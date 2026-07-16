@@ -43,11 +43,16 @@ const ERROR_PATTERNS: { pattern: string; message: string; known: boolean }[] = [
     known: true,
   },
   {
+    // Image-agnostic on purpose: this static message can't know the configured
+    // `container.image`. The docker preflight error (docker-exec.ts) already
+    // names the exact missing tag; this classifier fallback must NOT hardcode a
+    // tag (`archon-runner`) or it would contradict a custom `container.image`.
     pattern: 'no such image',
     message:
       '**Error:** The Archon runner image is missing. Build it with ' +
-      '`docker build -t archon-runner -f packages/isolation/docker/runner.Dockerfile ' +
-      'packages/isolation/docker` (or set `container.image` in `.archon/config.yaml`).',
+      '`bun run build:runner-image` (tags `archon-runner:<version>` + `:latest`), ' +
+      'or build your configured `container.image` from ' +
+      '`packages/isolation/docker/runner.Dockerfile`.',
     known: true,
   },
   {

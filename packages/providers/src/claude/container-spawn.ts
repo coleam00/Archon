@@ -179,7 +179,9 @@ export function buildContainerSpawn(
       get exitCode(): number | null {
         return child.exitCode;
       },
-      kill(signal: NodeJS.Signals): boolean {
+      kill(signal: NodeJS.Signals = 'SIGTERM'): boolean {
+        // Default matches ChildProcess.kill() (no-arg → SIGTERM); without it a
+        // no-arg kill() would pass undefined into toPosixSignal and crash.
         // Signal the in-container process (the local docker-exec kill would not
         // cross the boundary), then tear down the local exec client too.
         killInContainer(execContext.containerId, signal, spawnFn, pidFile);

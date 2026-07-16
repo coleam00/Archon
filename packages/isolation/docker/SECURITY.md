@@ -59,6 +59,16 @@ apparmor=unconfined` because the kernel `mount -t overlay` needs it. With
   powerful; the boundary is the container + the daemon's own confinement, not the
   in-container uid.
 
+- **Build-time installers are version-pinned but not checksum-verified.** The
+  runner image pins the base image by digest and pins the Claude/bun/uv **tool
+  versions** (`runner.Dockerfile` build args), so a build won't silently pull a
+  newer binary. But the vendor installer **scripts** (`claude.ai/install.sh`,
+  `bun.sh/install`, `astral.sh/uv/<v>/install.sh`) are fetched over TLS and run as
+  root at build time without an independent checksum/signature (they aren't
+  published with stable checksums). A compromised installer endpoint could still
+  tamper with the built image. Accepted residual for v1; re-evaluate if a
+  published-checksum path becomes available.
+
 ## Overlay modes and how to get the stronger boundary
 
 The backend picks the **least-privileged mode that mounts**, preferring `fuse`:

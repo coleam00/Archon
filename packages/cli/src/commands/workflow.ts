@@ -190,6 +190,29 @@ function resolveContainerBackendConfig(
 }
 
 /**
+ * Describe the first way a workflow can PAUSE (approval gate or interactive), or
+ * `undefined` if it can't. Container isolation (Phase B) has no suspend/resume —
+ * that is Phase C — so a pausing workflow must be rejected before a (privileged)
+ * container is created, rather than stranding it with no resume path. Recurses
+ * loop_group bodies.
+ */
+function describeWorkflowPause(wf: WorkflowDefinition): string | undefined {
+  if (wf.interactive) return 'interactive: true';
+  const scan = (nodes: WorkflowDefinition['nodes']): string | undefined => {
+    for (const n of nodes) {
+      if ('approval' in n && n.approval) return `approval node '${n.id}'`;
+      if ('interactive' in n && n.interactive) return `interactive node '${n.id}'`;
+      if ('loop_group' in n && n.loop_group?.nodes) {
+        const nested = scan(n.loop_group.nodes);
+        if (nested) return nested;
+      }
+    }
+    return undefined;
+  };
+  return scan(wf.nodes);
+}
+
+/**
  * Generate a unique conversation ID for CLI usage
  */
 function generateConversationId(): string {
@@ -1159,12 +1182,26 @@ export async function workflowRunCommand(
     };
 
     // Selection precedence: --container flag > workflow container.enabled >
-    // config container.enabled (default off).
-    const folderConfig = await loadConfig(codebase.default_cwd).catch(() => undefined);
+    // config container.enabled (default off). Do NOT swallow loadConfig errors:
+    // a malformed/unreadable config that would carry `container.*` policy must
+    // FAIL the run, never silently downgrade to an in-place host run (fail-fast).
+    // loadConfig returns defaults when no config file exists (not an error).
+    const folderConfig = await loadConfig(codebase.default_cwd);
     const wantsContainer =
       options.container ?? workflow.container?.enabled ?? folderConfig?.container?.enabled ?? false;
 
     if (wantsContainer) {
+      // Phase B container isolation has NO suspend/resume (Phase C). A workflow
+      // that can pause would strand a privileged container with no resume path —
+      // reject up front rather than create-then-orphan on pause.
+      const pauseReason = describeWorkflowPause(workflow);
+      if (pauseReason) {
+        throw new Error(
+          `Workflow '${workflow.name}' can pause (${pauseReason}), but container isolation ` +
+            'does not support pause/resume until Phase C. Run without --container, or use a ' +
+            'non-pausing workflow.'
+        );
+      }
       const containerConfig = resolveContainerBackendConfig(folderConfig?.container);
       const backend = resolveFolderBackend(folderCodebase, {
         container: true,
@@ -1522,66 +1559,59 @@ export async function workflowRunCommand(
 
     // Container teardown (Phase B) — in `finally` so a throw from executeWorkflow
     // BEFORE its own try/catch (malformed config, env resolvers, unknown provider)
-    // can't orphan a privileged container+volume. Destroy after a TERMINAL run
-    // (completed/failed) AND after a pre-result throw (result === undefined); a
-    // PAUSED run keeps its container so a future resume can reattach
-    // (No-Autonomous-Lifecycle-Mutation). Container resume + the approval-gated
-    // write-back of the overlay diff land in Phase C, so a Phase-B container run's
-    // changes are NOT applied to the live root.
+    // can't orphan a privileged container+volume. Phase B has NO container
+    // suspend/resume (Phase C), and pause-capable workflows are rejected before
+    // the container is created, so a container run ALWAYS terminates — we destroy
+    // unconditionally rather than ever leaving a privileged container running for
+    // a resume path that doesn't exist. (A container run's overlay changes are
+    // NOT applied to the live root; the approval-gated write-back is Phase C.)
     if (containerBackend && containerEnvId) {
-      const isPaused = result?.success === true && 'paused' in result && result.paused;
-      if (isPaused) {
-        console.log(
-          '\nRun paused — container left running for resume (container resume lands in Phase C).'
-        );
-      } else {
-        try {
-          await containerBackend.destroy(containerEnvId);
-          // Persist a container_destroyed event (console + `workflow get --verbose`)
-          // and emit for any live subscriber. The emitter fire is after unsubscribe,
-          // so the DB row is the durable channel for CLI runs. No runId on the
-          // pre-result throw path — skip the event, still destroy.
-          const runId = result?.workflowRunId;
-          if (runId) {
-            getWorkflowEventEmitter().emit({
-              type: 'container_lifecycle',
-              runId,
-              phase: 'destroyed',
+      try {
+        await containerBackend.destroy(containerEnvId);
+        // Persist a container_destroyed event (console + `workflow get --verbose`)
+        // and emit for any live subscriber. The emitter fire is after unsubscribe,
+        // so the DB row is the durable channel for CLI runs. No runId on the
+        // pre-result throw path — skip the event, still destroy.
+        const runId = result?.workflowRunId;
+        if (runId) {
+          getWorkflowEventEmitter().emit({
+            type: 'container_lifecycle',
+            runId,
+            phase: 'destroyed',
+          });
+          await deps.store
+            .createWorkflowEvent({
+              workflow_run_id: runId,
+              event_type: 'container_destroyed',
+              step_name: 'container',
+              data: {},
+            })
+            .catch((eventErr: Error) => {
+              getLog().warn(
+                { err: eventErr, runId },
+                'workflow.container_destroyed_event_persist_failed'
+              );
             });
-            await deps.store
-              .createWorkflowEvent({
-                workflow_run_id: runId,
-                event_type: 'container_destroyed',
-                step_name: 'container',
-                data: {},
-              })
-              .catch((eventErr: Error) => {
-                getLog().warn(
-                  { err: eventErr, runId },
-                  'workflow.container_destroyed_event_persist_failed'
-                );
-              });
-          }
-          console.log(
-            'Container and overlay volume removed. (Phase B: overlay changes were NOT applied ' +
-              'to the live root — approval-gated write-back lands in Phase C.)'
-          );
-        } catch (destroyErr) {
-          // destroy() throws only on a GENUINE docker failure (not idempotent
-          // not-found). Surface it LOUD (console.error, not a --quiet log) so the
-          // operator cleans up the privileged container manually.
-          console.error(
-            `\nWARNING: failed to remove the isolation container/volume: ${
-              (destroyErr as Error).message
-            }\n` +
-              'Remove it manually: docker ps -a --filter label=diy.archon.managed=true ' +
-              '(then `docker rm -f <name>` and `docker volume rm <name>-upper`).'
-          );
-          getLog().error(
-            { err: destroyErr as Error, envId: containerEnvId },
-            'workflow.container_destroy_failed'
-          );
         }
+        console.log(
+          'Container and overlay volume removed. (Phase B: overlay changes were NOT applied ' +
+            'to the live root — approval-gated write-back lands in Phase C.)'
+        );
+      } catch (destroyErr) {
+        // destroy() throws only on a GENUINE docker failure (not idempotent
+        // not-found). Surface it LOUD (console.error, not a --quiet log) so the
+        // operator cleans up the privileged container manually.
+        console.error(
+          `\nWARNING: failed to remove the isolation container/volume: ${
+            (destroyErr as Error).message
+          }\n` +
+            'Remove it manually: docker ps -a --filter label=diy.archon.managed=true ' +
+            '(then `docker rm -f <name>` and `docker volume rm <name>-upper`).'
+        );
+        getLog().error(
+          { err: destroyErr as Error, envId: containerEnvId },
+          'workflow.container_destroy_failed'
+        );
       }
     }
   }

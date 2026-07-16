@@ -186,15 +186,23 @@ export class ContainerBackend implements IIsolationBackend {
       overlayMode,
       workspacePath: hostRoot,
     };
-    const row = await this.store.create({
-      codebase_id: req.codebase.id,
-      workflow_type: 'task',
-      workflow_id: resourceId,
-      provider: 'container',
-      working_path: hostRoot,
-      branch_name: NO_BRANCH_SENTINEL,
-      metadata,
-    });
+    let row;
+    try {
+      row = await this.store.create({
+        codebase_id: req.codebase.id,
+        workflow_type: 'task',
+        workflow_id: resourceId,
+        provider: 'container',
+        working_path: hostRoot,
+        branch_name: NO_BRANCH_SENTINEL,
+        metadata,
+      });
+    } catch (createErr) {
+      // The container + volume exist but there's no tracking row → they'd be
+      // orphaned. Remove both (best-effort, with breadcrumbs) before rethrowing.
+      await this.removeContainerAndVolume(containerName, volume);
+      throw createErr;
+    }
 
     log.info({ envId: row.id, containerId, resourceId }, 'isolation.container_prepare_completed');
 
@@ -441,5 +449,26 @@ export class ContainerBackend implements IIsolationBackend {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Best-effort removal of a container + its upper volume, used to unwind a
+   * partially-prepared environment (e.g. after `store.create()` rejects) before
+   * a tracking row exists. Failures are logged (breadcrumbs) but never thrown —
+   * the caller is already rethrowing the original error.
+   */
+  private async removeContainerAndVolume(containerName: string, volume: string): Promise<void> {
+    await this.docker(['rm', '-f', containerName]).catch(err => {
+      log.warn(
+        { containerName, detail: extractDockerError(err) },
+        'isolation.container_unwind_rm_failed'
+      );
+    });
+    await this.docker(['volume', 'rm', '-f', volume]).catch(err => {
+      log.warn(
+        { volume, detail: extractDockerError(err) },
+        'isolation.container_unwind_volume_failed'
+      );
+    });
   }
 }

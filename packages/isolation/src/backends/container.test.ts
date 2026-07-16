@@ -205,6 +205,23 @@ describe('ContainerBackend.prepare', () => {
     expect(volumeRm).toBeDefined();
   });
 
+  test('removes the container + volume if store.create rejects (no orphan)', async () => {
+    const store = fakeStore();
+    // Container starts + becomes ready (fuse wins), but the row insert fails.
+    store.create = async () => {
+      throw new Error('db insert failed');
+    };
+    const docker = fakeDocker(args => {
+      if (args[0] === 'run') return { stdout: 'cid\n', stderr: '' };
+      return { stdout: '', stderr: '' };
+    });
+    const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
+    await expect(backend.prepare({ codebase: FOLDER })).rejects.toThrow(/db insert failed/);
+    // Both the container and the volume are cleaned up before rethrow.
+    expect(docker.calls.find(c => c[0] === 'rm' && c[1] === '-f')).toBeDefined();
+    expect(docker.calls.find(c => c[0] === 'volume' && c[1] === 'rm')).toBeDefined();
+  });
+
   test('falls back to native when the fuse run itself fails (host has no /dev/fuse)', async () => {
     const store = fakeStore();
     let runAttempts = 0;

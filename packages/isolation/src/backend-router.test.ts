@@ -58,8 +58,14 @@ describe('resolveFolderBackend', () => {
 
   test('container requested WITHOUT store/config → throws (no silent host downgrade)', () => {
     expect(() => resolveFolderBackend(folderCodebase, { container: true })).toThrow(/not wired up/);
+    // Missing containerConfig (store present).
     expect(() =>
       resolveFolderBackend(folderCodebase, { container: true, store: stubStore })
+    ).toThrow(/not wired up/);
+    // Missing store (containerConfig present) — asserted independently so removing
+    // the store validation alone would be caught.
+    expect(() =>
+      resolveFolderBackend(folderCodebase, { container: true, containerConfig })
     ).toThrow(/not wired up/);
   });
 

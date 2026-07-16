@@ -10,9 +10,22 @@
 #   docker build -t archon-runner:<version> \
 #     -f packages/isolation/docker/runner.Dockerfile packages/isolation/docker
 # Or: bun run build:runner-image
-FROM debian:bookworm-slim
+#
+# Supply chain: the base image is pinned by digest and every tool below is
+# version-pinned so the image is reproducible and a compromised installer
+# endpoint can't silently pull a newer/tampered binary. The vendor installer
+# SCRIPTS themselves are still fetched over TLS at build time and are not
+# checksum-verified (they aren't published with stable checksums) — an accepted,
+# documented residual (see SECURITY.md). Bump the *_VERSION args deliberately.
+FROM debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818
 
 ENV DEBIAN_FRONTEND=noninteractive
+
+# Pinned tool versions (bump deliberately; keep in sync with the version the
+# maintainer validated). CLAUDE_VERSION 'stable' / 'latest' / 'X.Y.Z' accepted.
+ARG CLAUDE_VERSION=2.1.211
+ARG BUN_VERSION=1.3.14
+ARG UV_VERSION=0.11.29
 
 # Runtime deps: git/bash/rsync for workflow work, ca-certificates+curl for the
 # installers, fuse-overlayfs as the overlay fallback, procps for in-container
@@ -30,18 +43,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
-# Claude Code native binary (self-contained). Installs to /root/.local/bin/claude.
-RUN curl -fsSL https://claude.ai/install.sh | bash \
+# Claude Code native binary (self-contained), pinned to $CLAUDE_VERSION.
+RUN curl -fsSL https://claude.ai/install.sh | bash -s "${CLAUDE_VERSION}" \
     && test -x /root/.local/bin/claude \
     || (echo "FATAL: claude binary not found after install" >&2 && exit 1)
 
-# bun (script: nodes with runtime: bun) → /root/.bun/bin/bun
-RUN curl -fsSL https://bun.sh/install | bash \
+# bun (script: nodes with runtime: bun) → /root/.bun/bin/bun, pinned to $BUN_VERSION.
+RUN curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}" \
     && test -x /root/.bun/bin/bun \
     || (echo "FATAL: bun not found after install" >&2 && exit 1)
 
-# uv (script: nodes with runtime: uv) → /root/.local/bin/uv
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
+# uv (script: nodes with runtime: uv) → /root/.local/bin/uv, pinned via the
+# versioned installer URL (https://astral.sh/uv/<version>/install.sh).
+RUN curl -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh" | sh \
     && test -x /root/.local/bin/uv \
     || (echo "FATAL: uv not found after install" >&2 && exit 1)
 

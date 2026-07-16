@@ -57,10 +57,13 @@ describe('classifyIsolationError — docker patterns', () => {
     expect(classifyIsolationError(err)).toMatch(/Start Docker/);
   });
 
-  test('image-missing maps to a build instruction', () => {
+  test('image-missing maps to an image-agnostic build instruction (no hardcoded tag)', () => {
     const err = new Error("No such image: 'archon-runner:test'");
-    expect(classifyIsolationError(err)).toMatch(/runner image is missing/);
-    expect(classifyIsolationError(err)).toMatch(/docker build/);
+    const msg = classifyIsolationError(err);
+    expect(msg).toMatch(/runner image is missing/);
+    expect(msg).toMatch(/bun run build:runner-image/);
+    // Must NOT hardcode a specific tag that could contradict a custom container.image.
+    expect(msg).not.toMatch(/docker build -t archon-runner\b/);
   });
 
   test('docker permission maps to the docker-group hint', () => {
