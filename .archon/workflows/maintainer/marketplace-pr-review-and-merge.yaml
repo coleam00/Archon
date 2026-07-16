@@ -373,7 +373,19 @@ nodes:
         reason = aiReview.reasoning;
       }
 
-      const output = { decision, reason, author, slug };
+      // R2 governance gate: only auto-close a contributor's PR when a
+      // DETERMINISTIC signal justified the reject — a critical/high security
+      // scan or a scope violation. An AI-ONLY reject (Haiku recommended reject
+      // but the deterministic checks are clean) still posts the request-changes
+      // review, but does NOT auto-close: it's flagged for a maintainer to make
+      // the final call. Only `reject` decisions are ever eligible to close.
+      const deterministicReject =
+        scopeResult !== 'SCOPE_OK' ||
+        scanResult.severity === 'critical' ||
+        scanResult.severity === 'high';
+      const close = decision === 'reject' && deterministicReject;
+
+      const output = { decision, reason, author, slug, close };
       writeFileSync(resolve(artifactsDir, 'decision.json'), JSON.stringify(output, null, 2));
       console.log(JSON.stringify(output));
 
@@ -387,6 +399,7 @@ nodes:
       DECISION=$(cat "$ARTIFACTS_DIR/decision.json" | jq -r '.decision')
       REASON=$(cat "$ARTIFACTS_DIR/decision.json" | jq -r '.reason')
       SLUG=$(cat "$ARTIFACTS_DIR/decision.json" | jq -r '.slug // empty')
+      CLOSE=$(cat "$ARTIFACTS_DIR/decision.json" | jq -r '.close // false')
       IS_FORK=$(jq -r '.isCrossRepository // false' "$ARTIFACTS_DIR/pr-meta.json")
 
       # Auth preflight. The earlier read-only nodes (gh pr view/diff) succeed
@@ -459,13 +472,24 @@ nodes:
       *Reviewed by Archon marketplace-pr-review-and-merge workflow.*"
           ;;
         reject)
-          echo "Decision: REJECT — closing PR #$PR_NUM as out of scope or unsafe"
+          if [ "$CLOSE" = "true" ]; then
+            echo "Decision: REJECT — requesting changes and closing PR #$PR_NUM (deterministic scan/scope concurred)"
+          else
+            echo "Decision: REJECT — requesting changes on PR #$PR_NUM (AI-only; flagged for maintainer close, not auto-closed)"
+          fi
           retry gh pr review "$PR_NUM" --request-changes --body "**Marketplace Auto-Review: Rejected**
 
       $REASON
 
       *Reviewed by Archon marketplace-pr-review-and-merge workflow.*"
-          gh pr close "$PR_NUM" --comment "Closing this PR per the automated review above." 2>/dev/null || true
+          # R2: only auto-close when a deterministic signal (critical/high scan or
+          # scope violation) justified the reject. An AI-only reject leaves the PR
+          # open and flags it for a maintainer rather than closing a human's work.
+          if [ "$CLOSE" = "true" ]; then
+            gh pr close "$PR_NUM" --comment "Closing this PR per the automated review above." 2>/dev/null || true
+          else
+            retry gh pr comment "$PR_NUM" --body "**Flagged for maintainer close.** The automated review recommended rejecting this submission, but the deterministic security scan did not independently flag it as critical/high — so it has not been auto-closed. A maintainer should make the final call."
+          fi
           ;;
         *)
           echo "ERROR: Unexpected decision value: $DECISION" >&2
