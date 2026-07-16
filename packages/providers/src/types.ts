@@ -309,6 +309,26 @@ export interface SystemPromptPreset {
 export type SystemPromptInput = string | string[] | SystemPromptPreset;
 
 /**
+ * Where a provider turn (or a deterministic bash/script subprocess) runs.
+ *  - `host`      — directly on the Archon host process, inheriting its environment.
+ *    This is today's behavior and the default everywhere.
+ *  - `container` — inside a prepared isolation container (the folder-project
+ *    container backend). The provider spawns its CLI via `docker exec` and
+ *    receives only the Archon-managed env bag; `containerId` identifies the
+ *    running container and `execUser` optionally pins the in-container uid/user.
+ *
+ * Plain data with zero SDK / `@archon/*` dependencies, so this contract layer
+ * (which forbids cross-package imports) can own it while `@archon/isolation`
+ * (which produces it) and `@archon/workflows` (which threads it) both import it.
+ * Consumed by providers only after the engine's per-node capability fail-fast
+ * (Phase B) — a `container` value reaching a provider that can't honor it is a
+ * bug the executor prevents, not something the provider silently downgrades.
+ */
+export type ExecutionContext =
+  | { kind: 'host' }
+  | { kind: 'container'; containerId: string; execUser?: string };
+
+/**
  * Universal request options accepted by all providers.
  * Provider-specific fields go through `nodeConfig` and `assistantConfig` in SendQueryOptions.
  */
@@ -432,6 +452,16 @@ export interface SendQueryOptions extends AgentRequestOptions {
   nodeConfig?: NodeConfig;
   /** Per-provider defaults from .archon/config.yaml assistants section. */
   assistantConfig?: Record<string, unknown>;
+  /**
+   * Execution target for this turn. Absent / `{ kind: 'host' }` runs the provider
+   * on the Archon host — the only value the engine produces today, so this field
+   * is currently inert plumbing that every provider can safely ignore.
+   * `{ kind: 'container', … }` will (Phase B) tell a capable provider (Claude
+   * first) to spawn its CLI inside the prepared container. Phase B will also add
+   * a provider capability flag plus a pre-dispatch fail-fast so a `container`
+   * value can never reach a provider that cannot honor it.
+   */
+  execContext?: ExecutionContext;
 }
 
 /**

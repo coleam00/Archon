@@ -22,6 +22,7 @@ import { formatDuration, parseDbTimestamp } from './utils/duration';
 import { keepAwake } from './utils/keep-awake';
 import { getWorkflowEventEmitter } from './event-emitter';
 import { isRegisteredProvider, getRegisteredProviders } from '@archon/providers';
+import type { ExecutionContext } from '@archon/providers/types';
 import {
   classifyError,
   toTelemetryErrorClass,
@@ -361,6 +362,14 @@ export type ExecuteWorkflowOptions = ResumePayload & {
    * is preserved on resume.
    */
   userId?: string;
+  /**
+   * Execution context resolved by the isolation seam: `{ kind: 'host' }` (default)
+   * runs on the Archon host; `{ kind: 'container', … }` (folder-project container
+   * backend, Phase B) runs provider turns and subprocesses inside the prepared
+   * container. Threaded verbatim into `executeDagWorkflow`. Defaults to host when
+   * absent, so every existing caller is unchanged.
+   */
+  execContext?: ExecutionContext;
 };
 
 /**
@@ -427,6 +436,7 @@ export async function executeWorkflow(
     userId,
     source,
     baseBranch: callerBaseBranch,
+    execContext = { kind: 'host' },
   } = opts;
   // Load config once for the entire workflow execution
   const fileConfig = await deps.loadConfig(cwd);
@@ -961,7 +971,8 @@ export async function executeWorkflow(
       source,
       aiProfile,
       workflowPreset,
-      scopeArtifactsDir
+      scopeArtifactsDir,
+      execContext
     );
 
     // executeDagWorkflow throws on fatal errors; check DB status for result
