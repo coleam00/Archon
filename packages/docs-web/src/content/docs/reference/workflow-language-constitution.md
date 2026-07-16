@@ -2,7 +2,7 @@
 title: Workflow Language Constitution
 description: The design rules that keep Archon's workflow YAML a coordination language — the admissibility test for new YAML features, the failure smells, and how each is managed.
 category: reference
-audience: [developer, contributor]
+audience: [developer]
 status: current
 sidebar:
   order: 9
