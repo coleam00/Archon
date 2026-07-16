@@ -611,6 +611,87 @@ describe('ClaudeProvider', () => {
       expect(chunks[0]).toMatchObject({ type: 'task_notification', status: 'failed' });
     });
 
+    // --- #2083 — background-task liveness (SDK 0.3.209 background_tasks_changed) ---
+
+    test('yields background_tasks chunk from SDK background_tasks_changed', async () => {
+      mockQuery.mockImplementation(async function* () {
+        yield {
+          type: 'system',
+          subtype: 'background_tasks_changed',
+          tasks: [
+            { task_id: 't-1', task_type: 'local_agent', description: 'Research problem A' },
+            { task_id: 't-2', task_type: 'local_agent', description: 'Research problem B' },
+          ],
+        };
+      });
+
+      const chunks = [];
+      for await (const chunk of client.sendQuery('test', '/workspace')) {
+        chunks.push(chunk);
+      }
+
+      expect(chunks).toEqual([
+        {
+          type: 'background_tasks',
+          tasks: [
+            { taskId: 't-1', taskType: 'local_agent', description: 'Research problem A' },
+            { taskId: 't-2', taskType: 'local_agent', description: 'Research problem B' },
+          ],
+        },
+      ]);
+    });
+
+    test('forwards an EMPTY background_tasks_changed set (drain signal)', async () => {
+      mockQuery.mockImplementation(async function* () {
+        yield { type: 'system', subtype: 'background_tasks_changed', tasks: [] };
+      });
+
+      const chunks = [];
+      for await (const chunk of client.sendQuery('test', '/workspace')) {
+        chunks.push(chunk);
+      }
+
+      // An empty set means "all background work drained" — it must be forwarded,
+      // not dropped, or the executor's wait gate would never release.
+      expect(chunks).toEqual([{ type: 'background_tasks', tasks: [] }]);
+    });
+
+    test('keeps forwarding chunks that arrive AFTER the result (background-task wait window)', async () => {
+      // Single-turn queries keep streaming after the turn-level result while
+      // background tasks drain; streamClaudeMessages must not stop at result.
+      mockQuery.mockImplementation(async function* () {
+        yield {
+          type: 'system',
+          subtype: 'background_tasks_changed',
+          tasks: [{ task_id: 't-1', task_type: 'local_agent', description: 'bg work' }],
+        };
+        yield { type: 'result', subtype: 'success', session_id: 's-1', is_error: false };
+        yield {
+          type: 'system',
+          subtype: 'task_notification',
+          task_id: 't-1',
+          status: 'completed',
+          output_file: '/tmp/t-1.md',
+          summary: 'done',
+        };
+        yield { type: 'system', subtype: 'background_tasks_changed', tasks: [] };
+        yield { type: 'result', subtype: 'success', session_id: 's-1', is_error: false };
+      });
+
+      const types = [];
+      for await (const chunk of client.sendQuery('test', '/workspace')) {
+        types.push(chunk.type);
+      }
+
+      expect(types).toEqual([
+        'background_tasks',
+        'result',
+        'task_notification',
+        'background_tasks',
+        'result',
+      ]);
+    });
+
     test('yields hook_started chunk from SDK system message', async () => {
       mockQuery.mockImplementation(async function* () {
         yield {

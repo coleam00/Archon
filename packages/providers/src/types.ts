@@ -262,6 +262,17 @@ export type MessageChunk =
       usage?: { total_tokens: number; tool_uses: number; duration_ms: number };
       toolUseId?: string;
     }
+  // Forwarded from SDKBackgroundTasksChangedMessage (`background_tasks_changed`,
+  // Claude SDK v0.3.209+): the FULL set of live background tasks, emitted
+  // whenever membership changes. Level signal with REPLACE semantics — consumers
+  // swap their set for each payload (an empty array means no background work is
+  // running). The dag-executor gates node completion on this: a `result` chunk
+  // that arrives while the set is non-empty must not tear down the stream, or
+  // the SDK subprocess (and the tasks' pending artifacts) get killed (#2083).
+  | {
+      type: 'background_tasks';
+      tasks: { taskId: string; taskType: string; description: string }[];
+    }
   // ─── Hook Lifecycle (Claude SDK `system` subtypes) ─────────────────────
   // Forwarded by the Claude provider from SDKHookStartedMessage /
   // SDKHookResponseMessage. Same aggregation path as task_* above; the bridge
