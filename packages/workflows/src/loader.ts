@@ -3,6 +3,7 @@
  */
 import type { WorkflowDefinition, WorkflowLoadError, DagNode, WorkflowNodeHooks } from './schemas';
 import {
+  isBashNode,
   isLoopNode,
   isLoopGroupNode,
   isApprovalNode,
@@ -218,6 +219,12 @@ export function validateDagStructure(
   // loop.prompt, loop.until_bash, loop_group.until_bash). A dangling ref in any of
   // them silently substitutes to '' at run time, so all must be validated here.
   //
+  // KEEP IN SYNC (three ref-surface enumerations must agree):
+  //   1. this scan (loader validateDagStructure) — validates refs,
+  //   2. rewriteNodeOutputRefs (include-expander.ts) — renames refs on inline,
+  //   3. the substituteNodeOutputRefs call sites (dag-executor.ts) — resolves refs at run.
+  // Adding a substituted field to one means updating all three.
+  //
   // Prose fields (prompt / loop.prompt) may contain triple-backtick fenced blocks or
   // single-backtick inline code that are documentation meant to render literally to
   // the LLM (e.g. the workflow-builder shows authors how to write `$<other-node>.output`
@@ -233,7 +240,7 @@ export function validateDagStructure(
     if ('prompt' in node && typeof node.prompt === 'string') {
       sources.push(stripMarkdownCode(node.prompt));
     }
-    if ('bash' in node && typeof node.bash === 'string') sources.push(node.bash);
+    if (isBashNode(node)) sources.push(node.bash);
     if (isScriptNode(node)) sources.push(node.script);
     if (isCancelNode(node)) sources.push(node.cancel);
     if (isApprovalNode(node)) sources.push(node.approval.message);

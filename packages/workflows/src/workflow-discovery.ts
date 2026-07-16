@@ -188,20 +188,39 @@ function loadBundledWorkflows(): DirLoadResult {
 }
 
 /**
+/**
+ * Command-resolution config that keeps the include safety scan at parity with the
+ * runtime/validator command lookup: the configured extra `commandFolder` and the
+ * `loadDefaultCommands` opt-out. Threaded from `discoverWorkflowsWithConfig` (which loads
+ * `.archon/config.yaml`); direct `discoverWorkflows` callers get the defaults.
+ */
+interface CommandScanConfig {
+  commandFolder?: string;
+  loadDefaultCommands?: boolean;
+}
+
+/**
  * Resolve a command name to its file CONTENT, mirroring the runtime/validator search
- * order (repo `.archon/commands/` → `~/.archon/commands/` → bundled defaults). Returns
- * `null` when the command cannot be resolved. Read-only; used solely so the include
- * expander can scan a block's command files for sibling refs that namespacing renames.
+ * order (repo `.archon/commands/` + configured `commandFolder` → `~/.archon/commands/` →
+ * bundled defaults, unless `loadDefaultCommands` is false). Returns `null` when the command
+ * cannot be resolved. Read-only; used solely so the include expander can scan a block's
+ * command files for sibling refs that namespacing renames.
  */
 async function resolveCommandContentForScan(
   cwd: string | null,
-  commandName: string
+  commandName: string,
+  config: CommandScanConfig
 ): Promise<string | null> {
   if (!isValidCommandName(commandName)) return null;
 
   const dirs: string[] = [];
   if (cwd !== null) {
-    for (const folder of archonPaths.getCommandFolderSearchPaths()) dirs.push(join(cwd, folder));
+    // Pass the configured folder so a repo with a custom command directory is scanned
+    // (not silently skipped → downgraded to WARN). Matches getCommandFolderSearchPaths use
+    // in the validator/executor.
+    for (const folder of archonPaths.getCommandFolderSearchPaths(config.commandFolder)) {
+      dirs.push(join(cwd, folder));
+    }
   }
   dirs.push(archonPaths.getHomeCommandsPath());
 
@@ -215,7 +234,10 @@ async function resolveCommandContentForScan(
     }
   }
 
-  // Bundled defaults (embedded in binary; filesystem in source mode).
+  // Bundled defaults — skipped when the repo opts out (loadDefaultCommands: false), matching
+  // the workflow/command discovery opt-out so the scan doesn't resolve a command the repo
+  // has disabled.
+  if (config.loadDefaultCommands === false) return null;
   if (isBinaryBuild()) {
     return BUNDLED_COMMANDS[commandName] ?? null;
   }
@@ -238,7 +260,8 @@ async function resolveCommandContentForScan(
  */
 async function resolveIncludeBlockCommandContents(
   cwd: string | null,
-  byName: ReadonlyMap<string, WorkflowDefinition>
+  byName: ReadonlyMap<string, WorkflowDefinition>,
+  config: CommandScanConfig
 ): Promise<Map<string, string | null>> {
   const targetNames = new Set<string>();
   const visit = (workflow: WorkflowDefinition): void => {
@@ -259,7 +282,7 @@ async function resolveIncludeBlockCommandContents(
     if (!workflow) continue;
     for (const node of workflow.nodes) {
       if ('command' in node && typeof node.command === 'string' && !contents.has(node.command)) {
-        contents.set(node.command, await resolveCommandContentForScan(cwd, node.command));
+        contents.set(node.command, await resolveCommandContentForScan(cwd, node.command, config));
       }
     }
   }
@@ -286,7 +309,7 @@ async function resolveIncludeBlockCommandContents(
  */
 export async function discoverWorkflows(
   cwd: string | null,
-  options?: { loadDefaults?: boolean }
+  options?: { loadDefaults?: boolean; commandFolder?: string; loadDefaultCommands?: boolean }
 ): Promise<WorkflowLoadResult> {
   // Map of filename -> workflow+source for deduplication
   const workflowsByFile = new Map<string, WorkflowWithSource>();
@@ -333,18 +356,32 @@ export async function discoverWorkflows(
     }
 
     const rawByName = new Map<string, WorkflowDefinition>();
-    for (const { workflow } of workflowsByFile.values()) {
+    // Map workflow NAME → its real filename, so expansion errors (keyed by name inside the
+    // pure expander) can be reported against the includer's actual file. Duplicate names
+    // are excluded from expansion above, so first-seen is unambiguous for the rest.
+    const filenameByName = new Map<string, string>();
+    for (const [filename, { workflow }] of workflowsByFile) {
       if (duplicateNames.has(workflow.name)) continue; // ambiguous — errored above, excluded
       rawByName.set(workflow.name, workflow);
+      if (!filenameByName.has(workflow.name)) filenameByName.set(workflow.name, filename);
     }
     // Pre-resolve command-file contents for include-target command nodes so the expander
     // can catch a block command file that references a sibling id namespacing renames.
-    const commandContents = await resolveIncludeBlockCommandContents(cwd, rawByName);
+    const commandContents = await resolveIncludeBlockCommandContents(cwd, rawByName, {
+      commandFolder: options?.commandFolder,
+      loadDefaultCommands: options?.loadDefaultCommands,
+    });
     const { workflows: expandedByName, errors: expansionErrors } = expandWorkflowIncludes(
       rawByName,
       commandContents
     );
-    allErrors.push(...expansionErrors);
+    // Re-key expansion errors from workflow name to the includer's real filename.
+    allErrors.push(
+      ...expansionErrors.map(e => ({
+        ...e,
+        filename: filenameByName.get(e.filename) ?? e.filename,
+      }))
+    );
 
     const result: WorkflowWithSource[] = [];
     for (const { workflow, source } of workflowsByFile.values()) {
@@ -519,13 +556,23 @@ export async function discoverWorkflows(
  */
 export async function discoverWorkflowsWithConfig(
   cwd: string | null,
-  loadConfig: (cwd: string) => Promise<{ defaults?: { loadDefaultWorkflows?: boolean } }>
+  loadConfig: (cwd: string) => Promise<{
+    defaults?: { loadDefaultWorkflows?: boolean; loadDefaultCommands?: boolean };
+    commands?: { folder?: string };
+  }>
 ): Promise<WorkflowLoadResult> {
   let loadDefaults = true;
+  // Command-scan parity: pass the repo's configured command folder + loadDefaultCommands
+  // opt-out through so the include safety scan resolves the same command files the
+  // runtime/validator would (else it silently degrades to WARN on custom-folder repos).
+  let commandFolder: string | undefined;
+  let loadDefaultCommands: boolean | undefined;
   if (cwd !== null) {
     try {
       const cfg = await loadConfig(cwd);
       loadDefaults = cfg.defaults?.loadDefaultWorkflows ?? true;
+      commandFolder = cfg.commands?.folder;
+      loadDefaultCommands = cfg.defaults?.loadDefaultCommands;
     } catch (error) {
       getLog().warn(
         { err: error as Error, cwd },
@@ -533,5 +580,5 @@ export async function discoverWorkflowsWithConfig(
       );
     }
   }
-  return discoverWorkflows(cwd, { loadDefaults });
+  return discoverWorkflows(cwd, { loadDefaults, commandFolder, loadDefaultCommands });
 }

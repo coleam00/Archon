@@ -546,6 +546,11 @@ function shellQuoteOrFile(
  * Substitute $node_id.output and $node_id.output.field references in a prompt.
  * Called AFTER the standard substituteWorkflowVariables pass.
  *
+ * KEEP IN SYNC (three ref-surface enumerations must agree): the fields this is called on
+ * (search call sites below), the loader's validateDagStructure scan (which validates the
+ * same refs), and rewriteNodeOutputRefs in include-expander.ts (which renames them on
+ * inline). Adding a substituted field to one means updating all three.
+ *
  * @param escapedForBash - When true, wraps substituted values in single quotes so
  *   they are safe to embed in bash scripts passed to `bash -c`. Set true only for
  *   bash node script substitution; AI/command prompt substitution should use false.

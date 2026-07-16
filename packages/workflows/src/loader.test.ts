@@ -3024,7 +3024,8 @@ nodes:
       // Broken workflow is dropped with an error; the healthy one still loads.
       expect(result.workflows.some(w => w.workflow.name === 'broken-include')).toBe(false);
       expect(result.workflows.some(w => w.workflow.name === 'healthy')).toBe(true);
-      const err = result.errors.find(e => e.filename === 'broken-include');
+      // Expansion errors are re-keyed to the includer's real filename (not the workflow name).
+      const err = result.errors.find(e => e.filename === 'broken-include.yaml');
       expect(err).toBeDefined();
       expect(err?.error).toContain('not found');
     });
@@ -3164,8 +3165,56 @@ nodes:
 
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
       expect(result.workflows.some(w => w.workflow.name === 'cmd-parent')).toBe(false);
-      const err = result.errors.find(e => e.filename === 'cmd-parent');
+      const err = result.errors.find(e => e.filename === 'cmd-parent.yaml');
       expect(err?.error).toContain("command file 'blk-runner.md'");
+      expect(err?.error).toContain("sibling node '$sib'");
+    });
+
+    it('should scan block command files in a configured custom command folder (config parity)', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      const customCmds = join(testDir, 'my-cmds');
+      await mkdir(workflowDir, { recursive: true });
+      await mkdir(customCmds, { recursive: true });
+
+      // The command file lives ONLY in the configured custom folder, referencing a sibling.
+      await writeFile(
+        join(customCmds, 'custom-runner.md'),
+        'Summarize $sib.output for the report.'
+      );
+      await writeFile(
+        join(workflowDir, 'cc-block.yaml'),
+        `
+name: cc-block
+description: block whose command lives in a custom folder
+nodes:
+  - id: sib
+    bash: "echo hi"
+  - id: runner
+    command: custom-runner
+    depends_on: [sib]
+`
+      );
+      await writeFile(
+        join(workflowDir, 'cc-parent.yaml'),
+        `
+name: cc-parent
+description: includes cc-block
+nodes:
+  - id: rev
+    include: cc-block
+`
+      );
+
+      // Through discoverWorkflowsWithConfig with the custom command folder configured, the
+      // scan resolves the command (config parity) and catches the sibling ref.
+      const result = await discoverWorkflowsWithConfig(testDir, () =>
+        Promise.resolve({
+          defaults: { loadDefaultWorkflows: false },
+          commands: { folder: 'my-cmds' },
+        })
+      );
+      expect(result.workflows.some(w => w.workflow.name === 'cc-parent')).toBe(false);
+      const err = result.errors.find(e => e.filename === 'cc-parent.yaml');
       expect(err?.error).toContain("sibling node '$sib'");
     });
 

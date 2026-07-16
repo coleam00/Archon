@@ -48,9 +48,11 @@ function getLog(): ReturnType<typeof createLogger> {
 }
 
 /**
- * Maximum include-nesting depth. A chain of includes deeper than this is rejected
- * as a load error (guards against accidental deep/runaway recursion). Depth 1
- * (an includer → a building block) is the common case; the cap leaves generous room.
+ * Maximum include-nesting depth — chains up to this many include levels are allowed; a
+ * deeper chain is a load error (guards against accidental deep/runaway recursion). Depth 1
+ * (an includer → a building block) is the common case; the cap leaves generous room. The
+ * depth check below uses `>` (not `>=`) so exactly INCLUDE_MAX_DEPTH levels are permitted,
+ * matching the "up to 3 levels deep" contract in authoring-workflows.md.
  */
 export const INCLUDE_MAX_DEPTH = 3;
 
@@ -131,6 +133,10 @@ class IncludeExpansionError extends Error {}
  *     embed fenced/inline code examples that must NOT be rewritten → fence-aware.
  *   - Code/expression (bash / script / loop.until_bash / loop_group.until_bash / cancel) —
  *     canonical `.output` refs are LIVE (never documentation) → rewritten verbatim.
+ *
+ * KEEP IN SYNC (three ref-surface enumerations must agree): this rewrite, the loader's
+ * validateDagStructure scan, and the substituteNodeOutputRefs call sites in dag-executor.ts.
+ * Adding a substituted field to one means updating all three.
  */
 function rewriteNodeOutputRefs(node: DagNode, rename: (id: string) => string): void {
   const code = (text: string): string => applyOutputRefRename(text, rename);
@@ -362,9 +368,9 @@ export function expandWorkflowIncludes(
     if (stack.includes(name)) {
       throw new IncludeExpansionError(`include cycle detected: ${[...stack, name].join(' -> ')}`);
     }
-    if (stack.length >= INCLUDE_MAX_DEPTH) {
+    if (stack.length > INCLUDE_MAX_DEPTH) {
       throw new IncludeExpansionError(
-        `include depth limit exceeded (max ${String(INCLUDE_MAX_DEPTH)}): ${[...stack, name].join(' -> ')}`
+        `include depth limit exceeded (max ${String(INCLUDE_MAX_DEPTH)} levels): ${[...stack, name].join(' -> ')}`
       );
     }
 

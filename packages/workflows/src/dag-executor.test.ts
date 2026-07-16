@@ -12742,3 +12742,110 @@ describe('executeDagWorkflow -- unexpanded include node fail-fast guard', () => 
     expect(evs.some(e => e.event_type === 'node_skipped' && e.step_name === 'inc')).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// An approval node inside an included block: pause + capture_response + no
+// cross-talk when the same block is included twice.
+// ---------------------------------------------------------------------------
+
+describe('executeDagWorkflow -- approval node inside an included block', () => {
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = join(
+      tmpdir(),
+      `dag-inc-approval-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
+    await mkdir(testDir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    try {
+      await rm(testDir, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup errors
+    }
+  });
+
+  function buildWf(name: string, nodes: unknown[]): WorkflowDefinition {
+    return { name, description: name, nodes: nodes.map(n => dagNodeSchema.parse(n)) };
+  }
+
+  it('pauses at the namespaced approval id and exposes capture_response via it', async () => {
+    const block = buildWf('apblk', [
+      { id: 'approve', approval: { message: 'Approve this?', capture_response: true } },
+    ]);
+    const parent = buildWf('apparent', [
+      { id: 'setup', bash: 'echo setup' },
+      { id: 'rev', include: 'apblk', depends_on: ['setup'] },
+      // Reads the include's output; the block's sole sink is the approval node, so
+      // $rev.output resolves to the captured response via the namespaced id.
+      { id: 'after', bash: 'echo $rev.output', depends_on: ['rev'] },
+    ]);
+    const { workflows, errors } = expandWorkflowIncludes(
+      new Map([
+        ['apblk', block],
+        ['apparent', parent],
+      ])
+    );
+    expect(errors).toHaveLength(0);
+    const expanded = workflows.get('apparent')!;
+
+    // capture_response (stored as $<approvalId>.output) is reachable via the namespaced id.
+    const after = expanded.nodes.find(n => n.id === 'after');
+    expect(after && 'bash' in after ? after.bash : '').toBe('echo $rev__approve.output');
+
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('inc-approval-run', { workflow_name: 'apparent' });
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-inc-approval',
+      testDir,
+      { name: 'apparent', nodes: expanded.nodes },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const pauseCalls = (
+      store.pauseWorkflowRun as Mock<(id: string, ctx: Record<string, unknown>) => Promise<void>>
+    ).mock.calls;
+    expect(pauseCalls.length).toBe(1);
+    // The gate pauses under the namespaced approval id, not the bare block id.
+    expect(pauseCalls[0][1]).toMatchObject({
+      type: 'approval',
+      nodeId: 'rev__approve',
+      message: 'Approve this?',
+      captureResponse: true,
+    });
+  });
+
+  it('the same approval block included twice yields distinct namespaced approval ids', () => {
+    const block = buildWf('apblk', [{ id: 'approve', approval: { message: 'Approve?' } }]);
+    const parent = buildWf('apparent', [
+      { id: 'a', include: 'apblk' },
+      { id: 'b', include: 'apblk', depends_on: ['a'] },
+    ]);
+    const { workflows, errors } = expandWorkflowIncludes(
+      new Map([
+        ['apblk', block],
+        ['apparent', parent],
+      ])
+    );
+    expect(errors).toHaveLength(0);
+    const ids = workflows.get('apparent')!.nodes.map(n => n.id);
+    // Distinct ApprovalContext.nodeId per inclusion → no cross-talk between the two gates.
+    expect(ids).toContain('a__approve');
+    expect(ids).toContain('b__approve');
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+});

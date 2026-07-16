@@ -828,10 +828,15 @@ written the nodes by hand. There is no separate child run.
   rewired to the namespaced ids automatically. The include node's own `depends_on` /
   `when` / `trigger_rule` attach to the block's **entry** nodes (those with no upstream
   inside the block).
-- **Output.** `$<includeId>.output` in another node resolves to the block's **terminal**
-  node — the first node with no dependents, in definition order (the same rule
-  `loop_group` uses). In the example, `$review.output` is the output of the block's
-  `implement-fixes` node.
+- **Sink asymmetry (a downstream node depending on the include).** A `depends_on:
+  [<includeId>]` on a downstream node fans out to **all** of the block's sink nodes (every
+  node with no dependents inside the block), so it waits for the whole block to finish.
+  But `$<includeId>.output` resolves to only the **primary** sink — the first sink in
+  definition order (the same terminal-selection rule `loop_group` uses). For a
+  single-sink block like the review block the two coincide; they differ only when a block
+  has multiple leaf nodes.
+- **Output.** `$<includeId>.output` in another node resolves to the block's primary sink.
+  In the example, `$review.output` is the output of the block's `implement-fixes` node.
 
 ### Non-goals (Phase 1)
 

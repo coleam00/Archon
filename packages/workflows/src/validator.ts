@@ -386,10 +386,11 @@ export async function validateWorkflowResources(
 
   for (const node of allNodes) {
     // Include nodes carry no resources to check — the target workflow is resolved and
-    // inlined at DISCOVERY time (see include-expander.ts). Discovery-fed validation
-    // (CLI `validate workflows`) therefore sees the already-expanded nodes and checks
-    // their commands/mcp/skills normally; only the raw `POST /api/workflows/validate`
-    // path reaches an unexpanded include node, and it cannot resolve the target here.
+    // inlined at DISCOVERY time (see include-expander.ts), so discovery-fed validation
+    // (CLI `validate workflows`) sees the already-expanded nodes and checks their
+    // commands/mcp/skills normally. This skip is DEFENSIVE-ONLY: no current caller reaches
+    // it with an unexpanded include node (POST /api/workflows/validate only runs
+    // parseWorkflow, not this resource pass). Kept so a future raw caller can't crash here.
     if (isIncludeNode(node)) continue;
 
     const provider = resolveProvider(node, workflow.provider, defaultProvider);

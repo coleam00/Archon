@@ -357,6 +357,116 @@ describe('expandWorkflowIncludes — command-file ref scan', () => {
 });
 
 // ---------------------------------------------------------------------------
+// loop_group inside an included block
+// ---------------------------------------------------------------------------
+
+describe('expandWorkflowIncludes — loop_group in an included block', () => {
+  test('renames outer-sibling refs but leaves body ids and $LOOP_PREV refs body-local', () => {
+    const block = wf('lgblk', [
+      { id: 'seed', bash: 'echo seed' },
+      {
+        id: 'lg',
+        depends_on: ['seed'],
+        loop_group: {
+          until: 'DONE',
+          max_iterations: 3,
+          nodes: [
+            {
+              id: 'inner',
+              prompt: 'prev=$LOOP_PREV.inner.output outer=$seed.output',
+              depends_on: [],
+            },
+          ],
+        },
+      },
+    ]);
+    const parent = wf('parent', [{ id: 'rev', include: 'lgblk' }]);
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
+    expect(errors).toHaveLength(0);
+
+    const expanded = workflows.get('parent')!;
+    // The loop_group NODE is namespaced; the outer sibling `seed` is too.
+    expect(expanded.nodes.map(n => n.id)).toContain('rev__lg');
+    const lg = expanded.nodes.find(n => n.id === 'rev__lg') as {
+      loop_group: { nodes: { id: string; prompt: string }[] };
+    };
+    // Body node id is NOT renamed (body-local), so its $LOOP_PREV.<bodyId> ref is preserved,
+    // while the outer-sibling ref ($seed.output) IS rewritten to the namespaced id.
+    expect(lg.loop_group.nodes[0].id).toBe('inner');
+    expect(lg.loop_group.nodes[0].prompt).toBe(
+      'prev=$LOOP_PREV.inner.output outer=$rev__seed.output'
+    );
+  });
+
+  test('a loop_group body id shadowing a parent top-level id is rejected', () => {
+    const block = wf('lgblk', [
+      { id: 'seed', bash: 'echo seed' },
+      {
+        id: 'lg',
+        depends_on: ['seed'],
+        loop_group: {
+          until: 'DONE',
+          max_iterations: 2,
+          nodes: [{ id: 'clash', prompt: 'work', depends_on: [] }],
+        },
+      },
+    ]);
+    // Parent has a top-level node whose id equals the block's loop_group body id.
+    const parent = wf('parent', [
+      { id: 'clash', bash: 'echo clash' },
+      { id: 'rev', include: 'lgblk' },
+    ]);
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
+    expect(workflows.has('parent')).toBe(false);
+    expect(errors.find(e => e.filename === 'parent')?.error).toContain('shadows');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Composition: persist_session isolation + diamond includes
+// ---------------------------------------------------------------------------
+
+describe('expandWorkflowIncludes — composition', () => {
+  test('persist_session survives inlining and namespaces per parent (independent keys)', () => {
+    const block = wf('sesblk', [{ id: 'ai', prompt: 'do work', persist_session: true }]);
+    const parentA = wf('parentA', [{ id: 'rev', include: 'sesblk' }]);
+    const parentB = wf('parentB', [{ id: 'rev', include: 'sesblk' }]);
+
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parentA, parentB));
+    expect(errors).toHaveLength(0);
+
+    const a = workflows.get('parentA')!;
+    const b = workflows.get('parentB')!;
+    const aNode = a.nodes.find(n => n.id === 'rev__ai') as { persist_session?: boolean };
+    const bNode = b.nodes.find(n => n.id === 'rev__ai') as { persist_session?: boolean };
+    expect(aNode?.persist_session).toBe(true);
+    expect(bNode?.persist_session).toBe(true);
+    // The persisted-session store key is (workflow_name, node_id, scope, provider): the
+    // node_id matches, but workflow_name differs (parentA vs parentB), so the two inclusions
+    // keep independent session memory.
+    expect(a.name).not.toBe(b.name);
+  });
+
+  test('diamond include: two blocks both including the same leaf expand without collision', () => {
+    const leaf = wf('leaf', [{ id: 'x', prompt: 'x' }]);
+    const b1 = wf('b1', [{ id: 'l', include: 'leaf' }]);
+    const b2 = wf('b2', [{ id: 'l', include: 'leaf' }]);
+    const parent = wf('parent', [
+      { id: 'a', include: 'b1' },
+      { id: 'b', include: 'b2' },
+    ]);
+
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(leaf, b1, b2, parent));
+    expect(errors).toHaveLength(0);
+    const ids = workflows.get('parent')!.nodes.map(n => n.id);
+    // The shared leaf node appears once per path, under distinct nested namespaces.
+    expect(ids).toContain('a__l__x');
+    expect(ids).toContain('b__l__x');
+    expect(new Set(ids).size).toBe(ids.length); // no duplicate ids
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Error paths — resilient (drop the bad one, keep the rest)
 // ---------------------------------------------------------------------------
 
@@ -387,8 +497,9 @@ describe('expandWorkflowIncludes — errors', () => {
     expect(errors.some(e => e.error.includes('cycle'))).toBe(true);
   });
 
-  test('an include chain deeper than the cap is a depth error', () => {
-    // a -> b -> c -> d -> e (4 hops). With INCLUDE_MAX_DEPTH=3 the deepest chains fail.
+  test('honors "up to N levels": an N-level chain expands, N+1 fails', () => {
+    // Chain a -> b -> c -> d -> e. INCLUDE_MAX_DEPTH=3, and the cap is `> N` so exactly N
+    // include levels are allowed (matching the "up to 3 levels deep" doc contract).
     const e = wf('e', [{ id: 'x', prompt: 'x' }]);
     const d = wf('d', [{ id: 'r', include: 'e' }]);
     const c = wf('c', [{ id: 'r', include: 'd' }]);
@@ -396,14 +507,15 @@ describe('expandWorkflowIncludes — errors', () => {
     const a = wf('a', [{ id: 'r', include: 'b' }]);
 
     const { workflows, errors } = expandWorkflowIncludes(mapOf(a, b, c, d, e));
-    // The two deepest roots exceed the cap and are dropped with a depth error.
+    expect(INCLUDE_MAX_DEPTH).toBe(3);
+    // a -> b -> c -> d -> e is 4 include levels → over the cap → dropped with a depth error.
     expect(workflows.has('a')).toBe(false);
     expect(errors.find(err => err.filename === 'a')?.error).toContain('depth');
-    // Shallow-enough workflows still expand.
+    // b -> c -> d -> e is exactly 3 levels → the boundary is allowed.
+    expect(workflows.has('b')).toBe(true);
     expect(workflows.has('c')).toBe(true);
     expect(workflows.has('d')).toBe(true);
     expect(workflows.has('e')).toBe(true);
-    expect(INCLUDE_MAX_DEPTH).toBe(3);
   });
 
   test('a namespaced id colliding with a hand-written node is a duplicate-id error', () => {

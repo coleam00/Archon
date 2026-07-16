@@ -709,8 +709,10 @@ export const dagNodeSchema = dagNodeBaseSchema
   .transform((data): DagNode => {
     const id = data.id.trim();
 
-    // Common base fields (sparse — only include defined values)
-    const base = {
+    // Structural graph fields present on every node — including the execution-less
+    // include node, which carries ONLY these (see the include branch below). Sparse:
+    // only defined values are included.
+    const structuralBase = {
       id,
       ...(data.description !== undefined ? { description: data.description } : {}),
       ...(data.depends_on !== undefined && data.depends_on.length > 0
@@ -718,6 +720,12 @@ export const dagNodeSchema = dagNodeBaseSchema
         : {}),
       ...(data.when !== undefined ? { when: data.when } : {}),
       ...(data.trigger_rule !== undefined ? { trigger_rule: data.trigger_rule } : {}),
+    };
+
+    // Common base fields for executable nodes — structural fields plus the exec-only
+    // scheduling fields (sparse — only include defined values).
+    const base = {
+      ...structuralBase,
       ...(data.idle_timeout !== undefined ? { idle_timeout: data.idle_timeout } : {}),
       ...(data.always_run !== undefined ? { always_run: data.always_run } : {}),
       ...(data.output_type !== undefined ? { output_type: data.output_type } : {}),
@@ -783,21 +791,13 @@ export const dagNodeSchema = dagNodeBaseSchema
       return { ...base, ...shared, cancel: data.cancel.trim() } as CancelNode;
     }
     if (data.include !== undefined && data.include.trim().length > 0) {
-      // An include node is a load-time directive, not an executable node. It carries
-      // ONLY structural graph fields (id / depends_on / when / trigger_rule / description)
-      // — the expander reads those to attach the sub-DAG. aiOnly / shared (retry) and the
-      // exec-only base fields (always_run / output_type / idle_timeout) are intentionally
-      // dropped; the loader warns about them via INCLUDE_NODE_IGNORED_FIELDS.
-      return {
-        id,
-        ...(data.description !== undefined ? { description: data.description } : {}),
-        ...(data.depends_on !== undefined && data.depends_on.length > 0
-          ? { depends_on: data.depends_on }
-          : {}),
-        ...(data.when !== undefined ? { when: data.when } : {}),
-        ...(data.trigger_rule !== undefined ? { trigger_rule: data.trigger_rule } : {}),
-        include: data.include.trim(),
-      } as IncludeNode;
+      // An include node is a load-time directive, not an executable node. It carries ONLY
+      // the structural graph fields (shared with `base` via `structuralBase`) plus the
+      // target name — the expander reads id / depends_on / when / trigger_rule to attach
+      // the sub-DAG (description just rides along). aiOnly / shared (retry) and the exec-only
+      // base fields (always_run / output_type / idle_timeout) are intentionally dropped;
+      // the loader warns about them via INCLUDE_NODE_IGNORED_FIELDS.
+      return { ...structuralBase, include: data.include.trim() } as IncludeNode;
     }
     // loop_group — guaranteed by superRefine to be defined at this point.
     // Spread aiOnly so group-level model/provider survive parsing — the executor forwards
@@ -860,11 +860,11 @@ export function isTriggerRule(value: unknown): value is TriggerRule {
 
 /**
  * True for node types that invoke a provider and therefore participate in cross-run
- * session persistence (`persist_session`). bash, script, approval, cancel, loop, and
- * loop_group nodes are excluded — they either make no provider call or manage their
- * own per-iteration sessions. Shared by the loader's load-time capability gate and
- * any other caller that needs to reason about persistence eligibility, so the
- * exclusion list lives in one place.
+ * session persistence (`persist_session`). bash, script, approval, cancel, loop,
+ * loop_group, and include nodes are excluded — they either make no provider call, manage
+ * their own per-iteration sessions, or (include) are expanded away before execution.
+ * Shared by the loader's load-time capability gate and any other caller that needs to
+ * reason about persistence eligibility, so the exclusion list lives in one place.
  */
 export function isPersistableNode(node: DagNode): boolean {
   return (
