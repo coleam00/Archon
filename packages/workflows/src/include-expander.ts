@@ -238,19 +238,40 @@ function inlineInclude(includeNode: IncludeNode, childNodes: DagNode[]): Expande
 }
 
 /**
+ * Workflow-level keys that are NOT dropped-config and must be excluded from the warning.
+ *   - name/description: the block's identity, never inheritable config.
+ *   - nodes: not dropped — they ARE what gets inlined.
+ *   - tags: cosmetic UI keyword-inference metadata with no runtime effect, so dropping it
+ *     is behaviorally inert; reporting it would be noise.
+ */
+const NON_DROPPED_WORKFLOW_KEYS: ReadonlySet<string> = new Set([
+  'name',
+  'description',
+  'nodes',
+  'tags',
+]);
+
+/** Isolation/concurrency-safety fields — a silent drop of these is the most dangerous. */
+const SAFETY_WORKFLOW_KEYS: ReadonlySet<string> = new Set(['mutates_checkout', 'sandbox']);
+
+/**
  * The included file's workflow-level fields are dropped (only its `nodes:` are inlined) —
  * emit a one-line load-time WARN so authors get a signal, since a silently-dropped
- * `requires: [github]` or `provider` can change behavior under a different parent.
+ * `requires`/`provider`/`mutates_checkout`/`sandbox`/… can change behavior under a
+ * different parent. The dropped set is DERIVED from the child's own defined keys (not a
+ * hand-maintained list) so any future workflow-level field is covered automatically —
+ * parseWorkflow emits provider/model/modelReasoningEffort/webSearchMode/interactive as
+ * always-present keys, so undefined values are filtered out.
  */
 function warnDroppedWorkflowLevelFields(includeNode: IncludeNode, child: WorkflowDefinition): void {
-  const droppedFields: string[] = [];
-  if (child.requires && child.requires.length > 0) droppedFields.push('requires');
-  if (child.persist_sessions) droppedFields.push('persist_sessions');
-  if (child.interactive !== undefined) droppedFields.push('interactive');
-  if (child.worktree) droppedFields.push('worktree');
-  if (child.provider) droppedFields.push('provider');
-  if (child.model) droppedFields.push('model');
+  const childRecord = child as Record<string, unknown>;
+  const droppedFields = Object.keys(child)
+    .filter(key => !NON_DROPPED_WORKFLOW_KEYS.has(key) && childRecord[key] !== undefined)
+    .sort();
   if (droppedFields.length === 0) return;
+
+  const safetyDropped = droppedFields.filter(f => SAFETY_WORKFLOW_KEYS.has(f));
+
   getLog().warn(
     {
       include: includeNode.id,
@@ -258,7 +279,13 @@ function warnDroppedWorkflowLevelFields(includeNode: IncludeNode, child: Workflo
       droppedFields,
       ...(child.requires?.includes('github')
         ? {
-            note: "requires:['github'] is dropped by inlining — declare it on the PARENT workflow if the block needs GitHub identity",
+            requiresNote:
+              "requires:['github'] is dropped by inlining — declare it on the PARENT workflow if the block needs GitHub identity",
+          }
+        : {}),
+      ...(safetyDropped.length > 0
+        ? {
+            safetyNote: `${safetyDropped.join(' and ')} affect isolation/concurrency safety — set them on the PARENT workflow if the block relies on them`,
           }
         : {}),
     },

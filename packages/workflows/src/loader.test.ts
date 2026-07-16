@@ -3059,13 +3059,75 @@ nodes:
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
       const parentErrors = result.errors.filter(e => e.filename === 'parent.yaml');
       expect(parentErrors).toHaveLength(0);
-      expect(mockLogger.warn).toHaveBeenCalledWith(
-        expect.objectContaining({
-          include: 'sub',
-          droppedFields: expect.arrayContaining(['provider', 'requires']),
-        }),
-        'include.workflow_level_fields_dropped'
+
+      // mockLogger is shared/accumulating across tests, so filter by this test's include id.
+      const call = (mockLogger.warn as Mock<(...args: unknown[]) => unknown>).mock.calls.find(
+        c =>
+          c[1] === 'include.workflow_level_fields_dropped' &&
+          (c[0] as { include?: string }).include === 'sub'
       );
+      expect(call).toBeDefined();
+      const payload = call![0] as {
+        include: string;
+        droppedFields: string[];
+        requiresNote?: string;
+        safetyNote?: string;
+      };
+      expect(payload.include).toBe('sub');
+      expect(payload.droppedFields).toContain('provider');
+      expect(payload.droppedFields).toContain('requires');
+      // The always-present-but-undefined keys parseWorkflow emits are filtered out, so a
+      // generic key derivation must NOT report them as dropped.
+      expect(payload.droppedFields).not.toContain('model');
+      expect(payload.droppedFields).not.toContain('interactive');
+      // requires:[github] gets its explicit callout; no safety fields here.
+      expect(payload.requiresNote).toContain('github');
+      expect(payload.safetyNote).toBeUndefined();
+    });
+
+    it('should warn — with a safety callout — when a block drops mutates_checkout and sandbox', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'safety-block.yaml'),
+        `
+name: safety-block
+description: A block declaring isolation/concurrency-safety fields
+mutates_checkout: false
+sandbox:
+  enabled: true
+nodes:
+  - id: work
+    prompt: "do the work"
+`
+      );
+      await writeFile(
+        join(workflowDir, 'safety-parent.yaml'),
+        `
+name: safety-parent
+description: Includes the safety block
+nodes:
+  - id: safety-sub
+    include: safety-block
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors.filter(e => e.filename === 'safety-parent.yaml')).toHaveLength(0);
+
+      const call = (mockLogger.warn as Mock<(...args: unknown[]) => unknown>).mock.calls.find(
+        c =>
+          c[1] === 'include.workflow_level_fields_dropped' &&
+          (c[0] as { include?: string }).include === 'safety-sub'
+      );
+      expect(call).toBeDefined();
+      const payload = call![0] as { droppedFields: string[]; safetyNote?: string };
+      expect(payload.droppedFields).toContain('mutates_checkout');
+      expect(payload.droppedFields).toContain('sandbox');
+      // Explicit safety callout naming BOTH.
+      expect(payload.safetyNote).toContain('mutates_checkout');
+      expect(payload.safetyNote).toContain('sandbox');
     });
 
     it('should fail expansion when a block command file references a renamed sibling', async () => {
