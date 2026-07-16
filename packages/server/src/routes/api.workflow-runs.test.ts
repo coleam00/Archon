@@ -1212,7 +1212,7 @@ describe('POST /api/workflows/runs/:runId/abandon', () => {
     expect(response.status).toBe(404);
   });
 
-  test('returns 400 when run is already terminal', async () => {
+  test('returns 400 when run is completed (non-resumable terminal)', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(MOCK_COMPLETED_RUN);
     const { app } = makeApp();
     const response = await app.request('/api/workflows/runs/run-uuid-2/abandon', {
@@ -1221,6 +1221,23 @@ describe('POST /api/workflows/runs/:runId/abandon', () => {
     expect(response.status).toBe(400);
     const body = (await response.json()) as { error: string };
     expect(body.error).toContain('Cannot abandon');
+    expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  test('returns 400 when run is cancelled (non-resumable terminal)', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce({
+      ...MOCK_RUNNING_RUN,
+      status: 'cancelled' as const,
+      completed_at: NOW,
+    });
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-uuid-1/abandon', {
+      method: 'POST',
+    });
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toContain('Cannot abandon');
+    expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
   });
 
   test('returns 200 and calls cancelWorkflowRun for running run', async () => {
@@ -1234,6 +1251,21 @@ describe('POST /api/workflows/runs/:runId/abandon', () => {
     expect(body.success).toBe(true);
     expect(body.message).toContain('Abandoned');
     expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-uuid-1');
+  });
+
+  // #1887: a failed run is terminal but resumable, so it must remain
+  // abandonable — the HTTP route previously rejected it, contradicting CLI/chat.
+  test('returns 200 and calls cancelWorkflowRun for failed run', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(MOCK_FAILED_RUN);
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-uuid-4/abandon', {
+      method: 'POST',
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { success: boolean; message: string };
+    expect(body.success).toBe(true);
+    expect(body.message).toContain('Abandoned');
+    expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-uuid-4');
   });
 });
 

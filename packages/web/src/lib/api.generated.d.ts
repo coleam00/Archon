@@ -1755,7 +1755,7 @@ export interface paths {
     };
     get?: never;
     put?: never;
-    /** Abandon a workflow run (mark as failed) */
+    /** Abandon a workflow run (mark as cancelled) */
     post: {
       parameters: {
         query?: never;

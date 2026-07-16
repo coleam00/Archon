@@ -767,7 +767,7 @@ const abandonWorkflowRunRoute = createRoute({
   method: 'post',
   path: '/api/workflows/runs/{runId}/abandon',
   tags: ['Workflows'],
-  summary: 'Abandon a workflow run (mark as failed)',
+  summary: 'Abandon a workflow run (mark as cancelled)',
   request: { params: z.object({ runId: z.string() }) },
   responses: {
     200: {
@@ -3211,8 +3211,16 @@ export function registerApiRoutes(
       if (!run) {
         return apiError(c, 404, 'Workflow run not found');
       }
-      if (TERMINAL_WORKFLOW_STATUSES.includes(run.status)) {
-        return apiError(c, 400, `Cannot abandon workflow in '${run.status}' status`);
+      // A `failed` run is terminal per TERMINAL_WORKFLOW_STATUSES but remains
+      // resumable, so the user must be able to discard it — only the two
+      // non-resumable terminal states are blocked. Mirrors abandonWorkflow in
+      // workflow-operations.ts so the HTTP route agrees with CLI/chat (#1887).
+      if (run.status === 'completed' || run.status === 'cancelled') {
+        return apiError(
+          c,
+          400,
+          `Cannot abandon run with status '${run.status}'. Only running, paused, or failed runs can be abandoned.`
+        );
       }
       await workflowDb.cancelWorkflowRun(runId);
       return c.json({ success: true, message: `Abandoned workflow: ${run.workflow_name}` });
