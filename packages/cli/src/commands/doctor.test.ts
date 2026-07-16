@@ -255,6 +255,25 @@ describe('checkOpenCode', () => {
     expect(result.status).toBe('skip');
     expect(result.message).toContain('not configured');
   });
+
+  it('surfaces the load error (not "entrypoint missing") when deps fail under --full', async () => {
+    const result = await checkOpenCode({}, true, async () => {
+      throw new Error('config load failed');
+    });
+    expect(result.status).toBe('fail');
+    // Must report the real load failure, not a fabricated SDK-entrypoint verdict.
+    expect(result.message).toContain('config load failed');
+    expect(result.message).not.toContain('createOpencode');
+  });
+
+  it('surfaces the load error when deps fail and OpenCode is the configured assistant', async () => {
+    const result = await checkOpenCode({ DEFAULT_AI_ASSISTANT: 'opencode' }, false, async () => {
+      throw new Error('module import failed');
+    });
+    expect(result.status).toBe('fail');
+    expect(result.message).toContain('module import failed');
+    expect(result.message).not.toContain('createOpencode');
+  });
 });
 
 describe('checkGhAuth', () => {

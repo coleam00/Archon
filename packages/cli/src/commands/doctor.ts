@@ -210,20 +210,33 @@ export async function checkOpenCode(
 ): Promise<CheckResult> {
   const label = 'OpenCode runtime';
 
-  let deps: OpenCodeDeps;
+  let deps: OpenCodeDeps | undefined;
+  let loadError: Error | undefined;
   try {
     deps = await loadDeps();
   } catch (err) {
+    // Keep the load error — if the check turns out to be in scope we must
+    // report *this* failure, not a fabricated "entrypoint missing" verdict.
+    loadError = err as Error;
     getLog().debug({ err }, 'doctor.opencode_deps_load_failed');
-    deps = { isDefaultAssistant: false, probeRuntimeModule: async (): Promise<boolean> => false };
   }
 
-  const configured = env.DEFAULT_AI_ASSISTANT === 'opencode' || deps.isDefaultAssistant;
+  const configured = env.DEFAULT_AI_ASSISTANT === 'opencode' || (deps?.isDefaultAssistant ?? false);
   if (!configured && !full) {
     return {
       label,
       status: 'skip',
       message: 'OpenCode not configured (pass --full to probe the runtime SDK)',
+    };
+  }
+
+  // In scope (configured or --full) but the probe deps never loaded — surface
+  // the real load failure instead of falsely blaming the SDK entrypoint below.
+  if (!deps) {
+    return {
+      label,
+      status: 'fail',
+      message: `runtime probe unavailable: ${loadError?.message ?? 'unknown error'}. Reinstall dependencies (bun install).`,
     };
   }
 
