@@ -346,6 +346,16 @@ nodes:
       } else if (scanResult.severity === 'critical' || scanResult.severity === 'high') {
         decision = 'reject';
         reason = `Security scan found ${String(scanResult.severity)} severity issues: ${scanResult.findings.map((f: { category: string; context: string }) => `${f.category} in ${f.context}`).join('; ')}`;
+      } else if (!schemaResult.files || (schemaResult.files as Array<{ valid: boolean }>).length === 0) {
+        // A marketplace entry must contain at least one workflow. validate-schema
+        // emits { valid: true, files: [] } when the pinned SHA yields no source
+        // dir / no YAML / no workflow-shaped YAML (top-level `nodes:`). Without
+        // this branch such a submission passes the schema guard below (which only
+        // fires on valid:false with a NON-empty file list), scans clean (nothing
+        // to scan), and reaches auto-merge — a fail-open. Reject deterministically.
+        decision = 'request_changes';
+        reason =
+          'Submission contains no workflow YAML at the pinned SHA. A marketplace entry must include at least one workflow definition (a YAML file with a top-level `nodes:` block).';
       } else if (aiReview.recommendation === 'reject') {
         decision = 'reject';
         reason = aiReview.reasoning;
