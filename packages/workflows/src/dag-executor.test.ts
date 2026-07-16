@@ -4157,6 +4157,151 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
     );
   });
 
+  // ─── Background Agent Task Gating (#2083) ───────────────────────────────
+
+  describe('background task completion gating (#2083)', () => {
+    const runSingleNode = async (
+      store: ReturnType<typeof createMockStore>,
+      platform: IWorkflowPlatform,
+      runId: string
+    ): Promise<void> => {
+      const mockDeps = createMockDeps(store);
+      const workflowRun = makeWorkflowRun(runId);
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-bg-tasks',
+        testDir,
+        { name: 'bg-task-test', nodes: [{ id: 'step1', command: 'step1' }] },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+    };
+
+    const findCompletedEvent = (
+      store: ReturnType<typeof createMockStore>
+    ): { data: Record<string, unknown> } | undefined => {
+      const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+      const call = eventCalls.find(
+        (c: unknown[]) =>
+          (c[0] as { event_type: string }).event_type === 'node_completed' &&
+          (c[0] as { step_name: string }).step_name === 'step1'
+      );
+      return call?.[0] as { data: Record<string, unknown> } | undefined;
+    };
+
+    it('waits past a result with live background tasks and captures the follow-up output', async () => {
+      mockSendQueryDag.mockImplementation(function* () {
+        yield {
+          type: 'background_tasks',
+          tasks: [{ taskId: 't-1', taskType: 'local_agent', description: 'bg research' }],
+        };
+        yield { type: 'assistant', content: 'spawned agents' };
+        // Turn-level result while t-1 is still live — must NOT complete the node
+        yield { type: 'result', sessionId: 'sid', cost: 0.1 };
+        // Post-result: task drains, follow-up turn integrates its output
+        yield { type: 'assistant', content: ' + integrated task output' };
+        yield { type: 'background_tasks', tasks: [] };
+        yield { type: 'result', sessionId: 'sid', cost: 0.3 };
+      });
+
+      const store = createMockStore();
+      const platform = createMockPlatform();
+      await runSingleNode(store, platform, 'bg-wait-run');
+
+      const completed = findCompletedEvent(store);
+      expect(completed).toBeDefined();
+      // Output includes the post-result follow-up turn (the wait actually happened)
+      expect(completed!.data.node_output).toBe('spawned agents + integrated task output');
+      // Cost is the LAST result's session-cumulative value, not a sum
+      expect(completed!.data.cost_usd).toBe(0.3);
+      // Clean drain → no incompleteness recorded
+      expect(completed!.data.background_tasks_incomplete).toBeUndefined();
+      // The wait was announced to the user once
+      const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.map(c =>
+        String(c[1])
+      );
+      expect(sent.some(m => m.includes('background agent task(s) still running'))).toBe(true);
+    });
+
+    it('records background_tasks_incomplete and warns when the stream ends with live tasks', async () => {
+      mockSendQueryDag.mockImplementation(function* () {
+        yield {
+          type: 'background_tasks',
+          tasks: [{ taskId: 't-orphan', taskType: 'local_agent', description: 'never drains' }],
+        };
+        yield { type: 'assistant', content: 'partial work' };
+        yield { type: 'result', sessionId: 'sid' };
+        // Generator ends without the set draining (subprocess death analog)
+      });
+
+      const store = createMockStore();
+      const platform = createMockPlatform();
+      await runSingleNode(store, platform, 'bg-incomplete-run');
+
+      const completed = findCompletedEvent(store);
+      expect(completed).toBeDefined();
+      expect(completed!.data.background_tasks_incomplete).toEqual(['t-orphan']);
+      const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.map(c =>
+        String(c[1])
+      );
+      expect(sent.some(m => m.includes('output may be missing'))).toBe(true);
+    });
+
+    it('breaks at the first result when no background_tasks chunk was seen (unchanged behavior)', async () => {
+      mockSendQueryDag.mockImplementation(function* () {
+        yield { type: 'assistant', content: 'normal output' };
+        yield { type: 'result', sessionId: 'sid' };
+        // Anything after the result must NOT be consumed
+        yield { type: 'assistant', content: ' MUST NOT APPEAR' };
+      });
+
+      const store = createMockStore();
+      const platform = createMockPlatform();
+      await runSingleNode(store, platform, 'bg-none-run');
+
+      const completed = findCompletedEvent(store);
+      expect(completed).toBeDefined();
+      expect(completed!.data.node_output).toBe('normal output');
+      expect(completed!.data.background_tasks_incomplete).toBeUndefined();
+    });
+
+    it('persists output_file on task_notification task_activity events', async () => {
+      mockSendQueryDag.mockImplementation(function* () {
+        yield { type: 'assistant', content: 'delegating' };
+        yield {
+          type: 'task_notification',
+          taskId: 't-9',
+          status: 'completed',
+          summary: 'wrote the report',
+          outputFile: '/tmp/task-9-output.md',
+        };
+        yield { type: 'result', sessionId: 'sid' };
+      });
+
+      const store = createMockStore();
+      const platform = createMockPlatform();
+      await runSingleNode(store, platform, 'bg-output-file-run');
+
+      const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+      const taskEvent = eventCalls.find(
+        (c: unknown[]) =>
+          (c[0] as { event_type: string }).event_type === 'task_activity' &&
+          (c[0] as { data: { task_id?: string } }).data.task_id === 't-9'
+      );
+      expect(taskEvent).toBeDefined();
+      expect((taskEvent![0] as { data: { output_file?: string } }).data.output_file).toBe(
+        '/tmp/task-9-output.md'
+      );
+    });
+  });
+
   // ─── Loop Node Tests ─────────────────────────────────────────────────────
 
   describe('loop node execution', () => {
@@ -4210,6 +4355,63 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       expect(completeCalls[0][1]).toEqual({
         node_counts: { completed: 1, failed: 0, skipped: 0, total: 1 },
       });
+    });
+
+    it('does not double-count cost when an iteration sees two results (background-task wait, #2083)', async () => {
+      mockSendQueryDag.mockImplementation(function* () {
+        yield {
+          type: 'background_tasks',
+          tasks: [{ taskId: 't-1', taskType: 'local_agent', description: 'bg work' }],
+        };
+        yield { type: 'assistant', content: 'Done. <promise>COMPLETE</promise>' };
+        // Session-cumulative cost: 0.1 at the first result, 0.3 at the final one
+        yield { type: 'result', sessionId: 'loop-sid', cost: 0.1 };
+        yield { type: 'background_tasks', tasks: [] };
+        yield { type: 'result', sessionId: 'loop-sid', cost: 0.3 };
+      });
+
+      const store = createMockStore();
+      const mockDeps = createMockDeps(store);
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun('loop-bg-cost-run');
+
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-dag',
+        testDir,
+        {
+          name: 'dag-loop-bg-cost',
+          nodes: [
+            {
+              id: 'my-loop',
+              loop: {
+                prompt: 'Do a task. When done, output <promise>COMPLETE</promise>.',
+                until: 'COMPLETE',
+                max_iterations: 5,
+              },
+            },
+          ],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+      const completedEvent = eventCalls.find(
+        (c: unknown[]) =>
+          (c[0] as { event_type: string }).event_type === 'node_completed' &&
+          (c[0] as { step_name: string }).step_name === 'my-loop'
+      );
+      expect(completedEvent).toBeDefined();
+      // 0.3 (last session-cumulative value), NOT 0.4 (0.1 + 0.3 double-count)
+      expect((completedEvent![0] as { data: { cost_usd?: number } }).data.cost_usd).toBe(0.3);
     });
 
     it('completes after multiple iterations', async () => {

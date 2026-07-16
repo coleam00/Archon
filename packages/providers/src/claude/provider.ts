@@ -782,6 +782,8 @@ async function* streamClaudeMessages(
         status?: string;
         output_file?: string;
         skip_transcript?: boolean;
+        // Background-task set (Claude SDK v0.3.209+ `background_tasks_changed`)
+        tasks?: { task_id: string; task_type: string; description: string }[];
         // Hook lifecycle (Claude SDK v0.2.89+)
         hook_id?: string;
         hook_name?: string;
@@ -846,6 +848,20 @@ async function* streamClaudeMessages(
           outputFile: sysMsg.output_file ?? '',
           ...(sysMsg.usage !== undefined ? { usage: sysMsg.usage } : {}),
           ...(sysMsg.tool_use_id !== undefined ? { toolUseId: sysMsg.tool_use_id } : {}),
+        };
+      } else if (subtype === 'background_tasks_changed') {
+        // Level signal: the FULL set of live background tasks after a membership
+        // change (REPLACE semantics — see the MessageChunk variant docs). An
+        // empty `tasks` array is meaningful ("all drained") and MUST be
+        // forwarded, so no `&& sysMsg.tasks` guard here.
+        const tasks = Array.isArray(sysMsg.tasks) ? sysMsg.tasks : [];
+        yield {
+          type: 'background_tasks',
+          tasks: tasks.map(t => ({
+            taskId: t.task_id,
+            taskType: t.task_type,
+            description: t.description,
+          })),
         };
       } else if (subtype === 'hook_started' && sysMsg.hook_id) {
         yield {

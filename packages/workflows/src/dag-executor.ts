@@ -355,6 +355,62 @@ const DEFAULT_NODE_RETRY_DELAY_MS = 3000;
 const STRUCTURED_OUTPUT_MAX_REASKS = 3;
 
 /**
+ * Tracks live background Agent tasks within one provider stream pass (#2083).
+ *
+ * Since Claude SDK 0.3.193 the model can delegate work to asynchronous
+ * background agents, so a `result` chunk only means "top-level turn done" —
+ * NOT "all work done". Breaking out of the stream loop at a result while
+ * background tasks are live calls `.return()` on the generator chain, which
+ * tears down the SDK subprocess (SIGTERM) and kills the tasks — the artifacts
+ * they were producing silently never appear.
+ *
+ * Fed by the provider's `background_tasks` chunk (SDK `background_tasks_changed`,
+ * v0.3.209+): a level signal carrying the FULL live set, REPLACE semantics.
+ * Both dag-executor stream loops (AI node + loop iteration) instantiate one
+ * tracker per stream pass and gate their break-on-result on it: when the set
+ * is non-empty, keep consuming — the SDK keeps the subprocess alive until the
+ * tasks drain, gives the agent a follow-up turn to integrate their output, and
+ * emits a final `result` (verified empirically against SDK 0.3.209). The wait
+ * is bounded by the existing idle-timeout machinery: `task_progress` chunks
+ * (~30s cadence while subagents run) reset the idle timer, and a genuinely
+ * hung task hits the normal idle-timeout path.
+ *
+ * Providers that never emit the chunk (Codex/Pi/OpenCode/Copilot, older Claude
+ * CLIs) leave the set empty → break-on-first-result behavior is unchanged.
+ */
+function createBackgroundTaskTracker(): {
+  update(tasks: { taskId: string; description: string }[]): void;
+  shouldBreakOnResult(): boolean;
+  count(): number;
+  ids(): string[];
+  /** True exactly once — lets the caller announce the wait a single time per pass. */
+  shouldAnnounceWait(): boolean;
+} {
+  const live = new Map<string, string>(); // taskId → description
+  let announced = false;
+  return {
+    update(tasks): void {
+      live.clear();
+      for (const t of tasks) live.set(t.taskId, t.description);
+    },
+    shouldBreakOnResult(): boolean {
+      return live.size === 0;
+    },
+    count(): number {
+      return live.size;
+    },
+    ids(): string[] {
+      return [...live.keys()];
+    },
+    shouldAnnounceWait(): boolean {
+      if (announced) return false;
+      announced = true;
+      return true;
+    },
+  };
+}
+
+/**
  * Get effective retry config for a DAG node.
  */
 function getEffectiveNodeRetryConfig(node: DagNode): {
@@ -1113,6 +1169,10 @@ async function executeNodeInternal(
   let nodeIdleTimedOut = false;
   const effectiveIdleTimeout = node.idle_timeout ?? STEP_IDLE_TIMEOUT_MS;
   let lastToolStartedAt: { toolName: string; startedAt: number } | null = null;
+  // Task ids still live when the stream ended abnormally (idle timeout /
+  // subprocess death) — recorded on the node_completed event so an incomplete
+  // node never masquerades as a clean success (#2083).
+  let backgroundTasksIncomplete: string[] = [];
 
   // Best-effort providers (Pi/Copilot) get a bounded validate-and-reask loop: on a
   // structured-output validation miss, re-run the stream with the schema errors
@@ -1138,6 +1198,8 @@ async function executeNodeInternal(
     batchMessages.length = 0; // else a failed attempt's prose flushes during reask
     nodeCostUsd = undefined;
     nodeIdleTimedOut = false;
+    backgroundTasksIncomplete = [];
+    const backgroundTasks = createBackgroundTaskTracker();
     for await (const msg of withIdleTimeout(
       aiClient.sendQuery(attemptPrompt, cwd, attemptResumeId, nodeOptionsWithAbort),
       effectiveIdleTimeout,
@@ -1360,7 +1422,36 @@ async function executeNodeInternal(
           );
           throw new Error(`Node '${node.id}' failed: SDK returned ${subtype}${errorsDetail}`);
         }
-        break; // Result is the "I'm done" signal — don't wait for subprocess to exit
+        if (backgroundTasks.shouldBreakOnResult()) {
+          break; // Result is the "I'm done" signal — don't wait for subprocess to exit
+        }
+        // Result arrived with background Agent tasks still live (#2083).
+        // Breaking here would .return() the generator chain → SDK cleanup →
+        // SIGTERM the CLI → kill the tasks and lose their pending artifacts.
+        // Keep consuming: the SDK holds the subprocess open until the tasks
+        // drain, runs a follow-up turn to integrate their output, and emits a
+        // final result (whose fields overwrite the captures above — correct,
+        // since SDK cost/usage are session-cumulative). Bounded by the
+        // existing idle timeout; task_progress chunks reset it.
+        getLog().warn(
+          {
+            nodeId: node.id,
+            taskCount: backgroundTasks.count(),
+            taskIds: backgroundTasks.ids(),
+          },
+          'dag.node_result_with_live_background_tasks'
+        );
+        if (backgroundTasks.shouldAnnounceWait()) {
+          await safeSendMessage(
+            platform,
+            conversationId,
+            `⏳ Node \`${node.id}\`: turn ended with ${String(backgroundTasks.count())} background agent task(s) still running — waiting for them to finish before completing the node.`,
+            nodeContext
+          );
+        }
+      } else if (msg.type === 'background_tasks') {
+        // Level signal (REPLACE semantics): swap the live set for the payload.
+        backgroundTasks.update(msg.tasks);
       } else if (msg.type === 'system' && msg.content) {
         // Providers yield system chunks for user-actionable issues (missing env
         // vars, Haiku+MCP, structured output failures, etc.). MCP-failure
@@ -1496,6 +1587,7 @@ async function executeNodeInternal(
           activity: msg.status,
           ...(msg.summary !== undefined ? { summary: msg.summary } : {}),
           ...(msg.usage !== undefined ? { usage: msg.usage } : {}),
+          ...(msg.outputFile ? { outputFile: msg.outputFile } : {}),
         });
         deps.store
           .createWorkflowEvent({
@@ -1507,6 +1599,9 @@ async function executeNodeInternal(
               activity: msg.status,
               ...(msg.summary !== undefined ? { summary: msg.summary } : {}),
               ...(msg.usage !== undefined ? { usage: msg.usage } : {}),
+              // Where the settled task wrote its output — the artifact trail
+              // for delegated work (#2083).
+              ...(msg.outputFile ? { output_file: msg.outputFile } : {}),
             },
           })
           .catch((err: Error) => {
@@ -1577,6 +1672,33 @@ async function executeNodeInternal(
           });
       }
       // rate_limit chunks: already log.warn'd in claude.ts; not surfaced to SSE per design
+    }
+
+    // Stream ended with background tasks still live: the SDK subprocess died or
+    // the idle timeout fired mid-wait. The tasks' artifacts may be missing —
+    // record the incompleteness (surfaced on the node_completed event) and warn
+    // loudly instead of silently completing (#2083). Cancellation is exempt:
+    // the node returns 'failed — Cancelled by user' and the warning would be noise.
+    if (!backgroundTasks.shouldBreakOnResult()) {
+      backgroundTasksIncomplete = backgroundTasks.ids();
+      const cancelled = nodeAbortController.signal.aborted && !nodeIdleTimedOut;
+      getLog().warn(
+        {
+          nodeId: node.id,
+          taskIds: backgroundTasksIncomplete,
+          idleTimedOut: nodeIdleTimedOut,
+          cancelled,
+        },
+        'dag.node_stream_ended_with_live_background_tasks'
+      );
+      if (!cancelled) {
+        await safeSendMessage(
+          platform,
+          conversationId,
+          `⚠️ Node \`${node.id}\`: the provider stream ended with ${String(backgroundTasksIncomplete.length)} background agent task(s) still running (${backgroundTasksIncomplete.join(', ')}). Their output may be missing — treat this node's artifacts as potentially incomplete.`,
+          nodeContext
+        );
+      }
     }
   };
 
@@ -1867,6 +1989,11 @@ async function executeNodeInternal(
           ...(nodeStopReason ? { stop_reason: nodeStopReason } : {}),
           ...(nodeNumTurns !== undefined ? { num_turns: nodeNumTurns } : {}),
           ...(nodeModelUsage ? { model_usage: nodeModelUsage } : {}),
+          // Background Agent tasks still live when the stream ended (#2083) —
+          // this node's artifacts may be incomplete.
+          ...(backgroundTasksIncomplete.length > 0
+            ? { background_tasks_incomplete: backgroundTasksIncomplete }
+            : {}),
           ...iterationData,
         },
       })
@@ -3263,6 +3390,38 @@ async function executeLoopNode(
     let iterationIdleTimedOut = false;
     const iterationAbortController = new AbortController();
 
+    // Background-task gate (#2083) — see createBackgroundTaskTracker. When the
+    // set is non-empty at result time this iteration keeps consuming, so a
+    // single iteration can now observe MULTIPLE result chunks. SDK cost/usage
+    // are session-cumulative, so the per-result `+=` accumulation used before
+    // would double-count: capture last-seen values (overwrite semantics) and
+    // fold them into the loop totals once, after the stream ends.
+    const backgroundTasks = createBackgroundTaskTracker();
+    let iterationCost: number | undefined;
+    let iterationTokens: TokenUsage | undefined;
+    let iterationNumTurns: number | undefined;
+    // Fold the last-seen per-iteration values into the loop totals exactly
+    // once — called on both the normal exit and the catch path (an SDK-error
+    // result still carries the iteration's cost, which the totals reported
+    // on the failure return must include, matching the old += behavior).
+    let iterationUsageFolded = false;
+    const foldIterationUsage = (): void => {
+      if (iterationUsageFolded) return;
+      iterationUsageFolded = true;
+      if (iterationCost !== undefined) {
+        loopTotalCostUsd = (loopTotalCostUsd ?? 0) + iterationCost;
+      }
+      if (iterationTokens !== undefined) {
+        loopTotalTokens = {
+          input: (loopTotalTokens?.input ?? 0) + iterationTokens.input,
+          output: (loopTotalTokens?.output ?? 0) + iterationTokens.output,
+        };
+      }
+      if (iterationNumTurns !== undefined) {
+        loopTotalNumTurns = (loopTotalNumTurns ?? 0) + iterationNumTurns;
+      }
+    };
+
     try {
       // Build prompt — substituteWorkflowVariables throws if $BASE_BRANCH referenced but empty
       // Pass loopUserInput on the first resumed iteration; '' on all others (non-interactive
@@ -3338,17 +3497,16 @@ async function executeLoopNode(
             lastToolStartedAt = null;
           }
           if (msg.sessionId) currentSessionId = msg.sessionId;
+          // Overwrite, don't accumulate — a later result in the same iteration
+          // (background-task wait, #2083) carries session-cumulative values.
           if (msg.cost !== undefined) {
-            loopTotalCostUsd = (loopTotalCostUsd ?? 0) + msg.cost;
+            iterationCost = msg.cost;
           }
           if (msg.tokens !== undefined) {
             // Provider-supplied numbers — see the NaN guard rationale at the
             // DAG-level accumulator.
             if (Number.isFinite(msg.tokens.input) && Number.isFinite(msg.tokens.output)) {
-              loopTotalTokens = {
-                input: (loopTotalTokens?.input ?? 0) + msg.tokens.input,
-                output: (loopTotalTokens?.output ?? 0) + msg.tokens.output,
-              };
+              iterationTokens = { input: msg.tokens.input, output: msg.tokens.output };
             } else {
               getLog().warn(
                 { nodeId: node.id, tokens: msg.tokens },
@@ -3358,7 +3516,7 @@ async function executeLoopNode(
           }
           if (msg.stopReason !== undefined) loopFinalStopReason = msg.stopReason;
           if (msg.numTurns !== undefined) {
-            loopTotalNumTurns = (loopTotalNumTurns ?? 0) + msg.numTurns;
+            iterationNumTurns = msg.numTurns;
           }
           if (msg.structuredOutput !== undefined) {
             lastIterationStructuredOutput = msg.structuredOutput;
@@ -3390,7 +3548,32 @@ async function executeLoopNode(
               `Loop '${node.id}' iteration ${String(i)} failed: SDK returned ${subtype}${errorsDetail}`
             );
           }
-          break; // Result is the "I'm done" signal — don't wait for subprocess to exit
+          if (backgroundTasks.shouldBreakOnResult()) {
+            break; // Result is the "I'm done" signal — don't wait for subprocess to exit
+          }
+          // Result with live background Agent tasks (#2083): breaking would
+          // SIGTERM the SDK subprocess and kill them. Keep consuming until the
+          // final result — see the AI-node stream loop for the full rationale.
+          getLog().warn(
+            {
+              nodeId: node.id,
+              iteration: i,
+              taskCount: backgroundTasks.count(),
+              taskIds: backgroundTasks.ids(),
+            },
+            'loop_node.iteration_result_with_live_background_tasks'
+          );
+          if (backgroundTasks.shouldAnnounceWait()) {
+            await safeSendMessage(
+              platform,
+              conversationId,
+              `⏳ Loop \`${node.id}\` iteration ${String(i)}: turn ended with ${String(backgroundTasks.count())} background agent task(s) still running — waiting for them to finish.`,
+              msgContext
+            );
+          }
+        } else if (msg.type === 'background_tasks') {
+          // Level signal (REPLACE semantics): swap the live set for the payload.
+          backgroundTasks.update(msg.tasks);
         } else if (msg.type === 'tool' && msg.toolName) {
           const now = Date.now();
 
@@ -3462,7 +3645,35 @@ async function executeLoopNode(
         }
         // rate_limit chunks: already log.warn'd in claude.ts; not surfaced to SSE per design
       }
+      foldIterationUsage();
+
+      // Stream ended with background tasks still live (idle timeout mid-wait or
+      // subprocess death): their artifacts may be missing — warn loudly instead
+      // of silently continuing (#2083). Cancellation is exempt (iteration fails
+      // with its own message).
+      if (!backgroundTasks.shouldBreakOnResult()) {
+        const cancelled = iterationAbortController.signal.aborted && !iterationIdleTimedOut;
+        getLog().warn(
+          {
+            nodeId: node.id,
+            iteration: i,
+            taskIds: backgroundTasks.ids(),
+            idleTimedOut: iterationIdleTimedOut,
+            cancelled,
+          },
+          'loop_node.iteration_stream_ended_with_live_background_tasks'
+        );
+        if (!cancelled) {
+          await safeSendMessage(
+            platform,
+            conversationId,
+            `⚠️ Loop \`${node.id}\` iteration ${String(i)}: the provider stream ended with ${String(backgroundTasks.count())} background agent task(s) still running (${backgroundTasks.ids().join(', ')}). Their output may be missing.`,
+            msgContext
+          );
+        }
+      }
     } catch (error) {
+      foldIterationUsage();
       const err = error as Error;
       const duration = Date.now() - iterationStart;
       getLog().error({ err, nodeId: node.id, iteration: i }, 'loop_node.iteration_failed');
