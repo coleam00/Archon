@@ -255,15 +255,30 @@ export async function resolveProjectPaths(
             artifactsRoot: archonPaths.getFolderProjectArtifactsPath(slug),
           };
         }
-        const parsed = archonPaths.parseOwnerRepo(codebase.name);
-        if (parsed) {
+        // Repo projects: parse `owner/repo`, or scope a no-remote local repo
+        // under `_local/<basename(cwd)>` — the same identity registration wrote
+        // to disk. Without this branch the paths below fall through to the
+        // <cwd>/.archon fallback, dumping logs/artifacts outside ARCHON_HOME
+        // (#2132).
+        const identity = archonPaths.resolveRepoProjectIdentity(
+          codebase.name,
+          codebase.default_cwd
+        );
+        if (identity) {
           return {
-            artifactsDir: archonPaths.getRunArtifactsPath(parsed.owner, parsed.repo, workflowRunId),
-            logDir: archonPaths.getProjectLogsPath(parsed.owner, parsed.repo),
-            artifactsRoot: archonPaths.getProjectArtifactsPath(parsed.owner, parsed.repo),
+            artifactsDir: archonPaths.getRunArtifactsPath(
+              identity.owner,
+              identity.repo,
+              workflowRunId
+            ),
+            logDir: archonPaths.getProjectLogsPath(identity.owner, identity.repo),
+            artifactsRoot: archonPaths.getProjectArtifactsPath(identity.owner, identity.repo),
           };
         }
-        getLog().warn({ codebaseName: codebase.name }, 'codebase_name_not_owner_repo_format');
+        getLog().warn(
+          { codebaseName: codebase.name, cwd: codebase.default_cwd },
+          'codebase_project_identity_unresolved'
+        );
       }
     } catch (error) {
       const fallbackArtifactsDir = join(cwd, '.archon', 'artifacts', 'runs', workflowRunId);

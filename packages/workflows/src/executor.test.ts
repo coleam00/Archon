@@ -27,6 +27,7 @@ const mockCaptureWorkflowCompleted = mock(() => {});
 mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
   parseOwnerRepo: mock(() => null),
+  resolveRepoProjectIdentity: mock(() => null),
   getRunArtifactsPath: mock(() => '/tmp/artifacts'),
   getProjectLogsPath: mock(() => '/tmp/logs'),
   getProjectArtifactsPath: mock(() => '/tmp/artifacts-root'),
@@ -1576,7 +1577,7 @@ describe('resolveProjectPaths', () => {
 
   it('routes repo projects to owner/repo/ storage (unchanged)', async () => {
     const paths = await import('@archon/paths');
-    (paths.parseOwnerRepo as ReturnType<typeof mock>).mockReturnValueOnce({
+    (paths.resolveRepoProjectIdentity as ReturnType<typeof mock>).mockReturnValueOnce({
       owner: 'acme',
       repo: 'widget',
     });
@@ -1594,6 +1595,39 @@ describe('resolveProjectPaths', () => {
     const result = await resolveProjectPaths(deps, '/repos/widget', RUN_ID, 'cb-repo');
 
     // getRunArtifactsPath/getProjectLogsPath/getProjectArtifactsPath are mocked to constants
+    expect(result.artifactsDir).toBe('/tmp/artifacts');
+    expect(result.logDir).toBe('/tmp/logs');
+    expect(result.artifactsRoot).toBe('/tmp/artifacts-root');
+  });
+
+  it('routes a no-remote local repo to _local/<basename> storage (#2132)', async () => {
+    const paths = await import('@archon/paths');
+    // A bare-basename codebase name resolves to the _local pseudo-owner rather
+    // than falling through to <cwd>/.archon.
+    (paths.resolveRepoProjectIdentity as ReturnType<typeof mock>).mockReturnValueOnce({
+      owner: '_local',
+      repo: 'workspace',
+    });
+    const store = makeStore({
+      getCodebase: mock(async () => ({
+        id: 'cb-local',
+        name: 'workspace',
+        repository_url: null,
+        default_cwd: '/home/username/workspace',
+        kind: 'repo' as const,
+      })),
+    });
+    const deps = makeDeps(store);
+
+    const result = await resolveProjectPaths(deps, '/home/username/workspace', RUN_ID, 'cb-local');
+
+    expect(paths.resolveRepoProjectIdentity).toHaveBeenCalledWith(
+      'workspace',
+      '/home/username/workspace'
+    );
+    expect(paths.getRunArtifactsPath).toHaveBeenCalledWith('_local', 'workspace', RUN_ID);
+    expect(paths.getProjectLogsPath).toHaveBeenCalledWith('_local', 'workspace');
+    // Routed to project storage (mocked constants), NOT the cwd fallback.
     expect(result.artifactsDir).toBe('/tmp/artifacts');
     expect(result.logDir).toBe('/tmp/logs');
     expect(result.artifactsRoot).toBe('/tmp/artifacts-root');

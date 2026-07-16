@@ -22,6 +22,7 @@ export {
   logArchonPaths,
   validateAppDefaultsPaths,
   parseOwnerRepo,
+  resolveRepoProjectIdentity,
   getProjectRoot,
   getProjectSourcePath,
   getProjectWorktreesPath,
