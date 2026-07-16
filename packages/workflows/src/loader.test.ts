@@ -1978,8 +1978,10 @@ nodes:
       expect(result.workflows).toHaveLength(1);
     });
 
-    it('should not validate bash: script $nodeId.output refs at load time', async () => {
-      // bash: nodes are intentionally excluded from load-time validation
+    it('should validate bash node $nodeId.output refs at load time', async () => {
+      // bash: (like script/cancel/approval.message/until_bash) is substituted at
+      // runtime, so a dangling ref there silently resolves to '' — it must be caught
+      // at load time, same as prompt/when refs.
       const workflowDir = join(testDir, '.archon', 'workflows');
       await mkdir(workflowDir, { recursive: true });
 
@@ -1987,7 +1989,7 @@ nodes:
         join(workflowDir, 'bash-unknown-ref.yaml'),
         `
 name: bash-unknown-ref
-description: Bash node with unknown output ref (not validated at load time)
+description: Bash node with a dangling output ref
 nodes:
   - id: step1
     prompt: "Do step 1"
@@ -1997,10 +1999,36 @@ nodes:
 `
       );
 
-      // Should parse without error — bash: refs are validated at runtime only
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      expect(result.errors).toHaveLength(0);
-      expect(result.workflows).toHaveLength(1);
+      expect(result.errors.length).toBeGreaterThan(0);
+      expect(result.errors[0].error).toContain('$typo.output');
+      expect(result.workflows).toHaveLength(0);
+    });
+
+    it('should validate script/cancel/approval.message/until_bash refs at load time', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      // A script node with a dangling ref is rejected (representative of the other
+      // newly-scanned code/text surfaces).
+      await writeFile(
+        join(workflowDir, 'script-unknown-ref.yaml'),
+        `
+name: script-unknown-ref
+description: Script node with a dangling output ref
+nodes:
+  - id: step1
+    prompt: "Do step 1"
+  - id: step2
+    script: "console.log($missing.output)"
+    runtime: bun
+    depends_on: [step1]
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors.length).toBeGreaterThan(0);
+      expect(result.errors[0].error).toContain('$missing.output');
     });
 
     it('should ignore $nodeId.output inside fenced code blocks in prompt: bodies', async () => {
@@ -2999,6 +3027,120 @@ nodes:
       const err = result.errors.find(e => e.filename === 'broken-include');
       expect(err).toBeDefined();
       expect(err?.error).toContain('not found');
+    });
+
+    it('should warn when an included block drops meaningful workflow-level fields', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'gated-block.yaml'),
+        `
+name: gated-block
+description: A block that declares workflow-level fields (dropped on inline)
+provider: claude
+requires: [github]
+nodes:
+  - id: work
+    prompt: "do the work"
+`
+      );
+      await writeFile(
+        join(workflowDir, 'parent.yaml'),
+        `
+name: parent
+description: Includes the gated block
+nodes:
+  - id: sub
+    include: gated-block
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      const parentErrors = result.errors.filter(e => e.filename === 'parent.yaml');
+      expect(parentErrors).toHaveLength(0);
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          include: 'sub',
+          droppedFields: expect.arrayContaining(['provider', 'requires']),
+        }),
+        'include.workflow_level_fields_dropped'
+      );
+    });
+
+    it('should fail expansion when a block command file references a renamed sibling', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      const commandsDir = join(testDir, '.archon', 'commands');
+      await mkdir(workflowDir, { recursive: true });
+      await mkdir(commandsDir, { recursive: true });
+
+      // Command file references a SIBLING node id that namespacing will rename.
+      await writeFile(join(commandsDir, 'blk-runner.md'), 'Summarize $sib.output for the report.');
+      await writeFile(
+        join(workflowDir, 'cmd-block.yaml'),
+        `
+name: cmd-block
+description: Block whose command references a sibling
+nodes:
+  - id: sib
+    bash: "echo hi"
+  - id: runner
+    command: blk-runner
+    depends_on: [sib]
+`
+      );
+      await writeFile(
+        join(workflowDir, 'cmd-parent.yaml'),
+        `
+name: cmd-parent
+description: Includes the command block
+nodes:
+  - id: rev
+    include: cmd-block
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.workflows.some(w => w.workflow.name === 'cmd-parent')).toBe(false);
+      const err = result.errors.find(e => e.filename === 'cmd-parent');
+      expect(err?.error).toContain("command file 'blk-runner.md'");
+      expect(err?.error).toContain("sibling node '$sib'");
+    });
+
+    it('should warn (not fail) when a block command file cannot be resolved for scanning', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'ghost-block.yaml'),
+        `
+name: ghost-block
+description: Block whose command file does not exist on disk
+nodes:
+  - id: runner
+    command: ghost-cmd-does-not-exist-xyz
+`
+      );
+      await writeFile(
+        join(workflowDir, 'ghost-parent.yaml'),
+        `
+name: ghost-parent
+description: Includes the ghost block
+nodes:
+  - id: g
+    include: ghost-block
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      // Unresolvable command → WARN, never a hard expansion error.
+      const parentErrors = result.errors.filter(e => e.filename === 'ghost-parent.yaml');
+      expect(parentErrors).toHaveLength(0);
+      expect(result.workflows.some(w => w.workflow.name === 'ghost-parent')).toBe(true);
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ include: 'g', command: 'ghost-cmd-does-not-exist-xyz' }),
+        'include.command_file_unresolved_for_ref_scan'
+      );
     });
   });
 

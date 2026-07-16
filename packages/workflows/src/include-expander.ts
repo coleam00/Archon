@@ -37,7 +37,15 @@ import {
   isBashNode,
   isScriptNode,
 } from './schemas';
+import { createLogger } from '@archon/paths';
 import { validateDagStructure } from './loader';
+
+/** Lazy-initialized logger (deferred so test mocks can intercept createLogger). */
+let cachedLog: ReturnType<typeof createLogger> | undefined;
+function getLog(): ReturnType<typeof createLogger> {
+  if (!cachedLog) cachedLog = createLogger('workflow.include-expander');
+  return cachedLog;
+}
 
 /**
  * Maximum include-nesting depth. A chain of includes deeper than this is rejected
@@ -49,46 +57,107 @@ export const INCLUDE_MAX_DEPTH = 3;
 /**
  * Output-ref pattern — mirrors the loader's `outputRefPattern` and the executor's
  * substitution regex. Matches `$<id>.output`; any `.field` suffix that follows is
- * left untouched (only the node-id segment is rewritten).
+ * left untouched (only the node-id segment is rewritten). Used for the eight text
+ * surfaces that go through substituteNodeOutputRefs (prompt/bash/script/... ), which
+ * only accept the canonical `.output[.field]` form.
  */
 const OUTPUT_REF_PATTERN = /\$([a-zA-Z_][a-zA-Z0-9_-]*)\.output/g;
+
+/**
+ * `when:`-only ref pattern. The condition grammar (condition-evaluator.ts) additionally
+ * accepts the SHORTHAND `$id.field` form (equivalent to `$id.output.field`) alongside
+ * `$id.output` / `$id.output.field`. So in a `when:` a bare `$id` followed by `.` and a
+ * field name is a node reference whose id must be renamed too — OUTPUT_REF_PATTERN (which
+ * requires the literal `.output`) would miss `$verify.exit_code == '0'`. The lookahead
+ * matches `$id` only when a `.<field>` follows, and rewrites just the id segment.
+ */
+const WHEN_REF_PATTERN = /\$([a-zA-Z_][a-zA-Z0-9_-]*)(?=\.[a-zA-Z_])/g;
+
+/** Fenced (``` ```) and inline (` `` `) markdown code spans — documentation, not live refs. */
+const CODE_SPAN_PATTERN = /```[\s\S]*?```|`[^`\n]*`/g;
+
+function applyOutputRefRename(text: string, rename: (id: string) => string): string {
+  return text.replace(OUTPUT_REF_PATTERN, (match, id: string) => {
+    const renamed = rename(id);
+    return renamed === id ? match : `$${renamed}.output`;
+  });
+}
+
+function applyWhenRefRename(text: string, rename: (id: string) => string): string {
+  return text.replace(WHEN_REF_PATTERN, (match, id: string) => {
+    const renamed = rename(id);
+    return renamed === id ? match : `$${renamed}`;
+  });
+}
+
+/**
+ * Apply `fn` only to the text OUTSIDE markdown code spans, leaving fenced/inline code
+ * verbatim. Used for prose fields (prompt/loop.prompt/approval.message) where a
+ * `$other.output` inside a fenced example is documentation for the LLM, not a live ref —
+ * mirroring the loader's fence-stripping in validateDagStructure so validation and
+ * rewriting agree.
+ */
+function rewriteOutsideCode(text: string, fn: (chunk: string) => string): string {
+  let result = '';
+  let last = 0;
+  CODE_SPAN_PATTERN.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = CODE_SPAN_PATTERN.exec(text)) !== null) {
+    result += fn(text.slice(last, m.index)) + m[0];
+    last = m.index + m[0].length;
+  }
+  return result + fn(text.slice(last));
+}
+
+/** Escape a node id for use inside a dynamically-built RegExp. */
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 /** Internal signal for a per-workflow expansion failure (resilient: drop one, keep the rest). */
 class IncludeExpansionError extends Error {}
 
 /**
- * Rewrite `$id.output` references in a node's text-bearing fields via `rename`.
+ * Rewrite node-output references in a node's text-bearing fields via `rename`.
  * Mutates the (already-cloned) node in place. Recurses into loop_group bodies so a
  * body node's reference to an enclosing (namespaced) node is rewritten too.
  * `command` is a command NAME, never a ref, and is intentionally not rewritten.
+ *
+ * Three field classes, each with the right ref grammar:
+ *   - `when:` — dual grammar (`$id.output[.field]` AND shorthand `$id.field`), never
+ *     markdown → `applyWhenRefRename`. Missing the shorthand would leave e.g.
+ *     `$verify.exit_code` pointing at a renamed sibling (silent fail-closed skip).
+ *   - Prose (prompt / loop.prompt / approval.message) — canonical `.output` refs, but may
+ *     embed fenced/inline code examples that must NOT be rewritten → fence-aware.
+ *   - Code/expression (bash / script / loop.until_bash / loop_group.until_bash / cancel) —
+ *     canonical `.output` refs are LIVE (never documentation) → rewritten verbatim.
  */
 function rewriteNodeOutputRefs(node: DagNode, rename: (id: string) => string): void {
-  const sub = (text: string): string =>
-    text.replace(OUTPUT_REF_PATTERN, (match, id: string) => {
-      const renamed = rename(id);
-      return renamed === id ? match : `$${renamed}.output`;
-    });
+  const code = (text: string): string => applyOutputRefRename(text, rename);
+  const prose = (text: string): string =>
+    rewriteOutsideCode(text, chunk => applyOutputRefRename(chunk, rename));
+  const whenExpr = (text: string): string => applyWhenRefRename(text, rename);
 
-  if (node.when !== undefined) node.when = sub(node.when);
+  if (node.when !== undefined) node.when = whenExpr(node.when);
 
   if (isLoopNode(node)) {
-    node.loop.prompt = sub(node.loop.prompt);
-    if (node.loop.until_bash !== undefined) node.loop.until_bash = sub(node.loop.until_bash);
+    node.loop.prompt = prose(node.loop.prompt);
+    if (node.loop.until_bash !== undefined) node.loop.until_bash = code(node.loop.until_bash);
   } else if (isLoopGroupNode(node)) {
     if (node.loop_group.until_bash !== undefined) {
-      node.loop_group.until_bash = sub(node.loop_group.until_bash);
+      node.loop_group.until_bash = code(node.loop_group.until_bash);
     }
     for (const body of node.loop_group.nodes) rewriteNodeOutputRefs(body, rename);
   } else if (isApprovalNode(node)) {
-    node.approval.message = sub(node.approval.message);
+    node.approval.message = prose(node.approval.message);
   } else if (isBashNode(node)) {
-    node.bash = sub(node.bash);
+    node.bash = code(node.bash);
   } else if (isScriptNode(node)) {
-    node.script = sub(node.script);
+    node.script = code(node.script);
   } else if (isCancelNode(node)) {
-    node.cancel = sub(node.cancel);
+    node.cancel = code(node.cancel);
   } else if ('prompt' in node && typeof node.prompt === 'string') {
-    node.prompt = sub(node.prompt);
+    node.prompt = prose(node.prompt);
   }
 }
 
@@ -169,15 +238,90 @@ function inlineInclude(includeNode: IncludeNode, childNodes: DagNode[]): Expande
 }
 
 /**
+ * The included file's workflow-level fields are dropped (only its `nodes:` are inlined) —
+ * emit a one-line load-time WARN so authors get a signal, since a silently-dropped
+ * `requires: [github]` or `provider` can change behavior under a different parent.
+ */
+function warnDroppedWorkflowLevelFields(includeNode: IncludeNode, child: WorkflowDefinition): void {
+  const droppedFields: string[] = [];
+  if (child.requires && child.requires.length > 0) droppedFields.push('requires');
+  if (child.persist_sessions) droppedFields.push('persist_sessions');
+  if (child.interactive !== undefined) droppedFields.push('interactive');
+  if (child.worktree) droppedFields.push('worktree');
+  if (child.provider) droppedFields.push('provider');
+  if (child.model) droppedFields.push('model');
+  if (droppedFields.length === 0) return;
+  getLog().warn(
+    {
+      include: includeNode.id,
+      target: child.name,
+      droppedFields,
+      ...(child.requires?.includes('github')
+        ? {
+            note: "requires:['github'] is dropped by inlining — declare it on the PARENT workflow if the block needs GitHub identity",
+          }
+        : {}),
+    },
+    'include.workflow_level_fields_dropped'
+  );
+}
+
+/**
+ * A `command:` node's file content is read only at EXECUTION time, so the expander cannot
+ * rewrite `$sibling.output` refs inside it the way it rewrites inline node text. If a
+ * block's command file references a sibling node id that namespacing renames, the ref
+ * would silently substitute to '' at run time. Scan resolved command content (markdown
+ * fences stripped) for refs to any renamed id and FAIL the expansion on a hit; WARN when
+ * the file can't be resolved for scanning. Skipped entirely when no `commandContents` is
+ * supplied (e.g. unit tests that don't exercise command files).
+ */
+function scanBlockCommandRefs(
+  includeNode: IncludeNode,
+  child: WorkflowDefinition,
+  commandContents: ReadonlyMap<string, string | null>
+): void {
+  const renamedIds = child.nodes.map(n => n.id); // every child top-level id gets a prefix
+  for (const cn of child.nodes) {
+    if (!('command' in cn && typeof cn.command === 'string')) continue;
+    const content = commandContents.get(cn.command);
+    if (content === undefined || content === null) {
+      getLog().warn(
+        { include: includeNode.id, target: child.name, command: cn.command, renamedIds },
+        'include.command_file_unresolved_for_ref_scan'
+      );
+      continue;
+    }
+    const stripped = content.replace(/```[\s\S]*?```/g, '').replace(/`[^`\n]*`/g, '');
+    for (const id of renamedIds) {
+      // `$id.output` or the shorthand `$id.field` — either points at the pre-rename id.
+      const refRe = new RegExp(`\\$${escapeRegExp(id)}(?=\\.[a-zA-Z_])`);
+      if (refRe.test(stripped)) {
+        throw new IncludeExpansionError(
+          `Node '${includeNode.id}': command file '${cn.command}.md' in included block '${child.name}' references sibling node '$${id}', which include namespacing renames to '${includeNode.id}__${id}'. Command-file contents are read at execution time and cannot be rewritten — inline the prompt, or restructure so the command has no cross-node reference.`
+        );
+      }
+    }
+  }
+}
+
+/**
  * Expand every workflow's `include:` nodes into flattened, namespaced sub-DAGs.
  *
  * Input is keyed by workflow NAME (higher-scope files have already overridden lower
  * ones by filename in discovery). Output workflows contain ZERO include nodes.
  * Errors are per-workflow: a workflow that fails to expand (unknown target, cycle,
- * depth, id collision, invalid flattened structure) is dropped from the output and
- * an error is recorded — other workflows still expand.
+ * depth, id collision, invalid flattened structure, command-file cross-ref) is dropped
+ * from the output and an error is recorded — other workflows still expand.
+ *
+ * `commandContents` maps command NAME → file content (or null when unresolvable). When
+ * provided (discovery pre-resolves it for include-target command nodes) the expander
+ * scans block command files for sibling refs that namespacing would break; omit it to
+ * skip that scan.
  */
-export function expandWorkflowIncludes(rawByName: Map<string, WorkflowDefinition>): {
+export function expandWorkflowIncludes(
+  rawByName: Map<string, WorkflowDefinition>,
+  commandContents?: ReadonlyMap<string, string | null>
+): {
   workflows: Map<string, WorkflowDefinition>;
   errors: WorkflowLoadError[];
 } {
@@ -230,6 +374,8 @@ export function expandWorkflowIncludes(rawByName: Map<string, WorkflowDefinition
           }
           throw e;
         }
+        warnDroppedWorkflowLevelFields(node, child);
+        if (commandContents) scanBlockCommandRefs(node, child, commandContents);
         const inlined = inlineInclude(node, child.nodes);
         sinksByIncludeId.set(node.id, inlined.sinks);
         primarySinkByIncludeId.set(node.id, inlined.primarySink);

@@ -29,7 +29,12 @@ import {
   sandboxSettingsSchema,
   betasSchema,
 } from './schemas/dag-node';
-import { modelReasoningEffortSchema, webSearchModeSchema } from './schemas/workflow';
+import {
+  modelReasoningEffortSchema,
+  webSearchModeSchema,
+  workflowRequirementSchema,
+} from './schemas/workflow';
+import type { WorkflowRequirement } from './schemas/workflow';
 import { workflowNodeHooksSchema } from './schemas/hooks';
 import { z } from '@hono/zod-openapi';
 
@@ -207,14 +212,18 @@ export function validateDagStructure(
     return `Cycle detected among nodes: ${cycleNodes.join(', ')}`;
   }
 
-  // Check $nodeId.output references in when: and prompt: fields.
-  // Triple-backtick fenced blocks and single-backtick inline code inside a
-  // prompt body are documentation meant to render literally to the LLM
-  // (e.g. the workflow-builder shows authors how to write
-  // `$<other-node>.output` inside a script-node example); strip them before
-  // scanning so they don't false-match as real cross-node references. when:
-  // clauses are JS-like expressions and never carry markdown code, so they
-  // pass through unchanged.
+  // Check $nodeId.output references across EVERY field the executor substitutes at
+  // runtime: when:, and the eight text surfaces that flow through
+  // substituteNodeOutputRefs (prompt, bash, script, approval.message, cancel,
+  // loop.prompt, loop.until_bash, loop_group.until_bash). A dangling ref in any of
+  // them silently substitutes to '' at run time, so all must be validated here.
+  //
+  // Prose fields (prompt / loop.prompt) may contain triple-backtick fenced blocks or
+  // single-backtick inline code that are documentation meant to render literally to
+  // the LLM (e.g. the workflow-builder shows authors how to write `$<other-node>.output`
+  // inside a script-node example); strip those before scanning so they don't false-match.
+  // The code/expression fields (bash / script / until_bash / cancel) and when: clauses
+  // carry live refs (not documentation), so they are scanned verbatim.
   const outputRefPattern = /\$([a-zA-Z_][a-zA-Z0-9_-]*)\.output/g;
   const stripMarkdownCode = (s: string): string =>
     s.replace(/```[\s\S]*?```/g, '').replace(/`[^`\n]*`/g, '');
@@ -224,8 +233,16 @@ export function validateDagStructure(
     if ('prompt' in node && typeof node.prompt === 'string') {
       sources.push(stripMarkdownCode(node.prompt));
     }
+    if ('bash' in node && typeof node.bash === 'string') sources.push(node.bash);
+    if (isScriptNode(node)) sources.push(node.script);
+    if (isCancelNode(node)) sources.push(node.cancel);
+    if (isApprovalNode(node)) sources.push(node.approval.message);
     if (isLoopNode(node)) {
       sources.push(stripMarkdownCode(node.loop.prompt));
+      if (node.loop.until_bash) sources.push(node.loop.until_bash);
+    }
+    if (isLoopGroupNode(node) && node.loop_group.until_bash) {
+      sources.push(node.loop_group.until_bash);
     }
     for (const source of sources) {
       let m: RegExpExecArray | null;
@@ -544,6 +561,26 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
       getLog().warn({ filename, value: raw.tags }, 'invalid_tags_block_ignored');
     }
 
+    // Parse optional requires — the external-capability enum list (today only
+    // `github`) that hard-blocks invocation when the originating user hasn't connected
+    // that identity (see assertWorkflowRequirementsMet). Same warn-and-drop policy as
+    // `tags`: invalid entries are dropped with a warning; an absent/empty list leaves
+    // `requires` undefined. Without this block the field is silently discarded here and
+    // the capability gate can never fire for a discovered workflow.
+    let requires: WorkflowRequirement[] | undefined;
+    if (Array.isArray(raw.requires)) {
+      const valid: WorkflowRequirement[] = [];
+      for (const entry of raw.requires) {
+        const parsed = workflowRequirementSchema.safeParse(entry);
+        if (parsed.success) valid.push(parsed.data);
+        else getLog().warn({ filename, value: entry }, 'invalid_workflow_requires_entry_ignored');
+      }
+      const deduped = [...new Set(valid)];
+      if (deduped.length > 0) requires = deduped;
+    } else if (raw.requires !== undefined) {
+      getLog().warn({ filename, value: raw.requires }, 'invalid_workflow_requires_block_ignored');
+    }
+
     // Parse workflow-level fallback fields. Same warn-and-drop pattern as
     // `modelReasoningEffort` / `webSearchMode` above. These are declared on
     // `workflowBaseSchema` and consumed by the DAG executor's
@@ -625,6 +662,7 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
         nodes: dagNodes,
         ...(worktreePolicy ? { worktree: worktreePolicy } : {}),
         ...(tags !== undefined ? { tags } : {}),
+        ...(requires !== undefined ? { requires } : {}),
       },
       error: null,
     };

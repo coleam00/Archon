@@ -24,9 +24,11 @@ import type {
   WorkflowLoadResult,
   WorkflowWithSource,
 } from './schemas';
+import { isIncludeNode } from './schemas';
 import * as archonPaths from '@archon/paths';
-import { BUNDLED_WORKFLOWS, isBinaryBuild } from './defaults/bundled-defaults';
+import { BUNDLED_WORKFLOWS, BUNDLED_COMMANDS, isBinaryBuild } from './defaults/bundled-defaults';
 import { createLogger } from '@archon/paths';
+import { isValidCommandName } from './command-validation';
 import { parseWorkflow } from './loader';
 import { expandWorkflowIncludes } from './include-expander';
 
@@ -186,6 +188,85 @@ function loadBundledWorkflows(): DirLoadResult {
 }
 
 /**
+ * Resolve a command name to its file CONTENT, mirroring the runtime/validator search
+ * order (repo `.archon/commands/` → `~/.archon/commands/` → bundled defaults). Returns
+ * `null` when the command cannot be resolved. Read-only; used solely so the include
+ * expander can scan a block's command files for sibling refs that namespacing renames.
+ */
+async function resolveCommandContentForScan(
+  cwd: string | null,
+  commandName: string
+): Promise<string | null> {
+  if (!isValidCommandName(commandName)) return null;
+
+  const dirs: string[] = [];
+  if (cwd !== null) {
+    for (const folder of archonPaths.getCommandFolderSearchPaths()) dirs.push(join(cwd, folder));
+  }
+  dirs.push(archonPaths.getHomeCommandsPath());
+
+  for (const dir of dirs) {
+    try {
+      const entries = await archonPaths.findMarkdownFilesRecursive(dir, '', { maxDepth: 1 });
+      const match = entries.find(e => e.commandName === commandName);
+      if (match) return await readFile(join(dir, match.relativePath), 'utf-8');
+    } catch {
+      // ENOENT / unreadable scope → try the next one.
+    }
+  }
+
+  // Bundled defaults (embedded in binary; filesystem in source mode).
+  if (isBinaryBuild()) {
+    return BUNDLED_COMMANDS[commandName] ?? null;
+  }
+  try {
+    const defaultsDir = archonPaths.getDefaultCommandsPath();
+    const entries = await archonPaths.findMarkdownFilesRecursive(defaultsDir, '', { maxDepth: 1 });
+    const match = entries.find(e => e.commandName === commandName);
+    if (match) return await readFile(join(defaultsDir, match.relativePath), 'utf-8');
+  } catch {
+    // no app defaults dir
+  }
+  return null;
+}
+
+/**
+ * Pre-resolve command-file contents for every `command:` node that lives in a workflow
+ * reachable as an `include:` target (transitively). The include expander uses these to
+ * detect a block command file referencing a sibling id that namespacing renames. Touches
+ * disk only when includes exist; returns an empty map otherwise.
+ */
+async function resolveIncludeBlockCommandContents(
+  cwd: string | null,
+  byName: ReadonlyMap<string, WorkflowDefinition>
+): Promise<Map<string, string | null>> {
+  const targetNames = new Set<string>();
+  const visit = (workflow: WorkflowDefinition): void => {
+    for (const node of workflow.nodes) {
+      if (isIncludeNode(node) && !targetNames.has(node.include)) {
+        targetNames.add(node.include);
+        const target = byName.get(node.include);
+        if (target) visit(target);
+      }
+    }
+  };
+  for (const workflow of byName.values()) visit(workflow);
+
+  const contents = new Map<string, string | null>();
+  if (targetNames.size === 0) return contents; // no includes → nothing to scan
+  for (const name of targetNames) {
+    const workflow = byName.get(name);
+    if (!workflow) continue;
+    for (const node of workflow.nodes) {
+      if ('command' in node && typeof node.command === 'string' && !contents.has(node.command)) {
+        contents.set(node.command, await resolveCommandContentForScan(cwd, node.command));
+      }
+    }
+  }
+  return contents;
+}
+
+/**
  * Discover and load workflows from codebase.
  *
  * Loads three scopes in order (later overrides earlier by filename):
@@ -218,7 +299,7 @@ export async function discoverWorkflows(
    * its flattened, namespaced form. A workflow that fails to expand is dropped and
    * its error surfaced via `allErrors`. Only `.workflow` changes — `source` is kept.
    */
-  const expandIncludes = (): WorkflowWithSource[] => {
+  const expandIncludes = async (): Promise<WorkflowWithSource[]> => {
     // Overrides are by FILENAME, but include targets resolve by workflow NAME. Two
     // surviving files (after filename-precedence) declaring the same `name:` would
     // silently collapse in the name map — last-writer-wins, emitting the same expanded
@@ -256,8 +337,13 @@ export async function discoverWorkflows(
       if (duplicateNames.has(workflow.name)) continue; // ambiguous — errored above, excluded
       rawByName.set(workflow.name, workflow);
     }
-    const { workflows: expandedByName, errors: expansionErrors } =
-      expandWorkflowIncludes(rawByName);
+    // Pre-resolve command-file contents for include-target command nodes so the expander
+    // can catch a block command file that references a sibling id namespacing renames.
+    const commandContents = await resolveIncludeBlockCommandContents(cwd, rawByName);
+    const { workflows: expandedByName, errors: expansionErrors } = expandWorkflowIncludes(
+      rawByName,
+      commandContents
+    );
     allErrors.push(...expansionErrors);
 
     const result: WorkflowWithSource[] = [];
@@ -340,7 +426,7 @@ export async function discoverWorkflows(
   // Skipped when cwd is null — surfaces bundled + home scopes only, which is the right answer
   // for callers without a project context (e.g. UI listing workflows before any codebase is registered).
   if (cwd === null) {
-    const workflows = expandIncludes();
+    const workflows = await expandIncludes();
     getLog().info(
       { count: workflows.length, errorCount: allErrors.length, scope: 'no_project_context' },
       'workflows_discovery_completed'
@@ -412,7 +498,7 @@ export async function discoverWorkflows(
     getLog().debug({ workflowPath }, 'workflow_folder_not_found');
   }
 
-  const workflows = expandIncludes();
+  const workflows = await expandIncludes();
   getLog().info(
     { count: workflows.length, errorCount: allErrors.length },
     'workflows_discovery_completed'

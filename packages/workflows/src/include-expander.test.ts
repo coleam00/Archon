@@ -226,6 +226,137 @@ describe('expandWorkflowIncludes — nested', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Shorthand when: refs ($id.field == $id.output.field) must be renamed too
+// ---------------------------------------------------------------------------
+
+describe('expandWorkflowIncludes — shorthand when: refs', () => {
+  test('renames a shorthand $sibling.field ref inside an internal when:', () => {
+    const block = wf('shbk', [
+      { id: 'sib', bash: 'echo hi' },
+      { id: 'e', prompt: 'e', when: "$sib.exit_code == '0'", depends_on: ['sib'] },
+    ]);
+    const parent = wf('parent', [{ id: 'inc', include: 'shbk' }]);
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
+    expect(errors).toHaveLength(0);
+    // The shorthand ref (no literal `.output`) is renamed to the namespaced sibling.
+    expect(nodeById(workflows.get('parent')!, 'inc__e')?.when).toBe("$inc__sib.exit_code == '0'");
+  });
+
+  test('renames a shorthand $includeId.field ref on a downstream parent node', () => {
+    const block = wf('blk1', [{ id: 'only', bash: 'echo hi' }]);
+    const parent = wf('parent', [
+      { id: 'inc', include: 'blk1' },
+      { id: 'after', prompt: 'after', when: "$inc.exit_code == '0'", depends_on: ['inc'] },
+    ]);
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
+    expect(errors).toHaveLength(0);
+    // $inc.exit_code (shorthand to the include id) resolves to the block's primary sink.
+    expect(nodeById(workflows.get('parent')!, 'after')?.when).toBe("$inc__only.exit_code == '0'");
+  });
+
+  test('still renames the canonical $id.output form in when:', () => {
+    const block = wf('blk2', [
+      { id: 'a', bash: 'echo a' },
+      { id: 'b', prompt: 'b', when: "$a.output == 'x'", depends_on: ['a'] },
+    ]);
+    const parent = wf('parent', [{ id: 'inc', include: 'blk2' }]);
+    const { workflows } = expandWorkflowIncludes(mapOf(block, parent));
+    expect(nodeById(workflows.get('parent')!, 'inc__b')?.when).toBe("$inc__a.output == 'x'");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fence-aware prose: documentation examples inside prompts must NOT be rewritten
+// ---------------------------------------------------------------------------
+
+describe('expandWorkflowIncludes — fence-aware prose', () => {
+  test('rewrites a live prompt ref but leaves a fenced example untouched', () => {
+    const block = wf('blk', [
+      { id: 'helper', bash: 'echo hi' },
+      {
+        id: 'writer',
+        prompt: 'Live: $helper.output\n```\nexample: $helper.output\n```',
+        depends_on: ['helper'],
+      },
+    ]);
+    const parent = wf('parent', [{ id: 'inc', include: 'blk' }]);
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
+    expect(errors).toHaveLength(0);
+    const writer = nodeById(workflows.get('parent')!, 'inc__writer');
+    const prompt = writer && 'prompt' in writer ? writer.prompt : '';
+    // Live ref (outside the fence) renamed…
+    expect(prompt).toContain('Live: $inc__helper.output');
+    // …fenced example left verbatim.
+    expect(prompt).toContain('```\nexample: $helper.output\n```');
+  });
+
+  test('bash refs are rewritten verbatim (code fields are not fence-protected)', () => {
+    const block = wf('blk', [
+      { id: 'a', bash: 'echo a' },
+      { id: 'b', bash: 'echo $a.output', depends_on: ['a'] },
+    ]);
+    const parent = wf('parent', [{ id: 'inc', include: 'blk' }]);
+    const { workflows } = expandWorkflowIncludes(mapOf(block, parent));
+    const b = nodeById(workflows.get('parent')!, 'inc__b');
+    expect(b && 'bash' in b ? b.bash : '').toBe('echo $inc__a.output');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Command-file ref scan (contents can't be rewritten → fail-fast at load time)
+// ---------------------------------------------------------------------------
+
+describe('expandWorkflowIncludes — command-file ref scan', () => {
+  function blockWithCommand(): [WorkflowDefinition, WorkflowDefinition] {
+    const block = wf('cmdblk', [
+      { id: 'sib', bash: 'echo hi' },
+      { id: 'runner', command: 'my-cmd', depends_on: ['sib'] },
+    ]);
+    const parent = wf('parent', [{ id: 'inc', include: 'cmdblk' }]);
+    return [block, parent];
+  }
+
+  test('fails when a block command file references a renamed sibling id', () => {
+    const [block, parent] = blockWithCommand();
+    const commandContents = new Map<string, string | null>([
+      ['my-cmd', 'Process the results from $sib.output and summarize.'],
+    ]);
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent), commandContents);
+    expect(workflows.has('parent')).toBe(false);
+    const err = errors.find(e => e.filename === 'parent');
+    expect(err?.error).toContain("command file 'my-cmd.md'");
+    expect(err?.error).toContain("sibling node '$sib'");
+  });
+
+  test('passes when the command file has no cross-node reference', () => {
+    const [block, parent] = blockWithCommand();
+    const commandContents = new Map<string, string | null>([
+      ['my-cmd', 'Work from $ARTIFACTS_DIR only. See `$sib.output` in fenced docs.'],
+    ]);
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent), commandContents);
+    // The only $sib.output is inside inline code (stripped), so no live ref → clean.
+    expect(errors).toHaveLength(0);
+    expect(workflows.has('parent')).toBe(true);
+  });
+
+  test('does not fail expansion when the command file is unresolvable (null)', () => {
+    const [block, parent] = blockWithCommand();
+    const commandContents = new Map<string, string | null>([['my-cmd', null]]);
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent), commandContents);
+    // Unresolvable → warn (asserted in loader.test.ts), never a hard error.
+    expect(errors).toHaveLength(0);
+    expect(workflows.has('parent')).toBe(true);
+  });
+
+  test('skips the scan entirely when no commandContents map is supplied', () => {
+    const [block, parent] = blockWithCommand();
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
+    expect(errors).toHaveLength(0);
+    expect(workflows.has('parent')).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Error paths — resilient (drop the bad one, keep the rest)
 // ---------------------------------------------------------------------------
 
