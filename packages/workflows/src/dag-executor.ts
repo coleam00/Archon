@@ -4179,7 +4179,8 @@ async function executeApprovalNode(
   aiProfile?: ResolvedAiProfile,
   workflowPreset?: ModelAliasPreset,
   stepNamePrefix = '',
-  iteration?: number
+  iteration?: number,
+  execContext: ExecutionContext = { kind: 'host' }
 ): Promise<NodeOutput> {
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
   // Namespaced persisted step_name for loop_group bodies ('' → node.id at top level, #2090).
@@ -4278,7 +4279,8 @@ async function executeApprovalNode(
       cwd,
       workflowLevelOptions,
       aiProfile,
-      workflowPreset
+      workflowPreset,
+      execContext
     );
 
     const output = await executeNodeInternal(
@@ -4860,7 +4862,8 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               aiProfile,
               workflowPreset,
               stepNamePrefix,
-              iteration
+              iteration,
+              execContext
             );
             return { nodeId: node.id, output };
           }

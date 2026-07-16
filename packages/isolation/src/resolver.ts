@@ -107,6 +107,15 @@ export class IsolationResolver {
     // the '/workspace' docker sentinel), so chat/workflows land in the actual
     // project directory — byte-identical to the pre-seam early-return. Container
     // selection is a Phase B config concern; the chat path stays in-place for now.
+    //
+    // NOTE (Phase A): only `prepared.cwd` is propagated. `prepared.execContext`
+    // is intentionally DROPPED here because the `IsolationResolution` 'none'
+    // variant carries no execution-context field, so chat/orchestrator callers
+    // (which consume this result) have no channel for it — they run host-only in
+    // Phase A. Phase B, when it wires containerized CHAT, must extend the 'none'
+    // variant with an `execContext` and thread it through the orchestrator; until
+    // then only the CLI workflow path carries execContext (from the backend it
+    // resolves directly).
     if (request.codebase.kind === 'folder') {
       const folderCodebase = {
         id: request.codebase.id,

@@ -442,11 +442,12 @@ export interface SendQueryOptions extends AgentRequestOptions {
   assistantConfig?: Record<string, unknown>;
   /**
    * Execution target for this turn. Absent / `{ kind: 'host' }` runs the provider
-   * on the Archon host (default). `{ kind: 'container', … }` (Phase B) tells a
-   * capable provider (Claude v1) to spawn its CLI inside the prepared container.
-   * The engine only ever populates this for the container backend and fails fast
-   * before dispatch for providers lacking the capability, so a provider that
-   * doesn't understand it can safely ignore it.
+   * on the Archon host — the only value the engine produces today, so this field
+   * is currently inert plumbing that every provider can safely ignore.
+   * `{ kind: 'container', … }` will (Phase B) tell a capable provider (Claude
+   * first) to spawn its CLI inside the prepared container. Phase B will also add
+   * a provider capability flag plus a pre-dispatch fail-fast so a `container`
+   * value can never reach a provider that cannot honor it.
    */
   execContext?: ExecutionContext;
 }
