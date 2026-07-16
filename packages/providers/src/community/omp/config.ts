@@ -34,6 +34,15 @@ export interface OmpSnapcompactSettingsDefaults {
 export interface OmpToolsSettingsDefaults {
   approvalMode?: 'always-ask' | 'write' | 'yolo';
   maxTimeout?: number;
+  xdev?: boolean;
+}
+
+export interface OmpEditSettingsDefaults {
+  enforceSeenLines?: boolean;
+}
+
+export interface OmpEnabledSettingsDefaults {
+  enabled?: boolean;
 }
 
 export interface OmpProvidersSettingsDefaults {
@@ -75,6 +84,8 @@ export interface OmpProvidersSettingsDefaults {
 export interface OmpTaskSettingsDefaults {
   maxConcurrency?: number;
   maxRuntimeMs?: number;
+  prewalk?: boolean;
+  agentPrewalk?: Record<string, string>;
 }
 
 export interface OmpMemorySettingsDefaults {
@@ -105,8 +116,11 @@ export interface OmpSettingsDefaults {
   contextPromotion?: OmpContextPromotionSettingsDefaults;
   model?: OmpModelSettingsDefaults;
   tools?: OmpToolsSettingsDefaults;
+  edit?: OmpEditSettingsDefaults;
   providers?: OmpProvidersSettingsDefaults;
   task?: OmpTaskSettingsDefaults;
+  generate_image?: OmpEnabledSettingsDefaults;
+  astGrep?: OmpEnabledSettingsDefaults;
   memory?: OmpMemorySettingsDefaults;
   mnemopi?: OmpMnemopiSettingsDefaults;
   hindsight?: OmpHindsightSettingsDefaults;
@@ -258,9 +272,22 @@ function retrySettings(value: unknown): OmpSettingsDefaults['retry'] | undefined
   return Object.keys(retry).length > 0 ? retry : undefined;
 }
 
-function enabledSetting(value: unknown): { enabled?: boolean } | undefined {
-  if (!isRecord(value) || typeof value.enabled !== 'boolean') return undefined;
-  return { enabled: value.enabled };
+function enabledSetting(value: unknown): { enabled?: boolean } | undefined;
+function enabledSetting(
+  value: unknown,
+  key: 'enforceSeenLines'
+): { enforceSeenLines?: boolean } | undefined;
+function enabledSetting(
+  value: unknown,
+  key: 'enabled' | 'enforceSeenLines' = 'enabled'
+): { enabled?: boolean; enforceSeenLines?: boolean } | undefined {
+  if (!isRecord(value)) return undefined;
+  if (key === 'enabled') {
+    return typeof value.enabled === 'boolean' ? { enabled: value.enabled } : undefined;
+  }
+  return typeof value.enforceSeenLines === 'boolean'
+    ? { enforceSeenLines: value.enforceSeenLines }
+    : undefined;
 }
 
 function compactionSettings(value: unknown): OmpSettingsDefaults['compaction'] | undefined {
@@ -339,6 +366,7 @@ function toolsSettings(value: unknown): OmpSettingsDefaults['tools'] | undefined
   }
   const maxTimeout = nonNegativeInteger(value.maxTimeout);
   if (maxTimeout !== undefined) tools.maxTimeout = maxTimeout;
+  if (typeof value.xdev === 'boolean') tools.xdev = value.xdev;
 
   return Object.keys(tools).length > 0 ? tools : undefined;
 }
@@ -365,6 +393,9 @@ function taskSettings(value: unknown): OmpSettingsDefaults['task'] | undefined {
   if (maxConcurrency !== undefined) task.maxConcurrency = maxConcurrency;
   const maxRuntimeMs = nonNegativeInteger(value.maxRuntimeMs);
   if (maxRuntimeMs !== undefined) task.maxRuntimeMs = maxRuntimeMs;
+  if (typeof value.prewalk === 'boolean') task.prewalk = value.prewalk;
+  const agentPrewalk = stringRecord(value.agentPrewalk);
+  if (agentPrewalk !== undefined) task.agentPrewalk = agentPrewalk;
 
   return Object.keys(task).length > 0 ? task : undefined;
 }
@@ -407,8 +438,11 @@ function settingsObject(value: unknown): OmpSettingsDefaults | undefined {
   assignDefined(settings, 'contextPromotion', enabledSetting(value.contextPromotion));
   assignDefined(settings, 'model', modelSettings(value.model));
   assignDefined(settings, 'tools', toolsSettings(value.tools));
+  assignDefined(settings, 'edit', enabledSetting(value.edit, 'enforceSeenLines'));
   assignDefined(settings, 'providers', providersSettings(value.providers));
   assignDefined(settings, 'task', taskSettings(value.task));
+  assignDefined(settings, 'generate_image', enabledSetting(value.generate_image));
+  assignDefined(settings, 'astGrep', enabledSetting(value.astGrep));
   assignDefined(settings, 'memory', memorySettings(value.memory));
   assignDefined(
     settings,

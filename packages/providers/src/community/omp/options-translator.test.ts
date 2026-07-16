@@ -35,69 +35,84 @@ describe('resolveOmpThinkingLevel', () => {
 });
 
 describe('resolveOmpToolNames', () => {
-  test('uses curated defaults with current OMP tool names', () => {
+  test('uses the curated OMP v17 default tools', () => {
+    expect(DEFAULT_OMP_TOOL_NAMES).toEqual([
+      'ask',
+      'bash',
+      'eval',
+      'edit',
+      'glob',
+      'grep',
+      'ast_grep',
+      'ast_edit',
+      'lsp',
+      'read',
+      'browser',
+      'task',
+      'hub',
+      'todo',
+      'web_search',
+      'write',
+      'inspect_image',
+    ]);
     expect(resolveOmpToolNames()).toEqual({
       toolNames: [...DEFAULT_OMP_TOOL_NAMES],
       unknownTools: [],
       unknownDeniedTools: [],
     });
-    expect(DEFAULT_OMP_TOOL_NAMES).toContain('todo');
-    expect(DEFAULT_OMP_TOOL_NAMES).toContain('launch');
-    expect(DEFAULT_OMP_TOOL_NAMES).toContain('inspect_image');
-    expect(DEFAULT_OMP_TOOL_NAMES).not.toContain('todo_write');
-    expect(DEFAULT_OMP_TOOL_NAMES).not.toContain('render_mermaid');
-    expect(DEFAULT_OMP_TOOL_NAMES).not.toContain('generate_image');
   });
 
-  test('uses current OMP tool names', () => {
-    expect(
-      resolveOmpToolNames({
-        allowed_tools: [
-          'eval',
-          'grep',
-          'glob',
-          'read',
-          'job',
-          'memory_edit',
-          'learn',
-          'manage_skill',
-          'render_mermaid',
-          'generate_image',
-        ],
-      })
-    ).toEqual({
-      toolNames: [
-        'eval',
-        'grep',
-        'glob',
-        'read',
-        'job',
-        'memory_edit',
-        'learn',
-        'manage_skill',
-        'render_mermaid',
-        'generate_image',
-      ],
+  test('accepts the exact known conditional OMP v17 tools', () => {
+    const toolNames = [
+      'debug',
+      'github',
+      'checkpoint',
+      'rewind',
+      'yield',
+      'goal',
+      'generate_image',
+      'memory_edit',
+      'retain',
+      'recall',
+      'reflect',
+      'learn',
+      'manage_skill',
+    ];
+
+    expect(resolveOmpToolNames({ allowed_tools: toolNames })).toEqual({
+      toolNames,
       unknownTools: [],
       unknownDeniedTools: [],
     });
   });
 
-  test('reports tools removed from current OMP SDK', () => {
-    expect(resolveOmpToolNames({ allowed_tools: ['read', 'calc', 'recipe'] })).toEqual({
+  test('reports direct names removed from OMP v17 as unknown', () => {
+    const removedNames = [
+      'job',
+      'launch',
+      'ssh',
+      'irc',
+      'resolve',
+      'render_mermaid',
+      'search_tool_bm25',
+      'report_finding',
+      'report_tool_issue',
+    ];
+
+    expect(resolveOmpToolNames({ allowed_tools: ['read', ...removedNames] })).toEqual({
       toolNames: ['read'],
-      unknownTools: ['calc', 'recipe'],
+      unknownTools: removedNames,
       unknownDeniedTools: [],
     });
   });
 
-  test('maps legacy OMP tool aliases to current names', () => {
+  test('maps retained OMP tool aliases to v17 names', () => {
     expect(
       resolveOmpToolNames({
         allowed_tools: ['python', 'search', 'find', 'fetch', 'poll', 'todo_write'],
       })
     ).toEqual({
-      toolNames: ['eval', 'grep', 'glob', 'read', 'job', 'todo'],
+      toolNames: ['eval', 'grep', 'glob', 'read', 'hub', 'todo'],
       unknownTools: [],
       unknownDeniedTools: [],
     });
@@ -105,8 +120,8 @@ describe('resolveOmpToolNames', () => {
 
   test('honors allowed and denied tools in OMP namespace', () => {
     expect(
-      resolveOmpToolNames({ allowed_tools: ['read', 'ssh', 'search'], denied_tools: ['grep'] })
-    ).toEqual({ toolNames: ['read', 'ssh'], unknownTools: [], unknownDeniedTools: [] });
+      resolveOmpToolNames({ allowed_tools: ['read', 'hub', 'search'], denied_tools: ['grep'] })
+    ).toEqual({ toolNames: ['read', 'hub'], unknownTools: [], unknownDeniedTools: [] });
   });
 
   test('reports unknown denied tools separately', () => {
@@ -153,13 +168,21 @@ describe('buildOmpSettingsOverrides', () => {
           snapcompact: { systemPrompt: 'agents-md', toolResults: true, shape: 'auto' },
           contextPromotion: { enabled: true },
           model: { loopGuard: { enabled: false, checkAssistantContent: false } },
-          tools: { approvalMode: 'always-ask', maxTimeout: 30 },
+          tools: { approvalMode: 'always-ask', maxTimeout: 30, xdev: false },
+          edit: { enforceSeenLines: true },
           providers: {
             webSearch: 'tavily',
             webSearchExclude: ['brave'],
             image: 'gemini',
           },
-          task: { maxConcurrency: 4, maxRuntimeMs: 60000 },
+          task: {
+            maxConcurrency: 4,
+            maxRuntimeMs: 60000,
+            prewalk: true,
+            agentPrewalk: { reviewer: '@smol' },
+          },
+          generate_image: { enabled: false },
+          astGrep: { enabled: false },
           memory: { backend: 'hindsight' },
           mnemopi: {
             autoRecall: false,
@@ -200,11 +223,17 @@ describe('buildOmpSettingsOverrides', () => {
       'model.loopGuard.checkAssistantContent': false,
       'tools.approvalMode': 'always-ask',
       'tools.maxTimeout': 30,
+      'tools.xdev': false,
+      'edit.enforceSeenLines': true,
       'providers.webSearch': 'tavily',
       'providers.webSearchExclude': ['brave'],
       'providers.image': 'gemini',
       'task.maxConcurrency': 4,
       'task.maxRuntimeMs': 60000,
+      'task.prewalk': true,
+      'task.agentPrewalk': { reviewer: '@smol' },
+      'generate_image.enabled': false,
+      'astGrep.enabled': false,
       'memory.backend': 'hindsight',
       'mnemopi.autoRecall': false,
       'mnemopi.autoRetain': true,
@@ -225,8 +254,14 @@ describe('buildOmpSettingsOverrides', () => {
     });
   });
 
-  test('returns an empty object without settings', () => {
-    expect(buildOmpSettingsOverrides({})).toEqual({});
+  test('preserves Archon AST-grep default without settings', () => {
+    expect(buildOmpSettingsOverrides({})).toEqual({ 'astGrep.enabled': true });
+  });
+
+  test('honors explicit AST-grep opt-out', () => {
+    expect(buildOmpSettingsOverrides({ settings: { astGrep: { enabled: false } } })).toEqual({
+      'astGrep.enabled': false,
+    });
   });
 });
 

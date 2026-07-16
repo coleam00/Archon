@@ -37,6 +37,61 @@ describe('mapOmpEvent', () => {
     ]);
   });
 
+  test('keeps generated-image text without serializing image details', () => {
+    const chunks = mapOmpEvent({
+      type: 'tool_execution_end',
+      toolName: 'generate_image',
+      toolCallId: 'image-1',
+      result: {
+        content: [
+          { type: 'text', text: 'Generated image' },
+          { type: 'text', text: '/tmp/generated-image.png' },
+        ],
+        details: {
+          images: [{ data: 'base64-image-data', mimeType: 'image/png' }],
+        },
+      },
+    });
+
+    expect(chunks).toEqual([
+      {
+        type: 'tool_result',
+        toolName: 'generate_image',
+        toolOutput: 'Generated image\n/tmp/generated-image.png',
+        toolCallId: 'image-1',
+      },
+    ]);
+    expect(JSON.stringify(chunks)).not.toContain('base64-image-data');
+  });
+
+  test('ignores v17 image_end message updates', () => {
+    expect(
+      mapOmpEvent({
+        type: 'message_update',
+        assistantMessageEvent: {
+          type: 'image_end',
+          image: { data: 'base64-image-data', mimeType: 'image/png' },
+        },
+      })
+    ).toEqual([]);
+  });
+
+  test('still serializes unrelated object tool results', () => {
+    expect(
+      mapOmpEvent({
+        type: 'tool_execution_end',
+        toolName: 'read',
+        result: { path: 'a.txt', bytes: 12 },
+      })
+    ).toEqual([
+      {
+        type: 'tool_result',
+        toolName: 'read',
+        toolOutput: '{\"path\":\"a.txt\",\"bytes\":12}',
+      },
+    ]);
+  });
+
   test('guards tool input to plain objects', () => {
     expect(
       mapOmpEvent({

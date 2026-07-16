@@ -421,9 +421,17 @@ describe('OmpProvider', () => {
           compaction: { enabled: true, thresholdPercent: 75, thresholdTokens: 50000 },
           contextPromotion: { enabled: false },
           model: { loopGuard: { enabled: false, checkAssistantContent: true } },
-          tools: { approvalMode: 'write', maxTimeout: 45 },
+          tools: { approvalMode: 'write', maxTimeout: 45, xdev: false },
+          edit: { enforceSeenLines: true },
           providers: { webSearch: 'exa', webSearchExclude: ['brave'], image: 'openai' },
-          task: { maxConcurrency: 2, maxRuntimeMs: 30000 },
+          task: {
+            maxConcurrency: 2,
+            maxRuntimeMs: 30000,
+            prewalk: true,
+            agentPrewalk: { reviewer: '@smol' },
+          },
+          generate_image: { enabled: false },
+          astGrep: { enabled: false },
           memory: { backend: 'local' },
           mnemopi: { autoRecall: false, autoRetain: true, debug: true },
           hindsight: { autoRecall: true, autoRetain: false, mentalModelsEnabled: false },
@@ -449,11 +457,17 @@ describe('OmpProvider', () => {
       'model.loopGuard.checkAssistantContent': true,
       'tools.approvalMode': 'write',
       'tools.maxTimeout': 45,
+      'tools.xdev': false,
+      'edit.enforceSeenLines': true,
       'providers.webSearch': 'exa',
       'providers.webSearchExclude': ['brave'],
       'providers.image': 'openai',
       'task.maxConcurrency': 2,
       'task.maxRuntimeMs': 30000,
+      'task.prewalk': true,
+      'task.agentPrewalk': { reviewer: '@smol' },
+      'generate_image.enabled': false,
+      'astGrep.enabled': false,
       'memory.backend': 'local',
       'mnemopi.autoRecall': false,
       'mnemopi.autoRetain': true,
@@ -483,7 +497,7 @@ describe('OmpProvider', () => {
       model: 'anthropic/claude-sonnet-4-5',
     });
 
-    expect(settingsOverrides).toEqual({});
+    expect(settingsOverrides).toEqual({ 'astGrep.enabled': true });
   });
 
   test('maps fallbackModel to OMP retry fallback chain settings', async () => {
@@ -502,6 +516,7 @@ describe('OmpProvider', () => {
     });
 
     expect(settingsOverrides).toEqual({
+      'astGrep.enabled': true,
       'retry.fallbackChains': { archon: ['openrouter/qwen/qwen3-coder'] },
       modelRoles: { archon: 'anthropic/claude-sonnet-4-5' },
     });
@@ -565,6 +580,7 @@ describe('OmpProvider', () => {
     });
 
     expect(settingsOverrides).toEqual({
+      'astGrep.enabled': true,
       'retry.enabled': true,
       'retry.fallbackChains': {
         archon: ['openrouter/qwen/qwen3-coder:off'],
@@ -1583,6 +1599,7 @@ describe('OmpProvider', () => {
     expect(tool.name).toBe('manage_run');
     expect(tool.label).toBe('manage_run');
     expect(tool.description).toBe('Inspect and control Archon workflow runs.');
+    expect(tool.loadMode).toBe('discoverable');
     expect(tool.parameters).toMatchObject({
       type: 'object',
       properties: {
@@ -1604,7 +1621,7 @@ describe('OmpProvider', () => {
     const temp = await writeTempMcpConfig({ github: { command: 'npx' } });
     let sessionOptions: OmpCreateAgentSessionOptions | undefined;
     const deniedTool = { name: 'mcp__github_create_issue' };
-    const allowedTool = { name: 'mcp__github_list_issues' };
+    const allowedTool = { name: 'mcp__github_list_issues', loadMode: 'essential' };
     const provider = new OmpProvider(async () =>
       makeSdk({
         mcpTools: [deniedTool, allowedTool],
@@ -1644,6 +1661,12 @@ describe('OmpProvider', () => {
       );
       expect(customToolNames).toEqual(['mcp__github_list_issues', 'manage_run']);
       expect(sessionOptions?.customTools?.[0]).toBe(allowedTool);
+      expect((sessionOptions?.customTools?.[0] as OmpCustomTool | undefined)?.loadMode).toBe(
+        'essential'
+      );
+      expect((sessionOptions?.customTools?.[1] as OmpCustomTool | undefined)?.loadMode).toBe(
+        'discoverable'
+      );
     } finally {
       await temp.cleanup();
     }

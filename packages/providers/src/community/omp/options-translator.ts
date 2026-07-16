@@ -4,14 +4,7 @@ import type { NodeConfig } from '../../types';
 import type { OmpProviderDefaults } from './config';
 
 export type OmpThinkingLevel =
-  | 'auto'
-  | 'off'
-  | 'minimal'
-  | 'low'
-  | 'medium'
-  | 'high'
-  | 'xhigh'
-  | 'max';
+  'auto' | 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 type OmpSkill = Awaited<ReturnType<OmpCodingAgentSdk['discoverSkills']>>['skills'][number];
 
@@ -32,7 +25,6 @@ export const DEFAULT_OMP_TOOL_NAMES = [
   'ask',
   'bash',
   'eval',
-  'ssh',
   'edit',
   'glob',
   'grep',
@@ -42,8 +34,7 @@ export const DEFAULT_OMP_TOOL_NAMES = [
   'read',
   'browser',
   'task',
-  'job',
-  'launch',
+  'hub',
   'todo',
   'web_search',
   'write',
@@ -58,28 +49,22 @@ const KNOWN_OMP_TOOL_NAMES = new Set<string>([
   'github',
   'checkpoint',
   'rewind',
-  'irc',
   'yield',
-  'resolve',
   'goal',
-  'render_mermaid',
   'generate_image',
-  'search_tool_bm25',
   'memory_edit',
   'retain',
   'recall',
   'reflect',
   'learn',
   'manage_skill',
-  'report_finding',
-  'report_tool_issue',
 ]);
 
 const LEGACY_OMP_TOOL_ALIASES: Record<string, string> = {
   python: 'eval',
   find: 'glob',
   search: 'grep',
-  poll: 'job',
+  poll: 'hub',
   fetch: 'read',
   todo_write: 'todo',
 };
@@ -295,7 +280,6 @@ export function buildOmpSettingsOverrides(
   fallback?: OmpFallbackModelOverride
 ): Record<string, unknown> {
   const settings = config.settings;
-  if (!settings && !fallback) return {};
 
   const retry = settings?.retry;
   const modelRoles = settings?.modelRoles !== undefined ? { ...settings.modelRoles } : undefined;
@@ -333,11 +317,17 @@ export function buildOmpSettingsOverrides(
     ['model.loopGuard.checkAssistantContent', settings?.model?.loopGuard?.checkAssistantContent],
     ['tools.approvalMode', settings?.tools?.approvalMode],
     ['tools.maxTimeout', settings?.tools?.maxTimeout],
+    ['tools.xdev', settings?.tools?.xdev],
+    ['edit.enforceSeenLines', settings?.edit?.enforceSeenLines],
     ['providers.webSearch', settings?.providers?.webSearch],
     ['providers.webSearchExclude', settings?.providers?.webSearchExclude],
     ['providers.image', settings?.providers?.image],
     ['task.maxConcurrency', settings?.task?.maxConcurrency],
     ['task.maxRuntimeMs', settings?.task?.maxRuntimeMs],
+    ['task.prewalk', settings?.task?.prewalk],
+    ['task.agentPrewalk', settings?.task?.agentPrewalk],
+    ['generate_image.enabled', settings?.generate_image?.enabled],
+    ['astGrep.enabled', settings?.astGrep?.enabled ?? true],
     ['memory.backend', settings?.memory?.backend],
     ['mnemopi.autoRecall', settings?.mnemopi?.autoRecall],
     ['mnemopi.autoRetain', settings?.mnemopi?.autoRetain],

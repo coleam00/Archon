@@ -555,8 +555,8 @@ assistants:
     # Restrict the OMP tool set Archon exposes to the session.
     toolNames:
       - read
-      - search
-      - find
+      - grep
+      - glob
       - bash
       - edit
       - write
@@ -586,6 +586,12 @@ assistants:
       tools:
         approvalMode: write       # 'always-ask' | 'write' | 'yolo'
         maxTimeout: 60            # seconds; 0 disables the cap
+        # OMP v17 defaults this to true. Set false to restore discoverable
+        # custom tools as top-level tools instead of xd:// devices.
+        xdev: true
+      edit:
+        # Reject hashline edits against lines the agent has not read.
+        enforceSeenLines: true
       providers:
         webSearch: gemini         # 'auto' or a supported web-search provider
         webSearchExclude:
@@ -594,6 +600,18 @@ assistants:
       task:
         maxConcurrency: 8         # 0 means unlimited
         maxRuntimeMs: 600000      # 0 disables the cap
+        # Let the bundled task agent start on its resolved model, then hand
+        # off to the default prewalk target at its first edit/write.
+        prewalk: true
+        # Agent-specific prewalk targets. Values are OMP model patterns.
+        agentPrewalk:
+          reviewer: "@smol"
+      generate_image:
+        enabled: true
+      astGrep:
+        # OMP v17 defaults this to false. Archon preserves its curated
+        # ast_grep default by emitting true unless explicitly disabled here.
+        enabled: true
       memory:
         backend: mnemopi          # 'off' | 'local' | 'hindsight' | 'mnemopi'
       mnemopi:
@@ -624,6 +642,10 @@ assistants:
 
 Only `model` is exposed to web clients by default; filesystem paths, environment variables, extension settings, OMP settings, and OMP spawn controls remain server-side configuration.
 
+`settings.edit.enforceSeenLines` makes OMP's hashline editor reject edits against lines the agent has not read. `settings.task.prewalk` enables the bundled task agent's model handoff; `settings.task.agentPrewalk` supplies per-agent targets. Archon deliberately overrides OMP v17's upstream `astGrep.enabled: false` default to `true` so the curated `ast_grep` tool remains available; set it to `false` explicitly to opt out.
+
+OMP v17 defaults `settings.tools.xdev` to `true`. Discoverable custom tools—including Archon's `manage_run` native tool and eligible tools such as `generate_image`—are then presented through `xd://` and invoked via `read` or `write`. Set `settings.tools.xdev: false` to present discoverable tools as top-level tools instead. Node-scoped MCP tools keep the load mode supplied by OMP's MCP manager.
+
 ### Model reference format
 
 Oh My Pi models use `<omp-provider-id>/<model-id>`:
@@ -644,9 +666,42 @@ Archon still chooses the initial model from the node/workflow model first, then 
 
 ### OMP tool names
 
-`allowed_tools`, `denied_tools`, and `assistants.omp.toolNames` use OMP tool names. Common safe read/analysis tools are `read`, `grep`, `glob`, `lsp`, `web_search`, `ast_grep`, `ast_edit`, `task`, `todo`, and `ask`.
+`allowed_tools`, `denied_tools`, and `assistants.omp.toolNames` use OMP v17 tool names. Archon's curated defaults are `ask`, `bash`, `eval`, `edit`, `glob`, `grep`, `ast_grep`, `ast_edit`, `lsp`, `read`, `browser`, `task`, `hub`, `todo`, `web_search`, `write`, and `inspect_image`. `hub` replaces the former `job` and `launch` process-management tools.
 
-Tools that can modify files, run code, access the network, manage long-running processes, or change session state should be enabled intentionally: `bash`, `eval`, `write`, `edit`, `browser`, `ssh`, `github`, `checkpoint`, `rewind`, `job`, `launch`, `irc`, `render_mermaid`, `generate_image`, `memory_edit`, `learn`, `manage_skill`, and `search_tool_bm25`. Legacy aliases are accepted for existing workflows: `search` → `grep`, `find` → `glob`, `python` → `eval`, `fetch` → `read`, `poll` → `job`, and `todo_write` → `todo`. Hidden SDK tools such as `yield`, `resolve`, `goal`, `report_finding`, and `report_tool_issue` are only useful for OMP-internal workflows.
+Known registry or conditional tools that are not enabled by default are `debug`, `github`, `checkpoint`, `rewind`, `yield`, `goal`, `generate_image`, `memory_edit`, `retain`, `recall`, `reflect`, `learn`, and `manage_skill`. Enable write, execution, network, image, memory, or session-state tools intentionally. With `tools.xdev: true`, discoverable tools mount under `xd://`; the allowlist still uses the registry name, such as `generate_image`.
+
+The retained compatibility aliases are `python` → `eval`, `find` → `glob`, `search` → `grep`, `fetch` → `read`, `poll` → `hub`, and `todo_write` → `todo`. OMP v17 removed the direct names `job`, `launch`, `ssh`, `irc`, `resolve`, `render_mermaid`, `search_tool_bm25`, `report_finding`, and `report_tool_issue`; Archon reports them as unknown instead of adding compatibility shims.
+
+### Generate workflow image artifacts
+
+Enable OMP's image tool in server-side assistant configuration:
+
+```yaml
+# .archon/config.yaml
+assistants:
+  omp:
+    settings:
+      generate_image:
+        enabled: true
+```
+
+Then allow the registry name in a workflow node and tell the agent to copy OMP's temporary output into the run artifact directory:
+
+```yaml
+# .archon/workflows/generate-image.yaml
+name: generate-image
+provider: omp
+
+nodes:
+  - id: render
+    allowed_tools: [generate_image, bash]
+    prompt: |
+      Generate an image from: $ARGUMENTS
+      After generate_image returns its temporary file path, copy that file to
+      $ARTIFACTS_DIR/generated-image.png with bash. Confirm the artifact path.
+```
+
+The copied file appears in Archon's workflow artifact listing. Generated images are not streamed as platform image chunks; the provider emits the image tool's text summary and path only.
 
 ### Oh My Pi capabilities
 
@@ -663,11 +718,11 @@ Tools that can modify files, run code, access the network, manage long-running p
 | Node idle timeout | ✅ | Archon's workflow idle watchdog owns `idle_timeout` and aborts the OMP session through the provider abort signal; it is not forwarded as an OMP SDK option |
 | OMP spawn controls | ✅ | `assistants.omp.spawns` is passed through to the OMP SDK as its spawn allowlist expression; omit it to keep the SDK default |
 | OMP extension flags | ✅ when an extension runner loads | `assistants.omp.extensionFlags` calls OMP `extensionRunner.setFlagValue()` before the first prompt; Archon emits a warning if no runner is present |
-| OMP settings overrides | ✅ | `assistants.omp.settings.retry`, `compaction`, `snapcompact`, `contextPromotion`, `model.loopGuard`, `tools`, `providers`, `task`, `memory`, `mnemopi`, `hindsight`, `modelRoles`, `enabledModels`, `modelProviderOrder`, `disabledProviders`, and `disabledExtensions` are passed to `Settings.isolated(...)`; secret-bearing Mnemopi/Hindsight fields and raw arbitrary settings are not exposed |
-| OMP MCP discovery | ✅ (OMP-native) | `assistants.omp.enableMCP` toggles OMP's own MCP discovery from `.omp/mcp.json`, `~/.omp/agent/mcp.json`, root `mcp.json`, and supported third-party config files |
-| Archon `mcp:` field | ✅ (node-scoped) | Workflow node `mcp: .archon/mcp/server.json` loads that Archon MCP JSON only for the node. It does not require `assistants.omp.enableMCP: true` and does not write OMP-native config files |
+| OMP settings overrides | ✅ | `assistants.omp.settings.retry`, `compaction`, `snapcompact`, `contextPromotion`, `model.loopGuard`, `tools` (including `xdev`), `edit.enforceSeenLines`, `providers`, `task` (including `prewalk` and `agentPrewalk`), `generate_image.enabled`, `astGrep.enabled`, `memory`, `mnemopi`, `hindsight`, `modelRoles`, `enabledModels`, `modelProviderOrder`, `disabledProviders`, and `disabledExtensions` are passed to `Settings.isolated(...)`; secret-bearing Mnemopi/Hindsight fields and raw arbitrary settings are not exposed |
+| OMP MCP discovery | ✅ (OMP-native) | `assistants.omp.enableMCP` toggles OMP's own MCP discovery from `.omp/mcp.json`, `~/.omp/agent/mcp.json`, root `mcp.json`, and supported third-party config files; MCP tools retain their SDK-supplied load modes |
+| Archon `mcp:` field | ✅ (node-scoped) | Workflow node `mcp: .archon/mcp/server.json` loads that Archon MCP JSON only for the node, preserves OMP's MCP tool presentation, and applies node allow/deny filtering. It does not require `assistants.omp.enableMCP: true` and does not write OMP-native config files |
 | Bash subprocess env injection | ✅ | Workflow/codebase `envVars` are injected into OMP `bash` tool calls. If a model supplies an explicit bash `env` argument for the same key, the tool-call value wins. |
-| In-process native tools | ✅ | Archon's native `manage_run` tool is injected into OMP through SDK `customTools` for project-scoped chat/workflow control. |
+| In-process native tools | ✅ | Archon's native `manage_run` tool is injected into OMP through SDK `customTools` for project-scoped chat/workflow control. It is discoverable under `xd://` by default; `assistants.omp.settings.tools.xdev: false` restores it as a top-level tool. |
 | Fallback model | ✅ (retry/rate-limit fallback) | `fallbackModel:` maps to OMP `retry.fallbackChains` for the node/workflow primary model. OMP applies it during retryable errors such as rate limits or transient provider failures, not as an arbitrary-error fallback. |
 | Custom tools / commands / hooks paths | OMP-native only | Use OMP discovery directories such as `.omp/tools`, `.omp/commands`, `.omp/hooks`, or extensions; Archon does not write hidden config files or expose path-array shims |
 | Claude hooks / inline agents / sandbox / cost limits | ❌ | no Archon-compatible OMP session-level equivalent wired in v1 |

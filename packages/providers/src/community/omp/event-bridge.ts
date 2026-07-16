@@ -13,7 +13,24 @@ function getLog(): ReturnType<typeof createLogger> {
 
 const TERMINAL_EVENT_WAIT_MS = 1_000;
 
+function extractToolResultText(result: unknown): string | undefined {
+  if (typeof result !== 'object' || result === null || !('content' in result)) return undefined;
+  if (!Array.isArray(result.content)) return undefined;
+
+  const content: unknown[] = result.content;
+  const text: string[] = [];
+  for (const block of content) {
+    if (typeof block !== 'object' || block === null || !('type' in block) || !('text' in block)) {
+      continue;
+    }
+    if (block.type === 'text' && typeof block.text === 'string') text.push(block.text);
+  }
+  return text.length > 0 ? text.join('\n') : undefined;
+}
+
 function serializeToolResult(result: unknown): string {
+  const contentText = extractToolResultText(result);
+  if (contentText !== undefined) return contentText;
   if (typeof result === 'string') return result;
   try {
     const json = JSON.stringify(result);
@@ -251,9 +268,7 @@ export interface BridgeNotifier {
 }
 
 type BridgeQueueItem =
-  | { kind: 'chunk'; chunk: MessageChunk }
-  | { kind: 'done' }
-  | { kind: 'error'; error: Error };
+  { kind: 'chunk'; chunk: MessageChunk } | { kind: 'done' } | { kind: 'error'; error: Error };
 
 type ResultChunk = Extract<MessageChunk, { type: 'result' }>;
 

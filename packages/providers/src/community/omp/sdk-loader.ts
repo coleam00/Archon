@@ -74,6 +74,7 @@ export interface OmpCustomTool {
   label: string;
   description: string;
   parameters: unknown;
+  loadMode?: 'essential' | 'discoverable';
   execute(
     toolCallId: string,
     params: Record<string, unknown>,

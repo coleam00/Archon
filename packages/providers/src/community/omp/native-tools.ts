@@ -60,6 +60,7 @@ export function buildOmpNativeToolDefinitions(nativeTools: NativeTool[]): OmpCus
     name: tool.name,
     label: tool.name,
     description: tool.description,
+    loadMode: 'discoverable',
     parameters: jsonSchemaToTypeBox(tool.inputSchema),
     async execute(
       _toolCallId: string,
