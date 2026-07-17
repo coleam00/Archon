@@ -1,0 +1,33 @@
+name: archon-compose-child-qa
+description: |
+  Child building block for archon-compose-plan-implement-qa (#2121 Phase 2). Runs as
+  a governed sub-run: implement, PAUSE at an approval gate for human review, then
+  summarize. It gets its own run record, artifacts, gate, and cost line.
+
+  A reviewer approves THIS run by its own id (`/workflow approve <id>` — shown in the
+  pause message); the parent auto-resumes when this child completes and threads the
+  `qa-summary` output back as the parent node's output.
+
+  Runnable standalone too, but its purpose is to be composed via a `workflow:` node.
+
+# Contains an approval gate — must run in the foreground on web.
+interactive: true
+
+nodes:
+  - id: implement
+    prompt: |
+      Based on the plan below, describe the concrete implementation steps you would take.
+
+      $ARGUMENTS
+    context: fresh
+
+  - id: review-gate
+    approval:
+      message: "Review the sub-run's implementation before it finalizes."
+    depends_on: [implement]
+
+  - id: qa-summary
+    prompt: |
+      Summarize the implemented change and confirm the QA review passed.
+    depends_on: [review-gate]
+    context: fresh
