@@ -8,6 +8,7 @@ const mockGetWorkflowRun = mock(() => Promise.resolve(null));
 const mockListWorkflowRuns = mock(() => Promise.resolve([]));
 const mockUpdateWorkflowRun = mock(() => Promise.resolve());
 const mockCancelWorkflowRun = mock(() => Promise.resolve({ cancelled: true }));
+const mockFindChildRuns = mock((): Promise<unknown[]> => Promise.resolve([]));
 // CAS gate resolvers (#2113): default to "won the race". Tests that simulate a
 // concurrent loser override with mockResolvedValueOnce({ resolved: false }).
 // resolveApprovalGate = stay-paused resolution (approve, reject stage-rework);
@@ -20,6 +21,7 @@ mock.module('../db/workflows', () => ({
   listWorkflowRuns: mockListWorkflowRuns,
   updateWorkflowRun: mockUpdateWorkflowRun,
   cancelWorkflowRun: mockCancelWorkflowRun,
+  findChildRuns: mockFindChildRuns,
   resolveApprovalGate: mockResolveApprovalGate,
   resolveAndCancelApprovalGate: mockResolveAndCancelApprovalGate,
 }));
@@ -106,6 +108,10 @@ describe('approveWorkflow', () => {
     mockCreateWorkflowEvent.mockClear();
     mockUpdateWorkflowRun.mockClear();
     mockResolveApprovalGate.mockClear();
+    mockCancelWorkflowRun.mockClear();
+    mockCancelWorkflowRun.mockResolvedValue({ cancelled: true });
+    mockFindChildRuns.mockClear();
+    mockFindChildRuns.mockResolvedValue([]);
   });
 
   test('approves standard approval gate — writes node_completed + approval_received', async () => {
@@ -667,6 +673,8 @@ describe('abandonWorkflow', () => {
     mockCancelWorkflowRun.mockImplementation(() => Promise.resolve({ cancelled: true }));
     mockReclaimContainerEnv.mockClear();
     mockReclaimContainerEnv.mockImplementation(() => Promise.resolve());
+    mockFindChildRuns.mockClear();
+    mockFindChildRuns.mockImplementation(() => Promise.resolve([]));
   });
 
   test('cancels a non-terminal run', async () => {
@@ -675,6 +683,42 @@ describe('abandonWorkflow', () => {
     const run = await abandonWorkflow('run-1');
     expect(run.id).toBe('run-1');
     expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1');
+  });
+
+  // #2121 Phase 2 (D7): abandoning a parent cascade-cancels its non-terminal
+  // sub-run descendants (children AND grandchildren), skipping already-terminal ones.
+  test('cascade-cancels non-terminal sub-run descendants', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'running' }));
+    // run-1 → [child-a (paused), child-done (completed)]; child-a → [grandchild (running)].
+    mockFindChildRuns.mockImplementation((parentId: unknown) => {
+      if (parentId === 'run-1') {
+        return Promise.resolve([
+          { id: 'child-a', status: 'paused' },
+          { id: 'child-done', status: 'completed' },
+        ]);
+      }
+      if (parentId === 'child-a') {
+        return Promise.resolve([{ id: 'grandchild', status: 'running' }]);
+      }
+      return Promise.resolve([]);
+    });
+
+    await abandonWorkflow('run-1');
+
+    const cancelled = mockCancelWorkflowRun.mock.calls.map(c => c[0]);
+    expect(cancelled).toContain('run-1'); // the parent itself
+    expect(cancelled).toContain('child-a'); // non-terminal child
+    expect(cancelled).toContain('grandchild'); // non-terminal grandchild
+    expect(cancelled).not.toContain('child-done'); // already terminal — skipped
+  });
+
+  // The cascade only runs when OUR cancel won the CAS (`cancelled: true`).
+  test('does not cascade when the parent cancel loses the race', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'paused' }));
+    mockCancelWorkflowRun.mockImplementationOnce(() => Promise.resolve({ cancelled: false }));
+    await abandonWorkflow('run-1');
+    // findChildRuns is never consulted (no cascade) when the CAS was lost.
+    expect(mockFindChildRuns).not.toHaveBeenCalled();
   });
 
   // M2 — abandoning a CONTAINER run reclaims its container + volume in the SHARED op

@@ -67,6 +67,50 @@ export interface RejectionOperationResult {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/** Safety bound on the abandon cascade walk (guards against corrupted run trees). */
+const MAX_CASCADE_RUNS = 500;
+
+/**
+ * Cascade-cancel the `workflow:` sub-run tree under `rootId` (#2121 Phase 2 / D7).
+ * A child sub-run shares the parent's conversation and runs in-process, so
+ * abandoning the parent must flip every non-terminal DESCENDANT to cancelled — not
+ * just direct children (a child may itself spawn grandchildren). Cooperative: each
+ * cancelled run's executor between-layer status poll then aborts it (~10s; there is
+ * no hard subprocess kill in slice 1). Best-effort — a per-run failure is logged,
+ * never thrown, so the parent abandon always succeeds.
+ */
+async function cascadeCancelChildren(rootId: string): Promise<void> {
+  const queue: string[] = [rootId];
+  const seen = new Set<string>([rootId]);
+  let processed = 0;
+  while (queue.length > 0 && processed < MAX_CASCADE_RUNS) {
+    const parentId = queue.shift();
+    if (parentId === undefined) break;
+    processed++;
+    let children: WorkflowRun[];
+    try {
+      children = await workflowDb.findChildRuns(parentId);
+    } catch (err) {
+      getLog().warn({ err, parentId }, 'operations.workflow_abandon_cascade_lookup_failed');
+      continue;
+    }
+    for (const child of children) {
+      if (seen.has(child.id)) continue;
+      seen.add(child.id);
+      queue.push(child.id); // traverse deeper even under an already-terminal child
+      if (child.status === 'completed' || child.status === 'cancelled') continue;
+      try {
+        await workflowDb.cancelWorkflowRun(child.id);
+      } catch (err) {
+        getLog().warn(
+          { err, childId: child.id },
+          'operations.workflow_abandon_cascade_cancel_failed'
+        );
+      }
+    }
+  }
+}
+
 async function getRunOrThrow(runId: string, logEvent: string): Promise<WorkflowRun> {
   let run: WorkflowRun | null;
   try {
@@ -136,6 +180,12 @@ export async function abandonWorkflow(runId: string): Promise<WorkflowRun> {
       'operations.workflow_abandon_failed'
     );
     throw new Error(`Failed to abandon workflow run ${runId}: ${err.message}`);
+  }
+  // Cascade-cancel the sub-run tree — ONLY when OUR cancel won the CAS (same guard as
+  // the container reclaim below): a false `cancelled` means a concurrent transition
+  // already took the run terminal, so its children are not ours to cancel.
+  if (cancelled) {
+    await cascadeCancelChildren(runId);
   }
   // M2 — reclaim a container run's container + upper volume immediately, in the SHARED
   // op so EVERY abandon surface (CLI, web API, chat, manage_run, Slack-cancel) frees the
