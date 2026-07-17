@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -28,7 +28,15 @@ async function runPersist(stdin: string, target = TARGET, seed?: string) {
     const targetExists = existsSync(join(cwd, target));
     let onDiskRaw: string | null = null;
     if (targetExists) onDiskRaw = readFileSync(join(cwd, target), 'utf8');
-    return { exitCode, stdout: stdout.trim(), stderr, written, onDiskRaw };
+    // Capture the state dir listing before the finally-cleanup so a test can
+    // assert the atomic temp file was renamed away, not left behind.
+    let stateDirEntries: string[] = [];
+    try {
+      stateDirEntries = readdirSync(join(cwd, '.archon/state'));
+    } catch {
+      stateDirEntries = [];
+    }
+    return { exitCode, stdout: stdout.trim(), stderr, written, onDiskRaw, stateDirEntries };
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }
@@ -166,5 +174,8 @@ describe('repo-triage-persist', () => {
     const result = await runPersist(input, '.archon/state/stale-nudge-state.json');
     expect(result.exitCode).toBe(0);
     expect(result.written).toEqual({ version: 1, nudged: {} });
+    // The temp file (`.tmp-<pid>-<ts>`) must have been renamed away, not left behind.
+    expect(result.stateDirEntries).toContain('stale-nudge-state.json');
+    expect(result.stateDirEntries.some((f) => f.includes('.tmp'))).toBe(false);
   });
 });
