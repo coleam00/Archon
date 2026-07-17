@@ -715,7 +715,7 @@ describe('PiProvider', () => {
     expect(mockSetRuntimeApiKey).toHaveBeenCalledWith('anthropic', 'sk-ant-oat01-proc');
   });
 
-  test('yields assistant chunks from text_delta events', async () => {
+  test('coalesces text_delta events into a single assistant chunk (#1814)', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     resetScript([
       {
@@ -759,9 +759,11 @@ describe('PiProvider', () => {
       })
     );
     expect(error).toBeUndefined();
+    // Consecutive text_delta events are coalesced into one block-level chunk
+    // (flushed before the terminal result) so downstream consumers don't see
+    // fragmented "Hello\n\n world" output — see #1814.
     expect(chunks).toEqual([
-      { type: 'assistant', content: 'Hello' },
-      { type: 'assistant', content: ' world' },
+      { type: 'assistant', content: 'Hello world' },
       expect.objectContaining({ type: 'result', stopReason: 'stop' }),
     ]);
   });
