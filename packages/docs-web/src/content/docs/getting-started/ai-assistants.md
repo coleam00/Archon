@@ -11,6 +11,8 @@ sidebar:
 
 You must configure **at least one** AI assistant. All four can be configured and mixed within workflows.
 
+For a canonical, at-a-glance comparison of which per-node features each provider supports, see the [Provider Capability Matrix](/reference/provider-capabilities/) — it is generated directly from the providers' capability declarations, so it never drifts from runtime behavior. The per-provider sections below add the field-level YAML syntax and caveats.
+
 ## Structured output guarantees
 
 When a workflow node sets `output_format`, the guarantee level depends on the provider's tier (exposed as `capabilities.structuredOutput` on `GET /api/providers`):
@@ -307,7 +309,7 @@ assistants:
 | Skills | ✅ | SKILL.md files with YAML frontmatter, pattern-based permissions |
 | Tool restrictions | ✅ | `tools` / `disallowedTools` per agent; deny wins over allow |
 | Inline agents (`agents:`) | ✅ | File-materialized agents; single and parallel multi-agent fan-out |
-| Hooks | ✅ | Plugin hook system (tool, session, message hooks) |
+| Hooks | ❌ | Archon's per-node `hooks` field is Claude-SDK-shaped; the OpenCode provider has no translation site, so a node's `hooks:` is ignored (with a warning) |
 | Effort / reasoning control | ❌ | No per-request param; not configurable in agent file, opencode puts it in config. |
 | Thinking control | ❌ | No explicit `thinking` field in agent frontmatter; OpenCode auto-enables reasoning when `agents[].model` is a reasoning-capable model (e.g. `anthropic/claude-sonnet-4-5`) |
 | Fallback model | ❌ | No native failover in the SDK |

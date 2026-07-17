@@ -30,6 +30,9 @@ jobs:
       - name: Check bundled defaults
         run: bun run check:bundled
 
+      - name: Check provider capability matrix
+        run: bun run check:capability-matrix
+
       - name: Type check
         run: bun run type-check
 
