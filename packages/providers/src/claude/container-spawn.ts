@@ -24,6 +24,7 @@ import { spawn, type ChildProcess } from 'child_process';
 import { randomUUID } from 'crypto';
 import type { SpawnOptions, SpawnedProcess } from '@anthropic-ai/claude-agent-sdk';
 import type { ExecutionContext } from '../types';
+import { CONTAINER_ENV_DENYLIST } from '../types';
 import { createLogger } from '@archon/paths';
 
 /**
@@ -49,12 +50,9 @@ function getLog(): ReturnType<typeof createLogger> {
  */
 const CONTAINER_CLAUDE_BIN = process.env.ARCHON_CONTAINER_CLAUDE_BIN ?? 'claude';
 
-/**
- * Env keys we never forward via `docker exec -e`: the container image sets these
- * correctly (PATH must point at the in-container binaries; HOME must be the
- * container user's home) and a host value would break in-container resolution.
- */
-const CONTAINER_ENV_DENYLIST = new Set(['PATH', 'HOME', 'PWD', 'OLDPWD', 'SHLVL']);
+// Env keys never forwarded via `docker exec -e` — shared with the bash/script
+// exec path (see `@archon/providers/types`) so the two container env policies
+// can't drift.
 
 /** Build the per-invocation in-container pidfile path. Uuid-only → shell-safe. */
 function pidFilePath(): string {

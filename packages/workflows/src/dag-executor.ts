@@ -23,6 +23,7 @@ import type {
   TokenUsage,
   ExecutionContext,
 } from '@archon/providers/types';
+import { CONTAINER_ENV_DENYLIST } from '@archon/providers/types';
 import {
   getProviderCapabilities,
   getRegisteredProviders,
@@ -2186,7 +2187,10 @@ export function buildSubprocessDockerArgs(
   const dockerArgs = ['exec', '-w', options.cwd];
   if (execContext.execUser) dockerArgs.push('-u', execContext.execUser);
   for (const [key, value] of Object.entries(options.env)) {
-    if (value !== undefined) dockerArgs.push('-e', `${key}=${value}`);
+    // Skip the denylist (PATH/HOME/…): a project env var must not clobber the
+    // in-container binary/home resolution — same policy as the Claude spawn path.
+    if (value === undefined || CONTAINER_ENV_DENYLIST.has(key)) continue;
+    dockerArgs.push('-e', `${key}=${value}`);
   }
   dockerArgs.push(execContext.containerId, containerCommandName(cmd), ...args);
   return dockerArgs;

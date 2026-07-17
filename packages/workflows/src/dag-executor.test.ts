@@ -13977,4 +13977,16 @@ describe('buildSubprocessDockerArgs — bash/script env isolation', () => {
     const cidIdx = args.indexOf('cid-9');
     expect(args[cidIdx + 1]).toBe('bash');
   });
+
+  it('never forwards denylisted keys (PATH/HOME) — a project env var must not clobber resolution', () => {
+    const args = buildSubprocessDockerArgs(CTX, 'bash', ['-c', 'true'], {
+      cwd: '/w',
+      env: { PATH: '/evil/bin', HOME: '/evil', PWD: '/x', KEEP: '1' },
+    });
+    const joined = args.join(' ');
+    expect(joined).not.toContain('PATH=/evil/bin');
+    expect(joined).not.toContain('HOME=/evil');
+    expect(joined).not.toContain('PWD=/x');
+    expect(joined).toContain('KEEP=1'); // non-denylisted keys still forwarded
+  });
 });

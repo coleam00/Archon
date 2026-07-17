@@ -394,14 +394,18 @@ packages/
 │       ├── types.ts          # Branded types (RepoPath, BranchName, etc.)
 │       ├── worktree.ts       # Worktree operations (create, remove, list)
 │       └── index.ts          # Package exports
-├── isolation/                # @archon/isolation - Worktree isolation (depends on @archon/git + @archon/paths + @archon/providers/types)
+├── isolation/                # @archon/isolation - Worktree + container isolation (depends on @archon/git + @archon/paths + @archon/providers/types)
 │   └── src/
-│       ├── types.ts          # Isolation types and interfaces
-│       ├── errors.ts         # Error classifiers (classifyIsolationError, IsolationBlockedError)
+│       ├── types.ts          # Isolation types and interfaces (incl. IIsolationBackend, ContainerBackendConfig)
+│       ├── errors.ts         # Error classifiers (classifyIsolationError, IsolationBlockedError; incl. docker patterns)
 │       ├── factory.ts        # Provider factory (getIsolationProvider, configureIsolation)
 │       ├── resolver.ts       # IsolationResolver (request → environment resolution)
 │       ├── store.ts          # IIsolationStore interface
 │       ├── worktree-copy.ts  # File copy utilities for worktrees
+│       ├── backend-router.ts # Kind-routed folder backend selection (resolveFolderBackend: in-place | container)
+│       ├── backends/         # Folder-project isolation backends (in-place.ts, container.ts)
+│       ├── container/        # Docker CLI wrapper (docker-exec.ts) for the container backend
+│       ├── docker/           # runner.Dockerfile + entrypoint.sh + SECURITY.md (the container runner image)
 │       ├── providers/
 │       │   └── worktree.ts   # WorktreeProvider implementation
 │       └── index.ts          # Package exports
@@ -474,7 +478,7 @@ import type { DagNode, WorkflowDefinition } from '@/lib/api';
 1. **`codebases`** - Repository/project metadata and commands (JSONB); `kind` (`'repo'`/`'folder'`, default `'repo'`) discriminates git repos from **folder projects** (non-git workspaces — multi-repo roots or plain ops folders — that run in place with named `_folder/<slug>/` storage; `repository_url`/`default_branch` are null)
 2. **`conversations`** - Track platform conversations with titles and soft-delete support; nullable `user_id` records first creator (provenance + execution-identity **fallback** only — chat turns execute as the message sender, #1982)
 3. **`sessions`** - Track AI SDK sessions with resume capability
-4. **`isolation_environments`** - Git worktree isolation tracking; nullable `created_by_user_id` preserves first creator
+4. **`isolation_environments`** - Isolation tracking (git worktrees AND folder-project containers — `provider` is `'worktree'`/`'container'`; container rows use a `''` `branch_name` sentinel and store `{containerId, volume, image, overlayMode, …}` in `metadata`); nullable `created_by_user_id` preserves first creator
 5. **`workflow_runs`** - Workflow execution tracking and state; nullable `user_id` for per-run attribution
 6. **`workflow_events`** - Step-level workflow event log (step transitions, artifacts, errors)
 7. **`messages`** - Conversation message history with tool call metadata (JSONB); nullable `user_id` (NULL for assistant rows). Split write-path: the **web** adapter persists its own turns via `MessagePersistence`; the **orchestrator** persists non-web turns (Slack/Telegram/GitHub/Discord/CLI) fire-and-forget, guarded by `isWebAdapter` to avoid double-writing web turns — only AI-bound turns get a user row (deterministic-command and approval-only turns return earlier), so a `user` row always pairs with an `assistant` row

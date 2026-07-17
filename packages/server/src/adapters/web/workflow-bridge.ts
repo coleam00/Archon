@@ -188,7 +188,6 @@ export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
         runId: event.runId,
         phase: event.phase,
         ...(event.containerId !== undefined ? { containerId: event.containerId } : {}),
-        ...(event.image !== undefined ? { image: event.image } : {}),
         timestamp: Date.now(),
       });
 

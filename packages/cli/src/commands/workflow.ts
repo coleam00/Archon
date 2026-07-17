@@ -1118,6 +1118,20 @@ export async function workflowRunCommand(
       'workflow.resume_found_resumable'
     );
 
+    // A run that executed in a container CANNOT be resumed in Phase B: the
+    // overlay was discarded on teardown, so resuming (with OR without --container)
+    // would run downstream nodes against a fresh/empty or in-place live root,
+    // silently unisolated and missing the completed nodes' filesystem changes.
+    // Reject regardless of the current flag (round-3 blocks the flag-present path;
+    // this catches `resume` WITHOUT the flag). Detected via the run's own metadata.
+    if (resumable.metadata?.isolation === 'container') {
+      throw new Error(
+        `Run '${resumable.id}' executed inside a container and cannot be resumed until ` +
+          'Phase C: the isolation overlay was discarded on teardown, so a resume would ' +
+          'run against a fresh/unisolated workspace. Start a fresh --container run instead.'
+      );
+    }
+
     // Reuse the working path from the resumable run (verify it still exists)
     if (resumable.working_path) {
       const { existsSync } = await import('fs');

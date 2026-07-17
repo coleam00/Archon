@@ -1201,7 +1201,15 @@ export class ClaudeProvider implements IAgentProvider {
     // Resolve Claude CLI path once before the retry loop. In binary mode this
     // throws immediately if neither env nor config supplies a valid path, so
     // the user gets a clean error rather than N retries of "Module not found".
-    const resolvedCliPath = await resolveClaudeBinaryPath(assistantDefaults.claudeBinaryPath);
+    // SKIP entirely for container runs: the SDK bypasses disk resolution when
+    // `spawnClaudeCodeProcess` is set (buildBaseClaudeOptions omits
+    // pathToClaudeCodeExecutable), and Claude is baked into the runner image — a
+    // compiled Archon binary has no host Claude, so resolving it here would throw
+    // and kill an otherwise-valid container run.
+    const isContainerRun = requestOptions?.execContext?.kind === 'container';
+    const resolvedCliPath = isContainerRun
+      ? undefined
+      : await resolveClaudeBinaryPath(assistantDefaults.claudeBinaryPath);
 
     // Build subprocess env once (avoids re-logging auth mode per retry). A
     // container run gets ONLY the Archon-managed bag + a minimal base — host

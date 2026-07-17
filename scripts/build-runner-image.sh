@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
-# Build the Archon container-isolation runner image, tagged with the current
-# Archon version (from the root package.json). The container backend defaults to
-# `archon-runner:<version>` — keep this the canonical way to build it so the tag
-# always matches what the backend looks for.
+# Build the Archon container-isolation runner image. Tags BOTH
+# `archon-runner:<version>` (from the root package.json) and `archon-runner:latest`.
+# The container backend defaults to `archon-runner:latest`, so this is the
+# canonical build step; pin `container.image` to a version tag for reproducibility.
 #
 # Usage:
 #   bun run build:runner-image           # tags archon-runner:<version> + :latest

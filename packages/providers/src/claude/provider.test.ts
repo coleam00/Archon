@@ -992,6 +992,35 @@ describe('ClaudeProvider', () => {
       spy.mockRestore();
     });
 
+    test('container run SKIPS host binary resolution (works when host Claude is absent)', async () => {
+      // Simulate a compiled binary with no host Claude — resolveClaudeBinaryPath
+      // would throw. A container run must NOT call it (Claude is baked into the
+      // runner image; the SDK bypasses disk resolution via spawnClaudeCodeProcess).
+      const spy = spyOn(binaryResolver, 'resolveClaudeBinaryPath').mockRejectedValue(
+        new Error('Claude Code not found — set CLAUDE_BIN_PATH')
+      );
+      mockQuery.mockImplementation(async function* () {
+        // empty
+      });
+
+      // Must not throw at resolution time.
+      for await (const _ of client.sendQuery('test', '/workspace', undefined, {
+        execContext: { kind: 'container', containerId: 'c-1' },
+      })) {
+        // consume
+      }
+
+      expect(spy).not.toHaveBeenCalled();
+      const callArgs = mockQuery.mock.calls[0][0] as {
+        options: { pathToClaudeCodeExecutable?: string; spawnClaudeCodeProcess?: unknown };
+      };
+      // SDK spawn hook is set; host disk path is omitted.
+      expect(typeof callArgs.options.spawnClaudeCodeProcess).toBe('function');
+      expect(callArgs.options.pathToClaudeCodeExecutable).toBeUndefined();
+
+      spy.mockRestore();
+    });
+
     test('classifies exit code errors as crash and retries up to 3 times', async () => {
       const error = new Error('process exited with code 1');
       mockQuery.mockImplementation(async function* () {

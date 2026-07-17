@@ -71,7 +71,10 @@ export type WorkflowWorktreePolicy = z.infer<typeof workflowWorktreePolicySchema
 export const workflowContainerPolicySchema = z.object({
   /**
    * Pin the container backend on for this folder-project workflow without the
-   * `--container` flag. `false`/omitted defers to the flag / config default.
+   * `--container` flag. Precedence is `--container flag ?? this ?? config ?? false`:
+   * `true` enables it (unless already forced by the flag); OMITTED defers to the
+   * config default; `false` HARD-disables it relative to config (the config
+   * default is not consulted), though an explicit `--container` flag still wins.
    */
   enabled: z.boolean().optional(),
 });

@@ -197,7 +197,6 @@ export interface ContainerLifecycleEvent {
   runId: string;
   phase: 'created' | 'destroyed';
   containerId?: string;
-  image?: string;
 }
 
 export type WorkflowEmitterEvent =

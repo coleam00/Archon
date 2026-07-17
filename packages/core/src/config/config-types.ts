@@ -70,8 +70,11 @@ export type AssistantDefaults = ProviderDefaultsMap & {
  */
 export interface ContainerConfig {
   /**
-   * Runner image tag.
-   * @default 'archon-runner:<archon-version>'
+   * Runner image tag. Defaults to `archon-runner:latest` — the `build:runner-image`
+   * script tags both `archon-runner:<version>` and `:latest`, and defaulting to
+   * `:latest` avoids coupling to the dev-vs-binary version string. Pin an explicit
+   * version tag here for reproducibility.
+   * @default 'archon-runner:latest'
    */
   image?: string;
 
