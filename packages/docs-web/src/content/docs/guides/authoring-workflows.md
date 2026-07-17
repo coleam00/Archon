@@ -449,17 +449,17 @@ nodes:
 
 ### Inline sub-agents
 
-Define Claude sub-agents directly in the workflow YAML, without authoring `.claude/agents/*.md` files. The main agent can spawn them in parallel via the `Task` tool — useful for map-reduce patterns where a cheap model (e.g. Haiku) briefs items and a stronger model reduces.
+Define Claude sub-agents directly in the workflow YAML, without authoring `.claude/agents/*.md` files. The main agent can spawn them in parallel via the `Agent` tool (renamed from `Task` in the Claude SDK — the old name is silently ignored) — useful for map-reduce patterns where a cheap model (e.g. Haiku) briefs items and a stronger model reduces.
 
 ```yaml
 nodes:
   - id: triage
     prompt: |
       Fetch open issues via `gh issue list ...`. For each issue, spawn the
-      brief-gen sub-agent in parallel (one message, multiple Task tool calls)
+      brief-gen sub-agent in parallel (one message, multiple Agent tool calls)
       to produce a 2-3 sentence brief. Then cluster briefs for duplicates.
     model: sonnet
-    allowed_tools: [Bash, Read, Write, Task]
+    allowed_tools: [Bash, Read, Write, Agent]
     agents:
       brief-gen:
         description: Summarises a single GitHub issue in 2-3 sentences
@@ -482,7 +482,7 @@ Keys:
 - **`agents:` (inline)** — use when the sub-agent is specific to ONE workflow's needs. Keeps the workflow self-contained in a single YAML file; travels cleanly in PRs and forks.
 - **`.claude/agents/*.md` (on-disk)** — use when the sub-agent is shared across multiple workflows OR the whole project (for example, a `triage-agent` used by several maintenance workflows). On-disk agents live outside workflow YAMLs and are picked up automatically by the Claude Agent SDK.
 
-Both sources coexist — inline agents and on-disk agents are both available to `Task(subagent_type=...)` at runtime.
+Both sources coexist — inline agents and on-disk agents are both available to `Agent(subagent_type=...)` at runtime.
 
 ---
 
@@ -1472,7 +1472,7 @@ Before deploying a workflow:
 10. **`hooks`** — attach SDK hook callbacks to Claude nodes for tool control and context injection
 11. **`mcp:`** — attach per-node MCP servers via JSON config (Codex and Claude)
 12. **`skills:`** — preload skills into Claude nodes for domain expertise
-13. **`agents:`** — inline Claude sub-agent definitions invokable via the `Task` tool
+13. **`agents:`** — inline Claude sub-agent definitions invokable via the `Agent` tool
 14. **`effort` / `thinking`** — control reasoning depth and thinking mode per node or workflow (Claude only)
 15. **`maxBudgetUsd`** — set a USD cost cap per node; fails with error if exceeded (Claude only)
 16. **`systemPrompt`** — override the default system prompt per node (Claude only)
