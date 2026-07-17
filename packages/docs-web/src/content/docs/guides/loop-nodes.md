@@ -267,6 +267,7 @@ completion when tests still fail.
 - `when` — conditional execution
 - `trigger_rule` — join semantics
 - `idle_timeout` — per-iteration timeout (default: 30 minutes)
+- `provider` / `model` — node-level overrides are resolved and used for every iteration
 - `$nodeId.output` — downstream nodes receive the last iteration's output
 
 ### `interactive` and `gate_message`
@@ -370,7 +371,6 @@ nodes:
 - `skills` — skill preloading is not applied to loop iterations
 - `allowed_tools` / `denied_tools` — tool restrictions are not enforced on loop iterations
 - `output_format` — structured JSON output is not supported for loop nodes
-- `provider` / `model` — accepted in YAML without error but silently ignored at runtime. Loop nodes always use the workflow-level provider and model.
 
 These fields (except `retry`) are silently discarded at parse time with a
 loader warning — the workflow still loads but the fields have no effect.
@@ -485,9 +485,10 @@ than silently degrading).
 difference is the body: `loop` takes a single `prompt`; `loop_group` takes a
 `nodes` array.
 
-Unlike `loop:` (where node-level `model`/`provider` are ignored at runtime),
-`model` and `provider` set on a `loop_group` node **are honored**: they become
-the default for every body AI node, overridable per body node.
+As with a `loop:` node (whose node-level `model`/`provider` are resolved and
+applied to every iteration), `model` and `provider` set on a `loop_group` node
+**are honored**: they become the default for every body AI node, overridable per
+body node.
 
 ### Resume
 

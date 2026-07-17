@@ -172,8 +172,8 @@ nodes:
     provider: claude             # Per-node provider override
     model: haiku                 # Per-node model override
     # hooks:                     # Optional: per-node SDK hook callbacks (Claude only) — see hooks guide
-    # mcp: .archon/mcp/servers.json  # Optional: per-node MCP servers (Codex and Claude)
-    # skills: [remotion-best-practices]  # Optional: per-node skills (Claude only) — see skills guide
+    # mcp: .archon/mcp/servers.json  # Optional: per-node MCP servers (all providers except Pi)
+    # skills: [remotion-best-practices]  # Optional: per-node skills (Claude/Pi/OpenCode/Copilot; Codex auto-discovers) — see skills guide
 ```
 
 ### Node Fields
@@ -213,14 +213,14 @@ nodes:
 | `provider` | string | inherited | Per-node provider override (any registered provider, e.g. `'claude'`, `'codex'`) |
 | `model` | string | inherited | Per-node model override |
 | `output_format` | object | — | JSON Schema for structured output. SDK-enforced on Claude/Codex/OpenCode; best-effort on Pi/Copilot (schema appended to prompt, JSON extracted + repaired). The parsed output is validated against the schema (every provider); a node that declares `output_format` but returns no schema-valid output **fails** rather than degrading silently. |
-| `allowed_tools` | string[] | — | Whitelist of built-in tools. `[]` = no tools. Claude only |
-| `denied_tools` | string[] | — | Tools to remove. Applied after `allowed_tools`. Claude only |
+| `allowed_tools` | string[] | — | Whitelist of built-in tools. `[]` = no tools. All providers except Codex |
+| `denied_tools` | string[] | — | Tools to remove. Applied after `allowed_tools`. All providers except Codex |
 | `hooks` | object | — | Per-node SDK hook callbacks. Claude only. See [Hooks](/guides/hooks/) |
-| `mcp` | string | — | Path to MCP server config JSON file. Codex and Claude. See [MCP Servers](/guides/mcp-servers/) |
-| `skills` | string[] | — | Skills to preload. Claude only. See [Skills](/guides/skills/) |
+| `mcp` | string | — | Path to MCP server config JSON file. All providers except Pi. See [MCP Servers](/guides/mcp-servers/) |
+| `skills` | string[] | — | Skills to preload. Per-node injection on Claude/Pi/OpenCode/Copilot; Codex auto-discovers from `.agents/skills/`. See [Skills](/guides/skills/) |
 | `agents` | object | — | Inline sub-agent definitions keyed by kebab-case ID. Claude only. See [Inline sub-agents](#inline-sub-agents) |
-| `effort` | `'low'`\|`'medium'`\|`'high'`\|`'max'` | — | Reasoning depth. Claude only. Also settable at workflow level |
-| `thinking` | string \| object | — | Thinking mode: `'adaptive'`, `'disabled'`, or `{type:'enabled', budgetTokens:N}`. Claude only. Also settable at workflow level |
+| `effort` | `'low'`\|`'medium'`\|`'high'`\|`'max'` | — | Reasoning depth. Claude/Pi/Copilot. Also settable at workflow level |
+| `thinking` | string \| object | — | Thinking mode: `'adaptive'`, `'disabled'`, or `{type:'enabled', budgetTokens:N}`. Claude/Pi/Copilot. Also settable at workflow level |
 | `maxBudgetUsd` | number | — | USD cost cap; node fails if exceeded. Claude only. Per-node only |
 | `systemPrompt` | string | — | Override the default `claude_code` system prompt for this node. Claude only. Per-node only |
 | `fallbackModel` | string | — | Model to use if primary model fails. Claude only. Also settable at workflow level |
@@ -229,7 +229,7 @@ nodes:
 
 ### Claude SDK Advanced Options
 
-These fields map directly to Claude Agent SDK options. All are Claude-only — Codex nodes emit a warning and ignore them. They can be set **per-node** or at the **workflow level** as defaults (per-node takes precedence). `maxBudgetUsd` and `systemPrompt` are per-node only.
+These fields map directly to Claude Agent SDK options. `maxBudgetUsd`, `systemPrompt`, `fallbackModel`, `betas`, and `sandbox` are Claude-only — Codex and other providers emit a warning and ignore them. `effort` and `thinking` also apply to Pi and Copilot, which map them to their own reasoning controls (Codex uses `modelReasoningEffort` instead; OpenCode configures reasoning via `opencode.json`). They can be set **per-node** or at the **workflow level** as defaults (per-node takes precedence). `maxBudgetUsd` and `systemPrompt` are per-node only.
 
 **effort** — reasoning depth:
 
@@ -445,7 +445,7 @@ nodes:
 - `allowed_tools: []` disables all built-in tools (useful for MCP-only nodes). Use the `mcp` field on a node to attach per-node MCP servers — see [Node Fields](#node-fields)
 - If both are set, `denied_tools` is applied after `allowed_tools`
 - `undefined` (field absent) and `[]` have different semantics — absent means use default tool set, `[]` means no tools
-- Claude only — Codex nodes/steps emit a warning and continue (Codex doesn't support per-call tool restrictions)
+- Supported on all providers except Codex — Codex nodes/steps emit a warning and continue (Codex doesn't support per-call tool restrictions)
 
 ### Inline sub-agents
 
@@ -669,7 +669,7 @@ The resolved provider must declare `sessionResume: true` in its capabilities. Th
 
 - **`bash:` / `script:`** — never invoke a provider, so the field is meaningless. Setting it produces a warning at load time and is ignored.
 - **`approval:` / `cancel:`** — same: no AI call, no session to persist.
-- **`loop:`** — has its own per-iteration session threading. Cross-run persistence for loops isn't wired in this release; the field is warn-and-dropped on loop nodes. Use a `prompt:` node if you need cross-run memory.
+- **`loop:` / `loop_group:`** — have their own per-iteration session threading. Cross-run persistence isn't wired for them in this release; the field is warn-and-dropped on loop and loop_group nodes. Use a `prompt:` node if you need cross-run memory.
 
 When a workflow-level `persist_sessions: true` is combined with any of these node types, the capability check and persistence logic both skip the non-applicable nodes — no false validation errors, no silent runtime mistakes.
 
@@ -1467,13 +1467,13 @@ Before deploying a workflow:
 5. **Parallel by default** — nodes in the same topological layer run concurrently
 6. **Conditional branching** — `when:` conditions and `trigger_rule` control which nodes run
 7. **`output_format`** — enforce structured JSON output from AI nodes for reliable branching
-8. **`allowed_tools` / `denied_tools`** — restrict tools per node (Claude only, SDK-enforced)
-9. **`retry:`** — auto-retries transient errors (default: 2 retries / 3 total attempts, 3 s backoff); customize per node
+8. **`allowed_tools` / `denied_tools`** — restrict tools per node (all providers except Codex)
+9. **`retry:`** — AI nodes auto-retry transient errors (default: 2 retries / 3 total attempts, 3 s backoff); `bash:`/`script:` retry only with an explicit `retry:` block
 10. **`hooks`** — attach SDK hook callbacks to Claude nodes for tool control and context injection
-11. **`mcp:`** — attach per-node MCP servers via JSON config (Codex and Claude)
-12. **`skills:`** — preload skills into Claude nodes for domain expertise
+11. **`mcp:`** — attach per-node MCP servers via JSON config (all providers except Pi)
+12. **`skills:`** — preload skills per node (Claude/Pi/OpenCode/Copilot; Codex auto-discovers from `.agents/skills/`)
 13. **`agents:`** — inline Claude sub-agent definitions invokable via the `Task` tool
-14. **`effort` / `thinking`** — control reasoning depth and thinking mode per node or workflow (Claude only)
+14. **`effort` / `thinking`** — control reasoning depth and thinking mode per node or workflow (Claude/Pi/Copilot)
 15. **`maxBudgetUsd`** — set a USD cost cap per node; fails with error if exceeded (Claude only)
 16. **`systemPrompt`** — override the default system prompt per node (Claude only)
 17. **`sandbox`** — OS-level filesystem/network restrictions per node or workflow (Claude only)

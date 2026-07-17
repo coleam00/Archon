@@ -12,7 +12,7 @@ Archon substitutes variables in command files, inline prompts, bash scripts, and
 
 ## Workflow Variables
 
-These variables are substituted by the workflow executor in all node types (`command:`, `prompt:`, `bash:`, `script:`, `loop:`).
+These variables are substituted by the workflow executor in all node types (`command:`, `prompt:`, `bash:`, `script:`, `loop:`, `loop_group:`).
 
 | Variable | Resolves to | Notes |
 |----------|-------------|-------|
