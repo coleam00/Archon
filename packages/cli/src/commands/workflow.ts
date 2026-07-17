@@ -26,11 +26,7 @@ import {
   resolveFolderBackend,
   classifyIsolationError,
 } from '@archon/isolation';
-import type {
-  ExecutionContext,
-  IIsolationBackend,
-  ContainerBackendConfig,
-} from '@archon/isolation';
+import type { ExecutionContext, ContainerBackend, ContainerBackendConfig } from '@archon/isolation';
 import {
   createLogger,
   getArchonHome,
@@ -189,29 +185,6 @@ export function resolveContainerBackendConfig(
     memoryMb: memoryMb ?? 4096,
     pidsLimit: pidsLimit ?? 512,
   };
-}
-
-/**
- * Describe the first way a workflow can PAUSE (approval gate or interactive), or
- * `undefined` if it can't. Container isolation (Phase B) has no suspend/resume —
- * that is Phase C — so a pausing workflow must be rejected before a (privileged)
- * container is created, rather than stranding it with no resume path. Recurses
- * loop_group bodies.
- */
-export function describeWorkflowPause(wf: WorkflowDefinition): string | undefined {
-  if (wf.interactive) return 'interactive: true';
-  const scan = (nodes: WorkflowDefinition['nodes']): string | undefined => {
-    for (const n of nodes) {
-      if ('approval' in n && n.approval) return `approval node '${n.id}'`;
-      if ('interactive' in n && n.interactive) return `interactive node '${n.id}'`;
-      if ('loop_group' in n && n.loop_group?.nodes) {
-        const nested = scan(n.loop_group.nodes);
-        if (nested) return nested;
-      }
-    }
-    return undefined;
-  };
-  return scan(wf.nodes);
 }
 
 /**
@@ -1075,10 +1048,10 @@ export async function workflowRunCommand(
   // it to a container context.
   let execContext: ExecutionContext = { kind: 'host' };
   // Container backend handle for a folder-project container run — held so the CLI
-  // tears it down after a TERMINAL run. Phase B has no write-back gate, so overlay
-  // changes are discarded on destroy; the approval-gated apply/discard + suspend-
-  // on-pause land in Phase C.
-  let containerBackend: IIsolationBackend | undefined;
+  // tears it down after a TERMINAL run (a PAUSED run keeps its suspended container
+  // for resume). The engine drives suspend + the write-back gate through the same
+  // backend via `opts.container`; the CLI only prepares/resumes and destroys.
+  let containerBackend: ContainerBackend | undefined;
   let containerEnvId: string | undefined;
 
   // Handle --resume: locate the prior failed run, reuse its worktree, and hand
@@ -1118,19 +1091,10 @@ export async function workflowRunCommand(
       'workflow.resume_found_resumable'
     );
 
-    // A run that executed in a container CANNOT be resumed in Phase B: the
-    // overlay was discarded on teardown, so resuming (with OR without --container)
-    // would run downstream nodes against a fresh/empty or in-place live root,
-    // silently unisolated and missing the completed nodes' filesystem changes.
-    // Reject regardless of the current flag (round-3 blocks the flag-present path;
-    // this catches `resume` WITHOUT the flag). Detected via the run's own metadata.
-    if (resumable.metadata?.isolation === 'container') {
-      throw new Error(
-        `Run '${resumable.id}' executed inside a container and cannot be resumed until ` +
-          'Phase C: the isolation overlay was discarded on teardown, so a resume would ' +
-          'run against a fresh/unisolated workspace. Start a fresh --container run instead.'
-      );
-    }
+    // A container run IS resumable (Phase C): the overlay lives on a persisted
+    // volume the resume rediscovers and restarts (see the folder branch below,
+    // which calls backend.resumeEnv when `resumable.metadata.isolation` is
+    // 'container'). Nothing to reject here anymore.
 
     // Reuse the working path from the resumable run (verify it still exists)
     if (resumable.working_path) {
@@ -1202,52 +1166,70 @@ export async function workflowRunCommand(
     // a malformed/unreadable config that would carry `container.*` policy must
     // FAIL the run, never silently downgrade to an in-place host run (fail-fast).
     // loadConfig returns defaults when no config file exists (not an error).
+    //
+    // On a RESUME (approve/reject/resume re-enter with `{ resume: true }` and no
+    // --container flag), honor the ORIGINAL run's isolation via its stamped
+    // metadata — never re-derive from the flag/config, or a resume could silently
+    // switch a container run to in-place on the live root.
     const folderConfig = await loadConfig(codebase.default_cwd);
-    const wantsContainer =
-      options.container ?? workflow.container?.enabled ?? folderConfig?.container?.enabled ?? false;
+    const wantsContainer = options.resume
+      ? resumable?.metadata?.isolation === 'container'
+      : (options.container ??
+        workflow.container?.enabled ??
+        folderConfig?.container?.enabled ??
+        false);
 
     if (wantsContainer) {
-      // Phase B container isolation has NO suspend/resume (Phase C). --resume
-      // would run downstream nodes against a FRESH overlay (the prior run's
-      // overlay was destroyed on teardown), silently missing the completed
-      // nodes' filesystem changes — reject before creating a container.
-      if (options.resume) {
-        throw new Error(
-          'Container runs cannot be resumed until Phase C: the prior overlay was ' +
-            'discarded on teardown, so a resume would run against a fresh, empty ' +
-            'overlay. Start a fresh --container run instead.'
-        );
-      }
-      // A workflow that can pause would strand a privileged container with no
-      // resume path — reject up front rather than create-then-orphan on pause.
-      const pauseReason = describeWorkflowPause(workflow);
-      if (pauseReason) {
-        throw new Error(
-          `Workflow '${workflow.name}' can pause (${pauseReason}), but container isolation ` +
-            'does not support pause/resume until Phase C. Run without --container, or use a ' +
-            'non-pausing workflow.'
-        );
-      }
       const containerConfig = resolveContainerBackendConfig(folderConfig?.container);
       const backend = resolveFolderBackend(folderCodebase, {
         container: true,
         store: isolationDb.createIsolationStore(),
         containerConfig,
       });
-      console.log(`Folder project — running in container (image ${containerConfig.image}).`);
-      getLog().info(
-        { cwd: codebase.default_cwd, image: containerConfig.image },
-        'workflow.running_in_container'
-      );
       let prepared;
-      try {
-        prepared = await backend.prepare({ codebase: folderCodebase });
-      } catch (prepErr) {
-        // Map docker/daemon/image failures to an actionable message (daemon down,
-        // runner image missing, docker-group permission — see errors.ts).
-        const err = prepErr as Error;
-        getLog().error({ err, codebaseId: codebase.id }, 'workflow.container_prepare_failed');
-        throw new Error(classifyIsolationError(err));
+      if (options.resume) {
+        // Rediscover + restart the container for this run: `docker start` a
+        // suspended container, or recreate one over the persisted upper volume
+        // (the accumulated overlay is preserved). The env id was stamped into the
+        // run metadata at first-run creation. resumeEnv fails LOUD if the volume
+        // is gone (un-applied work lost) rather than restarting from empty.
+        const resumeEnvId =
+          typeof resumable?.metadata?.isolation_env_id === 'string'
+            ? resumable.metadata.isolation_env_id
+            : undefined;
+        if (!resumeEnvId) {
+          throw new Error(
+            `Cannot resume container run '${resumable?.id ?? '?'}': its isolation env id is ` +
+              'missing from the run metadata. Start a fresh --container run instead.'
+          );
+        }
+        console.log(`Folder project — resuming container run (image ${containerConfig.image}).`);
+        getLog().info(
+          { envId: resumeEnvId, image: containerConfig.image },
+          'workflow.resuming_in_container'
+        );
+        try {
+          prepared = await backend.resumeEnv(resumeEnvId);
+        } catch (resumeErr) {
+          const err = resumeErr as Error;
+          getLog().error({ err, envId: resumeEnvId }, 'workflow.container_resume_failed');
+          throw new Error(classifyIsolationError(err));
+        }
+      } else {
+        console.log(`Folder project — running in container (image ${containerConfig.image}).`);
+        getLog().info(
+          { cwd: codebase.default_cwd, image: containerConfig.image },
+          'workflow.running_in_container'
+        );
+        try {
+          prepared = await backend.prepare({ codebase: folderCodebase });
+        } catch (prepErr) {
+          // Map docker/daemon/image failures to an actionable message (daemon down,
+          // runner image missing, docker-group permission — see errors.ts).
+          const err = prepErr as Error;
+          getLog().error({ err, codebaseId: codebase.id }, 'workflow.container_prepare_failed');
+          throw new Error(classifyIsolationError(err));
+        }
       }
       // The container mounts the overlay at the SAME absolute path (same-absolute-
       // path invariant), so prepared.cwd is the folder root. Consume it explicitly
@@ -1574,6 +1556,17 @@ export async function workflowRunCommand(
   // the finally when the run itself succeeded — so a leaked privileged container
   // fails the CLI instead of reporting success + exit 0.
   let containerTeardownError: Error | undefined;
+  // Container run context for the engine (Phase C): the write-back backend port +
+  // env id + policy. The executor drives suspend-on-pause and the write-back gate
+  // through this. Absent for host/in-place runs.
+  const containerRunCtx =
+    containerBackend && containerEnvId
+      ? {
+          envId: containerEnvId,
+          writeBack: workflow.container?.write_back ?? ('approve' as const),
+          backend: containerBackend,
+        }
+      : undefined;
   try {
     const opts = prepared
       ? {
@@ -1582,6 +1575,7 @@ export async function workflowRunCommand(
           userId: cliUserId,
           baseBranch: codebaseDefaultBranch,
           execContext,
+          container: containerRunCtx,
           ...prepared,
         }
       : {
@@ -1590,6 +1584,7 @@ export async function workflowRunCommand(
           userId: cliUserId,
           baseBranch: codebaseDefaultBranch,
           execContext,
+          container: containerRunCtx,
         };
     result = await executeWorkflow(
       deps,
@@ -1604,21 +1599,23 @@ export async function workflowRunCommand(
   } finally {
     unsubscribe?.();
 
-    // Container teardown (Phase B) — in `finally` so a throw from executeWorkflow
+    // Container teardown (Phase C) — in `finally` so a throw from executeWorkflow
     // BEFORE its own try/catch (malformed config, env resolvers, unknown provider)
-    // can't orphan a privileged container+volume. Phase B has NO container
-    // suspend/resume (Phase C), and pause-capable workflows are rejected before
-    // the container is created, so a container run ALWAYS terminates — we destroy
-    // unconditionally rather than ever leaving a privileged container running for
-    // a resume path that doesn't exist. (A container run's overlay changes are
-    // NOT applied to the live root; the approval-gated write-back is Phase C.)
-    if (containerBackend && containerEnvId) {
+    // can't orphan a privileged container+volume. A PAUSED run keeps its (already
+    // suspended, by the engine) container + volume for resume — destroying it would
+    // discard the overlay the resume needs. Every OTHER outcome (completed / failed /
+    // cancelled, or a pre-result throw) is terminal for this process → destroy. The
+    // write-back apply already ran inside the engine before completion, so a
+    // completed run's live-root changes are safe before this teardown removes the
+    // volume.
+    const runPaused = Boolean(result?.success && 'paused' in result && result.paused);
+    if (containerBackend && containerEnvId && !runPaused) {
       try {
         await containerBackend.destroy(containerEnvId);
-        // Persist a container_destroyed event (console + `workflow get --verbose`)
-        // and emit for any live subscriber. The emitter fire is after unsubscribe,
-        // so the DB row is the durable channel for CLI runs. No runId on the
-        // pre-result throw path — skip the event, still destroy.
+        // Persist a container_destroyed event (console timeline) and emit for any
+        // live subscriber. The emitter fire is after unsubscribe, so the DB row is
+        // the durable channel for CLI runs. No runId on the pre-result throw path —
+        // skip the event, still destroy.
         const runId = result?.workflowRunId;
         if (runId) {
           getWorkflowEventEmitter().emit({
@@ -1640,10 +1637,7 @@ export async function workflowRunCommand(
               );
             });
         }
-        console.log(
-          'Container and overlay volume removed. (Phase B: overlay changes were NOT applied ' +
-            'to the live root — approval-gated write-back lands in Phase C.)'
-        );
+        console.log('Container and overlay volume removed.');
       } catch (destroyErr) {
         // destroy() throws only on a GENUINE docker failure (not idempotent
         // not-found). Surface it LOUD (console.error, not a --quiet log) so the
@@ -2450,7 +2444,9 @@ export async function workflowRejectCommand(
     return;
   }
 
-  // Not cancelled = has onRejectPrompt, CLI auto-resumes with rejection feedback
+  // Not cancelled = either an on_reject rework (DAG approval gate) or a container
+  // write-back reject (discard the overlay). Both auto-resume; the resume drives
+  // the rework / the overlay discard + completion.
   if (!result.workingPath) {
     throw new Error(
       `Workflow run '${resolvedId}' has no working path recorded.\n` +
@@ -2458,7 +2454,11 @@ export async function workflowRejectCommand(
     );
   }
   console.log(`Rejected workflow: ${result.workflowName}`);
-  console.log('Resuming with on_reject prompt...');
+  console.log(
+    result.writeBack
+      ? 'Discarding container changes (live folder left untouched)...'
+      : 'Resuming with on_reject prompt...'
+  );
 
   // Look up the original platform conversation ID to keep all messages in one thread
   let platformConversationId: string | undefined;

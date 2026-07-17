@@ -22,8 +22,11 @@ import type {
   ProviderCapabilities,
   TokenUsage,
   ExecutionContext,
+  OverlayChangeSummary,
 } from '@archon/providers/types';
 import { CONTAINER_ENV_DENYLIST } from '@archon/providers/types';
+import type { ContainerRunContext } from './container-context';
+import { WRITEBACK_GATE_NODE_ID } from './container-context';
 import {
   getProviderCapabilities,
   getRegisteredProviders,
@@ -5515,6 +5518,238 @@ export function collectContainerIncompatibleProviders(
 }
 
 /**
+ * Emit + persist a container-lifecycle event (fire-and-forget DB write). Mirrors
+ * the `container_created`/`container_destroyed` pattern already in this file so
+ * the stop/resume/write-back phases surface in all three logging layers.
+ */
+function emitContainerLifecycleEvent(
+  deps: WorkflowDeps,
+  runId: string,
+  phase: ContainerLifecyclePhase,
+  eventType: ContainerLifecycleDbEvent,
+  containerId?: string,
+  data: Record<string, unknown> = {}
+): void {
+  getWorkflowEventEmitter().emit({
+    type: 'container_lifecycle',
+    runId,
+    phase,
+    ...(containerId ? { containerId } : {}),
+  });
+  deps.store
+    .createWorkflowEvent({
+      workflow_run_id: runId,
+      event_type: eventType,
+      step_name: 'container',
+      data,
+    })
+    .catch((err: Error) => {
+      getLog().error({ err, workflowRunId: runId, eventType }, 'workflow_event_persist_failed');
+    });
+}
+
+/** Container-lifecycle phases carried by the emitter event (superset of the DB rows). */
+type ContainerLifecyclePhase =
+  | 'created'
+  | 'stopped'
+  | 'resumed'
+  | 'destroyed'
+  | 'writeback_requested'
+  | 'writeback_applied'
+  | 'writeback_discarded';
+
+/** DB `workflow_events.event_type` values for container lifecycle. */
+type ContainerLifecycleDbEvent =
+  | 'container_created'
+  | 'container_stopped'
+  | 'container_resumed'
+  | 'container_destroyed'
+  | 'writeback_requested'
+  | 'writeback_applied'
+  | 'writeback_discarded';
+
+/**
+ * Suspend the container on pause (`docker stop`) so a multi-day wait costs ~0
+ * resources. Best-effort: a suspend failure leaves the container running (a
+ * resource leak the resume/teardown reclaims) but must NOT throw — throwing here
+ * would mask the pause and flip the run to failed. Surfaced loud (error log +
+ * platform note); the `container_stopped` event only fires on success.
+ */
+async function suspendContainerForPause(
+  deps: WorkflowDeps,
+  platform: IWorkflowPlatform,
+  conversationId: string,
+  containerCtx: ContainerRunContext,
+  execContext: Extract<ExecutionContext, { kind: 'container' }>,
+  runId: string
+): Promise<void> {
+  try {
+    await containerCtx.backend.suspend(containerCtx.envId);
+    emitContainerLifecycleEvent(
+      deps,
+      runId,
+      'stopped',
+      'container_stopped',
+      execContext.containerId
+    );
+    getLog().info({ runId, envId: containerCtx.envId }, 'dag.container_suspended_on_pause');
+  } catch (err) {
+    getLog().error(
+      { err: err as Error, runId, envId: containerCtx.envId },
+      'dag.container_suspend_on_pause_failed'
+    );
+    await safeSendMessage(
+      platform,
+      conversationId,
+      `⚠️ Run paused, but its isolation container could not be stopped: ${
+        (err as Error).message
+      }. It keeps running until resume/teardown reclaims it.`,
+      { workflowId: runId }
+    );
+  }
+}
+
+/** Render the write-back change summary + approve/reject instructions for the gate message. */
+function renderWriteBackSummary(summary: OverlayChangeSummary): string {
+  const { added, modified, deleted, totalCount, truncated } = summary;
+  const preview = [
+    ...added.map(p => `+ ${p}`),
+    ...modified.map(p => `~ ${p}`),
+    ...deleted.map(p => `- ${p}`),
+  ].slice(0, 20);
+  const lines = [
+    '**Container run finished — review the changes before they touch the live folder.**',
+    '',
+    `${totalCount} file(s) changed (${added.length} added, ${modified.length} modified, ${deleted.length} deleted):`,
+    ...preview.map(p => `  ${p}`),
+  ];
+  if (truncated || totalCount > preview.length) {
+    lines.push(`  … and ${totalCount - preview.length} more`);
+  }
+  lines.push('', 'Approve to APPLY these changes to the live folder, or reject to discard them.');
+  return lines.join('\n');
+}
+
+/**
+ * The engine-level container write-back gate (Phase C). Runs after the last node
+ * succeeds, and again on each resume (the DAG re-runs with every node skipped and
+ * lands here). Returns:
+ *  - `paused`    — pending an approval decision; the container was suspended.
+ *  - `applied`   — the overlay diff landed on the live root (auto policy, or
+ *                  resume-after-approve). Fall through to complete the run.
+ *  - `discarded` — the overlay was discarded (resume-after-reject). Complete.
+ *  - `skipped`   — empty diff; nothing to apply. Complete normally.
+ */
+async function runContainerWriteBackGate(
+  deps: WorkflowDeps,
+  platform: IWorkflowPlatform,
+  conversationId: string,
+  runId: string,
+  containerCtx: ContainerRunContext,
+  execContext: Extract<ExecutionContext, { kind: 'container' }>
+): Promise<'paused' | 'applied' | 'discarded' | 'skipped'> {
+  const run = await deps.store.getWorkflowRun(runId);
+  const meta = run?.metadata ?? {};
+  const pending = meta.pending_writeback as { envId: string } | undefined;
+  const alreadyResolved = meta.writeback_resolved === true;
+
+  // RESUME after a decision: the gate was raised on a prior invocation and the
+  // human has approved/rejected. Apply or discard, mark resolved (idempotent), and
+  // fall through to completion.
+  if (pending && !alreadyResolved) {
+    const decision = meta.approval_response;
+    if (decision === 'rejected') {
+      await containerCtx.backend.discardChanges(containerCtx.envId);
+      await deps.store.updateWorkflowRun(runId, { metadata: { writeback_resolved: true } });
+      emitContainerLifecycleEvent(deps, runId, 'writeback_discarded', 'writeback_discarded');
+      await safeSendMessage(
+        platform,
+        conversationId,
+        '🗑️ Changes discarded — the live folder was left untouched. (The run itself succeeded; artifacts remain.)',
+        { workflowId: runId }
+      );
+      return 'discarded';
+    }
+    // Any resolved-and-not-rejected decision applies (approve is the only other path).
+    const applied = await containerCtx.backend.applyChanges(containerCtx.envId);
+    await deps.store.updateWorkflowRun(runId, { metadata: { writeback_resolved: true } });
+    emitContainerLifecycleEvent(deps, runId, 'writeback_applied', 'writeback_applied', undefined, {
+      files_applied: applied.filesApplied,
+      files_deleted: applied.filesDeleted,
+    });
+    await safeSendMessage(
+      platform,
+      conversationId,
+      `✅ Applied to the live folder: ${applied.filesApplied} file(s) written, ${applied.filesDeleted} deleted.` +
+        (applied.warnings.length > 0 ? `\n⚠️ ${applied.warnings.join('; ')}` : ''),
+      { workflowId: runId }
+    );
+    return 'applied';
+  }
+
+  // FIRST arrival: inspect the overlay diff.
+  const finalize = await containerCtx.backend.finalize(containerCtx.envId);
+  const summary = finalize.changeSummary;
+  if (!finalize.requiresApproval || !summary || summary.totalCount === 0) {
+    getLog().info({ runId }, 'dag.writeback_empty_diff_skipped');
+    return 'skipped';
+  }
+
+  // `auto` policy: apply without pausing (logged). For unattended workflows.
+  if (containerCtx.writeBack === 'auto') {
+    const applied = await containerCtx.backend.applyChanges(containerCtx.envId);
+    emitContainerLifecycleEvent(deps, runId, 'writeback_applied', 'writeback_applied', undefined, {
+      files_applied: applied.filesApplied,
+      files_deleted: applied.filesDeleted,
+      auto: true,
+    });
+    await safeSendMessage(
+      platform,
+      conversationId,
+      `✅ Auto-applied ${applied.filesApplied} file(s) to the live folder (${applied.filesDeleted} deleted). ` +
+        '(`container.write_back: auto` — no approval gate.)',
+      { workflowId: runId }
+    );
+    getLog().info({ runId, filesApplied: applied.filesApplied }, 'dag.writeback_auto_applied');
+    return 'applied';
+  }
+
+  // `approve` policy (default): pause at the write-back gate. Reuses the approval
+  // pause machinery (approve/reject CAS) with a synthetic node id + `writeback`
+  // type; the resume path branches on `pending_writeback` above, not on this node.
+  const message = renderWriteBackSummary(summary);
+  await deps.store.pauseWorkflowRun(runId, {
+    nodeId: WRITEBACK_GATE_NODE_ID,
+    message,
+    type: 'writeback',
+  });
+  await deps.store.updateWorkflowRun(runId, {
+    metadata: { pending_writeback: { envId: containerCtx.envId, summary } },
+  });
+  emitContainerLifecycleEvent(
+    deps,
+    runId,
+    'writeback_requested',
+    'writeback_requested',
+    undefined,
+    {
+      total_count: summary.totalCount,
+    }
+  );
+  // Live pause signal for the CLI progress renderer + console dock (same event the
+  // approval node emits, so the existing pause UI shows approve/reject).
+  getWorkflowEventEmitter().emit({
+    type: 'approval_pending',
+    runId,
+    nodeId: WRITEBACK_GATE_NODE_ID,
+    message,
+  });
+  await suspendContainerForPause(deps, platform, conversationId, containerCtx, execContext, runId);
+  await safeSendMessage(platform, conversationId, message, { workflowId: runId });
+  return 'paused';
+}
+
+/**
  * Execute a complete DAG workflow.
  * Called from executeWorkflow() in executor.ts.
  */
@@ -5558,7 +5793,13 @@ export async function executeDagWorkflow(
    * threads a container context in Phase B). Threaded onto every node's
    * `RunLayersContext` so provider turns and subprocesses exec in the right place.
    */
-  execContext: ExecutionContext = { kind: 'host' }
+  execContext: ExecutionContext = { kind: 'host' },
+  /**
+   * Container run context (Phase C): the write-back backend port + env id + policy.
+   * Present only for container runs. Drives suspend-on-pause and the engine-level
+   * write-back gate that runs after the last node before the run completes.
+   */
+  containerCtx?: ContainerRunContext
 ): Promise<string | undefined> {
   const dagStartTime = Date.now();
 
@@ -5581,26 +5822,18 @@ export async function executeDagWorkflow(
       );
     }
 
-    // Container is live for this run — surface it in all three logging layers.
-    getWorkflowEventEmitter().emit({
-      type: 'container_lifecycle',
-      runId: workflowRun.id,
-      phase: 'created',
-      containerId: execContext.containerId,
-    });
-    deps.store
-      .createWorkflowEvent({
-        workflow_run_id: workflowRun.id,
-        event_type: 'container_created',
-        step_name: 'container',
-        data: { containerId: execContext.containerId },
-      })
-      .catch((err: Error) => {
-        getLog().error(
-          { err, workflowRunId: workflowRun.id, eventType: 'container_created' },
-          'workflow_event_persist_failed'
-        );
-      });
+    // Container is live for this run — surface it in all three logging layers. A
+    // resume (the container was rediscovered + restarted by the caller) emits
+    // `container_resumed` rather than `container_created` so the timeline is honest.
+    const isResume = priorCompletedNodes !== undefined && priorCompletedNodes.size > 0;
+    emitContainerLifecycleEvent(
+      deps,
+      workflowRun.id,
+      isResume ? 'resumed' : 'created',
+      isResume ? 'container_resumed' : 'container_created',
+      execContext.containerId,
+      { containerId: execContext.containerId }
+    );
   }
 
   const workflowTier = workflow.model && isTierName(workflow.model) ? workflow.model : undefined;
@@ -5714,6 +5947,28 @@ export async function executeDagWorkflow(
   const totalTokensIn = runCtx.totalTokensIn;
   const totalTokensOut = runCtx.totalTokensOut;
   const totalLoopIterations = runCtx.totalLoopIterations;
+
+  // Container pause economics (Phase C): if a node paused the run (approval /
+  // interactive gate), suspend the container so a multi-day wait costs ~0 RAM/CPU.
+  // The pause happens BETWEEN layers, after node completion — the #2134 background-
+  // task wait gate has already drained and no `docker exec` is in flight (docker
+  // stop would kill any live exec) — so it is safe to stop here. Resume rediscovers
+  // and restarts. Terminal (failed / cancelled) runs are left for teardown, not
+  // suspended. Only 'paused' triggers this.
+  if (execContext.kind === 'container' && containerCtx) {
+    const pausedStatus = await deps.store.getWorkflowRunStatus(workflowRun.id);
+    if (pausedStatus === 'paused') {
+      await suspendContainerForPause(
+        deps,
+        platform,
+        conversationId,
+        containerCtx,
+        execContext,
+        workflowRun.id
+      );
+      return;
+    }
+  }
 
   /**
    * Bail out of the final completion/failure write if the run was transitioned
@@ -5864,6 +6119,26 @@ export async function executeDagWorkflow(
 
   // Check if status was changed externally (e.g. cancelled) before marking complete.
   if (await skipIfStatusChanged('dag.skip_complete_status_changed')) return;
+
+  // Container write-back gate (Phase C): all nodes succeeded — before completing,
+  // present the overlay diff and (unless auto) pause for approval. This is an
+  // ENGINE-level gate with no DAG node. On the FIRST arrival it either pauses
+  // (approve policy, non-empty diff) or applies (auto / has changes) / skips
+  // (empty diff). On a RESUME after the decision, the DAG re-ran with every node
+  // skipped and lands here again with `pending_writeback` set — it applies or
+  // discards and falls through to completion. `paused` short-circuits (the gate
+  // suspended the container); any other outcome falls through to completeWorkflowRun.
+  if (execContext.kind === 'container' && containerCtx) {
+    const gate = await runContainerWriteBackGate(
+      deps,
+      platform,
+      conversationId,
+      workflowRun.id,
+      containerCtx,
+      execContext
+    );
+    if (gate === 'paused') return;
+  }
 
   // Update DB and emit completion
   try {

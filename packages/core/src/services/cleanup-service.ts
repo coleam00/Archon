@@ -7,8 +7,10 @@ import * as conversationDb from '../db/conversations';
 import * as sessionDb from '../db/sessions';
 import { SessionNotFoundError } from '../db/sessions';
 import * as codebaseDb from '../db/codebases';
-import { getIsolationProvider, getPrState } from '@archon/isolation';
-import type { WorktreeStatusBreakdown, PrState } from '@archon/isolation';
+import * as workflowDb from '../db/workflows';
+import { getIsolationProvider, getPrState, ContainerBackend } from '@archon/isolation';
+import type { WorktreeStatusBreakdown, PrState, ContainerBackendConfig } from '@archon/isolation';
+import { TERMINAL_WORKFLOW_STATUSES } from '@archon/workflows/schemas/workflow-run';
 import {
   hasUncommittedChanges,
   worktreeExists,
@@ -62,6 +64,108 @@ export interface CleanupReport {
   skipped: { id: string; reason: string }[];
   errors: { id: string; error: string }[];
   sessionsDeleted: number;
+}
+
+// ---------------------------------------------------------------------------
+// Container isolation environments (folder-project container backend, Phase C)
+// ---------------------------------------------------------------------------
+
+/**
+ * `ContainerBackend.destroy()` reads the container/volume names from the tracking
+ * row's metadata and IGNORES `config` (config is a prepare-time concern), so a
+ * placeholder is correct for the cleanup path — it never prepares a container.
+ */
+const CLEANUP_PLACEHOLDER_CONTAINER_CONFIG: ContainerBackendConfig = {
+  image: 'archon-runner:latest',
+  network: 'bridge',
+  memoryMb: 4096,
+  pidsLimit: 512,
+};
+
+export interface ContainerEnvSummary {
+  envId: string;
+  codebaseName: string;
+  workingPath: string;
+  ageDays: number;
+  runId: string | null;
+  runStatus: string | null;
+}
+
+export interface ContainerCleanupReport {
+  removed: string[];
+  skipped: { id: string; reason: string }[];
+  errors: { id: string; error: string }[];
+}
+
+/**
+ * List active container isolation environments with their owning run's status.
+ * Read-only; used by `archon isolation list`.
+ */
+export async function listContainerEnvironments(): Promise<readonly ContainerEnvSummary[]> {
+  const rows = await isolationEnvDb.listActiveContainerEnvironments();
+  const summaries: ContainerEnvSummary[] = [];
+  for (const row of rows) {
+    const run = await workflowDb.getRunByIsolationEnvId(row.id).catch(() => null);
+    summaries.push({
+      envId: row.id,
+      codebaseName: row.codebase_name,
+      workingPath: row.working_path,
+      ageDays: Math.floor(row.days_since_created),
+      runId: run?.id ?? null,
+      runStatus: run?.status ?? null,
+    });
+  }
+  return summaries;
+}
+
+/**
+ * Reap orphaned container isolation environments: remove the container + upper
+ * volume of TERMINAL (completed/failed/cancelled) or run-less container envs older
+ * than `daysStale`. A PAUSED run's container is NEVER touched — a paused container
+ * is awaited state, not garbage (No-Autonomous-Lifecycle-Mutation Across Process
+ * Boundaries); it is surfaced by `isolation list` with its age instead. All pruning
+ * is label-scoped (via the tracking row), never a bare `docker prune`.
+ */
+export async function cleanupContainerEnvironments(
+  daysStale = STALE_THRESHOLD_DAYS
+): Promise<ContainerCleanupReport> {
+  const report: ContainerCleanupReport = { removed: [], skipped: [], errors: [] };
+  const rows = await isolationEnvDb.listActiveContainerEnvironments();
+  if (rows.length === 0) return report;
+
+  const backend = new ContainerBackend({
+    store: isolationEnvDb.createIsolationStore(),
+    config: CLEANUP_PLACEHOLDER_CONTAINER_CONFIG,
+  });
+
+  for (const row of rows) {
+    const run = await workflowDb.getRunByIsolationEnvId(row.id).catch(() => null);
+    // Never reap an awaited (paused) or still-active (running/pending) run's
+    // container — only terminal runs, or orphans with no run at all.
+    if (run && !TERMINAL_WORKFLOW_STATUSES.includes(run.status)) {
+      report.skipped.push({
+        id: row.id,
+        reason: `run ${run.id.slice(0, 8)} is ${run.status}`,
+      });
+      continue;
+    }
+    if (row.days_since_created < daysStale) {
+      report.skipped.push({
+        id: row.id,
+        reason: `${Math.floor(row.days_since_created)}d old (< ${daysStale}d threshold)`,
+      });
+      continue;
+    }
+    try {
+      await backend.destroy(row.id);
+      report.removed.push(row.id);
+      getLog().info({ envId: row.id, runId: run?.id ?? null }, 'container_env_reaped');
+    } catch (err) {
+      report.errors.push({ id: row.id, error: (err as Error).message });
+      getLog().warn({ err, envId: row.id }, 'container_env_reap_failed');
+    }
+  }
+  return report;
 }
 
 /**

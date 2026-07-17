@@ -54,6 +54,13 @@ export interface RejectionOperationResult {
   cancelled: boolean;
   /** true when cancelled specifically because max rejection attempts were reached */
   maxAttemptsReached: boolean;
+  /**
+   * true when this was the engine-level container write-back gate (Phase C). The
+   * run stays resumable (never cancelled) so the resume DISCARDS the overlay and
+   * completes with a note; lets the CLI/chat print "discarding" instead of the
+   * on_reject-rework message.
+   */
+  writeBack: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -174,6 +181,7 @@ export async function approveWorkflow(
   // otherwise be recorded verbatim where the documented default is 'Approved'.
   const approvalComment = comment !== undefined && comment.trim().length > 0 ? comment : 'Approved';
   const isInteractiveLoop = approval.type === 'interactive_loop';
+  const isWriteBack = approval.type === 'writeback';
 
   // Build the resolution metadata AND the audit events for this gate type.
   // IMPORTANT: metadata is MERGED (not replaced) and the approval context is
@@ -183,7 +191,23 @@ export async function approveWorkflow(
   // double-resolution guard (#2113) and the atomic audit trail (#2146).
   let metadataPayload: Record<string, unknown>;
   let events: workflowDb.GateResolutionEvent[];
-  if (isInteractiveLoop) {
+  if (isWriteBack) {
+    // Engine-level container write-back gate (Phase C): record the approval so the
+    // resumed executor applies the overlay diff to the live root. `approval_response`
+    // is what the executor's write-back gate reads on resume. NO node_completed
+    // event — there is no DAG node behind this gate (its `nodeId` is synthetic).
+    metadataPayload = {
+      approval: { ...approval, resolved: 'approved' },
+      approval_response: 'approved',
+    };
+    events = [
+      {
+        event_type: 'approval_received',
+        step_name: approval.nodeId,
+        data: { decision: 'approved', comment: approvalComment, gate: 'writeback' },
+      },
+    ];
+  } else if (isInteractiveLoop) {
     // Finalize-vs-iterate discriminator (#2074): derived from the RAW comment,
     // not approvalComment (which defaults to 'Approved') — a bare approve on a
     // signal-bearing gate finalizes at resume; real feedback runs another iteration.
@@ -288,6 +312,39 @@ export async function rejectWorkflow(
       `Workflow run ${runId} was already ${String(approval.resolved)} and is awaiting resume.`
     );
   }
+  const isWriteBack = approval?.type === 'writeback';
+
+  // Engine-level container write-back gate (Phase C): reject means DISCARD the
+  // overlay, but the RUN itself succeeded — keep it resumable (never cancel) so
+  // the resumed executor discards + completes with a note. Distinct from a DAG
+  // approval reject (which cancels or stages an on_reject rework).
+  if (isWriteBack && approval) {
+    const rejectionEvent: workflowDb.GateResolutionEvent = {
+      event_type: 'approval_received',
+      step_name: approval.nodeId,
+      data: { decision: 'rejected', gate: 'writeback' },
+    };
+    const { resolved: won } = await workflowDb.resolveApprovalGate(
+      runId,
+      { approval: { ...approval, resolved: 'rejected' }, approval_response: 'rejected' },
+      [rejectionEvent]
+    );
+    if (!won) {
+      throw new Error(`Workflow run ${runId} was already resolved and is awaiting resume.`);
+    }
+    captureApprovalResolved({ resolution: 'rejected' });
+    return {
+      workflowName: run.workflow_name,
+      workingPath: run.working_path,
+      userMessage: run.user_message,
+      codebaseId: run.codebase_id,
+      conversationId: run.conversation_id,
+      cancelled: false,
+      maxAttemptsReached: false,
+      writeBack: true,
+    };
+  }
+
   const rejectReason = reason ?? 'Rejected';
   const currentCount = (run.metadata.rejection_count as number | undefined) ?? 0;
   const maxAttempts = approval?.onRejectMaxAttempts ?? 3;
@@ -343,6 +400,7 @@ export async function rejectWorkflow(
     conversationId: run.conversation_id,
     cancelled: !willStageRework,
     maxAttemptsReached,
+    writeBack: false,
   };
 }
 

@@ -284,7 +284,15 @@ container:
 
 **Selection precedence:** `--container` flag > workflow `container.enabled` > config `container.enabled` > `false`. (A workflow `enabled: false` hard-disables relative to config, but the flag still wins.)
 
-**Prerequisites:** Docker, and the runner image built once with `bun run build:runner-image` (tags `archon-runner:<version>` + `:latest`). Container mode is **folder-project-only** (a repo project errors), and is **rejected for pausing workflows** (approval/interactive) and for `--resume` — suspend/resume and the approval-gated write-back of the overlay diff land in a later phase; until then a container run's changes are discarded on teardown. `$ARTIFACTS_DIR` is not mounted into the container (see [variables](/reference/variables/)). For the security posture (capabilities, the `native` overlay mode caveat, env delivery), see `packages/isolation/docker/SECURITY.md`.
+**Write-back mode** is a per-workflow policy (not a config key). After a container run finishes, its overlay diff is reviewed before touching the live root:
+
+```yaml
+# In a workflow YAML (.archon/workflows/*.yaml):
+container:
+  write_back: approve # 'approve' (default) pauses at a write-back gate; 'auto' applies without pausing
+```
+
+**Prerequisites:** Docker, and the runner image built once with `bun run build:runner-image` (tags `archon-runner:<version>` + `:latest`). Container mode is **folder-project-only** (a repo project errors). Pausing workflows (approval/interactive gates) **are** supported — a pause `docker stop`s the container (near-zero resources while awaiting a decision) and resume rediscovers and restarts it. `$ARTIFACTS_DIR` is not mounted into the container (see [variables](/reference/variables/)). For the full flow, pause economics, and security posture, see the [Container isolation guide](/guides/container-isolation/) and `packages/isolation/docker/SECURITY.md`.
 
 ## Environment Variables
 

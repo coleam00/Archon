@@ -7,12 +7,17 @@
  */
 
 import type { RepoPath, BranchName } from '@archon/git';
-import type { ExecutionContext } from '@archon/providers/types';
+import type {
+  ExecutionContext,
+  WriteBackFinalizeResult,
+  WriteBackApplySummary,
+} from '@archon/providers/types';
 
 // Re-exported so isolation consumers can source the execution-context contract
-// from `@archon/isolation` alongside the backend types that produce it, without
-// reaching into `@archon/providers/types` directly.
-export type { ExecutionContext };
+// (and the write-back result shapes) from `@archon/isolation` alongside the
+// backend types that produce them, without reaching into
+// `@archon/providers/types` directly.
+export type { ExecutionContext, WriteBackFinalizeResult, WriteBackApplySummary };
 
 // --- Provider Types ---
 
@@ -412,17 +417,54 @@ export interface PreparedEnv {
 }
 
 /**
- * Isolation backend for FOLDER-kind projects. Phase A ships only the required
- * lifecycle (`prepare`/`destroy`) implemented by the in-place backend; the
- * container backend (Phase B) extends this interface with the pause/resume and
- * write-back methods it alone needs. Adding those later is backward-compatible —
- * they are intentionally absent here rather than declared unimplemented.
+ * Isolation backend for FOLDER-kind projects. Every backend implements the core
+ * lifecycle (`prepare`/`destroy`); the pause/resume + write-back methods below
+ * are OPTIONAL because only the container backend (Phase C) needs them — the
+ * in-place backend has no container to stop, no overlay to diff, and never sets
+ * a `PreparedEnv.envId`, so the engine never calls them for it. The container
+ * backend implements all of them (required on its concrete type), so the CLI can
+ * pass it where the engine's non-optional write-back port is expected.
  */
 export interface IIsolationBackend {
   readonly id: 'in-place' | 'container';
   prepare(req: BackendPrepareRequest): Promise<PreparedEnv>;
   /** Tear down a prepared environment. No-op for in-place (nothing was created). */
   destroy(envId: string): Promise<void>;
+
+  /**
+   * Suspend a running environment on pause (`docker stop`) so a multi-day wait at
+   * an approval / write-back gate costs ~0 resources. The upper volume persists;
+   * `resumeEnv` restarts it. Container-only.
+   */
+  suspend?(envId: string): Promise<void>;
+
+  /**
+   * Rediscover and restart a suspended environment for resume, returning a fresh
+   * {@link PreparedEnv} (the container id changes across a stop/recreate). Fails
+   * loudly when the un-applied work is gone (volume deleted) rather than silently
+   * restarting from an empty overlay. Container-only.
+   */
+  resumeEnv?(envId: string): Promise<PreparedEnv>;
+
+  /**
+   * Inspect the finished run's overlay diff and report whether a write-back
+   * approval gate is warranted (non-empty diff) plus the change summary to show
+   * the reviewer. Container-only; reads the volume via a helper (no running
+   * container required).
+   */
+  finalize?(envId: string): Promise<WriteBackFinalizeResult>;
+
+  /**
+   * Apply the overlay diff to the live project root (the ONE moment the live root
+   * is written): adds/modifies copy in, whiteouts delete. Container-only.
+   */
+  applyChanges?(envId: string): Promise<WriteBackApplySummary>;
+
+  /**
+   * Discard the overlay diff without touching the live root (write-back rejected).
+   * The volume is reclaimed by `destroy`. Container-only.
+   */
+  discardChanges?(envId: string): Promise<void>;
 }
 
 /**

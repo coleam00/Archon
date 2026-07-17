@@ -15,6 +15,8 @@ import {
 import { getIsolationProvider } from '@archon/isolation';
 import {
   removeEnvironment,
+  listContainerEnvironments,
+  cleanupContainerEnvironments,
   type RemoveEnvironmentResult,
 } from '@archon/core/services/cleanup-service';
 import {
@@ -66,7 +68,22 @@ export async function isolationListCommand(): Promise<void> {
   if (totalEnvironments === 0) {
     console.log('No active isolation environments.');
   } else {
-    console.log(`\nTotal: ${String(totalEnvironments)} environment(s)`);
+    console.log(`\nTotal: ${String(totalEnvironments)} worktree environment(s)`);
+  }
+
+  // Container isolation environments (folder-project container backend). These are
+  // not worktrees — they're labeled Docker containers + upper volumes. A paused
+  // run's container shows here (awaiting approve/resume) and is never auto-pruned.
+  const containers = await listContainerEnvironments();
+  if (containers.length > 0) {
+    console.log('\nContainer environments (folder projects):');
+    for (const c of containers) {
+      const runPart = c.runId ? `run ${c.runId.slice(0, 8)} (${c.runStatus})` : 'no run (orphan)';
+      console.log(`  ${c.envId.slice(0, 8)} — ${c.codebaseName}`);
+      console.log(`    Path: ${c.workingPath}`);
+      console.log(`    ${runPart} | Age: ${c.ageDays}d`);
+    }
+    console.log(`\nTotal: ${String(containers.length)} container environment(s)`);
   }
 }
 
@@ -121,6 +138,29 @@ export async function isolationCleanupCommand(daysStale = 7): Promise<void> {
   }
 
   console.log(`\nCleanup complete: ${String(cleaned)} cleaned, ${String(failed)} failed`);
+
+  // Reap orphaned container environments (terminal / run-less, older than the
+  // threshold). Paused runs' containers are deliberately skipped (awaited state).
+  const containerReport = await cleanupContainerEnvironments(daysStale);
+  const containerTotal =
+    containerReport.removed.length + containerReport.skipped.length + containerReport.errors.length;
+  if (containerTotal > 0) {
+    console.log('\nContainer environments:');
+    for (const id of containerReport.removed) {
+      console.log(`  Removed: ${id.slice(0, 8)}`);
+    }
+    for (const s of containerReport.skipped) {
+      console.log(`  Skipped: ${s.id.slice(0, 8)} — ${s.reason}`);
+    }
+    for (const e of containerReport.errors) {
+      console.error(`  Failed: ${e.id.slice(0, 8)} — ${e.error}`);
+    }
+    console.log(
+      `Container cleanup: ${String(containerReport.removed.length)} removed, ` +
+        `${String(containerReport.skipped.length)} skipped, ` +
+        `${String(containerReport.errors.length)} failed`
+    );
+  }
 }
 
 /**

@@ -51,11 +51,17 @@ export const WORKFLOW_EVENT_TYPES = [
   'task_activity',
   'hook_activity',
   // Container isolation backend lifecycle (folder-project container runs).
-  // Phase B emits only these two; `container_stopped`/`container_resumed` are
-  // NOT declared until Phase C actually implements suspend/resume (YAGNI — no
-  // speculative event states).
+  // `container_created`/`container_destroyed` bracket the run; `container_stopped`/
+  // `container_resumed` bracket a suspend/resume across a pause (Phase C).
   'container_created',
+  'container_stopped',
+  'container_resumed',
   'container_destroyed',
+  // Container write-back gate (Phase C): the finished run's overlay diff is
+  // requested (paused for approval), then applied to / discarded from the live root.
+  'writeback_requested',
+  'writeback_applied',
+  'writeback_discarded',
 ] as const;
 
 export type WorkflowEventType = (typeof WORKFLOW_EVENT_TYPES)[number];

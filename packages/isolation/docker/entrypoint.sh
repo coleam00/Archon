@@ -29,6 +29,13 @@ LOWER=/mnt/lower
 UPPER=/mnt/upper/data
 WORK=/mnt/upper/work
 
+# Clear the ready sentinel FIRST — it lives on the persistent upper volume, so on a
+# resume (`docker start` of the same container) a stale sentinel from the previous
+# run would make the backend's ready-poll return BEFORE this restart re-mounts the
+# overlay. Removing it up front means the poll only succeeds once the mount below
+# has actually re-established. (Fresh prepares have no sentinel; the rm is a no-op.)
+rm -f /mnt/upper/.ready
+
 # Upper/work MUST live on the named volume (VM-local), never a host bind, or the
 # overlay upperdir hits EACCES on macOS (orbstack#1376). claude-home is a sibling
 # so Claude session state stays OFF the write-back diff.

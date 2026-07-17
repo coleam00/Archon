@@ -29,6 +29,8 @@ export type {
   ResolutionMethod,
   IsolationResolution,
   ExecutionContext,
+  WriteBackFinalizeResult,
+  WriteBackApplySummary,
   BackendPrepareRequest,
   PreparedEnv,
   IIsolationBackend,

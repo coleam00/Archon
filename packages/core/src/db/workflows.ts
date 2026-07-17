@@ -306,6 +306,34 @@ export async function getWorkflowRun(id: string): Promise<WorkflowRun | null> {
 }
 
 /**
+ * Find the workflow run that owns a container isolation environment
+ * (`metadata.isolation_env_id === envId`, stamped at run creation for container
+ * runs). Used by `isolation cleanup` to decide whether a container is reapable:
+ * a paused/running run must NOT be pruned. Returns the newest match, or null when
+ * no run references the env (an orphan safe to reap). Dialect-aware JSON extract.
+ */
+export async function getRunByIsolationEnvId(envId: string): Promise<WorkflowRun | null> {
+  const extract =
+    getDatabaseType() === 'postgresql'
+      ? "metadata->>'isolation_env_id'"
+      : "json_extract(metadata, '$.isolation_env_id')";
+  try {
+    const result = await pool.query<WorkflowRun>(
+      `SELECT * FROM remote_agent_workflow_runs
+       WHERE ${extract} = $1
+       ORDER BY started_at DESC LIMIT 1`,
+      [envId]
+    );
+    const row = result.rows[0];
+    return row ? normalizeWorkflowRun(row) : null;
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, envId }, 'db.workflow_run_get_by_isolation_env_failed');
+    throw new Error(`Failed to look up run for isolation env ${envId}: ${err.message}`);
+  }
+}
+
+/**
  * Find runs in a codebase whose id starts with `idPrefix` (e.g. the 8-char
  * short id shown in listings). Returns up to two matches so callers can detect
  * an ambiguous prefix. Scoped to `codebaseId` in the query, so it never crosses

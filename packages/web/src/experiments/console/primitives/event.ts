@@ -284,16 +284,34 @@ export function toRunEvent(raw: RawWorkflowEvent): RunEvent {
 
   // Container isolation lifecycle (folder-project container runs). Persisted with
   // DB-side names, NOT the emitter's `container_lifecycle` type — this normalizer
-  // reads DB rows. Surfaced behind the System toggle. Phase B emits only
-  // created/destroyed (stopped/resumed arrive with Phase C suspend/resume).
-  if (et === 'container_created' || et === 'container_destroyed') {
-    const label = et === 'container_created' ? 'Container created' : 'Container removed';
+  // reads DB rows. Surfaced behind the System toggle. created/destroyed bracket the
+  // run; stopped/resumed bracket a suspend across a pause; writeback_* track the
+  // write-back gate (Phase C).
+  const CONTAINER_EVENT_LABELS: Record<string, string> = {
+    container_created: 'Container created',
+    container_stopped: 'Container stopped (paused)',
+    container_resumed: 'Container resumed',
+    container_destroyed: 'Container removed',
+    writeback_requested: 'Write-back requested',
+    writeback_applied: 'Changes applied to live folder',
+    writeback_discarded: 'Changes discarded',
+  };
+  if (et in CONTAINER_EVENT_LABELS) {
     const containerId = readString(data, 'containerId');
+    let detail = containerId ? containerId.slice(0, 12) : '';
+    if (et === 'writeback_applied') {
+      const filesApplied = readNumberOrNull(data, 'files_applied') ?? 0;
+      const filesDeleted = readNumberOrNull(data, 'files_deleted') ?? 0;
+      detail = `${filesApplied} written, ${filesDeleted} deleted`;
+    } else if (et === 'writeback_requested') {
+      const totalCount = readNumberOrNull(data, 'total_count');
+      detail = totalCount !== null ? `${totalCount} file(s) changed` : '';
+    }
     return {
       ...base,
       kind: 'system',
-      label,
-      detail: containerId ? containerId.slice(0, 12) : '',
+      label: CONTAINER_EVENT_LABELS[et] ?? et,
+      detail,
     };
   }
 

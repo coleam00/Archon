@@ -172,6 +172,67 @@ describe('executeWorkflow', () => {
   });
 
   // -------------------------------------------------------------------------
+  // Container resume guard (Phase C)
+  // -------------------------------------------------------------------------
+
+  describe('container resume guard', () => {
+    it('fails a container run resumed without a container context, pointing at the CLI', async () => {
+      const failSpy = mock(async () => {});
+      const store = makeStore({ failWorkflowRun: failSpy });
+      const preCreatedRun = makeRun({
+        id: 'crun',
+        metadata: { isolation: 'container', isolation_env_id: 'env-x' },
+      });
+      const result = await executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv-1',
+        '/tmp/ops',
+        makeWorkflow(),
+        'msg',
+        'db-conv-1',
+        { preCreatedRun, priorCompletedNodes: new Map([['node1', 'out']]) }
+      );
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/executed inside an isolation container/);
+      expect(failSpy).toHaveBeenCalledTimes(1);
+      // The DAG is never entered — the guard returns before any execution.
+      expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+    });
+
+    it('proceeds when the container context IS provided (guard passes)', async () => {
+      const preCreatedRun = makeRun({
+        id: 'crun2',
+        metadata: { isolation: 'container', isolation_env_id: 'env-x' },
+      });
+      const backend = {
+        suspend: mock(async () => {}),
+        finalize: mock(async () => ({ requiresApproval: false })),
+        applyChanges: mock(async () => ({ filesApplied: 0, filesDeleted: 0, warnings: [] })),
+        discardChanges: mock(async () => {}),
+      };
+      const result = await executeWorkflow(
+        makeDeps(),
+        makePlatform(),
+        'conv-1',
+        '/tmp/ops',
+        makeWorkflow(),
+        'msg',
+        'db-conv-1',
+        {
+          preCreatedRun,
+          priorCompletedNodes: new Map([['node1', 'out']]),
+          execContext: { kind: 'container', containerId: 'cid' },
+          container: { envId: 'env-x', writeBack: 'approve', backend },
+        }
+      );
+      // Guard passed → DAG entered (mocked no-op) → run completes.
+      expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(1);
+      expect(result.success).toBe(true);
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // Concurrent-run guard
   // -------------------------------------------------------------------------
 

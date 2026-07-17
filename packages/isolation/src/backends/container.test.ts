@@ -388,3 +388,184 @@ describe('ContainerBackend.destroy', () => {
     await expect(backend.destroy(row.id)).rejects.toThrow(/no containerName\/volume/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase C — suspend / resumeEnv / finalize / applyChanges / discardChanges
+// ---------------------------------------------------------------------------
+
+/** Seed an active container env row with full metadata (as prepare would leave it). */
+function seedContainerRow(
+  store: ReturnType<typeof fakeStore>,
+  meta?: Partial<Record<string, unknown>>
+): IsolationEnvironmentRow {
+  const row: IsolationEnvironmentRow = {
+    id: 'env-c',
+    codebase_id: 'cb-1',
+    workflow_type: 'task',
+    workflow_id: 'res-1',
+    provider: 'container',
+    working_path: '/tmp/ops-client',
+    branch_name: '' as unknown as IsolationEnvironmentRow['branch_name'],
+    status: 'active',
+    created_at: new Date(),
+    created_by_platform: 'cli',
+    created_by_user_id: null,
+    metadata: {
+      containerId: 'cid-orig',
+      containerName: 'archon-res-1',
+      volume: 'archon-res-1-upper',
+      image: 'archon-runner:test',
+      resourceId: 'res-1',
+      workspacePath: '/tmp/ops-client',
+      overlayMode: 'fuse',
+      ...meta,
+    },
+  };
+  store.rows.set(row.id, row);
+  return row;
+}
+
+describe('ContainerBackend.suspend', () => {
+  test('docker stops the container by name', async () => {
+    const store = fakeStore();
+    seedContainerRow(store);
+    const docker = fakeDocker(() => ({ stdout: '', stderr: '' }));
+    const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
+    await backend.suspend('env-c');
+    const stop = docker.calls.find(c => c[0] === 'stop');
+    expect(stop).toEqual(['stop', 'archon-res-1']);
+  });
+
+  test('is idempotent when the container is already gone', async () => {
+    const store = fakeStore();
+    seedContainerRow(store);
+    const docker = fakeDocker(() => {
+      throw new Error('Error: No such container: archon-res-1');
+    });
+    const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
+    await expect(backend.suspend('env-c')).resolves.toBeUndefined();
+  });
+
+  test('throws on a genuine docker failure (resources still consuming)', async () => {
+    const store = fakeStore();
+    seedContainerRow(store);
+    const docker = fakeDocker(() => {
+      throw new Error('Cannot connect to the Docker daemon');
+    });
+    const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
+    await expect(backend.suspend('env-c')).rejects.toThrow(/Failed to suspend/);
+  });
+});
+
+describe('ContainerBackend.resumeEnv', () => {
+  test('reuses a still-running container', async () => {
+    const store = fakeStore();
+    seedContainerRow(store);
+    const docker = fakeDocker(args => {
+      if (args[0] === 'inspect' && args.includes('{{.State.Running}}')) {
+        return { stdout: 'true\n', stderr: '' };
+      }
+      if (args[0] === 'inspect' && args.includes('{{.Id}}'))
+        return { stdout: 'cid-run\n', stderr: '' };
+      return { stdout: '', stderr: '' };
+    });
+    const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
+    const prepared = await backend.resumeEnv('env-c');
+    expect(prepared.execContext).toEqual({ kind: 'container', containerId: 'cid-run' });
+    expect(docker.calls.find(c => c[0] === 'start')).toBeUndefined();
+  });
+
+  test('starts a stopped container and waits for the overlay', async () => {
+    const store = fakeStore();
+    seedContainerRow(store);
+    const docker = fakeDocker(args => {
+      if (args[0] === 'inspect' && args.includes('{{.State.Running}}')) {
+        return { stdout: 'false\n', stderr: '' };
+      }
+      if (args[0] === 'inspect' && args.includes('{{.Id}}'))
+        return { stdout: 'cid-started\n', stderr: '' };
+      if (args[0] === 'start') return { stdout: '', stderr: '' };
+      if (args[0] === 'exec' && args.includes('test')) return { stdout: '', stderr: '' }; // ready
+      return { stdout: '', stderr: '' };
+    });
+    const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
+    const prepared = await backend.resumeEnv('env-c');
+    expect(prepared.execContext).toEqual({ kind: 'container', containerId: 'cid-started' });
+    expect(docker.calls.find(c => c[0] === 'start')).toEqual(['start', 'archon-res-1']);
+  });
+
+  test('recreates the container over the surviving volume when the container is gone', async () => {
+    const store = fakeStore();
+    seedContainerRow(store);
+    let ran = false;
+    const docker = fakeDocker(args => {
+      if (args[0] === 'inspect' && args.includes('{{.State.Running}}')) {
+        throw new Error('Error: No such object: archon-res-1');
+      }
+      if (args[0] === 'volume' && args[1] === 'inspect') return { stdout: '[]', stderr: '' }; // volume exists
+      if (args[0] === 'run') {
+        ran = true;
+        return { stdout: 'cid-recreated\n', stderr: '' };
+      }
+      if (args[0] === 'exec' && args.includes('test')) return { stdout: '', stderr: '' }; // ready
+      return { stdout: '', stderr: '' };
+    });
+    const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
+    const prepared = await backend.resumeEnv('env-c');
+    expect(ran).toBe(true);
+    expect(prepared.execContext).toEqual({ kind: 'container', containerId: 'cid-recreated' });
+  });
+
+  test('fails LOUD when both the container and the volume are gone (work lost)', async () => {
+    const store = fakeStore();
+    seedContainerRow(store);
+    const docker = fakeDocker(args => {
+      if (args[0] === 'inspect' && args.includes('{{.State.Running}}')) {
+        throw new Error('Error: No such object: archon-res-1');
+      }
+      if (args[0] === 'volume' && args[1] === 'inspect') {
+        throw new Error('Error: No such volume: archon-res-1-upper');
+      }
+      return { stdout: '', stderr: '' };
+    });
+    const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
+    await expect(backend.resumeEnv('env-c')).rejects.toThrow(/un-applied changes are lost/);
+  });
+});
+
+describe('ContainerBackend.finalize / applyChanges / discardChanges', () => {
+  test('finalize requires approval only for a non-empty overlay', async () => {
+    const store = fakeStore();
+    seedContainerRow(store);
+    const empty = fakeDocker(() => ({ stdout: '', stderr: '' }));
+    const backendEmpty = new ContainerBackend({ store, config: CONFIG, dockerRunner: empty });
+    const emptyResult = await backendEmpty.finalize('env-c');
+    expect(emptyResult.requiresApproval).toBe(false);
+    expect(emptyResult.changeSummary?.totalCount).toBe(0);
+
+    const changed = fakeDocker(() => ({ stdout: 'A\tnew.md\0', stderr: '' }));
+    const backendChanged = new ContainerBackend({ store, config: CONFIG, dockerRunner: changed });
+    const changedResult = await backendChanged.finalize('env-c');
+    expect(changedResult.requiresApproval).toBe(true);
+    expect(changedResult.changeSummary?.added).toEqual(['new.md']);
+  });
+
+  test('applyChanges returns the written + deleted counts', async () => {
+    const store = fakeStore();
+    seedContainerRow(store);
+    const docker = fakeDocker(() => ({ stdout: 'W\ta.txt\0D\tb.txt\0', stderr: '' }));
+    const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
+    const summary = await backend.applyChanges('env-c');
+    expect(summary.filesApplied).toBe(1);
+    expect(summary.filesDeleted).toBe(1);
+  });
+
+  test('discardChanges is a no-op that never touches docker', async () => {
+    const store = fakeStore();
+    seedContainerRow(store);
+    const docker = fakeDocker(() => ({ stdout: '', stderr: '' }));
+    const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
+    await backend.discardChanges('env-c');
+    expect(docker.calls.length).toBe(0);
+  });
+});

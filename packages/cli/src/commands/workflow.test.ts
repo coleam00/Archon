@@ -19,7 +19,6 @@ import {
   buildDetachedRunCmd,
   maybePrintTierNotice,
   resolveContainerBackendConfig,
-  describeWorkflowPause,
 } from './workflow';
 
 const mockLogger = {
@@ -4896,35 +4895,5 @@ describe('resolveContainerBackendConfig', () => {
   it('rejects a non-integer / non-positive pidsLimit', () => {
     expect(() => resolveContainerBackendConfig({ pidsLimit: 10.5 })).toThrow(/positive integer/);
     expect(() => resolveContainerBackendConfig({ pidsLimit: 0 })).toThrow(/positive integer/);
-  });
-});
-
-describe('describeWorkflowPause', () => {
-  it('flags a workflow-level interactive flag', () => {
-    const wf = makeTestWorkflow({
-      name: 'i',
-      interactive: true,
-      nodes: [{ id: 'a', prompt: 'hi' }],
-    });
-    expect(describeWorkflowPause(wf)).toBe('interactive: true');
-  });
-
-  it('flags an approval node by id', () => {
-    const wf = makeTestWorkflow({
-      name: 'a',
-      nodes: [
-        { id: 'think', prompt: 'hi' },
-        { id: 'gate', depends_on: ['think'], approval: { message: 'ok?' } },
-      ],
-    });
-    expect(describeWorkflowPause(wf)).toBe("approval node 'gate'");
-  });
-
-  it('returns undefined for a non-pausing workflow', () => {
-    const wf = makeTestWorkflow({
-      name: 'p',
-      nodes: [{ id: 'b', bash: 'echo hi' }],
-    });
-    expect(describeWorkflowPause(wf)).toBeUndefined();
   });
 });

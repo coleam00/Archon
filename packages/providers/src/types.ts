@@ -329,6 +329,58 @@ export type ExecutionContext =
   | { kind: 'container'; containerId: string; execUser?: string };
 
 /**
+ * Container write-back contract (folder-project container backend, Phase C).
+ *
+ * These plain-data shapes describe the overlay diff of a finished container run
+ * and the outcome of applying it to the live root. They live in this zero-dep
+ * contract layer for the SAME cross-boundary reason as {@link ExecutionContext}:
+ * `@archon/isolation` PRODUCES them (the container backend's overlay walk) and
+ * `@archon/workflows` CONSUMES them (the engine's write-back gate), and neither
+ * package may import the other — so the shared shape can only live here.
+ */
+
+/**
+ * Summary of the changes an overlay upper layer holds relative to the read-only
+ * lower (the live project root). By overlayfs construction the upper layer IS the
+ * diff, so this is a directory walk, not a tree comparison. File lists are capped
+ * (see `truncated`); `totalCount` is the true total across all three categories.
+ */
+export interface OverlayChangeSummary {
+  /** Paths present in the upper but absent from the lower (new files). */
+  added: string[];
+  /** Paths present in both (the run overwrote an existing file). */
+  modified: string[];
+  /** Paths whited-out in the upper (the run deleted a lower file). */
+  deleted: string[];
+  /** True when any list was capped — more changes exist than are listed. */
+  truncated: boolean;
+  /** True count of changed paths (added + modified + deleted), pre-cap. */
+  totalCount: number;
+}
+
+/**
+ * Result of `finalize()` — whether the finished run needs a write-back approval
+ * gate, plus the change summary to show the reviewer. `requiresApproval` is
+ * false when the overlay is empty (no changes → complete without a gate).
+ */
+export interface WriteBackFinalizeResult {
+  requiresApproval: boolean;
+  changeSummary?: OverlayChangeSummary;
+}
+
+/**
+ * Result of `applyChanges()` — what actually landed on the live root. Reported
+ * in the completion message and the `writeback_applied` event. `warnings` carries
+ * per-file issues (e.g. an opaque-directory replace overlay-native can't express)
+ * without failing the whole apply.
+ */
+export interface WriteBackApplySummary {
+  filesApplied: number;
+  filesDeleted: number;
+  warnings: string[];
+}
+
+/**
  * Env keys NEVER forwarded into a container via `docker exec -e` — the runner
  * image sets these correctly and a host/project value would break in-container
  * resolution (PATH must point at the in-container binaries; HOME must be the

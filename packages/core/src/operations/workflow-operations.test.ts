@@ -345,6 +345,42 @@ describe('approveWorkflow', () => {
 
     await expect(approveWorkflow('run-1')).rejects.toThrow('Workflow run not found: run-1');
   });
+
+  test('approves container write-back gate — records approval_response, NO node_completed', async () => {
+    const run = makePausedRun({
+      metadata: {
+        approval: { nodeId: '__writeback__', message: '7 files changed', type: 'writeback' },
+      },
+    });
+    mockGetWorkflowRun.mockResolvedValueOnce(run);
+
+    const result = await approveWorkflow('run-1');
+
+    expect(result.type).toBe('approval_gate');
+    // The resumed executor's write-back gate reads approval_response to APPLY.
+    expect(mockResolveApprovalGate).toHaveBeenCalledWith(
+      'run-1',
+      {
+        approval: {
+          nodeId: '__writeback__',
+          message: '7 files changed',
+          type: 'writeback',
+          resolved: 'approved',
+        },
+        approval_response: 'approved',
+      },
+      [
+        {
+          event_type: 'approval_received',
+          step_name: '__writeback__',
+          data: { decision: 'approved', comment: 'Approved', gate: 'writeback' },
+        },
+      ]
+    );
+    // No node_completed — there is no DAG node behind the write-back gate.
+    const casEvents = mockResolveApprovalGate.mock.calls[0][2] as Array<Record<string, unknown>>;
+    expect(casEvents.every(e => e.event_type !== 'node_completed')).toBe(true);
+  });
 });
 
 describe('rejectWorkflow', () => {
@@ -516,6 +552,41 @@ describe('rejectWorkflow', () => {
     expect(mockResolveAndCancelApprovalGate).toHaveBeenCalledTimes(1);
     expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
     expect(mockCaptureApprovalResolved).not.toHaveBeenCalled();
+  });
+
+  test('rejects container write-back gate — stays resumable (never cancels), writeBack flag set', async () => {
+    const run = makePausedRun({
+      metadata: {
+        approval: { nodeId: '__writeback__', message: '3 files changed', type: 'writeback' },
+      },
+    });
+    mockGetWorkflowRun.mockResolvedValueOnce(run);
+
+    const result = await rejectWorkflow('run-1');
+
+    // The run stays resumable so the resume DISCARDS the overlay + completes.
+    expect(result.cancelled).toBe(false);
+    expect(result.writeBack).toBe(true);
+    expect(mockResolveAndCancelApprovalGate).not.toHaveBeenCalled();
+    expect(mockResolveApprovalGate).toHaveBeenCalledWith(
+      'run-1',
+      {
+        approval: {
+          nodeId: '__writeback__',
+          message: '3 files changed',
+          type: 'writeback',
+          resolved: 'rejected',
+        },
+        approval_response: 'rejected',
+      },
+      [
+        {
+          event_type: 'approval_received',
+          step_name: '__writeback__',
+          data: { decision: 'rejected', gate: 'writeback' },
+        },
+      ]
+    );
   });
 
   test('throws on non-paused run', async () => {

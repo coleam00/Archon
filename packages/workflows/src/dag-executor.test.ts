@@ -13990,3 +13990,157 @@ describe('buildSubprocessDockerArgs — bash/script env isolation', () => {
     expect(joined).toContain('KEEP=1'); // non-denylisted keys still forwarded
   });
 });
+
+// ---------------------------------------------------------------------------
+// Container write-back gate + suspend-on-pause (Phase C)
+// ---------------------------------------------------------------------------
+
+describe('executeDagWorkflow -- container write-back gate', () => {
+  const CONTAINER_EXEC = { kind: 'container' as const, containerId: 'cid-1' };
+  const wbTestDir = join(tmpdir(), `dag-wb-test-${Date.now()}`);
+
+  function makeWritebackBackend(over?: Partial<Record<string, unknown>>) {
+    return {
+      suspend: mock(async () => undefined),
+      finalize: mock(async () => ({ requiresApproval: false as boolean })),
+      applyChanges: mock(async () => ({
+        filesApplied: 0,
+        filesDeleted: 0,
+        warnings: [] as string[],
+      })),
+      discardChanges: mock(async () => undefined),
+      ...over,
+    };
+  }
+
+  /** Run a single pre-completed bash node under a container context so the gate runs. */
+  async function runGate(opts: {
+    backend: ReturnType<typeof makeWritebackBackend>;
+    writeBack?: 'approve' | 'auto';
+    runMetadata?: Record<string, unknown>;
+    status?: 'running' | 'paused';
+  }): Promise<IWorkflowStore> {
+    const store = createMockStore();
+    store.getWorkflowRunStatus = mock(() => Promise.resolve(opts.status ?? ('running' as const)));
+    store.getWorkflowRun = mock(() =>
+      Promise.resolve(makeWorkflowRun('wb-run', { metadata: opts.runMetadata ?? {} }))
+    );
+    const deps = createMockDeps(store);
+    await executeDagWorkflow(
+      deps,
+      createMockPlatform(),
+      'conv-wb',
+      wbTestDir,
+      { name: 'wb', nodes: [{ id: 'a', bash: 'echo hi' }] },
+      makeWorkflowRun('wb-run'),
+      'claude',
+      undefined,
+      join(wbTestDir, 'artifacts'),
+      join(wbTestDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      new Map([['a', 'out']]), // pre-completed → node skipped, DAG reaches the gate
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      CONTAINER_EXEC,
+      { envId: 'env-x', writeBack: opts.writeBack ?? 'approve', backend: opts.backend }
+    );
+    return store;
+  }
+
+  it('empty diff → completes normally, no pause', async () => {
+    const backend = makeWritebackBackend({
+      finalize: mock(async () => ({ requiresApproval: false })),
+    });
+    const store = await runGate({ backend });
+    expect(backend.finalize).toHaveBeenCalledTimes(1);
+    expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(store.pauseWorkflowRun).not.toHaveBeenCalled();
+    expect(backend.suspend).not.toHaveBeenCalled();
+  });
+
+  it('non-empty diff + approve policy → pauses (writeback) + suspends, does NOT complete', async () => {
+    const backend = makeWritebackBackend({
+      finalize: mock(async () => ({
+        requiresApproval: true,
+        changeSummary: {
+          added: ['x.md'],
+          modified: [],
+          deleted: [],
+          totalCount: 1,
+          truncated: false,
+        },
+      })),
+    });
+    const store = await runGate({ backend });
+    expect(store.pauseWorkflowRun).toHaveBeenCalledTimes(1);
+    const pauseArg = (store.pauseWorkflowRun as ReturnType<typeof mock>).mock.calls[0][1] as {
+      nodeId: string;
+      type: string;
+    };
+    expect(pauseArg.nodeId).toBe('__writeback__');
+    expect(pauseArg.type).toBe('writeback');
+    expect(store.updateWorkflowRun).toHaveBeenCalled(); // persists pending_writeback
+    expect(backend.suspend).toHaveBeenCalledTimes(1);
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('non-empty diff + auto policy → applies without pausing, then completes', async () => {
+    const backend = makeWritebackBackend({
+      finalize: mock(async () => ({
+        requiresApproval: true,
+        changeSummary: {
+          added: ['x.md'],
+          modified: [],
+          deleted: [],
+          totalCount: 1,
+          truncated: false,
+        },
+      })),
+      applyChanges: mock(async () => ({ filesApplied: 1, filesDeleted: 0, warnings: [] })),
+    });
+    const store = await runGate({ backend, writeBack: 'auto' });
+    expect(backend.applyChanges).toHaveBeenCalledTimes(1);
+    expect(store.pauseWorkflowRun).not.toHaveBeenCalled();
+    expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('resume after approve → applies overlay, marks resolved, completes', async () => {
+    const backend = makeWritebackBackend({
+      applyChanges: mock(async () => ({ filesApplied: 3, filesDeleted: 1, warnings: [] })),
+    });
+    const store = await runGate({
+      backend,
+      runMetadata: { pending_writeback: { envId: 'env-x' }, approval_response: 'approved' },
+    });
+    expect(backend.applyChanges).toHaveBeenCalledTimes(1);
+    expect(backend.finalize).not.toHaveBeenCalled(); // resume path skips re-inspection
+    expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('resume after reject → discards overlay (live root untouched), completes', async () => {
+    const backend = makeWritebackBackend();
+    const store = await runGate({
+      backend,
+      runMetadata: { pending_writeback: { envId: 'env-x' }, approval_response: 'rejected' },
+    });
+    expect(backend.discardChanges).toHaveBeenCalledTimes(1);
+    expect(backend.applyChanges).not.toHaveBeenCalled();
+    expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('mid-DAG pause suspends the container instead of completing', async () => {
+    const backend = makeWritebackBackend();
+    const store = await runGate({ backend, status: 'paused' });
+    // A node paused the run → suspend fires right after the layer walk; the gate
+    // + completion are never reached.
+    expect(backend.suspend).toHaveBeenCalledTimes(1);
+    expect(backend.finalize).not.toHaveBeenCalled();
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+  });
+});
