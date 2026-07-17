@@ -9,6 +9,35 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # ─── Path gate: only run the container tier when container code changes ──
+  # Building the runner image adds minutes, so the container smoke is gated on
+  # the paths that can affect it. Every other job below runs unconditionally.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      container: ${{ steps.filter.outputs.container }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            container:
+              - 'packages/isolation/**'
+              - 'scripts/build-runner-image.sh'
+              # The smoke exercises the CLI --container/--folder dispatch + teardown
+              # and the Claude container-exec spawn, so changes there must trigger it.
+              - 'packages/cli/src/commands/workflow.ts'
+              - 'packages/providers/src/claude/container-*'
+              - '.github/workflows/e2e-smoke.yml'
+              - '.archon/workflows/test-workflows/e2e-container-smoke.yaml'
+              # Deliberately NOT packages/workflows/src/dag-executor.ts: it also
+              # runs container exec, but it churns on unrelated work and would make
+              # this gate near-unconditional. Accept the small coverage gap.
+
   # ─── Tier 1: Deterministic (no API keys needed) ────────────────────────
   e2e-deterministic:
     runs-on: ubuntu-latest
@@ -29,6 +58,94 @@ jobs:
 
       - name: Run deterministic workflow
         run: bun run cli workflow run e2e-deterministic --no-worktree "smoke test"
+
+  # ─── Tier 1b: Container isolation (Docker, no API keys needed) ──────────
+  # Deterministic slice of the container-isolation e2e (folder project +
+  # --container). Bash-node-only, so no AI credential is required. Gated on
+  # container-related paths via the `changes` job above.
+  e2e-container:
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: ${{ needs.changes.outputs.container == 'true' }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # Cheap fail-fast (no image/daemon needed): --container against the repo
+      # checkout (a git repo, not a folder project) must hard-error with the
+      # folder-only message before any container work.
+      - name: Negative — --container rejected on a repo project
+        run: |
+          set -uo pipefail
+          set +e
+          out="$(bun run cli workflow run e2e-container-smoke --container 'should be rejected' 2>&1)"
+          code=$?
+          set -e
+          echo "$out"
+          if [ "$code" -eq 0 ]; then
+            echo "FAIL: --container on a repo project exited 0 (expected non-zero)"; exit 1
+          fi
+          if ! printf '%s' "$out" | grep -q 'Container isolation is folder-project-only for now'; then
+            echo "FAIL: expected the folder-only error, got exit $code with different output"; exit 1
+          fi
+          echo "PASS: --container on a repo project rejected with the folder-only error (exit $code)"
+
+      - name: Build runner image
+        run: bun run build:runner-image
+
+      - name: Container smoke + teardown/host assertions
+        run: |
+          set -euo pipefail
+          # Force-remove any managed containers + archon-* volumes on exit so a
+          # failed run never leaks resources into later jobs on this runner.
+          # (Volumes are unlabeled, so they are matched by the `archon-` name
+          # prefix; only containers carry diy.archon.managed=true.)
+          cleanup() {
+            docker ps -aq --filter label=diy.archon.managed=true | xargs -r docker rm -f >/dev/null 2>&1 || true
+            docker volume ls --format '{{.Name}}' | grep '^archon-' | xargs -r docker volume rm -f >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          SCRATCH="$(mktemp -d)"
+          mkdir -p "$SCRATCH/.archon/workflows"
+          cp .archon/workflows/test-workflows/e2e-container-smoke.yaml "$SCRATCH/.archon/workflows/"
+          echo "scratch folder project: $SCRATCH"
+
+          # Register the scratch folder project on first use + run in a container.
+          # A non-zero exit here means an in-container assertion failed OR the
+          # container teardown failed — either way the run did not cleanly finish.
+          bun run cli workflow run e2e-container-smoke --folder --container --cwd "$SCRATCH" "container smoke"
+
+          # Host untouched: Phase B discards the overlay, so the marker the run
+          # wrote into the workspace must NOT exist on the host folder.
+          if [ -f "$SCRATCH/container-smoke-overlay-marker.txt" ]; then
+            echo "FAIL: overlay write leaked to the host folder (Phase B must discard the overlay)"; exit 1
+          fi
+          echo "PASS: host folder unchanged after the container run"
+
+          # No managed containers left (teardown removed them).
+          leaked_c="$(docker ps -a --filter label=diy.archon.managed=true --format '{{.Names}}')"
+          if [ -n "$leaked_c" ]; then
+            echo "FAIL: managed containers leaked:"; echo "$leaked_c"; exit 1
+          fi
+          echo "PASS: no managed containers left"
+
+          # No archon-* volumes left (match by name prefix — volumes are unlabeled).
+          leaked_v="$(docker volume ls --format '{{.Name}}' | grep '^archon-' || true)"
+          if [ -n "$leaked_v" ]; then
+            echo "FAIL: archon volumes leaked:"; echo "$leaked_v"; exit 1
+          fi
+          echo "PASS: no archon-* volumes left"
 
   # ─── Tier 2a: Claude provider ──────────────────────────────────────────
   e2e-claude:
