@@ -339,9 +339,9 @@ nodes that opt in via `persist_session` (or workflow-level `persist_sessions: tr
 Use it when a workflow should forget its prior conversation and start fresh.
 
 ```bash
-archon workflow reset-sessions <workflow-name>                 # ALL scopes — requires --yes
-archon workflow reset-sessions <workflow-name> --scope <key>   # one scope only
-archon workflow reset-sessions <workflow-name> --node <id>     # narrow to a single node
+archon workflow reset-sessions <workflow-name> --yes             # ALL scopes (cross-scope wipe)
+archon workflow reset-sessions <workflow-name> --scope <key>     # one scope only
+archon workflow reset-sessions <workflow-name> --node <id> --yes # single node, still all scopes → needs --yes
 archon workflow reset-sessions <workflow-name> --scope <key> --json
 ```
 
