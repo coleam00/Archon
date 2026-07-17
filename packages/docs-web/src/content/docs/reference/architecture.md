@@ -856,34 +856,50 @@ This registers repo-specific commands. Default commands are loaded at runtime fr
 
 ### Variable Substitution
 
+Command-file and workflow prompts flow through a single substitution pass before
+they reach the AI. `$ARGUMENTS` and `$USER_MESSAGE` both expand to the user's
+**whole** trigger message — positional `$1`/`$2`/`$3` arguments are **not**
+supported.
+
 **Supported variables:**
 
-- `$1`, `$2`, `$3`, ... - Positional arguments
-- `$ARGUMENTS` - All arguments as single string
-- `\$` - Escaped dollar sign (literal `$`)
+- `$ARGUMENTS`, `$USER_MESSAGE` - The user's full trigger message as a single string
+- `$WORKFLOW_ID` - The workflow run ID
+- `$ARTIFACTS_DIR` - External artifacts directory for this workflow run
+- `$BASE_BRANCH` - Base branch (from config or auto-detected)
+- `$DOCS_DIR` - Documentation directory path (configured, default `docs/`)
+- `$CONTEXT`, `$EXTERNAL_CONTEXT`, `$ISSUE_CONTEXT` - GitHub issue/PR context (empty when unavailable)
+- `$LOOP_USER_INPUT`, `$REJECTION_REASON`, `$LOOP_PREV_OUTPUT` - Loop/approval context (see the [Variables reference](/reference/variables/))
 
-**Implementation** (`packages/core/src/utils/variable-substitution.ts`):
+**Implementation** (`substituteWorkflowVariables` in `packages/workflows/src/executor-shared.ts`):
 
 ```typescript
-export function substituteVariables(
-  text: string,
-  args: string[],
-  metadata: Record<string, unknown> = {}
-): string {
-  let result = text;
+export function substituteWorkflowVariables(
+  prompt: string,
+  workflowId: string,
+  userMessage: string,
+  artifactsDir: string,
+  baseBranch: string,
+  docsDir: string,
+  issueContext?: string,
+  // ...loop/approval context args
+  options?: { shellSafe?: boolean }
+): { prompt: string; contextSubstituted: boolean } {
+  let result = prompt
+    .replace(/\$WORKFLOW_ID/g, workflowId)
+    .replace(/\$ARTIFACTS_DIR/g, artifactsDir)
+    .replace(/\$BASE_BRANCH/g, baseBranch)
+    .replace(/\$DOCS_DIR/g, docsDir || 'docs/');
 
-  // Replace $1, $2, $3, etc.
-  args.forEach((arg, index) => {
-    result = result.replace(new RegExp(`\\$${index + 1}`, 'g'), arg);
-  });
-
-  // Replace $ARGUMENTS
-  result = result.replace(/\$ARGUMENTS/g, args.join(' '));
-
-  // Replace escaped dollar signs
-  result = result.replace(/\\\$/g, '$');
-
-  return result;
+  // User-controlled vars are skipped when shellSafe: true — bash/script nodes
+  // receive them via subprocess env instead, to prevent shell injection.
+  if (!options?.shellSafe) {
+    result = result
+      .replace(/\$USER_MESSAGE/g, userMessage)
+      .replace(/\$ARGUMENTS/g, userMessage);
+    // ...$LOOP_USER_INPUT, $REJECTION_REASON, $LOOP_PREV_OUTPUT, and $CONTEXT* vars
+  }
+  // ...
 }
 ```
 
@@ -892,9 +908,7 @@ export function substituteVariables(
 ```markdown
 <!-- .archon/commands/analyze.md -->
 
-Analyze the following aspect of the codebase: $1
-
-Focus on: $ARGUMENTS
+Analyze the codebase for the following request: $ARGUMENTS
 
 Provide recommendations for improvement.
 ```
@@ -903,8 +917,7 @@ Provide recommendations for improvement.
 User asks: "Analyze the security of authentication and authorization"
 # Orchestrator routes to the `analyze` command
 # Variable substitution produces:
-# Analyze the following aspect of the codebase: security
-# Focus on: security authentication authorization
+# Analyze the codebase for the following request: Analyze the security of authentication and authorization
 # Provide recommendations for improvement.
 ```
 
@@ -1340,7 +1353,7 @@ This checklist is for **built-in** providers only. For community providers (`bui
 
 ### Modifying Command System
 
-- [ ] Update `substituteVariables()` for new variable types
+- [ ] Update `substituteWorkflowVariables()` (`packages/workflows/src/executor-shared.ts`) for new variable types
 - [ ] Add command to Command Handler for deterministic logic
 - [ ] Update `/help` command output
 - [ ] Add example command file to `.archon/commands/`

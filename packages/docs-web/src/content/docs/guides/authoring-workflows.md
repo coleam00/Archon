@@ -1061,7 +1061,7 @@ All workflows support variable substitution in prompts and commands. The most co
 | `$nodeId.output` | Output of a completed upstream node |
 | `$nodeId.output.field` | JSON field from a structured upstream node output |
 
-See the [Variable Reference](/reference/variables/) for the complete list, including `$LOOP_USER_INPUT`, `$REJECTION_REASON`, positional arguments, substitution order, and context variable behavior.
+See the [Variable Reference](/reference/variables/) for the complete list, including `$LOOP_USER_INPUT`, `$REJECTION_REASON`, substitution order, and context variable behavior.
 
 Example:
 ```yaml

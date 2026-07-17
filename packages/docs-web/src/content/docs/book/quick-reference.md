@@ -70,8 +70,7 @@ Variables are substituted at runtime in command bodies and workflow `prompt:` fi
 
 | Variable | Available In | Contains |
 |----------|-------------|----------|
-| `$ARGUMENTS` | Commands, prompts | All arguments passed to the command as a single string |
-| `$1`, `$2`, `$3` | Commands, prompts | First, second, third positional arguments |
+| `$ARGUMENTS` / `$USER_MESSAGE` | Commands, prompts | The user's whole trigger message (positional `$1`/`$2`/`$3` are not supported) |
 | `$ARTIFACTS_DIR` | Commands, prompts | Absolute path to the workflow run's artifact directory |
 | `$WORKFLOW_ID` | Commands, prompts | The current workflow run ID |
 | `$BASE_BRANCH` | Commands, prompts | Base git branch (auto-detected or set via `worktree.baseBranch`) |
