@@ -182,7 +182,7 @@ Use this matrix to find the right parameter. Use these references for the full e
 | `bash` / `script`               | yes (no AI — provider-independent) | yes                | yes                                  | yes                  | yes                 |
 | `output_format`                 | **enforced** (SDK grammar) | **enforced** (SDK grammar) | best-effort (prompt + parse/repair + up to 3 re-asks) | **enforced** | best-effort (same re-ask loop as Pi) |
 | `allowed_tools` / `denied_tools` | yes          | ignored (use Codex CLI config)          | **yes**                              | **yes**              | **yes**             |
-| `hooks`                         | yes           | **ignored + warn**                      | not available                        | **yes**              | not available       |
+| `hooks`                         | yes           | **ignored + warn**                      | not available                        | **ignored + warn**   | not available       |
 | `mcp` (per-node)                | yes           | **yes**                                 | not available                        | **yes**              | **yes**             |
 | `skills` (per-node)             | yes           | informational (auto-discovers `.agents/skills/`) | yes                          | yes                  | yes                 |
 | `agents`                        | yes           | no                                      | no                                   | **yes**              | **yes**             |
@@ -190,6 +190,8 @@ Use this matrix to find the right parameter. Use these references for the full e
 | Model naming                    | `haiku`, `sonnet`, `opus`, `opus[1m]`   | Codex model ID (e.g. `gpt-5.6-sol`)   | `<vendor>/<model>` (e.g. `anthropic/claude-opus-4-5`, `openrouter/qwen/qwen3-coder`) | OpenCode catalog ref | Copilot model id |
 | `effort` / `thinking`           | yes           | use `modelReasoningEffort` for reasoning models | via `effort:` (maps to thinking level) | no (opencode.json agent config) | yes (maps like Pi) |
 | Provider session resume (`persist_session`, `context: shared` threading) | yes | yes            | yes                                  | yes                  | yes                 |
+
+This table is kept in sync by hand with the canonical, generated [Provider Capability Matrix](https://archon.diy/reference/provider-capabilities/) (produced from each provider's `capabilities.ts` via `bun run generate:capability-matrix`) — treat that page as the source of truth if the two ever disagree.
 
 Whatever the enforcement tier, a node with `output_format` either produces schema-valid output or **fails** — validation runs for every provider, and best-effort providers re-ask up to 3 times first. Prefer tier keywords (`model: small|medium|large`) over hardcoded model ids — they resolve per-install from config.
 

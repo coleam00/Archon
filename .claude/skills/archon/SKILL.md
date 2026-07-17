@@ -325,7 +325,7 @@ Full variable reference: Read `references/variables.md`
 
 ### Advanced Features (Command/Prompt Nodes)
 
-`output_format` (structured JSON output — all providers, schema-validated, node fails on miss), `hooks` (tool interception — Claude + OpenCode), `mcp` (external tool servers — all providers except Pi), `skills` (per-node injection on Claude/Pi/OpenCode/Copilot; Codex via filesystem), `allowed_tools`/`denied_tools` (tool restrictions — all except Codex), `agents` (inline sub-agents — Claude/OpenCode/Copilot), `persist_session` (cross-run AI memory), `output_type` (typed artifact sidecars).
+`output_format` (structured JSON output — all providers, schema-validated, node fails on miss), `hooks` (tool interception — Claude only), `mcp` (external tool servers — all providers except Pi), `skills` (per-node injection on Claude/Pi/OpenCode/Copilot; Codex via filesystem), `allowed_tools`/`denied_tools` (tool restrictions — all except Codex), `agents` (inline sub-agents — Claude/OpenCode/Copilot), `persist_session` (cross-run AI memory), `output_type` (typed artifact sidecars).
 
 For details: Read `references/dag-advanced.md`
 
