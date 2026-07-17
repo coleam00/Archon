@@ -122,6 +122,19 @@ export interface IWorkflowStore {
     approvalContext: ApprovalContext,
     extraMetadata?: Record<string, unknown>
   ): Promise<void>;
+
+  /**
+   * Atomically CLAIM the container write-back apply before the live root is mutated
+   * (retry-safe apply). Sets `metadata.writeback_apply_claimed` only while unset;
+   * returns whether THIS caller won. Apply the overlay only when `claimed`.
+   */
+  claimWriteback(id: string): Promise<{ claimed: boolean }>;
+
+  /**
+   * Release a claimed write-back apply after the apply FAILED, so a later resume can
+   * re-claim and retry. Best-effort (never throws in the caller's critical path).
+   */
+  releaseWritebackClaim(id: string): Promise<void>;
   cancelWorkflowRun(id: string): Promise<{ cancelled: boolean }>;
 
   /**

@@ -26,6 +26,23 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { buildApplyScript, buildSummaryScript } from './overlay';
 
+// These scripts ONLY ever execute inside the Linux runner container in production.
+// Git-Bash on Windows can't create real symlinks (`ln -s` copies) and MSYS mangles
+// absolute paths (`/etc/shadow` → `/d/etc/shadow`), so the symlink/dest-traversal
+// cases are skipped on win32 — environment reality, not test weakening. Every
+// non-symlink case still runs on Windows.
+const isWin = process.platform === 'win32';
+// FIFO creation needs `mkfifo` (POSIX) — detected once so a missing tool is an
+// explicit skip, never a silent pass (R2-F6).
+const hasMkfifo = (() => {
+  try {
+    execFileSync('sh', ['-c', 'command -v mkfifo'], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+})();
+
 /** Run a walk script under bash; returns NUL-split records + raw stdout/stderr. */
 function runScript(
   script: string,
@@ -125,15 +142,9 @@ describe('apply script — C2 special files + setuid', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  test('a fifo (special file) is skipped, never reproduced on the host', () => {
+  test.skipIf(!hasMkfifo)('a fifo (special file) is skipped, never reproduced on the host', () => {
     const { root, upper, dest, ws } = makeDirs();
-    // mkfifo via bash (portable); if unavailable the test still asserts non-reproduction.
-    try {
-      execFileSync('mkfifo', [join(upper, 'pipe')]);
-    } catch {
-      rmSync(root, { recursive: true, force: true });
-      return;
-    }
+    execFileSync('mkfifo', [join(upper, 'pipe')]);
     const { records } = runScript(buildApplyScript(), upper, dest, ws);
     expect(existsSync(join(dest, 'pipe'))).toBe(false);
     expect(records.some(r => r.tag === 'S' && r.fields[0] === 'pipe')).toBe(true);
@@ -142,7 +153,7 @@ describe('apply script — C2 special files + setuid', () => {
 });
 
 describe('apply script — M1/M4 symlinks', () => {
-  test('a symlink whose target escapes the project root is REFUSED', () => {
+  test.skipIf(isWin)('a symlink whose target escapes the project root is REFUSED', () => {
     const { root, upper, dest, ws } = makeDirs();
     symlinkSync('/etc/passwd', join(upper, 'leak')); // absolute, outside ws
     const { records } = runScript(buildApplyScript(), upper, dest, ws);
@@ -151,7 +162,7 @@ describe('apply script — M1/M4 symlinks', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  test('a relative `..` symlink target is refused', () => {
+  test.skipIf(isWin)('a relative `..` symlink target is refused', () => {
     const { root, upper, dest, ws } = makeDirs();
     symlinkSync('../../../../etc/hosts', join(upper, 'up'));
     const { records } = runScript(buildApplyScript(), upper, dest, ws);
@@ -160,7 +171,7 @@ describe('apply script — M1/M4 symlinks', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  test('an in-project relative symlink is reproduced as a symlink', () => {
+  test.skipIf(isWin)('an in-project relative symlink is reproduced as a symlink', () => {
     const { root, upper, dest, ws } = makeDirs();
     writeFileSync(join(upper, 'real.txt'), 'x');
     symlinkSync('real.txt', join(upper, 'link'));
@@ -171,7 +182,7 @@ describe('apply script — M1/M4 symlinks', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  test('M4: a symlink-to-dir is applied as a SYMLINK, not a real directory', () => {
+  test.skipIf(isWin)('M4: a symlink-to-dir is applied as a SYMLINK, not a real directory', () => {
     const { root, upper, dest, ws } = makeDirs();
     mkdirSync(join(upper, 'realdir'), { recursive: true });
     symlinkSync('realdir', join(upper, 'dirlink'));
@@ -182,7 +193,7 @@ describe('apply script — M1/M4 symlinks', () => {
 });
 
 describe('apply script — dest-symlink traversal confinement', () => {
-  test('a write through a pre-existing dest symlink parent is refused', () => {
+  test.skipIf(isWin)('a write through a pre-existing dest symlink parent is refused', () => {
     const { root, upper, dest, ws } = makeDirs();
     const outside = join(root, 'outside');
     mkdirSync(outside, { recursive: true });
@@ -198,7 +209,7 @@ describe('apply script — dest-symlink traversal confinement', () => {
 });
 
 describe('summary script — faithful representation (M1)', () => {
-  test('symlinks are shown with target + escape flag; specials flagged', () => {
+  test.skipIf(isWin)('symlinks are shown with target + escape flag; specials flagged', () => {
     const { root, upper, dest, ws } = makeDirs();
     writeFileSync(join(upper, 'added.txt'), 'x');
     symlinkSync('/etc/shadow', join(upper, 'exfil')); // escaping

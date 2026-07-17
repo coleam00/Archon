@@ -134,6 +134,8 @@ function createMockStore(): IWorkflowStore {
     completeWorkflowRun: mock(() => Promise.resolve()),
     failWorkflowRun: mock(() => Promise.resolve()),
     pauseWorkflowRun: mock(() => Promise.resolve()),
+    claimWriteback: mock(() => Promise.resolve({ claimed: true })),
+    releaseWritebackClaim: mock(() => Promise.resolve()),
     cancelWorkflowRun: mock(() => Promise.resolve()),
     createWorkflowEvent: mock(() => Promise.resolve()),
     getCompletedDagNodeOutputs: mock(() => Promise.resolve(new Map<string, string>())),
@@ -14019,12 +14021,14 @@ describe('executeDagWorkflow -- container write-back gate', () => {
     writeBack?: 'approve' | 'auto';
     runMetadata?: Record<string, unknown>;
     status?: 'running' | 'paused';
+    claimed?: boolean;
   }): Promise<IWorkflowStore> {
     const store = createMockStore();
     store.getWorkflowRunStatus = mock(() => Promise.resolve(opts.status ?? ('running' as const)));
     store.getWorkflowRun = mock(() =>
       Promise.resolve(makeWorkflowRun('wb-run', { metadata: opts.runMetadata ?? {} }))
     );
+    store.claimWriteback = mock(() => Promise.resolve({ claimed: opts.claimed ?? true }));
     const deps = createMockDeps(store);
     await executeDagWorkflow(
       deps,
@@ -14122,7 +14126,7 @@ describe('executeDagWorkflow -- container write-back gate', () => {
     resolved,
   });
 
-  it('resume after approve → applies overlay, marks resolved, completes', async () => {
+  it('resume after approve → CLAIMS then applies overlay, marks resolved, completes', async () => {
     const backend = makeWritebackBackend({
       applyChanges: mock(async () => ({ filesApplied: 3, filesDeleted: 1, warnings: [] })),
     });
@@ -14130,9 +14134,79 @@ describe('executeDagWorkflow -- container write-back gate', () => {
       backend,
       runMetadata: { pending_writeback: { envId: 'env-x' }, approval: wbApproval('approved') },
     });
+    // R2-F4: the apply is claimed BEFORE the live root is mutated.
+    expect(store.claimWriteback).toHaveBeenCalledTimes(1);
     expect(backend.applyChanges).toHaveBeenCalledTimes(1);
     expect(backend.finalize).not.toHaveBeenCalled(); // resume path skips re-inspection
     expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+  });
+
+  // R2-F4 — a lost claim (concurrent/prior resume owns the apply, or a crash left it
+  // claimed after a successful apply) must NOT re-apply; complete as applied.
+  it('resume after approve with a LOST claim does NOT re-apply', async () => {
+    const backend = makeWritebackBackend();
+    const store = await runGate({
+      backend,
+      claimed: false,
+      runMetadata: { pending_writeback: { envId: 'env-x' }, approval: wbApproval('approved') },
+    });
+    expect(store.claimWriteback).toHaveBeenCalledTimes(1);
+    expect(backend.applyChanges).not.toHaveBeenCalled(); // no double-apply
+    expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+  });
+
+  // R2-F4 — a failed apply RELEASES the claim (so `workflow resume` can retry) and
+  // propagates the error (run fails → volume preserved by H2).
+  it('resume after approve with a FAILED apply releases the claim and rethrows', async () => {
+    const backend = makeWritebackBackend({
+      applyChanges: mock(async () => {
+        throw new Error('cp: No space left on device');
+      }),
+    });
+    // executeDagWorkflow lets the apply error propagate; the outer executor marks the
+    // run failed. Assert release was called and the error surfaced.
+    let threw = false;
+    const store = createMockStore();
+    store.getWorkflowRunStatus = mock(() => Promise.resolve('running' as const));
+    store.getWorkflowRun = mock(() =>
+      Promise.resolve(
+        makeWorkflowRun('wb-run', {
+          metadata: { pending_writeback: { envId: 'env-x' }, approval: wbApproval('approved') },
+        })
+      )
+    );
+    store.claimWriteback = mock(() => Promise.resolve({ claimed: true }));
+    try {
+      await executeDagWorkflow(
+        createMockDeps(store),
+        createMockPlatform(),
+        'conv-wb',
+        wbTestDir,
+        { name: 'wb', nodes: [{ id: 'a', bash: 'echo hi' }] },
+        makeWorkflowRun('wb-run'),
+        'claude',
+        undefined,
+        join(wbTestDir, 'artifacts'),
+        join(wbTestDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig,
+        undefined,
+        undefined,
+        new Map([['a', 'out']]),
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        CONTAINER_EXEC,
+        { envId: 'env-x', writeBack: 'approve', backend }
+      );
+    } catch {
+      threw = true;
+    }
+    expect(threw).toBe(true);
+    expect(store.releaseWritebackClaim).toHaveBeenCalledTimes(1);
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
   });
 
   it('resume after reject → discards overlay (live root untouched), completes', async () => {

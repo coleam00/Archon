@@ -46,6 +46,8 @@ const {
   findResumableRunByParentConversation,
   resolveApprovalGate,
   resolveAndCancelApprovalGate,
+  claimWriteback,
+  releaseWritebackClaim,
   WorkflowNotResumableError,
 } = await import('./workflows');
 const { approveWorkflow, rejectWorkflow } = await import('../operations/workflow-operations');
@@ -98,6 +100,30 @@ describe('resumeWorkflowRun — real SQLite (CAS + orphan recovery)', () => {
 
   test('throws not-found for a missing run', async () => {
     await expect(resumeWorkflowRun('ghost')).rejects.toThrow('Workflow run not found (id: ghost)');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// claimWriteback CAS (R2-F4) — retry-safe container write-back apply. Real SQLite
+// json_patch: exactly one caller wins the claim; release makes it claimable again.
+// ---------------------------------------------------------------------------
+
+describe('claimWriteback — real SQLite CAS', () => {
+  test('first caller wins, second loses (no double-apply)', async () => {
+    await seed('wb-claim', 'running', "datetime('now')");
+    const first = await claimWriteback('wb-claim');
+    const second = await claimWriteback('wb-claim');
+    expect(first.claimed).toBe(true);
+    expect(second.claimed).toBe(false);
+  });
+
+  test('release makes the write-back claimable again (retry after a failed apply)', async () => {
+    await seed('wb-release', 'running', "datetime('now')");
+    expect((await claimWriteback('wb-release')).claimed).toBe(true);
+    expect((await claimWriteback('wb-release')).claimed).toBe(false);
+    await releaseWritebackClaim('wb-release');
+    // Released → the retrying resume can re-claim.
+    expect((await claimWriteback('wb-release')).claimed).toBe(true);
   });
 });
 

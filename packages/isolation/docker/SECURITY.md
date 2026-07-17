@@ -108,11 +108,13 @@ no-new-privileges` (defense-in-depth around the script logic), and the apply:
   symlink guard (blocks traversal through a pre-existing dest symlink), and runs
   with `set -f` (noglob) so malicious filenames can't glob-expand;
 - reproduces **only** regular files, real directories, and **in-project** symlinks —
-  block/char/fifo/socket special files are skipped (a planted device or setuid
-  binary never lands on the host), and a `(0,0)` overlay-whiteout char device is
+  block/char/fifo/socket **special files** are skipped entirely (a planted device
+  never lands on the host), and a `(0,0)` overlay-whiteout char device is
   distinguished from a planted real device by its major/minor;
-- **strips** setuid/setgid/sticky bits and copies by **contents only** (no `cp -a`),
-  dropping ownership and xattrs (incl. `security.*` capability xattrs);
+- a regular **setuid/setgid binary DOES land** as a normal file, but its
+  setuid/setgid/sticky bits are **stripped** (`chmod u-s,g-s,o-t`) and it is copied by
+  **contents only** (no `cp -a`), dropping ownership and xattrs (incl. `security.*`
+  capability xattrs) — so the file arrives inert, not privilege-escalating;
 - **refuses** symlinks whose target escapes the project root (absolute-outside-root
   or a `..`-escaping relative target) — a secret-exfiltration / foothold vector —
   and flags them in the change summary so the approver sees the refusal.

@@ -913,6 +913,53 @@ export async function pauseWorkflowRun(
   }
 }
 
+/**
+ * Atomically CLAIM the container write-back apply before the live root is mutated
+ * (R2-F4). A conditional UPDATE that sets `metadata.writeback_apply_claimed = true`
+ * only while it is unset — so exactly one resume wins the claim. Returns whether
+ * THIS caller won. The caller must apply the overlay only on `claimed === true`, and
+ * on apply FAILURE release the claim (`releaseWritebackClaim`) so a `workflow resume`
+ * can retry; on a crash AFTER a successful apply the claim stays set, so the next
+ * resume finds it claimed and does NOT re-apply (no path applies twice).
+ */
+export async function claimWriteback(id: string): Promise<{ claimed: boolean }> {
+  const dialect = getDialect();
+  const extract =
+    getDatabaseType() === 'postgresql'
+      ? "metadata->>'writeback_apply_claimed'"
+      : "json_extract(metadata, '$.writeback_apply_claimed')";
+  try {
+    const result = await pool.query(
+      `UPDATE remote_agent_workflow_runs
+       SET metadata = ${dialect.jsonMerge('metadata', 2)}
+       WHERE id = $1 AND (${extract} IS NULL)`,
+      [id, JSON.stringify({ writeback_apply_claimed: true })]
+    );
+    return { claimed: (result.rowCount ?? 0) > 0 };
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, workflowRunId: id }, 'db.workflow_run_claim_writeback_failed');
+    throw new Error(`Failed to claim write-back apply: ${err.message}`);
+  }
+}
+
+/**
+ * Release a previously-claimed write-back apply (R2-F4) after the apply FAILED, so a
+ * subsequent `workflow resume` can re-claim and retry. Explicit-null so SQLite's
+ * json_patch removes the key (Postgres `||` sets JSON null); `claimWriteback`'s
+ * `IS NULL` check treats both as unclaimed. Best-effort — a failure here leaves the
+ * claim set (the volume is preserved regardless; the operator reconciles manually).
+ */
+export async function releaseWritebackClaim(id: string): Promise<void> {
+  const dialect = getDialect();
+  await pool.query(
+    `UPDATE remote_agent_workflow_runs
+     SET metadata = ${dialect.jsonMerge('metadata', 2)}
+     WHERE id = $1`,
+    [id, JSON.stringify({ writeback_apply_claimed: null })]
+  );
+}
+
 export type {
   DashboardWorkflowRun,
   ListDashboardRunsOptions,
