@@ -183,7 +183,7 @@ export function ensureBedrockProviderRegistered(
 ): Promise<void> {
   bedrockRegistrationPromise ??= registrar()
     .then(() => {
-      getLog().debug('pi.bedrock_provider_registered');
+      getLog().debug('pi.bedrock_provider_register_completed');
     })
     .catch((err: unknown) => {
       getLog().warn({ err }, 'pi.bedrock_provider_register_failed');

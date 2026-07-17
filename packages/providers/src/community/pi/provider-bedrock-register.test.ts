@@ -77,5 +77,5 @@ test('logs a DEBUG breadcrumb on successful registration', async () => {
   const registrar = mock(async () => undefined);
   await ensureBedrockProviderRegistered(registrar);
   expect(mockLogger.debug).toHaveBeenCalledTimes(1);
-  expect(mockLogger.debug.mock.calls[0][0]).toBe('pi.bedrock_provider_registered');
+  expect(mockLogger.debug.mock.calls[0][0]).toBe('pi.bedrock_provider_register_completed');
 });
