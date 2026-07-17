@@ -136,6 +136,25 @@ export async function abandonWorkflow(runId: string): Promise<WorkflowRun> {
     );
     throw new Error(`Failed to abandon workflow run ${runId}: ${err.message}`);
   }
+  // M2 — reclaim a container run's container + upper volume immediately, in the SHARED
+  // op so EVERY abandon surface (CLI, web API, chat, manage_run, Slack-cancel) frees the
+  // resources now rather than waiting for the scheduled reaper. Best-effort: the run is
+  // already cancelled, so a reclaim failure is logged (the reaper retries) — never thrown.
+  // Runs wherever the op executes (CLI/server), which is where docker is reachable.
+  if (
+    run.metadata?.isolation === 'container' &&
+    typeof run.metadata.isolation_env_id === 'string'
+  ) {
+    try {
+      // Lazy import: `cleanup-service` pulls the docker/isolation/git chain, which the
+      // operations module (and its lightweight tests) otherwise never need — load it
+      // only when a container run is actually abandoned.
+      const { reclaimContainerEnv } = await import('../services/cleanup-service');
+      await reclaimContainerEnv(run.metadata.isolation_env_id);
+    } catch (err) {
+      getLog().warn({ err, runId }, 'operations.workflow_abandon_container_reclaim_failed');
+    }
+  }
   return run;
 }
 
@@ -193,9 +212,10 @@ export async function approveWorkflow(
   let events: workflowDb.GateResolutionEvent[];
   if (isWriteBack) {
     // Engine-level container write-back gate (Phase C): record the approval so the
-    // resumed executor applies the overlay diff to the live root. `approval_response`
-    // is what the executor's write-back gate reads on resume. NO node_completed
-    // event — there is no DAG node behind this gate (its `nodeId` is synthetic).
+    // resumed executor applies the overlay diff to the live root. The gate discriminates
+    // on the gate's OWN `metadata.approval.resolved` (set here) — NOT the run-wide
+    // `approval_response`, which is kept only for backward-compat/telemetry (H1). NO
+    // node_completed event — there is no DAG node behind this gate (`nodeId` is synthetic).
     metadataPayload = {
       approval: { ...approval, resolved: 'approved' },
       approval_response: 'approved',

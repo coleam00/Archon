@@ -14209,6 +14209,107 @@ describe('executeDagWorkflow -- container write-back gate', () => {
     expect(store.completeWorkflowRun).not.toHaveBeenCalled();
   });
 
+  // A stateful store that accumulates metadata from updateWorkflowRun / pauseWorkflowRun,
+  // so an apply-throw test can inspect the FINAL run metadata — the exact input the CLI
+  // teardown's `hasUnresolvedWriteback` reads to decide preserve-vs-destroy.
+  function statefulGateStore(initialMeta: Record<string, unknown>): {
+    store: IWorkflowStore;
+    metadata: Record<string, unknown>;
+  } {
+    const metadata: Record<string, unknown> = { ...initialMeta };
+    const store = createMockStore();
+    store.getWorkflowRunStatus = mock(() => Promise.resolve('running' as const));
+    store.getWorkflowRun = mock(() => Promise.resolve(makeWorkflowRun('wb-run', { metadata })));
+    store.claimWriteback = mock(() => Promise.resolve({ claimed: true }));
+    store.updateWorkflowRun = mock(
+      (_id: string, updates: { metadata?: Record<string, unknown> }) => {
+        for (const [k, v] of Object.entries(updates.metadata ?? {})) {
+          if (v === null) delete metadata[k];
+          else metadata[k] = v;
+        }
+        return Promise.resolve();
+      }
+    );
+    return { store, metadata };
+  }
+
+  /** The predicate the CLI teardown uses to PRESERVE the volume (mirror of hasUnresolvedWriteback). */
+  const wouldPreserve = (m: Record<string, unknown>): boolean =>
+    m.pending_writeback !== undefined && m.writeback_resolved !== true;
+
+  async function runGateWithStore(
+    store: IWorkflowStore,
+    backend: ReturnType<typeof makeWritebackBackend>,
+    writeBack: 'approve' | 'auto'
+  ): Promise<void> {
+    await executeDagWorkflow(
+      createMockDeps(store),
+      createMockPlatform(),
+      'conv-wb',
+      wbTestDir,
+      { name: 'wb', nodes: [{ id: 'a', bash: 'echo hi' }] },
+      makeWorkflowRun('wb-run'),
+      'claude',
+      undefined,
+      join(wbTestDir, 'artifacts'),
+      join(wbTestDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      new Map([['a', 'out']]),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      CONTAINER_EXEC,
+      { envId: 'env-x', writeBack, backend }
+    );
+  }
+
+  // N1/item-2 — an apply-throw in APPROVE mode leaves the run with pending_writeback set
+  // and unresolved, so the teardown PRESERVES the volume (never destroy the only copy).
+  it('apply-throw in approve mode leaves an unresolved write-back (teardown preserves)', async () => {
+    const { store, metadata } = statefulGateStore({
+      pending_writeback: { envId: 'env-x' },
+      approval: wbApproval('approved'),
+    });
+    const backend = makeWritebackBackend({
+      applyChanges: mock(async () => {
+        throw new Error('cp: read-only file system');
+      }),
+    });
+    await expect(runGateWithStore(store, backend, 'approve')).rejects.toThrow(/read-only/);
+    expect(wouldPreserve(metadata)).toBe(true);
+  });
+
+  // N1 — an apply-throw in AUTO mode must ALSO leave pending_writeback set (auto sets the
+  // preserve marker BEFORE mutating the live root), so the teardown preserves the volume.
+  it('apply-throw in auto mode sets the preserve marker (teardown preserves)', async () => {
+    const { store, metadata } = statefulGateStore({}); // fresh: no pending_writeback yet
+    const backend = makeWritebackBackend({
+      finalize: mock(async () => ({
+        requiresApproval: true,
+        changeSummary: {
+          added: ['x.md'],
+          modified: [],
+          deleted: [],
+          symlinks: [],
+          skipped: [],
+          totalCount: 1,
+          truncated: false,
+        },
+      })),
+      applyChanges: mock(async () => {
+        throw new Error('cp: read-only file system');
+      }),
+    });
+    await expect(runGateWithStore(store, backend, 'auto')).rejects.toThrow(/read-only/);
+    expect(metadata.pending_writeback).toBeDefined(); // marker set before the throw
+    expect(wouldPreserve(metadata)).toBe(true);
+  });
+
   it('resume after reject → discards overlay (live root untouched), completes', async () => {
     const backend = makeWritebackBackend();
     const store = await runGate({

@@ -39,7 +39,6 @@ import { join } from 'node:path';
 import { mkdirSync, openSync, closeSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { createWorkflowDeps } from '@archon/core/workflows/store-adapter';
-import { reclaimContainerEnv } from '@archon/core/services/cleanup-service';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { resolveWorkflowName } from '@archon/workflows/router';
 import { executeWorkflow, hydrateResumableRun } from '@archon/workflows/executor';
@@ -2317,11 +2316,13 @@ export async function workflowAbandonCommand(
   json?: boolean,
   cwd?: string
 ): Promise<void> {
+  // The container reclaim (M2) now lives in the shared `abandonWorkflow` op, so EVERY
+  // surface reclaims — the CLI just reports the cancellation. Keeps `--json` a clean
+  // one-line contract (no reclaim text before the payload).
   if (json) {
     try {
       const resolvedId = await resolveRunIdArg(runId, cwd);
       const run = await abandonWorkflow(resolvedId);
-      const reclaim = await reclaimAbandonedContainer(run);
       console.log(
         JSON.stringify(
           {
@@ -2330,10 +2331,6 @@ export async function workflowAbandonCommand(
             action: 'abandon',
             status: 'cancelled',
             workflowName: run.workflow_name,
-            // Fold the container reclaim into the structured payload (R2-F2) — never
-            // print human text before the JSON, which would corrupt the one-line contract.
-            ...(reclaim.attempted ? { containerReclaimed: reclaim.reclaimed } : {}),
-            ...(reclaim.error ? { containerReclaimError: reclaim.error } : {}),
           },
           null,
           2
@@ -2347,49 +2344,8 @@ export async function workflowAbandonCommand(
 
   const resolvedId = await resolveRunIdArg(runId, cwd);
   const run = await abandonWorkflow(resolvedId);
-  const reclaim = await reclaimAbandonedContainer(run);
   console.log(`Abandoned workflow run: ${resolvedId}`);
   console.log(`Workflow: ${run.workflow_name}`);
-  if (reclaim.attempted && reclaim.reclaimed) {
-    console.log('Container and overlay volume removed.');
-  } else if (reclaim.attempted && reclaim.error) {
-    console.error(
-      `\nWARNING: could not remove the isolation container/volume for the abandoned run: ${reclaim.error}\n` +
-        'Reclaim it via `bun run cli isolation cleanup` or ' +
-        '`docker ps -a --filter label=diy.archon.managed=true`.'
-    );
-  }
-}
-
-/**
- * Outcome of reclaiming an abandoned run's container (R2-F2 — returned, not printed,
- * so `--json` mode can fold it into the structured payload). `attempted` is false
- * for non-container runs (nothing to reclaim).
- */
-interface ContainerReclaimResult {
-  attempted: boolean;
-  reclaimed: boolean;
-  error?: string;
-}
-
-/**
- * Reclaim a container run's container + upper volume immediately on abandon (M2) —
- * a paused container run keeps its suspended container, so abandoning it must free
- * those resources now rather than waiting for the scheduled reaper. Best-effort:
- * a destroy failure is RETURNED (the caller decides how to surface it) but never
- * throws (the run is already cancelled; the reaper will retry). No-op for non-container runs.
- */
-async function reclaimAbandonedContainer(run: WorkflowRun): Promise<ContainerReclaimResult> {
-  if (run.metadata?.isolation !== 'container') return { attempted: false, reclaimed: false };
-  const envId = run.metadata.isolation_env_id;
-  if (typeof envId !== 'string') return { attempted: false, reclaimed: false };
-  try {
-    await reclaimContainerEnv(envId);
-    return { attempted: true, reclaimed: true };
-  } catch (err) {
-    getLog().warn({ err, runId: run.id }, 'cli.abandon_container_reclaim_failed');
-    return { attempted: true, reclaimed: false, error: (err as Error).message };
-  }
 }
 
 /**

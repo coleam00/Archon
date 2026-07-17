@@ -36,6 +36,13 @@ mock.module('../db/workflow-node-sessions', () => ({
   deleteWorkflowNodeSessions: mockDeleteWorkflowNodeSessions,
 }));
 
+// abandonWorkflow lazily imports cleanup-service to reclaim a container run's
+// resources (M2). Mock it so the dynamic import doesn't pull the docker chain.
+const mockReclaimContainerEnv = mock(() => Promise.resolve());
+mock.module('../services/cleanup-service', () => ({
+  reclaimContainerEnv: mockReclaimContainerEnv,
+}));
+
 const mockLogger = {
   fatal: mock(() => undefined),
   error: mock(() => undefined),
@@ -657,12 +664,46 @@ describe('abandonWorkflow', () => {
   beforeEach(() => {
     mockGetWorkflowRun.mockClear();
     mockCancelWorkflowRun.mockClear();
+    mockReclaimContainerEnv.mockClear();
+    mockReclaimContainerEnv.mockImplementation(() => Promise.resolve());
   });
 
   test('cancels a non-terminal run', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'running' }));
 
     const run = await abandonWorkflow('run-1');
+    expect(run.id).toBe('run-1');
+    expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1');
+  });
+
+  // M2 — abandoning a CONTAINER run reclaims its container + volume in the SHARED op
+  // (so web/chat/manage_run/Slack, not just the CLI, free the resources immediately).
+  test('reclaims a container run’s env on abandon', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(
+      makePausedRun({
+        status: 'paused',
+        metadata: { isolation: 'container', isolation_env_id: 'env-9' },
+      })
+    );
+    await abandonWorkflow('run-1');
+    expect(mockReclaimContainerEnv).toHaveBeenCalledWith('env-9');
+  });
+
+  test('does not reclaim for a non-container run', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'running' }));
+    await abandonWorkflow('run-1');
+    expect(mockReclaimContainerEnv).not.toHaveBeenCalled();
+  });
+
+  test('a reclaim failure does not fail the abandon (best-effort)', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(
+      makePausedRun({
+        status: 'paused',
+        metadata: { isolation: 'container', isolation_env_id: 'env-9' },
+      })
+    );
+    mockReclaimContainerEnv.mockImplementationOnce(() => Promise.reject(new Error('docker down')));
+    const run = await abandonWorkflow('run-1'); // resolves despite the reclaim throw
     expect(run.id).toBe('run-1');
     expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1');
   });

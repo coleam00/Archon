@@ -5689,8 +5689,12 @@ async function runContainerWriteBackGate(
     | { envId: string; summary?: OverlayChangeSummary }
     | undefined;
   // Idempotent re-entry: a resume after the decision already applied/discarded on a
-  // prior invocation just completes (L2 — never re-pause a resolved gate).
-  if (meta.writeback_resolved === true) return 'applied';
+  // prior invocation just completes (L2 — never re-pause a resolved gate). Return the
+  // HONEST outcome (`writeback_outcome`) so a re-entered DISCARDED run isn't mislabeled
+  // as applied.
+  if (meta.writeback_resolved === true) {
+    return meta.writeback_outcome === 'discarded' ? 'discarded' : 'applied';
+  }
 
   const rawApproval = meta.approval;
   const approval = isApprovalContext(rawApproval) ? rawApproval : undefined;
@@ -5717,7 +5721,9 @@ async function runContainerWriteBackGate(
       if (!claimed) {
         getLog().warn({ runId }, 'dag.writeback_apply_already_claimed');
         await deps.store
-          .updateWorkflowRun(runId, { metadata: { writeback_resolved: true } })
+          .updateWorkflowRun(runId, {
+            metadata: { writeback_resolved: true, writeback_outcome: 'applied' },
+          })
           .catch(() => undefined);
         return 'applied';
       }
@@ -5730,7 +5736,9 @@ async function runContainerWriteBackGate(
         });
         throw applyErr;
       }
-      await deps.store.updateWorkflowRun(runId, { metadata: { writeback_resolved: true } });
+      await deps.store.updateWorkflowRun(runId, {
+        metadata: { writeback_resolved: true, writeback_outcome: 'applied' },
+      });
       emitContainerLifecycleEvent(
         deps,
         runId,
@@ -5753,7 +5761,9 @@ async function runContainerWriteBackGate(
     }
     if (approval.resolved === 'rejected') {
       await containerCtx.backend.discardChanges(containerCtx.envId);
-      await deps.store.updateWorkflowRun(runId, { metadata: { writeback_resolved: true } });
+      await deps.store.updateWorkflowRun(runId, {
+        metadata: { writeback_resolved: true, writeback_outcome: 'discarded' },
+      });
       emitContainerLifecycleEvent(deps, runId, 'writeback_discarded', 'writeback_discarded');
       await safeSendMessage(
         platform,
@@ -5790,7 +5800,20 @@ async function runContainerWriteBackGate(
 
   // `auto` policy: apply without pausing (logged). For unattended workflows.
   if (containerCtx.writeBack === 'auto') {
+    // N1 — set the `pending_writeback` preserve marker BEFORE mutating the live root,
+    // even in auto mode (which never pauses). If applyChanges throws partway, the run
+    // fails with the marker set + unresolved, so the teardown PRESERVES the volume
+    // (the un-applied remainder is recoverable) instead of destroying it. Cleared to
+    // resolved on success so normal teardown cleanup proceeds. (No claim CAS here:
+    // auto runs in one process; a resume of a failed auto run re-enters this first-
+    // arrival path and re-applies idempotently.)
+    await deps.store.updateWorkflowRun(runId, {
+      metadata: { pending_writeback: { envId: containerCtx.envId } },
+    });
     const applied = await containerCtx.backend.applyChanges(containerCtx.envId);
+    await deps.store.updateWorkflowRun(runId, {
+      metadata: { writeback_resolved: true, writeback_outcome: 'applied' },
+    });
     emitContainerLifecycleEvent(deps, runId, 'writeback_applied', 'writeback_applied', undefined, {
       files_applied: applied.filesApplied,
       files_deleted: applied.filesDeleted,

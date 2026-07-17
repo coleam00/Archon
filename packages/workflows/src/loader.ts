@@ -550,6 +550,42 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
       }
     }
 
+    // Parse workflow-level container policy (folder-project container backend).
+    // Same warn-and-ignore pattern as `worktree`. `enabled` pins the container
+    // backend on without `--container`; `write_back` ('approve' | 'auto') chooses
+    // whether the finished run's overlay diff pauses for review or applies directly.
+    let containerPolicy: { enabled?: boolean; write_back?: 'approve' | 'auto' } | undefined;
+    if (raw.container !== undefined) {
+      if (
+        typeof raw.container === 'object' &&
+        raw.container !== null &&
+        !Array.isArray(raw.container)
+      ) {
+        const rawContainer = raw.container as Record<string, unknown>;
+        const rawEnabled = rawContainer.enabled;
+        const rawWriteBack = rawContainer.write_back;
+        const policy: { enabled?: boolean; write_back?: 'approve' | 'auto' } = {};
+        if (typeof rawEnabled === 'boolean') {
+          policy.enabled = rawEnabled;
+        } else if (rawEnabled !== undefined) {
+          getLog().warn({ filename, value: rawEnabled }, 'invalid_container_enabled_value_ignored');
+        }
+        if (rawWriteBack === 'approve' || rawWriteBack === 'auto') {
+          policy.write_back = rawWriteBack;
+        } else if (rawWriteBack !== undefined) {
+          getLog().warn(
+            { filename, value: rawWriteBack },
+            'invalid_container_write_back_value_ignored'
+          );
+        }
+        if (policy.enabled !== undefined || policy.write_back !== undefined) {
+          containerPolicy = policy;
+        }
+      } else {
+        getLog().warn({ filename, value: raw.container }, 'invalid_container_block_ignored');
+      }
+    }
+
     // Parse mutates_checkout — boolean, omitted means true (run the path-lock guard).
     // Same parse/warn pattern as `interactive` (invalid non-boolean values are dropped).
     // When false, the executor skips the path-lock guard and allows concurrent runs on the same checkout.
@@ -684,6 +720,7 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
         ...(workflowPersistSessions ? { persist_sessions: true } : {}),
         nodes: dagNodes,
         ...(worktreePolicy ? { worktree: worktreePolicy } : {}),
+        ...(containerPolicy ? { container: containerPolicy } : {}),
         ...(tags !== undefined ? { tags } : {}),
         ...(requires !== undefined ? { requires } : {}),
       },
