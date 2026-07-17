@@ -344,14 +344,14 @@ describe('registry', () => {
       expect(opencodeEntries).toHaveLength(1);
     });
 
-    test('declares capabilities (sessionResume, mcp, structuredOutput, envInjection, hooks, skills, agents, toolRestrictions supported; effort/thinking off because opencode.json owns those)', () => {
+    test('declares capabilities (sessionResume, mcp, structuredOutput, envInjection, skills, agents, toolRestrictions supported; hooks off because nodeConfig.hooks has no translation site; effort/thinking off because opencode.json owns those)', () => {
       registerOpencodeProvider();
       const caps = getProviderCapabilities('opencode');
       expect(caps.sessionResume).toBe(true);
       expect(caps.mcp).toBe(true);
       expect(caps.structuredOutput).toBe('enforced');
       expect(caps.envInjection).toBe(true);
-      expect(caps.hooks).toBe(true);
+      expect(caps.hooks).toBe(false);
       expect(caps.skills).toBe(true);
       expect(caps.agents).toBe(true);
       expect(caps.toolRestrictions).toBe(true);

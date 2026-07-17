@@ -9,6 +9,7 @@
         "@opencode-ai/sdk": "^1.17.3",
       },
       "devDependencies": {
+        "@archon/providers": "workspace:*",
         "@eslint/js": "^9.39.1",
         "@types/bun": "latest",
         "bun-types": "^1.3.5",
