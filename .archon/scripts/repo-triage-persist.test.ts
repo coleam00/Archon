@@ -107,6 +107,26 @@ describe('repo-triage-persist', () => {
     expect(result.onDiskRaw).toBe(seed);
   });
 
+  test('delimiter block that is a JSON array (not an object) is rejected, state intact', async () => {
+    const seed = '{"version": 1, "keep": "me"}\n';
+    const input = ['ARCHON_STATE_JSON_BEGIN', '[1, 2, 3]', 'ARCHON_STATE_JSON_END'].join('\n');
+    const result = await runPersist(input, TARGET, seed);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('not a JSON object');
+    // The isPlainObject guard blocks the write, so prior state is untouched.
+    expect(result.onDiskRaw).toBe(seed);
+  });
+
+  test('bare-JSON fallback takes the FIRST balanced object (documented first-match limitation)', async () => {
+    // No delimiters, so Tier 2 runs. extractFirstBalancedJsonObject returns the
+    // first balanced {...} from the first `{`, so a leading JSON blob wins over a
+    // later one — the reason the helper is named "first", not "largest".
+    const input = 'Prior config was {"stale": true}. New state:\n{"version": 5, "real": true}';
+    const result = await runPersist(input);
+    expect(result.exitCode).toBe(0);
+    expect(result.written).toEqual({ stale: true });
+  });
+
   test('rejects a --target outside .archon/state/', async () => {
     const result = await runPersist(
       'ARCHON_STATE_JSON_BEGIN\n{"x":1}\nARCHON_STATE_JSON_END',

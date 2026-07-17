@@ -10,15 +10,20 @@
  * Usage:
  *   <ai-node-output> | bun .archon/scripts/repo-triage-persist.ts --target .archon/state/triage-state.json
  *
- * State extraction handles two formats (same contract as maintainer-standup-persist):
+ * State extraction handles two formats. Tier 1 (the delimited markers) matches
+ * maintainer-standup-persist's contract; Tier 2 (the bare-JSON fallback) is an
+ * extra recovery path this script adds for Pi/Minimax output that ignores the
+ * delimiter directive:
  *
  *   Preferred — delimited markers (one line each, anchored):
  *     ARCHON_STATE_JSON_BEGIN
  *     {...state json...}
  *     ARCHON_STATE_JSON_END
  *
- *   Fallback — a bare JSON object (what Pi/Minimax tends to emit when it ignores
- *   the delimiter directive): the largest brace-balanced object in the output.
+ *   Fallback — a bare JSON object: the first brace-balanced object in the output.
+ *
+ * BOTH tiers require a plain JSON object; an array/string/number is rejected so a
+ * malformed emission can never atomically overwrite the state file with junk.
  *
  * `--target` MUST resolve under `<cwd>/.archon/state/` — a prompt can't redirect
  * this to write arbitrary files. Exits non-zero (leaving prior state intact) on
@@ -77,11 +82,21 @@ if (beginMatches.length > 0 && endMatches.length > 0) {
     const lastBegin = beginsBeforeEnd[beginsBeforeEnd.length - 1];
     const stateText = raw.slice(lastBegin.index! + lastBegin[0].length, lastEndIdx).trim();
     try {
-      state = JSON.parse(stateText) as State;
-      source = 'delimiter';
-      if (beginMatches.length > 1) {
+      const parsed: unknown = JSON.parse(stateText);
+      if (isPlainObject(parsed)) {
+        state = parsed;
+        source = 'delimiter';
+        if (beginMatches.length > 1) {
+          process.stderr.write(
+            `WARN: ${beginMatches.length} ARCHON_STATE_JSON_BEGIN markers found; used the last complete pair.\n`,
+          );
+        }
+      } else {
+        // A delimited array/string/number is not valid state — reject it rather
+        // than atomically overwrite the file (the fallback path already guards
+        // this; the delimiter path must too).
         process.stderr.write(
-          `WARN: ${beginMatches.length} ARCHON_STATE_JSON_BEGIN markers found; used the last complete pair.\n`,
+          `Delimiter block parsed but is not a JSON object (got ${Array.isArray(parsed) ? 'array' : typeof parsed}); ignoring.\n`,
         );
       }
     } catch (err) {
@@ -100,12 +115,12 @@ if (beginMatches.length > 0 && endMatches.length > 0) {
 
 // ── Tier 2: bare-JSON fallback (largest brace-balanced object) ──
 if (state === null) {
-  const candidate = extractLargestJsonObject(raw);
+  const candidate = extractFirstBalancedJsonObject(raw);
   if (candidate !== null) {
     try {
-      const parsed = JSON.parse(candidate) as unknown;
-      if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
-        state = parsed as State;
+      const parsed: unknown = JSON.parse(candidate);
+      if (isPlainObject(parsed)) {
+        state = parsed;
         source = 'bare-json';
         process.stderr.write(
           'State output used bare-JSON format (delimiter contract not followed); recovered via fallback.\n',
@@ -143,14 +158,20 @@ process.stdout.write(
   JSON.stringify({ target, source, bytes: serialized.length }) + '\n',
 );
 
+/** A plain (non-null, non-array) JSON object — the only valid state shape. */
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
 /**
- * Return the substring of the largest brace-balanced `{...}` region in `text`,
- * or null if none. Scans for the first `{`, then walks matching braces while
- * ignoring braces inside JSON string literals (respecting `\` escapes). This is
- * more robust than `slice(indexOf('{'))` when the model appends trailing prose
- * after the JSON.
+ * Return the substring of the FIRST brace-balanced `{...}` region in `text`,
+ * starting at the first `{`, or null if none. Walks matching braces while
+ * ignoring braces inside JSON string literals (respecting `\` escapes). More
+ * robust than `slice(indexOf('{'))` when the model appends trailing prose after
+ * the JSON — but note it recovers the first balanced object, not the largest, so
+ * leading prose that itself contains `{...}` would win over a later real block.
  */
-function extractLargestJsonObject(text: string): string | null {
+function extractFirstBalancedJsonObject(text: string): string | null {
   const start = text.indexOf('{');
   if (start === -1) return null;
   let depth = 0;
