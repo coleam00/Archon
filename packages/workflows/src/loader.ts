@@ -10,6 +10,7 @@ import {
   isCancelNode,
   isScriptNode,
   isIncludeNode,
+  isWorkflowNode,
   isPersistableNode,
 } from './schemas';
 import { createLogger } from '@archon/paths';
@@ -25,6 +26,7 @@ import {
   LOOP_NODE_AI_FIELDS,
   LOOP_GROUP_NODE_AI_FIELDS,
   INCLUDE_NODE_IGNORED_FIELDS,
+  WORKFLOW_NODE_IGNORED_FIELDS,
   effortLevelSchema,
   thinkingConfigSchema,
   sandboxSettingsSchema,
@@ -119,6 +121,8 @@ function parseDagNode(raw: unknown, index: number, errors: string[]): DagNode | 
     nonAiNode = { type: 'cancel', fields: BASH_NODE_AI_FIELDS };
   } else if (isIncludeNode(node)) {
     nonAiNode = { type: 'include', fields: INCLUDE_NODE_IGNORED_FIELDS };
+  } else if (isWorkflowNode(node)) {
+    nonAiNode = { type: 'workflow', fields: WORKFLOW_NODE_IGNORED_FIELDS };
   } else if (isApprovalNode(node)) {
     nonAiNode = { type: 'approval', fields: BASH_NODE_AI_FIELDS };
   } else if (isLoopNode(node)) {
@@ -214,10 +218,10 @@ export function validateDagStructure(
   }
 
   // Check $nodeId.output references across EVERY field the executor substitutes at
-  // runtime: when:, and the eight text surfaces that flow through
-  // substituteNodeOutputRefs (prompt, bash, script, approval.message, cancel,
-  // loop.prompt, loop.until_bash, loop_group.until_bash). A dangling ref in any of
-  // them silently substitutes to '' at run time, so all must be validated here.
+  // runtime: when:, and the text surfaces that flow through substituteNodeOutputRefs
+  // (prompt, bash, script, approval.message, cancel, loop.prompt, loop.until_bash,
+  // loop_group.until_bash, workflow.input). A dangling ref in any of them silently
+  // substitutes to '' at run time, so all must be validated here.
   //
   // KEEP IN SYNC (three ref-surface enumerations must agree):
   //   1. this scan (loader validateDagStructure) — validates refs,
@@ -242,6 +246,9 @@ export function validateDagStructure(
     }
     if (isBashNode(node)) sources.push(node.bash);
     if (isScriptNode(node)) sources.push(node.script);
+    // workflow.input is a live ref surface (a data string), scanned verbatim like
+    // bash/script — not prose, so no markdown stripping.
+    if (isWorkflowNode(node) && node.input) sources.push(node.input);
     if (isCancelNode(node)) sources.push(node.cancel);
     if (isApprovalNode(node)) sources.push(node.approval.message);
     if (isLoopNode(node)) {
@@ -288,6 +295,13 @@ export function validateDagStructure(
       const includeInBody = node.loop_group.nodes.find(isIncludeNode);
       if (includeInBody) {
         return `loop_group '${node.id}' body: 'include' is not supported inside a loop_group body`;
+      }
+      // `workflow:` (sub-run) inside a loop_group body is rejected in slice 1 (bounds
+      // the interaction surface — see the plan's NOT Building). A sub-run per
+      // iteration needs the fan-out semantics deferred to slice 2.
+      const workflowInBody = node.loop_group.nodes.find(isWorkflowNode);
+      if (workflowInBody) {
+        return `loop_group '${node.id}' body: 'workflow' (sub-run) is not supported inside a loop_group body`;
       }
       const scopeIds = new Set([...(enclosingIds ?? []), ...ids]);
       const bodyError = validateDagStructure(node.loop_group.nodes, scopeIds);

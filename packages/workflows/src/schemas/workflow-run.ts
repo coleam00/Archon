@@ -121,6 +121,14 @@ export const workflowRunSchema = z.object({
   last_activity_at: z.date().nullable(),
   working_path: z.string().nullable(),
   user_id: z.string().nullable(),
+  /**
+   * Run-tree parent (#2121 Phase 2). Set when this run is a `workflow:` sub-run
+   * spawned as one node of a parent run; null for top-level runs. Self-referential
+   * FK with ON DELETE SET NULL (a deleted parent orphans, never cascades). Paired
+   * with `metadata.parent_node_id` so the parent can re-find WHICH node's child on
+   * resume.
+   */
+  parent_run_id: z.string().nullable(),
 });
 
 export type WorkflowRun = z.infer<typeof workflowRunSchema>;
@@ -138,8 +146,21 @@ export interface ApprovalContext {
    *    overlay diff of a finished container run awaiting approve→apply / reject→
    *    discard. Reuses the approve/reject CAS machinery; the executor's resume
    *    path branches on the persisted `pending_writeback` marker, not this node.
+   *  - `child_workflow`   — a `workflow:` sub-run node (#2121 Phase 2) whose CHILD
+   *    run paused at its own gate. The parent pauses "blocked on child"; `nodeId`
+   *    is the parent's workflow node, `childRunId` the paused child. The reviewer
+   *    approves the CHILD by run id; when the child terminates, the parent_run_id
+   *    auto-resume hook re-enters the parent (executor.ts), which re-runs the
+   *    workflow node, finds the child terminal, and threads its output. NO
+   *    node_completed is written for the parent's node on this pause.
    */
-  type?: 'approval' | 'interactive_loop' | 'writeback';
+  type?: 'approval' | 'interactive_loop' | 'writeback' | 'child_workflow';
+  /**
+   * Child run id when `type === 'child_workflow'` — the specific paused sub-run
+   * the parent is blocked on. Read by the parent auto-resume guard so a DIFFERENT
+   * child of the same parent can't trigger the wrong re-entry.
+   */
+  childRunId?: string;
   /** Current loop iteration when paused (interactive loops only). */
   iteration?: number;
   /**
