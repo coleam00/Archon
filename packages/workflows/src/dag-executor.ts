@@ -681,6 +681,29 @@ export function substituteNodeOutputRefs(
 }
 
 /**
+ * Collect the static ids of every node in a loop_group body, recursing into nested
+ * loop_group bodies. This is the *typo detector* for `$LOOP_PREV.<id>.output.<field>`
+ * refs: an id that matches no node anywhere in the (possibly nested) body is a genuine
+ * typo, distinct from a real body id that merely has no prior-iteration output yet.
+ *
+ * The transitive set (not just the outer group's direct ids) is deliberate: nested
+ * loop_group bodies reuse the OUTER loop's prior-iteration snapshot, so a ref inside a
+ * nested body may legitimately name an inner-group node id (which resolves to '' at the
+ * outer granularity — see {@link applyLoopPrevToBodyNode}). Including descendants keeps
+ * such real-but-empty refs lenient while still catching ids that exist nowhere.
+ */
+function collectLoopBodyNodeIds(
+  nodes: readonly DagNode[],
+  into: Set<string> = new Set<string>()
+): Set<string> {
+  for (const n of nodes) {
+    into.add(n.id);
+    if (isLoopGroupNode(n)) collectLoopBodyNodeIds(n.loop_group.nodes, into);
+  }
+  return into;
+}
+
+/**
  * Resolve `$LOOP_PREV.<nodeId>.output` and `$LOOP_PREV.<nodeId>.output.<field>` references
  * against a loop_group body's *prior-iteration* node outputs.
  *
@@ -695,12 +718,21 @@ export function substituteNodeOutputRefs(
  * semantics (declared-schema typo / schemaless non-JSON / missing key → throws
  * `OutputRefError`, propagating to the consuming node's failure). The only value that
  * resolves to empty is an author-declared-optional field — or any ref on iteration 1.
+ *
+ * `knownBodyIds` (the static id set of the enclosing loop_group body, via
+ * {@link collectLoopBodyNodeIds}) turns a `.field` ref to a genuinely-unknown id into a
+ * loud `OutputRefError('unknown-node')` instead of a silent '' — the loop_group analog of
+ * the same fix at the `$node.output.field` seam (#2135/#2142). Only `.field`-form refs to
+ * an id absent from this set throw; a KNOWN id with no prior output (iteration 1 / skipped)
+ * and the whole-text `$LOOP_PREV.<id>.output` form both stay lenient (''). When
+ * `knownBodyIds` is undefined (raw callers with no static set) the seam stays fully lenient.
  */
 export function substituteLoopPrevRefs(
   prompt: string,
   loopPrevOutputs: Map<string, NodeOutput> | undefined,
   escapedForBash = false,
-  outputFileDir?: string
+  outputFileDir?: string,
+  knownBodyIds?: ReadonlySet<string>
 ): string {
   // Fast path: no refs to resolve. When refs ARE present but the map is empty/undefined
   // (iteration 1 — no prior iteration), we still run the replace so each ref resolves to
@@ -713,17 +745,26 @@ export function substituteLoopPrevRefs(
     (match, nodeId: string, field: string | undefined) => {
       const nodeOutput = loopPrevOutputs?.get(nodeId);
       if (!nodeOutput || nodeOutput.state === 'skipped' || nodeOutput.state === 'pending') {
-        // No prior-iteration output for this body node (iteration 1, or the node was
+        // A `.field` ref to an id that matches NO body node anywhere in the enclosing
+        // loop_group (a typo the loader can't see — it never scans `$LOOP_PREV.*` refs)
+        // fails the consuming node loudly, mirroring substituteNodeOutputRefs /
+        // resolveOutputRef. The static id set is required to make this call: the runtime
+        // `loopPrevOutputs` map is empty on iteration 1, so it alone cannot tell a typo
+        // from a legitimate first-pass absence.
+        if (field && knownBodyIds && !knownBodyIds.has(nodeId)) {
+          throw new OutputRefError(
+            nodeId,
+            field,
+            'unknown-node',
+            similarNodeIds(nodeId, knownBodyIds)
+          );
+        }
+        // No prior-iteration output for this KNOWN body node (iteration 1, or the node was
         // skipped / hasn't settled last iteration). Resolve to empty rather than
         // throwing — the author opted into a cross-iteration ref, and absence on the
-        // first pass (or after a skipped node) is expected.
-        //
-        // NOTE: unlike substituteNodeOutputRefs / resolveOutputRef, this seam does NOT
-        // yet fail loudly on a `.field` ref to a genuinely-unknown body node id (a typo
-        // that matches no body node on ANY iteration). Distinguishing that from the
-        // legitimate iteration-1 absence needs the static body-node-id set threaded in
-        // (complicated by nested loop_groups reusing the outer snapshot), which is out
-        // of scope for #2135's `$node.output.field` fix — tracked as #2142.
+        // first pass (or after a skipped node) is expected. The whole-text
+        // `$LOOP_PREV.<id>.output` form also stays lenient here, even for an unknown id,
+        // matching the long-documented lenient whole-text surface.
         getLog().debug({ nodeId, match }, 'loop_group_prev_ref_no_prior_output');
         return escapedForBash ? "''" : '';
       }
@@ -2834,6 +2875,13 @@ async function executeLoopGroupNode(
   // prefix composes across nested loop_groups: `<enclosing>.<groupId>.<bodyNodeId>`.
   const bodyStepNamePrefix = `${stepName}.`;
 
+  // Static (iteration-invariant) id set of every node in this group's body, including
+  // nested loop_group descendants — the typo detector for `$LOOP_PREV.<id>.output.<field>`
+  // refs (#2142). A `.field` ref to an id absent from this set fails the consuming node
+  // loudly; a known id with no prior-iteration output stays lenient (''). Computed once
+  // (the body shape is static) and threaded into every applyLoopPrevToBodyNode call.
+  const knownBodyIds = collectLoopBodyNodeIds(group.nodes);
+
   // Detect interactive loop resume (mirrors executeLoopNode).
   const rawApproval = workflowRun.metadata?.approval;
   const loopGateMeta = isApprovalContext(rawApproval) ? rawApproval : undefined;
@@ -2932,7 +2980,7 @@ async function executeLoopGroupNode(
     const prevSnapshot = loopPrevOutputs;
     const userInputForIter = isLoopResume && i === startIteration ? loopUserInput : '';
     const iterBodyNodes = group.nodes.map(n =>
-      applyLoopPrevToBodyNode(n, prevSnapshot, userInputForIter, logDir)
+      applyLoopPrevToBodyNode(n, prevSnapshot, userInputForIter, logDir, knownBodyIds)
     );
     // Re-layer from the (possibly substituted) body nodes — runLayers walks ctx.layers,
     // not ctx.nodes, so the layers must reference the substituted nodes to take effect.
@@ -3316,12 +3364,19 @@ async function executeLoopGroupNode(
  * Only prompt-bearing fields are substituted in v1; `when:` conditions are NOT (they use
  * evaluateCondition, which does not call substituteLoopPrevRefs). Body authors who need
  * cross-iteration gating should branch on prompt content, not `when:`.
+ *
+ * `knownBodyIds` is the enclosing loop_group's static body-id set (via
+ * {@link collectLoopBodyNodeIds}); it is threaded UNCHANGED into every
+ * substituteLoopPrevRefs call and into the nested-loop_group recursion so `$LOOP_PREV.*`
+ * refs are validated against the OUTER loop's body ids (whose snapshot they resolve
+ * against). Omitted by raw callers, which then skip the typo check.
  */
 export function applyLoopPrevToBodyNode(
   node: DagNode,
   loopPrevOutputs: Map<string, NodeOutput> | undefined,
   loopUserInput: string,
-  outputFileDir?: string
+  outputFileDir?: string,
+  knownBodyIds?: ReadonlySet<string>
 ): DagNode {
   // Substitute $LOOP_USER_INPUT (user free-text) and $LOOP_PREV.* refs.
   // Resolve $LOOP_PREV FIRST, then splice $LOOP_USER_INPUT — so user input containing a
@@ -3334,7 +3389,13 @@ export function applyLoopPrevToBodyNode(
   // cancel reasons are display text, mirroring their normal-path substitution) use the
   // raw values.
   const sub = (s: string, escapedForBash = false): string => {
-    const prevResolved = substituteLoopPrevRefs(s, loopPrevOutputs, escapedForBash, outputFileDir);
+    const prevResolved = substituteLoopPrevRefs(
+      s,
+      loopPrevOutputs,
+      escapedForBash,
+      outputFileDir,
+      knownBodyIds
+    );
     const userInputForField = escapedForBash ? shellQuote(loopUserInput) : loopUserInput;
     return prevResolved.replace(/\$LOOP_USER_INPUT/g, userInputForField);
   };
@@ -3356,7 +3417,10 @@ export function applyLoopPrevToBodyNode(
     // Nested loop_group: recurse into the body (each body node gets $LOOP_PREV resolved
     // against the OUTER loop's prior-iteration snapshot; inner-loop refs resolve at the
     // inner loop's own iteration granularity). The inner group's until_bash is likewise
-    // shell-bound and only ever substituted here for OUTER-loop refs.
+    // shell-bound and only ever substituted here for OUTER-loop refs. `knownBodyIds` is
+    // the OUTER group's transitive body-id set (includes this nested group's own ids),
+    // reused as-is so an inner-body ref to a real node stays lenient while a true typo
+    // still throws.
     return {
       ...node,
       loop_group: {
@@ -3365,7 +3429,7 @@ export function applyLoopPrevToBodyNode(
           ? { until_bash: sub(node.loop_group.until_bash, true) }
           : {}),
         nodes: node.loop_group.nodes.map(n =>
-          applyLoopPrevToBodyNode(n, loopPrevOutputs, loopUserInput, outputFileDir)
+          applyLoopPrevToBodyNode(n, loopPrevOutputs, loopUserInput, outputFileDir, knownBodyIds)
         ),
       },
     };

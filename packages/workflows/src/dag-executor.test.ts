@@ -11479,8 +11479,134 @@ describe('executeDagWorkflow -- loop_group node', () => {
 
   it('EDGE F: $LOOP_PREV.<id>.output.<field> on a missing prior node resolves to empty', () => {
     // The referenced node wasn't in the prior iteration (skipped/absent) → '' not a throw.
+    // Raw call (no knownBodyIds set) stays fully lenient — the typo check only engages when
+    // the static body-id set is threaded in via the executor path.
     const prev = new Map<string, NodeOutput>([['work', makeOutput('completed', 'ran', undefined)]]);
     expect(substituteLoopPrevRefs('other=[$LOOP_PREV.absent.output.field]', prev)).toBe('other=[]');
+  });
+
+  it('EDGE F (#2142): $LOOP_PREV.<typo>.output.<field> throws unknown-node when a body-id set is given', () => {
+    // Iteration-1 posture: no prior outputs yet. With the static body-id set threaded in,
+    // a `.field` ref to an id that matches NO body node is a typo → fail loudly; a `.field`
+    // ref to a KNOWN body id that simply has no prior output yet stays lenient ('').
+    const knownBodyIds = new Set(['grader', 'work']);
+    // Typo: `grrader` matches no body node → OutputRefError('unknown-node') + did-you-mean.
+    let caught: unknown;
+    try {
+      substituteLoopPrevRefs(
+        'score=$LOOP_PREV.grrader.output.score',
+        undefined,
+        false,
+        undefined,
+        knownBodyIds
+      );
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(OutputRefError);
+    expect((caught as OutputRefError).reason).toBe('unknown-node');
+    expect((caught as OutputRefError).message).toContain("'grader'"); // did-you-mean names the near miss
+
+    // Known body id with no prior-iteration output (iteration 1) → '' (legitimate absence).
+    expect(
+      substituteLoopPrevRefs(
+        'score=$LOOP_PREV.grader.output.score',
+        undefined,
+        false,
+        undefined,
+        knownBodyIds
+      )
+    ).toBe('score=');
+
+    // Whole-text `$LOOP_PREV.<id>.output` to an unknown id stays lenient (no throw), even
+    // with the set — mirrors substituteNodeOutputRefs' lenient whole-text surface.
+    expect(
+      substituteLoopPrevRefs(
+        'all=$LOOP_PREV.grrader.output',
+        undefined,
+        false,
+        undefined,
+        knownBodyIds
+      )
+    ).toBe('all=');
+
+    // Bash-escaped mode throws too (the typo would otherwise become an empty shell literal).
+    expect(() =>
+      substituteLoopPrevRefs(
+        'echo $LOOP_PREV.grrader.output.score',
+        undefined,
+        true,
+        undefined,
+        knownBodyIds
+      )
+    ).toThrow(OutputRefError);
+  });
+
+  it('EDGE F (#2142): applyLoopPrevToBodyNode threads the body-id set — typo throws, nested real id stays lenient', () => {
+    // The executor path builds the static body-id set (transitive across nested groups)
+    // and threads it through applyLoopPrevToBodyNode. Simulate iteration 1 (no prior
+    // outputs). Outer body = { review }; nested inner group `refine` has body node `polish`.
+    const knownBodyIds = new Set(['review', 'refine', 'polish']);
+
+    // A typo in a body prompt fails loudly.
+    expect(() =>
+      applyLoopPrevToBodyNode(
+        {
+          id: 'review',
+          prompt: 'act on $LOOP_PREV.reviw.output.verdict',
+          depends_on: [],
+        } as DagNode,
+        undefined,
+        '',
+        undefined,
+        knownBodyIds
+      )
+    ).toThrow(OutputRefError);
+
+    // A nested loop_group whose inner body references a REAL inner id (`polish`) resolves to
+    // '' at the outer granularity — no false-positive throw, because `polish` is in the set.
+    const nestedGroup = applyLoopPrevToBodyNode(
+      {
+        id: 'refine',
+        loop_group: {
+          until: 'DONE',
+          max_iterations: 2,
+          nodes: [
+            { id: 'polish', prompt: 'refine on $LOOP_PREV.polish.output.draft', depends_on: [] },
+          ],
+        },
+        depends_on: [],
+      } as DagNode,
+      undefined,
+      '',
+      undefined,
+      knownBodyIds
+    );
+    if (!('loop_group' in nestedGroup) || nestedGroup.loop_group === undefined)
+      throw new Error('expected loop_group node');
+    const polishNode = nestedGroup.loop_group.nodes[0];
+    expect('prompt' in polishNode && polishNode.prompt).toBe('refine on ');
+
+    // But a typo INSIDE the nested body (id in no body node) still throws through the recursion.
+    expect(() =>
+      applyLoopPrevToBodyNode(
+        {
+          id: 'refine',
+          loop_group: {
+            until: 'DONE',
+            max_iterations: 2,
+            nodes: [
+              { id: 'polish', prompt: 'refine on $LOOP_PREV.reviw.output.verdict', depends_on: [] },
+            ],
+          },
+          depends_on: [],
+        } as DagNode,
+        undefined,
+        '',
+        undefined,
+        knownBodyIds
+      )
+    ).toThrow(OutputRefError);
   });
 
   it('EDGE H: applyLoopPrevToBodyNode uses shell escaping only for shell-bound fields (unit)', () => {
