@@ -217,7 +217,14 @@ nodes:
       if (existsSync(reviewedPath)) {
         try {
           reviewed = JSON.parse(readFileSync(reviewedPath, 'utf8'));
-        } catch {
+        } catch (err) {
+          // Corrupt state is not silently reset: log before falling back so the
+          // wiped history leaves a diagnostic trace (unlike a bare catch, which
+          // would erase every recorded review with no signal).
+          console.error(
+            `record-review: reviewed-prs.json is corrupt (${(err as Error).message}); ` +
+              `starting from empty. Prior review markers are lost — restore from git if they mattered.`,
+          );
           reviewed = {};
         }
       }
