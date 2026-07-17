@@ -19,6 +19,8 @@ jobs:
       container: ${{ steps.filter.outputs.container }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: dorny/paths-filter@v3
         id: filter
         with:
@@ -26,8 +28,15 @@ jobs:
             container:
               - 'packages/isolation/**'
               - 'scripts/build-runner-image.sh'
+              # The smoke exercises the CLI --container/--folder dispatch + teardown
+              # and the Claude container-exec spawn, so changes there must trigger it.
+              - 'packages/cli/src/commands/workflow.ts'
+              - 'packages/providers/src/claude/container-*'
               - '.github/workflows/e2e-smoke.yml'
               - '.archon/workflows/test-workflows/e2e-container-smoke.yaml'
+              # Deliberately NOT packages/workflows/src/dag-executor.ts: it also
+              # runs container exec, but it churns on unrelated work and would make
+              # this gate near-unconditional. Accept the small coverage gap.
 
   # ─── Tier 1: Deterministic (no API keys needed) ────────────────────────
   e2e-deterministic:
@@ -61,6 +70,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
