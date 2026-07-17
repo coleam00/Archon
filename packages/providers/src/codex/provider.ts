@@ -326,7 +326,7 @@ function buildTurnOptions(requestOptions?: SendQueryOptions): {
 /**
  * Fold the request/node-level systemPrompt into the user prompt.
  *
- * The Codex SDK (verified at @openai/codex-sdk 0.144.4) exposes NO
+ * The Codex SDK (verified at @openai/codex-sdk 0.144.5) exposes NO
  * instructions/system-prompt channel on ThreadOptions or TurnOptions, so the
  * only delivery mechanism is prepending to the prompt string, separated by
  * the same `---` delimiter augmentPromptForJsonSchema uses. See issue #1837.
