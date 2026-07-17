@@ -18,6 +18,8 @@ import {
   workflowResetSessionsCommand,
   buildDetachedRunCmd,
   maybePrintTierNotice,
+  resolveContainerBackendConfig,
+  describeWorkflowPause,
 } from './workflow';
 
 const mockLogger = {
@@ -4854,5 +4856,75 @@ describe('maybePrintTierNotice', () => {
     await maybePrintTierNotice(workflow, '/cwd', 'user-1', false);
     expect(stderrSpy).not.toHaveBeenCalled();
     expect(markTierNoticeShown).not.toHaveBeenCalled();
+  });
+});
+
+describe('resolveContainerBackendConfig', () => {
+  it('applies defaults when config is absent', () => {
+    const cfg = resolveContainerBackendConfig(undefined);
+    expect(cfg).toEqual({
+      image: 'archon-runner:latest',
+      network: 'bridge',
+      memoryMb: 4096,
+      pidsLimit: 512,
+    });
+  });
+
+  it('passes through valid values', () => {
+    const cfg = resolveContainerBackendConfig({
+      image: '  my-runner:1  ',
+      network: 'none',
+      memoryMb: 2048,
+      pidsLimit: 256,
+    });
+    expect(cfg).toEqual({
+      image: 'my-runner:1',
+      network: 'none',
+      memoryMb: 2048,
+      pidsLimit: 256,
+    });
+  });
+
+  it('rejects a non bridge/none network (no silent --network host)', () => {
+    expect(() => resolveContainerBackendConfig({ network: 'host' })).toThrow(/bridge.*none/);
+  });
+
+  it('rejects a fractional memoryMb (docker --memory needs an integer)', () => {
+    expect(() => resolveContainerBackendConfig({ memoryMb: 512.5 })).toThrow(/positive integer/);
+  });
+
+  it('rejects a non-integer / non-positive pidsLimit', () => {
+    expect(() => resolveContainerBackendConfig({ pidsLimit: 10.5 })).toThrow(/positive integer/);
+    expect(() => resolveContainerBackendConfig({ pidsLimit: 0 })).toThrow(/positive integer/);
+  });
+});
+
+describe('describeWorkflowPause', () => {
+  it('flags a workflow-level interactive flag', () => {
+    const wf = makeTestWorkflow({
+      name: 'i',
+      interactive: true,
+      nodes: [{ id: 'a', prompt: 'hi' }],
+    });
+    expect(describeWorkflowPause(wf)).toBe('interactive: true');
+  });
+
+  it('flags an approval node by id', () => {
+    const wf = makeTestWorkflow({
+      name: 'a',
+      nodes: [
+        { id: 'think', prompt: 'hi' },
+        { id: 'gate', depends_on: ['think'], approval: { message: 'ok?' } },
+      ],
+    });
+    expect(describeWorkflowPause(wf)).toBe("approval node 'gate'");
+  });
+
+  it('returns undefined for a non-pausing workflow', () => {
+    const wf = makeTestWorkflow({
+      name: 'p',
+      nodes: [{ id: 'b', bash: 'echo hi' }],
+    });
+    expect(describeWorkflowPause(wf)).toBeUndefined();
   });
 });

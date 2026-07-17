@@ -64,6 +64,9 @@ import {
   substituteLoopPrevRefs,
   applyLoopPrevToBodyNode,
   executeDagWorkflow,
+  collectContainerIncompatibleProviders,
+  containerCommandName,
+  buildSubprocessDockerArgs,
 } from './dag-executor';
 import { writeNodeArtifact } from './artifacts-index';
 import { getWorkflowEventEmitter, type WorkflowEmitterEvent } from './event-emitter';
@@ -13871,5 +13874,119 @@ describe('executeDagWorkflow -- approval node inside an included block', () => {
     expect(ids).toContain('a__approve');
     expect(ids).toContain('b__approve');
     expect(new Set(ids).size).toBe(ids.length);
+  });
+});
+
+describe('containerCommandName', () => {
+  it('returns a bare command unchanged', () => {
+    expect(containerCommandName('bash')).toBe('bash');
+    expect(containerCommandName('bun')).toBe('bun');
+  });
+
+  it('strips a unix directory to the basename', () => {
+    expect(containerCommandName('/usr/local/bin/bash')).toBe('bash');
+  });
+
+  it('strips a Windows path + .exe (container is always Linux)', () => {
+    expect(containerCommandName('C:\\Program Files\\Git\\bin\\bash.exe')).toBe('bash');
+  });
+});
+
+describe('collectContainerIncompatibleProviders', () => {
+  const promptNode = (id: string, provider?: string): DagNode =>
+    ({ id, prompt: `do ${id}`, ...(provider ? { provider } : {}) }) as unknown as DagNode;
+  const bashNode = (id: string): DagNode => ({ id, bash: 'echo hi' }) as unknown as DagNode;
+
+  it('is empty when all AI nodes resolve to claude (containerExec: true)', () => {
+    const nodes = [promptNode('a'), promptNode('b', 'claude'), bashNode('c')];
+    const bad = collectContainerIncompatibleProviders(nodes, 'claude');
+    expect([...bad]).toEqual([]);
+  });
+
+  it('flags a node whose provider lacks containerExec (codex)', () => {
+    const nodes = [promptNode('a'), promptNode('b', 'codex')];
+    const bad = collectContainerIncompatibleProviders(nodes, 'claude');
+    expect([...bad]).toEqual(['codex']);
+  });
+
+  it('flags the workflow-level provider when a node does not override it', () => {
+    const nodes = [promptNode('a')];
+    const bad = collectContainerIncompatibleProviders(nodes, 'codex');
+    expect([...bad]).toEqual(['codex']);
+  });
+
+  it('ignores bash/script nodes (deterministic, no provider)', () => {
+    const nodes = [bashNode('a'), bashNode('b')];
+    const bad = collectContainerIncompatibleProviders(nodes, 'codex');
+    expect([...bad]).toEqual([]);
+  });
+
+  it('recurses loop_group bodies', () => {
+    const group = {
+      id: 'g',
+      loop_group: { max_iterations: 2, nodes: [promptNode('inner', 'codex')] },
+    } as unknown as DagNode;
+    const bad = collectContainerIncompatibleProviders([group], 'claude');
+    expect([...bad]).toEqual(['codex']);
+  });
+});
+
+describe('buildSubprocessDockerArgs — bash/script env isolation', () => {
+  const CTX = { kind: 'container' as const, containerId: 'cid-9' };
+
+  it('delivers the Archon-managed env via -e flags only and runs at the same cwd', () => {
+    const args = buildSubprocessDockerArgs(CTX, 'bash', ['-c', 'echo hi'], {
+      cwd: '/tmp/ops-client',
+      env: { ARTIFACTS_DIR: '/a', ANTHROPIC_API_KEY: 'sk', BASE_BRANCH: 'main' },
+    });
+    expect(args.slice(0, 2)).toEqual(['exec', '-w']);
+    expect(args[2]).toBe('/tmp/ops-client');
+    // Every managed var is delivered as an explicit -e flag.
+    expect(args).toContain('-e');
+    expect(args).toContain('ARTIFACTS_DIR=/a');
+    expect(args).toContain('ANTHROPIC_API_KEY=sk');
+    expect(args).toContain('BASE_BRANCH=main');
+    // Container id, then the normalized command, then the node args.
+    const cidIdx = args.indexOf('cid-9');
+    expect(cidIdx).toBeGreaterThan(-1);
+    expect(args[cidIdx + 1]).toBe('bash');
+    expect(args.slice(cidIdx + 2)).toEqual(['-c', 'echo hi']);
+  });
+
+  it('does NOT leak host process.env (only the passed env bag is forwarded)', () => {
+    const canary = 'ARCHON_DAGEXEC_CANARY';
+    process.env[canary] = 'leaked';
+    try {
+      const args = buildSubprocessDockerArgs(CTX, 'bash', ['-c', 'true'], {
+        cwd: '/w',
+        env: { ONLY_THIS: '1' },
+      });
+      const joined = args.join(' ');
+      expect(joined).toContain('ONLY_THIS=1');
+      expect(joined).not.toContain(canary);
+    } finally {
+      delete process.env[canary];
+    }
+  });
+
+  it('normalizes a host bash path to the in-container binary name', () => {
+    const args = buildSubprocessDockerArgs(CTX, '/usr/local/bin/bash', ['-c', 'x'], {
+      cwd: '/w',
+      env: {},
+    });
+    const cidIdx = args.indexOf('cid-9');
+    expect(args[cidIdx + 1]).toBe('bash');
+  });
+
+  it('never forwards denylisted keys (PATH/HOME) — a project env var must not clobber resolution', () => {
+    const args = buildSubprocessDockerArgs(CTX, 'bash', ['-c', 'true'], {
+      cwd: '/w',
+      env: { PATH: '/evil/bin', HOME: '/evil', PWD: '/x', KEEP: '1' },
+    });
+    const joined = args.join(' ');
+    expect(joined).not.toContain('PATH=/evil/bin');
+    expect(joined).not.toContain('HOME=/evil');
+    expect(joined).not.toContain('PWD=/x');
+    expect(joined).toContain('KEEP=1'); // non-denylisted keys still forwarded
   });
 });

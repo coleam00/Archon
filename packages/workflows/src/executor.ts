@@ -633,7 +633,14 @@ export async function executeWorkflow(
         codebase_id: codebaseId,
         user_message: userMessage,
         working_path: cwd,
-        metadata: issueContext ? { github_context: issueContext } : {},
+        // Record container isolation on the run itself so a later resume can
+        // detect it regardless of the current --container flag or the (destroyed)
+        // env row's status — Phase B container runs cannot be resumed (the overlay
+        // was discarded on teardown).
+        metadata: {
+          ...(issueContext ? { github_context: issueContext } : {}),
+          ...(execContext.kind === 'container' ? { isolation: 'container' } : {}),
+        },
         parent_conversation_id: parentConversationId,
         user_id: userId,
       });

@@ -269,6 +269,23 @@ recommendedWorkflows:
 
 **Worktree path behavior:** By default, every repo's worktrees live under `~/.archon/workspaces/<owner>/<repo>/worktrees/<branch>` — outside the repo, invisible to the IDE. Set `worktree.path` to opt in to a **repo-local** layout instead: worktrees are created at `<repoRoot>/<worktree.path>/<branch>` so they show up in the file tree and editor workspace. A common choice is `.worktrees`. Because worktrees now live inside the repository tree, you should add the directory to your `.gitignore` (Archon does not modify user-owned files). The configured path must be relative to the repo root; absolute paths and paths containing `..` segments fail loudly at worktree creation rather than silently falling back.
 
+### Container isolation (folder projects)
+
+**Folder projects** run in place by default. Opt into overlay-isolated Docker execution — writes land in an overlay upper layer, not the live root — with the `--container` CLI flag, the `container.enabled` config key, or a workflow's `container.enabled` policy. Valid on both global and repo `.archon/config.yaml` (repo overrides global per-field):
+
+```yaml
+container:
+  image: archon-runner:latest # runner image tag (default: archon-runner:latest)
+  network: bridge # 'bridge' (default) or 'none' (no egress)
+  memoryMb: 4096 # hard memory cap in MiB (positive integer)
+  pidsLimit: 512 # process cap / fork-bomb guard (positive integer)
+  enabled: false # run folder projects in a container without --container (default false)
+```
+
+**Selection precedence:** `--container` flag > workflow `container.enabled` > config `container.enabled` > `false`. (A workflow `enabled: false` hard-disables relative to config, but the flag still wins.)
+
+**Prerequisites:** Docker, and the runner image built once with `bun run build:runner-image` (tags `archon-runner:<version>` + `:latest`). Container mode is **folder-project-only** (a repo project errors), and is **rejected for pausing workflows** (approval/interactive) and for `--resume` — suspend/resume and the approval-gated write-back of the overlay diff land in a later phase; until then a container run's changes are discarded on teardown. `$ARTIFACTS_DIR` is not mounted into the container (see [variables](/reference/variables/)). For the security posture (capabilities, the `native` overlay mode caveat, env delivery), see `packages/isolation/docker/SECURITY.md`.
+
 ## Environment Variables
 
 Environment variables override all other configuration. They are organized by category below.

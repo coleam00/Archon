@@ -46,6 +46,7 @@ import type {
 } from '../types';
 import { parseClaudeConfig } from './config';
 import { CLAUDE_CAPABILITIES } from './capabilities';
+import { buildContainerSpawn } from './container-spawn';
 import { resolveClaudeBinaryPath } from './binary-resolver';
 import { buildArchonMcpServer, ARCHON_TOOL_SERVER } from './native-tools';
 import { createLogger } from '@archon/paths';
@@ -105,6 +106,49 @@ function buildSubprocessEnv(): NodeJS.ProcessEnv {
     authMode === 'global' ? 'using_global_auth' : 'using_explicit_tokens'
   );
   return { ...process.env };
+}
+
+/**
+ * Build the base env for a CONTAINER run. Deliberately does NOT spread
+ * `process.env` — that is the isolation boundary itself (the container must
+ * never inherit the host's environment). The Archon-managed bag
+ * (`requestOptions.env`: codebase env vars + per-user AI creds + GitHub token)
+ * is layered on top by the caller, and PATH/HOME/CLAUDE_CONFIG_DIR come from the
+ * runner image. Only a minimal, host-independent base is seeded here.
+ */
+function buildContainerBaseEnv(): NodeJS.ProcessEnv {
+  return { TERM: 'dumb' };
+}
+
+/**
+ * Resolve the environment delivered to the Claude subprocess for a request.
+ *
+ * This is the env-isolation ENFORCEMENT POINT. A container run
+ * (`execContext.kind === 'container'`) gets ONLY the Archon-managed bag
+ * (`requestOptions.env`: codebase env + per-user creds + GitHub token) layered
+ * over a minimal base — host `process.env` NEVER crosses the boundary. A host run
+ * inherits the (already-cleaned) host env exactly as before. Exported so the
+ * invariant can be unit-tested with a `process.env` canary.
+ */
+export function buildRequestSubprocessEnv(
+  requestOptions: SendQueryOptions | undefined
+): NodeJS.ProcessEnv {
+  const isContainerRun = requestOptions?.execContext?.kind === 'container';
+  const subprocessEnv = isContainerRun ? buildContainerBaseEnv() : buildSubprocessEnv();
+  const env = requestOptions?.env ? { ...subprocessEnv, ...requestOptions.env } : subprocessEnv;
+  // CLAUDE_API_KEY is Archon's variable name; the Claude Code CLI only reads
+  // ANTHROPIC_API_KEY, so mirror it or solo .env installs never authenticate
+  // (delivery.ts sets both vars on the per-user api_key path). Guarded on the
+  // MERGED env, not process.env: a per-request CLAUDE_CODE_OAUTH_TOKEN (per-user
+  // subscription delivered via requestOptions.env) must stay authoritative — the
+  // CLI prefers ANTHROPIC_API_KEY over the OAuth token, so injecting the install
+  // key alongside it would silently rebill the run. Truthiness is intentional:
+  // empty string = missing credential. Never clobbers an explicit ANTHROPIC_API_KEY.
+  if (env.CLAUDE_API_KEY && !env.ANTHROPIC_API_KEY && !env.CLAUDE_CODE_OAUTH_TOKEN) {
+    env.ANTHROPIC_API_KEY = env.CLAUDE_API_KEY;
+    getLog().debug('claude.api_key_mirrored');
+  }
+  return env;
 }
 
 /** Max retries for transient subprocess failures */
@@ -578,12 +622,29 @@ function buildBaseClaudeOptions(
   const isJsExecutable = shouldPassNoEnvFile(cliPath);
   getLog().debug({ cliPath: cliPath ?? null, isJsExecutable }, 'claude.subprocess_env_file_flag');
 
+  // Container execution: the SDK runs Claude via our `docker exec` spawn hook
+  // instead of a local process. When the hook is set the SDK bypasses ALL disk
+  // resolution, so `pathToClaudeCodeExecutable` and the host-only
+  // `--no-env-file` executableArg are intentionally omitted — the in-container
+  // binary is resolved from the runner image's PATH.
+  const containerExecContext =
+    requestOptions?.execContext?.kind === 'container' ? requestOptions.execContext : undefined;
+  const spawnOverride = containerExecContext
+    ? { spawnClaudeCodeProcess: buildContainerSpawn(containerExecContext) }
+    : {};
+
   return {
     cwd,
     // In compiled binaries, the resolver supplies an absolute executable path;
     // in dev mode it returns undefined and the SDK resolves from node_modules.
-    ...(cliPath !== undefined ? { pathToClaudeCodeExecutable: cliPath } : {}),
-    ...(isJsExecutable ? { executableArgs: ['--no-env-file'] } : {}),
+    // Both are skipped for container runs (spawn hook bypasses disk resolution).
+    ...(cliPath !== undefined && containerExecContext === undefined
+      ? { pathToClaudeCodeExecutable: cliPath }
+      : {}),
+    ...(isJsExecutable && containerExecContext === undefined
+      ? { executableArgs: ['--no-env-file'] }
+      : {}),
+    ...spawnOverride,
     env,
     model: requestOptions?.model ?? assistantDefaults.model,
     abortController: controller,
@@ -1140,24 +1201,21 @@ export class ClaudeProvider implements IAgentProvider {
     // Resolve Claude CLI path once before the retry loop. In binary mode this
     // throws immediately if neither env nor config supplies a valid path, so
     // the user gets a clean error rather than N retries of "Module not found".
-    const resolvedCliPath = await resolveClaudeBinaryPath(assistantDefaults.claudeBinaryPath);
+    // SKIP entirely for container runs: the SDK bypasses disk resolution when
+    // `spawnClaudeCodeProcess` is set (buildBaseClaudeOptions omits
+    // pathToClaudeCodeExecutable), and Claude is baked into the runner image — a
+    // compiled Archon binary has no host Claude, so resolving it here would throw
+    // and kill an otherwise-valid container run.
+    const isContainerRun = requestOptions?.execContext?.kind === 'container';
+    const resolvedCliPath = isContainerRun
+      ? undefined
+      : await resolveClaudeBinaryPath(assistantDefaults.claudeBinaryPath);
 
-    // Build subprocess env once (avoids re-logging auth mode per retry)
-    const subprocessEnv = buildSubprocessEnv();
-    const env = requestOptions?.env ? { ...subprocessEnv, ...requestOptions.env } : subprocessEnv;
-    // CLAUDE_API_KEY is Archon's variable name; the Claude Code CLI only reads
-    // ANTHROPIC_API_KEY, so mirror it or solo .env installs never authenticate
-    // (delivery.ts sets both vars on the per-user api_key path). Guarded on the
-    // MERGED env, not process.env: a per-request CLAUDE_CODE_OAUTH_TOKEN (per-user
-    // subscription delivered via requestOptions.env) must stay authoritative —
-    // the CLI prefers ANTHROPIC_API_KEY over the OAuth token, so injecting the
-    // install key alongside it would silently rebill the run. Truthiness is
-    // intentional: empty string = missing credential. Never clobbers an
-    // explicit ANTHROPIC_API_KEY.
-    if (env.CLAUDE_API_KEY && !env.ANTHROPIC_API_KEY && !env.CLAUDE_CODE_OAUTH_TOKEN) {
-      env.ANTHROPIC_API_KEY = env.CLAUDE_API_KEY;
-      getLog().debug('using_mirrored_api_key');
-    }
+    // Build subprocess env once (avoids re-logging auth mode per retry). A
+    // container run gets ONLY the Archon-managed bag + a minimal base — host
+    // process.env never crosses the boundary (the isolation invariant); the host
+    // path inherits the (already-cleaned) process env exactly as before.
+    const env = buildRequestSubprocessEnv(requestOptions);
 
     // Apply nodeConfig translation once (deterministic, not retry-dependent)
     // We need a throwaway Options to extract warnings from applyNodeConfig,

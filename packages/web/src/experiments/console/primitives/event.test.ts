@@ -416,3 +416,28 @@ describe('foldNodeRuns', () => {
     expect(runs[0]?.nodeId).toBe('plan');
   });
 });
+
+describe('toRunEvent — container lifecycle (DB rows)', () => {
+  test('container_created → system event with the container id', () => {
+    const e = toRunEvent(
+      raw({
+        event_type: 'container_created',
+        step_name: 'container',
+        data: { containerId: 'cabbc1f406f6abcdef' },
+      })
+    );
+    expect(e.kind).toBe('system');
+    if (e.kind === 'system') {
+      expect(e.label).toBe('Container created');
+      expect(e.detail).toBe('cabbc1f406f6'); // 12-char short id
+    }
+  });
+
+  test('container_destroyed → system event', () => {
+    const e = toRunEvent(
+      raw({ event_type: 'container_destroyed', step_name: 'container', data: {} })
+    );
+    expect(e.kind).toBe('system');
+    if (e.kind === 'system') expect(e.label).toBe('Container removed');
+  });
+});

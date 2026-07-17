@@ -9,7 +9,7 @@ sidebar:
   order: 11
 ---
 
-Many platforms are not a single repository — they're a **root directory holding N service repos** (`auth-service/`, `billing-service/`, …), often with no git at the root itself. Archon models this as a [folder project](/getting-started/concepts/#folder-projects-non-git-workspaces): register the root once, and every workflow and chat runs **in place** at that root, so the agent sees all contained repos at once.
+Many platforms are not a single repository — they're a **root directory holding N service repos** (`auth-service/`, `billing-service/`, …), often with no git at the root itself. Archon models this as a [folder project](/getting-started/concepts/#folder-projects-non-git-workspaces): register the root once, and every workflow and chat runs **in place** at that root by default, so the agent sees all contained repos at once. Opt into overlay-isolated container execution with `--container` (see [configuration](/reference/configuration/#container-isolation-folder-projects)).
 
 ## Register the root
 

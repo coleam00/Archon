@@ -329,6 +329,21 @@ export type ExecutionContext =
   | { kind: 'container'; containerId: string; execUser?: string };
 
 /**
+ * Env keys NEVER forwarded into a container via `docker exec -e` — the runner
+ * image sets these correctly and a host/project value would break in-container
+ * resolution (PATH must point at the in-container binaries; HOME must be the
+ * container user's home). Shared by BOTH container exec paths (the Claude spawn
+ * hook and the bash/script deterministic exec) so their env policy can't drift.
+ */
+export const CONTAINER_ENV_DENYLIST: ReadonlySet<string> = new Set([
+  'PATH',
+  'HOME',
+  'PWD',
+  'OLDPWD',
+  'SHLVL',
+]);
+
+/**
  * Universal request options accepted by all providers.
  * Provider-specific fields go through `nodeConfig` and `assistantConfig` in SendQueryOptions.
  */
@@ -512,6 +527,16 @@ export interface ProviderCapabilities {
   sandbox: boolean;
   /** Whether the provider can register in-process `NativeTool`s for a turn. */
   nativeTools: boolean;
+  /**
+   * Whether the provider can execute inside the folder-project container backend
+   * (`execContext.kind === 'container'`) — i.e. it knows how to spawn its CLI via
+   * `docker exec` rather than a local process. `true` for Claude
+   * (`spawnClaudeCodeProcess` hook). The engine's pre-dispatch fail-fast rejects
+   * a container run whose resolved provider has this `false`, so an unsupported
+   * provider can never silently downgrade to running on the host. Codex/Pi/
+   * community providers set `false` until they implement their in-container path.
+   */
+  containerExec: boolean;
 }
 
 /**

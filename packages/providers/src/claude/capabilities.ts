@@ -64,4 +64,5 @@ export const CLAUDE_CAPABILITIES: ProviderCapabilities = {
   fallbackModel: true,
   sandbox: true,
   nativeTools: true,
+  containerExec: true, // spawns the CLI in-container via spawnClaudeCodeProcess
 };

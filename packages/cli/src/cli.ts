@@ -278,6 +278,7 @@ async function main(): Promise<number> {
         'from-branch': { type: 'string' },
         'no-worktree': { type: 'boolean' },
         folder: { type: 'boolean' },
+        container: { type: 'boolean' },
         resume: { type: 'boolean' },
         spawn: { type: 'boolean' },
         quiet: { type: 'boolean', short: 'q' },
@@ -323,6 +324,7 @@ async function main(): Promise<number> {
     (values.from as string | undefined) ?? (values['from-branch'] as string | undefined);
   const noWorktree = values['no-worktree'] as boolean | undefined;
   const folderFlag = values.folder as boolean | undefined;
+  const containerFlag = values.container as boolean | undefined;
   const resumeFlag = values.resume as boolean | undefined;
   const spawnFlag = values.spawn as boolean | undefined;
   const jsonFlag = values.json as boolean | undefined;
@@ -555,6 +557,7 @@ async function main(): Promise<number> {
               fromBranch,
               noWorktree,
               folder: folderFlag,
+              container: containerFlag,
               resume: resumeFlag,
               quiet: values.quiet as boolean | undefined,
               verbose: values.verbose as boolean | undefined,

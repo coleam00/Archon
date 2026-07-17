@@ -182,6 +182,15 @@ export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
         timestamp: Date.now(),
       });
 
+    case 'container_lifecycle':
+      return JSON.stringify({
+        type: 'workflow_container_lifecycle',
+        runId: event.runId,
+        phase: event.phase,
+        ...(event.containerId !== undefined ? { containerId: event.containerId } : {}),
+        timestamp: Date.now(),
+      });
+
     default: {
       const exhaustiveCheck: never = event;
       getLog().warn(

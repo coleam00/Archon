@@ -121,7 +121,7 @@ archon workflow run assist --folder "List every service and its current branch"
 
 Folder projects differ from repo projects in a few honest ways:
 
-- **They run in place — no worktree isolation.** The agent's working directory is the folder root, so it sees *every* child folder and repo. Per-service git (branch, commit, PR) is the agent's job via `bash`/`gh`, not Archon's.
+- **They run in place by default — no worktree isolation.** The agent's working directory is the folder root, so it sees *every* child folder and repo. Per-service git (branch, commit, PR) is the agent's job via `bash`/`gh`, not Archon's. Pass `--container` (or set `container.enabled` in config) to instead run inside an overlay-isolated Docker container so writes don't touch the live root mid-run — see [configuration](/reference/configuration/#container-isolation-folder-projects).
 - `--branch` / `--from` are rejected (there's no worktree to create), and `/worktree` reports "not applicable".
 - Artifacts and logs live under `~/.archon/workspaces/_folder/<slug>/` instead of `<owner>/<repo>/`.
 - Registration is explicit — via `--folder` on the CLI, the `path` field when adding a project in the web console, or `/register-project` in chat (a non-git path is auto-detected as a folder).
