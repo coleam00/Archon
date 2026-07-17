@@ -33,7 +33,7 @@
     "@earendil-works/pi-ai": "^0.80.6",
     "@earendil-works/pi-coding-agent": "^0.80.6",
     "@opencode-ai/sdk": "^1.17.3",
-    "@openai/codex-sdk": "^0.144.4",
+    "@openai/codex-sdk": "^0.144.5",
     "@sinclair/typebox": "^0.34.41",
     "ajv": "^8.20.0",
     "jsonrepair": "^3.14.0",
