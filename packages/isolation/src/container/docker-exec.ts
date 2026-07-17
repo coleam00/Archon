@@ -87,7 +87,19 @@ export async function dockerPreflight(
     await runner(['version', '--format', '{{.Server.Version}}'], { timeout: 10_000 });
   } catch (err) {
     const detail = extractDockerError(err);
-    throw new Error(`Cannot connect to the Docker daemon. Is Docker running? (${detail})`);
+    // When Archon itself runs in Docker (the compose stack), the app image ships
+    // no `docker` CLI and the daemon socket is deliberately NOT mounted — so
+    // `--container` cannot work here. Say so instead of the misleading generic
+    // "is Docker running?" (see deployment/docker.md; the socket is root-equivalent).
+    const dockerizedHint =
+      process.env.ARCHON_DOCKER === 'true'
+        ? ' Archon is running inside Docker, which does not mount the Docker daemon socket — ' +
+          'the --container backend is unavailable in a dockerized deploy. Run Archon directly ' +
+          'on the host, or see deployment/docker.md.'
+        : '';
+    throw new Error(
+      `Cannot connect to the Docker daemon. Is Docker running?${dockerizedHint} (${detail})`
+    );
   }
 
   // 2. Runner image present locally. We never auto-pull — the image is built

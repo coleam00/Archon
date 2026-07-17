@@ -342,40 +342,12 @@ describe('ContainerBackend.destroy', () => {
     expect(store.rows.get(prepared.envId as string)?.status).toBe('active');
   });
 
-  // Regression: SQLite returns the metadata column as a JSON STRING (Postgres
-  // returns a parsed object). Reading it as an object skipped `docker rm` and
-  // leaked the container — caught by the live smoke. destroy() must parse both.
-  test('removes container when metadata is a JSON string (SQLite dialect)', async () => {
-    const store = fakeStore();
-    const docker = fakeDocker(() => ({ stdout: '', stderr: '' }));
-    // Seed a row exactly as SQLite hands it back: metadata is a JSON string.
-    const meta = {
-      containerId: 'cid-sqlite',
-      containerName: 'archon-sqlite-env',
-      volume: 'archon-sqlite-env-upper',
-      image: 'archon-runner:test',
-      resourceId: 'sqlite-env',
-      workspacePath: '/tmp/ops-client',
-    };
-    const row = await store.create({
-      codebase_id: FOLDER.id,
-      workflow_type: 'task',
-      workflow_id: 'sqlite-env',
-      provider: 'container',
-      working_path: '/tmp/ops-client',
-      branch_name: '' as never,
-      metadata: JSON.stringify(meta) as unknown as Record<string, unknown>,
-    });
-
-    const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
-    await backend.destroy(row.id);
-
-    const rm = docker.calls.find(c => c[0] === 'rm');
-    expect(rm).toEqual(['rm', '-f', 'archon-sqlite-env']);
-    const volumeRm = docker.calls.find(c => c[0] === 'volume' && c[1] === 'rm');
-    expect(volumeRm).toEqual(['volume', 'rm', '-f', 'archon-sqlite-env-upper']);
-    expect(store.rows.get(row.id)?.status).toBe('destroyed');
-  });
+  // The SQLite-vs-Postgres metadata-shape mismatch (SQLite returns a JSON STRING,
+  // Postgres a parsed object) once made destroy() skip `docker rm` and leak the
+  // container. That dialect normalization now lives at the store boundary
+  // (normalizeEnvironmentRow in db/isolation-environments.ts, covered by its own
+  // test), so the backend trusts a parsed-object `metadata` — the tests below seed
+  // objects exactly as the store hands them back.
 
   test('throws (not silently no-ops) when metadata has no containerName/volume', async () => {
     const store = fakeStore();
@@ -387,7 +359,7 @@ describe('ContainerBackend.destroy', () => {
       provider: 'container',
       working_path: '/tmp/ops-client',
       branch_name: '' as never,
-      metadata: '{}' as unknown as Record<string, unknown>,
+      metadata: {},
     });
     const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
     await expect(backend.destroy(row.id)).rejects.toThrow(/no containerName\/volume/);

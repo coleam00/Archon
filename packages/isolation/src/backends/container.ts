@@ -89,29 +89,6 @@ interface ContainerEnvMetadata {
   [key: string]: unknown;
 }
 
-/**
- * Normalize a persisted `metadata` value into an object. The store returns JSONB
- * as a parsed object on Postgres but a raw JSON STRING on SQLite (the column is
- * TEXT, `JSON.stringify`'d on write) — reading it as an object works on Postgres
- * and silently yields `undefined` fields on SQLite, which would make `destroy()`
- * skip the `docker rm` and leak the container. Parse the string form here so both
- * dialects behave identically. A parse failure returns `{}` (destroy then throws
- * loudly rather than leaking silently).
- */
-function readContainerMetadata(metadata: unknown): Partial<ContainerEnvMetadata> {
-  if (typeof metadata === 'string') {
-    try {
-      return JSON.parse(metadata) as Partial<ContainerEnvMetadata>;
-    } catch {
-      return {};
-    }
-  }
-  if (metadata && typeof metadata === 'object') {
-    return metadata as Partial<ContainerEnvMetadata>;
-  }
-  return {};
-}
-
 export class ContainerBackend implements IIsolationBackend {
   readonly id = 'container' as const;
 
@@ -243,12 +220,13 @@ export class ContainerBackend implements IIsolationBackend {
       log.warn({ envId }, 'isolation.container_destroy_row_missing');
       return;
     }
-    const meta = readContainerMetadata(row.metadata);
+    const meta = row.metadata as Partial<ContainerEnvMetadata>;
     const containerName = meta.containerName ?? meta.containerId;
     const volume = meta.volume;
 
     if (!containerName && !volume) {
-      // Metadata is present-but-unusable (e.g. an old row, or a parse failure).
+      // Metadata is present-but-unusable (e.g. an old row, or a metadata that
+      // failed to parse at the store boundary and was normalized to `{}`).
       // Fail LOUDLY rather than silently "destroy" nothing and leak the container.
       log.error(
         { envId, rawMetadataType: typeof row.metadata },
@@ -436,13 +414,17 @@ export class ContainerBackend implements IIsolationBackend {
     log.info({ envId }, 'isolation.container_changes_discarded');
   }
 
-  /** Load + normalize a container env's persisted metadata, or throw if the row is gone. */
+  /**
+   * Load a container env's persisted metadata, or throw if the row is gone. The
+   * store normalizes `metadata` to a parsed object on every dialect (SQLite returns
+   * it as a JSON string otherwise), so this reads it directly.
+   */
   private async loadMetadata(envId: string): Promise<Partial<ContainerEnvMetadata>> {
     const row = await this.store.getById(envId);
     if (!row) {
       throw new Error(`Container env '${envId}' not found (its tracking row is gone).`);
     }
-    return readContainerMetadata(row.metadata);
+    return row.metadata as Partial<ContainerEnvMetadata>;
   }
 
   private preparedEnvFor(

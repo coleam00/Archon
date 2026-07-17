@@ -25,6 +25,24 @@ describe('dockerPreflight', () => {
     );
   });
 
+  test('daemon-down error names the dockerized-Archon case when ARCHON_DOCKER=true', async () => {
+    const prev = process.env.ARCHON_DOCKER;
+    process.env.ARCHON_DOCKER = 'true';
+    try {
+      const runner: DockerRunner = async () => {
+        const err = new Error('Command failed') as Error & { stderr?: string };
+        err.stderr = 'Cannot connect to the Docker daemon';
+        throw err;
+      };
+      await expect(dockerPreflight('archon-runner:test', runner)).rejects.toThrow(
+        /running inside Docker.*--container backend is unavailable/s
+      );
+    } finally {
+      if (prev === undefined) delete process.env.ARCHON_DOCKER;
+      else process.env.ARCHON_DOCKER = prev;
+    }
+  });
+
   test('throws an image-missing error naming the build command', async () => {
     const runner: DockerRunner = async args => {
       if (args[0] === 'version') return { stdout: '28.2.2', stderr: '' };
