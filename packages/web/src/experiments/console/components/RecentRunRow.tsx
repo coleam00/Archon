@@ -99,6 +99,14 @@ export function RecentRunRow({
         <span className="shrink-0 truncate font-mono text-[13px] font-bold text-text-primary">
           {run.workflow}
         </span>
+        {run.parentRunId ? (
+          <span
+            className="shrink-0 rounded-[5px] border border-border/60 px-1.5 py-px font-mono text-[10px] font-semibold uppercase tracking-[0.04em] text-text-tertiary"
+            title={`Sub-run of ${shortRunId(run.parentRunId)}`}
+          >
+            ↳ child
+          </span>
+        ) : null}
         {run.userMessage !== '' ? (
           <span
             className="min-w-0 truncate text-[12.5px] text-text-tertiary"
