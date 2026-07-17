@@ -7,7 +7,7 @@ import { describe, test, expect, mock, beforeEach } from 'bun:test';
 const mockGetWorkflowRun = mock(() => Promise.resolve(null));
 const mockListWorkflowRuns = mock(() => Promise.resolve([]));
 const mockUpdateWorkflowRun = mock(() => Promise.resolve());
-const mockCancelWorkflowRun = mock(() => Promise.resolve());
+const mockCancelWorkflowRun = mock(() => Promise.resolve({ cancelled: true }));
 // CAS gate resolvers (#2113): default to "won the race". Tests that simulate a
 // concurrent loser override with mockResolvedValueOnce({ resolved: false }).
 // resolveApprovalGate = stay-paused resolution (approve, reject stage-rework);
@@ -664,6 +664,7 @@ describe('abandonWorkflow', () => {
   beforeEach(() => {
     mockGetWorkflowRun.mockClear();
     mockCancelWorkflowRun.mockClear();
+    mockCancelWorkflowRun.mockImplementation(() => Promise.resolve({ cancelled: true }));
     mockReclaimContainerEnv.mockClear();
     mockReclaimContainerEnv.mockImplementation(() => Promise.resolve());
   });
@@ -691,6 +692,20 @@ describe('abandonWorkflow', () => {
 
   test('does not reclaim for a non-container run', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'running' }));
+    await abandonWorkflow('run-1');
+    expect(mockReclaimContainerEnv).not.toHaveBeenCalled();
+  });
+
+  // Race: a concurrent transition already took the run terminal, so our cancel CAS
+  // no-ops (`cancelled: false`). The winner OWNS the environment — we must NOT reclaim.
+  test('does not reclaim a container run when the cancel loses the race', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(
+      makePausedRun({
+        status: 'paused',
+        metadata: { isolation: 'container', isolation_env_id: 'env-9' },
+      })
+    );
+    mockCancelWorkflowRun.mockImplementationOnce(() => Promise.resolve({ cancelled: false }));
     await abandonWorkflow('run-1');
     expect(mockReclaimContainerEnv).not.toHaveBeenCalled();
   });

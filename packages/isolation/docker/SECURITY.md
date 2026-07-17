@@ -138,9 +138,9 @@ predicts what apply will do (escaping symlinks and skipped specials are shown).
 - The **SIGKILL grace** on `docker stop` (suspend) means a container killed at the
   grace deadline can under-report; the volume (the overlay) is unaffected.
 - **Applied file ownership.** The write-back apply runs as root in the helper
-  container, so on a **Linux rootful daemon** files it writes to the live root land
-  **root-owned** (usability caveat — the operator may need to `chown` them back).
-  On Docker Desktop (macOS/Windows) the VM maps writes to the host user, so this does
+  container, so, on a Linux rootful daemon, files it writes to the live root land
+  root-owned (usability caveat — the operator may need to `chown` them back). On
+  Docker Desktop (macOS/Windows) the VM maps writes to the host user, so this does
   not arise there.
 
 ## Concurrency caveat

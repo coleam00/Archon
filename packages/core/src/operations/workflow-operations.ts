@@ -126,8 +126,9 @@ export async function abandonWorkflow(runId: string): Promise<WorkflowRun> {
       `Cannot abandon run with status '${run.status}'. Only running, paused, or failed runs can be abandoned.`
     );
   }
+  let cancelled: boolean;
   try {
-    await workflowDb.cancelWorkflowRun(runId);
+    ({ cancelled } = await workflowDb.cancelWorkflowRun(runId));
   } catch (error) {
     const err = error as Error;
     getLog().error(
@@ -138,10 +139,16 @@ export async function abandonWorkflow(runId: string): Promise<WorkflowRun> {
   }
   // M2 — reclaim a container run's container + upper volume immediately, in the SHARED
   // op so EVERY abandon surface (CLI, web API, chat, manage_run, Slack-cancel) frees the
-  // resources now rather than waiting for the scheduled reaper. Best-effort: the run is
-  // already cancelled, so a reclaim failure is logged (the reaper retries) — never thrown.
-  // Runs wherever the op executes (CLI/server), which is where docker is reachable.
+  // resources now rather than waiting for the scheduled reaper. Best-effort: a reclaim
+  // failure is logged (the reaper retries) — never thrown. Runs wherever the op executes
+  // (CLI/server), which is where docker is reachable.
+  //
+  // ONLY when OUR cancel actually won the CAS (`cancelled === true`). cancelWorkflowRun
+  // is `UPDATE … WHERE status NOT IN (completed, cancelled)`, so a false result means a
+  // concurrent transition (a resume or completion) already took the run terminal and now
+  // OWNS the environment — reclaiming here would pull the container out from under it.
   if (
+    cancelled &&
     run.metadata?.isolation === 'container' &&
     typeof run.metadata.isolation_env_id === 'string'
   ) {

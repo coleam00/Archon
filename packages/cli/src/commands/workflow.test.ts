@@ -163,7 +163,7 @@ mock.module('@archon/core/db/messages', () => ({
 mock.module('@archon/core/db/workflows', () => ({
   getActiveWorkflowRun: mock(() => Promise.resolve(null)),
   failWorkflowRun: mock(() => Promise.resolve()),
-  cancelWorkflowRun: mock(() => Promise.resolve()),
+  cancelWorkflowRun: mock(() => Promise.resolve({ cancelled: true })),
   findResumableRun: mock(() => Promise.resolve(null)),
   resumeWorkflowRun: mock(() => Promise.resolve(null)),
   getWorkflowRun: mock(() => Promise.resolve(null)),
@@ -2647,7 +2647,9 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
       workflow_name: 'implement',
       status: 'running',
     });
-    (workflowDb.cancelWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(undefined);
+    (workflowDb.cancelWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      cancelled: true,
+    });
 
     await workflowAbandonCommand('0b1ee8da', true, '/repo');
 
@@ -3806,7 +3808,9 @@ describe('workflowAbandonCommand', () => {
       workflow_name: 'implement',
       status: 'running',
     });
-    (workflowDb.cancelWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(undefined);
+    (workflowDb.cancelWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      cancelled: true,
+    });
 
     await workflowAbandonCommand('run-1');
 
