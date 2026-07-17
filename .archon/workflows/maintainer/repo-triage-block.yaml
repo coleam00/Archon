@@ -6,8 +6,10 @@ description: >-
   Run repo-triage or repo-triage-minimax instead. Read-side plumbing (issue/PR
   lists + templates) is pre-fetched once by the `gather` script node; triage
   judgment stays in the AI nodes; state writes go through repo-triage-persist
-  (atomic). Kept provider-agnostic: no inline `agents:`, no per-node model —
-  the including workflow's provider governs.
+  (atomic). Provider-agnostic: the sub-agent `agents:` fan-outs are GATED on
+  Agent-tool availability (the Claude parent fans out; the Pi/Minimax parent
+  briefs inline), and no outer node pins model/provider — the including
+  workflow's provider governs.
 
 # Standalone hygiene only — when this block is `include:`d, its workflow-level
 # fields are dropped and the PARENT's worktree/provider/model govern.
@@ -65,6 +67,59 @@ nodes:
   - id: triage-issues
     depends_on: [gather-health]
     allowed_tools: [Bash, Read, Write, Agent]
+    # Sub-agent used ONLY when the Agent tool is available (Claude parent). The
+    # Pi/Minimax parent has no Agent tool and ignores this block; that path
+    # briefs inline (see the BRIEF PASS step). Provider-agnostic by gating, not
+    # by omission.
+    agents:
+      brief-gen:
+        description: >-
+          Reads a single GitHub issue and returns a concise JSON brief,
+          plus a template-adherence check if the caller provided template
+          context. Used for duplicate detection + template-fill reporting.
+        model: haiku
+        tools: [Bash, Read]
+        prompt: |
+          You are a concise GitHub issue summariser. The caller's prompt
+          will include an issue number AND (optionally) the issue
+          templates from `.github/ISSUE_TEMPLATE/`.
+
+          Fetch the issue:
+            gh issue view <N> --json number,title,body,labels,author
+
+          Return ONLY a single JSON object — no fences, no prose:
+
+          {
+            "number": <N>,
+            "summary": "2-3 sentence neutral summary",
+            "primarySymptom": "one short sentence — the core symptom or ask",
+            "area": "best-guess tag, e.g. backend, frontend, docs, core, isolation, cli, workflows, providers",
+            "templateAdherence": {
+              "templateType": "bug_report | feature_request | other | none",
+              "sectionsFilled": ["<section headers where the reporter wrote non-trivial content>"],
+              "sectionsMissing": ["<template section headers clearly left empty or untouched>"],
+              "quality": "good | partial | empty | no-template-context"
+            }
+          }
+
+          Template-adherence rules:
+          - If the caller did NOT include templates → `quality: "no-template-context"`, skip sections.
+          - `quality: "good"` = most template sections have real content.
+          - `quality: "partial"` = headers present but several sections look blank/placeholder.
+          - `quality: "empty"` = body has nothing matching the template shape.
+          - A section counts as MISSING when its body is empty, whitespace-only,
+            or contains only HTML-comment placeholders like `<!-- ... -->`.
+            Such sections must go in `sectionsMissing`, NOT `sectionsFilled`.
+
+          Be terse. If the issue body is empty, set area='unknown' and
+          quality='empty'.
+
+          ERROR HANDLING — if the `gh issue view` call fails (auth,
+          rate limit, network, or non-zero exit), do NOT emit JSON.
+          Instead print exactly one line on stdout:
+              ERROR: <one-line reason>
+          The orchestrator detects the `ERROR:` prefix and handles it
+          (logs, counts, may abort). Never emit partial/fabricated JSON.
     prompt: |
       You are the issue-triage orchestrator for the repository in the
       current working directory.
@@ -89,7 +144,8 @@ nodes:
 
       Your job on every (non-dry) run:
         1. Apply labels to any unlabeled open issues (delegate to triage-agent)
-        2. Generate or refresh briefs for new/changed open issues (inline)
+        2. Generate or refresh briefs for new/changed open issues
+           (brief-gen fan-out when the Agent tool is available, else inline)
         3. Detect potential duplicates across all briefs
         4. Comment on suspected duplicates with a "reply in 3 days or auto-close" note
         5. Auto-close stale warnings from prior runs whose authors never replied
@@ -192,11 +248,21 @@ nodes:
       Under DRY_RUN, do not delegate — print `[DRY] would label #<N>` for each
       unlabeled issue instead. Wait for all label tasks to settle before moving on.
 
-      ## 5. BRIEF PASS — inline (no sub-agent)
+      ## 5. BRIEF PASS — Agent fan-out (Claude) or inline (Pi/Minimax)
 
-      You already have the full open-issue list (title + body) in
-      `issues-open.json`. For each issue that needs a brief, build this
-      object IN-LINE (summarise + classify yourself — no sub-agent, no extra
+      If the `Agent` tool is available (the Claude parent provides it; the
+      Pi/Minimax parent does not), spawn the `brief-gen` sub-agent in PARALLEL —
+      ONE assistant turn with MANY Agent tool calls, one per issue that needs a
+      brief (this scales better than summarising every issue yourself in a
+      single context). Give each call the issue number and, when
+      `issue-templates.md` is non-empty, inline the template block for the
+      adherence check. Parse each JSON reply; on a parse failure or an `ERROR:`
+      sentinel line, record it in `failedBriefs` (number + first 200 chars) and
+      skip. Merge successes exactly as the inline path does below.
+
+      If the `Agent` tool is NOT available, brief INLINE instead — you already
+      have the full open-issue list (title + body) in `issues-open.json`, so
+      build each object yourself in a single pass (no sub-agent, no extra
       `gh issue view`):
 
           {
@@ -368,12 +434,50 @@ nodes:
   # Closed-dedup check — does any OPEN issue duplicate a recently-CLOSED one?
   # Reads the fresh open-issue briefs written by triage-issues-persist. Runs in
   # parallel with link-prs once triage-issues state is on disk.
-  # TODO(R3): still an inline prompt (own gh comment-fetch + AI-Write state).
-  #   Follow-up: read/write via gather + repo-triage-persist like triage-issues.
+  # State is written atomically by the closed-dedup-check-persist node (below).
   # ---------------------------------------------------------------------------
   - id: closed-dedup-check
     depends_on: [triage-issues-persist]
-    allowed_tools: [Bash, Read]
+    allowed_tools: [Bash, Read, Agent]
+    # closed-brief-gen fan-out is used only when the Agent tool is available
+    # (Claude parent); the Pi/Minimax parent briefs inline (see BRIEF PASS).
+    agents:
+      closed-brief-gen:
+        description: >-
+          Reads a single recently-CLOSED GitHub issue and returns a JSON
+          brief including close reason and any closing PR reference.
+        model: haiku
+        tools: [Bash, Read]
+        prompt: |
+          You are a concise summariser for CLOSED GitHub issues. You will
+          be given an issue number in the caller's prompt.
+
+          Fetch the issue with:
+            gh issue view <N> --json number,title,body,stateReason,closedAt,comments,labels
+
+          Also check the closing comment thread for any `#<pr>` reference
+          that looks like it closed the issue (keywords: closed by, fixed by,
+          resolved by, Closes, Fixes, Resolves).
+
+          Return ONLY a single JSON object on stdout — no fences, no prose:
+
+          {
+            "number": <N>,
+            "summary": "2-3 sentence summary of what the issue was",
+            "primarySymptom": "one short sentence — the core symptom",
+            "area": "single best-guess area tag (same vocabulary as open briefs)",
+            "closedAt": "<ISO timestamp>",
+            "stateReason": "completed | not_planned | duplicate | null (normalize gh CLI's UPPERCASE output to lowercase)",
+            "resolvedByPr": "<PR number if identifiable from closing thread, else null>"
+          }
+
+          Be terse. If `stateReason` (normalized to lowercase) is
+          `not_planned` or `duplicate`, that matters for the match
+          verdict downstream — include it honestly.
+
+          ERROR HANDLING — if `gh issue view` fails, print exactly:
+              ERROR: <one-line reason>
+          on a single stdout line. Do NOT emit partial/fabricated JSON.
     prompt: |
       You check whether any currently OPEN issue duplicates a recently
       CLOSED one. A reporter may have filed a bug that was fixed months
@@ -469,11 +573,18 @@ nodes:
         - If `state.closedBriefs[N]` exists AND sha matches → reuse.
         - Else → needs BRIEF.
 
-      ## 4. BRIEF PASS — inline iteration
+      ## 4. BRIEF PASS — Agent fan-out (Claude) or inline (Pi/Minimax)
 
-      You already have the closed-issue list (title + body) in
-      `issues-closed.json`. Process every entry needing a brief in a single
-      pass — no sub-agent. For each closed issue, build this object inline:
+      If the `Agent` tool is available (Claude parent), spawn `closed-brief-gen`
+      in PARALLEL — ONE turn, MANY Agent calls, one per closed issue that needs
+      a brief. Parse each JSON reply; on parse failure or an `ERROR:` sentinel,
+      record it in `failedClosedBriefs` and skip. Merge successes exactly as the
+      inline path does below.
+
+      If the `Agent` tool is NOT available, brief INLINE — you already have the
+      closed-issue list (title + body) in `issues-closed.json`, so process every
+      entry needing a brief in a single pass (no sub-agent). For each closed
+      issue, build this object inline:
 
           {
             "number": <N>,
@@ -621,7 +732,50 @@ nodes:
   # ---------------------------------------------------------------------------
   - id: closed-pr-dedup-check
     depends_on: [gather-health]
-    allowed_tools: [Bash, Read]
+    allowed_tools: [Bash, Read, Agent]
+    # pr-brief-gen fan-out is used only when the Agent tool is available (Claude
+    # parent); the Pi/Minimax parent briefs inline (see BRIEF PASS).
+    agents:
+      pr-brief-gen:
+        description: >-
+          Reads a single PR (open OR closed) and returns a compact JSON
+          brief suitable for cross-comparison.
+        model: haiku
+        tools: [Bash, Read]
+        prompt: |
+          You summarise a single GitHub PR. You will be given a PR number
+          and a `state` hint (open/closed) in the caller's prompt.
+
+          Fetch:
+            gh pr view <N> --json number,title,body,state,headRefName,changedFiles,additions,deletions,mergedAt,closedAt,stateReason
+            gh pr diff <N> --color=never | head -c 30000
+
+          Return ONLY a single JSON object — no fences, no prose:
+
+          {
+            "number": <N>,
+            "state": "open" | "closed" | "merged",
+            "stateReason": "<closed reason if applicable, else null>",
+            "title": "<title>",
+            "summary": "2-3 sentence neutral summary of what the PR changes",
+            "intent": "one-sentence core goal (bug fix X, add feature Y, refactor Z)",
+            "scope": "affected-area tag (backend/frontend/docs/core/providers/etc)",
+            "filesChanged": <count>,
+            "mergedAt": "<iso or null>",
+            "closedAt": "<iso or null>"
+          }
+
+          Be terse. Don't quote commit messages verbatim unless they are
+          the only information available.
+
+          If the diff was truncated (you hit the 30,000-char limit when
+          reading `gh pr diff`), set `diffTruncated: true` on the brief
+          output so the orchestrator knows to be more conservative about
+          `fully-addresses` claims.
+
+          ERROR HANDLING — if `gh pr view` or `gh pr diff` fails, print:
+              ERROR: <one-line reason>
+          on a single stdout line. Do NOT emit partial/fabricated JSON.
     prompt: |
       You find OPEN PRs that duplicate or supersede a recently-CLOSED PR.
       A contributor may have missed that a similar change was already
@@ -687,11 +841,18 @@ nodes:
           and the sha matches → reuse the cached brief.
         - Else → needs BRIEF.
 
-      ## 4. BRIEF PASS — inline iteration
+      ## 4. BRIEF PASS — Agent fan-out (Claude) or inline (Pi/Minimax)
 
-      You already have the open and closed PR lists (title + body) from the
-      gather files. For each PR needing a brief, fetch the diff (title + body
-      are already present, so no `gh pr view` is needed):
+      If the `Agent` tool is available (Claude parent), spawn `pr-brief-gen` in
+      PARALLEL — ONE turn, MANY Agent calls, one per PR (open AND closed) that
+      needs a brief; pass the PR number and the `state` hint. Parse each JSON
+      reply; on parse failure or an `ERROR:` sentinel, record it in
+      `failedBriefs` and skip. Merge successes exactly as the inline path below.
+
+      If the `Agent` tool is NOT available, brief INLINE — you already have the
+      open and closed PR lists (title + body) from the gather files. For each PR
+      needing a brief, fetch the diff (title + body are already present, so no
+      `gh pr view` is needed):
 
           gh pr diff <N> --color=never | head -c 30000
 
@@ -828,7 +989,78 @@ nodes:
   # ---------------------------------------------------------------------------
   - id: link-prs
     depends_on: [gather-health]
-    allowed_tools: [Bash, Read]
+    allowed_tools: [Bash, Read, Agent]
+    # pr-issue-matcher fan-out is used only when the Agent tool is available
+    # (Claude parent); the Pi/Minimax parent matches inline (see MATCH PASS).
+    agents:
+      pr-issue-matcher:
+        description: >-
+          Given one PR (title + body + diff) and a compact list of open
+          issues, returns related-issue matches AND a template-adherence
+          check if the caller provided the PR template. Conservative —
+          prefers "related" over "fully-addresses" when in doubt.
+        model: haiku
+        tools: [Bash, Read]
+        prompt: |
+          You match a single GitHub PR to the open issues it touches AND
+          score its adherence to the repository's PR template (if the
+          caller provided one).
+
+          Inputs in the caller's prompt:
+            - PR number
+            - Compact issue list (one per line: `#<N> <title> — <body excerpt>`)
+            - Optional PR_TEMPLATE section
+
+          Your work:
+            1. Fetch the PR:
+                 gh pr view <N> --json number,title,body,files,headRefName
+            2. Fetch a compact diff:
+                 gh pr diff <N> --color=never | head -c 60000
+            3. For each open issue, decide:
+               - `fully-addresses`: PR's scope CLEARLY covers EVERY symptom
+                 in the issue. Err strictly toward "related" if unsure.
+               - `related`: touches same area / partial fix.
+               - `unrelated`: omit.
+            4. Score template adherence against the PR_TEMPLATE (if present):
+               - Enumerate the `(required)` sections and other section
+                 headers from the template.
+               - Mark each section as filled (non-trivial reporter content)
+                 or missing (empty / placeholder / HTML-comment-only).
+
+          Return ONLY a single JSON object — no fences, no prose:
+
+          {
+            "prNumber": <N>,
+            "candidates": [
+              {
+                "issue": <issueNumber>,
+                "relation": "fully-addresses" | "related",
+                "evidence": "one-sentence justification citing files/symptoms"
+              }
+            ],
+            "templateAdherence": {
+              "sectionsFilled": ["<section titles with real content>"],
+              "sectionsMissing": ["<empty / placeholder section titles>"],
+              "requiredMissing": ["<subset of sectionsMissing that are marked (required)>"],
+              "quality": "good | partial | empty | no-template-context"
+            }
+          }
+
+          `quality` scale:
+          - "good" = required sections all filled AND most non-required too
+          - "partial" = some required sections empty but not all
+          - "empty" = essentially no template content beyond headers
+          - "no-template-context" = caller didn't include PR_TEMPLATE
+
+          No matches: candidates=[]. Always return templateAdherence
+          (may be no-template-context).
+
+          Default bias: when the PR description doesn't explicitly claim
+          to close the issue, mark it `related`, never `fully-addresses`.
+
+          ERROR HANDLING — if `gh pr view` or `gh pr diff` fails, print:
+              ERROR: <one-line reason>
+          on a single stdout line. Do NOT emit partial/fabricated JSON.
     prompt: |
       You are the PR-to-issue linker for the repository in the current
       working directory.
@@ -858,7 +1090,8 @@ nodes:
       Your job on every (non-dry, non-skipped) run:
         1. For every open PR not yet fully processed, identify related
            open issues by reading the PR title/body/diff and comparing
-           against the open-issue list (inline — no sub-agent).
+           against the open-issue list (via the `pr-issue-matcher` sub-agent
+           when the Agent tool is available, else inline — see MATCH PASS).
         2. Add a `Closes #X` SUGGESTION comment on the PR only when the
            PR fully addresses the issue, after re-reading the issue + PR diff.
         3. Otherwise post a conservative "related to #X" cross-reference
@@ -922,10 +1155,19 @@ nodes:
         - If `state.linkedPrs[N]` exists AND its sha matches → SKIP.
         - Else → needs MATCHING.
 
-      ## 4. MATCH PASS — inline iteration
+      ## 4. MATCH PASS — Agent fan-out (Claude) or inline (Pi/Minimax)
 
-      You already have the open-PR list and open-issue list (title + body)
-      from the gather files. For each PR needing matching, fetch the diff:
+      If the `Agent` tool is available (Claude parent), spawn `pr-issue-matcher`
+      in PARALLEL — ONE turn, MANY Agent calls, one per PR needing matching.
+      Give each call the PR number, the compact open-issue list (one per line:
+      `#<num> <title> — <first 120 chars of body>`), and the PR_TEMPLATE block
+      when `pr-template.md` is non-empty. Parse each JSON reply; on parse failure
+      or an `ERROR:` sentinel, record it in `failedMatches` and skip. Then run
+      the VERIFY pass below on any `fully-addresses` the matcher returned.
+
+      If the `Agent` tool is NOT available, match INLINE — you already have the
+      open-PR list and open-issue list (title + body) from the gather files. For
+      each PR needing matching, fetch the diff:
 
           gh pr diff <N> --color=never | head -c 60000
 
