@@ -11479,8 +11479,283 @@ describe('executeDagWorkflow -- loop_group node', () => {
 
   it('EDGE F: $LOOP_PREV.<id>.output.<field> on a missing prior node resolves to empty', () => {
     // The referenced node wasn't in the prior iteration (skipped/absent) → '' not a throw.
+    // Raw call (no knownBodyIds set) stays fully lenient — the typo check only engages when
+    // the static body-id set is threaded in via the executor path.
     const prev = new Map<string, NodeOutput>([['work', makeOutput('completed', 'ran', undefined)]]);
     expect(substituteLoopPrevRefs('other=[$LOOP_PREV.absent.output.field]', prev)).toBe('other=[]');
+  });
+
+  it('EDGE F (#2142): substituteLoopPrevRefs classifies absent refs by the two body-id sets', () => {
+    // Iteration-1 posture: no prior outputs yet. `knownBodyIds` is the TRANSITIVE set
+    // (this group + nested descendants); `directBodyIds` is only this group's immediate ids.
+    // Group body: { grader, work, refine(nested group) }; refine's inner body: { polish }.
+    const knownBodyIds = new Set(['grader', 'work', 'refine', 'polish']);
+    const directBodyIds = new Set(['grader', 'work', 'refine']);
+
+    // Typo: `grrader` matches no body node → OutputRefError('unknown-node') + did-you-mean.
+    let caught: unknown;
+    try {
+      substituteLoopPrevRefs(
+        'score=$LOOP_PREV.grrader.output.score',
+        undefined,
+        false,
+        undefined,
+        knownBodyIds,
+        directBodyIds
+      );
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(OutputRefError);
+    expect((caught as OutputRefError).reason).toBe('unknown-node');
+    expect((caught as OutputRefError).message).toContain("'grader'"); // did-you-mean names the near miss
+
+    // Direct body id with no prior-iteration output (iteration 1) → '' (legitimate absence).
+    expect(
+      substituteLoopPrevRefs(
+        'score=$LOOP_PREV.grader.output.score',
+        undefined,
+        false,
+        undefined,
+        knownBodyIds,
+        directBodyIds
+      )
+    ).toBe('score=');
+
+    // Nested-owned id (`polish` ∈ known, ∉ direct): token left INTACT so the inner
+    // loop_group resolves it against its OWN prior-iteration snapshot later. Both the
+    // `.field` and whole-text forms are preserved.
+    expect(
+      substituteLoopPrevRefs(
+        'draft=[$LOOP_PREV.polish.output.draft]',
+        undefined,
+        false,
+        undefined,
+        knownBodyIds,
+        directBodyIds
+      )
+    ).toBe('draft=[$LOOP_PREV.polish.output.draft]');
+    expect(
+      substituteLoopPrevRefs(
+        'whole=[$LOOP_PREV.polish.output]',
+        undefined,
+        false,
+        undefined,
+        knownBodyIds,
+        directBodyIds
+      )
+    ).toBe('whole=[$LOOP_PREV.polish.output]');
+
+    // Whole-text `$LOOP_PREV.<id>.output` to an unknown id stays lenient (no throw), even
+    // with the set — mirrors substituteNodeOutputRefs' lenient whole-text surface.
+    expect(
+      substituteLoopPrevRefs(
+        'all=$LOOP_PREV.grrader.output',
+        undefined,
+        false,
+        undefined,
+        knownBodyIds,
+        directBodyIds
+      )
+    ).toBe('all=');
+
+    // Bash-escaped mode throws too (the typo would otherwise become an empty shell literal).
+    expect(() =>
+      substituteLoopPrevRefs(
+        'echo $LOOP_PREV.grrader.output.score',
+        undefined,
+        true,
+        undefined,
+        knownBodyIds,
+        directBodyIds
+      )
+    ).toThrow(OutputRefError);
+
+    // Raw caller with NO sets → fully lenient (pre-#2142 behavior): unknown id .field → ''.
+    expect(substituteLoopPrevRefs('x=[$LOOP_PREV.grrader.output.score]', undefined)).toBe('x=[]');
+  });
+
+  it('EDGE F (#2142): applyLoopPrevToBodyNode — typo throws, nested-owned token SURVIVES the outer pass', () => {
+    // The executor path threads the transitive `knownBodyIds` and immediate `directBodyIds`.
+    // Simulate the OUTER group's iteration-1 pass (no prior outputs). Outer body =
+    // { review, refine(nested group) }; refine's inner body = { polish }.
+    const knownBodyIds = new Set(['review', 'refine', 'polish']);
+    const directBodyIds = new Set(['review', 'refine']);
+
+    // A typo in a body prompt fails loudly.
+    expect(() =>
+      applyLoopPrevToBodyNode(
+        {
+          id: 'review',
+          prompt: 'act on $LOOP_PREV.reviw.output.verdict',
+          depends_on: [],
+        } as DagNode,
+        undefined,
+        '',
+        undefined,
+        knownBodyIds,
+        directBodyIds
+      )
+    ).toThrow(OutputRefError);
+
+    // A nested loop_group whose inner body references its OWN sibling id (`polish`, nested-
+    // owned) must have that token LEFT INTACT by the outer pass — otherwise the inner loop
+    // could never resolve its own prior iteration (this is the #2165 fix; before it the
+    // outer pass destroyed the token to '').
+    const nestedGroup = applyLoopPrevToBodyNode(
+      {
+        id: 'refine',
+        loop_group: {
+          until: 'DONE',
+          max_iterations: 2,
+          nodes: [
+            { id: 'polish', prompt: 'refine on $LOOP_PREV.polish.output.draft', depends_on: [] },
+          ],
+        },
+        depends_on: [],
+      } as DagNode,
+      undefined,
+      '',
+      undefined,
+      knownBodyIds,
+      directBodyIds
+    );
+    if (!('loop_group' in nestedGroup) || nestedGroup.loop_group === undefined)
+      throw new Error('expected loop_group node');
+    const polishNode = nestedGroup.loop_group.nodes[0];
+    expect('prompt' in polishNode && polishNode.prompt).toBe(
+      'refine on $LOOP_PREV.polish.output.draft'
+    );
+
+    // A ref to an OUTER-direct id (`review`) inside the nested body IS resolved now, at the
+    // outer granularity — here to '' (iteration 1, no prior output), not preserved.
+    const nestedReadsOuter = applyLoopPrevToBodyNode(
+      {
+        id: 'refine',
+        loop_group: {
+          until: 'DONE',
+          max_iterations: 2,
+          nodes: [
+            {
+              id: 'polish',
+              prompt: 'saw outer [$LOOP_PREV.review.output.verdict]',
+              depends_on: [],
+            },
+          ],
+        },
+        depends_on: [],
+      } as DagNode,
+      undefined,
+      '',
+      undefined,
+      knownBodyIds,
+      directBodyIds
+    );
+    if (!('loop_group' in nestedReadsOuter) || nestedReadsOuter.loop_group === undefined)
+      throw new Error('expected loop_group node');
+    const polishReadsOuter = nestedReadsOuter.loop_group.nodes[0];
+    expect('prompt' in polishReadsOuter && polishReadsOuter.prompt).toBe('saw outer []');
+
+    // But a typo INSIDE the nested body (id in no body node) still throws through the recursion.
+    expect(() =>
+      applyLoopPrevToBodyNode(
+        {
+          id: 'refine',
+          loop_group: {
+            until: 'DONE',
+            max_iterations: 2,
+            nodes: [
+              { id: 'polish', prompt: 'refine on $LOOP_PREV.reviw.output.verdict', depends_on: [] },
+            ],
+          },
+          depends_on: [],
+        } as DagNode,
+        undefined,
+        '',
+        undefined,
+        knownBodyIds,
+        directBodyIds
+      )
+    ).toThrow(OutputRefError);
+  });
+
+  it('EDGE F (#2165): a nested inner loop_group resolves its OWN prior-iteration $LOOP_PREV end-to-end', async () => {
+    // The semantics the L3417 comment promises: an inner loop_group body node referencing
+    // its own sibling's previous iteration (`$LOOP_PREV.w.output`) must see that output on
+    // the inner group's 2nd+ iteration — even though the inner group is nested inside an
+    // outer loop_group. Before #2165 the outer loop's substitution pass eagerly destroyed
+    // the token to '' before the inner loop ran, so it was empty on EVERY inner iteration.
+    //
+    // Body node `w` emits a distinct marker each call; we capture the prompt it receives.
+    // Inner iteration 1 → no prior output (''); inner iteration 2 → the marker from
+    // iteration 1 (proving the inner loop resolved its own prior iteration).
+    const capturedPrompts: string[] = [];
+    mockSendQueryDag.mockImplementation(function* (prompt: string) {
+      capturedPrompts.push(prompt ?? '');
+      const n = capturedPrompts.length;
+      // Call 1 emits MARK1 (no signal → inner iterates again); call 2 emits the signal.
+      yield { type: 'assistant', content: n === 1 ? 'MARK1' : 'MARK2 INNER_DONE' };
+      yield { type: 'result', sessionId: `s-${n}` };
+    });
+
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('lg-nested-prev');
+
+    const nodes: DagNode[] = [
+      {
+        id: 'outer',
+        loop_group: {
+          until: 'OUTER_DONE',
+          // One outer iteration is enough to run the inner group to its own completion.
+          max_iterations: 1,
+          fresh_context: false,
+          nodes: [
+            {
+              id: 'inner',
+              loop_group: {
+                until: 'INNER_DONE',
+                max_iterations: 3,
+                fresh_context: false,
+                nodes: [
+                  {
+                    id: 'w',
+                    prompt: 'prev=[$LOOP_PREV.w.output] do work',
+                    depends_on: [],
+                  },
+                ],
+              },
+              depends_on: [],
+            },
+          ],
+        },
+        depends_on: [],
+      },
+    ];
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-lg',
+      testDir,
+      { name: 'lg-nested-prev', nodes },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    // Two inner iterations ran within the single outer iteration.
+    expect(capturedPrompts.length).toBe(2);
+    // Inner iteration 1: no prior output → empty.
+    expect(capturedPrompts[0]).toContain('prev=[]');
+    // Inner iteration 2: the inner loop resolved ITS OWN prior-iteration output — the token
+    // survived the outer pass and resolved against the inner snapshot. This is the fix.
+    expect(capturedPrompts[1]).toContain('prev=[MARK1]');
   });
 
   it('EDGE H: applyLoopPrevToBodyNode uses shell escaping only for shell-bound fields (unit)', () => {
