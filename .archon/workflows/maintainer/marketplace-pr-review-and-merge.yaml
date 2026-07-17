@@ -295,6 +295,11 @@ nodes:
     script: |
       import { readFileSync, writeFileSync } from 'node:fs';
       import { resolve } from 'node:path';
+      // The decision truth table (and the auto-close policy) lives in a tested
+      // script — it gates an irreversible auto-merge/close, so the mapping is
+      // unit-tested rather than trusted inline. Relative import resolves from the
+      // workflow cwd (repo root), same as the named `script:` nodes.
+      import { decideMarketplace } from './.archon/scripts/marketplace-decide.ts';
 
       const artifactsDir = process.env['ARTIFACTS_DIR'] ?? '';
       const prMeta = JSON.parse(readFileSync(resolve(artifactsDir, 'pr-meta.json'), 'utf8')) as {
@@ -324,9 +329,6 @@ nodes:
         process.exit(1);
       }
 
-      const author = prMeta.author.login;
-      const isDraft = prMeta.isDraft;
-
       // Read slug from entry.json for merge commit subject
       let slug = '';
       try {
@@ -334,58 +336,15 @@ nodes:
         slug = entry.slug ?? '';
       } catch {}
 
-      let decision: 'auto_merge' | 'auto_approve' | 'request_changes' | 'reject';
-      let reason: string;
+      const { decision, reason, close } = decideMarketplace({
+        scopeOk: scopeResult === 'SCOPE_OK',
+        isDraft: prMeta.isDraft,
+        scan: scanResult,
+        schema: schemaResult,
+        ai: aiReview,
+      });
 
-      if (scopeResult !== 'SCOPE_OK') {
-        decision = 'reject';
-        reason = 'PR modifies files outside packages/docs-web/src/data/marketplace.ts. Only marketplace.ts additions are accepted.';
-      } else if (isDraft) {
-        decision = 'request_changes';
-        reason = 'PR is in draft state. Mark as ready for review when complete.';
-      } else if (scanResult.severity === 'critical' || scanResult.severity === 'high') {
-        decision = 'reject';
-        reason = `Security scan found ${String(scanResult.severity)} severity issues: ${scanResult.findings.map((f: { category: string; context: string }) => `${f.category} in ${f.context}`).join('; ')}`;
-      } else if (!schemaResult.files || (schemaResult.files as Array<{ valid: boolean }>).length === 0) {
-        // A marketplace entry must contain at least one workflow. validate-schema
-        // emits { valid: true, files: [] } when the pinned SHA yields no source
-        // dir / no YAML / no workflow-shaped YAML (top-level `nodes:`). Without
-        // this branch such a submission passes the schema guard below (which only
-        // fires on valid:false with a NON-empty file list), scans clean (nothing
-        // to scan), and reaches auto-merge — a fail-open. Reject deterministically.
-        decision = 'request_changes';
-        reason =
-          'Submission contains no workflow YAML at the pinned SHA. A marketplace entry must include at least one workflow definition (a YAML file with a top-level `nodes:` block).';
-      } else if (aiReview.recommendation === 'reject') {
-        decision = 'reject';
-        reason = aiReview.reasoning;
-      } else if (!schemaResult.valid && schemaResult.files && (schemaResult.files as Array<{valid: boolean}>).length > 0) {
-        decision = 'request_changes';
-        reason = 'Workflow YAML failed schema validation. Fix structural errors before merging.';
-      } else if (scanResult.severity === 'medium' || aiReview.recommendation === 'request_changes') {
-        decision = 'request_changes';
-        reason = aiReview.reasoning;
-      } else if (scanResult.severity === 'none' && (aiReview.recommendation === 'auto_merge' || aiReview.recommendation === 'auto_approve')) {
-        decision = 'auto_merge';
-        reason = aiReview.reasoning;
-      } else {
-        decision = 'auto_approve';
-        reason = aiReview.reasoning;
-      }
-
-      // R2 governance gate: only auto-close a contributor's PR when a
-      // DETERMINISTIC signal justified the reject — a critical/high security
-      // scan or a scope violation. An AI-ONLY reject (Haiku recommended reject
-      // but the deterministic checks are clean) still posts the request-changes
-      // review, but does NOT auto-close: it's flagged for a maintainer to make
-      // the final call. Only `reject` decisions are ever eligible to close.
-      const deterministicReject =
-        scopeResult !== 'SCOPE_OK' ||
-        scanResult.severity === 'critical' ||
-        scanResult.severity === 'high';
-      const close = decision === 'reject' && deterministicReject;
-
-      const output = { decision, reason, author, slug, close };
+      const output = { decision, reason, author: prMeta.author.login, slug, close };
       writeFileSync(resolve(artifactsDir, 'decision.json'), JSON.stringify(output, null, 2));
       console.log(JSON.stringify(output));
 
