@@ -543,7 +543,7 @@ import type { DagNode, WorkflowDefinition } from '@/lib/api';
 **3. Orchestrator** (`packages/core/src/orchestrator/`)
 - Manage AI conversations
 - Load conversation + codebase context from database
-- Variable substitution: `$1`, `$2`, `$3`, `$ARGUMENTS`
+- Variable substitution: `$ARGUMENTS`/`$USER_MESSAGE` (the whole trigger message; positional `$1`/`$2`/`$3` are not supported)
 - Session management: Create new or resume existing
 - Stream AI responses to platform
 - System prompt gets a "Managing Workflow Runs" section (`buildRunManagementSection` in `prompt-builder.ts`) teaching the chat agent to drive run management (`archon workflow runs/get/status/run --detach/approve/reject/abandon`) directly via bash. It is appended **only for project-scoped chats on providers without the native `manage_run` tool** (Codex/OpenCode/Copilot) — gated in `orchestrator-agent.ts` on `!scopedCaps.nativeTools`. Claude and Pi instead receive the in-process `manage_run` native tool (the prompt section would be redundant for them). This is the CLI-bash delivery path for providers that have neither native tools nor `skills:` (direct chat doesn't consume the `skills:` option — it is workflow-node-only).
@@ -808,8 +808,7 @@ async function createSession(conversationId: string, codebaseId: string) {
 ### Command System
 
 **Variable Substitution:**
-- `$1`, `$2`, `$3` - Positional arguments
-- `$ARGUMENTS` - All arguments as single string
+- `$ARGUMENTS`, `$USER_MESSAGE` - The user's full trigger message as a single string. Positional `$1`/`$2`/`$3` args are NOT supported — command/workflow prompts receive the whole message only.
 - `$ARTIFACTS_DIR` - External artifacts directory for the current workflow run (pre-created by executor)
 - `$WORKFLOW_ID` - The workflow run ID
 - `$BASE_BRANCH` - Base branch; auto-detected from git when `worktree.baseBranch` is not set; fails only if referenced in a prompt and auto-detection also fails
