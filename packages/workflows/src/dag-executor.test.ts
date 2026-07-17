@@ -1994,6 +1994,357 @@ describe('executeDagWorkflow -- bash nodes', () => {
   });
 });
 
+describe('executeDagWorkflow -- script node injection hardening (#2115)', () => {
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = join(
+      tmpdir(),
+      `dag-script-hardening-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
+    await mkdir(testDir, { recursive: true });
+    mockSendQueryDag.mockClear();
+    mockGetAgentProviderDag.mockClear();
+  });
+
+  afterEach(async () => {
+    // force: true already no-ops on a missing dir — any other failure (EBUSY/EPERM)
+    // should surface, not be swallowed.
+    await rm(testDir, { recursive: true, force: true });
+  });
+
+  it('bun script delivers the user message via env var, never spliced into source', async () => {
+    const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'ok\n', stderr: '' });
+    try {
+      const workflowRun = makeWorkflowRun('script-inject-bun', {
+        workflow_name: 'script-inject',
+        conversation_id: 'conv-script-inject',
+        // If this were text-substituted into TS source the string literal would close
+        // and execSync would run; delivered as an env var it stays inert data.
+        user_message: '"); require("child_process").execSync("touch pwned"); //',
+      });
+
+      const scriptNode: ScriptNode = {
+        id: 'safe',
+        script: 'console.log(process.env.ARGUMENTS)',
+        runtime: 'bun',
+      };
+
+      await executeDagWorkflow(
+        createMockDeps(),
+        createMockPlatform(),
+        'conv-script-inject',
+        testDir,
+        { name: 'script-inject-test', nodes: [scriptNode] },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      expect(execSpy).toHaveBeenCalledTimes(1);
+      const [cmd, args, opts] = execSpy.mock.calls[0] as [
+        string,
+        string[],
+        { env: NodeJS.ProcessEnv },
+      ];
+      expect(cmd).toBe('bun');
+      // Source is byte-identical to the author's body — the payload never appears in it.
+      expect(args).toEqual(['--no-env-file', '-e', 'console.log(process.env.ARGUMENTS)']);
+      expect(args.join(' ')).not.toContain('execSync');
+      // The value reaches the script via env vars instead.
+      expect(opts.env.ARGUMENTS).toBe(workflowRun.user_message);
+      expect(opts.env.USER_MESSAGE).toBe(workflowRun.user_message);
+    } finally {
+      execSpy.mockRestore();
+    }
+  });
+
+  it('leaves a literal $ARGUMENTS in the script body inert (not substituted)', async () => {
+    const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'ok\n', stderr: '' });
+    try {
+      const workflowRun = makeWorkflowRun('script-literal', {
+        workflow_name: 'script-literal',
+        conversation_id: 'conv-script-literal',
+        user_message: '$(rm -rf /)',
+      });
+
+      const scriptNode: ScriptNode = {
+        id: 'legacy',
+        script: 'console.log("value: $ARGUMENTS")',
+        runtime: 'bun',
+      };
+
+      await executeDagWorkflow(
+        createMockDeps(),
+        createMockPlatform(),
+        'conv-script-literal',
+        testDir,
+        { name: 'script-literal-test', nodes: [scriptNode] },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      const [, args] = execSpy.mock.calls[0] as [string, string[], unknown];
+      // The dangerous payload is NOT interpolated into the source; $ARGUMENTS stays literal.
+      expect(args[2]).toBe('console.log("value: $ARGUMENTS")');
+      expect(args[2]).not.toContain('rm -rf');
+    } finally {
+      execSpy.mockRestore();
+    }
+  });
+
+  it('uv/python script delivers the user message and issue context via env vars', async () => {
+    const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'ok\n', stderr: '' });
+    try {
+      const workflowRun = makeWorkflowRun('script-inject-uv', {
+        workflow_name: 'script-inject-uv',
+        conversation_id: 'conv-script-uv',
+        user_message: 'py-message',
+      });
+
+      const scriptNode: ScriptNode = {
+        id: 'py',
+        script: "import os; print(os.environ['ARGUMENTS'])",
+        runtime: 'uv',
+      };
+
+      await executeDagWorkflow(
+        createMockDeps(),
+        createMockPlatform(),
+        'conv-script-uv',
+        testDir,
+        { name: 'script-uv-test', nodes: [scriptNode] },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig,
+        undefined, // configuredCommandFolder
+        'ISSUE #42 body text' // issueContext
+      );
+
+      const [cmd, args, opts] = execSpy.mock.calls[0] as [
+        string,
+        string[],
+        { env: NodeJS.ProcessEnv },
+      ];
+      expect(cmd).toBe('uv');
+      expect(args).toEqual(['run', 'python', '-c', "import os; print(os.environ['ARGUMENTS'])"]);
+      expect(opts.env.ARGUMENTS).toBe('py-message');
+      expect(opts.env.CONTEXT).toBe('ISSUE #42 body text');
+      expect(opts.env.EXTERNAL_CONTEXT).toBe('ISSUE #42 body text');
+      expect(opts.env.ISSUE_CONTEXT).toBe('ISSUE #42 body text');
+    } finally {
+      execSpy.mockRestore();
+    }
+  });
+
+  it('a configured project env var cannot shadow an engine-reserved value (#2115)', async () => {
+    const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'ok\n', stderr: '' });
+    try {
+      const workflowRun = makeWorkflowRun('script-env-collision', {
+        workflow_name: 'script-env-collision',
+        conversation_id: 'conv-script-collision',
+        user_message: 'the-real-arguments',
+      });
+
+      const scriptNode: ScriptNode = {
+        id: 'collide',
+        script: 'console.log(process.env.ARGUMENTS)',
+        runtime: 'bun',
+      };
+
+      // A codebase env var that (maliciously or by accident) reuses a reserved name,
+      // alongside a legitimate non-reserved var that must still pass through.
+      const configWithEnv: WorkflowConfig = {
+        ...minimalConfig,
+        envVars: { ARGUMENTS: 'PROJECT_OVERRIDE', CONTEXT: 'PROJECT_CTX', MY_VAR: 'keep-me' },
+      };
+
+      await executeDagWorkflow(
+        createMockDeps(),
+        createMockPlatform(),
+        'conv-script-collision',
+        testDir,
+        { name: 'script-env-collision', nodes: [scriptNode] },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        configWithEnv,
+        undefined, // configuredCommandFolder
+        'ENGINE_CONTEXT' // issueContext
+      );
+
+      const [, , opts] = execSpy.mock.calls[0] as [string, string[], { env: NodeJS.ProcessEnv }];
+      // Reserved workflow vars win over the colliding configured vars — the delivery
+      // channel this PR establishes can't be shadowed by a project env var.
+      expect(opts.env.ARGUMENTS).toBe('the-real-arguments');
+      expect(opts.env.CONTEXT).toBe('ENGINE_CONTEXT');
+      // Non-reserved configured vars still reach the subprocess.
+      expect(opts.env.MY_VAR).toBe('keep-me');
+    } finally {
+      execSpy.mockRestore();
+    }
+  });
+
+  it('still substitutes $nodeId.output raw into the script source (item 3 preserved)', async () => {
+    // upstream bash → 'UPSTREAM_RAW'; downstream bun script assigns $upstream.output directly.
+    const execSpy = spyOn(git, 'execFileAsync').mockImplementation(
+      async (_cmd: string, args: string[]) =>
+        args[0] === '-c'
+          ? { stdout: 'UPSTREAM_RAW\n', stderr: '' } // bash upstream
+          : { stdout: '', stderr: '' } // bun downstream
+    );
+    try {
+      const workflowRun = makeWorkflowRun('script-nodeoutput', {
+        workflow_name: 'script-nodeoutput',
+        conversation_id: 'conv-script-nodeoutput',
+        user_message: 'msg',
+      });
+
+      const nodes: DagNode[] = [
+        { id: 'upstream', bash: 'printf UPSTREAM_RAW' },
+        {
+          id: 'downstream',
+          script: 'const v = "$upstream.output"; console.log(v)',
+          runtime: 'bun',
+          depends_on: ['upstream'],
+        },
+      ];
+
+      await executeDagWorkflow(
+        createMockDeps(),
+        createMockPlatform(),
+        'conv-script-nodeoutput',
+        testDir,
+        { name: 'script-nodeoutput-test', nodes },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      const scriptCall = execSpy.mock.calls.find(
+        c => (c[0] as string) === 'bun' && (c[1] as string[]).includes('-e')
+      ) as [string, string[], unknown] | undefined;
+      expect(scriptCall).toBeDefined();
+      // Raw (unquoted) node-output splice is intact — the direct-assignment pattern.
+      expect(scriptCall?.[1][2]).toBe('const v = "UPSTREAM_RAW"; console.log(v)');
+    } finally {
+      execSpy.mockRestore();
+    }
+  });
+
+  it('warns when a script body still uses a literal user-controlled variable', async () => {
+    const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'ok\n', stderr: '' });
+    try {
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun('script-warn', {
+        workflow_name: 'script-warn',
+        conversation_id: 'conv-script-warn',
+        user_message: 'hi',
+      });
+
+      const scriptNode: ScriptNode = {
+        id: 'legacy',
+        script: 'console.log("$ARGUMENTS and $CONTEXT")',
+        runtime: 'bun',
+      };
+
+      await executeDagWorkflow(
+        createMockDeps(),
+        platform,
+        'conv-script-warn',
+        testDir,
+        { name: 'script-warn-test', nodes: [scriptNode] },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      const messages = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.map(
+        (c: unknown[]) => c[1] as string
+      );
+      const warn = messages.find(m => m.includes('no longer') && m.includes('#2115'));
+      expect(warn).toBeDefined();
+      // Language-appropriate accessor is suggested for both referenced vars.
+      expect(warn).toContain('process.env.ARGUMENTS');
+      expect(warn).toContain('process.env.CONTEXT');
+    } finally {
+      execSpy.mockRestore();
+    }
+  });
+
+  it('does not warn when the script reads values from the environment (correct form)', async () => {
+    const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'ok\n', stderr: '' });
+    try {
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun('script-nowarn', {
+        workflow_name: 'script-nowarn',
+        conversation_id: 'conv-script-nowarn',
+        user_message: 'hi',
+      });
+
+      const scriptNode: ScriptNode = {
+        id: 'modern',
+        // Contains the substring "ARGUMENTS" but not the literal $ARGUMENTS ref.
+        script: 'console.log(process.env.ARGUMENTS ?? "")',
+        runtime: 'bun',
+      };
+
+      await executeDagWorkflow(
+        createMockDeps(),
+        platform,
+        'conv-script-nowarn',
+        testDir,
+        { name: 'script-nowarn-test', nodes: [scriptNode] },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      const messages = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.map(
+        (c: unknown[]) => c[1] as string
+      );
+      expect(messages.find(m => m.includes('no longer substituted'))).toBeUndefined();
+    } finally {
+      execSpy.mockRestore();
+    }
+  });
+});
+
 describe('executeDagWorkflow -- output_format structured output', () => {
   let testDir: string;
 
@@ -11075,6 +11426,79 @@ describe('executeDagWorkflow -- loop_group node', () => {
     expect(result).toContain('iteration 2 final result');
   });
 
+  it('delivers $LOOP_USER_INPUT to a resumed body script via env, never spliced into source (#2115)', async () => {
+    // Resumed interactive group: the approval-gate free-text must reach the body script
+    // as an env var, not as text interpolated into the executed TS source.
+    const injection = '"); process.exit(1); //';
+    const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'DONE\n', stderr: '' });
+    try {
+      const mockDeps = createMockDeps();
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun('lg-userinput-script', {
+        metadata: {
+          approval: {
+            type: 'interactive_loop',
+            nodeId: 'grp',
+            iteration: 0,
+            message: 'Review and provide feedback.',
+          },
+          loop_user_input: injection,
+          loop_feedback_given: true,
+        },
+      });
+
+      const nodes: DagNode[] = [
+        {
+          id: 'grp',
+          loop_group: {
+            until: 'DONE',
+            max_iterations: 3,
+            fresh_context: true,
+            interactive: true,
+            gate_message: 'Review and provide feedback.',
+            nodes: [
+              {
+                id: 'emit',
+                script: 'console.log("$LOOP_USER_INPUT"); console.log("DONE")',
+                runtime: 'bun',
+                depends_on: [],
+              },
+            ],
+          },
+          depends_on: [],
+        },
+      ];
+
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-lg-userinput',
+        testDir,
+        { name: 'lg-userinput-script', nodes },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      const scriptCall = execSpy.mock.calls.find(
+        c => (c[0] as string) === 'bun' && (c[1] as string[]).includes('-e')
+      ) as [string, string[], { env: NodeJS.ProcessEnv }] | undefined;
+      expect(scriptCall).toBeDefined();
+      // Source is byte-identical to the author's body — the payload is not interpolated.
+      expect(scriptCall?.[1][2]).toBe('console.log("$LOOP_USER_INPUT"); console.log("DONE")');
+      expect(scriptCall?.[1][2]).not.toContain('process.exit');
+      // The per-iteration feedback reaches the script through the environment.
+      expect(scriptCall?.[2].env.LOOP_USER_INPUT).toBe(injection);
+    } finally {
+      execSpy.mockRestore();
+    }
+  });
+
   it('fails the loop_group when max_iterations is exceeded without the until signal', async () => {
     let callCount = 0;
     mockSendQueryDag.mockImplementation(function* () {
@@ -11792,6 +12216,35 @@ describe('executeDagWorkflow -- loop_group node', () => {
       ''
     );
     expect('cancel' in cancelNode && cancelNode.cancel).toBe("stopping: it's done");
+  });
+
+  it('EDGE H: never splices $LOOP_USER_INPUT into a script body — env delivery only (#2115)', () => {
+    // Malicious approval-gate free-text. Raw-spliced into TS source it would close the
+    // string literal and execute; it must stay an inert literal token in the script so
+    // executeScriptNode delivers the value out-of-band via env instead.
+    const injection = '"); require("child_process").execSync("touch pwned"); //';
+
+    const scriptNode = applyLoopPrevToBodyNode(
+      {
+        id: 's',
+        script: 'console.log("$LOOP_USER_INPUT")',
+        runtime: 'bun',
+        depends_on: [],
+      } as DagNode,
+      undefined,
+      injection
+    );
+    // Literal token preserved; the payload never reaches the executed source.
+    expect('script' in scriptNode && scriptNode.script).toBe('console.log("$LOOP_USER_INPUT")');
+
+    // bash stays shell-quoted (the existing safe channel) — proving only scripts changed.
+    const bashNode = applyLoopPrevToBodyNode(
+      { id: 'b', bash: 'echo $LOOP_USER_INPUT', depends_on: [] } as DagNode,
+      undefined,
+      injection
+    );
+    // No single quotes in the payload → shellQuote wraps it verbatim in single quotes.
+    expect('bash' in bashNode && bashNode.bash).toBe(`echo '${injection}'`);
   });
 
   it('EDGE H: nested loop until_bash gets $LOOP_PREV substituted shell-safely (unit)', () => {
