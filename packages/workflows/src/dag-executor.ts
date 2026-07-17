@@ -2358,7 +2358,14 @@ async function executeBashNode(
   const timeout = node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT;
   // Archon-managed env only — runSubprocess adds the host env for host runs and
   // delivers ONLY this bag into the container (host process.env never crosses).
+  // Configured project env (envVars) spreads FIRST so the engine-reserved keys below
+  // always win — a codebase env var named ARGUMENTS/CONTEXT/… must never shadow the
+  // values this node delivers (that IS the injection-safe delivery channel, #2115).
+  // The GitHub-token scrub keys (GH_TOKEN/GITHUB_TOKEN/COPILOT_GITHUB_TOKEN) are
+  // disjoint from the reserved set and stay in the bag, still overriding the ambient
+  // host token via runSubprocess's process.env layering — the scrub is unaffected.
   const subprocessEnv: NodeJS.ProcessEnv = {
+    ...(envVars ?? {}),
     ARTIFACTS_DIR: artifactsDir,
     LOG_DIR: logDir,
     BASE_BRANCH: baseBranch,
@@ -2370,7 +2377,6 @@ async function executeBashNode(
     CONTEXT: issueContext ?? '',
     EXTERNAL_CONTEXT: issueContext ?? '',
     ISSUE_CONTEXT: issueContext ?? '',
-    ...(envVars ?? {}),
   };
 
   const bashPath = resolveBashPath();
@@ -2610,7 +2616,12 @@ async function executeScriptNode(
   // delivers ONLY this bag into the container (host process.env never crosses).
   // User-controlled values ride env vars (never spliced into source) — the
   // sanctioned injection-safe channel, matching executeBashNode (#2115).
+  // Configured project env (envVars) spreads FIRST so the engine-reserved keys below
+  // always win — a codebase env var named ARGUMENTS/CONTEXT/… must never shadow this
+  // delivery channel. The GitHub-token scrub keys are disjoint from the reserved set
+  // and still override the ambient host token via runSubprocess (scrub unaffected).
   const subprocessEnv: NodeJS.ProcessEnv = {
+    ...(envVars ?? {}),
     ARTIFACTS_DIR: artifactsDir,
     LOG_DIR: logDir,
     BASE_BRANCH: baseBranch,
@@ -2622,7 +2633,6 @@ async function executeScriptNode(
     CONTEXT: issueContext ?? '',
     EXTERNAL_CONTEXT: issueContext ?? '',
     ISSUE_CONTEXT: issueContext ?? '',
-    ...(envVars ?? {}),
   };
 
   // Build the command and args based on runtime and inline vs named
@@ -3256,8 +3266,12 @@ async function executeLoopGroupNode(
           timeout: SUBPROCESS_DEFAULT_TIMEOUT,
           // Archon-managed env only (no process.env spread) — runSubprocess
           // layers the host env for host runs, or delivers ONLY this bag into
-          // the container.
+          // the container. Configured project env spreads FIRST so the reserved
+          // workflow vars below win over any colliding codebase env var (#2115);
+          // the token-scrub keys are disjoint and still override the ambient host
+          // token via runSubprocess, so the unconnected-user scrub is unaffected.
           env: {
+            ...(config.envVars ?? {}),
             USER_MESSAGE: workflowRun.user_message,
             ARGUMENTS: workflowRun.user_message,
             LOOP_USER_INPUT: i === startIteration ? (loopUserInput ?? '') : '',
@@ -3266,7 +3280,6 @@ async function executeLoopGroupNode(
             CONTEXT: issueContext ?? '',
             EXTERNAL_CONTEXT: issueContext ?? '',
             ISSUE_CONTEXT: issueContext ?? '',
-            ...(config.envVars ?? {}),
           },
         });
         bashComplete = true;
@@ -4216,8 +4229,15 @@ async function executeLoopNode(
           timeout: SUBPROCESS_DEFAULT_TIMEOUT,
           // Archon-managed env only (no process.env spread) — runSubprocess
           // layers the host env for host runs, or delivers ONLY this bag into
-          // the container.
+          // the container. Configured project env (managed per-project vars +
+          // per-user GitHub token overrides incl. the unconnected-user scrub)
+          // spreads FIRST so the reserved workflow vars below win over any
+          // colliding codebase env var (#2115). The scrub keys (GH_TOKEN/
+          // GITHUB_TOKEN/COPILOT_GITHUB_TOKEN) are disjoint from the reserved set
+          // and stay in the bag, so they still override the server's ambient GH
+          // token via runSubprocess's process.env layering — scrub unaffected.
           env: {
+            ...(config.envVars ?? {}),
             USER_MESSAGE: workflowRun.user_message,
             ARGUMENTS: workflowRun.user_message,
             LOOP_USER_INPUT: i === startIteration ? (loopUserInput ?? '') : '',
@@ -4226,11 +4246,6 @@ async function executeLoopNode(
             CONTEXT: issueContext ?? '',
             EXTERNAL_CONTEXT: issueContext ?? '',
             ISSUE_CONTEXT: issueContext ?? '',
-            // Managed per-project env vars + per-user GitHub token overrides
-            // (incl. the unconnected-user scrub) must win last, exactly as
-            // executeBashNode/executeScriptNode do — otherwise until_bash would
-            // inherit the server's ambient GH token and bypass the scrub.
-            ...(config.envVars ?? {}),
           },
         });
         bashComplete = true; // exit 0 = complete

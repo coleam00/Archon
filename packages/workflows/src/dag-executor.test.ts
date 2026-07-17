@@ -2008,11 +2008,9 @@ describe('executeDagWorkflow -- script node injection hardening (#2115)', () => 
   });
 
   afterEach(async () => {
-    try {
-      await rm(testDir, { recursive: true, force: true });
-    } catch {
-      // ignore cleanup errors
-    }
+    // force: true already no-ops on a missing dir — any other failure (EBUSY/EPERM)
+    // should surface, not be swallowed.
+    await rm(testDir, { recursive: true, force: true });
   });
 
   it('bun script delivers the user message via env var, never spliced into source', async () => {
@@ -2150,6 +2148,58 @@ describe('executeDagWorkflow -- script node injection hardening (#2115)', () => 
       expect(opts.env.CONTEXT).toBe('ISSUE #42 body text');
       expect(opts.env.EXTERNAL_CONTEXT).toBe('ISSUE #42 body text');
       expect(opts.env.ISSUE_CONTEXT).toBe('ISSUE #42 body text');
+    } finally {
+      execSpy.mockRestore();
+    }
+  });
+
+  it('a configured project env var cannot shadow an engine-reserved value (#2115)', async () => {
+    const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'ok\n', stderr: '' });
+    try {
+      const workflowRun = makeWorkflowRun('script-env-collision', {
+        workflow_name: 'script-env-collision',
+        conversation_id: 'conv-script-collision',
+        user_message: 'the-real-arguments',
+      });
+
+      const scriptNode: ScriptNode = {
+        id: 'collide',
+        script: 'console.log(process.env.ARGUMENTS)',
+        runtime: 'bun',
+      };
+
+      // A codebase env var that (maliciously or by accident) reuses a reserved name,
+      // alongside a legitimate non-reserved var that must still pass through.
+      const configWithEnv: WorkflowConfig = {
+        ...minimalConfig,
+        envVars: { ARGUMENTS: 'PROJECT_OVERRIDE', CONTEXT: 'PROJECT_CTX', MY_VAR: 'keep-me' },
+      };
+
+      await executeDagWorkflow(
+        createMockDeps(),
+        createMockPlatform(),
+        'conv-script-collision',
+        testDir,
+        { name: 'script-env-collision', nodes: [scriptNode] },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        configWithEnv,
+        undefined, // configuredCommandFolder
+        'ENGINE_CONTEXT' // issueContext
+      );
+
+      const [, , opts] = execSpy.mock.calls[0] as [string, string[], { env: NodeJS.ProcessEnv }];
+      // Reserved workflow vars win over the colliding configured vars — the delivery
+      // channel this PR establishes can't be shadowed by a project env var.
+      expect(opts.env.ARGUMENTS).toBe('the-real-arguments');
+      expect(opts.env.CONTEXT).toBe('ENGINE_CONTEXT');
+      // Non-reserved configured vars still reach the subprocess.
+      expect(opts.env.MY_VAR).toBe('keep-me');
     } finally {
       execSpy.mockRestore();
     }
