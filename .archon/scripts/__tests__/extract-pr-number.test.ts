@@ -56,7 +56,7 @@ describe('extract-pr-number: anchored forms win', () => {
     expect(run('https://github.com/coleam00/Archon/pull/1428').stdout.trim()).toBe('1428'));
   it('issues URL', () =>
     expect(run('https://github.com/coleam00/Archon/issues/1428').stdout.trim()).toBe('1428'));
-  it('pr2-tool slug does not win over pull/1428 (S3 precedence)', () =>
+  it('pr2-tool slug does not win over pull/1428 (anchor precedence)', () =>
     expect(run('https://github.com/pr2-tool/Archon/pull/1428').stdout.trim()).toBe('1428'));
   it('ignores an unanchored digit token when an anchor is present', () =>
     expect(run('the 2nd one, pr #1428').stdout.trim()).toBe('1428'));
@@ -67,20 +67,20 @@ describe('extract-pr-number: bare number only when whole input', () => {
 });
 
 describe('extract-pr-number: loud errors (no silent wrong number)', () => {
-  it('errors on anchor-less prose with a leading digit token (I1: coleam00 fix 1428)', () => {
+  it('errors on anchor-less prose with a leading digit token (coleam00 fix 1428)', () => {
     const r = run('coleam00 fix 1428');
     expect(r.code).toBe(1);
     expect(r.stdout.trim()).toBe('');
     expect(r.stderr).toContain('no PR number found');
   });
 
-  it('errors on a version string with a trailing number (I1: v1.2.3 changelog for 1428)', () => {
+  it('errors on a version string with a trailing number (v1.2.3 changelog for 1428)', () => {
     const r = run('v1.2.3 changelog for 1428');
     expect(r.code).toBe(1);
     expect(r.stderr).toContain('no PR number found');
   });
 
-  it('errors on ambiguous multi-number input, listing them (I2)', () => {
+  it('errors on ambiguous multi-number input, listing them', () => {
     const r = run('see #1400, should relate to PR 1428');
     expect(r.code).toBe(1);
     expect(r.stderr).toContain('ambiguous');

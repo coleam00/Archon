@@ -5,6 +5,9 @@ description: |
   runs a deterministic security scan, runs a Haiku AI review, then decides:
   auto-merge / auto-approve / request-changes / reject.
   Clean submissions (scan severity none, AI approval) are auto-merged.
+  Rejects auto-close the PR only when a deterministic signal concurred (a
+  scope violation or a critical/high security scan); an AI-only reject posts a
+  request-changes review and stays open, flagged for a maintainer to close.
   Triggers: "marketplace review", "review marketplace PR <n>",
             "marketplace-pr-review-and-merge <n>".
   Arguments: PR number (integer).

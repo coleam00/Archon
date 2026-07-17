@@ -57,9 +57,7 @@ if (!artifactsDir) {
 }
 
 const sourceDir = resolve(artifactsDir, 'source');
-if (!existsSync(sourceDir)) {
-  // Empty files list => no workflow found; decide treats this as request_changes.
-  console.log(JSON.stringify({ valid: true, files: [], note: 'no source directory' }));
+if (!existsSync(sourceDir)) {  console.log(JSON.stringify({ valid: true, files: [], note: 'no source directory' }));
   process.exit(0);
 }
 
@@ -78,9 +76,7 @@ function findYamlFiles(dir: string): string[] {
 
 const yamlFiles = findYamlFiles(sourceDir);
 
-if (yamlFiles.length === 0) {
-  // Empty files list => no workflow found; decide treats this as request_changes.
-  console.log(JSON.stringify({ valid: true, files: [], note: 'no yaml files found' }));
+if (yamlFiles.length === 0) {  console.log(JSON.stringify({ valid: true, files: [], note: 'no yaml files found' }));
   process.exit(0);
 }
 
@@ -90,9 +86,7 @@ if (yamlFiles.length === 0) {
 // produces false-positive errors and tanks legitimate submissions.
 const workflowFiles = yamlFiles.filter((p) => looksLikeWorkflow(readFileSync(p, 'utf8')));
 
-if (workflowFiles.length === 0) {
-  // Empty files list => no workflow found; decide treats this as request_changes.
-  console.log(JSON.stringify({ valid: true, files: [], note: 'no workflow yaml files (no top-level nodes:)' }));
+if (workflowFiles.length === 0) {  console.log(JSON.stringify({ valid: true, files: [], note: 'no workflow yaml files (no top-level nodes:)' }));
   process.exit(0);
 }
 

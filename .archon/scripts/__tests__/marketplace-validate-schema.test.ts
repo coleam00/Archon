@@ -51,7 +51,7 @@ nodes:
 // The empty-list contract these tests pin: `files: []` means "no workflow YAML
 // found at the pinned SHA". validate-schema emits valid:true for it (nothing
 // FAILED validation), but the decide node in marketplace-pr-review-and-merge
-// must treat an empty list as request_changes, never as a merge signal (B3).
+// must treat an empty list as request_changes, never as a merge signal.
 describe('marketplace-validate-schema: empty-submission contract', () => {
   it('returns files:[] when there is no source directory', () => {
     const result = runValidator(null);
