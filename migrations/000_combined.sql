@@ -236,6 +236,7 @@ CREATE TABLE IF NOT EXISTS remote_agent_workflow_runs (
   user_message TEXT NOT NULL,
   metadata JSONB DEFAULT '{}',
   parent_conversation_id UUID REFERENCES remote_agent_conversations(id) ON DELETE SET NULL,
+  parent_run_id UUID REFERENCES remote_agent_workflow_runs(id) ON DELETE SET NULL,
   started_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   completed_at TIMESTAMP WITH TIME ZONE,
   last_activity_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
@@ -413,6 +414,16 @@ CREATE INDEX IF NOT EXISTS idx_conversations_user_id
   ON remote_agent_conversations(user_id) WHERE user_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_workflow_runs_user_id
   ON remote_agent_workflow_runs(user_id) WHERE user_id IS NOT NULL;
+
+-- Run-tree parent (#2121 Phase 2): a `workflow:` sub-run links back to the run
+-- that spawned it. Self-referential FK, ON DELETE SET NULL so deleting a parent
+-- orphans children rather than cascade-deleting their audit trail. First
+-- self-referential FK on this table — declared identically on SQLite (sqlite.ts).
+ALTER TABLE remote_agent_workflow_runs
+  ADD COLUMN IF NOT EXISTS parent_run_id UUID
+    REFERENCES remote_agent_workflow_runs(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_workflow_runs_parent_run
+  ON remote_agent_workflow_runs(parent_run_id) WHERE parent_run_id IS NOT NULL;
 
 -- From PR-C: per-user GitHub user-to-server tokens (device flow), encrypted at rest.
 -- One row per Archon user; cascades on user deletion. github_user_id is the

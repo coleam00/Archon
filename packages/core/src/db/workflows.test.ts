@@ -77,6 +77,7 @@ describe('workflows database', () => {
           null,
           null,
           null,
+          null,
         ]
       );
     });
@@ -108,6 +109,7 @@ describe('workflows database', () => {
           null,
           null,
           null,
+          null,
         ]
       );
     });
@@ -125,7 +127,17 @@ describe('workflows database', () => {
       expect(result.codebase_id).toBeNull();
       expect(mockQuery).toHaveBeenCalledWith(
         expect.stringContaining('INSERT INTO remote_agent_workflow_runs'),
-        ['feature-development', 'conv-456', null, 'Add dark mode support', '{}', null, null, null]
+        [
+          'feature-development',
+          'conv-456',
+          null,
+          'Add dark mode support',
+          '{}',
+          null,
+          null,
+          null,
+          null,
+        ]
       );
     });
   });

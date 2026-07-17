@@ -228,6 +228,7 @@ export async function createWorkflowRun(data: {
   working_path?: string;
   parent_conversation_id?: string;
   user_id?: string;
+  parent_run_id?: string;
 }): Promise<WorkflowRun> {
   // Serialize metadata with validation to catch circular references early
   let metadataJson: string;
@@ -262,8 +263,8 @@ export async function createWorkflowRun(data: {
   try {
     const result = await pool.query<WorkflowRun>(
       `INSERT INTO remote_agent_workflow_runs
-       (workflow_name, conversation_id, codebase_id, user_message, metadata, working_path, parent_conversation_id, user_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       (workflow_name, conversation_id, codebase_id, user_message, metadata, working_path, parent_conversation_id, user_id, parent_run_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING *`,
       [
         data.workflow_name,
@@ -274,6 +275,7 @@ export async function createWorkflowRun(data: {
         data.working_path ?? null,
         data.parent_conversation_id ?? null,
         data.user_id ?? null,
+        data.parent_run_id ?? null,
       ]
     );
     const row = result.rows[0];
@@ -432,7 +434,7 @@ export const STALE_PENDING_AGE_MS = 5 * 60 * 1000; // 5 minutes
 
 export async function getActiveWorkflowRunByPath(
   workingPath: string,
-  self?: { id: string; startedAt: Date }
+  self?: { id: string; startedAt: Date; excludeRunIds?: string[] }
 ): Promise<WorkflowRun | null> {
   const isPostgres = getDatabaseType() === 'postgresql';
   const stalePendingCutoff = isPostgres
@@ -449,6 +451,17 @@ export async function getActiveWorkflowRunByPath(
   if (self !== undefined) {
     params.push(self.id);
     clauses.push(`id != $${String(params.length)}`);
+  }
+  // Exclude the caller's ancestor chain (#2121 Phase 2): a `workflow:` sub-run
+  // shares the parent's checkout, so the parent's own running/paused row on this
+  // path must NOT count as a lock against the child. Each id is a separate
+  // placeholder so both dialects bind positionally (no array binding).
+  if (self?.excludeRunIds && self.excludeRunIds.length > 0) {
+    const placeholders = self.excludeRunIds.map(id => {
+      params.push(id);
+      return `$${String(params.length)}`;
+    });
+    clauses.push(`id NOT IN (${placeholders.join(', ')})`);
   }
   if (self !== undefined) {
     // Older-wins tiebreaker. (started_at, id) is a total order so both
@@ -489,6 +502,58 @@ export async function getActiveWorkflowRunByPath(
     getLog().error({ err, workingPath }, 'db.workflow_run_get_active_by_path_failed');
     throw new Error(`Failed to get active workflow run by path: ${err.message}`);
   }
+}
+
+/**
+ * Find every run spawned as a child of `parentRunId` (#2121 Phase 2), oldest
+ * first. Callers filter further by `metadata.parent_node_id` (a parent may have
+ * several `workflow:` nodes) or by status (the abandon cascade cancels
+ * non-terminal children).
+ */
+export async function findChildRuns(parentRunId: string): Promise<WorkflowRun[]> {
+  try {
+    const result = await pool.query<WorkflowRun>(
+      'SELECT * FROM remote_agent_workflow_runs WHERE parent_run_id = $1 ORDER BY started_at ASC',
+      [parentRunId]
+    );
+    return result.rows.map(row => normalizeWorkflowRun(row));
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, parentRunId }, 'db.workflow_run_find_children_failed');
+    throw new Error(`Failed to find child workflow runs: ${err.message}`);
+  }
+}
+
+/**
+ * Safety cap on the `parent_run_id` walk. The load-time and runtime cycle guards
+ * prevent creating a cyclic run tree, but a hand-edited DB must never hang the
+ * walk — deeper than the runtime depth cap (5) so a legitimately deep-but-bounded
+ * tree still resolves fully.
+ */
+const MAX_RUN_ANCESTRY_DEPTH = 32;
+
+/**
+ * Walk `parent_run_id` from `runId` up to the root, returning ancestors nearest
+ * first (the immediate parent at index 0). Depth-capped and cycle-safe (a
+ * repeated id stops the walk). Used by the runtime cycle guard and to build the
+ * path-lock exclusion set for a shared-checkout sub-run.
+ */
+export async function getRunAncestry(runId: string): Promise<WorkflowRun[]> {
+  const ancestors: WorkflowRun[] = [];
+  const seen = new Set<string>([runId]);
+  let current = await getWorkflowRun(runId);
+  let depth = 0;
+  while (current?.parent_run_id && depth < MAX_RUN_ANCESTRY_DEPTH) {
+    const parentId = current.parent_run_id;
+    if (seen.has(parentId)) break; // cyclic data — stop rather than loop forever
+    const parent = await getWorkflowRun(parentId);
+    if (!parent) break; // parent deleted (ON DELETE SET NULL orphan) — chain ends
+    ancestors.push(parent);
+    seen.add(parentId);
+    current = parent;
+    depth++;
+  }
+  return ancestors;
 }
 
 export async function findLatestRunByWorkingPath(workingPath: string): Promise<WorkflowRun | null> {

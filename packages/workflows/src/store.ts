@@ -78,8 +78,26 @@ export interface IWorkflowStore {
     parent_conversation_id?: string;
     /** Archon user UUID; populated via ExecuteWorkflowOptions.userId. */
     user_id?: string;
+    /**
+     * Run-tree parent (#2121 Phase 2). Set for a `workflow:` sub-run so its row
+     * links back to the spawning parent run; omitted for top-level runs.
+     */
+    parent_run_id?: string;
   }): Promise<WorkflowRun>;
   getWorkflowRun(id: string): Promise<WorkflowRun | null>;
+  /**
+   * Find every run whose `parent_run_id` is `parentRunId` (#2121 Phase 2). Used
+   * by a `workflow:` node's re-entry logic to locate its child (filtered further
+   * by `metadata.parent_node_id`) and by the abandon cascade to cancel children.
+   */
+  findChildRuns(parentRunId: string): Promise<WorkflowRun[]>;
+  /**
+   * Walk the `parent_run_id` chain from `runId` UP to the root, returning the
+   * ancestors (nearest parent first), depth-capped. Used by the runtime cycle
+   * guard (reject a child whose target name is already an ancestor) and to build
+   * the path-lock exclusion set.
+   */
+  getRunAncestry(runId: string): Promise<WorkflowRun[]>;
   /**
    * Find the workflow run currently holding the lock on `workingPath`.
    *
@@ -95,10 +113,15 @@ export interface IWorkflowStore {
    * Stale `pending` rows (older than ~5 minutes) are treated as orphaned
    * and ignored, so leaks from crashed dispatches don't permanently block
    * a path.
+   *
+   * `excludeRunIds` additionally drops those run ids from the active set. A
+   * `workflow:` sub-run shares its parent's checkout (#2121 Phase 2), so the
+   * child's path-lock must exclude its ancestor chain — otherwise the child
+   * self-blocks against the parent's own `running`/`paused` row on that path.
    */
   getActiveWorkflowRunByPath(
     workingPath: string,
-    self?: { id: string; startedAt: Date }
+    self?: { id: string; startedAt: Date; excludeRunIds?: string[] }
   ): Promise<WorkflowRun | null>;
   findResumableRun(workflowName: string, workingPath: string): Promise<WorkflowRun | null>;
   failOrphanedRuns(): Promise<{ count: number }>;
