@@ -117,6 +117,11 @@ describe('ContainerBackend.prepare', () => {
     expect(joined).toContain('archon-runner:test');
     // The winning mode is recorded on the row metadata.
     expect((store.created?.metadata as { overlayMode: string }).overlayMode).toBe('fuse');
+
+    // The upper volume carries the same managed label as the container, so leak
+    // detection + cleanup can discover BOTH resource types by label.
+    const volumeCreate = docker.calls.find(c => c[0] === 'volume' && c[1] === 'create');
+    expect(volumeCreate?.join(' ')).toContain('--label diy.archon.managed=true');
   });
 
   test('falls back to native mode (CAP_SYS_ADMIN) when fuse never becomes ready', async () => {

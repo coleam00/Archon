@@ -150,8 +150,21 @@ export class ContainerBackend implements IIsolationBackend {
     );
 
     // 1. Per-run upper volume (VM-local — overlay upperdir/workdir must NEVER be
-    //    on a host bind mount, orbstack#1376 EACCES on macOS).
-    await this.docker(['volume', 'create', volume]);
+    //    on a host bind mount, orbstack#1376 EACCES on macOS). Stamped with the same
+    //    labels as the container so leak-detection + cleanup can discover BOTH
+    //    resource types by `diy.archon.managed` label, not just the `archon-` name
+    //    prefix (volumes from older builds carry no label — match the prefix there).
+    await this.docker([
+      'volume',
+      'create',
+      '--label',
+      `${CONTAINER_LABELS.managed}=true`,
+      '--label',
+      `${CONTAINER_LABELS.codebaseId}=${req.codebase.id}`,
+      '--label',
+      `${CONTAINER_LABELS.envId}=${containerName}`,
+      volume,
+    ]);
 
     // 2. Create + start the container, mounting the overlay with the
     //    least-privileged mode that works (fuse without CAP_SYS_ADMIN first,
