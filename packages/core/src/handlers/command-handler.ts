@@ -1261,8 +1261,7 @@ description: Example command
 This is an example command.
 
 Arguments:
-- $1 - First positional argument
-- $ARGUMENTS - All arguments as string
+- $ARGUMENTS - The full trigger message
 
 Task: $ARGUMENTS
 `;
