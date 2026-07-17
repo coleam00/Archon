@@ -66,6 +66,58 @@ describe('isolation-environments', () => {
     });
   });
 
+  // SQLite stores `metadata` as TEXT and hands it back as a JSON STRING; Postgres
+  // returns a parsed object. The store boundary must normalize the string form so
+  // `IsolationEnvironmentRow.metadata` is a real object on both dialects — otherwise
+  // a consumer (e.g. container destroy) reads `metadata.containerName` off a string
+  // as undefined and leaks the container. We simulate the SQLite shape by returning
+  // a stringified `metadata` from the mocked query.
+  describe('metadata normalization (dialect boundary)', () => {
+    test('getById parses a SQLite JSON-string metadata into an object', async () => {
+      const meta = { containerName: 'archon-x', volume: 'archon-x-upper' };
+      const sqliteRow = {
+        ...sampleEnv,
+        metadata: JSON.stringify(meta),
+      } as unknown as IsolationEnvironmentRow;
+      mockQuery.mockResolvedValueOnce(createQueryResult([sqliteRow]));
+
+      const result = await getById('env-123');
+
+      expect(result?.metadata).toEqual(meta);
+      expect(typeof result?.metadata).toBe('object');
+    });
+
+    test('getById normalizes a corrupt metadata string to {} (no throw)', async () => {
+      const badRow = { ...sampleEnv, metadata: '{not json' } as unknown as IsolationEnvironmentRow;
+      mockQuery.mockResolvedValueOnce(createQueryResult([badRow]));
+
+      const result = await getById('env-123');
+
+      expect(result?.metadata).toEqual({});
+    });
+
+    test('listByCodebase normalizes metadata for every row', async () => {
+      const rows = [
+        { ...sampleEnv, id: 'e1', metadata: JSON.stringify({ a: 1 }) },
+        { ...sampleEnv, id: 'e2', metadata: JSON.stringify({ b: 2 }) },
+      ] as unknown as IsolationEnvironmentRow[];
+      mockQuery.mockResolvedValueOnce(createQueryResult(rows));
+
+      const result = await listByCodebase('codebase-456');
+
+      expect(result.map(r => r.metadata)).toEqual([{ a: 1 }, { b: 2 }]);
+    });
+
+    test('an already-parsed (Postgres) object metadata passes through unchanged', async () => {
+      const meta = { containerName: 'archon-pg' };
+      mockQuery.mockResolvedValueOnce(createQueryResult([{ ...sampleEnv, metadata: meta }]));
+
+      const result = await getById('env-123');
+
+      expect(result?.metadata).toEqual(meta);
+    });
+  });
+
   describe('findActiveByWorkflow', () => {
     test('finds active environment by workflow identity', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([sampleEnv]));

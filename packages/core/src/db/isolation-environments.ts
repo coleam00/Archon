@@ -18,6 +18,33 @@ function getLog(): ReturnType<typeof createLogger> {
 }
 
 /**
+ * Normalize an isolation-environment row so `metadata` is ALWAYS a parsed object,
+ * regardless of dialect. SQLite stores `metadata` as TEXT (a JSON string,
+ * `JSON.stringify`'d on write) while Postgres returns a parsed JSONB object — so the
+ * raw SQLite row hands back a STRING, which makes `IsolationEnvironmentRow.metadata`
+ * (typed `Record<string, unknown>`) a lie on SQLite. That lie once leaked a container
+ * during Phase B smoke testing: `destroy()` read `metadata.containerName` off the
+ * string as `undefined` and silently skipped `docker rm`. Parsing here at the store
+ * boundary makes the type TRUE for every consumer, so no downstream reader has to
+ * re-guard the shape. A corrupt string is logged and normalized to `{}` — the read
+ * stays resilient (one bad row must not break `isolation list`/cleanup for all rows),
+ * while the destructive path (container `destroy()`) still throws loudly when the
+ * resulting object lacks the fields it needs. Mirrors `normalizeWorkflowRun` in
+ * `workflows.ts`. `metadata` is the only JSON column on this row.
+ */
+function normalizeEnvironmentRow<T extends IsolationEnvironmentRow>(row: T): T {
+  if (typeof row.metadata === 'string') {
+    try {
+      row.metadata = JSON.parse(row.metadata) as Record<string, unknown>;
+    } catch (err) {
+      getLog().warn({ envId: row.id, err: err as Error }, 'db.isolation_env_metadata_parse_failed');
+      row.metadata = {};
+    }
+  }
+  return row;
+}
+
+/**
  * Get an isolation environment by UUID
  */
 export async function getById(id: string): Promise<IsolationEnvironmentRow | null> {
@@ -25,7 +52,8 @@ export async function getById(id: string): Promise<IsolationEnvironmentRow | nul
     'SELECT * FROM remote_agent_isolation_environments WHERE id = $1',
     [id]
   );
-  return result.rows[0] ?? null;
+  const row = result.rows[0];
+  return row ? normalizeEnvironmentRow(row) : null;
 }
 
 /**
@@ -41,7 +69,8 @@ export async function findActiveByWorkflow(
      WHERE codebase_id = $1 AND workflow_type = $2 AND workflow_id = $3 AND status = 'active'`,
     [codebaseId, workflowType, workflowId]
   );
-  return result.rows[0] ?? null;
+  const row = result.rows[0];
+  return row ? normalizeEnvironmentRow(row) : null;
 }
 
 /**
@@ -56,7 +85,7 @@ export async function listByCodebase(
      ORDER BY created_at DESC`,
     [codebaseId]
   );
-  return result.rows;
+  return result.rows.map(normalizeEnvironmentRow);
 }
 
 /**
@@ -105,7 +134,7 @@ export async function create(env: CreateEnvironmentParams): Promise<IsolationEnv
     { envId: result.rows[0].id, codebaseId: env.codebase_id, branch: env.branch_name },
     'db.isolation_env_create_completed'
   );
-  return result.rows[0];
+  return normalizeEnvironmentRow(result.rows[0]);
 }
 
 /**
@@ -160,7 +189,8 @@ export async function findByRelatedIssue(
      LIMIT 1`,
     [codebaseId, String(issueNumber)]
   );
-  return result.rows[0] ?? null;
+  const row = result.rows[0];
+  return row ? normalizeEnvironmentRow(row) : null;
 }
 
 /**
@@ -212,7 +242,7 @@ export async function findStaleEnvironments(
        AND e.created_at < ${staleCreationThreshold}`,
     [staleDays, staleDays]
   );
-  return result.rows;
+  return result.rows.map(normalizeEnvironmentRow);
 }
 
 /**
@@ -232,7 +262,8 @@ export async function findActiveByBranchName(
      LIMIT 1`,
     [branchName]
   );
-  return result.rows[0] ?? null;
+  const row = result.rows[0];
+  return row ? normalizeEnvironmentRow(row) : null;
 }
 
 /**
@@ -256,7 +287,7 @@ export async function listAllActiveWithCodebase(): Promise<
      WHERE e.status = 'active'
      ORDER BY e.created_at DESC`
   );
-  return result.rows;
+  return result.rows.map(normalizeEnvironmentRow);
 }
 
 /**
@@ -283,7 +314,7 @@ export async function listByCodebaseWithAge(
      ORDER BY e.created_at DESC`,
     [codebaseId]
   );
-  return result.rows;
+  return result.rows.map(normalizeEnvironmentRow);
 }
 
 /**
@@ -309,7 +340,7 @@ export async function listActiveContainerEnvironments(): Promise<
      WHERE e.status = 'active' AND e.provider = 'container'
      ORDER BY e.created_at DESC`
   );
-  return result.rows;
+  return result.rows.map(normalizeEnvironmentRow);
 }
 
 /**

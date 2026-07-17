@@ -512,6 +512,32 @@ PI_CODING_AGENT_DIR=/.archon/pi
 
 This must be set before the container starts; the Pi SDK reads the variable on each file path lookup.
 
+### Folder-project container isolation (`--container`) is unavailable in Docker
+
+The folder-project **container backend** (`archon workflow run … --container`) launches a
+sibling Docker container per run to isolate a workflow's writes. It shells out to the
+`docker` CLI, which needs both the Docker CLI binary and access to the host Docker daemon
+socket (`/var/run/docker.sock`).
+
+**When Archon itself runs inside Docker (this compose stack), `--container` does not work:**
+the app image ships no `docker` CLI and the compose stack deliberately does **not** mount
+`/var/run/docker.sock`. A `--container` run fails fast at preflight with a
+"Cannot connect to the Docker daemon" error (the message calls out the dockerized case).
+Worktree isolation (the default for git repos) and in-place folder runs are unaffected —
+only the `--container` backend requires the daemon.
+
+:::caution
+Mounting the Docker socket into the app container to enable `--container` is a serious
+security tradeoff and is **not** part of the supported compose stack. The socket is
+**root-equivalent**: any process that can reach it can start a privileged container and
+take over the host. Combined with the `native`-overlay CAP_SYS_ADMIN escape, this widens
+the blast radius well beyond a single run. If you accept that tradeoff on a single-tenant,
+operator-trusted host, read `packages/isolation/docker/SECURITY.md` first — it documents
+the full threat model for the container backend. To use `--container` without exposing the
+socket, run Archon **directly on the host** (non-Docker install) with a local Docker daemon
+instead.
+:::
+
 ### GitHub CLI Authentication
 
 `GH_TOKEN` from `.env` is picked up automatically. Alternatively:
