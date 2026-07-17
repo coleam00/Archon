@@ -414,6 +414,13 @@ export interface PreparedEnv {
   cwd: string;
   execContext: ExecutionContext;
   envId?: string;
+  /**
+   * Overlay mount mode that actually took effect (container backend). `native`
+   * grants CAP_SYS_ADMIN, which lets in-container root remount the read-only lower
+   * read-write — i.e. the agent could bypass the write-back gate. The engine warns
+   * loudly at run start when this is `native` (see SECURITY.md). Absent for in-place.
+   */
+  overlayMode?: 'fuse' | 'native';
 }
 
 /**

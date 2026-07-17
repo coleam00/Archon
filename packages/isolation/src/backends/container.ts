@@ -225,6 +225,7 @@ export class ContainerBackend implements IIsolationBackend {
       cwd: hostRoot,
       execContext: { kind: 'container', containerId },
       envId: row.id,
+      overlayMode,
     };
   }
 
@@ -336,19 +337,21 @@ export class ContainerBackend implements IIsolationBackend {
     }
     const row = await this.store.getById(envId);
     const codebaseId = row?.codebase_id ?? '';
+    // The mode the row recorded; the recreate branch below may re-probe and override.
+    const priorMode: OverlayMode = meta.overlayMode ?? 'native';
 
     const presence = await this.describeContainer(containerName);
     if (presence === 'running') {
       const containerId = await this.getContainerId(containerName);
       log.info({ envId, containerName }, 'isolation.container_resume_reused_running');
-      return this.preparedEnvFor(containerId, workspacePath, envId);
+      return this.preparedEnvFor(containerId, workspacePath, envId, priorMode);
     }
     if (presence === 'stopped') {
       await this.docker(['start', containerName]);
       const containerId = await this.getContainerId(containerName);
       await this.waitForReady(containerId);
       log.info({ envId, containerName }, 'isolation.container_resume_restarted');
-      return this.preparedEnvFor(containerId, workspacePath, envId);
+      return this.preparedEnvFor(containerId, workspacePath, envId, priorMode);
     }
 
     // Container is gone. The overlay lives on the volume — recreate over it, or
@@ -361,14 +364,14 @@ export class ContainerBackend implements IIsolationBackend {
           'an aggressive prune likely removed it; paused runs are never auto-pruned.)'
       );
     }
-    const { containerId } = await this.startContainerWithOverlay(
+    const { containerId, mode } = await this.startContainerWithOverlay(
       containerName,
       volume,
       workspacePath,
       codebaseId
     );
     log.info({ envId, containerName, volume }, 'isolation.container_resume_recreated');
-    return this.preparedEnvFor(containerId, workspacePath, envId);
+    return this.preparedEnvFor(containerId, workspacePath, envId, mode);
   }
 
   /**
@@ -442,8 +445,13 @@ export class ContainerBackend implements IIsolationBackend {
     return readContainerMetadata(row.metadata);
   }
 
-  private preparedEnvFor(containerId: string, cwd: string, envId: string): PreparedEnv {
-    return { cwd, execContext: { kind: 'container', containerId }, envId };
+  private preparedEnvFor(
+    containerId: string,
+    cwd: string,
+    envId: string,
+    overlayMode: OverlayMode
+  ): PreparedEnv {
+    return { cwd, execContext: { kind: 'container', containerId }, envId, overlayMode };
   }
 
   /**

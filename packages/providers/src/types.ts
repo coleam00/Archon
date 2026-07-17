@@ -346,15 +346,28 @@ export type ExecutionContext =
  * (see `truncated`); `totalCount` is the true total across all three categories.
  */
 export interface OverlayChangeSummary {
-  /** Paths present in the upper but absent from the lower (new files). */
+  /** Regular files present in the upper but absent from the lower (new files). */
   added: string[];
-  /** Paths present in both (the run overwrote an existing file). */
+  /** Regular files present in both (the run overwrote an existing file). */
   modified: string[];
   /** Paths whited-out in the upper (the run deleted a lower file). */
   deleted: string[];
+  /**
+   * Symlinks the run created/changed, shown as `path -> target`. `escapes` marks a
+   * target that resolves outside the project root — apply REFUSES those (reproducing
+   * them would be a foothold / secret-exfiltration vector); the approver sees them
+   * flagged in the summary.
+   */
+  symlinks: { path: string; target: string; escapes: boolean }[];
+  /**
+   * Entries the walk refused to reproduce and apply will skip: special files
+   * (block/char/fifo/socket that aren't overlay whiteouts), escaping symlinks, and
+   * unsafe whiteout names. Surfaced so the summary never over-promises what apply does.
+   */
+  skipped: { path: string; reason: string }[];
   /** True when any list was capped — more changes exist than are listed. */
   truncated: boolean;
-  /** True count of changed paths (added + modified + deleted), pre-cap. */
+  /** True count of changed paths (added + modified + deleted + symlinks), pre-cap. */
   totalCount: number;
 }
 

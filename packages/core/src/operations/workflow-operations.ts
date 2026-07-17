@@ -348,7 +348,10 @@ export async function rejectWorkflow(
   const rejectReason = reason ?? 'Rejected';
   const currentCount = (run.metadata.rejection_count as number | undefined) ?? 0;
   const maxAttempts = approval?.onRejectMaxAttempts ?? 3;
-  const onRejectConfigured = approval?.onRejectPrompt !== undefined;
+  // `!= null` (not `!== undefined`): pauseWorkflowRun now explicit-nulls this field
+  // on every pause when the gate has no on_reject (L1 dialect-parity reset), so a
+  // null must read as "not configured" exactly like an absent key.
+  const onRejectConfigured = approval?.onRejectPrompt != null;
   const maxAttemptsReached = onRejectConfigured && currentCount + 1 >= maxAttempts;
   // The on_reject rework is staged (run stays 'paused') only when a prompt is
   // set AND we're under the attempt cap; every other case cancels the run.

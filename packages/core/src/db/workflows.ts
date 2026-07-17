@@ -864,7 +864,8 @@ export async function cancelWorkflowRun(id: string): Promise<{ cancelled: boolea
  */
 export async function pauseWorkflowRun(
   id: string,
-  approvalContext: ApprovalContext
+  approvalContext: ApprovalContext,
+  extraMetadata?: Record<string, unknown>
 ): Promise<void> {
   const dialect = getDialect();
   try {
@@ -878,9 +879,25 @@ export async function pauseWorkflowRun(
           approval: {
             ...approvalContext,
             resolved: null,
+            // Explicit-null reset of EVERY optional approval sub-field on each fresh
+            // pause (L1) — SQLite's json_patch deep-merges the new approval into the
+            // stored one, so a field the caller omits would otherwise inherit a stale
+            // value from a PRIOR gate in the same run (e.g. an earlier node's
+            // onRejectPrompt misrouting this gate's reject). RFC 7396 null removes the
+            // key; Postgres `||` replaces the approval object wholesale. Readers treat
+            // null as absent (`!= null`).
             completionSignaled: approvalContext.completionSignaled ?? null,
             signaledOutput: approvalContext.signaledOutput ?? null,
+            onRejectPrompt: approvalContext.onRejectPrompt ?? null,
+            onRejectMaxAttempts: approvalContext.onRejectMaxAttempts ?? null,
+            captureResponse: approvalContext.captureResponse ?? null,
+            iteration: approvalContext.iteration ?? null,
+            sessionId: approvalContext.sessionId ?? null,
+            sessionProvider: approvalContext.sessionProvider ?? null,
           },
+          // Fold caller-supplied run-level metadata (e.g. `pending_writeback`) into the
+          // SAME atomic write so there is no window where the run is paused without it (M3).
+          ...(extraMetadata ?? {}),
         }),
       ]
     );

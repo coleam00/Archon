@@ -98,6 +98,21 @@ export interface ContainerCleanupReport {
 }
 
 /**
+ * Immediately reclaim (destroy) a single container isolation environment by id —
+ * used when a container run is ABANDONED (M2), so its container + upper volume don't
+ * linger until the scheduled reaper. Best-effort: throws on a genuine docker failure
+ * (the caller surfaces it), a no-op if the row/container is already gone. The
+ * placeholder config is unused by `destroy` (see CLEANUP_PLACEHOLDER_CONTAINER_CONFIG).
+ */
+export async function reclaimContainerEnv(envId: string): Promise<void> {
+  const backend = new ContainerBackend({
+    store: isolationEnvDb.createIsolationStore(),
+    config: CLEANUP_PLACEHOLDER_CONTAINER_CONFIG,
+  });
+  await backend.destroy(envId);
+}
+
+/**
  * List active container isolation environments with their owning run's status.
  * Read-only; used by `archon isolation list`.
  */
@@ -105,14 +120,23 @@ export async function listContainerEnvironments(): Promise<readonly ContainerEnv
   const rows = await isolationEnvDb.listActiveContainerEnvironments();
   const summaries: ContainerEnvSummary[] = [];
   for (const row of rows) {
-    const run = await workflowDb.getRunByIsolationEnvId(row.id).catch(() => null);
+    // A lookup ERROR is reported as an explicit 'lookup-failed' status, NOT null — a
+    // null runId reads as "orphan" and would misrepresent an active run's container.
+    let run: Awaited<ReturnType<typeof workflowDb.getRunByIsolationEnvId>> | null = null;
+    let lookupFailed = false;
+    try {
+      run = await workflowDb.getRunByIsolationEnvId(row.id);
+    } catch (err) {
+      lookupFailed = true;
+      getLog().warn({ err, envId: row.id }, 'container_env_list_lookup_failed');
+    }
     summaries.push({
       envId: row.id,
       codebaseName: row.codebase_name,
       workingPath: row.working_path,
       ageDays: Math.floor(row.days_since_created),
       runId: run?.id ?? null,
-      runStatus: run?.status ?? null,
+      runStatus: lookupFailed ? 'lookup-failed' : (run?.status ?? null),
     });
   }
   return summaries;
@@ -139,7 +163,20 @@ export async function cleanupContainerEnvironments(
   });
 
   for (const row of rows) {
-    const run = await workflowDb.getRunByIsolationEnvId(row.id).catch(() => null);
+    // FAIL CLOSED on an ambiguous lookup (H3): a DB error is NOT "no run" — treating
+    // it as an orphan would destroy an active/paused run's container on a transient
+    // blip (violating No-Autonomous-Lifecycle-Mutation). Report + skip, never destroy.
+    let run: Awaited<ReturnType<typeof workflowDb.getRunByIsolationEnvId>> | null;
+    try {
+      run = await workflowDb.getRunByIsolationEnvId(row.id);
+    } catch (err) {
+      report.errors.push({
+        id: row.id,
+        error: `run lookup failed (NOT reaped): ${(err as Error).message}`,
+      });
+      getLog().warn({ err, envId: row.id }, 'container_env_reap_lookup_failed');
+      continue;
+    }
     // Never reap an awaited (paused) or still-active (running/pending) run's
     // container — only terminal runs, or orphans with no run at all.
     if (run && !TERMINAL_WORKFLOW_STATUSES.includes(run.status)) {

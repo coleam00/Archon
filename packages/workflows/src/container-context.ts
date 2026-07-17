@@ -38,6 +38,13 @@ export interface ContainerRunContext {
   /** `approve` (default) pauses at the write-back gate; `auto` applies without pausing. */
   writeBack: 'approve' | 'auto';
   backend: ContainerWriteBackBackend;
+  /**
+   * Overlay mount mode in effect. `native` (CAP_SYS_ADMIN — the common fallback on
+   * stock daemons) lets in-container root remount the read-only lower read-write, so
+   * an adversarial agent could bypass the write-back gate. The engine emits a loud
+   * run-start warning when this is `native` (H4; see SECURITY.md).
+   */
+  overlayMode?: 'fuse' | 'native';
 }
 
 /** Synthetic node id for the engine-level write-back gate (there is no DAG node). */

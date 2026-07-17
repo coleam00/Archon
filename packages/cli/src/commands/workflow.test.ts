@@ -19,6 +19,7 @@ import {
   buildDetachedRunCmd,
   maybePrintTierNotice,
   resolveContainerBackendConfig,
+  hasUnresolvedWriteback,
 } from './workflow';
 
 const mockLogger = {
@@ -4855,6 +4856,21 @@ describe('maybePrintTierNotice', () => {
     await maybePrintTierNotice(workflow, '/cwd', 'user-1', false);
     expect(stderrSpy).not.toHaveBeenCalled();
     expect(markTierNoticeShown).not.toHaveBeenCalled();
+  });
+});
+
+describe('hasUnresolvedWriteback (H2 teardown-preserve decision)', () => {
+  it('true when the gate was raised but never resolved (failed/partial apply)', () => {
+    expect(hasUnresolvedWriteback({ pending_writeback: { envId: 'e' } })).toBe(true);
+  });
+  it('false once the write-back resolved (applied/discarded)', () => {
+    expect(
+      hasUnresolvedWriteback({ pending_writeback: { envId: 'e' }, writeback_resolved: true })
+    ).toBe(false);
+  });
+  it('false for a run that never raised a write-back gate', () => {
+    expect(hasUnresolvedWriteback({ isolation: 'container' })).toBe(false);
+    expect(hasUnresolvedWriteback(undefined)).toBe(false);
   });
 });
 

@@ -14072,6 +14072,8 @@ describe('executeDagWorkflow -- container write-back gate', () => {
           added: ['x.md'],
           modified: [],
           deleted: [],
+          symlinks: [],
+          skipped: [],
           totalCount: 1,
           truncated: false,
         },
@@ -14079,13 +14081,13 @@ describe('executeDagWorkflow -- container write-back gate', () => {
     });
     const store = await runGate({ backend });
     expect(store.pauseWorkflowRun).toHaveBeenCalledTimes(1);
-    const pauseArg = (store.pauseWorkflowRun as ReturnType<typeof mock>).mock.calls[0][1] as {
-      nodeId: string;
-      type: string;
-    };
+    const pauseCall = (store.pauseWorkflowRun as ReturnType<typeof mock>).mock.calls[0];
+    const pauseArg = pauseCall[1] as { nodeId: string; type: string };
     expect(pauseArg.nodeId).toBe('__writeback__');
     expect(pauseArg.type).toBe('writeback');
-    expect(store.updateWorkflowRun).toHaveBeenCalled(); // persists pending_writeback
+    // pending_writeback is folded into the SAME pause write (M3), not a 2nd update.
+    const extraMeta = pauseCall[2] as { pending_writeback?: { envId: string } };
+    expect(extraMeta.pending_writeback?.envId).toBe('env-x');
     expect(backend.suspend).toHaveBeenCalledTimes(1);
     expect(store.completeWorkflowRun).not.toHaveBeenCalled();
   });
@@ -14098,6 +14100,8 @@ describe('executeDagWorkflow -- container write-back gate', () => {
           added: ['x.md'],
           modified: [],
           deleted: [],
+          symlinks: [],
+          skipped: [],
           totalCount: 1,
           truncated: false,
         },
@@ -14110,13 +14114,21 @@ describe('executeDagWorkflow -- container write-back gate', () => {
     expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
   });
 
+  // Helper: a writeback approval context resolved to a given decision.
+  const wbApproval = (resolved: 'approved' | 'rejected' | null) => ({
+    nodeId: '__writeback__',
+    message: 'review',
+    type: 'writeback' as const,
+    resolved,
+  });
+
   it('resume after approve → applies overlay, marks resolved, completes', async () => {
     const backend = makeWritebackBackend({
       applyChanges: mock(async () => ({ filesApplied: 3, filesDeleted: 1, warnings: [] })),
     });
     const store = await runGate({
       backend,
-      runMetadata: { pending_writeback: { envId: 'env-x' }, approval_response: 'approved' },
+      runMetadata: { pending_writeback: { envId: 'env-x' }, approval: wbApproval('approved') },
     });
     expect(backend.applyChanges).toHaveBeenCalledTimes(1);
     expect(backend.finalize).not.toHaveBeenCalled(); // resume path skips re-inspection
@@ -14127,11 +14139,66 @@ describe('executeDagWorkflow -- container write-back gate', () => {
     const backend = makeWritebackBackend();
     const store = await runGate({
       backend,
-      runMetadata: { pending_writeback: { envId: 'env-x' }, approval_response: 'rejected' },
+      runMetadata: { pending_writeback: { envId: 'env-x' }, approval: wbApproval('rejected') },
     });
     expect(backend.discardChanges).toHaveBeenCalledTimes(1);
     expect(backend.applyChanges).not.toHaveBeenCalled();
     expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+  });
+
+  // H1 — FAIL CLOSED. A bare `/workflow resume` (no decision) reaches the still-open
+  // gate: it must RE-PAUSE, never apply.
+  it('resume with an UNRESOLVED gate re-pauses (fail closed), does NOT apply', async () => {
+    const backend = makeWritebackBackend();
+    const store = await runGate({
+      backend,
+      runMetadata: {
+        pending_writeback: {
+          envId: 'env-x',
+          summary: {
+            added: ['x'],
+            modified: [],
+            deleted: [],
+            symlinks: [],
+            skipped: [],
+            totalCount: 1,
+            truncated: false,
+          },
+        },
+        approval: wbApproval(null), // gate raised but not yet decided
+      },
+    });
+    expect(backend.applyChanges).not.toHaveBeenCalled();
+    expect(backend.discardChanges).not.toHaveBeenCalled();
+    expect(store.pauseWorkflowRun).toHaveBeenCalledTimes(1); // re-raised
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  // H1 — a STALE run-wide approval_response from an earlier mid-DAG approval node must
+  // NOT auto-apply the write-back gate; only the gate's own approval.resolved counts.
+  it('stale top-level approval_response does NOT apply the write-back overlay', async () => {
+    const backend = makeWritebackBackend();
+    const store = await runGate({
+      backend,
+      runMetadata: {
+        pending_writeback: {
+          envId: 'env-x',
+          summary: {
+            added: ['x'],
+            modified: [],
+            deleted: [],
+            symlinks: [],
+            skipped: [],
+            totalCount: 1,
+            truncated: false,
+          },
+        },
+        approval: wbApproval(null),
+        approval_response: 'approved', // stale from a prior gate — must be ignored
+      },
+    });
+    expect(backend.applyChanges).not.toHaveBeenCalled();
+    expect(store.pauseWorkflowRun).toHaveBeenCalledTimes(1); // re-raised, not applied
   });
 
   it('mid-DAG pause suspends the container instead of completing', async () => {
@@ -14141,6 +14208,20 @@ describe('executeDagWorkflow -- container write-back gate', () => {
     // + completion are never reached.
     expect(backend.suspend).toHaveBeenCalledTimes(1);
     expect(backend.finalize).not.toHaveBeenCalled();
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('a docker-stop failure during suspend does NOT flip the paused run to failed', async () => {
+    const backend = makeWritebackBackend({
+      suspend: mock(async () => {
+        throw new Error('Cannot connect to the Docker daemon');
+      }),
+    });
+    // status 'paused' → the mid-DAG suspend path runs; a suspend throw is best-effort.
+    const store = await runGate({ backend, status: 'paused' });
+    expect(backend.suspend).toHaveBeenCalledTimes(1);
+    // The run stays paused — suspend failure must not mark it failed or complete it.
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
     expect(store.completeWorkflowRun).not.toHaveBeenCalled();
   });
 });

@@ -5611,20 +5611,35 @@ async function suspendContainerForPause(
 
 /** Render the write-back change summary + approve/reject instructions for the gate message. */
 function renderWriteBackSummary(summary: OverlayChangeSummary): string {
-  const { added, modified, deleted, totalCount, truncated } = summary;
+  const { added, modified, deleted, symlinks, skipped, totalCount, truncated } = summary;
+  // Faithfully represent what apply will do (M1): files by kind, symlinks as
+  // `path -> target` with escaping ones flagged (apply REFUSES them), and the
+  // entries apply will skip. The approver sees exactly what lands and what won't.
   const preview = [
     ...added.map(p => `+ ${p}`),
     ...modified.map(p => `~ ${p}`),
     ...deleted.map(p => `- ${p}`),
-  ].slice(0, 20);
+    ...symlinks.map(
+      s =>
+        `${s.escapes ? '⚠ ' : ''}@ ${s.path} -> ${s.target}${s.escapes ? '  (ESCAPES — will be refused)' : ''}`
+    ),
+  ].slice(0, 25);
   const lines = [
     '**Container run finished — review the changes before they touch the live folder.**',
     '',
-    `${totalCount} file(s) changed (${added.length} added, ${modified.length} modified, ${deleted.length} deleted):`,
+    `${totalCount} change(s): ${added.length} added, ${modified.length} modified, ${deleted.length} deleted, ${symlinks.length} symlink(s):`,
     ...preview.map(p => `  ${p}`),
   ];
   if (truncated || totalCount > preview.length) {
     lines.push(`  … and ${totalCount - preview.length} more`);
+  }
+  if (skipped.length > 0) {
+    lines.push(
+      '',
+      `${skipped.length} entr${skipped.length === 1 ? 'y' : 'ies'} will be SKIPPED (special files / unsafe / escaping):`
+    );
+    for (const s of skipped.slice(0, 10)) lines.push(`  ! ${s.path} (${s.reason})`);
+    if (skipped.length > 10) lines.push(`  … and ${skipped.length - 10} more`);
   }
   lines.push('', 'Approve to APPLY these changes to the live folder, or reject to discard them.');
   return lines.join('\n');
@@ -5650,15 +5665,47 @@ async function runContainerWriteBackGate(
 ): Promise<'paused' | 'applied' | 'discarded' | 'skipped'> {
   const run = await deps.store.getWorkflowRun(runId);
   const meta = run?.metadata ?? {};
-  const pending = meta.pending_writeback as { envId: string } | undefined;
-  const alreadyResolved = meta.writeback_resolved === true;
+  const pending = meta.pending_writeback as
+    | { envId: string; summary?: OverlayChangeSummary }
+    | undefined;
+  // Idempotent re-entry: a resume after the decision already applied/discarded on a
+  // prior invocation just completes (L2 — never re-pause a resolved gate).
+  if (meta.writeback_resolved === true) return 'applied';
 
-  // RESUME after a decision: the gate was raised on a prior invocation and the
-  // human has approved/rejected. Apply or discard, mark resolved (idempotent), and
-  // fall through to completion.
-  if (pending && !alreadyResolved) {
-    const decision = meta.approval_response;
-    if (decision === 'rejected') {
+  const rawApproval = meta.approval;
+  const approval = isApprovalContext(rawApproval) ? rawApproval : undefined;
+  const isWriteBackGate = approval?.type === 'writeback';
+
+  // RESUME after the gate was raised. Decide STRICTLY on THIS gate's own resolution
+  // (`metadata.approval.resolved` for the `type:'writeback'` context) — NEVER the
+  // run-wide `approval_response` (a stale value from an earlier mid-DAG approval node
+  // would auto-apply) and NEVER "anything but rejected" (a plain `/workflow resume`
+  // carries no decision → must not apply). Unresolved ⇒ FAIL CLOSED (re-pause).
+  if (pending && isWriteBackGate) {
+    if (approval.resolved === 'approved') {
+      const applied = await containerCtx.backend.applyChanges(containerCtx.envId);
+      await deps.store.updateWorkflowRun(runId, { metadata: { writeback_resolved: true } });
+      emitContainerLifecycleEvent(
+        deps,
+        runId,
+        'writeback_applied',
+        'writeback_applied',
+        undefined,
+        {
+          files_applied: applied.filesApplied,
+          files_deleted: applied.filesDeleted,
+        }
+      );
+      await safeSendMessage(
+        platform,
+        conversationId,
+        `✅ Applied to the live folder: ${applied.filesApplied} file(s) written, ${applied.filesDeleted} deleted.` +
+          (applied.warnings.length > 0 ? `\n⚠️ ${applied.warnings.join('; ')}` : ''),
+        { workflowId: runId }
+      );
+      return 'applied';
+    }
+    if (approval.resolved === 'rejected') {
       await containerCtx.backend.discardChanges(containerCtx.envId);
       await deps.store.updateWorkflowRun(runId, { metadata: { writeback_resolved: true } });
       emitContainerLifecycleEvent(deps, runId, 'writeback_discarded', 'writeback_discarded');
@@ -5670,21 +5717,21 @@ async function runContainerWriteBackGate(
       );
       return 'discarded';
     }
-    // Any resolved-and-not-rejected decision applies (approve is the only other path).
-    const applied = await containerCtx.backend.applyChanges(containerCtx.envId);
-    await deps.store.updateWorkflowRun(runId, { metadata: { writeback_resolved: true } });
-    emitContainerLifecycleEvent(deps, runId, 'writeback_applied', 'writeback_applied', undefined, {
-      files_applied: applied.filesApplied,
-      files_deleted: applied.filesDeleted,
-    });
-    await safeSendMessage(
+    // FAIL CLOSED: a resume reached the still-open gate with no decision (e.g. a bare
+    // `/workflow resume`). Re-raise the gate rather than touching the live root.
+    getLog().warn({ runId }, 'dag.writeback_resume_unresolved_repause');
+    const summary =
+      pending.summary ?? (await containerCtx.backend.finalize(containerCtx.envId)).changeSummary;
+    await raiseWriteBackGate(
+      deps,
       platform,
       conversationId,
-      `✅ Applied to the live folder: ${applied.filesApplied} file(s) written, ${applied.filesDeleted} deleted.` +
-        (applied.warnings.length > 0 ? `\n⚠️ ${applied.warnings.join('; ')}` : ''),
-      { workflowId: runId }
+      runId,
+      containerCtx,
+      execContext,
+      summary
     );
-    return 'applied';
+    return 'paused';
   }
 
   // FIRST arrival: inspect the overlay diff.
@@ -5714,18 +5761,45 @@ async function runContainerWriteBackGate(
     return 'applied';
   }
 
-  // `approve` policy (default): pause at the write-back gate. Reuses the approval
-  // pause machinery (approve/reject CAS) with a synthetic node id + `writeback`
-  // type; the resume path branches on `pending_writeback` above, not on this node.
-  const message = renderWriteBackSummary(summary);
-  await deps.store.pauseWorkflowRun(runId, {
-    nodeId: WRITEBACK_GATE_NODE_ID,
-    message,
-    type: 'writeback',
-  });
-  await deps.store.updateWorkflowRun(runId, {
-    metadata: { pending_writeback: { envId: containerCtx.envId, summary } },
-  });
+  // `approve` policy (default): raise the write-back gate (pause + suspend).
+  await raiseWriteBackGate(
+    deps,
+    platform,
+    conversationId,
+    runId,
+    containerCtx,
+    execContext,
+    summary
+  );
+  return 'paused';
+}
+
+/**
+ * Raise (or re-raise) the write-back approval gate: pause the run with a synthetic
+ * `type:'writeback'` ApprovalContext, persist `pending_writeback`, emit the events +
+ * live pause signal, suspend the container, and message the user. Reused by the
+ * first-arrival approve path AND the fail-closed re-pause on an unresolved resume.
+ */
+async function raiseWriteBackGate(
+  deps: WorkflowDeps,
+  platform: IWorkflowPlatform,
+  conversationId: string,
+  runId: string,
+  containerCtx: ContainerRunContext,
+  execContext: Extract<ExecutionContext, { kind: 'container' }>,
+  summary: OverlayChangeSummary | undefined
+): Promise<void> {
+  const message = summary
+    ? renderWriteBackSummary(summary)
+    : 'Container run finished — review before applying to the live folder.';
+  // Fold `pending_writeback` into the SAME pause write so there is no window where the
+  // run is paused-for-writeback without the resume marker (M3): pass it as extra
+  // metadata alongside the approval context, both in one merged write.
+  await deps.store.pauseWorkflowRun(
+    runId,
+    { nodeId: WRITEBACK_GATE_NODE_ID, message, type: 'writeback' },
+    { pending_writeback: { envId: containerCtx.envId, ...(summary ? { summary } : {}) } }
+  );
   emitContainerLifecycleEvent(
     deps,
     runId,
@@ -5733,7 +5807,7 @@ async function runContainerWriteBackGate(
     'writeback_requested',
     undefined,
     {
-      total_count: summary.totalCount,
+      total_count: summary?.totalCount ?? 0,
     }
   );
   // Live pause signal for the CLI progress renderer + console dock (same event the
@@ -5746,7 +5820,6 @@ async function runContainerWriteBackGate(
   });
   await suspendContainerForPause(deps, platform, conversationId, containerCtx, execContext, runId);
   await safeSendMessage(platform, conversationId, message, { workflowId: runId });
-  return 'paused';
 }
 
 /**
@@ -5834,6 +5907,31 @@ export async function executeDagWorkflow(
       execContext.containerId,
       { containerId: execContext.containerId }
     );
+
+    // H4 — native overlay mode grants CAP_SYS_ADMIN, so an adversarial in-container
+    // agent can remount the read-only lower read-write and bypass the write-back
+    // gate. Warn LOUDLY at run start (console/platform + a workflow event) so the
+    // operator knows the isolation is accident-protection, not a hostile-agent
+    // sandbox, in this mode. Warning-only in v1 (see SECURITY.md).
+    if (containerCtx?.overlayMode === 'native') {
+      await safeSendMessage(
+        platform,
+        conversationId,
+        '⚠️ Container is running in NATIVE overlay mode (CAP_SYS_ADMIN). An adversarial ' +
+          'agent could bypass the write-back review by remounting the project root — treat ' +
+          'this run as accident-protection, not a sandbox against hostile code. (See SECURITY.md.)',
+        { workflowId: workflowRun.id }
+      );
+      deps.store
+        .createWorkflowEvent({
+          workflow_run_id: workflowRun.id,
+          event_type: 'container_created',
+          step_name: 'container',
+          data: { overlayMode: 'native', gateBypassable: true },
+        })
+        .catch(() => undefined);
+      getLog().warn({ workflowRunId: workflowRun.id }, 'dag.container_native_mode_gate_bypassable');
+    }
   }
 
   const workflowTier = workflow.model && isTierName(workflow.model) ? workflow.model : undefined;

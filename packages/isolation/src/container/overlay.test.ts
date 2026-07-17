@@ -37,7 +37,7 @@ describe('summarizeOverlayChanges', () => {
     expect(summary.truncated).toBe(false);
   });
 
-  test('mounts the volume + host root read-only and runs bash on the runner image', async () => {
+  test('mounts the volume + host root read-only, runs bash, and is capability-hardened', async () => {
     const docker = fakeDocker({ stdout: '', stderr: '' });
     await summarizeOverlayChanges(docker, TARGET);
     const joined = docker.calls[0]?.join(' ') ?? '';
@@ -45,7 +45,26 @@ describe('summarizeOverlayChanges', () => {
     expect(joined).toContain('archon-x-upper:/upper:ro');
     expect(joined).toContain('/tmp/ops:/lower:ro');
     expect(joined).toContain('archon-runner:test');
-    expect(joined).toContain('bash');
+    expect(joined).toContain('--entrypoint bash');
+    // Defense-in-depth: the helper drops all caps, has no network, no new privileges.
+    expect(joined).toContain('--cap-drop ALL');
+    expect(joined).toContain('--network none');
+    expect(joined).toContain('--security-opt no-new-privileges');
+  });
+
+  test('parses symlink records (target + escape flag) and skipped/refused entries', async () => {
+    const stdout =
+      'A\tnew.md\0L\texfil\t/etc/shadow\t1\0L\tok\tinner.txt\t0\0S\tpipe\tspecial-file\0';
+    const docker = fakeDocker({ stdout, stderr: '' });
+    const summary = await summarizeOverlayChanges(docker, TARGET);
+    expect(summary.added).toEqual(['new.md']);
+    expect(summary.symlinks).toEqual([
+      { path: 'exfil', target: '/etc/shadow', escapes: true },
+      { path: 'ok', target: 'inner.txt', escapes: false },
+    ]);
+    expect(summary.skipped).toEqual([{ path: 'pipe', reason: 'special-file' }]);
+    // symlinks count toward totalCount (3: A + 2 L); skipped does not.
+    expect(summary.totalCount).toBe(3);
   });
 
   test('empty overlay → empty lists, totalCount 0, not truncated', async () => {

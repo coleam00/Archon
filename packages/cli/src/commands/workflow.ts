@@ -39,6 +39,7 @@ import { join } from 'node:path';
 import { mkdirSync, openSync, closeSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { createWorkflowDeps } from '@archon/core/workflows/store-adapter';
+import { reclaimContainerEnv } from '@archon/core/services/cleanup-service';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { resolveWorkflowName } from '@archon/workflows/router';
 import { executeWorkflow, hydrateResumableRun } from '@archon/workflows/executor';
@@ -185,6 +186,18 @@ export function resolveContainerBackendConfig(
     memoryMb: memoryMb ?? 4096,
     pidsLimit: pidsLimit ?? 512,
   };
+}
+
+/**
+ * H2 — a container run has an UNRESOLVED write-back when its overlay diff was raised
+ * for review (`pending_writeback` set) but never applied or discarded
+ * (`writeback_resolved !== true`). This happens on a failed/partial apply. The CLI
+ * teardown must PRESERVE the container+volume in this state (the overlay is the only
+ * copy of the changes) rather than destroy it. Pure so the decision is unit-testable.
+ */
+export function hasUnresolvedWriteback(metadata: Record<string, unknown> | undefined): boolean {
+  if (!metadata) return false;
+  return metadata.pending_writeback !== undefined && metadata.writeback_resolved !== true;
 }
 
 /**
@@ -1053,6 +1066,9 @@ export async function workflowRunCommand(
   // backend via `opts.container`; the CLI only prepares/resumes and destroys.
   let containerBackend: ContainerBackend | undefined;
   let containerEnvId: string | undefined;
+  // Overlay mode the backend actually mounted (fuse = unprivileged; native =
+  // CAP_SYS_ADMIN, gate-bypassable). Threaded to the engine for the H4 run-start warning.
+  let containerOverlayMode: 'fuse' | 'native' | undefined;
 
   // Handle --resume: locate the prior failed run, reuse its worktree, and hand
   // the resumed-run handle to executeWorkflow below via opts. The executor no
@@ -1193,6 +1209,13 @@ export async function workflowRunCommand(
         // (the accumulated overlay is preserved). The env id was stamped into the
         // run metadata at first-run creation. resumeEnv fails LOUD if the volume
         // is gone (un-applied work lost) rather than restarting from empty.
+        //
+        // Ordering (L3): the container is restarted FIRST (here) even on a
+        // write-back-only resume where no DAG node will re-execute — kept uniform
+        // with the mid-DAG-approval resume, which DOES need a live container. The
+        // subsequent write-back apply runs in an INDEPENDENT `docker run` helper
+        // over the volume (see overlay.ts), so it neither needs nor races the
+        // restarted run container.
         const resumeEnvId =
           typeof resumable?.metadata?.isolation_env_id === 'string'
             ? resumable.metadata.isolation_env_id
@@ -1239,6 +1262,7 @@ export async function workflowRunCommand(
       execContext = prepared.execContext;
       containerBackend = backend;
       containerEnvId = prepared.envId;
+      containerOverlayMode = prepared.overlayMode;
       isolationEnvId = prepared.envId;
     } else {
       // In-place (default) — byte-identical to pre-container behavior: keep
@@ -1565,6 +1589,7 @@ export async function workflowRunCommand(
           envId: containerEnvId,
           writeBack: workflow.container?.write_back ?? ('approve' as const),
           backend: containerBackend,
+          ...(containerOverlayMode ? { overlayMode: containerOverlayMode } : {}),
         }
       : undefined;
   try {
@@ -1609,7 +1634,30 @@ export async function workflowRunCommand(
     // completed run's live-root changes are safe before this teardown removes the
     // volume.
     const runPaused = Boolean(result?.success && 'paused' in result && result.paused);
-    if (containerBackend && containerEnvId && !runPaused) {
+    // H2 — preserve the container+volume whenever the un-applied overlay is still the
+    // only copy of the run's changes: a PAUSED run (awaiting the decision) OR a
+    // TERMINAL run whose write-back never resolved (e.g. a partial applyChanges threw
+    // → run failed with pending_writeback still un-applied). Destroying then would
+    // silently discard the changes despite the "reconcile manually" message. A failed
+    // run stays resumable, so `archon workflow resume <id>` re-runs the apply.
+    let unresolvedWriteback = false;
+    if (containerBackend && containerEnvId && !runPaused && result?.workflowRunId) {
+      const finalRun = await deps.store.getWorkflowRun(result.workflowRunId).catch(() => null);
+      unresolvedWriteback = hasUnresolvedWriteback(finalRun?.metadata);
+    }
+    if (containerBackend && containerEnvId && unresolvedWriteback) {
+      console.error(
+        '\nWARNING: the write-back did not complete — the container + overlay volume are ' +
+          'PRESERVED so your changes are not lost. Retry with ' +
+          `\`bun run cli workflow resume ${result?.workflowRunId ?? '<run-id>'}\` (re-applies the ` +
+          'overlay), or reclaim manually via `docker ps -a --filter label=diy.archon.managed=true`.'
+      );
+      getLog().warn(
+        { envId: containerEnvId, runId: result?.workflowRunId },
+        'workflow.container_preserved_unresolved_writeback'
+      );
+    }
+    if (containerBackend && containerEnvId && !runPaused && !unresolvedWriteback) {
       try {
         await containerBackend.destroy(containerEnvId);
         // Persist a container_destroyed event (console timeline) and emit for any
@@ -2261,6 +2309,7 @@ export async function workflowAbandonCommand(
     try {
       const resolvedId = await resolveRunIdArg(runId, cwd);
       const run = await abandonWorkflow(resolvedId);
+      await reclaimAbandonedContainer(run);
       console.log(
         JSON.stringify(
           {
@@ -2282,8 +2331,34 @@ export async function workflowAbandonCommand(
 
   const resolvedId = await resolveRunIdArg(runId, cwd);
   const run = await abandonWorkflow(resolvedId);
+  await reclaimAbandonedContainer(run);
   console.log(`Abandoned workflow run: ${resolvedId}`);
   console.log(`Workflow: ${run.workflow_name}`);
+}
+
+/**
+ * Reclaim a container run's container + upper volume immediately on abandon (M2) —
+ * a paused container run keeps its suspended container, so abandoning it must free
+ * those resources now rather than waiting for the scheduled reaper. Best-effort:
+ * a destroy failure is surfaced loudly but does not fail the abandon (the run is
+ * already cancelled; the reaper will retry). No-op for non-container runs.
+ */
+async function reclaimAbandonedContainer(run: WorkflowRun): Promise<void> {
+  if (run.metadata?.isolation !== 'container') return;
+  const envId = run.metadata.isolation_env_id;
+  if (typeof envId !== 'string') return;
+  try {
+    await reclaimContainerEnv(envId);
+    console.log('Container and overlay volume removed.');
+  } catch (err) {
+    console.error(
+      `\nWARNING: could not remove the isolation container/volume for the abandoned run: ${
+        (err as Error).message
+      }\nReclaim it via \`bun run cli isolation cleanup\` or ` +
+        '`docker ps -a --filter label=diy.archon.managed=true`.'
+    );
+    getLog().warn({ err, runId: run.id }, 'cli.abandon_container_reclaim_failed');
+  }
 }
 
 /**
