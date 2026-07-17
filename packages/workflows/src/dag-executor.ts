@@ -719,20 +719,31 @@ function collectLoopBodyNodeIds(
  * `OutputRefError`, propagating to the consuming node's failure). The only value that
  * resolves to empty is an author-declared-optional field — or any ref on iteration 1.
  *
- * `knownBodyIds` (the static id set of the enclosing loop_group body, via
- * {@link collectLoopBodyNodeIds}) turns a `.field` ref to a genuinely-unknown id into a
- * loud `OutputRefError('unknown-node')` instead of a silent '' — the loop_group analog of
- * the same fix at the `$node.output.field` seam (#2135/#2142). Only `.field`-form refs to
- * an id absent from this set throw; a KNOWN id with no prior output (iteration 1 / skipped)
- * and the whole-text `$LOOP_PREV.<id>.output` form both stay lenient (''). When
- * `knownBodyIds` is undefined (raw callers with no static set) the seam stays fully lenient.
+ * Two static id sets from the enclosing loop_group (both via {@link collectLoopBodyNodeIds}
+ * / its immediate-ids counterpart) drive the absent-output branch. `knownBodyIds` is the
+ * TRANSITIVE set (this group's body plus every nested descendant); `directBodyIds` is only
+ * THIS group's immediate body ids. When output is absent, the id is classified:
+ *   - not in `knownBodyIds` → a typo that matches no body node anywhere. A `.field` ref
+ *     throws `OutputRefError('unknown-node')` (loud, with a did-you-mean) — the loop_group
+ *     analog of the same fix at the `$node.output.field` seam (#2135/#2142); a whole-text
+ *     `$LOOP_PREV.<id>.output` ref stays lenient ('').
+ *   - in `knownBodyIds` but not in `directBodyIds` → the id belongs to a NESTED loop_group,
+ *     not this group's own body. The literal token is left INTACT (`return match`) so the
+ *     inner loop_group resolves it against its OWN prior-iteration snapshot when it runs
+ *     (nested body nodes get a second substituteLoopPrevRefs pass — the outer pass must not
+ *     consume their tokens, or the inner loop could never see its own prior iteration).
+ *   - in `directBodyIds` with no prior output → legitimate iteration-1 / skipped absence → ''.
+ *
+ * When `knownBodyIds` is undefined (raw callers with no static set) the seam stays fully
+ * lenient — every absent ref resolves to '', preserving the pre-#2142 behavior.
  */
 export function substituteLoopPrevRefs(
   prompt: string,
   loopPrevOutputs: Map<string, NodeOutput> | undefined,
   escapedForBash = false,
   outputFileDir?: string,
-  knownBodyIds?: ReadonlySet<string>
+  knownBodyIds?: ReadonlySet<string>,
+  directBodyIds?: ReadonlySet<string>
 ): string {
   // Fast path: no refs to resolve. When refs ARE present but the map is empty/undefined
   // (iteration 1 — no prior iteration), we still run the replace so each ref resolves to
@@ -745,26 +756,36 @@ export function substituteLoopPrevRefs(
     (match, nodeId: string, field: string | undefined) => {
       const nodeOutput = loopPrevOutputs?.get(nodeId);
       if (!nodeOutput || nodeOutput.state === 'skipped' || nodeOutput.state === 'pending') {
-        // A `.field` ref to an id that matches NO body node anywhere in the enclosing
-        // loop_group (a typo the loader can't see — it never scans `$LOOP_PREV.*` refs)
-        // fails the consuming node loudly, mirroring substituteNodeOutputRefs /
-        // resolveOutputRef. The static id set is required to make this call: the runtime
-        // `loopPrevOutputs` map is empty on iteration 1, so it alone cannot tell a typo
-        // from a legitimate first-pass absence.
-        if (field && knownBodyIds && !knownBodyIds.has(nodeId)) {
-          throw new OutputRefError(
-            nodeId,
-            field,
-            'unknown-node',
-            similarNodeIds(nodeId, knownBodyIds)
-          );
+        if (knownBodyIds) {
+          if (!knownBodyIds.has(nodeId)) {
+            // Typo: id matches NO body node anywhere in the enclosing loop_group (a typo
+            // the loader can't see — it never scans `$LOOP_PREV.*` refs). A `.field` ref
+            // fails the consuming node loudly, mirroring substituteNodeOutputRefs /
+            // resolveOutputRef; a whole-text ref stays lenient ('' below). The static set
+            // is required: the runtime `loopPrevOutputs` map is empty on iteration 1, so it
+            // alone cannot tell a typo from a legitimate first-pass absence.
+            if (field) {
+              throw new OutputRefError(
+                nodeId,
+                field,
+                'unknown-node',
+                similarNodeIds(nodeId, knownBodyIds)
+              );
+            }
+          } else if (directBodyIds && !directBodyIds.has(nodeId)) {
+            // Known id owned by a NESTED loop_group, not this group's own body. Leave the
+            // literal token intact so the inner loop_group resolves it against its OWN
+            // prior-iteration snapshot when it executes — the outer pass must not consume
+            // it, or the inner loop could never reference its own previous iteration.
+            return match;
+          }
+          // else: known + direct id with no prior output → legitimate iteration-1 / skipped
+          // absence → lenient '' below.
         }
-        // No prior-iteration output for this KNOWN body node (iteration 1, or the node was
+        // No prior-iteration output for this body node (iteration 1, or the node was
         // skipped / hasn't settled last iteration). Resolve to empty rather than
         // throwing — the author opted into a cross-iteration ref, and absence on the
-        // first pass (or after a skipped node) is expected. The whole-text
-        // `$LOOP_PREV.<id>.output` form also stays lenient here, even for an unknown id,
-        // matching the long-documented lenient whole-text surface.
+        // first pass (or after a skipped node) is expected.
         getLog().debug({ nodeId, match }, 'loop_group_prev_ref_no_prior_output');
         return escapedForBash ? "''" : '';
       }
@@ -2875,12 +2896,14 @@ async function executeLoopGroupNode(
   // prefix composes across nested loop_groups: `<enclosing>.<groupId>.<bodyNodeId>`.
   const bodyStepNamePrefix = `${stepName}.`;
 
-  // Static (iteration-invariant) id set of every node in this group's body, including
-  // nested loop_group descendants — the typo detector for `$LOOP_PREV.<id>.output.<field>`
-  // refs (#2142). A `.field` ref to an id absent from this set fails the consuming node
-  // loudly; a known id with no prior-iteration output stays lenient (''). Computed once
-  // (the body shape is static) and threaded into every applyLoopPrevToBodyNode call.
+  // Static (iteration-invariant) id sets for `$LOOP_PREV.<id>.output[.field]` resolution
+  // (#2142). `knownBodyIds` is TRANSITIVE (this group's body + every nested descendant) —
+  // an id absent from it is a typo (`.field` ref → loud failure). `directBodyIds` is only
+  // THIS group's immediate ids — an id in knownBodyIds but not directBodyIds belongs to a
+  // nested group and its token is preserved for that inner group's own pass. Computed once
+  // (body shape is static) and threaded into every applyLoopPrevToBodyNode call.
   const knownBodyIds = collectLoopBodyNodeIds(group.nodes);
+  const directBodyIds = new Set(group.nodes.map(n => n.id));
 
   // Detect interactive loop resume (mirrors executeLoopNode).
   const rawApproval = workflowRun.metadata?.approval;
@@ -2980,7 +3003,14 @@ async function executeLoopGroupNode(
     const prevSnapshot = loopPrevOutputs;
     const userInputForIter = isLoopResume && i === startIteration ? loopUserInput : '';
     const iterBodyNodes = group.nodes.map(n =>
-      applyLoopPrevToBodyNode(n, prevSnapshot, userInputForIter, logDir, knownBodyIds)
+      applyLoopPrevToBodyNode(
+        n,
+        prevSnapshot,
+        userInputForIter,
+        logDir,
+        knownBodyIds,
+        directBodyIds
+      )
     );
     // Re-layer from the (possibly substituted) body nodes — runLayers walks ctx.layers,
     // not ctx.nodes, so the layers must reference the substituted nodes to take effect.
@@ -3365,18 +3395,21 @@ async function executeLoopGroupNode(
  * evaluateCondition, which does not call substituteLoopPrevRefs). Body authors who need
  * cross-iteration gating should branch on prompt content, not `when:`.
  *
- * `knownBodyIds` is the enclosing loop_group's static body-id set (via
- * {@link collectLoopBodyNodeIds}); it is threaded UNCHANGED into every
- * substituteLoopPrevRefs call and into the nested-loop_group recursion so `$LOOP_PREV.*`
- * refs are validated against the OUTER loop's body ids (whose snapshot they resolve
- * against). Omitted by raw callers, which then skip the typo check.
+ * `knownBodyIds` (transitive body-id set) and `directBodyIds` (this group's immediate body
+ * ids) are threaded UNCHANGED into every substituteLoopPrevRefs call AND into the
+ * nested-loop_group recursion — deliberately not recomputed for the inner group. This keeps
+ * `$LOOP_PREV.*` refs validated against the OUTER loop's snapshot (whose body they resolve
+ * against): a ref to an outer-direct id resolves now, a ref owned by a nested group is left
+ * intact for that inner group's own pass, and a ref to nothing is a typo. Both omitted by
+ * raw callers, which then skip the typo/nested classification entirely (fully lenient).
  */
 export function applyLoopPrevToBodyNode(
   node: DagNode,
   loopPrevOutputs: Map<string, NodeOutput> | undefined,
   loopUserInput: string,
   outputFileDir?: string,
-  knownBodyIds?: ReadonlySet<string>
+  knownBodyIds?: ReadonlySet<string>,
+  directBodyIds?: ReadonlySet<string>
 ): DagNode {
   // Substitute $LOOP_USER_INPUT (user free-text) and $LOOP_PREV.* refs.
   // Resolve $LOOP_PREV FIRST, then splice $LOOP_USER_INPUT — so user input containing a
@@ -3394,7 +3427,8 @@ export function applyLoopPrevToBodyNode(
       loopPrevOutputs,
       escapedForBash,
       outputFileDir,
-      knownBodyIds
+      knownBodyIds,
+      directBodyIds
     );
     const userInputForField = escapedForBash ? shellQuote(loopUserInput) : loopUserInput;
     return prevResolved.replace(/\$LOOP_USER_INPUT/g, userInputForField);
@@ -3414,13 +3448,15 @@ export function applyLoopPrevToBodyNode(
     };
   }
   if (isLoopGroupNode(node)) {
-    // Nested loop_group: recurse into the body (each body node gets $LOOP_PREV resolved
-    // against the OUTER loop's prior-iteration snapshot; inner-loop refs resolve at the
-    // inner loop's own iteration granularity). The inner group's until_bash is likewise
-    // shell-bound and only ever substituted here for OUTER-loop refs. `knownBodyIds` is
-    // the OUTER group's transitive body-id set (includes this nested group's own ids),
-    // reused as-is so an inner-body ref to a real node stays lenient while a true typo
-    // still throws.
+    // Nested loop_group: recurse into the body. `knownBodyIds`/`directBodyIds` are the OUTER
+    // group's sets, threaded UNCHANGED — so during this OUTER pass a ref to an inner-owned id
+    // (in knownBodyIds but not directBodyIds) is left intact (return match) for the inner
+    // group's own pass, while a ref to an OUTER-direct id resolves here at the outer
+    // granularity and a true typo still throws. The inner group's own executeLoopGroupNode
+    // computes fresh sets when it runs, so inner-owned refs resolve at the inner iteration
+    // granularity. The inner group's until_bash is shell-bound and only ever substituted
+    // here for OUTER-loop refs (a nested group's own until_bash cannot reference its own body
+    // via $LOOP_PREV — executeLoopGroupNode does not re-run this pass on the group's until_bash).
     return {
       ...node,
       loop_group: {
@@ -3429,7 +3465,14 @@ export function applyLoopPrevToBodyNode(
           ? { until_bash: sub(node.loop_group.until_bash, true) }
           : {}),
         nodes: node.loop_group.nodes.map(n =>
-          applyLoopPrevToBodyNode(n, loopPrevOutputs, loopUserInput, outputFileDir, knownBodyIds)
+          applyLoopPrevToBodyNode(
+            n,
+            loopPrevOutputs,
+            loopUserInput,
+            outputFileDir,
+            knownBodyIds,
+            directBodyIds
+          )
         ),
       },
     };
