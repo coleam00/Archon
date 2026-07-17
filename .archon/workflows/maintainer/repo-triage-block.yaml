@@ -21,8 +21,9 @@ nodes:
   # written to $ARTIFACTS_DIR/gather/*.json. Replaces the per-node `gh issue
   # list` / `gh pr list` / template reads that the old mega-prompts each ran
   # (collapsing N× identical calls and removing the token-heavy plumbing prose).
-  # State files are NOT gathered here — they are read fresh in-node (triage-issues
-  # writes triage-state.json mid-run) and written via repo-triage-persist.
+  # State files are NOT gathered here — they are read fresh in-node, and written
+  # by the *-persist nodes via repo-triage-persist (each AI node emits a state
+  # block; its persist node does the atomic temp+rename write).
   # ===========================================================================
   - id: gather
     script: repo-triage-gather
@@ -30,11 +31,39 @@ nodes:
     timeout: 180000
 
   # ---------------------------------------------------------------------------
+  # Fetch-health gate — gather records every gh failure into meta.fetchOk. If any
+  # fetch failed (or the bot login is empty), ABORT the whole run loudly here
+  # instead of letting each judgment node run on a partial snapshot and emit a
+  # clean "nothing to do" digest (a silent no-op on an auth/rate-limit blip is
+  # worse than a loud, re-runnable failure). Capped-but-complete lists are NOT
+  # fatal — the digest flags those.
+  # ---------------------------------------------------------------------------
+  - id: gather-health
+    depends_on: [gather]
+    timeout: 30000
+    bash: |
+      set -uo pipefail
+      META="$ARTIFACTS_DIR/gather/meta.json"
+      if [ ! -f "$META" ]; then
+        echo "[gather-health] ABORT: $META missing — gather produced no snapshot." >&2
+        exit 1
+      fi
+      OK=$(jq -r '.fetchOk' "$META")
+      if [ "$OK" != "true" ]; then
+        echo "[gather-health] ABORT: gather reported fetchOk=false — the GitHub snapshot is incomplete." >&2
+        echo "Refusing to triage on partial data. fetchErrors:" >&2
+        jq -r '.fetchErrors[]? | "  - \(.call): \(.message)"' "$META" >&2
+        exit 1
+      fi
+      CAPPED=$(jq -r '.capped | length' "$META")
+      echo "gather-health OK (fetchOk=true; capped lists: $CAPPED — surfaced in the digest)."
+
+  # ---------------------------------------------------------------------------
   # Issue triage — labels + briefs + dedup detection + 3-day auto-close.
   # Runs concurrently with link-prs / closed-pr-dedup-check.
   # ---------------------------------------------------------------------------
   - id: triage-issues
-    depends_on: [gather]
+    depends_on: [gather-health]
     allowed_tools: [Bash, Read, Write, Agent]
     prompt: |
       You are the issue-triage orchestrator for the repository in the
@@ -344,7 +373,7 @@ nodes:
   # ---------------------------------------------------------------------------
   - id: closed-dedup-check
     depends_on: [triage-issues-persist]
-    allowed_tools: [Bash, Read, Write]
+    allowed_tools: [Bash, Read]
     prompt: |
       You check whether any currently OPEN issue duplicates a recently
       CLOSED one. A reporter may have filed a bug that was fixed months
@@ -534,10 +563,16 @@ nodes:
             - Drop entry from state.
         - Else → keep as-is.
 
-      ## 8. SAVE
-      Set `state.lastRunAt = <now-iso>`. Write
-      `.archon/state/closed-dedup-state.json` with the Write tool
-      (2-space JSON).
+      ## 8. SAVE — emit state for the persist node
+      Set `state.lastRunAt = <now-iso>`. Do NOT use the Write tool. Instead,
+      emit the final merged state as a delimited block so the
+      closed-dedup-check-persist node writes it atomically — each marker on its
+      own line, exactly one block, AFTER the summary (under DRY_RUN still emit
+      it; the persist node won't write):
+
+          ARCHON_STATE_JSON_BEGIN
+          {...the full closed-dedup-state.json object, valid JSON...}
+          ARCHON_STATE_JSON_END
 
       ## 9. Summary output
           ## Closed-dedup check — <now>
@@ -556,17 +591,37 @@ nodes:
         suggest a reporter's bug is already fixed when it isn't, and that
         erodes trust. When in doubt, skip.
       - If `gh` errors (auth, rate limit), abort cleanly and summarise.
-      - State writes are ATOMIC — one Write at step 8.
+      - The final state is written exactly once, atomically, by the
+        closed-dedup-check-persist node (temp+rename). Emit the COMPLETE merged
+        state in the ARCHON_STATE_JSON block — a missing key drops that data.
       - Step 6 is sequential to capture comment IDs reliably.
+
+  # ---------------------------------------------------------------------------
+  # Persist closed-dedup-check state atomically (temp+rename via repo-triage-persist).
+  # ---------------------------------------------------------------------------
+  - id: closed-dedup-check-persist
+    depends_on: [closed-dedup-check]
+    timeout: 60000
+    bash: |
+      set -uo pipefail
+      OUT=$closed-dedup-check.output
+      if [ "${DRY_RUN:-0}" = "1" ]; then
+        echo "[DRY] closed-dedup-check state write skipped (dry run)."
+        exit 0
+      fi
+      if ! printf '%s' "$OUT" | grep -q '^ARCHON_STATE_JSON_BEGIN$'; then
+        echo "closed-dedup-check emitted no state block (aborted or nothing to persist) — state left untouched."
+        exit 0
+      fi
+      printf '%s' "$OUT" | bun .archon/scripts/repo-triage-persist.ts --target .archon/state/closed-dedup-state.json
 
   # ---------------------------------------------------------------------------
   # Closed-PR dedup check — for each OPEN PR, does a recently-CLOSED PR cover
   # the same change? Comments only — NEVER closes an open PR. Runs in parallel.
-  # TODO(R3): still an inline prompt (own diff fetch + AI-Write state).
   # ---------------------------------------------------------------------------
   - id: closed-pr-dedup-check
-    depends_on: [gather]
-    allowed_tools: [Bash, Read, Write]
+    depends_on: [gather-health]
+    allowed_tools: [Bash, Read]
     prompt: |
       You find OPEN PRs that duplicate or supersede a recently-CLOSED PR.
       A contributor may have missed that a similar change was already
@@ -718,9 +773,16 @@ nodes:
       Entries stay in `closedMatchComments` indefinitely (never reconciled)
       so we never re-post on the same PR.
 
-      ## 7. SAVE
-      Set `state.lastRunAt = <now-iso>`. Write
-      `.archon/state/closed-pr-dedup-state.json` with the Write tool.
+      ## 7. SAVE — emit state for the persist node
+      Set `state.lastRunAt = <now-iso>`. Do NOT use the Write tool. Instead,
+      emit the final state as a delimited block so the
+      closed-pr-dedup-check-persist node writes it atomically — each marker on
+      its own line, exactly one block, AFTER the summary (under DRY_RUN still
+      emit it; the persist node won't write):
+
+          ARCHON_STATE_JSON_BEGIN
+          {...the full closed-pr-dedup-state.json object, valid JSON...}
+          ARCHON_STATE_JSON_END
 
       ## 8. Summary output
           ## Closed-PR dedup — <now>
@@ -735,18 +797,38 @@ nodes:
       - NEVER close an open PR. Comment only.
       - Idempotent comments — always check existing PR comments before
         posting to avoid noise.
-      - State writes are ATOMIC — one Write at step 7.
+      - The final state is written exactly once, atomically, by the
+        closed-pr-dedup-check-persist node (temp+rename). Emit the COMPLETE
+        state in the ARCHON_STATE_JSON block — a missing key drops that data.
       - Step 6 sequential for reliable comment-ID capture.
       - Strict matching — false positives on PR dedup are a maintainer
         trust hit. When ambiguous, skip.
 
   # ---------------------------------------------------------------------------
+  # Persist closed-pr-dedup-check state atomically (temp+rename via repo-triage-persist).
+  # ---------------------------------------------------------------------------
+  - id: closed-pr-dedup-check-persist
+    depends_on: [closed-pr-dedup-check]
+    timeout: 60000
+    bash: |
+      set -uo pipefail
+      OUT=$closed-pr-dedup-check.output
+      if [ "${DRY_RUN:-0}" = "1" ]; then
+        echo "[DRY] closed-pr-dedup-check state write skipped (dry run)."
+        exit 0
+      fi
+      if ! printf '%s' "$OUT" | grep -q '^ARCHON_STATE_JSON_BEGIN$'; then
+        echo "closed-pr-dedup-check emitted no state block (aborted or nothing to persist) — state left untouched."
+        exit 0
+      fi
+      printf '%s' "$OUT" | bun .archon/scripts/repo-triage-persist.ts --target .archon/state/closed-pr-dedup-state.json
+
+  # ---------------------------------------------------------------------------
   # PR ↔ issue linker — runs concurrently with triage-issues.
-  # TODO(R3): still an inline prompt (own diff fetch + AI-Write state).
   # ---------------------------------------------------------------------------
   - id: link-prs
-    depends_on: [gather]
-    allowed_tools: [Bash, Read, Write]
+    depends_on: [gather-health]
+    allowed_tools: [Bash, Read]
     prompt: |
       You are the PR-to-issue linker for the repository in the current
       working directory.
@@ -1029,8 +1111,14 @@ nodes:
             // are already in `existing` and survive the spread
           };
 
-      Update `state.lastRunAt`. Write `.archon/state/pr-state.json` in
-      ONE Write call at the end of the node.
+      Update `state.lastRunAt`. Do NOT use the Write tool. Emit the final
+      merged state as a delimited block so the link-prs-persist node writes it
+      atomically — each marker on its own line, exactly one block, AFTER the
+      summary (under DRY_RUN still emit it; the persist node won't write):
+
+          ARCHON_STATE_JSON_BEGIN
+          {...the full pr-state.json object, valid JSON...}
+          ARCHON_STATE_JSON_END
 
       ## 8. Summary
           ## PR-issue linker — <now>
@@ -1052,19 +1140,41 @@ nodes:
       - Default to `related`. Only suggest `fully-addresses` when the
         evidence is overwhelming.
       - If `gh` errors out (auth, rate limit), abort cleanly and summarise.
-      - State writes are ATOMIC per run — a single Write at step 7.
+      - The final state is written exactly once, atomically, by the
+        link-prs-persist node (temp+rename). Emit the COMPLETE merged state in
+        the ARCHON_STATE_JSON block — a missing key drops that data.
       - Act pass is sequential for idempotent comment-ID capture.
       - Template nudge comments happen AT MOST ONCE per PR (tracked via
         `templateNudgedAt`). Never re-nudge — contributors will ignore us.
 
   # ---------------------------------------------------------------------------
+  # Persist link-prs state atomically (temp+rename via repo-triage-persist).
+  # ---------------------------------------------------------------------------
+  - id: link-prs-persist
+    depends_on: [link-prs]
+    timeout: 60000
+    bash: |
+      set -uo pipefail
+      OUT=$link-prs.output
+      if [ "${DRY_RUN:-0}" = "1" ]; then
+        echo "[DRY] link-prs state write skipped (dry run)."
+        exit 0
+      fi
+      if ! printf '%s' "$OUT" | grep -q '^ARCHON_STATE_JSON_BEGIN$'; then
+        echo "link-prs emitted no state block (aborted or nothing to persist) — state left untouched."
+        exit 0
+      fi
+      printf '%s' "$OUT" | bun .archon/scripts/repo-triage-persist.ts --target .archon/state/pr-state.json
+
+  # ---------------------------------------------------------------------------
   # Stale nudge — gentle "still relevant?" reminders on issues/PRs untouched
-  # for STALE_DAYS (default 60). No auto-close. Uses the gather open lists.
-  # TODO(R3): still an inline prompt (own stale filter + AI-Write state).
+  # for STALE_DAYS (default 60). No auto-close. Consumes the dedicated gather
+  # stale slice (server-side updated:<cutoff>) so the stalest items aren't lost
+  # to the open-list cap.
   # ---------------------------------------------------------------------------
   - id: stale-nudge
-    depends_on: [gather]
-    allowed_tools: [Bash, Read, Write]
+    depends_on: [gather-health]
+    allowed_tools: [Bash, Read]
     prompt: |
       You post gentle reminders on GitHub issues and PRs that have gone
       quiet. No auto-close. No sub-agent fan-out — this is direct work.
@@ -1112,15 +1222,16 @@ nodes:
         restore or explicit deletion, never a reset).
 
       ## 2. Identify stale items
-      Compute the stale cutoff:
-          DAYS=${STALE_DAYS:-60}
-          CUTOFF=$(date -u -v-${DAYS}d +%Y-%m-%d 2>/dev/null || date -u -d "${DAYS} days ago" +%Y-%m-%d)
-
-      The gather node fetched all open issues and PRs (with `updatedAt`):
-        - `$ARTIFACTS_DIR/gather/issues-open.json`
-        - `$ARTIFACTS_DIR/gather/prs-open.json` (has `isDraft`)
-      Select the items whose `updatedAt` date is STRICTLY BEFORE `CUTOFF`
-      (i.e. untouched for ≥ STALE_DAYS). No extra gh calls needed.
+      The gather node ran a DEDICATED server-side stale query
+      (`updated:<cutoff>`) using the same `STALE_DAYS` window (default 60), so
+      the stalest items are present even when open issues exceed the list cap.
+      (Client-filtering the 200-capped open snapshot would silently drop exactly
+      the oldest tail once the repo crosses 200 open issues.) Read the
+      pre-filtered lists — every entry is already stale, so no date math and no
+      extra gh calls are needed:
+        - `$ARTIFACTS_DIR/gather/issues-stale.json`
+        - `$ARTIFACTS_DIR/gather/prs-stale.json` (has `isDraft` + `labels`)
+      The exact window is in `meta.json` (`staleDays`, `staleCutoff`).
 
       ## 3. Filter
       For each stale item:
@@ -1162,9 +1273,16 @@ nodes:
                 botCommentId: "<id>"
               }`
 
-      ## 5. SAVE
-      Set `state.lastRunAt = <now-iso>`. Write
-      `.archon/state/stale-nudge-state.json`.
+      ## 5. SAVE — emit state for the persist node
+      Set `state.lastRunAt = <now-iso>`. Do NOT use the Write tool. Instead,
+      emit the final state as a delimited block so the stale-nudge-persist node
+      writes it atomically — each marker on its own line, exactly one block,
+      AFTER the summary (under DRY_RUN still emit it; the persist node won't
+      write):
+
+          ARCHON_STATE_JSON_BEGIN
+          {...the full stale-nudge-state.json object, valid JSON...}
+          ARCHON_STATE_JSON_END
 
       ## 6. Summary
           ## Stale nudge — <now>
@@ -1182,7 +1300,27 @@ nodes:
         pinned, keep-open. (Add more via PR if missed.)
       - One nudge per quiet period. Re-nudge only if the item was updated
         after the prior nudge AND went quiet again.
-      - If `gh` errors out, abort cleanly. State stays atomic.
+      - If `gh` errors out, abort cleanly. The final state is written exactly
+        once, atomically, by the stale-nudge-persist node (temp+rename).
+
+  # ---------------------------------------------------------------------------
+  # Persist stale-nudge state atomically (temp+rename via repo-triage-persist).
+  # ---------------------------------------------------------------------------
+  - id: stale-nudge-persist
+    depends_on: [stale-nudge]
+    timeout: 60000
+    bash: |
+      set -uo pipefail
+      OUT=$stale-nudge.output
+      if [ "${DRY_RUN:-0}" = "1" ]; then
+        echo "[DRY] stale-nudge state write skipped (dry run)."
+        exit 0
+      fi
+      if ! printf '%s' "$OUT" | grep -q '^ARCHON_STATE_JSON_BEGIN$'; then
+        echo "stale-nudge emitted no state block (aborted or nothing to persist) — state left untouched."
+        exit 0
+      fi
+      printf '%s' "$OUT" | bun .archon/scripts/repo-triage-persist.ts --target .archon/state/stale-nudge-state.json
 
   # ---------------------------------------------------------------------------
   # Digest — runs LAST. Reads each prior node's final output via $<nodeId>.output
@@ -1194,10 +1332,10 @@ nodes:
   - id: digest
     depends_on:
       - triage-issues-persist
-      - link-prs
-      - closed-dedup-check
-      - closed-pr-dedup-check
-      - stale-nudge
+      - link-prs-persist
+      - closed-dedup-check-persist
+      - closed-pr-dedup-check-persist
+      - stale-nudge-persist
     allowed_tools: [Bash, Read, Write]
     prompt: |
       You synthesise the outputs of all prior nodes in this run into one
@@ -1220,6 +1358,21 @@ nodes:
       You may also read the state files under `.archon/state/` for any
       counts the summaries omitted, but keep it light — this is a digest,
       not a re-analysis.
+
+      # Data coverage — REQUIRED when partial
+
+      Read `$ARTIFACTS_DIR/gather/meta.json`. If `capped` is a non-empty array,
+      the run hit a fetch `--limit` on those lists and coverage is INCOMPLETE
+      (the dropped tail was not triaged). Surface this PROMINENTLY at the TOP of
+      the digest, for example:
+
+          > ⚠️ Partial coverage — these lists hit their fetch cap and were
+          > truncated: <capped, joined>. Dedup/matching over the dropped
+          > entries is incomplete. (fetchOk was true, so what WAS fetched is
+          > reliable.)
+
+      If `capped` is empty, omit the banner. A hard fetch failure never reaches
+      the digest — the gather-health gate aborts the run before this node.
 
       # Comment-URL index — REQUIRED
 
