@@ -3,6 +3,20 @@ name: E2E Smoke Tests
 on:
   push:
     branches: [main, dev]
+  # The AI-credentialed smoke tiers (e2e-claude / e2e-codex / e2e-mixed) are
+  # OPT-IN. CI has no funded API keys, so they fail on every dev push with
+  # "credit balance too low" (Anthropic) / "quota exceeded" (OpenAI) — a
+  # permanently-red tier trains people to ignore the whole workflow. Those tiers
+  # now run locally on maintainer subscriptions as the pre-release ritual, and
+  # only run in CI when deliberately enabled: dispatch this workflow with
+  # run_ai_tiers=true, or set the repo variable RUN_AI_SMOKE=true (no file edit
+  # needed to re-enable). The deterministic + container tiers stay unconditional.
+  workflow_dispatch:
+    inputs:
+      run_ai_tiers:
+        description: 'Run the AI-credentialed smoke tiers (Claude/Codex/mixed). Requires funded ANTHROPIC_API_KEY / OPENAI_API_KEY secrets.'
+        type: boolean
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -151,6 +165,12 @@ jobs:
   e2e-claude:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # OPT-IN (see the `on:` block). && binds tighter than ||, and the explicit
+    # parens make it unmistakable: run only when dispatched with run_ai_tiers
+    # OR when RUN_AI_SMOKE=true. On a push, event_name != workflow_dispatch, so
+    # the first clause is false and an unset RUN_AI_SMOKE ('' == 'true') is false
+    # too — the tier is skipped by default.
+    if: ${{ (github.event_name == 'workflow_dispatch' && inputs.run_ai_tiers) || (vars.RUN_AI_SMOKE == 'true') }}
     steps:
       - uses: actions/checkout@v4
 
@@ -181,6 +201,8 @@ jobs:
   e2e-codex:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # OPT-IN — same gate as e2e-claude (see the `on:` block).
+    if: ${{ (github.event_name == 'workflow_dispatch' && inputs.run_ai_tiers) || (vars.RUN_AI_SMOKE == 'true') }}
     steps:
       - uses: actions/checkout@v4
 
@@ -211,6 +233,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     needs: [e2e-claude, e2e-codex]
+    # OPT-IN — same gate as e2e-claude (see the `on:` block). Also skipped
+    # transitively when its needs are skipped, but the explicit gate keeps the
+    # RUN_AI_SMOKE escape hatch consistent across all three AI tiers.
+    if: ${{ (github.event_name == 'workflow_dispatch' && inputs.run_ai_tiers) || (vars.RUN_AI_SMOKE == 'true') }}
     steps:
       - uses: actions/checkout@v4
 
