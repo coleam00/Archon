@@ -15,8 +15,18 @@ import type {
   WorkflowExecutionResult,
   WorkflowSource,
 } from './schemas';
-import { isLoopNode, isLoopGroupNode, isApprovalNode, isScriptNode, isBashNode } from './schemas';
-import { executeDagWorkflow } from './dag-executor';
+import {
+  isLoopNode,
+  isLoopGroupNode,
+  isApprovalNode,
+  isScriptNode,
+  isBashNode,
+  isApprovalContext,
+} from './schemas';
+import { executeDagWorkflow, childOutcomeFromRun } from './dag-executor';
+import type { RunChildWorkflowArgs, ChildWorkflowOutcome } from './dag-executor';
+import { discoverWorkflowsWithConfig } from './workflow-discovery';
+import { resolveWorkflowName } from './router';
 import { logWorkflowStart, logWorkflowError } from './logger';
 import { formatDuration, parseDbTimestamp } from './utils/duration';
 import { keepAwake } from './utils/keep-awake';
@@ -418,6 +428,14 @@ export type ExecuteWorkflowOptions = ResumePayload & {
    * write-back. Absent for host runs.
    */
   container?: ContainerRunContext;
+  /**
+   * Internal (#2121 Phase 2): the ancestor run-id chain for a `workflow:` sub-run
+   * (the parent + its ancestors). A child shares the parent's checkout, so the
+   * path-lock must exclude these ids — otherwise the child self-blocks against the
+   * parent's own running/paused row on that path. Set only by the runChildWorkflow
+   * closure; undefined for every top-level run.
+   */
+  ancestorRunIds?: string[];
 };
 
 /**
@@ -438,10 +456,16 @@ export async function hydrateResumableRun(
   candidate: WorkflowRun
 ): Promise<{ preCreatedRun: WorkflowRun; priorCompletedNodes: Map<string, string> } | null> {
   const priorCompletedNodes = await deps.store.getCompletedDagNodeOutputs(candidate.id);
-  const hasInteractiveLoopState =
-    candidate.metadata?.approval !== undefined &&
-    (candidate.metadata.approval as Record<string, unknown>).type === 'interactive_loop';
-  if (priorCompletedNodes.size === 0 && !hasInteractiveLoopState) {
+  // A gate whose node deliberately writes NO node_completed on pause must still be
+  // resumable with zero completed nodes: interactive loops, and a `workflow:` node
+  // blocked on a child (#2121 Phase 2) whose child is the very first node.
+  const approvalType =
+    candidate.metadata?.approval !== undefined
+      ? (candidate.metadata.approval as Record<string, unknown>).type
+      : undefined;
+  const hasReRunGateState =
+    approvalType === 'interactive_loop' || approvalType === 'child_workflow';
+  if (priorCompletedNodes.size === 0 && !hasReRunGateState) {
     getLog().info(
       { resumableRunId: candidate.id },
       'workflow.dag_resume_skipped_no_completed_nodes'
@@ -454,6 +478,253 @@ export async function hydrateResumableRun(
     'workflow.dag_resuming'
   );
   return { preCreatedRun, priorCompletedNodes };
+}
+
+/** Depth cap on the `workflow:` sub-run tree (D9). A node nested deeper fails fast. */
+const CHILD_WORKFLOW_DEPTH_CAP = 5;
+
+/**
+ * Start (or resume a failed) child workflow run in-process for a `workflow:` node
+ * (#2121 Phase 2). Reuses the FULL executeWorkflow lifecycle for the child —
+ * run-record creation, path-lock, artifacts, credential/model resolution, resume,
+ * terminal output — and returns the child's node-facing outcome.
+ *
+ * The runtime cycle guard + depth cap live here (include:'s guard is load-time and
+ * does not cover runtime targets). The child shares the parent's checkout, so its
+ * ancestor chain is threaded into executeWorkflow to exclude from the path-lock.
+ * Never throws — every failure is returned as a `{ status: 'failed' }` outcome so
+ * the calling node fails cleanly rather than the whole DAG throwing.
+ */
+async function runChildWorkflow(
+  deps: WorkflowDeps,
+  platform: IWorkflowPlatform,
+  args: RunChildWorkflowArgs
+): Promise<ChildWorkflowOutcome> {
+  const {
+    parentRun,
+    nodeId,
+    childWorkflowName,
+    input,
+    cwd,
+    conversationId,
+    conversationDbId,
+    userId,
+    codebaseId,
+    resumeFailedChild,
+  } = args;
+
+  // 1. Cycle guard + depth cap (D9). The child's ancestor chain is the parent plus
+  //    the parent's ancestors; a target name already in the chain is a cycle.
+  let ancestry: WorkflowRun[];
+  try {
+    ancestry = [parentRun, ...(await deps.store.getRunAncestry(parentRun.id))];
+  } catch (err) {
+    return {
+      childRunId: '',
+      status: 'failed',
+      error: `Failed to resolve run ancestry for sub-run guard: ${(err as Error).message}`,
+    };
+  }
+  if (ancestry.some(a => a.workflow_name === childWorkflowName)) {
+    return {
+      childRunId: '',
+      status: 'failed',
+      error: `Sub-run cycle detected: '${childWorkflowName}' is already an ancestor of this run.`,
+    };
+  }
+  if (ancestry.length >= CHILD_WORKFLOW_DEPTH_CAP) {
+    return {
+      childRunId: '',
+      status: 'failed',
+      error: `Sub-run depth cap (${String(CHILD_WORKFLOW_DEPTH_CAP)}) exceeded nesting '${childWorkflowName}'.`,
+    };
+  }
+  const ancestorRunIds = ancestry.map(a => a.id);
+
+  // 2. Resolve the child workflow by NAME (static target — constitution guardrail).
+  let childWorkflow: WorkflowDefinition | undefined;
+  try {
+    const { workflows } = await discoverWorkflowsWithConfig(cwd, deps.loadConfig);
+    childWorkflow = resolveWorkflowName(
+      childWorkflowName,
+      workflows.map(w => w.workflow)
+    );
+  } catch (err) {
+    // resolveWorkflowName throws only on ambiguity.
+    return {
+      childRunId: '',
+      status: 'failed',
+      error: `Failed to resolve sub-run '${childWorkflowName}': ${(err as Error).message}`,
+    };
+  }
+  if (!childWorkflow) {
+    return {
+      childRunId: '',
+      status: 'failed',
+      error: `Unknown sub-run workflow '${childWorkflowName}'.`,
+    };
+  }
+
+  // 3. Create the child run row (fresh) or hydrate the failed one (resume path).
+  let childOpts: ExecuteWorkflowOptions;
+  let childRunId: string;
+  try {
+    if (resumeFailedChild) {
+      const hydrated = await hydrateResumableRun(deps, resumeFailedChild);
+      if (hydrated) {
+        childOpts = { ...hydrated, ancestorRunIds, codebaseId };
+        childRunId = hydrated.preCreatedRun.id;
+      } else {
+        // Failed child with no completed nodes — flip it back to running and re-run
+        // from the top (nothing to skip).
+        const preCreatedRun = await deps.store.resumeWorkflowRun(resumeFailedChild.id);
+        childOpts = { preCreatedRun, ancestorRunIds, codebaseId };
+        childRunId = preCreatedRun.id;
+      }
+    } else {
+      const childRun = await deps.store.createWorkflowRun({
+        workflow_name: childWorkflow.name,
+        conversation_id: conversationDbId,
+        codebase_id: codebaseId,
+        user_message: input,
+        working_path: cwd,
+        parent_run_id: parentRun.id,
+        // Share the parent's parent_conversation_id back-link so approve/reject
+        // auto-resume scoping keeps working for the child on chat platforms.
+        parent_conversation_id: parentRun.parent_conversation_id ?? undefined,
+        user_id: userId,
+        metadata: { parent_node_id: nodeId },
+      });
+      childOpts = { preCreatedRun: childRun, ancestorRunIds, codebaseId };
+      childRunId = childRun.id;
+    }
+  } catch (err) {
+    return {
+      childRunId: '',
+      status: 'failed',
+      error: `Failed to create sub-run '${childWorkflowName}': ${(err as Error).message}`,
+    };
+  }
+
+  // 4. Run the child in-process (reuses the whole lifecycle). Its terminal output +
+  //    cost + tokens land in the child run metadata on completion.
+  await executeWorkflow(
+    deps,
+    platform,
+    conversationId,
+    cwd,
+    childWorkflow,
+    input,
+    conversationDbId,
+    childOpts
+  );
+
+  // 5. Read the child back for the node-facing outcome (status + summary + cost +
+  //    tokens). Works for synchronous completion AND a child paused at its gate.
+  const finalChild = await deps.store.getWorkflowRun(childRunId);
+  if (!finalChild) {
+    return {
+      childRunId,
+      status: 'failed',
+      error: 'Child run row disappeared after execution.',
+    };
+  }
+  return childOutcomeFromRun(finalChild);
+}
+
+/**
+ * After a `workflow:` sub-run reaches a terminal state, re-enter its PARENT run if
+ * the parent is paused blocked on THIS child (#2121 Phase 2). This is the D5 hook
+ * that turns a child's completion into a parent resume — the cross-run analogue of
+ * a human approve, driven in the same process.
+ *
+ * No-op (guarded) when:
+ *  - the parent is not 'paused' (synchronous first-run path: the parent is still
+ *    'running' on the call stack — output threads directly from the returned outcome),
+ *  - the parent's gate isn't a `child_workflow` gate, or
+ *  - a DIFFERENT child of the same parent terminated (childRunId mismatch).
+ *
+ * Never throws — the child's own result must not be corrupted by a parent-resume
+ * failure; callers wrap this in `.catch`.
+ */
+async function maybeResumeParentRun(
+  deps: WorkflowDeps,
+  platform: IWorkflowPlatform,
+  conversationId: string,
+  conversationDbId: string,
+  childRun: WorkflowRun
+): Promise<void> {
+  const parentRunId = childRun.parent_run_id;
+  if (!parentRunId) return;
+
+  const parent = await deps.store.getWorkflowRun(parentRunId);
+  if (parent?.status !== 'paused') return;
+
+  const approval = isApprovalContext(parent.metadata?.approval)
+    ? parent.metadata.approval
+    : undefined;
+  if (approval?.type !== 'child_workflow' || approval.childRunId !== childRun.id) {
+    return;
+  }
+
+  const parentCwd = parent.working_path;
+  if (!parentCwd) {
+    getLog().warn(
+      { parentRunId, childRunId: childRun.id },
+      'workflow.parent_resume_no_working_path'
+    );
+    return;
+  }
+
+  let parentWorkflow: WorkflowDefinition | undefined;
+  try {
+    const { workflows } = await discoverWorkflowsWithConfig(parentCwd, deps.loadConfig);
+    parentWorkflow = resolveWorkflowName(
+      parent.workflow_name,
+      workflows.map(w => w.workflow)
+    );
+  } catch (err) {
+    getLog().error({ err: err as Error, parentRunId }, 'workflow.parent_resume_discovery_failed');
+    return;
+  }
+  if (!parentWorkflow) {
+    getLog().warn(
+      { parentRunId, workflowName: parent.workflow_name },
+      'workflow.parent_resume_workflow_not_found'
+    );
+    return;
+  }
+
+  const hydrated = await hydrateResumableRun(deps, parent);
+  if (!hydrated) {
+    // A parent paused on a child_workflow gate is always resumable (see the
+    // child_workflow branch in hydrateResumableRun), so null here is unexpected.
+    getLog().warn({ parentRunId }, 'workflow.parent_resume_nothing_to_resume');
+    return;
+  }
+
+  const ancestorRunIds = (await deps.store.getRunAncestry(parent.id).catch(() => [])).map(
+    a => a.id
+  );
+
+  getLog().info(
+    { parentRunId, childRunId: childRun.id, childStatus: childRun.status },
+    'workflow.parent_auto_resume_started'
+  );
+  await executeWorkflow(
+    deps,
+    platform,
+    conversationId,
+    parentCwd,
+    parentWorkflow,
+    parent.user_message ?? '',
+    conversationDbId,
+    {
+      ...hydrated,
+      ...(ancestorRunIds.length > 0 ? { ancestorRunIds } : {}),
+      codebaseId: parent.codebase_id ?? undefined,
+    }
+  );
 }
 
 /**
@@ -486,6 +757,7 @@ export async function executeWorkflow(
     baseBranch: callerBaseBranch,
     execContext = { kind: 'host' },
     container: containerCtx,
+    ancestorRunIds,
   } = opts;
 
   // Guard: a container run MUST be resumed with its container rewired (the CLI does
@@ -735,9 +1007,23 @@ export async function executeWorkflow(
   // permanently block the path.
   if (workflow.mutates_checkout !== false) {
     try {
+      // A `workflow:` sub-run shares its parent's checkout, so the ancestor chain
+      // must be excluded from the path-lock — otherwise the child self-blocks
+      // against the parent's own running/paused row on that path (#2121). Derived
+      // from the run's OWN parent_run_id so it holds on every entry path: the
+      // initial in-process spawn AND any later resume-after-approve (which is driven
+      // by the generic resume machinery and carries no ancestorRunIds hint). The
+      // opts.ancestorRunIds hint (from runChildWorkflow, already computed) is merged
+      // in to avoid a redundant ancestry query on the spawn path.
+      let pathLockExclude: string[] = ancestorRunIds ? [...ancestorRunIds] : [];
+      if (workflowRun.parent_run_id) {
+        const ancestry = await deps.store.getRunAncestry(workflowRun.id).catch(() => []);
+        pathLockExclude = [...new Set([...pathLockExclude, ...ancestry.map(a => a.id)])];
+      }
       const activeWorkflow = await deps.store.getActiveWorkflowRunByPath(cwd, {
         id: workflowRun.id,
         startedAt: new Date(parseDbTimestamp(workflowRun.started_at)),
+        ...(pathLockExclude.length > 0 ? { excludeRunIds: pathLockExclude } : {}),
       });
       if (activeWorkflow) {
         // The lock query found another active row that wins the older-wins
@@ -1059,11 +1345,42 @@ export async function executeWorkflow(
       workflowPreset,
       scopeArtifactsDir,
       execContext,
-      containerCtx
+      containerCtx,
+      // Sub-run closure (#2121 Phase 2): captures executeWorkflow (this module — no
+      // import cycle) so a `workflow:` node can spawn a governed child run in-process.
+      (childArgs: RunChildWorkflowArgs): Promise<ChildWorkflowOutcome> =>
+        runChildWorkflow(deps, platform, childArgs)
     );
 
     // executeDagWorkflow throws on fatal errors; check DB status for result
     const finalStatus = await deps.store.getWorkflowRun(workflowRun.id);
+    // Sub-run re-entry (#2121 Phase 2): if this run is a `workflow:` child that just
+    // reached a terminal state, re-enter its paused parent in-process. Guarded to be
+    // a no-op on the synchronous first-run path (parent still 'running'). Wrapped in
+    // catch — a parent-resume failure must not corrupt the child's own result.
+    if (
+      finalStatus?.parent_run_id &&
+      (finalStatus.status === 'completed' ||
+        finalStatus.status === 'failed' ||
+        finalStatus.status === 'cancelled')
+    ) {
+      await maybeResumeParentRun(
+        deps,
+        platform,
+        conversationId,
+        conversationDbId,
+        finalStatus
+      ).catch((err: unknown) => {
+        getLog().error(
+          {
+            err: err as Error,
+            childRunId: workflowRun.id,
+            parentRunId: finalStatus.parent_run_id,
+          },
+          'workflow.parent_auto_resume_failed'
+        );
+      });
+    }
     if (finalStatus?.status === 'completed') {
       return { success: true, workflowRunId: workflowRun.id, summary: dagSummary };
     } else if (finalStatus?.status === 'paused') {
