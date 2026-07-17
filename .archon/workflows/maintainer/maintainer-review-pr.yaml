@@ -31,26 +31,17 @@ nodes:
 
   - id: extract-pr-number
     bash: |
-      # Bash-first PR-number extraction — digit-picking needs no AI. $ARGUMENTS
-      # arrives as a subprocess env var (never textually interpolated), so
-      # quoting it is safe against shell injection.
+      # PR-number parsing lives in a tested script so its edge cases are pinned
+      # (.archon/scripts/extract-pr-number.ts): anchored forms (#N, PR N,
+      # pull/N, issues/N) win, a bare number is accepted only when it is the
+      # WHOLE input, multiple distinct anchored numbers error loudly, and a URL
+      # org/repo slug (e.g. coleam00, pr2-tool) never leaks a stray digit. The
+      # script writes $ARTIFACTS_DIR/.pr-number (checked) and prints the number.
       #
-      # Anchor on a keyword/URL segment BEFORE grabbing digits: a bare
-      # `grep -oE '[0-9]+' | head -1` picks the first number anywhere in the
-      # string, which is wrong for a PR URL whose org/repo slug contains digits
-      # (github.com/coleam00/Archon/pull/1428 would yield "00"). Prefer the
-      # number following `pull/`, `issues/`, `#`, or `PR`; fall back to a bare
-      # number scan only when no anchored form is present.
-      PR_NUM=$(echo "$ARGUMENTS" | grep -oiE '(pull/|issues/|#|pr[[:space:]#]*)[0-9]+' | grep -oE '[0-9]+' | head -1)
-      if [ -z "$PR_NUM" ]; then
-        PR_NUM=$(echo "$ARGUMENTS" | tr -d "'\"\`\n " | grep -oE '[0-9]+' | head -1)
-      fi
-      if [ -z "$PR_NUM" ]; then
-        echo "ERROR: Could not extract a PR number from arguments: $ARGUMENTS" >&2
-        exit 1
-      fi
-      echo "$PR_NUM" > "$ARTIFACTS_DIR/.pr-number"
-      echo "$PR_NUM"
+      # $ARGUMENTS arrives as a subprocess env var (never textually
+      # interpolated) and is passed as a single argv element, so this is
+      # injection-safe. A non-zero exit (no number / ambiguous) fails the node.
+      bun --no-env-file run .archon/scripts/extract-pr-number.ts "$ARGUMENTS"
     timeout: 10000
 
   # ═══════════════════════════════════════════════════════════════
