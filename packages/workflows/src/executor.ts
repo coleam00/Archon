@@ -226,6 +226,30 @@ async function resolveUserProviderEnvForWorkflow(
 }
 
 /**
+ * Whether the run's codebase is a folder project (non-git). Folder projects run
+ * in place on a non-git root, so git base-branch auto-detection can only fail
+ * (`fatal: not a git repository`) — skip it to avoid the ERROR/WARN log-spam
+ * pair on every folder run (#2159). `$BASE_BRANCH` keeps its
+ * referenced-but-unresolvable failure semantics (empty string when skipped).
+ *
+ * Contract: NEVER THROWS. A lookup failure returns `false` so the normal
+ * auto-detection path still runs, preserving prior behavior on any DB hiccup.
+ */
+async function isFolderCodebase(
+  deps: WorkflowDeps,
+  codebaseId: string | undefined
+): Promise<boolean> {
+  if (!codebaseId) return false;
+  try {
+    const codebase = await deps.store.getCodebase(codebaseId);
+    return codebase?.kind === 'folder';
+  } catch (err) {
+    getLog().warn({ err: err as Error, codebaseId }, 'workflow.folder_kind_resolve_failed');
+    return false;
+  }
+}
+
+/**
  * Resolve the artifacts and log directories for a workflow run.
  * Looks up the codebase by ID once, parses owner/repo, and returns project-scoped paths.
  * Folder projects route to `_folder/<slug>/` storage; falls back to cwd-based
@@ -520,6 +544,11 @@ export async function executeWorkflow(
     baseBranch = config.baseBranch;
   } else if (fallbackBaseBranch) {
     baseBranch = fallbackBaseBranch;
+  } else if (await isFolderCodebase(deps, codebaseId)) {
+    // Folder projects run on a non-git root — auto-detection can only fail and
+    // emit ERROR/WARN noise on every run (#2159). Leave empty; $BASE_BRANCH
+    // stays unresolved and throws only if a prompt actually references it.
+    baseBranch = '';
   } else {
     try {
       baseBranch = await getDefaultBranch(toRepoPath(cwd));
