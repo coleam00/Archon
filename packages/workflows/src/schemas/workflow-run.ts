@@ -129,8 +129,17 @@ export type WorkflowRun = z.infer<typeof workflowRunSchema>;
 export interface ApprovalContext {
   nodeId: string;
   message: string;
-  /** Distinguishes approval-gate pauses from interactive-loop pauses. */
-  type?: 'approval' | 'interactive_loop';
+  /**
+   * Distinguishes the pause kind:
+   *  - `approval`         — a DAG approval node awaiting a human decision.
+   *  - `interactive_loop` — an interactive loop gate.
+   *  - `writeback`        — the ENGINE-level container write-back gate (Phase C):
+   *    no DAG node behind it (`nodeId` is the synthetic `__writeback__`), the
+   *    overlay diff of a finished container run awaiting approve→apply / reject→
+   *    discard. Reuses the approve/reject CAS machinery; the executor's resume
+   *    path branches on the persisted `pending_writeback` marker, not this node.
+   */
+  type?: 'approval' | 'interactive_loop' | 'writeback';
   /** Current loop iteration when paused (interactive loops only). */
   iteration?: number;
   /**

@@ -187,15 +187,22 @@ interface HookActivityEvent {
 }
 
 /**
- * Container isolation backend lifecycle (folder-project container runs). Phase B
- * emits only `created` (at run start) and `destroyed` (at teardown). `stopped`/
- * `resumed` phases are NOT declared until Phase C implements suspend/resume
- * (YAGNI — no speculative states).
+ * Container isolation backend lifecycle (folder-project container runs).
+ * `created`/`destroyed` bracket the run; `stopped`/`resumed` bracket a suspend
+ * across a pause; the `writeback_*` phases track the engine-level write-back gate
+ * (requested → applied / discarded) (Phase C).
  */
 export interface ContainerLifecycleEvent {
   type: 'container_lifecycle';
   runId: string;
-  phase: 'created' | 'destroyed';
+  phase:
+    | 'created'
+    | 'stopped'
+    | 'resumed'
+    | 'destroyed'
+    | 'writeback_requested'
+    | 'writeback_applied'
+    | 'writeback_discarded';
   containerId?: string;
 }
 

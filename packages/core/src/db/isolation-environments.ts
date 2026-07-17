@@ -287,6 +287,32 @@ export async function listByCodebaseWithAge(
 }
 
 /**
+ * List active CONTAINER isolation environments (folder-project container backend),
+ * newest first, with the codebase name and age in days. Used by `isolation
+ * list/cleanup` to surface + reap containers; the run status (which decides
+ * whether a container is reapable) is looked up per-row via
+ * {@link import('./workflows').getRunByIsolationEnvId}.
+ */
+export async function listActiveContainerEnvironments(): Promise<
+  readonly (IsolationEnvironmentRow & {
+    codebase_name: string;
+    days_since_created: number;
+  })[]
+> {
+  const dialect = getDialect();
+  const result = await pool.query<
+    IsolationEnvironmentRow & { codebase_name: string; days_since_created: number }
+  >(
+    `SELECT e.*, c.name as codebase_name, ${dialect.daysSince('e.created_at')} as days_since_created
+     FROM remote_agent_isolation_environments e
+     JOIN remote_agent_codebases c ON e.codebase_id = c.id
+     WHERE e.status = 'active' AND e.provider = 'container'
+     ORDER BY e.created_at DESC`
+  );
+  return result.rows;
+}
+
+/**
  * Create an IIsolationStore adapter from the DB query functions.
  * Used by IsolationResolver for dependency injection.
  */

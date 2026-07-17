@@ -19,7 +19,7 @@ import {
   buildDetachedRunCmd,
   maybePrintTierNotice,
   resolveContainerBackendConfig,
-  describeWorkflowPause,
+  hasUnresolvedWriteback,
 } from './workflow';
 
 const mockLogger = {
@@ -163,7 +163,7 @@ mock.module('@archon/core/db/messages', () => ({
 mock.module('@archon/core/db/workflows', () => ({
   getActiveWorkflowRun: mock(() => Promise.resolve(null)),
   failWorkflowRun: mock(() => Promise.resolve()),
-  cancelWorkflowRun: mock(() => Promise.resolve()),
+  cancelWorkflowRun: mock(() => Promise.resolve({ cancelled: true })),
   findResumableRun: mock(() => Promise.resolve(null)),
   resumeWorkflowRun: mock(() => Promise.resolve(null)),
   getWorkflowRun: mock(() => Promise.resolve(null)),
@@ -2647,7 +2647,9 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
       workflow_name: 'implement',
       status: 'running',
     });
-    (workflowDb.cancelWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(undefined);
+    (workflowDb.cancelWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      cancelled: true,
+    });
 
     await workflowAbandonCommand('0b1ee8da', true, '/repo');
 
@@ -3806,7 +3808,9 @@ describe('workflowAbandonCommand', () => {
       workflow_name: 'implement',
       status: 'running',
     });
-    (workflowDb.cancelWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(undefined);
+    (workflowDb.cancelWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      cancelled: true,
+    });
 
     await workflowAbandonCommand('run-1');
 
@@ -4859,6 +4863,21 @@ describe('maybePrintTierNotice', () => {
   });
 });
 
+describe('hasUnresolvedWriteback (H2 teardown-preserve decision)', () => {
+  it('true when the gate was raised but never resolved (failed/partial apply)', () => {
+    expect(hasUnresolvedWriteback({ pending_writeback: { envId: 'e' } })).toBe(true);
+  });
+  it('false once the write-back resolved (applied/discarded)', () => {
+    expect(
+      hasUnresolvedWriteback({ pending_writeback: { envId: 'e' }, writeback_resolved: true })
+    ).toBe(false);
+  });
+  it('false for a run that never raised a write-back gate', () => {
+    expect(hasUnresolvedWriteback({ isolation: 'container' })).toBe(false);
+    expect(hasUnresolvedWriteback(undefined)).toBe(false);
+  });
+});
+
 describe('resolveContainerBackendConfig', () => {
   it('applies defaults when config is absent', () => {
     const cfg = resolveContainerBackendConfig(undefined);
@@ -4896,35 +4915,5 @@ describe('resolveContainerBackendConfig', () => {
   it('rejects a non-integer / non-positive pidsLimit', () => {
     expect(() => resolveContainerBackendConfig({ pidsLimit: 10.5 })).toThrow(/positive integer/);
     expect(() => resolveContainerBackendConfig({ pidsLimit: 0 })).toThrow(/positive integer/);
-  });
-});
-
-describe('describeWorkflowPause', () => {
-  it('flags a workflow-level interactive flag', () => {
-    const wf = makeTestWorkflow({
-      name: 'i',
-      interactive: true,
-      nodes: [{ id: 'a', prompt: 'hi' }],
-    });
-    expect(describeWorkflowPause(wf)).toBe('interactive: true');
-  });
-
-  it('flags an approval node by id', () => {
-    const wf = makeTestWorkflow({
-      name: 'a',
-      nodes: [
-        { id: 'think', prompt: 'hi' },
-        { id: 'gate', depends_on: ['think'], approval: { message: 'ok?' } },
-      ],
-    });
-    expect(describeWorkflowPause(wf)).toBe("approval node 'gate'");
-  });
-
-  it('returns undefined for a non-pausing workflow', () => {
-    const wf = makeTestWorkflow({
-      name: 'p',
-      nodes: [{ id: 'b', bash: 'echo hi' }],
-    });
-    expect(describeWorkflowPause(wf)).toBeUndefined();
   });
 });

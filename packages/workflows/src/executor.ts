@@ -23,6 +23,8 @@ import { keepAwake } from './utils/keep-awake';
 import { getWorkflowEventEmitter } from './event-emitter';
 import { isRegisteredProvider, getRegisteredProviders } from '@archon/providers';
 import type { ExecutionContext } from '@archon/providers/types';
+import type { ContainerRunContext } from './container-context';
+export type { ContainerRunContext, ContainerWriteBackBackend } from './container-context';
 import {
   classifyError,
   toTelemetryErrorClass,
@@ -385,6 +387,13 @@ export type ExecuteWorkflowOptions = ResumePayload & {
    * absent, so every existing caller is unchanged.
    */
   execContext?: ExecutionContext;
+  /**
+   * Container run context (folder-project container backend, Phase C). Present
+   * only when `execContext.kind === 'container'`; carries the prepared env id, the
+   * write-back policy, and the backend port the engine drives for suspend +
+   * write-back. Absent for host runs.
+   */
+  container?: ContainerRunContext;
 };
 
 /**
@@ -452,7 +461,32 @@ export async function executeWorkflow(
     source,
     baseBranch: callerBaseBranch,
     execContext = { kind: 'host' },
+    container: containerCtx,
   } = opts;
+
+  // Guard: a container run MUST be resumed with its container rewired (the CLI does
+  // this via backend.resumeEnv, threading a `container` context). A resume that
+  // reaches here for a container run WITHOUT that context — e.g. approving a
+  // --container run from chat/web, which has no docker backend wired — would run
+  // host-side and SILENTLY skip the write-back apply, losing the approved changes.
+  // Fail loudly and point at the CLI instead; the run stays resumable (failed) so
+  // the CLI can rediscover the container and apply.
+  if (preCreatedRun?.metadata?.isolation === 'container' && !containerCtx) {
+    const msg =
+      `Run '${preCreatedRun.id}' executed inside an isolation container. Resume it from the ` +
+      'CLI in the same project (`archon workflow approve/reject/resume <id>`), where the ' +
+      'container is rediscovered — chat/web resume cannot rewire it.';
+    getLog().warn({ workflowRunId: preCreatedRun.id }, 'workflow.container_resume_without_backend');
+    await deps.store.failWorkflowRun(preCreatedRun.id, msg).catch((err: unknown) => {
+      getLog().error(
+        { err, workflowRunId: preCreatedRun.id },
+        'workflow.container_resume_guard_fail_failed'
+      );
+    });
+    await safeSendMessage(platform, conversationId, `⚠️ ${msg}`);
+    return { success: false, workflowRunId: preCreatedRun.id, error: msg };
+  }
+
   // Load config once for the entire workflow execution
   const fileConfig = await deps.loadConfig(cwd);
   const dbEnvVars = codebaseId ? await deps.store.getCodebaseEnvVars(codebaseId) : {};
@@ -633,13 +667,14 @@ export async function executeWorkflow(
         codebase_id: codebaseId,
         user_message: userMessage,
         working_path: cwd,
-        // Record container isolation on the run itself so a later resume can
-        // detect it regardless of the current --container flag or the (destroyed)
-        // env row's status — Phase B container runs cannot be resumed (the overlay
-        // was discarded on teardown).
+        // Record container isolation on the run itself so a later resume — a
+        // SEPARATE process with no --container flag in hand — can detect it and
+        // rediscover the container. `isolation_env_id` is the handle the resume
+        // path passes to `backend.resumeEnv()` (Phase C).
         metadata: {
           ...(issueContext ? { github_context: issueContext } : {}),
           ...(execContext.kind === 'container' ? { isolation: 'container' } : {}),
+          ...(containerCtx ? { isolation_env_id: containerCtx.envId } : {}),
         },
         parent_conversation_id: parentConversationId,
         user_id: userId,
@@ -994,7 +1029,8 @@ export async function executeWorkflow(
       aiProfile,
       workflowPreset,
       scopeArtifactsDir,
-      execContext
+      execContext,
+      containerCtx
     );
 
     // executeDagWorkflow throws on fatal errors; check DB status for result

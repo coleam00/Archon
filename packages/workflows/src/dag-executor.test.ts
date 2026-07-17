@@ -134,6 +134,8 @@ function createMockStore(): IWorkflowStore {
     completeWorkflowRun: mock(() => Promise.resolve()),
     failWorkflowRun: mock(() => Promise.resolve()),
     pauseWorkflowRun: mock(() => Promise.resolve()),
+    claimWriteback: mock(() => Promise.resolve({ claimed: true })),
+    releaseWritebackClaim: mock(() => Promise.resolve()),
     cancelWorkflowRun: mock(() => Promise.resolve()),
     createWorkflowEvent: mock(() => Promise.resolve()),
     getCompletedDagNodeOutputs: mock(() => Promise.resolve(new Map<string, string>())),
@@ -13988,5 +13990,413 @@ describe('buildSubprocessDockerArgs — bash/script env isolation', () => {
     expect(joined).not.toContain('HOME=/evil');
     expect(joined).not.toContain('PWD=/x');
     expect(joined).toContain('KEEP=1'); // non-denylisted keys still forwarded
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Container write-back gate + suspend-on-pause (Phase C)
+// ---------------------------------------------------------------------------
+
+describe('executeDagWorkflow -- container write-back gate', () => {
+  const CONTAINER_EXEC = { kind: 'container' as const, containerId: 'cid-1' };
+  const wbTestDir = join(tmpdir(), `dag-wb-test-${Date.now()}`);
+
+  function makeWritebackBackend(over?: Partial<Record<string, unknown>>) {
+    return {
+      suspend: mock(async () => undefined),
+      finalize: mock(async () => ({ requiresApproval: false as boolean })),
+      applyChanges: mock(async () => ({
+        filesApplied: 0,
+        filesDeleted: 0,
+        warnings: [] as string[],
+      })),
+      discardChanges: mock(async () => undefined),
+      ...over,
+    };
+  }
+
+  /** Run a single pre-completed bash node under a container context so the gate runs. */
+  async function runGate(opts: {
+    backend: ReturnType<typeof makeWritebackBackend>;
+    writeBack?: 'approve' | 'auto';
+    runMetadata?: Record<string, unknown>;
+    status?: 'running' | 'paused';
+    claimed?: boolean;
+  }): Promise<IWorkflowStore> {
+    const store = createMockStore();
+    store.getWorkflowRunStatus = mock(() => Promise.resolve(opts.status ?? ('running' as const)));
+    store.getWorkflowRun = mock(() =>
+      Promise.resolve(makeWorkflowRun('wb-run', { metadata: opts.runMetadata ?? {} }))
+    );
+    store.claimWriteback = mock(() => Promise.resolve({ claimed: opts.claimed ?? true }));
+    const deps = createMockDeps(store);
+    await executeDagWorkflow(
+      deps,
+      createMockPlatform(),
+      'conv-wb',
+      wbTestDir,
+      { name: 'wb', nodes: [{ id: 'a', bash: 'echo hi' }] },
+      makeWorkflowRun('wb-run'),
+      'claude',
+      undefined,
+      join(wbTestDir, 'artifacts'),
+      join(wbTestDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      new Map([['a', 'out']]), // pre-completed → node skipped, DAG reaches the gate
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      CONTAINER_EXEC,
+      { envId: 'env-x', writeBack: opts.writeBack ?? 'approve', backend: opts.backend }
+    );
+    return store;
+  }
+
+  it('empty diff → completes normally, no pause', async () => {
+    const backend = makeWritebackBackend({
+      finalize: mock(async () => ({ requiresApproval: false })),
+    });
+    const store = await runGate({ backend });
+    expect(backend.finalize).toHaveBeenCalledTimes(1);
+    expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(store.pauseWorkflowRun).not.toHaveBeenCalled();
+    expect(backend.suspend).not.toHaveBeenCalled();
+  });
+
+  it('non-empty diff + approve policy → pauses (writeback) + suspends, does NOT complete', async () => {
+    const backend = makeWritebackBackend({
+      finalize: mock(async () => ({
+        requiresApproval: true,
+        changeSummary: {
+          added: ['x.md'],
+          modified: [],
+          deleted: [],
+          symlinks: [],
+          skipped: [],
+          totalCount: 1,
+          truncated: false,
+        },
+      })),
+    });
+    const store = await runGate({ backend });
+    expect(store.pauseWorkflowRun).toHaveBeenCalledTimes(1);
+    const pauseCall = (store.pauseWorkflowRun as ReturnType<typeof mock>).mock.calls[0];
+    const pauseArg = pauseCall[1] as { nodeId: string; type: string };
+    expect(pauseArg.nodeId).toBe('__writeback__');
+    expect(pauseArg.type).toBe('writeback');
+    // pending_writeback is folded into the SAME pause write (M3), not a 2nd update.
+    const extraMeta = pauseCall[2] as { pending_writeback?: { envId: string } };
+    expect(extraMeta.pending_writeback?.envId).toBe('env-x');
+    expect(backend.suspend).toHaveBeenCalledTimes(1);
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('non-empty diff + auto policy → applies without pausing, then completes', async () => {
+    const backend = makeWritebackBackend({
+      finalize: mock(async () => ({
+        requiresApproval: true,
+        changeSummary: {
+          added: ['x.md'],
+          modified: [],
+          deleted: [],
+          symlinks: [],
+          skipped: [],
+          totalCount: 1,
+          truncated: false,
+        },
+      })),
+      applyChanges: mock(async () => ({ filesApplied: 1, filesDeleted: 0, warnings: [] })),
+    });
+    const store = await runGate({ backend, writeBack: 'auto' });
+    expect(backend.applyChanges).toHaveBeenCalledTimes(1);
+    expect(store.pauseWorkflowRun).not.toHaveBeenCalled();
+    expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+  });
+
+  // Helper: a writeback approval context resolved to a given decision.
+  const wbApproval = (resolved: 'approved' | 'rejected' | null) => ({
+    nodeId: '__writeback__',
+    message: 'review',
+    type: 'writeback' as const,
+    resolved,
+  });
+
+  it('resume after approve → CLAIMS then applies overlay, marks resolved, completes', async () => {
+    const backend = makeWritebackBackend({
+      applyChanges: mock(async () => ({ filesApplied: 3, filesDeleted: 1, warnings: [] })),
+    });
+    const store = await runGate({
+      backend,
+      runMetadata: { pending_writeback: { envId: 'env-x' }, approval: wbApproval('approved') },
+    });
+    // R2-F4: the apply is claimed BEFORE the live root is mutated.
+    expect(store.claimWriteback).toHaveBeenCalledTimes(1);
+    expect(backend.applyChanges).toHaveBeenCalledTimes(1);
+    expect(backend.finalize).not.toHaveBeenCalled(); // resume path skips re-inspection
+    expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+  });
+
+  // R2-F4 — a lost claim (concurrent/prior resume owns the apply, or a crash left it
+  // claimed after a successful apply) must NOT re-apply; complete as applied.
+  it('resume after approve with a LOST claim does NOT re-apply', async () => {
+    const backend = makeWritebackBackend();
+    const store = await runGate({
+      backend,
+      claimed: false,
+      runMetadata: { pending_writeback: { envId: 'env-x' }, approval: wbApproval('approved') },
+    });
+    expect(store.claimWriteback).toHaveBeenCalledTimes(1);
+    expect(backend.applyChanges).not.toHaveBeenCalled(); // no double-apply
+    expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+  });
+
+  // R2-F4 — a failed apply RELEASES the claim (so `workflow resume` can retry) and
+  // propagates the error (run fails → volume preserved by H2).
+  it('resume after approve with a FAILED apply releases the claim and rethrows', async () => {
+    const backend = makeWritebackBackend({
+      applyChanges: mock(async () => {
+        throw new Error('cp: No space left on device');
+      }),
+    });
+    // executeDagWorkflow lets the apply error propagate; the outer executor marks the
+    // run failed. Assert release was called and the error surfaced.
+    let threw = false;
+    const store = createMockStore();
+    store.getWorkflowRunStatus = mock(() => Promise.resolve('running' as const));
+    store.getWorkflowRun = mock(() =>
+      Promise.resolve(
+        makeWorkflowRun('wb-run', {
+          metadata: { pending_writeback: { envId: 'env-x' }, approval: wbApproval('approved') },
+        })
+      )
+    );
+    store.claimWriteback = mock(() => Promise.resolve({ claimed: true }));
+    try {
+      await executeDagWorkflow(
+        createMockDeps(store),
+        createMockPlatform(),
+        'conv-wb',
+        wbTestDir,
+        { name: 'wb', nodes: [{ id: 'a', bash: 'echo hi' }] },
+        makeWorkflowRun('wb-run'),
+        'claude',
+        undefined,
+        join(wbTestDir, 'artifacts'),
+        join(wbTestDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig,
+        undefined,
+        undefined,
+        new Map([['a', 'out']]),
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        CONTAINER_EXEC,
+        { envId: 'env-x', writeBack: 'approve', backend }
+      );
+    } catch {
+      threw = true;
+    }
+    expect(threw).toBe(true);
+    expect(store.releaseWritebackClaim).toHaveBeenCalledTimes(1);
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  // A stateful store that accumulates metadata from updateWorkflowRun / pauseWorkflowRun,
+  // so an apply-throw test can inspect the FINAL run metadata — the exact input the CLI
+  // teardown's `hasUnresolvedWriteback` reads to decide preserve-vs-destroy.
+  function statefulGateStore(initialMeta: Record<string, unknown>): {
+    store: IWorkflowStore;
+    metadata: Record<string, unknown>;
+  } {
+    const metadata: Record<string, unknown> = { ...initialMeta };
+    const store = createMockStore();
+    store.getWorkflowRunStatus = mock(() => Promise.resolve('running' as const));
+    store.getWorkflowRun = mock(() => Promise.resolve(makeWorkflowRun('wb-run', { metadata })));
+    store.claimWriteback = mock(() => Promise.resolve({ claimed: true }));
+    store.updateWorkflowRun = mock(
+      (_id: string, updates: { metadata?: Record<string, unknown> }) => {
+        for (const [k, v] of Object.entries(updates.metadata ?? {})) {
+          if (v === null) delete metadata[k];
+          else metadata[k] = v;
+        }
+        return Promise.resolve();
+      }
+    );
+    return { store, metadata };
+  }
+
+  /** The predicate the CLI teardown uses to PRESERVE the volume (mirror of hasUnresolvedWriteback). */
+  const wouldPreserve = (m: Record<string, unknown>): boolean =>
+    m.pending_writeback !== undefined && m.writeback_resolved !== true;
+
+  async function runGateWithStore(
+    store: IWorkflowStore,
+    backend: ReturnType<typeof makeWritebackBackend>,
+    writeBack: 'approve' | 'auto'
+  ): Promise<void> {
+    await executeDagWorkflow(
+      createMockDeps(store),
+      createMockPlatform(),
+      'conv-wb',
+      wbTestDir,
+      { name: 'wb', nodes: [{ id: 'a', bash: 'echo hi' }] },
+      makeWorkflowRun('wb-run'),
+      'claude',
+      undefined,
+      join(wbTestDir, 'artifacts'),
+      join(wbTestDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      new Map([['a', 'out']]),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      CONTAINER_EXEC,
+      { envId: 'env-x', writeBack, backend }
+    );
+  }
+
+  // N1/item-2 — an apply-throw in APPROVE mode leaves the run with pending_writeback set
+  // and unresolved, so the teardown PRESERVES the volume (never destroy the only copy).
+  it('apply-throw in approve mode leaves an unresolved write-back (teardown preserves)', async () => {
+    const { store, metadata } = statefulGateStore({
+      pending_writeback: { envId: 'env-x' },
+      approval: wbApproval('approved'),
+    });
+    const backend = makeWritebackBackend({
+      applyChanges: mock(async () => {
+        throw new Error('cp: read-only file system');
+      }),
+    });
+    await expect(runGateWithStore(store, backend, 'approve')).rejects.toThrow(/read-only/);
+    expect(wouldPreserve(metadata)).toBe(true);
+  });
+
+  // N1 — an apply-throw in AUTO mode must ALSO leave pending_writeback set (auto sets the
+  // preserve marker BEFORE mutating the live root), so the teardown preserves the volume.
+  it('apply-throw in auto mode sets the preserve marker (teardown preserves)', async () => {
+    const { store, metadata } = statefulGateStore({}); // fresh: no pending_writeback yet
+    const backend = makeWritebackBackend({
+      finalize: mock(async () => ({
+        requiresApproval: true,
+        changeSummary: {
+          added: ['x.md'],
+          modified: [],
+          deleted: [],
+          symlinks: [],
+          skipped: [],
+          totalCount: 1,
+          truncated: false,
+        },
+      })),
+      applyChanges: mock(async () => {
+        throw new Error('cp: read-only file system');
+      }),
+    });
+    await expect(runGateWithStore(store, backend, 'auto')).rejects.toThrow(/read-only/);
+    expect(metadata.pending_writeback).toBeDefined(); // marker set before the throw
+    expect(wouldPreserve(metadata)).toBe(true);
+  });
+
+  it('resume after reject → discards overlay (live root untouched), completes', async () => {
+    const backend = makeWritebackBackend();
+    const store = await runGate({
+      backend,
+      runMetadata: { pending_writeback: { envId: 'env-x' }, approval: wbApproval('rejected') },
+    });
+    expect(backend.discardChanges).toHaveBeenCalledTimes(1);
+    expect(backend.applyChanges).not.toHaveBeenCalled();
+    expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+  });
+
+  // H1 — FAIL CLOSED. A bare `/workflow resume` (no decision) reaches the still-open
+  // gate: it must RE-PAUSE, never apply.
+  it('resume with an UNRESOLVED gate re-pauses (fail closed), does NOT apply', async () => {
+    const backend = makeWritebackBackend();
+    const store = await runGate({
+      backend,
+      runMetadata: {
+        pending_writeback: {
+          envId: 'env-x',
+          summary: {
+            added: ['x'],
+            modified: [],
+            deleted: [],
+            symlinks: [],
+            skipped: [],
+            totalCount: 1,
+            truncated: false,
+          },
+        },
+        approval: wbApproval(null), // gate raised but not yet decided
+      },
+    });
+    expect(backend.applyChanges).not.toHaveBeenCalled();
+    expect(backend.discardChanges).not.toHaveBeenCalled();
+    expect(store.pauseWorkflowRun).toHaveBeenCalledTimes(1); // re-raised
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  // H1 — a STALE run-wide approval_response from an earlier mid-DAG approval node must
+  // NOT auto-apply the write-back gate; only the gate's own approval.resolved counts.
+  it('stale top-level approval_response does NOT apply the write-back overlay', async () => {
+    const backend = makeWritebackBackend();
+    const store = await runGate({
+      backend,
+      runMetadata: {
+        pending_writeback: {
+          envId: 'env-x',
+          summary: {
+            added: ['x'],
+            modified: [],
+            deleted: [],
+            symlinks: [],
+            skipped: [],
+            totalCount: 1,
+            truncated: false,
+          },
+        },
+        approval: wbApproval(null),
+        approval_response: 'approved', // stale from a prior gate — must be ignored
+      },
+    });
+    expect(backend.applyChanges).not.toHaveBeenCalled();
+    expect(store.pauseWorkflowRun).toHaveBeenCalledTimes(1); // re-raised, not applied
+  });
+
+  it('mid-DAG pause suspends the container instead of completing', async () => {
+    const backend = makeWritebackBackend();
+    const store = await runGate({ backend, status: 'paused' });
+    // A node paused the run → suspend fires right after the layer walk; the gate
+    // + completion are never reached.
+    expect(backend.suspend).toHaveBeenCalledTimes(1);
+    expect(backend.finalize).not.toHaveBeenCalled();
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('a docker-stop failure during suspend does NOT flip the paused run to failed', async () => {
+    const backend = makeWritebackBackend({
+      suspend: mock(async () => {
+        throw new Error('Cannot connect to the Docker daemon');
+      }),
+    });
+    // status 'paused' → the mid-DAG suspend path runs; a suspend throw is best-effort.
+    const store = await runGate({ backend, status: 'paused' });
+    expect(backend.suspend).toHaveBeenCalledTimes(1);
+    // The run stays paused — suspend failure must not mark it failed or complete it.
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
   });
 });

@@ -136,6 +136,33 @@ describe('Workflow Loader', () => {
       expect(result.workflows[0].workflow.worktree).toBeUndefined();
     });
 
+    it('should parse container policy (enabled + write_back)', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      const yaml = `name: ops\ndescription: containerized\ncontainer:\n  enabled: true\n  write_back: auto\nnodes:\n  - id: n\n    prompt: p\n`;
+      await writeFile(join(workflowDir, 'ops.yaml'), yaml);
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.workflows[0].workflow.container).toEqual({ enabled: true, write_back: 'auto' });
+    });
+
+    it('should ignore an invalid container.write_back value but keep the block', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      const yaml = `name: ops2\ndescription: bad\ncontainer:\n  enabled: true\n  write_back: bogus\nnodes:\n  - id: n\n    prompt: p\n`;
+      await writeFile(join(workflowDir, 'ops2.yaml'), yaml);
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.workflows[0].workflow.container).toEqual({ enabled: true });
+    });
+
+    it('should omit container block when not present', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      const yaml = `name: plain\ndescription: none\nnodes:\n  - id: n\n    prompt: p\n`;
+      await writeFile(join(workflowDir, 'plain.yaml'), yaml);
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.workflows[0].workflow.container).toBeUndefined();
+    });
+
     it('should parse explicit tags array', async () => {
       const workflowDir = join(testDir, '.archon', 'workflows');
       await mkdir(workflowDir, { recursive: true });

@@ -22,6 +22,7 @@
 import { randomUUID } from 'crypto';
 import type { BranchName } from '@archon/git';
 import { createLogger } from '@archon/paths';
+import type { WriteBackFinalizeResult, WriteBackApplySummary } from '@archon/providers/types';
 import type {
   BackendPrepareRequest,
   ContainerBackendConfig,
@@ -36,6 +37,7 @@ import {
   extractDockerError,
   type DockerRunner,
 } from '../container/docker-exec';
+import { summarizeOverlayChanges, applyOverlayChanges } from '../container/overlay';
 
 const log = createLogger('isolation.container');
 
@@ -148,8 +150,21 @@ export class ContainerBackend implements IIsolationBackend {
     );
 
     // 1. Per-run upper volume (VM-local — overlay upperdir/workdir must NEVER be
-    //    on a host bind mount, orbstack#1376 EACCES on macOS).
-    await this.docker(['volume', 'create', volume]);
+    //    on a host bind mount, orbstack#1376 EACCES on macOS). Stamped with the same
+    //    labels as the container so leak-detection + cleanup can discover BOTH
+    //    resource types by `diy.archon.managed` label, not just the `archon-` name
+    //    prefix (volumes from older builds carry no label — match the prefix there).
+    await this.docker([
+      'volume',
+      'create',
+      '--label',
+      `${CONTAINER_LABELS.managed}=true`,
+      '--label',
+      `${CONTAINER_LABELS.codebaseId}=${req.codebase.id}`,
+      '--label',
+      `${CONTAINER_LABELS.envId}=${containerName}`,
+      volume,
+    ]);
 
     // 2. Create + start the container, mounting the overlay with the
     //    least-privileged mode that works (fuse without CAP_SYS_ADMIN first,
@@ -210,6 +225,7 @@ export class ContainerBackend implements IIsolationBackend {
       cwd: hostRoot,
       execContext: { kind: 'container', containerId },
       envId: row.id,
+      overlayMode,
     };
   }
 
@@ -269,6 +285,206 @@ export class ContainerBackend implements IIsolationBackend {
     });
 
     log.info({ envId, containerName, volume }, 'isolation.container_destroy_completed');
+  }
+
+  /**
+   * Suspend a running container on pause (`docker stop`, default grace). The upper
+   * volume + container survive so `resumeEnv` can restart it; only the RAM/CPU are
+   * released. Idempotent: a container that is already stopped or gone is a no-op
+   * (the caller has nothing to reclaim). A GENUINE docker failure throws — a
+   * container we couldn't stop is still consuming resources and the caller must know.
+   */
+  async suspend(envId: string): Promise<void> {
+    const meta = await this.loadMetadata(envId);
+    const handle = meta.containerName ?? meta.containerId;
+    if (!handle) {
+      log.warn({ envId }, 'isolation.container_suspend_no_handle');
+      return;
+    }
+    try {
+      await this.docker(['stop', handle]);
+      log.info({ envId, handle }, 'isolation.container_suspended');
+    } catch (err) {
+      const detail = extractDockerError(err);
+      if (/no such container|is not running/i.test(detail)) {
+        log.debug({ envId, handle, detail }, 'isolation.container_suspend_already_stopped');
+        return;
+      }
+      log.error({ envId, handle, detail }, 'isolation.container_suspend_failed');
+      throw new Error(`Failed to suspend container '${handle}' for env '${envId}': ${detail}`);
+    }
+  }
+
+  /**
+   * Rediscover and restart a suspended environment for resume, returning a fresh
+   * {@link PreparedEnv}. Cases, in order:
+   *  - container present + running → reuse as-is,
+   *  - container present + stopped → `docker start` + re-wait for the overlay,
+   *  - container GONE but the upper volume survives → recreate a container over the
+   *    same volume (the accumulated overlay is preserved),
+   *  - volume ALSO gone → throw LOUD: the un-applied work is lost, never silently
+   *    restart from an empty overlay.
+   */
+  async resumeEnv(envId: string): Promise<PreparedEnv> {
+    const meta = await this.loadMetadata(envId);
+    const { containerName, volume, workspacePath } = meta;
+    if (!containerName || !volume || !workspacePath) {
+      throw new Error(
+        `Cannot resume container env '${envId}': its tracking row is missing the ` +
+          'container name / volume / workspace path. The environment may be from an ' +
+          'incompatible version; start a fresh --container run.'
+      );
+    }
+    const row = await this.store.getById(envId);
+    const codebaseId = row?.codebase_id ?? '';
+    // The mode the row recorded; the recreate branch below may re-probe and override.
+    const priorMode: OverlayMode = meta.overlayMode ?? 'native';
+
+    const presence = await this.describeContainer(containerName);
+    if (presence === 'running') {
+      const containerId = await this.getContainerId(containerName);
+      log.info({ envId, containerName }, 'isolation.container_resume_reused_running');
+      return this.preparedEnvFor(containerId, workspacePath, envId, priorMode);
+    }
+    if (presence === 'stopped') {
+      await this.docker(['start', containerName]);
+      const containerId = await this.getContainerId(containerName);
+      await this.waitForReady(containerId);
+      log.info({ envId, containerName }, 'isolation.container_resume_restarted');
+      return this.preparedEnvFor(containerId, workspacePath, envId, priorMode);
+    }
+
+    // Container is gone. The overlay lives on the volume — recreate over it, or
+    // fail loudly if the volume is gone too (the un-applied work is unrecoverable).
+    if (!(await this.volumeExists(volume))) {
+      throw new Error(
+        `Cannot resume container env '${envId}': both the container and its overlay ` +
+          `volume '${volume}' are gone, so the un-applied changes are lost. This run ` +
+          'cannot continue — start a fresh --container run. (A `docker volume rm` or ' +
+          'an aggressive prune likely removed it; paused runs are never auto-pruned.)'
+      );
+    }
+    const { containerId, mode } = await this.startContainerWithOverlay(
+      containerName,
+      volume,
+      workspacePath,
+      codebaseId
+    );
+    log.info({ envId, containerName, volume }, 'isolation.container_resume_recreated');
+    return this.preparedEnvFor(containerId, workspacePath, envId, mode);
+  }
+
+  /**
+   * Inspect the finished run's overlay diff. Runs a read-only helper against the
+   * upper volume (no running container needed). Empty diff → `requiresApproval:
+   * false` so the engine completes without a write-back gate.
+   */
+  async finalize(envId: string): Promise<WriteBackFinalizeResult> {
+    const meta = await this.loadMetadata(envId);
+    const { volume, workspacePath, image } = meta;
+    if (!volume || !workspacePath || !image) {
+      throw new Error(
+        `Cannot finalize container env '${envId}': tracking row missing volume / ` +
+          'workspace path / image.'
+      );
+    }
+    const changeSummary = await summarizeOverlayChanges(this.docker, {
+      volume,
+      hostRoot: workspacePath,
+      image,
+    });
+    log.info(
+      { envId, totalCount: changeSummary.totalCount, truncated: changeSummary.truncated },
+      'isolation.container_finalized'
+    );
+    return { requiresApproval: changeSummary.totalCount > 0, changeSummary };
+  }
+
+  /**
+   * Apply the overlay diff to the live project root — the ONE moment the live root
+   * is written. Runs the write-back helper (mounts the live root read-write). Does
+   * NOT tear the environment down; the caller destroys the container + volume after
+   * the run completes.
+   */
+  async applyChanges(envId: string): Promise<WriteBackApplySummary> {
+    const meta = await this.loadMetadata(envId);
+    const { volume, workspacePath, image } = meta;
+    if (!volume || !workspacePath || !image) {
+      throw new Error(
+        `Cannot apply container env '${envId}': tracking row missing volume / ` +
+          'workspace path / image.'
+      );
+    }
+    const summary = await applyOverlayChanges(this.docker, {
+      volume,
+      hostRoot: workspacePath,
+      image,
+    });
+    log.info(
+      { envId, filesApplied: summary.filesApplied, filesDeleted: summary.filesDeleted },
+      'isolation.container_changes_applied'
+    );
+    return summary;
+  }
+
+  /**
+   * Discard the overlay diff (write-back rejected). The live root is never touched;
+   * the volume is reclaimed by the caller's subsequent `destroy`. A no-op beyond a
+   * breadcrumb — the discard IS "do nothing to the live root, then destroy".
+   */
+  async discardChanges(envId: string): Promise<void> {
+    log.info({ envId }, 'isolation.container_changes_discarded');
+  }
+
+  /** Load + normalize a container env's persisted metadata, or throw if the row is gone. */
+  private async loadMetadata(envId: string): Promise<Partial<ContainerEnvMetadata>> {
+    const row = await this.store.getById(envId);
+    if (!row) {
+      throw new Error(`Container env '${envId}' not found (its tracking row is gone).`);
+    }
+    return readContainerMetadata(row.metadata);
+  }
+
+  private preparedEnvFor(
+    containerId: string,
+    cwd: string,
+    envId: string,
+    overlayMode: OverlayMode
+  ): PreparedEnv {
+    return { cwd, execContext: { kind: 'container', containerId }, envId, overlayMode };
+  }
+
+  /**
+   * Container presence as three outcomes: `running`, `stopped` (exists but not
+   * running), or `missing` (no such container). Distinct from {@link containerState}
+   * which folds "missing" and "inspect blip" into `unknown` — resume MUST tell
+   * "gone" (→ recreate over the volume) apart from "stopped" (→ start).
+   */
+  private async describeContainer(nameOrId: string): Promise<'running' | 'stopped' | 'missing'> {
+    try {
+      const { stdout } = await this.docker(['inspect', '-f', '{{.State.Running}}', nameOrId]);
+      return stdout.trim() === 'true' ? 'running' : 'stopped';
+    } catch (err) {
+      const detail = extractDockerError(err);
+      if (/no such (object|container)/i.test(detail)) return 'missing';
+      throw new Error(`Failed to inspect container '${nameOrId}': ${detail}`);
+    }
+  }
+
+  private async getContainerId(nameOrId: string): Promise<string> {
+    const { stdout } = await this.docker(['inspect', '-f', '{{.Id}}', nameOrId]);
+    return stdout.trim();
+  }
+
+  private async volumeExists(volume: string): Promise<boolean> {
+    try {
+      await this.docker(['volume', 'inspect', volume]);
+      return true;
+    } catch (err) {
+      const detail = extractDockerError(err);
+      if (/no such volume/i.test(detail)) return false;
+      throw new Error(`Failed to inspect volume '${volume}': ${detail}`);
+    }
   }
 
   /**

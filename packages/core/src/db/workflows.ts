@@ -306,6 +306,34 @@ export async function getWorkflowRun(id: string): Promise<WorkflowRun | null> {
 }
 
 /**
+ * Find the workflow run that owns a container isolation environment
+ * (`metadata.isolation_env_id === envId`, stamped at run creation for container
+ * runs). Used by `isolation cleanup` to decide whether a container is reapable:
+ * a paused/running run must NOT be pruned. Returns the newest match, or null when
+ * no run references the env (an orphan safe to reap). Dialect-aware JSON extract.
+ */
+export async function getRunByIsolationEnvId(envId: string): Promise<WorkflowRun | null> {
+  const extract =
+    getDatabaseType() === 'postgresql'
+      ? "metadata->>'isolation_env_id'"
+      : "json_extract(metadata, '$.isolation_env_id')";
+  try {
+    const result = await pool.query<WorkflowRun>(
+      `SELECT * FROM remote_agent_workflow_runs
+       WHERE ${extract} = $1
+       ORDER BY started_at DESC LIMIT 1`,
+      [envId]
+    );
+    const row = result.rows[0];
+    return row ? normalizeWorkflowRun(row) : null;
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, envId }, 'db.workflow_run_get_by_isolation_env_failed');
+    throw new Error(`Failed to look up run for isolation env ${envId}: ${err.message}`);
+  }
+}
+
+/**
  * Find runs in a codebase whose id starts with `idPrefix` (e.g. the 8-char
  * short id shown in listings). Returns up to two matches so callers can detect
  * an ambiguous prefix. Scoped to `codebaseId` in the query, so it never crosses
@@ -836,7 +864,8 @@ export async function cancelWorkflowRun(id: string): Promise<{ cancelled: boolea
  */
 export async function pauseWorkflowRun(
   id: string,
-  approvalContext: ApprovalContext
+  approvalContext: ApprovalContext,
+  extraMetadata?: Record<string, unknown>
 ): Promise<void> {
   const dialect = getDialect();
   try {
@@ -850,9 +879,25 @@ export async function pauseWorkflowRun(
           approval: {
             ...approvalContext,
             resolved: null,
+            // Explicit-null reset of EVERY optional approval sub-field on each fresh
+            // pause (L1) — SQLite's json_patch deep-merges the new approval into the
+            // stored one, so a field the caller omits would otherwise inherit a stale
+            // value from a PRIOR gate in the same run (e.g. an earlier node's
+            // onRejectPrompt misrouting this gate's reject). RFC 7396 null removes the
+            // key; Postgres `||` replaces the approval object wholesale. Readers treat
+            // null as absent (`!= null`).
             completionSignaled: approvalContext.completionSignaled ?? null,
             signaledOutput: approvalContext.signaledOutput ?? null,
+            onRejectPrompt: approvalContext.onRejectPrompt ?? null,
+            onRejectMaxAttempts: approvalContext.onRejectMaxAttempts ?? null,
+            captureResponse: approvalContext.captureResponse ?? null,
+            iteration: approvalContext.iteration ?? null,
+            sessionId: approvalContext.sessionId ?? null,
+            sessionProvider: approvalContext.sessionProvider ?? null,
           },
+          // Fold caller-supplied run-level metadata (e.g. `pending_writeback`) into the
+          // SAME atomic write so there is no window where the run is paused without it (M3).
+          ...(extraMetadata ?? {}),
         }),
       ]
     );
@@ -866,6 +911,53 @@ export async function pauseWorkflowRun(
     getLog().error({ err, workflowRunId: id }, 'db.workflow_run_pause_failed');
     throw new Error(`Failed to pause workflow run: ${err.message}`);
   }
+}
+
+/**
+ * Atomically CLAIM the container write-back apply before the live root is mutated
+ * (R2-F4). A conditional UPDATE that sets `metadata.writeback_apply_claimed = true`
+ * only while it is unset — so exactly one resume wins the claim. Returns whether
+ * THIS caller won. The caller must apply the overlay only on `claimed === true`, and
+ * on apply FAILURE release the claim (`releaseWritebackClaim`) so a `workflow resume`
+ * can retry; on a crash AFTER a successful apply the claim stays set, so the next
+ * resume finds it claimed and does NOT re-apply (no path applies twice).
+ */
+export async function claimWriteback(id: string): Promise<{ claimed: boolean }> {
+  const dialect = getDialect();
+  const extract =
+    getDatabaseType() === 'postgresql'
+      ? "metadata->>'writeback_apply_claimed'"
+      : "json_extract(metadata, '$.writeback_apply_claimed')";
+  try {
+    const result = await pool.query(
+      `UPDATE remote_agent_workflow_runs
+       SET metadata = ${dialect.jsonMerge('metadata', 2)}
+       WHERE id = $1 AND (${extract} IS NULL)`,
+      [id, JSON.stringify({ writeback_apply_claimed: true })]
+    );
+    return { claimed: (result.rowCount ?? 0) > 0 };
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, workflowRunId: id }, 'db.workflow_run_claim_writeback_failed');
+    throw new Error(`Failed to claim write-back apply: ${err.message}`);
+  }
+}
+
+/**
+ * Release a previously-claimed write-back apply (R2-F4) after the apply FAILED, so a
+ * subsequent `workflow resume` can re-claim and retry. Explicit-null so SQLite's
+ * json_patch removes the key (Postgres `||` sets JSON null); `claimWriteback`'s
+ * `IS NULL` check treats both as unclaimed. Best-effort — a failure here leaves the
+ * claim set (the volume is preserved regardless; the operator reconciles manually).
+ */
+export async function releaseWritebackClaim(id: string): Promise<void> {
+  const dialect = getDialect();
+  await pool.query(
+    `UPDATE remote_agent_workflow_runs
+     SET metadata = ${dialect.jsonMerge('metadata', 2)}
+     WHERE id = $1`,
+    [id, JSON.stringify({ writeback_apply_claimed: null })]
+  );
 }
 
 export type {

@@ -65,8 +65,8 @@ export type WorkflowWorktreePolicy = z.infer<typeof workflowWorktreePolicySchema
  * repo/global `.archon/config.yaml > container` because they are install-wide.
  *
  * Selection precedence: CLI `--container` flag > this `container.enabled` >
- * config `container.enabled` default (false). The write-back mode
- * (`container.write_back`) lands in Phase C.
+ * config `container.enabled` default (false). `container.write_back` chooses how
+ * the finished run's overlay diff reaches the live root (gated vs auto).
  */
 export const workflowContainerPolicySchema = z.object({
   /**
@@ -77,6 +77,16 @@ export const workflowContainerPolicySchema = z.object({
    * default is not consulted), though an explicit `--container` flag still wins.
    */
   enabled: z.boolean().optional(),
+  /**
+   * How a finished container run's overlay changes reach the live folder root:
+   *  - `approve` (default) — pause at an engine-level write-back gate presenting
+   *    the change summary; the run applies to the live root only on approval and
+   *    discards on rejection.
+   *  - `auto` — apply the overlay diff to the live root without pausing (logged).
+   *    For unattended workflows that accept ungated write-back.
+   * Only consulted for container runs; a no-op for in-place / worktree runs.
+   */
+  write_back: z.enum(['approve', 'auto']).optional(),
 });
 
 export type WorkflowContainerPolicy = z.infer<typeof workflowContainerPolicySchema>;

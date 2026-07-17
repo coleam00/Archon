@@ -7,7 +7,7 @@ import { describe, test, expect, mock, beforeEach } from 'bun:test';
 const mockGetWorkflowRun = mock(() => Promise.resolve(null));
 const mockListWorkflowRuns = mock(() => Promise.resolve([]));
 const mockUpdateWorkflowRun = mock(() => Promise.resolve());
-const mockCancelWorkflowRun = mock(() => Promise.resolve());
+const mockCancelWorkflowRun = mock(() => Promise.resolve({ cancelled: true }));
 // CAS gate resolvers (#2113): default to "won the race". Tests that simulate a
 // concurrent loser override with mockResolvedValueOnce({ resolved: false }).
 // resolveApprovalGate = stay-paused resolution (approve, reject stage-rework);
@@ -34,6 +34,13 @@ const mockDeleteWorkflowNodeSessions = mock(() => Promise.resolve({ deleted: 0 }
 
 mock.module('../db/workflow-node-sessions', () => ({
   deleteWorkflowNodeSessions: mockDeleteWorkflowNodeSessions,
+}));
+
+// abandonWorkflow lazily imports cleanup-service to reclaim a container run's
+// resources (M2). Mock it so the dynamic import doesn't pull the docker chain.
+const mockReclaimContainerEnv = mock(() => Promise.resolve());
+mock.module('../services/cleanup-service', () => ({
+  reclaimContainerEnv: mockReclaimContainerEnv,
 }));
 
 const mockLogger = {
@@ -345,6 +352,42 @@ describe('approveWorkflow', () => {
 
     await expect(approveWorkflow('run-1')).rejects.toThrow('Workflow run not found: run-1');
   });
+
+  test('approves container write-back gate — records approval_response, NO node_completed', async () => {
+    const run = makePausedRun({
+      metadata: {
+        approval: { nodeId: '__writeback__', message: '7 files changed', type: 'writeback' },
+      },
+    });
+    mockGetWorkflowRun.mockResolvedValueOnce(run);
+
+    const result = await approveWorkflow('run-1');
+
+    expect(result.type).toBe('approval_gate');
+    // The resumed executor's write-back gate reads approval_response to APPLY.
+    expect(mockResolveApprovalGate).toHaveBeenCalledWith(
+      'run-1',
+      {
+        approval: {
+          nodeId: '__writeback__',
+          message: '7 files changed',
+          type: 'writeback',
+          resolved: 'approved',
+        },
+        approval_response: 'approved',
+      },
+      [
+        {
+          event_type: 'approval_received',
+          step_name: '__writeback__',
+          data: { decision: 'approved', comment: 'Approved', gate: 'writeback' },
+        },
+      ]
+    );
+    // No node_completed — there is no DAG node behind the write-back gate.
+    const casEvents = mockResolveApprovalGate.mock.calls[0][2] as Array<Record<string, unknown>>;
+    expect(casEvents.every(e => e.event_type !== 'node_completed')).toBe(true);
+  });
 });
 
 describe('rejectWorkflow', () => {
@@ -518,6 +561,41 @@ describe('rejectWorkflow', () => {
     expect(mockCaptureApprovalResolved).not.toHaveBeenCalled();
   });
 
+  test('rejects container write-back gate — stays resumable (never cancels), writeBack flag set', async () => {
+    const run = makePausedRun({
+      metadata: {
+        approval: { nodeId: '__writeback__', message: '3 files changed', type: 'writeback' },
+      },
+    });
+    mockGetWorkflowRun.mockResolvedValueOnce(run);
+
+    const result = await rejectWorkflow('run-1');
+
+    // The run stays resumable so the resume DISCARDS the overlay + completes.
+    expect(result.cancelled).toBe(false);
+    expect(result.writeBack).toBe(true);
+    expect(mockResolveAndCancelApprovalGate).not.toHaveBeenCalled();
+    expect(mockResolveApprovalGate).toHaveBeenCalledWith(
+      'run-1',
+      {
+        approval: {
+          nodeId: '__writeback__',
+          message: '3 files changed',
+          type: 'writeback',
+          resolved: 'rejected',
+        },
+        approval_response: 'rejected',
+      },
+      [
+        {
+          event_type: 'approval_received',
+          step_name: '__writeback__',
+          data: { decision: 'rejected', gate: 'writeback' },
+        },
+      ]
+    );
+  });
+
   test('throws on non-paused run', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'completed' }));
 
@@ -586,12 +664,61 @@ describe('abandonWorkflow', () => {
   beforeEach(() => {
     mockGetWorkflowRun.mockClear();
     mockCancelWorkflowRun.mockClear();
+    mockCancelWorkflowRun.mockImplementation(() => Promise.resolve({ cancelled: true }));
+    mockReclaimContainerEnv.mockClear();
+    mockReclaimContainerEnv.mockImplementation(() => Promise.resolve());
   });
 
   test('cancels a non-terminal run', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'running' }));
 
     const run = await abandonWorkflow('run-1');
+    expect(run.id).toBe('run-1');
+    expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1');
+  });
+
+  // M2 — abandoning a CONTAINER run reclaims its container + volume in the SHARED op
+  // (so web/chat/manage_run/Slack, not just the CLI, free the resources immediately).
+  test('reclaims a container run’s env on abandon', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(
+      makePausedRun({
+        status: 'paused',
+        metadata: { isolation: 'container', isolation_env_id: 'env-9' },
+      })
+    );
+    await abandonWorkflow('run-1');
+    expect(mockReclaimContainerEnv).toHaveBeenCalledWith('env-9');
+  });
+
+  test('does not reclaim for a non-container run', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'running' }));
+    await abandonWorkflow('run-1');
+    expect(mockReclaimContainerEnv).not.toHaveBeenCalled();
+  });
+
+  // Race: a concurrent transition already took the run terminal, so our cancel CAS
+  // no-ops (`cancelled: false`). The winner OWNS the environment — we must NOT reclaim.
+  test('does not reclaim a container run when the cancel loses the race', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(
+      makePausedRun({
+        status: 'paused',
+        metadata: { isolation: 'container', isolation_env_id: 'env-9' },
+      })
+    );
+    mockCancelWorkflowRun.mockImplementationOnce(() => Promise.resolve({ cancelled: false }));
+    await abandonWorkflow('run-1');
+    expect(mockReclaimContainerEnv).not.toHaveBeenCalled();
+  });
+
+  test('a reclaim failure does not fail the abandon (best-effort)', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(
+      makePausedRun({
+        status: 'paused',
+        metadata: { isolation: 'container', isolation_env_id: 'env-9' },
+      })
+    );
+    mockReclaimContainerEnv.mockImplementationOnce(() => Promise.reject(new Error('docker down')));
+    const run = await abandonWorkflow('run-1'); // resolves despite the reclaim throw
     expect(run.id).toBe('run-1');
     expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1');
   });

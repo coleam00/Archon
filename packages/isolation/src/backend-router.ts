@@ -17,6 +17,8 @@ import { InPlaceBackend } from './backends/in-place';
 import { ContainerBackend } from './backends/container';
 import type { DockerRunner } from './container/docker-exec';
 
+export type { ContainerBackend };
+
 export interface ResolveFolderBackendOptions {
   /**
    * Opt into the container backend. When true, `store` and `containerConfig`
@@ -42,6 +44,17 @@ export interface ResolveFolderBackendOptions {
  *   failing loudly beats a surprising in-place run when the user asked for a
  *   container (no silent container→host downgrade).
  */
+// Overloads: a `container: true` selection returns the CONCRETE ContainerBackend
+// (its Phase C write-back methods are required on that type), so the CLI can pass
+// it straight into the engine's write-back port without a runtime narrowing.
+export function resolveFolderBackend(
+  codebase: BackendPrepareRequest['codebase'],
+  opts: ResolveFolderBackendOptions & { container: true }
+): ContainerBackend;
+export function resolveFolderBackend(
+  codebase: BackendPrepareRequest['codebase'],
+  opts?: ResolveFolderBackendOptions
+): IIsolationBackend;
 export function resolveFolderBackend(
   codebase: BackendPrepareRequest['codebase'],
   opts: ResolveFolderBackendOptions = {}

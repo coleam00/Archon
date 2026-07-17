@@ -54,6 +54,13 @@ export interface RejectionOperationResult {
   cancelled: boolean;
   /** true when cancelled specifically because max rejection attempts were reached */
   maxAttemptsReached: boolean;
+  /**
+   * true when this was the engine-level container write-back gate (Phase C). The
+   * run stays resumable (never cancelled) so the resume DISCARDS the overlay and
+   * completes with a note; lets the CLI/chat print "discarding" instead of the
+   * on_reject-rework message.
+   */
+  writeBack: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -119,8 +126,9 @@ export async function abandonWorkflow(runId: string): Promise<WorkflowRun> {
       `Cannot abandon run with status '${run.status}'. Only running, paused, or failed runs can be abandoned.`
     );
   }
+  let cancelled: boolean;
   try {
-    await workflowDb.cancelWorkflowRun(runId);
+    ({ cancelled } = await workflowDb.cancelWorkflowRun(runId));
   } catch (error) {
     const err = error as Error;
     getLog().error(
@@ -128,6 +136,31 @@ export async function abandonWorkflow(runId: string): Promise<WorkflowRun> {
       'operations.workflow_abandon_failed'
     );
     throw new Error(`Failed to abandon workflow run ${runId}: ${err.message}`);
+  }
+  // M2 — reclaim a container run's container + upper volume immediately, in the SHARED
+  // op so EVERY abandon surface (CLI, web API, chat, manage_run, Slack-cancel) frees the
+  // resources now rather than waiting for the scheduled reaper. Best-effort: a reclaim
+  // failure is logged (the reaper retries) — never thrown. Runs wherever the op executes
+  // (CLI/server), which is where docker is reachable.
+  //
+  // ONLY when OUR cancel actually won the CAS (`cancelled === true`). cancelWorkflowRun
+  // is `UPDATE … WHERE status NOT IN (completed, cancelled)`, so a false result means a
+  // concurrent transition (a resume or completion) already took the run terminal and now
+  // OWNS the environment — reclaiming here would pull the container out from under it.
+  if (
+    cancelled &&
+    run.metadata?.isolation === 'container' &&
+    typeof run.metadata.isolation_env_id === 'string'
+  ) {
+    try {
+      // Lazy import: `cleanup-service` pulls the docker/isolation/git chain, which the
+      // operations module (and its lightweight tests) otherwise never need — load it
+      // only when a container run is actually abandoned.
+      const { reclaimContainerEnv } = await import('../services/cleanup-service');
+      await reclaimContainerEnv(run.metadata.isolation_env_id);
+    } catch (err) {
+      getLog().warn({ err, runId }, 'operations.workflow_abandon_container_reclaim_failed');
+    }
   }
   return run;
 }
@@ -174,6 +207,7 @@ export async function approveWorkflow(
   // otherwise be recorded verbatim where the documented default is 'Approved'.
   const approvalComment = comment !== undefined && comment.trim().length > 0 ? comment : 'Approved';
   const isInteractiveLoop = approval.type === 'interactive_loop';
+  const isWriteBack = approval.type === 'writeback';
 
   // Build the resolution metadata AND the audit events for this gate type.
   // IMPORTANT: metadata is MERGED (not replaced) and the approval context is
@@ -183,7 +217,24 @@ export async function approveWorkflow(
   // double-resolution guard (#2113) and the atomic audit trail (#2146).
   let metadataPayload: Record<string, unknown>;
   let events: workflowDb.GateResolutionEvent[];
-  if (isInteractiveLoop) {
+  if (isWriteBack) {
+    // Engine-level container write-back gate (Phase C): record the approval so the
+    // resumed executor applies the overlay diff to the live root. The gate discriminates
+    // on the gate's OWN `metadata.approval.resolved` (set here) — NOT the run-wide
+    // `approval_response`, which is kept only for backward-compat/telemetry (H1). NO
+    // node_completed event — there is no DAG node behind this gate (`nodeId` is synthetic).
+    metadataPayload = {
+      approval: { ...approval, resolved: 'approved' },
+      approval_response: 'approved',
+    };
+    events = [
+      {
+        event_type: 'approval_received',
+        step_name: approval.nodeId,
+        data: { decision: 'approved', comment: approvalComment, gate: 'writeback' },
+      },
+    ];
+  } else if (isInteractiveLoop) {
     // Finalize-vs-iterate discriminator (#2074): derived from the RAW comment,
     // not approvalComment (which defaults to 'Approved') — a bare approve on a
     // signal-bearing gate finalizes at resume; real feedback runs another iteration.
@@ -288,10 +339,46 @@ export async function rejectWorkflow(
       `Workflow run ${runId} was already ${String(approval.resolved)} and is awaiting resume.`
     );
   }
+  const isWriteBack = approval?.type === 'writeback';
+
+  // Engine-level container write-back gate (Phase C): reject means DISCARD the
+  // overlay, but the RUN itself succeeded — keep it resumable (never cancel) so
+  // the resumed executor discards + completes with a note. Distinct from a DAG
+  // approval reject (which cancels or stages an on_reject rework).
+  if (isWriteBack && approval) {
+    const rejectionEvent: workflowDb.GateResolutionEvent = {
+      event_type: 'approval_received',
+      step_name: approval.nodeId,
+      data: { decision: 'rejected', gate: 'writeback' },
+    };
+    const { resolved: won } = await workflowDb.resolveApprovalGate(
+      runId,
+      { approval: { ...approval, resolved: 'rejected' }, approval_response: 'rejected' },
+      [rejectionEvent]
+    );
+    if (!won) {
+      throw new Error(`Workflow run ${runId} was already resolved and is awaiting resume.`);
+    }
+    captureApprovalResolved({ resolution: 'rejected' });
+    return {
+      workflowName: run.workflow_name,
+      workingPath: run.working_path,
+      userMessage: run.user_message,
+      codebaseId: run.codebase_id,
+      conversationId: run.conversation_id,
+      cancelled: false,
+      maxAttemptsReached: false,
+      writeBack: true,
+    };
+  }
+
   const rejectReason = reason ?? 'Rejected';
   const currentCount = (run.metadata.rejection_count as number | undefined) ?? 0;
   const maxAttempts = approval?.onRejectMaxAttempts ?? 3;
-  const onRejectConfigured = approval?.onRejectPrompt !== undefined;
+  // `!= null` (not `!== undefined`): pauseWorkflowRun now explicit-nulls this field
+  // on every pause when the gate has no on_reject (L1 dialect-parity reset), so a
+  // null must read as "not configured" exactly like an absent key.
+  const onRejectConfigured = approval?.onRejectPrompt != null;
   const maxAttemptsReached = onRejectConfigured && currentCount + 1 >= maxAttempts;
   // The on_reject rework is staged (run stays 'paused') only when a prompt is
   // set AND we're under the attempt cap; every other case cancels the run.
@@ -343,6 +430,7 @@ export async function rejectWorkflow(
     conversationId: run.conversation_id,
     cancelled: !willStageRework,
     maxAttemptsReached,
+    writeBack: false,
   };
 }
 
