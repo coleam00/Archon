@@ -8,11 +8,11 @@ sidebar:
   order: 5
 ---
 
-Archon substitutes variables in command files, inline prompts, bash scripts, and `script:` node bodies before execution. There are three categories of variables: workflow variables (substituted by the workflow engine), positional arguments (substituted by the command handler), and node output references (DAG workflows only).
+Archon substitutes variables in command files, inline prompts, bash scripts, and `script:` node bodies before execution. There are two categories of variables: workflow variables (substituted by the workflow engine) and node output references (DAG workflows only).
 
 ## Workflow Variables
 
-These variables are substituted by the workflow executor in all node types (`command:`, `prompt:`, `bash:`, `script:`, `loop:`).
+These variables are substituted by the workflow executor in all node types (`command:`, `prompt:`, `bash:`, `script:`, `loop:`, `loop_group:`).
 
 | Variable | Resolves to | Notes |
 |----------|-------------|-------|
@@ -46,17 +46,14 @@ Unlike other variables, `$BASE_BRANCH` will cause the workflow to **fail immedia
 
 If the variable is not referenced, no error occurs even if the base branch cannot be determined.
 
-## Positional Arguments
+## Positional Arguments (not supported)
 
-These variables are substituted by the command handler when commands are invoked directly (outside workflows). They are processed before workflow variables.
-
-| Variable | Resolves to | Notes |
-|----------|-------------|-------|
-| `$1` | First positional argument | Split by whitespace from the user's input |
-| `$2` | Second positional argument | |
-| `$3` ... `$9` | Third through ninth positional arguments | |
-| `$ARGUMENTS` | All arguments as a single string | Same variable, available in both contexts |
-| `\$` | Literal `$` character | Escape a dollar sign to prevent substitution |
+Archon does **not** support positional arguments (`$1`, `$2`, `$3`, … `$9`).
+Command files and workflow prompts receive the user's whole trigger message via
+`$ARGUMENTS` / `$USER_MESSAGE` only — there is no whitespace-splitting into
+numbered slots, in either direct command invocation or workflow nodes. If you
+need structured inputs, parse them out of `$ARGUMENTS` inside the command or
+prompt body.
 
 ## Node Output References
 
@@ -118,14 +115,13 @@ Inside a `loop_group` body, `$LOOP_PREV.<nodeId>.output` refs are resolved
 first (before `$LOOP_USER_INPUT` is spliced in, so user-provided text is never
 re-processed as a workflow ref), then the node's normal substitution runs.
 
-Positional arguments (`$1` through `$9`) are substituted separately by the command handler and are only available when commands are invoked directly, not through workflow nodes.
+Positional arguments (`$1` through `$9`) are **not** supported in any context — `$ARGUMENTS` / `$USER_MESSAGE` deliver the whole trigger message instead.
 
 ## Variable Availability by Context
 
 | Variable | Workflow nodes | Direct command invocation | `when:` conditions |
 |----------|---------------|--------------------------|-------------------|
-| `$ARGUMENTS` / `$USER_MESSAGE` | Yes | Yes (as `$ARGUMENTS`) | No |
-| `$1` ... `$9` | No | Yes | No |
+| `$ARGUMENTS` / `$USER_MESSAGE` | Yes | Yes (both aliases) | No |
 | `$WORKFLOW_ID` | Yes | No | No |
 | `$ARTIFACTS_DIR` | Yes | No | No |
 | `$BASE_BRANCH` | Yes | No | No |

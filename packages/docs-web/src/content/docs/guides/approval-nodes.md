@@ -95,8 +95,11 @@ Approval nodes do not support AI-specific fields (`model`, `provider`, `context`
 `idle_timeout`) since they don't invoke an AI agent. (The `on_reject.prompt` runs
 as a separate AI node using the workflow's default provider.)
 
-Standard DAG fields (`id`, `depends_on`, `when`, `trigger_rule`, `retry`) work
-as expected.
+Standard DAG fields (`id`, `depends_on`, `when`, `trigger_rule`) work as
+expected. `retry` is accepted by the schema but has **no effect** on an approval
+node — the approval dispatch path never enters the retry loop. To rework a
+rejected gate, use `on_reject` (see [Rejection with AI Rework](#rejection-with-ai-rework-on_reject)),
+not `retry`.
 
 ## Approving and Rejecting
 

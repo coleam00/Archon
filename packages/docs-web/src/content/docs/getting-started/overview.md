@@ -408,7 +408,7 @@ argument-hint: <module>
 Run tests for: $ARGUMENTS
 ```
 
-Variables available: `$1`, `$2`, `$3` (positional), `$ARGUMENTS` (all args), `$ARTIFACTS_DIR` (workflow artifacts directory), `$WORKFLOW_ID` (run ID), `$BASE_BRANCH` (base branch), `$nodeId.output` (DAG node output).
+Variables available: `$ARGUMENTS` / `$USER_MESSAGE` (the whole trigger message — positional `$1`/`$2`/`$3` are not supported), `$ARTIFACTS_DIR` (workflow artifacts directory), `$WORKFLOW_ID` (run ID), `$BASE_BRANCH` (base branch), `$nodeId.output` (DAG node output).
 
 ### Custom Workflows
 

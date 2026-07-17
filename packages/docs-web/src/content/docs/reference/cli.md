@@ -332,6 +332,31 @@ archon workflow cleanup        # Default: 7 days
 archon workflow cleanup 30     # Custom threshold
 ```
 
+### `workflow reset-sessions`
+
+Clear persisted per-node AI sessions for a workflow — the cross-run memory stored by
+nodes that opt in via `persist_session` (or workflow-level `persist_sessions: true`).
+Use it when a workflow should forget its prior conversation and start fresh.
+
+```bash
+archon workflow reset-sessions <workflow-name> --yes             # ALL scopes (cross-scope wipe)
+archon workflow reset-sessions <workflow-name> --scope <key>     # one scope only
+archon workflow reset-sessions <workflow-name> --node <id> --yes # single node, still all scopes → needs --yes
+archon workflow reset-sessions <workflow-name> --scope <key> --json
+```
+
+**Flags:**
+
+| Flag | Required | Description |
+|------|----------|-------------|
+| `--scope` | No | Scope key to reset — typically the conversation UUID. Omitting it wipes **every** scope and requires `--yes`. |
+| `--node` | No | Restrict the reset to a single node id. |
+| `--yes` | Only for cross-scope wipes | Confirm a wipe across all scopes (when `--scope` is omitted). |
+| `--json` | No | Machine-readable output (`{ success, deleted }`). |
+
+Extra positional arguments are rejected rather than silently reinterpreted — use `--node <id>`
+to filter by node, since this is a destructive command.
+
 ### `workflow event emit`
 
 Emit a workflow event directly to the database. Primarily used inside workflow loop prompts to record story-level lifecycle events.
