@@ -35,10 +35,17 @@ nodes:
       # whether the head branch lives on a contributor fork — the base-repo
       # GITHUB_TOKEN cannot delete a fork's branch, so --delete-branch must be
       # skipped for those to avoid a spurious merge-step failure.
-      gh pr view "$PR_NUM" \
-        --json number,title,body,author,state,isDraft,additions,deletions,changedFiles,files,baseRefName,headRefName,isCrossRepository \
-        > "$ARTIFACTS_DIR/pr-meta.json"
-
+      #
+      # Capture-then-check (mirrors fetch-diff): a bare `gh ... > file` masks a
+      # gh failure (auth, network, deleted PR) as an empty file plus exit 0,
+      # which would let verify-scope read zero changed files and mint a false
+      # SCOPE_OK. Let the failure fail this node instead.
+      if ! pr_meta=$(gh pr view "$PR_NUM" \
+        --json number,title,body,author,state,isDraft,additions,deletions,changedFiles,files,baseRefName,headRefName,isCrossRepository); then
+        echo "ERROR: gh pr view failed for PR #$PR_NUM (auth, network, or the PR does not exist)." >&2
+        exit 1
+      fi
+      printf '%s\n' "$pr_meta" > "$ARTIFACTS_DIR/pr-meta.json"
       cat "$ARTIFACTS_DIR/pr-meta.json"
     timeout: 30000
 
@@ -355,8 +362,11 @@ nodes:
   - id: act
     bash: |
       PR_NUM=$(cat "$ARTIFACTS_DIR/.pr-number")
-      DECISION=$(cat "$ARTIFACTS_DIR/decision.json" | jq -r '.decision')
-      REASON=$(cat "$ARTIFACTS_DIR/decision.json" | jq -r '.reason')
+      # `// empty` on every read: a missing field yields "" (handled by the case
+      # default / empty body) rather than the literal string "null" leaking into
+      # a posted PR comment.
+      DECISION=$(cat "$ARTIFACTS_DIR/decision.json" | jq -r '.decision // empty')
+      REASON=$(cat "$ARTIFACTS_DIR/decision.json" | jq -r '.reason // empty')
       SLUG=$(cat "$ARTIFACTS_DIR/decision.json" | jq -r '.slug // empty')
       CLOSE=$(cat "$ARTIFACTS_DIR/decision.json" | jq -r '.close // false')
       IS_FORK=$(jq -r '.isCrossRepository // false' "$ARTIFACTS_DIR/pr-meta.json")
@@ -431,22 +441,27 @@ nodes:
       *Reviewed by Archon marketplace-pr-review-and-merge workflow.*"
           ;;
         reject)
-          if [ "$CLOSE" = "true" ]; then
-            echo "Decision: REJECT — requesting changes and closing PR #$PR_NUM (deterministic scan/scope concurred)"
-          else
-            echo "Decision: REJECT — requesting changes on PR #$PR_NUM (AI-only; flagged for maintainer close, not auto-closed)"
-          fi
           retry gh pr review "$PR_NUM" --request-changes --body "**Marketplace Auto-Review: Rejected**
 
       $REASON
 
       *Reviewed by Archon marketplace-pr-review-and-merge workflow.*"
-          # R2: only auto-close when a deterministic signal (critical/high scan or
-          # scope violation) justified the reject. An AI-only reject leaves the PR
-          # open and flags it for a maintainer rather than closing a human's work.
+          # A reject only auto-closes the PR when a deterministic signal
+          # (critical/high security scan or a scope violation) justified it; an
+          # AI-only reject stays open and is flagged for a maintainer rather than
+          # closing a contributor's work on a single model opinion. Closing is a
+          # governance action, so it runs through `retry` and its failure is
+          # surfaced loudly — never swallowed with `2>/dev/null || true` — and the
+          # "closed" confirmation is printed only when the close actually succeeds.
           if [ "$CLOSE" = "true" ]; then
-            gh pr close "$PR_NUM" --comment "Closing this PR per the automated review above." 2>/dev/null || true
+            echo "Decision: REJECT — deterministic scan/scope concurred; closing PR #$PR_NUM"
+            if retry gh pr close "$PR_NUM" --comment "Closing this PR per the automated review above."; then
+              echo "Closed PR #$PR_NUM."
+            else
+              echo "WARNING: failed to close PR #$PR_NUM after retries — it remains OPEN and needs a manual close." >&2
+            fi
           else
+            echo "Decision: REJECT — deterministic checks clean; PR #$PR_NUM stays open, flagged for maintainer close"
             retry gh pr comment "$PR_NUM" --body "**Flagged for maintainer close.** The automated review recommended rejecting this submission, but the deterministic security scan did not independently flag it as critical/high — so it has not been auto-closed. A maintainer should make the final call."
           fi
           ;;
