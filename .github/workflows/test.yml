@@ -42,6 +42,12 @@ jobs:
       - name: Run tests
         run: bun run test
 
+      # .archon/scripts/ tests aren't discovered by the workspace-filtered
+      # `bun run test`, so run them explicitly here (and chained into
+      # `bun run validate` locally) or their coverage silently bit-rots.
+      - name: Run .archon/scripts tests
+        run: bun run test:archon-scripts
+
   docker-build:
     runs-on: ubuntu-latest
     permissions:
