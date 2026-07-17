@@ -2476,6 +2476,51 @@ async function executeBashNode(
 }
 
 /**
+ * User-controlled workflow variables that {@link executeScriptNode} delivers via
+ * subprocess env vars instead of splicing into the script source. Matches the
+ * literal `$VAR` form only (word-boundary lookahead) so `$LOOP_PREV.<id>.output`
+ * refs and `process.env.ARGUMENTS`-style accessors never false-positive (#2115).
+ */
+const SCRIPT_USER_VAR_PATTERN =
+  /\$(?:USER_MESSAGE|ARGUMENTS|LOOP_USER_INPUT|LOOP_PREV_OUTPUT|REJECTION_REASON|CONTEXT|EXTERNAL_CONTEXT|ISSUE_CONTEXT)(?![A-Za-z0-9_])/g;
+
+/**
+ * Migration aid (#2115): script bodies used to raw-splice user-controlled text
+ * ($ARGUMENTS/$CONTEXT family/…) directly into TS/Python source — an injection
+ * channel. Those refs are now delivered as env vars and no longer substituted, so
+ * a literal `$VAR` left in the body silently stops resolving. Warn the author (log
+ * + one concise platform line) with the language-appropriate accessor for one
+ * release before the refs are removed. `script` is the post-workflow-var,
+ * pre-node-output string so an expanded `$nodeId.output` value can't false-positive.
+ */
+async function warnOnLiteralUserVars(
+  node: ScriptNode,
+  script: string,
+  platform: IWorkflowPlatform,
+  conversationId: string,
+  nodeContext: SendMessageContext
+): Promise<void> {
+  const matches = script.match(SCRIPT_USER_VAR_PATTERN);
+  if (!matches) return;
+  const unique = [...new Set(matches)];
+  const accessor = unique
+    .map(v => (node.runtime === 'uv' ? `os.environ['${v.slice(1)}']` : `process.env.${v.slice(1)}`))
+    .join(', ');
+  getLog().warn(
+    { nodeId: node.id, runtime: node.runtime, vars: unique },
+    'script_node_literal_user_var'
+  );
+  await safeSendMessage(
+    platform,
+    conversationId,
+    `Script node '${node.id}': ${unique.join(', ')} ${unique.length > 1 ? 'are' : 'is'} no longer ` +
+      'substituted into script source (security hardening, #2115). ' +
+      `Read from the environment instead: ${accessor}.`,
+    nodeContext
+  );
+}
+
+/**
  * Execute a script (TypeScript via bun or Python via uv) DAG node.
  * Supports both inline code snippets and named scripts discovered from .archon/scripts/.
  * stdout is captured and trimmed as the node output; stderr is logged as a warning.
@@ -2496,6 +2541,10 @@ async function executeScriptNode(
   envVars?: Record<string, string>,
   stepNamePrefix = '',
   iteration?: number,
+  // Per-iteration $LOOP_USER_INPUT free-text for loop_group body scripts, delivered via
+  // env (never spliced into source — #2115). '' for top-level scripts and non-first
+  // iterations (mirrors executeBashNode, which delivers loop input via quoted splice).
+  loopUserInput = '',
   execContext: ExecutionContext = { kind: 'host' }
 ): Promise<NodeOutput> {
   const nodeStartTime = Date.now();
@@ -2529,7 +2578,14 @@ async function executeScriptNode(
     nodeName: node.id,
   });
 
-  // Variable substitution on script field
+  // Variable substitution on script field.
+  // shellSafe: true skips literal substitution of the user-controlled variables
+  // ($ARGUMENTS/$USER_MESSAGE/$CONTEXT family/$LOOP_*/$REJECTION_REASON) so
+  // attacker-influenced text is never spliced into the TS/Python source that
+  // `bun -e` / `uv run python -c` executes. Those values ride subprocess env vars
+  // below instead (read via process.env.X / os.environ['X']), mirroring the
+  // executeBashNode hardening. $nodeId.output refs keep raw substitution — the
+  // strict producer contract bounds those values (#2115).
   const { prompt: substitutedScript } = substituteWorkflowVariables(
     node.script,
     workflowRun.id,
@@ -2537,17 +2593,35 @@ async function executeScriptNode(
     artifactsDir,
     baseBranch,
     docsDir,
-    issueContext
+    issueContext,
+    undefined,
+    undefined,
+    undefined,
+    { shellSafe: true }
   );
   const finalScript = substituteNodeOutputRefs(substitutedScript, nodeOutputs, false);
+
+  // One-release migration warn for any literal user-controlled var ref that no
+  // longer substitutes now that delivery moved to env vars (#2115).
+  await warnOnLiteralUserVars(node, substitutedScript, platform, conversationId, nodeContext);
 
   const timeout = node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT;
   // Archon-managed env only — runSubprocess adds the host env for host runs and
   // delivers ONLY this bag into the container (host process.env never crosses).
+  // User-controlled values ride env vars (never spliced into source) — the
+  // sanctioned injection-safe channel, matching executeBashNode (#2115).
   const subprocessEnv: NodeJS.ProcessEnv = {
     ARTIFACTS_DIR: artifactsDir,
     LOG_DIR: logDir,
     BASE_BRANCH: baseBranch,
+    USER_MESSAGE: workflowRun.user_message,
+    ARGUMENTS: workflowRun.user_message,
+    LOOP_USER_INPUT: loopUserInput,
+    LOOP_PREV_OUTPUT: '',
+    REJECTION_REASON: '',
+    CONTEXT: issueContext ?? '',
+    EXTERNAL_CONTEXT: issueContext ?? '',
+    ISSUE_CONTEXT: issueContext ?? '',
     ...(envVars ?? {}),
   };
 
@@ -3068,6 +3142,9 @@ async function executeLoopGroupNode(
       totalLoopIterations: 0,
       stepNamePrefix: bodyStepNamePrefix,
       iteration: i,
+      // Deliver this iteration's approval-gate free-text to body script: nodes via env
+      // (never spliced into source — #2115); matches applyLoopPrevToBodyNode's skip.
+      bodyLoopUserInput: userInputForIter,
     };
     await runLayers(iterCtx);
     // A body approval/cancel node may have paused or cancelled the run mid-iteration.
@@ -3417,11 +3494,15 @@ export function applyLoopPrevToBodyNode(
   // is true for shell-bound fields (bash/until_bash): $LOOP_PREV values are shell-quoted
   // (spilling to a file over the size threshold, same as substituteNodeOutputRefs), and
   // $LOOP_USER_INPUT is shell-quoted before splicing (user input is free-text; unquoted
-  // it could break or inject into the bash command). Non-shell fields (prompt/
-  // approval.message/command, and script/cancel — scripts run via execFile argv and
-  // cancel reasons are display text, mirroring their normal-path substitution) use the
-  // raw values.
-  const sub = (s: string, escapedForBash = false): string => {
+  // it could break or inject into the bash command). Non-shell display/prompt fields
+  // (prompt/approval.message/command, and cancel reasons) use the raw values.
+  // `skipUserInput` is set ONLY for `script:` bodies: $LOOP_USER_INPUT is free-text that
+  // cannot be safely quoted into TS/Python source, so it is left as a literal token here
+  // and delivered to the script as a subprocess env var instead (#2115) — matching how
+  // executeScriptNode delivers every other user-controlled variable. $LOOP_PREV.* refs
+  // stay raw-spliced (bounded producer contract), routed through the knownBodyIds/
+  // directBodyIds typo-vs-nested-vs-absent decision table (#2165).
+  const sub = (s: string, escapedForBash = false, skipUserInput = false): string => {
     const prevResolved = substituteLoopPrevRefs(
       s,
       loopPrevOutputs,
@@ -3430,6 +3511,7 @@ export function applyLoopPrevToBodyNode(
       knownBodyIds,
       directBodyIds
     );
+    if (skipUserInput) return prevResolved;
     const userInputForField = escapedForBash ? shellQuote(loopUserInput) : loopUserInput;
     return prevResolved.replace(/\$LOOP_USER_INPUT/g, userInputForField);
   };
@@ -3482,9 +3564,10 @@ export function applyLoopPrevToBodyNode(
   }
   if (isBashNode(node)) return { ...node, bash: sub(node.bash, true) };
   // Scripts never pass through a shell (execFile argv) — bash-quoting would inject
-  // literal quote artifacts into TS/Python source. Mirrors executeScriptNode's own
-  // substituteNodeOutputRefs(..., false).
-  if (isScriptNode(node)) return { ...node, script: sub(node.script) };
+  // literal quote artifacts into TS/Python source. $LOOP_PREV.* refs are spliced raw
+  // (mirroring executeScriptNode's substituteNodeOutputRefs(..., false)); $LOOP_USER_INPUT
+  // is skipped here (skipUserInput) and delivered via env by executeScriptNode (#2115).
+  if (isScriptNode(node)) return { ...node, script: sub(node.script, false, true) };
   // Cancel reason is display text, never executed — mirrors the normal-path default.
   if (isCancelNode(node)) return { ...node, cancel: sub(node.cancel) };
   if ('command' in node && typeof node.command === 'string')
@@ -4691,6 +4774,13 @@ interface RunLayersContext {
    * so multi-iteration runs are disaggregatable in the persisted event log (#2090).
    */
   iteration?: number;
+  /**
+   * Per-iteration `$LOOP_USER_INPUT` free-text for loop_group body `script:` nodes,
+   * delivered into the subprocess as an env var (never spliced into TS/Python source —
+   * #2115). Only non-empty on the first resumed iteration of an interactive group;
+   * undefined for the top-level DAG (top-level scripts have no loop user input).
+   */
+  bodyLoopUserInput?: string;
 }
 
 /**
@@ -5150,6 +5240,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                   config.envVars,
                   stepNamePrefix,
                   iteration,
+                  ctx.bodyLoopUserInput ?? '',
                   execContext
                 )
             );
