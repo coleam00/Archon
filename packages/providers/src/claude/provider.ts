@@ -155,7 +155,15 @@ export function buildRequestSubprocessEnv(
 const MAX_SUBPROCESS_RETRIES = 3;
 const RETRY_BASE_DELAY_MS = 2000;
 
-const RATE_LIMIT_PATTERNS = ['rate limit', 'too many requests', '429', 'overloaded'];
+const RATE_LIMIT_PATTERNS = [
+  'rate limit',
+  'too many requests',
+  '429',
+  'overloaded',
+  // "API Error: 400 due to tool use concurrency issues" — transient server-side
+  // rejection of concurrent tool calls; retrying after backoff succeeds (#1341).
+  'tool use concurrency',
+];
 const AUTH_PATTERNS = [
   'credit balance',
   'unauthorized',
@@ -1124,7 +1132,16 @@ function classifyAndEnrichError(
   // API failures the SDK surfaced as text (#1797) carry a typed error code —
   // classify by that code, never by matching the (arbitrary) message text.
   if (error instanceof ClaudeApiResultError) {
-    const errorClass = classifySdkErrorCode(error.sdkErrorCode);
+    let errorClass = classifySdkErrorCode(error.sdkErrorCode);
+    // Exception for the SDK's catch-all codes only ('unknown'/'invalid_request'
+    // — a 400 status maps here): they conflate transient server-side rejections
+    // with true client errors, so the code alone carries no retry signal. The
+    // "tool use concurrency" 400 is known-transient — reclassify it as
+    // rate_limit so the existing backoff applies (#1341). Specific typed codes
+    // above remain authoritative and are never overridden by text.
+    if (errorClass === 'unknown' && error.message.toLowerCase().includes('tool use concurrency')) {
+      errorClass = 'rate_limit';
+    }
     return {
       enrichedError: error,
       errorClass,

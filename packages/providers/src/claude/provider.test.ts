@@ -2194,6 +2194,53 @@ describe('API error surfaced as text (#1797)', () => {
     expect(mockQuery).toHaveBeenCalledTimes(4);
   }, 5_000);
 
+  test('400 tool-use-concurrency error with a catch-all code retries like a rate limit (#1341)', async () => {
+    // The SDK types this transient 400 with a catch-all code ('unknown' here;
+    // 'invalid_request' classifies identically), so code-only classification
+    // would fail fast. The narrow text fallback must reclassify it as
+    // rate_limit and drive the existing backoff.
+    const text = 'API Error: 400 due to tool use concurrency issues.';
+    mockQuery.mockImplementation(async function* () {
+      yield syntheticAssistantMessage('unknown', text);
+      yield { ...apiErrorResult(text), api_error_status: 400 };
+    });
+
+    const { error } = await collect(client.sendQuery('test', '/workspace'));
+    expect(error?.message).toContain('Claude API error (unknown)');
+    expect(error?.message).toContain('tool use concurrency');
+    // MAX_SUBPROCESS_RETRIES = 3 → 4 attempts total
+    expect(mockQuery).toHaveBeenCalledTimes(4);
+  }, 5_000);
+
+  test('other catch-all-coded api errors stay non-retryable', async () => {
+    // Guards the narrowness of the #1341 fallback: a genuine client error that
+    // also lands on a catch-all code must NOT be retried.
+    const text = 'Invalid request: max_tokens exceeds model limit';
+    mockQuery.mockImplementation(async function* () {
+      yield syntheticAssistantMessage('invalid_request', text);
+      yield { ...apiErrorResult(text), api_error_status: 400 };
+    });
+
+    const { error } = await collect(client.sendQuery('test', '/workspace'));
+    expect(error?.message).toContain('Claude API error (invalid_request)');
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+  });
+
+  test('thrown subprocess error mentioning tool use concurrency retries as rate_limit (#1341)', async () => {
+    mockQuery.mockImplementation(async function* () {
+      throw new Error('API Error: 400 due to tool use concurrency issues.');
+    });
+
+    const consumeGenerator = async (): Promise<void> => {
+      for await (const _ of client.sendQuery('test', '/workspace')) {
+        // consume
+      }
+    };
+
+    await expect(consumeGenerator()).rejects.toThrow(/Claude Code rate_limit/);
+    expect(mockQuery).toHaveBeenCalledTimes(4);
+  }, 5_000);
+
   test('legitimate output that merely mentions the error phrases is untouched', async () => {
     // A real model turn (real model id, no wrapper error field, clean result)
     // whose TEXT happens to discuss login errors — e.g. a node writing docs
