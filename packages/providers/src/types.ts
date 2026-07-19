@@ -326,7 +326,56 @@ export type SystemPromptInput = string | string[] | SystemPromptPreset;
  */
 export type ExecutionContext =
   | { kind: 'host' }
-  | { kind: 'container'; containerId: string; execUser?: string };
+  | {
+      kind: 'container';
+      containerId: string;
+      execUser?: string;
+      /**
+       * In-container working directory. When set, `docker exec -w` uses THIS
+       * instead of the host cwd — for a container whose mount is NOT at the same
+       * absolute path as the host (our WSL sandbox mounts the worktree at /work).
+       * Absent → the container runs at the host cwd (upstream's same-path model).
+       */
+      workdir?: string;
+      /**
+       * Host→container mount-prefix remaps applied to forwarded path VALUES
+       * (env values like ARTIFACTS_DIR/LOG_DIR/DOCS_DIR). Generic: models a
+       * container whose bind-mounts don't sit at their host absolute paths.
+       */
+      pathMap?: ContainerPathMap;
+    };
+
+/**
+ * Ordered host→container path-prefix remaps for a container execution context.
+ * First matching entry wins. See {@link remapContainerPath}.
+ */
+export type ContainerPathMap = readonly {
+  readonly hostPrefix: string;
+  readonly containerPrefix: string;
+}[];
+
+/**
+ * Rewrite a host path value to its in-container location using a {@link ContainerPathMap}.
+ *
+ * A value equal to (or under, at a `/` boundary) a `hostPrefix` is re-anchored to
+ * the matching `containerPrefix`; everything else passes through unchanged. Paths
+ * are compared with separators normalized to `/`, so a win32 host prefix (the run
+ * meta dir) maps as cleanly as a POSIX one (the WSL worktree). Returns POSIX paths.
+ */
+export function remapContainerPath(value: string, pathMap?: ContainerPathMap): string {
+  if (!pathMap || !value) return value;
+  const norm = value.replace(/\\/g, '/');
+  for (const { hostPrefix, containerPrefix } of pathMap) {
+    const from = hostPrefix.replace(/\\/g, '/');
+    if (norm === from) return containerPrefix;
+    const boundary = from.endsWith('/') ? from : `${from}/`;
+    if (norm.startsWith(boundary)) {
+      const base = containerPrefix.replace(/\/+$/, '');
+      return `${base}/${norm.slice(boundary.length)}`;
+    }
+  }
+  return value;
+}
 
 /**
  * Container write-back contract (folder-project container backend, Phase C).

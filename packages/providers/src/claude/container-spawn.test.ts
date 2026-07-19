@@ -89,6 +89,34 @@ describe('buildDockerExecArgs', () => {
   });
 });
 
+describe('buildDockerExecArgs — container workdir + pathMap extension', () => {
+  // Our WSL sandbox mounts the worktree at /work, NOT at the host cwd, so the
+  // execContext carries an in-container workdir + a host→container path map.
+  const WORKTREE = '/home/bunny/archon/worktrees/marphob-page/s1';
+  const CTX_MAPPED = {
+    kind: 'container' as const,
+    containerId: 'cid-123',
+    workdir: '/work',
+    pathMap: [{ hostPrefix: WORKTREE, containerPrefix: '/work' }],
+  };
+
+  test('emits -w workdir (not the host cwd) when workdir is set', () => {
+    const args = buildDockerExecArgs(CTX_MAPPED, makeSpawnOptions({ cwd: WORKTREE }), PIDFILE);
+    const wIdx = args.indexOf('-w');
+    expect(args[wIdx + 1]).toBe('/work');
+  });
+
+  test('remaps a forwarded env path value under a host mount prefix', () => {
+    const args = buildDockerExecArgs(
+      CTX_MAPPED,
+      makeSpawnOptions({ cwd: WORKTREE, env: { DOCS_DIR: `${WORKTREE}/docs`, KEEP: 'plain' } }),
+      PIDFILE
+    );
+    expect(args).toContain('DOCS_DIR=/work/docs');
+    expect(args).toContain('KEEP=plain'); // non-path value untouched
+  });
+});
+
 describe('buildContainerSpawn — SpawnedProcess contract', () => {
   test('spawns docker exec and exposes the child stdio', () => {
     const spawner = recordingSpawner();

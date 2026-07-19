@@ -24,7 +24,7 @@ import type {
   ExecutionContext,
   OverlayChangeSummary,
 } from '@archon/providers/types';
-import { CONTAINER_ENV_DENYLIST } from '@archon/providers/types';
+import { CONTAINER_ENV_DENYLIST, remapContainerPath } from '@archon/providers/types';
 import type { ContainerRunContext } from './container-context';
 import { WRITEBACK_GATE_NODE_ID } from './container-context';
 import {
@@ -2250,13 +2250,17 @@ export function buildSubprocessDockerArgs(
   args: string[],
   options: { cwd: string; env: NodeJS.ProcessEnv }
 ): string[] {
-  const dockerArgs = ['exec', '-w', options.cwd];
+  // Prefer the in-container workdir (mount ≠ host cwd, e.g. the WSL sandbox's
+  // /work); fall back to the host cwd for the same-path model.
+  const dockerArgs = ['exec', '-w', execContext.workdir ?? options.cwd];
   if (execContext.execUser) dockerArgs.push('-u', execContext.execUser);
   for (const [key, value] of Object.entries(options.env)) {
     // Skip the denylist (PATH/HOME/…): a project env var must not clobber the
     // in-container binary/home resolution — same policy as the Claude spawn path.
     if (value === undefined || CONTAINER_ENV_DENYLIST.has(key)) continue;
-    dockerArgs.push('-e', `${key}=${value}`);
+    // Remap host path values (ARTIFACTS_DIR/LOG_DIR/DOCS_DIR) to their in-container
+    // mount location; non-path values pass through unchanged.
+    dockerArgs.push('-e', `${key}=${remapContainerPath(value, execContext.pathMap)}`);
   }
   dockerArgs.push(execContext.containerId, containerCommandName(cmd), ...args);
   return dockerArgs;
