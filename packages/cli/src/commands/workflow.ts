@@ -90,12 +90,20 @@ function getLog(): ReturnType<typeof createLogger> {
  * --no-worktree: opt out of isolation, run in live checkout.
  * --resume: reuse worktree from last failed run.
  * --from: override base branch (start-point for worktree).
+ * --base: per-dispatch PR base + worktree cut-from override (wins over config).
  *
- * Mutually exclusive: --branch + --no-worktree, --resume + --branch.
+ * Mutually exclusive: --branch + --no-worktree, --resume + --branch,
+ * --base + --no-worktree.
  */
 export interface WorkflowRunOptions {
   branchName?: string;
   fromBranch?: string;
+  /**
+   * Per-dispatch base-branch override (`--base <branch>`). Wins over repo config
+   * and the codebase default for BOTH the worktree cut-from and the PR target
+   * (`$BASE_BRANCH`). Mutually exclusive with `--no-worktree`.
+   */
+  baseBranch?: string;
   noWorktree?: boolean;
   /**
    * Register the current non-git cwd as a folder project on first use and run
@@ -798,6 +806,11 @@ export async function workflowRunCommand(
         'Remove --from or drop --no-worktree.'
     );
   }
+  if (options.noWorktree && options.baseBranch !== undefined) {
+    throw new Error(
+      '--base has no effect with --no-worktree.\n' + 'Remove --base or drop --no-worktree.'
+    );
+  }
   if (options.resume && options.branchName !== undefined) {
     throw new Error(
       '--resume and --branch are mutually exclusive.\n' +
@@ -805,6 +818,11 @@ export async function workflowRunCommand(
         '  Remove --branch when using --resume.'
     );
   }
+
+  // Per-dispatch --base override, normalized once. Wins over repo config + the
+  // codebase default for both the worktree cut-from (provider request below) and
+  // the PR target / $BASE_BRANCH (executeWorkflow opts).
+  const flagBase = options.baseBranch?.trim() || undefined;
 
   // Reconcile workflow-level worktree policy with invocation flags.
   // The workflow YAML's `worktree.enabled` pins isolation regardless of caller —
@@ -1348,6 +1366,7 @@ export async function workflowRunCommand(
           ? git.toBranchName(options.fromBranch.trim())
           : undefined,
         baseBranch: codebaseDefaultBranch ? git.toBranchName(codebaseDefaultBranch) : undefined,
+        baseOverride: flagBase ? git.toBranchName(flagBase) : undefined,
         codebaseId: codebase.id,
         // owner/repo name lets resolveOwnerRepo skip the path heuristic, which
         // throws for single-segment checkout paths like /workspace (#2022)
@@ -1639,7 +1658,7 @@ export async function workflowRunCommand(
           codebaseId: codebase?.id,
           source: workflowSource,
           userId: cliUserId,
-          baseBranch: codebaseDefaultBranch,
+          baseBranch: flagBase ?? codebaseDefaultBranch,
           execContext,
           container: containerRunCtx,
           ...prepared,
@@ -1648,7 +1667,7 @@ export async function workflowRunCommand(
           codebaseId: codebase?.id,
           source: workflowSource,
           userId: cliUserId,
-          baseBranch: codebaseDefaultBranch,
+          baseBranch: flagBase ?? codebaseDefaultBranch,
           execContext,
           container: containerRunCtx,
         };

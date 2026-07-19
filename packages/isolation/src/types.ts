@@ -63,6 +63,17 @@ interface IsolationRequestBase {
    */
   baseBranch?: BranchName;
 
+  /**
+   * Per-dispatch base-branch override (from the CLI `--base <branch>` flag).
+   *
+   * The top precedence level for base resolution: it wins over both repo config
+   * (`worktree.baseBranch`) and the codebase-default `baseBranch` above, so
+   * parallel epic slices can each cut from — and target a PR at — a different
+   * base. Absent for ordinary dispatches (base then falls back to config →
+   * codebase default → git auto-detect).
+   */
+  baseOverride?: BranchName;
+
   description?: string;
 
   /**

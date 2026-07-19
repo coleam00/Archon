@@ -2342,6 +2342,24 @@ describe('WorktreeProvider', () => {
       });
     });
 
+    test('uses request baseOverride over configured baseBranch and request baseBranch', async () => {
+      worktreeExistsSpy.mockResolvedValue(false);
+      const configLoader: RepoConfigLoader = async () => ({ baseBranch: 'main' });
+      provider = new WorktreeProvider(configLoader);
+
+      await provider.create({
+        ...baseRequest,
+        baseBranch: git.toBranchName('develop'),
+        baseOverride: git.toBranchName('epic/foo'),
+      });
+
+      // --base (baseOverride) is the top precedence level: it beats repo-config
+      // 'main' and the codebase-default request.baseBranch 'develop'.
+      expect(syncWorkspaceSpy).toHaveBeenCalledWith('/workspace/owner/repo', 'epic/foo', {
+        mode: 'fast-forward',
+      });
+    });
+
     test('uses explicit reset mode for managed clone worktree creation', async () => {
       worktreeExistsSpy.mockResolvedValue(false);
       const configLoader: RepoConfigLoader = async () => ({});
