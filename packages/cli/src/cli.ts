@@ -154,6 +154,7 @@ Options:
   --cwd <path>               Override working directory (default: current directory)
   --branch, -b <name>        Create worktree for branch (or reuse existing)
   --from, --from-branch <name> Create new branch from specific start point
+  --base <branch>            Per-dispatch base override for epic slices (worktree cut-from + PR target)
   --no-worktree              Run on branch directly without worktree isolation
   --folder                   Register the current non-git directory as a folder project and run in place
   --resume                   Resume the most recent failed run of the workflow (mutually exclusive with --branch)
@@ -276,6 +277,7 @@ async function main(): Promise<number> {
         branch: { type: 'string', short: 'b' },
         from: { type: 'string' },
         'from-branch': { type: 'string' },
+        base: { type: 'string' },
         'no-worktree': { type: 'boolean' },
         folder: { type: 'boolean' },
         container: { type: 'boolean' },
@@ -322,6 +324,7 @@ async function main(): Promise<number> {
   const branchName = values.branch as string | undefined;
   const fromBranch =
     (values.from as string | undefined) ?? (values['from-branch'] as string | undefined);
+  const baseBranch = values.base as string | undefined;
   const noWorktree = values['no-worktree'] as boolean | undefined;
   const folderFlag = values.folder as boolean | undefined;
   const containerFlag = values.container as boolean | undefined;
@@ -544,6 +547,13 @@ async function main(): Promise<number> {
               );
               return 1;
             }
+            if (noWorktree && baseBranch !== undefined) {
+              console.error(
+                'Error: --base has no effect with --no-worktree.\n' +
+                  'Remove --base or drop --no-worktree.'
+              );
+              return 1;
+            }
             if (resumeFlag && branchName !== undefined) {
               console.error(
                 'Error: --resume and --branch are mutually exclusive.\n' +
@@ -555,6 +565,7 @@ async function main(): Promise<number> {
             const options = {
               branchName,
               fromBranch,
+              baseBranch,
               noWorktree,
               folder: folderFlag,
               container: containerFlag,

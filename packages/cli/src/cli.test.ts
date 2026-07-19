@@ -22,6 +22,7 @@ describe('CLI argument parsing', () => {
         branch: { type: 'string', short: 'b' },
         from: { type: 'string' },
         'from-branch': { type: 'string' },
+        base: { type: 'string' },
         'no-worktree': { type: 'boolean' },
         spawn: { type: 'boolean' },
         quiet: { type: 'boolean', short: 'q' },
@@ -150,6 +151,11 @@ describe('CLI argument parsing', () => {
       ]);
       expect(result.values.from).toBe('feature/primary');
       expect(result.values['from-branch']).toBe('feature/secondary');
+    });
+
+    it('should parse --base flag for workflow run', () => {
+      const result = parseCliArgs(['workflow', 'run', 'assist', '--base', 'epic/foo']);
+      expect(result.values.base).toBe('epic/foo');
     });
   });
 
