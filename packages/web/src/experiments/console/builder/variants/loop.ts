@@ -20,9 +20,16 @@ export function loopFromDag(variantSpecific: Partial<WireDagNode>): LoopNodeData
     );
   }
   return {
-    // `prompt` is optional on the wire (a loop may use `command` instead); the
-    // builder only models prompt-based loops, so fall back to the empty default.
-    prompt: loop.prompt ?? '',
+    // Exactly one prompt source survives the round-trip. A command-backed loop
+    // keeps `command` (never collapsed to an empty prompt); a prompt-backed
+    // loop keeps `prompt`. A wire node carrying BOTH is invalid per the engine
+    // schema — the importer flags it (see nodeFromDag) and `prompt` wins here
+    // so the flagged node stays deterministically editable.
+    ...(typeof loop.prompt === 'string'
+      ? { prompt: loop.prompt }
+      : typeof loop.command === 'string'
+        ? { command: loop.command }
+        : { prompt: '' }),
     until: loop.until,
     max_iterations: loop.max_iterations,
     // Engine default is false but the generated type makes it required, so it is
@@ -38,7 +45,10 @@ export function loopFromDag(variantSpecific: Partial<WireDagNode>): LoopNodeData
 export function loopToDag(data: LoopNodeData): Partial<WireDagNode> {
   return {
     loop: {
-      prompt: data.prompt,
+      // Emit exactly the prompt source the node carries (one-of invariant).
+      // A node with neither (transient editing state) exports `prompt: ''`
+      // so the engine's own "requires prompt or command" validation fires.
+      ...(data.command !== undefined ? { command: data.command } : { prompt: data.prompt ?? '' }),
       until: data.until,
       max_iterations: data.max_iterations,
       fresh_context: data.fresh_context,

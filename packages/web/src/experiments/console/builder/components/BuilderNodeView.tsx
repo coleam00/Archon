@@ -23,7 +23,8 @@ export function contentPreview(node: BuilderNode): string {
     case 'script':
       return node.data.script.split('\n')[0] ?? '';
     case 'loop':
-      return node.data.prompt.split('\n')[0] ?? '';
+      // Command-backed loops preview the command name (same as command nodes).
+      return node.data.command ?? node.data.prompt?.split('\n')[0] ?? '';
     case 'approval':
       return node.data.message.split('\n')[0] ?? '';
     case 'cancel':
