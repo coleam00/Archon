@@ -428,14 +428,6 @@ export type ExecuteWorkflowOptions = ResumePayload & {
    * write-back. Absent for host runs.
    */
   container?: ContainerRunContext;
-  /**
-   * Internal (#2121 Phase 2): the ancestor run-id chain for a `workflow:` sub-run
-   * (the parent + its ancestors). A child shares the parent's checkout, so the
-   * path-lock must exclude these ids — otherwise the child self-blocks against the
-   * parent's own running/paused row on that path. Set only by the runChildWorkflow
-   * closure; undefined for every top-level run.
-   */
-  ancestorRunIds?: string[];
 };
 
 /**
@@ -539,8 +531,6 @@ async function runChildWorkflow(
       error: `Sub-run depth cap (${String(CHILD_WORKFLOW_DEPTH_CAP)}) exceeded nesting '${childWorkflowName}'.`,
     };
   }
-  const ancestorRunIds = ancestry.map(a => a.id);
-
   // 2. Resolve the child workflow by NAME (static target — constitution guardrail).
   let childWorkflow: WorkflowDefinition | undefined;
   try {
@@ -572,13 +562,13 @@ async function runChildWorkflow(
     if (resumeFailedChild) {
       const hydrated = await hydrateResumableRun(deps, resumeFailedChild);
       if (hydrated) {
-        childOpts = { ...hydrated, ancestorRunIds, codebaseId };
+        childOpts = { ...hydrated, codebaseId };
         childRunId = hydrated.preCreatedRun.id;
       } else {
         // Failed child with no completed nodes — flip it back to running and re-run
         // from the top (nothing to skip).
         const preCreatedRun = await deps.store.resumeWorkflowRun(resumeFailedChild.id);
-        childOpts = { preCreatedRun, ancestorRunIds, codebaseId };
+        childOpts = { preCreatedRun, codebaseId };
         childRunId = preCreatedRun.id;
       }
     } else {
@@ -595,7 +585,7 @@ async function runChildWorkflow(
         user_id: userId,
         metadata: { parent_node_id: nodeId },
       });
-      childOpts = { preCreatedRun: childRun, ancestorRunIds, codebaseId };
+      childOpts = { preCreatedRun: childRun, codebaseId };
       childRunId = childRun.id;
     }
   } catch (err) {
@@ -721,10 +711,6 @@ async function maybeResumeParentRun(
     return;
   }
 
-  const ancestorRunIds = (await deps.store.getRunAncestry(parent.id).catch(() => [])).map(
-    a => a.id
-  );
-
   getLog().info(
     { parentRunId, childRunId: childRun.id, childStatus: childRun.status },
     'workflow.parent_auto_resume_started'
@@ -740,7 +726,6 @@ async function maybeResumeParentRun(
       conversationDbId,
       {
         ...hydrated,
-        ...(ancestorRunIds.length > 0 ? { ancestorRunIds } : {}),
         codebaseId: parent.codebase_id ?? undefined,
       }
     );
@@ -796,7 +781,6 @@ export async function executeWorkflow(
     baseBranch: callerBaseBranch,
     execContext = { kind: 'host' },
     container: containerCtx,
-    ancestorRunIds,
   } = opts;
 
   // Guard: a container run MUST be resumed with its container rewired (the CLI does
@@ -1050,20 +1034,34 @@ export async function executeWorkflow(
       // must be excluded from the path-lock — otherwise the child self-blocks
       // against the parent's own running/paused row on that path (#2121). Derived
       // from the run's OWN parent_run_id so it holds on every entry path: the
-      // initial in-process spawn AND any later resume-after-approve (which is driven
-      // by the generic resume machinery and carries no ancestorRunIds hint). The
-      // opts.ancestorRunIds hint (from runChildWorkflow, already computed) is merged
-      // in to avoid a redundant ancestry query on the spawn path.
-      let pathLockExclude: string[] = ancestorRunIds ? [...ancestorRunIds] : [];
+      // initial in-process spawn AND any later resume-after-approve (which is
+      // driven by the generic resume machinery).
+      let pathLockExclude: string[] = [];
+      let skipPathLock = false;
       if (workflowRun.parent_run_id) {
-        const ancestry = await deps.store.getRunAncestry(workflowRun.id).catch(() => []);
-        pathLockExclude = [...new Set([...pathLockExclude, ...ancestry.map(a => a.id)])];
+        try {
+          const ancestry = await deps.store.getRunAncestry(workflowRun.id);
+          pathLockExclude = ancestry.map(a => a.id);
+        } catch (err) {
+          // Fail OPEN for sub-runs: without the ancestor set, the lock query would
+          // "find" this run's own parent and cancel the child with a misleading
+          // "already active on this path" — a false self-collision caused by a
+          // transient lookup error. Skipping the best-effort lock for this one
+          // entry is the lesser risk; log loudly so the real cause is traceable.
+          getLog().error(
+            { err: err as Error, workflowRunId: workflowRun.id, cwd },
+            'workflow.path_lock_ancestry_lookup_failed'
+          );
+          skipPathLock = true;
+        }
       }
-      const activeWorkflow = await deps.store.getActiveWorkflowRunByPath(cwd, {
-        id: workflowRun.id,
-        startedAt: new Date(parseDbTimestamp(workflowRun.started_at)),
-        ...(pathLockExclude.length > 0 ? { excludeRunIds: pathLockExclude } : {}),
-      });
+      const activeWorkflow = skipPathLock
+        ? null
+        : await deps.store.getActiveWorkflowRunByPath(cwd, {
+            id: workflowRun.id,
+            startedAt: new Date(parseDbTimestamp(workflowRun.started_at)),
+            ...(pathLockExclude.length > 0 ? { excludeRunIds: pathLockExclude } : {}),
+          });
       if (activeWorkflow) {
         // The lock query found another active row that wins the older-wins
         // tiebreaker. Mark our own row terminal so it falls out of the
