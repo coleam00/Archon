@@ -184,10 +184,7 @@ describe('isValidCommandName', () => {
 });
 
 describe('isValidWorkflowName', () => {
-  // Workflows may be namespaced one subfolder deep (MAX_DISCOVERY_DEPTH = 1),
-  // so a single '/' is allowed where isValidCommandName forbids it. Every other
-  // path-traversal protection carries over because each segment must itself be a
-  // valid command name.
+  // Unlike isValidCommandName, allows one '/' (MAX_DISCOVERY_DEPTH = 1 namespacing).
 
   describe('valid names', () => {
     test('non-namespaced name', () => {

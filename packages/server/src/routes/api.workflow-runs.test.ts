@@ -401,10 +401,7 @@ describe('POST /api/workflows/:name/run', () => {
   });
 
   test('accepts a percent-encoded namespaced name and forwards the decoded name', async () => {
-    // The run route is the launchability path the namespaced-name fix targets,
-    // so exercise it the way the GET route is exercised: a one-subfolder-deep
-    // name (`triage/review`) must pass the real validator and reach the
-    // orchestrator decoded, not as the raw `triage%2Freview`.
+    // Regression guard: percent-encoded '/' must be decoded and validate, not raw-route to 400.
     const { isValidWorkflowName, isValidCommandName } =
       await import('@archon/workflows/command-validation');
     const segmentOk = (seg: string) =>
