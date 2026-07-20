@@ -3913,11 +3913,9 @@ export function registerApiRoutes(
       }
     }
     if (!codebase?.name) return c.json({ files: [] });
-    const nameParts = codebase.name.split('/');
-    if (nameParts.length < 2) return c.json({ files: [] });
-    const owner = nameParts[0];
-    const repo = nameParts[1];
-    if (!owner || !repo) return c.json({ files: [] });
+    const parsed = parseOwnerRepo(codebase.name);
+    if (!parsed) return c.json({ files: [] });
+    const { owner, repo } = parsed;
 
     const artifactDir = getRunArtifactsPath(owner, repo, runId);
     // Defense-in-depth: even though registration sanitises codebase names,
