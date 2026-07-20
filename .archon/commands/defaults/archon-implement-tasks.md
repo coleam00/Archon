@@ -65,12 +65,37 @@ echo "unknown"
 
 Store the runner for validation commands.
 
+### 1.5 Repository Hygiene — Archon Telemetry
+
+Archon keeps per-run telemetry outside the repo (`$ARTIFACTS_DIR` lives under `~/.archon/workspaces/`), but repo-local `.archon/` directories can still exist in the target repo:
+
+- `.archon/artifacts/` — per-run artifacts (older Archon layouts)
+- `.archon/logs/` — per-run execution logs (older Archon layouts)
+- `.archon/state/` — cross-run workflow state
+
+**These paths are local-only and must never be committed.**
+
+**MANDATORY rule** for any task in this run that creates or modifies `.gitignore`:
+
+The `.gitignore` MUST include these patterns (add them if missing, leave them in place if already present):
+
+```
+.archon/artifacts/
+.archon/logs/
+.archon/state/
+```
+
+If the plan calls for scaffolding a new `.gitignore` from scratch, include these patterns alongside the language- or framework-specific entries.
+
+Never stage paths under `.archon/artifacts/`, `.archon/logs/`, or `.archon/state/`. If they appear in `git status` output, the `.gitignore` is missing or incomplete — fix the `.gitignore` first, then stage.
+
 **PHASE_1_CHECKPOINT:**
 
 - [ ] Plan context loaded
 - [ ] Confirmation status verified
 - [ ] Original plan loaded
 - [ ] Package manager identified
+- [ ] Repository hygiene rules acknowledged (`.archon/artifacts/`, `.archon/logs/`, `.archon/state/` stay local-only)
 
 ---
 

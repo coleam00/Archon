@@ -307,6 +307,7 @@ git status --porcelain  # verify nothing scratch/review/PR-body is staged
 - `.pr-body.md`, `pr-body.md`, `*.scratch.md`, `*.tmp.md`
 - `review/`, `*-report.md` at the repo root
 - Anything under `$ARTIFACTS_DIR`
+- Repo-local Archon telemetry: `.archon/artifacts/`, `.archon/logs/`, `.archon/state/` (local-only — never in git)
 
 ### 7.2 Write Commit Message
 

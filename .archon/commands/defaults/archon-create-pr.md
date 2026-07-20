@@ -94,6 +94,7 @@ git status --porcelain
    - `.pr-body.md`, `pr-body.md`, `*.scratch.md`, `*.tmp.md`
    - `review/`, `*-report.md` at the repo root
    - Anything under `$ARTIFACTS_DIR`
+   - Repo-local Archon telemetry: `.archon/artifacts/`, `.archon/logs/`, `.archon/state/` (local-only — never in git)
 3. Commit: `git commit -m "Final changes before PR"`
 
 ### 2.2 Push Branch

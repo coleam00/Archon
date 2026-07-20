@@ -83,6 +83,7 @@ git status --porcelain  # verify nothing else is staged
 - `.pr-body.md`, `pr-body.md`, `*.scratch.md`, `*.tmp.md`
 - `review/`, `*-report.md` at the repo root
 - Anything under `$ARTIFACTS_DIR`
+- Repo-local Archon telemetry: `.archon/artifacts/`, `.archon/logs/`, `.archon/state/` (local-only — never in git)
 
 **Review staged files** — ensure no sensitive files (`.env`, credentials) and no scratch artifacts are included:
 
