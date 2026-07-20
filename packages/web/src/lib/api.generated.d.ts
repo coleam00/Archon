@@ -3344,6 +3344,11 @@ export interface components {
       worktree?: {
         enabled?: boolean;
       };
+      container?: {
+        enabled?: boolean;
+        /** @enum {string} */
+        write_back?: 'approve' | 'auto';
+      };
       mutates_checkout?: boolean;
       persist_sessions?: boolean;
       tags?: string[];
@@ -3535,6 +3540,13 @@ export interface components {
           maxTurns?: number;
         };
       };
+      pi?: {
+        enableExtensions?: boolean;
+        interactive?: boolean;
+        extensionFlags?: {
+          [key: string]: boolean | string;
+        };
+      };
       /** @enum {string} */
       effort?: 'low' | 'medium' | 'high' | 'max';
       thinking?:
@@ -3600,6 +3612,7 @@ export interface components {
         until_bash?: string;
         interactive?: boolean;
         gate_message?: string;
+        signal_completes?: boolean;
         prompt?: string;
         command?: string;
       };
@@ -3611,6 +3624,7 @@ export interface components {
         until_bash?: string;
         interactive?: boolean;
         gate_message?: string;
+        signal_completes?: boolean;
         nodes: components['schemas']['DagNode'][];
       };
       approval?: {
@@ -3622,6 +3636,8 @@ export interface components {
         };
       };
       cancel?: string;
+      include?: string;
+      with?: unknown;
       script?: string;
       /** @enum {string} */
       runtime?: 'bun' | 'uv';
