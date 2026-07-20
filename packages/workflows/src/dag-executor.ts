@@ -3422,7 +3422,7 @@ async function executeLoopGroupNode(
         .catch((err: Error) => {
           logEventStoreError(err, i);
         });
-      const gatePaused = await pauseGateRespectingExternalTransition(deps, workflowRun.id, {
+      await pauseGateRespectingExternalTransition(deps, workflowRun.id, {
         nodeId: node.id,
         message: honestMessage,
         type: 'interactive_loop',
@@ -3441,14 +3441,6 @@ async function executeLoopGroupNode(
         completionSignaled: completionDetected,
         signaledOutput: completionDetected ? lastIterationOutput : null,
       });
-      if (gatePaused) {
-        getWorkflowEventEmitter().emit({
-          type: 'approval_pending',
-          runId: workflowRun.id,
-          nodeId: node.id,
-          message: honestMessage,
-        });
-      }
       return {
         state: 'completed',
         output: lastIterationOutput,
@@ -4414,7 +4406,7 @@ async function executeLoopNode(
         .catch((err: Error) => {
           logEventStoreError(err, i);
         });
-      const gatePaused = await pauseGateRespectingExternalTransition(deps, workflowRun.id, {
+      await pauseGateRespectingExternalTransition(deps, workflowRun.id, {
         nodeId: node.id,
         message: honestMessage,
         type: 'interactive_loop',
@@ -4428,14 +4420,6 @@ async function executeLoopNode(
         completionSignaled: completionDetected,
         signaledOutput: completionDetected ? lastIterationOutput : null,
       });
-      if (gatePaused) {
-        getWorkflowEventEmitter().emit({
-          type: 'approval_pending',
-          runId: workflowRun.id,
-          nodeId: node.id,
-          message: honestMessage,
-        });
-      }
       // Return completed — the between-layer status check sees 'paused' and halts cleanly.
       // This mirrors the approval-node pattern, preventing false "DAG nodes failed" warnings
       // in multi-node workflows. Resume correctness relies on the 'paused' DB status, not
@@ -4473,11 +4457,13 @@ async function executeLoopNode(
  * signal cleanup marked the run failed mid-pause (#1123), or an operator
  * cancelled it from another surface. `pauseWorkflowRun`'s UPDATE only matches
  * status='running'; when it misses, re-read the status: any non-running status
- * means the pause lost a legitimate external race — log and return false so
- * the caller skips the approval_pending emit and returns its normal
- * completed-shaped output, letting the between-layer status check halt the DAG
- * cleanly (the same path a successful pause takes). A store error while the
- * run is still 'running' is a genuine pause failure and rethrows.
+ * means the pause lost a legitimate external race — log, skip the
+ * approval_pending emit, and return so the caller's normal completed-shaped
+ * output lets the between-layer status check halt the DAG cleanly (the same
+ * path a successful pause takes). On a successful pause, the approval_pending
+ * live signal is emitted HERE (from the ApprovalContext's own nodeId/message)
+ * so no call site can accidentally emit it after a lost CAS. A store error
+ * while the run is still 'running' is a genuine pause failure and rethrows.
  *
  * Deliberately NOT used by the container write-back gate (raiseWriteBackGate),
  * which must stay fail-closed: a lost pause there may never fall through
@@ -4488,10 +4474,9 @@ async function pauseGateRespectingExternalTransition(
   deps: WorkflowDeps,
   runId: string,
   approvalContext: ApprovalContext
-): Promise<boolean> {
+): Promise<void> {
   try {
     await deps.store.pauseWorkflowRun(runId, approvalContext);
-    return true;
   } catch (pauseErr) {
     let status: string | null;
     try {
@@ -4505,8 +4490,14 @@ async function pauseGateRespectingExternalTransition(
       { workflowRunId: runId, status, err: pauseErr as Error },
       'dag.gate_pause_skipped_external_transition'
     );
-    return false;
+    return;
   }
+  getWorkflowEventEmitter().emit({
+    type: 'approval_pending',
+    runId,
+    nodeId: approvalContext.nodeId,
+    message: approvalContext.message,
+  });
 }
 
 /**
@@ -4692,7 +4683,7 @@ async function executeApprovalNode(
       );
     });
 
-  const gatePaused = await pauseGateRespectingExternalTransition(deps, workflowRun.id, {
+  await pauseGateRespectingExternalTransition(deps, workflowRun.id, {
     message: renderedMessage,
     nodeId: node.id,
     type: 'approval',
@@ -4700,15 +4691,6 @@ async function executeApprovalNode(
     onRejectPrompt: node.approval.on_reject?.prompt,
     onRejectMaxAttempts: node.approval.on_reject?.max_attempts,
   });
-
-  if (gatePaused) {
-    getWorkflowEventEmitter().emit({
-      type: 'approval_pending',
-      runId: workflowRun.id,
-      nodeId: node.id,
-      message: renderedMessage,
-    });
-  }
 
   // Return completed — the between-layer status check will see 'paused' (or the
   // external transition that beat the pause) and break.
