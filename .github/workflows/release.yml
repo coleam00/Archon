@@ -16,7 +16,43 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  web-dist:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build web UI
+        run: bun --filter @archon/web build
+
+      - name: Package web dist
+        run: |
+          mkdir -p dist
+          # Deterministic tar so an independent rebuild from source produces the
+          # same bytes (and same SHA-256) as the released artifact. ubuntu-latest
+          # ships GNU tar; --mtime='@0' clamps timestamps, --sort=name removes
+          # filesystem-order variance, --owner/--group/--numeric-owner zero out
+          # runner identity. Gzip stays default — its mtime header is in the
+          # tarball payload only when --no-name is omitted; we accept that.
+          tar --sort=name --owner=0 --group=0 --numeric-owner --mtime='@0' \
+            -czf dist/archon-web.tar.gz -C packages/web/dist .
+
+      - name: Upload web dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: archon-web-dist
+          path: dist/archon-web.tar.gz
+          retention-days: 1
+
   build:
+    needs: web-dist
     strategy:
       matrix:
         include:
@@ -47,6 +83,15 @@ jobs:
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
+
+      - name: Download packaged web dist
+        uses: actions/download-artifact@v4
+        with:
+          name: archon-web-dist
+          path: web-dist-artifact
+
+      - name: Stage packaged web dist for binary build
+        run: cp web-dist-artifact/archon-web.tar.gz ./archon-web.tar.gz
 
       - name: Build binary
         env:
@@ -215,7 +260,8 @@ jobs:
           retention-days: 1
 
   release:
-    needs: build
+    needs:
+      - build
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -227,21 +273,6 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.3.11
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Build web UI
-        run: bun --filter @archon/web build
-
-      - name: Package web dist
-        run: |
-          tar czf dist/archon-web.tar.gz -C packages/web/dist .
 
       - name: Generate checksums
         run: |
