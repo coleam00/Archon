@@ -1283,11 +1283,12 @@ User comments: @Archon prime the codebase
          |
 GitHub sends webhook to POST /webhooks/github
          |
-GitHubAdapter.handleWebhook(payload, signature)
+GitHubAdapter.handleWebhook(payload, signature, deliveryId)
   - Verify HMAC signature
   - Parse event: issue_comment.created
   - Extract: owner/repo#42, comment text
   - Check for @Archon mention
+  - Drop duplicate deliveries (same comment via dual repo+App webhooks)
          |
 First mention on this issue?
   - Yes -> Clone repo, create codebase, detect and register commands

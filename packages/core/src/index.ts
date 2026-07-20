@@ -151,6 +151,9 @@ export {
 // Conversation lock
 export { ConversationLockManager, type LockAcquisitionResult } from './utils/conversation-lock';
 
+// Webhook delivery dedup
+export { DeliveryDeduplicator } from './utils/delivery-dedup';
+
 // Error formatting
 export { classifyAndFormatError } from './utils/error-formatter';
 export { toError } from './utils/error';

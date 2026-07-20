@@ -4,7 +4,17 @@
  * Note: Database modules are mocked to prevent self-filtering tests from
  * writing phantom records (e.g., testuser/testrepo) to the real SQLite DB.
  */
-import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test';
+import {
+  describe,
+  test,
+  expect,
+  mock,
+  spyOn,
+  beforeAll,
+  afterAll,
+  beforeEach,
+  afterEach,
+} from 'bun:test';
 
 // Mock logger to suppress noisy output during tests
 const mockLogger = {
@@ -119,6 +129,9 @@ mock.module('@archon/git', () => ({
 
 import { GitHubAdapter } from './adapter';
 import { ConversationLockManager } from '@archon/core';
+// Namespace import so the dedup tests can spyOn(core, 'handleMessage') — the
+// orchestrator entry point the adapter calls after webhook setup succeeds.
+import * as core from '@archon/core';
 
 // Create a mock lock manager that immediately executes handlers
 const mockLockManager = {
@@ -461,6 +474,224 @@ describe('GitHubAdapter', () => {
 
       // Missing user should not trigger self-filtering (proceeds to conversation creation)
       expect(mockGetOrCreateConversation).toHaveBeenCalled();
+    });
+  });
+
+  describe('webhook delivery dedup', () => {
+    let originalAllowedUsers: string | undefined;
+    let handleMessageSpy: ReturnType<typeof spyOn<typeof core, 'handleMessage'>>;
+
+    interface DedupOctokitStubs {
+      reposGet: ReturnType<typeof mock>;
+      listComments: ReturnType<typeof mock>;
+      createComment: ReturnType<typeof mock>;
+    }
+
+    /**
+     * Adapter whose private Octokit client is replaced with local stubs so
+     * handleWebhook() runs its full downstream path without live API calls.
+     */
+    function createDedupAdapter(): { adapter: GitHubAdapter; octokit: DedupOctokitStubs } {
+      const octokit: DedupOctokitStubs = {
+        reposGet: mock(async () => ({ data: { default_branch: 'main' } })),
+        listComments: mock(async () => ({ data: [] })),
+        createComment: mock(async () => ({ data: {} })),
+      };
+      const adapter = new GitHubAdapter(
+        { kind: 'pat', token: 'fake-token-for-testing' },
+        'fake-webhook-secret',
+        mockLockManager,
+        'archon'
+      );
+      // @ts-expect-error - accessing private method for testing
+      adapter.verifySignature = mock(() => true);
+      // @ts-expect-error - replacing private Octokit client for testing
+      adapter.octokit = {
+        rest: {
+          repos: { get: octokit.reposGet },
+          issues: { listComments: octokit.listComments, createComment: octokit.createComment },
+        },
+      };
+      return { adapter, octokit };
+    }
+
+    function createIdentifiedCommentPayload(
+      commentBody: string,
+      commentId: number | undefined,
+      updatedAt: string | undefined
+    ): string {
+      const comment: {
+        id?: number;
+        body: string;
+        user: { login: string };
+        updated_at?: string;
+      } = { body: commentBody, user: { login: 'user123' } };
+      if (commentId !== undefined) comment.id = commentId;
+      if (updatedAt !== undefined) comment.updated_at = updatedAt;
+      return JSON.stringify({
+        action: 'created',
+        issue: {
+          number: 42,
+          title: 'Test Issue',
+          body: 'Description',
+          user: { login: 'user123' },
+          labels: [],
+          state: 'open',
+        },
+        comment,
+        repository: {
+          owner: { login: 'testuser' },
+          name: 'testrepo',
+          full_name: 'testuser/testrepo',
+          html_url: 'https://github.com/testuser/testrepo',
+          default_branch: 'main',
+        },
+        sender: { login: 'user123' },
+      });
+    }
+
+    async function deliver(
+      adapter: GitHubAdapter,
+      payload: string,
+      deliveryId?: string
+    ): Promise<void> {
+      await adapter.handleWebhook(payload, 'mock-signature', deliveryId);
+    }
+
+    beforeAll(() => {
+      handleMessageSpy = spyOn(core, 'handleMessage').mockImplementation(async () => {});
+    });
+
+    afterAll(() => {
+      handleMessageSpy.mockRestore();
+    });
+
+    beforeEach(() => {
+      originalAllowedUsers = process.env.GITHUB_ALLOWED_USERS;
+      delete process.env.GITHUB_ALLOWED_USERS;
+      mockLockManager.acquireLock.mockClear();
+      mockGetOrCreateConversation.mockClear();
+      mockLogger.info.mockClear();
+      handleMessageSpy.mockClear();
+    });
+
+    afterEach(() => {
+      if (originalAllowedUsers !== undefined) {
+        process.env.GITHUB_ALLOWED_USERS = originalAllowedUsers;
+      }
+    });
+
+    test('drops a repeat delivery of the same comment (same GUID)', async () => {
+      const { adapter, octokit } = createDedupAdapter();
+      const payload = createIdentifiedCommentPayload('@archon help', 1001, '2026-06-12T21:00:00Z');
+
+      await deliver(adapter, payload, 'guid-1');
+      await deliver(adapter, payload, 'guid-1');
+
+      expect(mockGetOrCreateConversation).toHaveBeenCalledTimes(1);
+      // First delivery completed the full pipeline against local stubs —
+      // no unmocked Octokit path (and thus no live API call) was reachable.
+      expect(octokit.reposGet).toHaveBeenCalledTimes(1);
+      expect(octokit.listComments).toHaveBeenCalledTimes(1);
+      expect(handleMessageSpy).toHaveBeenCalledTimes(1);
+    });
+
+    test('drops a dual-subscription duplicate (same comment, different GUIDs)', async () => {
+      const { adapter } = createDedupAdapter();
+      const payload = createIdentifiedCommentPayload('@archon help', 1001, '2026-06-12T21:00:00Z');
+
+      // Repo webhook and App webhook deliver the same comment under different
+      // delivery GUIDs, so GUID-only dedup would miss this duplicate.
+      await deliver(adapter, payload, 'guid-repo-hook');
+      await deliver(adapter, payload, 'guid-app-hook');
+
+      expect(mockGetOrCreateConversation).toHaveBeenCalledTimes(1);
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        expect.objectContaining({ deliveryId: 'guid-app-hook' }),
+        'github.duplicate_delivery_dropped'
+      );
+    });
+
+    test('redelivery within TTL is dropped even when the first attempt failed (claim-at-ingest tradeoff)', async () => {
+      const { adapter, octokit } = createDedupAdapter();
+      const payload = createIdentifiedCommentPayload('@archon help', 1001, '2026-06-12T21:00:00Z');
+      // First attempt fails transiently AFTER the dedup key is claimed.
+      octokit.reposGet.mockRejectedValueOnce(new Error('transient GitHub outage'));
+
+      await deliver(adapter, payload, 'guid-1');
+      expect(handleMessageSpy).not.toHaveBeenCalled();
+
+      // Pins current behavior: the key is claimed before downstream work, so a
+      // redelivery of the failed attempt within the TTL is dropped (accepted
+      // fire-and-forget tradeoff). Moving the claim later must flip this
+      // assertion deliberately.
+      await deliver(adapter, payload, 'guid-1-redelivery');
+
+      expect(handleMessageSpy).not.toHaveBeenCalled();
+      expect(mockGetOrCreateConversation).toHaveBeenCalledTimes(1);
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        expect.objectContaining({ deliveryId: 'guid-1-redelivery' }),
+        'github.duplicate_delivery_dropped'
+      );
+    });
+
+    test('processes an edited comment again (new updated_at)', async () => {
+      const { adapter } = createDedupAdapter();
+      const original = createIdentifiedCommentPayload('@archon help', 1001, '2026-06-12T21:00:00Z');
+      const edited = createIdentifiedCommentPayload(
+        '@archon help please',
+        1001,
+        '2026-06-12T21:05:00Z'
+      );
+
+      await deliver(adapter, original, 'guid-1');
+      await deliver(adapter, edited, 'guid-2');
+
+      expect(mockGetOrCreateConversation).toHaveBeenCalledTimes(2);
+    });
+
+    test('processes distinct comments independently', async () => {
+      const { adapter } = createDedupAdapter();
+      const first = createIdentifiedCommentPayload('@archon help', 1001, '2026-06-12T21:00:00Z');
+      const second = createIdentifiedCommentPayload('@archon also', 1002, '2026-06-12T21:00:30Z');
+
+      await deliver(adapter, first, 'guid-1');
+      await deliver(adapter, second, 'guid-2');
+
+      expect(mockGetOrCreateConversation).toHaveBeenCalledTimes(2);
+    });
+
+    test('requires both id and updated_at for the comment key (id alone uses GUID fallback)', async () => {
+      const { adapter } = createDedupAdapter();
+      // id present but updated_at missing — keying on id alone would dedup a
+      // later edit against the original, so this must use the GUID fallback.
+      const payload = createIdentifiedCommentPayload('@archon help', 1001, undefined);
+
+      await deliver(adapter, payload, 'guid-1');
+      await deliver(adapter, payload, 'guid-1');
+      await deliver(adapter, payload, 'guid-2');
+
+      expect(mockGetOrCreateConversation).toHaveBeenCalledTimes(2);
+    });
+
+    test('falls back to delivery GUID when payload lacks comment id', async () => {
+      const { adapter } = createDedupAdapter();
+      const payload = createIdentifiedCommentPayload('@archon help', undefined, undefined);
+
+      await deliver(adapter, payload, 'guid-1');
+      await deliver(adapter, payload, 'guid-1');
+
+      expect(mockGetOrCreateConversation).toHaveBeenCalledTimes(1);
+    });
+
+    test('fails open when neither comment id nor delivery GUID is available', async () => {
+      const { adapter } = createDedupAdapter();
+      const payload = createIdentifiedCommentPayload('@archon help', undefined, undefined);
+
+      await deliver(adapter, payload, undefined);
+      await deliver(adapter, payload, undefined);
+
+      expect(mockGetOrCreateConversation).toHaveBeenCalledTimes(2);
     });
   });
 
