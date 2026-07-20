@@ -75,6 +75,7 @@ import {
   checkForUpdate,
   BUNDLED_IS_BINARY,
   BUNDLED_VERSION,
+  parseOwnerRepo,
 } from '@archon/paths';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { parseWorkflow } from '@archon/workflows/loader';
@@ -3912,11 +3913,9 @@ export function registerApiRoutes(
       }
     }
     if (!codebase?.name) return c.json({ files: [] });
-    const nameParts = codebase.name.split('/');
-    if (nameParts.length < 2) return c.json({ files: [] });
-    const owner = nameParts[0];
-    const repo = nameParts[1];
-    if (!owner || !repo) return c.json({ files: [] });
+    const parsed = parseOwnerRepo(codebase.name);
+    if (!parsed) return c.json({ files: [] });
+    const { owner, repo } = parsed;
 
     const artifactDir = getRunArtifactsPath(owner, repo, runId);
     // Defense-in-depth: even though registration sanitises codebase names,
@@ -4037,12 +4036,12 @@ export function registerApiRoutes(
       getLog().error({ runId, codebaseId: run.codebase_id }, 'artifacts.codebase_lookup_failed');
       return apiError(c, 404, 'Artifact not available: codebase not found');
     }
-    const nameParts = codebase.name.split('/');
-    if (nameParts.length < 2) {
+    const parsed = parseOwnerRepo(codebase.name);
+    if (!parsed) {
       getLog().error({ runId, codebaseName: codebase.name }, 'artifacts.owner_repo_parse_failed');
       return apiError(c, 404, 'Artifact not available: could not determine owner/repo');
     }
-    const [owner, repo] = nameParts;
+    const { owner, repo } = parsed;
 
     const artifactDir = getRunArtifactsPath(owner, repo, runId);
     const filePath = join(artifactDir, filename);

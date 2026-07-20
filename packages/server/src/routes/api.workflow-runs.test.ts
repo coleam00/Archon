@@ -136,6 +136,17 @@ mock.module('@archon/paths', () => ({
   getArchonHome: () => '/tmp/.archon',
   getRunArtifactsPath: (owner: string, repo: string, runId: string): string =>
     `/tmp/.archon/workspaces/${owner}/${repo}/artifacts/runs/${runId}`,
+  // Mirrors the real parseOwnerRepo semantics (exactly owner/repo, no
+  // traversal segments, GitHub-safe characters only).
+  parseOwnerRepo: (name: string): { owner: string; repo: string } | null => {
+    const parts = name.split('/');
+    if (parts.length !== 2) return null;
+    const [owner, repo] = parts;
+    if (!owner || !repo) return null;
+    if (owner === '.' || owner === '..' || repo === '.' || repo === '..') return null;
+    if (!/^[a-zA-Z0-9._-]+$/.test(owner) || !/^[a-zA-Z0-9._-]+$/.test(repo)) return null;
+    return { owner, repo };
+  },
 }));
 
 mockAllWorkflowModules();
@@ -1995,11 +2006,11 @@ describe('GET /api/runs/:runId/artifacts', () => {
     expect(response.status).toBe(500);
   });
 
-  // Path-escape guard: a maliciously crafted owner/repo with `..` segments
-  // would, after the join, resolve to a directory outside ARCHON_HOME. The
-  // mocked getRunArtifactsPath above naively joins inputs, so passing
-  // `'..'` as the owner produces a path that normalises outside /tmp/.archon.
-  test('returns 400 when the resolved artifact dir escapes ARCHON_HOME', async () => {
+  // Traversal-shaped codebase names are now rejected up-front by
+  // parseOwnerRepo (exact owner/repo, no `..`/`.` segments, safe characters
+  // only) before any path is built — they never reach getRunArtifactsPath.
+  // The downstream ARCHON_HOME containment check remains as a second layer.
+  test('returns empty files when the codebase name is a traversal attempt', async () => {
     mockGetWorkflowRun.mockImplementationOnce(async () => ({
       ...MOCK_RUNNING_RUN,
       id: 'run-escape',
@@ -2008,6 +2019,97 @@ describe('GET /api/runs/:runId/artifacts', () => {
     mockGetCodebase.mockImplementationOnce(async () => ({ name: '../../etc/passwd' }));
     const { app } = makeApp();
     const response = await app.request('/api/runs/run-escape/artifacts');
-    expect(response.status).toBe(400);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { files: unknown[] };
+    expect(body.files).toEqual([]);
+  });
+
+  test('returns empty files for names with more than two segments or unsafe chars', async () => {
+    for (const name of ['a/b/c', '../repo', 'owner/..', 'ow ner/repo']) {
+      mockGetWorkflowRun.mockImplementationOnce(async () => ({
+        ...MOCK_RUNNING_RUN,
+        id: 'run-bad-name',
+        codebase_id: 'cb-bad',
+      }));
+      mockGetCodebase.mockImplementationOnce(async () => ({ name }));
+      const { app } = makeApp();
+      const response = await app.request('/api/runs/run-bad-name/artifacts');
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { files: unknown[] };
+      expect(body.files).toEqual([]);
+    }
+  });
+
+  // Folder projects (kind: 'folder') have plain display names without an
+  // owner/repo shape; the listing route has never resolved their `_folder/`
+  // storage and must keep returning an empty list rather than erroring.
+  test('returns empty files for a folder-project style name (unchanged behavior)', async () => {
+    mockGetWorkflowRun.mockImplementationOnce(async () => ({
+      ...MOCK_RUNNING_RUN,
+      id: 'run-folder',
+      codebase_id: 'cb-folder',
+    }));
+    mockGetCodebase.mockImplementationOnce(async () => ({ name: 'my ops folder' }));
+    const { app } = makeApp();
+    const response = await app.request('/api/runs/run-folder/artifacts');
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { files: unknown[] };
+    expect(body.files).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: GET /api/artifacts/:runId/* — the artifact file-serving endpoint
+// (owner/repo derivation only; content serving hits the real filesystem)
+// ---------------------------------------------------------------------------
+
+describe('GET /api/artifacts/:runId/* owner/repo guard', () => {
+  beforeEach(() => {
+    mockGetWorkflowRun.mockReset();
+    mockGetCodebase.mockReset();
+  });
+
+  test('returns 404 when the codebase name is a traversal attempt', async () => {
+    mockGetWorkflowRun.mockImplementationOnce(async () => ({
+      ...MOCK_RUNNING_RUN,
+      id: 'run-serve-escape',
+      codebase_id: 'cb-escape',
+    }));
+    mockGetCodebase.mockImplementationOnce(async () => ({ name: '../../etc/passwd' }));
+    const { app } = makeApp();
+    const response = await app.request('/api/artifacts/run-serve-escape/plan.md');
+    expect(response.status).toBe(404);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toContain('could not determine owner/repo');
+  });
+
+  test('returns 404 for a folder-project style name (unchanged behavior)', async () => {
+    mockGetWorkflowRun.mockImplementationOnce(async () => ({
+      ...MOCK_RUNNING_RUN,
+      id: 'run-serve-folder',
+      codebase_id: 'cb-folder',
+    }));
+    mockGetCodebase.mockImplementationOnce(async () => ({ name: 'my ops folder' }));
+    const { app } = makeApp();
+    const response = await app.request('/api/artifacts/run-serve-folder/plan.md');
+    expect(response.status).toBe(404);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toContain('could not determine owner/repo');
+  });
+
+  test('a valid owner/repo name passes the parse and proceeds to the file read', async () => {
+    mockGetWorkflowRun.mockImplementationOnce(async () => ({
+      ...MOCK_RUNNING_RUN,
+      id: 'run-serve-ok',
+      codebase_id: 'cb-ok',
+    }));
+    mockGetCodebase.mockImplementationOnce(async () => ({ name: 'acme/widgets' }));
+    const { app } = makeApp();
+    const response = await app.request('/api/artifacts/run-serve-ok/plan.md');
+    // Artifact dir does not exist on disk → ENOENT, distinct from the
+    // owner/repo rejection above.
+    expect(response.status).toBe(404);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toBe('Artifact file not found');
   });
 });
