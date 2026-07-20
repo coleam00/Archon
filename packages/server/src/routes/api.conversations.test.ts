@@ -530,3 +530,133 @@ describe('GET /api/conversations/:id — forge platform IDs with encoded slashes
     expect(response.status).toBe(404);
   });
 });
+
+describe('DELETE /api/conversations/:id — forge platform IDs with encoded slashes', () => {
+  const FORGE_CONV = {
+    id: 'forge-internal-uuid',
+    platform_conversation_id: 'Solvation-BV/Archon#42',
+    title: 'fix: a thing',
+    created_at: new Date(),
+    updated_at: new Date(),
+    platform_type: 'github',
+    deleted_at: null,
+    codebase_id: null,
+  };
+
+  test('deletes forge conversation when ID contains encoded slash and hash', async () => {
+    mockFindConversationByPlatformId.mockImplementationOnce(async platformId => {
+      expect(platformId).toBe('Solvation-BV/Archon#42');
+      return FORGE_CONV;
+    });
+    mockSoftDeleteConversation.mockImplementationOnce(async () => {});
+
+    const app = new OpenAPIHono();
+    registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+    const response = await app.request('/api/conversations/Solvation-BV%2FArchon%2342', {
+      method: 'DELETE',
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { success: boolean };
+    expect(body).toEqual({ success: true });
+    expect(mockSoftDeleteConversation).toHaveBeenCalledWith('forge-internal-uuid');
+  });
+
+  test('deletes gitea PR conversation with ! separator when ID is encoded', async () => {
+    const giteaPRConv = { ...FORGE_CONV, platform_conversation_id: 'owner/repo!42' };
+    mockFindConversationByPlatformId.mockImplementationOnce(async platformId => {
+      expect(platformId).toBe('owner/repo!42');
+      return giteaPRConv;
+    });
+    mockSoftDeleteConversation.mockImplementationOnce(async () => {});
+
+    const app = new OpenAPIHono();
+    registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+    const response = await app.request('/api/conversations/owner%2Frepo!42', {
+      method: 'DELETE',
+    });
+    expect(response.status).toBe(200);
+    expect(mockSoftDeleteConversation).toHaveBeenCalledWith('forge-internal-uuid');
+  });
+
+  test('returns 404 for unknown encoded forge conversation ID', async () => {
+    mockFindConversationByPlatformId.mockImplementationOnce(async () => null);
+
+    const app = new OpenAPIHono();
+    registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+    const response = await app.request('/api/conversations/unknown-org%2Funknown-repo%2399', {
+      method: 'DELETE',
+    });
+    expect(response.status).toBe(404);
+  });
+});
+
+describe('PATCH /api/conversations/:id — forge platform IDs with encoded slashes', () => {
+  const FORGE_CONV = {
+    id: 'forge-internal-uuid',
+    platform_conversation_id: 'Solvation-BV/Archon#42',
+    title: 'old title',
+    created_at: new Date(),
+    updated_at: new Date(),
+    platform_type: 'github',
+    deleted_at: null,
+    codebase_id: null,
+  };
+
+  test('updates forge conversation title when ID contains encoded slash and hash', async () => {
+    mockFindConversationByPlatformId.mockImplementationOnce(async platformId => {
+      expect(platformId).toBe('Solvation-BV/Archon#42');
+      return FORGE_CONV;
+    });
+    mockUpdateConversationTitle.mockImplementationOnce(async () => {});
+
+    const app = new OpenAPIHono();
+    registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+    const response = await app.request('/api/conversations/Solvation-BV%2FArchon%2342', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'New Title' }),
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { success: boolean };
+    expect(body).toEqual({ success: true });
+    expect(mockUpdateConversationTitle).toHaveBeenCalledWith('forge-internal-uuid', 'New Title');
+  });
+
+  test('updates gitea PR conversation with ! separator when ID is encoded', async () => {
+    const giteaPRConv = { ...FORGE_CONV, platform_conversation_id: 'owner/repo!42' };
+    mockFindConversationByPlatformId.mockImplementationOnce(async platformId => {
+      expect(platformId).toBe('owner/repo!42');
+      return giteaPRConv;
+    });
+    mockUpdateConversationTitle.mockImplementationOnce(async () => {});
+
+    const app = new OpenAPIHono();
+    registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+    const response = await app.request('/api/conversations/owner%2Frepo!42', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'New Title' }),
+    });
+    expect(response.status).toBe(200);
+    expect(mockUpdateConversationTitle).toHaveBeenCalledWith('forge-internal-uuid', 'New Title');
+  });
+
+  test('returns 404 for unknown encoded forge conversation ID', async () => {
+    mockFindConversationByPlatformId.mockImplementationOnce(async () => null);
+
+    const app = new OpenAPIHono();
+    registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+    const response = await app.request('/api/conversations/unknown-org%2Funknown-repo%2399', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'New Title' }),
+    });
+    expect(response.status).toBe(404);
+  });
+});
