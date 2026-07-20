@@ -241,6 +241,19 @@ export async function approveWorkflow(
   if (!approval?.nodeId) {
     throw new Error('Workflow run is paused but missing approval context.');
   }
+  if (approval.type === 'child_workflow') {
+    // A parent blocked on a `workflow:` sub-run has no approvable gate of its
+    // own — the pause resolves automatically when the child run completes.
+    // Falling through to the generic branch would stamp a node_completed for the
+    // parent's workflow node with empty output (the child's real output is then
+    // discarded on resume) and orphan the still-paused child. Redirect the
+    // operator to the child run, where the actual gate lives.
+    throw new Error(
+      `Run ${runId} is paused waiting on sub-run ${approval.childRunId ?? '<unknown>'} ` +
+        `('workflow:' node '${approval.nodeId}'). Approve or reject the child run instead` +
+        (approval.childRunId ? `: /workflow approve ${approval.childRunId}` : '.')
+    );
+  }
   if (isGateResolved(approval)) {
     // Fast-path friendly error for the common (sequential) case. The run stays
     // 'paused' after a resolution, so the status check alone no longer blocks a
@@ -381,6 +394,18 @@ export async function rejectWorkflow(
   const approval: ApprovalContext | undefined = isApprovalContext(rawApproval)
     ? rawApproval
     : undefined;
+  if (approval?.type === 'child_workflow') {
+    // Same redirect as approveWorkflow: the parent's pause is not a rejectable
+    // gate — cancelling the parent here would silently orphan the still-paused
+    // child run. Reject the child (its own gate) or abandon the parent (which
+    // cascade-cancels the subtree) instead.
+    throw new Error(
+      `Run ${runId} is paused waiting on sub-run ${approval.childRunId ?? '<unknown>'} ` +
+        `('workflow:' node '${approval.nodeId}'). Reject the child run instead` +
+        (approval.childRunId ? `: /workflow reject ${approval.childRunId}` : '.') +
+        ' To discard the whole tree, abandon this run.'
+    );
+  }
   if (approval && isGateResolved(approval)) {
     // Fast-path friendly error, same as approveWorkflow — the run stays 'paused'
     // after a resolution, so status alone no longer blocks a second reject. The

@@ -394,6 +394,28 @@ describe('approveWorkflow', () => {
     const casEvents = mockResolveApprovalGate.mock.calls[0][2] as Array<Record<string, unknown>>;
     expect(casEvents.every(e => e.event_type !== 'node_completed')).toBe(true);
   });
+
+  test('refuses a child_workflow-blocked parent — redirects to the child run, writes nothing', async () => {
+    const run = makePausedRun({
+      metadata: {
+        approval: {
+          nodeId: 'implement-qa',
+          message: 'Blocked on sub-run',
+          type: 'child_workflow',
+          childRunId: 'child-run-9',
+        },
+      },
+    });
+    mockGetWorkflowRun.mockResolvedValueOnce(run);
+
+    await expect(approveWorkflow('run-1')).rejects.toThrow(
+      /waiting on sub-run child-run-9.*approve child-run-9/i
+    );
+    // Nothing resolved, nothing stamped — a fall-through here would write a bogus
+    // node_completed for the workflow node and orphan the paused child.
+    expect(mockResolveApprovalGate).not.toHaveBeenCalled();
+    expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
+  });
 });
 
 describe('rejectWorkflow', () => {
@@ -608,6 +630,28 @@ describe('rejectWorkflow', () => {
     await expect(rejectWorkflow('run-1')).rejects.toThrow(
       "Cannot reject run with status 'completed'"
     );
+  });
+
+  test('refuses a child_workflow-blocked parent — redirects to the child run, cancels nothing', async () => {
+    const run = makePausedRun({
+      metadata: {
+        approval: {
+          nodeId: 'implement-qa',
+          message: 'Blocked on sub-run',
+          type: 'child_workflow',
+          childRunId: 'child-run-9',
+        },
+      },
+    });
+    mockGetWorkflowRun.mockResolvedValueOnce(run);
+
+    await expect(rejectWorkflow('run-1')).rejects.toThrow(
+      /waiting on sub-run child-run-9.*reject child-run-9/i
+    );
+    // A fall-through would cancel the parent and silently orphan the paused child.
+    expect(mockResolveApprovalGate).not.toHaveBeenCalled();
+    expect(mockResolveAndCancelApprovalGate).not.toHaveBeenCalled();
+    expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
   });
 });
 
