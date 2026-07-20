@@ -15128,3 +15128,191 @@ describe('executeDagWorkflow -- container write-back gate', () => {
     expect(store.completeWorkflowRun).not.toHaveBeenCalled();
   });
 });
+
+describe('executeDagWorkflow -- gate pause vs external transition (#1123)', () => {
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = join(
+      tmpdir(),
+      `dag-pause-race-test-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
+    await mkdir(join(testDir, '.archon', 'commands'), { recursive: true });
+    mockSendQueryDag.mockClear();
+    mockGetAgentProviderDag.mockClear();
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+  });
+
+  afterEach(async () => {
+    try {
+      await rm(testDir, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup errors
+    }
+  });
+
+  /** Store whose pauseWorkflowRun loses the CAS: the run was externally
+   *  transitioned (e.g. a killed CLI's signal cleanup marked it failed) in the
+   *  window between gate raise and pause commit. getWorkflowRunStatus reports
+   *  'running' until the pause attempt, then the external 'failed'. */
+  function createExternallyFailedStore(): IWorkflowStore {
+    const store = createMockStore();
+    let pauseAttempted = false;
+    store.pauseWorkflowRun = mock(() => {
+      pauseAttempted = true;
+      return Promise.reject(
+        new Error('Workflow run not found or not in running state (id: dag-test-run-id)')
+      );
+    });
+    store.getWorkflowRunStatus = mock(() =>
+      Promise.resolve(pauseAttempted ? ('failed' as const) : ('running' as const))
+    );
+    return store;
+  }
+
+  it('approval gate that loses the pause CAS to an external transition halts cleanly', async () => {
+    const store = createExternallyFailedStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    const emitted: string[] = [];
+    const unsubscribe = getWorkflowEventEmitter().subscribe((event: WorkflowEmitterEvent) => {
+      if ('runId' in event && event.runId === workflowRun.id) emitted.push(event.type);
+    });
+
+    try {
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-pause-race',
+        testDir,
+        {
+          name: 'pause-race-approval',
+          nodes: [{ id: 'review', approval: { message: 'Approve this plan?' } }],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+    } finally {
+      unsubscribe();
+    }
+
+    // The gate never actually paused — no approval_pending signal to live UIs.
+    expect(emitted).not.toContain('approval_pending');
+
+    // The lost CAS must NOT cascade into a node failure or any terminal write —
+    // the external transition owns the run's final state.
+    const events = (store.createWorkflowEvent as Mock<() => Promise<void>>).mock.calls.map(
+      (c: unknown[]) => (c[0] as { event_type: string }).event_type
+    );
+    expect(events).not.toContain('node_failed');
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('interactive loop gate that loses the pause CAS halts cleanly', async () => {
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'Here is the plan. Please review.' };
+      yield { type: 'result', sessionId: 'loop-session-race' };
+    });
+
+    const store = createExternallyFailedStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    const emitted: string[] = [];
+    const unsubscribe = getWorkflowEventEmitter().subscribe((event: WorkflowEmitterEvent) => {
+      if ('runId' in event && event.runId === workflowRun.id) emitted.push(event.type);
+    });
+
+    try {
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-pause-race-loop',
+        testDir,
+        {
+          name: 'pause-race-loop',
+          nodes: [
+            {
+              id: 'refine',
+              loop: {
+                prompt: 'User said: $LOOP_USER_INPUT. Refine the plan.',
+                until: 'APPROVED',
+                max_iterations: 10,
+                interactive: true,
+                gate_message: 'Review the plan and provide feedback.',
+              },
+            },
+          ],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+    } finally {
+      unsubscribe();
+    }
+
+    expect(emitted).not.toContain('approval_pending');
+    const events = (store.createWorkflowEvent as Mock<() => Promise<void>>).mock.calls.map(
+      (c: unknown[]) => (c[0] as { event_type: string }).event_type
+    );
+    expect(events).not.toContain('node_failed');
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('gate pause failure with the run still running stays a genuine node failure', async () => {
+    const store = createMockStore();
+    // Pause fails but the run is still 'running' (default mock) — a real store
+    // failure, not an external transition. Legacy behavior must hold: the node
+    // fails and the run is marked failed.
+    store.pauseWorkflowRun = mock(() => Promise.reject(new Error('database connection lost')));
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-pause-genuine-failure',
+      testDir,
+      {
+        name: 'pause-genuine-failure',
+        nodes: [{ id: 'review', approval: { message: 'Approve this plan?' } }],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const events = (store.createWorkflowEvent as Mock<() => Promise<void>>).mock.calls.map(
+      (c: unknown[]) => (c[0] as { event_type: string }).event_type
+    );
+    expect(events).toContain('node_failed');
+    expect(store.failWorkflowRun).toHaveBeenCalled();
+  });
+});

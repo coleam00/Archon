@@ -1465,20 +1465,53 @@ export async function workflowRunCommand(
     }
   })();
 
-  // Register cleanup handlers for graceful termination
+  // Register cleanup handlers for graceful termination.
+  //
+  // Guard rails (#1123): a signal must only ever fail THE run this process is
+  // driving, and only while that run is still 'running'. The run id is learned
+  // from the resumable lookup (resume path) or the workflow_started emitter
+  // event (fresh runs, see the subscription below) — never from a
+  // conversation-wide "active run" query, which can match a run driven by
+  // another process (children share parent_conversation_id). When the run has
+  // already transitioned elsewhere — paused at a gate, completed, cancelled —
+  // the handler leaves it alone; see "No Autonomous Lifecycle Mutation Across
+  // Process Boundaries" in CLAUDE.md. The handlers themselves are removed in
+  // the finally below once executeWorkflow returns, so a late signal can never
+  // touch a settled run (and repeated workflowRunCommand calls in one process
+  // don't stack handlers).
+  let ownedRunId: string | undefined = resumable?.id;
   let terminating = false;
   const cleanup = (signal: string): void => {
     if (terminating) return;
     terminating = true;
     getLog().info({ conversationId: conversation.id, signal }, 'workflow.process_terminating');
-    workflowDb
-      .getActiveWorkflowRun(conversation.id)
-      .then(activeRun => {
-        if (activeRun) {
-          return workflowDb.failWorkflowRun(activeRun.id, `Process terminated (${signal})`);
-        }
-        return undefined;
-      })
+    const interruptedRunId = ownedRunId;
+    (async (): Promise<void> => {
+      if (!interruptedRunId) {
+        // Signal before this process created/resumed a run — nothing it owns.
+        // A pre-created 'pending' row is covered by the stale-pending hygiene.
+        getLog().info(
+          { conversationId: conversation.id, signal },
+          'workflow.termination_no_owned_run'
+        );
+        return;
+      }
+      const status = await workflowDb.getWorkflowRunStatus(interruptedRunId);
+      if (status !== 'running') {
+        // Externally transitioned (paused at a new gate, completed, cancelled,
+        // failed) — not this handler's to mutate.
+        getLog().info(
+          { runId: interruptedRunId, status, signal },
+          'workflow.termination_skip_not_running'
+        );
+        return;
+      }
+      // Genuine interrupt of the run this process is driving. failWorkflowRun's
+      // own status='running' CAS closes the read-then-write window: if the
+      // executor commits a gate pause between the read above and this write,
+      // the CAS misses and throws (caught below) — the run stays paused.
+      await workflowDb.failWorkflowRun(interruptedRunId, `Process terminated (${signal})`);
+    })()
       .catch((err: unknown) => {
         const e = err as Error;
         getLog().error(
@@ -1507,25 +1540,34 @@ export async function workflowRunCommand(
         process.exit(1);
       });
   };
-  process.once('SIGTERM', () => {
+  const sigtermHandler = (): void => {
     cleanup('SIGTERM');
-  });
-  process.once('SIGINT', () => {
+  };
+  const sigintHandler = (): void => {
     cleanup('SIGINT');
-  });
+  };
+  process.once('SIGTERM', sigtermHandler);
+  process.once('SIGINT', sigintHandler);
 
   // One-time-per-version notice when the workflow uses unconfigured tier keywords.
   await maybePrintTierNotice(workflow, workingCwd, cliUserId, options.quiet);
 
-  // Subscribe to workflow events for progress rendering on stderr.
+  // Subscribe to workflow events: always registered (even with --quiet) because
+  // the handler also learns the run id this process owns — the signal cleanup
+  // guard above needs it for fresh runs, where the id only exists once
+  // executeWorkflow creates the run and emits workflow_started. --quiet only
+  // gates the progress rendering.
   // subscribeForConversation is pure in-memory registration — cannot throw in practice.
   // If that changes, this should be moved inside the try block to prevent blocking executeWorkflow.
   const { quiet, verbose } = options;
-  const unsubscribe = quiet
-    ? undefined
-    : getWorkflowEventEmitter().subscribeForConversation(conversationId, event => {
-        renderWorkflowEvent(event, verbose ?? false);
-      });
+  const unsubscribe = getWorkflowEventEmitter().subscribeForConversation(conversationId, event => {
+    if (event.type === 'workflow_started' && ownedRunId === undefined) {
+      ownedRunId = event.runId;
+    }
+    if (!quiet) {
+      renderWorkflowEvent(event, verbose ?? false);
+    }
+  });
 
   // Notify Web UI that a workflow is dispatching.
   // Mirrors the orchestrator dispatch message structure (category/segment/workflowDispatch),
@@ -1621,7 +1663,16 @@ export async function workflowRunCommand(
       opts
     );
   } finally {
-    unsubscribe?.();
+    unsubscribe();
+
+    // Deregister the signal handlers now that the run's lifecycle is settled
+    // (paused / completed / failed, or the throw propagating out of this
+    // finally). A signal from here on gets default handling — the destructive
+    // failWorkflowRun cleanup must never fire against a settled run (#1123),
+    // and removal keeps repeated workflowRunCommand calls in one process from
+    // stacking handlers.
+    process.off('SIGTERM', sigtermHandler);
+    process.off('SIGINT', sigintHandler);
 
     // Container teardown (Phase C) — in `finally` so a throw from executeWorkflow
     // BEFORE its own try/catch (malformed config, env resolvers, unknown provider)
