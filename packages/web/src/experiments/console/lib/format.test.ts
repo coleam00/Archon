@@ -1,3 +1,8 @@
+// Pin a non-UTC timezone: under TZ=UTC the buggy pre-ensureUtc behavior
+// (browser-local parsing of naive strings) is indistinguishable from correct
+// UTC parsing, so the suite must run non-UTC to discriminate. UTC+14, no DST.
+process.env.TZ = 'Pacific/Kiritimati';
+
 import { describe, test, expect } from 'bun:test';
 import {
   elapsedSince,
