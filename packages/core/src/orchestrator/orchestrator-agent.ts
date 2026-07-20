@@ -1433,6 +1433,24 @@ export async function handleMessage(
     let cwd: string;
     if (scopedCodebase !== undefined) {
       cwd = conversation.cwd ?? scopedCodebase.default_cwd;
+      // Fail fast when the resolved directory has been removed out from under a
+      // long-lived conversation (cleaned-up worktree, deleted repo dir, reset
+      // volume). Providers pass cwd straight through — Codex hands it to the
+      // native binary as `--cd`, which dies with an opaque
+      // "No such file or directory (os error 2)" (#1170). Mirrors the existsSync
+      // guard /register-project and /update-project already apply.
+      if (!existsSync(cwd)) {
+        getLog().error(
+          { conversationId, codebaseId: scopedCodebase.id, cwd },
+          'orchestrator.cwd_missing'
+        );
+        throw new Error(
+          `Working directory no longer exists: ${cwd}\n\n` +
+            'The project folder or worktree may have been deleted or cleaned up ' +
+            '(e.g. `archon isolation cleanup`, `archon complete`, or a manual removal). ' +
+            'Re-register the project (`/register-project`) or select a different one (`/setproject`).'
+        );
+      }
     } else {
       if (conversation.codebase_id !== null) {
         getLog().warn(
