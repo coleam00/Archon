@@ -4976,6 +4976,15 @@ async function executeWorkflowNode(
   // branch — so getCompletedDagNodeOutputs skips a truly-finished sub-run on resume
   // but re-runs one still blocked on its child.
   const asCompleted = async (outcome: ChildWorkflowOutcome): Promise<NodeExecutionResult> => {
+    if (outcome.output === undefined) {
+      // A completed child with no non-blank terminal output threads '' into
+      // $<node>.output — legal, but indistinguishable downstream from an
+      // intentional empty result, so leave a trace for the author.
+      getLog().warn(
+        { parentRunId: parentRun.id, nodeId: node.id, childRunId: outcome.childRunId },
+        'workflow.subrun_completed_without_output'
+      );
+    }
     const output = outcome.output ?? '';
     await deps.store.createWorkflowEvent({
       workflow_run_id: parentRun.id,
@@ -5007,9 +5016,15 @@ async function executeWorkflowNode(
     };
   };
 
-  // Pause the PARENT "blocked on child" — mirrors executeApprovalNode: pause,
-  // emit, return {completed, ''} WITHOUT node_completed so the node re-runs on the
-  // parent's resume (getCompletedDagNodeOutputs reads only node_completed).
+  // Pause the PARENT "blocked on child" — mirrors executeApprovalNode's PAUSE
+  // primitives: pause, emit, return {completed, ''} WITHOUT node_completed so the
+  // node re-runs on the parent's resume (getCompletedDagNodeOutputs reads only
+  // node_completed). The RESUME side deliberately differs: an approval gate is
+  // resolved externally by the approve handler, while this node re-runs and
+  // re-inspects its child. Also unlike the approval node, no approval_requested
+  // workflow_event row is persisted here — the block reason lives on the run
+  // itself (metadata.approval), and there is no human decision to audit for a
+  // gate that resolves automatically on child completion.
   const pauseParentOnChild = async (childRunId: string): Promise<NodeExecutionResult> => {
     const message =
       `Sub-run \`${node.workflow}\` (run \`${childRunId.slice(0, 8)}\`) is paused awaiting review. ` +
@@ -5095,21 +5110,24 @@ async function executeWorkflowNode(
     if (existing === undefined) {
       return await interpret(await ctx.runChildWorkflow(childArgs));
     }
-    if (existing.status === 'completed') {
-      return await asCompleted(childOutcomeFromRun(existing));
-    }
     if (existing.status === 'failed') {
       // Resume-through-parent recovery (D5/#1764): re-drive the failed child once.
       return await interpret(
         await ctx.runChildWorkflow({ ...childArgs, resumeFailedChild: existing })
       );
     }
-    if (existing.status === 'cancelled') {
-      return { state: 'failed', output: '', error: `Sub-run '${node.workflow}' was cancelled` };
+    if (
+      existing.status === 'paused' ||
+      existing.status === 'running' ||
+      existing.status === 'pending'
+    ) {
+      // Still in progress (awaiting a human or a concurrent run). Re-pause the
+      // parent; NEVER resume a paused child.
+      return await pauseParentOnChild(existing.id);
     }
-    // paused / running / pending — still in progress (awaiting a human or a
-    // concurrent run). Re-pause the parent; NEVER resume a paused child.
-    return await pauseParentOnChild(existing.id);
+    // completed / cancelled — thread the outcome through the same state table a
+    // freshly-run child uses (interpret handles both).
+    return await interpret(childOutcomeFromRun(existing));
   } catch (err) {
     return {
       state: 'failed',
@@ -5727,8 +5745,10 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
 
           // 3f. Workflow (sub-run) node dispatch — starts/re-inspects a child run
           // (#2121 Phase 2). Makes no direct provider call; the closure captured on
-          // ctx.runChildWorkflow drives the child's own executeWorkflow. output_type
-          // sidecar + node_completed are handled by the shared completed-node path.
+          // ctx.runChildWorkflow drives the child's own executeWorkflow. The
+          // output_type sidecar is handled by the shared completed-node path;
+          // node_completed is written inline by executeWorkflowNode itself (see
+          // asCompleted — only on true completion, never on the paused branch).
           if (isWorkflowNode(node)) {
             const output = await executeWorkflowNode(node, ctx);
             return { nodeId: node.id, output };

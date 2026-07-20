@@ -421,12 +421,16 @@ export async function getPausedWorkflowRun(conversationId: string): Promise<Work
  * ignored — they're from crashed or resume-replaced dispatches).
  *
  * When called from a dispatch that already pre-created its own row, pass
- * `excludeId` and `selfStartedAt` so:
+ * `self` (`id` + `startedAt`) so:
  *   1. Self is never returned.
  *   2. If two dispatches both have rows, the deterministic older-wins
  *      tiebreaker `(started_at, id)` ensures both agree on which is "first."
  *      The newer dispatch sees the older row and aborts; the older dispatch
  *      sees nothing.
+ *
+ * `self.excludeRunIds` (#2121 Phase 2) additionally excludes the caller's
+ * ancestor run-id chain: a `workflow:` sub-run shares its parent's checkout, so
+ * the parent's own running/paused row must not count as a lock against the child.
  *
  * Returns the holding row, or null if the path is free.
  */
