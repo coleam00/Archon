@@ -66,6 +66,56 @@ describe('classifyAndFormatError', () => {
         '⚠️ AI usage limit reached (resets 4:50 p.m. (UTC)). Please wait and try again.'
       );
     });
+
+    test('detects "session limit" (Claude subscription 5h window)', () => {
+      const result = classifyAndFormatError(
+        new Error("You've hit your session limit · resets 3am (America/Mexico_City)")
+      );
+      expect(result).toBe(
+        '⚠️ AI usage limit reached (resets 3am (America/Mexico_City)). Please wait and try again.'
+      );
+    });
+
+    test('captures only the first ·-delimited segment when multiple · separators follow', () => {
+      const result = classifyAndFormatError(
+        new Error("You've hit your limit · resets 4:50pm (UTC) · upgrade to increase your limit")
+      );
+      expect(result).toBe(
+        '⚠️ AI usage limit reached (resets 4:50pm (UTC)). Please wait and try again.'
+      );
+    });
+  });
+
+  describe('reset-time fallback without · separator', () => {
+    test('captures a standalone "Resets in ..." clause', () => {
+      const result = classifyAndFormatError(new Error('rate limit exceeded. Resets in 5 minutes'));
+      expect(result).toBe(
+        '⚠️ AI usage limit reached (Resets in 5 minutes). Please wait and try again.'
+      );
+    });
+
+    test('does not capture a clause from "reset" without the plural form', () => {
+      const result = classifyAndFormatError(new Error('usage limit exceeded, reset pending'));
+      expect(result).toBe('⚠️ AI usage limit reached. Please wait and try again.');
+    });
+
+    test('keeps abbreviated periods intact in the fallback capture', () => {
+      const result = classifyAndFormatError(new Error('rate limit hit. Resets 4:50 p.m. (UTC)'));
+      expect(result).toBe(
+        '⚠️ AI usage limit reached (Resets 4:50 p.m. (UTC)). Please wait and try again.'
+      );
+    });
+
+    test('drops the follow-on sentence from the workflow session-limit FATAL shape (#2181)', () => {
+      const result = classifyAndFormatError(
+        new Error(
+          'Claude session limit reached — resets 3:20pm (UTC). Abandon this run and retry after reset.'
+        )
+      );
+      expect(result).toBe(
+        '⚠️ AI usage limit reached (resets 3:20pm (UTC)). Please wait and try again.'
+      );
+    });
   });
 
   describe('Claude OAuth refresh-token errors', () => {
