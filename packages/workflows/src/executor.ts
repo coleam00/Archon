@@ -695,7 +695,25 @@ async function maybeResumeParentRun(
     return;
   }
 
-  const hydrated = await hydrateResumableRun(deps, parent);
+  let hydrated: Awaited<ReturnType<typeof hydrateResumableRun>>;
+  try {
+    hydrated = await hydrateResumableRun(deps, parent);
+  } catch (err) {
+    // Nothing has been mutated yet on a pre-CAS throw (resumeWorkflowRun's CAS is
+    // hydrate's last step; a lost CAS throws WorkflowNotResumableError instead) —
+    // the parent stays 'paused' and manually resumable, so log and stand down.
+    if (err instanceof Error && err.name === 'WorkflowNotResumableError') {
+      // Benign race: a concurrent (manual or duplicate) resume won the CAS and
+      // now owns the parent. Not an error.
+      getLog().info(
+        { parentRunId, childRunId: childRun.id },
+        'workflow.parent_auto_resume_lost_race'
+      );
+    } else {
+      getLog().error({ err: err as Error, parentRunId }, 'workflow.parent_resume_hydrate_failed');
+    }
+    return;
+  }
   if (!hydrated) {
     // A parent paused on a child_workflow gate is always resumable (see the
     // child_workflow branch in hydrateResumableRun), so null here is unexpected.
@@ -711,20 +729,41 @@ async function maybeResumeParentRun(
     { parentRunId, childRunId: childRun.id, childStatus: childRun.status },
     'workflow.parent_auto_resume_started'
   );
-  await executeWorkflow(
-    deps,
-    platform,
-    conversationId,
-    parentCwd,
-    parentWorkflow,
-    parent.user_message ?? '',
-    conversationDbId,
-    {
-      ...hydrated,
-      ...(ancestorRunIds.length > 0 ? { ancestorRunIds } : {}),
-      codebaseId: parent.codebase_id ?? undefined,
-    }
-  );
+  try {
+    await executeWorkflow(
+      deps,
+      platform,
+      conversationId,
+      parentCwd,
+      parentWorkflow,
+      parent.user_message ?? '',
+      conversationDbId,
+      {
+        ...hydrated,
+        ...(ancestorRunIds.length > 0 ? { ancestorRunIds } : {}),
+        codebaseId: parent.codebase_id ?? undefined,
+      }
+    );
+  } catch (err) {
+    // The hydrate CAS above already flipped the parent paused→running, and
+    // executeWorkflow's own failWorkflowRun catch-all doesn't cover its early
+    // setup (config load, env/credential resolution). Without this handler a
+    // throw there would strand the parent at 'running' — a non-terminal status
+    // resumeWorkflow refuses, leaving destructive abandon as the only exit.
+    // Land it in 'failed' instead so it stays resumable.
+    getLog().error(
+      { err: err as Error, parentRunId, childRunId: childRun.id },
+      'workflow.parent_auto_resume_execute_failed'
+    );
+    await deps.store
+      .failWorkflowRun(parentRunId, `Auto-resume after sub-run failed: ${(err as Error).message}`)
+      .catch((failErr: unknown) => {
+        getLog().error(
+          { err: failErr as Error, parentRunId },
+          'workflow.parent_auto_resume_fail_mark_failed'
+        );
+      });
+  }
 }
 
 /**
