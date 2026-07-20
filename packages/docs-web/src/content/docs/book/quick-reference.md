@@ -128,6 +128,7 @@ All nodes share these base fields:
 | `approval` | One of | object | Pause for human review; see [Approval Nodes](/guides/approval-nodes/) |
 | `cancel` | One of | string | Reason string; terminates the run with `cancelled` status (not `failed`). Usually gated with `when:` |
 | `include` | One of | string | Name of another workflow whose nodes are inlined at discovery as a namespaced sub-DAG; see [Reusing a Shared Sub-DAG](/guides/authoring-workflows/#reusing-a-shared-sub-dag-with-include) |
+| `workflow` | One of | string | Name of another workflow run at execution time as a separate governed CHILD run (own run record, gates, artifacts, cost); see [Composing a Governed Sub-Run](/guides/authoring-workflows/#composing-a-governed-sub-run-with-workflow) |
 | `depends_on` | No | string[] | Node IDs that must complete before this node runs |
 | `when` | No | string | Condition expression; node is skipped if false |
 | `trigger_rule` | No | string | Join semantics when multiple upstreams exist (see Trigger Rules) |
@@ -151,6 +152,15 @@ All nodes share these base fields:
 | `runtime` | Yes | `'bun'` \| `'uv'` | Which runtime executes the script. Must match file extension for named scripts (`.ts`/`.js` → bun, `.py` → uv) |
 | `deps` | No | string[] | Python dependencies for `uv run --with`. Ignored for bun (bun auto-installs) |
 | `timeout` | No | number | Hard kill in ms. Default: 120000 (2 min). Same semantics as `bash` timeout |
+
+**Workflow (sub-run)-specific fields** (when `workflow:` is set):
+
+| Field | Required | Type | Description |
+|-------|----------|------|-------------|
+| `input` | No | string | Data string forwarded as the child's `$ARGUMENTS`. Substituted like a `prompt:` body (`$nodeId.output`, workflow variables) |
+| `isolation` | No | `'inherit'` | Only `'inherit'` (shared checkout) is supported; `'worktree'` is reserved and rejected at load time (slice 2) |
+
+`retry` is rejected on `workflow:` nodes, and `workflow:` is rejected inside a `loop_group` body. The child's terminal output threads back as `$nodeId.output`; a child approval gate pauses the whole tree — approve the **child** by run id and the parent auto-resumes.
 
 **Approval-specific fields** (required when `approval:` is set):
 

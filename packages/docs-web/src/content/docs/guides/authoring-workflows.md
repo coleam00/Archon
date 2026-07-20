@@ -937,6 +937,10 @@ sub-pipeline.**
 - **Static target only.** `workflow:` takes a literal workflow name — no
   `workflow: $something`. Self-reference and ancestor cycles (`A` → `B` → `A`) are rejected
   at run time, and the sub-run tree is depth-capped.
+- **One blocking child gate at a time.** Two `workflow:` nodes in the same DAG layer
+  whose children both pause contend for the parent run's single approval slot — the
+  second pause fails its node. Sequence gated sub-runs with `depends_on` until a later
+  slice adds real concurrent gating.
 
 ---
 
