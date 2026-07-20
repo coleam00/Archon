@@ -30,9 +30,7 @@ function runFetch(entryJson: Record<string, unknown>): { output: FetchOutput; st
     if (stdout) {
       try {
         output = JSON.parse(stdout);
-      } catch {
-        // stdout wasn't JSON — return empty default
-      }
+      } catch {}
     }
 
     return { output, stderr, exitCode };
@@ -70,19 +68,14 @@ describe('marketplace-fetch-source: guard for missing sourceUrl/sha', () => {
   });
 
   it('does not trigger guard when entry.json has both sourceUrl and sha', () => {
-    // When both fields are present, the guard should NOT fire.
-    // The script proceeds past the guard to URL parsing and gh api calls.
-    // Since gh api will fail in the test env, we verify the guard didn't
-    // trigger by checking stderr does NOT contain the guard's signature message.
-    const { stderr, output } = runFetch({
-      sourceUrl: 'https://github.com/coleam00/Archon/blob/main/README.md',
+    // Unrecognized URL makes the script stop deterministically at URL validation — no network.
+    const { stderr, exitCode } = runFetch({
+      sourceUrl: 'https://example.com/not-a-github-url',
       sha: 'abc123def456',
     });
     expect(stderr).not.toContain('missing required field');
-    expect(output.files).toHaveLength(0); // no fetch possible in test env
-    // The script proceeds past the guard; gh api errors are expected.
-    expect(output.errors.length).toBeGreaterThan(0);
-    expect(output.errors.some((e) => e.includes('gh api'))).toBe(true);
+    expect(stderr).toContain('Unrecognized sourceUrl format');
+    expect(exitCode).toBe(1);
   });
 });
 
@@ -90,7 +83,6 @@ describe('marketplace-fetch-source: missing entry.json', () => {
   it('exits 1 when entry.json is absent', () => {
     const artifactsDir = mkdtempSync(join(tmpdir(), 'fetch-test-'));
     try {
-      // No entry.json created
       const result = spawnSync('bun', [SCRIPT], {
         env: { ...process.env, ARTIFACTS_DIR: artifactsDir },
         stdio: ['ignore', 'pipe', 'pipe'],
