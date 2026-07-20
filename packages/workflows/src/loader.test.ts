@@ -2893,11 +2893,12 @@ nodes:
       const workflowDir = join(testDir, '.archon', 'workflows');
       await mkdir(workflowDir, { recursive: true });
 
-      // Regression guard: a quoted YAML value like `" my-loop-cmd "` (or one with
-      // a stray trailing newline from awkward block scalars) must not pass parse
-      // with whitespace intact, because downstream `loadCommandPrompt` resolves
-      // the literal filename and would fail at runtime with a confusing
-      // "not found" instead of failing fast at parse with a clearer error.
+      // Parsing NORMALIZES the command name (schema-level trim) rather than
+      // rejecting it: a quoted YAML value like `" my-loop-cmd "` (or one with a
+      // stray trailing newline from awkward block scalars) is stored trimmed,
+      // so downstream `loadCommandPrompt` — which resolves the literal filename
+      // — sees the same name the author meant instead of failing at runtime
+      // with a confusing "not found".
       await writeFile(
         join(workflowDir, 'loop-cmd-whitespace.yaml'),
         `

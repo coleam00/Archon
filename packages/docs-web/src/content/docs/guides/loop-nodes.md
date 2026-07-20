@@ -71,8 +71,9 @@ the executor checks for workflow cancellation.
 - id: my-loop
   loop:
     prompt: "..."           # Inline prompt. Exactly one of `prompt` or `command` is required.
-    command: <name>         # Alternative to `prompt`: command name under .archon/commands/.
-                            # Loaded once at node start; reused for every iteration.
+    # command: <name>       # Alternative to `prompt`: command name under .archon/commands/,
+    #                       # loaded once per run and reused for every iteration.
+    #                       # Never combine with `prompt` — the loader rejects both together.
     until: COMPLETE         # Required. Completion signal string.
     max_iterations: 10      # Required. Hard limit — node fails if exceeded.
     fresh_context: true     # Optional. Default: false.
@@ -125,10 +126,12 @@ are rejected at parse time. Static workflow validation also flags a
 "create `.archon/commands/<name>.md`" guidance), the same way it does for
 `command:` nodes.
 
-The file is **read once when the loop node starts** and the loaded text is
-reused for every iteration. Editing the file mid-run does not affect the
-remaining iterations of that run. A missing, empty, or unreadable target
-fails the node immediately with an actionable error — no iterations execute.
+The file is **read once per run** — loaded when the loop node starts and
+reused for every iteration, including across interactive-gate pauses: the
+loaded text is persisted with the pause, so editing or deleting the file while
+a run sits paused neither changes nor breaks the resumed loop's prompt. A
+missing, empty, or unreadable target fails the node immediately with an
+actionable error — no iterations execute.
 
 Once loaded, the text behaves identically to an inline `prompt`: all the
 variable substitution above applies unchanged (including `$LOOP_PREV_OUTPUT`
@@ -141,7 +144,7 @@ and `$LOOP_USER_INPUT`), as do all the iteration semantics (`until`,
   model: opus
   depends_on: [generate-prd]
   loop:
-    command: archon-ralph-implement   # loads .archon/commands/archon-ralph-implement.md
+    command: archon-ralph-implement   # resolved repo → home → bundled (see precedence above)
     until: COMPLETE
     max_iterations: 15
     fresh_context: true
