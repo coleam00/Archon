@@ -659,7 +659,8 @@ describe('classifyError', () => {
     expect(classifyError(new Error('unauthorized: exited with code 1'))).toBe('FATAL');
   });
 
-  it('classifies session-limit errors as FATAL (never retried) — #2177', () => {
+  it('classifies session-limit and usage-limit errors as FATAL (never retried) — #2177', () => {
+    // Verbatim node_failed payload from the issue report — regression pin.
     expect(
       classifyError(
         new Error(
@@ -667,20 +668,9 @@ describe('classifyError', () => {
         )
       )
     ).toBe('FATAL');
-    expect(
-      classifyError(
-        new Error(
-          'Claude session limit reached — abandon this run and retry when the session resets.'
-        )
-      )
-    ).toBe('FATAL');
-  });
-
-  it('classifies usage-limit and credit-exhaustion errors as FATAL', () => {
+    // CLI-only quota string: not producible by detectCreditExhaustion, so the
+    // drift guard below cannot cover it.
     expect(classifyError(new Error('Claude AI usage limit reached|1751234567'))).toBe('FATAL');
-    expect(classifyError(new Error('Credit exhaustion detected — resume when credits reset'))).toBe(
-      'FATAL'
-    );
   });
 
   it('session-limit stays FATAL even when the message also matches a TRANSIENT pattern', () => {
