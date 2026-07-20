@@ -140,10 +140,22 @@ jobs:
           # container teardown failed — either way the run did not cleanly finish.
           bun run cli workflow run e2e-container-smoke --folder --container --cwd "$SCRATCH" "container smoke"
 
-          # Host untouched: Phase B discards the overlay, so the marker the run
-          # wrote into the workspace must NOT exist on the host folder.
+          # Phase C (#2160): a container run that produced changes ends PAUSED at
+          # the approval-gated write-back, with its container suspended and KEPT
+          # (paused runs are resumable by contract — that is not a leak). Reject
+          # the gate to discard the overlay and destroy the container — the
+          # Phase B semantic this smoke asserts. Guard on paused: a run with no
+          # changes finalizes without a gate.
+          RUN_ID="$(bun run cli workflow runs --status paused --limit 1 --all --json | jq -r '.runs[0].id // empty')"
+          if [ -n "$RUN_ID" ]; then
+            echo "rejecting write-back gate on paused run $RUN_ID (discard overlay)"
+            bun run cli workflow reject "$RUN_ID" "e2e smoke: discard overlay"
+          fi
+
+          # Host untouched: the rejected write-back discards the overlay, so the
+          # marker the run wrote into the workspace must NOT exist on the host.
           if [ -f "$SCRATCH/container-smoke-overlay-marker.txt" ]; then
-            echo "FAIL: overlay write leaked to the host folder (Phase B must discard the overlay)"; exit 1
+            echo "FAIL: overlay write leaked to the host folder (rejected write-back must discard)"; exit 1
           fi
           echo "PASS: host folder unchanged after the container run"
 
