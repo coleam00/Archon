@@ -746,3 +746,93 @@ describe('validateWorkflowResources — bash double-quote lint', () => {
     expect(warnings[0].message).toContain('double-quoting');
   });
 });
+
+// =============================================================================
+// validateWorkflowResources — skills search roots (#2178)
+// =============================================================================
+
+describe('validateWorkflowResources — skills search roots', () => {
+  // The validator must accept skills anywhere the runtime resolver
+  // (skillSearchRoots in @archon/providers) would find them: .agents/skills/
+  // and .claude/skills/, at both project (cwd) and user (HOME) level.
+  let originalHome: string | undefined;
+  let fakeHome: string;
+
+  beforeEach(async () => {
+    originalHome = process.env.HOME;
+    // Point HOME at a temp dir so real user-level skills can't leak in.
+    fakeHome = await mkdtemp(join(tmpdir(), 'validator-skills-home-'));
+    process.env.HOME = fakeHome;
+  });
+
+  afterEach(async () => {
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    await rm(fakeHome, { recursive: true, force: true });
+  });
+
+  async function stageSkill(
+    base: string,
+    subdir: '.agents' | '.claude',
+    name: string
+  ): Promise<void> {
+    const dir = join(base, subdir, 'skills', name);
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'SKILL.md'), `# ${name}\n`);
+  }
+
+  function skillsWorkflow(skillName: string): WorkflowDefinition {
+    return makeWorkflow(
+      'test',
+      [{ id: 'step1', prompt: 'do work', skills: [skillName] } as unknown as DagNode],
+      'claude'
+    );
+  }
+
+  function missingSkillWarnings(issues: Awaited<ReturnType<typeof validateWorkflowResources>>) {
+    return issues.filter(
+      i => i.level === 'warning' && i.field === 'skills' && i.message.includes('not found')
+    );
+  }
+
+  test('no warning for a skill under <cwd>/.agents/skills/', async () => {
+    await stageSkill(tmpDir, '.agents', 'my-skill');
+    const issues = await validateWorkflowResources(skillsWorkflow('my-skill'), tmpDir);
+    expect(missingSkillWarnings(issues)).toHaveLength(0);
+  });
+
+  test('no warning for a skill under <cwd>/.claude/skills/', async () => {
+    await stageSkill(tmpDir, '.claude', 'my-skill');
+    const issues = await validateWorkflowResources(skillsWorkflow('my-skill'), tmpDir);
+    expect(missingSkillWarnings(issues)).toHaveLength(0);
+  });
+
+  test('no warning for a skill under ~/.agents/skills/', async () => {
+    await stageSkill(fakeHome, '.agents', 'home-skill');
+    const issues = await validateWorkflowResources(skillsWorkflow('home-skill'), tmpDir);
+    expect(missingSkillWarnings(issues)).toHaveLength(0);
+  });
+
+  test('no warning for a skill under ~/.claude/skills/', async () => {
+    await stageSkill(fakeHome, '.claude', 'home-skill');
+    const issues = await validateWorkflowResources(skillsWorkflow('home-skill'), tmpDir);
+    expect(missingSkillWarnings(issues)).toHaveLength(0);
+  });
+
+  test('warning when the skill exists in none of the search roots', async () => {
+    const issues = await validateWorkflowResources(skillsWorkflow('nonexistent-skill'), tmpDir);
+    const warnings = missingSkillWarnings(issues);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].nodeId).toBe('step1');
+    expect(warnings[0].message).toContain("Skill 'nonexistent-skill' not found");
+    expect(warnings[0].message).toContain('.agents/skills/');
+    expect(warnings[0].hint).toContain('.agents/skills/nonexistent-skill/SKILL.md');
+  });
+
+  test('skill directory without SKILL.md still warns', async () => {
+    // An empty directory is not a valid skill — the resolver requires SKILL.md.
+    await mkdir(join(tmpDir, '.agents', 'skills', 'empty-skill'), { recursive: true });
+    const issues = await validateWorkflowResources(skillsWorkflow('empty-skill'), tmpDir);
+    expect(missingSkillWarnings(issues)).toHaveLength(1);
+  });
+});

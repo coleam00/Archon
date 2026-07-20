@@ -65,7 +65,7 @@ export {
 export { resolveClaudeBinaryPath, fileExists as claudeFileExists } from './claude/binary-resolver';
 
 // Skills resolution
-export { skillSearchRoots, resolveSkillDirectories } from './shared/skills';
+export { skillSearchRoots } from './shared/skills';
 
 // Community providers
 export {
