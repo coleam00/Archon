@@ -314,6 +314,7 @@ import {
   parseOrchestratorCommands,
   handleMessage,
   resolveChatModelRequest,
+  resolveTitleRequest,
 } from './orchestrator-agent';
 import { buildAiProfile } from '@archon/workflows/model-validation';
 
@@ -4023,5 +4024,94 @@ describe('resolveChatModelRequest', () => {
       { assistants: { claude: {}, codex: {} }, tiers }
     );
     expect(req.model).toBe('sonnet');
+  });
+});
+
+// ─── resolveTitleRequest (#1855): small-tier title generation ────────────────
+
+describe('resolveTitleRequest', () => {
+  beforeEach(() => {
+    mockLoadConfig.mockReset();
+    mockLoadConfig.mockImplementation(() =>
+      Promise.resolve({
+        assistants: { claude: {}, codex: { model: 'gpt-5.3-codex' } },
+        envVars: {},
+      })
+    );
+    mockGetUserAiPrefsDb.mockReset();
+    mockGetUserAiPrefsDb.mockImplementation(async () => ({}));
+  });
+
+  test('resolves the built-in codex small tier instead of the raw config-default model', async () => {
+    const req = await resolveTitleRequest('codex');
+
+    expect(req.provider).toBe('codex');
+    // Built-in codex small tier — NOT the (ChatGPT-plan-unsupported) assistants default.
+    expect(req.options.model).toBe('gpt-5.5');
+    // Preset effort is routed to the Codex reasoning-effort field.
+    expect(req.options.assistantConfig).toEqual({
+      model: 'gpt-5.3-codex',
+      modelReasoningEffort: 'minimal',
+    });
+  });
+
+  test('a configured small tier wins (including a provider switch)', async () => {
+    mockLoadConfig.mockResolvedValueOnce({
+      assistants: { claude: {}, codex: { model: 'gpt-5.3-codex' } },
+      tiers: { small: { provider: 'claude', model: 'haiku' } },
+      envVars: {},
+    });
+
+    const req = await resolveTitleRequest('codex');
+
+    expect(req.provider).toBe('claude');
+    expect(req.options.model).toBe('haiku');
+    expect(req.options.assistantConfig).toEqual({});
+  });
+
+  test('per-user small tier participates when a userId is available', async () => {
+    mockGetUserAiPrefsDb.mockResolvedValueOnce({
+      tiers: { small: { provider: 'codex', model: 'gpt-5.4-mini' } },
+    });
+
+    const req = await resolveTitleRequest('codex', 'user-1');
+
+    expect(mockGetUserAiPrefsDb).toHaveBeenCalledWith('user-1');
+    expect(req.provider).toBe('codex');
+    expect(req.options.model).toBe('gpt-5.4-mini');
+  });
+
+  test('per-user prefs are NOT consulted without a userId', async () => {
+    await resolveTitleRequest('codex');
+    expect(mockGetUserAiPrefsDb).not.toHaveBeenCalled();
+  });
+
+  test('per-user default provider rebases the built-in tier defaults', async () => {
+    mockGetUserAiPrefsDb.mockResolvedValueOnce({ defaultProvider: 'claude' });
+
+    const req = await resolveTitleRequest('codex', 'user-1');
+
+    expect(req.provider).toBe('claude');
+    expect(req.options.model).toBe('haiku');
+  });
+
+  test('structurally invalid stored prefs degrade to config-only resolution', async () => {
+    // Missing '@' prefix makes buildAiProfile throw for the user layer.
+    mockGetUserAiPrefsDb.mockResolvedValueOnce({
+      aliases: { fast: { provider: 'codex', model: 'gpt-5.5' } },
+    });
+
+    const req = await resolveTitleRequest('codex', 'user-1');
+
+    expect(req.provider).toBe('codex');
+    expect(req.options.model).toBe('gpt-5.5');
+  });
+
+  test('NEVER throws — config load failure falls back to the bare legacy request', async () => {
+    mockLoadConfig.mockRejectedValueOnce(new Error('config exploded'));
+
+    const req = await resolveTitleRequest('codex', 'user-1');
+
+    expect(req).toEqual({ provider: 'codex', options: {} });
   });
 });

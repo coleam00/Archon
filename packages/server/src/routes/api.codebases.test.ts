@@ -58,6 +58,7 @@ mock.module('@archon/core', () => ({
   },
   getArchonWorkspacesPath: () => '/tmp/.archon/workspaces',
   generateAndSetTitle: mock(async () => {}),
+  resolveTitleRequest: mock(async () => ({ provider: 'claude', options: {} })),
   createLogger: () => ({
     fatal: mock(() => undefined),
     error: mock(() => undefined),

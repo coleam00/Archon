@@ -198,6 +198,71 @@ export function resolveChatModelRequest(
   return request;
 }
 
+/** A resolved title-generation request: which provider to call, with fully resolved options. */
+export interface TitleRequest {
+  provider: string;
+  options: SendQueryOptions;
+}
+
+/**
+ * Resolve provider + request options for conversation-title generation (#1855).
+ *
+ * Server entry points that fire title generation outside a full chat turn
+ * (create-with-message, web workflow run) resolve the `small` tier here —
+ * config tiers plus per-user prefs when a userId is available — instead of
+ * letting the provider fall through to its raw config-default model, which
+ * the active account may not support (e.g. `gpt-5.3-codex` on ChatGPT-plan
+ * Codex accounts). Mirrors the chat path's title resolution in
+ * `handleMessage` (#1873), which keeps its own inline resolution to reuse
+ * the already-loaded config and profile.
+ *
+ * NEVER THROWS — degrades to `{ provider: fallbackProvider, options: {} }`
+ * (the legacy behavior) so fire-and-forget callers stay safe.
+ */
+export async function resolveTitleRequest(
+  fallbackProvider: string,
+  userId?: string
+): Promise<TitleRequest> {
+  try {
+    const config = await loadConfig();
+    const userAiPrefs = userId ? await resolveUserAiPrefsForChat(userId) : {};
+    let configuredProviderKey = userAiPrefs.defaultProvider ?? fallbackProvider;
+    let aiProfile: ReturnType<typeof buildAiProfile>;
+    try {
+      aiProfile = buildAiProfile(configuredProviderKey, {
+        repoTiers: config.tiers,
+        repoAliases: config.aliases,
+        userTiers: userAiPrefs.tiers,
+        userAliases: userAiPrefs.aliases,
+      });
+    } catch (profileErr) {
+      // Structurally invalid STORED prefs must not break title generation —
+      // degrade to config-only (mirrors the chat path in handleMessage).
+      getLog().warn({ err: profileErr as Error, userId }, 'orchestrator.title_prefs_invalid');
+      configuredProviderKey = fallbackProvider;
+      aiProfile = buildAiProfile(configuredProviderKey, {
+        repoTiers: config.tiers,
+        repoAliases: config.aliases,
+      });
+    }
+    const titleRequest = resolveModelRequest(aiProfile, 'small', configuredProviderKey);
+    const options: SendQueryOptions = {
+      model: titleRequest.model,
+      assistantConfig: { ...(config.assistants[titleRequest.provider] ?? {}) },
+    };
+    if (titleRequest.preset) {
+      applyPresetToRequestOptions(titleRequest.provider, titleRequest.preset, options);
+    }
+    return { provider: titleRequest.provider, options };
+  } catch (err) {
+    getLog().warn(
+      { err: err as Error, fallbackProvider },
+      'orchestrator.title_request_resolve_failed'
+    );
+    return { provider: fallbackProvider, options: {} };
+  }
+}
+
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 export interface WorkflowInvocation {

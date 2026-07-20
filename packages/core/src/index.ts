@@ -79,7 +79,8 @@ export * as isolationOperations from './operations/isolation-operations';
 // =============================================================================
 // Orchestrator
 // =============================================================================
-export { handleMessage } from './orchestrator/orchestrator-agent';
+export { handleMessage, resolveTitleRequest } from './orchestrator/orchestrator-agent';
+export type { TitleRequest } from './orchestrator/orchestrator-agent';
 export {
   buildOrchestratorPrompt,
   buildProjectScopedPrompt,

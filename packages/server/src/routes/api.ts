@@ -31,6 +31,7 @@ import {
   registerFolder,
   ConversationNotFoundError,
   generateAndSetTitle,
+  resolveTitleRequest,
   isPerUserGitHubEnabled,
   loadDeviceFlowConfig,
   startDeviceFlow,
@@ -2378,13 +2379,21 @@ export function registerApiRoutes(
         const placeholderTitle = message.length > 60 ? message.slice(0, 60) + '...' : message;
         await conversationDb.updateConversationTitle(conversation.id, placeholderTitle);
 
-        // Generate proper AI title for non-command messages (fire-and-forget, overwrites placeholder)
+        // Generate proper AI title for non-command messages (fire-and-forget, overwrites placeholder).
+        // Resolve the `small` tier (config tiers + per-user prefs) instead of the raw
+        // assistant default — the config-default Codex model may not be usable on the
+        // active account (e.g. ChatGPT-plan accounts, #1855). Both calls never throw.
         if (!message.startsWith('/')) {
-          void generateAndSetTitle(
-            conversation.id,
-            message,
-            conversation.ai_assistant_type,
-            getArchonWorkspacesPath()
+          void resolveTitleRequest(conversation.ai_assistant_type, userId).then(titleRequest =>
+            generateAndSetTitle(
+              conversation.id,
+              message,
+              titleRequest.provider,
+              getArchonWorkspacesPath(),
+              undefined,
+              titleRequest.options.assistantConfig,
+              titleRequest.options
+            )
           );
         }
 
@@ -3057,12 +3066,18 @@ export function registerApiRoutes(
         }
         webAdapter.setConversationDbId(conversationId, conv.id);
         if (!conv.title) {
-          void generateAndSetTitle(
-            conv.id,
-            message,
-            conv.ai_assistant_type,
-            getArchonWorkspacesPath(),
-            workflowName
+          // Resolve the `small` tier (config tiers + per-user prefs) instead of the raw
+          // assistant default (#1855). Both calls never throw.
+          void resolveTitleRequest(conv.ai_assistant_type, userId).then(titleRequest =>
+            generateAndSetTitle(
+              conv.id,
+              message,
+              titleRequest.provider,
+              getArchonWorkspacesPath(),
+              workflowName,
+              titleRequest.options.assistantConfig,
+              titleRequest.options
+            )
           );
         }
       }

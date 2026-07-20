@@ -21,7 +21,11 @@ const mockFindConversationByPlatformId = mock(
 const mockSoftDeleteConversation = mock(async (_id: string) => {});
 const mockUpdateConversationTitle = mock(async (_id: string, _title: string) => {});
 
-const mockGenerateAndSetTitle = mock(async () => {});
+const mockGenerateAndSetTitle = mock(async (..._args: unknown[]) => {});
+const mockResolveTitleRequest = mock(async () => ({
+  provider: 'claude',
+  options: {} as Record<string, unknown>,
+}));
 mock.module('@archon/core', () => ({
   handleMessage: mock(async () => {}),
   getDatabaseType: () => 'sqlite',
@@ -40,6 +44,7 @@ mock.module('@archon/core', () => ({
     }
   },
   generateAndSetTitle: mockGenerateAndSetTitle,
+  resolveTitleRequest: mockResolveTitleRequest,
   getArchonWorkspacesPath: () => '/tmp/.archon/workspaces',
   createLogger: () => ({
     fatal: mock(() => undefined),
@@ -389,7 +394,32 @@ describe('POST /api/conversations with message (atomic create+send)', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message: 'help me debug this function' }),
     });
+    // Title generation is chained behind resolveTitleRequest — flush microtasks.
+    await new Promise(resolve => setTimeout(resolve, 0));
     expect(mockGenerateAndSetTitle.mock.calls.length).toBeGreaterThan(callsBefore);
+  });
+
+  test('forwards the resolved small-tier provider and options to title generation (#1855)', async () => {
+    const titleOptions = {
+      model: 'gpt-5.5',
+      assistantConfig: { modelReasoningEffort: 'minimal' },
+    };
+    mockResolveTitleRequest.mockResolvedValueOnce({ provider: 'codex', options: titleOptions });
+
+    const app = new OpenAPIHono({ defaultHook: validationErrorHook });
+    registerApiRoutes(app, mockWebAdapter, mockLockManager);
+
+    await app.request('/api/conversations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: 'summarize this repo' }),
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const lastCall = mockGenerateAndSetTitle.mock.calls.at(-1);
+    expect(lastCall?.[2]).toBe('codex'); // resolved provider, not the raw assistant type
+    expect(lastCall?.[5]).toEqual(titleOptions.assistantConfig);
+    expect(lastCall?.[6]).toEqual(titleOptions);
   });
 
   test('skips title generation for slash commands', async () => {
