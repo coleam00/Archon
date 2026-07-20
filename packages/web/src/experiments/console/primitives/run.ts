@@ -19,12 +19,9 @@ export interface Run {
    */
   conversationPlatformId: string | null;
   /**
-   * Platform id of the WORKER conversation for chat-dispatched runs. The
-   * getRun route deliberately splits the pointer: CLI runs get
-   * `conversation_platform_id`, web/chat-dispatched runs (parent conversation
-   * set) get `worker_platform_id` instead — and the worker conversation is
-   * where the run's messages live. Use runMessageConversationId() to pick
-   * the message source (#2048).
+   * Platform id of the WORKER conversation for chat-dispatched (web) runs —
+   * where a chat-dispatched run's messages actually live. See
+   * runMessageConversationId() for how CLI vs. web runs are picked (#2048).
    */
   workerPlatformId: string | null;
   workflow: string;
@@ -120,10 +117,11 @@ function readCost(meta: Record<string, unknown> | undefined): number | null {
  * `/api/conversations/:id/messages` route accepts. CLI runs expose it as
  * `conversationPlatformId`; chat-dispatched (web) runs only expose the worker
  * conversation as `workerPlatformId`, which is where their agent output is
- * persisted (#2048). Null for list-sourced rows (neither field is present),
- * so message fetching stays off there.
+ * persisted (#2048). Null for list-sourced rows (neither field is present)
+ * and for a run that hasn't loaded yet, so message fetching stays off there.
  */
-export function runMessageConversationId(run: Run): string | null {
+export function runMessageConversationId(run: Run | undefined): string | null {
+  if (run === undefined) return null;
   return run.conversationPlatformId ?? run.workerPlatformId;
 }
 

@@ -147,8 +147,7 @@ export function RunDetailPage(): ReactElement {
   // conversationPlatformId; chat-dispatched runs only expose the worker
   // conversation (workerPlatformId), which holds their messages (#2048). The
   // helper picks whichever is present.
-  const conversationPlatformId =
-    detail?.run !== undefined ? runMessageConversationId(detail.run) : null;
+  const conversationPlatformId = runMessageConversationId(detail?.run);
 
   const { data: messages } = useEntity<Message[]>(
     conversationPlatformId !== null

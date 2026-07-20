@@ -135,6 +135,10 @@ describe('runMessageConversationId', () => {
     const r = toRun(raw({ id: 'r1', workflow_name: 'plan', status: 'running' }));
     expect(runMessageConversationId(r)).toBeNull();
   });
+
+  test('not-yet-loaded run (undefined) → null', () => {
+    expect(runMessageConversationId(undefined)).toBeNull();
+  });
 });
 
 describe('toRun — cost', () => {
