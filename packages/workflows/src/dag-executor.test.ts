@@ -6925,14 +6925,13 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
     });
 
     it('applies $LOOP_PREV_OUTPUT and $LOOP_USER_INPUT substitution to command-loaded text', async () => {
-      // Spec acceptance criterion: "All loop variable substitution applies to
-      // command-loaded prompt text identically to inline prompt text." We
-      // embed both `$LOOP_PREV_OUTPUT` and `$LOOP_USER_INPUT` inside the
-      // command file body and assert the prompt actually sent to the AI on
-      // each iteration substitutes them the same way the inline-prompt tests
-      // already verify for `loop.prompt`. The body itself must appear in the
-      // sent prompt — proof the file contents (not the YAML node body) flow
-      // through `substituteWorkflowVariables`.
+      // Loop variable substitution applies to command-loaded prompt text
+      // identically to inline prompt text: both `$LOOP_PREV_OUTPUT` and
+      // `$LOOP_USER_INPUT` are embedded in the command file body, and the
+      // prompt actually sent to the AI must substitute them the same way the
+      // inline-prompt tests verify for `loop.prompt`. The body itself must
+      // appear in the sent prompt — proof the file contents (not the YAML
+      // node body) flow through `substituteWorkflowVariables`.
       await writeFile(
         join(testDir, '.archon', 'commands', 'subst-loop.md'),
         'Cmd-file body. PREV=<<$LOOP_PREV_OUTPUT>> USER=<<$LOOP_USER_INPUT>>'
