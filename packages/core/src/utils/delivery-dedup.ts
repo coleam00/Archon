@@ -1,18 +1,10 @@
 /**
- * Webhook Delivery Deduplicator
- *
  * Bounded, TTL-based first-seen cache for webhook idempotency keys.
  * Forges can deliver the same logical event more than once: dual
  * subscriptions (repo webhook + App webhook produce different delivery
  * GUIDs for one comment), load-balancer double-forwards, and manual
  * redeliveries. Without ingest dedup, a duplicate delivery queues a
- * byte-identical second workflow run behind the first (#1951).
- *
- * `seen(key)` returns false the first time a key appears within the TTL
- * window and true on repeats, so callers drop the repeat. Entries expire
- * after the TTL (a deliberate redelivery hours later should run again)
- * and the cache evicts oldest-first past a max size, so memory stays
- * bounded regardless of webhook volume.
+ * byte-identical second workflow run behind the first.
  */
 
 import { createLogger } from '@archon/paths';
@@ -24,14 +16,10 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
-/** Default time window in which a repeated key is treated as a duplicate */
 const DEFAULT_TTL_MS = 10 * 60 * 1000; // 10 minutes
-
-/** Default cap on tracked keys; oldest entries are evicted past this */
 const DEFAULT_MAX_ENTRIES = 10_000;
 
 export class DeliveryDeduplicator {
-  /** Insertion-ordered map of key -> first-seen timestamp (ms) */
   private entries: Map<string, number>;
   private ttlMs: number;
   private maxEntries: number;
@@ -84,6 +72,8 @@ export class DeliveryDeduplicator {
    * Drop expired entries from the front of the insertion order, then enforce
    * the max-size cap. Map iteration order is insertion order and timestamps
    * are monotonically inserted, so expired entries are always at the front.
+   * That invariant holds because seen() short-circuits on a fresh entry —
+   * only stale or new keys are (re)inserted, always with the current time.
    */
   private prune(now: number): void {
     for (const [key, firstSeen] of this.entries) {

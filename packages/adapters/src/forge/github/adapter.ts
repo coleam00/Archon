@@ -70,7 +70,7 @@ export class GitHubAdapter implements IPlatformAdapter {
   /**
    * Ingest idempotency: drops repeat deliveries of one logical comment event
    * (dual repo+App subscriptions, LB double-forwards, redeliveries) before
-   * they reach the lock manager, which orders but does not dedup (#1951).
+   * they reach the lock manager, which orders but does not dedup.
    */
   private readonly deliveryDedup = new DeliveryDeduplicator();
   private readonly retryDelayFn: (attempt: number) => number;
@@ -996,28 +996,21 @@ ${userComment}`;
     // 5. Check @mention
     if (!this.hasMention(comment)) return;
 
-    // 5a. Ingest idempotency. Key on the comment's identity (id + updated_at)
-    // rather than the delivery GUID: dual subscriptions (repo webhook + App
-    // webhook) deliver the same comment under different GUIDs, so GUID-only
-    // dedup misses the common duplicate source. An edited comment gets a new
-    // updated_at and forms a new key, so edit re-triggers still run. Both
-    // fields are required — keying on id alone would dedup an edit against
-    // the original. Falls back to the delivery GUID when either is absent.
+    // 5a. Ingest idempotency. Key on comment identity (id + updated_at), not
+    // the delivery GUID: dual subscriptions (repo + App webhooks) deliver the
+    // same comment under different GUIDs. Both fields required — id alone
+    // would dedup an edit against the original. GUID is the fallback.
     const dedupKey =
       event.comment?.id !== undefined && event.comment.updated_at
         ? `comment:${owner}/${repo}#${String(number)}:${String(event.comment.id)}:${event.comment.updated_at}`
         : deliveryId
           ? `delivery:${deliveryId}`
           : undefined;
-    // seen() marks the key on first sight, before the downstream work below.
-    // That is deliberate: the duplicates this guards against are dual
-    // subscriptions delivering the same comment near-simultaneously, so the
-    // check must claim the key before either delivery finishes processing.
-    // Marking only after success would let both concurrent deliveries pass the
-    // check first and double-process. The tradeoff is that a redelivery of a
-    // comment whose first processing threw within the TTL window is dropped;
-    // that is acceptable here since the route treats webhooks as
-    // fire-and-forget and failures are logged rather than retried.
+    // seen() claims the key BEFORE the downstream work: dual-subscription
+    // duplicates arrive near-simultaneously, so marking only after success
+    // would let both pass and double-process. Tradeoff: a redelivery whose
+    // first attempt failed within the TTL is dropped — acceptable for this
+    // fire-and-forget route, where failures are logged rather than retried.
     if (dedupKey && this.deliveryDedup.seen(dedupKey)) {
       getLog().info(
         { eventType, owner, repo, number, deliveryId },

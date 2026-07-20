@@ -21,11 +21,11 @@ export interface WebhookEvent {
     deletions?: number;
   };
   comment?: {
-    /** GitHub's stable comment id — same across duplicate deliveries of one comment */
+    /** GitHub's numeric comment id */
     id?: number;
     body: string;
     user: { login: string };
-    /** Bumped on edit, so an edited comment forms a new idempotency key */
+    /** ISO timestamp of the comment's last update; GitHub bumps it on edit */
     updated_at?: string;
   };
   repository: {
