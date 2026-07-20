@@ -287,6 +287,10 @@ describe('workflows database', () => {
       // SQLite would keep a stale value from a previous interactive-loop gate).
       expect(payload.approval.completionSignaled).toBeNull();
       expect(payload.approval.signaledOutput).toBeNull();
+      // commandSnapshot (command-backed interactive loops) follows the same
+      // rule — a stale snapshot from a prior loop gate must never survive
+      // into an unrelated pause.
+      expect(payload.approval.commandSnapshot).toBeNull();
     });
 
     test('preserves completionSignaled/signaledOutput when the gate provides them (#2074)', async () => {
@@ -299,6 +303,7 @@ describe('workflows database', () => {
         iteration: 1,
         completionSignaled: true,
         signaledOutput: 'REPORT',
+        commandSnapshot: 'Loaded command body',
       });
 
       const [, params] = mockQuery.mock.calls[0] as [string, unknown[]];
@@ -307,6 +312,7 @@ describe('workflows database', () => {
       };
       expect(payload.approval.completionSignaled).toBe(true);
       expect(payload.approval.signaledOutput).toBe('REPORT');
+      expect(payload.approval.commandSnapshot).toBe('Loaded command body');
       expect(payload.approval.resolved).toBeNull();
     });
 

@@ -894,6 +894,7 @@ export async function pauseWorkflowRun(
             iteration: approvalContext.iteration ?? null,
             sessionId: approvalContext.sessionId ?? null,
             sessionProvider: approvalContext.sessionProvider ?? null,
+            commandSnapshot: approvalContext.commandSnapshot ?? null,
           },
           // Fold caller-supplied run-level metadata (e.g. `pending_writeback`) into the
           // SAME atomic write so there is no window where the run is paused without it (M3).

@@ -194,6 +194,16 @@ export interface ApprovalContext {
    * downstream `$nodeId.output` refs. Only set when completionSignaled is true; null otherwise.
    */
   signaledOutput?: string | null;
+  /**
+   * Interactive-loop only. Read-once snapshot of a command-backed loop's
+   * (`loop.command`) loaded prompt body, persisted at gate pause so the resumed
+   * invocation reuses the exact text the run started with — a command file
+   * edited or deleted while the run sat paused cannot change or break the
+   * running loop's prompt. Null for prompt-based loops (explicit-null pause
+   * convention, same as `sessionId`). Absent on runs paused by builds that
+   * predate this field — the resume path then falls back to re-reading the file.
+   */
+  commandSnapshot?: string | null;
 }
 
 /**
