@@ -22,6 +22,7 @@ import {
   isScriptNode,
   isBashNode,
   isApprovalContext,
+  isRunBlockedOnChild,
 } from './schemas';
 import { executeDagWorkflow, childOutcomeFromRun } from './dag-executor';
 import type { RunChildWorkflowArgs, ChildWorkflowOutcome } from './dag-executor';
@@ -475,6 +476,36 @@ export async function hydrateResumableRun(
 /** Depth cap on the `workflow:` sub-run tree (D9). A node nested deeper fails fast. */
 const CHILD_WORKFLOW_DEPTH_CAP = 5;
 
+/** Safety bound on the descendant walk (guards a corrupted run tree). */
+const MAX_DESCENDANT_RUNS = 64;
+
+/**
+ * Collect the transitive descendant run ids of `rootId` via a bounded downward walk
+ * of `parent_run_id` (#2121 Phase 2). Used to exclude a run's own sub-run children
+ * from its path-lock: they share the checkout by design, so a parent resumed while
+ * still blocked on a paused child must not self-cancel against that child. Throws
+ * are the caller's to handle (it fails closed).
+ */
+async function gatherDescendantRunIds(deps: WorkflowDeps, rootId: string): Promise<string[]> {
+  const out: string[] = [];
+  const queue: string[] = [rootId];
+  const seen = new Set<string>([rootId]);
+  let processed = 0;
+  while (queue.length > 0 && processed < MAX_DESCENDANT_RUNS) {
+    const id = queue.shift();
+    if (id === undefined) break;
+    processed++;
+    const children = await deps.store.findChildRuns(id);
+    for (const c of children) {
+      if (seen.has(c.id)) continue;
+      seen.add(c.id);
+      out.push(c.id);
+      queue.push(c.id);
+    }
+  }
+  return out;
+}
+
 /**
  * Start (or resume a failed) child workflow run in-process for a `workflow:` node
  * (#2121 Phase 2). Reuses the FULL executeWorkflow lifecycle for the child —
@@ -507,33 +538,18 @@ async function runChildWorkflow(
     resumeFailedChild,
   } = args;
 
-  // 1. Cycle guard + depth cap (D9). The child's ancestor chain is the parent plus
-  //    the parent's ancestors; a target name already in the chain is a cycle.
-  let ancestry: WorkflowRun[];
-  try {
-    ancestry = [parentRun, ...(await deps.store.getRunAncestry(parentRun.id))];
-  } catch (err) {
-    return {
-      childRunId: '',
-      status: 'failed',
-      error: `Failed to resolve run ancestry for sub-run guard: ${(err as Error).message}`,
-    };
-  }
-  if (ancestry.some(a => a.workflow_name === childWorkflowName)) {
-    return {
-      childRunId: '',
-      status: 'failed',
-      error: `Sub-run cycle detected: '${childWorkflowName}' is already an ancestor of this run.`,
-    };
-  }
-  if (ancestry.length >= CHILD_WORKFLOW_DEPTH_CAP) {
-    return {
-      childRunId: '',
-      status: 'failed',
-      error: `Sub-run depth cap (${String(CHILD_WORKFLOW_DEPTH_CAP)}) exceeded nesting '${childWorkflowName}'.`,
-    };
-  }
-  // 2. Resolve the child workflow by NAME (static target — constitution guardrail).
+  // Every failure below returns a `{ status: 'failed' }` outcome (never throws);
+  // `childRunId` defaults to '' for failures before a child row exists.
+  const failOutcome = (error: string, childRunId = ''): ChildWorkflowOutcome => ({
+    childRunId,
+    status: 'failed',
+    error,
+  });
+
+  // 1. Resolve the child workflow by NAME (static target — constitution guardrail).
+  //    Resolution runs BEFORE the cycle check so a case-variant / suffix / substring
+  //    reference to an ancestor (e.g. `workflow: SELFIE` naming its own run) is caught
+  //    as a cycle by canonical name, not left to the less-informative depth cap.
   let childWorkflow: WorkflowDefinition | undefined;
   try {
     const { workflows } = await discoverWorkflowsWithConfig(cwd, deps.loadConfig);
@@ -543,18 +559,34 @@ async function runChildWorkflow(
     );
   } catch (err) {
     // resolveWorkflowName throws only on ambiguity.
-    return {
-      childRunId: '',
-      status: 'failed',
-      error: `Failed to resolve sub-run '${childWorkflowName}': ${(err as Error).message}`,
-    };
+    return failOutcome(
+      `Failed to resolve sub-run '${childWorkflowName}': ${(err as Error).message}`
+    );
   }
   if (!childWorkflow) {
-    return {
-      childRunId: '',
-      status: 'failed',
-      error: `Unknown sub-run workflow '${childWorkflowName}'.`,
-    };
+    return failOutcome(`Unknown sub-run workflow '${childWorkflowName}'.`);
+  }
+
+  // 2. Cycle guard + depth cap (D9), compared against the RESOLVED canonical name.
+  //    The child's ancestor chain is the parent plus the parent's ancestors; a
+  //    resolved target already in the chain is a cycle.
+  let ancestry: WorkflowRun[];
+  try {
+    ancestry = [parentRun, ...(await deps.store.getRunAncestry(parentRun.id))];
+  } catch (err) {
+    return failOutcome(
+      `Failed to resolve run ancestry for sub-run guard: ${(err as Error).message}`
+    );
+  }
+  if (ancestry.some(a => a.workflow_name === childWorkflow.name)) {
+    return failOutcome(
+      `Sub-run cycle detected: '${childWorkflow.name}' is already an ancestor of this run.`
+    );
+  }
+  if (ancestry.length >= CHILD_WORKFLOW_DEPTH_CAP) {
+    return failOutcome(
+      `Sub-run depth cap (${String(CHILD_WORKFLOW_DEPTH_CAP)}) exceeded nesting '${childWorkflow.name}'.`
+    );
   }
 
   // 3. Create the child run row (fresh) or hydrate the failed one (resume path).
@@ -591,11 +623,9 @@ async function runChildWorkflow(
       childRunId = childRun.id;
     }
   } catch (err) {
-    return {
-      childRunId: '',
-      status: 'failed',
-      error: `Failed to create sub-run '${childWorkflowName}': ${(err as Error).message}`,
-    };
+    return failOutcome(
+      `Failed to create sub-run '${childWorkflowName}': ${(err as Error).message}`
+    );
   }
 
   // 4. Run the child in-process (reuses the whole lifecycle). Its terminal output +
@@ -616,11 +646,7 @@ async function runChildWorkflow(
     //    tokens). Works for synchronous completion AND a child paused at its gate.
     const finalChild = await deps.store.getWorkflowRun(childRunId);
     if (!finalChild) {
-      return {
-        childRunId,
-        status: 'failed',
-        error: 'Child run row disappeared after execution.',
-      };
+      return failOutcome('Child run row disappeared after execution.', childRunId);
     }
     return childOutcomeFromRun(finalChild);
   } catch (err) {
@@ -628,11 +654,22 @@ async function runChildWorkflow(
     // setup (before its own failWorkflowRun catch-all), and the read-back can
     // throw on a DB error — both must surface as a failed node outcome, not an
     // exception unwinding the parent's DAG.
-    return {
-      childRunId,
-      status: 'failed',
-      error: `Sub-run '${childWorkflowName}' errored: ${(err as Error).message}`,
-    };
+    //
+    // Wedge guard (symmetric to maybeResumeParentRun's post-CAS handler): a throw in
+    // executeWorkflow's EARLY setup (config load, getCodebaseEnvVars, token
+    // resolution) fires BEFORE the status→running flip and BEFORE its own catch-all,
+    // stranding the pre-created child at 'pending' (or 'running' on a later window) —
+    // a non-terminal row that holds the working-path lock. `cancelWorkflowRun` (NOT
+    // failWorkflowRun, whose `WHERE status='running'` would miss the 'pending' case)
+    // flips any non-terminal child to 'cancelled' and no-ops on a child that reached
+    // completed/cancelled on its own. childRunId is always assigned once step 3 ran.
+    await deps.store.cancelWorkflowRun(childRunId).catch((cancelErr: unknown) => {
+      getLog().error({ err: cancelErr as Error, childRunId }, 'workflow.child_setup_cancel_failed');
+    });
+    return failOutcome(
+      `Sub-run '${childWorkflowName}' errored: ${(err as Error).message}`,
+      childRunId
+    );
   }
 }
 
@@ -663,6 +700,22 @@ async function maybeResumeParentRun(
   const parentRunId = childRun.parent_run_id;
   if (!parentRunId) return;
 
+  // Surface a reconciliation failure to the user with a manual-recovery pointer
+  // (per the repo's surface-ambiguous-state principle): the child terminated but the
+  // parent stayed paused, so a log-only return leaves a stale "blocked on sub-run"
+  // gate with no signal. Guarded (safeSendMessage never throws) so it honors the
+  // never-throws contract. Only called once we've confirmed the parent IS blocked on
+  // THIS child — never for the synchronous no-op or a different-child terminal.
+  const notifyStuck = async (reason: string): Promise<void> => {
+    await safeSendMessage(
+      platform,
+      conversationId,
+      `⚠️ Sub-run \`${childRun.id.slice(0, 8)}\` finished, but its parent run ` +
+        `\`${parentRunId.slice(0, 8)}\` couldn't auto-resume (${reason}). ` +
+        `Resume it manually: \`/workflow resume ${parentRunId}\``
+    );
+  };
+
   let parent: WorkflowRun | null;
   try {
     parent = await deps.store.getWorkflowRun(parentRunId);
@@ -671,27 +724,26 @@ async function maybeResumeParentRun(
       { err: err as Error, parentRunId, childRunId: childRun.id },
       'workflow.parent_resume_lookup_failed'
     );
+    await notifyStuck('the parent run could not be looked up');
     return;
   }
-  if (parent?.status !== 'paused') return;
+  if (parent?.status !== 'paused') return; // synchronous no-op, or already resumed
 
-  const approval = isApprovalContext(parent.metadata?.approval)
-    ? parent.metadata.approval
-    : undefined;
-  if (approval?.type !== 'child_workflow') return;
-  if (!approval.childRunId) {
-    // Invariant violation, not a routing miss: a child_workflow gate is always
-    // written with its childRunId (pauseParentOnChild). A context without one is
-    // malformed/stale metadata — silently skipping would wedge the parent forever,
-    // so make the corruption loud and diagnosable.
-    getLog().error(
-      { parentRunId, childRunId: childRun.id },
-      'workflow.parent_resume_malformed_gate_missing_child_run_id'
-    );
-    return;
-  }
-  if (approval.childRunId !== childRun.id) {
-    // A different child of the same parent terminated — not ours to resume.
+  // The core "parent blocked on THIS child" invariant lives in one shared predicate
+  // (isRunBlockedOnChild) so this hook and the abandon-strand detector can't drift.
+  if (!isRunBlockedOnChild(parent, childRun.id)) {
+    // Paused but not blocked on this child. Distinguish a MALFORMED child_workflow
+    // gate (missing childRunId — an invariant violation that would wedge the parent
+    // forever; make it loud) from a normal different-child / non-child gate (silent).
+    const approval = isApprovalContext(parent.metadata?.approval)
+      ? parent.metadata.approval
+      : undefined;
+    if (approval?.type === 'child_workflow' && !approval.childRunId) {
+      getLog().error(
+        { parentRunId, childRunId: childRun.id },
+        'workflow.parent_resume_malformed_gate_missing_child_run_id'
+      );
+    }
     return;
   }
 
@@ -701,6 +753,7 @@ async function maybeResumeParentRun(
       { parentRunId, childRunId: childRun.id },
       'workflow.parent_resume_no_working_path'
     );
+    await notifyStuck('the parent has no recorded working path');
     return;
   }
 
@@ -713,6 +766,7 @@ async function maybeResumeParentRun(
     );
   } catch (err) {
     getLog().error({ err: err as Error, parentRunId }, 'workflow.parent_resume_discovery_failed');
+    await notifyStuck('workflow discovery failed');
     return;
   }
   if (!parentWorkflow) {
@@ -720,6 +774,7 @@ async function maybeResumeParentRun(
       { parentRunId, workflowName: parent.workflow_name },
       'workflow.parent_resume_workflow_not_found'
     );
+    await notifyStuck(`the parent workflow '${parent.workflow_name}' could not be found`);
     return;
   }
 
@@ -732,13 +787,14 @@ async function maybeResumeParentRun(
     // the parent stays 'paused' and manually resumable, so log and stand down.
     if (err instanceof Error && err.name === 'WorkflowNotResumableError') {
       // Benign race: a concurrent (manual or duplicate) resume won the CAS and
-      // now owns the parent. Not an error.
+      // now owns the parent. Not an error — no user-facing message (it IS resuming).
       getLog().info(
         { parentRunId, childRunId: childRun.id },
         'workflow.parent_auto_resume_lost_race'
       );
     } else {
       getLog().error({ err: err as Error, parentRunId }, 'workflow.parent_resume_hydrate_failed');
+      await notifyStuck('preparing the parent for resume failed');
     }
     return;
   }
@@ -746,6 +802,7 @@ async function maybeResumeParentRun(
     // A parent paused on a child_workflow gate is always resumable (see the
     // child_workflow branch in hydrateResumableRun), so null here is unexpected.
     getLog().warn({ parentRunId }, 'workflow.parent_resume_nothing_to_resume');
+    await notifyStuck('the parent had no resumable state');
     return;
   }
 
@@ -1068,29 +1125,41 @@ export async function executeWorkflow(
   // permanently block the path.
   if (workflow.mutates_checkout !== false) {
     try {
-      // A `workflow:` sub-run shares its parent's checkout, so the ancestor chain
-      // must be excluded from the path-lock — otherwise the child self-blocks
-      // against the parent's own running/paused row on that path (#2121). Derived
-      // from the run's OWN parent_run_id so it holds on every entry path: the
-      // initial in-process spawn AND any later resume-after-approve (which is
-      // driven by the generic resume machinery).
-      let pathLockExclude: string[] = [];
+      // A `workflow:` sub-run and its children share ONE checkout (#2121), so the
+      // path-lock must not treat another run in this run's OWN vertical tree line as
+      // a conflict. Exclude both directions:
+      //   • ANCESTORS (upward via parent_run_id) — a child must not self-block against
+      //     its own running/paused parent on that path.
+      //   • DESCENDANTS (downward via a bounded walk) — a parent resumed while still
+      //     blocked on a paused child must re-pause on it, not self-cancel against it.
+      // Siblings are intentionally NOT excluded (see #2180). The ancestor lookup fails
+      // OPEN (skip the best-effort lock) — a false self-collision against the parent is
+      // worse than a briefly-unenforced lock; the descendant lookup fails CLOSED (run
+      // the lock with whatever we have) — most runs have no descendants, so a lost set
+      // only risks a legitimate-looking collision, never a self-collision.
+      const pathLockExclude: string[] = [];
       let skipPathLock = false;
       if (workflowRun.parent_run_id) {
         try {
           const ancestry = await deps.store.getRunAncestry(workflowRun.id);
-          pathLockExclude = ancestry.map(a => a.id);
+          pathLockExclude.push(...ancestry.map(a => a.id));
         } catch (err) {
-          // Fail OPEN for sub-runs: without the ancestor set, the lock query would
-          // "find" this run's own parent and cancel the child with a misleading
-          // "already active on this path" — a false self-collision caused by a
-          // transient lookup error. Skipping the best-effort lock for this one
-          // entry is the lesser risk; log loudly so the real cause is traceable.
           getLog().error(
             { err: err as Error, workflowRunId: workflowRun.id, cwd },
             'workflow.path_lock_ancestry_lookup_failed'
           );
           skipPathLock = true;
+        }
+      }
+      if (!skipPathLock) {
+        try {
+          const descendantIds = await gatherDescendantRunIds(deps, workflowRun.id);
+          pathLockExclude.push(...descendantIds);
+        } catch (err) {
+          getLog().warn(
+            { err: err as Error, workflowRunId: workflowRun.id, cwd },
+            'workflow.path_lock_descendant_lookup_failed'
+          );
         }
       }
       const activeWorkflow = skipPathLock

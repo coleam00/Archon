@@ -115,6 +115,7 @@ export {
   TERMINAL_WORKFLOW_STATUSES,
   RESUMABLE_WORKFLOW_STATUSES,
   isApprovalContext,
+  isRunBlockedOnChild,
 } from './workflow-run';
 export type {
   WorkflowRunStatus,

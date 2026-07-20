@@ -4940,15 +4940,42 @@ async function executeWorkflowNode(
   const { deps, platform, conversationId, cwd, workflowRun: parentRun } = ctx;
   const msgContext = { workflowId: parentRun.id, nodeName: node.id };
 
+  // Build the failed result AND persist a node_failed event with the reason. Unlike
+  // command/prompt/bash/script nodes (which write their own node_failed inside their
+  // executor), the workflow node returns a failed NodeExecutionResult that runLayers
+  // does NOT turn into an event — so without this the sub-run failure reason (cycle,
+  // unknown target, cancelled child, …) would be swallowed into the run-level DAG
+  // summary and never auditable per-node. Fire-and-forget like every other event.
+  const failResult = (error: string): NodeExecutionResult => {
+    deps.store
+      .createWorkflowEvent({
+        workflow_run_id: parentRun.id,
+        event_type: 'node_failed',
+        step_name: ctx.stepNamePrefix + node.id,
+        data: { error, type: 'workflow' },
+      })
+      .catch((err: Error) => {
+        getLog().error(
+          { err, workflowRunId: parentRun.id, eventType: 'node_failed' },
+          'workflow.event_persist_failed'
+        );
+      });
+    getWorkflowEventEmitter().emit({
+      type: 'node_failed',
+      runId: parentRun.id,
+      nodeId: node.id,
+      nodeName: node.id,
+      error,
+    });
+    return { state: 'failed', output: '', error };
+  };
+
   if (!ctx.runChildWorkflow) {
     // Fail fast: executor.ts MUST inject the closure. A missing one means a caller
     // wired executeDagWorkflow without sub-run support — never silently no-op.
-    return {
-      state: 'failed',
-      output: '',
-      error:
-        "Internal error: 'workflow:' node cannot run — runChildWorkflow closure was not injected.",
-    };
+    return failResult(
+      "Internal error: 'workflow:' node cannot run — runChildWorkflow closure was not injected."
+    );
   }
 
   // Resolve the input data string (workflow vars + $node.output refs), exactly as
@@ -4975,7 +5002,7 @@ async function executeWorkflowNode(
   // writes node_completed HERE — and ONLY on true completion, never on the paused
   // branch — so getCompletedDagNodeOutputs skips a truly-finished sub-run on resume
   // but re-runs one still blocked on its child.
-  const asCompleted = async (outcome: ChildWorkflowOutcome): Promise<NodeExecutionResult> => {
+  const asCompleted = (outcome: ChildWorkflowOutcome): NodeExecutionResult => {
     if (outcome.output === undefined) {
       // A completed child with no non-blank terminal output threads '' into
       // $<node>.output — legal, but indistinguishable downstream from an
@@ -4986,17 +5013,30 @@ async function executeWorkflowNode(
       );
     }
     const output = outcome.output ?? '';
-    await deps.store.createWorkflowEvent({
-      workflow_run_id: parentRun.id,
-      event_type: 'node_completed',
-      step_name: ctx.stepNamePrefix + node.id,
-      data: {
-        node_output: output,
-        type: 'workflow',
-        child_run_id: outcome.childRunId,
-        ...(outcome.costUsd !== undefined ? { cost_usd: outcome.costUsd } : {}),
-      },
-    });
+    // Fire-and-forget (matches every other event write in this file): the run
+    // lifecycle must not hinge on the observability event. Awaiting it unguarded
+    // would let a transient event-store failure report a successfully-completed
+    // child as a FAILED parent node (it self-heals on resume, but reads wrong). A
+    // lost write just means the node re-runs on resume and re-threads the same
+    // completed child — idempotent.
+    deps.store
+      .createWorkflowEvent({
+        workflow_run_id: parentRun.id,
+        event_type: 'node_completed',
+        step_name: ctx.stepNamePrefix + node.id,
+        data: {
+          node_output: output,
+          type: 'workflow',
+          child_run_id: outcome.childRunId,
+          ...(outcome.costUsd !== undefined ? { cost_usd: outcome.costUsd } : {}),
+        },
+      })
+      .catch((err: Error) => {
+        getLog().error(
+          { err, workflowRunId: parentRun.id, eventType: 'node_completed' },
+          'workflow.event_persist_failed'
+        );
+      });
     getWorkflowEventEmitter().emit({
       type: 'node_completed',
       runId: parentRun.id,
@@ -5026,6 +5066,14 @@ async function executeWorkflowNode(
   // itself (metadata.approval), and there is no human decision to audit for a
   // gate that resolves automatically on child completion.
   const pauseParentOnChild = async (childRunId: string): Promise<NodeExecutionResult> => {
+    // KNOWN LIMITATION (#2180): the run has a SINGLE approval-gate slot. If two
+    // gate-pausing nodes (two `workflow:` children, or a `workflow:` + an `approval:`)
+    // land in the SAME topological layer, the second pauseWorkflowRun matches 0 rows
+    // (the first already flipped running→paused) and throws — swallowed into a node
+    // failure the paused run then short-circuits past. The loser's child is real but
+    // unmentioned until a later resume re-pauses on it. A retry can't fix this (there
+    // is nowhere to record a second simultaneous block); the real fix is a gate queue
+    // or a load-time reject of multiple gate-pausing nodes per layer — tracked in #2180.
     const message =
       `Sub-run \`${node.workflow}\` (run \`${childRunId.slice(0, 8)}\`) is paused awaiting review. ` +
       `Approve it by run id: \`/workflow approve ${childRunId}\``;
@@ -5057,22 +5105,16 @@ async function executeWorkflowNode(
       case 'paused':
         return pauseParentOnChild(outcome.childRunId);
       case 'failed':
-        return {
-          state: 'failed',
-          output: outcome.output ?? '',
-          error: outcome.error ?? `Sub-run '${node.workflow}' failed`,
-        };
+        return failResult(outcome.error ?? `Sub-run '${node.workflow}' failed`);
       case 'cancelled':
-        return { state: 'failed', output: '', error: `Sub-run '${node.workflow}' was cancelled` };
+        return failResult(`Sub-run '${node.workflow}' was cancelled`);
       default: {
         // Compile-time exhaustiveness + runtime fail-loud: without this, a status
         // outside the union would silently return `undefined` into runLayers.
         const unreachable: never = outcome.status;
-        return {
-          state: 'failed',
-          output: '',
-          error: `Sub-run '${node.workflow}' returned unexpected status '${String(unreachable)}'`,
-        };
+        return failResult(
+          `Sub-run '${node.workflow}' returned unexpected status '${String(unreachable)}'`
+        );
       }
     }
   };
@@ -5087,11 +5129,9 @@ async function executeWorkflowNode(
     );
     existing = children.length > 0 ? children[children.length - 1] : undefined;
   } catch (err) {
-    return {
-      state: 'failed',
-      output: '',
-      error: `Failed to look up child runs for node '${node.id}': ${(err as Error).message}`,
-    };
+    return failResult(
+      `Failed to look up child runs for node '${node.id}': ${(err as Error).message}`
+    );
   }
 
   const childArgs = {
@@ -5129,11 +5169,7 @@ async function executeWorkflowNode(
     // freshly-run child uses (interpret handles both).
     return await interpret(childOutcomeFromRun(existing));
   } catch (err) {
-    return {
-      state: 'failed',
-      output: '',
-      error: `Sub-run '${node.workflow}' errored: ${(err as Error).message}`,
-    };
+    return failResult(`Sub-run '${node.workflow}' errored: ${(err as Error).message}`);
   }
 }
 

@@ -269,6 +269,28 @@ export function isApprovalContext(val: unknown): val is ApprovalContext {
   );
 }
 
+/**
+ * True when `run` is currently paused blocked on the child sub-run `childRunId`
+ * (#2121 Phase 2) — i.e. a `paused` run whose `metadata.approval` is a
+ * `child_workflow` gate pointing at that child. This is the single source of the
+ * "parent blocked on this child" invariant, shared by the abandon-strand detector
+ * (`findParentBlockedOn`, @archon/core) and the auto-resume hook
+ * (`maybeResumeParentRun`, @archon/workflows) so the two cannot drift if the gate
+ * shape changes. Reads defensively from possibly-malformed metadata.
+ */
+export function isRunBlockedOnChild(
+  run: { status: WorkflowRunStatus; metadata?: Record<string, unknown> },
+  childRunId: string
+): boolean {
+  if (run.status !== 'paused') return false;
+  const approval = run.metadata?.approval;
+  return (
+    isApprovalContext(approval) &&
+    approval.type === 'child_workflow' &&
+    approval.childRunId === childRunId
+  );
+}
+
 // ---------------------------------------------------------------------------
 // ArtifactType
 // ---------------------------------------------------------------------------
