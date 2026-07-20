@@ -784,6 +784,27 @@ describe('abandonWorkflow', () => {
     expect(cancelled).toContain('child-c'); // sibling AFTER the failure still cancelled
   });
 
+  // S1: an unbounded-deep tree hits the MAX_CASCADE_RUNS cap. Truncation must be
+  // REPORTED (non-zero cascadeFailures + a log), not silently returned as all-clear —
+  // otherwise the caller tells the user "abandoned, 0 failures" while descendants live.
+  test('reports truncation (does not silently stop) when the cascade hits its cap', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'running' }));
+    // Infinite chain: every run has exactly one new, unique, non-terminal child. Only
+    // the cap terminates the walk — the test completing at all proves the bound holds.
+    mockFindChildRuns.mockImplementation((parentId: unknown) =>
+      Promise.resolve([{ id: `${String(parentId)}::c`, status: 'running' }])
+    );
+
+    const { cascadeFailures } = await abandonWorkflow('run-1');
+
+    // Unreached descendants surface via the failures channel.
+    expect(cascadeFailures).toBeGreaterThan(0);
+    // The walk was bounded (never looped forever) — findChildRuns was called a
+    // finite number of times despite the infinite chain.
+    expect(mockFindChildRuns.mock.calls.length).toBeLessThanOrEqual(501);
+    expect(mockFindChildRuns.mock.calls.length).toBeGreaterThan(1);
+  });
+
   // Abandoning a CHILD directly strands a parent paused on it — the op surfaces
   // the blocked parent's id so callers can point the user at it.
   test('surfaces the parent run id when abandoning a child its parent is blocked on', async () => {

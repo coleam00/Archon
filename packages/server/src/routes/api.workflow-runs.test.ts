@@ -1457,6 +1457,35 @@ describe('POST /api/workflows/runs/:runId/approve', () => {
     expect(response.status).toBe(400);
   });
 
+  // #2121 Phase 2: a parent paused blocked on a `workflow:` child has no approvable
+  // gate of its own — approving the PARENT must 400 with a redirect to the child id,
+  // never stamp a spurious node_completed for the parent's sub-run node.
+  test('returns 400 redirecting to the child when the parent is blocked on a sub-run', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce({
+      ...MOCK_PAUSED_RUN,
+      id: 'parent-blocked-1',
+      metadata: {
+        approval: {
+          type: 'child_workflow',
+          nodeId: 'sub',
+          message: 'Blocked on sub-run',
+          childRunId: 'child-xyz',
+        },
+      },
+    });
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/parent-blocked-1/approve', {
+      method: 'POST',
+      body: JSON.stringify({}),
+      headers: { 'Content-Type': 'application/json' },
+    });
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { error?: string };
+    expect(body.error).toContain('child-xyz');
+    // No gate mutation happened.
+    expect(mockResolveApprovalGate).not.toHaveBeenCalled();
+  });
+
   test('returns 400 when the gate is already resolved (double-approve guard)', async () => {
     // Post-#2075 an approved run stays 'paused' with approval.resolved set —
     // the status check alone no longer blocks a second approve.
@@ -1655,6 +1684,33 @@ describe('POST /api/workflows/runs/:runId/reject', () => {
       headers: { 'Content-Type': 'application/json' },
     });
     expect(response.status).toBe(400);
+  });
+
+  // #2121 Phase 2: rejecting a parent blocked on a `workflow:` child must 400 with a
+  // redirect to the child id, not cancel the parent or stamp its sub-run node.
+  test('returns 400 redirecting to the child when the parent is blocked on a sub-run', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce({
+      ...MOCK_PAUSED_RUN,
+      id: 'parent-blocked-2',
+      metadata: {
+        approval: {
+          type: 'child_workflow',
+          nodeId: 'sub',
+          message: 'Blocked on sub-run',
+          childRunId: 'child-abc',
+        },
+      },
+    });
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/parent-blocked-2/reject', {
+      method: 'POST',
+      body: JSON.stringify({ reason: 'no' }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { error?: string };
+    expect(body.error).toContain('child-abc');
+    expect(mockResolveAndCancelApprovalGate).not.toHaveBeenCalled();
   });
 
   test('cancels immediately when no on_reject configured', async () => {

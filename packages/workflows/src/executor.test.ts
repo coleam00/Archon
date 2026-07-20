@@ -102,6 +102,8 @@ import type { WorkflowDefinition, WorkflowRun } from './schemas';
 function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
   return {
     getActiveWorkflowRunByPath: mock(async () => null),
+    findChildRuns: mock(async () => []),
+    getRunAncestry: mock(async () => []),
     failOrphanedRuns: mock(async () => ({ count: 0 })),
     createWorkflowRun: mock(async () => makeRun()),
     updateWorkflowRun: mock(async () => {}),

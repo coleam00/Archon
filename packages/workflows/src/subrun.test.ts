@@ -864,4 +864,203 @@ nodes:
       /cancelled/i
     );
   });
+
+  it('a throw during the child spawn does NOT leave a non-terminal zombie child (I1)', async () => {
+    await writeWorkflow(
+      'child-plain',
+      `
+name: child-plain
+description: child with no gate
+nodes:
+  - id: work
+    prompt: "do work for $ARGUMENTS"
+`
+    );
+    await writeWorkflow(
+      'parent-plain',
+      `
+name: parent-plain
+description: parent that spawns a child
+nodes:
+  - id: sub
+    workflow: child-plain
+    input: "x"
+`
+    );
+
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    // The child inherits the parent's codebase_id, so its executeWorkflow early setup
+    // calls getCodebaseEnvVars. Make the SECOND call (the child's — the parent's is
+    // first) throw, sabotaging the child's setup BEFORE its own status→running flip
+    // and catch-all. Without the wedge guard the pre-created child stays 'pending',
+    // holding the path lock.
+    let envCalls = 0;
+    store.getCodebaseEnvVars = () => {
+      envCalls++;
+      return envCalls >= 2 ? Promise.reject(new Error('env lookup exploded')) : Promise.resolve({});
+    };
+
+    const parent = await discover('parent-plain');
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parent,
+      'goal',
+      'conv-db',
+      { codebaseId: 'cb-1' }
+    );
+
+    expect(result.success).toBe(false);
+    const child = [...store.runs.values()].find(r => r.workflow_name === 'child-plain');
+    expect(child).toBeDefined();
+    // The child must be TERMINAL — not a 'pending'/'running' zombie holding the lock.
+    expect(['cancelled', 'failed']).toContain(child?.status);
+    const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'parent-plain');
+    expect(parentRun?.status).toBe('failed');
+  });
+
+  it('rejects a CASE-VARIANT self-reference by resolving the name before the cycle check (I3)', async () => {
+    // The node names its own workflow in a different case; resolveWorkflowName resolves
+    // 'SELFIE' → 'selfie', and the cycle check (post-resolution) catches it as a cycle
+    // rather than letting it slip to the depth cap.
+    await writeWorkflow(
+      'selfie',
+      `
+name: selfie
+description: names itself in a different case
+nodes:
+  - id: sub
+    workflow: SELFIE
+`
+    );
+
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    const parent = await discover('selfie');
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parent,
+      'goal',
+      'conv-db'
+    );
+
+    expect(result.success).toBe(false);
+    const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'selfie');
+    expect(parentRun?.status).toBe('failed');
+    // The sub-run node's failure reason is persisted as a node_failed event.
+    const nodeFailed = store.events.find(
+      e => e.event_type === 'node_failed' && e.step_name === 'sub'
+    );
+    expect(String(nodeFailed?.data?.error)).toMatch(/cycle/i);
+    // Caught as a cycle → no child run was created.
+    expect([...store.runs.values()].filter(r => r.parent_run_id !== null)).toHaveLength(0);
+  });
+
+  it('re-pauses (does NOT double-drive) when the parent is resumed while the child is still paused (I5)', async () => {
+    await writeWorkflow(
+      'child-gated',
+      `
+name: child-gated
+description: child with an approval gate
+interactive: true
+nodes:
+  - id: implement
+    prompt: "implement $ARGUMENTS"
+  - id: review-gate
+    approval:
+      message: "review the sub-run"
+    depends_on: [implement]
+`
+    );
+    await writeWorkflow(
+      'parent-gated',
+      `
+name: parent-gated
+description: parent composing a gated child
+interactive: true
+nodes:
+  - id: sub
+    workflow: child-gated
+    input: "goal"
+`
+    );
+
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    const parent = await discover('parent-gated');
+
+    // First drive: child pauses at its gate, parent pauses blocked on it.
+    await executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, parent, 'goal', 'conv-db');
+    const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'parent-gated');
+    const child = [...store.runs.values()].find(r => r.workflow_name === 'child-gated');
+    expect(parentRun?.status).toBe('paused');
+    expect(child?.status).toBe('paused');
+
+    const childEventsBefore = store.events.filter(e => e.workflow_run_id === child!.id).length;
+
+    // Resume the PARENT while the child is STILL paused (child NOT approved). Re-entry
+    // must find the paused child and re-pause the parent — never resume the child.
+    const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(parentRun!.id))!);
+    expect(hydrated).not.toBeNull();
+    await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parent,
+      parentRun!.user_message,
+      'conv-db',
+      { ...hydrated! }
+    );
+
+    // Parent re-paused; child untouched (still paused, still one run, no new events).
+    expect((await store.getWorkflowRun(parentRun!.id))?.status).toBe('paused');
+    expect((await store.getWorkflowRun(child!.id))?.status).toBe('paused');
+    expect([...store.runs.values()].filter(r => r.workflow_name === 'child-gated')).toHaveLength(1);
+    const childEventsAfter = store.events.filter(e => e.workflow_run_id === child!.id).length;
+    expect(childEventsAfter).toBe(childEventsBefore); // child was NOT re-driven
+  });
+
+  it('fails cleanly with "Unknown sub-run workflow" on a typo\'d target (S5)', async () => {
+    await writeWorkflow(
+      'parent-typo',
+      `
+name: parent-typo
+description: references a non-existent sub-run
+nodes:
+  - id: sub
+    workflow: does-not-exist-typo
+`
+    );
+
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    const parent = await discover('parent-typo');
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parent,
+      'goal',
+      'conv-db'
+    );
+
+    expect(result.success).toBe(false);
+    const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'parent-typo');
+    expect(parentRun?.status).toBe('failed');
+    // The node_failed event carries the authoring-friendly reason.
+    const nodeFailed = store.events.find(
+      e => e.event_type === 'node_failed' && e.step_name === 'sub'
+    );
+    expect(String(nodeFailed?.data?.error)).toContain('Unknown sub-run workflow');
+    // No child run was created for a target that doesn't resolve.
+    expect([...store.runs.values()].filter(r => r.parent_run_id !== null)).toHaveLength(0);
+  });
 });
