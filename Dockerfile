@@ -125,9 +125,7 @@ RUN useradd -m -u 1001 -s /bin/bash appuser \
 RUN mkdir -p /.archon/workspaces /.archon/worktrees \
     && chown -R appuser:appuser /.archon
 
-# App content below is copied/installed directly as appuser (COPY --chown + USER).
-# A trailing `RUN chown -R appuser:appuser /app` would rewrite every inode into a
-# duplicate image layer and took 50+ minutes on slow disks (#1970).
+# A trailing `RUN chown -R /app` would duplicate every inode into a new image layer (#1970).
 USER appuser
 
 # Copy root package files and lockfile
