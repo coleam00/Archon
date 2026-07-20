@@ -92,7 +92,13 @@ export async function serveCommand(opts: ServeOptions): Promise<number> {
   return 0;
 }
 
-async function downloadWebDist(version: string, targetDir: string): Promise<void> {
+// Exported for tests; `embeddedChecksum` defaults to the build-time constant so
+// production callers never pass it explicitly.
+export async function downloadWebDist(
+  version: string,
+  targetDir: string,
+  embeddedChecksum: string = BUNDLED_WEB_DIST_SHA256
+): Promise<void> {
   const tarballUrl = `https://github.com/${GITHUB_REPO}/releases/download/v${version}/archon-web.tar.gz`;
   const checksumsUrl = `https://github.com/${GITHUB_REPO}/releases/download/v${version}/checksums.txt`;
 
@@ -103,8 +109,8 @@ async function downloadWebDist(version: string, targetDir: string): Promise<void
   // over the remote checksums.txt (same-source, weaker guarantee).
   let expectedHash: string;
   let tarballRes: Response;
-  if (BUNDLED_WEB_DIST_SHA256) {
-    expectedHash = parseEmbeddedChecksum(BUNDLED_WEB_DIST_SHA256);
+  if (embeddedChecksum) {
+    expectedHash = parseEmbeddedChecksum(embeddedChecksum);
     log.info({ source: 'embedded' }, 'web_dist.checksum_resolved');
     console.log(`Downloading ${tarballUrl}...`);
     tarballRes = await fetch(tarballUrl).catch((err: unknown) => {
