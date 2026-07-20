@@ -117,56 +117,65 @@ ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
 
 # Create non-root user for running Claude Code
 # Claude Code refuses to run with --dangerously-skip-permissions as root for security
+# /app is still empty here (only WORKDIR created it) — non-recursive chown suffices.
 RUN useradd -m -u 1001 -s /bin/bash appuser \
-    && chown -R appuser:appuser /app
+    && chown appuser:appuser /app
 
 # Create Archon directories
 RUN mkdir -p /.archon/workspaces /.archon/worktrees \
     && chown -R appuser:appuser /.archon
 
+# A trailing `RUN chown -R /app` would duplicate every inode into a new image layer (#1970).
+USER appuser
+
 # Copy root package files and lockfile
-COPY package.json bun.lock ./
+COPY --chown=appuser:appuser package.json bun.lock ./
 
 # Copy ALL workspace package.json files
-COPY packages/adapters/package.json ./packages/adapters/
-COPY packages/cli/package.json ./packages/cli/
-COPY packages/core/package.json ./packages/core/
+COPY --chown=appuser:appuser packages/adapters/package.json ./packages/adapters/
+COPY --chown=appuser:appuser packages/cli/package.json ./packages/cli/
+COPY --chown=appuser:appuser packages/core/package.json ./packages/core/
 # docs-web source is NOT copied — it's a static site deployed separately
 # (see .github/workflows/deploy-docs.yml). package.json is included only
 # so Bun's workspace lockfile resolves correctly.
-COPY packages/docs-web/package.json ./packages/docs-web/
-COPY packages/git/package.json ./packages/git/
-COPY packages/isolation/package.json ./packages/isolation/
-COPY packages/paths/package.json ./packages/paths/
-COPY packages/providers/package.json ./packages/providers/
-COPY packages/server/package.json ./packages/server/
-COPY packages/web/package.json ./packages/web/
-COPY packages/workflows/package.json ./packages/workflows/
+COPY --chown=appuser:appuser packages/docs-web/package.json ./packages/docs-web/
+COPY --chown=appuser:appuser packages/git/package.json ./packages/git/
+COPY --chown=appuser:appuser packages/isolation/package.json ./packages/isolation/
+COPY --chown=appuser:appuser packages/paths/package.json ./packages/paths/
+COPY --chown=appuser:appuser packages/providers/package.json ./packages/providers/
+COPY --chown=appuser:appuser packages/server/package.json ./packages/server/
+COPY --chown=appuser:appuser packages/web/package.json ./packages/web/
+COPY --chown=appuser:appuser packages/workflows/package.json ./packages/workflows/
 
-# Install production dependencies only (--ignore-scripts skips husky prepare hook)
-RUN bun install --frozen-lockfile --production --ignore-scripts --linker=hoisted
+# Install production dependencies only (--ignore-scripts skips husky prepare hook).
+# Cache goes to /tmp and is removed in the same layer: not baked into the image,
+# not copied into the /home/appuser volume on first run.
+RUN HOME=/home/appuser BUN_INSTALL_CACHE_DIR=/tmp/bun-install-cache \
+      bun install --frozen-lockfile --production --ignore-scripts --linker=hoisted \
+    && rm -rf /tmp/bun-install-cache
 
 # Copy application source (Bun runs TypeScript directly, no compile step needed)
-COPY packages/adapters/ ./packages/adapters/
-COPY packages/cli/ ./packages/cli/
-COPY packages/core/ ./packages/core/
-COPY packages/git/ ./packages/git/
-COPY packages/isolation/ ./packages/isolation/
-COPY packages/paths/ ./packages/paths/
-COPY packages/providers/ ./packages/providers/
-COPY packages/server/ ./packages/server/
-COPY packages/workflows/ ./packages/workflows/
+COPY --chown=appuser:appuser packages/adapters/ ./packages/adapters/
+COPY --chown=appuser:appuser packages/cli/ ./packages/cli/
+COPY --chown=appuser:appuser packages/core/ ./packages/core/
+COPY --chown=appuser:appuser packages/git/ ./packages/git/
+COPY --chown=appuser:appuser packages/isolation/ ./packages/isolation/
+COPY --chown=appuser:appuser packages/paths/ ./packages/paths/
+COPY --chown=appuser:appuser packages/providers/ ./packages/providers/
+COPY --chown=appuser:appuser packages/server/ ./packages/server/
+COPY --chown=appuser:appuser packages/workflows/ ./packages/workflows/
 
 # Copy pre-built web UI from build stage
-COPY --from=web-build /app/packages/web/dist/ ./packages/web/dist/
+COPY --from=web-build --chown=appuser:appuser /app/packages/web/dist/ ./packages/web/dist/
 
 # Copy config, migrations, and bundled defaults
-COPY .archon/ ./.archon/
-COPY migrations/ ./migrations/
-COPY tsconfig*.json ./
+COPY --chown=appuser:appuser .archon/ ./.archon/
+COPY --chown=appuser:appuser migrations/ ./migrations/
+COPY --chown=appuser:appuser tsconfig*.json ./
 
-# Fix permissions for appuser
-RUN chown -R appuser:appuser /app
+# Back to root: the entrypoint must start as root to fix volume ownership,
+# and the gosu git-config setup below requires it.
+USER root
 
 # Create .codex directory for Codex authentication
 RUN mkdir -p /home/appuser/.codex && chown appuser:appuser /home/appuser/.codex

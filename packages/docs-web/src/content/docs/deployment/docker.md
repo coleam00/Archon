@@ -493,7 +493,7 @@ mkdir -p /opt/archon-user-home
 sudo chown -R 1001:1001 /opt/archon-user-home
 ```
 
-The entrypoint re-applies ownership on every container start, so subsequent rebuilds work without re-running `chown`.
+The entrypoint fixes ownership on every container start, touching only files whose owner is wrong, so startup stays fast even on large volumes. Subsequent rebuilds work without re-running `chown`.
 
 :::caution
 Bind-mount paths do **not** inherit the image's baked `~/.gitconfig` (Docker only copies image content into named volumes on first creation, never into bind mounts). The entrypoint still registers git `safe.directory` entries for `/.archon/workspaces` and `/.archon/worktrees` repos at runtime, so functionality is preserved — but a bind-mounted `~/.gitconfig` starts empty and any author identity / signing config you want must be set explicitly with `git config --global` inside the container.
