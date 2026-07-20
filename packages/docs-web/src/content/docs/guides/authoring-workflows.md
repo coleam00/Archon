@@ -35,7 +35,7 @@ nodes:
     context: fresh
 ```
 
-> **Using defaults as templates:** Archon ships default workflows in `.archon/workflows/defaults/` (12 bundled into the binary, plus additional ones available on disk in source builds). Browse them for real-world examples, then copy and modify:
+> **Using defaults as templates:** Archon ships default workflows in `.archon/workflows/defaults/` (21 bundled into the binary; source builds also load them from disk). Browse them for real-world examples, then copy and modify:
 > ```bash
 > cp .archon/workflows/defaults/archon-fix-github-issue.yaml .archon/workflows/my-fix-issue.yaml
 > ```
@@ -875,9 +875,11 @@ nodes:
     prompt: "Plan the change described in $ARGUMENTS."
     context: fresh
 
-  # Runs archon-compose-child-qa as a child run; its output becomes $implement-qa.output.
+  # `workflow:` names any discovered workflow (bundled / global / repo) to run as a
+  # child sub-run; `qa-block` here is a placeholder for your own workflow file.
+  # Its terminal output becomes $implement-qa.output.
   - id: implement-qa
-    workflow: archon-compose-child-qa
+    workflow: qa-block
     input: "$plan.output"
     depends_on: [plan]
 

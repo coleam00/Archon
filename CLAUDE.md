@@ -909,7 +909,7 @@ Pattern: Use `classifyIsolationError()` (from `@archon/isolation`) to map git er
 
 **Workflow Run Lifecycle:**
 - `POST /api/workflows/runs/{runId}/resume` - Resume a failed run from where it left off (skips already-completed DAG nodes; AI session context is not restored).
-- `POST /api/workflows/runs/{runId}/abandon` - Abandon a non-terminal run (marks as cancelled)
+- `POST /api/workflows/runs/{runId}/abandon` - Abandon a non-terminal run (marks as cancelled); cascade-cancels non-terminal `workflow:` sub-run descendants (#2121 Phase 2) and reports `cascadeFailures`/`blockedParentRunId`
 - `DELETE /api/workflows/runs/{runId}` - Delete a terminal workflow run and its events
 
 **Codebases:**

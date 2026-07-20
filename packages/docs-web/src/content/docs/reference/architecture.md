@@ -1111,6 +1111,7 @@ remote_agent_workflow_runs
 ├── workflow_name (VARCHAR)
 ├── status (VARCHAR) -- 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
 ├── parent_conversation_id (UUID) -- Parent chat that dispatched this run
+├── parent_run_id (UUID -> remote_agent_workflow_runs.id, ON DELETE SET NULL) -- Run-tree parent for a workflow: sub-run (#2121); null for top-level
 ├── user_id (UUID -> remote_agent_users.id, ON DELETE SET NULL) -- User who triggered the run
 └── metadata (JSONB)
 
