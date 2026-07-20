@@ -1,7 +1,7 @@
 /** Inspector sub-form for loop nodes. */
 import type { ReactElement } from 'react';
 import type { LoopNodeData } from '../../types';
-import { CheckboxField, NumberField, TextAreaField, TextField } from './fields';
+import { CheckboxField, NumberField, SelectField, TextAreaField, TextField } from './fields';
 
 export function LoopFields({
   data,
@@ -10,17 +10,49 @@ export function LoopFields({
   data: LoopNodeData;
   onChange: (next: LoopNodeData) => void;
 }): ReactElement {
+  // Exactly-one prompt source (engine one-of rule): the toggle swaps which
+  // field is present, dropping the other so a stale value can never leak into
+  // the export. `command` keys the mode (matching loopToDag's export branch);
+  // the importer guarantees at most one of the two is present on `data`.
+  const sourceMode: 'prompt' | 'command' = data.command !== undefined ? 'command' : 'prompt';
   return (
     <>
-      <TextAreaField
-        label="Prompt (each iteration)"
-        value={data.prompt}
-        rows={5}
-        placeholder="Keep fixing failing tests…"
-        onChange={(prompt): void => {
-          onChange({ ...data, prompt });
+      <SelectField
+        label="Prompt source"
+        value={sourceMode}
+        options={[
+          { value: 'prompt', label: 'Inline prompt' },
+          { value: 'command', label: 'Command file' },
+        ]}
+        onChange={(next): void => {
+          if (next === sourceMode) return;
+          const rest: LoopNodeData = { ...data };
+          delete rest.prompt;
+          delete rest.command;
+          onChange(next === 'command' ? { ...rest, command: '' } : { ...rest, prompt: '' });
         }}
       />
+      {sourceMode === 'command' ? (
+        <TextField
+          label="Command (each iteration)"
+          value={data.command ?? ''}
+          mono
+          placeholder="my-command"
+          onChange={(command): void => {
+            onChange({ ...data, command });
+          }}
+        />
+      ) : (
+        <TextAreaField
+          label="Prompt (each iteration)"
+          value={data.prompt ?? ''}
+          rows={5}
+          placeholder="Keep fixing failing tests…"
+          onChange={(prompt): void => {
+            onChange({ ...data, prompt });
+          }}
+        />
+      )}
       <TextField
         label="Until (completion signal)"
         value={data.until}

@@ -10,6 +10,7 @@ import {
   type Mock,
 } from 'bun:test';
 import { mkdir, writeFile, rm, readFile } from 'fs/promises';
+import { unlinkSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import * as git from '@archon/git';
@@ -6655,6 +6656,526 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       ).mock.calls;
       expect(pauseCalls.length).toBe(0);
     });
+
+    // ─── loop.command (command-file-backed loop nodes) ──────────────────────
+    //
+    // Hidden mechanics these tests pin down:
+    //   • The command file is read ONCE per run/node — loaded at node start,
+    //     reused for every iteration, and persisted across an interactive gate
+    //     pause (`commandSnapshot`) so a file edited or deleted while paused
+    //     cannot change the running loop's prompt.
+    //   • A missing / empty / unsafe `loop.command` fails the node *before*
+    //     any iteration runs — no `sendQuery` call, one `node_failed` event
+    //     with an actionable error. The schema's superRefine catches unsafe
+    //     names at parse, but a hand-constructed workflow can bypass parse;
+    //     these tests exercise the executor's defense-in-depth branch.
+    //   • Loop variable substitution (`$LOOP_PREV_OUTPUT`, `$LOOP_USER_INPUT`,
+    //     and the standard workflow vars) applies to the loaded command-file
+    //     text identically to inline `loop.prompt` text.
+
+    it('reads loop.command file once at node start, not per iteration', async () => {
+      // Regression guard for the "load once, reuse" invariant. We write a
+      // command file, run iteration 1, delete the file synchronously inside
+      // the mock generator, and confirm iteration 2 still runs successfully.
+      // If the executor re-read the file per iteration, the load would fail
+      // on iteration 2 and surface as `node_failed` / `loop_iteration_failed`.
+      const cmdPath = join(testDir, '.archon', 'commands', 'read-once-loop.md');
+      await writeFile(cmdPath, 'Command-loaded loop body. iter prev=<<$LOOP_PREV_OUTPUT>>');
+
+      let callCount = 0;
+      mockSendQueryDag.mockImplementation(function* () {
+        callCount++;
+        if (callCount === 1) {
+          // Delete the source file *during* iteration 1 so it is gone by the
+          // time iteration 2 begins. Synchronous unlink ensures the file is
+          // removed before the next `for await` yield resumes the loop body.
+          unlinkSync(cmdPath);
+          yield { type: 'assistant', content: 'iter1 work output' };
+          yield { type: 'result', sessionId: 'sid-once-1' };
+        } else {
+          yield { type: 'assistant', content: 'iter2 done. <promise>COMPLETE</promise>' };
+          yield { type: 'result', sessionId: 'sid-once-2' };
+        }
+      });
+
+      const store = createMockStore();
+      const mockDeps = createMockDeps(store);
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun();
+
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-dag',
+        testDir,
+        {
+          name: 'loop-cmd-read-once',
+          nodes: [
+            {
+              id: 'read-once-loop',
+              loop: {
+                command: 'read-once-loop',
+                until: 'COMPLETE',
+                max_iterations: 5,
+                fresh_context: true,
+              },
+            } as unknown as DagNode,
+          ],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      // Both iterations ran — the mid-run deletion did not break iteration 2.
+      expect(mockSendQueryDag.mock.calls.length).toBe(2);
+      // No failure events of any kind.
+      const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+      const failedEvents = eventCalls.filter((call: unknown[]) => {
+        const evt = (call[0] as Record<string, unknown>).event_type as string;
+        return evt === 'node_failed' || evt === 'loop_iteration_failed';
+      });
+      expect(failedEvents).toHaveLength(0);
+      // Both iterations received the *same* file body as their prompt template
+      // — proving the file contents were loaded once and reused, not re-read.
+      expect(mockSendQueryDag.mock.calls[0][0] as string).toContain('Command-loaded loop body.');
+      expect(mockSendQueryDag.mock.calls[1][0] as string).toContain('Command-loaded loop body.');
+      // node_started carries the command name so the event stream identifies
+      // command-backed loops without reading the workflow YAML.
+      const started = eventCalls.find(
+        (call: unknown[]) =>
+          (call[0] as Record<string, unknown>).event_type === 'node_started' &&
+          (call[0] as Record<string, unknown>).step_name === 'read-once-loop'
+      );
+      expect(started).toBeDefined();
+      const startedData = (started![0] as Record<string, unknown>).data as Record<string, unknown>;
+      expect(startedData.command).toBe('read-once-loop');
+    });
+
+    it('fails fast with node_failed when loop.command names a missing file', async () => {
+      // Schema rejection at parse only fires when the workflow is parsed via
+      // the loader; a hand-constructed workflow bypasses that. The runtime
+      // guard inside `executeLoopNode` must catch the missing command and
+      // fail the node before iteration 1 runs.
+      const store = createMockStore();
+      const mockDeps = createMockDeps(store);
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun();
+
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-dag',
+        testDir,
+        {
+          name: 'loop-cmd-missing',
+          nodes: [
+            {
+              id: 'missing-loop',
+              loop: {
+                command: 'does-not-exist-anywhere',
+                until: 'COMPLETE',
+                max_iterations: 3,
+              },
+            } as unknown as DagNode,
+          ],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      // sendQuery must never have been invoked — load failed pre-iteration.
+      expect(mockSendQueryDag.mock.calls.length).toBe(0);
+      // `node_failed` event was emitted with the actionable message.
+      const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+      const failed = eventCalls.find(
+        (call: unknown[]) =>
+          (call[0] as Record<string, unknown>).event_type === 'node_failed' &&
+          (call[0] as Record<string, unknown>).step_name === 'missing-loop'
+      );
+      expect(failed).toBeDefined();
+      const data = (failed![0] as Record<string, unknown>).data as Record<string, unknown>;
+      expect(String(data.error)).toContain('not found');
+      // The failing command name must travel with the event so consumers of the
+      // event stream see the same context as the structured log.
+      expect(data.command).toBe('does-not-exist-anywhere');
+
+      // node_started must be paired with node_failed even when the failure is
+      // pre-iteration — same lifecycle contract as bash and script nodes.
+      const started = eventCalls.find(
+        (call: unknown[]) =>
+          (call[0] as Record<string, unknown>).event_type === 'node_started' &&
+          (call[0] as Record<string, unknown>).step_name === 'missing-loop'
+      );
+      expect(started).toBeDefined();
+    });
+
+    it('fails fast with node_failed when loop.command target file is empty', async () => {
+      // An empty command file is a load-time failure in `loadCommandPrompt`
+      // (same as for `command:` nodes). The loop must fail with the empty-file
+      // diagnostic before iteration 1.
+      await writeFile(join(testDir, '.archon', 'commands', 'empty-loop.md'), '');
+
+      const store = createMockStore();
+      const mockDeps = createMockDeps(store);
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun();
+
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-dag',
+        testDir,
+        {
+          name: 'loop-cmd-empty',
+          nodes: [
+            {
+              id: 'empty-loop',
+              loop: {
+                command: 'empty-loop',
+                until: 'COMPLETE',
+                max_iterations: 3,
+              },
+            } as unknown as DagNode,
+          ],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      expect(mockSendQueryDag.mock.calls.length).toBe(0);
+      const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+      const failed = eventCalls.find(
+        (call: unknown[]) =>
+          (call[0] as Record<string, unknown>).event_type === 'node_failed' &&
+          (call[0] as Record<string, unknown>).step_name === 'empty-loop'
+      );
+      expect(failed).toBeDefined();
+      const data = (failed![0] as Record<string, unknown>).data as Record<string, unknown>;
+      expect(String(data.error)).toContain('empty');
+      expect(data.command).toBe('empty-loop');
+    });
+
+    it('fails fast with node_failed when loop.command is an unsafe name', async () => {
+      // The loop schema's superRefine rejects `'../escape'` at parse, but a
+      // programmatically-constructed workflow bypasses parse. The executor
+      // branch must still flag this via `isValidCommandName` inside
+      // `loadCommandPrompt` rather than attempting any file resolution.
+      const store = createMockStore();
+      const mockDeps = createMockDeps(store);
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun();
+
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-dag',
+        testDir,
+        {
+          name: 'loop-cmd-unsafe',
+          nodes: [
+            {
+              id: 'unsafe-loop',
+              loop: {
+                command: '../escape',
+                until: 'COMPLETE',
+                max_iterations: 3,
+              },
+            } as unknown as DagNode,
+          ],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      expect(mockSendQueryDag.mock.calls.length).toBe(0);
+      const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+      const failed = eventCalls.find(
+        (call: unknown[]) =>
+          (call[0] as Record<string, unknown>).event_type === 'node_failed' &&
+          (call[0] as Record<string, unknown>).step_name === 'unsafe-loop'
+      );
+      expect(failed).toBeDefined();
+      const data = (failed![0] as Record<string, unknown>).data as Record<string, unknown>;
+      expect(String(data.error)).toContain('Invalid command name');
+      expect(data.command).toBe('../escape');
+    });
+
+    it('applies $LOOP_PREV_OUTPUT and $LOOP_USER_INPUT substitution to command-loaded text', async () => {
+      // Loop variable substitution applies to command-loaded prompt text
+      // identically to inline prompt text: both `$LOOP_PREV_OUTPUT` and
+      // `$LOOP_USER_INPUT` are embedded in the command file body, and the
+      // prompt actually sent to the AI must substitute them the same way the
+      // inline-prompt tests verify for `loop.prompt`. The body itself must
+      // appear in the sent prompt — proof the file contents (not the YAML
+      // node body) flow through `substituteWorkflowVariables`.
+      await writeFile(
+        join(testDir, '.archon', 'commands', 'subst-loop.md'),
+        'Cmd-file body. PREV=<<$LOOP_PREV_OUTPUT>> USER=<<$LOOP_USER_INPUT>>'
+      );
+
+      let callCount = 0;
+      mockSendQueryDag.mockImplementation(function* () {
+        callCount++;
+        if (callCount === 1) {
+          yield { type: 'assistant', content: 'iter1 result text' };
+          yield { type: 'result', sessionId: 'sid-subst-1' };
+        } else {
+          yield { type: 'assistant', content: 'done. <promise>COMPLETE</promise>' };
+          yield { type: 'result', sessionId: 'sid-subst-2' };
+        }
+      });
+
+      const mockDeps = createMockDeps();
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun();
+
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-dag',
+        testDir,
+        {
+          name: 'loop-cmd-subst',
+          nodes: [
+            {
+              id: 'subst-loop',
+              loop: {
+                command: 'subst-loop',
+                until: 'COMPLETE',
+                max_iterations: 5,
+                fresh_context: true,
+              },
+            } as unknown as DagNode,
+          ],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      expect(mockSendQueryDag.mock.calls.length).toBe(2);
+      const promptIter1 = mockSendQueryDag.mock.calls[0][0] as string;
+      const promptIter2 = mockSendQueryDag.mock.calls[1][0] as string;
+      // The file body is what reached the AI — not the YAML inline-prompt path.
+      expect(promptIter1).toContain('Cmd-file body.');
+      expect(promptIter2).toContain('Cmd-file body.');
+      // Iteration 1: PREV substitutes to empty (no prior output); USER empty
+      // (non-interactive, no resume metadata).
+      expect(promptIter1).toContain('PREV=<<>>');
+      expect(promptIter1).toContain('USER=<<>>');
+      // Iteration 2: PREV carries iteration 1's cleaned output, USER stays
+      // empty (still non-interactive).
+      expect(promptIter2).toContain('PREV=<<iter1 result text>>');
+      expect(promptIter2).toContain('USER=<<>>');
+    });
+
+    it('reuses the pause-time command snapshot on approval resume — file mutated and deleted while paused', async () => {
+      // Two-invocation contract: invocation 1 loads the command file and pauses
+      // at the interactive gate, persisting the loaded body (`commandSnapshot`)
+      // in the pause context. While the run sits paused, the file is rewritten
+      // AND then deleted. Invocation 2 (the approval resume) must run the next
+      // iteration from the SNAPSHOT — never from the mutated file, and without
+      // failing on the missing file.
+      const cmdPath = join(testDir, '.archon', 'commands', 'gated-loop.md');
+      await writeFile(cmdPath, 'ORIGINAL gated body. USER=<<$LOOP_USER_INPUT>>');
+
+      mockSendQueryDag.mockImplementation(function* () {
+        yield { type: 'assistant', content: 'iteration output, no signal yet' };
+        yield { type: 'result', sessionId: 'sid-gated-1' };
+      });
+
+      const mockDeps = createMockDeps();
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun();
+
+      const gatedWorkflow = {
+        name: 'loop-cmd-gated',
+        nodes: [
+          {
+            id: 'gated-loop',
+            loop: {
+              command: 'gated-loop',
+              until: 'COMPLETE',
+              max_iterations: 5,
+              interactive: true,
+              gate_message: 'Review this iteration.',
+            },
+          } as unknown as DagNode,
+        ],
+      };
+
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-dag',
+        testDir,
+        gatedWorkflow,
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      // Invocation 1 paused at the gate and persisted the loaded body.
+      const pauseCalls = (
+        mockDeps.store.pauseWorkflowRun as Mock<
+          (id: string, ctx: Record<string, unknown>) => Promise<void>
+        >
+      ).mock.calls;
+      expect(pauseCalls.length).toBe(1);
+      const pausedContext = pauseCalls[0][1] as Record<string, unknown>;
+      expect(pausedContext.commandSnapshot).toContain('ORIGINAL gated body.');
+      expect(mockSendQueryDag.mock.calls[0][0] as string).toContain('ORIGINAL gated body.');
+
+      // While paused: the file is rewritten, then deleted entirely.
+      await writeFile(cmdPath, 'TAMPERED body that must never run');
+      unlinkSync(cmdPath);
+
+      // Invocation 2: approval resume with feedback (feedback forces a real
+      // resumed iteration rather than a bare-approve finalize).
+      mockSendQueryDag.mockClear();
+      mockSendQueryDag.mockImplementation(function* () {
+        yield { type: 'assistant', content: 'refined. <promise>COMPLETE</promise>' };
+        yield { type: 'result', sessionId: 'sid-gated-2' };
+      });
+      const resumedRun = makeWorkflowRun('gated-resume-run', {
+        metadata: {
+          approval: { ...pausedContext },
+          loop_user_input: 'tighten the summary',
+          loop_feedback_given: true,
+        },
+      });
+      const store2 = createMockStore();
+      const mockDeps2 = createMockDeps(store2);
+
+      await executeDagWorkflow(
+        mockDeps2,
+        platform,
+        'conv-dag',
+        testDir,
+        gatedWorkflow,
+        resumedRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      // The resumed iteration ran from the snapshot: original body, user
+      // feedback substituted, no trace of the tampered content, no failure
+      // from the deleted file.
+      expect(mockSendQueryDag.mock.calls.length).toBe(1);
+      const resumedPrompt = mockSendQueryDag.mock.calls[0][0] as string;
+      expect(resumedPrompt).toContain('ORIGINAL gated body.');
+      expect(resumedPrompt).toContain('USER=<<tighten the summary>>');
+      expect(resumedPrompt).not.toContain('TAMPERED');
+      const failed = (store2.createWorkflowEvent as ReturnType<typeof mock>).mock.calls.filter(
+        (call: unknown[]) => (call[0] as Record<string, unknown>).event_type === 'node_failed'
+      );
+      expect(failed).toHaveLength(0);
+    });
+
+    it('closes the loop lifecycle with exactly one node_failed on max-iterations exhaustion', async () => {
+      // Failure finalizer contract: every failed exit after node_started goes
+      // through one finalizer — exactly one node_failed row per started loop
+      // node, paired with its node_started.
+      await writeFile(
+        join(testDir, '.archon', 'commands', 'exhaust-loop.md'),
+        'Body that never signals completion'
+      );
+
+      mockSendQueryDag.mockImplementation(function* () {
+        yield { type: 'assistant', content: 'still going, no signal' };
+        yield { type: 'result', sessionId: 'sid-exhaust' };
+      });
+
+      const store = createMockStore();
+      const mockDeps = createMockDeps(store);
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun();
+
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-dag',
+        testDir,
+        {
+          name: 'loop-cmd-exhaust',
+          nodes: [
+            {
+              id: 'exhaust-loop',
+              loop: {
+                command: 'exhaust-loop',
+                until: 'COMPLETE',
+                max_iterations: 2,
+                fresh_context: true,
+              },
+            } as unknown as DagNode,
+          ],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      expect(mockSendQueryDag.mock.calls.length).toBe(2);
+      const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+      const started = eventCalls.filter(
+        (call: unknown[]) =>
+          (call[0] as Record<string, unknown>).event_type === 'node_started' &&
+          (call[0] as Record<string, unknown>).step_name === 'exhaust-loop'
+      );
+      const failed = eventCalls.filter(
+        (call: unknown[]) =>
+          (call[0] as Record<string, unknown>).event_type === 'node_failed' &&
+          (call[0] as Record<string, unknown>).step_name === 'exhaust-loop'
+      );
+      expect(started).toHaveLength(1);
+      expect(failed).toHaveLength(1);
+      const data = (failed[0][0] as Record<string, unknown>).data as Record<string, unknown>;
+      expect(String(data.error)).toContain('exceeded max iterations');
+    });
   });
 });
 
@@ -11424,6 +11945,79 @@ describe('executeDagWorkflow -- loop_group node', () => {
     // Two iterations: iter 1 (no signal) → iter 2 (DONE signal) → complete.
     expect(callCount).toBe(2);
     expect(result).toContain('iteration 2 final result');
+  });
+
+  it('runs a command-backed loop node inside a loop_group body with namespaced lifecycle events', async () => {
+    // A `loop:` body node may use `loop.command` like any top-level loop. The
+    // command body must reach the AI, and the loop's persisted lifecycle events
+    // must carry the `<groupId>.<nodeId>` namespaced step_name (#2090).
+    await writeFile(
+      join(testDir, '.archon', 'commands', 'body-loop-cmd.md'),
+      'Command-file body for the inner loop.'
+    );
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'inner work done. <promise>INNER_DONE</promise>\nDONE' };
+      yield { type: 'result', sessionId: 'lg-cmd-sess' };
+    });
+
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('dag-loopgroup-cmd');
+
+    const nodes: DagNode[] = [
+      {
+        id: 'grp',
+        loop_group: {
+          until: 'DONE',
+          max_iterations: 3,
+          fresh_context: false,
+          nodes: [
+            {
+              id: 'inner-loop',
+              loop: {
+                command: 'body-loop-cmd',
+                until: 'INNER_DONE',
+                max_iterations: 2,
+                fresh_context: false,
+              },
+              depends_on: [],
+            } as unknown as DagNode,
+          ],
+        },
+        depends_on: [],
+      },
+    ];
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-lg',
+      testDir,
+      { name: 'dag-loopgroup-cmd', nodes },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    // The command file's body (not a YAML inline prompt) reached the AI.
+    expect(mockSendQueryDag.mock.calls.length).toBe(1);
+    expect(mockSendQueryDag.mock.calls[0][0] as string).toContain(
+      'Command-file body for the inner loop.'
+    );
+    // Inner-loop lifecycle events are namespaced under the group id.
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    const innerStarted = eventCalls.filter(
+      (call: unknown[]) =>
+        (call[0] as Record<string, unknown>).event_type === 'node_started' &&
+        (call[0] as Record<string, unknown>).step_name === 'grp.inner-loop'
+    );
+    expect(innerStarted.length).toBeGreaterThanOrEqual(1);
   });
 
   it('delivers $LOOP_USER_INPUT to a resumed body script via env, never spliced into source (#2115)', async () => {

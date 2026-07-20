@@ -406,6 +406,37 @@ export async function validateWorkflowResources(
       }
     }
 
+    // --- Loop nodes with loop.command: check file exists (parallel to command-node check above) ---
+    if (isLoopNode(node) && node.loop.command !== undefined) {
+      const loopCommand = node.loop.command;
+      if (!isValidCommandName(loopCommand)) {
+        issues.push({
+          level: 'error',
+          nodeId: node.id,
+          field: 'loop.command',
+          message: `Invalid command name '${loopCommand}' — must not contain '/', '\\', '..', or start with '.'`,
+          hint: 'Use a simple name like "my-command" (without path separators or the .md extension)',
+        });
+      } else {
+        const resolved = await resolveCommand(loopCommand, cwd, config);
+        if (!resolved) {
+          const similar = findSimilar(loopCommand, availableCommands);
+          const issue: ValidationIssue = {
+            level: 'error',
+            nodeId: node.id,
+            field: 'loop.command',
+            message: `Command '${loopCommand}' not found`,
+            hint: `Create .archon/commands/${loopCommand}.md or use an existing command name`,
+          };
+          if (similar.length > 0) {
+            issue.hint = `Did you mean: ${similar.map(s => `'${s}'`).join(', ')}? Or create .archon/commands/${loopCommand}.md`;
+            issue.suggestions = similar;
+          }
+          issues.push(issue);
+        }
+      }
+    }
+
     // --- MCP nodes: check config file exists and is valid JSON ---
     if ('mcp' in node && typeof node.mcp === 'string') {
       const mcpPath = isAbsolute(node.mcp) ? node.mcp : resolve(cwd, node.mcp);

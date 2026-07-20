@@ -281,6 +281,129 @@ describe('validateWorkflowResources — portable model refs', () => {
 });
 
 // =============================================================================
+// validateWorkflowResources — loop.command (mirrors command-node coverage)
+// =============================================================================
+
+describe('validateWorkflowResources — loop.command', () => {
+  // Helper: build a loop node carrying `loop.command`. We bypass the parser via
+  // `as DagNode` for parity with the command-node tests above, which lets the
+  // validator branch be exercised directly even for inputs the schema would
+  // reject (e.g. an unsafe `loop.command` name).
+  function makeLoopCommandNode(id: string, loopCommand: string): DagNode {
+    return {
+      id,
+      loop: {
+        command: loopCommand,
+        until: 'DONE',
+        max_iterations: 5,
+        fresh_context: false,
+      },
+    } as unknown as DagNode;
+  }
+
+  test('no issues when repo-local command file exists', async () => {
+    // Repo-scope hit: confirms the validator reuses the same repo lookup that
+    // command-nodes use, so a `loop.command` pointing at an existing
+    // `.archon/commands/<name>.md` clears Level 3 silently.
+    await createCommandFile('my-loop-command');
+    const workflow = makeWorkflow('test', [makeLoopCommandNode('step1', 'my-loop-command')]);
+    const issues = await validateWorkflowResources(workflow, tmpDir, {
+      loadDefaultCommands: false,
+    });
+    const errors = issues.filter(i => i.level === 'error');
+    expect(errors).toHaveLength(0);
+  });
+
+  test('error with suggestions when loop.command target is missing', async () => {
+    // Missing target should produce exactly one `field: 'loop.command'` error,
+    // and the suggestions list should populate from `findSimilar` over the
+    // already-discovered command names — the same affordance command-nodes get.
+    await createCommandFile('archon-ralph-implement');
+    const workflow = makeWorkflow('test', [makeLoopCommandNode('step1', 'archon-ralph-implemen')]);
+    const issues = await validateWorkflowResources(workflow, tmpDir, {
+      loadDefaultCommands: false,
+    });
+    const errors = issues.filter(i => i.level === 'error');
+    expect(errors).toHaveLength(1);
+    expect(errors[0].field).toBe('loop.command');
+    expect(errors[0].nodeId).toBe('step1');
+    expect(errors[0].message).toContain("Command 'archon-ralph-implemen' not found");
+    expect(errors[0].suggestions).toContain('archon-ralph-implement');
+  });
+
+  test('error for invalid (unsafe) loop.command name', async () => {
+    // Defense-in-depth: the loop schema's superRefine already rejects unsafe
+    // names at parse time, but a programmatically-constructed workflow can
+    // bypass that path. The validator must still flag it with a clear
+    // `field: 'loop.command'` error rather than treating it as a missing file.
+    const workflow = makeWorkflow('test', [makeLoopCommandNode('step1', '../escape')]);
+    const issues = await validateWorkflowResources(workflow, tmpDir, {
+      loadDefaultCommands: false,
+    });
+    const errors = issues.filter(i => i.level === 'error');
+    expect(errors).toHaveLength(1);
+    expect(errors[0].field).toBe('loop.command');
+    expect(errors[0].message).toContain('Invalid command name');
+  });
+
+  test('no issues when loop.command resolves to a bundled default', async () => {
+    // Bundled-default fallback: a `loop.command` referencing a known bundled
+    // command (e.g. `archon-ralph-generate`) must resolve when defaults are
+    // loaded, even with an empty repo `.archon/commands/`. This is the same
+    // precedence command-nodes already get (repo → home → bundled).
+    const workflow = makeWorkflow('test', [makeLoopCommandNode('step1', 'archon-ralph-generate')]);
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    const errors = issues.filter(i => i.level === 'error' && i.field === 'loop.command');
+    expect(errors).toHaveLength(0);
+  });
+
+  // --- Home-scoped resolution: mirrors the equivalent command-node test path.
+  // Uses the same ARCHON_HOME swap as the existing home-scope block so the
+  // walks of repo / home / bundled all see the temp dirs.
+  describe('home-scoped loop.command', () => {
+    let homeDir: string;
+    const originalArchonHome = process.env.ARCHON_HOME;
+    const originalArchonDocker = process.env.ARCHON_DOCKER;
+
+    beforeEach(async () => {
+      homeDir = await mkdtemp(join(tmpdir(), 'validator-loop-home-'));
+      process.env.ARCHON_HOME = homeDir;
+      delete process.env.ARCHON_DOCKER;
+    });
+
+    afterEach(async () => {
+      await rm(homeDir, { recursive: true, force: true });
+      if (originalArchonHome === undefined) {
+        delete process.env.ARCHON_HOME;
+      } else {
+        process.env.ARCHON_HOME = originalArchonHome;
+      }
+      if (originalArchonDocker === undefined) {
+        delete process.env.ARCHON_DOCKER;
+      } else {
+        process.env.ARCHON_DOCKER = originalArchonDocker;
+      }
+    });
+
+    async function createHomeCommand(name: string, content = '# Home helper'): Promise<void> {
+      const dir = join(homeDir, 'commands');
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, `${name}.md`), content);
+    }
+
+    test('resolves a loop.command placed under ~/.archon/commands/', async () => {
+      await createHomeCommand('only-in-home-loop');
+      const workflow = makeWorkflow('test', [makeLoopCommandNode('step1', 'only-in-home-loop')]);
+      const issues = await validateWorkflowResources(workflow, tmpDir, {
+        loadDefaultCommands: false,
+      });
+      const errors = issues.filter(i => i.level === 'error');
+      expect(errors).toHaveLength(0);
+    });
+  });
+});
+
+// =============================================================================
 // validateWorkflowResources — MCP validation
 // =============================================================================
 

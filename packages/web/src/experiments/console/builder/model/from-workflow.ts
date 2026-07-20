@@ -45,6 +45,26 @@ function nodeFromDag(node: WireWorkflowDefinition['nodes'][number], issues: Issu
     return { id, variant: 'prompt', base, data: defaultPromptData() };
   }
 
+  if (
+    variant === 'loop' &&
+    typeof variantSpecific.loop?.prompt === 'string' &&
+    typeof variantSpecific.loop.command === 'string'
+  ) {
+    // The engine schema rejects a loop carrying both prompt sources; a wire
+    // node that somehow has both cannot round-trip faithfully. loopFromDag
+    // deterministically keeps `prompt` — surface the dropped `command`.
+    issues.push(
+      makeIssue({
+        rule: 'structural.field.unsupported',
+        severity: 'error',
+        source: 'client-instant',
+        message:
+          "loop node has both 'prompt' and 'command' (engine allows exactly one); editing as an inline-prompt loop — 'command' was dropped",
+        path: { nodeId: id, field: 'loop.command' },
+      })
+    );
+  }
+
   if (variant === 'script' && variantSpecific.runtime === undefined) {
     // The engine requires `runtime` on script nodes. scriptFromDag defaults to
     // 'bun' so the node stays editable, but the gap must not be silent.

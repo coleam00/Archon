@@ -17,6 +17,11 @@ Use loop nodes for autonomous multi-step work: implement N stories from a PRD,
 iterate on a design until validation passes, or refine output until quality
 criteria are met.
 
+A loop node's iteration prompt can live **inline** (`loop.prompt`) or in a
+**command file** (`loop.command`, loaded from `.archon/commands/` the same way
+[`command:` nodes](/guides/authoring-commands/) load their text). Provide
+exactly one — both at once, or neither, is rejected at workflow load time.
+
 ## Quick Start
 
 ```yaml
@@ -65,7 +70,10 @@ the executor checks for workflow cancellation.
 ```yaml
 - id: my-loop
   loop:
-    prompt: "..."           # Required. The prompt sent each iteration.
+    prompt: "..."           # Inline prompt. Exactly one of `prompt` or `command` is required.
+    # command: <name>       # Alternative to `prompt`: command name under .archon/commands/,
+    #                       # loaded once per run and reused for every iteration.
+    #                       # Never combine with `prompt` — the loader rejects both together.
     until: COMPLETE         # Required. Completion signal string.
     max_iterations: 10      # Required. Hard limit — node fails if exceeded.
     fresh_context: true     # Optional. Default: false.
@@ -100,6 +108,52 @@ the agent has no memory of prior iterations, so the prompt must include all
 context needed to continue the work. `$LOOP_PREV_OUTPUT` complements this by
 exposing the previous iteration's own output without forcing the engine to
 thread the session.
+
+### `command`
+
+Alternative to `prompt` — names a command file (under `.archon/commands/`)
+whose body is loaded as the iteration prompt. **Exactly one of `prompt` or
+`command` is required**; specifying both, or neither, is rejected at workflow
+load time with a clear error.
+
+The named command resolves with the same repo → home → bundled precedence as a
+[`command:` node](/guides/authoring-commands/): `.archon/commands/<name>.md`
+relative to the working directory first, then `~/.archon/commands/<name>.md`,
+then the bundled defaults shipped with Archon. The same command-name safety
+rules apply — no path separators, no `..`, no leading `.` — and unsafe names
+are rejected at parse time. Static workflow validation also flags a
+`loop.command` that points at a missing file (with "did you mean…" /
+"create `.archon/commands/<name>.md`" guidance), the same way it does for
+`command:` nodes.
+
+The file is **read once per run** — loaded when the loop node starts and
+reused for every iteration, including across interactive-gate pauses: the
+loaded text is persisted with the pause, so editing or deleting the file while
+a run sits paused neither changes nor breaks the resumed loop's prompt. A
+missing, empty, or unreadable target fails the node immediately with an
+actionable error — no iterations execute.
+
+Once loaded, the text behaves identically to an inline `prompt`: all the
+variable substitution above applies unchanged (including `$LOOP_PREV_OUTPUT`
+and `$LOOP_USER_INPUT`), as do all the iteration semantics (`until`,
+`until_bash`, `max_iterations`, `fresh_context`, `interactive` /
+`gate_message`).
+
+```yaml
+- id: implement
+  model: opus
+  depends_on: [generate-prd]
+  loop:
+    command: archon-ralph-implement   # resolved repo → home → bundled (see precedence above)
+    until: COMPLETE
+    max_iterations: 15
+    fresh_context: true
+```
+
+Use this when the iteration prompt is long enough that keeping it inline
+obscures the shape of the pipeline — Ralph-style implement/build loops and
+iterate-until-valid loops are the typical case. It is the loop-node parallel
+of moving a `prompt:` node to a `command:` node.
 
 ### `until`
 

@@ -178,7 +178,8 @@ Defined under `loop:` inside a node:
 
 | Field | Required | Type | Description |
 |-------|----------|------|-------------|
-| `prompt` | Yes | string | AI instructions executed each iteration |
+| `prompt` | One of `prompt`/`command` | string | Inline AI instructions executed each iteration |
+| `command` | One of `prompt`/`command` | string | Command file (under `.archon/commands/`) whose body is the iteration prompt — exactly one of `prompt` or `command` |
 | `until` | Yes | string | Completion signal string — loop ends when AI output contains this |
 | `max_iterations` | Yes | number | Maximum iterations before the node fails |
 | `fresh_context` | No | boolean | Start a new session each iteration (default: false) |

@@ -147,7 +147,9 @@ function rewriteNodeOutputRefs(node: DagNode, rename: (id: string) => string): v
   if (node.when !== undefined) node.when = whenExpr(node.when);
 
   if (isLoopNode(node)) {
-    node.loop.prompt = prose(node.loop.prompt);
+    // A command-backed loop has no inline prompt; its `command` is a NAME, not a ref
+    // (same rule as `command:` nodes above), so there is nothing to rewrite.
+    if (node.loop.prompt !== undefined) node.loop.prompt = prose(node.loop.prompt);
     if (node.loop.until_bash !== undefined) node.loop.until_bash = code(node.loop.until_bash);
   } else if (isLoopGroupNode(node)) {
     if (node.loop_group.until_bash !== undefined) {
