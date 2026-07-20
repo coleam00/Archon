@@ -1,7 +1,12 @@
 import { DeliveryDeduplicator } from './delivery-dedup';
 
+interface TestClock {
+  now: () => number;
+  advance: (ms: number) => void;
+}
+
 /** Deterministic clock: tests advance time explicitly instead of sleeping. */
-function createClock(start = 0) {
+function createClock(start = 0): TestClock {
   let now = start;
   return {
     now: () => now,
@@ -88,14 +93,17 @@ describe('DeliveryDeduplicator', () => {
 
   test('re-seeing a key after expiry refreshes its eviction position', () => {
     const clock = createClock();
-    const dedup = new DeliveryDeduplicator(20, 10, clock.now);
-    dedup.seen('a');
-    clock.advance(30);
-    dedup.seen('b');
-    dedup.seen('a'); // expired -> refreshed, moves behind b
+    const dedup = new DeliveryDeduplicator(100, 2, clock.now);
+    dedup.seen('a'); // t=0
+    clock.advance(50);
+    dedup.seen('b'); // t=50
+    clock.advance(70); // t=120: a expired, b fresh until t=150
 
-    expect(dedup.seen('a')).toBe(true);
-    expect(dedup.seen('b')).toBe(true);
-    expect(dedup.size).toBe(2);
+    expect(dedup.seen('a')).toBe(false); // expired -> refreshed, moves behind b
+    dedup.seen('c'); // size pressure (3 > 2) evicts the oldest, now b
+
+    expect(dedup.seen('a')).toBe(true); // refreshed entry survived eviction
+    expect(dedup.size).toBe(2); // a + c remain
+    expect(dedup.seen('b')).toBe(false); // evicted, so first-seen again
   });
 });
