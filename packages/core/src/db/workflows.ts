@@ -972,6 +972,10 @@ export async function pauseWorkflowRun(
             sessionId: approvalContext.sessionId ?? null,
             sessionProvider: approvalContext.sessionProvider ?? null,
             commandSnapshot: approvalContext.commandSnapshot ?? null,
+            // #2121 Phase 2: the child_workflow gate's target child. Reset explicitly
+            // like every other optional sub-field so a prior gate's childRunId can't
+            // leak into a later non-child gate via SQLite json_patch deep-merge.
+            childRunId: approvalContext.childRunId ?? null,
           },
           // Fold caller-supplied run-level metadata (e.g. `pending_writeback`) into the
           // SAME atomic write so there is no window where the run is paused without it (M3).

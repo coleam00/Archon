@@ -9,6 +9,7 @@ import {
   RESUMABLE_WORKFLOW_STATUSES,
   isApprovalContext,
   isGateResolved,
+  isRunBlockedOnChild,
 } from '@archon/workflows/schemas/workflow-run';
 import type {
   WorkflowRun,
@@ -113,6 +114,17 @@ async function cascadeCancelChildren(rootId: string): Promise<{ failures: number
       }
     }
   }
+  // Truncation is NOT silent success: if we hit the cap with the queue non-empty,
+  // an unbounded-deep/wide tree still has live descendants we never reached. Surface
+  // it via the same `failures` channel (caller reports "part of the tree may still be
+  // alive") AND a distinct log line, rather than returning a false all-clear.
+  if (queue.length > 0) {
+    getLog().warn(
+      { rootId, cap: MAX_CASCADE_RUNS, unreached: queue.length },
+      'operations.workflow_abandon_cascade_truncated'
+    );
+    failures += queue.length;
+  }
   return { failures };
 }
 
@@ -127,15 +139,9 @@ async function findParentBlockedOn(run: WorkflowRun): Promise<string | null> {
   if (!run.parent_run_id) return null;
   try {
     const parent = await workflowDb.getWorkflowRun(run.parent_run_id);
-    if (parent?.status !== 'paused') return null;
-    const approval = parent.metadata.approval;
-    if (
-      isApprovalContext(approval) &&
-      approval.type === 'child_workflow' &&
-      approval.childRunId === run.id
-    ) {
-      return parent.id;
-    }
+    // Shared invariant (isRunBlockedOnChild) — same predicate the auto-resume hook
+    // uses, so the two can't drift if the child_workflow gate shape changes.
+    if (parent && isRunBlockedOnChild(parent, run.id)) return parent.id;
     return null;
   } catch (err) {
     getLog().warn(
