@@ -414,6 +414,7 @@ nodes:
         - `.pr-body.md`, `pr-body.md`, `*.scratch.md`, `*.tmp.md`
         - `review/`, `*-report.md` at the repo root
         - Anything under `$ARTIFACTS_DIR`
+        - Repo-local Archon telemetry: `.archon/artifacts/`, `.archon/logs/`, `.archon/state/` (local-only — never in git)
 
         Verify only expected files are staged. If unexpected files appear, investigate before committing.
 
