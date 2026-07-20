@@ -360,6 +360,15 @@ export type RunChildWorkflowFn = (args: RunChildWorkflowArgs) => Promise<ChildWo
  * (executeWorkflowNode finds an already-terminal child) read the same source.
  */
 export function childOutcomeFromRun(run: WorkflowRun): ChildWorkflowOutcome {
+  if (run.status === 'running' || run.status === 'pending') {
+    // Fail fast instead of a blind narrowing cast: every caller must hand this a
+    // settled (terminal or paused) run. A non-settled status slipping through
+    // would fall out of interpret()'s switch and corrupt the node result with
+    // `undefined` — throwing turns that into a loud, attributable node failure.
+    throw new Error(
+      `Sub-run ${run.id} is still '${run.status}' — cannot derive a node outcome from an unsettled run.`
+    );
+  }
   const md: Record<string, unknown> = run.metadata ?? {};
   const input = typeof md.total_tokens_in === 'number' ? md.total_tokens_in : undefined;
   const output = typeof md.total_tokens_out === 'number' ? md.total_tokens_out : undefined;
@@ -369,7 +378,7 @@ export function childOutcomeFromRun(run: WorkflowRun): ChildWorkflowOutcome {
       : undefined;
   return {
     childRunId: run.id,
-    status: run.status as ChildWorkflowOutcome['status'],
+    status: run.status,
     output: typeof md.summary === 'string' ? md.summary : undefined,
     costUsd: typeof md.total_cost_usd === 'number' ? md.total_cost_usd : undefined,
     tokens,
@@ -5040,6 +5049,16 @@ async function executeWorkflowNode(
         };
       case 'cancelled':
         return { state: 'failed', output: '', error: `Sub-run '${node.workflow}' was cancelled` };
+      default: {
+        // Compile-time exhaustiveness + runtime fail-loud: without this, a status
+        // outside the union would silently return `undefined` into runLayers.
+        const unreachable: never = outcome.status;
+        return {
+          state: 'failed',
+          output: '',
+          error: `Sub-run '${node.workflow}' returned unexpected status '${String(unreachable)}'`,
+        };
+      }
     }
   };
 

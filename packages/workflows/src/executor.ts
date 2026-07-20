@@ -482,10 +482,12 @@ const CHILD_WORKFLOW_DEPTH_CAP = 5;
  * terminal output — and returns the child's node-facing outcome.
  *
  * The runtime cycle guard + depth cap live here (include:'s guard is load-time and
- * does not cover runtime targets). The child shares the parent's checkout, so its
- * ancestor chain is threaded into executeWorkflow to exclude from the path-lock.
+ * does not cover runtime targets). The child shares the parent's checkout;
+ * executeWorkflow derives the ancestor chain from the child's own parent_run_id
+ * to exclude it from the path-lock.
  * Never throws — every failure is returned as a `{ status: 'failed' }` outcome so
- * the calling node fails cleanly rather than the whole DAG throwing.
+ * the calling node fails cleanly rather than the whole DAG throwing. (Every step,
+ * including the recursive executeWorkflow call, is guarded — keep it that way.)
  */
 async function runChildWorkflow(
   deps: WorkflowDeps,
@@ -598,28 +600,40 @@ async function runChildWorkflow(
 
   // 4. Run the child in-process (reuses the whole lifecycle). Its terminal output +
   //    cost + tokens land in the child run metadata on completion.
-  await executeWorkflow(
-    deps,
-    platform,
-    conversationId,
-    cwd,
-    childWorkflow,
-    input,
-    conversationDbId,
-    childOpts
-  );
+  try {
+    await executeWorkflow(
+      deps,
+      platform,
+      conversationId,
+      cwd,
+      childWorkflow,
+      input,
+      conversationDbId,
+      childOpts
+    );
 
-  // 5. Read the child back for the node-facing outcome (status + summary + cost +
-  //    tokens). Works for synchronous completion AND a child paused at its gate.
-  const finalChild = await deps.store.getWorkflowRun(childRunId);
-  if (!finalChild) {
+    // 5. Read the child back for the node-facing outcome (status + summary + cost +
+    //    tokens). Works for synchronous completion AND a child paused at its gate.
+    const finalChild = await deps.store.getWorkflowRun(childRunId);
+    if (!finalChild) {
+      return {
+        childRunId,
+        status: 'failed',
+        error: 'Child run row disappeared after execution.',
+      };
+    }
+    return childOutcomeFromRun(finalChild);
+  } catch (err) {
+    // Honor the never-throws contract: executeWorkflow can throw from its early
+    // setup (before its own failWorkflowRun catch-all), and the read-back can
+    // throw on a DB error — both must surface as a failed node outcome, not an
+    // exception unwinding the parent's DAG.
     return {
       childRunId,
       status: 'failed',
-      error: 'Child run row disappeared after execution.',
+      error: `Sub-run '${childWorkflowName}' errored: ${(err as Error).message}`,
     };
   }
-  return childOutcomeFromRun(finalChild);
 }
 
 /**
@@ -635,7 +649,9 @@ async function runChildWorkflow(
  *  - a DIFFERENT child of the same parent terminated (childRunId mismatch).
  *
  * Never throws — the child's own result must not be corrupted by a parent-resume
- * failure; callers wrap this in `.catch`.
+ * failure. Every await is guarded here (a parent-side failure is logged, and a
+ * post-CAS failure marks the parent 'failed' so it stays resumable); the caller's
+ * `.catch` is a belt-and-braces backstop, not the contract.
  */
 async function maybeResumeParentRun(
   deps: WorkflowDeps,
@@ -647,13 +663,35 @@ async function maybeResumeParentRun(
   const parentRunId = childRun.parent_run_id;
   if (!parentRunId) return;
 
-  const parent = await deps.store.getWorkflowRun(parentRunId);
+  let parent: WorkflowRun | null;
+  try {
+    parent = await deps.store.getWorkflowRun(parentRunId);
+  } catch (err) {
+    getLog().error(
+      { err: err as Error, parentRunId, childRunId: childRun.id },
+      'workflow.parent_resume_lookup_failed'
+    );
+    return;
+  }
   if (parent?.status !== 'paused') return;
 
   const approval = isApprovalContext(parent.metadata?.approval)
     ? parent.metadata.approval
     : undefined;
-  if (approval?.type !== 'child_workflow' || approval.childRunId !== childRun.id) {
+  if (approval?.type !== 'child_workflow') return;
+  if (!approval.childRunId) {
+    // Invariant violation, not a routing miss: a child_workflow gate is always
+    // written with its childRunId (pauseParentOnChild). A context without one is
+    // malformed/stale metadata — silently skipping would wedge the parent forever,
+    // so make the corruption loud and diagnosable.
+    getLog().error(
+      { parentRunId, childRunId: childRun.id },
+      'workflow.parent_resume_malformed_gate_missing_child_run_id'
+    );
+    return;
+  }
+  if (approval.childRunId !== childRun.id) {
+    // A different child of the same parent terminated — not ours to resume.
     return;
   }
 
