@@ -10,7 +10,6 @@
  */
 
 import { join, resolve, isAbsolute } from 'path';
-import { homedir } from 'os';
 import { access, readFile } from 'fs/promises';
 import {
   createLogger,
@@ -23,7 +22,7 @@ import { execFileAsync } from '@archon/git';
 import { BUNDLED_COMMANDS, isBinaryBuild } from './defaults/bundled-defaults';
 import { isValidCommandName } from './command-validation';
 import { levenshtein, findSimilar } from './utils/fuzzy-match';
-import { getProviderCapabilities, isRegisteredProvider } from '@archon/providers';
+import { getProviderCapabilities, isRegisteredProvider, skillSearchRoots } from '@archon/providers';
 
 /** Lazy-initialized logger */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -462,20 +461,24 @@ export async function validateWorkflowResources(
 
     // --- Skills nodes: check skill directories exist ---
     if ('skills' in node && Array.isArray(node.skills)) {
+      const searchRoots = skillSearchRoots(cwd);
       for (const skillName of node.skills) {
-        const projectSkillPath = join(cwd, '.claude', 'skills', skillName, 'SKILL.md');
-        const userSkillPath = join(homedir(), '.claude', 'skills', skillName, 'SKILL.md');
+        let found = false;
+        for (const root of searchRoots) {
+          const skillPath = join(root, skillName, 'SKILL.md');
+          if (await fileExists(skillPath)) {
+            found = true;
+            break;
+          }
+        }
 
-        const projectExists = await fileExists(projectSkillPath);
-        const userExists = await fileExists(userSkillPath);
-
-        if (!projectExists && !userExists) {
+        if (!found) {
           issues.push({
             level: 'warning',
             nodeId: node.id,
             field: 'skills',
-            message: `Skill '${skillName}' not found in .claude/skills/ or ~/.claude/skills/`,
-            hint: `Install with: npx skills add <repo> — or create manually at .claude/skills/${skillName}/SKILL.md`,
+            message: `Skill '${skillName}' not found in .agents/skills/ or .claude/skills/ (project or user scope)`,
+            hint: `Install with: npx skills add <repo> — or create manually at .agents/skills/${skillName}/SKILL.md`,
           });
         }
       }

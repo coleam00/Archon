@@ -64,6 +64,9 @@ export {
 } from './codex/binary-resolver';
 export { resolveClaudeBinaryPath, fileExists as claudeFileExists } from './claude/binary-resolver';
 
+// Skills resolution
+export { skillSearchRoots, resolveSkillDirectories } from './shared/skills';
+
 // Community providers
 export {
   OpencodeProvider,
