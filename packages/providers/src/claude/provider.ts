@@ -164,6 +164,34 @@ const RATE_LIMIT_PATTERNS = [
   // rejection of concurrent tool calls; retrying after backoff succeeds (#1341).
   'tool use concurrency',
 ];
+
+/**
+ * Message-text fallbacks for Anthropic errors the SDK does not yet type.
+ *
+ * Entries are consulted ONLY when the SDK's typed error code has resolved to
+ * the catch-all 'unknown' class (see the ClaudeApiResultError branch in
+ * classifyAndEnrichError) — they must never override a typed classification.
+ * A matching entry reclassifies the error as rate_limit so the existing
+ * backoff-retry applies.
+ *
+ * Admission contract — each entry must:
+ *   1. Name the upstream error it matches.
+ *   2. Link an upstream issue/reference requesting the error be properly typed.
+ *   3. Be removed once the SDK types it.
+ * Do NOT add entries for errors the SDK already classifies.
+ *
+ * This is deliberately a separate list from RATE_LIMIT_PATTERNS above: that
+ * list matches raw subprocess text (no typed code exists at all), while this
+ * one is a narrow escape hatch inside the typed classification path (#1797).
+ */
+const UNTYPED_TRANSIENT_PATTERNS: readonly string[] = [
+  // Anthropic 400 "due to tool use concurrency issues" — transient server-side
+  // rejection of concurrent tool calls; retrying after backoff succeeds (#1341).
+  // TODO: link the upstream SDK issue requesting a typed code for this error,
+  // and remove this entry once the SDK classifies it.
+  'tool use concurrency',
+];
+
 const AUTH_PATTERNS = [
   'credit balance',
   'unauthorized',
@@ -1135,12 +1163,16 @@ function classifyAndEnrichError(
     let errorClass = classifySdkErrorCode(error.sdkErrorCode);
     // Exception for the SDK's catch-all codes only ('unknown'/'invalid_request'
     // — a 400 status maps here): they conflate transient server-side rejections
-    // with true client errors, so the code alone carries no retry signal. The
-    // "tool use concurrency" 400 is known-transient — reclassify it as
-    // rate_limit so the existing backoff applies (#1341). Specific typed codes
-    // above remain authoritative and are never overridden by text.
-    if (errorClass === 'unknown' && error.message.toLowerCase().includes('tool use concurrency')) {
-      errorClass = 'rate_limit';
+    // with true client errors, so the code alone carries no retry signal. For
+    // those, and ONLY those, fall back to UNTYPED_TRANSIENT_PATTERNS (see its
+    // admission contract) to reclassify known-transient errors as rate_limit
+    // so the existing backoff applies (#1341). Specific typed codes above
+    // remain authoritative and are never overridden by text.
+    if (errorClass === 'unknown') {
+      const message = error.message.toLowerCase();
+      if (UNTYPED_TRANSIENT_PATTERNS.some(p => message.includes(p))) {
+        errorClass = 'rate_limit';
+      }
     }
     return {
       enrichedError: error,
