@@ -176,7 +176,7 @@ All must pass. If something fails after a fix:
 
 ### 5.1 Stage and Commit
 
-Only stage files you actually changed:
+Only stage files you actually changed — never repo-local Archon telemetry (`.archon/artifacts/`, `.archon/logs/`, `.archon/state/` are local-only, never in git):
 
 ```bash
 git add {specific files}

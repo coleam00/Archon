@@ -510,7 +510,7 @@ nodes:
         )"
         ```
 
-        **Never stage**: `.pr-body.md`, `pr-body.md`, `*.scratch.md`, `*.tmp.md`, `review/`, `*-report.md` at the repo root, or anything under `$ARTIFACTS_DIR`.
+        **Never stage**: `.pr-body.md`, `pr-body.md`, `*.scratch.md`, `*.tmp.md`, `review/`, `*-report.md` at the repo root, anything under `$ARTIFACTS_DIR`, or repo-local `.archon/artifacts/`, `.archon/logs/`, `.archon/state/` (local-only Archon telemetry — never in git).
 
         Track progress in `$ARTIFACTS_DIR/progress.txt`:
         ```
@@ -585,7 +585,7 @@ nodes:
       git diff --cached --quiet || git commit -m "fix: address code review findings"
       ```
 
-      **Never stage**: `.pr-body.md`, `pr-body.md`, `*.scratch.md`, `*.tmp.md`, `review/`, `*-report.md` at the repo root, or anything under `$ARTIFACTS_DIR`.
+      **Never stage**: `.pr-body.md`, `pr-body.md`, `*.scratch.md`, `*.tmp.md`, `review/`, `*-report.md` at the repo root, anything under `$ARTIFACTS_DIR`, or repo-local `.archon/artifacts/`, `.archon/logs/`, `.archon/state/` (local-only Archon telemetry — never in git).
 
       ## Step 6: Present Review
 
@@ -674,7 +674,7 @@ nodes:
         )"
         ```
 
-        **Never stage**: `.pr-body.md`, `pr-body.md`, `*.scratch.md`, `*.tmp.md`, `review/`, `*-report.md` at the repo root, or anything under `$ARTIFACTS_DIR`.
+        **Never stage**: `.pr-body.md`, `pr-body.md`, `*.scratch.md`, `*.tmp.md`, `review/`, `*-report.md` at the repo root, anything under `$ARTIFACTS_DIR`, or repo-local `.archon/artifacts/`, `.archon/logs/`, `.archon/state/` (local-only Archon telemetry — never in git).
 
         ## Step 5: Report
 
