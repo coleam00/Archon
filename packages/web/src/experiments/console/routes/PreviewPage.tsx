@@ -19,6 +19,7 @@ const baseRun: Omit<Run, 'id' | 'workflow' | 'status'> = {
   costUsd: null,
   conversationId: null,
   conversationPlatformId: null,
+  workerPlatformId: null,
   origin: 'cli',
   startedAt: new Date(Date.now() - 4 * 60 * 1000 - 12 * 1000).toISOString(),
   finishedAt: null,

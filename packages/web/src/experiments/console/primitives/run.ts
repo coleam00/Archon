@@ -18,6 +18,15 @@ export interface Run {
    * that endpoint. Use this when fetching the run's messages.
    */
   conversationPlatformId: string | null;
+  /**
+   * Platform id of the WORKER conversation for chat-dispatched runs. The
+   * getRun route deliberately splits the pointer: CLI runs get
+   * `conversation_platform_id`, web/chat-dispatched runs (parent conversation
+   * set) get `worker_platform_id` instead — and the worker conversation is
+   * where the run's messages live. Use runMessageConversationId() to pick
+   * the message source (#2048).
+   */
+  workerPlatformId: string | null;
   workflow: string;
   origin: RunOrigin;
   status: RunStatus;
@@ -56,6 +65,8 @@ interface RawWorkflowRun {
   conversation_id?: string | null;
   /** Platform-level conversation id — exposed on the getRun response only. */
   conversation_platform_id?: string | null;
+  /** Worker conversation platform id — getRun response only, web runs only. */
+  worker_platform_id?: string | null;
   status: string;
   started_at: string;
   completed_at?: string | null;
@@ -104,6 +115,18 @@ function readCost(meta: Record<string, unknown> | undefined): number | null {
   return typeof raw === 'number' && Number.isFinite(raw) && raw > 0 ? raw : null;
 }
 
+/**
+ * The platform conversation id that holds this run's messages — the id the
+ * `/api/conversations/:id/messages` route accepts. CLI runs expose it as
+ * `conversationPlatformId`; chat-dispatched (web) runs only expose the worker
+ * conversation as `workerPlatformId`, which is where their agent output is
+ * persisted (#2048). Null for list-sourced rows (neither field is present),
+ * so message fetching stays off there.
+ */
+export function runMessageConversationId(run: Run): string | null {
+  return run.conversationPlatformId ?? run.workerPlatformId;
+}
+
 export function toRun(raw: RawWorkflowRun): Run {
   const approval = raw.metadata?.approval;
   const isApprovalShape =
@@ -139,6 +162,7 @@ export function toRun(raw: RawWorkflowRun): Run {
     costUsd: readCost(raw.metadata),
     conversationId: raw.conversation_id ?? null,
     conversationPlatformId: raw.conversation_platform_id ?? null,
+    workerPlatformId: raw.worker_platform_id ?? null,
     workflow: raw.workflow_name,
     origin: normalizeOrigin(raw.platform_type),
     status: normalizeStatus(raw.status),

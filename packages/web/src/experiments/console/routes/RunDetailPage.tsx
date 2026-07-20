@@ -23,7 +23,7 @@ import { useRunStreamSSE } from '../lib/sse';
 import { useEntity, invalidate } from '../store/cache';
 import { K } from '../store/keys';
 import * as skill from '../skills';
-import type { Run } from '../primitives/run';
+import { runMessageConversationId, type Run } from '../primitives/run';
 import { foldNodeRuns, type RunEvent } from '../primitives/event';
 import type { Message } from '../primitives/message';
 import type { Project } from '../primitives/project';
@@ -143,9 +143,12 @@ export function RunDetailPage(): ReactElement {
   );
 
   // Messages are tied to the run's conversation — and the /messages endpoint
-  // takes the *platform* conversation id, not the DB id. getRun exposes both;
-  // we consume the platform id here.
-  const conversationPlatformId = detail?.run.conversationPlatformId ?? null;
+  // takes the *platform* conversation id, not the DB id. CLI runs expose it as
+  // conversationPlatformId; chat-dispatched runs only expose the worker
+  // conversation (workerPlatformId), which holds their messages (#2048). The
+  // helper picks whichever is present.
+  const conversationPlatformId =
+    detail?.run !== undefined ? runMessageConversationId(detail.run) : null;
 
   const { data: messages } = useEntity<Message[]>(
     conversationPlatformId !== null

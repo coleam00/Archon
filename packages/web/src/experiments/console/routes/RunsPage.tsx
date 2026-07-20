@@ -48,6 +48,7 @@ function buildDemoRuns(scope: Scope, projectName: string | null): Run[] {
     costUsd: null as number | null,
     conversationId: null as string | null,
     conversationPlatformId: null as string | null,
+    workerPlatformId: null as string | null,
     workingPath: null,
     userMessage: '',
     finishedAt: null as string | null,

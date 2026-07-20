@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { toRun, normalizeOrigin } from './run';
+import { toRun, normalizeOrigin, runMessageConversationId } from './run';
 
 type Raw = Parameters<typeof toRun>[0];
 
@@ -65,6 +65,22 @@ describe('toRun — provenance', () => {
     expect(r.conversationPlatformId).toBe('cli-detail-789');
   });
 
+  test('worker_platform_id maps through for chat-dispatched runs; absent → null', () => {
+    const web = toRun(
+      raw({
+        id: 'r1',
+        workflow_name: 'plan',
+        status: 'completed',
+        worker_platform_id: 'web-worker-123-abc',
+      })
+    );
+    expect(web.workerPlatformId).toBe('web-worker-123-abc');
+    expect(web.conversationPlatformId).toBeNull();
+
+    const bare = toRun(raw({ id: 'r2', workflow_name: 'plan', status: 'completed' }));
+    expect(bare.workerPlatformId).toBeNull();
+  });
+
   test("normalizes the transient 'pending' status to running", () => {
     const r = toRun(raw({ id: 'r1', workflow_name: 'plan', status: 'pending' }));
     expect(r.status).toBe('running');
@@ -73,6 +89,51 @@ describe('toRun — provenance', () => {
   test('an unrecognised status falls back to running', () => {
     const r = toRun(raw({ id: 'r1', workflow_name: 'plan', status: 'banana' }));
     expect(r.status).toBe('running');
+  });
+});
+
+describe('runMessageConversationId', () => {
+  test('CLI run: uses conversationPlatformId (unchanged behavior)', () => {
+    const r = toRun(
+      raw({
+        id: 'r1',
+        workflow_name: 'plan',
+        status: 'completed',
+        conversation_platform_id: 'cli-1776237248436-q61o4h',
+      })
+    );
+    expect(runMessageConversationId(r)).toBe('cli-1776237248436-q61o4h');
+  });
+
+  test('chat-dispatched run: falls back to the worker conversation (#2048)', () => {
+    const r = toRun(
+      raw({
+        id: 'r1',
+        workflow_name: 'plan',
+        status: 'completed',
+        conversation_platform_id: null,
+        worker_platform_id: 'web-worker-1784559376043-8p44vw',
+      })
+    );
+    expect(runMessageConversationId(r)).toBe('web-worker-1784559376043-8p44vw');
+  });
+
+  test('prefers conversationPlatformId when both are present', () => {
+    const r = toRun(
+      raw({
+        id: 'r1',
+        workflow_name: 'plan',
+        status: 'completed',
+        conversation_platform_id: 'cli-abc',
+        worker_platform_id: 'web-worker-xyz',
+      })
+    );
+    expect(runMessageConversationId(r)).toBe('cli-abc');
+  });
+
+  test('list-sourced row (neither field) → null, message fetching stays off', () => {
+    const r = toRun(raw({ id: 'r1', workflow_name: 'plan', status: 'running' }));
+    expect(runMessageConversationId(r)).toBeNull();
   });
 });
 
