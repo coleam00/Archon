@@ -366,6 +366,17 @@ nodes:
     const deps = makeDeps(store);
     const parent = await discover('parent-plain');
 
+    // Pin the double-fire guard: on the synchronous path the child's terminal
+    // hook (maybeResumeParentRun) fires while the parent is still 'running' on
+    // the call stack — the guard must make it a no-op, so resumeWorkflowRun is
+    // never invoked for anything in this run tree.
+    const resumeCalls: string[] = [];
+    const realResume = store.resumeWorkflowRun.bind(store);
+    store.resumeWorkflowRun = (id: string) => {
+      resumeCalls.push(id);
+      return realResume(id);
+    };
+
     const result = await executeWorkflow(
       deps,
       makePlatform(),
@@ -377,6 +388,14 @@ nodes:
     );
 
     expect(result.success).toBe(true);
+    // Guard held: no resume of the parent (or anything else) mid-flight, and no
+    // node ran twice — a regressed guard would recursively re-enter the parent
+    // while its own call frame is live (duplicate AI calls / duplicate events).
+    expect(resumeCalls).toEqual([]);
+    const completedSteps = store.events
+      .filter(e => e.event_type === 'node_completed')
+      .map(e => e.step_name);
+    expect(new Set(completedSteps).size).toBe(completedSteps.length);
     // Parent completed.
     const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'parent-plain');
     expect(parentRun?.status).toBe('completed');
@@ -635,5 +654,214 @@ nodes:
     expect(parentRun?.status).toBe('failed');
     // No child run was created for the cycle.
     expect([...store.runs.values()].filter(r => r.parent_run_id !== null)).toHaveLength(0);
+  });
+
+  it('rejects an INDIRECT cycle (A → B → A) at runtime', async () => {
+    await writeWorkflow(
+      'cycle-a',
+      `
+name: cycle-a
+description: composes cycle-b
+nodes:
+  - id: sub
+    workflow: cycle-b
+`
+    );
+    await writeWorkflow(
+      'cycle-b',
+      `
+name: cycle-b
+description: composes cycle-a (closing the loop)
+nodes:
+  - id: sub
+    workflow: cycle-a
+`
+    );
+
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    const a = await discover('cycle-a');
+    const result = await executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, a, 'g', 'conv-db');
+
+    expect(result.success).toBe(false);
+    // B was spawned as A's child, then B's own sub node hit the ancestry guard.
+    const bRun = [...store.runs.values()].find(r => r.workflow_name === 'cycle-b');
+    expect(bRun?.status).toBe('failed');
+    expect(String(bRun?.metadata.error)).toMatch(/cycle/i);
+    // No third-level run (a second cycle-a) was ever created.
+    expect([...store.runs.values()].filter(r => r.workflow_name === 'cycle-a')).toHaveLength(1);
+  });
+
+  it('enforces the sub-run depth cap', async () => {
+    // deep-1 → deep-2 → … → deep-7: the cap fires when a run whose ancestry is
+    // already CHILD_WORKFLOW_DEPTH_CAP (5) deep tries to spawn the next child —
+    // i.e. deep-6 (ancestry deep-1..deep-5) attempting to spawn deep-7.
+    for (let i = 1; i <= 7; i++) {
+      const body =
+        i < 7
+          ? `  - id: sub\n    workflow: deep-${String(i + 1)}\n`
+          : `  - id: leaf\n    prompt: "bottom"\n`;
+      await writeWorkflow(
+        `deep-${String(i)}`,
+        `\nname: deep-${String(i)}\ndescription: depth chain link ${String(i)}\nnodes:\n${body}`
+      );
+    }
+
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    const top = await discover('deep-1');
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      top,
+      'g',
+      'conv-db'
+    );
+
+    expect(result.success).toBe(false);
+    // The cap counts the full ancestor chain INCLUDING the spawning run itself,
+    // so a cap of 5 allows at most 5 nested runs: deep-5 (chain length 5) is
+    // refused when it tries to spawn deep-6. The refusal fails deep-5's node and
+    // propagates up the whole chain.
+    const runNames = [...store.runs.values()].map(r => r.workflow_name);
+    expect(runNames).toContain('deep-5');
+    expect(runNames).not.toContain('deep-6');
+    expect([...store.runs.values()].every(r => r.status === 'failed')).toBe(true);
+  });
+
+  it('resume-through-parent re-drives a failed child once; a cancelled child fails the node', async () => {
+    // Child fails on the first pass, succeeds on the second (marker file).
+    await writeWorkflow(
+      'child-flaky',
+      `
+name: child-flaky
+description: fails once then succeeds
+nodes:
+  - id: attempt
+    bash: "test -f flaky-marker && echo recovered || { touch flaky-marker; exit 3; }"
+`
+    );
+    await writeWorkflow(
+      'parent-recover',
+      `
+name: parent-recover
+description: parent that recovers a flaky child on resume
+nodes:
+  - id: sub
+    workflow: child-flaky
+    input: "x"
+  - id: after
+    prompt: "downstream: $sub.output"
+    depends_on: [sub]
+`
+    );
+
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    const parent = await discover('parent-recover');
+
+    // First drive: child fails → node fails → parent fails.
+    const r1 = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parent,
+      'goal',
+      'conv-db'
+    );
+    expect(r1.success).toBe(false);
+    const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'parent-recover');
+    const child1 = [...store.runs.values()].find(r => r.workflow_name === 'child-flaky');
+    expect(parentRun?.status).toBe('failed');
+    expect(child1?.status).toBe('failed');
+
+    // Resume the PARENT: re-entry finds the failed child and re-drives it once
+    // (resumeFailedChild), the marker now exists so the child completes, and the
+    // output threads through to the downstream node. A failed parent with zero
+    // completed nodes hydrates to null — mirror the CLI's fallback: flip it back
+    // to running and re-run from the top under the SAME run id.
+    const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(parentRun!.id))!);
+    const resumeOpts = hydrated ?? {
+      preCreatedRun: await store.resumeWorkflowRun(parentRun!.id),
+    };
+    const r2 = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parent,
+      'goal',
+      'conv-db',
+      { ...resumeOpts }
+    );
+    expect(r2.success).toBe(true);
+    expect((await store.getWorkflowRun(parentRun!.id))?.status).toBe('completed');
+    // Same child ROW was re-driven — no second child-flaky run was created.
+    const flakyRuns = [...store.runs.values()].filter(r => r.workflow_name === 'child-flaky');
+    expect(flakyRuns).toHaveLength(1);
+    expect(flakyRuns[0].status).toBe('completed');
+    const subCompleted = store.events.find(
+      e => e.event_type === 'node_completed' && e.step_name === 'sub'
+    );
+    expect(String(subCompleted?.data?.node_output)).toContain('recovered');
+
+    // Separately: a child cancelled out-of-band fails the node on re-entry.
+    await writeWorkflow(
+      'parent-cancelled',
+      `
+name: parent-cancelled
+description: parent whose child gets cancelled out-of-band
+nodes:
+  - id: sub
+    workflow: child-flaky
+    input: "x"
+`
+    );
+    const store2 = new InMemoryStore();
+    const deps2 = makeDeps(store2);
+    const parent2 = await discover('parent-cancelled');
+    // Fail the child's first pass again for this fresh store: remove the marker.
+    await rm(join(cwd, 'flaky-marker'), { force: true });
+    const p2r1 = await executeWorkflow(
+      deps2,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parent2,
+      'goal',
+      'conv-db'
+    );
+    expect(p2r1.success).toBe(false);
+    const child2 = [...store2.runs.values()].find(r => r.workflow_name === 'child-flaky');
+    // Out-of-band cancel (e.g. a direct abandon of the child).
+    await store2.cancelWorkflowRun(child2!.id);
+    const parentRun2 = [...store2.runs.values()].find(r => r.workflow_name === 'parent-cancelled');
+    const hydrated2 = await hydrateResumableRun(
+      deps2,
+      (await store2.getWorkflowRun(parentRun2!.id))!
+    );
+    const resumeOpts2 = hydrated2 ?? {
+      preCreatedRun: await store2.resumeWorkflowRun(parentRun2!.id),
+    };
+    const p2r2 = await executeWorkflow(
+      deps2,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parent2,
+      'goal',
+      'conv-db',
+      { ...resumeOpts2 }
+    );
+    expect(p2r2.success).toBe(false);
+    // The cancelled child was NOT re-driven; the node failed with the cancel message.
+    expect((await store2.getWorkflowRun(child2!.id))?.status).toBe('cancelled');
+    expect((await store2.getWorkflowRun(parentRun2!.id))?.status).toBe('failed');
+    expect(String((await store2.getWorkflowRun(parentRun2!.id))?.metadata.error)).toMatch(
+      /cancelled/i
+    );
   });
 });

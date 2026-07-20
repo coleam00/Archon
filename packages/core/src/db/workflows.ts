@@ -452,9 +452,13 @@ export async function getActiveWorkflowRunByPath(
     'working_path = $1',
     `(status IN ('running', 'paused') OR (status = 'pending' AND started_at > ${stalePendingCutoff}))`,
   ];
+  let selfIdParam: string | undefined;
   if (self !== undefined) {
     params.push(self.id);
-    clauses.push(`id != $${String(params.length)}`);
+    // Captured at push time — the tiebreaker below must reference THIS
+    // placeholder, and excludeRunIds params may land in between.
+    selfIdParam = `$${String(params.length)}`;
+    clauses.push(`id != ${selfIdParam}`);
   }
   // Exclude the caller's ancestor chain (#2121 Phase 2): a `workflow:` sub-run
   // shares the parent's checkout, so the parent's own running/paused row on this
@@ -486,7 +490,11 @@ export async function getActiveWorkflowRunByPath(
     //     comparison via SQLite's date/time functions.
     params.push(self.startedAt.toISOString());
     const startedAtParam = `$${String(params.length)}`;
-    const idParam = `$${String(params.length - 1)}`;
+    // NOT params.length - 1: excludeRunIds placeholders may sit between the self
+    // id and startedAt — a positional back-reference here once pointed the id
+    // tiebreak at an ancestor id instead of self (caught by the SQL-shape test).
+    // selfIdParam is always set when `self` is (same guard above).
+    const idParam = selfIdParam ?? '$2';
     const colExpr = isPostgres ? 'started_at' : 'datetime(started_at)';
     const paramExpr = isPostgres ? `${startedAtParam}::timestamptz` : `datetime(${startedAtParam})`;
     clauses.push(`(${colExpr} < ${paramExpr} OR (${colExpr} = ${paramExpr} AND id < ${idParam}))`);
