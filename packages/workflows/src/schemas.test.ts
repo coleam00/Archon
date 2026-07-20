@@ -3,10 +3,16 @@ import {
   isBashNode,
   isCancelNode,
   isScriptNode,
+  isLoopNode,
+  isLoopGroupNode,
+  isIncludeNode,
   isTriggerRule,
   TRIGGER_RULES,
   SCRIPT_NODE_AI_FIELDS,
   LOOP_NODE_AI_FIELDS,
+  LOOP_GROUP_NODE_AI_FIELDS,
+  INCLUDE_NODE_IGNORED_FIELDS,
+  BASH_NODE_AI_FIELDS,
   approvalOnRejectSchema,
   dagNodeSchema,
 } from './schemas';
@@ -18,6 +24,7 @@ import type {
   BashNode,
   CancelNode,
   ScriptNode,
+  IncludeNode,
   TriggerRule,
 } from './schemas';
 
@@ -413,6 +420,74 @@ describe('dagNodeSchema — new Claude SDK options', () => {
 });
 
 // ---------------------------------------------------------------------------
+// dagNodeSchema — per-node Pi extension posture (`pi:`, #2133)
+// ---------------------------------------------------------------------------
+
+describe('dagNodeSchema — per-node Pi posture (pi:)', () => {
+  test('accepts and preserves a pi: block on a prompt node', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'plan',
+      prompt: 'plan it',
+      pi: { interactive: true, extensionFlags: { plan: true, 'plan-file': 'PLAN.md' } },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect((result.data as PromptNode).pi).toEqual({
+        interactive: true,
+        extensionFlags: { plan: true, 'plan-file': 'PLAN.md' },
+      });
+    }
+  });
+
+  test('preserves a pi: block on a loop node (the plannotator leak seam, #2073)', () => {
+    // Loops drop model/provider in the transform, but pi MUST survive — the loop
+    // is exactly where the implement node needs its posture scoped down.
+    const result = dagNodeSchema.safeParse({
+      id: 'implement',
+      loop: { prompt: 'do work', until: 'DONE', max_iterations: 5 },
+      pi: { interactive: false, extensionFlags: { plan: false } },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(isLoopNode(result.data)).toBe(true);
+      expect((result.data as DagNode & { pi?: unknown }).pi).toEqual({
+        interactive: false,
+        extensionFlags: { plan: false },
+      });
+    }
+  });
+
+  test('drops pi: from a bash node in the transform', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'sh',
+      bash: 'echo hi',
+      pi: { interactive: false },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect('pi' in result.data).toBe(false);
+    }
+  });
+
+  test('rejects a non-boolean/string extensionFlags value', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'plan',
+      prompt: 'plan it',
+      pi: { extensionFlags: { plan: 42 } },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  test('pi is warned-ignored on non-AI + loop_group nodes but supported on loop', () => {
+    // loop uses its per-iteration sendQuery, so pi must NOT be in its ignore list;
+    // loop_group never sendQuerys (body nodes carry their own pi), so it warns.
+    expect(LOOP_NODE_AI_FIELDS).not.toContain('pi');
+    expect(LOOP_GROUP_NODE_AI_FIELDS).toContain('pi');
+    expect(SCRIPT_NODE_AI_FIELDS).toContain('pi');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // isScriptNode
 // ---------------------------------------------------------------------------
 
@@ -692,6 +767,224 @@ describe('LOOP_NODE_AI_FIELDS', () => {
     ];
     for (const field of expectedFields) {
       expect(LOOP_NODE_AI_FIELDS).toContain(field);
+    }
+  });
+});
+
+describe('dagNodeSchema — loop_group', () => {
+  test('parses a valid loop_group node with a recursive body', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'grp',
+      loop_group: {
+        until: 'DONE',
+        max_iterations: 5,
+        fresh_context: false,
+        nodes: [
+          { id: 'a', prompt: 'do a', depends_on: [] },
+          { id: 'b', bash: 'echo hi', depends_on: ['a'] },
+        ],
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(isLoopGroupNode(result.data)).toBe(true);
+      const grp = result.data as { loop_group?: { nodes: unknown[] } };
+      expect(grp.loop_group?.nodes).toHaveLength(2);
+    }
+  });
+
+  test('loop_group + prompt are mutually exclusive', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'grp',
+      prompt: 'inline',
+      loop_group: { until: 'DONE', max_iterations: 3, nodes: [{ id: 'x', prompt: 'x' }] },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0].message).toContain('mutually exclusive');
+      expect(result.error.issues[0].message).toContain('loop_group');
+    }
+  });
+
+  test('loop_group + loop are mutually exclusive', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'grp',
+      loop: { prompt: 'p', until: 'DONE', max_iterations: 3 },
+      loop_group: { until: 'DONE', max_iterations: 3, nodes: [{ id: 'x', prompt: 'x' }] },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  test('loop_group rejects retry (loop manages its own iteration)', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'grp',
+      retry: { max_attempts: 2, delay_ms: 1000 },
+      loop_group: { until: 'DONE', max_iterations: 3, nodes: [{ id: 'x', prompt: 'x' }] },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const retryIssue = result.error.issues.find(i => i.message.includes('retry'));
+      expect(retryIssue).toBeDefined();
+      expect(retryIssue?.message).toContain('loop_group');
+    }
+  });
+
+  test('loop_group requires at least one body node', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'grp',
+      loop_group: { until: 'DONE', max_iterations: 3, nodes: [] },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some(i => i.message.includes('at least one node'))).toBe(true);
+    }
+  });
+
+  test('loop_group requires until (completion signal)', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'grp',
+      loop_group: { max_iterations: 3, nodes: [{ id: 'x', prompt: 'x' }] },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  test('nested loop_group body parses (loop_group inside loop_group)', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'outer',
+      loop_group: {
+        until: 'OUTER_DONE',
+        max_iterations: 3,
+        nodes: [
+          {
+            id: 'inner',
+            loop_group: {
+              until: 'INNER_DONE',
+              max_iterations: 2,
+              nodes: [{ id: 'inner-work', prompt: 'work', depends_on: [] }],
+            },
+            depends_on: [],
+          },
+        ],
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const outer = result.data as {
+        loop_group?: { nodes: Array<{ loop_group?: { nodes: unknown[] } }> };
+      };
+      const inner = outer.loop_group?.nodes[0];
+      expect(isLoopGroupNode(inner as never)).toBe(true);
+      expect(inner?.loop_group?.nodes).toHaveLength(1);
+    }
+  });
+});
+
+describe('LOOP_GROUP_NODE_AI_FIELDS', () => {
+  test('excludes model/provider (forwarded to body AI nodes)', () => {
+    expect(LOOP_GROUP_NODE_AI_FIELDS).not.toContain('model');
+    expect(LOOP_GROUP_NODE_AI_FIELDS).not.toContain('provider');
+  });
+
+  test('differs from LOOP_NODE_AI_FIELDS only on pi (#2133)', () => {
+    // A plain loop: node calls sendQuery itself, so pi IS honored there (not warned).
+    // A loop_group node never calls sendQuery — body nodes carry their own pi — so
+    // pi is warned-ignored on the group. That single-key difference is intentional.
+    expect(LOOP_NODE_AI_FIELDS).not.toContain('pi');
+    expect(LOOP_GROUP_NODE_AI_FIELDS).toContain('pi');
+    expect(LOOP_GROUP_NODE_AI_FIELDS.filter(f => f !== 'pi')).toEqual([...LOOP_NODE_AI_FIELDS]);
+  });
+});
+
+describe('dagNodeSchema — include', () => {
+  test('parses a valid include node (only structural fields survive)', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'review',
+      include: 'archon-review-block',
+      depends_on: ['finalize-pr'],
+      when: 'always',
+      trigger_rule: 'all_success',
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(isIncludeNode(result.data)).toBe(true);
+      const node = result.data as IncludeNode;
+      expect(node.include).toBe('archon-review-block');
+      expect(node.depends_on).toEqual(['finalize-pr']);
+      expect(node.when).toBe('always');
+      expect(node.trigger_rule).toBe('all_success');
+    }
+  });
+
+  test('trims surrounding whitespace on the target name', () => {
+    const result = dagNodeSchema.safeParse({ id: 'r', include: '  archon-review-block  ' });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect((result.data as IncludeNode).include).toBe('archon-review-block');
+    }
+  });
+
+  test('include + command are mutually exclusive', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'r',
+      command: 'build',
+      include: 'archon-review-block',
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0].message).toContain('mutually exclusive');
+      expect(result.error.issues[0].message).toContain('include');
+    }
+  });
+
+  test('empty include is rejected', () => {
+    const result = dagNodeSchema.safeParse({ id: 'r', include: '' });
+    expect(result.success).toBe(false);
+  });
+
+  test("include with 'with:' is rejected (not yet supported)", () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'r',
+      include: 'archon-review-block',
+      with: { pr: '$create.output' },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const withIssue = result.error.issues.find(i => i.message.includes('with:'));
+      expect(withIssue).toBeDefined();
+      expect(withIssue?.message).toContain('not yet supported');
+      expect(withIssue?.path).toEqual(['with']);
+    }
+  });
+
+  test('include node drops AI/exec fields (they are ignored)', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'r',
+      include: 'archon-review-block',
+      model: 'opus',
+      always_run: true,
+      output_type: 'code',
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const node = result.data as Record<string, unknown>;
+      expect(node.model).toBeUndefined();
+      expect(node.always_run).toBeUndefined();
+      expect(node.output_type).toBeUndefined();
+    }
+  });
+});
+
+describe('INCLUDE_NODE_IGNORED_FIELDS', () => {
+  test('is a superset of BASH_NODE_AI_FIELDS plus exec-only fields', () => {
+    for (const f of BASH_NODE_AI_FIELDS) {
+      expect(INCLUDE_NODE_IGNORED_FIELDS).toContain(f);
+    }
+    for (const f of ['retry', 'output_type', 'always_run', 'idle_timeout', 'timeout']) {
+      expect(INCLUDE_NODE_IGNORED_FIELDS).toContain(f);
+    }
+    // Structural fields the include node legitimately carries are NOT ignored.
+    for (const f of ['id', 'depends_on', 'when', 'trigger_rule', 'include', 'description']) {
+      expect(INCLUDE_NODE_IGNORED_FIELDS).not.toContain(f);
     }
   });
 });

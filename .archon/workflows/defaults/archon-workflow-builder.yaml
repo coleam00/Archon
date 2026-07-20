@@ -6,6 +6,14 @@ description: |
   Does: Scans codebase -> extracts intent (JSON) -> generates YAML -> validates -> saves.
   NOT for: Editing existing workflows or creating non-workflow files.
 
+# Run in the live checkout, not in a fresh sub-worktree. Without this, every
+# archon-workflow-builder invocation creates an isolated sub-worktree and
+# writes the generated YAML there — the file never reaches the caller's
+# .archon/workflows/, so the run reports success while the user's repo gains
+# nothing. Closes #1220.
+worktree:
+  enabled: false
+
 nodes:
   - id: scan-codebase
     bash: |
@@ -61,8 +69,8 @@ nodes:
       5. Whether this should be a simple DAG or include a loop node
 
       Be specific and concrete. Each proposed node should have a clear type
-      (bash, prompt, command, script, loop, or approval) and a one-line
-      description of what it does.
+      (bash, prompt, command, script, loop, loop_group, approval, or cancel) and
+      a one-line description of what it does.
     model: small
     allowed_tools: []
     output_format:
@@ -116,7 +124,7 @@ nodes:
 
       nodes:
         - id: node-id-kebab-case
-          # Choose ONE of: prompt, bash, command, script, loop, approval
+          # Choose ONE of: prompt, bash, command, script, loop, loop_group, approval, cancel
 
           # --- prompt node (AI-executed) ---
           prompt: |
@@ -151,10 +159,23 @@ nodes:
             max_iterations: 10
             fresh_context: true  # optional: reset context each iteration
 
+          # --- loop_group node (iterate a multi-node sub-DAG until done) ---
+          loop_group:
+            until: COMPLETION_SIGNAL
+            max_iterations: 5
+            nodes:                             # sealed sub-DAG body, re-run each iteration
+              - id: body-step
+                prompt: |
+                  Do one unit of work. Emit COMPLETION_SIGNAL when finished.
+                depends_on: []
+
           # --- approval node (human gate — pauses workflow) ---
           approval:
             message: "Review the plan above. Approve to continue."
             # capture_response: true         # store reviewer comment as $<nodeId>.output
+
+          # --- cancel node (terminate the run with a reason; no AI) ---
+          cancel: "Reason the workflow was terminated"
 
           # Common options for all node types:
           depends_on: [other-node-id]       # DAG edges

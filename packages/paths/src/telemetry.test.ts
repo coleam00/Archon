@@ -779,7 +779,7 @@ describe('sanitizeModelForTelemetry', () => {
       'sonnet',
       'opus',
       'claude-sonnet-4-6',
-      'gpt-5.3-codex',
+      'gpt-5.6-sol',
       'anthropic/claude-haiku-4-5',
       'openrouter/qwen/qwen3-coder',
     ]) {

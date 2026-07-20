@@ -162,9 +162,9 @@ export class SlackWorkflowBridge {
         case 'workflow_cancelled':
           await this.onTerminal(event.runId, 'cancelled', conversationId, event.reason);
           break;
-        // Loop / tool / artifact events would surface as noise in-thread and
-        // aren't tied to a button or actionable state; the status message
-        // already conveys whether the run is healthy via the DAG node states.
+        // Loop / tool / artifact / container-lifecycle events would surface as
+        // noise in-thread and aren't tied to a button or actionable state; the
+        // status message already conveys run health via the DAG node states.
         case 'loop_iteration_started':
         case 'loop_iteration_completed':
         case 'loop_iteration_failed':
@@ -173,6 +173,7 @@ export class SlackWorkflowBridge {
         case 'workflow_artifact':
         case 'task_activity':
         case 'hook_activity':
+        case 'container_lifecycle':
           break;
         default: {
           const exhaustive: never = event;
@@ -469,9 +470,13 @@ export class SlackWorkflowBridge {
       try {
         if (decision === 'approved') {
           const result = await workflowOperations.approveWorkflow(runId);
+          // Interactive-loop approves are outcome-ambiguous from here: a gate that
+          // paused on a completion signal finalizes on resume (no re-run, #2074);
+          // otherwise the loop runs another iteration. Hedge like manage_run does —
+          // this bridge approves with no comment, so both outcomes are reachable.
           outcomeNote =
             result.type === 'interactive_loop'
-              ? 'recorded — loop will continue on resume'
+              ? 'recorded — finalizes if the gate paused on a completion signal, otherwise the loop runs another iteration on resume'
               : 'workflow resumed';
         } else {
           const result = await workflowOperations.rejectWorkflow(runId);

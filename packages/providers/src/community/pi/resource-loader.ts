@@ -1,4 +1,5 @@
 import { DefaultResourceLoader, getAgentDir } from '@earendil-works/pi-coding-agent';
+import type { ProviderConfig } from '@earendil-works/pi-coding-agent';
 
 /**
  * In pi-coding-agent <= 0.67.x, DefaultResourceLoader and PackageManager
@@ -129,7 +130,44 @@ export function createNoopResourceLoader(
  * this cache prevents. Time/idle-based reclamation belongs with isolation
  * cleanup (a future cross-package hook), not a blind cap here.
  */
-const reloadedExtensionLoaderCache = new Map<string, Promise<DefaultResourceLoader>>();
+const reloadedExtensionLoaderCache = new Map<string, Promise<ReloadedExtensionLoader>>();
+
+/**
+ * One extension provider registration captured at load time — the payload an
+ * extension factory passed to `pi.registerProvider()` while `reload()` ran.
+ * Mirrors the SDK's `ExtensionRuntimeState['pendingProviderRegistrations']`
+ * element shape.
+ */
+export interface ExtensionProviderRegistration {
+  name: string;
+  config: ProviderConfig;
+  extensionPath: string;
+}
+
+/**
+ * A cached, already-reloaded extension loader plus the provider registrations
+ * its extensions queued at load time (issue #2064).
+ *
+ * Why the snapshot exists: extension factories run only during the single
+ * cached `reload()` (see the deadlock note above), and a load-time
+ * `pi.registerProvider()` call is QUEUED on the loader's shared extension
+ * runtime (`runtime.pendingProviderRegistrations`), not applied. The first
+ * session built on this loader drains that queue into ITS ModelRegistry via
+ * `bindCore()` and clears it — so the second and later sendQuery calls, which
+ * each build a fresh per-call ModelRegistry, would never see extension models
+ * (e.g. pi-cursor's `cursor/*`) and fail LOOKUP-2 with "Pi model not found".
+ *
+ * The snapshot is taken right after `reload()` completes, BEFORE any session
+ * can drain the queue (`bindCore()` reassigns the array rather than mutating
+ * it, so the copy is stable). The provider re-applies it to every per-call
+ * registry — `ModelRegistry.registerProvider()` is a documented upsert, so
+ * the first session receiving the same configs twice (our re-apply + its own
+ * `bindCore()` flush) is harmless.
+ */
+export interface ReloadedExtensionLoader {
+  loader: DefaultResourceLoader;
+  providerRegistrations: readonly ExtensionProviderRegistration[];
+}
 
 /**
  * Cache key over every input baked into the loader. `systemPrompt` and
@@ -147,19 +185,21 @@ function extensionLoaderCacheKey(
 }
 
 /**
- * Return a process-cached, already-reloaded extension-bearing ResourceLoader,
- * constructing + `reload()`ing it on first use for a given input set. Always
- * loads with `enableExtensions: true` — this is the only path that runs the
- * non-re-entrant `reload()`, so it is the only path that needs the cache.
+ * Return a process-cached, already-reloaded extension-bearing ResourceLoader
+ * plus the load-time provider registrations its extensions queued (see
+ * `ReloadedExtensionLoader`), constructing + `reload()`ing it on first use for
+ * a given input set. Always loads with `enableExtensions: true` — this is the
+ * only path that runs the non-re-entrant `reload()`, so it is the only path
+ * that needs the cache.
  *
- * Concurrency: the cache stores the in-flight Promise (not the resolved loader)
+ * Concurrency: the cache stores the in-flight Promise (not the resolved entry)
  * so concurrent same-layer nodes await a single shared `reload()` instead of
  * racing into two. A failed reload is evicted so the next call retries cleanly.
  */
 export async function getOrCreateReloadedExtensionLoader(
   cwd: string,
   options: Pick<NoopResourceLoaderOptions, 'systemPrompt' | 'additionalSkillPaths'> = {}
-): Promise<DefaultResourceLoader> {
+): Promise<ReloadedExtensionLoader> {
   const key = extensionLoaderCacheKey(
     cwd,
     options.systemPrompt,
@@ -167,7 +207,7 @@ export async function getOrCreateReloadedExtensionLoader(
   );
   let pending = reloadedExtensionLoaderCache.get(key);
   if (!pending) {
-    pending = (async (): Promise<DefaultResourceLoader> => {
+    pending = (async (): Promise<ReloadedExtensionLoader> => {
       const loader = createNoopResourceLoader(cwd, { ...options, enableExtensions: true });
       // reload() loads the extensions into the loader so createAgentSession can
       // build session.extensionRunner. Without it the runner is undefined and the
@@ -175,6 +215,14 @@ export async function getOrCreateReloadedExtensionLoader(
       // would silently never apply.
       try {
         await loader.reload();
+        // Snapshot NOW, before any session's bindCore() drains the queue into
+        // its own ModelRegistry and clears it. Defensive copy: bindCore()
+        // reassigns the array, so the copy stays stable, but a copy also
+        // guards against future in-place mutation upstream.
+        const providerRegistrations: ExtensionProviderRegistration[] = [
+          ...loader.getExtensions().runtime.pendingProviderRegistrations,
+        ];
+        return { loader, providerRegistrations };
       } catch (error) {
         // Extensions execute arbitrary JS from ~/.pi/agent/extensions/ (and the
         // repo's .pi/); a broken one fails here. Rethrow with an actionable
@@ -188,7 +236,6 @@ export async function getOrCreateReloadedExtensionLoader(
           { cause: error }
         );
       }
-      return loader;
     })();
     reloadedExtensionLoaderCache.set(key, pending);
     // Evict on failure so a transient reload error doesn't poison the cache.

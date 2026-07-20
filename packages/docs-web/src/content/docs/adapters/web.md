@@ -177,6 +177,12 @@ The Workflow Builder at `/legacy/workflows/builder` provides a visual editor for
 
 You can also browse existing workflows on the `/legacy/workflows` page and open any of them in the builder to edit.
 
+### Archon Studio builder (beta)
+
+A rebuilt visual builder is available in the new console at `/console/builder` (reachable from the console sidebar). It is a controlled React Flow canvas with a node palette, per-node inspector, live YAML preview, inline validation panel, smart-guide snapping, marquee selection, and a right-click context menu (add node, cut/copy/duplicate/delete, paste, select all, auto-arrange, fit view). All seven node types (`prompt`, `command`, `bash`, `script`, `loop`, `approval`, `cancel`) are editable directly in the inspector.
+
+This builder is **beta and fixture-backed**: it loads a local example workflow and reports edits in-memory — load/save to `.archon/workflows/` and a live `/console/builder/:name` route land in a later milestone. For saving workflows today, use the `/legacy/workflows/builder` editor above.
+
 ## SSE Streaming
 
 The Web UI uses Server-Sent Events (SSE) for real-time communication with the backend. When you open a conversation, the frontend opens a persistent connection to `/api/stream/:conversationId`.

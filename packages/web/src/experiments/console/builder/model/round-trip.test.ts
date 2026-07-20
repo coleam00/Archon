@@ -25,6 +25,21 @@ describe('round-trip fidelity', () => {
     }
   });
 
+  test('command-backed loop round-trips exactly — command preserved, no prompt key introduced', () => {
+    const { workflow, issues } = fromWorkflowDefinition(FIXTURES.loopCommand);
+    expect(issues).toEqual([]);
+    const node = workflow.nodes[0];
+    expect(node.variant).toBe('loop');
+    if (node.variant === 'loop') {
+      expect(node.data.command).toBe('refine-draft');
+      expect(node.data.prompt).toBeUndefined();
+    }
+    const exported = toWorkflowDefinition(workflow);
+    // Exact equality: `{ command }` must NOT come back as `{ prompt: '' }`.
+    expect(exported).toEqual(FIXTURES.loopCommand);
+    expect('prompt' in (exported.nodes[0].loop ?? {})).toBe(false);
+  });
+
   test('approval on_reject and capture_response survive partitioning', () => {
     const bw = fromWorkflowDefinition(FIXTURES.approval).workflow;
     const node = bw.nodes[0];
@@ -113,6 +128,35 @@ describe('import issues', () => {
     expect(issues[0].path).toEqual({ nodeId: 'p', field: 'timeout' });
     const out = toWorkflowDefinition(workflow);
     expect('timeout' in out.nodes[0]).toBe(false);
+  });
+
+  test('a loop with both prompt and command is flagged with an error and keeps the prompt', () => {
+    // Not engine-producible input (the schema enforces exactly-one) — the
+    // importer must not silently drop either source.
+    const { workflow, issues } = fromWorkflowDefinition(
+      wire([
+        {
+          id: 'both',
+          loop: {
+            prompt: 'inline',
+            command: 'cmd-file',
+            until: 'DONE',
+            max_iterations: 3,
+            fresh_context: false,
+          },
+        },
+      ])
+    );
+    expect(issues).toHaveLength(1);
+    expect(issues[0].rule).toBe('structural.field.unsupported');
+    expect(issues[0].severity).toBe('error');
+    expect(issues[0].path).toEqual({ nodeId: 'both', field: 'loop.command' });
+    const node = workflow.nodes[0];
+    expect(node.variant).toBe('loop');
+    if (node.variant === 'loop') {
+      expect(node.data.prompt).toBe('inline');
+      expect(node.data.command).toBeUndefined();
+    }
   });
 
   test('timeout on bash and script nodes is carried, not flagged', () => {

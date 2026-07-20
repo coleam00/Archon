@@ -704,9 +704,11 @@ export class WorktreeProvider implements IIsolationProvider {
   ): Promise<{ warnings: string[] }> {
     const repoPath = request.canonicalRepoPath;
 
-    // Sync uses only the configured base branch (or auto-detects via getDefaultBranch).
+    // Sync uses explicit repo config first, then the registered codebase's
+    // default branch (request.baseBranch), then auto-detects via getDefaultBranch.
     // request.fromBranch is the start-point for worktree creation, not a sync target.
-    const baseBranch = await this.syncWorkspaceBeforeCreate(repoPath, worktreeConfig?.baseBranch);
+    const preferredBaseBranch = worktreeConfig?.baseBranch ?? request.baseBranch;
+    const baseBranch = await this.syncWorkspaceBeforeCreate(repoPath, preferredBaseBranch);
 
     const override: WorktreeBaseOverride = {
       repoLocal: resolveRepoLocalOverride(worktreeConfig?.path, repoPath),

@@ -27,6 +27,7 @@ Archon is being positioned as a governed agentic automation engine for business 
 - Schema naming: camelCase, descriptive suffix (e.g., `workflowRunSchema`, `errorSchema`)
 - Type derivation: always use `z.infer<typeof schema>` — never write parallel hand-crafted interfaces
 - Import `z` from `@hono/zod-openapi` (not from `zod` directly). Exception: `@archon/providers` imports `z` from `zod` directly in `claude/native-tools.ts` — it only builds the Zod shape the Claude SDK's `tool()` expects (never an OpenAPI schema), and being an SDK-deps-only leaf package it must not pull in Hono.
+- Recursive schemas: use zod v4 getter properties plus an explicit `z.ZodType<T>` annotation with a hand-written `T` to break the inference cycle — the annotation forces structural agreement so drift is a compile error. Established precedent: `loopGroupNodeConfigSchema`/`LoopGroupNodeConfig` in `packages/workflows/src/schemas/dag-node.ts` (the one sanctioned exception to the z.infer-only rule)
 - Record schemas: always pass an explicit key type — `z.record(z.string(), valueSchema)` — zod v4 dropped the single-arg `z.record(valueSchema)` form
 - All new/modified API routes must use `registerOpenApiRoute(createRoute({...}), handler)` — the local wrapper handles the TypedResponse bypass. Two narrow exceptions exist: (1) routes that serve raw non-JSON content (e.g. `/api/artifacts/:runId/*` returns `text/markdown`/`text/plain`) AND use wildcard path params that OpenAPI 3.0 can't represent, use `app.get(...)` with an explanatory comment; (2) multipart-or-JSON routes (e.g. `/api/conversations/:id/message`, `/api/workflows/:name/run`) register through `registerOpenApiRoute` but drop `request.body` from the route config so Zod doesn't validate multipart payloads against a JSON schema — the handler parses both content types manually.
 - Core row schemas live in `packages/core/src/schemas/` — one file per data shape (conversation, message, user, codebase, session, workflow-event, env-var, workflow-run); `index.ts` re-exports all
@@ -92,6 +93,15 @@ These are implementation constraints, not slogans. Apply them by default.
 - Surface the ambiguous state to the user and provide a one-click action.
 - Heuristics for *recoverable* operations (retry backoff, subprocess timeouts, hygiene cleanup of terminal-status data) remain appropriate; the rule is about destructive mutation of *non-terminal* state owned by an unknowable other party.
 - Reference: #1216 and the CLI orphan-cleanup precedent at `packages/cli/src/cli.ts:256-258`.
+
+**Workflow Language Constitution — YAML coordinates, code computes, agents judge**
+- The workflow YAML expresses only what the ENGINE must see to govern a run: ordering, gates, joins, retries, sessions, artifacts, reusable structure. Computation belongs in `bash:`/`script:` nodes; judgment belongs in prompts. This boundary is what keeps load-time validation, the visual builder, resume, and audit trails possible.
+- Admissibility test for every new YAML surface feature (field, node type, expression capability): (1) does the engine need to see it to govern? (2) is it declarative data, not evaluation? (3) could a script node + existing wiring express it today? A feature that computes rather than coordinates is rejected — point to the escape hatch instead.
+- `when:` never grows incrementally (no parens, no functions, no arithmetic). The answer to "when: can't express X" is a script node that computes the decision + `when:` on its structured output. If expression demand ever genuinely accumulates, adopt CEL wholesale in one versioned change — never home-grow operators.
+- Composition features must resolve fully at LOAD time (the executor runs a flat static DAG); include parameterization, if ever added, is data-only. Runtime-resolved structure = a sub-run (its own governance object), not a language feature.
+- New per-provider capabilities default to provider config / tier-alias presets, not new node fields; capability mismatches warn loudly (capabilities.ts is the source of truth).
+- Implicit behaviors need the same scrutiny as new fields: documented, individually defeatable, fail-safe — or not added.
+- Full rationale, case law, and the five failure smells: `packages/docs-web/src/content/docs/reference/workflow-language-constitution.md` (archon.diy/reference/workflow-language-constitution/). Cite it in `feat(workflows)` PRs touching the YAML surface.
 
 **Determinism + Reproducibility**
 - Prefer reproducible commands and locked dependency behavior in CI-sensitive paths
@@ -160,7 +170,7 @@ bun run format:check
 bun run validate
 ```
 
-This runs `check:bundled`, `check:bundled-skill`, `check:bundled-schema`, `check:pi-vendor-map`, type-check, lint, format check, and tests. All eight must pass for CI to succeed.
+This runs `check:bundled`, `check:bundled-skill`, `check:bundled-schema`, `check:pi-vendor-map`, `check:capability-matrix`, type-check, lint, format check, and tests. All nine must pass for CI to succeed.
 
 ### ESLint Guidelines
 
@@ -208,6 +218,9 @@ bun run cli workflow run implement --branch feature-auth "Add auth"
 
 # Opt out of isolation (run in live checkout)
 bun run cli workflow run quick-fix --no-worktree "Fix typo"
+
+# Register the current non-git directory as a folder project and run in place (no worktree)
+bun run cli workflow run assist --folder "List every repo under this multi-repo root"
 
 # Run in a detached background child (returns immediately; find it via `workflow runs`)
 bun run cli workflow run implement "Add auth" --detach
@@ -311,7 +324,7 @@ bun run cli ai tier unset <tier> [--scope user|install]
 bun run cli ai alias set <@name> <provider> <model> [--effort <e>] [--scope user|install]
 bun run cli ai alias list [--json]         # show @custom aliases (install + yours)
 bun run cli ai alias unset <@name> [--scope user|install]
-bun run cli ai default <provider> [--scope user|install]   # set the default assistant
+bun run cli ai default <provider> [<model>] [--scope user|install]   # set the default assistant (+ optional chat model; user scope writes provider+model atomically, install scope writes assistants.<p>.model)
 
 # Inspect or rotate the anonymous telemetry install UUID
 bun run cli telemetry status
@@ -381,14 +394,18 @@ packages/
 │       ├── types.ts          # Branded types (RepoPath, BranchName, etc.)
 │       ├── worktree.ts       # Worktree operations (create, remove, list)
 │       └── index.ts          # Package exports
-├── isolation/                # @archon/isolation - Worktree isolation (depends on @archon/git + @archon/paths)
+├── isolation/                # @archon/isolation - Worktree + container isolation (depends on @archon/git + @archon/paths + @archon/providers/types)
 │   └── src/
-│       ├── types.ts          # Isolation types and interfaces
-│       ├── errors.ts         # Error classifiers (classifyIsolationError, IsolationBlockedError)
+│       ├── types.ts          # Isolation types and interfaces (incl. IIsolationBackend, ContainerBackendConfig)
+│       ├── errors.ts         # Error classifiers (classifyIsolationError, IsolationBlockedError; incl. docker patterns)
 │       ├── factory.ts        # Provider factory (getIsolationProvider, configureIsolation)
 │       ├── resolver.ts       # IsolationResolver (request → environment resolution)
 │       ├── store.ts          # IIsolationStore interface
 │       ├── worktree-copy.ts  # File copy utilities for worktrees
+│       ├── backend-router.ts # Kind-routed folder backend selection (resolveFolderBackend: in-place | container)
+│       ├── backends/         # Folder-project isolation backends (in-place.ts, container.ts — prepare/suspend/resumeEnv/finalize/applyChanges/discardChanges/destroy)
+│       ├── container/        # Docker CLI wrapper (docker-exec.ts) + overlay diff/apply walk (overlay.ts) for the container backend
+│       ├── docker/           # runner.Dockerfile + entrypoint.sh + SECURITY.md (the container runner image)
 │       ├── providers/
 │       │   └── worktree.ts   # WorktreeProvider implementation
 │       └── index.ts          # Package exports
@@ -458,10 +475,10 @@ import type { DagNode, WorkflowDefinition } from '@/lib/api';
 ### Database Schema
 
 **18 Tables (all prefixed with `remote_agent_`):**
-1. **`codebases`** - Repository metadata and commands (JSONB)
+1. **`codebases`** - Repository/project metadata and commands (JSONB); `kind` (`'repo'`/`'folder'`, default `'repo'`) discriminates git repos from **folder projects** (non-git workspaces — multi-repo roots or plain ops folders — that run in place with named `_folder/<slug>/` storage; `repository_url`/`default_branch` are null)
 2. **`conversations`** - Track platform conversations with titles and soft-delete support; nullable `user_id` records first creator (provenance + execution-identity **fallback** only — chat turns execute as the message sender, #1982)
 3. **`sessions`** - Track AI SDK sessions with resume capability
-4. **`isolation_environments`** - Git worktree isolation tracking; nullable `created_by_user_id` preserves first creator
+4. **`isolation_environments`** - Isolation tracking (git worktrees AND folder-project containers — `provider` is `'worktree'`/`'container'`; container rows use a `''` `branch_name` sentinel and store `{containerId, volume, image, overlayMode, …}` in `metadata`); nullable `created_by_user_id` preserves first creator
 5. **`workflow_runs`** - Workflow execution tracking and state; nullable `user_id` for per-run attribution
 6. **`workflow_events`** - Step-level workflow event log (step transitions, artifacts, errors)
 7. **`messages`** - Conversation message history with tool call metadata (JSONB); nullable `user_id` (NULL for assistant rows). Split write-path: the **web** adapter persists its own turns via `MessagePersistence`; the **orchestrator** persists non-web turns (Slack/Telegram/GitHub/Discord/CLI) fire-and-forget, guarded by `isWebAdapter` to avoid double-writing web turns — only AI-bound turns get a user row (deterministic-command and approval-only turns return earlier), so a `user` row always pairs with an `assistant` row
@@ -471,7 +488,7 @@ import type { DagNode, WorkflowDefinition } from '@/lib/api';
 11. **`workflow_node_sessions`** - Per-node provider session IDs persisted across workflow re-runs (opt-in via `persist_session`); keyed by `(workflow_name, node_id, scope_key, provider)`; `scope_key` is typically the conversation UUID
 12. **`user_github_tokens`** - Per-user GitHub device-flow tokens encrypted at rest (AES-256-GCM); one row per Archon user (`UNIQUE(user_id)`), cascades on user deletion; numeric `github_user_id` anchors the commit no-reply email
 13. **`user_provider_keys`** - Per-user AI-provider credentials encrypted at rest (AES-256-GCM); one row per `(user_id, provider)` (`UNIQUE(user_id, provider)`), cascades on user deletion; `kind` is `api_key` or `oauth`; resolved + injected into the **acting user's** (run starter / message sender) runs/chat env at execution time. Always available — the encryption key is auto-provisioned at `~/.archon/credential-key` when `TOKEN_ENCRYPTION_KEY` is not set. Since #1955 the `provider` column holds **vendor-canonical credential ids** (`anthropic`, `openai`, `github-copilot`, plus the Pi backend vendors) — NOT agent ids; legacy `claude`/`codex`/`copilot` rows are renamed by an idempotent startup data fix (vendor row wins on conflict), and the connectable catalog is derived from provider registrations (`acceptedCredentials` via `credentials:` on `ProviderRegistration`), never hand-listed
-14. **`user_ai_prefs`** - Per-user AI preferences (Phase 3): personal model `tiers`/`aliases` (JSON-as-TEXT) + `default_provider`. NON-encrypted (model names aren't secrets — mirrors `codebase_env_vars`, not the provider-key store); one row per user (`UNIQUE(user_id)`), cascades on user deletion. Folded into `buildAiProfile` as the highest-precedence layer at the userId-aware seams (workflow executor: run starter; chat orchestrator: message **sender**-first, conversation creator only as fallback — #1982); needs a web/CLI identity but NO `TOKEN_ENCRYPTION_KEY`
+14. **`user_ai_prefs`** - Per-user AI preferences (Phase 3): personal model `tiers`/`aliases` (JSON-as-TEXT) + `default_provider` + `default_model` (#1998 — per-user default CHAT model, written atomically with `default_provider`; replaces the `large`-tier lookup for direct chat only when the effective provider matches — workflows still resolve `large`). NON-encrypted (model names aren't secrets — mirrors `codebase_env_vars`, not the provider-key store); one row per user (`UNIQUE(user_id)`), cascades on user deletion. Folded into `buildAiProfile` as the highest-precedence layer at the userId-aware seams (workflow executor: run starter; chat orchestrator: message **sender**-first, conversation creator only as fallback — #1982); needs a web/CLI identity but NO `TOKEN_ENCRYPTION_KEY`
 15–18. **`remote_agent_auth_user` / `remote_agent_auth_session` / `remote_agent_auth_account` / `remote_agent_auth_verification`** - Better Auth tables for opt-in web login (**PostgreSQL only**; always created on Postgres via the idempotent schema apply, but populated only when web auth is enabled — `DATABASE_URL` + `BETTER_AUTH_SECRET`). Owned and shaped by Better Auth (text ids, camelCase columns); Archon never queries them directly — a session maps to the canonical `users` row via `user_identities('web', <betterAuthUserId>)`
 
 **Key Patterns:**
@@ -491,7 +508,7 @@ import type { DagNode, WorkflowDefinition } from '@/lib/api';
 - **@archon/paths**: Path resolution utilities, Pino logger factory, web dist cache path (`getWebDistDir`), CWD env stripper (`stripCwdEnv`, `strip-cwd-env-boot`) (no @archon/* deps; `pino` and `dotenv` are allowed external deps)
 - **@archon/git**: Git operations - worktrees, branches, repos, exec wrappers (depends only on @archon/paths)
 - **@archon/providers**: AI agent providers (Claude, Codex, Pi community) — owns SDK deps, `IAgentProvider` interface, `sendQuery()` contract, and provider-specific option translation. `@archon/providers/types` is the contract subpath (zero SDK deps, zero runtime side effects) that `@archon/workflows` imports from. Providers receive raw `nodeConfig` + `assistantConfig` and translate to SDK-specific options internally. Core providers live under `claude/` and `codex/`; community providers live under `community/` (currently `community/pi/`, registered with `builtIn: false`). `@archon/providers/oauth` is the SDK-boundary subpath wrapping Pi's `@earendil-works/pi-ai/oauth` (subscription login: Claude Pro/Max, Copilot) — `@archon/core` drives Pi-based subscription OAuth through it so the Pi SDK dep stays in `@archon/providers`. The ChatGPT/Codex subscription login is NOT Pi-driven: it's Archon-owned PKCE in `@archon/core` `credentials/openai-oauth.ts` (Pi drops the `id_token` the Codex CLI requires, #1924).
-- **@archon/isolation**: Worktree isolation types, providers, resolver, error classifiers (depends only on @archon/git + @archon/paths)
+- **@archon/isolation**: Worktree isolation types, providers, resolver, error classifiers, and the folder-project backend seam — `IIsolationBackend`/`resolveFolderBackend` + the `ExecutionContext` it produces (depends only on @archon/git + @archon/paths + @archon/providers/types — the types-only import that carries the shared `ExecutionContext` + write-back result contracts). The container backend's full lifecycle: `prepare` (per-run upper volume + labeled container) → in-container exec → `suspend` (`docker stop` on pause) / `resumeEnv` (rediscover by `diy.archon.env-id` label + restart, or recreate over the surviving volume; fails loud if the volume is gone) → `finalize` (overlay diff walk) → approval-gated `applyChanges` (the ONE live-root write) / `discardChanges` → `destroy`. The engine drives suspend + the write-back gate through a structural write-back port (`ContainerWriteBackBackend`, injected via `ExecuteWorkflowOptions.container`) so @archon/workflows never imports @archon/isolation. The write-back gate reuses the pause/approve machinery with a `type: 'writeback'` ApprovalContext (synthetic `__writeback__` node); the resume path branches on the persisted `metadata.pending_writeback` marker (idempotent via `writeback_resolved`). Container pauses are CLI-resumable only (chat/web resume fails fast with a CLI pointer, run stays resumable). `isolation list/cleanup` cover container envs; a paused run's container is never auto-pruned.
 - **@archon/workflows**: Workflow engine - loader, router, executor, DAG, logger, bundled defaults (depends only on @archon/git + @archon/paths + @archon/providers/types + @hono/zod-openapi + zod; DB/AI/config injected via `WorkflowDeps`)
 - **@archon/cli**: Command-line interface for running workflows and starting the web UI server (depends on @archon/server + @archon/adapters for the serve command)
 - **@archon/core**: Business logic, database, orchestration (depends on @archon/providers for AI and @hono/zod-openapi for core Zod schemas; provides `createWorkflowStore()` adapter bridging core DB → `IWorkflowStore`)
@@ -519,14 +536,14 @@ import type { DagNode, WorkflowDefinition } from '@/lib/api';
 
 **2. Command Handler** (`packages/core/src/handlers/`)
 - Process slash commands (deterministic, no AI)
-- The orchestrator treats only these top-level commands as deterministic: `/help`, `/status`, `/reset`, `/workflow`, `/register-project`, `/update-project`, `/remove-project`, `/commands`, `/init`, `/worktree`
+- The orchestrator treats only these top-level commands as deterministic: `/help`, `/status`, `/reset`, `/workflow`, `/register-project`, `/update-project`, `/remove-project`, `/setproject` (binds by DB conversation id, clears cwd/worktree override, deactivates the session with `project-changed`), `/commands`, `/init` (falls back to the selected project root when `conversation.cwd` is null), `/worktree`
 - `/workflow` handles subcommands like `list`, `run`, `status`, `cancel`, `resume`, `abandon`, `approve`, `reject`, `reset-sessions`
 - Update database, perform operations, return responses
 
 **3. Orchestrator** (`packages/core/src/orchestrator/`)
 - Manage AI conversations
 - Load conversation + codebase context from database
-- Variable substitution: `$1`, `$2`, `$3`, `$ARGUMENTS`
+- Variable substitution: `$ARGUMENTS`/`$USER_MESSAGE` (the whole trigger message; positional `$1`/`$2`/`$3` are not supported)
 - Session management: Create new or resume existing
 - Stream AI responses to platform
 - System prompt gets a "Managing Workflow Runs" section (`buildRunManagementSection` in `prompt-builder.ts`) teaching the chat agent to drive run management (`archon workflow runs/get/status/run --detach/approve/reject/abandon`) directly via bash. It is appended **only for project-scoped chats on providers without the native `manage_run` tool** (Codex/OpenCode/Copilot) — gated in `orchestrator-agent.ts` on `!scopedCaps.nativeTools`. Claude and Pi instead receive the in-process `manage_run` native tool (the prompt section would be redundant for them). This is the CLI-bash delivery path for providers that have neither native tools nor `skills:` (direct chat doesn't consume the `skills:` option — it is workflow-node-only).
@@ -565,7 +582,7 @@ assistants:
                                                 # Required in compiled binaries if
                                                 # CLAUDE_BIN_PATH env var is not set.
   codex:
-    model: gpt-5.3-codex
+    model: gpt-5.6-sol
     modelReasoningEffort: medium  # 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
     webSearchMode: live  # 'disabled' | 'cached' | 'live'
     additionalDirectories:
@@ -649,6 +666,9 @@ curl http://localhost:3637/api/conversations/<conversationId>/messages
 │   │   ├── runs/{id}/            # Per-run artifacts ($ARTIFACTS_DIR)
 │   │   │   └── nodes/            # Typed node-output sidecars (<id>.md + <id>.meta.json) for nodes with output_type
 │   │   └── uploads/{convId}/     # Web UI file uploads (ephemeral)
+│   └── logs/                     # Workflow execution logs
+├── workspaces/_folder/<slug>/    # Folder project (non-git; runs in place — no source/ or worktrees/)
+│   ├── artifacts/                # Workflow artifacts (NEVER in git)
 │   └── logs/                     # Workflow execution logs
 ├── vendor/codex/                  # Codex native binary (binary builds, user-placed)
 ├── web-dist/<version>/            # Cached web UI dist (archon serve, binary only)
@@ -788,13 +808,12 @@ async function createSession(conversationId: string, codebaseId: string) {
 ### Command System
 
 **Variable Substitution:**
-- `$1`, `$2`, `$3` - Positional arguments
-- `$ARGUMENTS` - All arguments as single string
+- `$ARGUMENTS`, `$USER_MESSAGE` - The user's full trigger message as a single string. Positional `$1`/`$2`/`$3` args are NOT supported — command/workflow prompts receive the whole message only.
 - `$ARTIFACTS_DIR` - External artifacts directory for the current workflow run (pre-created by executor)
 - `$WORKFLOW_ID` - The workflow run ID
 - `$BASE_BRANCH` - Base branch; auto-detected from git when `worktree.baseBranch` is not set; fails only if referenced in a prompt and auto-detection also fails
 - `$DOCS_DIR` - Documentation directory path; configured via `docs.path` in `.archon/config.yaml`. Defaults to `docs/`. Never throws.
-- `$LOOP_USER_INPUT` - User feedback provided via `/workflow approve <id> <text>` at an interactive loop gate. Only populated on the first iteration of a resumed interactive loop; empty string on all other iterations.
+- `$LOOP_USER_INPUT` - User feedback provided via `/workflow approve <id> <text>` at an interactive loop gate. Only populated on the first iteration of a resumed interactive loop; empty string on all other iterations. Note: on a gate whose iteration emitted the completion signal, approving with NO text finalizes the node from the already-computed output (no new iteration, so `$LOOP_USER_INPUT` is never read) — providing text runs another iteration with it (#2074).
 - `$REJECTION_REASON` - Reviewer feedback provided via `/workflow reject <id> <reason>` at an approval gate. Only populated in `on_reject` prompts; empty string elsewhere.
 - `$LOOP_PREV_OUTPUT` - Cleaned output of the previous loop iteration (loop nodes only). Empty string on the first iteration (no prior output exists). Useful for `fresh_context: true` loops that need to reference what the previous pass produced or why it failed without carrying full session history.
 
@@ -808,7 +827,7 @@ async function createSession(conversationId: string, codebaseId: string) {
 2. **Workflows** (YAML-based):
    - Stored in `.archon/workflows/` (searched recursively)
    - Multi-step AI execution chains, discovered at runtime
-   - **`nodes:` (DAG format)**: Nodes with explicit `depends_on` edges; independent nodes in the same topological layer run concurrently. Node types: `command:` (named command file), `prompt:` (inline prompt), `bash:` (shell script, stdout captured as `$nodeId.output`, no AI, receives managed per-project env vars in its subprocess environment when configured), `loop:` (iterative AI prompt until completion signal), `approval:` (human gate; pauses until user approves or rejects; `capture_response: true` stores the user's comment as `$<node-id>.output` for downstream nodes, default false), `script:` (inline TypeScript/Python or named script from `.archon/scripts/`, runs via `bun` or `uv`, stdout captured as `$nodeId.output`, no AI, receives managed per-project env vars in its subprocess environment when configured, supports `deps:` for dependency installation and `timeout:` in ms, requires `runtime: bun` or `runtime: uv`) . Supports `when:` conditions, `trigger_rule` join semantics, `$nodeId.output` substitution, `output_format` for structured JSON output (SDK-enforced on Claude/Codex/OpenCode; best-effort prompt-augmentation + repair on Pi/Copilot — the parsed output is **validated against the declared schema for every provider**, best-effort providers (Pi/Copilot) re-ask up to 3× on a validation miss, and a node that declares `output_format` but returns no schema-valid output **fails** rather than degrading silently; `$nodeId.output.field` access is strict — a field not in the producer's schema, or a schemaless node whose output isn't JSON / lacks the key, fails the consuming node, while an author-declared-optional field resolves to `''`), `allowed_tools`/`denied_tools` for per-node tool restrictions (Claude only), `hooks` for per-node SDK hook callbacks (Claude only), `mcp` for per-node MCP server config files (Claude only, env vars expanded at execution time), and `skills` for per-node skill preloading via AgentDefinition wrapping (Claude only for per-node injection; Codex supports skills via filesystem auto-discovery from `.agents/skills/` — the `skills:` list is informational for Codex nodes), `agents` for inline sub-agent definitions invokable via the Task tool (Claude only), and `effort`/`thinking`/`maxBudgetUsd`/`systemPrompt`/`fallbackModel`/`betas`/`sandbox` for Claude SDK advanced options (Claude only, also settable at workflow level), and `persist_session` for cross-run provider session continuity (node-level opt-in; workflow-level default via `persist_sessions: true`; requires a provider with the `sessionResume` capability), and `output_type` (any node type) for engine-written typed output sidecars — when set, the executor writes `$ARTIFACTS_DIR/nodes/<id>.md` + `<id>.meta.json` after the node completes (best-effort) so downstream nodes and later runs can locate output by type instead of guessing filenames
+   - **`nodes:` (DAG format)**: Nodes with explicit `depends_on` edges; independent nodes in the same topological layer run concurrently. Node types: `command:` (named command file), `prompt:` (inline prompt), `bash:` (shell script, stdout captured as `$nodeId.output`, no AI, receives managed per-project env vars in its subprocess environment when configured), `loop:` (iterative AI prompt until completion signal), `loop_group:` (multi-node sub-DAG body repeated per iteration until `until` signal / `until_bash` exit 0 / `max_iterations`; body is sealed for `depends_on` but may read outer outputs via `$nodeId.output` and the previous iteration via `$LOOP_PREV.<nodeId>.output`; a failed body node fails the group immediately; group-level `model`/`provider` become body defaults), `approval:` (human gate; pauses until user approves or rejects; `capture_response: true` stores the user's comment as `$<node-id>.output` for downstream nodes, default false), `script:` (inline TypeScript/Python or named script from `.archon/scripts/`, runs via `bun` or `uv`, stdout captured as `$nodeId.output`, no AI, receives managed per-project env vars in its subprocess environment when configured, supports `deps:` for dependency installation and `timeout:` in ms, requires `runtime: bun` or `runtime: uv`), `include:` (load-time inlining of another workflow's nodes as a flattened, namespaced sub-DAG — each included node becomes `<includeId>__<nodeId>`; the include node's `depends_on`/`when`/`trigger_rule` attach to the block's entry nodes, and `$includeId.output` resolves to the block's terminal (primary) sink; expansion happens at discovery so the executor sees ordinary nodes — see the "Reusing a Shared Sub-DAG" guide) . Supports `when:` conditions, `trigger_rule` join semantics, `$nodeId.output` substitution, `output_format` for structured JSON output (SDK-enforced on Claude/Codex/OpenCode; best-effort prompt-augmentation + repair on Pi/Copilot — the parsed output is **validated against the declared schema for every provider**, best-effort providers (Pi/Copilot) re-ask up to 3× on a validation miss, and a node that declares `output_format` but returns no schema-valid output **fails** rather than degrading silently; `$nodeId.output.field` access is strict — a field not in the producer's schema, or a schemaless node whose output isn't JSON / lacks the key, fails the consuming node, while an author-declared-optional field resolves to `''`), `allowed_tools`/`denied_tools` for per-node tool restrictions (all providers except Codex), `hooks` for per-node SDK hook callbacks (Claude only), `mcp` for per-node MCP server config files (all providers except Pi, env vars expanded at execution time), and `skills` for per-node skill preloading via AgentDefinition wrapping (per-node injection on Claude/Pi/OpenCode/Copilot; Codex instead auto-discovers skills from `.agents/skills/` on the filesystem — the `skills:` list is informational for Codex nodes), `agents` for inline sub-agent definitions invokable via the Task tool (Claude only), and `effort`/`thinking` for reasoning depth (Claude/Pi/Copilot) plus the Claude-only SDK advanced options `maxBudgetUsd`/`systemPrompt`/`fallbackModel`/`betas`/`sandbox` (also settable at workflow level), and `persist_session` for cross-run provider session continuity (node-level opt-in; workflow-level default via `persist_sessions: true`; requires a provider with the `sessionResume` capability), and `output_type` (any node type) for engine-written typed output sidecars — when set, the executor writes `$ARTIFACTS_DIR/nodes/<id>.md` + `<id>.meta.json` after the node completes (best-effort) so downstream nodes and later runs can locate output by type instead of guessing filenames
    - Workflow-level `requires: [github]` hard-blocks invocation (before any worktree/clone/AI cost) when the originating user hasn't connected their GitHub identity — enforced only when per-user GitHub is enabled (GitHub App + `TOKEN_ENCRYPTION_KEY`); a no-op for solo PAT installs
    - Provider inherited from `.archon/config.yaml` unless explicitly set; per-node `provider` and `model` overrides supported
    - Model and options can be set per workflow or inherited from config defaults
@@ -826,7 +845,7 @@ async function createSession(conversationId: string, codebaseId: string) {
 - Source builds: Loaded from filesystem at runtime
 - Merged with repo-specific commands/workflows (repo overrides defaults by name)
 - Opt-out: Set `defaults.loadDefaultCommands: false` or `defaults.loadDefaultWorkflows: false` in `.archon/config.yaml`
-- **After adding, removing, or editing a default file, run `bun run generate:bundled`** to refresh the embedded bundle. After editing `migrations/000_combined.sql`, run `bun run generate:bundled-schema` to keep the embedded schema in sync, AND mirror any new table into `createSchema()` in `packages/core/src/db/adapters/sqlite.ts` — the SQLite schema is hand-maintained separately and is NOT generated from the migration; the only intentional Postgres-only exception is the `remote_agent_auth_*` Better Auth tables, and the schema-parity test in `sqlite.test.ts` fails CI on any other drift. After a `@earendil-works/pi-ai` upgrade, run `bun run generate:pi-vendor-map` to regenerate the Pi backend → env-var map + credential specs from the installed SDK (a new upstream backend must be classified in `scripts/generate-pi-vendor-map.ts`). `bun run validate` (and CI) run `check:bundled`, `check:bundled-skill`, `check:bundled-schema`, and `check:pi-vendor-map` and will fail loudly if any generated file is stale.
+- **After adding, removing, or editing a default file, run `bun run generate:bundled`** to refresh the embedded bundle. After editing `migrations/000_combined.sql`, run `bun run generate:bundled-schema` to keep the embedded schema in sync, AND mirror any new table into `createSchema()` in `packages/core/src/db/adapters/sqlite.ts` — the SQLite schema is hand-maintained separately and is NOT generated from the migration; the only intentional Postgres-only exception is the `remote_agent_auth_*` Better Auth tables, and the schema-parity test in `sqlite.test.ts` fails CI on any other drift. After a `@earendil-works/pi-ai` upgrade, run `bun run generate:pi-vendor-map` to regenerate the Pi backend → env-var map + credential specs from the installed SDK (a new upstream backend must be classified in `scripts/generate-pi-vendor-map.ts`). After changing any provider's `capabilities.ts` (or adding a provider/capability axis), run `bun run generate:capability-matrix` to refresh the canonical provider capability matrix at `packages/docs-web/src/content/docs/reference/provider-capabilities.md` — it is generated from the registry's capability constants (the same objects the dag-executor reads for ignored-capability warnings), so the docs can never drift from runtime behavior; a new `ProviderCapabilities` field fails the generator until it gets a matrix axis in `scripts/generate-capability-matrix.ts`. `bun run validate` (and CI) run `check:bundled`, `check:bundled-skill`, `check:bundled-schema`, `check:pi-vendor-map`, and `check:capability-matrix` and will fail loudly if any generated file is stale.
 
 **Home-scoped ("global") workflows, commands, and scripts** (user-level, applies to every project):
 - Workflows: `~/.archon/workflows/` (or `$ARCHON_HOME/workflows/`)
@@ -895,7 +914,7 @@ Pattern: Use `classifyIsolationError()` (from `@archon/isolation`) to map git er
 
 **Codebases:**
 - `GET /api/codebases` / `GET /api/codebases/:id` - List / fetch codebases
-- `POST /api/codebases` - Register a codebase (clone or local path)
+- `POST /api/codebases` - Register a codebase (clone or local path). A non-git local `path` now auto-registers as a folder project (`kind: 'folder'`, runs in place) instead of erroring
 - `DELETE /api/codebases/:id` - Delete a codebase and clean up resources
 - `GET /api/codebases/:id/env` - List env var keys for a codebase (never returns values)
 - `PUT /api/codebases/:id/env` / `DELETE /api/codebases/:id/env/:key` - Upsert / delete a single codebase env var
@@ -935,7 +954,8 @@ Pattern: Use `classifyIsolationError()` (from `@archon/isolation`) to map git er
 
 **Per-User AI Prefs (Phase 3; `requireWebUser` — identity only, NO `TOKEN_ENCRYPTION_KEY`):**
 - `GET /api/auth/me/ai-prefs` - The current user's stored prefs (raw per-user layer, not merged with config); returns `{ tiers?, aliases?, defaultProvider? }`. 401 without identity — the console hides "Just me" on failure.
-- `PATCH /api/auth/me/ai-prefs/tiers` / `…/aliases` / `…/default` - Per-key merge writes (`null` unsets); validate provider via `isRegisteredProvider`, effort via `isEffortValidForProvider`, alias names (`@` prefix, not a reserved tier keyword). All return the updated prefs.
+- `PATCH /api/auth/me/ai-prefs/tiers` / `…/aliases` - Per-key merge writes (`null` unsets); validate provider via `isRegisteredProvider`, effort via `isEffortValidForProvider`, alias names (`@` prefix, not a reserved tier keyword). All return the updated prefs.
+- `PATCH /api/auth/me/ai-prefs/default` - Set the personal default assistant + default chat model: `{ provider, model? }` written ATOMICALLY (omitted `model` clears any pin; `model` without `provider` → 400; `provider: null` clears both). Chat model precedence (#1998, chat call-site only): user `default_model` (provider must match) → configured `large` tier (user > repo > global) → install `assistants.<p>.model` (beats only the built-in tier default) → built-in tier default.
 - Stored in `remote_agent_user_ai_prefs` (non-encrypted); folded into `buildAiProfile` as the **highest-precedence** layer (global < repo < user) at the userId-aware seams — workflow executor (`deps.getUserAiPrefs`, resolved from the run starter) and chat orchestrator (sender-first: `executionUserId = context.userId ?? conversation.user_id` — the SENDER's prefs and credentials win; the conversation creator is only the fallback when no sender identity resolves, see #1982). The per-user `defaultProvider` rebases tier defaults and the chat assistant. No identity → byte-for-byte config-only behavior (solo unchanged). A chat request for tier `large` that resolves via the fallback chain emits a one-line non-blocking nudge (`orchestrator.tier_fallback_nudge`). Note: on genuinely shared threads (Slack/Telegram), per-sender prefs mean the provider can differ per turn within one thread (session transitions churn accordingly), and a sender's turn carries the shared thread history into a call billed to their credential — accepted semantics.
 
 **Config (System; ungated — works on solo installs, NOT `requireWebUser`):**

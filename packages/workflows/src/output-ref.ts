@@ -20,8 +20,17 @@
  *
  * The whole-text `$node.output` form (no `.field`) is never routed here — it is
  * unchanged and never throws.
+ *
+ * The UNKNOWN-node case (`$typo.output.field` where nothing in the outputs map
+ * resolves — a typo, or a real node that has not run before the reference) is
+ * handled by the callers, not `resolveNodeOutputField` — they own the outputs map.
+ * A `.field` ref to such an id throws `OutputRefError('unknown-node')` there, so it
+ * fails the consuming node loudly, consistent with the strict field posture above;
+ * a whole-text `$typo.output` to an unresolved id stays lenient ('') as a
+ * long-documented surface. See `similarNodeIds`.
  */
 import type { NodeOutput } from './schemas';
+import { findSimilar } from './utils/fuzzy-match';
 
 /**
  * Thrown when a `$nodeId.output.field` reference cannot be honored under the
@@ -32,19 +41,27 @@ export type OutputRefErrorReason =
   | 'not-in-schema'
   | 'unparseable'
   | 'missing-key'
-  | 'producer-not-run';
+  | 'producer-not-run'
+  | 'unknown-node';
 
 export class OutputRefError extends Error {
   constructor(
     public readonly nodeId: string,
     public readonly field: string,
-    public readonly reason: OutputRefErrorReason
+    public readonly reason: OutputRefErrorReason,
+    /** Nearby known node ids for a did-you-mean hint (only used by 'unknown-node'). */
+    public readonly candidates: readonly string[] = []
   ) {
-    super(OutputRefError.messageFor(nodeId, field, reason));
+    super(OutputRefError.messageFor(nodeId, field, reason, candidates));
     this.name = 'OutputRefError';
   }
 
-  private static messageFor(nodeId: string, field: string, reason: OutputRefErrorReason): string {
+  private static messageFor(
+    nodeId: string,
+    field: string,
+    reason: OutputRefErrorReason,
+    candidates: readonly string[]
+  ): string {
     const ref = `$${nodeId}.output.${field}`;
     switch (reason) {
       case 'not-in-schema':
@@ -55,8 +72,26 @@ export class OutputRefError extends Error {
         return `'${ref}' references field '${field}', but node '${nodeId}'s JSON output has no such key. Emit '${field}' in the output, or fix the reference.`;
       case 'producer-not-run':
         return `'${ref}' references field '${field}', but node '${nodeId}' did not run (skipped or pending), so it has no output to read. Guard this reference with a 'when:' condition, or fix the dependency.`;
+      case 'unknown-node': {
+        const hint =
+          candidates.length > 0
+            ? ` Did you mean: ${candidates.map(c => `'${c}'`).join(', ')}?`
+            : '';
+        return `'${ref}' references node '${nodeId}', but no node with that id has produced output at this point — the id is either unknown (a typo) or belongs to a node that has not run before this reference.${hint} Fix the id, or ensure '${nodeId}' runs first (e.g. add it to depends_on).`;
+      }
     }
   }
+}
+
+/**
+ * Rank known producer ids by proximity to a mistyped node id, for the did-you-mean
+ * hint in an 'unknown-node' `OutputRefError`. Returns up to 3 nearest ids (may be
+ * empty when nothing is close). Owned here so both substitution seams
+ * (`substituteNodeOutputRefs`, condition-evaluator's `resolveOutputRef`) build the
+ * error identically.
+ */
+export function similarNodeIds(nodeId: string, knownIds: Iterable<string>): string[] {
+  return findSimilar(nodeId, Array.from(knownIds));
 }
 
 /**

@@ -30,6 +30,7 @@ import type {
 } from './types';
 import type { IIsolationStore } from './store';
 import { classifyIsolationError, isKnownIsolationError } from './errors';
+import { resolveFolderBackend } from './backend-router';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -99,6 +100,32 @@ export class IsolationResolver {
     // 2. No codebase = no isolation
     if (!request.codebase) {
       return { status: 'none', cwd: '/workspace' };
+    }
+
+    // 2b. Folder projects run through the folder-backend seam — no worktree.
+    // The in-place backend (Phase A default) returns the REAL folder path (not
+    // the '/workspace' docker sentinel), so chat/workflows land in the actual
+    // project directory — byte-identical to the pre-seam early-return. Container
+    // selection is a Phase B config concern; the chat path stays in-place for now.
+    //
+    // NOTE (Phase A): only `prepared.cwd` is propagated. `prepared.execContext`
+    // is intentionally DROPPED here because the `IsolationResolution` 'none'
+    // variant carries no execution-context field, so chat/orchestrator callers
+    // (which consume this result) have no channel for it — they run host-only in
+    // Phase A. Phase B, when it wires containerized CHAT, must extend the 'none'
+    // variant with an `execContext` and thread it through the orchestrator; until
+    // then only the CLI workflow path carries execContext (from the backend it
+    // resolves directly).
+    if (request.codebase.kind === 'folder') {
+      const folderCodebase = {
+        id: request.codebase.id,
+        defaultCwd: request.codebase.defaultCwd,
+        name: request.codebase.name,
+        kind: 'folder' as const,
+      };
+      const backend = resolveFolderBackend(folderCodebase, { container: false });
+      const prepared = await backend.prepare({ codebase: folderCodebase });
+      return { status: 'none', cwd: prepared.cwd };
     }
 
     const codebase = request.codebase;
@@ -445,6 +472,7 @@ export class IsolationResolver {
       codebaseId: codebase.id,
       codebaseName: codebase.name,
       canonicalRepoPath: canonicalPath,
+      baseBranch: codebase.defaultBranch ?? undefined,
       identifier: workflowId,
       gitIdentity,
     };

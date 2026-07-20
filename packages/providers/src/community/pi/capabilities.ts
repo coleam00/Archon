@@ -31,4 +31,5 @@ export const PI_CAPABILITIES: ProviderCapabilities = {
   fallbackModel: false,
   sandbox: false,
   nativeTools: true,
+  containerExec: false, // no in-container spawn path yet (fail-fast source of truth)
 };

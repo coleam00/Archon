@@ -201,7 +201,7 @@ const DEFAULT_CONFIG_CONTENT = `# Archon Global Configuration
 #   claude:
 #     model: sonnet
 #   codex:
-#     model: gpt-5.3-codex
+#     model: gpt-5.6-sol
 #     modelReasoningEffort: medium
 #     webSearchMode: disabled
 #     additionalDirectories:
@@ -510,6 +510,11 @@ function mergeGlobalConfig(defaults: MergedConfig, global: GlobalConfig): Merged
     result.concurrency.maxConversations = global.concurrency.maxConversations;
   }
 
+  // Container backend defaults (folder projects)
+  if (global.container) {
+    result.container = { ...global.container };
+  }
+
   return result;
 }
 
@@ -577,6 +582,16 @@ function mergeRepoConfig(merged: MergedConfig, repo: RepoConfig): MergedConfig {
   // Propagate per-project env vars from repo config
   if (repo.env) {
     result.envVars = { ...result.envVars, ...repo.env };
+  }
+
+  // Container backend settings — repo overrides global per-field.
+  if (repo.container) {
+    result.container = {
+      ...result.container,
+      ...Object.fromEntries(
+        Object.entries(repo.container).filter(([, value]) => value !== undefined)
+      ),
+    };
   }
 
   return result;

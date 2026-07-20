@@ -45,6 +45,26 @@ function nodeFromDag(node: WireWorkflowDefinition['nodes'][number], issues: Issu
     return { id, variant: 'prompt', base, data: defaultPromptData() };
   }
 
+  if (
+    variant === 'loop' &&
+    typeof variantSpecific.loop?.prompt === 'string' &&
+    typeof variantSpecific.loop.command === 'string'
+  ) {
+    // The engine schema rejects a loop carrying both prompt sources; a wire
+    // node that somehow has both cannot round-trip faithfully. loopFromDag
+    // deterministically keeps `prompt` — surface the dropped `command`.
+    issues.push(
+      makeIssue({
+        rule: 'structural.field.unsupported',
+        severity: 'error',
+        source: 'client-instant',
+        message:
+          "loop node has both 'prompt' and 'command' (engine allows exactly one); editing as an inline-prompt loop — 'command' was dropped",
+        path: { nodeId: id, field: 'loop.command' },
+      })
+    );
+  }
+
   if (variant === 'script' && variantSpecific.runtime === undefined) {
     // The engine requires `runtime` on script nodes. scriptFromDag defaults to
     // 'bun' so the node stays editable, but the gap must not be silent.
@@ -62,7 +82,10 @@ function nodeFromDag(node: WireWorkflowDefinition['nodes'][number], issues: Issu
   // Warn about wire keys the variant's converters do not carry — the engine
   // emits some fields only on specific variants (e.g. `timeout` on bash/script),
   // so anything else here cannot survive the round-trip.
-  const wireKeys = VARIANT_REGISTRY[variant].wireKeys;
+  // Widen to `string[]` so the `.includes(key)` membership test accepts the
+  // arbitrary keys present on the wire node (the registry types these as
+  // `keyof WireDagNode` for compile-time drift safety).
+  const wireKeys: readonly string[] = VARIANT_REGISTRY[variant].wireKeys;
   for (const key of Object.keys(variantSpecific)) {
     if (!wireKeys.includes(key)) {
       issues.push(
@@ -97,4 +120,30 @@ export function fromWorkflowDefinition(def: WireWorkflowDefinition): ImportResul
     },
     issues,
   };
+}
+
+/**
+ * Import a workflow definition, surfacing any import issues to the console.
+ *
+ * Callers that seed the editor from a definition but have nowhere to render the
+ * issue list (the fixture route, the preview page) should use this instead of
+ * dropping `.issues` on the floor — an unknown node variant silently becomes an
+ * empty prompt node, and a missing script `runtime` silently becomes `bun`, so
+ * the degradation must at least be visible in the console. PR-3's live editor
+ * routes the same issues into the validation panel.
+ */
+export function importWorkflowDefinition(
+  def: WireWorkflowDefinition,
+  label: string
+): BuilderWorkflow {
+  const { workflow, issues } = fromWorkflowDefinition(def);
+  if (issues.length > 0) {
+    // Dev-visibility surface for import degradation; these routes have no issue
+    // panel (PR-3's live editor routes the same issues into the panel).
+    console.warn(
+      `[builder] imported "${label}" with ${String(issues.length)} import issue(s):`,
+      issues.map(i => i.message)
+    );
+  }
+  return workflow;
 }

@@ -210,8 +210,12 @@ function buildCodexMcpConfigOverrides(
   return { mcp_servers: mcpServers };
 }
 
+// Maps slugs that ChatGPT-plan accounts now reject (previously shipped as Archon
+// suggestions/defaults) to a current, plan-accepted slug to suggest instead.
 const CODEX_MODEL_FALLBACKS: Record<string, string> = {
-  'gpt-5.3-codex': 'gpt-5.2-codex',
+  'gpt-5.3-codex': 'gpt-5.6-sol',
+  'gpt-5.2-codex': 'gpt-5.6-sol',
+  'gpt-5.2': 'gpt-5.6-sol',
 };
 
 function isModelAccessError(errorMessage: string): boolean {
@@ -315,6 +319,50 @@ function buildTurnOptions(requestOptions?: SendQueryOptions): {
   // later attempts once any earlier attempt's subprocess is SIGTERM'd.
   // See issue #1266.
   return { turnOptions, hasOutputFormat };
+}
+
+// ─── Effective Prompt Builder ────────────────────────────────────────────
+
+/**
+ * Fold the request/node-level systemPrompt into the user prompt.
+ *
+ * The Codex SDK (verified at @openai/codex-sdk 0.144.5) exposes NO
+ * instructions/system-prompt channel on ThreadOptions or TurnOptions, so the
+ * only delivery mechanism is prepending to the prompt string, separated by
+ * the same `---` delimiter augmentPromptForJsonSchema uses. See issue #1837.
+ *
+ * Precedence mirrors the Pi provider: request-level systemPrompt wins over
+ * node-level. Only string / string[] are supported; SystemPromptPreset
+ * objects are Claude-specific and dropped with a WARN (the orchestrator
+ * already sends non-Claude providers a plain string).
+ *
+ * The prepend intentionally repeats on EVERY turn, including resumed
+ * threads: the provider cannot know whether a resumed session's earlier
+ * turns carried the instructions (the session may predate this fix), and
+ * both the resume-failure fallback and cold retry attempts start fresh
+ * threads where first-turn-only logic would drop the instructions exactly
+ * when they are most needed. This matches Claude, which receives the
+ * systemPrompt on every query.
+ */
+function buildEffectivePrompt(prompt: string, requestOptions?: SendQueryOptions): string {
+  const raw = requestOptions?.systemPrompt ?? requestOptions?.nodeConfig?.systemPrompt;
+  if (raw === undefined) {
+    return prompt;
+  }
+  let systemText: string | undefined;
+  if (typeof raw === 'string') {
+    systemText = raw;
+  } else if (Array.isArray(raw)) {
+    systemText = raw.join('\n\n');
+  }
+  if (systemText === undefined) {
+    getLog().warn({ systemPromptType: typeof raw }, 'codex.system_prompt_dropped_preset');
+    return prompt;
+  }
+  if (systemText.trim() === '') {
+    return prompt;
+  }
+  return `${systemText}\n\n---\n\n${prompt}`;
 }
 
 // ─── Stream Normalizer ───────────────────────────────────────────────────
@@ -682,6 +730,7 @@ function classifyAndEnrichCodexError(
  * sendQuery orchestrates the following internal helpers:
  * - buildThreadOptions: SDK thread configuration
  * - buildTurnOptions: per-turn configuration (output schema, abort signal)
+ * - buildEffectivePrompt: systemPrompt delivery via prompt prepend (no SDK channel)
  * - streamCodexEvents: raw SDK event normalization into MessageChunks
  * - classifyAndEnrichCodexError: error classification for retry decisions
  */
@@ -809,8 +858,11 @@ export class CodexProvider implements IAgentProvider {
       };
     }
 
-    // 3. Build turn options
+    // 3. Build turn options and the effective prompt (systemPrompt prepend).
+    // Computed once before the retry loop so cold retry attempts, which start
+    // fresh threads, also carry the system instructions.
     const { turnOptions, hasOutputFormat } = buildTurnOptions(requestOptions);
+    const effectivePrompt = buildEffectivePrompt(prompt, requestOptions);
     let lastError: Error | undefined;
 
     for (let attempt = 0; attempt <= MAX_SUBPROCESS_RETRIES; attempt++) {
@@ -853,7 +905,7 @@ export class CodexProvider implements IAgentProvider {
 
         try {
           // 4. Run streamed turn
-          const result = await thread.runStreamed(prompt, turnOptions);
+          const result = await thread.runStreamed(effectivePrompt, turnOptions);
 
           // 5. Stream normalized events (fresh state per attempt to avoid dedup leaks)
           yield* withResumedOutcome(

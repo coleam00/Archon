@@ -1,7 +1,8 @@
 /**
  * Database operations for workflow runs
  */
-import { pool, getDialect, getDatabaseType } from './connection';
+import { pool, getDialect, getDatabaseType, getDatabase } from './connection';
+import { insertWorkflowEvent } from './workflow-events';
 import type { IDatabase, SqlDialect } from './adapters/types';
 import type {
   WorkflowRun,
@@ -70,6 +71,133 @@ const ORPHAN_RESUME_STALE_DAYS = 1;
 function resumableStatusClause(dialect: SqlDialect, dayParamIndex: number): string {
   const staleOrphan = `last_activity_at IS NULL OR last_activity_at < ${dialect.nowMinusDays(dayParamIndex)}`;
   return `(status IN ('failed', 'paused') OR (status = 'running' AND (${staleOrphan})))`;
+}
+
+/**
+ * SQL predicate matching a run whose approval gate is still OPEN: the row is
+ * 'paused' AND metadata.approval.resolved is JSON null or absent. Dialect-aware
+ * (Postgres `->>`, SQLite `json_extract`) and kept in ONE place so the two forms
+ * cannot drift — mirrors resumableStatusClause and the local jsonIntExtract
+ * helper. `->>'resolved'` / `json_extract(...)` both return SQL NULL for a JSON
+ * null AND for an absent key, so `IS NULL` matches exactly "not yet resolved".
+ * This is the compare-and-swap guard resolveApprovalGate uses to serialize
+ * concurrent approve/reject.
+ */
+function unresolvedGateClause(): string {
+  const resolvedExpr =
+    getDatabaseType() === 'postgresql'
+      ? "metadata->'approval'->>'resolved'"
+      : "json_extract(metadata, '$.approval.resolved')";
+  return `status = 'paused' AND ${resolvedExpr} IS NULL`;
+}
+
+/**
+ * An audit event written atomically with a gate resolution (#2146). The winning
+ * resolver inserts these in the SAME transaction as the resolution UPDATE, so a
+ * failed event write rolls the resolution back — a resolved gate can never be
+ * left with no audit trail, which the fast-path guard would then wrongly block
+ * from retrying. `workflow_run_id` is supplied by the CAS function.
+ */
+export interface GateResolutionEvent {
+  event_type: string;
+  step_name: string;
+  data: Record<string, unknown>;
+}
+
+/**
+ * Atomically resolve a paused approval gate (compare-and-swap) and record its
+ * audit events in one transaction.
+ *
+ * Merges `metadata` (which carries `approval.resolved = 'approved' | 'rejected'`
+ * plus any gate-specific keys) into the row ONLY while the gate is still open
+ * (unresolvedGateClause). When the CAS matches, the same transaction inserts
+ * `events`; when it loses (rowCount 0) nothing is written. Returns
+ * `{ resolved }`: `true` = this caller won the race and its events are committed;
+ * `false` = a concurrent approve/reject already resolved the gate.
+ *
+ * This closes the read-then-write TOCTOU window in approveWorkflow /
+ * rejectWorkflow: the atomic conditional UPDATE — not a prior in-memory
+ * isGateResolved read — is the single arbiter of the resolution. The run STAYS
+ * 'paused' (only metadata changes); the resume CAS (resumeWorkflowRun)
+ * independently guards double-resume. Idempotent in content, so a lost race
+ * corrupts nothing — it only prevents the duplicate events/telemetry (#2113).
+ * Wrapping the resolution and its audit rows in one transaction closes the
+ * separate gap where a post-commit event-write failure stranded a resolved gate
+ * with no audit event and no way to retry (#2146).
+ */
+export async function resolveApprovalGate(
+  id: string,
+  metadata: Record<string, unknown>,
+  events: GateResolutionEvent[]
+): Promise<{ resolved: boolean }> {
+  const dialect = getDialect();
+  try {
+    return await getDatabase().withTransaction(async query => {
+      const result = await query(
+        `UPDATE remote_agent_workflow_runs
+         SET metadata = ${dialect.jsonMerge('metadata', 2)}
+         WHERE id = $1 AND ${unresolvedGateClause()}`,
+        [id, JSON.stringify(metadata)]
+      );
+      const resolved = (result.rowCount ?? 0) > 0;
+      if (resolved) {
+        for (const event of events) {
+          await insertWorkflowEvent(query, { workflow_run_id: id, ...event });
+        }
+      }
+      return { resolved };
+    });
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, workflowRunId: id }, 'db.workflow_run_resolve_gate_failed');
+    throw new Error(`Failed to resolve approval gate: ${err.message}`);
+  }
+}
+
+/**
+ * Atomically cancel a paused approval gate (compare-and-swap).
+ *
+ * The reject sibling of resolveApprovalGate for the outcomes that TERMINATE the
+ * run (no on_reject prompt, or the attempt cap reached): it flips the run
+ * paused→'cancelled' in a SINGLE conditional UPDATE, guarded on the SAME
+ * open-gate predicate. Doing it in one statement (instead of stamp-resolution +
+ * separate cancelWorkflowRun) means there is never an intermediate
+ * resolved-but-not-cancelled state that a failed second write could strand — a
+ * reject retry could not self-heal past the fast-path gate guard. No `resolved`
+ * marker is written: that marker only matters for the stay-paused rework path,
+ * and the rejection reason is preserved in the approval_received event. The
+ * status flip and that audit event commit in ONE transaction (#2146), so a
+ * failed event write rolls the cancellation back rather than terminating the run
+ * with no audit trail. Returns `{ resolved }`; `false` means a concurrent
+ * resolver already won (the gate is no longer open), so nothing is written.
+ */
+export async function resolveAndCancelApprovalGate(
+  id: string,
+  events: GateResolutionEvent[]
+): Promise<{ resolved: boolean }> {
+  const dialect = getDialect();
+  try {
+    return await getDatabase().withTransaction(async query => {
+      const result = await query(
+        `UPDATE remote_agent_workflow_runs
+         SET status = 'cancelled',
+             completed_at = ${dialect.now()}
+         WHERE id = $1 AND ${unresolvedGateClause()}`,
+        [id]
+      );
+      const resolved = (result.rowCount ?? 0) > 0;
+      if (resolved) {
+        for (const event of events) {
+          await insertWorkflowEvent(query, { workflow_run_id: id, ...event });
+        }
+      }
+      return { resolved };
+    });
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, workflowRunId: id }, 'db.workflow_run_resolve_cancel_gate_failed');
+    throw new Error(`Failed to resolve and cancel approval gate: ${err.message}`);
+  }
 }
 
 /**
@@ -174,6 +302,34 @@ export async function getWorkflowRun(id: string): Promise<WorkflowRun | null> {
     const err = error as Error;
     getLog().error({ err }, 'db.workflow_run_get_failed');
     throw new Error(`Failed to get workflow run: ${err.message}`);
+  }
+}
+
+/**
+ * Find the workflow run that owns a container isolation environment
+ * (`metadata.isolation_env_id === envId`, stamped at run creation for container
+ * runs). Used by `isolation cleanup` to decide whether a container is reapable:
+ * a paused/running run must NOT be pruned. Returns the newest match, or null when
+ * no run references the env (an orphan safe to reap). Dialect-aware JSON extract.
+ */
+export async function getRunByIsolationEnvId(envId: string): Promise<WorkflowRun | null> {
+  const extract =
+    getDatabaseType() === 'postgresql'
+      ? "metadata->>'isolation_env_id'"
+      : "json_extract(metadata, '$.isolation_env_id')";
+  try {
+    const result = await pool.query<WorkflowRun>(
+      `SELECT * FROM remote_agent_workflow_runs
+       WHERE ${extract} = $1
+       ORDER BY started_at DESC LIMIT 1`,
+      [envId]
+    );
+    const row = result.rows[0];
+    return row ? normalizeWorkflowRun(row) : null;
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, envId }, 'db.workflow_run_get_by_isolation_env_failed');
+    throw new Error(`Failed to look up run for isolation env ${envId}: ${err.message}`);
   }
 }
 
@@ -566,17 +722,14 @@ export async function updateWorkflowRun(
   if (updates.status !== undefined) {
     values.push(updates.status);
     setClauses.push(`status = $${values.length}`);
-    // Auto-set completed_at for terminal-like statuses, but skip when
-    // transitioning to 'failed' for approval resume (not a real completion)
-    const isApprovalTransition =
-      updates.status === 'failed' &&
-      (updates.metadata?.approval_response !== undefined ||
-        updates.metadata?.loop_user_input !== undefined);
+    // Auto-set completed_at for terminal statuses. (Gate approve/reject no
+    // longer stages runs as 'failed' — they stay 'paused' with
+    // metadata.approval.resolved set (#2075) — so a 'failed' write here is
+    // always a real completion.)
     if (
-      !isApprovalTransition &&
-      (updates.status === 'completed' ||
-        updates.status === 'failed' ||
-        updates.status === 'cancelled')
+      updates.status === 'completed' ||
+      updates.status === 'failed' ||
+      updates.status === 'cancelled'
     ) {
       setClauses.push(`completed_at = ${dialect.now()}`);
     }
@@ -671,9 +824,10 @@ export async function cancelWorkflowRun(id: string): Promise<{ cancelled: boolea
     // Guard against re-stamping an already-finished run. Cancelling a run that
     // is 'completed' or 'cancelled' must be a no-op, not a re-write of
     // completed_at / a resurrection of terminal state. 'failed' is intentionally
-    // still cancellable (it is overloaded as a resumable/approval state), and a
-    // 'running' run stays cancellable — that is cooperative cancellation, which
-    // the executor honors via its between-layer status check (dag-executor).
+    // still cancellable (it remains a resumable state, so the user must be able
+    // to discard it), and a 'running' run stays cancellable — that is
+    // cooperative cancellation, which the executor honors via its between-layer
+    // status check (dag-executor).
     result = await pool.query(
       `UPDATE remote_agent_workflow_runs
        SET status = 'cancelled', completed_at = ${dialect.now()}
@@ -699,10 +853,19 @@ export async function cancelWorkflowRun(id: string): Promise<{ cancelled: boolea
  * Pause a running workflow run for human approval.
  * Sets status to 'paused' and stores approval context in metadata.
  * Does NOT set completed_at — the run is not finished.
+ *
+ * `resolved`, `completionSignaled`, and `signaledOutput` are reset to an
+ * explicit null on every fresh pause so a prior gate's resolution or signal
+ * state can never leak into this one: SQLite's json_patch deep-merges the new
+ * context into the stored one (an omitted key would keep the old value —
+ * JSON.stringify drops undefined, so the values are computed explicitly), and
+ * RFC 7396 null removes the key; Postgres `||` replaces the approval object
+ * wholesale. See ApprovalContext.resolved / .completionSignaled.
  */
 export async function pauseWorkflowRun(
   id: string,
-  approvalContext: ApprovalContext
+  approvalContext: ApprovalContext,
+  extraMetadata?: Record<string, unknown>
 ): Promise<void> {
   const dialect = getDialect();
   try {
@@ -710,7 +873,34 @@ export async function pauseWorkflowRun(
       `UPDATE remote_agent_workflow_runs
        SET status = 'paused', metadata = ${dialect.jsonMerge('metadata', 2)}
        WHERE id = $1 AND status = 'running'`,
-      [id, JSON.stringify({ approval: approvalContext })]
+      [
+        id,
+        JSON.stringify({
+          approval: {
+            ...approvalContext,
+            resolved: null,
+            // Explicit-null reset of EVERY optional approval sub-field on each fresh
+            // pause (L1) — SQLite's json_patch deep-merges the new approval into the
+            // stored one, so a field the caller omits would otherwise inherit a stale
+            // value from a PRIOR gate in the same run (e.g. an earlier node's
+            // onRejectPrompt misrouting this gate's reject). RFC 7396 null removes the
+            // key; Postgres `||` replaces the approval object wholesale. Readers treat
+            // null as absent (`!= null`).
+            completionSignaled: approvalContext.completionSignaled ?? null,
+            signaledOutput: approvalContext.signaledOutput ?? null,
+            onRejectPrompt: approvalContext.onRejectPrompt ?? null,
+            onRejectMaxAttempts: approvalContext.onRejectMaxAttempts ?? null,
+            captureResponse: approvalContext.captureResponse ?? null,
+            iteration: approvalContext.iteration ?? null,
+            sessionId: approvalContext.sessionId ?? null,
+            sessionProvider: approvalContext.sessionProvider ?? null,
+            commandSnapshot: approvalContext.commandSnapshot ?? null,
+          },
+          // Fold caller-supplied run-level metadata (e.g. `pending_writeback`) into the
+          // SAME atomic write so there is no window where the run is paused without it (M3).
+          ...(extraMetadata ?? {}),
+        }),
+      ]
     );
     if (result.rowCount === 0) {
       getLog().warn({ workflowRunId: id }, 'db.workflow_run_pause_no_match');
@@ -722,6 +912,53 @@ export async function pauseWorkflowRun(
     getLog().error({ err, workflowRunId: id }, 'db.workflow_run_pause_failed');
     throw new Error(`Failed to pause workflow run: ${err.message}`);
   }
+}
+
+/**
+ * Atomically CLAIM the container write-back apply before the live root is mutated
+ * (R2-F4). A conditional UPDATE that sets `metadata.writeback_apply_claimed = true`
+ * only while it is unset — so exactly one resume wins the claim. Returns whether
+ * THIS caller won. The caller must apply the overlay only on `claimed === true`, and
+ * on apply FAILURE release the claim (`releaseWritebackClaim`) so a `workflow resume`
+ * can retry; on a crash AFTER a successful apply the claim stays set, so the next
+ * resume finds it claimed and does NOT re-apply (no path applies twice).
+ */
+export async function claimWriteback(id: string): Promise<{ claimed: boolean }> {
+  const dialect = getDialect();
+  const extract =
+    getDatabaseType() === 'postgresql'
+      ? "metadata->>'writeback_apply_claimed'"
+      : "json_extract(metadata, '$.writeback_apply_claimed')";
+  try {
+    const result = await pool.query(
+      `UPDATE remote_agent_workflow_runs
+       SET metadata = ${dialect.jsonMerge('metadata', 2)}
+       WHERE id = $1 AND (${extract} IS NULL)`,
+      [id, JSON.stringify({ writeback_apply_claimed: true })]
+    );
+    return { claimed: (result.rowCount ?? 0) > 0 };
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, workflowRunId: id }, 'db.workflow_run_claim_writeback_failed');
+    throw new Error(`Failed to claim write-back apply: ${err.message}`);
+  }
+}
+
+/**
+ * Release a previously-claimed write-back apply (R2-F4) after the apply FAILED, so a
+ * subsequent `workflow resume` can re-claim and retry. Explicit-null so SQLite's
+ * json_patch removes the key (Postgres `||` sets JSON null); `claimWriteback`'s
+ * `IS NULL` check treats both as unclaimed. Best-effort — a failure here leaves the
+ * claim set (the volume is preserved regardless; the operator reconciles manually).
+ */
+export async function releaseWritebackClaim(id: string): Promise<void> {
+  const dialect = getDialect();
+  await pool.query(
+    `UPDATE remote_agent_workflow_runs
+     SET metadata = ${dialect.jsonMerge('metadata', 2)}
+     WHERE id = $1`,
+    [id, JSON.stringify({ writeback_apply_claimed: null })]
+  );
 }
 
 export type {

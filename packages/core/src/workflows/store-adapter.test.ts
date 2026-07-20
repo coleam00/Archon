@@ -30,6 +30,8 @@ mock.module('../db/workflows', () => ({
   failWorkflowRun: mockFailWorkflowRun,
   cancelWorkflowRun: mockCancelWorkflowRun,
   pauseWorkflowRun: mockPauseWorkflowRun,
+  claimWriteback: mock(() => Promise.resolve({ claimed: true })),
+  releaseWritebackClaim: mock(() => Promise.resolve()),
 }));
 
 const mockCreateWorkflowEvent = mock(() => Promise.resolve());
@@ -116,6 +118,8 @@ describe('createWorkflowStore', () => {
       'completeWorkflowRun',
       'failWorkflowRun',
       'pauseWorkflowRun',
+      'claimWriteback',
+      'releaseWritebackClaim',
       'cancelWorkflowRun',
       'createWorkflowEvent',
       'getCompletedDagNodeOutputs',

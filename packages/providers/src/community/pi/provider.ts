@@ -16,7 +16,7 @@ import type {
 } from '../../types';
 
 import { PI_CAPABILITIES } from './capabilities';
-import { parsePiConfig } from './config';
+import { parsePiConfig, resolvePiExtensionSettings } from './config';
 import { parsePiModelRef } from './model-ref';
 import { withResumedOutcome, resumedOutcome } from '../../shared/resumed';
 
@@ -117,6 +117,85 @@ export function ensurePiPackageDirShim(): void {
   process.env.PI_PACKAGE_DIR = shimDir;
 }
 
+// ─── Bedrock backend registration (compiled-binary parity) ───────────────────
+
+/**
+ * Registrar for Pi's Bedrock backend module. Split out from
+ * `ensureBedrockProviderRegistered` so tests can inject a spy without touching
+ * the real SDK (Bun's `mock.module` is process-global and irreversible).
+ */
+export type BedrockRegistrar = () => Promise<void>;
+
+/**
+ * The default registrar: dynamically import the Pi SDK's Bedrock override hook
+ * and the statically-bundled Bedrock module, then wire them together.
+ *
+ * Both specifiers are STRING LITERALS on purpose — that is the entire point of
+ * this fix. Pi lazy-loads every backend via `import()`, and for all backends
+ * except Bedrock the specifier is a string literal that Bun's `--compile`
+ * static analysis can follow and embed. Bedrock's loader instead routes through
+ * a computed-specifier indirection (`importNodeOnlyApi('./bedrock-converse-stream.ts')`
+ * in pi-ai's `bedrock-converse-stream.lazy.js`) that Bun cannot resolve, so
+ * `bedrock-converse-stream.js` + `@aws-sdk/client-bedrock-runtime` never get
+ * bundled and a compiled Archon binary fails with `Cannot find module … /$bunfs/…`
+ * on any `amazon-bedrock/*` model (issue #2154).
+ *
+ * Pi fixed the identical bug in their own binary (earendil-works/pi#2349,
+ * PR #2350): `setBedrockProviderModule()` is checked FIRST inside the loader,
+ * and is fed the module via the static `@earendil-works/pi-ai/bedrock-provider`
+ * subpath, which Bun DOES bundle. Archon compiles its own CLI and never runs
+ * Pi's bun entrypoint (`bun/register-bedrock.js`), so we mirror that shim here.
+ *
+ * The two subpaths match Pi's own 0.80.6 `bun/register-bedrock.js` shim exactly:
+ * `setBedrockProviderModule` from `@earendil-works/pi-ai/compat` (the SDK moved
+ * it off the package root into the compat entrypoint) and `bedrockProviderModule`
+ * from `@earendil-works/pi-ai/bedrock-provider`. Both are safe to import inside a
+ * compiled binary — Pi loads them in its own working binary — unlike
+ * `@earendil-works/pi-coding-agent/config.js`, which reads a package.json next to
+ * `process.execPath` (see the header note and `ensurePiPackageDirShim`).
+ */
+async function defaultBedrockRegistrar(): Promise<void> {
+  const [compatModule, bedrockModule] = await Promise.all([
+    import('@earendil-works/pi-ai/compat'),
+    import('@earendil-works/pi-ai/bedrock-provider'),
+  ]);
+  compatModule.setBedrockProviderModule(bedrockModule.bedrockProviderModule);
+}
+
+let bedrockRegistrationPromise: Promise<void> | undefined;
+
+/**
+ * Register Pi's Bedrock backend override once per process. Idempotent: the
+ * registrar runs on the first call and every later call reuses the cached
+ * promise. Called from `sendQuery()` (not at module load), so it never
+ * eagerly pulls the Pi SDK into module scope — preserving the lazy-load
+ * invariant guarded by `provider-lazy-load.test.ts`.
+ *
+ * Registration failure is swallowed with a WARN rather than thrown: the hook
+ * only matters for `amazon-bedrock/*` models, so a failure must not break
+ * `anthropic/*`, `cursor/*`, or any other Pi backend. If a Bedrock node then
+ * runs, Pi's own `importNodeOnlyApi` fallback still surfaces the original
+ * `Cannot find module` error — i.e. degradation is strictly no worse than the
+ * pre-fix behavior, and the WARN keeps it searchable.
+ */
+export function ensureBedrockProviderRegistered(
+  registrar: BedrockRegistrar = defaultBedrockRegistrar
+): Promise<void> {
+  bedrockRegistrationPromise ??= registrar()
+    .then(() => {
+      getLog().debug('pi.bedrock_provider_register_completed');
+    })
+    .catch((err: unknown) => {
+      getLog().warn({ err }, 'pi.bedrock_provider_register_failed');
+    });
+  return bedrockRegistrationPromise;
+}
+
+/** Test-only: reset the once-per-process registration cache. */
+export function resetBedrockRegistrationForTest(): void {
+  bedrockRegistrationPromise = undefined;
+}
+
 // Pi provider id → env var name used by pi-ai's getEnvApiKey(). Generated
 // from the installed pi-ai SDK (full backend coverage) — see
 // scripts/generate-pi-vendor-map.ts; `bun run check:pi-vendor-map` guards drift.
@@ -167,6 +246,12 @@ export class PiProvider implements IAgentProvider {
     // `dirname(process.execPath)/package.json` inside a compiled binary.
     ensurePiPackageDirShim();
 
+    // Register Pi's Bedrock backend override once per process so `amazon-bedrock/*`
+    // models load inside a compiled Archon binary (issue #2154). Kicked off here
+    // to run concurrently with the SDK imports below; awaited before the session
+    // streams (the override is consulted lazily when the Bedrock backend loads).
+    const bedrockReady = ensureBedrockProviderRegistered();
+
     // Lazy-load Pi SDK and all Pi-dependent helper modules here. Must not move
     // these imports to module scope — see the header comment for the failure
     // mode (archon compiled binary crashes at startup when Pi's config.js
@@ -193,6 +278,12 @@ export class PiProvider implements IAgentProvider {
       import('./native-tools'),
     ]);
     const { createAgentSession } = piCodingAgent;
+
+    // Ensure the Bedrock override is set before any session work — the SDK reads
+    // it only when the Bedrock backend is first streamed, but awaiting here keeps
+    // the ordering obvious and the cost is one resolved-promise await after the
+    // first call.
+    await bedrockReady;
 
     const assistantConfig = requestOptions?.assistantConfig ?? {};
     const piConfig = parsePiConfig(assistantConfig);
@@ -458,9 +549,21 @@ export class PiProvider implements IAgentProvider {
     // `assistants.pi.enableExtensions: false` (or `interactive: false`) in
     // `.archon/config.yaml`. Previously default-off, which silently broke
     // users who installed or built an extension and expected it to fire.
-    const enableExtensions = piConfig.enableExtensions !== false;
-    // Clamp to false without extensions: nothing consumes hasUI without a runner.
-    const interactive = enableExtensions && piConfig.interactive !== false;
+    //
+    // Extension posture is resolved PER NODE (issue #2073): assistant-level
+    // defaults can be overridden via `assistants.pi.nodes.<nodeId>` so that
+    // e.g. only the planner node gets plannotator's `plan` flag and a
+    // UI-capable context (hasUI), while an implement node runs without the
+    // planning-mode edit guard. Direct chat (no nodeId) uses the defaults.
+    //
+    // The portable node-YAML `pi:` block (#2133) rides on `nodeConfig.pi` and is
+    // the highest-precedence layer — it travels with the workflow, so a node
+    // rename can't orphan it the way the node-id-keyed config map can.
+    const { enableExtensions, interactive, extensionFlags } = resolvePiExtensionSettings(
+      piConfig,
+      nodeConfig?.nodeId,
+      nodeConfig?.pi
+    );
 
     // Build the ResourceLoader. When extensions are ON we MUST reuse a
     // process-cached, already-reloaded loader: Pi's `reload()` re-invokes every
@@ -473,9 +576,42 @@ export class PiProvider implements IAgentProvider {
       ...(systemPrompt !== undefined ? { systemPrompt } : {}),
       ...(skillPaths.length > 0 ? { additionalSkillPaths: skillPaths } : {}),
     };
-    const resourceLoader: DefaultResourceLoader = enableExtensions
-      ? await getOrCreateReloadedExtensionLoader(cwd, loaderOptions)
-      : createNoopResourceLoader(cwd, loaderOptions);
+    let resourceLoader: DefaultResourceLoader;
+    if (enableExtensions) {
+      const { loader, providerRegistrations } = await getOrCreateReloadedExtensionLoader(
+        cwd,
+        loaderOptions
+      );
+      resourceLoader = loader;
+      // Re-apply the load-time extension provider registrations to THIS call's
+      // fresh ModelRegistry (issue #2064). Extension factories run only during
+      // the single cached reload(), and the SDK drains their queued
+      // registerProvider() calls into the FIRST session's registry only — so
+      // without this, the 2nd+ sendQuery in a process (e.g. DAG node 2) never
+      // sees extension models (pi-cursor's `cursor/*`) and LOOKUP-2 fails.
+      // registerProvider() is a documented upsert, so the first call receiving
+      // the same configs again via its own bindCore() flush is harmless.
+      for (const { name, config, extensionPath } of providerRegistrations) {
+        try {
+          modelRegistry.registerProvider(name, config);
+        } catch (err) {
+          // Intentional non-fatal fallback mirroring the SDK's own bindCore()
+          // flush (per-entry try/catch + emitted extension error): one broken
+          // extension config must not fail nodes that use other providers.
+          // If the model this node actually needs is missing, LOOKUP-2 below
+          // still throws the loud, actionable "Pi model not found" error.
+          getLog().warn(
+            { err, piExtensionProvider: name, extensionPath },
+            'pi.extension_provider_reapply_failed'
+          );
+        }
+      }
+      if (providerRegistrations.length > 0) {
+        getLog().debug({ count: providerRegistrations.length }, 'pi.extension_providers_reapplied');
+      }
+    } else {
+      resourceLoader = createNoopResourceLoader(cwd, loaderOptions);
+    }
 
     getLog().info(
       {
@@ -489,6 +625,7 @@ export class PiProvider implements IAgentProvider {
         missingSkillCount: missingSkills.length,
         extensionsEnabled: enableExtensions,
         interactive,
+        nodeId: nodeConfig?.nodeId,
         resumed: resumeSessionId !== undefined && !resumeFailed,
       },
       'pi.session_started'
@@ -543,10 +680,12 @@ export class PiProvider implements IAgentProvider {
 
     // 4e. Extension flag pass-through. Must happen before bindExtensions
     //     below — extensions read flags inside their session_start handler.
-    if (enableExtensions && piConfig.extensionFlags) {
+    //     `extensionFlags` is the per-node resolved map (assistant-level flags
+    //     shallow-merged with `nodes.<nodeId>.extensionFlags`, node wins).
+    if (enableExtensions && extensionFlags) {
       const runner = session.extensionRunner;
       if (runner) {
-        for (const [name, value] of Object.entries(piConfig.extensionFlags)) {
+        for (const [name, value] of Object.entries(extensionFlags)) {
           runner.setFlagValue(name, value);
         }
       }

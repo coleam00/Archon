@@ -13,7 +13,7 @@ export type {
 export { toRepoPath, toBranchName, toWorktreePath } from './types';
 
 // Process and filesystem wrappers
-export { execFileAsync, mkdirAsync } from './exec';
+export { execFileAsync, mkdirAsync, resolveBashPath } from './exec';
 
 // Worktree operations
 export {
@@ -48,6 +48,7 @@ export {
 export {
   findRepoRoot,
   getRemoteUrl,
+  listChildRepos,
   syncWorkspace,
   cloneRepository,
   syncRepository,

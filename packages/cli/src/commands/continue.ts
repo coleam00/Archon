@@ -6,7 +6,7 @@ import * as isolationDb from '@archon/core/db/isolation-environments';
 import * as codebaseDb from '@archon/core/db/codebases';
 import * as workflowDb from '@archon/core/db/workflows';
 import { execFileAsync } from '@archon/git';
-import { createLogger, getRunArtifactsPath, parseOwnerRepo } from '@archon/paths';
+import { createLogger, getRunArtifactsPath, resolveRepoProjectIdentity } from '@archon/paths';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { readdir, readFile, stat } from 'fs/promises';
 import { join } from 'path';
@@ -210,9 +210,12 @@ async function resolveArtifactsDir(
   try {
     const codebase = await codebaseDb.getCodebase(codebaseId);
     if (codebase) {
-      const parsed = parseOwnerRepo(codebase.name);
-      if (parsed) {
-        const dir = getRunArtifactsPath(parsed.owner, parsed.repo, runId);
+      // Mirror the executor's identity resolution so no-remote local repos
+      // (scoped under _local/<basename>) are found here too, not just repos
+      // with an owner/repo name (#2132).
+      const identity = resolveRepoProjectIdentity(codebase.name, codebase.default_cwd);
+      if (identity) {
+        const dir = getRunArtifactsPath(identity.owner, identity.repo, runId);
         try {
           await stat(dir);
           return dir;

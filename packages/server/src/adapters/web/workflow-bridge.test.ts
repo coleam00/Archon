@@ -147,3 +147,32 @@ describe('mapWorkflowEvent — hook_activity (Phase 2 of #975)', () => {
     expect(payload).not.toHaveProperty('exitCode');
   });
 });
+
+describe('mapWorkflowEvent — container_lifecycle (Phase B)', () => {
+  test('container_lifecycle created → workflow_container_lifecycle SSE', () => {
+    const event: WorkflowEmitterEvent = {
+      type: 'container_lifecycle',
+      runId: 'run-1',
+      phase: 'created',
+      containerId: 'abc123def456',
+    };
+    const sse = mapWorkflowEvent(event);
+    const payload = JSON.parse(sse ?? '{}') as Record<string, unknown>;
+    expect(payload.type).toBe('workflow_container_lifecycle');
+    expect(payload.runId).toBe('run-1');
+    expect(payload.phase).toBe('created');
+    expect(payload.containerId).toBe('abc123def456');
+  });
+
+  test('container_lifecycle destroyed → SSE without a containerId', () => {
+    const event: WorkflowEmitterEvent = {
+      type: 'container_lifecycle',
+      runId: 'run-1',
+      phase: 'destroyed',
+    };
+    const payload = JSON.parse(mapWorkflowEvent(event) ?? '{}') as Record<string, unknown>;
+    expect(payload.type).toBe('workflow_container_lifecycle');
+    expect(payload.phase).toBe('destroyed');
+    expect(payload).not.toHaveProperty('containerId');
+  });
+});

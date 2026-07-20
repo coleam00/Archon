@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS remote_agent_codebases (
   default_cwd VARCHAR(500) NOT NULL,
   default_branch VARCHAR(255),
   ai_assistant_type VARCHAR(20) DEFAULT 'claude',
+  kind VARCHAR(10) NOT NULL DEFAULT 'repo' CHECK (kind IN ('repo', 'folder')),
   allow_env_keys BOOLEAN NOT NULL DEFAULT FALSE,
   commands JSONB DEFAULT '{}'::jsonb,
   created_at TIMESTAMP DEFAULT NOW(),
@@ -231,7 +232,7 @@ CREATE TABLE IF NOT EXISTS remote_agent_workflow_runs (
   conversation_id UUID REFERENCES remote_agent_conversations(id) ON DELETE CASCADE,
   codebase_id UUID REFERENCES remote_agent_codebases(id) ON DELETE SET NULL,
   current_step_index INTEGER,
-  status VARCHAR(20) NOT NULL DEFAULT 'pending',  -- pending, running, completed, failed
+  status VARCHAR(20) NOT NULL DEFAULT 'pending',  -- pending, running, completed, failed, cancelled, paused
   user_message TEXT NOT NULL,
   metadata JSONB DEFAULT '{}',
   parent_conversation_id UUID REFERENCES remote_agent_conversations(id) ON DELETE SET NULL,
@@ -387,6 +388,12 @@ ALTER TABLE remote_agent_codebases
 ALTER TABLE remote_agent_codebases
   ADD COLUMN IF NOT EXISTS default_branch VARCHAR(255);
 
+-- From migration 024: project kind discriminator ('repo' | 'folder').
+-- Folder projects are non-git workspaces (multi-repo roots or plain ops folders)
+-- that run in place with named artifact/log storage under _folder/<slug>/.
+ALTER TABLE remote_agent_codebases
+  ADD COLUMN IF NOT EXISTS kind VARCHAR(10) NOT NULL DEFAULT 'repo';
+
 -- User identity foreign keys (nullable on the four primary tables).
 -- All FKs use ON DELETE SET NULL so future user deletion never cascades destructively.
 ALTER TABLE remote_agent_conversations
@@ -477,10 +484,18 @@ CREATE TABLE IF NOT EXISTS remote_agent_user_ai_prefs (
   tiers TEXT,
   aliases TEXT,
   default_provider VARCHAR(64),
+  default_model VARCHAR(255),
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   UNIQUE(user_id)
 );
+
+-- #1998: per-user default CHAT model, written atomically with
+-- default_provider (a model pin is only meaningful for the provider it was
+-- set with). Idempotent upgrade for installs that created the table before
+-- this column existed.
+ALTER TABLE remote_agent_user_ai_prefs
+  ADD COLUMN IF NOT EXISTS default_model VARCHAR(255);
 
 -- ============================================================================
 -- Web auth (opt-in): role on the canonical user + Better Auth tables

@@ -6,8 +6,8 @@
  * - Can answer directly or invoke workflows
  * - Does NOT require a project to be selected before starting a conversation
  */
-import { existsSync } from 'fs';
-import { createLogger, captureChatTurn, captureApprovalResolved } from '@archon/paths';
+import { existsSync, realpathSync } from 'fs';
+import { createLogger, captureChatTurn } from '@archon/paths';
 import type {
   IPlatformAdapter,
   HandleMessageContext,
@@ -24,11 +24,12 @@ import * as commandHandler from '../handlers/command-handler';
 import { formatToolCall } from '@archon/workflows/utils/tool-formatter';
 import { classifyAndFormatError } from '../utils/error-formatter';
 import { toError } from '../utils/error';
+import { safeDeactivateSession } from '../state/session-transitions';
 import { getAgentProvider, getProviderCapabilities } from '@archon/providers';
 import { buildManageRunTool } from './manage-run-tool';
 import { getArchonWorkspacesPath, ensureArchonWorkspacesPath } from '@archon/paths';
 import { syncArchonToWorktree } from '../utils/worktree-sync';
-import { execFileAsync, syncWorkspace, toBranchName, toRepoPath } from '@archon/git';
+import { execFileAsync, findRepoRoot, syncWorkspace, toBranchName, toRepoPath } from '@archon/git';
 import type { WorkspaceSyncResult } from '@archon/git';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { findWorkflow, resolveWorkflowName } from '@archon/workflows/router';
@@ -65,8 +66,9 @@ import type { WorkflowResultContext } from './prompt-builder';
 import { reportUnpushedWorkInSource } from './post-message-reminder';
 import * as messageDb from '../db/messages';
 import * as workflowDb from '../db/workflows';
-import * as workflowEventDb from '../db/workflow-events';
 import { getCodebaseEnvVars } from '../db/env-vars';
+import { approveWorkflow } from '../operations/workflow-operations';
+import { isApprovalContext, isGateResolved } from '@archon/workflows/schemas/workflow-run';
 import type { ApprovalContext } from '@archon/workflows/schemas/workflow-run';
 import {
   buildAiProfile,
@@ -141,6 +143,124 @@ function resolveModelRequest(
     return { provider: fallbackProvider, model: spec.literal };
   }
   return { provider: spec.provider, model: spec.model, preset: spec };
+}
+
+/**
+ * Resolve the model request for the MAIN chat turn (#1998).
+ *
+ * Model precedence (chat call-site only — workflows keep resolving `large`):
+ *   1. per-user `default_model` — applied only when the user's
+ *      `default_provider` matches the effective provider (a stale pin must
+ *      never ride a different provider). Routed through resolveModelRequest so
+ *      `@alias` and tier refs keep working; an unresolvable ref (e.g. deleted
+ *      alias) degrades to the tier path with a warning instead of failing chat.
+ *   2. tier `large` from CONFIGURED tiers (user > repo > global).
+ *   3. install `assistants.<p>.model` — outranks the BUILT-IN tier default
+ *      only, never a configured tier ('inherit' means "SDK default", skip).
+ *   4. built-in tier default.
+ *
+ * Title generation is NOT routed through this — it keeps the `small` tier.
+ * With no user prefs and no `assistants.<p>.model`, this reduces byte-for-byte
+ * to the previous `resolveModelRequest(aiProfile, 'large', provider)` call.
+ * Exported for tests.
+ */
+export function resolveChatModelRequest(
+  aiProfile: ReturnType<typeof buildAiProfile>,
+  configuredProviderKey: string,
+  userAiPrefs: UserAiPrefs,
+  config: Pick<MergedConfig, 'assistants' | 'tiers'>
+): ResolvedModelRequest {
+  if (
+    userAiPrefs.defaultModel !== undefined &&
+    userAiPrefs.defaultProvider === configuredProviderKey
+  ) {
+    try {
+      return resolveModelRequest(aiProfile, userAiPrefs.defaultModel, configuredProviderKey);
+    } catch (err) {
+      getLog().warn(
+        { err: err as Error, defaultModel: userAiPrefs.defaultModel },
+        'orchestrator.user_default_model_invalid'
+      );
+    }
+  }
+  const request = resolveModelRequest(aiProfile, 'large', configuredProviderKey);
+  if (request.matchedTier === undefined) return request;
+
+  const tierConfigured =
+    config.tiers?.[request.matchedTier] !== undefined ||
+    userAiPrefs.tiers?.[request.matchedTier] !== undefined;
+  if (tierConfigured) return request;
+
+  const installModel = config.assistants[request.provider]?.model;
+  if (typeof installModel === 'string' && installModel !== '' && installModel !== 'inherit') {
+    return { ...request, model: installModel };
+  }
+  return request;
+}
+
+/** A resolved title-generation request: which provider to call, with fully resolved options. */
+export interface TitleRequest {
+  provider: string;
+  options: SendQueryOptions;
+}
+
+/**
+ * Resolve provider + request options for conversation-title generation (#1855).
+ *
+ * Server entry points that fire title generation outside a full chat turn
+ * (create-with-message, web workflow run) resolve the `small` tier here —
+ * config tiers plus per-user prefs when a userId is available — instead of
+ * letting the provider fall through to its raw config-default model, which
+ * the active account may not support (e.g. `gpt-5.3-codex` on ChatGPT-plan
+ * Codex accounts). Mirrors the chat path's title resolution in
+ * `handleMessage` (#1873), which keeps its own inline resolution to reuse
+ * the already-loaded config and profile.
+ *
+ * NEVER THROWS — degrades to `{ provider: fallbackProvider, options: {} }`
+ * (the legacy behavior) so fire-and-forget callers stay safe.
+ */
+export async function resolveTitleRequest(
+  fallbackProvider: string,
+  userId?: string
+): Promise<TitleRequest> {
+  try {
+    const config = await loadConfig();
+    const userAiPrefs = userId ? await resolveUserAiPrefsForChat(userId) : {};
+    let configuredProviderKey = userAiPrefs.defaultProvider ?? fallbackProvider;
+    let aiProfile: ReturnType<typeof buildAiProfile>;
+    try {
+      aiProfile = buildAiProfile(configuredProviderKey, {
+        repoTiers: config.tiers,
+        repoAliases: config.aliases,
+        userTiers: userAiPrefs.tiers,
+        userAliases: userAiPrefs.aliases,
+      });
+    } catch (profileErr) {
+      // Structurally invalid STORED prefs must not break title generation —
+      // degrade to config-only (mirrors the chat path in handleMessage).
+      getLog().warn({ err: profileErr as Error, userId }, 'orchestrator.title_prefs_invalid');
+      configuredProviderKey = fallbackProvider;
+      aiProfile = buildAiProfile(configuredProviderKey, {
+        repoTiers: config.tiers,
+        repoAliases: config.aliases,
+      });
+    }
+    const titleRequest = resolveModelRequest(aiProfile, 'small', configuredProviderKey);
+    const options: SendQueryOptions = {
+      model: titleRequest.model,
+      assistantConfig: { ...(config.assistants[titleRequest.provider] ?? {}) },
+    };
+    if (titleRequest.preset) {
+      applyPresetToRequestOptions(titleRequest.provider, titleRequest.preset, options);
+    }
+    return { provider: titleRequest.provider, options };
+  } catch (err) {
+    getLog().warn(
+      { err: err as Error, fallbackProvider },
+      'orchestrator.title_request_resolve_failed'
+    );
+    return { provider: fallbackProvider, options: {} };
+  }
 }
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -573,6 +693,10 @@ async function dispatchOrchestratorWorkflow(
   source?: WorkflowSource,
   options?: WorkflowDispatchOptions
 ): Promise<void> {
+  // The codebase's stored default branch — the $BASE_BRANCH fallback for every
+  // executeWorkflow dispatch below (repo config worktree.baseBranch still wins).
+  const codebaseBaseBranch = codebase.default_branch?.trim() || undefined;
+
   // Capability gate: hard-fail before any worktree/clone/AI cost if the
   // workflow declares `requires: [github]` and the originating user hasn't
   // connected. No-op when per-user GitHub is disabled (solo PAT installs).
@@ -641,7 +765,8 @@ async function dispatchOrchestratorWorkflow(
 
   // Dispatch workflow.
   // Resume detection runs for ALL platforms: check if a prior run for this workflow
-  // is in a resumable state (paused/failed-by-approval) in this conversation+codebase
+  // is in a resumable state (paused — including approved-awaiting-resume — or failed)
+  // in this conversation+codebase
   // before dispatching fresh. This ensures chat platforms (slack, telegram, discord,
   // github) resume after approval gates just like web does.
   const resumableRun = options?.force
@@ -735,6 +860,7 @@ async function dispatchOrchestratorWorkflow(
           parentConversationId: conversation.id,
           userId,
           source,
+          baseBranch: codebaseBaseBranch,
           ...prepared,
         }
       );
@@ -756,6 +882,7 @@ async function dispatchOrchestratorWorkflow(
           parentConversationId: conversation.id,
           userId,
           source,
+          baseBranch: codebaseBaseBranch,
         }
       );
     }
@@ -791,6 +918,7 @@ async function dispatchOrchestratorWorkflow(
         parentConversationId: conversation.id,
         userId,
         source,
+        baseBranch: codebaseBaseBranch,
       }
     );
   }
@@ -882,23 +1010,31 @@ async function discoverAllWorkflows(conversation: Conversation): Promise<Discove
         // Sync canonical source with remote before the AI reads codebase state.
         // This path must remain non-destructive: users and agents can write to source/.
         // Non-fatal: if fetch fails (network, no remote), proceed with local state.
-        try {
-          syncResult = await syncWorkspace(
-            toRepoPath(codebase.default_cwd),
-            codebase.default_branch ? toBranchName(codebase.default_branch) : undefined
-          );
+        // Folder projects have no git repo to sync — skip entirely.
+        if (codebase.kind === 'folder') {
           getLog().debug(
-            {
-              codebaseId: codebase.id,
-              repoPath: codebase.default_cwd,
-              ...syncResult,
-            },
-            'workspace.sync_completed'
+            { codebaseId: codebase.id, path: codebase.default_cwd },
+            'workspace.sync_skipped_folder_project'
           );
-        } catch (err) {
-          const error = err as Error;
-          syncError = error.message;
-          getLog().warn({ err: error, codebaseId: codebase.id }, 'workspace.sync_failed');
+        } else {
+          try {
+            syncResult = await syncWorkspace(
+              toRepoPath(codebase.default_cwd),
+              codebase.default_branch ? toBranchName(codebase.default_branch) : undefined
+            );
+            getLog().debug(
+              {
+                codebaseId: codebase.id,
+                repoPath: codebase.default_cwd,
+                ...syncResult,
+              },
+              'workspace.sync_completed'
+            );
+          } catch (err) {
+            const error = err as Error;
+            syncError = error.message;
+            getLog().warn({ err: error, codebaseId: codebase.id }, 'workspace.sync_failed');
+          }
         }
         const workflowCwd = conversation.cwd ?? codebase.default_cwd;
         await syncArchonToWorktree(workflowCwd);
@@ -1006,10 +1142,20 @@ export async function handleMessage(
     );
 
     // Natural-language approval routing — if a workflow is paused in this
-    // conversation, treat any non-slash message as the approval response.
+    // conversation awaiting a human gate, treat any non-slash message as the
+    // approval response. A paused run whose gate is already resolved
+    // (metadata.approval.resolved set — approved/rejected and awaiting
+    // auto-resume, #2075) is skipped so the message falls through to normal
+    // routing, matching the pre-#2075 behavior where a staged run no longer
+    // matched the 'paused' query.
     if (!message.startsWith('/')) {
       const pausedRun = await workflowDb.getPausedWorkflowRun(conversation.id);
-      if (pausedRun) {
+      const pausedApprovalRaw = pausedRun?.metadata.approval;
+      const gateAlreadyResolved =
+        pausedApprovalRaw !== undefined &&
+        isApprovalContext(pausedApprovalRaw) &&
+        isGateResolved(pausedApprovalRaw);
+      if (pausedRun && !gateAlreadyResolved) {
         const approvalRaw = pausedRun.metadata.approval;
         const hasValidApproval =
           approvalRaw != null &&
@@ -1040,36 +1186,9 @@ export async function handleMessage(
         );
 
         try {
-          // Write approval events — for interactive loops, do NOT write node_completed
-          // (the executor writes it when the AI emits the completion signal on actual exit).
-          if (approval.type !== 'interactive_loop') {
-            const nodeOutput = approval.captureResponse === true ? message : '';
-            await workflowEventDb.createWorkflowEvent({
-              workflow_run_id: pausedRun.id,
-              event_type: 'node_completed',
-              step_name: approval.nodeId,
-              data: { node_output: nodeOutput, approval_decision: 'approved' },
-            });
-          }
-          await workflowEventDb.createWorkflowEvent({
-            workflow_run_id: pausedRun.id,
-            event_type: 'approval_received',
-            step_name: approval.nodeId,
-            data: { decision: 'approved', comment: message },
-          });
-          // Anonymous telemetry: NL approval path inlines the approve logic
-          // (does not go through approveWorkflow), so capture here too.
-          captureApprovalResolved({ resolution: 'approved' });
-          // For interactive loops, store user input; for standard approvals, mark as approved
-          // and clear any rejection state.
-          const metadataUpdate: Record<string, unknown> =
-            approval.type === 'interactive_loop'
-              ? { loop_user_input: message }
-              : { approval_response: 'approved', rejection_reason: '', rejection_count: 0 };
-          await workflowDb.updateWorkflowRun(pausedRun.id, {
-            status: 'failed',
-            metadata: metadataUpdate,
-          });
+          // Shared gate logic (events, telemetry, metadata staging) — the run
+          // stays 'paused' with metadata.approval.resolved = 'approved'.
+          await approveWorkflow(pausedRun.id, message);
 
           // Discover workflow and resume
           const { workflows: discoveredWorkflows } = await discoverAllWorkflows(conversation);
@@ -1170,7 +1289,10 @@ export async function handleMessage(
 
         if (command === 'setproject') {
           getLog().debug({ command, conversationId }, 'deterministic_command');
-          const result = await handleSetProject(message, conversationId);
+          // Pass the full Conversation — handleSetProject updates by the DB
+          // primary key (conversation.id, not the platform conversation id)
+          // and needs the prior cwd/isolation state for the detach note.
+          const result = await handleSetProject(message, conversation);
           await platform.sendMessage(conversationId, result);
           return;
         }
@@ -1376,7 +1498,12 @@ export async function handleMessage(
         repoAliases: config.aliases,
       });
     }
-    const chatRequest = resolveModelRequest(aiProfile, 'large', configuredProviderKey);
+    // Main chat model: per-user default_model > configured `large` tier >
+    // install assistants.<p>.model > built-in tier default (#1998).
+    const chatRequest = resolveChatModelRequest(aiProfile, configuredProviderKey, userAiPrefs, {
+      assistants: config.assistants,
+      tiers: config.tiers,
+    });
     // Tier-fallback nudge (mirrors dag.model_provider_conflict): chat asks for
     // 'large'; when that tier is unset and a sibling preset answered, tell the
     // user ONCE PER CONVERSATION, non-blocking — the dedup Set below is what
@@ -2265,6 +2392,19 @@ async function handleRegisterProject(
     return `Path does not exist: ${projectPath}`;
   }
 
+  // Canonicalize symlinks so the stored default_cwd matches what the CLI gate and
+  // `archon doctor` look up (both resolve against process.cwd(), which resolves
+  // symlinks — e.g. macOS /tmp → /private/tmp). Mirrors registerFolder; without
+  // it a symlinked path registers under one path but is looked up under another.
+  // Best-effort: existsSync already validated the path, so fall back to it if
+  // realpath fails for a rare reason (permission on a parent, race).
+  let canonicalPath = projectPath;
+  try {
+    canonicalPath = realpathSync(projectPath);
+  } catch (err) {
+    getLog().warn({ err: err as Error, projectPath }, 'project.register_realpath_failed');
+  }
+
   // Check if codebase already exists with this name
   const existing = await codebaseDb.listCodebases();
   const alreadyExists = existing.find(c => c.name.toLowerCase() === projectName.toLowerCase());
@@ -2275,19 +2415,46 @@ async function handleRegisterProject(
 
   // Use config default provider instead of hardcoding 'claude'
   const config = await loadConfig();
-  const detectedBranch = await detectCurrentGitBranch(projectPath);
+
+  // Detect whether the path is a git repository. Non-git paths (multi-repo roots
+  // or plain ops folders) register as folder projects — run-in-place, no branch.
+  // findRepoRoot returns null ONLY for a definitive "not a git repository"; it
+  // throws for genuine failures (git missing, timeout, permission). Since `kind`
+  // is persisted and mis-setting it to 'folder' permanently strips a real repo's
+  // worktree/branch capability, we do NOT silently treat a throw as folder: log
+  // loudly and tell the user so they can re-register after resolving the error.
+  let repoRoot: string | null = null;
+  let repoDetectFailed = false;
+  try {
+    repoRoot = await findRepoRoot(canonicalPath);
+  } catch (err) {
+    repoDetectFailed = true;
+    getLog().warn(
+      { err: err as Error, projectPath: canonicalPath },
+      'project.register_repo_detect_failed'
+    );
+  }
+  const kind: 'repo' | 'folder' = repoRoot ? 'repo' : 'folder';
+  const detectedBranch = kind === 'repo' ? await detectCurrentGitBranch(canonicalPath) : null;
   const codebase = await codebaseDb.createCodebase({
     name: projectName,
-    default_cwd: projectPath,
+    default_cwd: canonicalPath,
     default_branch: detectedBranch,
     ai_assistant_type: config.assistant,
+    kind,
   });
 
   getLog().info(
-    { name: projectName, path: projectPath, id: codebase.id },
+    { name: projectName, path: canonicalPath, id: codebase.id, kind },
     'project.register_completed'
   );
-  return `Project "${projectName}" registered successfully!\nPath: ${projectPath}\nID: ${codebase.id}`;
+  let kindNote = kind === 'folder' ? '\nKind: folder project (no git — runs in place)' : '';
+  if (repoDetectFailed) {
+    kindNote +=
+      '\n⚠️ Could not determine git status (git error) — registered as a folder project. ' +
+      'If this should be a git repo, resolve the error and re-register.';
+  }
+  return `Project "${projectName}" registered successfully!\nPath: ${canonicalPath}\nID: ${codebase.id}${kindNote}`;
 }
 
 async function detectCurrentGitBranch(projectPath: string): Promise<string | null> {
@@ -2334,7 +2501,13 @@ async function handleUpdateProject(message: string): Promise<string> {
     await codebaseDb.updateCodebase(codebase.id, { default_cwd: newPath });
   } catch (err) {
     getLog().warn({ err: err as Error, codebaseId: codebase.id, newPath }, 'project.update_failed');
-    return `Project "${projectName}" could not be updated — it may have been removed.`;
+    // Row gone (deleted between the fetch above and the UPDATE) is the only
+    // case where "removed" is the honest answer; anything else is an
+    // operational DB failure and should say so instead of blaming data state.
+    if (err instanceof codebaseDb.CodebaseNotFoundError) {
+      return `Project "${projectName}" could not be updated — it appears to have been removed. Use /register-project to re-create it.`;
+    }
+    return `Project "${projectName}" could not be updated — database error. Please try again.`;
   }
   getLog().info(
     { name: projectName, oldPath: codebase.default_cwd, newPath, id: codebase.id },
@@ -2369,12 +2542,18 @@ async function handleRemoveProject(message: string): Promise<string> {
 }
 
 /**
- * Handle /setproject command.
- * Binds the current conversation to a registered codebase by writing
- * `codebase_id` and `cwd` to the conversations table. Uses 4-tier fuzzy
- * name resolution (exact → case-insensitive → prefix → substring).
+ * Handle /setproject command. Four effects:
+ * 1. Binds the conversation to the resolved codebase (writes `codebase_id`).
+ * 2. Clears `cwd` — the project root remains codebase.default_cwd;
+ *    conversation.cwd is only an explicit runtime override.
+ * 3. Clears `isolation_env_id` — the old project's worktree no longer applies.
+ * 4. Deactivates the active AI session ('project-changed'), so the next
+ *    message starts fresh in the new project's context.
+ * Uses 4-tier fuzzy name resolution (exact → case-insensitive → prefix →
+ * substring) via resolveCodebaseName. Updates by the DB primary key
+ * (conversation.id), never the platform conversation id.
  */
-async function handleSetProject(message: string, conversationId: string): Promise<string> {
+async function handleSetProject(message: string, conversation: Conversation): Promise<string> {
   const { args } = commandHandler.parseCommand(message);
   if (args.length < 1) {
     return 'Usage: /setproject <project-name>';
@@ -2397,16 +2576,49 @@ async function handleSetProject(message: string, conversationId: string): Promis
       : `Project "${projectName}" not found. No projects registered — use /register-project.`;
   }
 
-  await db.updateConversation(conversationId, {
+  // Deactivate the old session BEFORE rebinding the conversation: if either
+  // session step throws, the switch aborts with the conversation untouched
+  // (next message just starts a fresh session in the OLD project). The reverse
+  // order would leave a rebound conversation with the old project's session
+  // still active — resuming old-project context under the new project's cwd.
+  const session = await sessionDb.getActiveSession(conversation.id);
+  if (session) {
+    await safeDeactivateSession(session.id, 'setproject');
+  }
+
+  // Intentionally non-destructive: clearing isolation_env_id detaches the
+  // conversation from its worktree WITHOUT destroying it — the worktree may
+  // hold uncommitted work and the user may switch back (project-switch is not
+  // terminal, unlike conversation-closed). The env row stays active until
+  // /worktree remove or the periodic isolation cleanup reaps it; we surface
+  // that to the user below instead of tearing it down.
+  const detachedWorktree = conversation.isolation_env_id !== null;
+  await db.updateConversation(conversation.id, {
     codebase_id: codebase.id,
-    cwd: codebase.default_cwd,
+    cwd: null,
+    isolation_env_id: null,
   });
+  if (detachedWorktree) {
+    getLog().info(
+      { conversationId: conversation.id, isolationEnvId: conversation.isolation_env_id },
+      'project.set_worktree_detached'
+    );
+  }
 
   getLog().info(
-    { conversationId, projectName: codebase.name, codebaseId: codebase.id },
+    { conversationId: conversation.id, projectName: codebase.name, codebaseId: codebase.id },
     'project.set_completed'
   );
-  return `Project set to **${codebase.name}**\nWorking directory: ${codebase.default_cwd}`;
+  let reply = `Project set to **${codebase.name}**\nWorking directory: ${codebase.default_cwd}`;
+  if (detachedWorktree) {
+    // Don't suggest `/worktree remove` here: it reads isolation_env_id from
+    // THIS conversation, which we just cleared — it would short-circuit with
+    // "not using a worktree". Cleanup tools that operate on the environments
+    // table directly are the working remedies.
+    reply +=
+      '\n\nNote: the previous worktree was detached but left in place — clean it up with `archon isolation cleanup` or from the project’s Environments list in the web UI.';
+  }
+  return reply;
 }
 
 /**

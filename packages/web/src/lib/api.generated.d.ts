@@ -437,6 +437,15 @@ export interface paths {
             'application/json': components['schemas']['Error'];
           };
         };
+        /** @description OAuth callback port still held by a previous login attempt — retry shortly */
+        503: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
       };
     };
     delete?: never;
@@ -503,6 +512,261 @@ export interface paths {
     options?: never;
     head?: never;
     patch?: never;
+    trace?: never;
+  };
+  '/api/auth/me/ai-prefs': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Get the current web user’s AI preferences (tiers/aliases/default assistant) */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description The user’s stored prefs (raw per-user layer, not merged with config) */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['UserAiPrefs'];
+          };
+        };
+        /** @description Web auth required */
+        401: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/auth/me/ai-prefs/tiers': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    /** Update the current web user’s model-tier presets (per-key merge; null unsets) */
+    patch: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['UpdateUserTiersBody'];
+        };
+      };
+      responses: {
+        /** @description Updated prefs */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['UserAiPrefs'];
+          };
+        };
+        /** @description Unknown provider or invalid effort */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Web auth required */
+        401: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    trace?: never;
+  };
+  '/api/auth/me/ai-prefs/aliases': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    /** Update the current web user’s @custom aliases (per-key merge; null unsets) */
+    patch: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['UpdateUserAliasesBody'];
+        };
+      };
+      responses: {
+        /** @description Updated prefs */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['UserAiPrefs'];
+          };
+        };
+        /** @description Invalid alias name, unknown provider, or invalid effort */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Web auth required */
+        401: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    trace?: never;
+  };
+  '/api/auth/me/ai-prefs/default': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    /** Set (or clear with null) the current web user’s default assistant + default chat model (written atomically; omitted model clears any pin) */
+    patch: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['UpdateUserDefaultBody'];
+        };
+      };
+      responses: {
+        /** @description Updated prefs */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['UserAiPrefs'];
+          };
+        };
+        /** @description Unknown provider */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Web auth required */
+        401: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
     trace?: never;
   };
   '/api/conversations': {
@@ -1491,7 +1755,7 @@ export interface paths {
     };
     get?: never;
     put?: never;
-    /** Abandon a workflow run (mark as failed) */
+    /** Abandon a workflow run (mark as cancelled) */
     post: {
       parameters: {
         query?: never;
@@ -2469,6 +2733,67 @@ export interface paths {
     };
     trace?: never;
   };
+  '/api/config/aliases': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    /**
+     * Update @custom model aliases
+     * @description Writes the `aliases:` config to ~/.archon/config.yaml. Ungated (works on solo installs). Per-alias merge; a `null` alias value unsets it.
+     */
+    patch: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['UpdateAliasesBody'];
+        };
+      };
+      responses: {
+        /** @description Updated configuration */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['ConfigResponse'];
+          };
+        };
+        /** @description Invalid alias name, unknown provider, or invalid effort */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    trace?: never;
+  };
   '/api/providers': {
     parameters: {
       query?: never;
@@ -2493,6 +2818,93 @@ export interface paths {
           };
           content: {
             'application/json': components['schemas']['ProviderListResponse'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/providers/pi/models': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List Pi's model catalog (cost/reasoning metadata for the tier picker)
+     * @description Best-effort hint surface: returns `{ models: [] }` when the Pi catalog cannot be loaded, never an error — tier/alias saves must not depend on it.
+     */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Pi model catalog (metadata only) */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['PiModelListResponse'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/providers/opencode/credentials': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Introspect OpenCode's backend providers and auth state
+     * @description Proxies the embedded OpenCode server's provider introspection (catalog, env var names, install-wide connected state). Heavyweight: starts the embedded server when not already running — call on demand from the settings card, never on passive page load (#1955).
+     */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description OpenCode backend providers (metadata only, no secrets) */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['OpencodeCredentialListResponse'];
+          };
+        };
+        /** @description Embedded OpenCode runtime unavailable */
+        503: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
           };
         };
       };
@@ -2673,12 +3085,31 @@ export interface components {
       connections: components['schemas']['ProviderKeyConnection'][];
       available: string[];
       subscriptionAvailable: string[];
+      agents: components['schemas']['AgentCredentials'][];
     };
     ProviderKeyConnection: {
       provider: string;
       /** @enum {string} */
       kind: 'api_key' | 'oauth';
       label: string | null;
+    };
+    AgentCredentials: {
+      id: string;
+      displayName: string;
+      /** @enum {string} */
+      catalog: 'static' | 'dynamic';
+      ready: boolean;
+      credentials: components['schemas']['AgentCredentialStatus'][];
+    };
+    AgentCredentialStatus: {
+      vendor: string;
+      displayName: string;
+      kinds: ('api_key' | 'subscription' | 'ambient')[];
+      /** @enum {string|null} */
+      connected: 'api_key' | 'oauth' | null;
+      subscriptionAvailable: boolean;
+      installEnv: boolean;
+      ambientConfigured?: boolean;
     };
     ProviderKeySetResponse: {
       success: boolean;
@@ -2716,6 +3147,41 @@ export interface components {
     ProviderOAuthPollBody: {
       sessionId: string;
       code?: string;
+    };
+    UserAiPrefs: {
+      tiers?: components['schemas']['UserTiersConfig'];
+      aliases?: {
+        [key: string]: components['schemas']['TierEntry'];
+      };
+      defaultProvider?: string;
+      defaultModel?: string;
+    };
+    UserTiersConfig: {
+      small?: components['schemas']['TierEntry'];
+      medium?: components['schemas']['TierEntry'];
+      large?: components['schemas']['TierEntry'];
+    };
+    TierEntry: {
+      provider: string;
+      model: string;
+      effort?: string;
+      thinking?: unknown;
+    };
+    UpdateUserTiersBody: {
+      tiers: {
+        small?: components['schemas']['TierEntry'] & unknown;
+        medium?: components['schemas']['TierEntry'] & unknown;
+        large?: components['schemas']['TierEntry'] & unknown;
+      };
+    };
+    UpdateUserAliasesBody: {
+      aliases: {
+        [key: string]: components['schemas']['TierEntry'] & unknown;
+      };
+    };
+    UpdateUserDefaultBody: {
+      provider: string | null;
+      model?: string | null;
     };
     ConversationListResponse: components['schemas']['Conversation'][];
     Conversation: {
@@ -2777,6 +3243,8 @@ export interface components {
       default_cwd: string;
       default_branch: string | null;
       ai_assistant_type: string;
+      /** @enum {string} */
+      kind: 'repo' | 'folder';
       commands: {
         [key: string]: {
           path: string;
@@ -2823,7 +3291,6 @@ export interface components {
       modelReasoningEffort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
       /** @enum {string} */
       webSearchMode?: 'disabled' | 'cached' | 'live';
-      additionalDirectories?: string[];
       interactive?: boolean;
       /** @enum {string} */
       effort?: 'low' | 'medium' | 'high' | 'max';
@@ -2877,6 +3344,11 @@ export interface components {
       worktree?: {
         enabled?: boolean;
       };
+      container?: {
+        enabled?: boolean;
+        /** @enum {string} */
+        write_back?: 'approve' | 'auto';
+      };
       mutates_checkout?: boolean;
       persist_sessions?: boolean;
       tags?: string[];
@@ -2885,6 +3357,7 @@ export interface components {
     };
     DagNode: {
       id: string;
+      description?: string;
       depends_on?: string[];
       when?: string;
       /** @enum {string} */
@@ -3067,6 +3540,13 @@ export interface components {
           maxTurns?: number;
         };
       };
+      pi?: {
+        enableExtensions?: boolean;
+        interactive?: boolean;
+        extensionFlags?: {
+          [key: string]: boolean | string;
+        };
+      };
       /** @enum {string} */
       effort?: 'low' | 'medium' | 'high' | 'max';
       thinking?:
@@ -3125,7 +3605,6 @@ export interface components {
       prompt?: string;
       bash?: string;
       loop?: {
-        prompt: string;
         until: string;
         max_iterations: number;
         /** @default false */
@@ -3133,6 +3612,20 @@ export interface components {
         until_bash?: string;
         interactive?: boolean;
         gate_message?: string;
+        signal_completes?: boolean;
+        prompt?: string;
+        command?: string;
+      };
+      loop_group?: {
+        until: string;
+        max_iterations: number;
+        /** @default false */
+        fresh_context: boolean;
+        until_bash?: string;
+        interactive?: boolean;
+        gate_message?: string;
+        signal_completes?: boolean;
+        nodes: components['schemas']['DagNode'][];
       };
       approval?: {
         message: string;
@@ -3143,6 +3636,8 @@ export interface components {
         };
       };
       cancel?: string;
+      include?: string;
+      with?: unknown;
       script?: string;
       /** @enum {string} */
       runtime?: 'bun' | 'uv';
@@ -3327,6 +3822,9 @@ export interface components {
       };
       tiers?: components['schemas']['TiersConfig'];
       tierDefaults?: components['schemas']['TiersConfig'];
+      aliases?: {
+        [key: string]: components['schemas']['TierEntry'];
+      };
     };
     ProviderDefaults: {
       [key: string]: unknown;
@@ -3335,12 +3833,6 @@ export interface components {
       small?: components['schemas']['TierEntry'];
       medium?: components['schemas']['TierEntry'];
       large?: components['schemas']['TierEntry'];
-    };
-    TierEntry: {
-      provider: string;
-      model: string;
-      effort?: string;
-      thinking?: unknown;
     };
     UpdateAssistantConfigBody: {
       assistant?: string;
@@ -3353,6 +3845,11 @@ export interface components {
         small?: components['schemas']['TierEntry'] & unknown;
         medium?: components['schemas']['TierEntry'] & unknown;
         large?: components['schemas']['TierEntry'] & unknown;
+      };
+    };
+    UpdateAliasesBody: {
+      aliases: {
+        [key: string]: components['schemas']['TierEntry'] & unknown;
       };
     };
     ProviderListResponse: {
@@ -3377,6 +3874,36 @@ export interface components {
       thinkingControl: boolean;
       fallbackModel: boolean;
       sandbox: boolean;
+    };
+    PiModelListResponse: {
+      models: components['schemas']['PiModelInfo'][];
+    };
+    PiModelInfo: {
+      ref: string;
+      provider: string;
+      id: string;
+      name: string;
+      reasoning: boolean;
+      cost: {
+        input: number;
+        output: number;
+      };
+      contextWindow: number;
+    };
+    OpencodeCredentialListResponse: {
+      providers: components['schemas']['OpencodeCredentialProvider'][];
+    };
+    OpencodeCredentialProvider: {
+      id: string;
+      name: string;
+      env: string[];
+      connected: boolean;
+      modelCount: number;
+      authMethods: {
+        /** @enum {string} */
+        type: 'oauth' | 'api';
+        label: string;
+      }[];
     };
     CodebaseEnvironmentsResponse: {
       environments: components['schemas']['IsolationEnvironment'][];

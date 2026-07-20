@@ -7,7 +7,7 @@
  *   archon ai login <provider>     Connect a subscription (claude/codex/copilot) via OAuth
  *   archon ai tier set|list|unset  Edit small/medium/large tier presets (config, not a credential)
  *   archon ai alias set|list|unset Edit @custom model aliases (config, not a credential)
- *   archon ai default <provider>   Set the default assistant (config, not a credential)
+ *   archon ai default <provider> [<model>]  Set the default assistant + chat model (config, not a credential)
  *
  * The CREDENTIAL commands (key/list/logout/login) require the encryption vault,
  * which is now available by default on every install (the key is auto-provisioned
@@ -45,7 +45,7 @@ import {
   getUserAiPrefs,
   setUserTiers,
   setUserAliases,
-  setUserDefaultProvider,
+  setUserDefault,
   type TiersPatch,
   type UserAiPrefs,
 } from '@archon/core';
@@ -648,15 +648,40 @@ export async function aiAliasListCommand(json?: boolean): Promise<number> {
   }
 }
 
-/** `archon ai default <provider> [--scope user|install]` — set the default assistant. */
+/**
+ * Install-scope atomic default write (#1998/#2082): `defaultAssistant` and,
+ * when a model is given, `assistants.<provider>.model` land in
+ * ~/.archon/config.yaml together. Shared by `archon ai default --scope
+ * install` and the setup wizard's default-chat-model step (#1999) so the
+ * "provider + model must land together" invariant has exactly one home —
+ * a model pin must never ride a different provider. Omitting the model
+ * leaves `assistants.<provider>.model` untouched (it predates this command
+ * and also drives workflow defaults). Caller validates the provider.
+ */
+export async function setInstallDefault(provider: string, model?: string): Promise<void> {
+  await updateGlobalConfig({
+    defaultAssistant: provider,
+    ...(model ? { assistants: { [provider]: { model } } } : {}),
+  });
+}
+
+/**
+ * `archon ai default <provider> [<model>] [--scope user|install]` — set the
+ * default assistant, optionally with a default CHAT model (#1998).
+ *
+ * User scope writes provider + model ATOMICALLY to the per-user prefs row:
+ * omitting the model clears any previous pin (a pin is only meaningful for the
+ * provider it was set with). Install scope writes via setInstallDefault above.
+ */
 export async function aiDefaultCommand(
   provider: string | undefined,
+  model: string | undefined,
   scope?: string
 ): Promise<number> {
   const resolvedScope = parsePrefsScope(scope);
   if (resolvedScope === null) return 1;
   if (!provider) {
-    console.error('Usage: archon ai default <provider> [--scope user|install]');
+    console.error('Usage: archon ai default <provider> [<model>] [--scope user|install]');
     console.error(`Providers: ${registeredProvidersList()}`);
     return 1;
   }
@@ -668,15 +693,28 @@ export async function aiDefaultCommand(
     if (resolvedScope === 'user') {
       const user = await resolveUser();
       if (!user) return 1;
-      await setUserDefaultProvider(user.id, provider);
-      console.log(`✓ Your default assistant set to '${provider}' (just you).`);
+      await setUserDefault(user.id, provider, model ?? null);
+      if (model) {
+        console.log(`✓ Your chat default set to '${provider}/${model}' (just you).`);
+      } else {
+        console.log(
+          `✓ Your default assistant set to '${provider}' (just you; any model pin cleared).`
+        );
+      }
     } else {
-      await updateGlobalConfig({ defaultAssistant: provider });
-      console.log(`✓ Default assistant set to '${provider}'.`);
+      await setInstallDefault(provider, model);
+      if (model) {
+        console.log(`✓ Default assistant set to '${provider}' with default model '${model}'.`);
+      } else {
+        console.log(`✓ Default assistant set to '${provider}'.`);
+      }
     }
     return 0;
   } catch (err) {
-    getLog().error({ err: err as Error, provider, scope: resolvedScope }, 'cli.ai_default_failed');
+    getLog().error(
+      { err: err as Error, provider, model, scope: resolvedScope },
+      'cli.ai_default_failed'
+    );
     console.error(`✗ ${(err as Error).message}`);
     return 1;
   }

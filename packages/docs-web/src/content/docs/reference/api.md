@@ -396,7 +396,7 @@ Each user can override the install-wide model config with **personal** tiers, `@
 | GET | `/api/auth/me/ai-prefs` | The current user's stored prefs (raw layer, not merged) |
 | PATCH | `/api/auth/me/ai-prefs/tiers` | Update personal tier presets (per-key merge; `null` unsets) |
 | PATCH | `/api/auth/me/ai-prefs/aliases` | Update personal `@custom` aliases (per-key merge; `null` unsets) |
-| PATCH | `/api/auth/me/ai-prefs/default` | Set (or clear with `null`) the personal default assistant |
+| PATCH | `/api/auth/me/ai-prefs/default` | Set (or clear with `null`) the personal default assistant + default chat model (`{ provider, model? }` — written atomically; an omitted `model` clears any pin, and `model` without a `provider` is rejected) |
 
 ```bash
 # Point YOUR `large` tier at opus without touching the install config

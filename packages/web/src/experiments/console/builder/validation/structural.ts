@@ -86,7 +86,15 @@ function checkRequiredFields(node: BuilderNode): Issue[] {
         invalid('runtime', "script requires runtime 'bun' or 'uv'");
       break;
     case 'loop':
-      if (node.data.prompt.trim().length === 0) missing('loop.prompt', 'loop requires a prompt');
+      // One-of rule (mirrors the engine schema): exactly one prompt source,
+      // and whichever is present must be non-empty.
+      if (node.data.prompt !== undefined && node.data.command !== undefined)
+        invalid('loop.command', "loop accepts exactly one of 'prompt' or 'command', not both");
+      else if (node.data.command !== undefined) {
+        if (node.data.command.trim().length === 0)
+          missing('loop.command', 'loop requires a command name');
+      } else if ((node.data.prompt ?? '').trim().length === 0)
+        missing('loop.prompt', 'loop requires a prompt (or a command file)');
       if (node.data.until.trim().length === 0)
         missing('loop.until', "loop requires an 'until' signal");
       if (!Number.isInteger(node.data.max_iterations) || node.data.max_iterations <= 0)

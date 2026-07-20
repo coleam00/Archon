@@ -31,14 +31,18 @@ Top-level YAML fields on a workflow object. Per-node overrides (same name under 
 | `name` | string (required) | Workflow identifier (used in `archon workflow run <name>`) |
 | `description` | string (required) | Human-readable summary. Used for routing; see [Workflow Description Best Practices](https://archon.diy/guides/authoring-workflows/#workflow-description-best-practices) |
 | `provider` | string | AI provider (e.g. `claude`, `codex`, `pi`). Default: from `.archon/config.yaml` |
-| `model` | string | Model override. Claude: `sonnet` \| `opus` \| `haiku` \| `claude-*` \| `inherit`. Codex: any non-Claude model ID |
+| `model` | string | Model override. Three forms: a **tier keyword** (`small` \| `medium` \| `large` — resolves via built-in defaults + `tiers:` config, portable across installs), a **custom alias** (`@fast` — resolved from `aliases:` config; rejected in bundled/global workflows since aliases aren't portable), or a **literal** SDK model string (Claude: `sonnet` \| `opus` \| `haiku` \| `claude-*`; Codex: model ID; Pi: `<vendor>/<model>`). Tiers/aliases can also carry provider + effort — prefer `model: large` over hardcoding |
 | `interactive` | boolean | **Required for web UI** when the workflow has approval gates or `loop.interactive` nodes. Forces foreground execution so gate messages reach the user's chat. Default: `false` (background on web) |
+| `persist_sessions` | boolean | Default for every node's `persist_session` (cross-RUN AI session continuity, keyed per conversation). Requires a provider with the `sessionResume` capability. See `dag-advanced.md` §Session Persistence |
+| `requires` | list | Hard-block invocation unless a requirement is met. Only value: `[github]` — blocks users without a connected GitHub identity before any worktree/AI cost. Only enforced on multi-user installs (GitHub App + `TOKEN_ENCRYPTION_KEY`); no-op on solo PAT installs |
+| `tags` | string[] | Free-form labels (non-empty strings) for organizing workflows |
 
 ### Isolation
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `worktree.enabled` | boolean | Pin isolation regardless of caller. `false` = always live checkout (CLI `--branch`/`--from` hard-error). `true` = always worktree (CLI `--no-worktree` hard-errors). Omit = caller decides. Use `false` for read-only workflows (triage, reporting) |
+| `mutates_checkout` | boolean | Default `true`. Set `false` for read-only workflows to skip the same-checkout path lock — N concurrent runs on the same live checkout are then allowed. With the default, a second run on the same path is refused while another run holds it |
 
 Other worktree config (`baseBranch`, `copyFiles`, `initSubmodules`, `path`) lives in `.archon/config.yaml`, not the workflow YAML — see `references/repo-init.md`.
 
@@ -104,7 +108,7 @@ nodes:
 
 ## Node Types (Mutually Exclusive)
 
-Each node must have exactly ONE of these fields: `command`, `prompt`, `bash`, `script`, `loop`, `approval`, or `cancel`.
+Each node must have exactly ONE of these fields: `command`, `prompt`, `bash`, `script`, `loop`, `loop_group`, `approval`, or `cancel`.
 
 ### Command Node
 Runs a command file from `.archon/commands/`:
@@ -204,6 +208,31 @@ Iterates an AI prompt until a completion signal or max iterations:
 
 See the dedicated **Loop Nodes** section below for full details.
 
+### Loop Group Node
+Repeats a **multi-node sub-DAG body** per iteration until a completion signal, `until_bash` exit 0, or `max_iterations`. Use when one prompt per iteration isn't enough — e.g. implement → test → review as one repeated unit:
+```yaml
+- id: implement-cycle
+  depends_on: [plan]
+  loop_group:
+    nodes:                            # Full sub-DAG: any node type, own depends_on edges
+      - id: implement
+        prompt: |
+          Implement the next unfinished item from $plan.output.
+          Previous review said: $LOOP_PREV.review.output
+      - id: test
+        bash: "bun run test 2>&1"
+        depends_on: [implement]
+        trigger_rule: all_done
+      - id: review
+        prompt: "Review the diff and test results: $test.output. If everything passes and nothing is left: <promise>DONE</promise>"
+        depends_on: [test]
+    until: DONE
+    max_iterations: 8
+    fresh_context: false
+```
+
+See the dedicated **Loop Group Nodes** section below for full details.
+
 ## Node Base Fields
 
 All node types share these fields:
@@ -214,22 +243,25 @@ All node types share these fields:
 | `depends_on` | string[] | `[]` | Node IDs that must settle before this node runs |
 | `when` | string | — | Condition expression. Node **skipped** when false |
 | `trigger_rule` | string | `all_success` | Join semantics for multiple dependencies |
-| `idle_timeout` | number (ms) | 300000 | Idle timeout for AI streaming (`command`, `prompt`) and per-iteration idle for `loop`. Accepted but ignored on `bash` and `script` — use `timeout` there |
+| `idle_timeout` | number (ms) | 1800000 (30 min) | Idle timeout for AI streaming (`command`, `prompt`) and per-iteration idle for `loop`/`loop_group`. It's a deadlock detector — resets on every message, fires only when the subprocess goes fully silent. Accepted but ignored on `bash` and `script` — use `timeout` there |
+| `always_run` | boolean | `false` | Opt out of resume caching: on a resumed run, re-execute this node even though it completed in the prior run. Use for nodes that fetch fresh state (issue data, git status) that downstream nodes must not consume stale |
+| `output_type` | string | — | Any node type. Engine writes typed output sidecars after completion: `$ARTIFACTS_DIR/nodes/<id>.md` + `<id>.meta.json` (best-effort — a write failure never fails the node). Lets downstream nodes and later runs locate output by type instead of guessing filenames |
 
-**Command, prompt, and bash nodes** (silently ignored on loop nodes, except `retry` which is a hard error):
+**AI nodes** (`command`, `prompt`; loop/loop_group forward only `model`/`provider` — the rest is unsupported there. Ignored with a loader warning on `bash`/`script`; `retry` on loop/loop_group is a hard parse error):
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `model` | string | inherited | Per-node model override |
-| `provider` | `claude` / `codex` | inherited | Per-node provider override |
+| `model` | string | inherited | Per-node model override. Tier keyword, `@alias`, or literal (same forms as workflow-level `model`). **Also works on `loop`/`loop_group`** — resolved once and forwarded to every iteration's AI call |
+| `provider` | string | inherited | Per-node provider override (`claude`, `codex`, `pi`, ...). Also forwarded on `loop`/`loop_group` |
 | `context` | `fresh` / `shared` | — | `fresh` = new session; `shared` = inherit from prior node. Defaults to `fresh` for parallel layers, inherited for sequential |
-| `output_format` | object | — | JSON Schema for structured output |
-| `allowed_tools` | string[] | all | Tool whitelist. `[]` = disable all. Claude only |
-| `denied_tools` | string[] | none | Tool blacklist. Claude only |
-| `retry` | object | 2 retries, 3s | Retry config. **Hard error on loop nodes** |
+| `output_format` | object | — | JSON Schema for structured output — see §Structured Output for the per-provider enforcement + failure contract |
+| `allowed_tools` | string[] | all | Tool whitelist. `[]` = disable all. All providers except Codex |
+| `denied_tools` | string[] | none | Tool blacklist. All providers except Codex |
+| `retry` | object | 2 retries, 3s (AI nodes) | Retry config. AI nodes retry transient errors by default even without `retry:`. Bash/script nodes retry **only with an explicit `retry:` block** (#2088 — on builds before that fix, `retry:` on bash/script is silently ignored). **Hard parse error on loop/loop_group** |
+| `persist_session` | boolean | workflow `persist_sessions` | `command`/`prompt` only. Persist the provider session across RUNS (keyed by workflow + node + conversation). See `dag-advanced.md` §Session Persistence |
 | `hooks` | object | — | SDK hooks. Claude only. See `dag-advanced.md` |
-| `mcp` | string | — | MCP config path. Claude only. See `dag-advanced.md` |
-| `skills` | string[] | — | Skill names. Claude only. See `dag-advanced.md` |
+| `mcp` | string | — | MCP config path. All providers except Pi. See `dag-advanced.md` |
+| `skills` | string[] | — | Skill names. Per-node injection on Claude/Pi/OpenCode/Copilot; Codex informational (discovers from `.agents/skills/`). See `dag-advanced.md` |
 
 ## Dependencies and Parallel Execution
 
@@ -268,7 +300,14 @@ Gate whether a node runs based on upstream output. A condition that evaluates to
 ```yaml
 when: "$nodeId.output == 'VALUE'"
 when: "$nodeId.output != 'VALUE'"
-when: "$nodeId.output.field == 'VALUE'"       # JSON dot notation (requires output_format)
+when: "$nodeId.output.field == 'VALUE'"       # JSON dot notation (see Dot Notation below)
+when: "$nodeId.field == 'VALUE'"              # Shorthand — equivalent to $nodeId.output.field
+```
+
+**Unquoted RHS**: numbers and booleans may be written without quotes:
+```yaml
+when: "$check.exit_code == 0"
+when: "$decide.output.proceed == true"
 ```
 
 **Numeric comparison** (both sides auto-parsed as numbers; fail-closed if either side is not finite):
@@ -280,7 +319,7 @@ when: "$score.output <= '5'"
 when: "$score.output.confidence >= '0.9'"
 ```
 
-All six operators — `==`, `!=`, `<`, `>`, `<=`, `>=` — are supported. Values are single-quoted strings (even for numeric comparisons).
+All six operators — `==`, `!=`, `<`, `>`, `<=`, `>=` — are supported. Quoted values are single-quoted strings; numbers/booleans may also be unquoted.
 
 ### Compound Expressions
 
@@ -297,16 +336,29 @@ when: "$a.output == 'X' && $b.output == 'Y' || $c.output == 'Z'"
 
 Short-circuit evaluation: `&&` stops at the first false, `||` stops at the first true.
 
-### Dot Notation (JSON Field Access)
+### Dot Notation (JSON Field Access) — Strict Semantics
 
-`$nodeId.output.field` parses the upstream output as JSON and extracts the named field. Returns empty string if parsing fails or the field is absent — which then fails-closed against any literal value. Requires the upstream node to have `output_format` set (for AI nodes) or to print valid JSON (for bash/script nodes).
+`$nodeId.output.field` is **strict** (no-silent-drop): a reference that cannot be honored **fails the consuming node** — it does NOT silently resolve to empty. The exact contract, by producer:
 
-### Fail-Closed Rules
+| Producer | Field declared in its `output_format` | Behavior |
+|----------|--------------------------------------|----------|
+| Has `output_format` | yes, value present | → the value |
+| Has `output_format` | yes, value absent/null (declared-optional) | → `''` (safe) |
+| Has `output_format` | **no** (typo / not in schema) | → **consumer node FAILS** |
+| Schemaless (bash/script/prose) | output is JSON with the key | → the value |
+| Schemaless | output is not a JSON object, or key missing | → **consumer node FAILS** |
+| Producer skipped or pending | — | → **consumer node FAILS** (guard with `when:` or `trigger_rule`) |
 
-- Invalid or unparseable expression → node skipped, warning logged
-- Numeric operator with a non-numeric side → node skipped
-- `$nodeId.output.field` on non-JSON output → field is empty → comparison fails
-- Referenced node did not run (skipped upstream) → substitution is empty → comparison fails
+The whole-text form `$nodeId.output` (no `.field`) never fails — a skipped/unknown producer resolves to `''`.
+
+### Error Modes: Skip vs Fail
+
+Two deliberately different behaviors:
+
+- **Malformed `when:` expression** (bad syntax) → fail-closed: node **skipped**, warning logged (`node_skipped` event, reason `when_condition_parse_error`)
+- **Numeric operator with a non-numeric side** → fail-closed: node **skipped**
+- **Unresolvable `.field` reference** (contract violation above) → node **FAILS** loudly — a referenced-but-missing value is a visible failure, not a silent skip
+- **Condition evaluates false** → node **skipped** (`node_skipped` event, reason `when_condition`)
 
 ## Node Output Substitution
 
@@ -317,10 +369,10 @@ Short-circuit evaluation: `&&` stops at the first false, `||` stops at the first
     Type: $classify.output.issue_type
 ```
 
-- `$nodeId.output` — full text output
-- `$nodeId.output.field` — JSON field from structured output
-- In bash scripts, values are auto **shell-quoted**
-- Loop node output = **last iteration only**
+- `$nodeId.output` — full text output. Unknown/skipped producer → `''` (never fails)
+- `$nodeId.output.field` — JSON field access, **strict** (see Dot Notation above — an unresolvable field fails the consuming node)
+- In bash scripts, values are auto **shell-quoted**; values >32KB spill to a file and substitute as `$(cat <path>)`
+- Loop / loop_group node output = **last iteration only** (completion-signal tags stripped)
 
 ## Structured Output (`output_format`)
 
@@ -340,22 +392,32 @@ Command/prompt nodes only:
     required: [issue_type]
 ```
 
-Enables `$classify.output.issue_type` field access. SDK-enforced on Claude and Codex; best-effort on Pi (schema is appended to the prompt and JSON is parsed out of the result text).
+Enables `$classify.output.issue_type` field access.
+
+**Enforcement tiers by provider:**
+- **Claude / Codex / OpenCode** — `enforced`: the SDK grammar-constrains decoding to the schema
+- **Pi / Copilot** — `best-effort`: the schema is appended to the prompt, JSON is parsed out of the result (with repair for trailing commas / preambles / truncation)
+
+**The failure contract (all providers):** the parsed output is validated against the declared schema for **every** provider — even SDK-enforced ones (catches refusals and max_tokens truncation). Best-effort providers get up to **3 re-asks** in a fresh session with a correction block listing the validation errors. A node that declares `output_format` but never yields schema-valid output **fails** — there is no silent fallback to prose. On success, `$nodeId.output` is the serialized JSON.
 
 ## Per-Node Provider and Model
 
-Override on command/prompt nodes:
+Override on command/prompt nodes — and on `loop`/`loop_group` nodes, where they apply to every iteration's AI call:
 
 ```yaml
 nodes:
   - id: classify
     prompt: "Quick classification"
-    model: haiku                    # Fast model
+    model: small                    # Tier keyword — resolves via config, portable
   - id: implement
     command: implement-changes      # Inherits workflow-level model
+  - id: polish-loop
+    model: large                    # Applies to every iteration
+    loop:
+      prompt: "..."
+      until: DONE
+      max_iterations: 5
 ```
-
-Loop nodes accept `provider`/`model` without error but ignore them at runtime.
 
 ## Resume on Failure
 
@@ -364,6 +426,10 @@ When a workflow fails, already-completed nodes are skipped on the next run:
 ```bash
 archon workflow run my-workflow --resume
 ```
+
+- Nodes with `always_run: true` re-execute on resume anyway (use for fresh-state fetches)
+- **AI session context is NOT restored** — a resumed node that relied on in-session memory from a prior node starts fresh. Artifact-based handoff survives; in-context memory does not
+- Prior nodes' outputs (including structured-output field access) remain available to downstream nodes
 
 ---
 
@@ -446,12 +512,14 @@ Either triggers completion. `<promise>` tags are stripped from output.
 
 First iteration is always fresh regardless.
 
-### What Does NOT Work on Loop Nodes
+### What Works / Does NOT Work on Loop Nodes
 
-- `retry` — **hard error** at parse time
-- `hooks`, `mcp`, `skills`, `allowed_tools`, `denied_tools`, `output_format` — silently ignored
+- `provider`, `model` — **WORK**: resolved once and forwarded to every iteration's AI call
+- `idle_timeout` — works, applies per iteration
+- `retry` — **hard error** at parse time (the loop manages its own iteration)
+- `hooks`, `mcp`, `skills`, `allowed_tools`, `denied_tools`, `output_format` — silently ignored (loader warning)
 - `context: fresh` — ignored (use `loop.fresh_context` instead)
-- `provider`, `model` — accepted but ignored at runtime
+- `persist_session` — not supported on loops (in-run session threading between iterations only)
 
 ### Loop Output
 
@@ -484,6 +552,54 @@ First iteration is always fresh regardless.
     until_bash: "bun run test"
     fresh_context: false
 ```
+
+---
+
+## Loop Group Nodes
+
+`loop_group:` repeats a **multi-node sub-DAG body** per iteration — the multi-node counterpart to `loop:`. The outer workflow graph stays acyclic; the iteration lives inside this one node. Body nodes can be any node type, including a nested `loop_group`.
+
+### Configuration
+
+Same iteration controls as `loop:` (`until`, `max_iterations`, `fresh_context`, `until_bash`, `interactive` + `gate_message`) with `nodes:` instead of `prompt:`:
+
+```yaml
+- id: fix-cycle
+  model: large                      # group-level model/provider = defaults for body AI nodes
+  loop_group:
+    nodes:
+      - id: implement
+        prompt: |
+          Implement the next fix. Last review feedback:
+          $LOOP_PREV.review.output
+      - id: test
+        bash: "bun run test 2>&1 || true"   # capture failures as output instead of failing the group
+        depends_on: [implement]
+      - id: review
+        prompt: "Review diff + tests: $test.output. All good? <promise>SHIP</promise>"
+        depends_on: [test]
+    until: SHIP
+    max_iterations: 6
+    fresh_context: false
+```
+
+### Body Semantics
+
+- **Sealed sub-DAG**: body `depends_on` edges may only reference body nodes — never outer nodes. Body node ids must not shadow outer node ids (load-time error).
+- **Reading outer context**: body prompts CAN reference outer outputs via `$outerNode.output` — the body's output map is seeded read-only with the outer DAG's outputs.
+- **`$LOOP_PREV.<nodeId>.output[.field]`**: the previous iteration's output of a body node. Empty string on iteration 1. Field access follows the same strict contract as `$nodeId.output.field`, except a genuinely absent prior output resolves to `''` (iteration 1 has no prior). Pre-substituted into body **prompt fields only** — NOT into body `when:` conditions; gate cross-iteration behavior via prompt content instead.
+- **Parallelism inside the body**: the body runs through the same layered executor — independent body nodes run concurrently, `when:`/`trigger_rule` work normally.
+- **Failure**: a failed body node **fails the whole group immediately** (no more iterations) — the group never silently re-runs a broken body.
+- **Group output**: `$groupId.output` = the final iteration's terminal body node output (first completed body node, in definition order, that no other body node depends on).
+- **Sessions**: with `fresh_context: false`, the body's sequential session threads across iterations; `persist_session` on body nodes is not supported (resets each iteration).
+- **`until_bash`** is skipped when the completion signal was already detected in the terminal output (unlike single `loop:` which always runs it).
+- **Interactive gates** work like `loop:` — pause after a non-completing iteration, `$LOOP_USER_INPUT` on the first resumed iteration.
+- **Observability caveat**: body node lifecycle events currently carry the raw body node id, not `<groupId>.<nodeId>` (#2090) — only skip/control events are namespaced.
+
+### When to use `loop:` vs `loop_group:`
+
+- `loop:` — one prompt is the whole iteration (implement-next-story, fix-until-tests-pass with the AI running tests itself)
+- `loop_group:` — the iteration has structure worth separating: deterministic test/build steps between AI steps, multiple AI roles per cycle (implementer + reviewer), or parallel work inside each iteration
 
 ---
 
@@ -650,16 +766,19 @@ Use `--json` for machine-readable output. Use `archon validate commands <name>` 
 
 - All node IDs unique
 - All `depends_on` reference existing IDs
-- No cycles
-- `$nodeId.output` refs in `when:`, `prompt:`, `loop.prompt:` must point to known IDs
-- Exactly one of `command`, `prompt`, `bash`, `script`, `loop`, `approval`, `cancel` per node
+- No cycles (reported with the exact stuck node ids)
+- `$nodeId.output` refs in `when:`, `prompt:`, `loop.prompt:` must point to known IDs (markdown code fences in prompts are stripped first, so examples don't false-positive)
+- Exactly one of `command`, `prompt`, `bash`, `script`, `loop`, `loop_group`, `approval`, `cancel` per node
+- `loop_group.nodes` is validated as its own sealed sub-DAG (unique ids, no cycles, body `depends_on` only within the body); a body id shadowing an outer node id is an error; body `$nodeId.output` refs may reach outer ids
 - Script nodes require `runtime: bun` or `runtime: uv`
 - Named scripts must exist in `.archon/scripts/` or `~/.archon/scripts/` with extension matching declared runtime
-- `retry` on loop node = hard error
+- `retry` on loop / loop_group node = hard error
 - `approval.message` required and non-empty
 - `cancel` reason required and non-empty
 - Approval `on_reject.max_attempts` must be 1–10 if set
+- `provider:` (workflow or node level) must be a registered provider id — unknown providers reject the whole YAML
 - `steps:` format rejected (deprecated — use `nodes:` only)
+- Invalid values for optional workflow-level fields (`interactive`, `effort`, `thinking`, `sandbox`, `tags`, ...) are **warn-and-drop** — the workflow still loads, the field is discarded. Watch loader warnings; don't assume a field took effect because the file loaded
 
 ## Complete Example
 

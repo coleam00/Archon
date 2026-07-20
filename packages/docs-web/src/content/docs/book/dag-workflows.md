@@ -20,6 +20,7 @@ That's what **DAG workflows** (Directed Acyclic Graphs) are for. Instead of a st
 |---------------|--------------|
 | Simple sequence, one after another | Sequential `nodes:` with `depends_on` |
 | Repeat until done | `loop:` node |
+| Repeat a multi-step pipeline until done | `loop_group:` node |
 | Skip a node based on previous output | `when:` condition |
 | Fan out to different handlers based on classified input | `output_format` + `when:` routing |
 | Express exactly which nodes depend on which | `depends_on` edges |
@@ -233,7 +234,7 @@ The classify-and-route example uses `none_failed_min_one_success` on `implement`
 
 ## Node Types
 
-Archon supports seven node types. Exactly one mode field is required per node:
+Archon supports eight node types. Exactly one mode field is required per node:
 
 | Type | Syntax | When to use |
 |------|--------|-------------|
@@ -242,6 +243,7 @@ Archon supports seven node types. Exactly one mode field is required per node:
 | **Bash** | `bash: "shell command"` | Run a shell script without AI. Stdout is captured as `$nodeId.output`. Deterministic operations only. |
 | **Script** | `script: "..." ` + `runtime: bun \| uv` | Run TypeScript/JavaScript (bun) or Python (uv) without AI. Inline code or named reference to `.archon/scripts/`. Stdout captured as `$nodeId.output`. See [Script Nodes](/guides/script-nodes/). |
 | **Loop** | `loop: { prompt: "...", until: SIGNAL }` | Repeat an AI prompt until a completion signal appears in the output. See [Loop Nodes](/guides/loop-nodes/). |
+| **Loop Group** | `loop_group: { until: SIGNAL, nodes: [...] }` | Repeat a multi-node sub-DAG body until a completion condition is met (cross-node iteration). See [Loop Nodes](/guides/loop-nodes/). |
 | **Approval** | `approval: { message: "..." }` | Pause the workflow for a human approve/reject decision. See [Approval Nodes](/guides/approval-nodes/). |
 | **Cancel** | `cancel: "reason string"` | Terminate the workflow run (status: cancelled, not failed). Usually gated with `when:`. |
 

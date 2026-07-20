@@ -28,6 +28,7 @@ export const userAiPrefsResponseSchema = z
     tiers: userTiersSchema.optional(),
     aliases: z.record(z.string(), aliasEntrySchema).optional(),
     defaultProvider: z.string().optional(),
+    defaultModel: z.string().optional(),
   })
   .openapi('UserAiPrefs');
 
@@ -49,9 +50,16 @@ export const updateUserAliasesBodySchema = z
   })
   .openapi('UpdateUserAliasesBody');
 
-/** PATCH /api/auth/me/ai-prefs/default body — `null` clears the per-user default. */
-export const updateUserDefaultProviderBodySchema = z
+/**
+ * PATCH /api/auth/me/ai-prefs/default body — sets the per-user default
+ * assistant + default CHAT model ATOMICALLY. `provider: null` clears both;
+ * `model` omitted or `null` clears any model pin (a pin is only meaningful
+ * for the provider it was set with, so it never survives a provider write).
+ * `model` with a `null` provider is rejected (400).
+ */
+export const updateUserDefaultBodySchema = z
   .object({
     provider: z.string().min(1).nullable(),
+    model: z.string().min(1).nullable().optional(),
   })
-  .openapi('UpdateUserDefaultProviderBody');
+  .openapi('UpdateUserDefaultBody');

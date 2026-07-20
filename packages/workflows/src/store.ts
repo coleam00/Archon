@@ -50,6 +50,18 @@ export const WORKFLOW_EVENT_TYPES = [
   // fans out task_activity / hook_activity to live Web UI subscribers.
   'task_activity',
   'hook_activity',
+  // Container isolation backend lifecycle (folder-project container runs).
+  // `container_created`/`container_destroyed` bracket the run; `container_stopped`/
+  // `container_resumed` bracket a suspend/resume across a pause (Phase C).
+  'container_created',
+  'container_stopped',
+  'container_resumed',
+  'container_destroyed',
+  // Container write-back gate (Phase C): the finished run's overlay diff is
+  // requested (paused for approval), then applied to / discarded from the live root.
+  'writeback_requested',
+  'writeback_applied',
+  'writeback_discarded',
 ] as const;
 
 export type WorkflowEventType = (typeof WORKFLOW_EVENT_TYPES)[number];
@@ -99,7 +111,30 @@ export interface IWorkflowStore {
   getWorkflowRunStatus(id: string): Promise<WorkflowRunStatus | null>;
   completeWorkflowRun(id: string, metadata?: Record<string, unknown>): Promise<void>;
   failWorkflowRun(id: string, error: string): Promise<void>;
-  pauseWorkflowRun(id: string, approvalContext: ApprovalContext): Promise<void>;
+  /**
+   * Pause a running run for human review, stamping the approval context. Optional
+   * `extraMetadata` is folded into the SAME atomic metadata write (e.g. the
+   * container write-back gate's `pending_writeback` marker) so there is never a
+   * paused-without-marker window.
+   */
+  pauseWorkflowRun(
+    id: string,
+    approvalContext: ApprovalContext,
+    extraMetadata?: Record<string, unknown>
+  ): Promise<void>;
+
+  /**
+   * Atomically CLAIM the container write-back apply before the live root is mutated
+   * (retry-safe apply). Sets `metadata.writeback_apply_claimed` only while unset;
+   * returns whether THIS caller won. Apply the overlay only when `claimed`.
+   */
+  claimWriteback(id: string): Promise<{ claimed: boolean }>;
+
+  /**
+   * Release a claimed write-back apply after the apply FAILED, so a later resume can
+   * re-claim and retry. Best-effort (never throws in the caller's critical path).
+   */
+  releaseWritebackClaim(id: string): Promise<void>;
   cancelWorkflowRun(id: string): Promise<{ cancelled: boolean }>;
 
   /**
@@ -134,6 +169,8 @@ export interface IWorkflowStore {
     name: string;
     repository_url: string | null;
     default_cwd: string;
+    /** Project kind — 'folder' routes path resolution to _folder/<slug>/ storage. */
+    kind: 'repo' | 'folder';
   } | null>;
 
   // Per-node provider sessions persisted across workflow re-runs (opt-in via

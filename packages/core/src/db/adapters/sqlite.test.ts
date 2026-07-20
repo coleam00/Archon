@@ -274,6 +274,22 @@ describe('SqliteAdapter', () => {
       // The migration should have added every user_id column.
       const codebaseCols = raw_pragma(dbPath, 'remote_agent_codebases');
       expect(codebaseCols).toContain('default_branch');
+      // …and the folder-project `kind` discriminator (runtime ALTER on old DBs).
+      expect(codebaseCols).toContain('kind');
+      // A row inserted without `kind` backfills to 'repo' via the column DEFAULT.
+      const writable = new Database(dbPath);
+      try {
+        writable.run(
+          "INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ('cb-old', 'legacy', '/tmp/legacy')"
+        );
+      } finally {
+        writable.close();
+      }
+      const kindRow = raw_query(
+        dbPath,
+        "SELECT kind FROM remote_agent_codebases WHERE id = 'cb-old'"
+      );
+      expect(kindRow).toEqual([{ kind: 'repo' }]);
 
       const conversationCols = raw_pragma(dbPath, 'remote_agent_conversations');
       expect(conversationCols).toContain('user_id');

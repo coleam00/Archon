@@ -88,18 +88,18 @@ Command files should lead with "read artifacts from `$ARTIFACTS_DIR/...`" when t
 
 ### 5. Cheap models for glue, strong models for substance
 
-Classification, routing, formatting, and short summaries don't need Opus. Use `model: haiku` for these and reserve `sonnet`/`opus` for the nodes that actually produce code or long-form analysis. Combined with `allowed_tools: []` on pure-text nodes, this cuts cost dramatically.
+Classification, routing, formatting, and short summaries don't need a frontier model. Prefer **tier keywords** — `model: small` for glue, `medium`/`large` for substance — over hardcoded model ids: tiers resolve from install config, so the workflow stays portable and upgrades centrally. Combined with `allowed_tools: []` on pure-text nodes, this cuts cost dramatically.
 
 ```yaml
 - id: classify
   prompt: "Classify this issue"
-  model: haiku              # fast + cheap
+  model: small              # fast + cheap, resolved from config
   allowed_tools: []         # no tool overhead
   output_format: { ... }
 
 - id: implement
   command: implement-fix
-  model: sonnet             # where the thinking happens
+  model: large              # where the thinking happens
 ```
 
 ### 6. Write the workflow description for routing
@@ -214,7 +214,11 @@ Loop nodes manage their own iteration via `max_iterations`. Setting `retry:` on 
 
 ### ❌ Tiny `max_iterations` on open-ended loops
 
-A loop with `max_iterations: 3` that's supposed to implement N stories from a PRD will silently stop after 3 iterations and leave the work half-done. Think about the worst case — multi-story PRDs need 10–20, fix-iterate cycles need 5–8, refinement loops need 3–5.
+A loop with `max_iterations: 3` that's supposed to implement N stories from a PRD will FAIL the node after 3 iterations and leave the work half-done (exhaustion is a hard failure, never a silent "done"). Think about the worst case — multi-story PRDs need 10–20, fix-iterate cycles need 5–8, refinement loops need 3–5. Applies to `loop_group` too.
+
+### ❌ Cramming a structured cycle into one loop prompt
+
+If each iteration is really "implement, then run tests deterministically, then review," a single `loop:` prompt makes the AI do all three in one session — tests get skipped or hallucinated. Use `loop_group:` and give the deterministic step a `bash:` body node; the reviewer reads real test output via `$test.output`, and the next iteration reads the review via `$LOOP_PREV.review.output`.
 
 ### ❌ Missing `interactive: true` at workflow level for approval/loop gates on web
 

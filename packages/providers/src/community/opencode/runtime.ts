@@ -280,6 +280,20 @@ export async function disposeInstanceForDirectory(
   }
 }
 
+/**
+ * Cheap availability probe for `archon doctor` — resolves the embedded
+ * OpenCode SDK module WITHOUT starting the server.
+ *
+ * `acquireEmbeddedRuntime` spawns a child process and binds a port, which is
+ * far too heavy for a diagnostic. This only confirms the SDK is installed and
+ * its `createOpencode` entrypoint is present, so doctor can report runtime
+ * readiness without the boot. Throws if the module cannot be resolved.
+ */
+export async function probeOpencodeRuntimeModule(): Promise<boolean> {
+  const mod = await import('@opencode-ai/sdk');
+  return typeof (mod as { createOpencode?: unknown }).createOpencode === 'function';
+}
+
 /** Reset the embedded runtime state. For testing only. */
 export function resetEmbeddedRuntime(): void {
   embeddedRuntimePromise = undefined;

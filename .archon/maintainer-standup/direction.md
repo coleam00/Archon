@@ -26,6 +26,8 @@ This file is **committed and shared by all maintainers**. Edit deliberately — 
 - **Not a general-purpose chat UI.** Adapters are conversation surfaces for *workflow execution*, not standalone chat experiences.
 - **Not a replacement for the AI coding agent itself.** Archon orchestrates Claude Code / Codex / Pi — it doesn't reimplement them.
 - **Not opinionated about the dev environment.** No mandatory editor integrations, framework lock-in, or Docker requirement beyond what users opt into.
+- **Not a deployment-infrastructure product.** Caddy is the single maintained reference reverse proxy (`--profile cloud`). Alternative proxies and infra recipes (Traefik, Nginx, k8s, ...) live in **docs** as community-maintained examples against the documented proxy contract (exposed port, health endpoint, `/internal/*` never proxied — see #2193), not as compose profiles Archon maintains: each maintained proxy config doubles a security-critical surface. Cite as `direction.md §deployment-recipes`.
+- **Not a programming language.** The workflow YAML coordinates (gates, joins, retries, sessions, artifacts, reusable structure); `bash:`/`script:` nodes compute; prompts judge. PRs that add computation to the YAML surface conflict — see §workflow-language.
 
 ## Community providers
 
@@ -44,6 +46,18 @@ Archon ships built-in providers for Claude (`@anthropic-ai/claude-agent-sdk`) an
 - A community provider that goes non-functional — CI broken, upstream SDK gone, no maintainer response — is marked deprecated and removed in the next minor release unless someone from the community submits a fix.
 
 When citing this policy in a PR comment: `direction.md §community-providers`.
+
+## Workflow language (YAML surface)
+
+The workflow YAML is a **coordination language**, not a programming language. Admissibility test for any new YAML surface feature (field, node type, expression capability): (1) does the *engine* need to see it to govern the run? (2) is it declarative data, not evaluation? (3) could a script node + existing wiring express it today? A feature that computes rather than coordinates is declined with a pointer to the escape hatch. Full rationale, case law, and the five failure smells: `packages/docs-web/src/content/docs/reference/workflow-language-constitution.md`.
+
+Triage clauses — cite as `direction.md §<clause>`:
+
+- **§when-grammar** — `when:` never grows incrementally (no parentheses, functions, string ops, arithmetic). Standing answer: compute the decision in a `script:` node, gate on `$node.output.field`. Only sanctioned growth is adopting CEL wholesale in one versioned change — never home-grown operators.
+- **§load-time-composition** — composition/reuse features must fully resolve at load time (the executor runs a flat static DAG). Parameterization may carry **data**, never **structure**; dynamic/templated targets are declined. Runtime-resolved structure is a sub-run — a governance object with its own run record (#2121 Phase 2, co-designed with #1764) — not a language feature.
+- **§workaround-triage** — repeated YAML structure or deterministic logic embedded in prompts is a signal, triaged into three buckets: missing *coordination* primitive → design it constitutionally; missing *pattern* → document the pattern (e.g. polyglot validate = detect-AI → execute-bash → fix-AI); disguised *computation* → point at script nodes. The workaround corpus decides language shape; the feature-request queue doesn't.
+- **§schema-width** — new provider capabilities default into provider config or tier/alias presets, not new node fields; a node field is earned only by genuine per-node variance. Capability mismatches warn loudly, never silently no-op (`capabilities.ts` is the source of truth; docs derive from it — #2116).
+- **§implicit-behavior** — a new implicit behavior (auto-anything) must be documented in the canonical behavior list, individually defeatable, and fail-safe — convenience alone never qualifies.
 
 ## Open questions (no stance yet)
 

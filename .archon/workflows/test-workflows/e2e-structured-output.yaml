@@ -34,7 +34,7 @@ nodes:
   - id: use-fields
     depends_on: [classify]
     bash: |
-      # No surrounding quotes: $node.output.field is injected as a shell-safe
+      # No surrounding quotes: a $<node>.output.field ref is injected as a shell-safe
       # single-quoted literal already (escapedForBash), so the value's quoting
       # is provided by the substitution.
       sentiment=$classify.output.sentiment

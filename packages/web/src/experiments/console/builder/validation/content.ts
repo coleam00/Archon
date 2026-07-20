@@ -38,7 +38,9 @@ function textBodies(node: BuilderNode): string[] {
     case 'approval':
       return [node.data.message];
     case 'loop':
-      return [node.data.prompt];
+      // A command-backed loop has no inline text to scan — the command file's
+      // body is loaded at runtime (same posture as the engine loader's ref scan).
+      return node.data.prompt !== undefined ? [node.data.prompt] : [];
     case 'cancel':
       return [];
   }
