@@ -49,6 +49,10 @@ const mockAddMessage = mock(async () => ({
   created_at: new Date().toISOString(),
 }));
 const mockGenerateAndSetTitle = mock(async () => {});
+const mockResolveTitleRequest = mock(async () => ({
+  provider: 'claude',
+  options: {} as Record<string, unknown>,
+}));
 
 // Type aliases for clarity in tests
 type MockWorkflowRun = {
@@ -90,6 +94,7 @@ mock.module('@archon/core', () => ({
   },
   getArchonWorkspacesPath: () => '/tmp/.archon/workspaces',
   generateAndSetTitle: mockGenerateAndSetTitle,
+  resolveTitleRequest: mockResolveTitleRequest,
   createLogger: () => ({
     fatal: mock(() => undefined),
     error: mock(() => undefined),
