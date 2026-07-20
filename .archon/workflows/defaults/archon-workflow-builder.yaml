@@ -6,6 +6,14 @@ description: |
   Does: Scans codebase -> extracts intent (JSON) -> generates YAML -> validates -> saves.
   NOT for: Editing existing workflows or creating non-workflow files.
 
+# Run in the live checkout, not in a fresh sub-worktree. Without this, every
+# archon-workflow-builder invocation creates an isolated sub-worktree and
+# writes the generated YAML there — the file never reaches the caller's
+# .archon/workflows/, so the run reports success while the user's repo gains
+# nothing. Closes #1220.
+worktree:
+  enabled: false
+
 nodes:
   - id: scan-codebase
     bash: |
