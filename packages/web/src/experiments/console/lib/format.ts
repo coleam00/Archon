@@ -29,14 +29,19 @@ export function ensureUtc(timestamp: string): string {
     : `${timestamp.replace(' ', 'T')}Z`;
 }
 
+/** UTC epoch ms for a timestamp, tolerant of naive DB strings (see ensureUtc). */
+function toUtcMs(timestamp: string): number {
+  return new Date(ensureUtc(timestamp)).getTime();
+}
+
 export function elapsedSince(startIso: string, endIso?: string): number {
-  const start = new Date(ensureUtc(startIso)).getTime();
-  const end = endIso !== undefined ? new Date(ensureUtc(endIso)).getTime() : Date.now();
+  const start = toUtcMs(startIso);
+  const end = endIso !== undefined ? toUtcMs(endIso) : Date.now();
   return (end - start) / 1000;
 }
 
 export function relativeTime(iso: string, now: number = Date.now()): string {
-  const t = new Date(ensureUtc(iso)).getTime();
+  const t = toUtcMs(iso);
   const d = Math.floor((now - t) / 1000);
   if (d < 5) return 'just now';
   if (d < 60) return `${d.toString()}s ago`;
@@ -52,8 +57,8 @@ export function relativeTime(iso: string, now: number = Date.now()): string {
  */
 export function formatRelativeToBaseline(eventIso: string, baselineIso: string | null): string {
   if (baselineIso === null) return formatClock(eventIso);
-  const base = new Date(ensureUtc(baselineIso)).getTime();
-  const t = new Date(ensureUtc(eventIso)).getTime();
+  const base = toUtcMs(baselineIso);
+  const t = toUtcMs(eventIso);
   if (Number.isNaN(base) || Number.isNaN(t)) return formatClock(eventIso);
   const delta = Math.max(0, Math.floor((t - base) / 1000));
   const h = Math.floor(delta / 3600);
