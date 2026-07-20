@@ -3577,10 +3577,9 @@ export function registerApiRoutes(
       return apiError(c, 400, 'Invalid workflow name');
     }
 
-    // Workflow files may use `.yaml` or `.yml` (the discovery scanner accepts
-    // both — `workflow-discovery.ts`'s readdir filter at line 119). Mirror
-    // that here so the by-name lookup doesn't 404 on `.yml` files like
-    // `phase-0-spike.yml` that the list endpoint already returns.
+    // Try `.yaml` then `.yml`, mirroring `loadWorkflowsFromDir` in
+    // workflow-discovery.ts so by-name lookup matches the list endpoint.
+    // Returns null if neither extension exists (caller tries the next source).
     const tryReadWorkflowAt = async (
       dir: string
     ): Promise<{ filename: string; content: string } | null> => {
@@ -3797,17 +3796,22 @@ export function registerApiRoutes(
         ? getHomeWorkflowsPath()
         : join(workingDir, getWorkflowFolderSearchPaths()[0]);
 
-    // Try both `.yaml` and `.yml` extensions to match discovery semantics.
+    // Remove both `.yaml` and `.yml` variants (discovery accepts either), so a
+    // twin file can't stay active after a reported deletion.
+    let deleted = false;
     for (const ext of ['yaml', 'yml']) {
       const filePath = join(dir, `${name}.${ext}`);
       try {
         await unlink(filePath);
-        return c.json({ deleted: true, name });
+        deleted = true;
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
         getLog().error({ err, name }, 'workflow.delete_failed');
         return apiError(c, 500, 'Failed to delete workflow');
       }
+    }
+    if (deleted) {
+      return c.json({ deleted: true, name });
     }
     return apiError(c, 404, `Workflow not found: ${name}`);
   });
