@@ -342,8 +342,15 @@ async function handleWrite(
     }
     case 'cancel':
     case 'abandon': {
-      const cancelled = await abandonWorkflow(id);
-      return `Cancelled run ${cancelled.id.slice(0, 8)} (${cancelled.workflow_name}).`;
+      const { run: cancelled, cascadeFailures, blockedParentRunId } = await abandonWorkflow(id);
+      let msg = `Cancelled run ${cancelled.id.slice(0, 8)} (${cancelled.workflow_name}).`;
+      if (cascadeFailures > 0) {
+        msg += ` Warning: ${String(cascadeFailures)} sub-run(s) could not be cancelled and may still be running.`;
+      }
+      if (blockedParentRunId) {
+        msg += ` Parent run ${blockedParentRunId.slice(0, 8)} was blocked on this sub-run and stays paused — resume it to fail the node cleanly, or abandon it too.`;
+      }
+      return msg;
     }
     case 'approve': {
       // accept=true forces the finalize path (#2074): no feedback reaches the gate,

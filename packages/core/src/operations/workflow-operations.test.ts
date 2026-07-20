@@ -724,8 +724,10 @@ describe('abandonWorkflow', () => {
   test('cancels a non-terminal run', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'running' }));
 
-    const run = await abandonWorkflow('run-1');
+    const { run, cascadeFailures, blockedParentRunId } = await abandonWorkflow('run-1');
     expect(run.id).toBe('run-1');
+    expect(cascadeFailures).toBe(0);
+    expect(blockedParentRunId).toBeNull();
     expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1');
   });
 
@@ -754,6 +756,67 @@ describe('abandonWorkflow', () => {
     expect(cancelled).toContain('child-a'); // non-terminal child
     expect(cancelled).toContain('grandchild'); // non-terminal grandchild
     expect(cancelled).not.toContain('child-done'); // already terminal — skipped
+  });
+
+  // Best-effort resilience: one descendant's cancel throwing must not abort the
+  // walk — siblings still get cancelled, and the failure count is surfaced.
+  test('cascade continues past a failing descendant and reports the failure count', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'running' }));
+    mockFindChildRuns.mockImplementation((parentId: unknown) => {
+      if (parentId === 'run-1') {
+        return Promise.resolve([
+          { id: 'child-a', status: 'running' },
+          { id: 'child-b', status: 'paused' },
+          { id: 'child-c', status: 'running' },
+        ]);
+      }
+      return Promise.resolve([]);
+    });
+    mockCancelWorkflowRun.mockImplementation((id: unknown) =>
+      id === 'child-b' ? Promise.reject(new Error('db blip')) : Promise.resolve({ cancelled: true })
+    );
+
+    const { cascadeFailures } = await abandonWorkflow('run-1');
+
+    expect(cascadeFailures).toBe(1);
+    const cancelled = mockCancelWorkflowRun.mock.calls.map(c => c[0]);
+    expect(cancelled).toContain('child-a');
+    expect(cancelled).toContain('child-c'); // sibling AFTER the failure still cancelled
+  });
+
+  // Abandoning a CHILD directly strands a parent paused on it — the op surfaces
+  // the blocked parent's id so callers can point the user at it.
+  test('surfaces the parent run id when abandoning a child its parent is blocked on', async () => {
+    const child = makePausedRun({
+      id: 'child-1',
+      status: 'running',
+      parent_run_id: 'parent-1',
+    });
+    const parent = makePausedRun({
+      id: 'parent-1',
+      status: 'paused',
+      metadata: {
+        approval: {
+          nodeId: 'sub',
+          message: 'Blocked on sub-run',
+          type: 'child_workflow',
+          childRunId: 'child-1',
+        },
+      },
+    });
+    mockGetWorkflowRun.mockImplementation((id: unknown) =>
+      Promise.resolve(id === 'child-1' ? child : id === 'parent-1' ? parent : null)
+    );
+
+    const { blockedParentRunId } = await abandonWorkflow('child-1');
+    expect(blockedParentRunId).toBe('parent-1');
+
+    // Parent paused on a DIFFERENT child → not blocked on us → null.
+    (parent.metadata as { approval: { childRunId: string } }).approval.childRunId = 'other-child';
+    const second = await abandonWorkflow('child-1');
+    expect(second.blockedParentRunId).toBeNull();
+    mockGetWorkflowRun.mockReset();
+    mockGetWorkflowRun.mockImplementation(() => Promise.resolve(null));
   });
 
   // The cascade only runs when OUR cancel won the CAS (`cancelled: true`).
@@ -806,7 +869,7 @@ describe('abandonWorkflow', () => {
       })
     );
     mockReclaimContainerEnv.mockImplementationOnce(() => Promise.reject(new Error('docker down')));
-    const run = await abandonWorkflow('run-1'); // resolves despite the reclaim throw
+    const { run } = await abandonWorkflow('run-1'); // resolves despite the reclaim throw
     expect(run.id).toBe('run-1');
     expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1');
   });
@@ -814,8 +877,10 @@ describe('abandonWorkflow', () => {
   test('cancels a failed run', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'failed' }));
 
-    const run = await abandonWorkflow('run-1');
+    const { run, cascadeFailures, blockedParentRunId } = await abandonWorkflow('run-1');
     expect(run.id).toBe('run-1');
+    expect(cascadeFailures).toBe(0);
+    expect(blockedParentRunId).toBeNull();
     expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1');
   });
 

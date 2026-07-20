@@ -202,11 +202,13 @@ const mockResolveApprovalGate = mock(async (_id: string, _md: unknown, _events?:
 const mockResolveAndCancelApprovalGate = mock(async (_id: string, _events?: unknown) => ({
   resolved: true,
 }));
+const mockFindChildRuns = mock(async (_parentRunId: string): Promise<unknown[]> => []);
 
 mock.module('@archon/core/db/workflows', () => ({
   listWorkflowRuns: mockListWorkflowRuns,
   listDashboardRuns: mockListDashboardRuns,
   getWorkflowRun: mockGetWorkflowRun,
+  findChildRuns: mockFindChildRuns,
   cancelWorkflowRun: mockCancelWorkflowRun,
   deleteWorkflowRun: mockDeleteWorkflowRun,
   updateWorkflowRun: mockUpdateWorkflowRun,
@@ -1278,6 +1280,11 @@ describe('POST /api/workflows/runs/:runId/abandon', () => {
   beforeEach(() => {
     mockGetWorkflowRun.mockReset();
     mockCancelWorkflowRun.mockReset();
+    // The shared abandonWorkflow op destructures { cancelled } from this call —
+    // a bare mockReset() would make it return undefined and 500 the route.
+    mockCancelWorkflowRun.mockImplementation(async (_id: string) => ({ cancelled: true }));
+    mockFindChildRuns.mockReset();
+    mockFindChildRuns.mockImplementation(async (_parentRunId: string): Promise<unknown[]> => []);
   });
 
   test('returns 404 when run not found', async () => {
@@ -1318,7 +1325,8 @@ describe('POST /api/workflows/runs/:runId/abandon', () => {
   });
 
   test('returns 200 and calls cancelWorkflowRun for running run', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce(MOCK_RUNNING_RUN);
+    // Two lookups now: the route's pre-check + the shared abandonWorkflow op's own.
+    mockGetWorkflowRun.mockResolvedValue(MOCK_RUNNING_RUN);
     const { app } = makeApp();
     const response = await app.request('/api/workflows/runs/run-uuid-1/abandon', {
       method: 'POST',
@@ -1333,7 +1341,8 @@ describe('POST /api/workflows/runs/:runId/abandon', () => {
   // #1887: a failed run is terminal but resumable, so it must remain
   // abandonable — the HTTP route previously rejected it, contradicting CLI/chat.
   test('returns 200 and calls cancelWorkflowRun for failed run', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce(MOCK_FAILED_RUN);
+    // Two lookups now: the route's pre-check + the shared abandonWorkflow op's own.
+    mockGetWorkflowRun.mockResolvedValue(MOCK_FAILED_RUN);
     const { app } = makeApp();
     const response = await app.request('/api/workflows/runs/run-uuid-4/abandon', {
       method: 'POST',

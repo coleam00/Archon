@@ -77,12 +77,14 @@ const MAX_CASCADE_RUNS = 500;
  * just direct children (a child may itself spawn grandchildren). Cooperative: each
  * cancelled run's executor between-layer status poll then aborts it (~10s; there is
  * no hard subprocess kill in slice 1). Best-effort — a per-run failure is logged,
- * never thrown, so the parent abandon always succeeds.
+ * never thrown, so the parent abandon always succeeds; the failure COUNT is
+ * returned so callers can tell the user part of the tree may still be alive.
  */
-async function cascadeCancelChildren(rootId: string): Promise<void> {
+async function cascadeCancelChildren(rootId: string): Promise<{ failures: number }> {
   const queue: string[] = [rootId];
   const seen = new Set<string>([rootId]);
   let processed = 0;
+  let failures = 0;
   while (queue.length > 0 && processed < MAX_CASCADE_RUNS) {
     const parentId = queue.shift();
     if (parentId === undefined) break;
@@ -92,6 +94,7 @@ async function cascadeCancelChildren(rootId: string): Promise<void> {
       children = await workflowDb.findChildRuns(parentId);
     } catch (err) {
       getLog().warn({ err, parentId }, 'operations.workflow_abandon_cascade_lookup_failed');
+      failures++;
       continue;
     }
     for (const child of children) {
@@ -106,8 +109,40 @@ async function cascadeCancelChildren(rootId: string): Promise<void> {
           { err, childId: child.id },
           'operations.workflow_abandon_cascade_cancel_failed'
         );
+        failures++;
       }
     }
+  }
+  return { failures };
+}
+
+/**
+ * If `run` is a `workflow:` sub-run whose PARENT is currently paused blocked on it,
+ * return the parent's run id — abandoning the child strands that parent (nothing
+ * re-fires the auto-resume hook for a terminal-via-abandon child), so callers must
+ * tell the user to resume (fails the node cleanly) or abandon the parent too.
+ * Best-effort: lookup failures are logged and read as "no blocked parent".
+ */
+async function findParentBlockedOn(run: WorkflowRun): Promise<string | null> {
+  if (!run.parent_run_id) return null;
+  try {
+    const parent = await workflowDb.getWorkflowRun(run.parent_run_id);
+    if (parent?.status !== 'paused') return null;
+    const approval = parent.metadata.approval;
+    if (
+      isApprovalContext(approval) &&
+      approval.type === 'child_workflow' &&
+      approval.childRunId === run.id
+    ) {
+      return parent.id;
+    }
+    return null;
+  } catch (err) {
+    getLog().warn(
+      { err, runId: run.id, parentRunId: run.parent_run_id },
+      'operations.workflow_abandon_parent_lookup_failed'
+    );
+    return null;
   }
 }
 
@@ -155,6 +190,22 @@ export async function resumeWorkflow(runId: string): Promise<WorkflowRun> {
   return run;
 }
 
+export interface AbandonWorkflowResult {
+  run: WorkflowRun;
+  /**
+   * Number of sub-run descendants the cascade failed to cancel (best-effort walk;
+   * failures are also logged). Non-zero means part of the tree may still be alive.
+   */
+  cascadeFailures: number;
+  /**
+   * When the abandoned run was itself a `workflow:` sub-run and its parent is
+   * paused blocked on it: the parent's run id. Nothing auto-resumes that parent
+   * (the hook only fires from inside the child's own execution) — the user should
+   * resume it (fails the node cleanly) or abandon it too.
+   */
+  blockedParentRunId: string | null;
+}
+
 /**
  * Abandon a workflow run (marks it as cancelled).
  *
@@ -163,7 +214,7 @@ export async function resumeWorkflow(runId: string): Promise<WorkflowRun> {
  * to discard it — hence the inline check here intentionally diverges from that
  * constant and blocks only the two non-resumable terminal states.
  */
-export async function abandonWorkflow(runId: string): Promise<WorkflowRun> {
+export async function abandonWorkflow(runId: string): Promise<AbandonWorkflowResult> {
   const run = await getRunOrThrow(runId, 'operations.workflow_abandon_lookup_failed');
   if (run.status === 'completed' || run.status === 'cancelled') {
     throw new Error(
@@ -184,9 +235,14 @@ export async function abandonWorkflow(runId: string): Promise<WorkflowRun> {
   // Cascade-cancel the sub-run tree — ONLY when OUR cancel won the CAS (same guard as
   // the container reclaim below): a false `cancelled` means a concurrent transition
   // already took the run terminal, so its children are not ours to cancel.
+  let cascadeFailures = 0;
   if (cancelled) {
-    await cascadeCancelChildren(runId);
+    ({ failures: cascadeFailures } = await cascadeCancelChildren(runId));
   }
+  // Abandoning a CHILD strands a parent paused on it (the auto-resume hook only
+  // fires from inside the child's own execution) — detect and surface that so the
+  // caller can point the user at the blocked parent.
+  const blockedParentRunId = cancelled ? await findParentBlockedOn(run) : null;
   // M2 — reclaim a container run's container + upper volume immediately, in the SHARED
   // op so EVERY abandon surface (CLI, web API, chat, manage_run, Slack-cancel) frees the
   // resources now rather than waiting for the scheduled reaper. Best-effort: a reclaim
@@ -212,7 +268,7 @@ export async function abandonWorkflow(runId: string): Promise<WorkflowRun> {
       getLog().warn({ err, runId }, 'operations.workflow_abandon_container_reclaim_failed');
     }
   }
-  return run;
+  return { run, cascadeFailures, blockedParentRunId };
 }
 
 /**
