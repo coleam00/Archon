@@ -26,6 +26,7 @@ This file is **committed and shared by all maintainers**. Edit deliberately — 
 - **Not a general-purpose chat UI.** Adapters are conversation surfaces for *workflow execution*, not standalone chat experiences.
 - **Not a replacement for the AI coding agent itself.** Archon orchestrates Claude Code / Codex / Pi — it doesn't reimplement them.
 - **Not opinionated about the dev environment.** No mandatory editor integrations, framework lock-in, or Docker requirement beyond what users opt into.
+- **Not a deployment-infrastructure product.** Caddy is the single maintained reference reverse proxy (`--profile cloud`). Alternative proxies and infra recipes (Traefik, Nginx, k8s, ...) live in **docs** as community-maintained examples against the documented proxy contract (exposed port, health endpoint, `/internal/*` never proxied — see #2193), not as compose profiles Archon maintains: each maintained proxy config doubles a security-critical surface. Cite as `direction.md §deployment-recipes`.
 - **Not a programming language.** The workflow YAML coordinates (gates, joins, retries, sessions, artifacts, reusable structure); `bash:`/`script:` nodes compute; prompts judge. PRs that add computation to the YAML surface conflict — see §workflow-language.
 
 ## Community providers
