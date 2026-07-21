@@ -759,7 +759,7 @@ The container runs as `appuser` (UID 1001). The entrypoint tries to fix ownershi
 sudo chown -R 1001:1001 /path/to/archon-data
 ```
 
-**On macOS** (Docker Desktop / VirtioFS bind mounts), host `chown` does **not** help — the host refuses to remap ownership to the container's UID 1001 no matter what the files are owned by on the host. The same applies to read-only mounts and SELinux/AppArmor denials on Linux. For the macOS case, opt in to the root fallback instead — see [Root fallback for macOS bind mounts (opt-in)](#root-fallback-for-macos-bind-mounts-opt-in).
+**On macOS** (Docker Desktop / VirtioFS bind mounts), host `chown` does **not** help — the host refuses to remap ownership to the container's UID 1001 no matter what the files are owned by on the host. For that case (and other failures `chown` can't fix, like read-only mounts or SELinux/AppArmor denials), see [Root fallback for macOS bind mounts (opt-in)](#root-fallback-for-macos-bind-mounts-opt-in).
 
 ### Port conflicts
 

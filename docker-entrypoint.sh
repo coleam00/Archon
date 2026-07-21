@@ -6,7 +6,10 @@ set -e
 # which causes the Claude subprocess to fail silently when spawned with a missing cwd.
 mkdir -p /.archon/workspaces /.archon/worktrees
 
-# Determine if we need to use gosu for privilege dropping
+# Determine if we need to use gosu for privilege dropping.
+# Default: run commands as-is — already non-root (e.g., --user flag or
+# Kubernetes), or root via the explicit ARCHON_ALLOW_ROOT_FALLBACK opt-in below.
+RUNNER=""
 if [ "$(id -u)" = "0" ]; then
   # A blanket `chown -R` rewrites metadata for every inode (#1970); only files
   # with wrong ownership are touched.
@@ -45,16 +48,11 @@ if [ "$(id -u)" = "0" ]; then
     # bypassPermissions as root. Never auto-enabled — default stays fail-loud.
     echo "WARNING: ARCHON_ALLOW_ROOT_FALLBACK=1 — continuing as root with IS_SANDBOX=1." >&2
     export IS_SANDBOX=1
-    RUNNER=""
   else
-    # Fail loud (default). On macOS VirtioFS this failure is expected — set
-    # ARCHON_ALLOW_ROOT_FALLBACK=1 to opt in to running as root. On Linux,
-    # fix volume ownership instead (see the docker deployment guide).
+    # Fail loud (default) — see the docker deployment guide for the
+    # ARCHON_ALLOW_ROOT_FALLBACK opt-in.
     exit 1
   fi
-else
-  # Already running as non-root (e.g., --user flag or Kubernetes)
-  RUNNER=""
 fi
 
 # Warn if vars known to be ignored inside the container were set via env_file: .env.
