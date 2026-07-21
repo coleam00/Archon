@@ -83,6 +83,19 @@ describe('getPrState', () => {
     expect(result).toBe('NONE');
   });
 
+  test('queries the custom remote when provided', async () => {
+    setupGhResponse('https://github.com/owner/repo.git', '[{"state":"MERGED"}]');
+
+    const result = await getPrState(BRANCH, REPO, undefined, 'upstream');
+
+    expect(result).toBe('MERGED');
+    expect(mockExecFileAsync).toHaveBeenCalledWith(
+      'git',
+      ['-C', REPO, 'remote', 'get-url', 'upstream'],
+      expect.any(Object)
+    );
+  });
+
   test('uses cache on subsequent lookups for same branch', async () => {
     setupGhResponse('https://github.com/owner/repo.git', '[{"state":"MERGED"}]');
     const cache = new Map<string, PrState>();

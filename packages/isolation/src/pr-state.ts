@@ -26,11 +26,13 @@ export type PrState = 'MERGED' | 'CLOSED' | 'OPEN' | 'NONE';
  *   - 'NONE' if no PR exists, gh is unavailable, or the remote is not GitHub
  *
  * The optional `cache` map dedupes lookups within a single cleanup invocation.
+ * The optional `remote` selects which git remote to inspect (default: 'origin').
  */
 export async function getPrState(
   branch: BranchName,
   repoPath: RepoPath,
-  cache?: Map<string, PrState>
+  cache?: Map<string, PrState>,
+  remote = 'origin'
 ): Promise<PrState> {
   const cached = cache?.get(branch);
   if (cached !== undefined) {
@@ -40,7 +42,7 @@ export async function getPrState(
   // Check whether the remote is on GitHub. Non-GitHub remotes are out of scope.
   let remoteUrl = '';
   try {
-    const { stdout } = await execFileAsync('git', ['-C', repoPath, 'remote', 'get-url', 'origin'], {
+    const { stdout } = await execFileAsync('git', ['-C', repoPath, 'remote', 'get-url', remote], {
       timeout: 10000,
     });
     remoteUrl = stdout.trim();

@@ -357,6 +357,38 @@ describe('cleanup-service', () => {
       expect(mockUpdateStatus).toHaveBeenCalledWith(envId, 'destroyed');
     });
 
+    test('passes configured worktree.remote to provider.destroy for remote branch deletion', async () => {
+      const envId = 'env-remote-custom';
+
+      mockGetById.mockResolvedValueOnce({
+        id: envId,
+        codebase_id: 'codebase-123',
+        workflow_type: 'pr',
+        workflow_id: '99',
+        provider: 'worktree',
+        working_path: '/workspace/worktrees/pr-99',
+        branch_name: 'feature-branch',
+        status: 'active',
+        created_at: new Date(),
+        created_by_platform: 'github',
+        metadata: {},
+      });
+
+      mockGetCodebase.mockResolvedValueOnce({
+        id: 'codebase-123',
+        name: 'test-repo',
+        default_cwd: '/workspace/repo',
+      });
+      mockLoadRepoConfig.mockResolvedValueOnce({ worktree: { remote: 'upstream' } });
+
+      await removeEnvironment(envId, { deleteRemoteBranch: true });
+
+      expect(mockDestroy).toHaveBeenCalledWith(
+        '/workspace/worktrees/pr-99',
+        expect.objectContaining({ deleteRemoteBranch: true, remote: 'upstream' })
+      );
+    });
+
     test('does not pass deleteRemoteBranch when not specified', async () => {
       const envId = 'env-no-remote-delete';
 
@@ -958,6 +990,9 @@ describe('getWorktreeStatusBreakdown', () => {
 
     expect(breakdown.total).toBe(4);
     expect(breakdown.merged).toBe(1);
+    // No worktree.remote configured — default-branch detection gets undefined
+    // (getDefaultBranch falls back to 'origin' internally)
+    expect(mockGetDefaultBranch).toHaveBeenCalledWith('/workspace/repo', undefined);
     expect(breakdown.stale).toBe(1); // env-2 is stale (30 days), env-4 is Telegram so not counted as stale
     expect(breakdown.active).toBe(2); // env-3 active, env-4 Telegram (counted as active, not stale)
   });
@@ -985,7 +1020,7 @@ describe('getWorktreeStatusBreakdown', () => {
 
   test('returns empty breakdown for empty codebase', async () => {
     mockListByCodebaseWithAge.mockResolvedValueOnce([]);
-    // resolveBaseBranch returns 'main' (no config → getDefaultBranch fallback, default from beforeEach)
+    // resolveRepoGitContext returns 'main' (no config → getDefaultBranch fallback, default from beforeEach)
 
     const breakdown = await getWorktreeStatusBreakdown('codebase-1', '/workspace/repo');
 
@@ -993,6 +1028,15 @@ describe('getWorktreeStatusBreakdown', () => {
     expect(breakdown.merged).toBe(0);
     expect(breakdown.stale).toBe(0);
     expect(breakdown.active).toBe(0);
+  });
+
+  test('detects the default branch on the configured worktree.remote', async () => {
+    mockLoadRepoConfig.mockResolvedValue({ worktree: { remote: 'upstream' } });
+    mockListByCodebaseWithAge.mockResolvedValueOnce([]);
+
+    await getWorktreeStatusBreakdown('codebase-1', '/workspace/repo');
+
+    expect(mockGetDefaultBranch).toHaveBeenCalledWith('/workspace/repo', 'upstream');
   });
 });
 
@@ -1056,6 +1100,56 @@ describe('cleanupMergedWorktrees', () => {
     expect(mockDestroy).toHaveBeenCalledWith(
       '/workspace/repo/worktrees/merged-branch',
       expect.objectContaining({ deleteRemoteBranch: true })
+    );
+  });
+
+  test('threads worktree.remote from repo config to getDefaultBranch and getPrState', async () => {
+    mockLoadRepoConfig.mockResolvedValue({ worktree: { remote: 'upstream' } });
+    mockListByCodebase.mockResolvedValueOnce([
+      {
+        id: 'env-remote',
+        branch_name: 'feature-branch',
+        working_path: '/workspace/repo/worktrees/feature-branch',
+        status: 'active',
+      },
+    ]);
+    // Not merged, not patch-equivalent → falls through to the PR-state check
+    mockIsBranchMerged.mockResolvedValueOnce(false);
+    mockIsPatchEquivalent.mockResolvedValueOnce(false);
+    mockGetPrState.mockResolvedValueOnce('NONE');
+
+    await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
+
+    // Default-branch detection uses the configured remote (no baseBranch set)
+    expect(mockGetDefaultBranch).toHaveBeenCalledWith('/workspace/repo', 'upstream');
+    // PR-state lookup receives the configured remote
+    expect(mockGetPrState).toHaveBeenCalledWith(
+      'feature-branch',
+      '/workspace/repo',
+      expect.any(Map),
+      'upstream'
+    );
+  });
+
+  test('logs a warn before skipping an environment when the merge check fails', async () => {
+    mockListByCodebase.mockResolvedValueOnce([
+      {
+        id: 'env-flaky',
+        branch_name: 'flaky-branch',
+        working_path: '/workspace/repo/worktrees/flaky-branch',
+        status: 'active',
+      },
+    ]);
+    mockIsBranchMerged.mockRejectedValueOnce(new Error('network unreachable'));
+
+    const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
+
+    expect(result.skipped).toEqual([
+      { branchName: 'flaky-branch', reason: 'merge check failed: network unreachable' },
+    ]);
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ branchName: 'flaky-branch', repoPath: '/workspace/repo' }),
+      'cleanup.merge_check_failed'
     );
   });
 
@@ -1371,7 +1465,7 @@ describe('resolveBaseBranch via runScheduledCleanup (issue #1419)', () => {
 
     await runScheduledCleanup();
 
-    expect(mockGetDefaultBranch).toHaveBeenCalledWith('/workspace/mainrepo');
+    expect(mockGetDefaultBranch).toHaveBeenCalledWith('/workspace/mainrepo', undefined);
     expect(mockIsBranchMerged).toHaveBeenCalledWith('/workspace/mainrepo', 'feature/bar', 'main');
   });
 
@@ -1401,7 +1495,7 @@ describe('resolveBaseBranch via runScheduledCleanup (issue #1419)', () => {
 
     await runScheduledCleanup();
 
-    expect(mockGetDefaultBranch).toHaveBeenCalledWith('/workspace/repo3');
+    expect(mockGetDefaultBranch).toHaveBeenCalledWith('/workspace/repo3', undefined);
   });
 });
 

@@ -65,6 +65,7 @@ import type { IsolationRequest, PRIsolationRequest, RepoConfigLoader } from '../
 
 // Track sync function calls for testing
 let getDefaultBranchSpy: Mock<typeof git.getDefaultBranch>;
+let getDefaultRemoteSpy: Mock<typeof git.getDefaultRemote>;
 let syncWorkspaceSpy: Mock<typeof git.syncWorkspace>;
 
 // Mock fs.promises.access for destroy() existence check
@@ -99,6 +100,7 @@ describe('WorktreeProvider', () => {
     findWorktreeByBranchSpy = spyOn(git, 'findWorktreeByBranch');
     getCanonicalRepoPathSpy = spyOn(git, 'getCanonicalRepoPath');
     getDefaultBranchSpy = spyOn(git, 'getDefaultBranch');
+    getDefaultRemoteSpy = spyOn(git, 'getDefaultRemote');
     syncWorkspaceSpy = spyOn(git, 'syncWorkspace');
 
     // Default mocks
@@ -124,6 +126,7 @@ describe('WorktreeProvider', () => {
 
     // Default mocks for workspace sync
     getDefaultBranchSpy.mockResolvedValue('main');
+    getDefaultRemoteSpy.mockResolvedValue('origin');
     syncWorkspaceSpy.mockResolvedValue({
       branch: 'main',
       synced: true,
@@ -143,6 +146,7 @@ describe('WorktreeProvider', () => {
     findWorktreeByBranchSpy.mockRestore();
     getCanonicalRepoPathSpy.mockRestore();
     getDefaultBranchSpy.mockRestore();
+    getDefaultRemoteSpy.mockRestore();
     syncWorkspaceSpy.mockRestore();
     mockAccess.mockClear();
     mockReadFile.mockClear();
@@ -2322,6 +2326,7 @@ describe('WorktreeProvider', () => {
       // syncWorkspace called with undefined → triggers auto-detect via getDefaultBranch
       expect(syncWorkspaceSpy).toHaveBeenCalledWith('/workspace/owner/repo', undefined, {
         mode: 'fast-forward',
+        remote: 'origin',
       });
     });
 
@@ -2346,6 +2351,7 @@ describe('WorktreeProvider', () => {
 
       expect(syncWorkspaceSpy).toHaveBeenCalledWith('/workspace/owner/repo', 'develop', {
         mode: 'fast-forward',
+        remote: 'origin',
       });
       expect(execSpy).toHaveBeenCalledWith(
         'git',
@@ -2374,6 +2380,7 @@ describe('WorktreeProvider', () => {
 
       expect(syncWorkspaceSpy).toHaveBeenCalledWith('/workspace/owner/repo', 'main', {
         mode: 'fast-forward',
+        remote: 'origin',
       });
     });
 
@@ -2390,7 +2397,7 @@ describe('WorktreeProvider', () => {
       expect(syncWorkspaceSpy).toHaveBeenCalledWith(
         '/test/.archon/workspaces/owner/repo/source',
         undefined,
-        { mode: 'reset' }
+        { mode: 'reset', remote: 'origin' }
       );
     });
 
@@ -2411,6 +2418,7 @@ describe('WorktreeProvider', () => {
       // fromBranch is the start-point for the branch, not for sync — sync auto-detects
       expect(syncWorkspaceSpy).toHaveBeenCalledWith('/workspace/owner/repo', undefined, {
         mode: 'fast-forward',
+        remote: 'origin',
       });
     });
 
@@ -2430,6 +2438,7 @@ describe('WorktreeProvider', () => {
 
       expect(syncWorkspaceSpy).toHaveBeenCalledWith('/workspace/owner/repo', 'main', {
         mode: 'fast-forward',
+        remote: 'origin',
       });
     });
 
@@ -2449,6 +2458,7 @@ describe('WorktreeProvider', () => {
       // fromBranch is ignored for non-task types, so syncWorkspace gets undefined → auto-detect
       expect(syncWorkspaceSpy).toHaveBeenCalledWith('/workspace/owner/repo', undefined, {
         mode: 'fast-forward',
+        remote: 'origin',
       });
     });
 
@@ -2463,6 +2473,7 @@ describe('WorktreeProvider', () => {
 
       expect(syncWorkspaceSpy).toHaveBeenCalledWith('/workspace/owner/repo', 'develop', {
         mode: 'fast-forward',
+        remote: 'origin',
       });
       expect(getDefaultBranchSpy).not.toHaveBeenCalled();
     });
@@ -2472,7 +2483,7 @@ describe('WorktreeProvider', () => {
       worktreeExistsSpy.mockResolvedValue(false);
 
       await expect(provider.create(baseRequest)).rejects.toThrow(
-        'Failed to fetch base branch from origin'
+        "Failed to fetch base branch from 'origin'"
       );
     });
 
@@ -2515,7 +2526,7 @@ describe('WorktreeProvider', () => {
       syncWorkspaceSpy.mockRejectedValue(new Error('Network timeout'));
 
       await expect(provider.create(baseRequest)).rejects.toThrow(
-        'Failed to fetch base branch from origin'
+        "Failed to fetch base branch from 'origin'"
       );
     });
   });
@@ -3032,6 +3043,194 @@ describe('WorktreeProvider', () => {
 
       // healthCheck wraps the path in toWorktreePath before calling worktreeExists
       expect(worktreeExistsSpy).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('custom remote support', () => {
+    const baseRequest: IsolationRequest = {
+      codebaseId: 'cb-123',
+      canonicalRepoPath: '/workspace/repo',
+      workflowType: 'issue',
+      identifier: '42',
+    };
+
+    beforeEach(() => {
+      worktreeExistsSpy.mockResolvedValue(false);
+    });
+
+    test('uses configured remote from worktree config', async () => {
+      const customProvider = new WorktreeProvider(async () => ({
+        baseBranch: 'main',
+        remote: 'mar',
+      }));
+
+      await customProvider.create(baseRequest);
+
+      // syncWorkspace receives the configured remote
+      expect(syncWorkspaceSpy).toHaveBeenCalledWith(
+        '/workspace/repo',
+        'main',
+        expect.objectContaining({ remote: 'mar' })
+      );
+      // Explicit config wins — no auto-detection call
+      expect(getDefaultRemoteSpy).not.toHaveBeenCalled();
+
+      // worktree add uses mar/main as the start-point
+      expect(execSpy).toHaveBeenCalledWith(
+        'git',
+        expect.arrayContaining(['worktree', 'add', '-b', 'archon/issue-42', 'mar/main']),
+        expect.any(Object)
+      );
+    });
+
+    test('auto-detects remote when not configured', async () => {
+      getDefaultRemoteSpy.mockResolvedValue('upstream');
+      const autoProvider = new WorktreeProvider(async () => ({ baseBranch: 'main' }));
+
+      await autoProvider.create(baseRequest);
+
+      expect(syncWorkspaceSpy).toHaveBeenCalledWith(
+        '/workspace/repo',
+        'main',
+        expect.objectContaining({ remote: 'upstream' })
+      );
+    });
+
+    test('fromBranch start-point is not remote-prefixed (task workflow)', async () => {
+      const taskRequest: IsolationRequest = {
+        ...baseRequest,
+        workflowType: 'task',
+        identifier: 'my-feature',
+        fromBranch: 'develop',
+      };
+
+      const customProvider = new WorktreeProvider(async () => ({
+        baseBranch: 'main',
+        remote: 'upstream',
+      }));
+
+      await customProvider.create(taskRequest);
+
+      // fromBranch overrides <remote>/<baseBranch> as the start-point
+      expect(execSpy).toHaveBeenCalledWith(
+        'git',
+        expect.arrayContaining(['worktree', 'add', '-b', 'archon/task-my-feature', 'develop']),
+        expect.any(Object)
+      );
+    });
+
+    test('throws actionable error when remote is ambiguous', async () => {
+      getDefaultRemoteSpy.mockResolvedValue(null);
+      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+        // `git remote` listing for the error message
+        if (args.includes('remote') && !args.includes('get-url')) {
+          return { stdout: 'jan\nfeb\nmar\n', stderr: '' };
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      const ambiguousProvider = new WorktreeProvider(async () => ({ baseBranch: 'main' }));
+
+      await expect(ambiguousProvider.create(baseRequest)).rejects.toThrow(
+        /Cannot determine git remote.*jan, feb, mar.*Set worktree\.remote/s
+      );
+      // No sync attempted from an unknown remote
+      expect(syncWorkspaceSpy).not.toHaveBeenCalled();
+    });
+
+    test('uses custom remote for same-repo PR fetch and tracking', async () => {
+      const prRequest: PRIsolationRequest = {
+        codebaseId: 'cb-123',
+        canonicalRepoPath: '/workspace/repo',
+        workflowType: 'pr',
+        identifier: '42',
+        prBranch: 'feature/auth',
+        isForkPR: false,
+      };
+
+      const customProvider = new WorktreeProvider(async () => ({
+        baseBranch: 'main',
+        remote: 'upstream',
+      }));
+
+      await customProvider.create(prRequest);
+
+      // Fetch uses the custom remote
+      expect(execSpy).toHaveBeenCalledWith(
+        'git',
+        expect.arrayContaining(['-C', '/workspace/repo', 'fetch', 'upstream', 'feature/auth']),
+        expect.any(Object)
+      );
+
+      // Branch tracking uses the custom remote
+      expect(execSpy).toHaveBeenCalledWith(
+        'git',
+        expect.arrayContaining(['branch', '--set-upstream-to', 'upstream/feature/auth']),
+        expect.any(Object)
+      );
+    });
+
+    test('uses custom remote for fork PR fetch', async () => {
+      const forkPrRequest: PRIsolationRequest = {
+        codebaseId: 'cb-123',
+        canonicalRepoPath: '/workspace/repo',
+        workflowType: 'pr',
+        identifier: '42',
+        prBranch: 'feature/auth',
+        isForkPR: true,
+      };
+
+      const customProvider = new WorktreeProvider(async () => ({
+        baseBranch: 'main',
+        remote: 'upstream',
+      }));
+
+      await customProvider.create(forkPrRequest);
+
+      expect(execSpy).toHaveBeenCalledWith(
+        'git',
+        expect.arrayContaining([
+          '-C',
+          '/workspace/repo',
+          'fetch',
+          'upstream',
+          'pull/42/head:pr-42-review',
+        ]),
+        expect.any(Object)
+      );
+    });
+
+    test('uses custom remote for remote branch deletion', async () => {
+      mockAccess.mockResolvedValue(undefined);
+
+      await provider.destroy('worktree-path', {
+        branchName: git.toBranchName('archon/issue-42'),
+        canonicalRepoPath: git.toRepoPath('/workspace/repo'),
+        deleteRemoteBranch: true,
+        remote: 'upstream',
+      });
+
+      expect(execSpy).toHaveBeenCalledWith(
+        'git',
+        ['-C', '/workspace/repo', 'push', 'upstream', '--delete', 'archon/issue-42'],
+        expect.any(Object)
+      );
+    });
+
+    test('defaults remote branch deletion to origin when no remote passed', async () => {
+      mockAccess.mockResolvedValue(undefined);
+
+      await provider.destroy('worktree-path', {
+        branchName: git.toBranchName('archon/issue-42'),
+        canonicalRepoPath: git.toRepoPath('/workspace/repo'),
+        deleteRemoteBranch: true,
+      });
+
+      expect(execSpy).toHaveBeenCalledWith(
+        'git',
+        ['-C', '/workspace/repo', 'push', 'origin', '--delete', 'archon/issue-42'],
+        expect.any(Object)
+      );
     });
   });
 });
