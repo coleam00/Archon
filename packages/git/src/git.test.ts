@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach, mock, spyOn, type Mock } from 'bun:test';
 import { writeFile, mkdir as realMkdir, rm } from 'fs/promises';
-import { join } from 'path';
+import { basename, join } from 'path';
 import { tmpdir, homedir } from 'os';
 
 // ---------------------------------------------------------------------------
@@ -47,12 +47,38 @@ function getArchonHome(): string {
   return process.env.ARCHON_HOME ?? join(homedir(), '.archon');
 }
 
+/** Mirror of @archon/paths parseOwnerRepo (must stay aligned with SAFE_NAME). */
+const SAFE_NAME = /^[a-zA-Z0-9._-]+$/;
+function parseOwnerRepo(name: string): { owner: string; repo: string } | null {
+  const parts = name.split('/');
+  if (parts.length !== 2) return null;
+  const [owner, repo] = parts;
+  if (!owner || !repo) return null;
+  if (owner === '.' || owner === '..' || repo === '.' || repo === '..') return null;
+  if (!SAFE_NAME.test(owner) || !SAFE_NAME.test(repo)) return null;
+  return { owner, repo };
+}
+
+/** Mirror of @archon/paths resolveRepoProjectIdentity (_local/<basename> fallback). */
+function resolveRepoProjectIdentity(
+  name: string,
+  cwd: string
+): { owner: string; repo: string } | null {
+  const parsed = parseOwnerRepo(name);
+  if (parsed) return parsed;
+  const repo = basename(cwd);
+  if (repo === '' || repo === '.' || repo === '..') return null;
+  return { owner: '_local', repo };
+}
+
 mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
   getArchonWorktreesPath: () => join(getArchonHome(), 'worktrees'),
   getArchonWorkspacesPath: () => join(getArchonHome(), 'workspaces'),
   getProjectWorktreesPath: (owner: string, repo: string) =>
     join(getArchonHome(), 'workspaces', owner, repo, 'worktrees'),
+  parseOwnerRepo,
+  resolveRepoProjectIdentity,
 }));
 
 // ---------------------------------------------------------------------------
@@ -196,15 +222,16 @@ describe('git utilities', () => {
 
     test('returns workspace-scoped base for a local non-workspace repo (via path fallback)', () => {
       // New-model invariant: every repo resolves to workspace-scoped. For a repo
-      // living outside ~/.archon/workspaces/, owner/repo is derived from the last
-      // two path segments (extractOwnerRepo) so the worktree base is still stable.
+      // living outside ~/.archon/workspaces/, the identity is the shared
+      // _local/<basename> fallback (resolveRepoProjectIdentity) — the same
+      // identity registration and log/artifact resolution use (#2227).
       delete process.env.WORKTREE_BASE;
       delete process.env.WORKSPACE_PATH;
       delete process.env.ARCHON_HOME;
       delete process.env.ARCHON_DOCKER;
       const result = git.getWorktreeBase('/workspace/my-repo');
       expect(result).toEqual({
-        base: join(homedir(), '.archon', 'workspaces', 'workspace', 'my-repo', 'worktrees'),
+        base: join(homedir(), '.archon', 'workspaces', '_local', 'my-repo', 'worktrees'),
         layout: 'workspace-scoped',
       });
     });
@@ -216,7 +243,7 @@ describe('git utilities', () => {
       process.env.ARCHON_HOME = '/custom/archon';
       const result = git.getWorktreeBase('/workspace/my-repo');
       expect(result).toEqual({
-        base: join('/custom/archon', 'workspaces', 'workspace', 'my-repo', 'worktrees'),
+        base: join('/custom/archon', 'workspaces', '_local', 'my-repo', 'worktrees'),
         layout: 'workspace-scoped',
       });
     });
@@ -226,7 +253,7 @@ describe('git utilities', () => {
       process.env.ARCHON_DOCKER = 'true';
       const result = git.getWorktreeBase('/workspace/my-repo');
       expect(result).toEqual({
-        base: join('/', '.archon', 'workspaces', 'workspace', 'my-repo', 'worktrees'),
+        base: join('/', '.archon', 'workspaces', '_local', 'my-repo', 'worktrees'),
         layout: 'workspace-scoped',
       });
     });
@@ -281,17 +308,63 @@ describe('git utilities', () => {
       });
     });
 
-    test('ignores invalid codebaseName and falls back to path-derived owner/repo', () => {
+    test('ignores invalid codebaseName and falls back to _local/<basename>', () => {
       // "invalid-no-slash" doesn't parse as owner/repo; the layout still resolves
-      // to workspace-scoped using the last two segments of the repoPath.
+      // to workspace-scoped using the shared _local/<basename> identity.
       delete process.env.WORKSPACE_PATH;
       delete process.env.ARCHON_DOCKER;
       delete process.env.ARCHON_HOME;
       const result = git.getWorktreeBase('/local/repo', 'invalid-no-slash');
       expect(result).toEqual({
-        base: join(homedir(), '.archon', 'workspaces', 'local', 'repo', 'worktrees'),
+        base: join(homedir(), '.archon', 'workspaces', '_local', 'repo', 'worktrees'),
         layout: 'workspace-scoped',
       });
+    });
+
+    test('ignores SSH-URL-shaped codebaseName (contains ":" / "@") and falls back to _local', () => {
+      // Regression guard (PR #1583): a codebase registered with
+      // name = "git@host.example:org/repo" used to be split naively at the last
+      // slash, yielding owner = "git@host.example:org" — that colon broke
+      // docker-compose volume parsing in worktrees (short-form
+      // `HOST:CONTAINER:OPT` mounts inside devcontainers). The strict validator
+      // must reject names containing characters outside `[A-Za-z0-9._-]` and
+      // fall back to the shared _local/<basename> identity.
+      delete process.env.WORKSPACE_PATH;
+      delete process.env.ARCHON_DOCKER;
+      delete process.env.ARCHON_HOME;
+      const result = git.getWorktreeBase(
+        '/srv/projects/widget-app',
+        'git@git.example.net:acme/widget-app'
+      );
+      expect(result).toEqual({
+        base: join(homedir(), '.archon', 'workspaces', '_local', 'widget-app', 'worktrees'),
+        layout: 'workspace-scoped',
+      });
+      // Check only the path below homedir — on Windows the home directory
+      // itself contains ":" in the drive letter (e.g. C:\Users\...).
+      const relativeToHome = result.base.slice(homedir().length);
+      expect(relativeToHome).not.toContain(':');
+      expect(relativeToHome).not.toContain('@');
+    });
+
+    test('resolves single-segment checkout paths via _local fallback (no throw)', () => {
+      // The historical last-two-segments heuristic threw for paths like
+      // /workspace (#2022); the shared fallback handles them.
+      delete process.env.WORKSPACE_PATH;
+      delete process.env.ARCHON_DOCKER;
+      delete process.env.ARCHON_HOME;
+      const result = git.getWorktreeBase('/workspace');
+      expect(result).toEqual({
+        base: join(homedir(), '.archon', 'workspaces', '_local', 'workspace', 'worktrees'),
+        layout: 'workspace-scoped',
+      });
+    });
+
+    test('throws for a degenerate repo path with no usable basename', () => {
+      delete process.env.WORKSPACE_PATH;
+      delete process.env.ARCHON_DOCKER;
+      delete process.env.ARCHON_HOME;
+      expect(() => git.getWorktreeBase('/')).toThrow('Cannot derive a project identity');
     });
 
     test('repoLocal override wins over workspace-scoped default', () => {
@@ -379,37 +452,6 @@ describe('git utilities', () => {
       delete process.env.ARCHON_DOCKER;
       delete process.env.ARCHON_HOME;
       expect(git.isProjectScopedWorktreeBase('/local/repo', 'invalid')).toBe(true);
-    });
-  });
-
-  describe('extractOwnerRepo', () => {
-    test('extracts owner and repo from a multi-segment path', () => {
-      const result = git.extractOwnerRepo(git.toRepoPath('/home/user/owner/repo'));
-      expect(result).toEqual({ owner: 'owner', repo: 'repo' });
-    });
-
-    test('extracts owner and repo from exactly 2-segment path', () => {
-      const result = git.extractOwnerRepo(git.toRepoPath('/owner/repo'));
-      expect(result).toEqual({ owner: 'owner', repo: 'repo' });
-    });
-
-    test('extracts owner and repo from Windows-style path', () => {
-      const result = git.extractOwnerRepo(
-        'C:\\Users\\dev\\owner\\repo' as ReturnType<typeof git.toRepoPath>
-      );
-      expect(result).toEqual({ owner: 'owner', repo: 'repo' });
-    });
-
-    test('throws when repoPath has fewer than 2 segments', () => {
-      expect(() => git.extractOwnerRepo(git.toRepoPath('/repo'))).toThrow(
-        'Cannot extract owner/repo from path "/repo"'
-      );
-    });
-
-    test('throws when repoPath is empty', () => {
-      expect(() => git.extractOwnerRepo('' as ReturnType<typeof git.toRepoPath>)).toThrow(
-        'Cannot extract owner/repo from path ""'
-      );
     });
   });
 

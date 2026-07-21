@@ -395,9 +395,11 @@ export function parseOwnerRepo(name: string): { owner: string; repo: string } | 
 /**
  * Resolve the `{ owner, repo }` storage identity for a registered *repo*-kind
  * codebase. This is the single source of truth that keeps `registerRepository()`
- * (which creates the on-disk `owner/repo` tree) and the log/artifact path
- * resolvers in agreement — a mismatch between the two dropped no-remote repos'
- * logs/artifacts into `<cwd>/.archon` instead of `ARCHON_HOME` (#2132).
+ * (which creates the on-disk `owner/repo` tree), the log/artifact path
+ * resolvers, and the worktree base (`getWorktreeBase()` in `@archon/git`) in
+ * agreement — a mismatch between them dropped no-remote repos' logs/artifacts
+ * into `<cwd>/.archon` instead of `ARCHON_HOME` (#2132), and later split
+ * worktrees and storage across two different workspace trees (#2227).
  *
  * - A `name` in exact `owner/repo` form (clones, web-registered repos) → that
  *   owner/repo.

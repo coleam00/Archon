@@ -1349,8 +1349,8 @@ export async function workflowRunCommand(
           : undefined,
         baseBranch: codebaseDefaultBranch ? git.toBranchName(codebaseDefaultBranch) : undefined,
         codebaseId: codebase.id,
-        // owner/repo name lets resolveOwnerRepo skip the path heuristic, which
-        // throws for single-segment checkout paths like /workspace (#2022)
+        // owner/repo name lets resolveOwnerRepo use the registered identity
+        // instead of the _local/<basename> path fallback (#2022, #2227)
         codebaseName: codebase.name,
         canonicalRepoPath: git.toRepoPath(codebase.default_cwd),
         description: `CLI workflow: ${workflowName}`,
