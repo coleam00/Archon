@@ -38,8 +38,8 @@ per-node YAML field for that provider; a ❌ means the field is accepted but ign
 | Session resume | ✅ | ✅ | ✅ | ✅ | ✅ |
 | MCP servers (`mcp:`) | ✅ | ✅ | ✅ | ❌ | ✅ |
 | Hooks (`hooks:`) | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Skills (`skills:`) | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Inline sub-agents (`agents:`) | ✅ | ❌ | ✅ | ❌ | ✅ |
+| Skills (`skills:`) | ✅ | ✅¹ | ✅ | ✅ | ✅ |
+| Inline sub-agents (`agents:`) | ✅ | ❌ | ✅² | ❌ | ✅ |
 | Tool restrictions (`allowed_tools`/`denied_tools`) | ✅ | ❌ | ✅ | ✅ | ✅ |
 | Structured output (`output_format`) | **enforced** | **enforced** | **enforced** | best-effort | best-effort |
 | Env injection (`env:`) | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -51,9 +51,16 @@ per-node YAML field for that provider; a ❌ means the field is accepted but ign
 | In-process native tools | ✅ | ❌ | ❌ | ✅ | ❌ |
 | Container exec (folder-project container backend) | ✅ | ❌ | ❌ | ❌ | ❌ |
 
+## Caveats
+
+- ¹ `codex` — Skills (`skills:`) — Filesystem auto-discovery from `.agents/skills/` — per-node `skills:` lists are informational; use `provider: claude` for node-scoped skills.
+- ² `opencode` — Inline sub-agents (`agents:`) — Config-file-based agent selection (named agents from `opencode.json`) with per-call model/tools overrides — not inline sub-agent definitions.
+
 ## Legend
 
 - **✅ / ❌** — the per-node field is wired for this provider, or accepted-but-ignored.
+- **✅¹ (superscript)** — supported, but with semantics that differ from the headline
+  meaning of the axis — see [Caveats](#caveats).
 - **Structured output** — `enforced` (the SDK/backend grammar-constrains decoding),
   `best-effort` (schema appended to the prompt, then validated + re-asked up to 3×),
   or ❌ (unsupported). See [AI Assistants → Structured output guarantees](/getting-started/ai-assistants/#structured-output-guarantees).
