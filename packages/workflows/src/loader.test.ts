@@ -3362,6 +3362,162 @@ nodes:
       expect(err).toBeDefined();
       expect(err?.error).toMatch(/mutually exclusive/i);
     });
+
+    // --- slice 2, PR-C: dynamic fan-out ------------------------------------------
+
+    it('accepts a valid fan_out node and defaults max_parallel=5, join=all_success', async () => {
+      const result = await loadOne(
+        'fan-ok',
+        `
+name: fan-ok
+description: fan out over a produced item list
+nodes:
+  - id: plan
+    prompt: "emit tasks"
+  - id: work
+    workflow: child-wf
+    isolation: worktree
+    depends_on: [plan]
+    fan_out:
+      items: "$plan.output.tasks"
+`
+      );
+      const errs = result.errors.filter(e => e.filename === 'fan-ok.yaml');
+      expect(errs).toHaveLength(0);
+      const wf = result.workflows.find(w => w.workflow.name === 'fan-ok');
+      const work = wf!.workflow.nodes.find(n => n.id === 'work');
+      const fanOut = work && 'fan_out' in work ? work.fan_out : undefined;
+      expect(fanOut?.items).toBe('$plan.output.tasks');
+      // Defaults applied by the schema.
+      expect(fanOut?.max_parallel).toBe(5);
+      expect(fanOut?.join).toBe('all_success');
+    });
+
+    it('catches a fan_out.items ref to an unknown node (dangling ref)', async () => {
+      const result = await loadOne(
+        'fan-dangling',
+        `
+name: fan-dangling
+description: fan_out.items references a node that does not exist
+nodes:
+  - id: work
+    workflow: child-wf
+    fan_out:
+      items: "$ghost.output.tasks"
+`
+      );
+      const err = result.errors.find(e => e.filename === 'fan-dangling.yaml');
+      expect(err).toBeDefined();
+      expect(err?.error).toContain("references unknown node '$ghost.output'");
+    });
+
+    it('rejects fan_out.items referencing a non-dependency producer', async () => {
+      const result = await loadOne(
+        'fan-not-dep',
+        `
+name: fan-not-dep
+description: items producer is real but not an upstream dependency (would race)
+nodes:
+  - id: plan
+    prompt: "emit tasks"
+  - id: work
+    workflow: child-wf
+    fan_out:
+      items: "$plan.output.tasks"
+`
+      );
+      const err = result.errors.find(e => e.filename === 'fan-not-dep.yaml');
+      expect(err).toBeDefined();
+      expect(err?.error).toContain('not an upstream dependency');
+      expect(err?.error).toContain('depends_on');
+    });
+
+    it("rejects 'fan_out' on a non-workflow node", async () => {
+      const result = await loadOne(
+        'fan-wrong-node',
+        `
+name: fan-wrong-node
+description: fan_out on a prompt node is meaningless
+nodes:
+  - id: think
+    prompt: "do a thing"
+    fan_out:
+      items: "$think.output"
+`
+      );
+      const err = result.errors.find(e => e.filename === 'fan-wrong-node.yaml');
+      expect(err).toBeDefined();
+      expect(err?.error).toContain("'fan_out' is only supported on workflow");
+    });
+
+    it("rejects 'fan_out.join: first_success' (racing staged for PR-D)", async () => {
+      const result = await loadOne(
+        'fan-race',
+        `
+name: fan-race
+description: first_success join is not supported yet
+nodes:
+  - id: plan
+    prompt: "emit tasks"
+  - id: work
+    workflow: child-wf
+    depends_on: [plan]
+    fan_out:
+      items: "$plan.output.tasks"
+      join: first_success
+`
+      );
+      const err = result.errors.find(e => e.filename === 'fan-race.yaml');
+      expect(err).toBeDefined();
+      expect(err?.error).toContain('first_success');
+      expect(err?.error).toContain('PR-D');
+    });
+
+    it("rejects 'max_parallel: 0' (must be >= 1)", async () => {
+      const result = await loadOne(
+        'fan-zero',
+        `
+name: fan-zero
+description: max_parallel must be at least 1
+nodes:
+  - id: plan
+    prompt: "emit tasks"
+  - id: work
+    workflow: child-wf
+    depends_on: [plan]
+    fan_out:
+      items: "$plan.output.tasks"
+      max_parallel: 0
+`
+      );
+      const err = result.errors.find(e => e.filename === 'fan-zero.yaml');
+      expect(err).toBeDefined();
+      expect(err?.error).toMatch(/max_parallel/);
+    });
+
+    it('rejects a fan_out workflow node inside a loop_group body', async () => {
+      const result = await loadOne(
+        'fan-in-loop-group',
+        `
+name: fan-in-loop-group
+description: fan-out sub-run nested in a loop_group body (rejected — it is a workflow node)
+nodes:
+  - id: grp
+    loop_group:
+      until: DONE
+      max_iterations: 3
+      nodes:
+        - id: bad
+          workflow: child-wf
+          fan_out:
+            items: "$grp.output"
+`
+      );
+      const err = result.errors.find(e => e.filename === 'fan-in-loop-group.yaml');
+      expect(err).toBeDefined();
+      expect(err?.error).toContain('loop_group');
+      expect(err?.error).toContain("'workflow' (sub-run) is not supported");
+    });
   });
 
   describe('include nodes', () => {

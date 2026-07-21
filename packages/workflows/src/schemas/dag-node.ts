@@ -460,6 +460,43 @@ export type IncludeNode = z.infer<typeof includeNodeSchema> & {
 };
 
 /**
+ * Dynamic fan-out config for a `workflow:` node (#2121 slice 2, PR-C). Expands the
+ * node into N governed child runs — one per element of a runtime-length item list —
+ * joined into a single node outcome. `items` is a `$node.output[.field]` ref that
+ * MUST resolve to a JSON array at run time (DATA, per the constitution's
+ * §load-time-composition — the child target stays a static name; only the item
+ * COUNT is runtime). Each item becomes a child's `input`/`$ARGUMENTS`. `max_parallel`
+ * bounds a sliding-window concurrency pool (default 5 — documented + defeatable, so
+ * an author can't trivially create a runaway N-wide layer, #1961). `max_parallel` caps
+ * *concurrency*, NOT the total child count — `items.length` is unbounded here, so a very
+ * large list (≳ the abandon-time cascade bound `MAX_CASCADE_RUNS`, currently 500) can
+ * leave some children uncancelled when the parent is abandoned; a run-tree-wide count/
+ * budget ceiling is deferred to #1961. `join` reduces the
+ * N child outcomes into the node's single outcome + `$<id>.output` aggregate:
+ *   - `all_success` (default): all must complete; `$<id>.output` = JSON array of child
+ *      outputs in item order; any child failing/cancelled fails the node.
+ *   - `all_done`: node succeeds once all children are terminal; failed/cancelled
+ *      entries are represented as `{ error, status }` objects in the array.
+ *   - `first_success`: reserved for PR-D (racing) — rejected fail-fast at load today.
+ *
+ * `as` is a forward seam reserved for PR-B (#2214, `with:`/`$INPUTS`): it will name the
+ * per-item value as `$INPUTS.<as>` inside the child. Until PR-B lands the item is only
+ * delivered via the child's `$ARGUMENTS` (slice-1 channel) and `as` has no runtime
+ * effect — accepted here so PR-B needs no schema migration.
+ */
+export const fanOutConfigSchema = z.object({
+  items: z
+    .string()
+    .min(1, "'fan_out.items' must reference a node output that produces a JSON array"),
+  as: z.string().optional(),
+  max_parallel: z.number().int().min(1, "'fan_out.max_parallel' must be >= 1").default(5),
+  join: z.enum(['all_success', 'all_done', 'first_success']).default('all_success'),
+});
+
+/** Dynamic fan-out configuration for a `workflow:` sub-run node (#2121 slice 2, PR-C). */
+export type FanOutConfig = z.infer<typeof fanOutConfigSchema>;
+
+/**
  * Workflow (sub-run) node schema — starts another workflow as a CHILD RUN of the
  * current run at execution time (see executeWorkflowNode in dag-executor.ts). Unlike
  * `include:` (which flattens another workflow's nodes into ONE run at load time), a
@@ -469,7 +506,9 @@ export type IncludeNode = z.infer<typeof includeNodeSchema> & {
  * substituted) forwarded as the child's user message. `isolation` selects the
  * child's checkout: `'inherit'` (default) shares the parent's checkout; `'worktree'`
  * (slice 2, PR-A) runs the child in its own git worktree via an injected
- * child-isolation resolver. `output_format`/`output_type` from the base stay
+ * child-isolation resolver. `fan_out` (slice 2, PR-C) expands the node into N child
+ * runs over a data-driven item list — and DEFAULTS `isolation` to `'worktree'` (its N
+ * children would otherwise collide on the shared parent checkout). `output_format`/`output_type` from the base stay
  * meaningful (the child's terminal output threads back as `$<id>.output`,
  * field-accessible when a schema is declared and the child emits JSON).
  */
@@ -477,6 +516,7 @@ export const workflowNodeSchema = dagNodeBaseSchema.extend({
   workflow: z.string().min(1, "'workflow' must be a non-empty workflow name"),
   input: z.string().optional(),
   isolation: z.enum(['inherit', 'worktree']).optional(),
+  fan_out: fanOutConfigSchema.optional(),
 });
 
 /** DAG node that runs another workflow as a governed child sub-run at execution time */
@@ -633,6 +673,10 @@ export const dagNodeSchema = dagNodeBaseSchema
     // `'worktree'` (slice 2, PR-A) runs the child in its own git worktree via an
     // injected child-isolation resolver.
     isolation: z.enum(['inherit', 'worktree']).optional(),
+    // Dynamic fan-out (slice 2, PR-C) — expand the workflow node into N child runs
+    // over a data-driven item list. Only meaningful on a `workflow:` node (guarded in
+    // superRefine).
+    fan_out: fanOutConfigSchema.optional(),
     // Reserved for Phase 1b input mapping. Present only so the superRefine below can
     // fail fast when it appears on an include or workflow node ("not yet supported").
     with: z.unknown().optional(),
@@ -729,6 +773,28 @@ export const dagNodeSchema = dagNodeBaseSchema
         code: z.ZodIssueCode.custom,
         message: "'isolation' is only supported on workflow (sub-run) nodes.",
         path: ['isolation'],
+      });
+    }
+    // Dynamic fan-out (slice 2, PR-C) is meaningful ONLY on a `workflow:` node — it
+    // multiplies a child sub-run. On any other node type it would be silently dropped,
+    // so reject it fail-fast (mirrors the `isolation` guard above).
+    if (!hasWorkflow && data.fan_out !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "'fan_out' is only supported on workflow (sub-run) nodes.",
+        path: ['fan_out'],
+      });
+    }
+    // `first_success` racing is staged for PR-D. Accept the enum value (so PR-D only
+    // has to lift this guard) but reject it fail-fast now — silently degrading it to
+    // `all_success` would surprise an author who wanted racing (mirrors how slice 1
+    // staged `isolation: 'worktree'`).
+    if (hasWorkflow && data.fan_out?.join === 'first_success') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "'fan_out.join: first_success' (racing) is not yet supported (PR-D). Use 'all_success' or 'all_done'.",
+        path: ['fan_out', 'join'],
       });
     }
 
@@ -941,7 +1007,17 @@ export const dagNodeSchema = dagNodeBaseSchema
         ...(data.output_format !== undefined ? { output_format: data.output_format } : {}),
         workflow: data.workflow.trim(),
         ...(data.input !== undefined ? { input: data.input } : {}),
-        ...(data.isolation !== undefined ? { isolation: data.isolation } : {}),
+        // Isolation. A fan-out node DEFAULTS to per-child `worktree` isolation (slice 2,
+        // PR-C): its N children would otherwise share the parent checkout and collide on
+        // the run-in-progress path lock — the exact collision worktree isolation exists to
+        // prevent. Explicit `isolation:` (including `inherit`) always wins, so a serial /
+        // read-only author can opt back into the shared checkout knowingly.
+        ...(data.isolation !== undefined
+          ? { isolation: data.isolation }
+          : data.fan_out !== undefined
+            ? { isolation: 'worktree' as const }
+            : {}),
+        ...(data.fan_out !== undefined ? { fan_out: data.fan_out } : {}),
       } as WorkflowNode;
     }
     // loop_group — guaranteed by superRefine to be defined at this point.
