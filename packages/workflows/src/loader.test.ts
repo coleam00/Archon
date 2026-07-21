@@ -3530,12 +3530,12 @@ nodes:
       expect(err?.error).toContain("'fan_out' is only supported on workflow");
     });
 
-    it("rejects 'fan_out.join: first_success' (racing staged for PR-D)", async () => {
+    it("accepts 'fan_out.join: first_success' (racing, PR-D)", async () => {
       const result = await loadOne(
         'fan-race',
         `
 name: fan-race
-description: first_success join is not supported yet
+description: first_success racing is supported
 nodes:
   - id: plan
     prompt: "emit tasks"
@@ -3548,9 +3548,10 @@ nodes:
 `
       );
       const err = result.errors.find(e => e.filename === 'fan-race.yaml');
-      expect(err).toBeDefined();
-      expect(err?.error).toContain('first_success');
-      expect(err?.error).toContain('PR-D');
+      expect(err).toBeUndefined();
+      const wf = result.workflows.find(w => w.workflow.name === 'fan-race');
+      const work = wf?.workflow.nodes?.find(n => n.id === 'work');
+      expect((work?.fan_out as { join?: string } | undefined)?.join).toBe('first_success');
     });
 
     it("rejects 'fan_out.as' ($INPUTS channel staged for PR-B) instead of ignoring it", async () => {
