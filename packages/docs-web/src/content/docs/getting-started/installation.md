@@ -33,6 +33,38 @@ brew install coleam00/archon/archon
 docker run --rm -v "$PWD:/workspace" ghcr.io/coleam00/archon:latest workflow list
 ```
 
+### Nix (Flakes)
+
+For users who already have Nix with flakes enabled:
+
+```bash
+# Run without installing (prebuilt binary, default)
+nix run github:coleam00/Archon
+
+# Install into your profile
+nix profile add github:coleam00/Archon
+
+# Explicitly choose prebuilt or source
+nix run github:coleam00/Archon#prebuilt
+nix run github:coleam00/Archon#source
+```
+
+The flake tracks the default branch and is auto-bumped to the latest release
+daily, so `github:coleam00/Archon` is updated daily when the version-bump PR
+is merged. For reproducibility, pin to a specific commit SHA or use the nixpkgs
+package.
+
+**Updating:**
+
+```bash
+# For profile installs
+nix profile upgrade <index-or-name>
+
+# For flake-based installs (e.g., via flake inputs)
+# Run from the consuming flake directory, using the actual input name (e.g. archon)
+nix flake update archon
+```
+
 ## From Source
 
 ```bash

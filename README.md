@@ -171,6 +171,49 @@ irm https://archon.diy/install.ps1 | iex
 brew install coleam00/archon/archon
 ```
 
+### Nix
+
+The project provides optional Nix flake outputs for users who already use Nix. The flake exposes the prebuilt release binary as `#prebuilt` (also `#default`) and a from-source build as `#source`.
+
+```bash
+# Run without installing (prebuilt binary, default)
+nix run github:coleam00/Archon
+
+# Install into your profile
+nix profile add github:coleam00/Archon
+
+# Explicitly choose prebuilt or source
+nix run github:coleam00/Archon#prebuilt
+nix run github:coleam00/Archon#source
+```
+
+The flake tracks the default branch and is auto-bumped to the latest release by a
+daily [workflow](.github/workflows/nix-release.yml), so `github:coleam00/Archon`
+is updated daily when the version-bump PR is merged. (Release tags are cut before
+the bump lands, so `github:coleam00/Archon/vX.Y.Z` is not a valid pin — use the
+nixpkgs package or a specific commit SHA if you need reproducibility.)
+
+### Devbox
+
+For reproducible development environments, use Devbox:
+
+```bash
+# Install Devbox first (if not already installed)
+curl -fsSL https://get.jetify.dev/devbox | bash
+
+# Initialize the environment
+devbox shell
+
+# Build the project
+devbox run build
+```
+
+Or install Devbox via Homebrew:
+
+```bash
+brew install jetify-com/devbox/devbox
+```
+
 > **Compiled binaries need a `CLAUDE_BIN_PATH`.** The quick-install binaries
 > don't bundle Claude Code. Install it separately, then point Archon at it:
 >

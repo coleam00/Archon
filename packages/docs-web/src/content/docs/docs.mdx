@@ -45,6 +45,15 @@ brew install coleam00/archon/archon
 docker run --rm -v "$PWD:/workspace" ghcr.io/coleam00/archon:latest workflow list
 ```
 
+```bash [Nix]
+# Latest release (auto-bumped daily, prebuilt)
+nix run github:coleam00/Archon
+nix profile add github:coleam00/Archon
+
+# Or choose explicitly: #prebuilt (fast) or #source (from source)
+nix run github:coleam00/Archon#source
+```
+
 :::
 
 ## What is Archon?

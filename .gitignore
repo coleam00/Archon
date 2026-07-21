@@ -120,3 +120,9 @@ packages/server/.env
 skills-lock.json
 test-results/
 .archon/ralph/
+
+# Nix build result symlinks
+/result
+/result-*
+# Devbox generated artifacts
+.devbox/

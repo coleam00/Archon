@@ -106,6 +106,13 @@ archon version
 > archon version
 > ```
 
+### 5. Update Nix Flake (Automatic)
+
+The `.github/workflows/nix-release.yml` workflow runs daily and automatically
+bumps `version` and per-platform `sha256` hashes in `flake.nix` when a new
+release is detected, then opens a PR. No manual action required — just merge
+the auto-generated bump PR after each release.
+
 ## Manual Release (When GitHub Actions Unavailable)
 
 If GitHub Actions can't run (billing issues, private repo limits), create the release manually:
