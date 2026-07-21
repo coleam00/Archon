@@ -133,7 +133,8 @@ class IncludeExpansionError extends Error {}
  *   - Prose (prompt / loop.prompt / approval.message) — canonical `.output` refs, but may
  *     embed fenced/inline code examples that must NOT be rewritten → fence-aware.
  *   - Code/expression (bash / script / loop.until_bash / loop_group.until_bash / cancel /
- *     workflow.input) — canonical `.output` refs are LIVE (never documentation) → rewritten verbatim.
+ *     workflow.input / workflow.fan_out.items) — canonical `.output` refs are LIVE (never
+ *     documentation) → rewritten verbatim.
  *
  * KEEP IN SYNC (three ref-surface enumerations must agree): this rewrite, the loader's
  * validateDagStructure scan, and the substituteNodeOutputRefs call sites in dag-executor.ts.
@@ -164,9 +165,11 @@ function rewriteNodeOutputRefs(node: DagNode, rename: (id: string) => string): v
   } else if (isScriptNode(node)) {
     node.script = code(node.script);
   } else if (isWorkflowNode(node)) {
-    // workflow.input is a live code/expression ref surface (a data string), so
-    // refs inside an included block's `workflow:` node namespace verbatim.
+    // workflow.input and workflow.fan_out.items are live code/expression ref surfaces
+    // (data strings), so refs inside an included block's `workflow:` node namespace
+    // verbatim.
     if (node.input !== undefined) node.input = code(node.input);
+    if (node.fan_out !== undefined) node.fan_out.items = code(node.fan_out.items);
   } else if (isCancelNode(node)) {
     node.cancel = code(node.cancel);
   } else if ('prompt' in node && typeof node.prompt === 'string') {
