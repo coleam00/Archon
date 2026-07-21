@@ -1783,8 +1783,9 @@ describe('workflowRunCommand', () => {
     (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'conv-123',
     });
-    // Single-segment checkout path — resolveOwnerRepo's path heuristic throws
-    // for these, so the stored owner/repo name must reach the provider (#2022).
+    // Single-segment checkout path — the stored owner/repo name must reach the
+    // provider so worktrees use the registered identity instead of the
+    // _local/<basename> path fallback (#2022, #2227).
     (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'cb-123',
       name: 'owner/repo',

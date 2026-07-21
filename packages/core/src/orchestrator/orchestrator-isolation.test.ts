@@ -22,6 +22,18 @@ mock.module('@archon/paths', () => ({
   getProjectWorktreesPath: mock(
     (owner: string, repo: string) => `/home/test/.archon/workspaces/${owner}/${repo}/worktrees`
   ),
+  // Required by @archon/git worktree.ts (shared identity resolution, #2227).
+  parseOwnerRepo: mock((name: string) => {
+    const parts = name.split('/');
+    if (parts.length !== 2 || !parts[0] || !parts[1]) return null;
+    return { owner: parts[0], repo: parts[1] };
+  }),
+  resolveRepoProjectIdentity: mock((name: string, cwd: string) => {
+    const parts = name.split('/');
+    if (parts.length === 2 && parts[0] && parts[1]) return { owner: parts[0], repo: parts[1] };
+    const repo = cwd.split('/').filter(Boolean).pop() ?? '';
+    return repo === '' || repo === '.' || repo === '..' ? null : { owner: '_local', repo };
+  }),
 }));
 
 // DB mocks
