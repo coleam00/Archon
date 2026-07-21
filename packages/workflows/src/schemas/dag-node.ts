@@ -467,7 +467,11 @@ export type IncludeNode = z.infer<typeof includeNodeSchema> & {
  * §load-time-composition — the child target stays a static name; only the item
  * COUNT is runtime). Each item becomes a child's `input`/`$ARGUMENTS`. `max_parallel`
  * bounds a sliding-window concurrency pool (default 5 — documented + defeatable, so
- * an author can't trivially create a runaway N-wide layer, #1961). `join` reduces the
+ * an author can't trivially create a runaway N-wide layer, #1961). `max_parallel` caps
+ * *concurrency*, NOT the total child count — `items.length` is unbounded here, so a very
+ * large list (≳ the abandon-time cascade bound `MAX_CASCADE_RUNS`, currently 500) can
+ * leave some children uncancelled when the parent is abandoned; a run-tree-wide count/
+ * budget ceiling is deferred to #1961. `join` reduces the
  * N child outcomes into the node's single outcome + `$<id>.output` aggregate:
  *   - `all_success` (default): all must complete; `$<id>.output` = JSON array of child
  *      outputs in item order; any child failing/cancelled fails the node.

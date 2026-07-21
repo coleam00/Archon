@@ -555,6 +555,7 @@ async function runChildWorkflow(
     codebaseId,
     isolation,
     childIndex,
+    itemHash,
     resumeFailedChild,
   } = args;
 
@@ -702,8 +703,10 @@ async function runChildWorkflow(
           // Fan-out instance index (slice 2, PR-C) — stamped only for a fan-out child so
           // parent resume can re-key the ordered instance set by index (findChildRuns is
           // started_at-ordered, which ≠ items order under max_parallel concurrency). A
-          // single (non-fan-out) child carries no child_index.
+          // single (non-fan-out) child carries no child_index. The item-content hash rides
+          // alongside so resume can WARN on a non-deterministic producer (same index, new item).
           ...(childIndex !== undefined ? { child_index: childIndex } : {}),
+          ...(itemHash !== undefined ? { fan_out_item_hash: itemHash } : {}),
           // Record the child's own worktree env + branch (mirrors the container path's
           // isolation_env_id) so `isolation list` correlation + PR-E console grouping
           // can find it. Absent for `inherit`/shared-checkout children.

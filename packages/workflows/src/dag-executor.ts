@@ -355,6 +355,12 @@ export interface RunChildWorkflowArgs {
    * identifier so N fan-out children get distinct worktrees.
    */
   childIndex?: number;
+  /**
+   * Content hash of a fan-out child's input (#2121 slice 2, PR-C). Stamped into
+   * `metadata.fan_out_item_hash` at spawn so parent resume can WARN when a
+   * non-deterministic items producer changed the item at a given index (never re-keys).
+   */
+  itemHash?: string;
   /** Present only when re-driving a FAILED child on parent resume (D5 recovery path). */
   resumeFailedChild?: WorkflowRun;
 }
@@ -5199,17 +5205,95 @@ async function executeWorkflowNode(
 }
 
 /**
+ * `metadata.cancelled_reason` values the fan-out path stamps on children it cancels
+ * ITSELF (so the cancel is attributable and — unlike a user's out-of-band cancel —
+ * recoverable on resume). `fan_out_gate`: a child paused at a gate (#2180). `fan_out_sibling`:
+ * an in-flight sibling cooperatively cancelled once the node's fate was sealed.
+ * `fan_out_orphan`: a child whose `child_index` fell out of range when the item list shrank.
+ */
+type FanOutCancelReason = 'fan_out_gate' | 'fan_out_sibling' | 'fan_out_orphan';
+const FAN_OUT_RECOVERABLE_CANCEL_REASONS: ReadonlySet<string> = new Set<FanOutCancelReason>([
+  'fan_out_gate',
+  'fan_out_sibling',
+]);
+
+/**
+ * A `running`/`pending` child found on re-entry is ambiguous: a crash-orphan of a prior
+ * pass, or a live execution in another process. Past this idle window (no
+ * `last_activity_at` heartbeat — written ≤ every 60s while a child runs) it reads as an
+ * orphan; within it, as possibly still live. Only the MESSAGE differs — per CLAUDE.md's
+ * "No Autonomous Lifecycle Mutation Across Process Boundaries", NEITHER branch cancels.
+ */
+const FAN_OUT_CHILD_STALE_MS = 5 * 60_000;
+
+/** The fan-out cancel reason stamped on a child, if any. */
+function fanOutCancelReason(run: WorkflowRun): string | undefined {
+  const reason = (run.metadata as Record<string, unknown> | undefined)?.cancelled_reason;
+  return typeof reason === 'string' ? reason : undefined;
+}
+
+/** True when a cancelled child was cancelled BY the fan-out path → recoverable on resume. */
+function isFanOutRecoverableCancel(run: WorkflowRun): boolean {
+  const reason = fanOutCancelReason(run);
+  return reason !== undefined && FAN_OUT_RECOVERABLE_CANCEL_REASONS.has(reason);
+}
+
+/** True when a `running`/`pending` child has had no activity within the idle window. */
+function isFanOutChildStale(run: WorkflowRun, now = Date.now()): boolean {
+  const last = run.last_activity_at ?? run.started_at;
+  return last === null || now - last.getTime() > FAN_OUT_CHILD_STALE_MS;
+}
+
+/**
+ * Cheap, dependency-free content hash (djb2) of a fan-out child's input string, stamped
+ * at spawn so resume can detect a non-deterministic items producer (same index, changed
+ * content) and WARN (never re-key). Collision-tolerant: a warn-only signal, not identity.
+ */
+function hashFanOutItem(input: string): string {
+  let h = 5381;
+  for (let i = 0; i < input.length; i++) h = (h * 33) ^ input.charCodeAt(i);
+  return (h >>> 0).toString(16);
+}
+
+/**
  * #2180 pointer: a fan-out child paused at an approval gate. Fan-out children must be
  * autonomous — the parent run has a SINGLE approval-gate slot, so N concurrently-paused
- * children cannot be represented. Point the author at the two supported fixes.
+ * children cannot be represented. Names the offending child + index + run id (I4) and
+ * points the author at the two supported fixes. Removing the gate then resuming re-drives
+ * exactly this child (its cancel is tagged `fan_out_gate` → recoverable).
  */
-function fanOutAutonomousGateMessage(node: WorkflowNode): string {
+function fanOutAutonomousGateMessage(
+  node: WorkflowNode,
+  childRunId: string,
+  index: number
+): string {
   return (
-    `fan_out node '${node.id}': a fan-out child of '${node.workflow}' paused at an approval gate. ` +
-    'Fan-out children must run autonomously — the parent run has a single gate slot, so N ' +
-    'concurrently-paused children cannot be represented (#2180). Remove the gate from ' +
-    `'${node.workflow}', or invoke it as a single (non-fan-out) 'workflow:' node.`
+    `fan_out node '${node.id}': child ${String(index)} (run ${childRunId.slice(0, 8)}) of ` +
+    `'${node.workflow}' paused at an approval gate. Fan-out children must run autonomously — ` +
+    'the parent run has a single gate slot, so N concurrently-paused children cannot be ' +
+    `represented (#2180). Remove the gate from '${node.workflow}' and resume (this child ` +
+    "re-drives), or invoke it as a single (non-fan-out) 'workflow:' node."
   );
+}
+
+/**
+ * A `running`/`pending` fan-out child found on re-entry — ambiguous ownership, so NOT
+ * auto-cancelled (CLAUDE.md lifecycle rule). Surfaces the state + a one-click action, with
+ * wording keyed to `last_activity_at` staleness (fresh → likely live; stale → likely orphaned).
+ */
+function fanOutAmbiguousChildMessage(
+  node: WorkflowNode,
+  child: WorkflowRun,
+  index: number,
+  stale: boolean
+): string {
+  const ref = `child ${String(index)} (run ${child.id.slice(0, 8)})`;
+  return stale
+    ? `fan_out node '${node.id}': ${ref} of '${node.workflow}' is still '${child.status}' with no ` +
+        'recent activity — it appears orphaned by an interrupted run. Abandon it (`archon workflow ' +
+        `abandon ${child.id}\`) and resume the parent to re-drive it.`
+    : `fan_out node '${node.id}': ${ref} of '${node.workflow}' may still be running (recent activity) — ` +
+        `wait for it to finish and resume, or abandon it (\`archon workflow abandon ${child.id}\`) if it is stuck.`;
 }
 
 /**
@@ -5253,11 +5337,17 @@ function sumFanOutTokens(outcomes: readonly ChildWorkflowOutcome[]): TokenUsage 
  *   - resolve `fan_out.items` → a JSON array (fail closed on non-array/malformed);
  *   - re-inspect existing children (findChildRuns by parent_node_id) by child_index, so
  *     parent resume skips completed instances and re-drives failed ones for free;
- *   - spawn/re-drive the incomplete indices through mapWithLimit(max_parallel);
- *   - #2180 (D5): a fan-out child that pauses at a gate FAILS the node (autonomous
- *     fan-out — the single parent gate slot can't hold N children) and is cancelled;
- *   - join: `all_success` (any fail → node fails, remaining spawns skipped fail-fast) /
- *     `all_done` (aggregate all terminal; failed/cancelled entries represented);
+ *   - spawn/re-drive the incomplete indices through mapWithLimit(max_parallel); a
+ *     fan-out-cancelled (gate/sibling) child is recoverable → re-driven, a user-cancelled
+ *     one stays terminal;
+ *   - #2180 (D5): a fan-out child that PAUSES at a gate FAILS the node (autonomous fan-out
+ *     — the single parent gate slot can't hold N children) and is cancelled tagged
+ *     `fan_out_gate` (removing the gate + resuming re-drives it). A `running`/`pending`
+ *     child found on resume is ambiguous → the node fails WITHOUT auto-cancel (CLAUDE.md
+ *     lifecycle rule), surfacing a staleness-keyed wait/abandon action;
+ *   - join: `all_success` (any fail → node fails; remaining spawns skipped + in-flight
+ *     siblings cooperatively cancelled) / `all_done` (aggregate all terminal; failed/
+ *     cancelled entries represented);
  *   - aggregate `$<id>.output` = JSON array in item order; cost/tokens = Σ children.
  *
  * Never throws — every failure returns a failed NodeExecutionResult so a child-store
@@ -5345,6 +5435,37 @@ async function executeFanOutWorkflowNode(
     });
   };
 
+  // Notify the platform immediately of a fan-out failure (S3) — the join-failure path
+  // already did; the #2180 and items-resolution paths did not, leaving those failures to
+  // the end-of-run digest only. safeSendMessage never throws.
+  const notify = async (text: string): Promise<void> => {
+    await safeSendMessage(platform, conversationId, text, msgContext);
+  };
+
+  // Cancel a child the fan-out path OWNS, stamping WHY (C2/I4) so the cancel is
+  // attributable AND — unlike a user's out-of-band cancel — recoverable on resume. The
+  // reason is written first (a best-effort metadata merge), then the status is flipped;
+  // both are best-effort so a store hiccup can't unwind the node.
+  const cancelChild = async (childId: string, reason: FanOutCancelReason): Promise<void> => {
+    if (!childId) return;
+    await deps.store
+      .updateWorkflowRun(childId, { metadata: { cancelled_reason: reason } })
+      .catch((err: unknown) => {
+        getLog().error(
+          { err: err as Error, childRunId: childId, reason },
+          'workflow.fan_out_cancel_reason_write_failed'
+        );
+      });
+    await deps.store.cancelWorkflowRun(childId).catch((err: unknown) => {
+      getLog().error({ err: err as Error, childRunId: childId }, 'workflow.fan_out_cancel_failed');
+    });
+  };
+
+  // Item → child input/$ARGUMENTS (objects JSON-stringified). Also the pre-image for the
+  // resume item-hash (S2).
+  const itemToInput = (item: unknown): string =>
+    typeof item === 'string' ? item : JSON.stringify(item);
+
   // 1. Resolve `fan_out.items` → a JSON array. Two-pass substitution (workflow vars,
   //    then $node.output refs) exactly as the input surface uses. A `.field` ref that
   //    can't be honored throws an OutputRefError → caught → fail closed. Never silently
@@ -5363,16 +5484,17 @@ async function executeFanOutWorkflowNode(
     const itemsResolved = substituteNodeOutputRefs(itemsVarsResolved, ctx.nodeOutputs);
     const parsed: unknown = JSON.parse(itemsResolved);
     if (!Array.isArray(parsed)) {
-      return failResult(
+      const msg =
         `fan_out.items on '${node.id}' resolved to ${typeof parsed}, not a JSON array. ` +
-          `'${fanOut.items}' must reference a node output that produces a JSON array.`
-      );
+        `'${fanOut.items}' must reference a node output that produces a JSON array.`;
+      await notify(`❌ **Fan-out failed** (node \`${node.id}\`): ${msg}`);
+      return failResult(msg);
     }
     items = parsed;
   } catch (err) {
-    return failResult(
-      `fan_out.items on '${node.id}' could not be resolved to a JSON array: ${(err as Error).message}`
-    );
+    const msg = `fan_out.items on '${node.id}' could not be resolved to a JSON array: ${(err as Error).message}`;
+    await notify(`❌ **Fan-out failed** (node \`${node.id}\`): ${msg}`);
+    return failResult(msg);
   }
 
   // 2. Empty array → a valid zero-width expansion (#977 acceptance): complete with '[]'.
@@ -5391,10 +5513,47 @@ async function executeFanOutWorkflowNode(
       c => (c.metadata as Record<string, unknown> | undefined)?.parent_node_id === node.id
     );
     for (const child of children) {
-      const idx = (child.metadata as Record<string, unknown> | undefined)?.child_index;
-      if (typeof idx === 'number' && idx >= 0 && idx < items.length) {
-        existingByIndex.set(idx, child);
+      const meta = child.metadata as Record<string, unknown> | undefined;
+      const idx = meta?.child_index;
+      if (typeof idx !== 'number') continue; // not a fan-out instance of this node
+      // I2: a child_index beyond the (now-shorter) item list — the items producer shrank
+      // between attempts. Never silently dropped: WARN for visibility, and cancel a
+      // still-live orphan (tagged) so it stops billing (a terminal one no-ops).
+      if (idx < 0 || idx >= items.length) {
+        getLog().warn(
+          {
+            parentRunId: parentRun.id,
+            nodeId: node.id,
+            childRunId: child.id,
+            childIndex: idx,
+            itemCount: items.length,
+          },
+          'workflow.fan_out_child_index_out_of_range'
+        );
+        if (child.status === 'running' || child.status === 'pending' || child.status === 'paused') {
+          await cancelChild(child.id, 'fan_out_orphan');
+        }
+        continue;
       }
+      // S4: a duplicate child_index (two rows for one index) is anomalous — last write
+      // wins (as the 1:1 precedent does), but log it rather than swallow it silently.
+      if (existingByIndex.has(idx)) {
+        getLog().debug(
+          { parentRunId: parentRun.id, nodeId: node.id, childIndex: idx, childRunId: child.id },
+          'workflow.fan_out_duplicate_child_index'
+        );
+      }
+      // S2: a non-deterministic items producer may have changed the item at this index
+      // between attempts. Resume still re-keys by index (safe under the cached-output
+      // invariant), but WARN so the content drift is visible.
+      const priorHash = meta?.fan_out_item_hash;
+      if (typeof priorHash === 'string' && priorHash !== hashFanOutItem(itemToInput(items[idx]))) {
+        getLog().warn(
+          { parentRunId: parentRun.id, nodeId: node.id, childIndex: idx, childRunId: child.id },
+          'workflow.fan_out_item_content_changed'
+        );
+      }
+      existingByIndex.set(idx, child);
     }
   } catch (err) {
     return failResult(
@@ -5402,46 +5561,93 @@ async function executeFanOutWorkflowNode(
     );
   }
 
-  // 4. #2180 (D5): a fan-out child cannot hold the single parent gate slot, so any
-  //    existing NON-terminal child (a gate-paused child from a prior pass, or an
-  //    orphaned running/pending one) FAILS the node — fan-out children must be
-  //    autonomous. Cancel them (cooperative) and point the author at the fix.
-  const blocked = [...existingByIndex.values()].filter(
-    c => c.status === 'paused' || c.status === 'running' || c.status === 'pending'
+  // 4. #2180 (D5): a fan-out child cannot hold the single parent gate slot. Split the
+  //    non-terminal existing children by how much is actually known:
+  //    - `paused` = a gate was genuinely OBSERVED → the designed autonomous-fan-out
+  //      rejection: cancel it (tagged `fan_out_gate`, so removing the gate + resuming
+  //      re-drives it) and point the author at the gate.
+  //    - `running`/`pending` = AMBIGUOUS (a crash-orphan of a prior pass, or a live run in
+  //      another process). Per CLAUDE.md's "No Autonomous Lifecycle Mutation Across Process
+  //      Boundaries" rule we DO NOT cancel — surface the state + a one-click action, wording
+  //      keyed to `last_activity_at` staleness. NEVER the gate message for a non-gate cause.
+  const pausedExisting = [...existingByIndex.entries()].filter(([, c]) => c.status === 'paused');
+  if (pausedExisting.length > 0) {
+    const [index, child] = pausedExisting[0];
+    for (const [, c] of pausedExisting) await cancelChild(c.id, 'fan_out_gate');
+    const msg = fanOutAutonomousGateMessage(node, child.id, index);
+    await notify(`⏸→❌ **Fan-out gate rejected** (node \`${node.id}\`): ${msg}`);
+    return failResult(msg);
+  }
+  const ambiguous = [...existingByIndex.entries()].filter(
+    ([, c]) => c.status === 'running' || c.status === 'pending'
   );
-  if (blocked.length > 0) {
-    for (const b of blocked) {
-      await deps.store.cancelWorkflowRun(b.id).catch((err: unknown) => {
-        getLog().error({ err: err as Error, childRunId: b.id }, 'workflow.fan_out_cancel_failed');
-      });
-    }
-    return failResult(fanOutAutonomousGateMessage(node));
+  if (ambiguous.length > 0) {
+    const [index, child] = ambiguous[0];
+    const stale = isFanOutChildStale(child);
+    getLog().warn(
+      {
+        parentRunId: parentRun.id,
+        nodeId: node.id,
+        childRunId: child.id,
+        childIndex: index,
+        status: child.status,
+        stale,
+      },
+      'workflow.fan_out_child_nonterminal_on_resume'
+    );
+    const msg = fanOutAmbiguousChildMessage(node, child, index, stale);
+    await notify(`⚠️ **Fan-out blocked** (node \`${node.id}\`): ${msg}`);
+    return failResult(msg);
   }
 
-  // 5. Execute the incomplete indices through a bounded sliding window. Each index is
-  //    classified inline: an existing completed/cancelled child threads its recorded
-  //    outcome (no re-spawn); an existing failed child is re-driven once (resume
-  //    recovery); a missing index spawns a fresh child. Fail-fast: once a stopping
-  //    condition trips (any pause, or an all_success failure), later indices are SKIPPED
-  //    rather than spawned — so one failure doesn't burn the remaining window. Concurrent
-  //    in-flight children still run to completion (bounded by max_parallel); only
-  //    not-yet-started indices are skipped.
+  // 5. Execute the incomplete indices through a bounded sliding window. Classification per
+  //    index: an existing completed child threads its recorded outcome (resume skip); an
+  //    existing failed OR fan-out-cancelled (recoverable) child is re-driven; a
+  //    user-cancelled child stays terminal; a missing index spawns fresh. Fail-fast: once a
+  //    stopping condition trips (any pause, or an all_success failure) later indices are
+  //    SKIPPED and any still-in-flight siblings are cooperatively cancelled (I1) — the
+  //    node's fate is sealed, so their remaining spend is waste.
   let stopSpawning = false;
-  const itemToInput = (item: unknown): string =>
-    typeof item === 'string' ? item : JSON.stringify(item);
+  let fateSealed = false;
+
+  // I1: cooperatively cancel every sibling still in flight once the node's fate is sealed.
+  // runChild is synchronous (its child run id isn't in hand until it returns), so the live
+  // siblings are re-queried; their between-layer cancel poll aborts them (bounded by
+  // CANCEL_CHECK_INTERVAL_MS) while mapWithLimit still awaits all. Runs once; tagged
+  // `fan_out_sibling` so a later resume re-drives them (they didn't themselves fail).
+  const sealFateCancelSiblings = async (): Promise<void> => {
+    if (fateSealed) return;
+    fateSealed = true;
+    try {
+      const live = (await deps.store.findChildRuns(parentRun.id)).filter(c => {
+        const m = c.metadata as Record<string, unknown> | undefined;
+        return m?.parent_node_id === node.id && (c.status === 'running' || c.status === 'pending');
+      });
+      for (const s of live) await cancelChild(s.id, 'fan_out_sibling');
+    } catch (err) {
+      getLog().warn(
+        { err: err as Error, parentRunId: parentRun.id, nodeId: node.id },
+        'workflow.fan_out_sibling_cancel_failed'
+      );
+    }
+  };
 
   const settled = await mapWithLimit(
     items,
     fanOut.max_parallel,
     async (item, i): Promise<ChildWorkflowOutcome> => {
       const existing = existingByIndex.get(i);
-      // Existing terminal child → thread its outcome without re-spawning (resume skip).
-      if (existing && (existing.status === 'completed' || existing.status === 'cancelled')) {
+      // Existing completed child → thread its outcome without re-spawning (resume skip).
+      if (existing?.status === 'completed') return childOutcomeFromRun(existing);
+      // A user-cancelled child (no fan-out tag) is terminal — thread it as-is (fails
+      // all_success; represented in all_done). A fan-out-tagged cancel is recoverable and
+      // falls through to re-drive.
+      if (existing?.status === 'cancelled' && !isFanOutRecoverableCancel(existing)) {
         return childOutcomeFromRun(existing);
       }
       // Fail-fast: a stopping condition already tripped → do not spawn this child. The
-      // synthetic 'cancelled' outcome only feeds the current join (which already fails);
-      // an existing failed row is left untouched so a later resume can still re-drive it.
+      // synthetic 'cancelled' outcome only feeds the current (already-failing) join; an
+      // existing failed/tagged-cancelled row is left for a later resume to re-drive.
       if (stopSpawning) {
         return {
           childRunId: existing?.id ?? '',
@@ -5449,11 +5655,28 @@ async function executeFanOutWorkflowNode(
           error: 'skipped by fan-out fail-fast',
         };
       }
+      const input = itemToInput(item);
+      // A fan-out-recoverable-cancelled child (gate/sibling) can't be resumed while
+      // 'cancelled' (resumeWorkflowRun rejects that status) — clear it to 'failed' first,
+      // then re-drive through the failed path. Our own tagged cancel is terminal state we
+      // own, so this recovery heuristic is appropriate (CLAUDE.md).
+      let resumeChild = existing?.status === 'failed' ? existing : undefined;
+      if (existing?.status === 'cancelled' && isFanOutRecoverableCancel(existing)) {
+        await deps.store
+          .updateWorkflowRun(existing.id, { status: 'failed' })
+          .catch((err: unknown) => {
+            getLog().error(
+              { err: err as Error, childRunId: existing.id },
+              'workflow.fan_out_recover_cancel_failed'
+            );
+          });
+        resumeChild = { ...existing, status: 'failed' };
+      }
       const outcome = await runChild({
         parentRun,
         nodeId: node.id,
         childWorkflowName: node.workflow,
-        input: itemToInput(item),
+        input,
         cwd,
         conversationId,
         conversationDbId: parentRun.conversation_id,
@@ -5461,17 +5684,19 @@ async function executeFanOutWorkflowNode(
         codebaseId: parentRun.codebase_id ?? undefined,
         isolation: node.isolation,
         childIndex: i,
-        ...(existing?.status === 'failed' ? { resumeFailedChild: existing } : {}),
+        itemHash: hashFanOutItem(input),
+        ...(resumeChild ? { resumeFailedChild: resumeChild } : {}),
       });
-      // Update the fail-fast gate. A paused child stops the whole fan-out for BOTH joins
-      // (#2180); a failed/cancelled child stops spawning only under all_success.
-      if (outcome.status === 'paused') {
-        stopSpawning = true;
-      } else if (
-        (outcome.status === 'failed' || outcome.status === 'cancelled') &&
-        fanOut.join === 'all_success'
+      // Seal the node's fate on a terminal-bad outcome. A paused child stops the whole
+      // fan-out for BOTH joins (#2180); a failed/cancelled child stops only under
+      // all_success. Sealing skips later spawns AND cancels in-flight siblings (I1).
+      if (
+        outcome.status === 'paused' ||
+        ((outcome.status === 'failed' || outcome.status === 'cancelled') &&
+          fanOut.join === 'all_success')
       ) {
         stopSpawning = true;
+        await sealFateCancelSiblings();
       }
       return outcome;
     }
@@ -5492,21 +5717,29 @@ async function executeFanOutWorkflowNode(
   const totalCostUsd = sumFanOutCost(outcomes);
   const totalTokens = sumFanOutTokens(outcomes);
 
-  // 6. #2180 (first-run path): a freshly-spawned child that paused at a gate fails the
-  //    node (same rule as the existing-blocked check above). Cancel the paused child(ren).
-  const paused = outcomes.filter(o => o.status === 'paused');
-  if (paused.length > 0) {
-    for (const p of paused) {
-      if (p.childRunId) {
-        await deps.store.cancelWorkflowRun(p.childRunId).catch((err: unknown) => {
-          getLog().error(
-            { err: err as Error, childRunId: p.childRunId },
-            'workflow.fan_out_cancel_failed'
-          );
-        });
-      }
+  // I3: parity with the 1:1 asCompleted path — a completed child with no terminal output
+  // threads '' but is indistinguishable downstream from an intentional empty result, so
+  // leave a trace. Used by both join reducers.
+  const childOutput = (o: ChildWorkflowOutcome, index: number): string => {
+    if (o.status === 'completed' && o.output === undefined) {
+      getLog().warn(
+        { parentRunId: parentRun.id, nodeId: node.id, childRunId: o.childRunId, childIndex: index },
+        'workflow.subrun_completed_without_output'
+      );
     }
-    return failResult(fanOutAutonomousGateMessage(node), totalCostUsd, totalTokens);
+    return o.output ?? '';
+  };
+
+  // 6. #2180 (first-run path): a freshly-spawned child that paused at a gate fails the
+  //    node. Cancel the paused child(ren) tagged `fan_out_gate` (recoverable once the gate
+  //    is removed) and name the offending child (I4). Siblings were already sealed above.
+  const pausedIdx = outcomes.findIndex(o => o.status === 'paused');
+  if (pausedIdx !== -1) {
+    for (const o of outcomes)
+      if (o.status === 'paused') await cancelChild(o.childRunId, 'fan_out_gate');
+    const msg = fanOutAutonomousGateMessage(node, outcomes[pausedIdx].childRunId, pausedIdx);
+    await notify(`⏸→❌ **Fan-out gate rejected** (node \`${node.id}\`): ${msg}`);
+    return failResult(msg, totalCostUsd, totalTokens);
   }
 
   // 7. Join.
@@ -5514,22 +5747,20 @@ async function executeFanOutWorkflowNode(
     const firstBad = outcomes.findIndex(o => o.status !== 'completed');
     if (firstBad !== -1) {
       const bad = outcomes[firstBad];
-      await safeSendMessage(
-        platform,
-        conversationId,
-        `❌ **Fan-out failed** (node \`${node.id}\`): child ${String(firstBad)} ${bad.status}` +
-          (bad.error ? ` — ${bad.error}` : ''),
-        msgContext
+      const ref = bad.childRunId ? ` (run ${bad.childRunId.slice(0, 8)})` : '';
+      await notify(
+        `❌ **Fan-out failed** (node \`${node.id}\`): child ${String(firstBad)}${ref} ${bad.status}` +
+          (bad.error ? ` — ${bad.error}` : '')
       );
       return failResult(
-        `fan_out node '${node.id}' (join: all_success): child ${String(firstBad)} ${bad.status}` +
+        `fan_out node '${node.id}' (join: all_success): child ${String(firstBad)}${ref} ${bad.status}` +
           (bad.error ? `: ${bad.error}` : ''),
         totalCostUsd,
         totalTokens
       );
     }
     // All completed → aggregate the child outputs in item order (JSON array string).
-    const aggregate = JSON.stringify(outcomes.map(o => o.output ?? ''));
+    const aggregate = JSON.stringify(outcomes.map((o, i) => childOutput(o, i)));
     writeCompleted(aggregate, totalCostUsd);
     return {
       state: 'completed',
@@ -5543,9 +5774,9 @@ async function executeFanOutWorkflowNode(
   // entry is represented as a { error, status } object in the aggregate array (so a
   // collector can reconcile partial results). Never fails the node on a partial failure.
   const aggregate = JSON.stringify(
-    outcomes.map(o =>
+    outcomes.map((o, i) =>
       o.status === 'completed'
-        ? (o.output ?? '')
+        ? childOutput(o, i)
         : { error: o.error ?? `child ${o.status}`, status: o.status }
     )
   );
