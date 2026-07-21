@@ -503,9 +503,14 @@ describe('cloneRepository', () => {
         spyExecFileAsync.mock.calls as [string, string[], { env?: NodeJS.ProcessEnv }][]
       ).find(args => args[0] === 'git' && args[1]?.[0] === 'clone');
       expect(cloneCall).toBeDefined();
-      expect(cloneCall?.[2]?.env?.GIT_TERMINAL_PROMPT).toBe('0');
-      // The rest of the environment must be inherited, not stripped
-      expect(cloneCall?.[2]?.env?.PATH).toBe(process.env.PATH);
+      const env = cloneCall?.[2]?.env ?? {};
+      expect(env.GIT_TERMINAL_PROMPT).toBe('0');
+      // The rest of the environment must be inherited, not stripped. On
+      // Windows the key can be 'Path' — spreading process.env keeps the
+      // original casing — so locate the path key case-insensitively.
+      const pathKey = Object.keys(env).find(k => k.toLowerCase() === 'path');
+      expect(pathKey).toBeDefined();
+      expect(env[pathKey!]).toBe(process.env[pathKey!]);
     });
   });
 
