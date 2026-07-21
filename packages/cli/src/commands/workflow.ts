@@ -39,6 +39,7 @@ import { join } from 'node:path';
 import { mkdirSync, openSync, closeSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { createWorkflowDeps } from '@archon/core/workflows/store-adapter';
+import { createChildWorktreeResolver } from '@archon/core/workflows/child-isolation-resolver';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { resolveWorkflowName } from '@archon/workflows/router';
 import { executeWorkflow, hydrateResumableRun } from '@archon/workflows/executor';
@@ -1713,6 +1714,20 @@ export async function workflowRunCommand(
           ...(containerOverlayMode ? { overlayMode: containerOverlayMode } : {}),
         }
       : undefined;
+  // Per-child isolation resolver (#2121 slice 2, PR-A): built for git-repo codebases
+  // only — a folder project can't make worktrees, so a `workflow:` node requesting
+  // `isolation: 'worktree'` there fails fast in the engine (no resolver injected).
+  const resolveChildIsolation =
+    codebase && codebase.kind !== 'folder'
+      ? createChildWorktreeResolver({
+          codebaseId: codebase.id,
+          codebaseName: codebase.name,
+          canonicalRepoPath: codebase.default_cwd,
+          baseBranch: codebaseDefaultBranch,
+          createdByPlatform: 'cli',
+          createdByUserId: cliUserId,
+        })
+      : undefined;
   try {
     const opts = prepared
       ? {
@@ -1723,6 +1738,7 @@ export async function workflowRunCommand(
           baseOverride: flagBase,
           execContext,
           container: containerRunCtx,
+          resolveChildIsolation,
           ...prepared,
         }
       : {
@@ -1733,6 +1749,7 @@ export async function workflowRunCommand(
           baseOverride: flagBase,
           execContext,
           container: containerRunCtx,
+          resolveChildIsolation,
         };
     result = await executeWorkflow(
       deps,
