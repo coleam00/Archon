@@ -499,15 +499,13 @@ describe('cloneRepository', () => {
 
       await cloneRepository('https://github.com/owner/repo');
 
-      const cloneCall = spyExecFileAsync.mock.calls.find(
-        (args: unknown[]) =>
-          args[0] === 'git' && Array.isArray(args[1]) && (args[1] as string[])[0] === 'clone'
-      );
+      const cloneCall = (
+        spyExecFileAsync.mock.calls as [string, string[], { env?: NodeJS.ProcessEnv }][]
+      ).find(args => args[0] === 'git' && args[1]?.[0] === 'clone');
       expect(cloneCall).toBeDefined();
-      const opts = cloneCall?.[2] as { env?: Record<string, string> } | undefined;
-      expect(opts?.env?.GIT_TERMINAL_PROMPT).toBe('0');
+      expect(cloneCall?.[2]?.env?.GIT_TERMINAL_PROMPT).toBe('0');
       // The rest of the environment must be inherited, not stripped
-      expect(opts?.env?.PATH).toBe(process.env.PATH);
+      expect(cloneCall?.[2]?.env?.PATH).toBe(process.env.PATH);
     });
   });
 
