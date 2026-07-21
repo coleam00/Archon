@@ -118,4 +118,47 @@ describe('bundled-defaults', () => {
       }
     });
   });
+
+  describe('fork-safe PR creation (#2226)', () => {
+    // In a clone of a fork, `gh pr create` without an explicit --repo resolves
+    // the base repo to the fork's UPSTREAM parent, publishing the user's diff
+    // against the upstream repo (accidental upstream PRs #1543/#1416). Every
+    // `gh pr create` invocation in the bundled defaults must pin `--repo`.
+
+    // Join backslash-continued shell lines so multi-line `gh pr create \`
+    // blocks are checked as a single command.
+    const mergeContinuations = (content: string): string[] => {
+      const merged: string[] = [];
+      let current = '';
+      for (const line of content.split('\n')) {
+        if (line.trimEnd().endsWith('\\')) {
+          current += line.trimEnd().slice(0, -1) + ' ';
+        } else {
+          merged.push(current + line);
+          current = '';
+        }
+      }
+      if (current) merged.push(current);
+      return merged;
+    };
+
+    const assertPinned = (bundle: Record<string, string>): void => {
+      for (const [name, content] of Object.entries(bundle)) {
+        for (const line of mergeContinuations(content)) {
+          if (!line.includes('gh pr create')) continue;
+          // Prose references to a failed command (hook texts) are not invocations.
+          if (line.includes('gh pr create failed')) continue;
+          expect(`${name}: ${line.trim()}`).toContain('--repo');
+        }
+      }
+    };
+
+    it('every gh pr create in bundled commands pins --repo', () => {
+      assertPinned(BUNDLED_COMMANDS);
+    });
+
+    it('every gh pr create in bundled workflows pins --repo', () => {
+      assertPinned(BUNDLED_WORKFLOWS);
+    });
+  });
 });

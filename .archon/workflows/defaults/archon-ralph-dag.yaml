@@ -536,7 +536,9 @@ nodes:
 
            If no template was found, write a summary with: problem, what changed, stories table, and validation evidence.
 
-        3. **Create a draft PR** using `gh pr create --draft --base $BASE_BRANCH --title "feat: {PRD feature name}"` with the filled-in template as the body. Use a HEREDOC for the body.
+        3. **Create a draft PR** — resolve the origin repo first (in a fork clone, gh otherwise targets the upstream parent):
+           `ORIGIN_REPO=$(git remote get-url origin | sed -E 's#^.*[:/]([^/]+/[^/]+)$#\1#; s#\.git$##')`
+           then `gh pr create --repo "$ORIGIN_REPO" --draft --base $BASE_BRANCH --title "feat: {PRD feature name}"` with the filled-in template as the body. Use a HEREDOC for the body.
 
         4. **Output completion signal:**
            ```

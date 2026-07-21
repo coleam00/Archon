@@ -728,8 +728,11 @@ nodes:
 
       ## Step 3: Create PR (if not already created)
 
+      Resolve the origin repo first — in a fork clone, gh otherwise targets the upstream parent:
+
       ```bash
-      gh pr view HEAD --json url 2>/dev/null || echo "NO_PR"
+      ORIGIN_REPO=$(git remote get-url origin | sed -E 's#^.*[:/]([^/]+/[^/]+)$#\1#; s#\.git$##')
+      gh pr view HEAD --repo "$ORIGIN_REPO" --json url 2>/dev/null || echo "NO_PR"
       ```
 
       If no PR exists:
@@ -738,7 +741,7 @@ nodes:
       cat .github/pull_request_template.md 2>/dev/null || echo "NO_TEMPLATE"
       ```
 
-      Create with `gh pr create --draft --base $BASE_BRANCH`:
+      Create with `gh pr create --repo "$ORIGIN_REPO" --draft --base $BASE_BRANCH`:
       - Title from the plan's feature name
       - Body summarizing the implementation
       - Use a HEREDOC for the body

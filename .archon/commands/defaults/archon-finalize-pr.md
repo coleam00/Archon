@@ -47,7 +47,10 @@ Extract:
 ### 1.3 Check for Existing PR
 
 ```bash
-gh pr list --head $(git branch --show-current) --json number,url,state
+# Pin all gh pr commands to the origin remote — in a fork clone, gh otherwise
+# targets the upstream parent repo. Re-run this line in every new shell.
+ORIGIN_REPO=$(git remote get-url origin | sed -E 's#^.*[:/]([^/]+/[^/]+)$#\1#; s#\.git$##')
+gh pr list --repo "$ORIGIN_REPO" --head $(git branch --show-current) --json number,url,state
 ```
 
 **If PR already exists**: Will update it instead of creating new one.
@@ -190,7 +193,11 @@ cat > $ARTIFACTS_DIR/pr-body.md <<'EOF'
 {prepared-body}
 EOF
 
+# Fork-safe target: without --repo, gh opens the PR against the upstream parent
+ORIGIN_REPO=$(git remote get-url origin | sed -E 's#^.*[:/]([^/]+/[^/]+)$#\1#; s#\.git$##')
+
 gh pr create \
+  --repo "$ORIGIN_REPO" \
   --title "{plan-title}" \
   --body-file $ARTIFACTS_DIR/pr-body.md \
   --base $BASE_BRANCH
@@ -199,7 +206,7 @@ gh pr create \
 **If PR already exists**, update it:
 
 ```bash
-gh pr edit {pr-number} --body-file $ARTIFACTS_DIR/pr-body.md
+gh pr edit {pr-number} --repo "$ORIGIN_REPO" --body-file $ARTIFACTS_DIR/pr-body.md
 ```
 
 ### 3.3 Ensure Ready for Review
@@ -207,13 +214,13 @@ gh pr edit {pr-number} --body-file $ARTIFACTS_DIR/pr-body.md
 If PR was created as draft, mark ready:
 
 ```bash
-gh pr ready {pr-number} 2>/dev/null || true
+gh pr ready {pr-number} --repo "$ORIGIN_REPO" 2>/dev/null || true
 ```
 
 ### 3.4 Capture PR Info
 
 ```bash
-gh pr view --json number,url,headRefName,baseRefName
+gh pr view --repo "$ORIGIN_REPO" --json number,url,headRefName,baseRefName
 ```
 
 ### 3.5 Write PR Number Registry
@@ -221,8 +228,9 @@ gh pr view --json number,url,headRefName,baseRefName
 Write PR number for downstream review steps:
 
 ```bash
-PR_NUMBER=$(gh pr view --json number -q '.number')
-PR_URL=$(gh pr view --json url -q '.url')
+ORIGIN_REPO=$(git remote get-url origin | sed -E 's#^.*[:/]([^/]+/[^/]+)$#\1#; s#\.git$##')
+PR_NUMBER=$(gh pr view --repo "$ORIGIN_REPO" --json number -q '.number')
+PR_URL=$(gh pr view --repo "$ORIGIN_REPO" --json url -q '.url')
 echo "$PR_NUMBER" > $ARTIFACTS_DIR/.pr-number
 echo "$PR_URL" > $ARTIFACTS_DIR/.pr-url
 ```
@@ -388,7 +396,7 @@ Check:
 ❌ PR not found: #{number}
 
 The draft PR may have been closed or deleted. Create a new one:
-`gh pr create --title "..." --body "..."`
+`gh pr create --repo "$ORIGIN_REPO" --title "..." --body "..."`
 ```
 
 ### Template Parsing

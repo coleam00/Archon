@@ -174,24 +174,27 @@ nodes:
          - `$ARTIFACTS_DIR/investigation.md` or `$ARTIFACTS_DIR/plan.md`
          - `$ARTIFACTS_DIR/implementation.md`
          - `$ARTIFACTS_DIR/validation.md`
-      4. Check if a PR already exists for this branch: `gh pr list --head $(git branch --show-current)`
+      4. Resolve the origin repo — in a fork clone, gh otherwise targets the upstream parent:
+         `ORIGIN_REPO=$(git remote get-url origin | sed -E 's#^.*[:/]([^/]+/[^/]+)$#\1#; s#\.git$##')`
+         Then check if a PR already exists for this branch: `gh pr list --repo "$ORIGIN_REPO" --head $(git branch --show-current)`
          - If PR exists, skip creation and capture its number
       5. Look for the project's PR template at `.github/pull_request_template.md`, `.github/PULL_REQUEST_TEMPLATE.md`, or `docs/PULL_REQUEST_TEMPLATE.md`. Read whichever one exists.
-      6. Create a DRAFT PR: `gh pr create --draft --base $BASE_BRANCH`
+      6. Create a DRAFT PR: `gh pr create --repo "$ORIGIN_REPO" --draft --base $BASE_BRANCH`
          - Title: concise, imperative mood, under 70 chars
          - Body: if a PR template was found, fill in **every section** with details from the artifacts. Don't skip sections or leave placeholders. If no template, write a body with summary, changes, validation evidence, and `Fixes #...`.
          - **PR body file location**: if you write the body to a file (e.g. for `--body-file`), the file MUST live at `$ARTIFACTS_DIR/pr-body.md` or under `/tmp/` — NEVER inside the worktree. Files like `.pr-body.md` at the repo root will be picked up by later commits.
          - Link to issue: include `Fixes #...` or `Closes #...`
       7. Capture PR identifiers:
          ```bash
+         ORIGIN_REPO=$(git remote get-url origin | sed -E 's#^.*[:/]([^/]+/[^/]+)$#\1#; s#\.git$##')
          HEAD_BRANCH=$(git branch --show-current)
-         PR_NUMBER=$(gh pr list --head "$HEAD_BRANCH" --state open --json number -q '.[0].number')
+         PR_NUMBER=$(gh pr list --repo "$ORIGIN_REPO" --head "$HEAD_BRANCH" --state open --json number -q '.[0].number')
          if [ -z "$PR_NUMBER" ]; then
            echo "No open PR found for branch $HEAD_BRANCH — PR creation failed" >&2
            exit 1
          fi
          echo "$PR_NUMBER" > "$ARTIFACTS_DIR/.pr-number"
-         PR_URL=$(gh pr view "$PR_NUMBER" --json url -q '.url')
+         PR_URL=$(gh pr view "$PR_NUMBER" --repo "$ORIGIN_REPO" --json url -q '.url')
          echo "$PR_URL" > "$ARTIFACTS_DIR/.pr-url"
          ```
     depends_on: [validate]
