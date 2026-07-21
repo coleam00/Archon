@@ -102,6 +102,9 @@ export function ChatComposer({
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>): void => {
+    // Don't submit while an IME composition is in progress (Japanese,
+    // Chinese, Korean, etc. — the first Enter accepts a candidate).
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       submit();
