@@ -62,6 +62,10 @@ export const WORKFLOW_EVENT_TYPES = [
   'writeback_requested',
   'writeback_applied',
   'writeback_discarded',
+  // Evidence gate (#2230): `evidence_policy.required` was set but
+  // `$ARTIFACTS_DIR/evidence.json` was absent at completion time — the run was
+  // refused terminal `completed` and marked failed. Data carries the expected path.
+  'evidence_validation_failed',
 ] as const;
 
 export type WorkflowEventType = (typeof WORKFLOW_EVENT_TYPES)[number];

@@ -36,8 +36,9 @@ import {
   modelReasoningEffortSchema,
   webSearchModeSchema,
   workflowRequirementSchema,
+  workflowEvidencePolicySchema,
 } from './schemas/workflow';
-import type { WorkflowRequirement } from './schemas/workflow';
+import type { WorkflowRequirement, WorkflowEvidencePolicy } from './schemas/workflow';
 import { workflowNodeHooksSchema } from './schemas/hooks';
 import { z } from '@hono/zod-openapi';
 
@@ -606,6 +607,28 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
       }
     }
 
+    // Parse workflow-level evidence policy (#2230). Unlike the worktree/container
+    // convenience policies, a malformed block REJECTS the workflow instead of
+    // warn-and-ignore: silently dropping a declared terminal-success gate would
+    // let a run complete ungated — not fail-safe. Same hard-reject posture as
+    // unknown-provider and persist_session capability validation above.
+    let evidencePolicy: WorkflowEvidencePolicy | undefined;
+    if (raw.evidence_policy !== undefined) {
+      const parsedEvidence = workflowEvidencePolicySchema.safeParse(raw.evidence_policy);
+      if (!parsedEvidence.success) {
+        return {
+          workflow: null,
+          error: {
+            filename,
+            error:
+              "Invalid evidence_policy: expected { required: boolean }. When required is true, the run is refused terminal 'completed' unless $ARTIFACTS_DIR/evidence.json exists.",
+            errorType: 'validation_error',
+          },
+        };
+      }
+      evidencePolicy = parsedEvidence.data;
+    }
+
     // Parse mutates_checkout — boolean, omitted means true (run the path-lock guard).
     // Same parse/warn pattern as `interactive` (invalid non-boolean values are dropped).
     // When false, the executor skips the path-lock guard and allows concurrent runs on the same checkout.
@@ -741,6 +764,7 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
         nodes: dagNodes,
         ...(worktreePolicy ? { worktree: worktreePolicy } : {}),
         ...(containerPolicy ? { container: containerPolicy } : {}),
+        ...(evidencePolicy !== undefined ? { evidence_policy: evidencePolicy } : {}),
         ...(tags !== undefined ? { tags } : {}),
         ...(requires !== undefined ? { requires } : {}),
       },

@@ -5,7 +5,7 @@
  * Independent nodes within the same layer run concurrently via Promise.allSettled.
  * Captures all assistant output regardless of streaming mode for $node_id.output substitution.
  */
-import { writeFileSync } from 'fs';
+import { existsSync, writeFileSync } from 'fs';
 import { readFile } from 'fs/promises';
 import { isAbsolute, join as joinPath, resolve as resolvePath } from 'path';
 import { execFileAsync, resolveBashPath } from '@archon/git';
@@ -52,6 +52,7 @@ import type {
   WorkflowSource,
   LoopGateRunMetadata,
   ApprovalContext,
+  WorkflowEvidencePolicy,
 } from './schemas';
 import {
   isBashNode,
@@ -6651,6 +6652,8 @@ export async function executeDagWorkflow(
     /** Raw workflow-level `model` ref — used only to derive the workflow tier
      *  keyword for node_started attribution (resolution uses `workflowModel`). */
     model?: string;
+    /** Terminal-success evidence gate (#2230) — read at the completion path. */
+    evidence_policy?: WorkflowEvidencePolicy;
   } & WorkflowLevelOptions,
   workflowRun: WorkflowRun,
   workflowProvider: string,
@@ -7043,6 +7046,93 @@ export async function executeDagWorkflow(
 
   // Check if status was changed externally (e.g. cancelled) before marking complete.
   if (await skipIfStatusChanged('dag.skip_complete_status_changed')) return;
+
+  // Evidence gate (#2230): thin terminal-success gate, a sibling of the
+  // approval/write-back gates (run-status transitions are engine governance).
+  // When the workflow declares `evidence_policy.required: true`, refuse to flip
+  // the run to `completed` unless `$ARTIFACTS_DIR/evidence.json` exists — the
+  // workflow's own bash/script nodes compute what counts as evidence; the
+  // engine checks PRESENCE only (no schema validation, no content checks, no
+  // git/gh I/O — constitution: code computes, YAML coordinates). Placed BEFORE
+  // the container write-back gate so a run that cannot complete never pauses
+  // for (or applies) write-back — mirroring how node-failure runs skip that
+  // gate entirely. Resume-safe: the run id (and therefore artifactsDir) is
+  // stable across resume, so a failed run resumed after evidence.json is
+  // produced re-enters here with all nodes prior-completed and completes.
+  if (workflow.evidence_policy?.required === true) {
+    const evidencePath = joinPath(artifactsDir, 'evidence.json');
+    if (!existsSync(evidencePath)) {
+      const failMsg =
+        `DAG workflow '${workflow.name}' failed the evidence gate: ` +
+        `evidence_policy.required is true but no evidence file exists at ${evidencePath}. ` +
+        'All nodes succeeded — produce evidence.json from a bash/script node, ' +
+        'then resume the run once the file exists.';
+      getLog().error({ workflowRunId: workflowRun.id, evidencePath }, 'dag.evidence_gate_failed');
+      // Anonymous telemetry: terminal failure (evidence missing at completion).
+      captureWorkflowCompleted({
+        outcome: 'failed',
+        workflowName: workflow.name,
+        workflowSource: source,
+        provider: workflowProvider,
+        durationMs: Date.now() - dagStartTime,
+        nodesCompleted: nodeCounts.completed,
+        nodesFailed: nodeCounts.failed,
+        nodesSkipped: nodeCounts.skipped,
+        nodesTotal: nodeCounts.total,
+        exitReason: 'evidence_missing',
+        ...runUsageProps,
+      });
+      // Structured, machine-readable note first (metadata merge), then the
+      // failed-status write — so metadata.evidence_validation is already present
+      // the moment the run reads as failed.
+      await deps.store
+        .updateWorkflowRun(workflowRun.id, {
+          metadata: {
+            evidence_validation: {
+              status: 'missing',
+              policy: 'evidence_policy.required',
+              expected_path: evidencePath,
+              checked_at: new Date().toISOString(),
+            },
+          },
+        })
+        .catch((dbErr: Error) => {
+          getLog().error(
+            { err: dbErr, workflowRunId: workflowRun.id },
+            'dag.evidence_metadata_write_failed'
+          );
+        });
+      await deps.store.failWorkflowRun(workflowRun.id, failMsg).catch((dbErr: Error) => {
+        getLog().error({ err: dbErr, workflowRunId: workflowRun.id }, 'dag_db_fail_failed');
+      });
+      // Persist the reason into the workflow-events log (contract: never throws).
+      await deps.store.createWorkflowEvent({
+        workflow_run_id: workflowRun.id,
+        event_type: 'evidence_validation_failed',
+        data: { policy: 'evidence_policy.required', expected_path: evidencePath },
+      });
+      await logWorkflowError(logDir, workflowRun.id, failMsg).catch((logErr: Error) => {
+        getLog().error(
+          { err: logErr, workflowRunId: workflowRun.id },
+          'dag.workflow_error_log_write_failed'
+        );
+      });
+      const emitterForEvidence = getWorkflowEventEmitter();
+      emitterForEvidence.emit({
+        type: 'workflow_failed',
+        runId: workflowRun.id,
+        workflowName: workflow.name,
+        error: failMsg,
+      });
+      emitterForEvidence.unregisterRun(workflowRun.id);
+      await safeSendMessage(platform, conversationId, `❌ ${failMsg}`, {
+        workflowId: workflowRun.id,
+      });
+      // DO NOT throw — outer executor.ts catch would duplicate workflow_failed events
+      return;
+    }
+    getLog().info({ workflowRunId: workflowRun.id, evidencePath }, 'dag.evidence_gate_passed');
+  }
 
   // Container write-back gate (Phase C): all nodes succeeded — before completing,
   // present the overlay diff and (unless auto) pause for approval. This is an
