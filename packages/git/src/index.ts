@@ -51,6 +51,7 @@ export type { ForgeType, ForgeInfo } from './forge';
 // Repository operations
 export {
   findRepoRoot,
+  getDefaultRemote,
   getRemoteUrl,
   listChildRepos,
   syncWorkspace,

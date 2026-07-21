@@ -1,5 +1,5 @@
 // Forge detection: identify the hosting platform (GitHub, Gitea, GitLab)
-// behind a repository's `origin` remote, plus its REST API base URL.
+// behind a repository's remote (default `origin`), plus its REST API base URL.
 
 import { getRemoteUrl } from './repo';
 import type { RepoPath } from './types';
@@ -51,7 +51,7 @@ function matchSelfHostedForge(envVar: string, hostname: string): string | null {
 }
 
 /**
- * Detect the forge platform behind a repository's `origin` remote.
+ * Detect the forge platform behind a repository's remote (default: `origin`).
  *
  * Detection order:
  * 1. `github.com` hostname → GitHub (`https://api.github.com`)
@@ -61,11 +61,14 @@ function matchSelfHostedForge(envVar: string, hostname: string): string | null {
  * 5. `GITLAB_URL` env hostname match → self-hosted GitLab (`<base>/api/v4`)
  * 6. No match → `unknown` (empty apiBase)
  *
- * A repository with no `origin` remote defaults to GitHub for backwards
+ * A repository without the requested remote defaults to GitHub for backwards
  * compatibility with existing GitHub-only callers.
+ *
+ * @param repoPath - Path to the git repository
+ * @param remote - Remote name to inspect (default: 'origin')
  */
-export async function detectForge(repoPath: RepoPath): Promise<ForgeInfo> {
-  const remoteUrl = await getRemoteUrl(repoPath);
+export async function detectForge(repoPath: RepoPath, remote = 'origin'): Promise<ForgeInfo> {
+  const remoteUrl = await getRemoteUrl(repoPath, remote);
   if (!remoteUrl) {
     return { type: 'github', apiBase: 'https://api.github.com' };
   }

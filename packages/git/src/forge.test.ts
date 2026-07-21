@@ -43,6 +43,13 @@ describe('detectForge', () => {
     expect(info.apiBase).toBe('https://api.github.com');
   });
 
+  test('forwards a custom remote name to getRemoteUrl', async () => {
+    getRemoteUrlSpy.mockResolvedValue('https://github.com/owner/repo.git');
+    const info = await detectForge(testRepo, 'upstream');
+    expect(info.type).toBe('github');
+    expect(getRemoteUrlSpy).toHaveBeenCalledWith(testRepo, 'upstream');
+  });
+
   test('detects GitHub Enterprise when GITHUB_URL env matches remote hostname', async () => {
     process.env.GITHUB_URL = 'https://github.corp.com';
     getRemoteUrlSpy.mockResolvedValue('https://github.corp.com/owner/repo.git');

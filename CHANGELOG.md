@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Configurable git remote name** — new optional `worktree.remote` in `.archon/config.yaml` plus `getDefaultRemote()` auto-detection (`origin` if it exists, else the sole remote, actionable error on ambiguity). Worktree creation, workspace sync, PR checkout, forge detection, and cleanup all honor the resolved remote, so repos whose only remote isn't named `origin` work out of the box. Default behavior for `origin`-based repos is unchanged. (#1548)
+
 ## [0.6.0] - 2026-07-20
 
 Folder projects, opt-in Docker container isolation, three new workflow-composition primitives (`include:`, `loop_group`, `loop.command`), the Archon Studio builder preview, and a large security + reliability batch spanning gates, providers, Windows, Docker, and the console.

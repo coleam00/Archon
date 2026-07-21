@@ -75,12 +75,37 @@ export async function listChildRepos(rootPath: string): Promise<string[]> {
 }
 
 /**
- * Get the remote URL for origin (if it exists)
- * Returns null if no remote is configured
+ * Detect the default remote name for a repository.
+ *
+ * Resolution order:
+ *   1. 'origin' — if it exists (standard Git convention)
+ *   2. The sole remote — if only one is configured
+ *   3. null — ambiguous (multiple non-origin remotes) or no remotes at all
+ *
+ * Callers can override via `worktree.remote` in `.archon/config.yaml`.
+ * Git errors (not a repo, permission denied) propagate — a null return
+ * always means "no unambiguous remote", never a swallowed failure.
  */
-export async function getRemoteUrl(repoPath: RepoPath): Promise<string | null> {
+export async function getDefaultRemote(repoPath: RepoPath): Promise<string | null> {
+  const { stdout } = await execFileAsync('git', ['-C', repoPath, 'remote'], { timeout: 10000 });
+  // Split on LF or CRLF (Windows git) and trim each entry defensively
+  const remotes = stdout
+    .split(/\r?\n/)
+    .map(r => r.trim())
+    .filter(r => r.length > 0);
+  if (remotes.length === 0) return null;
+  if (remotes.includes('origin')) return 'origin';
+  if (remotes.length === 1) return remotes[0];
+  return null;
+}
+
+/**
+ * Get the URL configured for a git remote (default: 'origin').
+ * Returns null if the remote does not exist.
+ */
+export async function getRemoteUrl(repoPath: RepoPath, remote = 'origin'): Promise<string | null> {
   try {
-    const { stdout } = await execFileAsync('git', ['-C', repoPath, 'remote', 'get-url', 'origin'], {
+    const { stdout } = await execFileAsync('git', ['-C', repoPath, 'remote', 'get-url', remote], {
       timeout: 10000,
     });
     return stdout.trim() || null;
@@ -88,7 +113,7 @@ export async function getRemoteUrl(repoPath: RepoPath): Promise<string | null> {
     const err = error as Error & { stderr?: string };
     const errorText = `${err.message} ${err.stderr ?? ''}`;
 
-    // Expected: no remote named origin
+    // Expected: no remote with that name
     if (
       errorText.includes('No such remote') ||
       errorText.includes('does not have a url configured')
@@ -97,19 +122,19 @@ export async function getRemoteUrl(repoPath: RepoPath): Promise<string | null> {
     }
 
     // Unexpected error - surface it
-    getLog().error({ repoPath, err, stderr: err.stderr }, 'get_remote_url_failed');
-    throw new Error(`Failed to get remote URL for ${repoPath}: ${err.message}`);
+    getLog().error({ repoPath, remote, err, stderr: err.stderr }, 'get_remote_url_failed');
+    throw new Error(`Failed to get remote URL for ${repoPath} (remote: ${remote}): ${err.message}`);
   }
 }
 
 /**
- * Sync workspace with remote origin.
- * Fetches the base branch from origin, then updates local state according to mode.
+ * Sync workspace with its remote.
+ * Fetches the base branch from the remote, then updates local state according to mode.
  *
  * Modes:
  * - fast-forward (default): fetch, classify state, and fast-forward only when safe.
  * - fetch-only: fetch and classify without touching the working tree.
- * - reset: fetch and hard-reset to origin/<branch>. This is destructive and must be
+ * - reset: fetch and hard-reset to <remote>/<branch>. This is destructive and must be
  *   requested explicitly by callers that own the checkout.
  *
  * Branch resolution:
@@ -119,21 +144,24 @@ export async function getRemoteUrl(repoPath: RepoPath): Promise<string | null> {
  *
  * @param workspacePath - Path to the workspace (canonical repo, not worktree)
  * @param baseBranch - Optional base branch name (e.g., 'main', 'develop'). If omitted, auto-detects default branch
- * @param options - Optional sync mode. Defaults to non-destructive fast-forward.
+ * @param options - Optional settings:
+ *   - `mode`: sync mode. Defaults to non-destructive fast-forward.
+ *   - `remote` (default 'origin'): git remote name to fetch from.
  * @returns Branch used plus whether sync was performed
  * @throws Error with actionable message if configured branch doesn't exist
  */
 export async function syncWorkspace(
   workspacePath: RepoPath,
   baseBranch?: BranchName,
-  options?: { mode?: WorkspaceSyncMode }
+  options?: { mode?: WorkspaceSyncMode; remote?: string }
 ): Promise<WorkspaceSyncResult> {
   const mode = options?.mode ?? 'fast-forward';
-  const branchToSync = baseBranch ?? (await getDefaultBranch(workspacePath));
+  const remote = options?.remote ?? 'origin';
+  const branchToSync = baseBranch ?? (await getDefaultBranch(workspacePath, remote));
 
-  // Fetch from origin to ensure origin/<branchToSync> is up-to-date
+  // Fetch from the remote to ensure <remote>/<branchToSync> is up-to-date
   try {
-    await execFileAsync('git', ['-C', workspacePath, 'fetch', 'origin', branchToSync], {
+    await execFileAsync('git', ['-C', workspacePath, 'fetch', remote, branchToSync], {
       timeout: 60000,
     });
   } catch (error) {
@@ -146,18 +174,18 @@ export async function syncWorkspace(
       (errorMessage.includes("couldn't find remote ref") || errorMessage.includes('not found'))
     ) {
       throw new Error(
-        `Configured base branch '${baseBranch}' not found on remote. ` +
+        `Configured base branch '${baseBranch}' not found on remote '${remote}'. ` +
           'Either create the branch, update worktree.baseBranch in .archon/config.yaml, ' +
           'or remove the setting to use the auto-detected default branch.'
       );
     }
-    throw new Error(`Sync fetch from origin/${branchToSync} failed: ${err.message}`);
+    throw new Error(`Sync fetch from ${remote}/${branchToSync} failed: ${err.message}`);
   }
 
   const previousHead = await readShortSha(workspacePath, 'HEAD');
 
   if (mode !== 'reset') {
-    const state = await classifyWorkspaceState(workspacePath, branchToSync);
+    const state = await classifyWorkspaceState(workspacePath, branchToSync, remote);
 
     if (mode === 'fetch-only' || state !== 'behind') {
       return unchangedSyncResult(branchToSync, mode, state, previousHead);
@@ -171,14 +199,14 @@ export async function syncWorkspace(
     try {
       await execFileAsync(
         'git',
-        ['-C', workspacePath, 'merge', '--ff-only', `origin/${branchToSync}`],
+        ['-C', workspacePath, 'merge', '--ff-only', `${remote}/${branchToSync}`],
         {
           timeout: 30000,
         }
       );
     } catch (error) {
       const err = error as Error;
-      throw new Error(`Fast-forward to origin/${branchToSync} failed: ${err.message}`);
+      throw new Error(`Fast-forward to ${remote}/${branchToSync} failed: ${err.message}`);
     }
 
     const newHead = await readShortSha(workspacePath, 'HEAD');
@@ -193,15 +221,19 @@ export async function syncWorkspace(
     };
   }
 
-  // Hard-reset local working tree to match origin — only safe for Archon-managed
+  // Hard-reset local working tree to match the remote — only safe for Archon-managed
   // clones, never for a user's local working directory.
   try {
-    await execFileAsync('git', ['-C', workspacePath, 'reset', '--hard', `origin/${branchToSync}`], {
-      timeout: 30000,
-    });
+    await execFileAsync(
+      'git',
+      ['-C', workspacePath, 'reset', '--hard', `${remote}/${branchToSync}`],
+      {
+        timeout: 30000,
+      }
+    );
   } catch (error) {
     const err = error as Error;
-    throw new Error(`Reset to origin/${branchToSync} failed: ${err.message}`);
+    throw new Error(`Reset to ${remote}/${branchToSync} failed: ${err.message}`);
   }
 
   const newHead = await readShortSha(workspacePath, 'HEAD');
@@ -306,14 +338,15 @@ async function isAncestor(
 
 async function classifyWorkspaceState(
   workspacePath: RepoPath,
-  branchToSync: BranchName
+  branchToSync: BranchName,
+  remote = 'origin'
 ): Promise<WorkspaceSyncState> {
   if (await hasTrackedModifications(workspacePath)) {
     return 'dirty';
   }
 
   const localSha = await readSha(workspacePath, 'HEAD');
-  const remoteRef = `origin/${branchToSync}`;
+  const remoteRef = `${remote}/${branchToSync}`;
   const remoteSha = await readSha(workspacePath, remoteRef);
 
   if (localSha === remoteSha) {
@@ -386,18 +419,20 @@ export async function cloneRepository(
  *
  * @param repoPath - Path to the local repository
  * @param branch - Branch to sync to (e.g., 'main')
+ * @param remote - Remote name to fetch from (default: 'origin')
  * @returns GitResult<void>
  */
 export async function syncRepository(
   repoPath: RepoPath,
-  branch: BranchName
+  branch: BranchName,
+  remote = 'origin'
 ): Promise<GitResult<void>> {
   try {
-    await execFileAsync('git', ['fetch', 'origin'], { cwd: repoPath, timeout: 60000 });
+    await execFileAsync('git', ['fetch', remote], { cwd: repoPath, timeout: 60000 });
   } catch (error) {
     const err = error as Error & { stderr?: string };
     const errorText = `${err.message} ${err.stderr ?? ''}`.toLowerCase();
-    getLog().error({ err, repoPath, branch }, 'sync_repository_fetch_failed');
+    getLog().error({ err, repoPath, branch, remote }, 'sync_repository_fetch_failed');
 
     if (errorText.includes('not a git repository')) {
       return { ok: false, error: { code: 'not_a_repo', path: repoPath } };
@@ -412,7 +447,7 @@ export async function syncRepository(
   }
 
   try {
-    await execFileAsync('git', ['reset', '--hard', `origin/${branch}`], {
+    await execFileAsync('git', ['reset', '--hard', `${remote}/${branch}`], {
       cwd: repoPath,
       timeout: 30000,
     });
@@ -424,7 +459,7 @@ export async function syncRepository(
       return { ok: false, error: { code: 'branch_not_found', branch } };
     }
 
-    getLog().error({ err, repoPath, branch }, 'sync_repository_reset_failed');
+    getLog().error({ err, repoPath, branch, remote }, 'sync_repository_reset_failed');
     return { ok: false, error: { code: 'unknown', message: `Reset failed: ${err.message}` } };
   }
 

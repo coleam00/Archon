@@ -792,6 +792,38 @@ branch refs/heads/feature/auth
       expect(result).toBe('master');
     });
 
+    test('uses custom remote for symbolic-ref lookup and prefix stripping', async () => {
+      execSpy.mockResolvedValue({ stdout: 'upstream/main\n', stderr: '' });
+
+      const result = await git.getDefaultBranch('/workspace/repo', 'upstream');
+
+      expect(result).toBe('main');
+      expect(execSpy).toHaveBeenCalledWith(
+        'git',
+        ['-C', '/workspace/repo', 'symbolic-ref', 'refs/remotes/upstream/HEAD', '--short'],
+        expect.any(Object)
+      );
+    });
+
+    test('falls back to <remote>/main and names the remote in the failure error', async () => {
+      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+        if (args.includes('symbolic-ref')) {
+          throw new Error('fatal: ref refs/remotes/mar/HEAD is not a symbolic ref');
+        }
+        throw new Error('fatal: Needed a single revision');
+      });
+
+      await expect(git.getDefaultBranch('/workspace/repo', 'mar')).rejects.toThrow(
+        'neither mar/HEAD nor mar/main exist'
+      );
+      // Verify the fallback probed mar/main, not origin/main
+      expect(execSpy).toHaveBeenCalledWith(
+        'git',
+        ['-C', '/workspace/repo', 'rev-parse', '--verify', 'mar/main'],
+        expect.any(Object)
+      );
+    });
+
     test('returns non-standard branch from symbolic-ref (origin/develop)', async () => {
       execSpy.mockResolvedValue({ stdout: 'origin/develop\n', stderr: '' });
 
@@ -1600,7 +1632,7 @@ branch refs/heads/feature/auth
         newHead: 'abc12345',
         updated: false,
       });
-      expect(getDefaultBranchSpy).toHaveBeenCalledWith('/workspace/repo');
+      expect(getDefaultBranchSpy).toHaveBeenCalledWith('/workspace/repo', 'origin');
     });
 
     test('throws actionable error when configured branch not found on remote', async () => {
@@ -1861,6 +1893,139 @@ branch refs/heads/feature/auth
         'workspace.merge_base_check_failed'
       );
     });
+
+    test('fetches and resets from custom remote when provided in options', async () => {
+      execSpy.mockResolvedValue({ stdout: '', stderr: '' });
+
+      await git.syncWorkspace('/workspace/repo', 'main', { mode: 'reset', remote: 'mar' });
+
+      expect(execSpy).toHaveBeenCalledWith(
+        'git',
+        ['-C', '/workspace/repo', 'fetch', 'mar', 'main'],
+        expect.any(Object)
+      );
+
+      const resetCalls = execSpy.mock.calls.filter((call: unknown[]) => {
+        const args = call[1] as string[];
+        return args.includes('reset');
+      });
+      expect(resetCalls).toHaveLength(1);
+      expect(resetCalls[0][1]).toEqual(['-C', '/workspace/repo', 'reset', '--hard', 'mar/main']);
+    });
+
+    test('classifies state against the custom remote ref in fast-forward mode', async () => {
+      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+        if (args.includes('status')) return { stdout: '', stderr: '' };
+        if (args.includes('rev-parse') && args.includes('--short=8')) {
+          return { stdout: 'abc12345\n', stderr: '' };
+        }
+        if (args.includes('rev-parse') && args.includes('HEAD')) {
+          return { stdout: 'abc12345abcdef\n', stderr: '' };
+        }
+        if (args.includes('rev-parse') && args.includes('upstream/main')) {
+          return { stdout: 'abc12345abcdef\n', stderr: '' };
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      const result = await git.syncWorkspace('/workspace/repo', 'main', { remote: 'upstream' });
+
+      expect(result.state).toBe('in_sync');
+      // The state classification must rev-parse upstream/main, not origin/main
+      expect(execSpy).toHaveBeenCalledWith(
+        'git',
+        ['-C', '/workspace/repo', 'rev-parse', 'upstream/main'],
+        expect.any(Object)
+      );
+    });
+
+    test('passes custom remote to getDefaultBranch when baseBranch not provided', async () => {
+      execSpy.mockResolvedValue({ stdout: '', stderr: '' });
+      getDefaultBranchSpy.mockResolvedValue('develop');
+
+      await git.syncWorkspace('/workspace/repo', undefined, { remote: 'upstream' });
+
+      expect(getDefaultBranchSpy).toHaveBeenCalledWith('/workspace/repo', 'upstream');
+    });
+
+    test('includes custom remote name in fetch error message', async () => {
+      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+        if (args.includes('fetch')) {
+          throw new Error("fatal: 'mar' does not appear to be a git repository");
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      await expect(git.syncWorkspace('/workspace/repo', 'main', { remote: 'mar' })).rejects.toThrow(
+        'Sync fetch from mar/main failed'
+      );
+    });
+
+    test('names the custom remote in the configured-branch-missing error', async () => {
+      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+        if (args.includes('fetch')) {
+          throw new Error("fatal: couldn't find remote ref does-not-exist");
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      await expect(
+        git.syncWorkspace('/workspace/repo', 'does-not-exist', { remote: 'mar' })
+      ).rejects.toThrow("Configured base branch 'does-not-exist' not found on remote 'mar'");
+    });
+  });
+
+  describe('getDefaultRemote', () => {
+    let execSpy: Mock<typeof git.execFileAsync>;
+
+    beforeEach(() => {
+      execSpy = spyOn(git, 'execFileAsync');
+    });
+
+    afterEach(() => {
+      execSpy.mockRestore();
+    });
+
+    test('returns origin when it exists among multiple remotes', async () => {
+      execSpy.mockResolvedValue({ stdout: 'upstream\norigin\n', stderr: '' });
+
+      const result = await git.getDefaultRemote('/workspace/repo');
+      expect(result).toBe('origin');
+    });
+
+    test('returns sole remote when only one is configured', async () => {
+      execSpy.mockResolvedValue({ stdout: 'mar\n', stderr: '' });
+
+      const result = await git.getDefaultRemote('/workspace/repo');
+      expect(result).toBe('mar');
+    });
+
+    test('returns null when multiple non-origin remotes exist', async () => {
+      execSpy.mockResolvedValue({ stdout: 'jan\nfeb\nmar\n', stderr: '' });
+
+      const result = await git.getDefaultRemote('/workspace/repo');
+      expect(result).toBeNull();
+    });
+
+    test('returns null when no remotes are configured', async () => {
+      execSpy.mockResolvedValue({ stdout: '', stderr: '' });
+
+      const result = await git.getDefaultRemote('/workspace/repo');
+      expect(result).toBeNull();
+    });
+
+    test('propagates git errors instead of swallowing them', async () => {
+      execSpy.mockRejectedValue(new Error('not a git repository'));
+
+      await expect(git.getDefaultRemote('/workspace/repo')).rejects.toThrow('not a git repository');
+    });
+
+    test('handles CRLF line endings from git output', async () => {
+      execSpy.mockResolvedValue({ stdout: 'origin\r\nupstream\r\n', stderr: '' });
+
+      const result = await git.getDefaultRemote('/workspace/repo');
+      expect(result).toBe('origin');
+    });
   });
 
   describe('cloneRepository', () => {
@@ -1974,6 +2139,22 @@ branch refs/heads/feature/auth
         timeout: 60000,
       });
       expect(execSpy).toHaveBeenCalledWith('git', ['reset', '--hard', 'origin/main'], {
+        cwd: '/workspace/repo',
+        timeout: 30000,
+      });
+    });
+
+    test('fetches and resets using a custom remote', async () => {
+      execSpy.mockResolvedValue({ stdout: '', stderr: '' });
+
+      const result = await git.syncRepository('/workspace/repo', 'main', 'upstream');
+
+      expect(result).toEqual({ ok: true, value: undefined });
+      expect(execSpy).toHaveBeenCalledWith('git', ['fetch', 'upstream'], {
+        cwd: '/workspace/repo',
+        timeout: 60000,
+      });
+      expect(execSpy).toHaveBeenCalledWith('git', ['reset', '--hard', 'upstream/main'], {
         cwd: '/workspace/repo',
         timeout: 30000,
       });
@@ -2208,6 +2389,21 @@ branch refs/heads/feature/auth
 
       const result = await git.getRemoteUrl('/workspace/repo');
       expect(result).toBe('https://github.com/owner/repo.git');
+    });
+
+    test('queries a custom remote when provided', async () => {
+      execSpy.mockResolvedValue({
+        stdout: 'https://github.com/owner/repo.git\n',
+        stderr: '',
+      });
+
+      await git.getRemoteUrl('/workspace/repo', 'upstream');
+
+      expect(execSpy).toHaveBeenCalledWith(
+        'git',
+        ['-C', '/workspace/repo', 'remote', 'get-url', 'upstream'],
+        expect.any(Object)
+      );
     });
 
     test('returns null when no remote configured', async () => {

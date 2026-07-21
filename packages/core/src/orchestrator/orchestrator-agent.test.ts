@@ -34,6 +34,10 @@ const mockSyncWorkspace = mock(() =>
 );
 // Identity passthrough — strips branded type for test simplicity; empty-string guard not needed here
 const mockToRepoPath = mock((p: string) => p);
+// Remote auto-detection defaults to 'origin' (standard repos)
+const mockGetDefaultRemote = mock(() => Promise.resolve('origin' as string | null));
+// Repo config defaults to empty (no worktree.remote configured)
+const mockLoadRepoConfig = mock(() => Promise.resolve({} as Record<string, unknown>));
 const mockGetOrCreateConversation = mock(() => Promise.resolve(null as unknown));
 const mockGetCodebase = mock(() => Promise.resolve(null as unknown));
 const mockExecuteWorkflow = mock(() => Promise.resolve());
@@ -208,6 +212,7 @@ mock.module('../db/workflow-events', () => ({
 
 mock.module('../config/config-loader', () => ({
   loadConfig: mockLoadConfig,
+  loadRepoConfig: mockLoadRepoConfig,
 }));
 
 const mockGenerateAndSetTitle = mock(() => Promise.resolve());
@@ -255,6 +260,7 @@ mock.module('../utils/worktree-sync', () => ({
 }));
 
 mock.module('@archon/git', () => ({
+  getDefaultRemote: mockGetDefaultRemote,
   syncWorkspace: mockSyncWorkspace,
   toRepoPath: mockToRepoPath,
   toBranchName: mock((b: string) => b),
@@ -1065,6 +1071,10 @@ describe('discoverAllWorkflows — remote sync', () => {
   beforeEach(() => {
     mockSyncWorkspace.mockClear();
     mockToRepoPath.mockClear();
+    mockGetDefaultRemote.mockClear();
+    mockGetDefaultRemote.mockImplementation(() => Promise.resolve('origin'));
+    mockLoadRepoConfig.mockClear();
+    mockLoadRepoConfig.mockImplementation(() => Promise.resolve({}));
     mockGetOrCreateConversation.mockReset();
     mockGetCodebase.mockReset();
     mockListCodebases.mockReset();
@@ -1095,8 +1105,11 @@ describe('discoverAllWorkflows — remote sync', () => {
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', 'What is the latest commit?');
 
-    // Non-destructive default sync (#1864): 2-arg call, no explicit reset mode.
-    expect(mockSyncWorkspace).toHaveBeenCalledWith('/repos/test-repo', undefined);
+    // Non-destructive default sync (#1864): no explicit reset mode, only the
+    // resolved remote rides in the options.
+    expect(mockSyncWorkspace).toHaveBeenCalledWith('/repos/test-repo', undefined, {
+      remote: 'origin',
+    });
     // cwd resolution behavior — scoped chat runs the provider in the repo's
     // default_cwd (not the workspaces root) and skips ensureArchonWorkspacesPath
     // — is covered by the 'provider cwd resolution' describe block (issue #1179).
@@ -1117,7 +1130,8 @@ describe('discoverAllWorkflows — remote sync', () => {
 
     expect(mockSyncWorkspace).toHaveBeenCalledWith(
       '/home/test/.archon/workspaces/owner/repo/source',
-      undefined
+      undefined,
+      { remote: 'origin' }
     );
   });
 
@@ -1130,7 +1144,47 @@ describe('discoverAllWorkflows — remote sync', () => {
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', 'What is the latest commit?');
 
-    expect(mockSyncWorkspace).toHaveBeenCalledWith('/repos/test-repo', 'develop');
+    expect(mockSyncWorkspace).toHaveBeenCalledWith('/repos/test-repo', 'develop', {
+      remote: 'origin',
+    });
+  });
+
+  test('passes configured worktree.remote through to syncWorkspace', async () => {
+    const conversation = makeConversation({ codebase_id: 'codebase-1' });
+    const codebase = makeCodebaseForSync();
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
+    mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
+    mockLoadRepoConfig.mockResolvedValueOnce({ worktree: { remote: 'mar' } });
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'What is the latest commit?');
+
+    expect(mockSyncWorkspace).toHaveBeenCalledWith(
+      '/repos/test-repo',
+      undefined,
+      expect.objectContaining({ remote: 'mar' })
+    );
+    // Explicit config wins — auto-detection must not run
+    expect(mockGetDefaultRemote).not.toHaveBeenCalled();
+  });
+
+  test('auto-detects the remote when worktree.remote is not configured', async () => {
+    const conversation = makeConversation({ codebase_id: 'codebase-1' });
+    const codebase = makeCodebaseForSync();
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
+    mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
+    mockGetDefaultRemote.mockResolvedValueOnce('upstream');
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'What is the latest commit?');
+
+    expect(mockSyncWorkspace).toHaveBeenCalledWith(
+      '/repos/test-repo',
+      undefined,
+      expect.objectContaining({ remote: 'upstream' })
+    );
   });
 
   test('proceeds without throwing when syncWorkspace rejects', async () => {
@@ -1146,7 +1200,9 @@ describe('discoverAllWorkflows — remote sync', () => {
     await expect(
       handleMessage(platform, 'conv-1', 'What is the latest commit?')
     ).resolves.toBeUndefined();
-    expect(mockSyncWorkspace).toHaveBeenCalledWith('/repos/test-repo', undefined);
+    expect(mockSyncWorkspace).toHaveBeenCalledWith('/repos/test-repo', undefined, {
+      remote: 'origin',
+    });
   });
 
   test('does not call syncWorkspace when conversation has no codebase_id', async () => {
