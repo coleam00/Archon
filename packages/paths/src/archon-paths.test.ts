@@ -120,6 +120,13 @@ describe('archon-paths', () => {
       delete process.env.WSL_DISTRO_NAME;
       expect(getWSLDistroName()).toBeUndefined();
     });
+
+    test('returns the empty string when WSL_DISTRO_NAME is set but empty', () => {
+      // Pins current behaviour: '' passes through (callers filter falsy values),
+      // so a future `|| undefined` refactor would change observable behaviour.
+      process.env.WSL_DISTRO_NAME = '';
+      expect(getWSLDistroName()).toBe('');
+    });
   });
 
   describe('isDocker', () => {

@@ -18,6 +18,8 @@ const mockLoadConfig = mock(async () => ({
 }));
 const mockGetDatabaseType = mock(() => 'sqlite' as const);
 const mockIsDocker = mock(() => false);
+const mockIsWSL = mock(() => false);
+const mockGetWSLDistroName = mock((): string | undefined => undefined);
 const mockGetStats = mock(() => ({
   active: 1,
   queuedTotal: 2,
@@ -78,6 +80,8 @@ mock.module('@archon/paths', () => ({
   getDefaultWorkflowsPath: mock(() => '/tmp/.archon-test-nonexistent/workflows/defaults'),
   getArchonWorkspacesPath: () => '/tmp/.archon/workspaces',
   isDocker: mockIsDocker,
+  isWSL: mockIsWSL,
+  getWSLDistroName: mockGetWSLDistroName,
 }));
 
 mock.module('@archon/workflows/workflow-discovery', makeDiscoverWorkflowsMock);
@@ -200,6 +204,8 @@ describe('GET /api/health', () => {
     mockGetStats.mockReset();
     mockGetRunningWorkflows.mockReset();
     mockIsDocker.mockClear(); // preserve base () => false implementation; only clear call records
+    mockIsWSL.mockClear();
+    mockGetWSLDistroName.mockClear();
   });
 
   test('returns status ok with adapter and concurrency info', async () => {
@@ -363,6 +369,48 @@ describe('GET /api/health', () => {
     const body = (await response.json()) as { is_docker: boolean };
     expect(body.is_docker).toBe(true);
   });
+
+  test('includes is_wsl: false and omits wsl_distro in non-WSL environment', async () => {
+    mockGetStats.mockImplementationOnce(() => ({
+      active: 0,
+      queuedTotal: 0,
+      queuedByConversation: [],
+      maxConcurrent: 10,
+      activeConversationIds: [],
+    }));
+    mockGetRunningWorkflows.mockImplementationOnce(async () => []);
+    mockIsWSL.mockReturnValueOnce(false);
+    mockGetWSLDistroName.mockReturnValueOnce(undefined);
+
+    const app = makeApp();
+    const response = await app.request('/api/health');
+    expect(response.status).toBe(200);
+
+    const body = (await response.json()) as { is_wsl: boolean; wsl_distro?: string };
+    expect(body.is_wsl).toBe(false);
+    expect('wsl_distro' in body).toBe(false);
+  });
+
+  test('includes is_wsl: true and wsl_distro in WSL environment', async () => {
+    mockGetStats.mockImplementationOnce(() => ({
+      active: 0,
+      queuedTotal: 0,
+      queuedByConversation: [],
+      maxConcurrent: 10,
+      activeConversationIds: [],
+    }));
+    mockGetRunningWorkflows.mockImplementationOnce(async () => []);
+    mockIsWSL.mockReturnValueOnce(true);
+    mockGetWSLDistroName.mockReturnValueOnce('Ubuntu');
+
+    const app = makeApp();
+    const response = await app.request('/api/health');
+    expect(response.status).toBe(200);
+
+    const body = (await response.json()) as { is_wsl: boolean; wsl_distro?: string };
+    expect(body.is_wsl).toBe(true);
+    expect(body.wsl_distro).toBe('Ubuntu');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -509,5 +557,14 @@ describe('GET /api/openapi.json', () => {
     expect(schemas['Conversation']).toBeDefined();
     expect(schemas['Codebase']).toBeDefined();
     expect(schemas['WorkflowEvent']).toBeDefined();
+    // The WSL fields on /api/health are consumed by the generated web client
+    // types — assert the schema actually exposes them.
+    const health = schemas['HealthResponse'] as
+      | { properties?: Record<string, unknown>; required?: string[] }
+      | undefined;
+    expect(health?.properties?.['is_wsl']).toBeDefined();
+    expect(health?.properties?.['wsl_distro']).toBeDefined();
+    expect(health?.required).toContain('is_wsl');
+    expect(health?.required).not.toContain('wsl_distro');
   });
 });
