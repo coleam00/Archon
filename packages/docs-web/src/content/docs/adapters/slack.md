@@ -54,7 +54,7 @@ Archon uses **Socket Mode** for Slack integration, which means:
 2. Scroll down to **Scopes** > **Bot Token Scopes**
 3. Add these scopes to bot token scopes:
    - `app_mentions:read` -- Receive @mention events
-   - `chat:write` -- Send messages
+   - `chat:write` -- Send and edit messages (covers `chat.update` on the bot's own messages)
    - `channels:history` -- Read messages in public channels (for thread context)
    - `channels:join` -- Allow bot to join public channels
    - `groups:history` -- Read messages in private channels (optional)
@@ -63,6 +63,9 @@ Archon uses **Socket Mode** for Slack integration, which means:
    - `im:read` -- Read DM history (for DM support)
    - `mpim:history` -- Read group DM history (optional)
    - `mpim:write` -- Send group DMs
+   - `reactions:write` -- Add lifecycle reactions (🔄 / ✅ / ❌) to the triggering message
+   - `commands` -- Required for the `/archon` and `/archon-workflow` slash commands
+   - `users:read` -- Look up real names via `users.info` for user attribution. The adapter degrades gracefully if this scope is missing (real names won't appear in the Archon DB, but messages still flow); a one-time `slack.users_info_missing_scope` warning surfaces the misconfiguration in the server log.
 
 ## Step 4: Subscribe to Events
 
@@ -74,6 +77,39 @@ Archon uses **Socket Mode** for Slack integration, which means:
    - `message.channels` -- Messages in public channels (optional, for broader context)
    - `message.groups` -- Messages in private channels (optional)
 4. Click **Save Changes**
+
+## Step 4b: Enable Interactivity
+
+Interactive buttons (Approve / Reject / Cancel on workflow runs) ride the same
+Socket Mode connection -- no public URL needed.
+
+1. In the left sidebar, click **Interactivity & Shortcuts**
+2. Toggle **Interactivity** to ON
+3. Leave the **Request URL** field blank -- Socket Mode handles routing
+4. Click **Save Changes**
+
+## Step 4c: Register Slash Commands
+
+Two slash commands give the team an alternative to @mention:
+
+| Command | What it does |
+| --- | --- |
+| `/archon <message>` | Talks to Archon in the current channel. Equivalent to `@archon <message>`. |
+| `/archon-workflow <subcommand>` | Direct workflow control. Supports `list`, `status`, `run <name> <args>`, `approve <id> [comment]`, `reject <id> [reason]`, `abandon <id>`, `resume <id>`. |
+
+For each command:
+
+1. In the left sidebar, click **Slash Commands**
+2. Click **Create New Command**
+3. Fill in:
+   - **Command**: `/archon` (or `/archon-workflow`)
+   - **Request URL**: leave blank -- Socket Mode handles routing
+   - **Short Description**: e.g. "Talk to Archon" or "Archon workflow control"
+   - **Usage Hint**: e.g. `<message>` or `<subcommand>`
+4. Save
+
+Reinstall the app (Step 5) after adding scopes or commands so Slack issues a
+fresh token with the new permissions.
 
 ## Step 5: Install to Workspace
 
@@ -147,6 +183,29 @@ You can also DM the bot directly -- no @mention needed:
 ```
 /help
 ```
+
+## In-Thread UX
+
+When a workflow runs in a Slack thread, Archon now:
+
+- Adds 🔄 to your triggering message when the run starts, and swaps it for ✅
+  on completion or ❌ on failure / cancellation
+- Posts a single status message in the thread that's edited in place as DAG
+  nodes start, complete, fail, or get skipped
+- Renders approval gates as interactive **Approve** / **Reject** buttons
+  in-thread -- no need to leave Slack to resume a paused run
+- Adds a **Cancel** button on the status message while the run is
+  non-terminal, so anyone on the allowed user list can abandon a runaway run
+  with a click
+- Appends a small italic cost / token footer after direct-chat replies
+  (e.g. `_cost: $0.0234 · 12.4k tokens · stop: end_turn_`) and on the
+  final status message when a workflow completes
+- Annotates long responses split across multiple Slack messages with
+  `_part i/n_` footers so it's clear they belong together
+
+All clicks on Approve / Reject / Cancel run through the same
+`SLACK_ALLOWED_USER_IDS` whitelist as inbound messages -- unauthorized
+clicks are silently dropped and logged.
 
 ## Troubleshooting
 

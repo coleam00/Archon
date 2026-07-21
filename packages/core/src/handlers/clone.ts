@@ -2,7 +2,7 @@
  * Standalone repository clone/register logic.
  * Extracted from command-handler.ts for reuse by REST endpoints.
  */
-import { access, rm } from 'fs/promises';
+import { access, rm, stat, realpath } from 'fs/promises';
 import { join, basename, resolve } from 'path';
 import * as codebaseDb from '../db/codebases';
 import { sanitizeError } from '../utils/credential-sanitizer';
@@ -11,12 +11,16 @@ import {
   expandTilde,
   getCommandFolderSearchPaths,
   ensureProjectStructure,
+  ensureFolderProjectStructure,
+  getFolderProjectRoot,
   getProjectSourcePath,
   createProjectSourceSymlink,
   parseOwnerRepo,
+  slugifyFolderName,
 } from '@archon/paths';
 import { findMarkdownFilesRecursive } from '../utils/commands';
 import { createLogger } from '@archon/paths';
+import { resolveDefaultAssistant } from '../config/resolve-assistant';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -25,13 +29,124 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
+/**
+ * Parse a URL safely, returning null for non-URL strings (e.g. bare host/path).
+ */
+function safeParseUrl(url: string): URL | null {
+  try {
+    return new URL(url);
+  } catch {
+    return null;
+  }
+}
+
+/** Forge auth config: which env var to check and what auth URL scheme to use. */
+interface ForgeAuthEntry {
+  hostPattern: string;
+  envVar: string;
+  /** URL user-info prefix (e.g. 'oauth2:' for GitLab, empty for GitHub). */
+  scheme: string;
+}
+
+/** Known exact-hostname → env-var + scheme mappings. */
+const FORGE_AUTH: ForgeAuthEntry[] = [
+  { hostPattern: 'github.com', envVar: 'GH_TOKEN', scheme: '' },
+  { hostPattern: 'gitlab.com', envVar: 'GITLAB_TOKEN', scheme: 'oauth2:' },
+  { hostPattern: 'gitea.com', envVar: 'GITEA_TOKEN', scheme: '' },
+];
+
+/**
+ * Resolve forge-specific authentication token and URL scheme for a repository URL.
+ * Returns the token and auth scheme prefix, or empty values if no token is available.
+ */
+/** Well-known self-hosted hostname label patterns → env var + scheme. */
+const SELF_HOSTED_FORGE: { label: string; envVar: string; scheme: string }[] = [
+  { label: 'gitlab', envVar: 'GITLAB_TOKEN', scheme: 'oauth2:' },
+  { label: 'gitea', envVar: 'GITEA_TOKEN', scheme: '' },
+  { label: 'forgejo', envVar: 'GITEA_TOKEN', scheme: '' },
+];
+
+export function resolveForgeAuth(url: string): { token: string | undefined; scheme: string } {
+  // Extract hostname from URL (or from bare host/path like "github.com/owner/repo")
+  let hostname: string;
+  const parsed = safeParseUrl(url);
+  if (parsed) {
+    hostname = parsed.hostname.toLowerCase();
+  } else {
+    // Bare host/path form: take everything before the first slash
+    hostname = url.split('/')[0].toLowerCase();
+  }
+
+  // 1. Exact known-host match
+  for (const entry of FORGE_AUTH) {
+    if (hostname === entry.hostPattern) {
+      const token = process.env[entry.envVar];
+      if (token) {
+        return { token, scheme: entry.scheme };
+      }
+      return { token: undefined, scheme: '' };
+    }
+  }
+
+  // 2. Self-hosted: check if any hostname label matches a known forge name
+  //    e.g. "gitlab.mycompany.com" has labels ["gitlab", "mycompany", "com"]
+  const labels = hostname.split('.');
+  for (const entry of SELF_HOSTED_FORGE) {
+    if (labels.includes(entry.label)) {
+      const token = process.env[entry.envVar];
+      if (token) {
+        return { token, scheme: entry.scheme };
+      }
+      return { token: undefined, scheme: '' };
+    }
+  }
+
+  // 3. Explicit URL match: compare clone hostname against configured *_URL env vars.
+  //    Handles self-hosted instances where the hostname doesn't contain a forge name
+  //    (e.g. git.example.com with GITEA_URL=https://git.example.com).
+  const URL_FORGE: { urlEnvVar: string; tokenEnvVar: string; scheme: string }[] = [
+    { urlEnvVar: 'GITEA_URL', tokenEnvVar: 'GITEA_TOKEN', scheme: '' },
+    { urlEnvVar: 'GITLAB_URL', tokenEnvVar: 'GITLAB_TOKEN', scheme: 'oauth2:' },
+    { urlEnvVar: 'FORGEJO_URL', tokenEnvVar: 'GITEA_TOKEN', scheme: '' },
+  ];
+  for (const entry of URL_FORGE) {
+    const forgeUrl = process.env[entry.urlEnvVar];
+    if (forgeUrl) {
+      const forgeParsed = safeParseUrl(forgeUrl);
+      if (forgeParsed?.hostname.toLowerCase() === hostname) {
+        const token = process.env[entry.tokenEnvVar];
+        if (token) {
+          return { token, scheme: entry.scheme };
+        }
+      }
+    }
+  }
+
+  return { token: undefined, scheme: '' };
+}
+
 export interface RegisterResult {
   codebaseId: string;
   name: string;
   repositoryUrl: string | null;
   defaultCwd: string;
+  defaultBranch: string | null;
   commandCount: number;
   alreadyExisted: boolean;
+}
+
+async function detectCurrentGitBranch(targetPath: string): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync(
+      'git',
+      ['-C', targetPath, 'rev-parse', '--abbrev-ref', 'HEAD'],
+      { timeout: 5000 }
+    );
+    const branch = stdout.trim();
+    return branch && branch !== 'HEAD' ? branch : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -42,28 +157,8 @@ async function registerRepoAtPath(
   name: string,
   repositoryUrl: string | null
 ): Promise<RegisterResult> {
-  // Auto-detect assistant type based on SDK folder conventions.
-  // Built-in providers use well-known folders (.claude/, .codex/).
-  // Falls back to first registered built-in provider if no folder detected.
-  const { getRegisteredProviders } = await import('@archon/providers');
-  const defaultProvider = getRegisteredProviders().find(p => p.builtIn)?.id ?? 'claude';
-  let suggestedAssistant = defaultProvider;
-  const codexFolder = join(targetPath, '.codex');
-  const claudeFolder = join(targetPath, '.claude');
-
-  try {
-    await access(codexFolder);
-    suggestedAssistant = 'codex';
-    getLog().debug({ path: codexFolder }, 'assistant_detected_codex');
-  } catch {
-    try {
-      await access(claudeFolder);
-      suggestedAssistant = 'claude';
-      getLog().debug({ path: claudeFolder }, 'assistant_detected_claude');
-    } catch {
-      getLog().debug({ provider: defaultProvider }, 'assistant_default_from_registry');
-    }
-  }
+  const suggestedAssistant = await resolveDefaultAssistant(targetPath);
+  const detectedBranch = await detectCurrentGitBranch(targetPath);
 
   // Check if a codebase with this name already exists (dedup by project identity)
   const existing = await codebaseDb.findCodebaseByName(name);
@@ -73,9 +168,16 @@ async function registerRepoAtPath(
     const isExistingPathManaged = existing.default_cwd.includes('/.archon/workspaces/');
     const shouldUpdateCwd = isNewPathLocal && isExistingPathManaged;
 
-    const updates: { default_cwd?: string; repository_url?: string | null } = {};
+    const updates: {
+      default_cwd?: string;
+      repository_url?: string | null;
+      default_branch?: string | null;
+    } = {};
     if (shouldUpdateCwd) {
       updates.default_cwd = targetPath;
+      updates.default_branch = detectedBranch;
+    } else if (!existing.default_branch && detectedBranch) {
+      updates.default_branch = detectedBranch;
     }
     // Fill in repository_url if the existing record doesn't have one
     if (!existing.repository_url && repositoryUrl) {
@@ -87,6 +189,10 @@ async function registerRepoAtPath(
 
     // Still reload commands for the existing codebase
     const effectiveCwd = shouldUpdateCwd ? targetPath : existing.default_cwd;
+    const effectiveDefaultBranch =
+      updates.default_branch !== undefined
+        ? updates.default_branch
+        : (existing.default_branch ?? null);
     let commandsLoaded = 0;
     for (const folder of getCommandFolderSearchPaths()) {
       const commandPath = join(effectiveCwd, folder);
@@ -115,6 +221,7 @@ async function registerRepoAtPath(
       name: existing.name,
       repositoryUrl: existing.repository_url,
       defaultCwd: shouldUpdateCwd ? targetPath : existing.default_cwd,
+      defaultBranch: effectiveDefaultBranch,
       commandCount: commandsLoaded,
       alreadyExisted: true,
     };
@@ -125,6 +232,7 @@ async function registerRepoAtPath(
     name,
     repository_url: repositoryUrl ?? undefined,
     default_cwd: targetPath,
+    default_branch: detectedBranch,
     ai_assistant_type: suggestedAssistant,
   });
 
@@ -158,6 +266,7 @@ async function registerRepoAtPath(
     name: codebase.name,
     repositoryUrl: repositoryUrl,
     defaultCwd: targetPath,
+    defaultBranch: codebase.default_branch ?? null,
     commandCount: commandsLoaded,
     alreadyExisted: false,
   };
@@ -175,7 +284,8 @@ function normalizeRepoUrl(rawUrl: string): {
   const normalizedUrl = rawUrl.replace(/\/+$/, '');
 
   let workingUrl = normalizedUrl;
-  const sshMatch = /^git@([^:]+):(.+)$/.exec(workingUrl);
+  // Convert SSH URLs (git@host:owner/repo) to HTTPS for any host
+  const sshMatch = /^git@([^:]+):(.+)$/.exec(normalizedUrl);
   if (sshMatch) {
     workingUrl = `https://${sshMatch[1]}/${sshMatch[2]}`;
   }
@@ -228,6 +338,7 @@ export async function cloneRepository(repoUrl: string): Promise<RegisterResult> 
         name: existingCodebase.name,
         repositoryUrl: existingCodebase.repository_url,
         defaultCwd: existingCodebase.default_cwd,
+        defaultBranch: existingCodebase.default_branch ?? null,
         commandCount: 0,
         alreadyExisted: true,
       };
@@ -244,17 +355,17 @@ export async function cloneRepository(repoUrl: string): Promise<RegisterResult> 
 
   getLog().info({ url: workingUrl, targetPath }, 'clone_started');
 
-  // Build clone command with authentication if GitHub token is available
+  // Build clone command with authentication using forge-specific tokens
   let cloneUrl = workingUrl;
-  const ghToken = process.env.GH_TOKEN;
+  const { token: forgeToken, scheme: authScheme } = resolveForgeAuth(workingUrl);
 
-  if (ghToken && workingUrl.includes('github.com')) {
-    if (workingUrl.startsWith('https://github.com')) {
-      cloneUrl = workingUrl.replace('https://github.com', `https://${ghToken}@github.com`);
-    } else if (workingUrl.startsWith('http://github.com')) {
-      cloneUrl = workingUrl.replace('http://github.com', `https://${ghToken}@github.com`);
+  if (forgeToken) {
+    const parsed = safeParseUrl(workingUrl);
+    if (parsed) {
+      cloneUrl = `https://${authScheme}${forgeToken}@${parsed.hostname}${parsed.pathname}`;
     } else if (!workingUrl.startsWith('http')) {
-      cloneUrl = `https://${ghToken}@${workingUrl}`;
+      // Bare host/path form (e.g. github.com/owner/repo)
+      cloneUrl = `https://${authScheme}${forgeToken}@${workingUrl}`;
     }
     getLog().debug('clone_authenticated');
   }
@@ -270,7 +381,11 @@ export async function cloneRepository(repoUrl: string): Promise<RegisterResult> 
   }
 
   try {
-    await execFileAsync('git', ['clone', cloneUrl, targetPath]);
+    // GIT_TERMINAL_PROMPT=0 turns any missing-creds scenario into an
+    // immediate, readable error instead of a hung stdin credential prompt.
+    await execFileAsync('git', ['clone', cloneUrl, targetPath], {
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+    });
   } catch (error) {
     const safeErr = sanitizeError(error as Error);
     throw new Error(`Failed to clone repository: ${safeErr.message}`);
@@ -304,6 +419,7 @@ export async function registerRepository(localPath: string): Promise<RegisterRes
       name: existing.name,
       repositoryUrl: existing.repository_url,
       defaultCwd: existing.default_cwd,
+      defaultBranch: existing.default_branch ?? null,
       commandCount: 0,
       alreadyExisted: true,
     };
@@ -330,9 +446,9 @@ export async function registerRepository(localPath: string): Promise<RegisterRes
   if (remoteUrl) {
     const cleaned = remoteUrl.replace(/\.git$/, '').replace(/\/+$/, '');
     let workingRemote = cleaned;
-    const sshMatch = /^git@([^:]+):(.+)$/.exec(workingRemote);
-    if (sshMatch) {
-      workingRemote = `https://${sshMatch[1]}/${sshMatch[2]}`;
+    const sshRemoteMatch = /^git@([^:]+):(.+)$/.exec(cleaned);
+    if (sshRemoteMatch) {
+      workingRemote = `https://${sshRemoteMatch[1]}/${sshRemoteMatch[2]}`;
     }
     const parts = workingRemote.split('/');
     const r = parts.pop();
@@ -356,4 +472,109 @@ export async function registerRepository(localPath: string): Promise<RegisterRes
 
   // default_cwd is the real local path (not the symlink)
   return registerRepoAtPath(localPath, name, remoteUrl);
+}
+
+/**
+ * Build an accurate path-validation error from a `realpath`/`stat` failure —
+ * `ENOENT` really is "does not exist", but `EACCES`/`ENOTDIR`/`ELOOP` are not,
+ * and mislabeling them "Path does not exist" sends the user chasing a typo
+ * instead of a permissions/symlink problem. The raw errno message is preserved.
+ */
+function pathValidationError(path: string, error: Error): Error {
+  const reasonByCode: Record<string, string> = {
+    EACCES: 'Permission denied',
+    ENOTDIR: 'A path segment is not a directory',
+    ELOOP: 'Too many symbolic links',
+  };
+  const code = (error as NodeJS.ErrnoException).code ?? '';
+  const reason = reasonByCode[code] ?? 'Path does not exist';
+  return new Error(`${reason}: ${path} (${error.message})`);
+}
+
+/**
+ * Register a folder project (`kind: 'folder'`) — any directory that is NOT
+ * required to be a git repository. Used for multi-repo roots (N service repos
+ * under one root) and plain business-ops folders with no git at all.
+ *
+ * Unlike {@link registerRepository}, this performs NO git validation and creates
+ * NO `source/` symlink: a folder project runs in place at its real path. Named
+ * artifact/log storage lives under `~/.archon/workspaces/_folder/<slug>/`.
+ */
+export async function registerFolder(localPath: string, name?: string): Promise<RegisterResult> {
+  const expandedPath = resolve(expandTilde(localPath));
+
+  // Canonicalize symlinks (realpath) so the stored `default_cwd` matches what the
+  // lookups resolve to: `archon doctor` uses `process.cwd()` (which resolves
+  // symlinks — e.g. macOS `/tmp` → `/private/tmp`) and the CLI gate realpaths its
+  // cwd too. Without this a symlinked root registers under one path but is looked
+  // up under another, causing a lookup miss and a duplicate row on re-register.
+  // Repo projects are immune because git canonicalizes the repo root on both
+  // sides. realpath also validates existence (throws ENOENT for a missing path).
+  let resolvedPath: string;
+  try {
+    resolvedPath = await realpath(expandedPath);
+  } catch (error) {
+    throw pathValidationError(expandedPath, error as Error);
+  }
+
+  // realpath succeeds for a symlink-to-file too — require a directory (no git check).
+  let isDirectory = false;
+  try {
+    isDirectory = (await stat(resolvedPath)).isDirectory();
+  } catch (error) {
+    throw pathValidationError(resolvedPath, error as Error);
+  }
+  if (!isDirectory) {
+    throw new Error(`Path is not a directory: ${resolvedPath}`);
+  }
+
+  // Already registered by path — return the existing record unchanged.
+  const existing = await codebaseDb.findCodebaseByDefaultCwd(resolvedPath);
+  if (existing) {
+    return {
+      codebaseId: existing.id,
+      name: existing.name,
+      repositoryUrl: existing.repository_url,
+      defaultCwd: existing.default_cwd,
+      defaultBranch: existing.default_branch ?? null,
+      commandCount: 0,
+      alreadyExisted: true,
+    };
+  }
+
+  const projectName = name?.trim() || basename(resolvedPath);
+  const slug = slugifyFolderName(projectName);
+
+  // Create the _folder/<slug>/{artifacts,logs} storage structure (no source/,
+  // no worktrees/ — folder projects are never git-isolated).
+  await ensureFolderProjectStructure(slug);
+
+  const suggestedAssistant = await resolveDefaultAssistant(resolvedPath);
+  const codebase = await codebaseDb.createCodebase({
+    name: projectName,
+    default_cwd: resolvedPath,
+    ai_assistant_type: suggestedAssistant,
+    kind: 'folder',
+  });
+
+  getLog().info(
+    {
+      name: projectName,
+      path: resolvedPath,
+      id: codebase.id,
+      slug,
+      storage: getFolderProjectRoot(slug),
+    },
+    'project.register_folder_completed'
+  );
+
+  return {
+    codebaseId: codebase.id,
+    name: codebase.name,
+    repositoryUrl: null,
+    defaultCwd: resolvedPath,
+    defaultBranch: null,
+    commandCount: 0,
+    alreadyExisted: false,
+  };
 }

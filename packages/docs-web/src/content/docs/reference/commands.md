@@ -24,6 +24,7 @@ These commands are handled deterministically by the orchestrator — they always
 | `/register-project <path>` | Register a local directory as a project |
 | `/update-project <name> <path>` | Update a project's directory path |
 | `/remove-project <name>` | Remove a project registration |
+| `/setproject <name>` | Bind this conversation to a registered project. Clears any working-directory/worktree override and starts a fresh AI session on the next message (chat history stays visible) |
 
 ## Workflows
 
@@ -34,8 +35,8 @@ These commands are handled deterministically by the orchestrator — they always
 | `/workflow status` | Show active workflows |
 | `/workflow cancel` | Cancel running workflow |
 | `/workflow resume <id>` | Resume a failed run (re-runs, skipping completed nodes) |
-| `/workflow abandon <id>` | Discard a non-terminal run |
-| `/workflow approve <id> [comment]` | Approve a paused workflow run at an approval gate |
+| `/workflow abandon <id>` | Discard a run (running, paused, or failed) |
+| `/workflow approve <id> [comment]` | Approve a paused workflow run at an approval gate (interactive-loop gates: no comment on a signal-bearing gate = accept & complete; a comment runs another iteration) |
 | `/workflow reject <id> [reason]` | Reject a paused workflow run at an approval gate |
 | `/workflow run <name> [args]` | Run a workflow directly |
 | `/workflow cleanup [days]` | CLI only -- delete old run records (default: 7 days) |

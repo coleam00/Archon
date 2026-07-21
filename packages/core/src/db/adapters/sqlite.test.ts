@@ -1,5 +1,7 @@
 import { describe, test, expect, afterEach } from 'bun:test';
 import { SqliteAdapter } from './sqlite';
+import { getSchemaSQL } from '../bundled-schema';
+import { Database } from 'bun:sqlite';
 import { unlinkSync } from 'fs';
 import { join } from 'path';
 
@@ -177,4 +179,282 @@ describe('SqliteAdapter', () => {
       expect(result.rows[0].equal).toBe(1);
     });
   });
+
+  describe('upgrade from pre-0.4.0 schema (regression for the v0.4.0 init bug)', () => {
+    /**
+     * v0.4.0 added user_id columns to conversations/workflow_runs/messages and
+     * created_by_user_id on isolation_environments via migrateColumns(). It also
+     * added CREATE INDEX statements referencing those columns directly inside
+     * createSchema(). On an existing pre-0.4.0 database, createSchema()'s
+     * CREATE INDEX hit a "no such column: user_id" because migrateColumns()
+     * runs AFTER createSchema(), aborting the entire init and leaving every
+     * subsequent query broken. This test reproduces that exact pre-0.4.0 shape
+     * and asserts that SqliteAdapter construction now completes cleanly and
+     * adds both the columns and the indexes.
+     */
+    test('migrates user_id columns and indexes onto an existing pre-0.4.0 database', () => {
+      const dbPath = join(
+        import.meta.dir,
+        `.test-sqlite-pre040-${Date.now()}-${Math.random().toString(36).slice(2)}.db`
+      );
+      currentDbPath = dbPath;
+
+      // Seed the file with a minimal pre-0.4.0 shape: the four tables that
+      // gained user_id-flavored columns in 0.4.0, with everything EXCEPT
+      // those new columns. CREATE TABLE IF NOT EXISTS in createSchema() will
+      // then be a no-op for these tables, so the migration path is the one
+      // under test.
+      const raw = new Database(dbPath);
+      raw.exec(`
+        CREATE TABLE remote_agent_codebases (
+          id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+          name TEXT NOT NULL,
+          default_cwd TEXT NOT NULL,
+          repository_url TEXT,
+          created_at TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE remote_agent_conversations (
+          id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+          platform_type TEXT NOT NULL,
+          platform_conversation_id TEXT NOT NULL,
+          ai_assistant_type TEXT,
+          codebase_id TEXT,
+          cwd TEXT,
+          isolation_env_id TEXT,
+          hidden INTEGER DEFAULT 0,
+          deleted_at TEXT,
+          last_activity_at TEXT,
+          created_at TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE remote_agent_workflow_runs (
+          id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+          workflow_name TEXT NOT NULL,
+          conversation_id TEXT,
+          codebase_id TEXT,
+          status TEXT DEFAULT 'pending',
+          user_message TEXT,
+          metadata TEXT DEFAULT '{}',
+          parent_conversation_id TEXT,
+          last_activity_at TEXT,
+          created_at TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE remote_agent_messages (
+          id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+          conversation_id TEXT,
+          role TEXT NOT NULL,
+          content TEXT NOT NULL,
+          metadata TEXT DEFAULT '{}',
+          created_at TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE remote_agent_isolation_environments (
+          id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+          codebase_id TEXT NOT NULL,
+          workflow_type TEXT NOT NULL,
+          workflow_id TEXT NOT NULL,
+          provider TEXT NOT NULL DEFAULT 'worktree',
+          working_path TEXT NOT NULL,
+          branch_name TEXT NOT NULL,
+          created_by_platform TEXT,
+          metadata TEXT DEFAULT '{}',
+          status TEXT NOT NULL DEFAULT 'active',
+          created_at TEXT DEFAULT (datetime('now')),
+          updated_at TEXT DEFAULT (datetime('now'))
+        );
+      `);
+      raw.close();
+
+      // Construction must not throw. Before the fix, this errored with
+      // "no such column: user_id" on the CREATE INDEX inside createSchema().
+      db = new SqliteAdapter(dbPath);
+
+      // The migration should have added every user_id column.
+      const codebaseCols = raw_pragma(dbPath, 'remote_agent_codebases');
+      expect(codebaseCols).toContain('default_branch');
+      // …and the folder-project `kind` discriminator (runtime ALTER on old DBs).
+      expect(codebaseCols).toContain('kind');
+      // A row inserted without `kind` backfills to 'repo' via the column DEFAULT.
+      const writable = new Database(dbPath);
+      try {
+        writable.run(
+          "INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ('cb-old', 'legacy', '/tmp/legacy')"
+        );
+      } finally {
+        writable.close();
+      }
+      const kindRow = raw_query(
+        dbPath,
+        "SELECT kind FROM remote_agent_codebases WHERE id = 'cb-old'"
+      );
+      expect(kindRow).toEqual([{ kind: 'repo' }]);
+
+      const conversationCols = raw_pragma(dbPath, 'remote_agent_conversations');
+      expect(conversationCols).toContain('user_id');
+
+      const workflowRunCols = raw_pragma(dbPath, 'remote_agent_workflow_runs');
+      expect(workflowRunCols).toContain('user_id');
+
+      const messageCols = raw_pragma(dbPath, 'remote_agent_messages');
+      expect(messageCols).toContain('user_id');
+
+      const isolationCols = raw_pragma(dbPath, 'remote_agent_isolation_environments');
+      expect(isolationCols).toContain('created_by_user_id');
+
+      // And the indexes that previously failed must now exist.
+      const indexes = raw_indexes(dbPath);
+      expect(indexes).toContain('idx_conversations_user_id');
+      expect(indexes).toContain('idx_workflow_runs_user_id');
+
+      // Sanity: querying the table that previously errored at init now works.
+      const probe = raw_query(
+        dbPath,
+        'SELECT COUNT(*) AS n FROM remote_agent_conversations WHERE user_id IS NOT NULL'
+      );
+      expect(probe).toEqual([{ n: 0 }]);
+    });
+  });
+
+  describe('provider-key vendor-id migration (#1955)', () => {
+    test('renames legacy rows and lets an existing vendor row win on conflict', async () => {
+      db = createTestDb();
+      const dbPath = currentDbPath;
+      // Seed users + legacy/vendor credential rows post-construction…
+      await db.query(`INSERT INTO remote_agent_users (id) VALUES ('u1'), ('u2')`, []);
+      await db.query(
+        `INSERT INTO remote_agent_user_provider_keys (id, user_id, provider, kind, api_key_encrypted, label)
+         VALUES
+           ('k1', 'u1', 'claude',  'api_key', 'enc-legacy-claude', 'legacy'),
+           ('k2', 'u1', 'anthropic', 'api_key', 'enc-vendor-anthropic', 'vendor'),
+           ('k3', 'u2', 'codex',   'api_key', 'enc-legacy-codex', NULL),
+           ('k4', 'u2', 'copilot', 'oauth',   NULL, 'subscription')`,
+        []
+      );
+      await db.close();
+
+      // …then reopen: migrateColumns() runs the idempotent vendor-id data fix.
+      db = new SqliteAdapter(dbPath);
+      const rows = raw_query(
+        dbPath,
+        'SELECT user_id, provider, label FROM remote_agent_user_provider_keys ORDER BY user_id, provider'
+      ) as { user_id: string; provider: string; label: string | null }[];
+      expect(rows).toEqual([
+        // u1: legacy 'claude' row dropped — the explicit 'anthropic' row wins.
+        { user_id: 'u1', provider: 'anthropic', label: 'vendor' },
+        // u2: no conflicts — legacy ids renamed in place.
+        { user_id: 'u2', provider: 'github-copilot', label: 'subscription' },
+        { user_id: 'u2', provider: 'openai', label: null },
+      ]);
+
+      // Idempotent: a third open changes nothing.
+      await db.close();
+      db = new SqliteAdapter(dbPath);
+      const again = raw_query(
+        dbPath,
+        'SELECT COUNT(*) AS n FROM remote_agent_user_provider_keys'
+      ) as { n: number }[];
+      expect(again).toEqual([{ n: 3 }]);
+    });
+  });
+
+  describe('schema parity with the Postgres migration (000_combined.sql)', () => {
+    /**
+     * The SQLite schema (createSchema() in sqlite.ts) and the Postgres schema
+     * (migrations/000_combined.sql) are two independently hand-maintained
+     * sources of truth. Before this test nothing compared them, so a table
+     * added to the migration but forgotten in sqlite.ts shipped silently and
+     * threw `no such table: <name>` on SQLite. That regression actually
+     * happened with remote_agent_user_ai_prefs (Phase 3 / credentials epic):
+     * added to the migration, missed in sqlite.ts, invisible on the Postgres
+     * VPS. The lookup is caught (runs degrade to config-only), but it spammed
+     * two ERROR log lines on every SQLite run.
+     *
+     * Better Auth's remote_agent_auth_* tables are intentionally Postgres-only
+     * (web auth never runs on SQLite — see migrateColumns() and CLAUDE.md), so
+     * they are the one allowlisted exception. A genuinely new Postgres-only
+     * table must be added to this allowlist with a justifying comment.
+     */
+    const POSTGRES_ONLY_PREFIX = 'remote_agent_auth_';
+
+    /** Extract Archon table names declared in the Postgres migration. */
+    function postgresArchonTables(): string[] {
+      const sql = getSchemaSQL();
+      const re = /CREATE TABLE(?:\s+IF NOT EXISTS)?\s+"?([a-z0-9_]+)"?/gi;
+      // All Archon tables share this prefix (CLAUDE.md); the filter also drops
+      // false positives — e.g. "above" captured from "...CREATE TABLE above)"
+      // inside a SQL comment.
+      const names = [...sql.matchAll(re)]
+        .map(m => m[1].toLowerCase())
+        .filter(name => name.startsWith('remote_agent_'));
+      return [...new Set(names)];
+    }
+
+    test('every non-auth Postgres table is created by the SQLite schema', async () => {
+      db = createTestDb();
+      const result = await db.query<{ name: string }>(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+      );
+      const sqliteTables = new Set(result.rows.map(r => r.name));
+
+      const expected = postgresArchonTables().filter(
+        name => !name.startsWith(POSTGRES_ONLY_PREFIX)
+      );
+      // Sanity: the parse found the table set, including the exact table whose
+      // absence triggered this regression — guards against the regex silently
+      // missing a name and the assertion below passing vacuously.
+      expect(expected.length).toBeGreaterThan(10);
+      expect(expected).toContain('remote_agent_user_ai_prefs');
+
+      const missing = expected.filter(name => !sqliteTables.has(name)).sort();
+      expect(missing).toEqual([]);
+    });
+
+    /**
+     * The generic table-parity test above is table-name only — it gives no
+     * column coverage. `parent_run_id` (#2121 Phase 2) is added to BOTH schema
+     * sources (sqlite.ts createSchema + runtime ALTER, and 000_combined.sql). A
+     * column added to only one dialect is invisible on the default-SQLite path
+     * (VPS runs Postgres), so assert the fresh-schema column + its index exist.
+     */
+    test('parent_run_id column + index present on a fresh SQLite schema', () => {
+      db = createTestDb();
+      const workflowRunCols = raw_pragma(currentDbPath, 'remote_agent_workflow_runs');
+      expect(workflowRunCols).toContain('parent_run_id');
+      const indexes = raw_indexes(currentDbPath);
+      expect(indexes).toContain('idx_workflow_runs_parent_run');
+    });
+  });
 });
+
+function raw_pragma(dbPath: string, table: string): string[] {
+  const raw = new Database(dbPath, { readonly: true });
+  try {
+    const rows = raw.prepare(`PRAGMA table_info('${table}')`).all() as { name: string }[];
+    return rows.map(r => r.name);
+  } finally {
+    raw.close();
+  }
+}
+
+function raw_indexes(dbPath: string): string[] {
+  const raw = new Database(dbPath, { readonly: true });
+  try {
+    const rows = raw.prepare("SELECT name FROM sqlite_master WHERE type='index'").all() as {
+      name: string;
+    }[];
+    return rows.map(r => r.name);
+  } finally {
+    raw.close();
+  }
+}
+
+function raw_query(dbPath: string, sql: string): unknown[] {
+  const raw = new Database(dbPath, { readonly: true });
+  try {
+    return raw.prepare(sql).all();
+  } finally {
+    raw.close();
+  }
+}

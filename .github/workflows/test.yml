@@ -30,6 +30,9 @@ jobs:
       - name: Check bundled defaults
         run: bun run check:bundled
 
+      - name: Check provider capability matrix
+        run: bun run check:capability-matrix
+
       - name: Type check
         run: bun run type-check
 
@@ -49,6 +52,17 @@ jobs:
       actions: write
     steps:
       - uses: actions/checkout@v4
+
+      # The image build needs ~14GB more scratch space than a stock runner has
+      # free once the provider SDKs' multi-platform vendor binaries are in
+      # node_modules. Cached-layer builds squeak by; any PR that invalidates an
+      # early Dockerfile layer (apt block, base image) rebuilds everything and
+      # hits "no space left on device". Reclaim the big unused toolchains first.
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+          df -h /
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3

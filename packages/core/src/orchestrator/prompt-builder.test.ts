@@ -3,6 +3,7 @@ import {
   buildRoutingRulesWithProject,
   formatWorkflowContextSection,
   buildOrchestratorSystemAppend,
+  buildRunManagementSection,
 } from './prompt-builder';
 
 describe('buildRoutingRulesWithProject', () => {
@@ -133,5 +134,36 @@ describe('buildOrchestratorSystemAppend', () => {
       workflows
     );
     expect(result).toContain('## Registered Projects');
+  });
+
+  test('does NOT include the run-management section (orchestrator gates it per-provider)', () => {
+    // The CLI run-management pointer is appended by orchestrator-agent.ts only for
+    // project-scoped chats on providers WITHOUT the native manage_run tool — never
+    // here, so Claude/Pi (nativeTools) don't get a redundant pointer.
+    const scoped = buildOrchestratorSystemAppend(makeConversation('cb-1'), codebases, workflows);
+    const unscoped = buildOrchestratorSystemAppend(makeConversation(null), codebases, workflows);
+    expect(scoped).not.toContain('## Managing Workflow Runs');
+    expect(unscoped).not.toContain('## Managing Workflow Runs');
+  });
+});
+
+describe('buildRunManagementSection', () => {
+  test('lists the run-management verbs and the --json hint', () => {
+    const section = buildRunManagementSection();
+    expect(section).toContain('## Managing Workflow Runs');
+    for (const verb of [
+      'archon workflow runs',
+      'archon workflow get',
+      'archon workflow status',
+      'archon workflow run',
+      'archon workflow approve',
+      'archon workflow reject',
+      'archon workflow resume',
+      'archon workflow abandon',
+    ]) {
+      expect(section).toContain(verb);
+    }
+    expect(section).toContain('--json');
+    expect(section).toContain('--detach');
   });
 });

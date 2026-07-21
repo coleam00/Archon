@@ -32,6 +32,13 @@ const mockRegisterRepository = mock(async (_path: string) => ({
   codebaseId: 'register-uuid-1',
   alreadyExisted: false,
 }));
+const mockRegisterFolder = mock(async (_path: string) => ({
+  codebaseId: 'folder-uuid-1',
+  alreadyExisted: false,
+}));
+// Default: a resolvable repo root so local-path registration routes to
+// registerRepository. Folder-fallback tests override this to resolve null.
+const mockFindRepoRoot = mock(async (p: string) => p as string | null);
 const mockListByCodebase = mock(async (_id: string) => [] as unknown[]);
 const mockRemoveWorktree = mock(async () => {});
 const mockUpdateStatus = mock(async (_id: string, _status: string) => {});
@@ -42,6 +49,7 @@ mock.module('@archon/core', () => ({
   loadConfig: mock(async () => ({})),
   cloneRepository: mockCloneRepository,
   registerRepository: mockRegisterRepository,
+  registerFolder: mockRegisterFolder,
   ConversationNotFoundError: class ConversationNotFoundError extends Error {
     constructor(id: string) {
       super(`Conversation not found: ${id}`);
@@ -50,6 +58,7 @@ mock.module('@archon/core', () => ({
   },
   getArchonWorkspacesPath: () => '/tmp/.archon/workspaces',
   generateAndSetTitle: mock(async () => {}),
+  resolveTitleRequest: mock(async () => ({ provider: 'claude', options: {} })),
   createLogger: () => ({
     fatal: mock(() => undefined),
     error: mock(() => undefined),
@@ -94,6 +103,7 @@ mock.module('@archon/git', () => ({
   removeWorktree: mockRemoveWorktree,
   toRepoPath: (p: string) => p,
   toWorktreePath: (p: string) => p,
+  findRepoRoot: mockFindRepoRoot,
 }));
 
 mock.module('@archon/core/db/conversations', () => ({
@@ -170,6 +180,7 @@ const MOCK_CODEBASE = {
   repository_url: 'https://github.com/user/repo',
   default_cwd: '/home/user/projects/my-project',
   ai_assistant_type: 'claude',
+  kind: 'repo',
   commands: {},
   created_at: new Date().toISOString(),
   updated_at: new Date().toISOString(),
@@ -345,6 +356,20 @@ describe('GET /api/codebases/:id', () => {
     expect(body.commands).not.toBeNull();
   });
 
+  test('returns empty commands object when JSON is corrupted', async () => {
+    mockGetCodebase.mockImplementationOnce(async () => ({
+      ...MOCK_CODEBASE,
+      commands: '{not valid json',
+    }));
+
+    const app = makeApp();
+    const response = await app.request('/api/codebases/codebase-uuid-1');
+    expect(response.status).toBe(200);
+
+    const body = (await response.json()) as { commands: unknown };
+    expect(body.commands).toEqual({});
+  });
+
   test('returns 500 when DB throws', async () => {
     mockGetCodebase.mockImplementationOnce(async () => {
       throw new Error('Connection error');
@@ -368,6 +393,11 @@ describe('POST /api/codebases', () => {
     mockGetCodebase.mockReset();
     mockCloneRepository.mockReset();
     mockRegisterRepository.mockReset();
+    mockRegisterFolder.mockReset();
+    // Restore the default "resolvable repo root" so a local path routes to
+    // registerRepository unless a test opts into the folder fallback.
+    mockFindRepoRoot.mockReset();
+    mockFindRepoRoot.mockImplementation(async (p: string) => p);
   });
 
   test('registers codebase by URL and returns 201', async () => {
@@ -425,6 +455,84 @@ describe('POST /api/codebases', () => {
     });
     expect(response.status).toBe(201);
     expect(mockRegisterRepository).toHaveBeenCalledWith('/home/user/my-repo');
+    expect(mockRegisterFolder).not.toHaveBeenCalled();
+  });
+
+  test('registers a non-git path as a folder project and returns 201', async () => {
+    // A path that is NOT a git repository → findRepoRoot resolves null → folder.
+    mockFindRepoRoot.mockResolvedValueOnce(null);
+    mockRegisterFolder.mockImplementationOnce(async () => ({
+      codebaseId: 'folder-uuid-1',
+      alreadyExisted: false,
+    }));
+    mockGetCodebase.mockImplementationOnce(async () => ({
+      ...MOCK_CODEBASE,
+      id: 'folder-uuid-1',
+      repository_url: null,
+      kind: 'folder',
+    }));
+
+    const app = makeApp();
+    const response = await app.request('/api/codebases', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: '/tmp/platform' }),
+    });
+
+    expect(response.status).toBe(201);
+    expect(mockRegisterFolder).toHaveBeenCalledWith('/tmp/platform');
+    expect(mockRegisterRepository).not.toHaveBeenCalled();
+  });
+
+  test('when findRepoRoot throws for a NONEXISTENT path, falls through to registerFolder for its clean error', async () => {
+    // findRepoRoot throws for nonexistent paths. That case is benign: fall
+    // through so registerFolder's own existence check produces the clean error.
+    mockFindRepoRoot.mockRejectedValueOnce(new Error('git: command timed out'));
+    mockRegisterFolder.mockImplementationOnce(async () => ({
+      codebaseId: 'folder-uuid-2',
+      alreadyExisted: false,
+    }));
+    mockGetCodebase.mockImplementationOnce(async () => ({
+      ...MOCK_CODEBASE,
+      id: 'folder-uuid-2',
+      repository_url: null,
+      kind: 'folder',
+    }));
+
+    const app = makeApp();
+    // Path must NOT exist on the test host (real existsSync decides the branch).
+    const missingPath = '/nonexistent-archon-test/ambiguous';
+    const response = await app.request('/api/codebases', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: missingPath }),
+    });
+
+    expect(response.status).toBe(201);
+    expect(mockRegisterFolder).toHaveBeenCalledWith(missingPath);
+    expect(mockRegisterRepository).not.toHaveBeenCalled();
+  });
+
+  test('when findRepoRoot throws for an EXISTING path, returns 500 and registers NOTHING', async () => {
+    // A genuine git failure (git missing, timeout, permission) on a path that
+    // exists is ambiguous — registering would permanently misclassify a real
+    // repo as kind:'folder'. Fail fast instead.
+    mockFindRepoRoot.mockRejectedValueOnce(new Error('git: command timed out'));
+
+    const app = makeApp();
+    // process.cwd() exists on every platform (real existsSync decides the branch).
+    const response = await app.request('/api/codebases', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: process.cwd() }),
+    });
+
+    expect(response.status).toBe(500);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toContain('git');
+    expect(body.error).toContain('Nothing was registered');
+    expect(mockRegisterFolder).not.toHaveBeenCalled();
+    expect(mockRegisterRepository).not.toHaveBeenCalled();
   });
 
   test('returns 400 when both url and path are provided', async () => {

@@ -17,6 +17,8 @@ import { ClaudeProvider } from './claude/provider';
 import { CodexProvider } from './codex/provider';
 import { CLAUDE_CAPABILITIES } from './claude/capabilities';
 import { CODEX_CAPABILITIES } from './codex/capabilities';
+import { registerCopilotProvider } from './community/copilot/registration';
+import { registerOpencodeProvider } from './community/opencode/registration';
 import { registerPiProvider } from './community/pi/registration';
 import { UnknownProviderError } from './errors';
 import { createLogger } from '@archon/paths';
@@ -113,6 +115,16 @@ export function registerBuiltinProviders(): void {
       factory: () => new ClaudeProvider(),
       capabilities: CLAUDE_CAPABILITIES,
       builtIn: true,
+      credentials: {
+        kind: 'static',
+        specs: [
+          {
+            vendor: 'anthropic',
+            displayName: 'Anthropic',
+            kinds: ['api_key', 'subscription'],
+          },
+        ],
+      },
     },
     {
       id: 'codex',
@@ -120,6 +132,18 @@ export function registerBuiltinProviders(): void {
       factory: () => new CodexProvider(),
       capabilities: CODEX_CAPABILITIES,
       builtIn: true,
+      credentials: {
+        kind: 'static',
+        specs: [
+          {
+            // Subscription (ChatGPT) login runs Archon's own PKCE flow —
+            // see @archon/core credentials/openai-oauth.ts (#1924).
+            vendor: 'openai',
+            displayName: 'OpenAI',
+            kinds: ['api_key', 'subscription'],
+          },
+        ],
+      },
     },
   ];
 
@@ -152,7 +176,9 @@ export function registerBuiltinProviders(): void {
  * disappear.
  */
 export function registerCommunityProviders(): void {
+  registerOpencodeProvider();
   registerPiProvider();
+  registerCopilotProvider();
 }
 
 /** @internal Test-only — clears the registry. Not for production use. */

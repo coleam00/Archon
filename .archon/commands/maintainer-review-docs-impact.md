@@ -52,7 +52,6 @@ For each user-facing change in the diff, identify the docs that should be update
 - **New surface**: is there a docs page describing it? Is it linked from a landing page or the relevant section?
 - **Changed surface**: are existing docs pages still accurate? Do they need updates?
 - **Removed surface**: are existing references stale? `grep` the docs site for old name.
-- **Migration**: does a breaking change need a migration note in CHANGELOG.md or docs?
 
 ### Specific places to check
 - `packages/docs-web/src/content/docs/getting-started/` — quickstart, install, concepts.
@@ -60,8 +59,9 @@ For each user-facing change in the diff, identify the docs that should be update
 - `packages/docs-web/src/content/docs/reference/` — CLI, variables, configuration.
 - `packages/docs-web/src/content/docs/adapters/` — Slack, Telegram, GitHub, Discord, Web.
 - `packages/docs-web/src/content/docs/deployment/` — Docker, cloud.
-- `CHANGELOG.md` — Keep-a-Changelog entry for user-visible changes.
 - `CLAUDE.md` — only if the change affects how *agents* working in this repo should behave.
+
+> **CHANGELOG.md is out of scope for this review.** The project's release process generates the changelog from squash-commit history at release time; contributors do not add CHANGELOG entries per PR. Do not flag a missing CHANGELOG entry under any severity.
 
 ---
 
@@ -89,7 +89,7 @@ Write `$ARTIFACTS_DIR/review/docs-impact-findings.md`:
 ### HIGH — stale docs from changed/removed surface
 - (same format)
 
-### MEDIUM — minor gaps (changelog entry, examples)
+### MEDIUM — minor gaps (examples, missing cross-link)
 - (same format)
 
 ### LOW — nice-to-have polish

@@ -1,17 +1,33 @@
-import { NavLink, Link } from 'react-router';
+import { NavLink, Link, useNavigate } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
-import { LayoutDashboard, MessageSquare, Workflow, Settings } from 'lucide-react';
-import { listDashboardRuns, getUpdateCheck } from '@/lib/api';
+import { LayoutDashboard, MessageSquare, Workflow, Settings, LogOut } from 'lucide-react';
+import { listDashboardRuns, getUpdateCheck, getAuthStatus } from '@/lib/api';
+import { useSession, signOut } from '@/lib/auth-client';
 import { cn } from '@/lib/utils';
 
 const tabs = [
-  { to: '/chat', end: false, icon: MessageSquare, label: 'Chat' },
-  { to: '/dashboard', end: true, icon: LayoutDashboard, label: 'Dashboard' },
-  { to: '/workflows', end: false, icon: Workflow, label: 'Workflows' },
-  { to: '/settings', end: false, icon: Settings, label: 'Settings' },
+  { to: '/legacy/chat', end: false, icon: MessageSquare, label: 'Chat' },
+  { to: '/legacy/dashboard', end: true, icon: LayoutDashboard, label: 'Dashboard' },
+  { to: '/legacy/workflows', end: false, icon: Workflow, label: 'Workflows' },
+  { to: '/legacy/settings', end: false, icon: Settings, label: 'Settings' },
 ] as const;
 
 export function TopNav(): React.ReactElement {
+  const navigate = useNavigate();
+
+  // Web-auth identity strip (only shown when auth is enabled).
+  const { data: authStatus } = useQuery({
+    queryKey: ['auth-status'],
+    queryFn: getAuthStatus,
+    staleTime: 5 * 60 * 1000,
+  });
+  const { data: session } = useSession();
+
+  async function handleSignOut(): Promise<void> {
+    await signOut();
+    navigate('/login', { replace: true });
+  }
+
   // We only need `counts.running` — a server-side aggregate independent of
   // the `runs` array. `limit: 1` minimises the `runs` payload that the API
   // returns alongside the counts (we discard it).
@@ -33,7 +49,10 @@ export function TopNav(): React.ReactElement {
   return (
     <nav className="flex items-center gap-1 border-b border-border bg-surface px-4">
       {/* Brand logo */}
-      <Link to="/chat" className="flex items-center gap-2 mr-4 hover:opacity-80 transition-opacity">
+      <Link
+        to="/legacy/chat"
+        className="flex items-center gap-2 mr-4 hover:opacity-80 transition-opacity"
+      >
         <div className="flex h-7 w-7 items-center justify-center rounded-md bg-primary">
           <span className="text-sm font-semibold text-primary-foreground">A</span>
         </div>
@@ -56,7 +75,7 @@ export function TopNav(): React.ReactElement {
         >
           <Icon className="h-4 w-4" />
           {label}
-          {to === '/dashboard' && runningCount > 0 && (
+          {to === '/legacy/dashboard' && runningCount > 0 && (
             <span
               className="ml-1 inline-flex min-w-[1.25rem] items-center justify-center rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-medium text-primary-foreground"
               aria-label={`${runningCount} workflows running`}
@@ -66,21 +85,65 @@ export function TopNav(): React.ReactElement {
           )}
         </NavLink>
       ))}
-      <span className="ml-auto text-xs text-text-secondary">
-        v{import.meta.env.VITE_APP_VERSION as string}
-        {updateCheck?.updateAvailable && updateCheck.releaseUrl && (
-          <a
-            href={updateCheck.releaseUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="ml-1.5 inline-flex items-center gap-1 text-xs text-primary hover:underline"
-            title={`v${updateCheck.latestVersion} available`}
+      <div className="ml-auto flex items-center gap-3">
+        {/* CTA to the experimental console. Uses the brand magenta→teal
+            gradient via inline style because the old UI's tokens don't
+            include the brand-gradient variables. Sized to read as a
+            primary CTA without dominating the nav. */}
+        <Link
+          to="/console"
+          title="Try the redesigned console UI (early access)"
+          className="group inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-semibold text-white shadow-sm transition-all hover:brightness-110 active:brightness-95"
+          style={{
+            background:
+              'linear-gradient(135deg, oklch(0.640 0.295 330) 0%, oklch(0.560 0.215 305) 50%, oklch(0.755 0.165 168) 100%)',
+          }}
+        >
+          <span>Try the new console UI</span>
+          <span
+            aria-hidden
+            className="inline-block transition-transform group-hover:translate-x-0.5"
           >
-            <span className="inline-block h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />v
-            {updateCheck.latestVersion}
-          </a>
+            →
+          </span>
+        </Link>
+        <span className="text-xs text-text-secondary">
+          v{import.meta.env.VITE_APP_VERSION as string}
+          {updateCheck?.updateAvailable && updateCheck.releaseUrl && (
+            <a
+              href={updateCheck.releaseUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="ml-1.5 inline-flex items-center gap-1 text-xs text-primary hover:underline"
+              title={`v${updateCheck.latestVersion} available`}
+            >
+              <span className="inline-block h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />v
+              {updateCheck.latestVersion}
+            </a>
+          )}
+        </span>
+
+        {/* Identity strip — only when web auth is enabled and a session exists. */}
+        {authStatus?.enabled && session?.user && (
+          <div className="flex items-center gap-2 border-l border-border pl-3">
+            <span
+              className="max-w-[12rem] truncate text-xs text-text-secondary"
+              title={session.user.email ?? undefined}
+            >
+              {session.user.name || session.user.email}
+            </span>
+            <button
+              type="button"
+              onClick={() => void handleSignOut()}
+              title="Sign out"
+              className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-text-secondary transition-colors hover:text-text-primary"
+            >
+              <LogOut className="h-3.5 w-3.5" />
+              Sign out
+            </button>
+          </div>
         )}
-      </span>
+      </div>
     </nav>
   );
 }

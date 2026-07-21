@@ -72,6 +72,12 @@ Archon uses structured logging (Pino) with explicit rules about what is and is n
 - Set `LOG_LEVEL=debug` for detailed execution traces
 - CLI: `--quiet` (errors only) or `--verbose` (debug)
 
+## Anonymous Telemetry
+
+Separate from local logging, Archon sends a small set of **anonymous** usage events to PostHog (`archon_started`, `archon_active` daily server heartbeat, `chat_turn_handled` — platform, provider, model, duration, and usage totals; never message content, `workflow_invoked`, `workflow_completed`/`workflow_failed`, `workflow_approval_resolved` — binary approve/reject only, `codebase_registered` — a pure count, no name/path/URL) so maintainers can see active installs, which workflows run, and run outcomes. Events are keyed by a random install UUID — never user identity.
+
+Only categorical data is sent: bundled workflow name (user-authored workflows report `"custom"`), platform, provider/model id, node shape and feature-adoption flags, run outcome/duration, aggregate usage totals (token counts, cost USD, loop iterations — numbers only), a fixed-enum failure class (`fatal`/`transient`/`unknown` — derived locally, never the error text itself), deployment shape (which adapters/db/auth modes are enabled — booleans and enums, never configuration values), and machine context (OS, arch, version, runtime). **Never sent:** code, prompts, chat message content, conversation ids, file paths, IP (dropped at ingest), geolocation, error text, or custom workflow names. See the [Telemetry table in the configuration reference](/reference/configuration/) for the full field list and opt-out options (`DO_NOT_TRACK=1`, `ARCHON_TELEMETRY_DISABLED=1`, CI auto-disable, or `POSTHOG_API_KEY=off`).
+
 ## Adapter Authorization
 
 Each platform adapter supports an optional user whitelist via environment variables. When a whitelist is configured, only listed users can interact with the bot. When the whitelist is empty or unset, the adapter operates in open access mode.
@@ -89,7 +95,9 @@ Each platform adapter supports an optional user whitelist via environment variab
 - Every incoming message or webhook is checked before processing.
 - Unauthorized users are silently rejected -- no error response is sent back.
 - Unauthorized attempts are logged with masked user identifiers for auditing.
-- The Web UI has no built-in user authentication. Use `CADDY_BASIC_AUTH` or form auth when exposing it publicly (see [Docker / Deployment](/reference/configuration/#docker--deployment) variables).
+- SQLite/solo installs have no built-in user authentication -- use `CADDY_BASIC_AUTH` or form auth to protect the Web UI when exposing it publicly (see [Docker / Deployment](/reference/configuration/#docker--deployment) variables). PostgreSQL deployments can additionally enable optional per-user email/password login via Better Auth (`BETTER_AUTH_SECRET`).
+- When web auth is enabled it **gates the API server-side**: every `/api/*` request needs a session/identity or gets `401`, except `/api/auth/*` (login) and `/api/health*` (healthcheck). This makes Better Auth the real access boundary — so you can drop the Caddy `forward_auth` sidecar and stop the `auth-service`. **Before flipping, understand the header-trust caveat:** the gate also accepts the trusted `X-Archon-User` (`ARCHON_WEB_AUTH_HEADER`) header as an identity. If your proxy was setting or stripping that header, you MUST keep stripping it from inbound requests after retiring the sidecar (or bind the app to `127.0.0.1`) — otherwise any client can forge the header and bypass the gate. To flip the deployment: confirm `/api/health` and a webhook still work, then sign in and confirm an authenticated `/api/*` call succeeds — note `/api/stream/*` (SSE) is under `/api/*` and **is now gated**, so an unauthenticated client gets `401`; a browser carrying its session cookie reaches it. Then remove the `forward_auth` block from the Caddyfile and the `auth-service` from compose. Set `ARCHON_WEB_AUTH_REQUIRED=false` to keep login-UI-only (e.g. when a proxy still gates access).
+- **Signup is closed by default.** With web auth on and no `ARCHON_AUTH_ALLOWED_EMAILS`, self-serve registration is **disabled** (login only) and the server logs `web_auth.signup_disabled_no_allowlist` at boot — it never silently opens public signup on a reachable URL. Set the allowlist to invite teammates, or `ARCHON_AUTH_OPEN_SIGNUP=true` for open signup.
 
 ## Webhook Security
 
@@ -123,6 +131,10 @@ The GitHub and Gitea adapters verify webhook signatures to ensure payloads origi
 - Then `loadArchonEnv(cwd)` loads archon-owned env from `~/.archon/.env` (user scope) and `<cwd>/.archon/.env` (repo scope, wins over user) with `override: true`. Both are trusted sources — the user controls them and all keys are intentional.
 - Per-codebase env vars configured via `codebase_env_vars` or `.archon/config.yaml` `env:` are merged on top at workflow execution time.
 - `<cwd>/.env` is the **only** untrusted source. It belongs to the target project, not to Archon. Directory ownership (`.archon/`) is the security boundary — not the filename.
+
+**Per-user provider credentials:**
+- Each user can connect their own provider API key or subscription. Credentials are encrypted at rest with **AES-256-GCM** using an auto-provisioned key (`~/.archon/credential-key`) or an explicit `TOKEN_ENCRYPTION_KEY` on managed installs. Credentials are never logged and **never returned by any endpoint** — responses carry only `provider`/`kind`/`label` metadata. See [AI Provider Credentials](/reference/api/#ai-provider-credentials).
+- The credential routes (`/api/auth/providers*`) require a resolved identity (the `X-Archon-User` header or a Better Auth session). The model-config routes (`/api/config/*`, including `tiers`) are intentionally **ungated** — they carry no secrets (just model strings) and must work on solo installs.
 
 ### Target repo `.env` isolation
 

@@ -31,9 +31,12 @@ nodes:
       fi
       echo "$PR_NUM" > "$ARTIFACTS_DIR/.pr-number"
 
-      # Fetch full PR metadata as JSON
+      # Fetch full PR metadata as JSON. isCrossRepository tells the act node
+      # whether the head branch lives on a contributor fork — the base-repo
+      # GITHUB_TOKEN cannot delete a fork's branch, so --delete-branch must be
+      # skipped for those to avoid a spurious merge-step failure.
       gh pr view "$PR_NUM" \
-        --json number,title,body,author,state,isDraft,additions,deletions,changedFiles,files,baseRefName,headRefName \
+        --json number,title,body,author,state,isDraft,additions,deletions,changedFiles,files,baseRefName,headRefName,isCrossRepository \
         > "$ARTIFACTS_DIR/pr-meta.json"
 
       cat "$ARTIFACTS_DIR/pr-meta.json"
@@ -276,10 +279,19 @@ nodes:
   # NODE 8: DECIDE — deterministic decision logic (inline Bun script)
   # ═══════════════════════════════════════════════════════════════
 
+  - id: persist-ai-review
+    # bash bridge: in a bash node $ai-review.output is shell-quoted, so a failed
+    # or non-JSON AI verdict (e.g. provider/API error) is written verbatim to a
+    # file instead of being injected raw into the decide script — where it would
+    # otherwise be invalid JS and crash the run at parse time.
+    depends_on: [ai-review]
+    bash: |
+      printf '%s' $ai-review.output > "$ARTIFACTS_DIR/ai-review.json"
+
   - id: decide
     runtime: bun
     timeout: 10000
-    depends_on: [ai-review, fetch-pr-metadata]
+    depends_on: [persist-ai-review, fetch-pr-metadata]
     script: |
       import { readFileSync, writeFileSync } from 'node:fs';
       import { resolve } from 'node:path';
@@ -292,8 +304,25 @@ nodes:
       const scopeResult = readFileSync(resolve(artifactsDir, '.scope-result'), 'utf8').trim();
 
       const scanResult = $security-scan.output;
-      const aiReview = $ai-review.output;
       const schemaResult = $validate-schema.output;
+
+      // ai-review verdict is read from a file (written by the persist-ai-review
+      // bash bridge) so a failed or non-JSON AI output can't crash this script.
+      let aiReview: { recommendation?: string; reasoning?: string };
+      try {
+        const aiReviewRaw = readFileSync(resolve(artifactsDir, 'ai-review.json'), 'utf8').trim();
+        aiReview = JSON.parse(aiReviewRaw) as { recommendation?: string; reasoning?: string };
+        if (typeof aiReview.recommendation !== 'string') {
+          throw new Error('missing "recommendation" field');
+        }
+      } catch (err) {
+        console.error(
+          `decide: ai-review did not produce a valid structured verdict (${(err as Error).message}). ` +
+            `The AI review step likely failed or was unavailable (e.g. provider/API quota). ` +
+            `Failing safe — not auto-merging. Re-run the marketplace auto-review once the provider is available.`,
+        );
+        process.exit(1);
+      }
 
       const author = prMeta.author.login;
       const isDraft = prMeta.isDraft;
@@ -348,10 +377,46 @@ nodes:
       DECISION=$(cat "$ARTIFACTS_DIR/decision.json" | jq -r '.decision')
       REASON=$(cat "$ARTIFACTS_DIR/decision.json" | jq -r '.reason')
       SLUG=$(cat "$ARTIFACTS_DIR/decision.json" | jq -r '.slug // empty')
+      IS_FORK=$(jq -r '.isCrossRepository // false' "$ARTIFACTS_DIR/pr-meta.json")
+
+      # Auth preflight. The earlier read-only nodes (gh pr view/diff) succeed
+      # anonymously on a public repo, so a missing/unusable token first surfaces
+      # here as an opaque "HTTP 401: Requires authentication" from the write
+      # calls below. Fail fast with an actionable message instead. On
+      # pull_request_target the token arrives via GH_TOKEN (see the GitHub
+      # Actions workflow); gh also reads GITHUB_TOKEN.
+      if ! gh auth status >/dev/null 2>&1; then
+        echo "ERROR: gh is not authenticated — cannot post the review or merge." >&2
+        echo "  GH_TOKEN present: $([ -n "$GH_TOKEN" ] && echo yes || echo no); GITHUB_TOKEN present: $([ -n "$GITHUB_TOKEN" ] && echo yes || echo no)." >&2
+        echo "  The marketplace auto-review needs a token with pull-requests:write (and contents:write to merge)." >&2
+        exit 1
+      fi
+
+      # Retry a command up to 3x with linear backoff. GitHub's GraphQL/REST
+      # write endpoints occasionally reject a freshly-minted pull_request_target
+      # token before it settles; a bare single attempt turns that transient blip
+      # into a hard CI failure. Returns the final attempt's exit code.
+      retry() {
+        local n=1 max=3 delay=3
+        until "$@"; do
+          if [ "$n" -ge "$max" ]; then return 1; fi
+          echo "  (attempt $n/$max failed; retrying in ${delay}s)" >&2
+          sleep "$delay"; n=$((n + 1)); delay=$((delay + 3))
+        done
+      }
+
+      # gh pr merge --delete-branch deletes the HEAD branch. For a fork PR the
+      # head branch lives on the contributor's fork, which the base-repo token
+      # cannot delete — attempting it fails the merge step even though the merge
+      # itself succeeded. Only request branch deletion for same-repo PRs.
+      merge_flags=(--squash --subject "feat(marketplace): add ${SLUG:-marketplace-entry}")
+      if [ "$IS_FORK" != "true" ]; then
+        merge_flags+=(--delete-branch)
+      fi
 
       case "$DECISION" in
         auto_merge)
-          echo "Decision: AUTO_MERGE — approving and merging PR #$PR_NUM"
+          echo "Decision: AUTO_MERGE — approving and merging PR #$PR_NUM (fork: $IS_FORK)"
           APPROVE_BODY="**Marketplace Auto-Review: Approved & Merging**
 
       $REASON
@@ -361,9 +426,9 @@ nodes:
           # has "Allow GitHub Actions to create and approve pull requests"
           # enabled in Settings → Actions → General. The comment below always
           # lands so the PR author still gets notified.
-          gh pr review "$PR_NUM" --approve --body "$APPROVE_BODY" \
-            || gh pr comment "$PR_NUM" --body "$APPROVE_BODY"
-          gh pr merge "$PR_NUM" --squash --delete-branch --subject "feat(marketplace): add ${SLUG:-marketplace-entry}"
+          retry gh pr review "$PR_NUM" --approve --body "$APPROVE_BODY" \
+            || retry gh pr comment "$PR_NUM" --body "$APPROVE_BODY"
+          retry gh pr merge "$PR_NUM" "${merge_flags[@]}"
           ;;
         auto_approve)
           echo "Decision: AUTO_APPROVE — approving PR #$PR_NUM (manual merge required)"
@@ -372,12 +437,12 @@ nodes:
       $REASON
 
       *Reviewed by Archon marketplace-pr-review-and-merge workflow. A maintainer will merge.*"
-          gh pr review "$PR_NUM" --approve --body "$APPROVE_BODY" \
-            || gh pr comment "$PR_NUM" --body "$APPROVE_BODY"
+          retry gh pr review "$PR_NUM" --approve --body "$APPROVE_BODY" \
+            || retry gh pr comment "$PR_NUM" --body "$APPROVE_BODY"
           ;;
         request_changes)
           echo "Decision: REQUEST_CHANGES — requesting changes on PR #$PR_NUM"
-          gh pr review "$PR_NUM" --request-changes --body "**Marketplace Auto-Review: Changes Requested**
+          retry gh pr review "$PR_NUM" --request-changes --body "**Marketplace Auto-Review: Changes Requested**
 
       $REASON
 
@@ -385,7 +450,7 @@ nodes:
           ;;
         reject)
           echo "Decision: REJECT — closing PR #$PR_NUM as out of scope or unsafe"
-          gh pr review "$PR_NUM" --request-changes --body "**Marketplace Auto-Review: Rejected**
+          retry gh pr review "$PR_NUM" --request-changes --body "**Marketplace Auto-Review: Rejected**
 
       $REASON
 
@@ -398,4 +463,4 @@ nodes:
           ;;
       esac
     depends_on: [decide]
-    timeout: 60000
+    timeout: 120000

@@ -16,7 +16,7 @@
 
 import { join, dirname, normalize, basename } from 'path';
 import { homedir } from 'os';
-import { access, mkdir, symlink, lstat, readdir, readlink, rm } from 'fs/promises';
+import { access, mkdir, symlink, lstat, readdir, readlink, realpath, rm, stat } from 'fs/promises';
 import { createLogger } from './logger';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -104,6 +104,11 @@ export function getArchonWorktreesPath(): string {
  */
 export function getArchonConfigPath(): string {
   return join(getArchonHome(), 'config.yaml');
+}
+
+/** Path where the auto-provisioned encryption key is stored (~/.archon/credential-key). */
+export function getCredentialKeyPath(): string {
+  return join(getArchonHome(), 'credential-key');
 }
 
 /**
@@ -219,10 +224,65 @@ export async function findMarkdownFilesRecursive(
   relativePath = '',
   options?: { maxDepth?: number }
 ): Promise<{ commandName: string; relativePath: string }[]> {
+  return findMarkdownFilesRecursiveImpl(rootPath, relativePath, options, new Set<string>());
+}
+
+function shouldSkipSymlinkTargetError(err: NodeJS.ErrnoException): boolean {
+  return err.code === 'ENOENT' || err.code === 'ELOOP';
+}
+
+async function getEntryKind(
+  entryPath: string,
+  entry: { isSymbolicLink(): boolean; isDirectory(): boolean; isFile(): boolean }
+): Promise<'directory' | 'file' | 'other' | null> {
+  if (entry.isSymbolicLink()) {
+    try {
+      const targetStat = await stat(entryPath);
+      if (targetStat.isDirectory()) return 'directory';
+      if (targetStat.isFile()) return 'file';
+      return 'other';
+    } catch (e) {
+      const err = e as NodeJS.ErrnoException;
+      if (shouldSkipSymlinkTargetError(err)) return null;
+      throw err;
+    }
+  }
+
+  if (entry.isDirectory()) return 'directory';
+  if (entry.isFile()) return 'file';
+  return 'other';
+}
+
+async function getReachableRealPath(path: string): Promise<string | null> {
+  try {
+    return await realpath(path);
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException;
+    if (shouldSkipSymlinkTargetError(err)) return null;
+    throw err;
+  }
+}
+
+async function findMarkdownFilesRecursiveImpl(
+  rootPath: string,
+  relativePath: string,
+  options: { maxDepth?: number } | undefined,
+  visitedRealPaths: Set<string>
+): Promise<{ commandName: string; relativePath: string }[]> {
   const maxDepth = options?.maxDepth ?? Infinity;
   const currentDepth = relativePath ? relativePath.split(/[/\\]/).filter(Boolean).length : 0;
   const results: { commandName: string; relativePath: string }[] = [];
   const fullPath = join(rootPath, relativePath);
+
+  if (visitedRealPaths.size === 0) {
+    try {
+      visitedRealPaths.add(await realpath(fullPath));
+    } catch (e) {
+      const err = e as NodeJS.ErrnoException;
+      if (err.code === 'ENOENT') return results;
+      throw err;
+    }
+  }
 
   let entries;
   try {
@@ -238,18 +298,31 @@ export async function findMarkdownFilesRecursive(
       continue;
     }
 
-    if (entry.isDirectory()) {
+    const entryPath = join(fullPath, entry.name);
+    const entryKind = await getEntryKind(entryPath, entry);
+    if (entryKind === null) continue;
+
+    if (entryKind === 'directory') {
       // Skip descending if we're already at the depth cap — files at deeper
       // levels are silently ignored (matches the convention that `.archon/*/`
       // folders support one level of grouping like `defaults/`).
       if (currentDepth >= maxDepth) continue;
-      const subResults = await findMarkdownFilesRecursive(
+
+      const realChild = await getReachableRealPath(entryPath);
+      if (!realChild) continue;
+      if (visitedRealPaths.has(realChild)) continue;
+
+      const childVisitedRealPaths = new Set(visitedRealPaths);
+      childVisitedRealPaths.add(realChild);
+
+      const subResults = await findMarkdownFilesRecursiveImpl(
         rootPath,
         join(relativePath, entry.name),
-        options
+        options,
+        childVisitedRealPaths
       );
       results.push(...subResults);
-    } else if (entry.isFile() && entry.name.endsWith('.md')) {
+    } else if (entryKind === 'file' && entry.name.endsWith('.md')) {
       results.push({
         commandName: basename(entry.name, '.md'),
         relativePath: join(relativePath, entry.name),
@@ -320,6 +393,33 @@ export function parseOwnerRepo(name: string): { owner: string; repo: string } | 
 }
 
 /**
+ * Resolve the `{ owner, repo }` storage identity for a registered *repo*-kind
+ * codebase. This is the single source of truth that keeps `registerRepository()`
+ * (which creates the on-disk `owner/repo` tree) and the log/artifact path
+ * resolvers in agreement — a mismatch between the two dropped no-remote repos'
+ * logs/artifacts into `<cwd>/.archon` instead of `ARCHON_HOME` (#2132).
+ *
+ * - A `name` in exact `owner/repo` form (clones, web-registered repos) → that
+ *   owner/repo.
+ * - Otherwise — most commonly a no-remote local repo registered under its bare
+ *   directory basename — the working directory's basename scoped under the
+ *   `_local` pseudo-owner, mirroring what registration writes to disk.
+ *   `basename()` never contains a path separator, so the only traversal risk is
+ *   `..`; that, `.`, and an empty segment return null so the caller can fall
+ *   back to cwd-local storage.
+ */
+export function resolveRepoProjectIdentity(
+  name: string,
+  cwd: string
+): { owner: string; repo: string } | null {
+  const parsed = parseOwnerRepo(name);
+  if (parsed) return parsed;
+  const repo = basename(cwd);
+  if (repo === '' || repo === '.' || repo === '..') return null;
+  return { owner: '_local', repo };
+}
+
+/**
  * Get the project root directory for a given owner/repo.
  * Returns: ~/.archon/workspaces/owner/repo/
  */
@@ -373,6 +473,115 @@ export function getRunArtifactsPath(owner: string, repo: string, workflowRunId: 
  */
 export function getRunLogPath(owner: string, repo: string, workflowRunId: string): string {
   return join(getProjectLogsPath(owner, repo), `${workflowRunId}.jsonl`);
+}
+
+/**
+ * Restrict a workflow name or scope key to a single filesystem-safe path
+ * segment. Any character outside `[a-zA-Z0-9_-]` becomes `_`, so a stray
+ * separator or `..` can never escape the scopes directory. Distinct inputs can
+ * collide (e.g. `a.b` and `a_b`) — scope dirs hold per-node files keyed by node
+ * id, so a collision co-mingles two scopes' artifacts rather than corrupting
+ * either. Falls back to `'_'` for an empty input.
+ */
+export function sanitizeScopeSegment(value: string): string {
+  const safe = value.replace(/[^a-zA-Z0-9_-]/g, '_');
+  return safe.length > 0 ? safe : '_';
+}
+
+/**
+ * Get the stable cross-invocation artifact scope directory for a workflow +
+ * scope key (the conversation UUID — the same key `persist_session` uses).
+ * Lives alongside the per-run `runs/` layout under the same artifacts root, so
+ * it works for repo projects, folder projects, and unregistered-cwd fallbacks:
+ *
+ *   <artifactsRoot>/scopes/<workflow>/<scope>/
+ *
+ * Unlike `runs/<id>/`, this path is identical across invocations of the same
+ * workflow in the same scope — it is the durable location a later invocation
+ * (e.g. a cold session resume) can read prior typed artifacts from.
+ */
+export function getScopeArtifactsPath(
+  artifactsRoot: string,
+  workflowName: string,
+  scopeKey: string
+): string {
+  return join(
+    artifactsRoot,
+    'scopes',
+    sanitizeScopeSegment(workflowName),
+    sanitizeScopeSegment(scopeKey)
+  );
+}
+
+// =============================================================================
+// Folder-project ("_folder") path functions
+// =============================================================================
+//
+// Folder projects (kind: 'folder') are non-git workspaces — a multi-repo root
+// or a plain ops folder. They run in place at their real directory, so there is
+// no `source/` symlink and no `worktrees/` directory. Their named artifact and
+// log storage lives under a `_folder` pseudo-owner, mirroring the `_local`
+// pseudo-owner convention used for locally-registered repos.
+
+/**
+ * Slugify a folder-project display name into a filesystem-safe segment.
+ * Lowercases, keeps `[a-z0-9._-]`, collapses any other run of characters to a
+ * single `-`, and trims leading/trailing `-`. The result always satisfies
+ * {@link SAFE_NAME}. Falls back to `'folder'` when the name slugifies to empty
+ * (e.g. a name that is entirely separators or unicode).
+ *
+ * Note: distinct display names can collide (e.g. "My App" and "my-app" both →
+ * "my-app"); runs stay separated by run-id subdirectories, so collisions only
+ * co-mingle listing-level artifacts. Accepted for now — see plan Questionables.
+ */
+export function slugifyFolderName(name: string): string {
+  const slug = name
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return slug.length > 0 && SAFE_NAME.test(slug) ? slug : 'folder';
+}
+
+/**
+ * Get the project root directory for a folder project.
+ * Returns: ~/.archon/workspaces/_folder/<slug>/
+ */
+export function getFolderProjectRoot(slug: string): string {
+  return join(getArchonWorkspacesPath(), '_folder', slug);
+}
+
+/**
+ * Get the artifacts directory for a folder project.
+ * Returns: ~/.archon/workspaces/_folder/<slug>/artifacts/
+ */
+export function getFolderProjectArtifactsPath(slug: string): string {
+  return join(getFolderProjectRoot(slug), 'artifacts');
+}
+
+/**
+ * Get the logs directory for a folder project.
+ * Returns: ~/.archon/workspaces/_folder/<slug>/logs/
+ */
+export function getFolderProjectLogsPath(slug: string): string {
+  return join(getFolderProjectRoot(slug), 'logs');
+}
+
+/**
+ * Get the artifacts directory for a specific folder-project workflow run.
+ * Returns: ~/.archon/workspaces/_folder/<slug>/artifacts/runs/{id}/
+ */
+export function getFolderRunArtifactsPath(slug: string, workflowRunId: string): string {
+  return join(getFolderProjectArtifactsPath(slug), 'runs', workflowRunId);
+}
+
+/**
+ * Ensure the on-disk storage directories for a folder project exist.
+ * Creates artifacts/ and logs/ under _folder/<slug>/ (no source/ or worktrees/ —
+ * folder projects run at their real path and are never git-isolated).
+ */
+export async function ensureFolderProjectStructure(slug: string): Promise<void> {
+  const dirs = [getFolderProjectArtifactsPath(slug), getFolderProjectLogsPath(slug)];
+  await Promise.all(dirs.map(dir => mkdir(dir, { recursive: true })));
 }
 
 /**

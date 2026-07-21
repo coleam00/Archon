@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
 import { Loader2 } from 'lucide-react';
 import { listWorkflows, createConversation, runWorkflow, deleteConversation } from '@/lib/api';
+import { partitionWorkflows } from '@/components/workflows/partition-workflows';
 import { useProject } from '@/contexts/ProjectContext';
 
 interface WorkflowInvokerProps {
@@ -19,7 +20,7 @@ export function WorkflowInvoker({ codebaseId }: WorkflowInvokerProps): React.Rea
 
   const cwd = codebaseId ? codebases?.find(cb => cb.id === codebaseId)?.default_cwd : undefined;
 
-  const { data: workflows, isError: isErrorWorkflows } = useQuery({
+  const { data: workflowsResult, isError: isErrorWorkflows } = useQuery({
     queryKey: ['workflows', cwd ?? null],
     queryFn: () => listWorkflows(cwd),
     refetchInterval: 30_000,
@@ -29,7 +30,16 @@ export function WorkflowInvoker({ codebaseId }: WorkflowInvokerProps): React.Rea
     return <p className="mx-1 text-[10px] text-error">Failed to load workflows — retrying</p>;
   }
 
+  const workflows = workflowsResult?.workflows;
+  const recommendedNames = workflowsResult?.recommended ?? [];
   if (!workflows || workflows.length === 0) return null;
+
+  // Partition into recommended (declared order) + rest. Empty recommended → flat options.
+  // The helper keys on `name`, so flatten each entry briefly before partitioning.
+  const flat = workflows.map(entry => ({ name: entry.workflow.name, entry }));
+  const { recommended: recPairs, rest: otherPairs } = partitionWorkflows(flat, recommendedNames);
+  const recommendedEntries = recPairs.map(p => p.entry);
+  const otherEntries = otherPairs.map(p => p.entry);
 
   const handleRun = async (): Promise<void> => {
     if (!selectedWorkflow || !message.trim() || running) return;
@@ -43,7 +53,7 @@ export function WorkflowInvoker({ codebaseId }: WorkflowInvokerProps): React.Rea
       workflowStarted = true;
       setSelectedWorkflow(null);
       setMessage('');
-      navigate(`/chat/${conversationId}`);
+      navigate(`/legacy/chat/${conversationId}`);
     } catch (err) {
       console.error('[WorkflowInvoker] Failed to start workflow', { err });
       setError(err instanceof Error ? err.message : 'Failed to start workflow');
@@ -71,11 +81,32 @@ export function WorkflowInvoker({ codebaseId }: WorkflowInvokerProps): React.Rea
         className="w-full rounded-md border border-border bg-surface-elevated px-2 py-1.5 text-xs text-text-secondary focus:outline-none focus:ring-1 focus:ring-accent"
       >
         <option value="">Run workflow...</option>
-        {workflows.map(entry => (
-          <option key={entry.workflow.name} value={entry.workflow.name}>
-            {entry.workflow.name}
-          </option>
-        ))}
+        {recommendedEntries.length > 0 ? (
+          <>
+            <optgroup label="Recommended">
+              {recommendedEntries.map(entry => (
+                <option key={entry.workflow.name} value={entry.workflow.name}>
+                  {entry.workflow.name}
+                </option>
+              ))}
+            </optgroup>
+            {otherEntries.length > 0 && (
+              <optgroup label="Other workflows">
+                {otherEntries.map(entry => (
+                  <option key={entry.workflow.name} value={entry.workflow.name}>
+                    {entry.workflow.name}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+          </>
+        ) : (
+          workflows.map(entry => (
+            <option key={entry.workflow.name} value={entry.workflow.name}>
+              {entry.workflow.name}
+            </option>
+          ))
+        )}
       </select>
       {selectedWorkflow && (
         <div className="flex flex-col gap-1.5">

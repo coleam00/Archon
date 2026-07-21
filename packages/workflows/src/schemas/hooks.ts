@@ -44,7 +44,7 @@ export const workflowHookMatcherSchema = z.object({
   /** Regex pattern to match tool names (PreToolUse/PostToolUse) or event subtypes. */
   matcher: z.string().optional(),
   /** The SDK SyncHookJSONOutput to return when this hook fires. */
-  response: z.record(z.unknown()),
+  response: z.record(z.string(), z.unknown()),
   /** Timeout in seconds (default: SDK default of 60). */
   timeout: z.number().positive().optional(),
 });

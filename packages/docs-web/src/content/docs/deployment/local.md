@@ -117,12 +117,14 @@ curl http://localhost:3000/api/health
 Docker defaults to port **3000** (set via `PORT` in `.env`). Local development defaults to port **3090**. The health endpoint in Docker is `/api/health`, while in local dev mode `/health` also works.
 :::
 
-### Database Migration (First Time)
+### Database Setup
 
-For fresh installations, run the combined migration:
+No manual migration is needed — the app applies `migrations/000_combined.sql` inside an
+advisory-lock transaction on first connection. To confirm the tables landed after starting the app:
 
 ```bash
-psql $DATABASE_URL < migrations/000_combined.sql
+psql $DATABASE_URL -c "\dt"
+# Should show: remote_agent_codebases, remote_agent_conversations, ...
 ```
 
 ### Stop

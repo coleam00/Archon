@@ -1,0 +1,27 @@
+{
+  "claude": {
+    "small": { "model": "haiku" },
+    "medium": { "model": "sonnet" },
+    "large": { "model": "opus" }
+  },
+  "codex": {
+    "small": { "model": "gpt-5.5", "effort": "minimal" },
+    "medium": { "model": "gpt-5.5", "effort": "medium" },
+    "large": { "model": "gpt-5.5", "effort": "high" }
+  },
+  "pi": {
+    "small": { "model": "anthropic/claude-haiku-4-5" },
+    "medium": { "model": "anthropic/claude-sonnet-4-6" },
+    "large": { "model": "anthropic/claude-opus-4-7" }
+  },
+  "copilot": {
+    "small": { "model": "gpt-5-mini" },
+    "medium": { "model": "gpt-5" },
+    "large": { "model": "claude-sonnet-4.5" }
+  },
+  "opencode": {
+    "small": { "model": "anthropic/claude-haiku-4-5" },
+    "medium": { "model": "anthropic/claude-sonnet-4-6" },
+    "large": { "model": "anthropic/claude-opus-4-7" }
+  }
+}

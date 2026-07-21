@@ -29,6 +29,7 @@ import type {
   WorkflowDispatchEvent,
 } from '@/lib/types';
 import { applyOnText } from '@/lib/chat-message-reducer';
+import { applySystemStatus } from '@/lib/system-status-reducer';
 import {
   getCachedMessages,
   setCachedMessages,
@@ -563,15 +564,7 @@ export function ChatInterface({ conversationId }: ChatInterfaceProps): React.Rea
   );
 
   const onSystemStatus = useCallback((content: string): void => {
-    setMessages(prev => [
-      ...prev,
-      {
-        id: nextId(),
-        role: 'system' as const,
-        content,
-        timestamp: Date.now(),
-      },
-    ]);
+    setMessages(prev => applySystemStatus(prev, content, nextId));
   }, []);
 
   const { connected } = useSSE(isNewChat ? null : conversationId, {
@@ -635,7 +628,7 @@ export function ChatInterface({ conversationId }: ChatInterfaceProps): React.Rea
           // Cache messages under the new ID so the remounted ChatInterface picks them up
           // (navigate changes the key prop, causing unmount/remount — state is lost otherwise)
           setCachedMessages(newId, [userMsg, thinkingMsg]);
-          navigate(`/chat/${newId}`, { replace: true });
+          navigate(`/legacy/chat/${newId}`, { replace: true });
           // Trigger title + workflow refreshes after AI generates a proper title
           if (!hasTriggeredTitleRefresh.current && !message.startsWith('/')) {
             hasTriggeredTitleRefresh.current = true;

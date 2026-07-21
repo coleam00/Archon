@@ -11,6 +11,8 @@
   --sl-color-bg-sidebar: #131825;
   --sl-color-bg-nav: #0f1219;
   --sl-color-hairline-light: #1e293b;
+  --sl-color-text-accent: rgba(168, 85, 247, 0.25); /* mobile sidebar active-link bg — re-test after Starlight upgrades */
+  --sl-color-text-invert: white;
 }
 
 /* !important needed: Starlight sets .hero padding/gap via inline styles */
@@ -23,4 +25,5 @@
 [data-theme='dark'] .sidebar-content a[aria-current='page'] {
   background: linear-gradient(135deg, rgba(168, 85, 247, 0.15), rgba(59, 130, 246, 0.15));
   border-left-color: #a855f7;
+  color: var(--sl-color-white);
 }

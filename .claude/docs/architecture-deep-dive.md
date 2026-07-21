@@ -86,7 +86,7 @@ User message starts with /workflow
 
   IF isLoopWorkflow:
     → for i = 1..max_iterations:
-      → substituteVariables(prompt) → aiClient.sendQuery()
+      → substituteWorkflowVariables(prompt) → aiClient.sendQuery()
       → detectCompletionSignal(output, until) → break if found
 
   IF isStepWorkflow:

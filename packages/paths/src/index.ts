@@ -7,6 +7,7 @@ export {
   ensureArchonWorkspacesPath,
   getArchonWorktreesPath,
   getArchonConfigPath,
+  getCredentialKeyPath,
   getArchonEnvPath,
   getRepoArchonEnvPath,
   getHomeWorkflowsPath,
@@ -21,6 +22,7 @@ export {
   logArchonPaths,
   validateAppDefaultsPaths,
   parseOwnerRepo,
+  resolveRepoProjectIdentity,
   getProjectRoot,
   getProjectSourcePath,
   getProjectWorktreesPath,
@@ -28,6 +30,14 @@ export {
   getProjectLogsPath,
   getRunArtifactsPath,
   getRunLogPath,
+  sanitizeScopeSegment,
+  getScopeArtifactsPath,
+  slugifyFolderName,
+  getFolderProjectRoot,
+  getFolderProjectArtifactsPath,
+  getFolderProjectLogsPath,
+  getFolderRunArtifactsPath,
+  ensureFolderProjectStructure,
   resolveProjectRootFromCwd,
   ensureProjectStructure,
   createProjectSourceSymlink,
@@ -43,7 +53,12 @@ export { createLogger, setLogLevel, getLogLevel, rootLogger } from './logger';
 export type { Logger } from './logger';
 
 // Build-time constants (rewritten by scripts/build-binaries.sh)
-export { BUNDLED_IS_BINARY, BUNDLED_VERSION, BUNDLED_GIT_COMMIT } from './bundled-build';
+export {
+  BUNDLED_IS_BINARY,
+  BUNDLED_VERSION,
+  BUNDLED_GIT_COMMIT,
+  BUNDLED_WEB_DIST_SHA256,
+} from './bundled-build';
 
 // Update check
 export {
@@ -54,6 +69,36 @@ export {
 } from './update-check';
 export type { UpdateCheckResult } from './update-check';
 
+// Tier notice (one-time CLI notice for unconfigured tier-keyword workflows)
+export { readTierNoticeState, markTierNoticeShown } from './tier-notice';
+export type { TierNoticeState } from './tier-notice';
+
 // Anonymous telemetry
-export { captureWorkflowInvoked, shutdownTelemetry, isTelemetryDisabled } from './telemetry';
-export type { WorkflowInvokedProperties } from './telemetry';
+export {
+  captureWorkflowInvoked,
+  captureArchonStarted,
+  captureArchonActive,
+  captureChatTurn,
+  captureApprovalResolved,
+  captureCodebaseRegistered,
+  captureWorkflowCompleted,
+  classifyWorkflowForTelemetry,
+  TELEMETRY_SCHEMA_VERSION,
+  shutdownTelemetry,
+  isTelemetryDisabled,
+  getTelemetryStatus,
+  resetTelemetryId,
+} from './telemetry';
+export type {
+  WorkflowInvokedProperties,
+  ArchonStartedProperties,
+  ChatTurnProperties,
+  DeploymentShapeProperties,
+  WorkflowCompletedProperties,
+  WorkflowExitReason,
+  WorkflowErrorClass,
+  WorkflowNodeType,
+  WorkflowTelemetrySource,
+  TelemetryStatus,
+  TelemetryDisabledReason,
+} from './telemetry';

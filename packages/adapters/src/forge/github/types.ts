@@ -21,8 +21,12 @@ export interface WebhookEvent {
     deletions?: number;
   };
   comment?: {
+    /** GitHub's numeric comment id */
+    id?: number;
     body: string;
     user: { login: string };
+    /** ISO timestamp of the comment's last update; GitHub bumps it on edit */
+    updated_at?: string;
   };
   repository: {
     owner: { login: string };
@@ -32,4 +36,11 @@ export interface WebhookEvent {
     default_branch: string;
   };
   sender: { login: string };
+  /**
+   * GitHub App webhook deliveries include the installation id on every event.
+   * Used to short-circuit the per-(owner, repo) installation lookup in App
+   * mode — saves one HTTP round trip per inbound event. Absent on PAT-mode
+   * "manual webhook" deliveries; the adapter falls back to the lookup path.
+   */
+  installation?: { id: number };
 }

@@ -1,6 +1,6 @@
 import { createLogger } from '@archon/paths';
-import type { AgentSession, AgentSessionEvent } from '@mariozechner/pi-coding-agent';
-import type { AssistantMessage, Usage } from '@mariozechner/pi-ai';
+import type { AgentSession, AgentSessionEvent } from '@earendil-works/pi-coding-agent';
+import type { AssistantMessage, Usage } from '@earendil-works/pi-ai';
 
 import type { MessageChunk, TokenUsage } from '../../types';
 
@@ -179,58 +179,23 @@ export function buildResultChunk(messages: readonly unknown[]): MessageChunk {
         }
       : {}),
   };
+  if (isError) {
+    // Intentional design: error chunks are yielded, not thrown. isError:true in the chunk
+    // is the signal — callers (bridgeSession, dag-executor) check result.isError to classify
+    // failures and still receive full token/stopReason context from the same chunk.
+    getLog().error(
+      { stopReason: last.stopReason, errorMessage: last.errorMessage },
+      'pi.result_chunk_error'
+    );
+  }
   return chunk;
 }
 
-/**
- * Attempt to parse a Pi assistant transcript as the structured-output JSON
- * requested via `outputFormat`. Handles three common model failure modes:
- *  - trailing/leading whitespace (always stripped)
- *  - markdown code fences (```json ... ``` or bare ``` ... ```) that models
- *    emit despite the "no code fences" instruction in the prompt
- *  - prose preamble followed by a single trailing JSON object — pattern
- *    observed on Minimax M2.7 ("Now I have all the inputs. Let me evaluate
- *    the three gates: ... {...}"). Reasoning models tend to "think out loud"
- *    before emitting structured output despite explicit JSON-only prompts.
- *
- * Returns the parsed value on success, `undefined` on any failure. Callers
- * treat `undefined` as "structured output unavailable" and degrade via the
- * dag-executor's existing missing-structured-output warning.
- */
-export function tryParseStructuredOutput(text: string): unknown {
-  const trimmed = text.trim();
-  if (trimmed.length === 0) return undefined;
-  // Strip ```json / ``` fences if present. Match only at boundaries so we
-  // don't mangle JSON strings that legitimately contain backticks.
-  const cleaned = trimmed
-    .replace(/^```(?:json)?\s*\n?/i, '')
-    .replace(/\n?\s*```\s*$/, '')
-    .trim();
-
-  // Tier 1: clean parse — fast path for fully compliant outputs.
-  try {
-    return JSON.parse(cleaned);
-  } catch {
-    // fall through
-  }
-
-  // Tier 2: scan forward to the FIRST `{` and parse from there. Recovers the
-  // preamble-then-JSON pattern reasoning models emit. A backward scan from
-  // the last `{` was considered but rejected: it silently returns the wrong
-  // object when the prose contains a brace-bearing example after the real
-  // payload (e.g. `{"actual":1}\nFor example: {"x":2}` would yield `{x:2}`),
-  // breaking the conservative-failure contract callers rely on.
-  const firstBrace = cleaned.indexOf('{');
-  if (firstBrace > 0) {
-    try {
-      return JSON.parse(cleaned.slice(firstBrace));
-    } catch {
-      // fall through
-    }
-  }
-
-  return undefined;
-}
+// Structured-output parsing is shared across providers. Import once for local
+// use and re-export so existing callers and tests keep their import path
+// stable; new providers should import from `../../shared/structured-output`.
+import { tryParseStructuredOutput } from '../../shared/structured-output';
+export { tryParseStructuredOutput };
 
 /**
  * Pure mapper from Pi's `AgentSessionEvent` → zero-or-more Archon `MessageChunk`s.
@@ -334,7 +299,31 @@ export async function* bridgeSession(
   uiBridge?: BridgeNotifier
 ): AsyncGenerator<MessageChunk> {
   const queue = new AsyncQueue<BridgeQueueItem>();
+
+  // ── Assistant-chunk coalescing (#1814) ─────────────────────────────────
+  // Pi streams assistant text as many tiny `text_delta` events (often a few
+  // characters each). Downstream, the DAG executor treats every `assistant`
+  // chunk as a discrete message block — batch mode joins them with "\n\n",
+  // stream mode sends each one separately. That is correct for Claude/Codex,
+  // which each yield one chunk per *complete* text block, but it shatters Pi's
+  // char-level deltas into fragmented "С\n\nег\n\nод\n\nня" output. We coalesce
+  // consecutive deltas into one block-level chunk and flush it only at natural
+  // boundaries (turn start, text-block end, before any non-assistant chunk, and
+  // at end-of-stream/error), so Pi matches the one-chunk-per-block contract the
+  // executor already expects. `currentTurnText`/`assistantBuffer` still
+  // accumulate every delta, so streaming-tail detection and structured-output
+  // buffering are unaffected.
+  let pendingAssistant = '';
+  const flushPendingAssistant = (): void => {
+    if (pendingAssistant.length === 0) return;
+    queue.push({ kind: 'chunk', chunk: { type: 'assistant', content: pendingAssistant } });
+    pendingAssistant = '';
+  };
+
   uiBridge?.setEmitter(chunk => {
+    // A notify() chunk (flush:true) must surface immediately and in order, so
+    // drain any buffered assistant text ahead of it.
+    flushPendingAssistant();
     queue.push({ kind: 'chunk', chunk });
   });
   // Best-effort structured-output buffer. Only accumulates when the caller
@@ -355,6 +344,8 @@ export async function* bridgeSession(
   const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
     try {
       if (event.type === 'turn_start') {
+        // A new turn begins: the previous turn's text block is complete.
+        flushPendingAssistant();
         currentTurnText = '';
       }
       if (event.type === 'agent_end') {
@@ -362,12 +353,23 @@ export async function* bridgeSession(
       }
       for (const chunk of mapPiEvent(event)) {
         if (chunk.type === 'assistant') {
+          // Coalesce char-level deltas; hold them until a boundary flush so the
+          // executor receives one block-level chunk instead of dozens of tiny
+          // ones. The accumulators below still observe every delta.
           currentTurnText += chunk.content;
+          if (wantsStructured) assistantBuffer += chunk.content;
+          pendingAssistant += chunk.content;
+        } else {
+          // Any non-assistant chunk (tool, tool_result, system, result) is a
+          // boundary: drain buffered text first so ordering is preserved.
+          flushPendingAssistant();
+          queue.push({ kind: 'chunk', chunk });
         }
-        if (wantsStructured && chunk.type === 'assistant') {
-          assistantBuffer += chunk.content;
-        }
-        queue.push({ kind: 'chunk', chunk });
+      }
+      // A completed text block flushes promptly so stream-mode consumers see
+      // each block as it finishes rather than waiting for the terminal result.
+      if (event.type === 'message_update' && event.assistantMessageEvent.type === 'text_end') {
+        flushPendingAssistant();
       }
     } catch (err) {
       queue.push({ kind: 'error', error: err as Error });
@@ -401,8 +403,25 @@ export async function* bridgeSession(
 
   try {
     for await (const item of queue) {
-      if (item.kind === 'done') return;
-      if (item.kind === 'error') throw item.error;
+      if (item.kind === 'done') {
+        // Defensive: agent_end normally flushes buffered text via its result
+        // chunk before `done` arrives, but surface any stranded text rather
+        // than dropping it.
+        if (pendingAssistant.length > 0) {
+          yield { type: 'assistant', content: pendingAssistant };
+          pendingAssistant = '';
+        }
+        return;
+      }
+      if (item.kind === 'error') {
+        // Preserve partial output: emit whatever text was buffered before the
+        // failure so it still reaches the user instead of being discarded.
+        if (pendingAssistant.length > 0) {
+          yield { type: 'assistant', content: pendingAssistant };
+          pendingAssistant = '';
+        }
+        throw item.error;
+      }
       // Annotate the terminal result chunk with Pi's session UUID so Archon's
       // orchestrator can pass it back as `resumeSessionId` on the next call.
       // Pi's session.sessionId is always a UUID (even for in-memory); we emit

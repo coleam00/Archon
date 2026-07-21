@@ -228,13 +228,11 @@ when: "$classify.output.complexity != 'trivial'"
 | `$PLAN` | Previous plan from session metadata |
 | `$IMPLEMENTATION_SUMMARY` | Previous execution summary |
 
-### Positional Variables (command handler)
+### User Message Variables
 
 | Variable | Replaced With |
 |----------|--------------|
-| `$1` through `$9` | Positional arguments split from user message |
-| `$ARGUMENTS` | All arguments joined |
-| `\$` | Literal `$` (escape) |
+| `$ARGUMENTS` / `$USER_MESSAGE` | The user's whole trigger message (positional `$1`–`$9` are not supported) |
 
 ### DAG Node Output References
 

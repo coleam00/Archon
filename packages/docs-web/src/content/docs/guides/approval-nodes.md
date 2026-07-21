@@ -55,9 +55,10 @@ to the user on whatever platform they're using (CLI, Slack, GitHub, etc.). On th
    block the worktree path guard (no other workflow can start on the same path).
 4. **Approve**: The user approves, which writes a `node_completed` event for
    the approval node and transitions the run to resumable. Natural-language
-   messages, the CLI, and the Web UI approve button all auto-resume the
-   workflow from the paused gate. (The explicit `/workflow approve <run-id>`
-   slash command also auto-resumes when issued in the originating conversation.)
+   messages, the CLI, the Web UI approve button, and the in-thread **Approve**
+   button posted by the Slack adapter all auto-resume the workflow from the
+   paused gate. (The explicit `/workflow approve <run-id>` slash command also
+   auto-resumes when issued in the originating conversation.)
 5. **Reject**: The user rejects.
    - **Without `on_reject`**: The workflow is cancelled immediately.
    - **With `on_reject`**: The executor runs the `on_reject.prompt` via AI (with
@@ -94,8 +95,11 @@ Approval nodes do not support AI-specific fields (`model`, `provider`, `context`
 `idle_timeout`) since they don't invoke an AI agent. (The `on_reject.prompt` runs
 as a separate AI node using the workflow's default provider.)
 
-Standard DAG fields (`id`, `depends_on`, `when`, `trigger_rule`, `retry`) work
-as expected.
+Standard DAG fields (`id`, `depends_on`, `when`, `trigger_rule`) work as
+expected. `retry` is accepted by the schema but has **no effect** on an approval
+node — the approval dispatch path never enters the retry loop. To rework a
+rejected gate, use `on_reject` (see [Rejection with AI Rework](#rejection-with-ai-rework-on_reject)),
+not `retry`.
 
 ## Approving and Rejecting
 
@@ -136,6 +140,20 @@ bun run cli workflow reject <run-id> --reason "Plan needs more test coverage"
 /workflow approve <run-id> looks good
 /workflow reject <run-id> needs changes
 ```
+
+### Interactive-loop gates: bare approve finalizes
+
+Interactive **loop** gates (`loop:`/`loop_group:` with `interactive: true`) share these
+approve surfaces but add one rule: when the gate paused on an iteration that emitted the
+loop's completion signal (the persisted gate message — `metadata.approval.message`, shown
+by `workflow get --json` and `manage_run` — leads with "✅ Completion signal detected";
+in chat the same line follows the `⏸ Input required` prefix),
+approving **without a comment** finalizes the loop node from the already-computed output —
+no extra iteration runs. Approving **with** a comment runs another iteration with your
+comment as `$LOOP_USER_INPUT`. Natural-language approval always counts as a comment
+(iterates); use the slash command, CLI, web button, or `manage_run` to finalize. See
+[Loop Nodes → `interactive` and `gate_message`](/guides/loop-nodes/#interactive-and-gate_message)
+for the full semantics, `signal_completes`, and the AI-approver steering pattern.
 
 ### Web UI
 
@@ -234,8 +252,11 @@ can approve or reject again.
 
 ## Design Notes
 
-Approval nodes reuse the existing resume infrastructure. When approved, the run
-transitions through `failed` status briefly so the orchestrator's explicit
-resume path (via `hydrateResumableRun`) picks it up — this avoids duplicating
-resume logic. The `metadata.approval_response` field distinguishes
-approved-then-resumed from genuinely-failed runs.
+Approval nodes reuse the existing resume infrastructure. When approved (or
+rejected with an `on_reject` rework), the run **stays `paused`** — the
+resolution is recorded on the pause context as `metadata.approval.resolved`
+(`'approved'` or `'rejected'`), and the resume machinery (which accepts paused
+runs) picks it up via `hydrateResumableRun`. The status you see between
+clicking Approve and the executor resuming is an honest `paused`, never a
+transient `failed`. A `failed` run always means a real failure (it carries
+`metadata.error` or `metadata.failure_reason`).

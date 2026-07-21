@@ -26,6 +26,8 @@ describe('stripCwdEnv', () => {
     delete process.env.CLAUDE_CODE_USE_VERTEX;
     delete process.env.NODE_OPTIONS;
     delete process.env.VSCODE_INSPECTOR_OPTIONS;
+    delete process.env.BUN_INSPECT;
+    delete process.env.BUN_INSPECT_NOTIFY;
   });
 
   it('strips keys from single .env file', () => {
@@ -163,6 +165,8 @@ describe('stripCwdEnv — nested Claude Code marker stripping', () => {
     delete process.env.CLAUDE_CODE_USE_VERTEX;
     delete process.env.NODE_OPTIONS;
     delete process.env.VSCODE_INSPECTOR_OPTIONS;
+    delete process.env.BUN_INSPECT;
+    delete process.env.BUN_INSPECT_NOTIFY;
   });
 
   it('strips CLAUDECODE from process.env', () => {
@@ -201,6 +205,14 @@ describe('stripCwdEnv — nested Claude Code marker stripping', () => {
     stripCwdEnv(tmpDir);
     expect(process.env.NODE_OPTIONS).toBeUndefined();
     expect(process.env.VSCODE_INSPECTOR_OPTIONS).toBeUndefined();
+  });
+
+  it('strips BUN_INSPECT* vars injected by IDE Bun debuggers', () => {
+    process.env.BUN_INSPECT = 'ws://127.0.0.1:6499/uuid?wait=1';
+    process.env.BUN_INSPECT_NOTIFY = 'http://127.0.0.1:6500';
+    stripCwdEnv(tmpDir);
+    expect(process.env.BUN_INSPECT).toBeUndefined();
+    expect(process.env.BUN_INSPECT_NOTIFY).toBeUndefined();
   });
 
   it('handles combined CWD .env + nested session markers in one call', () => {

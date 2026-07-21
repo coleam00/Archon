@@ -112,6 +112,10 @@ Do not kill `claude.exe` processes — those are active Claude Code sessions.
 
 See also: [Port Conflicts](/reference/troubleshooting/#port-conflicts) in the troubleshooting guide.
 
+## Sleep During Workflow Runs (Native Windows Only)
+
+While a workflow run is active on native Windows, Archon holds the system awake (via `SetThreadExecutionState`) so Modern Standby cannot freeze the executor mid-run — the display can still turn off, only system sleep is inhibited. This is automatic and best-effort: it releases as soon as the last active run finishes, requires no configuration, and if the OS call is unavailable Archon simply runs without it.
+
 ## Tips
 
 - **VS Code Integration**: Install the "Remote - WSL" extension to edit WSL2 files from VS Code

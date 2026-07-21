@@ -45,9 +45,27 @@ jobs:
             exit 1
           fi
 
-      - name: Run marketplace auto-review workflow
+      - name: Verify gh authentication
+        # The auto-review's final node approves/comments/merges via `gh`. The
+        # read-only nodes before it succeed anonymously on this public repo, so a
+        # missing or unusable token would otherwise only surface as an opaque
+        # "HTTP 401: Requires authentication" at the very end. Fail fast here with
+        # a clear signal that the token — not the workflow logic — is the problem.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if ! gh auth status; then
+            echo "::error::GITHUB_TOKEN did not authenticate gh. Check the job's permissions block (needs pull-requests: write, contents: write)." >&2
+            exit 1
+          fi
+
+      - name: Run marketplace auto-review workflow
+        env:
+          # gh reads GH_TOKEN first, then GITHUB_TOKEN; git credential helpers
+          # read GITHUB_TOKEN. Provide both so every auth path inside the Archon
+          # DAG's bash nodes resolves the same pull_request_target token.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           bun run cli workflow run marketplace-pr-review-and-merge --no-worktree \

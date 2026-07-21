@@ -107,6 +107,27 @@ When you're done with a worktree's branch, clean up everything (worktree + local
 archon complete <branch-name>
 ```
 
+## Folder Projects (non-git workspaces)
+
+A **project** doesn't have to be a git repository. A **folder project** is any directory — a **multi-repo root** holding many service repos, or a plain **business-ops folder** with no git at all — registered as a first-class Archon project. It gets identity, per-project env vars, run history, and named artifact/log storage, just like a repo project.
+
+Register and run one with `--folder`:
+
+```bash
+# From a multi-repo root (not itself a git repo)
+cd ~/platform          # contains auth-service/, billing-service/, ...
+archon workflow run assist --folder "List every service and its current branch"
+```
+
+Folder projects differ from repo projects in a few honest ways:
+
+- **They run in place by default — no worktree isolation.** The agent's working directory is the folder root, so it sees *every* child folder and repo. Per-service git (branch, commit, PR) is the agent's job via `bash`/`gh`, not Archon's. Pass `--container` (or set `container.enabled` in config) to instead run inside an overlay-isolated Docker container so writes don't touch the live root mid-run — see [configuration](/reference/configuration/#container-isolation-folder-projects).
+- `--branch` / `--from` are rejected (there's no worktree to create), and `/worktree` reports "not applicable".
+- Artifacts and logs live under `~/.archon/workspaces/_folder/<slug>/` instead of `<owner>/<repo>/`.
+- Registration is explicit — via `--folder` on the CLI, the `path` field when adding a project in the web console, or `/register-project` in chat (a non-git path is auto-detected as a folder).
+
+Once registered, you can run workflows and chat against the folder from anywhere under its root — no `--folder` flag needed after the first time.
+
 ---
 
 ## Next Steps

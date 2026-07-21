@@ -26,7 +26,7 @@ This chapter collects every CLI command, variable, and YAML option in one place.
 | `archon workflow run <name> --cwd /path "<prompt>"` | Run against a specific directory |
 | `archon workflow status` | Show status of active workflow runs |
 | `archon workflow resume <run-id>` | Resume a failed workflow run |
-| `archon workflow abandon <run-id>` | Abandon a non-terminal workflow run |
+| `archon workflow abandon <run-id>` | Abandon a workflow run (running, paused, or failed) |
 | `archon workflow cleanup [days]` | Delete old workflow run records (default: 7 days) |
 
 ### `archon isolation`
@@ -70,8 +70,7 @@ Variables are substituted at runtime in command bodies and workflow `prompt:` fi
 
 | Variable | Available In | Contains |
 |----------|-------------|----------|
-| `$ARGUMENTS` | Commands, prompts | All arguments passed to the command as a single string |
-| `$1`, `$2`, `$3` | Commands, prompts | First, second, third positional arguments |
+| `$ARGUMENTS` / `$USER_MESSAGE` | Commands, prompts | The user's whole trigger message (positional `$1`/`$2`/`$3` are not supported) |
 | `$ARTIFACTS_DIR` | Commands, prompts | Absolute path to the workflow run's artifact directory |
 | `$WORKFLOW_ID` | Commands, prompts | The current workflow run ID |
 | `$BASE_BRANCH` | Commands, prompts | Base git branch (auto-detected or set via `worktree.baseBranch`) |
@@ -112,7 +111,6 @@ archon workflow run my-workflow "auth refresh-tokens"
 | `model` | No | string | Model for all nodes (`sonnet`, `opus`, `haiku`, or full model ID) |
 | `modelReasoningEffort` | No | string | Codex only: `minimal` \| `low` \| `medium` \| `high` \| `xhigh` |
 | `webSearchMode` | No | string | Codex only: `disabled` \| `cached` \| `live` |
-| `additionalDirectories` | No | string[] | Extra directories available to the AI |
 
 ### Node Options (DAG)
 
@@ -126,8 +124,11 @@ All nodes share these base fields:
 | `bash` | One of | string | Shell script (runs without AI; stdout captured as `$nodeId.output`) |
 | `script` | One of | string | TypeScript/JavaScript (bun) or Python (uv) — inline or named ref to `.archon/scripts/`. Requires `runtime`. See [Script Nodes](/guides/script-nodes/) |
 | `loop` | One of | object | Loop configuration (see Loop Options below) |
+| `loop_group` | One of | object | Multi-node sub-DAG repeated per iteration (see Loop Group Options below) |
 | `approval` | One of | object | Pause for human review; see [Approval Nodes](/guides/approval-nodes/) |
 | `cancel` | One of | string | Reason string; terminates the run with `cancelled` status (not `failed`). Usually gated with `when:` |
+| `include` | One of | string | Name of another workflow whose nodes are inlined at discovery as a namespaced sub-DAG; see [Reusing a Shared Sub-DAG](/guides/authoring-workflows/#reusing-a-shared-sub-dag-with-include) |
+| `workflow` | One of | string | Name of another workflow run at execution time as a separate governed CHILD run (own run record, gates, artifacts, cost); see [Composing a Governed Sub-Run](/guides/authoring-workflows/#composing-a-governed-sub-run-with-workflow) |
 | `depends_on` | No | string[] | Node IDs that must complete before this node runs |
 | `when` | No | string | Condition expression; node is skipped if false |
 | `trigger_rule` | No | string | Join semantics when multiple upstreams exist (see Trigger Rules) |
@@ -151,6 +152,15 @@ All nodes share these base fields:
 | `runtime` | Yes | `'bun'` \| `'uv'` | Which runtime executes the script. Must match file extension for named scripts (`.ts`/`.js` → bun, `.py` → uv) |
 | `deps` | No | string[] | Python dependencies for `uv run --with`. Ignored for bun (bun auto-installs) |
 | `timeout` | No | number | Hard kill in ms. Default: 120000 (2 min). Same semantics as `bash` timeout |
+
+**Workflow (sub-run)-specific fields** (when `workflow:` is set):
+
+| Field | Required | Type | Description |
+|-------|----------|------|-------------|
+| `input` | No | string | Data string forwarded as the child's `$ARGUMENTS`. Substituted like a `prompt:` body (`$nodeId.output`, workflow variables) |
+| `isolation` | No | `'inherit'` | Only `'inherit'` (shared checkout) is supported; `'worktree'` is reserved and rejected at load time (slice 2) |
+
+`retry` is rejected on `workflow:` nodes, and `workflow:` is rejected inside a `loop_group` body. The child's terminal output threads back as `$nodeId.output`; a child approval gate pauses the whole tree — approve the **child** by run id and the parent auto-resumes.
 
 **Approval-specific fields** (required when `approval:` is set):
 
@@ -178,11 +188,15 @@ Defined under `loop:` inside a node:
 
 | Field | Required | Type | Description |
 |-------|----------|------|-------------|
-| `prompt` | Yes | string | AI instructions executed each iteration |
+| `prompt` | One of `prompt`/`command` | string | Inline AI instructions executed each iteration |
+| `command` | One of `prompt`/`command` | string | Command file (under `.archon/commands/`) whose body is the iteration prompt — exactly one of `prompt` or `command` |
 | `until` | Yes | string | Completion signal string — loop ends when AI output contains this |
 | `max_iterations` | Yes | number | Maximum iterations before the node fails |
 | `fresh_context` | No | boolean | Start a new session each iteration (default: false) |
 | `until_bash` | No | string | Shell script run after each iteration; exit 0 signals completion |
+| `interactive` | No | boolean | Pause at a human gate after each iteration for input via `/workflow approve` |
+| `gate_message` | No | string | Message shown at the interactive gate (required when `interactive: true`) |
+| `signal_completes` | No | boolean | Interactive loops only: a detected completion signal completes the node immediately (even on iteration 1) instead of gating (default: false) |
 
 **Example:**
 
@@ -192,6 +206,42 @@ Defined under `loop:` inside a node:
     prompt: "Review the current draft and improve it. Output COMPLETE when done."
     until: "COMPLETE"
     max_iterations: 5
+```
+
+### Loop Group Options
+
+Defined under `loop_group:` inside a node — repeats a sealed multi-node sub-DAG
+per iteration (see [Cross-Node Loops](/guides/loop-nodes/#cross-node-loops-with-loop_group)):
+
+| Field | Required | Type | Description |
+|-------|----------|------|-------------|
+| `nodes` | Yes | node[] | Sub-DAG body re-run in full each iteration. Any node type, including nested `loop_group`. `depends_on` is body-scoped; body ids must not shadow outer ids |
+| `until` | Yes | string | Completion signal — checked in the body's terminal-node output |
+| `max_iterations` | Yes | number | Maximum iterations before the node fails |
+| `fresh_context` | No | boolean | `true` starts fresh body AI sessions each iteration (default: false — sessions continue) |
+| `until_bash` | No | string | Shell script run after each iteration; exit 0 signals completion |
+| `interactive` | No | boolean | Pause at a human gate after each non-completing iteration |
+| `gate_message` | No | string | Message shown at the interactive gate |
+| `signal_completes` | No | boolean | Interactive loops only: a detected completion signal completes the group immediately (even on iteration 1) instead of gating (default: false) |
+
+Body nodes can reference the previous iteration via
+`$LOOP_PREV.<nodeId>.output`, and outer-DAG outputs via plain `$nodeId.output`.
+`retry` is rejected on `loop_group` nodes; `model`/`provider` set on the group
+become defaults for body AI nodes.
+
+**Example:**
+
+```yaml
+- id: fix-loop
+  loop_group:
+    until: TESTS_PASS
+    max_iterations: 5
+    nodes:
+      - id: implement
+        prompt: "Fix the failing tests. Previous run: $LOOP_PREV.test.output"
+      - id: test
+        bash: bun test
+        depends_on: [implement]
 ```
 
 ### Retry Options
@@ -295,7 +345,7 @@ defaults:
 | `Not a git repository` | Running outside a repo | `cd` into a git repo first — workflow and isolation commands require one |
 | `Unknown provider 'X'. Registered: claude, codex, pi` | Typo in `provider:` (workflow root or node-level) | Set `provider:` to one of the registered ids. Model strings themselves are not validated at load time — the SDK rejects unknown models at request time. |
 | `$BASE_BRANCH referenced but could not be detected` | No base branch set and auto-detection failed | Set `worktree.baseBranch` in `.archon/config.yaml` or ensure `main`/`master` exists |
-| Workflow hangs with no output | Node idle timeout hit | Increase `idle_timeout` on the node (milliseconds) |
+| Node fails with "timed out with no output" | `idle_timeout` fired before the provider emitted anything (time-to-first-token exceeded the window) | Increase `idle_timeout` on the node or reduce prompt size |
 
 ### Debug Techniques
 

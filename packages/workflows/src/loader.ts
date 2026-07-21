@@ -2,16 +2,42 @@
  * Workflow loader - discovers and parses workflow YAML files
  */
 import type { WorkflowDefinition, WorkflowLoadError, DagNode, WorkflowNodeHooks } from './schemas';
-import { isLoopNode, isApprovalNode, isCancelNode, isScriptNode } from './schemas';
+import {
+  isBashNode,
+  isLoopNode,
+  isLoopGroupNode,
+  isApprovalNode,
+  isCancelNode,
+  isScriptNode,
+  isIncludeNode,
+  isWorkflowNode,
+  isPersistableNode,
+} from './schemas';
 import { createLogger } from '@archon/paths';
-import { isRegisteredProvider, getRegisteredProviders } from '@archon/providers';
+import {
+  isRegisteredProvider,
+  getRegisteredProviders,
+  getProviderCapabilities,
+} from '@archon/providers';
 import {
   dagNodeSchema,
   BASH_NODE_AI_FIELDS,
   SCRIPT_NODE_AI_FIELDS,
   LOOP_NODE_AI_FIELDS,
+  LOOP_GROUP_NODE_AI_FIELDS,
+  INCLUDE_NODE_IGNORED_FIELDS,
+  WORKFLOW_NODE_IGNORED_FIELDS,
+  effortLevelSchema,
+  thinkingConfigSchema,
+  sandboxSettingsSchema,
+  betasSchema,
 } from './schemas/dag-node';
-import { modelReasoningEffortSchema, webSearchModeSchema } from './schemas/workflow';
+import {
+  modelReasoningEffortSchema,
+  webSearchModeSchema,
+  workflowRequirementSchema,
+} from './schemas/workflow';
+import type { WorkflowRequirement } from './schemas/workflow';
 import { workflowNodeHooksSchema } from './schemas/hooks';
 import { z } from '@hono/zod-openapi';
 
@@ -20,6 +46,35 @@ let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('workflow.loader');
   return cachedLog;
+}
+
+/**
+ * Parse an optional, schema-validated workflow field with warn-and-drop
+ * semantics: a present-but-invalid value is logged and dropped (returns
+ * undefined) rather than rejecting the whole workflow, so a typo in one field
+ * doesn't abort the discovery pass. Mirrors the policy used for `tags` /
+ * `interactive`. `extra` merges into the warning payload (e.g. the list of
+ * valid enum options).
+ *
+ * The return type is inferred from the schema (`z.output<S>`), so
+ * preprocess-based schemas (e.g. `thinkingConfigSchema`, whose input is
+ * `unknown`) still resolve to their parsed output type rather than their
+ * input type. zod v4 removed `ZodTypeDef` as the middle type parameter, so the
+ * old `z.ZodType<T, z.ZodTypeDef, unknown>` form no longer compiles.
+ */
+function parseOptionalField<S extends z.ZodType>(
+  raw: unknown,
+  schema: S,
+  filename: string,
+  event: string,
+  extra?: Record<string, unknown>
+): z.output<S> | undefined {
+  const result = schema.safeParse(raw);
+  if (result.success) return result.data;
+  if (raw !== undefined) {
+    getLog().warn({ filename, value: raw, ...extra }, event);
+  }
+  return undefined;
 }
 
 /**
@@ -64,10 +119,16 @@ function parseDagNode(raw: unknown, index: number, errors: string[]): DagNode | 
   let nonAiNode: { type: string; fields: readonly string[] } | undefined;
   if (isCancelNode(node)) {
     nonAiNode = { type: 'cancel', fields: BASH_NODE_AI_FIELDS };
+  } else if (isIncludeNode(node)) {
+    nonAiNode = { type: 'include', fields: INCLUDE_NODE_IGNORED_FIELDS };
+  } else if (isWorkflowNode(node)) {
+    nonAiNode = { type: 'workflow', fields: WORKFLOW_NODE_IGNORED_FIELDS };
   } else if (isApprovalNode(node)) {
     nonAiNode = { type: 'approval', fields: BASH_NODE_AI_FIELDS };
   } else if (isLoopNode(node)) {
     nonAiNode = { type: 'loop', fields: LOOP_NODE_AI_FIELDS };
+  } else if (isLoopGroupNode(node)) {
+    nonAiNode = { type: 'loop_group', fields: LOOP_GROUP_NODE_AI_FIELDS };
   } else if (isScriptNode(node)) {
     nonAiNode = { type: 'script', fields: SCRIPT_NODE_AI_FIELDS };
   } else if ('bash' in node && typeof node.bash === 'string') {
@@ -92,13 +153,26 @@ function parseDagNode(raw: unknown, index: number, errors: string[]): DagNode | 
  * Validate DAG structure: unique IDs, depends_on references exist, no cycles,
  * and $nodeId.output refs in when:/prompt: fields point to known nodes.
  * Returns error message or null if valid.
+ *
+ * Exported so the include-expander can re-run the same structural checks on the
+ * fully-flattened, namespaced node list after inlining (duplicate-id collisions,
+ * cycles introduced by rewired edges, unknown deps).
  */
-function validateDagStructure(nodes: DagNode[]): string | null {
+export function validateDagStructure(
+  nodes: DagNode[],
+  enclosingIds?: ReadonlySet<string>
+): string | null {
   // Check ID uniqueness
   const ids = new Set<string>();
   for (const node of nodes) {
     if (ids.has(node.id)) {
       return `Duplicate node id: '${node.id}'`;
+    }
+    // A loop_group body node must not reuse an enclosing DAG's node id: the executor
+    // seeds each iteration's scoped output map with the outer outputs, so a colliding
+    // body node would silently shadow the outer node for $id.output refs.
+    if (enclosingIds?.has(node.id)) {
+      return `Node id '${node.id}' shadows a node id in the enclosing DAG`;
     }
     ids.add(node.id);
   }
@@ -143,14 +217,24 @@ function validateDagStructure(nodes: DagNode[]): string | null {
     return `Cycle detected among nodes: ${cycleNodes.join(', ')}`;
   }
 
-  // Check $nodeId.output references in when: and prompt: fields.
-  // Triple-backtick fenced blocks and single-backtick inline code inside a
-  // prompt body are documentation meant to render literally to the LLM
-  // (e.g. the workflow-builder shows authors how to write
-  // `$<other-node>.output` inside a script-node example); strip them before
-  // scanning so they don't false-match as real cross-node references. when:
-  // clauses are JS-like expressions and never carry markdown code, so they
-  // pass through unchanged.
+  // Check $nodeId.output references across EVERY field the executor substitutes at
+  // runtime: when:, and the text surfaces that flow through substituteNodeOutputRefs
+  // (prompt, bash, script, approval.message, cancel, loop.prompt, loop.until_bash,
+  // loop_group.until_bash, workflow.input). A dangling ref in any of them silently
+  // substitutes to '' at run time, so all must be validated here.
+  //
+  // KEEP IN SYNC (three ref-surface enumerations must agree):
+  //   1. this scan (loader validateDagStructure) — validates refs,
+  //   2. rewriteNodeOutputRefs (include-expander.ts) — renames refs on inline,
+  //   3. the substituteNodeOutputRefs call sites (dag-executor.ts) — resolves refs at run.
+  // Adding a substituted field to one means updating all three.
+  //
+  // Prose fields (prompt / loop.prompt) may contain triple-backtick fenced blocks or
+  // single-backtick inline code that are documentation meant to render literally to
+  // the LLM (e.g. the workflow-builder shows authors how to write `$<other-node>.output`
+  // inside a script-node example); strip those before scanning so they don't false-match.
+  // The code/expression fields (bash / script / until_bash / cancel) and when: clauses
+  // carry live refs (not documentation), so they are scanned verbatim.
   const outputRefPattern = /\$([a-zA-Z_][a-zA-Z0-9_-]*)\.output/g;
   const stripMarkdownCode = (s: string): string =>
     s.replace(/```[\s\S]*?```/g, '').replace(/`[^`\n]*`/g, '');
@@ -160,17 +244,69 @@ function validateDagStructure(nodes: DagNode[]): string | null {
     if ('prompt' in node && typeof node.prompt === 'string') {
       sources.push(stripMarkdownCode(node.prompt));
     }
+    if (isBashNode(node)) sources.push(node.bash);
+    if (isScriptNode(node)) sources.push(node.script);
+    // workflow.input is a live ref surface (a data string), scanned verbatim like
+    // bash/script — not prose, so no markdown stripping.
+    if (isWorkflowNode(node) && node.input) sources.push(node.input);
+    if (isCancelNode(node)) sources.push(node.cancel);
+    if (isApprovalNode(node)) sources.push(node.approval.message);
     if (isLoopNode(node)) {
-      sources.push(stripMarkdownCode(node.loop.prompt));
+      // Only inline `loop.prompt` is scanned for `$nodeId.output` refs. A
+      // command-backed loop (`loop.command`) loads its prompt text from a file
+      // at runtime; that file's contents are the author's responsibility, the
+      // same way a `command:` node's body is not scanned at parse time.
+      if (typeof node.loop.prompt === 'string') {
+        sources.push(stripMarkdownCode(node.loop.prompt));
+      }
+      if (node.loop.until_bash) sources.push(node.loop.until_bash);
+    }
+    if (isLoopGroupNode(node) && node.loop_group.until_bash) {
+      sources.push(node.loop_group.until_bash);
     }
     for (const source of sources) {
       let m: RegExpExecArray | null;
       outputRefPattern.lastIndex = 0; // reset stateful g-flag regex before each new source string
       while ((m = outputRefPattern.exec(source)) !== null) {
         const refNodeId = m[1];
-        if (refNodeId !== undefined && !ids.has(refNodeId)) {
+        // Output refs (unlike depends_on) may also reach ENCLOSING-scope nodes: the
+        // executor seeds a loop_group iteration's scoped output map with the outer
+        // DAG's outputs, so `$outerNode.output` inside a body prompt is valid.
+        if (refNodeId !== undefined && !ids.has(refNodeId) && !enclosingIds?.has(refNodeId)) {
           return `Node '${node.id}' references unknown node '$${refNodeId}.output'`;
         }
+      }
+    }
+  }
+
+  // Recursively validate loop_group bodies as scoped sub-DAGs. A loop_group body is
+  // sealed for GRAPH edges: its depends_on edges resolve within the body (not the
+  // outer DAG), and the body is itself a DAG (unique ids, no cycles). $nodeId.output
+  // refs are wider — the accumulated enclosing-scope ids are passed down so body
+  // prompts may reference outer nodes (mirrors the executor seeding the scoped output
+  // map with outer outputs). Nested loop_groups recurse naturally, accumulating scope.
+  // Outer-DAG cycle/depends_on checks above operate on the flattened top-level node
+  // list and treat each loop_group as one outer node.
+  for (const node of nodes) {
+    if (isLoopGroupNode(node)) {
+      // `include` inside a loop_group body is rejected in v1 (bounds the interaction
+      // surface — see the plan's NOT Building). An include is a load-time inlining
+      // directive; nesting it inside a per-iteration sub-DAG body is not yet supported.
+      const includeInBody = node.loop_group.nodes.find(isIncludeNode);
+      if (includeInBody) {
+        return `loop_group '${node.id}' body: 'include' is not supported inside a loop_group body`;
+      }
+      // `workflow:` (sub-run) inside a loop_group body is rejected in slice 1 (bounds
+      // the interaction surface — see the plan's NOT Building). A sub-run per
+      // iteration needs the fan-out semantics deferred to slice 2.
+      const workflowInBody = node.loop_group.nodes.find(isWorkflowNode);
+      if (workflowInBody) {
+        return `loop_group '${node.id}' body: 'workflow' (sub-run) is not supported inside a loop_group body`;
+      }
+      const scopeIds = new Set([...(enclosingIds ?? []), ...ids]);
+      const bodyError = validateDagStructure(node.loop_group.nodes, scopeIds);
+      if (bodyError) {
+        return `loop_group '${node.id}' body: ${bodyError}`;
       }
     }
   }
@@ -319,40 +455,61 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
       }
     }
 
-    // Validate modelReasoningEffort — warn and ignore invalid values (preserve original behavior)
-    const modelReasoningEffortResult = modelReasoningEffortSchema.safeParse(
-      raw.modelReasoningEffort
+    // persist_session capability gating: when the effective provider is known at
+    // load time (explicit at node or workflow level), reject the workflow if the
+    // provider doesn't support session resume. When the provider is implicit (set
+    // via .archon/config.yaml defaults), the check defers to runtime in
+    // dag-executor.
+    //
+    // Only command + prompt nodes participate in cross-run session persistence today
+    // (see `isPersistableNode` for the exclusion list):
+    //   - bash / script / approval / cancel nodes don't invoke a provider at all.
+    //   - loop nodes manage their own per-iteration session threading; cross-run
+    //     persistence for loops isn't wired. `parseDagNode` emits a
+    //     `loop_node_ai_fields_ignored` warning when `persist_session` appears on one.
+    //   - context:'fresh' nodes explicitly bypass persistence in the executor.
+    // Skipping these here prevents false validation failures when a workflow opts
+    // in via workflow-level `persist_sessions: true` and contains, e.g., a bash node.
+    const workflowPersistSessions = raw.persist_sessions === true;
+    for (const node of dagNodes) {
+      if (!isPersistableNode(node)) continue;
+      if ('context' in node && node.context === 'fresh') continue;
+
+      const nodePersist = 'persist_session' in node ? node.persist_session : undefined;
+      const effectivePersist = nodePersist ?? workflowPersistSessions;
+      if (!effectivePersist) continue;
+
+      const explicitProvider = ('provider' in node ? node.provider : undefined) ?? provider;
+      if (explicitProvider && isRegisteredProvider(explicitProvider)) {
+        const caps = getProviderCapabilities(explicitProvider);
+        if (!caps.sessionResume) {
+          return {
+            workflow: null,
+            error: {
+              filename,
+              error: `Node '${node.id}' has persist_session: true but provider '${explicitProvider}' does not support sessionResume. Remove persist_session, or use a provider with sessionResume capability.`,
+              errorType: 'validation_error',
+            },
+          };
+        }
+      }
+    }
+
+    // Validate modelReasoningEffort / webSearchMode — warn and ignore invalid values.
+    const modelReasoningEffort = parseOptionalField(
+      raw.modelReasoningEffort,
+      modelReasoningEffortSchema,
+      filename,
+      'invalid_model_reasoning_effort',
+      { valid: modelReasoningEffortSchema.options }
     );
-    const modelReasoningEffort = modelReasoningEffortResult.success
-      ? modelReasoningEffortResult.data
-      : undefined;
-    if (raw.modelReasoningEffort !== undefined && !modelReasoningEffortResult.success) {
-      getLog().warn(
-        { filename, value: raw.modelReasoningEffort, valid: modelReasoningEffortSchema.options },
-        'invalid_model_reasoning_effort'
-      );
-    }
-
-    // Validate webSearchMode — warn and ignore invalid values (preserve original behavior)
-    const webSearchModeResult = webSearchModeSchema.safeParse(raw.webSearchMode);
-    const webSearchMode = webSearchModeResult.success ? webSearchModeResult.data : undefined;
-    if (raw.webSearchMode !== undefined && !webSearchModeResult.success) {
-      getLog().warn(
-        { filename, value: raw.webSearchMode, valid: webSearchModeSchema.options },
-        'invalid_web_search_mode'
-      );
-    }
-
-    // Filter additionalDirectories — warn on non-strings (preserve original behavior)
-    const additionalDirectories = Array.isArray(raw.additionalDirectories)
-      ? raw.additionalDirectories.filter((d: unknown) => {
-          if (typeof d !== 'string') {
-            getLog().warn({ filename, value: d }, 'non_string_additional_directory_filtered');
-            return false;
-          }
-          return true;
-        })
-      : undefined;
+    const webSearchMode = parseOptionalField(
+      raw.webSearchMode,
+      webSearchModeSchema,
+      filename,
+      'invalid_web_search_mode',
+      { valid: webSearchModeSchema.options }
+    );
 
     const interactive = typeof raw.interactive === 'boolean' ? raw.interactive : undefined;
     if (raw.interactive !== undefined && typeof raw.interactive !== 'boolean') {
@@ -362,10 +519,33 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
     // Warn if any interactive loop node exists in a non-interactive workflow
     // (approval messages won't reach the user in web background runs)
     if (!interactive) {
-      const hasInteractiveLoop = dagNodes.some(n => isLoopNode(n) && n.loop.interactive === true);
-      if (hasInteractiveLoop) {
+      // Covers loop: and loop_group: gates, including loops nested inside loop_group bodies.
+      const hasInteractiveLoop = (ns: DagNode[]): boolean =>
+        ns.some(
+          n =>
+            (isLoopNode(n) && n.loop.interactive === true) ||
+            (isLoopGroupNode(n) &&
+              (n.loop_group.interactive === true || hasInteractiveLoop(n.loop_group.nodes)))
+        );
+      if (hasInteractiveLoop(dagNodes)) {
         getLog().warn({ filename }, 'interactive_loop_in_non_interactive_workflow');
       }
+    }
+
+    // Warn (non-blocking) when signal_completes is set without interactive: the flag
+    // only changes interactive-gate behavior — a non-interactive loop already
+    // completes on the signal, so the author's intent is likely a missing
+    // `interactive: true`. The workflow still loads.
+    const hasSignalCompletesWithoutInteractive = (ns: DagNode[]): boolean =>
+      ns.some(
+        n =>
+          (isLoopNode(n) && n.loop.signal_completes === true && n.loop.interactive !== true) ||
+          (isLoopGroupNode(n) &&
+            ((n.loop_group.signal_completes === true && n.loop_group.interactive !== true) ||
+              hasSignalCompletesWithoutInteractive(n.loop_group.nodes)))
+      );
+    if (hasSignalCompletesWithoutInteractive(dagNodes)) {
+      getLog().warn({ filename }, 'signal_completes_without_interactive_ignored');
     }
 
     // Parse workflow-level worktree policy. Same warn-and-ignore pattern used
@@ -387,6 +567,42 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
         }
       } else {
         getLog().warn({ filename, value: raw.worktree }, 'invalid_worktree_block_ignored');
+      }
+    }
+
+    // Parse workflow-level container policy (folder-project container backend).
+    // Same warn-and-ignore pattern as `worktree`. `enabled` pins the container
+    // backend on without `--container`; `write_back` ('approve' | 'auto') chooses
+    // whether the finished run's overlay diff pauses for review or applies directly.
+    let containerPolicy: { enabled?: boolean; write_back?: 'approve' | 'auto' } | undefined;
+    if (raw.container !== undefined) {
+      if (
+        typeof raw.container === 'object' &&
+        raw.container !== null &&
+        !Array.isArray(raw.container)
+      ) {
+        const rawContainer = raw.container as Record<string, unknown>;
+        const rawEnabled = rawContainer.enabled;
+        const rawWriteBack = rawContainer.write_back;
+        const policy: { enabled?: boolean; write_back?: 'approve' | 'auto' } = {};
+        if (typeof rawEnabled === 'boolean') {
+          policy.enabled = rawEnabled;
+        } else if (rawEnabled !== undefined) {
+          getLog().warn({ filename, value: rawEnabled }, 'invalid_container_enabled_value_ignored');
+        }
+        if (rawWriteBack === 'approve' || rawWriteBack === 'auto') {
+          policy.write_back = rawWriteBack;
+        } else if (rawWriteBack !== undefined) {
+          getLog().warn(
+            { filename, value: rawWriteBack },
+            'invalid_container_write_back_value_ignored'
+          );
+        }
+        if (policy.enabled !== undefined || policy.write_back !== undefined) {
+          containerPolicy = policy;
+        }
+      } else {
+        getLog().warn({ filename, value: raw.container }, 'invalid_container_block_ignored');
       }
     }
 
@@ -424,6 +640,88 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
       getLog().warn({ filename, value: raw.tags }, 'invalid_tags_block_ignored');
     }
 
+    // Parse optional requires — the external-capability enum list (today only
+    // `github`) that hard-blocks invocation when the originating user hasn't connected
+    // that identity (see assertWorkflowRequirementsMet). Same warn-and-drop policy as
+    // `tags`: invalid entries are dropped with a warning; an absent/empty list leaves
+    // `requires` undefined. Without this block the field is silently discarded here and
+    // the capability gate can never fire for a discovered workflow.
+    let requires: WorkflowRequirement[] | undefined;
+    if (Array.isArray(raw.requires)) {
+      const valid: WorkflowRequirement[] = [];
+      for (const entry of raw.requires) {
+        const parsed = workflowRequirementSchema.safeParse(entry);
+        if (parsed.success) valid.push(parsed.data);
+        else getLog().warn({ filename, value: entry }, 'invalid_workflow_requires_entry_ignored');
+      }
+      const deduped = [...new Set(valid)];
+      if (deduped.length > 0) requires = deduped;
+    } else if (raw.requires !== undefined) {
+      getLog().warn({ filename, value: raw.requires }, 'invalid_workflow_requires_block_ignored');
+    }
+
+    // Parse workflow-level fallback fields. Same warn-and-drop pattern as
+    // `modelReasoningEffort` / `webSearchMode` above. These are declared on
+    // `workflowBaseSchema` and consumed by the DAG executor's
+    // `workflowLevelOptions` (the object literal at the top of
+    // `executeDagWorkflow`, reading `workflow.effort` etc.) as defaults that
+    // per-node options inherit when unset. Without this block, a workflow YAML
+    // that sets e.g. `effort: high` at the root would be dropped here and the
+    // executor would read undefined, so a node without its own `effort` would
+    // never inherit the workflow-level default.
+    const effort = parseOptionalField(
+      raw.effort,
+      effortLevelSchema,
+      filename,
+      'invalid_workflow_effort_value_ignored',
+      { valid: effortLevelSchema.options }
+    );
+    const thinking = parseOptionalField(
+      raw.thinking,
+      thinkingConfigSchema,
+      filename,
+      'invalid_workflow_thinking_value_ignored'
+    );
+    const sandbox = parseOptionalField(
+      raw.sandbox,
+      sandboxSettingsSchema,
+      filename,
+      'invalid_workflow_sandbox_value_ignored'
+    );
+
+    // fallbackModel: non-empty trimmed string. Inline trim rather than
+    // `safeParse` so a stray surrounding space is normalised rather than rejected.
+    const fallbackModelTrimmed =
+      typeof raw.fallbackModel === 'string' ? raw.fallbackModel.trim() : '';
+    const fallbackModel = fallbackModelTrimmed.length > 0 ? fallbackModelTrimmed : undefined;
+    if (raw.fallbackModel !== undefined && fallbackModel === undefined) {
+      getLog().warn(
+        { filename, value: raw.fallbackModel, expected: 'non-empty string' },
+        'invalid_workflow_fallback_model_value_ignored'
+      );
+    }
+
+    // betas: trim, drop empties, then validate the cleaned list through
+    // `betasSchema` (non-empty array of non-empty strings). An empty result
+    // drops the field entirely — the Claude SDK expects a populated beta header
+    // or none at all. The schema's `.nonempty()` enforces non-emptiness at
+    // runtime, so the cleaned list reaches the SDK validated without a cast.
+    let betas: string[] | undefined;
+    if (raw.betas !== undefined) {
+      const cleaned = Array.isArray(raw.betas)
+        ? raw.betas
+            .filter((b): b is string => typeof b === 'string')
+            .map(b => b.trim())
+            .filter(b => b.length > 0)
+        : [];
+      const betasResult = betasSchema.safeParse(cleaned);
+      if (betasResult.success) {
+        betas = betasResult.data;
+      } else {
+        getLog().warn({ filename, value: raw.betas }, 'invalid_workflow_betas_value_ignored');
+      }
+    }
+
     return {
       workflow: {
         name: raw.name,
@@ -432,12 +730,19 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
         model,
         modelReasoningEffort,
         webSearchMode,
-        additionalDirectories,
         interactive,
         ...(mutatesCheckout !== undefined ? { mutates_checkout: mutatesCheckout } : {}),
+        ...(effort !== undefined ? { effort } : {}),
+        ...(thinking !== undefined ? { thinking } : {}),
+        ...(fallbackModel !== undefined ? { fallbackModel } : {}),
+        ...(betas !== undefined ? { betas } : {}),
+        ...(sandbox !== undefined ? { sandbox } : {}),
+        ...(workflowPersistSessions ? { persist_sessions: true } : {}),
         nodes: dagNodes,
         ...(worktreePolicy ? { worktree: worktreePolicy } : {}),
+        ...(containerPolicy ? { container: containerPolicy } : {}),
         ...(tags !== undefined ? { tags } : {}),
+        ...(requires !== undefined ? { requires } : {}),
       },
       error: null,
     };

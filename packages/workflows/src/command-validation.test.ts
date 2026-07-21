@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { isValidCommandName } from './command-validation';
+import { isValidCommandName, isValidWorkflowName } from './command-validation';
 
 describe('isValidCommandName', () => {
   // ---------------------------------------------------------------------------
@@ -179,6 +179,90 @@ describe('isValidCommandName', () => {
 
     test('numeric-only name', () => {
       expect(isValidCommandName('123')).toBe(true);
+    });
+  });
+});
+
+describe('isValidWorkflowName', () => {
+  // Unlike isValidCommandName, allows one '/' (MAX_DISCOVERY_DEPTH = 1 namespacing).
+
+  describe('valid names', () => {
+    test('non-namespaced name', () => {
+      expect(isValidWorkflowName('build')).toBe(true);
+    });
+
+    test('single-level namespace', () => {
+      expect(isValidWorkflowName('triage/foo')).toBe(true);
+    });
+
+    test('namespace with hyphens in each segment', () => {
+      expect(isValidWorkflowName('code-review/pre-merge')).toBe(true);
+    });
+  });
+
+  describe('depth limit', () => {
+    test('two levels deep is rejected', () => {
+      expect(isValidWorkflowName('a/b/c')).toBe(false);
+    });
+
+    test('three levels deep is rejected', () => {
+      expect(isValidWorkflowName('a/b/c/d')).toBe(false);
+    });
+  });
+
+  describe('empty segments', () => {
+    test('leading slash', () => {
+      expect(isValidWorkflowName('/build')).toBe(false);
+    });
+
+    test('trailing slash', () => {
+      expect(isValidWorkflowName('triage/')).toBe(false);
+    });
+
+    test('double slash', () => {
+      expect(isValidWorkflowName('triage//foo')).toBe(false);
+    });
+
+    test('bare slash', () => {
+      expect(isValidWorkflowName('/')).toBe(false);
+    });
+  });
+
+  describe('path traversal still blocked', () => {
+    test('bare ".."', () => {
+      expect(isValidWorkflowName('..')).toBe(false);
+    });
+
+    test('".." as a segment', () => {
+      expect(isValidWorkflowName('triage/..')).toBe(false);
+    });
+
+    test('"../etc"', () => {
+      expect(isValidWorkflowName('../etc')).toBe(false);
+    });
+
+    test('backslash', () => {
+      expect(isValidWorkflowName('sub\\command')).toBe(false);
+    });
+
+    test('Windows absolute path', () => {
+      expect(isValidWorkflowName('C:\\Windows')).toBe(false);
+    });
+  });
+
+  describe('leading dot', () => {
+    test('hidden top-level name', () => {
+      expect(isValidWorkflowName('.hidden')).toBe(false);
+    });
+
+    test('hidden segment in namespace', () => {
+      expect(isValidWorkflowName('triage/.hidden')).toBe(false);
+    });
+  });
+
+  describe('empty input', () => {
+    test('empty string', () => {
+      expect(isValidWorkflowName('')).toBe(false);
     });
   });
 });

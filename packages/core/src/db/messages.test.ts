@@ -50,10 +50,10 @@ describe('messages', () => {
 
       expect(result).toEqual(mockMessage);
       expect(mockQuery).toHaveBeenCalledWith(
-        `INSERT INTO remote_agent_messages (conversation_id, role, content, metadata, created_at)
-     VALUES ($1, $2, $3, $4, NOW())
+        `INSERT INTO remote_agent_messages (conversation_id, role, content, metadata, user_id, created_at)
+     VALUES ($1, $2, $3, $4, $5, NOW())
      RETURNING *`,
-        ['conv-456', 'user', 'Hello, world!', '{}']
+        ['conv-456', 'user', 'Hello, world!', '{}', null]
       );
     });
 
@@ -73,6 +73,21 @@ describe('messages', () => {
         'assistant',
         'Done.',
         JSON.stringify(metadata),
+        null,
+      ]);
+    });
+
+    test('persists userId when provided', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([mockMessage]));
+
+      await addMessage('conv-456', 'user', 'Hi there', undefined, 'user-uuid-1');
+
+      expect(mockQuery).toHaveBeenCalledWith(expect.any(String), [
+        'conv-456',
+        'user',
+        'Hi there',
+        '{}',
+        'user-uuid-1',
       ]);
     });
 
@@ -114,7 +129,7 @@ describe('messages', () => {
       expect(mockQuery).toHaveBeenCalledWith(
         `SELECT * FROM remote_agent_messages
      WHERE conversation_id = $1
-     ORDER BY created_at DESC
+     ORDER BY created_at DESC, id DESC
      LIMIT $2`,
         ['conv-456', 200]
       );

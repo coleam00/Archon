@@ -143,4 +143,75 @@ export const marketplaceEntries: MarketplaceEntry[] = [
     tags: ['automation'],
     archonVersionCompat: '>=0.3.0',
   },
+    slug: 'archon-comprehensive-mr-review',
+    name: 'Comprehensive GitLab MR Review',
+    author: 'lraphael',
+    description:
+      'GitLab counterpart to archon-comprehensive-pr-review. Full code review of a GitLab MR — all 5 review agents (code-review, error-handling, test-coverage, comment-quality, docs-impact) run in parallel, posts resolvable Discussion threads, auto-approves on 0 critical findings.',
+    sourceUrl:
+      'https://github.com/lraphael/archon-gitlab-workflows/tree/6e39b359e1b02329ebf63f7d1699e6bbc8cb001f/archon-comprehensive-mr-review',
+    sha: '6e39b359e1b02329ebf63f7d1699e6bbc8cb001f',
+    tags: ['review', 'automation'],
+    archonVersionCompat: '>=0.3.0',
+  },
+  {
+    slug: 'piv-system-evolution',
+    name: 'PIV Loop + System Evolution',
+    author: 'coleam00',
+    description:
+      "Runs the PIV loop (Plan-Implement-Validate) on a feature or bug behind four human-in-the-loop gates, then evolves the codebase's own AI Layer from what the run learned. Eight phases are adapted from the agentic-coding-course AI Layer. Ends in a draft PR.",
+    sourceUrl:
+      'https://github.com/coleam00/piv-system-evolution/tree/de8a0e94f9bab1a81a152c62d5d5e4a2023874b3/.archon',
+    sha: 'de8a0e94f9bab1a81a152c62d5d5e4a2023874b3',
+    tags: ['development', 'planning', 'review'],
+    archonVersionCompat: '>=0.3.0',
+  },
+  {
+    slug: 'harness-score',
+    name: 'Harness Score',
+    author: 'seanrobertwright',
+    description:
+      'Audit a repository for AI-agent readiness. A deterministic script runs 10 checks (agent instructions, README, build/test commands, CI, tests, lint/typecheck, .archon workflows, security scanning, sensitive paths) and computes a score out of 100; Claude then narrates the pre-computed results into a markdown report with a rating and the top 3 fixes ranked by score gain.',
+    sourceUrl:
+      'https://github.com/seanrobertwright/archon-harness-score/blob/main/harness-score.yaml',
+    sha: '0a5b1406d9869e29507aed005df9456a2ea686e6',
+    tags: ['review', 'automation'],
+    archonVersionCompat: '>=0.3.0',
+  },
+  {
+    slug: 'pocock-skills-workflow-family',
+    name: 'Matt Pocock Skills Workflow Family',
+    author: 'seanrobertwright',
+    description:
+      "Matt Pocock's 'Skills for Real Engineers' (v1.1.0) as six workflows that mount the real SKILL.md files into nodes: spec-to-ship (tracer-bullet tickets -> TDD frontier loop -> two-axis Standards|Spec review -> PR), conservative AFK triage, a diagnosing-bugs pipeline that refuses to theorize without a red feedback loop, an AFK wayfinder frontier, architecture health scans, and repo init. Interactive grilling stays human — the spec issue is the handoff artifact into the AFK back half.",
+    sourceUrl:
+      'https://github.com/seanrobertwright/archon-pocock-workflow/tree/629e57716ea72bb8cf2f77fc7728d3845aa2cf92/.archon',
+    sha: '629e57716ea72bb8cf2f77fc7728d3845aa2cf92',
+    tags: ['development', 'planning', 'review', 'automation'],
+    archonVersionCompat: '>=0.5.0',
+  },
+  {
+    slug: 'token-max-site-factory',
+    name: 'Token-Max Site Factory',
+    author: 'TheSmokeDev',
+    description:
+      'Point-and-shoot programmatic SEO/GEO page factory. Scan any website, then expand it into hundreds of validated 2,800+ word answer-first pages with hard uniqueness gates and packet-only facts. Never deploys - generation ends at a validation report.',
+    sourceUrl:
+      'https://github.com/TheSmokeDev/token-max-site-factory/tree/d01735a1e731ff00400621d0110d112488eaa68d/marketplace/token-max-site-factory',
+    sha: 'd01735a1e731ff00400621d0110d112488eaa68d',
+    tags: ['automation', 'development'],
+    archonVersionCompat: '>=0.5.0',
+  },
+  {
+    slug: 'image-node-factory',
+    name: 'Image Node Factory',
+    author: 'TheSmokeDev',
+    description:
+      'One visual brief in, a grounded image prompt pack out (optional Codex-rendered bitmaps). Template selection cites a pinned, checksum-verified 511-case style corpus; a deterministic validator fails the run on any citation that does not resolve. Renders are opt-in and every concept ships baked and overlay variants.',
+    sourceUrl:
+      'https://github.com/TheSmokeDev/image-node-factory/tree/da7af16e3a3ba6fca7b58dd7a596dad24689a3f6/marketplace/image-node-factory',
+    sha: 'da7af16e3a3ba6fca7b58dd7a596dad24689a3f6',
+    tags: ['automation', 'development'],
+    archonVersionCompat: '>=0.5.0',
+  },
 ];

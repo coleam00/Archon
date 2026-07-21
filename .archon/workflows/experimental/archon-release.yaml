@@ -916,7 +916,7 @@ nodes:
   - id: final-summary
     script: |
       // Defensive: this node runs with trigger_rule: all_done, so any upstream
-      // node may have been skipped or failed. Empty $node.output substitutions
+      // node may have been skipped or failed. Empty $<node>.output substitutions
       // resolve to "" and would break JSON.parse if not guarded.
       const safeJson = (raw) => {
         const s = raw.trim();

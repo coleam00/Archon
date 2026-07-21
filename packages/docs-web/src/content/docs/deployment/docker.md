@@ -320,6 +320,8 @@ To disable, leave `CADDY_BASIC_AUTH` empty or unset — the Caddyfile expands it
 
 ### Form-Based Authentication (HTML Login Page)
 
+> **PostgreSQL deployments:** prefer native [Web UI login via Better Auth](/reference/configuration/#web-ui-login-better-auth-optional) (`BETTER_AUTH_SECRET`), which supersedes this single-user `auth-service` sidecar with real per-user accounts. Self-serve signup is **disabled by default** — invite teammates with `ARCHON_AUTH_ALLOWED_EMAILS` (an allowlist) or open it explicitly with `ARCHON_AUTH_OPEN_SIGNUP=true`. When enabled, Better Auth also **gates the API server-side** (every `/api/*` request needs a session or gets `401`), so it can fully replace this `forward_auth` sidecar — see the sidecar-retirement runbook in the [Security reference](/reference/security/#adapter-authorization). The sidecar below still works (and remains the option for SQLite/solo installs) but is no longer the recommended path on Postgres.
+
 An alternative to basic auth that serves a styled HTML login form instead of the browser's credential popup. Uses a lightweight `auth-service` sidecar and Caddy's `forward_auth` directive.
 
 **When to use form auth vs basic auth:**
@@ -491,7 +493,7 @@ mkdir -p /opt/archon-user-home
 sudo chown -R 1001:1001 /opt/archon-user-home
 ```
 
-The entrypoint re-applies ownership on every container start, so subsequent rebuilds work without re-running `chown`.
+The entrypoint fixes ownership on every container start, touching only files whose owner is wrong, so startup stays fast even on large volumes. Subsequent rebuilds work without re-running `chown`.
 
 :::caution
 Bind-mount paths do **not** inherit the image's baked `~/.gitconfig` (Docker only copies image content into named volumes on first creation, never into bind mounts). The entrypoint still registers git `safe.directory` entries for `/.archon/workspaces` and `/.archon/worktrees` repos at runtime, so functionality is preserved — but a bind-mounted `~/.gitconfig` starts empty and any author identity / signing config you want must be set explicitly with `git config --global` inside the container.
@@ -509,6 +511,32 @@ PI_CODING_AGENT_DIR=/.archon/pi
 ```
 
 This must be set before the container starts; the Pi SDK reads the variable on each file path lookup.
+
+### Folder-project container isolation (`--container`) is unavailable in Docker
+
+The folder-project **container backend** (`archon workflow run … --container`) launches a
+sibling Docker container per run to isolate a workflow's writes. It shells out to the
+`docker` CLI, which needs both the Docker CLI binary and access to the host Docker daemon
+socket (`/var/run/docker.sock`).
+
+**When Archon itself runs inside Docker (this compose stack), `--container` does not work:**
+the app image ships no `docker` CLI and the compose stack deliberately does **not** mount
+`/var/run/docker.sock`. A `--container` run fails fast at preflight with a
+"Cannot connect to the Docker daemon" error (the message calls out the dockerized case).
+Worktree isolation (the default for git repos) and in-place folder runs are unaffected —
+only the `--container` backend requires the daemon.
+
+:::caution
+Mounting the Docker socket into the app container to enable `--container` is a serious
+security tradeoff and is **not** part of the supported compose stack. The socket is
+**root-equivalent**: any process that can reach it can start a privileged container and
+take over the host. Combined with the `native`-overlay CAP_SYS_ADMIN escape, this widens
+the blast radius well beyond a single run. If you accept that tradeoff on a single-tenant,
+operator-trusted host, read `packages/isolation/docker/SECURITY.md` first — it documents
+the full threat model for the container backend. To use `--container` without exposing the
+socket, run Archon **directly on the host** (non-Docker install) with a local Docker daemon
+instead.
+:::
 
 ### GitHub CLI Authentication
 
@@ -628,14 +656,7 @@ docker compose down -v         # Stop + delete volumes (destructive!)
 
 ### Database Migrations (PostgreSQL)
 
-Migrations run automatically on first startup via `000_combined.sql`. When upgrading to a newer version that adds database tables, you need to apply incremental migrations manually:
-
-```bash
-# Example: apply the env vars migration (required when upgrading to v0.3.x)
-docker compose exec postgres psql -U postgres -d remote_coding_agent -f /migrations/020_codebase_env_vars.sql
-```
-
-The `migrations/` directory is mounted read-only into the postgres container. Check for any new migration files after pulling updates.
+The app converges the schema on every startup by running the idempotent `migrations/000_combined.sql` inside an advisory-lock transaction. Both fresh installs and version upgrades are handled automatically — no manual `psql` step is required after pulling a new image. The `migrations/` mount on the postgres container is retained only as a no-op for fresh volumes.
 
 ### Clean Up Docker Resources
 

@@ -30,6 +30,7 @@ import type {
 } from './types';
 import type { IIsolationStore } from './store';
 import { classifyIsolationError, isKnownIsolationError } from './errors';
+import { resolveFolderBackend } from './backend-router';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -99,6 +100,32 @@ export class IsolationResolver {
     // 2. No codebase = no isolation
     if (!request.codebase) {
       return { status: 'none', cwd: '/workspace' };
+    }
+
+    // 2b. Folder projects run through the folder-backend seam — no worktree.
+    // The in-place backend (Phase A default) returns the REAL folder path (not
+    // the '/workspace' docker sentinel), so chat/workflows land in the actual
+    // project directory — byte-identical to the pre-seam early-return. Container
+    // selection is a Phase B config concern; the chat path stays in-place for now.
+    //
+    // NOTE (Phase A): only `prepared.cwd` is propagated. `prepared.execContext`
+    // is intentionally DROPPED here because the `IsolationResolution` 'none'
+    // variant carries no execution-context field, so chat/orchestrator callers
+    // (which consume this result) have no channel for it — they run host-only in
+    // Phase A. Phase B, when it wires containerized CHAT, must extend the 'none'
+    // variant with an `execContext` and thread it through the orchestrator; until
+    // then only the CLI workflow path carries execContext (from the backend it
+    // resolves directly).
+    if (request.codebase.kind === 'folder') {
+      const folderCodebase = {
+        id: request.codebase.id,
+        defaultCwd: request.codebase.defaultCwd,
+        name: request.codebase.name,
+        kind: 'folder' as const,
+      };
+      const backend = resolveFolderBackend(folderCodebase, { container: false });
+      const prepared = await backend.prepare({ codebase: folderCodebase });
+      return { status: 'none', cwd: prepared.cwd };
     }
 
     const codebase = request.codebase;
@@ -174,7 +201,8 @@ export class IsolationResolver {
         hints,
         workflowType,
         workflowId,
-        request.platformType
+        request.platformType,
+        request.userId
       );
       if (adopted) return adopted;
     }
@@ -186,7 +214,9 @@ export class IsolationResolver {
       workflowId,
       hints,
       canonicalPath,
-      request.platformType
+      request.platformType,
+      request.userId,
+      request.gitIdentity
     );
   }
 
@@ -372,7 +402,8 @@ export class IsolationResolver {
     hints: IsolationHints,
     workflowType: IsolationWorkflowType,
     workflowId: string,
-    platformType: string
+    platformType: string,
+    userId: string | undefined
   ): Promise<IsolationResolution | null> {
     const prBranch = hints.prBranch;
     if (!prBranch) return null;
@@ -394,6 +425,7 @@ export class IsolationResolver {
         working_path: adoptedPath,
         branch_name: prBranch,
         created_by_platform: platformType,
+        created_by_user_id: userId,
         metadata: { adopted: true, adopted_from: 'skill' },
       });
       return {
@@ -431,14 +463,18 @@ export class IsolationResolver {
     workflowId: string,
     hints: IsolationHints | undefined,
     canonicalPath: RepoPath,
-    platformType: string
+    platformType: string,
+    userId: string | undefined,
+    gitIdentity: { email: string; name?: string } | undefined
   ): Promise<IsolationResolution> {
     // Construct request based on workflow type
     const baseRequest = {
       codebaseId: codebase.id,
       codebaseName: codebase.name,
       canonicalRepoPath: canonicalPath,
+      baseBranch: codebase.defaultBranch ?? undefined,
       identifier: workflowId,
+      gitIdentity,
     };
 
     let isolationRequest: IsolationRequest;
@@ -506,6 +542,7 @@ export class IsolationResolver {
         working_path: isolatedEnv.workingPath,
         branch_name: isolatedEnv.branchName,
         created_by_platform: platformType,
+        created_by_user_id: userId,
         metadata: {
           related_issues: hints?.linkedIssues ?? [],
           related_prs: hints?.linkedPRs ?? [],

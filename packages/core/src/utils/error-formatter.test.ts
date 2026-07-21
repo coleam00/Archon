@@ -5,17 +5,116 @@ describe('classifyAndFormatError', () => {
   describe('rate limit errors', () => {
     test('detects lowercase "rate limit"', () => {
       const result = classifyAndFormatError(new Error('rate limit exceeded'));
-      expect(result).toBe('⚠️ AI rate limit reached. Please wait a moment and try again.');
+      expect(result).toBe('⚠️ AI usage limit reached. Please wait and try again.');
     });
 
     test('detects titlecase "Rate limit"', () => {
       const result = classifyAndFormatError(new Error('Rate limit: 429 Too Many Requests'));
-      expect(result).toBe('⚠️ AI rate limit reached. Please wait a moment and try again.');
+      expect(result).toBe('⚠️ AI usage limit reached. Please wait and try again.');
     });
 
     test('matches rate limit anywhere in message', () => {
       const result = classifyAndFormatError(new Error('Request failed: rate limit hit'));
-      expect(result).toBe('⚠️ AI rate limit reached. Please wait a moment and try again.');
+      expect(result).toBe('⚠️ AI usage limit reached. Please wait and try again.');
+    });
+
+    test('detects "hit your limit" (Claude subscription cap)', () => {
+      const result = classifyAndFormatError(
+        new Error("You've hit your limit · resets 4:50pm (UTC)")
+      );
+      expect(result).toBe(
+        '⚠️ AI usage limit reached (resets 4:50pm (UTC)). Please wait and try again.'
+      );
+    });
+
+    test('detects full enriched Claude usage-cap error with reset time', () => {
+      const result = classifyAndFormatError(
+        new Error(
+          "Claude Code unknown: Claude Code returned an error result: You've hit your limit · resets 4:50pm (UTC)"
+        )
+      );
+      expect(result).toBe(
+        '⚠️ AI usage limit reached (resets 4:50pm (UTC)). Please wait and try again.'
+      );
+    });
+
+    test('detects "usage limit" (Claude org-disabled-overage variant)', () => {
+      const result = classifyAndFormatError(new Error('usage limit exceeded'));
+      expect(result).toBe('⚠️ AI usage limit reached. Please wait and try again.');
+    });
+
+    test('omits reset clause when no reset time present in hit-your-limit message', () => {
+      const result = classifyAndFormatError(new Error("You've hit your limit"));
+      expect(result).toBe('⚠️ AI usage limit reached. Please wait and try again.');
+    });
+
+    test('detects title-case "Hit your limit" (case-insensitive)', () => {
+      const result = classifyAndFormatError(new Error('Hit your limit'));
+      expect(result).toBe('⚠️ AI usage limit reached. Please wait and try again.');
+    });
+
+    test('detects title-case "Usage limit" (case-insensitive)', () => {
+      const result = classifyAndFormatError(new Error('Usage limit exceeded'));
+      expect(result).toBe('⚠️ AI usage limit reached. Please wait and try again.');
+    });
+
+    test('handles reset text containing abbreviated periods (e.g. p.m.)', () => {
+      const result = classifyAndFormatError(
+        new Error("You've hit your limit · resets 4:50 p.m. (UTC)")
+      );
+      expect(result).toBe(
+        '⚠️ AI usage limit reached (resets 4:50 p.m. (UTC)). Please wait and try again.'
+      );
+    });
+
+    test('detects "session limit" (Claude subscription 5h window)', () => {
+      const result = classifyAndFormatError(
+        new Error("You've hit your session limit · resets 3am (America/Mexico_City)")
+      );
+      expect(result).toBe(
+        '⚠️ AI usage limit reached (resets 3am (America/Mexico_City)). Please wait and try again.'
+      );
+    });
+
+    test('captures only the first ·-delimited segment when multiple · separators follow', () => {
+      const result = classifyAndFormatError(
+        new Error("You've hit your limit · resets 4:50pm (UTC) · upgrade to increase your limit")
+      );
+      expect(result).toBe(
+        '⚠️ AI usage limit reached (resets 4:50pm (UTC)). Please wait and try again.'
+      );
+    });
+  });
+
+  describe('reset-time fallback without · separator', () => {
+    test('captures a standalone "Resets in ..." clause', () => {
+      const result = classifyAndFormatError(new Error('rate limit exceeded. Resets in 5 minutes'));
+      expect(result).toBe(
+        '⚠️ AI usage limit reached (Resets in 5 minutes). Please wait and try again.'
+      );
+    });
+
+    test('does not capture a clause from "reset" without the plural form', () => {
+      const result = classifyAndFormatError(new Error('usage limit exceeded, reset pending'));
+      expect(result).toBe('⚠️ AI usage limit reached. Please wait and try again.');
+    });
+
+    test('keeps abbreviated periods intact in the fallback capture', () => {
+      const result = classifyAndFormatError(new Error('rate limit hit. Resets 4:50 p.m. (UTC)'));
+      expect(result).toBe(
+        '⚠️ AI usage limit reached (Resets 4:50 p.m. (UTC)). Please wait and try again.'
+      );
+    });
+
+    test('drops the follow-on sentence from the workflow session-limit FATAL shape (#2181)', () => {
+      const result = classifyAndFormatError(
+        new Error(
+          'Claude session limit reached — resets 3:20pm (UTC). Abandon this run and retry after reset.'
+        )
+      );
+      expect(result).toBe(
+        '⚠️ AI usage limit reached (resets 3:20pm (UTC)). Please wait and try again.'
+      );
     });
   });
 
@@ -66,6 +165,20 @@ describe('classifyAndFormatError', () => {
       const result = classifyAndFormatError(new Error('Claude Code auth error: 403 forbidden'));
       expect(result).toContain('Claude authentication error');
       expect(result).toContain('/login');
+    });
+  });
+
+  describe('not logged in (no credential reached the subprocess) (#1983)', () => {
+    test('detects "Not logged in" and names the connect surfaces', () => {
+      const result = classifyAndFormatError(new Error('Not logged in · Please run /login'));
+      expect(result).toContain('Not logged in to the AI provider');
+      expect(result).toContain('Settings → Agents');
+    });
+
+    test('detects a "Please run /login" message without leaking the raw string', () => {
+      const result = classifyAndFormatError(new Error('Invalid API key · Please run /login'));
+      expect(result).toContain('Settings → Agents');
+      expect(result).not.toContain('Invalid API key ·');
     });
   });
 
@@ -171,7 +284,7 @@ describe('classifyAndFormatError', () => {
     });
 
     test('returns message as-is for different model names', () => {
-      const msg = '❌ Model "gpt-5.3-codex" not available for your account';
+      const msg = '❌ Model "gpt-5.6-sol" not available for your account';
       const result = classifyAndFormatError(new Error(msg));
       expect(result).toBe(msg);
     });
@@ -301,7 +414,7 @@ describe('classifyAndFormatError', () => {
     test('rate limit takes precedence over short-message fallback', () => {
       // "rate limit" message is also short, but rate-limit branch fires first
       const result = classifyAndFormatError(new Error('rate limit'));
-      expect(result).toBe('⚠️ AI rate limit reached. Please wait a moment and try again.');
+      expect(result).toBe('⚠️ AI usage limit reached. Please wait and try again.');
     });
 
     test('Claude OAuth check takes precedence over general auth check', () => {

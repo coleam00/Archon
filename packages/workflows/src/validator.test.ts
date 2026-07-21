@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
-import { mkdtemp, mkdir, writeFile, rm } from 'fs/promises';
+import { mkdtemp, mkdir, writeFile, rm, symlink as fsSymlink } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { registerBuiltinProviders, clearRegistry } from '@archon/providers';
@@ -11,6 +11,7 @@ registerBuiltinProviders();
 import {
   levenshtein,
   findSimilar,
+  makeWorkflowResult,
   validateWorkflowResources,
   validateCommand,
   discoverAvailableCommands,
@@ -22,13 +23,26 @@ import type { WorkflowDefinition, DagNode } from './schemas';
 // =============================================================================
 
 let tmpDir: string;
+let tmpHomeDir: string;
+let originalArchonHome: string | undefined;
+let originalArchonDocker: string | undefined;
 
 beforeEach(async () => {
   tmpDir = await mkdtemp(join(tmpdir(), 'validator-test-'));
+  tmpHomeDir = await mkdtemp(join(tmpdir(), 'validator-home-'));
+  originalArchonHome = process.env.ARCHON_HOME;
+  originalArchonDocker = process.env.ARCHON_DOCKER;
+  process.env.ARCHON_HOME = tmpHomeDir;
+  delete process.env.ARCHON_DOCKER;
 });
 
 afterEach(async () => {
   await rm(tmpDir, { recursive: true, force: true });
+  await rm(tmpHomeDir, { recursive: true, force: true });
+  if (originalArchonHome === undefined) delete process.env.ARCHON_HOME;
+  else process.env.ARCHON_HOME = originalArchonHome;
+  if (originalArchonDocker === undefined) delete process.env.ARCHON_DOCKER;
+  else process.env.ARCHON_DOCKER = originalArchonDocker;
 });
 
 function makeWorkflow(name: string, nodes: DagNode[], provider?: string): WorkflowDefinition {
@@ -165,6 +179,231 @@ describe('validateWorkflowResources — command nodes', () => {
 });
 
 // =============================================================================
+// validateWorkflowResources — portable model refs
+// =============================================================================
+
+describe('validateWorkflowResources — portable model refs', () => {
+  test('bundled workflow rejects top-level @custom model ref', async () => {
+    await createCommandFile('my-command');
+    const workflow = {
+      ...makeWorkflow('test', [{ id: 'step1', command: 'my-command' } as DagNode]),
+      model: '@custom',
+    } as WorkflowDefinition;
+
+    const issues = await validateWorkflowResources(workflow, tmpDir, {
+      workflowSource: 'bundled',
+    });
+
+    expect(issues.some(i => i.field === 'model' && i.message.includes('@custom'))).toBe(true);
+  });
+
+  test('global workflow rejects node @custom model ref', async () => {
+    await createCommandFile('my-command');
+    const workflow = makeWorkflow('test', [
+      { id: 'step1', command: 'my-command', model: '@custom' } as DagNode,
+    ]);
+
+    const issues = await validateWorkflowResources(workflow, tmpDir, {
+      workflowSource: 'global',
+    });
+
+    expect(issues.some(i => i.nodeId === 'step1' && i.field === 'model')).toBe(true);
+  });
+
+  test('project workflow allows configured @custom model refs', async () => {
+    await createCommandFile('my-command');
+    const workflow = makeWorkflow('test', [
+      { id: 'step1', command: 'my-command', model: '@custom' } as DagNode,
+    ]);
+
+    const issues = await validateWorkflowResources(workflow, tmpDir, {
+      workflowSource: 'project',
+      aliases: {
+        '@custom': { provider: 'claude', model: 'sonnet' },
+      },
+    });
+
+    expect(issues.some(i => i.field === 'model')).toBe(false);
+  });
+
+  test('project workflow rejects unknown @custom model refs', async () => {
+    await createCommandFile('my-command');
+    const workflow = makeWorkflow('test', [
+      { id: 'step1', command: 'my-command', model: '@missing' } as DagNode,
+    ]);
+
+    const issues = await validateWorkflowResources(workflow, tmpDir, {
+      workflowSource: 'project',
+    });
+
+    expect(
+      issues.some(
+        i => i.nodeId === 'step1' && i.field === 'model' && i.message.includes('@missing')
+      )
+    ).toBe(true);
+  });
+
+  test('rejects invalid tier config during workflow validation', async () => {
+    await createCommandFile('my-command');
+    const workflow = {
+      ...makeWorkflow('test', [{ id: 'step1', command: 'my-command' } as DagNode]),
+      model: 'tiny',
+    } as WorkflowDefinition;
+
+    const issues = await validateWorkflowResources(workflow, tmpDir, {
+      workflowSource: 'project',
+      tiers: {
+        tiny: { provider: 'claude', model: 'sonnet' },
+      } as never,
+    });
+
+    expect(issues.some(i => i.field === 'model' && i.message.includes("Tier name 'tiny'"))).toBe(
+      true
+    );
+  });
+
+  test('bundled workflow accepts tiers and literal models', async () => {
+    await createCommandFile('my-command');
+    const workflow = {
+      ...makeWorkflow('test', [
+        { id: 'step1', command: 'my-command', model: 'small' } as DagNode,
+        { id: 'step2', command: 'my-command', model: 'gpt-5.5' } as DagNode,
+      ]),
+      model: 'large',
+    } as WorkflowDefinition;
+
+    const issues = await validateWorkflowResources(workflow, tmpDir, {
+      workflowSource: 'bundled',
+    });
+
+    expect(issues.some(i => i.field === 'model')).toBe(false);
+  });
+});
+
+// =============================================================================
+// validateWorkflowResources — loop.command (mirrors command-node coverage)
+// =============================================================================
+
+describe('validateWorkflowResources — loop.command', () => {
+  // Helper: build a loop node carrying `loop.command`. We bypass the parser via
+  // `as DagNode` for parity with the command-node tests above, which lets the
+  // validator branch be exercised directly even for inputs the schema would
+  // reject (e.g. an unsafe `loop.command` name).
+  function makeLoopCommandNode(id: string, loopCommand: string): DagNode {
+    return {
+      id,
+      loop: {
+        command: loopCommand,
+        until: 'DONE',
+        max_iterations: 5,
+        fresh_context: false,
+      },
+    } as unknown as DagNode;
+  }
+
+  test('no issues when repo-local command file exists', async () => {
+    // Repo-scope hit: confirms the validator reuses the same repo lookup that
+    // command-nodes use, so a `loop.command` pointing at an existing
+    // `.archon/commands/<name>.md` clears Level 3 silently.
+    await createCommandFile('my-loop-command');
+    const workflow = makeWorkflow('test', [makeLoopCommandNode('step1', 'my-loop-command')]);
+    const issues = await validateWorkflowResources(workflow, tmpDir, {
+      loadDefaultCommands: false,
+    });
+    const errors = issues.filter(i => i.level === 'error');
+    expect(errors).toHaveLength(0);
+  });
+
+  test('error with suggestions when loop.command target is missing', async () => {
+    // Missing target should produce exactly one `field: 'loop.command'` error,
+    // and the suggestions list should populate from `findSimilar` over the
+    // already-discovered command names — the same affordance command-nodes get.
+    await createCommandFile('archon-ralph-implement');
+    const workflow = makeWorkflow('test', [makeLoopCommandNode('step1', 'archon-ralph-implemen')]);
+    const issues = await validateWorkflowResources(workflow, tmpDir, {
+      loadDefaultCommands: false,
+    });
+    const errors = issues.filter(i => i.level === 'error');
+    expect(errors).toHaveLength(1);
+    expect(errors[0].field).toBe('loop.command');
+    expect(errors[0].nodeId).toBe('step1');
+    expect(errors[0].message).toContain("Command 'archon-ralph-implemen' not found");
+    expect(errors[0].suggestions).toContain('archon-ralph-implement');
+  });
+
+  test('error for invalid (unsafe) loop.command name', async () => {
+    // Defense-in-depth: the loop schema's superRefine already rejects unsafe
+    // names at parse time, but a programmatically-constructed workflow can
+    // bypass that path. The validator must still flag it with a clear
+    // `field: 'loop.command'` error rather than treating it as a missing file.
+    const workflow = makeWorkflow('test', [makeLoopCommandNode('step1', '../escape')]);
+    const issues = await validateWorkflowResources(workflow, tmpDir, {
+      loadDefaultCommands: false,
+    });
+    const errors = issues.filter(i => i.level === 'error');
+    expect(errors).toHaveLength(1);
+    expect(errors[0].field).toBe('loop.command');
+    expect(errors[0].message).toContain('Invalid command name');
+  });
+
+  test('no issues when loop.command resolves to a bundled default', async () => {
+    // Bundled-default fallback: a `loop.command` referencing a known bundled
+    // command (e.g. `archon-ralph-generate`) must resolve when defaults are
+    // loaded, even with an empty repo `.archon/commands/`. This is the same
+    // precedence command-nodes already get (repo → home → bundled).
+    const workflow = makeWorkflow('test', [makeLoopCommandNode('step1', 'archon-ralph-generate')]);
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    const errors = issues.filter(i => i.level === 'error' && i.field === 'loop.command');
+    expect(errors).toHaveLength(0);
+  });
+
+  // --- Home-scoped resolution: mirrors the equivalent command-node test path.
+  // Uses the same ARCHON_HOME swap as the existing home-scope block so the
+  // walks of repo / home / bundled all see the temp dirs.
+  describe('home-scoped loop.command', () => {
+    let homeDir: string;
+    const originalArchonHome = process.env.ARCHON_HOME;
+    const originalArchonDocker = process.env.ARCHON_DOCKER;
+
+    beforeEach(async () => {
+      homeDir = await mkdtemp(join(tmpdir(), 'validator-loop-home-'));
+      process.env.ARCHON_HOME = homeDir;
+      delete process.env.ARCHON_DOCKER;
+    });
+
+    afterEach(async () => {
+      await rm(homeDir, { recursive: true, force: true });
+      if (originalArchonHome === undefined) {
+        delete process.env.ARCHON_HOME;
+      } else {
+        process.env.ARCHON_HOME = originalArchonHome;
+      }
+      if (originalArchonDocker === undefined) {
+        delete process.env.ARCHON_DOCKER;
+      } else {
+        process.env.ARCHON_DOCKER = originalArchonDocker;
+      }
+    });
+
+    async function createHomeCommand(name: string, content = '# Home helper'): Promise<void> {
+      const dir = join(homeDir, 'commands');
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, `${name}.md`), content);
+    }
+
+    test('resolves a loop.command placed under ~/.archon/commands/', async () => {
+      await createHomeCommand('only-in-home-loop');
+      const workflow = makeWorkflow('test', [makeLoopCommandNode('step1', 'only-in-home-loop')]);
+      const issues = await validateWorkflowResources(workflow, tmpDir, {
+        loadDefaultCommands: false,
+      });
+      const errors = issues.filter(i => i.level === 'error');
+      expect(errors).toHaveLength(0);
+    });
+  });
+});
+
+// =============================================================================
 // validateWorkflowResources — MCP validation
 // =============================================================================
 
@@ -212,7 +451,7 @@ describe('validateWorkflowResources — MCP validation', () => {
     expect(mcpErrors).toHaveLength(0);
   });
 
-  test('warns when MCP used with codex provider', async () => {
+  test('does not warn when MCP is used with codex provider', async () => {
     const mcpPath = join(tmpDir, 'good.json');
     await writeFile(mcpPath, '{"server": {"command": "npx"}}');
     const workflow = makeWorkflow(
@@ -222,8 +461,7 @@ describe('validateWorkflowResources — MCP validation', () => {
     );
     const issues = await validateWorkflowResources(workflow, tmpDir);
     const mcpWarnings = issues.filter(i => i.field === 'mcp' && i.level === 'warning');
-    expect(mcpWarnings).toHaveLength(1);
-    expect(mcpWarnings[0].message).toContain('not supported by provider');
+    expect(mcpWarnings).toHaveLength(0);
   });
 });
 
@@ -285,6 +523,22 @@ describe('discoverAvailableCommands', () => {
     expect(commands).toEqual([]);
   });
 
+  test.skipIf(process.platform === 'win32')('finds symlinked project commands', async () => {
+    const sourceDir = await mkdtemp(join(tmpdir(), 'validator-command-source-'));
+    try {
+      await writeFile(join(sourceDir, 'linked.md'), '# Linked command');
+      const commandsDir = join(tmpDir, '.archon', 'commands');
+      await mkdir(commandsDir, { recursive: true });
+      await fsSymlink(join(sourceDir, 'linked.md'), join(commandsDir, 'linked.md'));
+
+      const commands = await discoverAvailableCommands(tmpDir, { loadDefaultCommands: false });
+
+      expect(commands).toContain('linked');
+    } finally {
+      await rm(sourceDir, { recursive: true, force: true });
+    }
+  });
+
   test('loadDefaultCommands: false suppresses bundled commands', async () => {
     const withDefaults = await discoverAvailableCommands(tmpDir, { loadDefaultCommands: true });
     const without = await discoverAvailableCommands(tmpDir, { loadDefaultCommands: false });
@@ -293,32 +547,8 @@ describe('discoverAvailableCommands', () => {
 
   // --- Home-scoped commands (~/.archon/commands/) — new capability
   describe('home-scoped commands', () => {
-    let homeDir: string;
-    const originalArchonHome = process.env.ARCHON_HOME;
-    const originalArchonDocker = process.env.ARCHON_DOCKER;
-
-    beforeEach(async () => {
-      homeDir = await mkdtemp(join(tmpdir(), 'validator-home-'));
-      process.env.ARCHON_HOME = homeDir;
-      delete process.env.ARCHON_DOCKER;
-    });
-
-    afterEach(async () => {
-      await rm(homeDir, { recursive: true, force: true });
-      if (originalArchonHome === undefined) {
-        delete process.env.ARCHON_HOME;
-      } else {
-        process.env.ARCHON_HOME = originalArchonHome;
-      }
-      if (originalArchonDocker === undefined) {
-        delete process.env.ARCHON_DOCKER;
-      } else {
-        process.env.ARCHON_DOCKER = originalArchonDocker;
-      }
-    });
-
     async function createHomeCommand(name: string, content = '# Home helper'): Promise<void> {
-      const dir = join(homeDir, 'commands');
+      const dir = join(tmpHomeDir, 'commands');
       await mkdir(dir, { recursive: true });
       await writeFile(join(dir, `${name}.md`), content);
     }
@@ -338,9 +568,6 @@ describe('discoverAvailableCommands', () => {
     test('repo command overrides home command with the same name', async () => {
       await createHomeCommand('shared', '# Home version');
       await createCommandFile('shared', '# Repo version');
-      // Both resolve but the repo wins — validator only asserts existence, so the
-      // strong behavioral assertion lives in the executor-shared loadCommand tests.
-      // Here we just confirm that having both doesn't error.
       const result = await validateCommand('shared', tmpDir, { loadDefaultCommands: false });
       expect(result.valid).toBe(true);
     });
@@ -442,5 +669,293 @@ describe('validateWorkflowResources — agents capability', () => {
     const issues = await validateWorkflowResources(workflow, tmpDir);
     const warning = issues.find(i => i.level === 'warning' && i.field === 'agents');
     expect(warning).toBeUndefined();
+  });
+});
+
+// =============================================================================
+// validateWorkflowResources — tool-name validation (#2084)
+// =============================================================================
+
+describe('validateWorkflowResources — tool-name validation', () => {
+  function nodeWithTools(tools: { allowed_tools?: string[]; denied_tools?: string[] }): DagNode {
+    return { id: 'step1', prompt: 'p', ...tools } as unknown as DagNode;
+  }
+
+  const isToolNameWarning = (field: string) => (i: { level: string; field: string }) =>
+    i.level === 'warning' && i.field === field;
+
+  test('warns on unknown tool name with did-you-mean suggestion', async () => {
+    const workflow = makeWorkflow('test', [nodeWithTools({ allowed_tools: ['Bsh'] })], 'claude');
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    const warning = issues.find(isToolNameWarning('allowed_tools'));
+    expect(warning).toBeDefined();
+    expect(warning!.message).toContain("Unknown tool 'Bsh'");
+    expect(warning!.message).toContain('silently ignored');
+    expect(warning!.suggestions).toContain('Bash');
+  });
+
+  test('warns on renamed tool (Task → Agent) in denied_tools with targeted hint', async () => {
+    const workflow = makeWorkflow('test', [nodeWithTools({ denied_tools: ['Task'] })], 'claude');
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    const warning = issues.find(isToolNameWarning('denied_tools'));
+    expect(warning).toBeDefined();
+    expect(warning!.message).toContain("renamed to 'Agent'");
+    expect(warning!.suggestions).toEqual(['Agent']);
+  });
+
+  test('no warning for valid built-in tool names', async () => {
+    const workflow = makeWorkflow(
+      'test',
+      [
+        nodeWithTools({
+          allowed_tools: ['Read', 'Glob', 'Grep', 'WebSearch'],
+          denied_tools: ['Write', 'Edit', 'Bash', 'Agent'],
+        }),
+      ],
+      'claude'
+    );
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    expect(issues.find(isToolNameWarning('allowed_tools'))).toBeUndefined();
+    expect(issues.find(isToolNameWarning('denied_tools'))).toBeUndefined();
+  });
+
+  test('no warning for MCP tool names and wildcards', async () => {
+    const workflow = makeWorkflow(
+      'test',
+      [
+        nodeWithTools({
+          allowed_tools: ['mcp__github__create_issue', 'mcp__server__*', 'mcp__server'],
+        }),
+      ],
+      'claude'
+    );
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    expect(issues.find(isToolNameWarning('allowed_tools'))).toBeUndefined();
+  });
+
+  test('validates the base name of permission-rule specifiers', async () => {
+    const workflow = makeWorkflow(
+      'test',
+      [nodeWithTools({ allowed_tools: ['Bash(git:*)', 'Bsh(git:*)'] })],
+      'claude'
+    );
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    const warnings = issues.filter(isToolNameWarning('allowed_tools'));
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].message).toContain("Unknown tool 'Bsh'");
+  });
+
+  test('no warning when provider declares no tool vocabulary (pi)', async () => {
+    const workflow = makeWorkflow('test', [nodeWithTools({ denied_tools: ['Task'] })], 'pi');
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    expect(issues.find(isToolNameWarning('denied_tools'))).toBeUndefined();
+    // pi supports tool restrictions, so the capability warning must not fire either
+    expect(issues.find(isToolNameWarning('allowed_tools/denied_tools'))).toBeUndefined();
+  });
+
+  test('unknown-tool warning is advisory — workflow still validates', async () => {
+    const workflow = makeWorkflow('test', [nodeWithTools({ denied_tools: ['Task'] })], 'claude');
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    expect(issues.some(isToolNameWarning('denied_tools'))).toBe(true);
+    expect(makeWorkflowResult('test', issues).valid).toBe(true);
+  });
+
+  test('empty allowed_tools produces no warning', async () => {
+    const workflow = makeWorkflow('test', [nodeWithTools({ allowed_tools: [] })], 'claude');
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    expect(issues.find(isToolNameWarning('allowed_tools'))).toBeUndefined();
+  });
+});
+
+// =============================================================================
+// validateWorkflowResources — bash double-quote lint
+// =============================================================================
+
+describe('validateWorkflowResources — bash double-quote lint', () => {
+  test('no warning when bash uses correct unquoted idiom', async () => {
+    const workflow = makeWorkflow('test', [
+      {
+        id: 'check',
+        bash: 'status=$node.output.field\n[ "$status" = "ok" ] && echo pass',
+      } as DagNode,
+    ]);
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    const warnings = issues.filter(i => i.level === 'warning' && i.field === 'bash');
+    expect(warnings).toHaveLength(0);
+  });
+
+  test('warning when bash body has double-quoted $nodeId.output.field', async () => {
+    const workflow = makeWorkflow('test', [
+      {
+        id: 'check',
+        bash: 'status="$emit.output.status"\n[ "$status" = "ok" ] && echo pass',
+      } as DagNode,
+    ]);
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    const warnings = issues.filter(i => i.level === 'warning' && i.field === 'bash');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].nodeId).toBe('check');
+    expect(warnings[0].message).toContain('double-quoting');
+    expect(warnings[0].hint).toContain('var=$node.output.field');
+  });
+
+  test('warning when $nodeId.output is embedded inside a double-quoted string', async () => {
+    const workflow = makeWorkflow('test', [
+      {
+        id: 'check',
+        bash: 'echo "result: $emit.output.status"',
+      } as DagNode,
+    ]);
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    const warnings = issues.filter(i => i.level === 'warning' && i.field === 'bash');
+    expect(warnings).toHaveLength(1);
+  });
+
+  test('script nodes are exempt from the double-quote lint', async () => {
+    const workflow = makeWorkflow('test', [
+      {
+        id: 'check',
+        script: 'const status = "$emit.output.status";\nconsole.log(status);',
+        runtime: 'bun',
+      } as unknown as DagNode,
+    ]);
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    const warnings = issues.filter(i => i.level === 'warning' && i.field === 'bash');
+    expect(warnings).toHaveLength(0);
+  });
+
+  test('no warning when $nodeId.output is inside single quotes', async () => {
+    const workflow = makeWorkflow('test', [
+      {
+        id: 'check',
+        bash: "status='$emit.output.status'",
+      } as DagNode,
+    ]);
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    const warnings = issues.filter(i => i.level === 'warning' && i.field === 'bash');
+    expect(warnings).toHaveLength(0);
+  });
+
+  test('no false positive: a prior double-quoted string before an unquoted ref on the same line', async () => {
+    // The closing `"` of "Build complete." must NOT seed a match that slides across
+    // the `;` to the correctly-unquoted $build.output.score.
+    const workflow = makeWorkflow('test', [
+      {
+        id: 'check',
+        bash: 'echo "Build complete."; result=$build.output.score',
+      } as DagNode,
+    ]);
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    const warnings = issues.filter(i => i.level === 'warning' && i.field === 'bash');
+    expect(warnings).toHaveLength(0);
+  });
+
+  test('warns on a double-quoted $node.output in a loop until_bash', async () => {
+    // until_bash substitutes with the same escapedForBash=true path as bash nodes,
+    // so the footgun applies there too.
+    const workflow = makeWorkflow('test', [
+      {
+        id: 'gen',
+        prompt: 'produce output',
+        loop: {
+          until: 'DONE',
+          until_bash: 'status="$emit.output.status" && [ "$status" = "done" ]',
+        },
+      } as unknown as DagNode,
+    ]);
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    const warnings = issues.filter(i => i.level === 'warning' && i.field === 'loop.until_bash');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].message).toContain('double-quoting');
+  });
+});
+
+// =============================================================================
+// validateWorkflowResources — skills search roots (#2178)
+// =============================================================================
+
+describe('validateWorkflowResources — skills search roots', () => {
+  // The validator must accept skills anywhere the runtime resolver
+  // (skillSearchRoots in @archon/providers) would find them: .agents/skills/
+  // and .claude/skills/, at both project (cwd) and user (HOME) level.
+  let originalHome: string | undefined;
+  let fakeHome: string;
+
+  beforeEach(async () => {
+    originalHome = process.env.HOME;
+    // Point HOME at a temp dir so real user-level skills can't leak in.
+    fakeHome = await mkdtemp(join(tmpdir(), 'validator-skills-home-'));
+    process.env.HOME = fakeHome;
+  });
+
+  afterEach(async () => {
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    await rm(fakeHome, { recursive: true, force: true });
+  });
+
+  async function stageSkill(
+    base: string,
+    subdir: '.agents' | '.claude',
+    name: string
+  ): Promise<void> {
+    const dir = join(base, subdir, 'skills', name);
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'SKILL.md'), `# ${name}\n`);
+  }
+
+  function skillsWorkflow(skillName: string): WorkflowDefinition {
+    return makeWorkflow(
+      'test',
+      [{ id: 'step1', prompt: 'do work', skills: [skillName] } as unknown as DagNode],
+      'claude'
+    );
+  }
+
+  function missingSkillWarnings(issues: Awaited<ReturnType<typeof validateWorkflowResources>>) {
+    return issues.filter(
+      i => i.level === 'warning' && i.field === 'skills' && i.message.includes('not found')
+    );
+  }
+
+  test('no warning for a skill under <cwd>/.agents/skills/', async () => {
+    await stageSkill(tmpDir, '.agents', 'my-skill');
+    const issues = await validateWorkflowResources(skillsWorkflow('my-skill'), tmpDir);
+    expect(missingSkillWarnings(issues)).toHaveLength(0);
+  });
+
+  test('no warning for a skill under <cwd>/.claude/skills/', async () => {
+    await stageSkill(tmpDir, '.claude', 'my-skill');
+    const issues = await validateWorkflowResources(skillsWorkflow('my-skill'), tmpDir);
+    expect(missingSkillWarnings(issues)).toHaveLength(0);
+  });
+
+  test('no warning for a skill under ~/.agents/skills/', async () => {
+    await stageSkill(fakeHome, '.agents', 'home-skill');
+    const issues = await validateWorkflowResources(skillsWorkflow('home-skill'), tmpDir);
+    expect(missingSkillWarnings(issues)).toHaveLength(0);
+  });
+
+  test('no warning for a skill under ~/.claude/skills/', async () => {
+    await stageSkill(fakeHome, '.claude', 'home-skill');
+    const issues = await validateWorkflowResources(skillsWorkflow('home-skill'), tmpDir);
+    expect(missingSkillWarnings(issues)).toHaveLength(0);
+  });
+
+  test('warning when the skill exists in none of the search roots', async () => {
+    const issues = await validateWorkflowResources(skillsWorkflow('nonexistent-skill'), tmpDir);
+    const warnings = missingSkillWarnings(issues);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].nodeId).toBe('step1');
+    expect(warnings[0].message).toContain("Skill 'nonexistent-skill' not found");
+    expect(warnings[0].message).toContain('.agents/skills/');
+    expect(warnings[0].hint).toContain('.agents/skills/nonexistent-skill/SKILL.md');
+  });
+
+  test('skill directory without SKILL.md still warns', async () => {
+    // An empty directory is not a valid skill — the resolver requires SKILL.md.
+    await mkdir(join(tmpDir, '.agents', 'skills', 'empty-skill'), { recursive: true });
+    const issues = await validateWorkflowResources(skillsWorkflow('empty-skill'), tmpDir);
+    expect(missingSkillWarnings(issues)).toHaveLength(1);
   });
 });

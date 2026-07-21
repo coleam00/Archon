@@ -53,10 +53,13 @@ Archon is a **platform-agnostic AI coding assistant orchestrator** that connects
       └───────────────┼───────────────────┘
                       ▼
 ┌─────────────────────────────────────────────┐
-│    SQLite (default) / PostgreSQL (7 Tables)  │
+│    SQLite (default) / PostgreSQL (16 Tables) │
 │  • Codebases  • Conversations  • Sessions   │
 │  • Isolation Envs • Workflow Runs            │
 │  • Workflow Events • Messages                │
+│  • Codebase Env Vars                         │
+│  • Users • User Identities • Node Sessions   │
+│  • GitHub Tokens • Web Auth Tables           │
 └─────────────────────────────────────────────┘
 ```
 
@@ -104,6 +107,9 @@ export interface IPlatformAdapter {
 
   // Optional: Retract previously streamed text (workflow routing intercept)
   emitRetract?(conversationId: string): Promise<void>;
+
+  // Optional: Append a cost / token footer after a direct-chat reply
+  sendResultFooter?(conversationId: string, info: { cost?: number; tokens?: TokenUsage; stopReason?: string }): Promise<void>;
 }
 ```
 
@@ -337,10 +343,15 @@ export type MessageChunk =
       structuredOutput?: unknown;
       isError?: boolean;
       errorSubtype?: string;
+      errors?: string[];
       cost?: number;
       stopReason?: string;
       numTurns?: number;
       modelUsage?: Record<string, unknown>;
+      // Session-resume outcome: true = restored, false = requested but fell back
+      // to a fresh session, omitted = no resume requested. Set only when
+      // resumeSessionId was passed (stamp it via withResumedOutcome).
+      resumed?: boolean;
     }
   | { type: 'rate_limit'; rateLimitInfo: Record<string, unknown> }
   | { type: 'tool'; toolName: string; toolInput?: Record<string, unknown>; toolCallId?: string }
@@ -446,7 +457,7 @@ YOUR_ASSISTANT_MODEL=<model-name>
 **Transition triggers** (`packages/core/src/state/session-transitions.ts`):
 - `first-message` - No existing session
 - `plan-to-execute` - Plan phase completed, starting execution (creates new session immediately)
-- `isolation-changed`, `codebase-changed`, `reset-requested`, etc. - Deactivate current session
+- `isolation-changed`, `project-changed`, `reset-requested`, etc. - Deactivate current session
 
 **Orchestrator logic** (`packages/core/src/orchestrator/orchestrator.ts`):
 
@@ -495,7 +506,14 @@ for await (const msg of query({ prompt, options })) {
 **Codex SDK** (`packages/providers/src/codex/provider.ts`):
 
 ```typescript
+// A new thread's id is assigned during the run via the thread.started event,
+// not synchronously on startThread() — capture it for a resumable sessionId.
+let resolvedThreadId = thread.id;
 for await (const event of result.events) {
+  if (event.type === 'thread.started') {
+    resolvedThreadId = event.thread_id; // resumable id; persist_session depends on it
+    continue;
+  }
   if (event.type === 'item.completed') {
     switch (event.item.type) {
       case 'agent_message':
@@ -509,7 +527,7 @@ for await (const event of result.events) {
         break;
     }
   } else if (event.type === 'turn.completed') {
-    yield { type: 'result', sessionId: thread.id };
+    yield { type: 'result', sessionId: resolvedThreadId };
     break; // CRITICAL: Exit loop on turn completion
   }
 }
@@ -838,34 +856,50 @@ This registers repo-specific commands. Default commands are loaded at runtime fr
 
 ### Variable Substitution
 
+Command-file and workflow prompts flow through a single substitution pass before
+they reach the AI. `$ARGUMENTS` and `$USER_MESSAGE` both expand to the user's
+**whole** trigger message — positional `$1`/`$2`/`$3` arguments are **not**
+supported.
+
 **Supported variables:**
 
-- `$1`, `$2`, `$3`, ... - Positional arguments
-- `$ARGUMENTS` - All arguments as single string
-- `\$` - Escaped dollar sign (literal `$`)
+- `$ARGUMENTS`, `$USER_MESSAGE` - The user's full trigger message as a single string
+- `$WORKFLOW_ID` - The workflow run ID
+- `$ARTIFACTS_DIR` - External artifacts directory for this workflow run
+- `$BASE_BRANCH` - Base branch (from config or auto-detected)
+- `$DOCS_DIR` - Documentation directory path (configured, default `docs/`)
+- `$CONTEXT`, `$EXTERNAL_CONTEXT`, `$ISSUE_CONTEXT` - GitHub issue/PR context (empty when unavailable)
+- `$LOOP_USER_INPUT`, `$REJECTION_REASON`, `$LOOP_PREV_OUTPUT` - Loop/approval context (see the [Variables reference](/reference/variables/))
 
-**Implementation** (`packages/core/src/utils/variable-substitution.ts`):
+**Implementation** (`substituteWorkflowVariables` in `packages/workflows/src/executor-shared.ts`):
 
 ```typescript
-export function substituteVariables(
-  text: string,
-  args: string[],
-  metadata: Record<string, unknown> = {}
-): string {
-  let result = text;
+export function substituteWorkflowVariables(
+  prompt: string,
+  workflowId: string,
+  userMessage: string,
+  artifactsDir: string,
+  baseBranch: string,
+  docsDir: string,
+  issueContext?: string,
+  // ...loop/approval context args
+  options?: { shellSafe?: boolean }
+): { prompt: string; contextSubstituted: boolean } {
+  let result = prompt
+    .replace(/\$WORKFLOW_ID/g, workflowId)
+    .replace(/\$ARTIFACTS_DIR/g, artifactsDir)
+    .replace(/\$BASE_BRANCH/g, baseBranch)
+    .replace(/\$DOCS_DIR/g, docsDir || 'docs/');
 
-  // Replace $1, $2, $3, etc.
-  args.forEach((arg, index) => {
-    result = result.replace(new RegExp(`\\$${index + 1}`, 'g'), arg);
-  });
-
-  // Replace $ARGUMENTS
-  result = result.replace(/\$ARGUMENTS/g, args.join(' '));
-
-  // Replace escaped dollar signs
-  result = result.replace(/\\\$/g, '$');
-
-  return result;
+  // User-controlled vars are skipped when shellSafe: true — bash/script nodes
+  // receive them via subprocess env instead, to prevent shell injection.
+  if (!options?.shellSafe) {
+    result = result
+      .replace(/\$USER_MESSAGE/g, userMessage)
+      .replace(/\$ARGUMENTS/g, userMessage);
+    // ...$LOOP_USER_INPUT, $REJECTION_REASON, $LOOP_PREV_OUTPUT, and $CONTEXT* vars
+  }
+  // ...
 }
 ```
 
@@ -874,9 +908,7 @@ export function substituteVariables(
 ```markdown
 <!-- .archon/commands/analyze.md -->
 
-Analyze the following aspect of the codebase: $1
-
-Focus on: $ARGUMENTS
+Analyze the codebase for the following request: $ARGUMENTS
 
 Provide recommendations for improvement.
 ```
@@ -885,8 +917,7 @@ Provide recommendations for improvement.
 User asks: "Analyze the security of authentication and authorization"
 # Orchestrator routes to the `analyze` command
 # Variable substitution produces:
-# Analyze the following aspect of the codebase: security
-# Focus on: security authentication authorization
+# Analyze the codebase for the following request: Analyze the security of authentication and authorization
 # Provide recommendations for improvement.
 ```
 
@@ -1023,7 +1054,7 @@ export function formatToolCall(toolName: string, toolInput?: Record<string, unkn
 
 ## Database Schema
 
-Archon uses a 7-table schema with `remote_agent_` prefix. SQLite is the default (zero setup); PostgreSQL is optional for cloud/advanced deployments.
+Archon uses a 16-table schema with `remote_agent_` prefix. SQLite is the default (zero setup); PostgreSQL is optional for cloud/advanced deployments.
 
 ### Schema Overview
 
@@ -1033,18 +1064,21 @@ remote_agent_codebases
 ├── name (VARCHAR)
 ├── repository_url (VARCHAR)
 ├── default_cwd (VARCHAR)
+├── default_branch (VARCHAR, nullable) -- detected branch used as sync context when available
 ├── ai_assistant_type (VARCHAR) -- registered provider identifier (e.g. 'claude', 'codex')
+├── kind (VARCHAR, default 'repo') -- 'repo' | 'folder' (folder projects are non-git, run in place)
 └── commands (JSONB) -- {command_name: {path, description}}
 
 remote_agent_conversations
 ├── id (UUID)
-├── platform_type (VARCHAR) -- 'web' | 'telegram' | 'github' | 'slack'
+├── platform_type (VARCHAR) -- 'web' | 'telegram' | 'github' | 'slack' | 'discord' | 'gitea' | 'gitlab' | 'cli'
 ├── platform_conversation_id (VARCHAR) -- Platform-specific ID
 ├── codebase_id (UUID -> remote_agent_codebases.id)
-├── cwd (VARCHAR) -- Current working directory
+├── cwd (VARCHAR) -- Explicit working-directory override, usually null (set by worktree create/remove; effective cwd falls back to codebase.default_cwd)
 ├── ai_assistant_type (VARCHAR) -- LOCKED at creation
 ├── title (VARCHAR) -- User-friendly conversation title (Web UI)
 ├── deleted_at (TIMESTAMP) -- Soft-delete support
+├── user_id (UUID -> remote_agent_users.id, ON DELETE SET NULL) -- First user to create the conversation
 └── UNIQUE(platform_type, platform_conversation_id)
 
 remote_agent_sessions
@@ -1066,6 +1100,8 @@ remote_agent_isolation_environments
 ├── working_path (VARCHAR)
 ├── branch_name (VARCHAR)
 ├── status (VARCHAR) -- 'active' | 'destroyed'
+├── created_by_platform (VARCHAR) -- 'github' | 'slack' | 'web' | ...
+├── created_by_user_id (UUID -> remote_agent_users.id, ON DELETE SET NULL) -- Original creator; preserved on ON CONFLICT re-activation
 └── metadata (JSONB)
 
 remote_agent_workflow_runs
@@ -1075,6 +1111,8 @@ remote_agent_workflow_runs
 ├── workflow_name (VARCHAR)
 ├── status (VARCHAR) -- 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
 ├── parent_conversation_id (UUID) -- Parent chat that dispatched this run
+├── parent_run_id (UUID -> remote_agent_workflow_runs.id, ON DELETE SET NULL) -- Run-tree parent for a workflow: sub-run (#2121); null for top-level
+├── user_id (UUID -> remote_agent_users.id, ON DELETE SET NULL) -- User who triggered the run
 └── metadata (JSONB)
 
 remote_agent_workflow_events
@@ -1092,7 +1130,29 @@ remote_agent_messages
 ├── role (VARCHAR) -- 'user' | 'assistant'
 ├── content (TEXT)
 ├── metadata (JSONB) -- {toolCalls: [{name, input, duration}], ...}
+├── user_id (UUID -> remote_agent_users.id, ON DELETE SET NULL) -- NULL on assistant rows
 └── created_at (TIMESTAMP)
+
+remote_agent_codebase_env_vars
+├── id (UUID)
+├── codebase_id (UUID -> remote_agent_codebases.id, ON DELETE CASCADE)
+├── key (VARCHAR)
+├── value (TEXT)
+└── UNIQUE(codebase_id, key)
+
+remote_agent_users
+├── id (UUID)
+├── display_name (VARCHAR) -- Nullable; populated via platform user-info lookups (e.g. Slack users.info)
+├── email (VARCHAR) -- Nullable
+└── (timestamps)
+
+remote_agent_user_identities
+├── id (UUID)
+├── user_id (UUID -> remote_agent_users.id, ON DELETE CASCADE)
+├── platform (VARCHAR) -- 'slack' | 'telegram' | 'discord' | 'github' | 'gitea' | 'gitlab' | 'web' | 'cli'
+├── platform_user_id (VARCHAR) -- Slack U-id, Telegram chat id, Discord snowflake, GitHub login, ...
+├── platform_display_name (VARCHAR) -- Cached per-platform display name
+└── UNIQUE(platform, platform_user_id)
 ```
 
 ### Database Operations
@@ -1224,11 +1284,12 @@ User comments: @Archon prime the codebase
          |
 GitHub sends webhook to POST /webhooks/github
          |
-GitHubAdapter.handleWebhook(payload, signature)
+GitHubAdapter.handleWebhook(payload, signature, deliveryId)
   - Verify HMAC signature
   - Parse event: issue_comment.created
   - Extract: owner/repo#42, comment text
   - Check for @Archon mention
+  - Drop duplicate deliveries (same comment via dual repo+App webhooks)
          |
 First mention on this issue?
   - Yes -> Clone repo, create codebase, detect and register commands
@@ -1294,7 +1355,7 @@ This checklist is for **built-in** providers only. For community providers (`bui
 
 ### Modifying Command System
 
-- [ ] Update `substituteVariables()` for new variable types
+- [ ] Update `substituteWorkflowVariables()` (`packages/workflows/src/executor-shared.ts`) for new variable types
 - [ ] Add command to Command Handler for deterministic logic
 - [ ] Update `/help` command output
 - [ ] Add example command file to `.archon/commands/`

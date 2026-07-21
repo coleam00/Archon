@@ -72,7 +72,7 @@ nodes:
 
       Determine if this is a bug fix or a new feature.
     depends_on: [fetch-issue]
-    model: haiku
+    model: small          # tier keyword — resolved from config; prefer over hardcoded model ids
     allowed_tools: []
     output_format:
       type: object
