@@ -57,6 +57,11 @@ import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
 import type { IWorkflowStore } from './store';
 import type { WorkflowRun } from './schemas/workflow-run';
 import type { WorkflowDefinition } from './schemas/workflow';
+import type {
+  ChildIsolationResolver,
+  ChildIsolationRequest,
+  ChildIsolationResult,
+} from './child-isolation';
 
 // ---------------------------------------------------------------------------
 // Stateful in-memory store — implements just enough of IWorkflowStore to drive
@@ -304,6 +309,31 @@ function makePlatform(): IWorkflowPlatform {
     getPlatformType: mock(() => 'test'),
     sendStructuredEvent: mock(() => Promise.resolve()),
   };
+}
+
+/**
+ * Fake child-isolation resolver (slice 2, PR-A). Records the requests it receives
+ * and returns a fixed per-child cwd, creating it on disk so the child's
+ * executeWorkflow (artifacts/logs) has a real directory — a real worktree IS a
+ * real checkout.
+ */
+function makeFakeResolver(childCwd: string): {
+  resolver: ChildIsolationResolver;
+  calls: ChildIsolationRequest[];
+} {
+  const calls: ChildIsolationRequest[] = [];
+  const resolver: ChildIsolationResolver = {
+    async resolve(req: ChildIsolationRequest): Promise<ChildIsolationResult> {
+      calls.push(req);
+      await mkdir(childCwd, { recursive: true });
+      return {
+        cwd: childCwd,
+        envId: `env-${String(req.childIndex ?? 0)}`,
+        branchName: `archon/task-${req.parentRun.id.slice(0, 8)}-child-${String(req.childIndex ?? 0)}`,
+      };
+    },
+  };
+  return { resolver, calls };
 }
 
 describe('workflow: sub-run e2e (#2121 Phase 2)', () => {
@@ -1062,5 +1092,163 @@ nodes:
     expect(String(nodeFailed?.data?.error)).toContain('Unknown sub-run workflow');
     // No child run was created for a target that doesn't resolve.
     expect([...store.runs.values()].filter(r => r.parent_run_id !== null)).toHaveLength(0);
+  });
+
+  // --- slice 2, PR-A: per-child worktree isolation ------------------------------
+
+  it("isolation: 'worktree' runs the child in the resolver's cwd (distinct from the parent)", async () => {
+    await writeWorkflow(
+      'child-iso',
+      `
+name: child-iso
+description: child that runs in its own worktree
+nodes:
+  - id: work
+    prompt: "do the work for $ARGUMENTS"
+`
+    );
+    await writeWorkflow(
+      'parent-iso',
+      `
+name: parent-iso
+description: parent that isolates its child
+nodes:
+  - id: sub
+    workflow: child-iso
+    input: "x"
+    isolation: worktree
+`
+    );
+
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    const parent = await discover('parent-iso');
+    const childCwd = join(cwd, 'child-worktree-0');
+    const { resolver, calls } = makeFakeResolver(childCwd);
+
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parent,
+      'goal',
+      'conv-db',
+      { resolveChildIsolation: resolver }
+    );
+
+    expect(result.success).toBe(true);
+    // The resolver was invoked once, for the `sub` node, carrying the parent run.
+    expect(calls).toHaveLength(1);
+    expect(calls[0].nodeId).toBe('sub');
+    const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'parent-iso');
+    expect(calls[0].parentRun.id).toBe(parentRun?.id);
+    // The child ran in the resolver's worktree cwd — NOT the parent's checkout.
+    const child = [...store.runs.values()].find(r => r.workflow_name === 'child-iso');
+    expect(child?.status).toBe('completed');
+    expect(child?.working_path).toBe(childCwd);
+    expect(child?.working_path).not.toBe(cwd);
+  });
+
+  it("isolation: 'worktree' with NO resolver injected fails the node fast (no shared-checkout fallback)", async () => {
+    await writeWorkflow(
+      'child-iso',
+      `
+name: child-iso
+description: child that wants its own worktree
+nodes:
+  - id: work
+    prompt: "do work for $ARGUMENTS"
+`
+    );
+    await writeWorkflow(
+      'parent-iso-noresolver',
+      `
+name: parent-iso-noresolver
+description: parent requesting worktree isolation with no resolver wired
+nodes:
+  - id: sub
+    workflow: child-iso
+    input: "x"
+    isolation: worktree
+`
+    );
+
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    const parent = await discover('parent-iso-noresolver');
+
+    // No resolveChildIsolation in opts — the node must fail fast, never silently
+    // fall back to the parent's shared checkout.
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parent,
+      'goal',
+      'conv-db'
+    );
+
+    expect(result.success).toBe(false);
+    const parentRun = [...store.runs.values()].find(
+      r => r.workflow_name === 'parent-iso-noresolver'
+    );
+    expect(parentRun?.status).toBe('failed');
+    const nodeFailed = store.events.find(
+      e => e.event_type === 'node_failed' && e.step_name === 'sub'
+    );
+    expect(String(nodeFailed?.data?.error)).toContain('requires an injected');
+    // Fail-fast happens BEFORE the child row is created — no orphan child.
+    expect([...store.runs.values()].filter(r => r.parent_run_id !== null)).toHaveLength(0);
+  });
+
+  it("isolation: 'inherit' (and default) shares the parent's checkout — resolver untouched", async () => {
+    await writeWorkflow(
+      'child-share',
+      `
+name: child-share
+description: child sharing the parent checkout
+nodes:
+  - id: work
+    prompt: "do work for $ARGUMENTS"
+`
+    );
+    await writeWorkflow(
+      'parent-inherit',
+      `
+name: parent-inherit
+description: parent whose child inherits the checkout
+nodes:
+  - id: sub
+    workflow: child-share
+    input: "x"
+    isolation: inherit
+`
+    );
+
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    const parent = await discover('parent-inherit');
+    const { resolver, calls } = makeFakeResolver(join(cwd, 'should-not-be-used'));
+
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parent,
+      'goal',
+      'conv-db',
+      { resolveChildIsolation: resolver }
+    );
+
+    expect(result.success).toBe(true);
+    // Even with a resolver available, `inherit` must NOT call it.
+    expect(calls).toHaveLength(0);
+    const child = [...store.runs.values()].find(r => r.workflow_name === 'child-share');
+    expect(child?.status).toBe('completed');
+    // The child shares the parent's checkout.
+    expect(child?.working_path).toBe(cwd);
   });
 });
