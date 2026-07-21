@@ -195,6 +195,22 @@ export function ActiveRunCard({
             </>
           )
         ) : null}
+
+        {/* Resolved gate awaiting auto-resume — the run is still 'paused' in the
+            DB for the second or so between approve/reject and the executor
+            flipping it to running. Show a hint instead of stale gate buttons. */}
+        {run.status === 'paused' && run.gateResolved !== null && run.gateResolved !== undefined ? (
+          <div className="mt-2 flex items-center gap-2 rounded border border-border bg-surface-hover/40 px-3 py-2 text-[12px] text-text-secondary">
+            <span aria-hidden className="inline-block animate-pulse leading-none">
+              ▸
+            </span>
+            <span>
+              {run.gateResolved === 'approved'
+                ? 'Approved — resuming…'
+                : 'Rejected — running on-reject rework…'}
+            </span>
+          </div>
+        ) : null}
       </div>
     </article>
   );

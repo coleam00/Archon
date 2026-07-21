@@ -13,7 +13,7 @@ export type {
 export { toRepoPath, toBranchName, toWorktreePath } from './types';
 
 // Process and filesystem wrappers
-export { execFileAsync, mkdirAsync } from './exec';
+export { execFileAsync, mkdirAsync, resolveBashPath } from './exec';
 
 // Worktree operations
 export {
@@ -33,6 +33,8 @@ export type { WorktreeLayout, WorktreeBaseOverride } from './worktree';
 // Branch operations
 export {
   getDefaultBranch,
+  getCurrentBranch,
+  countCommitsAhead,
   checkout,
   hasUncommittedChanges,
   commitAllChanges,
@@ -42,10 +44,15 @@ export {
   getLastCommitDate,
 } from './branch';
 
+// Forge detection
+export { detectForge } from './forge';
+export type { ForgeType, ForgeInfo } from './forge';
+
 // Repository operations
 export {
   findRepoRoot,
   getRemoteUrl,
+  listChildRepos,
   syncWorkspace,
   cloneRepository,
   syncRepository,

@@ -1,0 +1,24 @@
+name: minimax-smoke
+description: |
+  Minimal smoke test for the Pi / MiniMax-M3 provider. A single trivial prompt
+  node — no output_format, no tools, no large context — to check whether Pi can
+  reach MiniMax-M3 and stream a first token at all.
+
+  Diagnostic for the stall seen in archon-fix-github-issue-minimax, where the
+  `classify` node (large prompt + output_format augmentation) hung with zero
+  output for 30 min × 3 retries. This isolates the question: does M3/Pi respond
+  to a tiny prompt (→ the stall is prompt-size / structured-output specific), or
+  does it hang even here (→ Pi/M3 is broken outright)?
+
+  `idle_timeout: 120000` (2 min) so a stall fails fast instead of waiting 30 min.
+
+provider: pi
+model: minimax/MiniMax-M3
+
+nodes:
+  - id: ping
+    idle_timeout: 120000
+    prompt: |
+      Reply with exactly the single word: PONG
+
+      Do not add anything else — no punctuation, no explanation.

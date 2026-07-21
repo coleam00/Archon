@@ -25,7 +25,11 @@ const DROPDOWN_CLASS =
   // floating dropdown).
   'absolute left-0 right-0 top-full z-20 mt-1 max-h-60 overflow-y-auto rounded-[9px] border border-border bg-surface-elevated shadow-[0_18px_44px_-18px_rgba(0,0,0,0.85)]';
 const OPTION_CLASS =
-  'flex w-full items-baseline justify-between gap-3 px-3 py-2 text-left font-mono text-[12px] transition-colors hover:bg-surface-hover';
+  // Stacked two-line row (same shape as ArtifactPanel's list rows): the model
+  // name is the primary identifier and keeps the full row width; the
+  // cost/context hint rides a muted second line so it can never crowd the
+  // name out (#2031).
+  'flex w-full flex-col gap-0.5 px-3 py-2 text-left font-mono text-[12px] transition-colors hover:bg-surface-hover';
 const FOOTER_BUTTON_CLASS =
   'w-full border-t border-border px-3 py-2 text-left font-mono text-[11px] text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary';
 
@@ -92,9 +96,9 @@ function OptionRow({
       }}
       className={OPTION_CLASS}
     >
-      <span className="min-w-0 truncate text-text-primary">{option.value}</span>
+      <span className="truncate text-text-primary">{option.value}</span>
       {option.hint !== undefined ? (
-        <span className="shrink-0 text-[10px] text-text-tertiary">{option.hint}</span>
+        <span className="truncate text-[10px] text-text-tertiary">{option.hint}</span>
       ) : null}
     </button>
   );

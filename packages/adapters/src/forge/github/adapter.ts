@@ -16,6 +16,7 @@ import {
   getLinkedIssueNumbers,
   onConversationClosed,
   ConversationLockManager,
+  DeliveryDeduplicator,
   AppNotInstalledError,
   installCredentialHelper,
 } from '@archon/core';
@@ -66,6 +67,12 @@ export class GitHubAdapter implements IPlatformAdapter {
   private allowedUsers: string[];
   private botMention: string;
   private lockManager: ConversationLockManager;
+  /**
+   * Ingest idempotency: drops repeat deliveries of one logical comment event
+   * (dual repo+App subscriptions, LB double-forwards, redeliveries) before
+   * they reach the lock manager, which orders but does not dedup.
+   */
+  private readonly deliveryDedup = new DeliveryDeduplicator();
   private readonly retryDelayFn: (attempt: number) => number;
   /**
    * Resolve the originating user's personal GitHub token (App mode only).
@@ -918,8 +925,10 @@ ${userComment}`;
 
   /**
    * Handle incoming webhook event
+   * @param deliveryId - GitHub's X-GitHub-Delivery GUID; dedup fallback when
+   *   the payload carries no comment identity
    */
-  async handleWebhook(payload: string, signature: string): Promise<void> {
+  async handleWebhook(payload: string, signature: string, deliveryId?: string): Promise<void> {
     // 1. Verify signature
     if (!this.verifySignature(payload, signature)) {
       getLog().error(
@@ -986,6 +995,29 @@ ${userComment}`;
 
     // 5. Check @mention
     if (!this.hasMention(comment)) return;
+
+    // 5a. Ingest idempotency. Key on comment identity (id + updated_at), not
+    // the delivery GUID: dual subscriptions (repo + App webhooks) deliver the
+    // same comment under different GUIDs. Both fields required — id alone
+    // would dedup an edit against the original. GUID is the fallback.
+    const dedupKey =
+      event.comment?.id !== undefined && event.comment.updated_at
+        ? `comment:${owner}/${repo}#${String(number)}:${String(event.comment.id)}:${event.comment.updated_at}`
+        : deliveryId
+          ? `delivery:${deliveryId}`
+          : undefined;
+    // seen() claims the key BEFORE the downstream work: dual-subscription
+    // duplicates arrive near-simultaneously, so marking only after success
+    // would let both pass and double-process. Tradeoff: a redelivery whose
+    // first attempt failed within the TTL is dropped — acceptable for this
+    // fire-and-forget route, where failures are logged rather than retried.
+    if (dedupKey && this.deliveryDedup.seen(dedupKey)) {
+      getLog().info(
+        { eventType, owner, repo, number, deliveryId },
+        'github.duplicate_delivery_dropped'
+      );
+      return;
+    }
 
     getLog().info({ eventType, owner, repo, number }, 'github.webhook_processing');
 

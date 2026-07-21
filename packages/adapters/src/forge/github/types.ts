@@ -21,8 +21,12 @@ export interface WebhookEvent {
     deletions?: number;
   };
   comment?: {
+    /** GitHub's numeric comment id */
+    id?: number;
     body: string;
     user: { login: string };
+    /** ISO timestamp of the comment's last update; GitHub bumps it on edit */
+    updated_at?: string;
   };
   repository: {
     owner: { login: string };

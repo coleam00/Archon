@@ -7,18 +7,25 @@ import type { ProviderCapabilities } from '../../types';
  *
  * Agents semantics differ from Claude SDK: OpenCode supports agent
  * selection via adaptation layer. The `agents: true` flag enables
- * `nodeConfig.agents` translation to OpenCode request fields:
+ * `nodeConfig.agents` translation to OpenCode request fields (wired in
+ * provider.ts: `getOrderedAgents` → `materializeAgents`):
  * - agent selection (named agent from opencode.json config)
  * - model override per-call
  * - tools/permissions map for scoping
  *
  * NOT full programmatic inline agent definitions like Claude SDK's
  * `options.agents` array — OpenCode uses config-file-based agents.
+ *
+ * `hooks: false` — Archon's per-node `hooks` field carries Claude-SDK-shaped
+ * `HookCallbackMatcher` callbacks and the OpenCode provider has no translation
+ * site for them (grep the provider dir: `hooks` appears only here). Declaring
+ * `true` would suppress the dag-executor's ignored-capability warning and drop
+ * a node's hooks silently — a fail-fast violation (#2116).
  */
 export const OPENCODE_CAPABILITIES: ProviderCapabilities = {
   sessionResume: true,
   mcp: true,
-  hooks: true,
+  hooks: false,
   skills: true,
   agents: true,
   toolRestrictions: true,
@@ -29,5 +36,7 @@ export const OPENCODE_CAPABILITIES: ProviderCapabilities = {
   thinkingControl: false, // OpenCode handles effort/thinking via opencode.json agent config, not prompt body
   fallbackModel: false,
   sandbox: false,
+  settingSources: false, // Claude Agent SDK-only knob (which setting sources the agent loads)
   nativeTools: false,
+  containerExec: false, // no in-container spawn path yet (fail-fast source of truth)
 };

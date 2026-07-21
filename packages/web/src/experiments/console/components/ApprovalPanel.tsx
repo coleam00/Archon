@@ -38,6 +38,11 @@ export function ApprovalPanel({ run }: ApprovalPanelProps): ReactElement {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const isDemo = run.id.startsWith('demo-');
+  // Signal-bearing interactive-loop gate (#2074): a bare approve finalizes the
+  // node from the already-computed output (no re-run); a comment runs another
+  // iteration with it as feedback. Same approveRun call either way — the
+  // backend derives finalize-vs-iterate from comment presence.
+  const signalBearing = run.approval?.completionSignaled === true;
 
   const stopPropagation = (e: MouseEvent | ReactKeyboardEvent): void => {
     e.stopPropagation();
@@ -90,6 +95,9 @@ export function ApprovalPanel({ run }: ApprovalPanelProps): ReactElement {
 
   const onApproveKey = (e: ReactKeyboardEvent<HTMLInputElement>): void => {
     stopPropagation(e);
+    // Don't submit while an IME composition is in progress (Japanese,
+    // Chinese, Korean, etc. — the first Enter accepts a candidate).
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       void approve();
@@ -133,7 +141,11 @@ export function ApprovalPanel({ run }: ApprovalPanelProps): ReactElement {
               if (error !== null) setError(null);
             }}
             onKeyDown={onApproveKey}
-            placeholder="optional comment to send with approval"
+            placeholder={
+              signalBearing
+                ? 'add feedback to run another iteration instead'
+                : 'optional comment to send with approval'
+            }
             disabled={busy}
             autoFocus
             className="min-w-0 flex-1 rounded border border-border bg-surface-inset px-3 py-1.5 text-[13px] text-text-primary placeholder:text-text-tertiary focus:border-border-bright focus:outline-none disabled:opacity-50"
@@ -144,9 +156,13 @@ export function ApprovalPanel({ run }: ApprovalPanelProps): ReactElement {
             onClick={() => void approve()}
             disabled={busy}
             className="flex shrink-0 items-center gap-1 rounded border border-success/40 bg-success/15 px-3 text-[12px] font-medium text-success transition-colors hover:bg-success/25 disabled:opacity-50"
-            title="Continue · Enter"
+            title={
+              signalBearing && comment.trim().length === 0
+                ? 'Accept & complete · Enter'
+                : 'Continue · Enter'
+            }
           >
-            Continue
+            {signalBearing && comment.trim().length === 0 ? 'Accept & complete' : 'Continue'}
             <span aria-hidden className="font-mono text-[10px] opacity-70">
               ↵
             </span>

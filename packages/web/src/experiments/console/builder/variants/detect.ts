@@ -27,7 +27,16 @@ export function detectVariantOrNull(node: WireDagNode): VariantId | null {
   return null;
 }
 
-/** Resolve the variant of a wire node by mode-field presence. Defaults to `prompt`. */
+/**
+ * Resolve the variant of a wire node by mode-field presence. Defaults to
+ * `prompt` for nodes with no mode field.
+ *
+ * UNSAFE outside issue-collection contexts: the `prompt` default hides a
+ * malformed/future-schema node instead of flagging it. Use
+ * {@link detectVariantOrNull} (and surface an issue on `null`) on any import or
+ * validation path; reach for this convenience form only where an unknown node
+ * has already been reported elsewhere.
+ */
 export function detectVariant(node: WireDagNode): VariantId {
   return detectVariantOrNull(node) ?? 'prompt';
 }

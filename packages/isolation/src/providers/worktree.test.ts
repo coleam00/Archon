@@ -235,7 +235,7 @@ describe('WorktreeProvider', () => {
       expect(env.workingPath).toContain('issue-42');
       expect(env.status).toBe('active');
 
-      // Verify git worktree add was called with -b flag and origin/main as start-point
+      // Verify git worktree add was called with --no-track, -b flag and origin/main as start-point
       expect(execSpy).toHaveBeenCalledWith(
         'git',
         expect.arrayContaining([
@@ -243,6 +243,7 @@ describe('WorktreeProvider', () => {
           '/workspace/repo',
           'worktree',
           'add',
+          '--no-track',
           expect.any(String),
           '-b',
           'archon/issue-42',
@@ -286,6 +287,7 @@ describe('WorktreeProvider', () => {
           '/workspace/repo',
           'worktree',
           'add',
+          '--no-track',
           expect.any(String),
           '-b',
           'archon/task-test-adapters',
@@ -665,6 +667,7 @@ describe('WorktreeProvider', () => {
           '/workspace/repo',
           'worktree',
           'add',
+          '--no-track',
           expect.any(String),
           '-b',
           'archon/issue-42',
@@ -692,6 +695,19 @@ describe('WorktreeProvider', () => {
         ]),
         expect.any(Object)
       );
+
+      // --no-track must NOT be in the fallback call (only applies to new-branch -b creation)
+      const fallbackWorktreeAdd = execSpy.mock.calls.filter((call: unknown[]) => {
+        const args = call[1] as string[];
+        return (
+          args.includes('worktree') &&
+          args.includes('add') &&
+          !args.includes('-b') &&
+          args.includes('archon/issue-42')
+        );
+      });
+      expect(fallbackWorktreeAdd).toHaveLength(1);
+      expect(fallbackWorktreeAdd[0][1]).not.toContain('--no-track');
     });
 
     test('propagates error if branch -f reset fails (protected branch, etc.)', async () => {
@@ -2251,6 +2267,7 @@ describe('WorktreeProvider', () => {
         expect.arrayContaining([
           'worktree',
           'add',
+          '--no-track',
           expect.any(String),
           '-b',
           'archon/issue-42',
@@ -2269,6 +2286,58 @@ describe('WorktreeProvider', () => {
 
       // syncWorkspace called with undefined → triggers auto-detect via getDefaultBranch
       expect(syncWorkspaceSpy).toHaveBeenCalledWith('/workspace/owner/repo', undefined, {
+        mode: 'fast-forward',
+      });
+    });
+
+    test('uses request baseBranch when no config baseBranch is set', async () => {
+      worktreeExistsSpy.mockResolvedValue(false);
+      syncWorkspaceSpy.mockResolvedValue({
+        branch: 'develop',
+        synced: true,
+        mode: 'fast-forward',
+        state: 'in_sync',
+        previousHead: '',
+        newHead: '',
+        updated: false,
+      });
+      const configLoader: RepoConfigLoader = async () => ({});
+      provider = new WorktreeProvider(configLoader);
+
+      await provider.create({
+        ...baseRequest,
+        baseBranch: git.toBranchName('develop'),
+      });
+
+      expect(syncWorkspaceSpy).toHaveBeenCalledWith('/workspace/owner/repo', 'develop', {
+        mode: 'fast-forward',
+      });
+      expect(execSpy).toHaveBeenCalledWith(
+        'git',
+        expect.arrayContaining([
+          'worktree',
+          'add',
+          '--no-track',
+          expect.any(String),
+          '-b',
+          'archon/issue-42',
+          'origin/develop',
+        ]),
+        expect.any(Object)
+      );
+    });
+
+    test('uses configured baseBranch over request baseBranch when both are set', async () => {
+      worktreeExistsSpy.mockResolvedValue(false);
+      const configLoader: RepoConfigLoader = async () => ({ baseBranch: 'main' });
+      provider = new WorktreeProvider(configLoader);
+
+      await provider.create({
+        ...baseRequest,
+        baseBranch: git.toBranchName('develop'),
+      });
+
+      expect(syncWorkspaceSpy).toHaveBeenCalledWith('/workspace/owner/repo', 'main', {
         mode: 'fast-forward',
       });
     });

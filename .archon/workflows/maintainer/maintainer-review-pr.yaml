@@ -9,7 +9,7 @@ description: |
         comment-quality, docs-impact) in parallel, synthesizes findings, posts
         a draft comment to the PR, and records the review in shared state so
         the next maintainer-standup can mark "✓ reviewed Nd ago".
-  Provider: Pi (Minimax M2.7) — runs cheaper than Claude. Each review aspect
+  Provider: Pi (Minimax M3) — runs cheaper than Claude. Each review aspect
   is its own Archon node, so Pi handles them as independent calls.
   NOT for: Comprehensive review of a PR you've already decided to merge
            (use archon-comprehensive-pr-review). Quick triage of all open PRs
@@ -18,7 +18,7 @@ description: |
            to have done that filtering when picking the PR.
 
 provider: pi
-model: minimax/MiniMax-M2.7
+model: minimax/MiniMax-M3
 
 worktree:
   enabled: false # Live checkout — needs to read .archon/maintainer-standup/

@@ -1,7 +1,14 @@
 import { mock, describe, test, expect, beforeEach } from 'bun:test';
 import { createQueryResult, mockPostgresDialect } from '../test/mocks/database';
+import { createMockLogger } from '../test/mocks/logger';
 
 process.env.TOKEN_ENCRYPTION_KEY = 'a'.repeat(64);
+
+const mockLogger = createMockLogger();
+mock.module('@archon/paths', () => ({
+  createLogger: mock(() => mockLogger),
+  getCredentialKeyPath: mock(() => '/mock/.archon/credential-key'),
+}));
 
 const mockQuery = mock(() => Promise.resolve(createQueryResult([])));
 mock.module('./connection', () => ({
@@ -381,6 +388,35 @@ describe('user-provider-key-store', () => {
       expect(out).toHaveLength(1);
       expect(out[0]!.provider).toBe('claude');
       expect(out[0]!.cred).toEqual({ kind: 'api_key', apiKey: 'sk-claude-test' });
+    });
+
+    test('logs ERROR (not WARN) when ALL per-provider fetches fail (mass_decrypt_failure)', async () => {
+      mockLogger.error.mockClear();
+      mockLogger.warn.mockClear();
+
+      // List query: two providers.
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          { provider: 'openrouter', kind: 'api_key', label: null },
+          { provider: 'anthropic', kind: 'api_key', label: null },
+        ])
+      );
+      // Both individual fetches fail — simulates key-rotation/deletion.
+      mockQuery.mockRejectedValueOnce(new Error('decrypt fail'));
+      mockQuery.mockRejectedValueOnce(new Error('decrypt fail'));
+
+      const out = await listDecryptedUserProviderCredentials('user-1');
+
+      expect(out).toHaveLength(0);
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: 'user-1', total: 2, resolved: 0 }),
+        'user_provider_key.mass_decrypt_failure'
+      );
+      // Must NOT also emit a WARN for the same event.
+      expect(mockLogger.warn).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.stringContaining('partial_decrypt_failure')
+      );
     });
   });
 });

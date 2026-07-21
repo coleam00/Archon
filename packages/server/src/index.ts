@@ -8,6 +8,12 @@
 // when `bun run dev:server` is run from inside a target repo those keys leak
 // into the server process. stripCwdEnv() removes them before ~/.archon/.env loads.
 import '@archon/paths/strip-cwd-env-boot';
+// Pure env→bool boot helper (zero deps) — safe to import before the heavier
+// application imports below. Decides the Claude global-auth sentinel posture.
+import {
+  shouldDefaultClaudeGlobalAuth,
+  hasClaudeBootAuthPosture,
+} from './boot/claude-auth-posture';
 
 // Load environment variables — after CWD stripping, before application imports.
 import { config } from 'dotenv';
@@ -35,15 +41,11 @@ if (envPath) {
 import { loadArchonEnv } from '@archon/paths/env-loader';
 loadArchonEnv(process.cwd());
 
-// CLAUDECODE=1 warning is emitted inside stripCwdEnv() (boot import above)
-// BEFORE the marker is deleted from process.env. No duplicate warning here.
-
-// Smart default: use Claude Code's built-in OAuth if no explicit credentials
-if (
-  !process.env.CLAUDE_API_KEY &&
-  !process.env.CLAUDE_CODE_OAUTH_TOKEN &&
-  process.env.CLAUDE_USE_GLOBAL_AUTH === undefined
-) {
+// Smart default: fall back to Claude Code's built-in OAuth (`claude /login`)
+// ONLY for solo installs with no explicit credentials. Per-user installs
+// (TOKEN_ENCRYPTION_KEY) deliver Claude auth per-request, so the global-auth
+// sentinel is skipped there — it's misleading, not load-bearing (#1983).
+if (shouldDefaultClaudeGlobalAuth(process.env)) {
   process.env.CLAUDE_USE_GLOBAL_AUTH = 'true';
 }
 
@@ -76,6 +78,7 @@ import { WorkflowEventBridge } from './adapters/web/workflow-bridge';
 import { DashboardEventPoller } from './adapters/web/dashboard-event-poller';
 import { PgNotifyListener } from './adapters/web/pg-notify-listener';
 import { registerApiRoutes } from './routes/api';
+import { registerGithubWebhookRoute } from './routes/webhooks';
 import {
   handleMessage,
   pool,
@@ -111,6 +114,7 @@ import {
   captureArchonActive,
 } from '@archon/paths';
 import { selectGitHubAuthMode, parseGitCredentialPath } from './github-auth-bootstrap';
+import { isDiscordMentionRequired } from './discord-mention';
 import {
   getAuth,
   closeAuth,
@@ -261,14 +265,11 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   // Database auto-detected: SQLite (default) or PostgreSQL (if DATABASE_URL set)
   // No required environment variables - SQLite works out of the box
 
-  // Validate AI assistant credentials (warn if missing, don't fail)
-  // Using || intentionally: empty string should be treated as missing credential
-  // CLAUDE_USE_GLOBAL_AUTH=true: Use Claude Code's built-in OAuth (from `claude /login`)
-  const hasClaudeCredentials = Boolean(
-    process.env.CLAUDE_API_KEY ||
-    process.env.CLAUDE_CODE_OAUTH_TOKEN ||
-    process.env.CLAUDE_USE_GLOBAL_AUTH
-  );
+  // Validate AI assistant credentials (warn if missing, don't fail).
+  // A per-user install (TOKEN_ENCRYPTION_KEY) is a valid posture even with no
+  // shared Claude key — auth is delivered per request from the encrypted store,
+  // so it must NOT trip the no-credentials exit (#1983).
+  const hasClaudeCredentials = hasClaudeBootAuthPosture(process.env);
   const hasCodexCredentials = process.env.CODEX_ID_TOKEN && process.env.CODEX_ACCESS_TOKEN;
 
   if (!hasClaudeCredentials && !hasCodexCredentials) {
@@ -520,6 +521,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         | 'batch';
       discord = new DiscordAdapter(process.env.DISCORD_BOT_TOKEN, discordStreamingMode);
       const discordAdapter = discord; // Capture for use in callback
+      const discordRequireMention = isDiscordMentionRequired();
 
       // Register message handler
       discordAdapter.onMessage(async ({ message, platformUserId, displayName }) => {
@@ -529,10 +531,11 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         // Skip if no content
         if (!message.content) return;
 
-        // Check if bot was mentioned (required for activation)
-        // Exception: DMs don't require mention
+        // Check if bot was mentioned (required for activation unless
+        // DISCORD_REQUIRE_MENTION=false opts out of the gate)
+        // Exception: DMs never require mention
         const isDM = !message.guild;
-        if (!isDM && !discordAdapter.isBotMentioned(message)) {
+        if (!isDM && discordRequireMention && !discordAdapter.isBotMentioned(message)) {
           return; // Ignore messages that don't mention the bot
         }
 
@@ -724,32 +727,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
 
   // GitHub webhook endpoint
   if (github) {
-    app.post('/webhooks/github', async c => {
-      const eventType = c.req.header('x-github-event');
-      const deliveryId = c.req.header('x-github-delivery');
-
-      try {
-        const signature = c.req.header('x-hub-signature-256');
-        if (!signature) {
-          return c.json({ error: 'Missing signature header' }, 400);
-        }
-
-        // CRITICAL: Use c.req.text() for raw body (signature verification)
-        const payload = await c.req.text();
-
-        // Process async (fire-and-forget for fast webhook response)
-        // Note: github.handleWebhook() has internal error handling that notifies users
-        // This catch is a fallback for truly unexpected errors (e.g., signature verification bugs)
-        github.handleWebhook(payload, signature).catch((error: unknown) => {
-          getLog().error({ err: error, eventType, deliveryId }, 'webhook_processing_error');
-        });
-
-        return c.text('OK', 200);
-      } catch (error) {
-        getLog().error({ err: error, eventType, deliveryId }, 'webhook_endpoint_error');
-        return c.json({ error: 'Internal server error' }, 500);
-      }
-    });
+    registerGithubWebhookRoute(app, github);
     getLog().info('github_webhook_registered');
   }
 

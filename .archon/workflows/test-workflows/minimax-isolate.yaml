@@ -1,0 +1,89 @@
+name: minimax-isolate
+description: |
+  RCA isolation for the MiniMax-M3 / Pi stall (the classify hang in
+  archon-fix-github-issue-minimax). Four independent nodes, each with a 90s
+  idle_timeout so a stall fails fast instead of waiting 30 min. Disambiguates
+  whether the trigger is `output_format` (structured-output augmentation) or
+  prompt size — and whether forcing low thinking unblocks it.
+
+  Expected reads:
+    - small-plain ok, small-structured STALL  → output_format / JSON-mode is the trigger
+    - small-* ok, large-plain STALL           → prompt size is the trigger
+    - small-structured-lowthink ok            → it's M3 silently reasoning under JSON-mode
+
+provider: pi
+model: minimax/MiniMax-M3
+
+nodes:
+  # A: control — tiny plain prompt (known good from the PONG smoke test)
+  - id: small-plain
+    idle_timeout: 90000
+    prompt: |
+      Reply with exactly the single word: PONG
+
+  # B: tiny prompt + output_format (does the structured-output augmentation alone stall it?)
+  - id: small-structured
+    idle_timeout: 90000
+    prompt: |
+      Classify the sentiment of this sentence as positive, negative, or neutral:
+      "I really enjoyed the movie."
+    output_format:
+      type: object
+      properties:
+        sentiment:
+          type: string
+          enum: ["positive", "negative", "neutral"]
+        reasoning:
+          type: string
+      required: [sentiment, reasoning]
+
+  # C: same as B but force thinking low (does suppressing reasoning unblock structured output?)
+  - id: small-structured-lowthink
+    idle_timeout: 90000
+    effort: low
+    prompt: |
+      Classify the sentiment of this sentence as positive, negative, or neutral:
+      "I really enjoyed the movie."
+    output_format:
+      type: object
+      properties:
+        sentiment:
+          type: string
+          enum: ["positive", "negative", "neutral"]
+        reasoning:
+          type: string
+      required: [sentiment, reasoning]
+
+  # D: large plain prompt, no output_format (does size alone stall it?)
+  - id: large-plain
+    idle_timeout: 90000
+    prompt: |
+      Read the following text, then answer the question at the end.
+
+      Archon is a remote agentic coding platform that lets you control AI coding
+      assistants such as the Claude Code SDK and the Codex SDK remotely from Slack,
+      Telegram, GitHub, a CLI, and a web UI. It is built with Bun, TypeScript, and
+      either SQLite or PostgreSQL, and is designed as a single-developer tool for
+      AI-assisted development practitioners. The architecture prioritizes simplicity,
+      flexibility, and user control. Platform adapters implement a shared interface so
+      that a unified conversation surface spans every channel. AI providers implement a
+      shared provider interface and translate Archon's node configuration into each
+      vendor SDK's own options. Workflows are YAML-defined directed acyclic graphs of
+      nodes — prompts, commands, bash scripts, loops, approvals, and inline scripts —
+      with conditional gates, structured output, per-node tool restrictions, and
+      isolation via git worktrees so that parallel development never collides. The
+      orchestrator loads conversation and codebase context, performs variable
+      substitution, manages immutable session transitions with an explicit audit trail,
+      and streams responses to whichever platform initiated the request. Credentials are
+      currently process-global, configuration is a single global YAML file, and model
+      strings are forwarded to each SDK verbatim without validation, because vendors ship
+      new models faster than any catalog could track. A per-user setup effort is layering
+      per-user credentials and per-user model aliases on top of the existing identity
+      seam so that teammates sharing one host can each run on their own subscription and
+      their own preferred models, with the bundled default workflows simply working for
+      each of them without anyone editing a workflow file. The same composable resolver
+      that expands a tier name like large or medium or small into a concrete provider and
+      model is the durable primitive that all of this is built on, resolved once per run
+      and threaded down a single level into the executor.
+
+      Question: In one short sentence, what is the main topic of the text above?

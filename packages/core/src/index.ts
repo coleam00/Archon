@@ -79,7 +79,8 @@ export * as isolationOperations from './operations/isolation-operations';
 // =============================================================================
 // Orchestrator
 // =============================================================================
-export { handleMessage } from './orchestrator/orchestrator-agent';
+export { handleMessage, resolveTitleRequest } from './orchestrator/orchestrator-agent';
+export type { TitleRequest } from './orchestrator/orchestrator-agent';
 export {
   buildOrchestratorPrompt,
   buildProjectScopedPrompt,
@@ -90,7 +91,12 @@ export {
 // Handlers
 // =============================================================================
 export { handleCommand, parseCommand } from './handlers/command-handler';
-export { cloneRepository, registerRepository, type RegisterResult } from './handlers/clone';
+export {
+  cloneRepository,
+  registerRepository,
+  registerFolder,
+  type RegisterResult,
+} from './handlers/clone';
 
 // =============================================================================
 // Config
@@ -144,6 +150,9 @@ export {
 
 // Conversation lock
 export { ConversationLockManager, type LockAcquisitionResult } from './utils/conversation-lock';
+
+// Webhook delivery dedup
+export { DeliveryDeduplicator } from './utils/delivery-dedup';
 
 // Error formatting
 export { classifyAndFormatError } from './utils/error-formatter';
@@ -241,7 +250,7 @@ export {
   getUserAiPrefs,
   setUserTiers,
   setUserAliases,
-  setUserDefaultProvider,
+  setUserDefault,
   clearUserAiPrefs,
   type UserAiPrefs,
   type UserTiersPatch,

@@ -17,7 +17,13 @@ mock.module('../db/workflows', () => ({
   listDashboardRuns: mockListDashboardRuns,
 }));
 
-const mockAbandon = mock((_id: string) => Promise.resolve({ id: 'r1abcdef', workflow_name: 'wf' }));
+const mockAbandon = mock((_id: string) =>
+  Promise.resolve({
+    run: { id: 'r1abcdef', workflow_name: 'wf' },
+    cascadeFailures: 0,
+    blockedParentRunId: null,
+  })
+);
 const mockApprove = mock((_id: string, _c?: string) =>
   Promise.resolve({ workflowName: 'wf', type: 'approval_gate' as const })
 );
@@ -162,6 +168,71 @@ describe('manage_run — reads', () => {
     expect(out).toContain('status: completed');
     expect(out).toContain('finished:');
   });
+
+  test('get does not crash on SQLite rows where timestamps are strings (#2078)', async () => {
+    // SQLite hydrates started_at/completed_at as 'YYYY-MM-DD HH:MM:SS' TEXT
+    // even though the schema type says Date. formatRunDetail must not call
+    // Date methods unguarded — this used to throw and fail interactive resume.
+    mockFindByPrefix.mockResolvedValue([
+      makeRun({
+        status: 'completed',
+        started_at: '2026-07-10 18:26:36' as unknown as Date,
+        completed_at: '2026-07-10 18:30:00' as unknown as Date,
+      }),
+    ]);
+    const tool = buildManageRunTool({ codebaseId: CODEBASE_ID });
+    const out = await tool.handler({ action: 'get', runId: 'r1abcdef' });
+    expect(out).not.toContain('manage_run error');
+    expect(out).toContain('started: 2026-07-10 18:26:36');
+    expect(out).toContain('finished: 2026-07-10 18:30:00');
+  });
+
+  test('get surfaces the structured gate state on a paused interactive_loop run (#2074 E)', async () => {
+    mockFindByPrefix.mockResolvedValue([
+      makeRun({
+        status: 'paused',
+        metadata: {
+          approval: {
+            nodeId: 'refine',
+            message: 'gate',
+            type: 'interactive_loop',
+            iteration: 3,
+            completionSignaled: true,
+            signaledOutput: 'validation PASS — all 42 checks green',
+          },
+        },
+      }),
+    ]);
+    const tool = buildManageRunTool({ codebaseId: CODEBASE_ID });
+    const out = await tool.handler({ action: 'get', runId: 'r1abcdef' });
+    expect(out).toContain('gate: awaiting approval (node refine, iteration 3)');
+    expect(out).toContain('completionSignaled: true');
+    // The finalize hint tells an AI approver how to accept without re-running.
+    expect(out).toContain('FINALIZE');
+    expect(out).toContain('output: validation PASS');
+  });
+
+  test('get shows completionSignaled: false with no finalize hint on a non-signaled gate (#2074 E)', async () => {
+    mockFindByPrefix.mockResolvedValue([
+      makeRun({
+        status: 'paused',
+        metadata: {
+          approval: {
+            nodeId: 'refine',
+            message: 'gate',
+            type: 'interactive_loop',
+            iteration: 1,
+            completionSignaled: false,
+            signaledOutput: null,
+          },
+        },
+      }),
+    ]);
+    const tool = buildManageRunTool({ codebaseId: CODEBASE_ID });
+    const out = await tool.handler({ action: 'get', runId: 'r1abcdef' });
+    expect(out).toContain('completionSignaled: false');
+    expect(out).not.toContain('FINALIZE');
+  });
 });
 
 describe('manage_run — start', () => {
@@ -226,7 +297,11 @@ describe('manage_run — destructive confirmation gate', () => {
 
   test('cancel with confirm cancels the run using the verified full id', async () => {
     mockFindByPrefix.mockResolvedValue([makeRun()]);
-    mockAbandon.mockResolvedValue({ id: 'r1abcdef-1234', workflow_name: 'archon-assist' });
+    mockAbandon.mockResolvedValue({
+      run: { id: 'r1abcdef-1234', workflow_name: 'archon-assist' },
+      cascadeFailures: 0,
+      blockedParentRunId: null,
+    });
     const tool = buildManageRunTool({ codebaseId: CODEBASE_ID });
     const out = await tool.handler({ action: 'cancel', runId: 'r1abcdef', confirm: true });
     expect(out).toContain('Cancelled');
@@ -248,13 +323,70 @@ describe('manage_run — destructive confirmation gate', () => {
     expect(mockApprove).toHaveBeenCalledWith('r1abcdef-1234', 'lgtm');
   });
 
-  test('approve with confirm on an interactive loop reports loop input', async () => {
+  test('approve with confirm and no message on an interactive loop reports the finalize semantics (#2074)', async () => {
     mockFindByPrefix.mockResolvedValue([makeRun({ status: 'paused' })]);
     mockApprove.mockResolvedValue({ workflowName: 'wf', type: 'interactive_loop' });
     const tool = buildManageRunTool({ codebaseId: CODEBASE_ID });
     const out = await tool.handler({ action: 'approve', runId: 'r1abcdef', confirm: true });
-    expect(out).toContain('Loop input recorded');
-    expect(out).not.toContain('Approved');
+    expect(mockApprove).toHaveBeenCalledWith('r1abcdef-1234', undefined);
+    expect(out).toContain('no feedback');
+    expect(out).toContain('finalizes');
+  });
+
+  test('approve with accept:true finalizes even when a message is present (#2074 E)', async () => {
+    mockFindByPrefix.mockResolvedValue([makeRun({ status: 'paused' })]);
+    mockApprove.mockResolvedValue({ workflowName: 'wf', type: 'interactive_loop' });
+    const tool = buildManageRunTool({ codebaseId: CODEBASE_ID });
+    const out = await tool.handler({
+      action: 'approve',
+      runId: 'r1abcdef',
+      confirm: true,
+      accept: true,
+      message: 'looks good',
+    });
+    // accept forces the finalize path: no feedback reaches the gate.
+    expect(mockApprove).toHaveBeenCalledWith('r1abcdef-1234', undefined);
+    expect(out).toContain('finalizes');
+  });
+
+  test('approve with a message on an interactive loop records feedback (iterate) (#2074 E)', async () => {
+    mockFindByPrefix.mockResolvedValue([makeRun({ status: 'paused' })]);
+    mockApprove.mockResolvedValue({ workflowName: 'wf', type: 'interactive_loop' });
+    const tool = buildManageRunTool({ codebaseId: CODEBASE_ID });
+    const out = await tool.handler({
+      action: 'approve',
+      runId: 'r1abcdef',
+      confirm: true,
+      message: 'redo the check',
+    });
+    expect(mockApprove).toHaveBeenCalledWith('r1abcdef-1234', 'redo the check');
+    expect(out).toContain('another iteration');
+  });
+
+  test('approve preview on a signal-bearing gate states the finalize/iterate effect (#2074 E)', async () => {
+    mockFindByPrefix.mockResolvedValue([
+      makeRun({
+        status: 'paused',
+        metadata: {
+          approval: {
+            nodeId: 'refine',
+            message: 'gate',
+            type: 'interactive_loop',
+            iteration: 1,
+            completionSignaled: true,
+            signaledOutput: 'REPORT',
+          },
+        },
+      }),
+    ]);
+    const tool = buildManageRunTool({ codebaseId: CODEBASE_ID });
+    // No confirm → preview. Bare args would finalize.
+    const bare = await tool.handler({ action: 'approve', runId: 'r1abcdef' });
+    expect(bare).toContain('FINALIZE');
+    // A message would iterate.
+    const withMsg = await tool.handler({ action: 'approve', runId: 'r1abcdef', message: 'redo' });
+    expect(withMsg).toContain('ANOTHER iteration');
+    expect(mockApprove).not.toHaveBeenCalled();
   });
 
   test('reject with confirm and no on-reject prompt reports cancellation', async () => {

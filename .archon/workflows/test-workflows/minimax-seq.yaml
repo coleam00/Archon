@@ -1,0 +1,70 @@
+name: minimax-seq
+description: |
+  Sequential RCA for the MiniMax-M3 / Pi stall — nodes chained (no concurrency)
+  so the concurrency confound from minimax-isolate is removed. Disentangles
+  reasoning level (default vs effort:low) from output_format. Each node: 45s
+  idle_timeout + max_attempts 1 (fail fast). Runs a → b → c → d.
+
+  Decisive read:
+    - b (default + structured) STALLS while c (effort:low + structured) PASSES
+      → the default reasoning level is the root cause; low-think is the workaround.
+
+provider: pi
+model: minimax/MiniMax-M3
+
+nodes:
+  - id: a-default-plain
+    idle_timeout: 45000
+    retry:
+      max_attempts: 1
+    prompt: |
+      Reply with exactly the single word: PONG
+
+  - id: b-default-structured
+    idle_timeout: 45000
+    retry:
+      max_attempts: 1
+    depends_on: [a-default-plain]
+    trigger_rule: all_done
+    prompt: |
+      Classify the sentiment of this sentence as positive, negative, or neutral:
+      "I really enjoyed the movie."
+    output_format:
+      type: object
+      properties:
+        sentiment:
+          type: string
+          enum: ["positive", "negative", "neutral"]
+        reasoning:
+          type: string
+      required: [sentiment, reasoning]
+
+  - id: c-low-structured
+    idle_timeout: 45000
+    retry:
+      max_attempts: 1
+    effort: low
+    depends_on: [b-default-structured]
+    trigger_rule: all_done
+    prompt: |
+      Classify the sentiment of this sentence as positive, negative, or neutral:
+      "I really enjoyed the movie."
+    output_format:
+      type: object
+      properties:
+        sentiment:
+          type: string
+          enum: ["positive", "negative", "neutral"]
+        reasoning:
+          type: string
+      required: [sentiment, reasoning]
+
+  - id: d-low-plain
+    idle_timeout: 45000
+    retry:
+      max_attempts: 1
+    effort: low
+    depends_on: [c-low-structured]
+    trigger_rule: all_done
+    prompt: |
+      Reply with exactly the single word: PONG

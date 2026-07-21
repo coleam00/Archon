@@ -13,6 +13,11 @@ export interface ExecutionNodeData extends DagNodeData {
   selected?: boolean;
   currentIteration?: number;
   maxIterations?: number;
+  /** Phase 3 of #975 — surfaced from `DagNodeState.tasks` / `.hooks` so the
+   *  graph card shows at-a-glance subagent / hook activity counts. */
+  activeTaskCount?: number;
+  totalTaskCount?: number;
+  hookCount?: number;
 }
 
 export type ExecutionFlowNode = Node<ExecutionNodeData>;
@@ -69,6 +74,23 @@ function ExecutionDagNodeRender({ data }: NodeProps<ExecutionFlowNode>): React.R
           {data.currentIteration}/{data.maxIterations} iterations
         </div>
       )}
+      {(data.totalTaskCount !== undefined && data.totalTaskCount > 0) ||
+      (data.hookCount !== undefined && data.hookCount > 0) ? (
+        <div className="flex items-center gap-2 text-[10px] text-text-tertiary mt-0.5">
+          {data.totalTaskCount !== undefined && data.totalTaskCount > 0 && (
+            <span title="Subagent tasks">
+              {data.activeTaskCount === data.totalTaskCount
+                ? `${String(data.totalTaskCount)} task${data.totalTaskCount === 1 ? '' : 's'}`
+                : `${String(data.activeTaskCount ?? 0)}/${String(data.totalTaskCount)} tasks`}
+            </span>
+          )}
+          {data.hookCount !== undefined && data.hookCount > 0 && (
+            <span title="Hook callbacks">
+              {String(data.hookCount)} hook{data.hookCount === 1 ? '' : 's'}
+            </span>
+          )}
+        </div>
+      ) : null}
       {data.error && (
         <div className="text-[10px] text-error mt-1 truncate" title={data.error}>
           {data.error.slice(0, 60)}

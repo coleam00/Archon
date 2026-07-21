@@ -33,6 +33,7 @@ Archon provides a unified directory and configuration system with:
 ├── worktrees/                # Legacy global worktrees (for repos not in workspaces/)
 ├── web-dist/<version>/       # Cached web UI dist (archon serve, binary only)
 ├── update-check.json         # Update check cache (binary builds only, 24h TTL)
+├── tier-notice.json          # One-time tier-default notice state (CLI, per version)
 └── config.yaml               # Global user configuration
 ```
 

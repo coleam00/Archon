@@ -71,13 +71,33 @@ export function AssistantConfigPanel(): ReactElement {
   // Guard async setState after unmount (same hook as the sibling panels).
   const cancelledRef = useCancelledRef();
 
-  const onUserDefaultChange = async (value: string): Promise<void> => {
+  // "Just me" chat default: provider + optional model pin (#1998), edited as a
+  // draft and saved atomically (the server clears any model pin not sent with
+  // the provider, so a stale pin can never ride a provider switch).
+  const [userDraft, setUserDraft] = useState<{ provider: string; model: string } | null>(null);
+  const userBaselineRef = useRef('');
+  useEffect(() => {
+    if (userPrefs === undefined) return;
+    const seeded = {
+      provider: userPrefs.defaultProvider ?? '',
+      model: userPrefs.defaultModel ?? '',
+    };
+    setUserDraft(seeded);
+    userBaselineRef.current = JSON.stringify(seeded);
+  }, [userPrefs]);
+  const userDirty = userDraft !== null && JSON.stringify(userDraft) !== userBaselineRef.current;
+
+  const onUserDefaultSave = async (): Promise<void> => {
+    if (userDraft === null) return;
     setSavingUserDefault(true);
     setUserDefaultError(null);
     try {
-      await skill.updateUserDefaultProvider(value === '' ? null : value);
+      await skill.updateUserDefault(
+        userDraft.provider === '' ? null : userDraft.provider,
+        userDraft.provider === '' || userDraft.model === '' ? null : userDraft.model
+      );
       if (cancelledRef.current) return;
-      invalidate(K.userAiPrefs);
+      invalidate(K.userAiPrefs); // refetch re-seeds the draft and clears dirty
     } catch (e: unknown) {
       if (cancelledRef.current) return;
       setUserDefaultError(e instanceof Error ? e.message : 'Failed to save your default.');
@@ -138,11 +158,18 @@ export function AssistantConfigPanel(): ReactElement {
 
   return (
     <SettingsSection title="Defaults">
-      <label className="mb-5 flex items-center gap-[18px]">
+      {/* Lead combo (#1998): "chat runs on [provider][model]" — the install
+          row edits the default assistant + its default model
+          (assistants.<p>.model, shared state with the grid row below); saved
+          by the panel's Save button. */}
+      <label className="mb-5 flex flex-wrap items-center gap-[18px]">
         <span className="w-[150px] shrink-0 text-[13.5px] font-semibold text-text-secondary">
-          Default assistant
+          Chat runs on{' '}
+          <span className="font-mono text-[10px] font-bold uppercase tracking-[0.06em] text-text-tertiary">
+            this install
+          </span>
         </span>
-        <SelectShell className="flex-1">
+        <SelectShell className="w-[180px] shrink-0">
           <select
             value={form.assistant}
             onChange={e => {
@@ -157,21 +184,42 @@ export function AssistantConfigPanel(): ReactElement {
             ))}
           </select>
         </SelectShell>
+        <ModelPickerField
+          // Re-key per agent so picker-internal state never bleeds across a switch.
+          key={form.assistant}
+          agentId={form.assistant}
+          value={form.models[form.assistant] ?? ''}
+          onChange={v => {
+            setModel(form.assistant, v);
+          }}
+          placeholder="model — blank = tier default"
+          selectEmptyLabel="tier default"
+          ariaLabel="Install default chat model"
+          className="min-w-[160px] flex-1"
+          agents={keyData?.agents}
+          piModels={piModels}
+        />
       </label>
 
-      {userScopeAvailable && userPrefs !== undefined ? (
-        <label className="mb-5 flex items-center gap-[18px]">
+      {userScopeAvailable && userDraft !== null ? (
+        <div className="mb-5 flex flex-wrap items-center gap-[18px]">
           <span className="w-[150px] shrink-0 text-[13.5px] font-semibold text-text-secondary">
-            Your default{' '}
+            Chat runs on{' '}
             <span className="font-mono text-[10px] font-bold uppercase tracking-[0.06em] text-text-tertiary">
               just me
             </span>
           </span>
-          <SelectShell className="flex-1">
+          <SelectShell className="w-[180px] shrink-0">
             <select
-              value={userPrefs.defaultProvider ?? ''}
-              onChange={e => void onUserDefaultChange(e.target.value)}
+              value={userDraft.provider}
+              onChange={e => {
+                // Model pin belongs to the provider it was set with — clear it
+                // on a switch (mirrors the atomic server write).
+                const provider = e.target.value;
+                setUserDraft({ provider, model: '' });
+              }}
               disabled={savingUserDefault}
+              aria-label="Your default assistant"
               className={`${SELECT_CLASS_COMPACT} py-[11px] pl-3.5 text-[13.5px]`}
             >
               <option value="">Inherit (this install)</option>
@@ -182,10 +230,37 @@ export function AssistantConfigPanel(): ReactElement {
               ))}
             </select>
           </SelectShell>
+          <ModelPickerField
+            key={userDraft.provider}
+            agentId={userDraft.provider}
+            value={userDraft.model}
+            onChange={v => {
+              setUserDraft(d => (d === null ? d : { ...d, model: v }));
+            }}
+            disabled={savingUserDefault || userDraft.provider === ''}
+            placeholder={
+              userDraft.provider === '' ? 'inherit (this install)' : 'model — blank = tier default'
+            }
+            selectEmptyLabel="tier default"
+            ariaLabel="Your default chat model"
+            className="min-w-[160px] flex-1"
+            agents={keyData?.agents}
+            piModels={piModels}
+          />
+          {userDirty ? (
+            <button
+              type="button"
+              onClick={() => void onUserDefaultSave()}
+              disabled={savingUserDefault}
+              className="rounded-[10px] border border-border px-3.5 py-2 text-[12.5px] font-bold text-text-primary transition-colors hover:bg-surface-elevated disabled:opacity-40"
+            >
+              {savingUserDefault ? 'Saving…' : 'Save'}
+            </button>
+          ) : null}
           {userDefaultError !== null ? (
             <span className="font-mono text-[11px] text-error">{userDefaultError}</span>
           ) : null}
-        </label>
+        </div>
       ) : null}
 
       <div className="flex flex-col gap-[11px]">
@@ -228,7 +303,7 @@ export function AssistantConfigPanel(): ReactElement {
                   onChange={v => {
                     setModel(p.id, v);
                   }}
-                  placeholder="model (e.g. sonnet, gpt-5.3-codex) — blank = inherit"
+                  placeholder="model (e.g. sonnet, gpt-5.6-sol) — blank = inherit"
                   selectEmptyLabel="inherit"
                   ariaLabel={`${p.displayName} default model`}
                   className="w-full"

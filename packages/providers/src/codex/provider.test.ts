@@ -87,7 +87,9 @@ describe('CodexProvider', () => {
         thinkingControl: false,
         fallbackModel: false,
         sandbox: false,
+        settingSources: false,
         nativeTools: false,
+        containerExec: false,
       });
     });
   });
@@ -729,7 +731,52 @@ describe('CodexProvider', () => {
         type: 'result',
         sessionId: 'fallback-thread',
         tokens: { input: 10, output: 5 },
+        // A requested resume that fell back to a fresh thread is reported as cold.
+        resumed: false,
       });
+    });
+
+    test('reports resumed:true on the result when an existing thread resumes', async () => {
+      mockRunStreamed.mockResolvedValue({
+        events: (async function* () {
+          yield { type: 'turn.completed', usage: defaultUsage };
+        })(),
+      });
+
+      const chunks = [];
+      for await (const chunk of client.sendQuery('test', '/workspace', 'existing-thread')) {
+        chunks.push(chunk);
+      }
+
+      expect(chunks.find(c => c.type === 'result')).toMatchObject({ resumed: true });
+    });
+
+    test('reports resumed:false when a resumed thread retries cold after a transient crash', async () => {
+      // Attempt 0 resumes the thread, then the turn crashes. The retry re-runs on
+      // a fresh startThread (cold), so the produced result must report resumed:false
+      // rather than inheriting the initial resume's success (see CodeRabbit #1842).
+      let callCount = 0;
+      mockRunStreamed.mockImplementation(() => {
+        callCount++;
+        if (callCount === 1) {
+          return Promise.reject(new Error('Codex Exec exited with code 1'));
+        }
+        return Promise.resolve({
+          events: (async function* () {
+            yield { type: 'turn.completed', usage: defaultUsage };
+          })(),
+        });
+      });
+
+      const chunks = [];
+      for await (const chunk of client.sendQuery('test', '/workspace', 'existing-thread')) {
+        chunks.push(chunk);
+      }
+
+      expect(mockResumeThread).toHaveBeenCalled();
+      // The retry path created a fresh thread, dropping the resumed session context.
+      expect(mockStartThread).toHaveBeenCalled();
+      expect(chunks.find(c => c.type === 'result')).toMatchObject({ resumed: false });
     });
 
     test('passes model and codex options via assistantConfig to thread options', async () => {
@@ -740,7 +787,7 @@ describe('CodexProvider', () => {
       });
 
       for await (const _ of client.sendQuery('test prompt', '/workspace', undefined, {
-        model: 'gpt-5.2-codex',
+        model: 'gpt-5.6-sol',
         assistantConfig: {
           modelReasoningEffort: 'medium',
           webSearchMode: 'live',
@@ -752,7 +799,7 @@ describe('CodexProvider', () => {
 
       expect(mockStartThread).toHaveBeenCalledWith(
         expect.objectContaining({
-          model: 'gpt-5.2-codex',
+          model: 'gpt-5.6-sol',
           modelReasoningEffort: 'medium',
           webSearchMode: 'live',
           additionalDirectories: ['/other/repo'],
@@ -1442,7 +1489,7 @@ describe('CodexProvider', () => {
       await expect(consumeGenerator()).rejects.toThrow(
         'Model "gpt-5.3-codex" is not available for your account'
       );
-      await expect(consumeGenerator()).rejects.toThrow('model: gpt-5.2-codex');
+      await expect(consumeGenerator()).rejects.toThrow('model: gpt-5.6-sol');
     });
 
     test('uses generic dashboard guidance when fallback mapping is unknown', async () => {
@@ -1494,6 +1541,138 @@ describe('CodexProvider', () => {
         type: 'result',
         sessionId: 'new-thread-id',
         tokens: { input: 10, output: 5 },
+      });
+    });
+
+    describe('systemPrompt delivery (issue #1837)', () => {
+      // The Codex SDK has no instructions/system-prompt channel, so the
+      // provider must fold systemPrompt into the prompt string it hands to
+      // thread.runStreamed. These tests assert on that SDK boundary.
+      const seedRun = (): void => {
+        mockRunStreamed.mockResolvedValue({
+          events: (async function* () {
+            yield { type: 'turn.completed', usage: defaultUsage };
+          })(),
+        });
+      };
+
+      const drain = async (gen: AsyncGenerator<unknown>): Promise<void> => {
+        for await (const _ of gen) {
+          // consume
+        }
+      };
+
+      test('prepends a string systemPrompt to the prompt with a --- delimiter', async () => {
+        seedRun();
+
+        await drain(
+          client.sendQuery('test prompt', '/workspace', undefined, {
+            systemPrompt: 'AAA routing rules',
+          })
+        );
+
+        expect(mockRunStreamed).toHaveBeenCalledWith(
+          'AAA routing rules\n\n---\n\ntest prompt',
+          expect.anything()
+        );
+      });
+
+      test('joins a string[] systemPrompt with blank lines before prepending', async () => {
+        seedRun();
+
+        await drain(
+          client.sendQuery('test prompt', '/workspace', undefined, {
+            systemPrompt: ['part one', 'part two'],
+          })
+        );
+
+        expect(mockRunStreamed).toHaveBeenCalledWith(
+          'part one\n\npart two\n\n---\n\ntest prompt',
+          expect.anything()
+        );
+      });
+
+      test('drops a Claude-specific preset object with a WARN and keeps the prompt unchanged', async () => {
+        seedRun();
+
+        await drain(
+          client.sendQuery('test prompt', '/workspace', undefined, {
+            systemPrompt: { type: 'preset', preset: 'claude_code', append: 'extra' },
+          })
+        );
+
+        expect(mockRunStreamed).toHaveBeenCalledWith('test prompt', expect.anything());
+        expect(mockLogger.warn).toHaveBeenCalledWith(
+          expect.objectContaining({ systemPromptType: 'object' }),
+          'codex.system_prompt_dropped_preset'
+        );
+      });
+
+      test('passes the prompt unchanged when no systemPrompt is set', async () => {
+        seedRun();
+
+        await drain(client.sendQuery('test prompt', '/workspace'));
+
+        expect(mockRunStreamed).toHaveBeenCalledWith('test prompt', expect.anything());
+      });
+
+      test('passes the prompt unchanged when systemPrompt is whitespace-only', async () => {
+        seedRun();
+
+        await drain(
+          client.sendQuery('test prompt', '/workspace', undefined, {
+            systemPrompt: '   ',
+          })
+        );
+
+        expect(mockRunStreamed).toHaveBeenCalledWith('test prompt', expect.anything());
+      });
+
+      test('honors node-level nodeConfig.systemPrompt (workflow path)', async () => {
+        seedRun();
+
+        await drain(
+          client.sendQuery('test prompt', '/workspace', undefined, {
+            nodeConfig: { systemPrompt: 'node-level instructions' },
+          })
+        );
+
+        expect(mockRunStreamed).toHaveBeenCalledWith(
+          'node-level instructions\n\n---\n\ntest prompt',
+          expect.anything()
+        );
+      });
+
+      test('request-level systemPrompt wins over nodeConfig.systemPrompt', async () => {
+        seedRun();
+
+        await drain(
+          client.sendQuery('test prompt', '/workspace', undefined, {
+            systemPrompt: 'request-level',
+            nodeConfig: { systemPrompt: 'node-level' },
+          })
+        );
+
+        expect(mockRunStreamed).toHaveBeenCalledWith(
+          'request-level\n\n---\n\ntest prompt',
+          expect.anything()
+        );
+      });
+
+      test('prepends on resumed threads too (every turn, not first turn only)', async () => {
+        seedRun();
+
+        await drain(
+          client.sendQuery('follow-up prompt', '/workspace', 'existing-session-id', {
+            systemPrompt: 'AAA routing rules',
+          })
+        );
+
+        expect(mockResumeThread).toHaveBeenCalledWith('existing-session-id', expect.anything());
+        expect(mockRunStreamed).toHaveBeenCalledWith(
+          'AAA routing rules\n\n---\n\nfollow-up prompt',
+          expect.anything()
+        );
       });
     });
 

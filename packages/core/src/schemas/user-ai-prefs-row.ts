@@ -20,6 +20,7 @@ export const userAiPrefsRowSchema = z.object({
   tiers: z.string().nullable(),
   aliases: z.string().nullable(),
   default_provider: z.string().nullable(),
+  default_model: z.string().nullable(),
   created_at: dbTimestamp,
   updated_at: dbTimestamp,
 });

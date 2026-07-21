@@ -200,6 +200,16 @@ export type MessageChunk =
       stopReason?: string;
       numTurns?: number;
       modelUsage?: Record<string, unknown>;
+      /**
+       * Outcome of a session-resume attempt, so a failed resume is observable
+       * instead of silently continuing with a fresh (cold) session:
+       *   - `true`   a resume was requested and the prior session was restored
+       *   - `false`  a resume was requested but the provider fell back to fresh
+       *   - omitted  no resume was requested
+       * Set only when `resumeSessionId` was passed. Consumers (the dag-executor)
+       * use `false` to surface a warning rather than swallow the loss.
+       */
+      resumed?: boolean;
     }
   | { type: 'rate_limit'; rateLimitInfo: Record<string, unknown> }
   | {
@@ -219,6 +229,69 @@ export type MessageChunk =
       /** Matching ID for the originating `tool` chunk. See `tool` variant above. */
       toolCallId?: string;
     }
+  // ─── Subagent Task Lifecycle (Claude SDK `system` subtypes) ────────────
+  // Forwarded by the Claude provider from SDKTaskStartedMessage /
+  // SDKTaskProgressMessage / SDKTaskNotificationMessage. Downstream (workflow
+  // executor → SSE bridge) aggregates these into `task_activity` emitter
+  // events so the Web UI can render subagent visibility per workflow node.
+  // `skip_transcript` housekeeping tasks are filtered out at the provider
+  // boundary and never reach this surface.
+  | {
+      type: 'task_started';
+      taskId: string;
+      description: string;
+      taskType?: string;
+      prompt?: string;
+      toolUseId?: string;
+    }
+  | {
+      type: 'task_progress';
+      taskId: string;
+      description: string;
+      summary?: string;
+      usage?: { total_tokens: number; tool_uses: number; duration_ms: number };
+      lastToolName?: string;
+      toolUseId?: string;
+    }
+  | {
+      type: 'task_notification';
+      taskId: string;
+      status: 'completed' | 'failed' | 'stopped';
+      summary: string;
+      outputFile: string;
+      usage?: { total_tokens: number; tool_uses: number; duration_ms: number };
+      toolUseId?: string;
+    }
+  // Forwarded from SDKBackgroundTasksChangedMessage (`background_tasks_changed`,
+  // Claude SDK v0.3.209+): the FULL set of live background tasks, emitted
+  // whenever membership changes. Level signal with REPLACE semantics — consumers
+  // swap their set for each payload (an empty array means no background work is
+  // running). The dag-executor gates node completion on this: a `result` chunk
+  // that arrives while the set is non-empty must not tear down the stream, or
+  // the SDK subprocess (and the tasks' pending artifacts) get killed (#2083).
+  | {
+      type: 'background_tasks';
+      tasks: { taskId: string; taskType: string; description: string }[];
+    }
+  // ─── Hook Lifecycle (Claude SDK `system` subtypes) ─────────────────────
+  // Forwarded by the Claude provider from SDKHookStartedMessage /
+  // SDKHookResponseMessage. Same aggregation path as task_* above; the bridge
+  // emits `hook_activity` for inline indicators like
+  // `PreToolUse(Bash) → approved` under the parent node.
+  | {
+      type: 'hook_started';
+      hookId: string;
+      hookName: string;
+      hookEvent: string;
+    }
+  | {
+      type: 'hook_response';
+      hookId: string;
+      hookName: string;
+      hookEvent: string;
+      outcome: 'success' | 'error' | 'cancelled';
+      exitCode?: number;
+    }
   | { type: 'workflow_dispatch'; workerConversationId: string; workflowName: string };
 
 /**
@@ -234,6 +307,106 @@ export interface SystemPromptPreset {
 }
 
 export type SystemPromptInput = string | string[] | SystemPromptPreset;
+
+/**
+ * Where a provider turn (or a deterministic bash/script subprocess) runs.
+ *  - `host`      — directly on the Archon host process, inheriting its environment.
+ *    This is today's behavior and the default everywhere.
+ *  - `container` — inside a prepared isolation container (the folder-project
+ *    container backend). The provider spawns its CLI via `docker exec` and
+ *    receives only the Archon-managed env bag; `containerId` identifies the
+ *    running container and `execUser` optionally pins the in-container uid/user.
+ *
+ * Plain data with zero SDK / `@archon/*` dependencies, so this contract layer
+ * (which forbids cross-package imports) can own it while `@archon/isolation`
+ * (which produces it) and `@archon/workflows` (which threads it) both import it.
+ * Consumed by providers only after the engine's per-node capability fail-fast
+ * (Phase B) — a `container` value reaching a provider that can't honor it is a
+ * bug the executor prevents, not something the provider silently downgrades.
+ */
+export type ExecutionContext =
+  | { kind: 'host' }
+  | { kind: 'container'; containerId: string; execUser?: string };
+
+/**
+ * Container write-back contract (folder-project container backend, Phase C).
+ *
+ * These plain-data shapes describe the overlay diff of a finished container run
+ * and the outcome of applying it to the live root. They live in this zero-dep
+ * contract layer for the SAME cross-boundary reason as {@link ExecutionContext}:
+ * `@archon/isolation` PRODUCES them (the container backend's overlay walk) and
+ * `@archon/workflows` CONSUMES them (the engine's write-back gate), and neither
+ * package may import the other — so the shared shape can only live here.
+ */
+
+/**
+ * Summary of the changes an overlay upper layer holds relative to the read-only
+ * lower (the live project root). By overlayfs construction the upper layer IS the
+ * diff, so this is a directory walk, not a tree comparison. File lists are capped
+ * (see `truncated`); `totalCount` is the true total across all three categories.
+ */
+export interface OverlayChangeSummary {
+  /** Regular files present in the upper but absent from the lower (new files). */
+  added: string[];
+  /** Regular files present in both (the run overwrote an existing file). */
+  modified: string[];
+  /** Paths whited-out in the upper (the run deleted a lower file). */
+  deleted: string[];
+  /**
+   * Symlinks the run created/changed, shown as `path -> target`. `escapes` marks a
+   * target that resolves outside the project root — apply REFUSES those (reproducing
+   * them would be a foothold / secret-exfiltration vector); the approver sees them
+   * flagged in the summary.
+   */
+  symlinks: { path: string; target: string; escapes: boolean }[];
+  /**
+   * Entries the walk refused to reproduce and apply will skip: special files
+   * (block/char/fifo/socket that aren't overlay whiteouts), escaping symlinks, and
+   * unsafe whiteout names. Surfaced so the summary never over-promises what apply does.
+   */
+  skipped: { path: string; reason: string }[];
+  /** True when any list was capped — more changes exist than are listed. */
+  truncated: boolean;
+  /** True count of changed paths (added + modified + deleted + symlinks), pre-cap. */
+  totalCount: number;
+}
+
+/**
+ * Result of `finalize()` — whether the finished run needs a write-back approval
+ * gate, plus the change summary to show the reviewer. `requiresApproval` is
+ * false when the overlay is empty (no changes → complete without a gate).
+ */
+export interface WriteBackFinalizeResult {
+  requiresApproval: boolean;
+  changeSummary?: OverlayChangeSummary;
+}
+
+/**
+ * Result of `applyChanges()` — what actually landed on the live root. Reported
+ * in the completion message and the `writeback_applied` event. `warnings` carries
+ * per-file issues (e.g. an opaque-directory replace overlay-native can't express)
+ * without failing the whole apply.
+ */
+export interface WriteBackApplySummary {
+  filesApplied: number;
+  filesDeleted: number;
+  warnings: string[];
+}
+
+/**
+ * Env keys NEVER forwarded into a container via `docker exec -e` — the runner
+ * image sets these correctly and a host/project value would break in-container
+ * resolution (PATH must point at the in-container binaries; HOME must be the
+ * container user's home). Shared by BOTH container exec paths (the Claude spawn
+ * hook and the bash/script deterministic exec) so their env policy can't drift.
+ */
+export const CONTAINER_ENV_DENYLIST: ReadonlySet<string> = new Set([
+  'PATH',
+  'HOME',
+  'PWD',
+  'OLDPWD',
+  'SHLVL',
+]);
 
 /**
  * Universal request options accepted by all providers.
@@ -318,6 +491,18 @@ export interface NodeConfig {
   >;
   allowed_tools?: string[];
   denied_tools?: string[];
+  /**
+   * Portable per-node Pi extension-posture override (issue #2133). Carries the
+   * workflow-YAML `pi:` block — the highest-precedence layer over the
+   * install-level `assistants.pi.nodes.<nodeId>` map (#2124) and assistant-level
+   * defaults. Consumed only by the Pi provider (`resolvePiExtensionSettings`);
+   * other providers ignore it. It is exactly the extension-posture subset of
+   * `PiProviderDefaults`, so we derive it rather than re-declare the fields. The
+   * workflows-side authoring schema (`PiNodeConfig` in @archon/workflows) is a
+   * separate hand-mirror only because that package can't import runtime values
+   * across the @archon/providers/types contract boundary.
+   */
+  pi?: Pick<PiProviderDefaults, 'enableExtensions' | 'interactive' | 'extensionFlags'>;
   effort?: string;
   thinking?: unknown;
   sandbox?: unknown;
@@ -326,7 +511,22 @@ export interface NodeConfig {
   maxBudgetUsd?: number;
   systemPrompt?: SystemPromptInput;
   fallbackModel?: string;
+  /**
+   * Per-node override for Claude Code settingSources — which filesystem
+   * setting sources the SDK loads (CLAUDE.md, skills, commands, agents).
+   * Overrides the assistant-level default; falls back to ['project', 'user']
+   * when neither is set. Claude-only; other providers ignore it (the
+   * dag-executor warns via the settingSources capability axis).
+   */
+  settingSources?: ('project' | 'user')[];
   idle_timeout?: number;
+  /**
+   * Per-node override for Claude's `agentProgressSummaries` flag (Phase 4 of #975).
+   * When unset, workflow nodes default to `true` (so the Web UI gets AI-generated
+   * `summary` fields on `task_progress` every ~30s). Authors can explicitly set
+   * `false` to opt out for a specific node.
+   */
+  agentProgressSummaries?: boolean;
   [key: string]: unknown;
 }
 
@@ -340,6 +540,16 @@ export interface SendQueryOptions extends AgentRequestOptions {
   nodeConfig?: NodeConfig;
   /** Per-provider defaults from .archon/config.yaml assistants section. */
   assistantConfig?: Record<string, unknown>;
+  /**
+   * Execution target for this turn. Absent / `{ kind: 'host' }` runs the provider
+   * on the Archon host — the only value the engine produces today, so this field
+   * is currently inert plumbing that every provider can safely ignore.
+   * `{ kind: 'container', … }` will (Phase B) tell a capable provider (Claude
+   * first) to spawn its CLI inside the prepared container. Phase B will also add
+   * a provider capability flag plus a pre-dispatch fail-fast so a `container`
+   * value can never reach a provider that cannot honor it.
+   */
+  execContext?: ExecutionContext;
 }
 
 /**
@@ -354,6 +564,23 @@ export interface ProviderCapabilities {
   /** Whether the provider supports inline sub-agent definitions (Claude SDK's options.agents). */
   agents: boolean;
   toolRestrictions: boolean;
+  /**
+   * Built-in tool-name vocabulary for advisory validation of
+   * `allowed_tools`/`denied_tools` entries. When present, workflow validation
+   * warns (never errors) on entries not in this list — after stripping a
+   * `Tool(specifier)` suffix and skipping `mcp__*` names, which are dynamic
+   * per-install. When absent, the check is skipped entirely: providers without
+   * a stable audited vocabulary opt out simply by not declaring one, keeping
+   * their tool names out of the shared schema.
+   */
+  knownToolNames?: readonly string[];
+  /**
+   * Old tool name → current tool name, for tools the provider's SDK has
+   * renamed (e.g. Claude's `Task` → `Agent`). Lets validation give a precise
+   * "renamed" hint instead of a generic unknown-name warning, since a stale
+   * name is a silent no-op at runtime.
+   */
+  renamedTools?: Readonly<Record<string, string>>;
   /**
    * Structured-output guarantee tier for `output_format`:
    *  - `'enforced'`    — SDK/backend grammar-constrains decoding (Claude, Codex,
@@ -371,8 +598,25 @@ export interface ProviderCapabilities {
   thinkingControl: boolean;
   fallbackModel: boolean;
   sandbox: boolean;
+  /**
+   * Whether the provider honors the per-node `settingSources` override (which
+   * filesystem setting sources the agent loads: CLAUDE.md, skills, commands,
+   * agents). `true` for Claude only — the Claude Agent SDK's `settingSources`
+   * option; other providers have no equivalent knob.
+   */
+  settingSources: boolean;
   /** Whether the provider can register in-process `NativeTool`s for a turn. */
   nativeTools: boolean;
+  /**
+   * Whether the provider can execute inside the folder-project container backend
+   * (`execContext.kind === 'container'`) — i.e. it knows how to spawn its CLI via
+   * `docker exec` rather than a local process. `true` for Claude
+   * (`spawnClaudeCodeProcess` hook). The engine's pre-dispatch fail-fast rejects
+   * a container run whose resolved provider has this `false`, so an unsupported
+   * provider can never silently downgrade to running on the host. Codex/Pi/
+   * community providers set `false` until they implement their in-container path.
+   */
+  containerExec: boolean;
 }
 
 /**

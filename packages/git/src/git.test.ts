@@ -1216,6 +1216,108 @@ branch refs/heads/feature/auth
     });
   });
 
+  describe('getCurrentBranch', () => {
+    let execSpy: Mock<typeof git.execFileAsync>;
+
+    beforeEach(() => {
+      execSpy = spyOn(git, 'execFileAsync');
+    });
+
+    afterEach(() => {
+      execSpy.mockRestore();
+    });
+
+    test('returns branch name when on a named branch', async () => {
+      execSpy.mockResolvedValue({ stdout: 'main\n', stderr: '' });
+
+      const result = await git.getCurrentBranch('/workspace/repo' as git.RepoPath);
+
+      expect(result).toBe('main');
+      expect(execSpy).toHaveBeenCalledWith(
+        'git',
+        ['-C', '/workspace/repo', 'symbolic-ref', '--short', 'HEAD'],
+        { timeout: 10000 }
+      );
+    });
+
+    test('returns null for empty stdout (detached HEAD)', async () => {
+      execSpy.mockResolvedValue({ stdout: '', stderr: '' });
+
+      expect(await git.getCurrentBranch('/workspace/repo' as git.RepoPath)).toBeNull();
+    });
+
+    test('returns null for whitespace-only stdout', async () => {
+      execSpy.mockResolvedValue({ stdout: '   \n', stderr: '' });
+
+      expect(await git.getCurrentBranch('/workspace/repo' as git.RepoPath)).toBeNull();
+    });
+
+    test('returns null on any git error (detached HEAD, ENOENT, not a git repo)', async () => {
+      execSpy.mockRejectedValue(new Error('fatal: not a git repository'));
+
+      expect(await git.getCurrentBranch('/workspace/repo' as git.RepoPath)).toBeNull();
+    });
+
+    test('returns null on ENOENT (path not found)', async () => {
+      const error = Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      execSpy.mockRejectedValue(error);
+
+      expect(await git.getCurrentBranch('/nonexistent' as git.RepoPath)).toBeNull();
+    });
+  });
+
+  describe('countCommitsAhead', () => {
+    let execSpy: Mock<typeof git.execFileAsync>;
+
+    beforeEach(() => {
+      execSpy = spyOn(git, 'execFileAsync');
+    });
+
+    afterEach(() => {
+      execSpy.mockRestore();
+    });
+
+    test('returns commit count when ahead of origin', async () => {
+      execSpy.mockResolvedValue({ stdout: '3\n', stderr: '' });
+
+      const result = await git.countCommitsAhead(
+        '/workspace/repo' as git.RepoPath,
+        'main' as git.BranchName
+      );
+
+      expect(result).toBe(3);
+      expect(execSpy).toHaveBeenCalledWith(
+        'git',
+        ['-C', '/workspace/repo', 'rev-list', '--count', 'origin/main..HEAD'],
+        { timeout: 10000 }
+      );
+    });
+
+    test('returns 0 when in sync', async () => {
+      execSpy.mockResolvedValue({ stdout: '0\n', stderr: '' });
+
+      expect(
+        await git.countCommitsAhead('/workspace/repo' as git.RepoPath, 'main' as git.BranchName)
+      ).toBe(0);
+    });
+
+    test('returns 0 for NaN stdout (malformed git output)', async () => {
+      execSpy.mockResolvedValue({ stdout: 'not-a-number\n', stderr: '' });
+
+      expect(
+        await git.countCommitsAhead('/workspace/repo' as git.RepoPath, 'main' as git.BranchName)
+      ).toBe(0);
+    });
+
+    test('returns 0 on any error (origin branch missing, ENOENT, etc.)', async () => {
+      execSpy.mockRejectedValue(new Error("fatal: unknown revision 'origin/main..HEAD'"));
+
+      expect(
+        await git.countCommitsAhead('/workspace/repo' as git.RepoPath, 'main' as git.BranchName)
+      ).toBe(0);
+    });
+  });
+
   describe('isAncestorOf', () => {
     let execSpy: Mock<typeof git.execFileAsync>;
 
@@ -2038,6 +2140,52 @@ branch refs/heads/feature/auth
       execSpy.mockRejectedValue(new Error('fatal: permission denied'));
 
       await expect(git.findRepoRoot('/workspace/repo')).rejects.toThrow('Failed to find repo root');
+    });
+  });
+
+  describe('listChildRepos', () => {
+    const root = join(tmpdir(), 'archon-childrepos-test-' + Date.now());
+
+    beforeEach(async () => {
+      await realMkdir(root, { recursive: true });
+    });
+
+    afterEach(async () => {
+      await rm(root, { recursive: true, force: true });
+    });
+
+    test('lists immediate child directories that contain .git, sorted', async () => {
+      // Two git repos (svc-b, svc-a), one plain dir, one .git as a file (worktree)
+      await realMkdir(join(root, 'svc-a', '.git'), { recursive: true });
+      await realMkdir(join(root, 'svc-b', '.git'), { recursive: true });
+      await realMkdir(join(root, 'docs'), { recursive: true });
+      await realMkdir(join(root, 'svc-c'), { recursive: true });
+      await writeFile(join(root, 'svc-c', '.git'), 'gitdir: /elsewhere\n');
+
+      const result = await git.listChildRepos(root);
+      expect(result).toEqual(['svc-a', 'svc-b', 'svc-c']);
+    });
+
+    test('returns empty array when no child repos exist', async () => {
+      await realMkdir(join(root, 'plain-a'), { recursive: true });
+      await realMkdir(join(root, 'plain-b'), { recursive: true });
+
+      const result = await git.listChildRepos(root);
+      expect(result).toEqual([]);
+    });
+
+    test('does not recurse into nested repos', async () => {
+      await realMkdir(join(root, 'svc-a', '.git'), { recursive: true });
+      // Nested repo one level deeper — must NOT be reported
+      await realMkdir(join(root, 'svc-a', 'inner', '.git'), { recursive: true });
+
+      const result = await git.listChildRepos(root);
+      expect(result).toEqual(['svc-a']);
+    });
+
+    test('returns empty array for an unreadable/nonexistent root (never throws)', async () => {
+      const result = await git.listChildRepos(join(root, 'does-not-exist'));
+      expect(result).toEqual([]);
     });
   });
 

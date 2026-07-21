@@ -266,9 +266,9 @@ Only user-defined workflows can be deleted. Bundled defaults cannot be removed.
 | GET | `/api/workflows/runs/by-worker/{platformId}` | Look up a run by worker conversation ID |
 | POST | `/api/workflows/runs/{runId}/cancel` | Cancel a running workflow |
 | POST | `/api/workflows/runs/{runId}/resume` | Resume a failed workflow |
-| POST | `/api/workflows/runs/{runId}/abandon` | Abandon a non-terminal run |
-| POST | `/api/workflows/runs/{runId}/approve` | Approve a paused workflow |
-| POST | `/api/workflows/runs/{runId}/reject` | Reject a paused workflow |
+| POST | `/api/workflows/runs/{runId}/abandon` | Abandon a run (running, paused, or failed); cascade-cancels non-terminal `workflow:` sub-run descendants |
+| POST | `/api/workflows/runs/{runId}/approve` | Approve a paused workflow (400 if paused blocked on a `workflow:` child — approve the child) |
+| POST | `/api/workflows/runs/{runId}/reject` | Reject a paused workflow (400 if paused blocked on a `workflow:` child — reject the child) |
 | DELETE | `/api/workflows/runs/{runId}` | Delete a terminal run and its events |
 
 #### Run a Workflow
@@ -316,6 +316,8 @@ curl -X POST http://localhost:3090/api/workflows/runs/{runId}/reject \
   -H "Content-Type: application/json" \
   -d '{"reason": "Please add error handling first"}'
 ```
+
+**Sub-run child gates (#2121 Phase 2):** when a `workflow:` sub-run pauses at its own gate, its parent run pauses "blocked on child". Approve/reject the **child** run (its id is in the parent's block message) — the parent auto-resumes when the child completes. Calling approve/reject on the *parent's* id while it is blocked on a child returns **400** with a redirect to the child id. `abandon` on a parent cascade-cancels its non-terminal sub-run descendants; the response's `cascadeFailures` is non-zero if part of the tree could not be reached, and `blockedParentRunId` is set when the abandoned run was itself a child stranding a paused parent.
 
 ---
 
@@ -396,7 +398,7 @@ Each user can override the install-wide model config with **personal** tiers, `@
 | GET | `/api/auth/me/ai-prefs` | The current user's stored prefs (raw layer, not merged) |
 | PATCH | `/api/auth/me/ai-prefs/tiers` | Update personal tier presets (per-key merge; `null` unsets) |
 | PATCH | `/api/auth/me/ai-prefs/aliases` | Update personal `@custom` aliases (per-key merge; `null` unsets) |
-| PATCH | `/api/auth/me/ai-prefs/default` | Set (or clear with `null`) the personal default assistant |
+| PATCH | `/api/auth/me/ai-prefs/default` | Set (or clear with `null`) the personal default assistant + default chat model (`{ provider, model? }` — written atomically; an omitted `model` clears any pin, and `model` without a `provider` is rejected) |
 
 ```bash
 # Point YOUR `large` tier at opus without touching the install config
@@ -412,7 +414,7 @@ All writes validate the provider (registered), effort (provider vocabulary), and
 
 ## AI Provider Credentials
 
-Per-user provider credentials let each user bill their runs and chats to **their own** API key or subscription instead of the shared install key. Unlike the config routes above, these endpoints are **gated**: they require `TOKEN_ENCRYPTION_KEY` (a 64-char hex secret) to be set *and* a resolved web identity (the `X-Archon-User` header, or a Better Auth session). On a solo install with no `TOKEN_ENCRYPTION_KEY`, `GET /api/auth/providers` returns `enabled: false` and the write routes return `404`.
+Per-user provider credentials let each user bill their runs and chats to **their own** API key or subscription instead of the shared install key. These endpoints require a resolved web identity (`X-Archon-User` header or a Better Auth session) — `GET /api/auth/providers` returns `401` without one. The encryption key is auto-provisioned on every install; `TOKEN_ENCRYPTION_KEY` is an optional override for managed deployments.
 
 | Method | Path | Description |
 |--------|------|-------------|

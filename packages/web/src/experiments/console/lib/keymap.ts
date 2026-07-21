@@ -20,9 +20,13 @@
  *
  * Each useKeymap call owns its own chord buffer. Today multiple buffers
  * coexist (ConsoleApp + the active route) without collision because no
- * prefix keys overlap across them; if a future binding adds a chord
- * starting with `g`, `p`, `n`, or `?`, the chord buffers must be unified
- * (e.g. lifted into a context) before that ships.
+ * prefix keys overlap across simultaneously-mounted keymaps. The current
+ * reservations: ConsoleApp owns the single keys `p`, `?`, `,` everywhere;
+ * the `g` chord prefix is owned by route-level keymaps that never co-mount
+ * (RunsPage `g g`, the builder's `g *` chords). Adding a binding whose
+ * prefix overlaps another keymap that mounts at the same time requires
+ * unifying the chord buffers first (e.g. lifted into a context) — a
+ * same-prefix chord in two live buffers double-arms and drops keys.
  */
 
 import { useEffect } from 'react';

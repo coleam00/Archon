@@ -89,11 +89,21 @@ DISCORD_STREAMING_MODE=batch  # batch (default) | stream
 
 For streaming mode details, see [Configuration](/getting-started/configuration/).
 
+## Configure Mention Requirement (Optional)
+
+By default the bot only activates in servers when @mentioned (DMs are exempt). On single-user or private servers you can opt out so the bot responds to any authorized message:
+
+```ini
+DISCORD_REQUIRE_MENTION=false  # true (default) | false
+```
+
+Only the literal value `false` disables the mention requirement. Mentions that are present are still stripped from the message.
+
 ## Usage
 
 The bot responds to:
 - **Direct Messages**: Just send messages directly
-- **Server Channels**: @mention the bot (e.g., `@YourBotName help me with this code`)
+- **Server Channels**: @mention the bot (e.g., `@YourBotName help me with this code`) — or any authorized message when `DISCORD_REQUIRE_MENTION=false`
 - **Threads**: Bot maintains context in thread conversations
 
 ## Further Reading

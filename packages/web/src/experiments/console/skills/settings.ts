@@ -182,6 +182,8 @@ export interface UserAiPrefs {
   tiers?: TiersMap;
   aliases?: Record<string, TierEntry>;
   defaultProvider?: string;
+  /** Per-user default CHAT model (#1998) — only meaningful with defaultProvider. */
+  defaultModel?: string;
 }
 
 export function getUserAiPrefs(): Promise<UserAiPrefs> {
@@ -202,10 +204,18 @@ export function updateUserAliases(body: UpdateAliasesBody): Promise<UserAiPrefs>
   });
 }
 
-export function updateUserDefaultProvider(provider: string | null): Promise<UserAiPrefs> {
+/**
+ * Set the per-user default assistant + default chat model. Written atomically
+ * by the server: an omitted/null model clears any previous pin, and a model
+ * without a provider is rejected (400).
+ */
+export function updateUserDefault(
+  provider: string | null,
+  model: string | null
+): Promise<UserAiPrefs> {
   return requestJson<UserAiPrefs>('/api/auth/me/ai-prefs/default', {
     method: 'PATCH',
-    body: JSON.stringify({ provider }),
+    body: JSON.stringify({ provider, model }),
   });
 }
 

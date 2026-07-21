@@ -25,8 +25,11 @@ import {
   updateWorkflowActivity,
   findResumableRun,
   resumeWorkflowRun,
+  pauseWorkflowRun,
   cancelWorkflowRun,
   failOrphanedRuns,
+  findChildRuns,
+  getRunAncestry,
   listWorkflowRuns,
   deleteOldWorkflowRuns,
   deleteWorkflowRun,
@@ -76,6 +79,7 @@ describe('workflows database', () => {
           null,
           null,
           null,
+          null,
         ]
       );
     });
@@ -107,6 +111,7 @@ describe('workflows database', () => {
           null,
           null,
           null,
+          null,
         ]
       );
     });
@@ -124,7 +129,17 @@ describe('workflows database', () => {
       expect(result.codebase_id).toBeNull();
       expect(mockQuery).toHaveBeenCalledWith(
         expect.stringContaining('INSERT INTO remote_agent_workflow_runs'),
-        ['feature-development', 'conv-456', null, 'Add dark mode support', '{}', null, null, null]
+        [
+          'feature-development',
+          'conv-456',
+          null,
+          'Add dark mode support',
+          '{}',
+          null,
+          null,
+          null,
+          null,
+        ]
       );
     });
   });
@@ -255,6 +270,72 @@ describe('workflows database', () => {
       await updateWorkflowRun('workflow-run-123', {});
 
       expect(mockQuery).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('pauseWorkflowRun', () => {
+    test('pauses a running run and resets the gate resolution marker', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+
+      await pauseWorkflowRun('workflow-run-123', {
+        nodeId: 'review',
+        message: 'Please review',
+        type: 'approval',
+      });
+
+      const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(query).toContain("status = 'paused'");
+      expect(query).toContain("AND status = 'running'");
+      // resolved must be an EXPLICIT null on every fresh pause: SQLite's
+      // json_patch deep-merges the new approval context into the stored one, so
+      // an omitted key would let a stale 'approved' from the previous gate
+      // survive and falsely block this gate (#2075).
+      const payload = JSON.parse(params[1] as string) as {
+        approval: Record<string, unknown>;
+      };
+      expect(payload.approval.resolved).toBeNull();
+      expect(payload.approval.nodeId).toBe('review');
+      // completionSignaled/signaledOutput follow the same explicit-null rule
+      // (#2074): standard approval pauses never set them, so they must be
+      // written as null (never omitted — JSON.stringify drops undefined and
+      // SQLite would keep a stale value from a previous interactive-loop gate).
+      expect(payload.approval.completionSignaled).toBeNull();
+      expect(payload.approval.signaledOutput).toBeNull();
+      // commandSnapshot (command-backed interactive loops) follows the same
+      // rule — a stale snapshot from a prior loop gate must never survive
+      // into an unrelated pause.
+      expect(payload.approval.commandSnapshot).toBeNull();
+    });
+
+    test('preserves completionSignaled/signaledOutput when the gate provides them (#2074)', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+
+      await pauseWorkflowRun('workflow-run-123', {
+        nodeId: 'refine',
+        message: 'gate',
+        type: 'interactive_loop',
+        iteration: 1,
+        completionSignaled: true,
+        signaledOutput: 'REPORT',
+        commandSnapshot: 'Loaded command body',
+      });
+
+      const [, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+      const payload = JSON.parse(params[1] as string) as {
+        approval: Record<string, unknown>;
+      };
+      expect(payload.approval.completionSignaled).toBe(true);
+      expect(payload.approval.signaledOutput).toBe('REPORT');
+      expect(payload.approval.commandSnapshot).toBe('Loaded command body');
+      expect(payload.approval.resolved).toBeNull();
+    });
+
+    test('throws when the run is not running', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 0));
+
+      await expect(
+        pauseWorkflowRun('workflow-run-123', { nodeId: 'review', message: 'Please review' })
+      ).rejects.toThrow('not found or not in running state');
     });
   });
 
@@ -630,6 +711,112 @@ describe('workflows database', () => {
       await expect(getActiveWorkflowRunByPath('/repo/path')).rejects.toThrow(
         'Failed to get active workflow run by path: Connection refused'
       );
+    });
+
+    // #2121 Phase 2: the ancestor chain of a shared-checkout sub-run must not
+    // count as a lock — each id gets its own positional placeholder (no array
+    // binding, works on both dialects).
+    test('excludes ancestor run ids via NOT IN with positional placeholders', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+      const startedAt = new Date('2026-04-14T10:00:00Z');
+
+      await getActiveWorkflowRunByPath('/repo/path', {
+        id: 'child-id',
+        startedAt,
+        excludeRunIds: ['parent-id', 'grandparent-id'],
+      });
+
+      const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(query).toContain('id != $2');
+      expect(query).toContain('id NOT IN ($3, $4)');
+      // The tiebreaker's id comparison must reference SELF ($2) — a positional
+      // back-reference once pointed it at $4 (an ancestor id) when excludeRunIds
+      // params landed between the self id and startedAt.
+      expect(query).toContain('started_at = $5::timestamptz AND id < $2');
+      expect(params).toEqual([
+        '/repo/path',
+        'child-id',
+        'parent-id',
+        'grandparent-id',
+        startedAt.toISOString(),
+      ]);
+    });
+
+    test('omits the NOT IN clause when excludeRunIds is empty', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+
+      await getActiveWorkflowRunByPath('/repo/path', {
+        id: 'child-id',
+        startedAt: new Date(),
+        excludeRunIds: [],
+      });
+
+      const [query] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(query).not.toContain('NOT IN');
+    });
+  });
+
+  describe('findChildRuns', () => {
+    test('selects by parent_run_id ordered oldest-first', async () => {
+      const child = { ...mockWorkflowRun, id: 'child-1', parent_run_id: 'parent-1' };
+      mockQuery.mockResolvedValueOnce(createQueryResult([child]));
+
+      const result = await findChildRuns('parent-1');
+
+      expect(result).toHaveLength(1);
+      expect(result[0]?.id).toBe('child-1');
+      const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(query).toContain('WHERE parent_run_id = $1');
+      // The executor's re-entry picks children[children.length - 1] as "most
+      // recent" — that only holds because this ORDER BY pins oldest-first.
+      expect(query).toContain('ORDER BY started_at ASC');
+      expect(params).toEqual(['parent-1']);
+    });
+
+    test('throws on database error', async () => {
+      mockQuery.mockRejectedValueOnce(new Error('boom'));
+
+      await expect(findChildRuns('parent-1')).rejects.toThrow(
+        'Failed to find child workflow runs: boom'
+      );
+    });
+  });
+
+  describe('getRunAncestry', () => {
+    const runRow = (id: string, parentRunId: string | null) => ({
+      ...mockWorkflowRun,
+      id,
+      parent_run_id: parentRunId,
+    });
+
+    test('walks parent_run_id to the root, nearest ancestor first', async () => {
+      // child -> parent -> root (each lookup is one getWorkflowRun query).
+      mockQuery.mockResolvedValueOnce(createQueryResult([runRow('child', 'parent')]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([runRow('parent', 'root')]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([runRow('root', null)]));
+
+      const result = await getRunAncestry('child');
+
+      expect(result.map(r => r.id)).toEqual(['parent', 'root']);
+    });
+
+    test('stops on cyclic parent data instead of looping forever', async () => {
+      // child -> parent -> child (hand-edited/corrupt DB).
+      mockQuery.mockResolvedValueOnce(createQueryResult([runRow('child', 'parent')]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([runRow('parent', 'child')]));
+
+      const result = await getRunAncestry('child');
+
+      expect(result.map(r => r.id)).toEqual(['parent']);
+    });
+
+    test('ends the chain at a deleted parent (ON DELETE SET NULL orphan)', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([runRow('child', 'gone')]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+
+      const result = await getRunAncestry('child');
+
+      expect(result).toEqual([]);
     });
   });
 

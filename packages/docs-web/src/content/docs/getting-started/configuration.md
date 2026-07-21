@@ -39,7 +39,7 @@ assistants:
     settingSources:
       - project
   codex:
-    model: gpt-5.3-codex
+    model: gpt-5.6-sol
     modelReasoningEffort: medium
 
 # docs:

@@ -14,9 +14,26 @@
 export function classifyAndFormatError(error: Error): string {
   const message = error.message || '';
 
-  // AI/SDK errors - rate limits
-  if (message.includes('rate limit') || message.includes('Rate limit')) {
-    return '⚠️ AI rate limit reached. Please wait a moment and try again.';
+  // AI-provider rate-limit / usage-cap classification
+  // Broad substrings are intentional: every call site feeds errors from handling
+  // an AI conversation turn, so a bare "usage limit" needs no provider prefix.
+  const lower = message.toLowerCase();
+  if (
+    lower.includes('rate limit') ||
+    lower.includes('hit your limit') ||
+    lower.includes('usage limit') ||
+    lower.includes('session limit')
+  ) {
+    // Anchor on · (Claude format: "... · resets 4:50pm (UTC)"); stop at · or newline so "p.m." isn't truncated.
+    // The no-· fallback also drops any follow-on sentence (period + capital letter), so shapes like
+    // "Claude session limit reached — resets 3:20pm (UTC). Abandon this run…" yield just the reset clause.
+    const reset =
+      /·\s*(resets[^·\n]*)/i.exec(message)?.[1]?.trim() ??
+      /resets[^·\n]*/i
+        .exec(message)?.[0]
+        ?.replace(/\.\s+[A-Z][\s\S]*$/, '')
+        .trim();
+    return `⚠️ AI usage limit reached${reset ? ` (${reset})` : ''}. Please wait and try again.`;
   }
 
   // Claude-specific auth errors — OAuth token refresh failures
@@ -35,6 +52,14 @@ export function classifyAndFormatError(error: Error): string {
   // Claude-specific auth errors — general (subprocess crash with auth classification)
   if (message.startsWith('Claude Code auth error:')) {
     return '⚠️ Claude authentication error. Run `/login` inside Claude Code or check your API key configuration.';
+  }
+
+  // Not logged in — no credential reached the subprocess. On a multi-user
+  // install this means the user hasn't connected a provider yet; on a solo
+  // install it means no key / no `claude login`. Name both connect surfaces
+  // instead of leaking the raw CLI string (#1983).
+  if (message.includes('Not logged in') || message.includes('Please run /login')) {
+    return '⚠️ Not logged in to the AI provider. Connect a subscription or API key in Settings → Agents, or set credentials in your environment (e.g. `claude /login` or `CLAUDE_API_KEY`).';
   }
 
   // Codex-specific auth errors — 401 retry exhaustion

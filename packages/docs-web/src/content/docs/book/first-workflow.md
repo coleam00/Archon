@@ -199,7 +199,7 @@ You've just built a mini version of `archon-idea-to-pr` — the same structure, 
 | `model` | Sets the model for all nodes (`sonnet`, `opus`, `haiku`) | When you want to override the config default |
 | `context` | `fresh` starts a new session; `shared` inherits from prior node | Use `fresh` before verification nodes |
 | `depends_on` | List of node IDs that must complete before this node runs | To express ordering and fan-in |
-| `idle_timeout` | Per-node idle timeout in milliseconds (default: 5 minutes) | For long-running nodes |
+| `idle_timeout` | Per-node idle timeout in milliseconds (default: 30 minutes) | For long-running nodes |
 
 These options apply at the node level (inside `nodes:`). `provider` and `model` can also be set at the top level of the YAML to apply to all nodes.
 

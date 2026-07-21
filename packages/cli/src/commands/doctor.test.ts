@@ -14,7 +14,10 @@ import { mkdirSync, rmSync } from 'fs';
 import * as git from '@archon/git';
 import {
   checkClaudeBinary,
+  checkCodexBinary,
+  checkOpenCode,
   checkDatabase,
+  checkConnectedProviders,
   checkGhAuth,
   checkPi,
   checkWorkspaceWritable,
@@ -22,8 +25,12 @@ import {
   checkSlack,
   checkTelegram,
   checkTelemetry,
+  checkFolderProject,
   doctorCommand,
+  type CodexBinaryDeps,
   type DatabaseDeps,
+  type FolderProjectDeps,
+  type OpenCodeDeps,
 } from './doctor';
 import * as doctorModule from './doctor';
 
@@ -66,6 +73,206 @@ describe('checkClaudeBinary', () => {
     expect(result.status).toBe('fail');
     expect(result.message).toContain('did not spawn');
     expect(result.message).toContain('ENOENT');
+  });
+});
+
+describe('checkCodexBinary', () => {
+  let execSpy: ReturnType<typeof spyOn<typeof git, 'execFileAsync'>>;
+
+  const notConfigured: CodexBinaryDeps = {
+    isDefaultAssistant: false,
+    credentialConnected: false,
+  };
+  const loadDeps = (deps: CodexBinaryDeps) => async () => deps;
+  const resolvesTo =
+    (path: string, source: 'env' | 'config' | 'vendor' | 'autodetect') => async () => ({
+      path,
+      source,
+    });
+
+  beforeEach(() => {
+    execSpy = spyOn(git, 'execFileAsync');
+  });
+
+  afterEach(() => {
+    execSpy.mockRestore();
+  });
+
+  it('skips when Codex is not configured and no credential is connected', async () => {
+    const result = await checkCodexBinary({}, loadDeps(notConfigured), async () => undefined);
+    expect(result.status).toBe('skip');
+    expect(result.label).toBe('Codex binary');
+    expect(result.message).toContain('not configured');
+    expect(execSpy).not.toHaveBeenCalled();
+  });
+
+  it('runs (dev-mode skip) when DEFAULT_AI_ASSISTANT=codex even if config load fails', async () => {
+    // loadDeps throwing must not suppress the check — env signal still counts.
+    const result = await checkCodexBinary(
+      { DEFAULT_AI_ASSISTANT: 'codex' },
+      async () => {
+        throw new Error('config blew up');
+      },
+      async () => undefined // resolver returns undefined → dev mode
+    );
+    expect(result.status).toBe('skip');
+    expect(result.message).toContain('dev mode');
+  });
+
+  it('runs when a config codexBinaryPath is set (configured signal)', async () => {
+    const result = await checkCodexBinary(
+      {},
+      loadDeps({ ...notConfigured, configBinaryPath: '/cfg/codex' }),
+      async () => undefined
+    );
+    expect(result.status).toBe('skip');
+    expect(result.message).toContain('dev mode');
+  });
+
+  it('runs when an OpenAI (Codex) credential is connected', async () => {
+    const result = await checkCodexBinary(
+      {},
+      loadDeps({ ...notConfigured, credentialConnected: true }),
+      async () => undefined
+    );
+    expect(result.status).toBe('skip');
+    expect(result.message).toContain('dev mode');
+  });
+
+  it('passes and reports the resolved source when the binary spawns', async () => {
+    execSpy.mockResolvedValue({ stdout: '1.0.0', stderr: '' });
+    const result = await checkCodexBinary(
+      { DEFAULT_AI_ASSISTANT: 'codex' },
+      loadDeps(notConfigured),
+      resolvesTo('/opt/codex', 'autodetect')
+    );
+    expect(result.status).toBe('pass');
+    expect(result.message).toContain('/opt/codex');
+    expect(result.message).toContain('via autodetect');
+    expect(execSpy).toHaveBeenCalledWith('/opt/codex', ['--version'], expect.any(Object));
+  });
+
+  it('fails with install instructions when the resolver throws', async () => {
+    const result = await checkCodexBinary(
+      { DEFAULT_AI_ASSISTANT: 'codex' },
+      loadDeps(notConfigured),
+      async () => {
+        throw new Error(
+          'Codex CLI binary not found. Install globally: npm install -g @openai/codex'
+        );
+      }
+    );
+    expect(result.status).toBe('fail');
+    expect(result.message).toContain('Codex CLI binary not found');
+    expect(execSpy).not.toHaveBeenCalled();
+  });
+
+  it('fails when the resolved binary does not spawn', async () => {
+    execSpy.mockRejectedValue(new Error('ENOENT'));
+    const result = await checkCodexBinary(
+      { CODEX_BIN_PATH: '/opt/codex' },
+      loadDeps(notConfigured),
+      resolvesTo('/opt/codex', 'env')
+    );
+    expect(result.status).toBe('fail');
+    expect(result.message).toContain('did not spawn');
+    expect(result.message).toContain('ENOENT');
+  });
+});
+
+describe('checkOpenCode', () => {
+  const makeDeps = (over: Partial<OpenCodeDeps> = {}): OpenCodeDeps => ({
+    isDefaultAssistant: false,
+    probeRuntimeModule: async () => true,
+    ...over,
+  });
+
+  it('skips when OpenCode is not configured and --full is absent', async () => {
+    const result = await checkOpenCode({}, false, async () => makeDeps());
+    expect(result.status).toBe('skip');
+    expect(result.label).toBe('OpenCode runtime');
+    expect(result.message).toContain('pass --full');
+  });
+
+  it('passes when OpenCode is the configured assistant and the SDK resolves', async () => {
+    const result = await checkOpenCode({}, false, async () =>
+      makeDeps({ isDefaultAssistant: true })
+    );
+    expect(result.status).toBe('pass');
+    expect(result.message).toContain('server not started');
+  });
+
+  it('passes under --full even when OpenCode is not configured', async () => {
+    const result = await checkOpenCode({}, true, async () => makeDeps());
+    expect(result.status).toBe('pass');
+  });
+
+  it('runs when DEFAULT_AI_ASSISTANT=opencode', async () => {
+    const result = await checkOpenCode({ DEFAULT_AI_ASSISTANT: 'opencode' }, false, async () =>
+      makeDeps()
+    );
+    expect(result.status).toBe('pass');
+  });
+
+  it('never boots the runtime — only the cheap module probe is called', async () => {
+    let probeCalls = 0;
+    await checkOpenCode({}, true, async () =>
+      makeDeps({
+        probeRuntimeModule: async () => {
+          probeCalls += 1;
+          return true;
+        },
+      })
+    );
+    expect(probeCalls).toBe(1);
+  });
+
+  it('fails when the runtime SDK cannot be resolved', async () => {
+    const result = await checkOpenCode({}, true, async () =>
+      makeDeps({
+        probeRuntimeModule: async () => {
+          throw new Error('Cannot find module @opencode-ai/sdk');
+        },
+      })
+    );
+    expect(result.status).toBe('fail');
+    expect(result.message).toContain('not resolvable');
+    expect(result.message).toContain('bun install');
+  });
+
+  it('fails when the SDK resolves but the entrypoint is missing', async () => {
+    const result = await checkOpenCode({}, true, async () =>
+      makeDeps({ probeRuntimeModule: async () => false })
+    );
+    expect(result.status).toBe('fail');
+    expect(result.message).toContain('createOpencode');
+  });
+
+  it('skips gracefully when deps load fails and --full is absent', async () => {
+    const result = await checkOpenCode({}, false, async () => {
+      throw new Error('config load failed');
+    });
+    expect(result.status).toBe('skip');
+    expect(result.message).toContain('not configured');
+  });
+
+  it('surfaces the load error (not "entrypoint missing") when deps fail under --full', async () => {
+    const result = await checkOpenCode({}, true, async () => {
+      throw new Error('config load failed');
+    });
+    expect(result.status).toBe('fail');
+    // Must report the real load failure, not a fabricated SDK-entrypoint verdict.
+    expect(result.message).toContain('config load failed');
+    expect(result.message).not.toContain('createOpencode');
+  });
+
+  it('surfaces the load error when deps fail and OpenCode is the configured assistant', async () => {
+    const result = await checkOpenCode({ DEFAULT_AI_ASSISTANT: 'opencode' }, false, async () => {
+      throw new Error('module import failed');
+    });
+    expect(result.status).toBe('fail');
+    expect(result.message).toContain('module import failed');
+    expect(result.message).not.toContain('createOpencode');
   });
 });
 
@@ -215,6 +422,81 @@ describe('checkDatabase', () => {
     expect(result.status).toBe('fail');
     expect(result.message).toContain('failed to load database module');
     expect(result.message).toContain('Cannot find module');
+  });
+});
+
+describe('checkFolderProject', () => {
+  function makeDeps(over: Partial<FolderProjectDeps> = {}): FolderProjectDeps {
+    return {
+      findCodebaseByDefaultCwd: async () => null,
+      findCodebaseByPathPrefix: async () => null,
+      listChildRepos: async () => [],
+      ...over,
+    };
+  }
+
+  it('reports a folder project and its contained repos', async () => {
+    const deps = makeDeps({
+      findCodebaseByDefaultCwd: async () => ({
+        name: 'platform',
+        default_cwd: '/tmp/platform',
+        kind: 'folder',
+      }),
+      listChildRepos: async () => ['auth-service', 'billing-service'],
+    });
+
+    const result = await checkFolderProject('/tmp/platform', async () => deps);
+    expect(result.status).toBe('pass');
+    expect(result.message).toContain('platform');
+    expect(result.message).toContain('2 contained repo(s)');
+    expect(result.message).toContain('auth-service');
+  });
+
+  it('truncates the contained-repo list at 10 with a "+N more" suffix', async () => {
+    const many = Array.from({ length: 14 }, (_, i) => `svc-${String(i).padStart(2, '0')}`);
+    const deps = makeDeps({
+      findCodebaseByPathPrefix: async () => ({
+        name: 'big',
+        default_cwd: '/tmp/big',
+        kind: 'folder',
+      }),
+      listChildRepos: async () => many,
+    });
+
+    const result = await checkFolderProject('/tmp/big/subdir', async () => deps);
+    expect(result.status).toBe('pass');
+    expect(result.message).toContain('14 contained repo(s)');
+    expect(result.message).toContain('(+4 more)');
+  });
+
+  it('skips quietly when cwd is a repo-kind project', async () => {
+    const deps = makeDeps({
+      findCodebaseByDefaultCwd: async () => ({
+        name: 'owner/repo',
+        default_cwd: '/repos/repo',
+        kind: 'repo',
+      }),
+    });
+
+    const result = await checkFolderProject('/repos/repo', async () => deps);
+    expect(result.status).toBe('skip');
+    expect(result.message).toContain('not a registered folder project');
+  });
+
+  it('skips quietly when cwd is unregistered', async () => {
+    const result = await checkFolderProject('/tmp/random', async () => makeDeps());
+    expect(result.status).toBe('skip');
+  });
+
+  it('skips (not fail) when the database lookup throws', async () => {
+    const deps = makeDeps({
+      findCodebaseByDefaultCwd: async () => {
+        throw new Error('connection refused');
+      },
+    });
+    const result = await checkFolderProject('/tmp/x', async () => deps);
+    expect(result.status).toBe('skip');
+    expect(result.message).toContain('database unavailable');
   });
 });
 
@@ -480,5 +762,59 @@ describe('doctorCommand', () => {
       .map(args => String(args[0] ?? ''))
       .filter(s => s.startsWith('✓') || s.startsWith('✗') || s.startsWith('○'));
     expect(renderedLines.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe('checkConnectedProviders', () => {
+  const mockUser = { id: 'user-1' };
+
+  it('returns skip when CLI identity is not resolvable', async () => {
+    const result = await checkConnectedProviders({}, async () => ({
+      listUserProviderKeys: async () => [],
+      findOrCreateUserByPlatformIdentity: async () => mockUser,
+    }));
+    expect(result.status).toBe('skip');
+    expect(result.message).toContain('no CLI identity');
+  });
+
+  it('returns skip with a connect hint when no providers are connected', async () => {
+    const result = await checkConnectedProviders({ USER: 'testuser' }, async () => ({
+      listUserProviderKeys: async () => [],
+      findOrCreateUserByPlatformIdentity: async () => mockUser,
+    }));
+    expect(result.status).toBe('skip');
+    expect(result.message).toContain('archon ai login');
+  });
+
+  it('returns pass with a count and vendor list when providers are connected', async () => {
+    const result = await checkConnectedProviders({ USER: 'testuser' }, async () => ({
+      listUserProviderKeys: async () => [
+        { provider: 'anthropic', kind: 'oauth', label: 'subscription' },
+        { provider: 'openrouter', kind: 'api_key', label: null },
+      ],
+      findOrCreateUserByPlatformIdentity: async () => mockUser,
+    }));
+    expect(result.status).toBe('pass');
+    expect(result.message).toContain('2 connected');
+    expect(result.message).toContain('anthropic');
+  });
+
+  it('returns skip (not fail) when loadDeps throws', async () => {
+    const result = await checkConnectedProviders({ USER: 'testuser' }, async () => {
+      throw new Error('module load failed');
+    });
+    expect(result.status).toBe('skip');
+    expect(result.message).toContain('module load failed');
+  });
+
+  it('returns skip (not fail) when reading credentials throws', async () => {
+    const result = await checkConnectedProviders({ USER: 'testuser' }, async () => ({
+      listUserProviderKeys: async () => {
+        throw new Error('db down');
+      },
+      findOrCreateUserByPlatformIdentity: async () => mockUser,
+    }));
+    expect(result.status).toBe('skip');
+    expect(result.message).toContain('db down');
   });
 });
