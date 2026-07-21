@@ -477,7 +477,12 @@ export type IncludeNode = z.infer<typeof includeNodeSchema> & {
  *      outputs in item order; any child failing/cancelled fails the node.
  *   - `all_done`: node succeeds once all children are terminal; failed/cancelled
  *      entries are represented as `{ error, status }` objects in the array.
- *   - `first_success`: reserved for PR-D (racing) — rejected fail-fast at load today.
+ *   - `first_success` (racing, PR-D): the node completes when the FIRST child reaches
+ *      schema-valid terminal success; `$<id>.output` is the WINNER's single output
+ *      (field-accessible when the node declares `output_format`, else whole-text). The
+ *      remaining children are losers — cooperatively cancelled (tagged `fan_out_race_loser`)
+ *      plus a best-effort per-child abort. The node fails only if EVERY child fails or
+ *      cancels with no winner.
  *
  * `as` is a forward seam reserved for PR-B (#2214, `with:`/`$INPUTS`): it will name the
  * per-item value as `$INPUTS.<as>` inside the child. Until PR-B lands the item is only
@@ -785,18 +790,11 @@ export const dagNodeSchema = dagNodeBaseSchema
         path: ['fan_out'],
       });
     }
-    // `first_success` racing is staged for PR-D. Accept the enum value (so PR-D only
-    // has to lift this guard) but reject it fail-fast now — silently degrading it to
-    // `all_success` would surprise an author who wanted racing (mirrors how slice 1
-    // staged `isolation: 'worktree'`).
-    if (hasWorkflow && data.fan_out?.join === 'first_success') {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message:
-          "'fan_out.join: first_success' (racing) is not yet supported (PR-D). Use 'all_success' or 'all_done'.",
-        path: ['fan_out', 'join'],
-      });
-    }
+    // `first_success` racing (PR-D) is functional: the fan-out executor selects the first
+    // schema-valid terminal winner and cancels losers. `output_format` on the node is
+    // OPTIONAL — with it, the winner's output is field-accessible (`$<id>.output.field`)
+    // and validated; without it, the whole-text winner threads through. No extra load
+    // guard is needed beyond the shared `fan_out`-only-on-a-workflow-node rejection above.
 
     if (modeCount === 0) {
       if (typeof data.bash === 'string') {

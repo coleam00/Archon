@@ -363,6 +363,16 @@ export interface RunChildWorkflowArgs {
   itemHash?: string;
   /** Present only when re-driving a FAILED child on parent resume (D5 recovery path). */
   resumeFailedChild?: WorkflowRun;
+  /**
+   * Best-effort hard-abort signal for a racing (`join: first_success`) loser (#2121
+   * slice 2, PR-D). Threaded through the child's `executeWorkflow` into every AI turn's
+   * `SendQueryOptions.abortSignal`, so the racing driver's `.abort()` on a loser stops
+   * its in-flight provider turn fast (Codex near-instant, Claude ~2-7s, Pi instant). The
+   * cooperative `cancelWorkflowRun` cascade remains the correctness floor (D6) — this is
+   * a token-burn optimization, not a new kill primitive. Undefined for every non-racing
+   * child.
+   */
+  abortSignal?: AbortSignal;
 }
 
 /**
@@ -1236,6 +1246,31 @@ export function buildTopologicalLayers(nodes: readonly DagNode[]): DagNode[][] {
  * Always accumulates assistant text output (for $node_id.output substitution).
  * Parallel nodes and context: 'fresh' nodes always receive fresh sessions (caller ensures resumeSessionId is undefined).
  */
+/**
+ * Link an external hard-abort signal (a racing fan-out driver's per-child abort, #2121
+ * slice 2, PR-D) into a node-local AbortController so an external `.abort()` triggers the
+ * SAME stop path as an idle-timeout abort — sendQuery aborts, `.signal.aborted` checks
+ * fire, and the reask loop stops. A no-op when no external signal is threaded (every
+ * non-racing node). The listener uses `{ once: true }` and the external signal is
+ * per-racing-child and short-lived (dropped once the race settles), so listeners never
+ * accumulate across races. Best-effort: the cooperative cancel cascade is the correctness
+ * floor (D6); this only cuts a loser's in-flight-turn token burn.
+ */
+function linkExternalAbort(external: AbortSignal | undefined, local: AbortController): void {
+  if (!external) return;
+  if (external.aborted) {
+    local.abort();
+    return;
+  }
+  external.addEventListener(
+    'abort',
+    () => {
+      local.abort();
+    },
+    { once: true }
+  );
+}
+
 async function executeNodeInternal(
   deps: WorkflowDeps,
   platform: IWorkflowPlatform,
@@ -1256,7 +1291,8 @@ async function executeNodeInternal(
   resolvedModel?: string,
   resolvedTier?: TierName,
   stepNamePrefix = '',
-  iteration?: number
+  iteration?: number,
+  externalAbortSignal?: AbortSignal
 ): Promise<NodeExecutionResult> {
   const nodeStartTime = Date.now();
   const nodeContext: SendMessageContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -1382,8 +1418,11 @@ async function executeNodeInternal(
   let nodeModelUsage: Record<string, unknown> | undefined;
   const batchMessages: string[] = [];
 
-  // Create per-node abort controller for idle timeout cleanup
+  // Create per-node abort controller for idle timeout cleanup. A racing fan-out loser
+  // (PR-D) also links its external abort here, so an external `.abort()` stops this
+  // turn via the same path as an idle timeout (no separate stop logic).
   const nodeAbortController = new AbortController();
+  linkExternalAbort(externalAbortSignal, nodeAbortController);
   // Fork when resuming — leaves the source session untouched so retries are safe.
   const shouldForkSession = resumeSessionId !== undefined;
   const nodeOptionsWithAbort: SendQueryOptions | undefined = {
@@ -3068,7 +3107,8 @@ async function executeLoopGroupNode(
   issueContext?: string,
   stepNamePrefix = '',
   execContext: ExecutionContext = { kind: 'host' },
-  runChildWorkflow?: RunChildWorkflowFn
+  runChildWorkflow?: RunChildWorkflowFn,
+  externalAbortSignal?: AbortSignal
 ): Promise<NodeExecutionResult> {
   const group = node.loop_group;
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -3237,6 +3277,9 @@ async function executeLoopGroupNode(
       // a loop_group body exec in the same place (host, or the container in Phase B)
       // — without this a loop_group body would be a host-escape hole.
       execContext,
+      // Forward the racing loser hard-abort (PR-D) so body AI turns honor an external
+      // abort. Undefined for every ordinary run.
+      abortSignal: externalAbortSignal,
       // persist_session across iterations is out of v1 scope (body sessions reset per
       // iteration, governed by fresh_context). Pass undefined/false so body nodes don't
       // participate in cross-run session persistence inside the loop — and therefore
@@ -3721,7 +3764,8 @@ async function executeLoopNode(
   issueContext?: string,
   configuredCommandFolder?: string,
   stepNamePrefix = '',
-  execContext: ExecutionContext = { kind: 'host' }
+  execContext: ExecutionContext = { kind: 'host' },
+  externalAbortSignal?: AbortSignal
 ): Promise<NodeExecutionResult> {
   const loop = node.loop;
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -3978,6 +4022,10 @@ async function executeLoopNode(
     let cleanOutput = ''; // stripped, for platform display
     let iterationIdleTimedOut = false;
     const iterationAbortController = new AbortController();
+    // A racing fan-out loser (PR-D) links its external abort into each iteration so an
+    // external `.abort()` stops the in-flight turn (treated as a cancel, since
+    // iterationIdleTimedOut stays false — see the aborted-and-not-timed-out branch below).
+    linkExternalAbort(externalAbortSignal, iterationAbortController);
     // Mid-stream cancel-check throttle (see the check inside the stream loop).
     // The between-iteration status check just ran, so start the clock at the
     // iteration start. A local timestamp rather than the module-level
@@ -4895,6 +4943,8 @@ async function executeApprovalNode(
       resolvedTier,
       stepNamePrefix,
       iteration
+      // No externalAbortSignal: this is an approval node's synthetic turn, and a racing
+      // fan-out child that hits an approval gate fails the node up-front (#2180, D5).
     );
 
     if (output.state === 'failed') {
@@ -5210,8 +5260,17 @@ async function executeWorkflowNode(
  * recoverable on resume). `fan_out_gate`: a child paused at a gate (#2180). `fan_out_sibling`:
  * an in-flight sibling cooperatively cancelled once the node's fate was sealed.
  * `fan_out_orphan`: a child whose `child_index` fell out of range when the item list shrank.
+ * `fan_out_race_loser`: a `join: first_success` loser cancelled once a winner was found (PR-D).
  */
-type FanOutCancelReason = 'fan_out_gate' | 'fan_out_sibling' | 'fan_out_orphan';
+type FanOutCancelReason =
+  | 'fan_out_gate'
+  | 'fan_out_sibling'
+  | 'fan_out_orphan'
+  | 'fan_out_race_loser';
+// `fan_out_race_loser` is deliberately ABSENT: a race loser is recoverable ONLY when no
+// winner exists, and that decision is made explicitly in the racing branch (a surviving
+// winner short-circuits before any re-drive) — never by the generic all_success/all_done
+// re-entry classification this set feeds.
 const FAN_OUT_RECOVERABLE_CANCEL_REASONS: ReadonlySet<string> = new Set<FanOutCancelReason>([
   'fan_out_gate',
   'fan_out_sibling',
@@ -5326,6 +5385,38 @@ function sumFanOutTokens(outcomes: readonly ChildWorkflowOutcome[]): TokenUsage 
     }
   }
   return any ? { input, output } : undefined;
+}
+
+/**
+ * A racing (`join: first_success`) child qualifies as the WINNER when it produced terminal
+ * output that — if the fan-out node declares `output_format` — validates against that
+ * schema (mirrors the sink-node structured-output check at executeNodeInternal). Without a
+ * declared schema, any completed child is a whole-text winner. Fail-SAFE on an uncompilable
+ * schema (accept + `onSchemaError`), matching the node path's posture — a broken schema must
+ * not silently discard every otherwise-good racer. The caller checks `status === 'completed'`.
+ */
+function isRaceWinnerOutput(
+  output: string | undefined,
+  outputFormat: Record<string, unknown> | undefined,
+  onSchemaError?: (msg: string) => void
+): boolean {
+  if (!outputFormat) return true;
+  if (output === undefined || output.trim() === '') return false;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(output);
+  } catch {
+    return false;
+  }
+  let schemaCompileError: string | undefined;
+  const validation = validateStructuredOutput(parsed, outputFormat, m => {
+    schemaCompileError = m;
+  });
+  if (schemaCompileError !== undefined) {
+    onSchemaError?.(schemaCompileError);
+    return true; // cannot validate → do not block the winner (fail-safe)
+  }
+  return validation.valid;
 }
 
 /**
@@ -5600,6 +5691,229 @@ async function executeFanOutWorkflowNode(
     return failResult(msg);
   }
 
+  // 5r. join: first_success (racing, PR-D) — the FIRST child to reach schema-valid terminal
+  //     success WINS; its single output becomes `$<id>.output` and every other child is a
+  //     loser (best-effort hard-aborted + cooperatively cancelled, tagged
+  //     `fan_out_race_loser`). The node fails only if NO child produces a winner. This is a
+  //     dedicated spawn+reduce (different seal trigger, per-child AbortController, single
+  //     winner) that RETURNS — the all_success/all_done code below never runs for a
+  //     first_success node. Shares the items resolution, re-entry map, and #2180 pre-checks
+  //     above.
+  if (fanOut.join === 'first_success') {
+    // The winner degenerates to a SINGLE output (unlike the all_* JSON array), so — like a
+    // non-fan-out `workflow:` node — it is field-accessible: attach the declared field set
+    // so `$<id>.output.field` resolves declared-optional-absent → '' vs a typo → throw.
+    const raceDeclaredFields = declaredFieldsFromSchema(node.output_format);
+    // A completed child qualifies as the winner iff its terminal output passes the node's
+    // `output_format` (when declared); without a schema, any completed child wins.
+    const isRaceWinner = (o: ChildWorkflowOutcome): boolean =>
+      o.status === 'completed' &&
+      isRaceWinnerOutput(o.output, node.output_format, compileMsg => {
+        getLog().warn(
+          { parentRunId: parentRun.id, nodeId: node.id, compileMsg },
+          'workflow.fan_out_race_schema_uncompilable'
+        );
+      });
+
+    // (a) Resume-after-win: a prior pass may have found a winner but crashed before writing
+    //     node_completed (the node then re-runs). If any EXISTING child already qualifies,
+    //     complete from it WITHOUT re-driving anyone — race losers are recoverable ONLY when
+    //     no winner survives (settled semantics). Lowest child_index wins for determinism.
+    const priorWinner = [...existingByIndex.entries()]
+      .filter(([, c]) => c.status === 'completed')
+      .sort((a, b) => a[0] - b[0])
+      .find(([, c]) => isRaceWinner(childOutcomeFromRun(c)));
+    if (priorWinner) {
+      const outcome = childOutcomeFromRun(priorWinner[1]);
+      const winnerOutput = outcome.output ?? '';
+      const cost = sumFanOutCost([outcome]);
+      const tokens = sumFanOutTokens([outcome]);
+      writeCompleted(winnerOutput, cost);
+      return {
+        state: 'completed',
+        output: winnerOutput,
+        ...(cost !== undefined ? { costUsd: cost } : {}),
+        ...(tokens !== undefined ? { tokens } : {}),
+        ...(raceDeclaredFields !== undefined ? { declaredFields: raceDeclaredFields } : {}),
+      };
+    }
+
+    // (b) No surviving winner → race the incomplete indices. Each spawn gets its OWN
+    //     AbortController tracked in `liveAbort`; the temporally-first schema-valid winner
+    //     seals the race.
+    const liveAbort = new Map<number, AbortController>();
+    let raceSealed = false;
+    let winnerIndex: number | undefined;
+
+    // Seal the race once: hard-abort every live loser (fast provider stop — Codex
+    // near-instant, Claude ~2-7s, Pi instant; a loser burns ≤ one in-flight turn + grace,
+    // D6) and stop spawning later indices. `winnerIdx` (defined on a win, undefined on a
+    // #2180 pause) is excluded, though the winner's own controller was already removed by
+    // its fn's finally. The COOPERATIVE cancel (the correctness floor) does NOT run here —
+    // a child's run id isn't in hand until runChild returns and an aborted loser may race
+    // to 'failed' before a re-query could catch it, so losers are tagged + cancelled by
+    // their KNOWN run ids in the reducer once mapWithLimit settles (deterministic).
+    const sealRace = (winnerIdx?: number): void => {
+      if (raceSealed) return;
+      raceSealed = true;
+      for (const [idx, ac] of liveAbort) if (idx !== winnerIdx) ac.abort();
+    };
+
+    const raceSettled = await mapWithLimit(
+      items,
+      fanOut.max_parallel,
+      async (item, i): Promise<ChildWorkflowOutcome> => {
+        const existing = existingByIndex.get(i);
+        // Existing completed child → thread it (it may be selected as the winner below).
+        if (existing?.status === 'completed') return childOutcomeFromRun(existing);
+        // A user-cancelled child (no fan-out tag) is terminal. A fan-out-tagged cancel —
+        // INCLUDING a `fan_out_race_loser` from a prior no-winner pass — is recoverable HERE
+        // and re-driven (we only reach this branch because no winner survived).
+        const recoverable =
+          existing?.status === 'cancelled' &&
+          (isFanOutRecoverableCancel(existing) ||
+            fanOutCancelReason(existing) === 'fan_out_race_loser');
+        if (existing?.status === 'cancelled' && !recoverable) {
+          return childOutcomeFromRun(existing);
+        }
+        // Race already sealed → skip not-yet-started indices (no spawn, no cost).
+        if (raceSealed) {
+          return {
+            childRunId: existing?.id ?? '',
+            status: 'cancelled',
+            error: 'skipped by race winner',
+          };
+        }
+        const input = itemToInput(item);
+        // Re-drive a recoverable-cancelled/failed child from its own row (a 'cancelled'
+        // status can't be resumed — flip to 'failed' first, same heuristic as the all_* path).
+        let resumeChild = existing?.status === 'failed' ? existing : undefined;
+        if (recoverable && existing) {
+          await deps.store
+            .updateWorkflowRun(existing.id, { status: 'failed' })
+            .catch((err: unknown) => {
+              getLog().error(
+                { err: err as Error, childRunId: existing.id },
+                'workflow.fan_out_recover_cancel_failed'
+              );
+            });
+          resumeChild = { ...existing, status: 'failed' };
+        }
+        const ac = new AbortController();
+        liveAbort.set(i, ac);
+        let outcome: ChildWorkflowOutcome;
+        try {
+          outcome = await runChild({
+            parentRun,
+            nodeId: node.id,
+            childWorkflowName: node.workflow,
+            input,
+            cwd,
+            conversationId,
+            conversationDbId: parentRun.conversation_id,
+            userId: parentRun.user_id ?? undefined,
+            codebaseId: parentRun.codebase_id ?? undefined,
+            isolation: node.isolation,
+            childIndex: i,
+            itemHash: hashFanOutItem(input),
+            abortSignal: ac.signal,
+            ...(resumeChild ? { resumeFailedChild: resumeChild } : {}),
+          });
+        } finally {
+          liveAbort.delete(i);
+        }
+        // A paused child fails the whole race (single parent gate slot, #2180) — seal so
+        // later indices skip + in-flight siblings are hard-aborted; the reducer then cancels
+        // the paused child (fan_out_gate) and fails the node.
+        if (outcome.status === 'paused') {
+          sealRace();
+        } else if (winnerIndex === undefined && isRaceWinner(outcome)) {
+          // First schema-valid success (no await between the guard and this assignment, so
+          // exactly one fn ever wins) → seal (abort losers; reducer tag-cancels them).
+          winnerIndex = i;
+          sealRace(i);
+        }
+        // A completed-but-invalid, failed, or cancelled child does NOT seal — keep racing.
+        return outcome;
+      }
+    );
+
+    const raceOutcomes: ChildWorkflowOutcome[] = raceSettled.map((r, i) =>
+      r.status === 'fulfilled'
+        ? r.value
+        : {
+            childRunId: '',
+            status: 'failed',
+            error: `fan-out child ${String(i)} threw: ${String(r.reason)}`,
+          }
+    );
+    const raceCost = sumFanOutCost(raceOutcomes);
+    const raceTokens = sumFanOutTokens(raceOutcomes);
+
+    // #2180 (first-run path): a freshly-spawned child paused at a gate → fail the node +
+    // cancel the paused child(ren) tagged `fan_out_gate` (recoverable once the gate is
+    // removed and the parent is resumed). Siblings were already sealed above.
+    const rPausedIdx = raceOutcomes.findIndex(o => o.status === 'paused');
+    if (rPausedIdx !== -1) {
+      for (const o of raceOutcomes)
+        if (o.status === 'paused') await cancelChild(o.childRunId, 'fan_out_gate');
+      const msg = fanOutAutonomousGateMessage(
+        node,
+        raceOutcomes[rPausedIdx].childRunId,
+        rPausedIdx
+      );
+      await notify(`⏸→❌ **Fan-out gate rejected** (node \`${node.id}\`): ${msg}`);
+      return failResult(msg, raceCost, raceTokens);
+    }
+
+    // Winner = the temporal winner from this pass, else the lowest-index schema-valid
+    // success (covers a resume that threaded an existing-completed winner without sealing).
+    const finalWinnerIdx =
+      winnerIndex !== undefined ? winnerIndex : raceOutcomes.findIndex(isRaceWinner);
+    if (finalWinnerIdx === -1) {
+      // No child produced a schema-valid success → the node fails, listing per-child status.
+      const summary = raceOutcomes
+        .map((o, i) => `child ${String(i)} ${o.status}${o.error ? ` (${o.error})` : ''}`)
+        .join('; ');
+      const msg =
+        `fan_out node '${node.id}' (join: first_success): no child produced a schema-valid ` +
+        `success — ${summary}`;
+      await notify(`❌ **Race failed** (node \`${node.id}\`): ${msg}`);
+      return failResult(msg, raceCost, raceTokens);
+    }
+    // Loser cancellation (correctness floor): tag + cancel every non-winner by its KNOWN
+    // run id (deterministic — no re-query race). `cancelWorkflowRun` no-ops on a completed
+    // run, so a straggler that also finished valid is left intact; a blank id (an index
+    // skipped by the seal that never spawned) is a no-op. Tagged `fan_out_race_loser`:
+    // recoverable ONLY when no winner survives, which the resume path (a) enforces.
+    for (let i = 0; i < raceOutcomes.length; i++) {
+      if (i === finalWinnerIdx) continue;
+      await cancelChild(raceOutcomes[i].childRunId, 'fan_out_race_loser');
+    }
+
+    const winner = raceOutcomes[finalWinnerIdx];
+    if (winner.status === 'completed' && winner.output === undefined) {
+      getLog().warn(
+        {
+          parentRunId: parentRun.id,
+          nodeId: node.id,
+          childRunId: winner.childRunId,
+          childIndex: finalWinnerIdx,
+        },
+        'workflow.subrun_completed_without_output'
+      );
+    }
+    const winnerOutput = winner.output ?? '';
+    writeCompleted(winnerOutput, raceCost);
+    return {
+      state: 'completed',
+      output: winnerOutput,
+      ...(raceCost !== undefined ? { costUsd: raceCost } : {}),
+      ...(raceTokens !== undefined ? { tokens: raceTokens } : {}),
+      ...(raceDeclaredFields !== undefined ? { declaredFields: raceDeclaredFields } : {}),
+    };
+  }
+
   // 5. Execute the incomplete indices through a bounded sliding window. Classification per
   //    index: an existing completed child threads its recorded outcome (resume skip); an
   //    existing failed OR fan-out-cancelled (recoverable) child is re-driven; a
@@ -5868,6 +6182,13 @@ interface RunLayersContext {
   /** Where nodes in these layers execute (host, or the container in Phase B). Threaded
    *  into every AI turn's SendQueryOptions and every deterministic subprocess. */
   execContext: ExecutionContext;
+  /**
+   * External hard-abort signal for a racing fan-out loser (#2121 slice 2, PR-D). When
+   * set, each AI node links it into its per-turn AbortController so an external
+   * `.abort()` stops the in-flight provider turn fast. Undefined for every ordinary run
+   * and forwarded verbatim into loop_group body contexts.
+   */
+  abortSignal?: AbortSignal;
   workflowRun: WorkflowRun;
   /** Workflow name — used for persist_session keying + telemetry. */
   workflowName: string;
@@ -6245,7 +6566,9 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               issueContext,
               configuredCommandFolder,
               stepNamePrefix,
-              execContext
+              execContext,
+              // Racing loser hard-abort (PR-D): undefined for every ordinary run.
+              ctx.abortSignal
             );
             // Loop nodes run every iteration on the same resolved provider, so the
             // result session (if any) is attributable to loopProvider — tag it so a
@@ -6296,7 +6619,9 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               issueContext,
               stepNamePrefix,
               execContext,
-              ctx.runChildWorkflow
+              ctx.runChildWorkflow,
+              // Racing loser hard-abort (PR-D): undefined for every ordinary run.
+              ctx.abortSignal
             );
             return { nodeId: node.id, output };
           }
@@ -6558,7 +6883,9 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                 resolvedNodeModel,
                 resolvedTier,
                 stepNamePrefix,
-                iteration
+                iteration,
+                // Racing loser hard-abort (PR-D): undefined for every ordinary run.
+                ctx.abortSignal
               ),
             { state: 'failed', output: '', error: 'Node did not execute' } as NodeExecutionResult
           );
@@ -7304,7 +7631,14 @@ export async function executeDagWorkflow(
    * Phase 2). executor.ts is the sole caller and passes it; other callers (unit
    * tests) may omit it, in which case a `workflow:` node fails fast.
    */
-  runChildWorkflow?: RunChildWorkflowFn
+  runChildWorkflow?: RunChildWorkflowFn,
+  /**
+   * External hard-abort signal (#2121 slice 2, PR-D). Set only when this run is a
+   * racing fan-out loser: linked into every AI node's per-turn AbortController so an
+   * external `.abort()` stops the in-flight provider turn fast. Undefined for every
+   * ordinary run (idle-timeout abort is unchanged).
+   */
+  externalAbortSignal?: AbortSignal
 ): Promise<string | undefined> {
   const dagStartTime = Date.now();
 
@@ -7449,6 +7783,7 @@ export async function executeDagWorkflow(
     conversationId,
     cwd,
     execContext,
+    abortSignal: externalAbortSignal,
     runChildWorkflow,
     workflowRun,
     workflowName: workflow.name,

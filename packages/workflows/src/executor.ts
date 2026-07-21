@@ -446,6 +446,16 @@ export type ExecuteWorkflowOptions = ResumePayload & {
    * fallback). Threaded into the child-spawn closure.
    */
   resolveChildIsolation?: ChildIsolationResolver;
+  /**
+   * Best-effort hard-abort signal for the whole run (#2121 slice 2, PR-D). Set only when
+   * this run is a racing fan-out loser: the racing driver threads its per-child
+   * `AbortController.signal` here so an external `.abort()` reaches every AI turn's
+   * `SendQueryOptions.abortSignal` (via `executeDagWorkflow` → each node's abort
+   * controller). Absent for every ordinary run — the executor's own per-node idle-timeout
+   * abort is unchanged. Reason it lives on options (not a param): it rides the same
+   * child-spawn `childOpts` bag the resolver does.
+   */
+  abortSignal?: AbortSignal;
 };
 
 /**
@@ -557,6 +567,7 @@ async function runChildWorkflow(
     childIndex,
     itemHash,
     resumeFailedChild,
+    abortSignal,
   } = args;
 
   // Every failure below returns a `{ status: 'failed' }` outcome (never throws);
@@ -673,17 +684,19 @@ async function runChildWorkflow(
   // recursive executeWorkflow otherwise has no resolver and would fail-fast. (The
   // sibling `container:` context has the same non-propagation gap today; out of scope
   // for this PR, but noted so it isn't mistaken for intentional.)
+  // The racing abort signal (PR-D) rides the same bag so aborting a racing loser aborts
+  // its WHOLE sub-run subtree (grandchildren included), not just its top-level turn.
   try {
     if (resumeFailedChild) {
       const hydrated = await hydrateResumableRun(deps, resumeFailedChild);
       if (hydrated) {
-        childOpts = { ...hydrated, codebaseId, resolveChildIsolation };
+        childOpts = { ...hydrated, codebaseId, resolveChildIsolation, abortSignal };
         childRunId = hydrated.preCreatedRun.id;
       } else {
         // Failed child with no completed nodes — flip it back to running and re-run
         // from the top (nothing to skip).
         const preCreatedRun = await deps.store.resumeWorkflowRun(resumeFailedChild.id);
-        childOpts = { preCreatedRun, codebaseId, resolveChildIsolation };
+        childOpts = { preCreatedRun, codebaseId, resolveChildIsolation, abortSignal };
         childRunId = preCreatedRun.id;
       }
     } else {
@@ -718,7 +731,7 @@ async function runChildWorkflow(
             : {}),
         },
       });
-      childOpts = { preCreatedRun: childRun, codebaseId, resolveChildIsolation };
+      childOpts = { preCreatedRun: childRun, codebaseId, resolveChildIsolation, abortSignal };
       childRunId = childRun.id;
     }
   } catch (err) {
@@ -977,6 +990,7 @@ export async function executeWorkflow(
     execContext = { kind: 'host' },
     container: containerCtx,
     resolveChildIsolation,
+    abortSignal,
   } = opts;
 
   // Guard: a container run MUST be resumed with its container rewired (the CLI does
@@ -1596,7 +1610,10 @@ export async function executeWorkflow(
       // Also captures the per-child isolation resolver (slice 2, PR-A) so an
       // `isolation: 'worktree'` child gets its own worktree cwd.
       (childArgs: RunChildWorkflowArgs): Promise<ChildWorkflowOutcome> =>
-        runChildWorkflow(deps, platform, childArgs, resolveChildIsolation)
+        runChildWorkflow(deps, platform, childArgs, resolveChildIsolation),
+      // Racing loser hard-abort (slice 2, PR-D): when THIS run is a racing loser, the
+      // signal is threaded into every AI node's SendQueryOptions.abortSignal below.
+      abortSignal
     );
 
     // executeDagWorkflow throws on fatal errors; check DB status for result
