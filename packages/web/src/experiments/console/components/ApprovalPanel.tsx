@@ -95,6 +95,9 @@ export function ApprovalPanel({ run }: ApprovalPanelProps): ReactElement {
 
   const onApproveKey = (e: ReactKeyboardEvent<HTMLInputElement>): void => {
     stopPropagation(e);
+    // Don't submit while an IME composition is in progress (Japanese,
+    // Chinese, Korean, etc. — the first Enter accepts a candidate).
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       void approve();
