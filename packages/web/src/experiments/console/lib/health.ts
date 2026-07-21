@@ -6,6 +6,7 @@
  * link on first paint inside Docker.
  */
 
+import { ideUri } from '@/lib/ide-uri';
 import { useEntity, type EntityView } from '../store/cache';
 import { K } from '../store/keys';
 import { getHealth, type HealthResponse } from '../skills/settings';
@@ -21,9 +22,18 @@ export function useIsDocker(): boolean {
   return data?.is_docker ?? true;
 }
 
+/** Server-environment hints needed to build a working vscode:// URI. */
+export interface IdeEnv {
+  is_wsl?: boolean;
+  wsl_distro?: string;
+}
+
+export function useIdeEnv(): IdeEnv {
+  const { data } = useHealth();
+  return { is_wsl: data?.is_wsl, wsl_distro: data?.wsl_distro };
+}
+
 /** Open a host path in the user's editor via the vscode:// scheme. */
-export function openInIde(workingPath: string): void {
-  // Normalise backslashes for Windows paths the same way the old UI does.
-  const normalised = workingPath.replace(/\\/g, '/');
-  window.open(`vscode://file/${normalised}`, '_blank');
+export function openInIde(workingPath: string, env?: IdeEnv): void {
+  window.open(ideUri(workingPath, env), '_blank');
 }

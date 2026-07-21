@@ -1,13 +1,15 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { homedir, tmpdir } from 'os';
 import { join } from 'path';
-import { existsSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { mkdir, rm, writeFile, lstat, readlink, symlink as fsSymlink } from 'fs/promises';
 
 const isWindows = process.platform === 'win32';
 
 import {
   isDocker,
+  isWSL,
+  getWSLDistroName,
   getArchonHome,
   getArchonWorkspacesPath,
   ensureArchonWorkspacesPath,
@@ -49,7 +51,14 @@ import {
 } from './archon-paths';
 
 /** All env vars that path functions depend on */
-const ENV_VARS = ['WORKSPACE_PATH', 'WORKTREE_BASE', 'ARCHON_HOME', 'ARCHON_DOCKER', 'HOME'];
+const ENV_VARS = [
+  'WORKSPACE_PATH',
+  'WORKTREE_BASE',
+  'ARCHON_HOME',
+  'ARCHON_DOCKER',
+  'HOME',
+  'WSL_DISTRO_NAME',
+];
 
 /**
  * Save and restore environment variables around each test.
@@ -85,6 +94,47 @@ describe('archon-paths', () => {
 
     test('returns path unchanged if no tilde', () => {
       expect(expandTilde('/absolute/path')).toBe('/absolute/path');
+    });
+  });
+
+  describe('isWSL', () => {
+    test('returns true when WSL_DISTRO_NAME is set', () => {
+      process.env.WSL_DISTRO_NAME = 'Ubuntu';
+      expect(isWSL()).toBe(true);
+    });
+
+    test('falls back to /proc/sys/kernel/osrelease when WSL_DISTRO_NAME is unset', () => {
+      delete process.env.WSL_DISTRO_NAME;
+      // Derive the expectation from the same source as the implementation:
+      // real Linux CI → no "microsoft" → false; WSL2 host → "microsoft" → true.
+      let expected = false;
+      try {
+        expected = readFileSync('/proc/sys/kernel/osrelease', 'utf8')
+          .toLowerCase()
+          .includes('microsoft');
+      } catch {
+        expected = false;
+      }
+      expect(isWSL()).toBe(expected);
+    });
+  });
+
+  describe('getWSLDistroName', () => {
+    test('returns the WSL_DISTRO_NAME env var when set', () => {
+      process.env.WSL_DISTRO_NAME = 'Debian';
+      expect(getWSLDistroName()).toBe('Debian');
+    });
+
+    test('returns undefined when WSL_DISTRO_NAME is unset', () => {
+      delete process.env.WSL_DISTRO_NAME;
+      expect(getWSLDistroName()).toBeUndefined();
+    });
+
+    test('returns the empty string when WSL_DISTRO_NAME is set but empty', () => {
+      // Pins current behaviour: '' passes through (callers filter falsy values),
+      // so a future `|| undefined` refactor would change observable behaviour.
+      process.env.WSL_DISTRO_NAME = '';
+      expect(getWSLDistroName()).toBe('');
     });
   });
 

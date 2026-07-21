@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router';
 import { OriginBadge } from './OriginBadge';
 import type { Run } from '../primitives/run';
 import { shortRunId, formatElapsed, elapsedSince, formatCost } from '../lib/format';
-import { useIsDocker, openInIde } from '../lib/health';
+import { useIsDocker, useIdeEnv, openInIde } from '../lib/health';
 import { statusTextClass } from '../lib/run-status';
 
 interface RecentRunRowProps {
@@ -32,6 +32,7 @@ export function RecentRunRow({
 }: RecentRunRowProps): ReactElement {
   const navigate = useNavigate();
   const isDocker = useIsDocker();
+  const ideEnv = useIdeEnv();
   const elapsed = formatElapsed(elapsedSince(run.startedAt, run.finishedAt ?? undefined));
   const canOpen = run.projectId !== null && !run.id.startsWith('demo-');
   const canOpenIde =
@@ -161,7 +162,7 @@ export function RecentRunRow({
               type="button"
               onClick={e => {
                 e.stopPropagation();
-                if (run.workingPath !== null) openInIde(run.workingPath);
+                if (run.workingPath !== null) openInIde(run.workingPath, ideEnv);
               }}
               title={`Open ${run.workingPath} in IDE`}
               aria-label="Open in IDE"

@@ -3933,6 +3933,8 @@ export interface components {
       runningWorkflows: number;
       version?: string;
       is_docker: boolean;
+      is_wsl: boolean;
+      wsl_distro?: string;
       activePlatforms?: string[];
     };
     UpdateCheckResponse: {
