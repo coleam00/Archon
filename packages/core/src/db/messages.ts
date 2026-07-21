@@ -85,6 +85,7 @@ export async function getRecentWorkflowResultMessages(
       `SELECT id, content, metadata FROM remote_agent_messages
        WHERE conversation_id = $1
        AND ${metadataFilter}
+       -- id DESC tie-breaker: see listMessages() above for why.
        ORDER BY created_at DESC, id DESC
        LIMIT $2`,
       [conversationId, limit]

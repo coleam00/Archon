@@ -41,16 +41,11 @@ await db.query(
   []
 );
 
-async function insertMessage(
-  id: string,
-  createdAt: string,
-  metadata = '{}',
-  conversationId = 'conv-1'
-): Promise<void> {
+async function insertMessage(id: string, createdAt: string, metadata = '{}'): Promise<void> {
   await db.query(
     `INSERT INTO remote_agent_messages (id, conversation_id, role, content, metadata, created_at)
-     VALUES ($1, $2, 'user', $3, $4, $5)`,
-    [id, conversationId, `content-${id}`, metadata, createdAt]
+     VALUES ($1, 'conv-1', 'user', $2, $3, $4)`,
+    [id, `content-${id}`, metadata, createdAt]
   );
 }
 
