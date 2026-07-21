@@ -320,6 +320,29 @@ describe('expandWorkflowIncludes — fence-aware prose', () => {
     // …but the sub-run TARGET is a workflow name, not a node ref — never rewritten.
     expect(sub && 'workflow' in sub ? sub.workflow : '').toBe('child-target');
   });
+
+  // slice 2, PR-C: fan_out.items is a live `$node.output` ref surface too — it must
+  // namespace to the inlined producer so the fan-out expands over the right array.
+  test('fan_out.items refs rewritten inside an included block', () => {
+    const block = wf('fanblk', [
+      { id: 'plan', bash: 'echo tasks' },
+      {
+        id: 'work',
+        workflow: 'child-target',
+        depends_on: ['plan'],
+        fan_out: { items: '$plan.output.tasks' },
+      },
+    ]);
+    const parent = wf('parent', [{ id: 'inc', include: 'fanblk' }]);
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
+    expect(errors).toHaveLength(0);
+    const work = nodeById(workflows.get('parent')!, 'inc__work');
+    expect(work).toBeDefined();
+    // The producer ref inside fan_out.items is rewritten to the namespaced id…
+    expect(work && 'fan_out' in work ? work.fan_out?.items : '').toBe('$inc__plan.output.tasks');
+    // …the sub-run TARGET is a workflow name — never rewritten.
+    expect(work && 'workflow' in work ? work.workflow : '').toBe('child-target');
+  });
 });
 
 // ---------------------------------------------------------------------------
