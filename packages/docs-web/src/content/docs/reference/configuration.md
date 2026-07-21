@@ -366,6 +366,7 @@ The Copilot provider also reads `assistants.copilot.{model, modelReasoningEffort
 | `DISCORD_BOT_TOKEN` | Discord bot token from Developer Portal | -- |
 | `DISCORD_ALLOWED_USER_IDS` | Comma-separated Discord user IDs for whitelist | Open access |
 | `DISCORD_STREAMING_MODE` | Streaming mode (`stream` or `batch`) | `batch` |
+| `DISCORD_REQUIRE_MENTION` | Require @mention to activate in servers (`true` or `false`); DMs never require a mention | `true` |
 
 ### Platform Adapters -- GitHub
 
