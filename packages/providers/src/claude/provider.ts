@@ -702,7 +702,10 @@ function buildBaseClaudeOptions(
     permissionMode: 'bypassPermissions',
     allowDangerouslySkipPermissions: true,
     systemPrompt: requestOptions?.systemPrompt ?? { type: 'preset', preset: 'claude_code' },
-    settingSources: assistantDefaults.settingSources ?? ['project', 'user'],
+    // Per-node override wins over the assistant-level default; the final
+    // fallback stays ['project', 'user'] (the SDK-loading default Archon ships).
+    settingSources: requestOptions?.nodeConfig?.settingSources ??
+      assistantDefaults.settingSources ?? ['project', 'user'],
     hooks: buildToolCaptureHooks(toolResultQueue),
     stderr: (data: string): void => {
       const output = data.trim();

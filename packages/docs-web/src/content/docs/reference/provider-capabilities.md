@@ -48,6 +48,7 @@ per-node YAML field for that provider; a ❌ means the field is accepted but ign
 | Thinking control (`thinking`) | ✅ | ❌ | ❌ | ✅ | ✅ |
 | Fallback model (`fallbackModel`) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Sandbox (`sandbox`) | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Setting sources (`settingSources`) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | In-process native tools | ✅ | ❌ | ❌ | ✅ | ❌ |
 | Container exec (folder-project container backend) | ✅ | ❌ | ❌ | ❌ | ❌ |
 

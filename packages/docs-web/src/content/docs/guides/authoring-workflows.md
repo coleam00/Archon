@@ -227,10 +227,11 @@ nodes:
 | `fallbackModel` | string | — | Model to use if primary model fails. Claude only. Also settable at workflow level |
 | `betas` | string[] | — | SDK beta feature flags (e.g., `'context-1m-2025-08-07'`). Claude only. Also settable at workflow level |
 | `sandbox` | object | — | OS-level filesystem/network restrictions for the Claude subprocess. Claude only. Also settable at workflow level |
+| `settingSources` | (`'project'`\|`'user'`)[] | inherited | Which filesystem setting sources Claude loads (CLAUDE.md, skills, commands, agents). Overrides the assistant-level default; unset everywhere = `['project', 'user']`. `[]` loads none. Claude only. Per-node only |
 
 ### Claude SDK Advanced Options
 
-These fields map directly to Claude Agent SDK options. `maxBudgetUsd`, `systemPrompt`, `fallbackModel`, `betas`, and `sandbox` are Claude-only — Codex and other providers emit a warning and ignore them. `effort` and `thinking` also apply to Pi and Copilot, which map them to their own reasoning controls (Codex uses `modelReasoningEffort` instead; OpenCode configures reasoning via `opencode.json`). They can be set **per-node** or at the **workflow level** as defaults (per-node takes precedence). `maxBudgetUsd` and `systemPrompt` are per-node only.
+These fields map directly to Claude Agent SDK options. `maxBudgetUsd`, `systemPrompt`, `fallbackModel`, `betas`, `sandbox`, and `settingSources` are Claude-only — Codex and other providers emit a warning and ignore them. `effort` and `thinking` also apply to Pi and Copilot, which map them to their own reasoning controls (Codex uses `modelReasoningEffort` instead; OpenCode configures reasoning via `opencode.json`). They can be set **per-node** or at the **workflow level** as defaults (per-node takes precedence). `maxBudgetUsd`, `systemPrompt`, and `settingSources` are per-node only (`settingSources` also has an assistant-level default in `.archon/config.yaml`).
 
 **effort** — reasoning depth:
 
@@ -295,6 +296,20 @@ These fields map directly to Claude Agent SDK options. `maxBudgetUsd`, `systemPr
     filesystem:
       denyWrite: ['/etc', '/usr']
 ```
+
+**settingSources** — control which filesystem setting sources the Claude SDK loads (project `CLAUDE.md`/`.claude/` skills, commands, agents vs the user-level `~/.claude/`). Loading fewer sources gives a leaner context and a faster node start — a lean reviewer node can skip project context entirely while a writer node in the same workflow keeps it:
+
+```yaml
+- id: lean-review
+  command: review
+  settingSources: []              # load no CLAUDE.md / skills / commands / agents
+
+- id: implement
+  command: implement
+  settingSources: ['project']     # project sources only, skip ~/.claude/
+```
+
+Omitting the field inherits the assistant-level `assistants.claude.settingSources` from `.archon/config.yaml`; if that is also unset, the default is `['project', 'user']`.
 
 **Workflow-level defaults** (inherited by all Claude nodes unless overridden per-node):
 

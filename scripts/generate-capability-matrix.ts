@@ -63,6 +63,7 @@ const AXES: readonly { key: keyof ProviderCapabilities; label: string }[] = [
   { key: 'thinkingControl', label: 'Thinking control (`thinking`)' },
   { key: 'fallbackModel', label: 'Fallback model (`fallbackModel`)' },
   { key: 'sandbox', label: 'Sandbox (`sandbox`)' },
+  { key: 'settingSources', label: 'Setting sources (`settingSources`)' },
   { key: 'nativeTools', label: 'In-process native tools' },
   { key: 'containerExec', label: 'Container exec (folder-project container backend)' },
 ];

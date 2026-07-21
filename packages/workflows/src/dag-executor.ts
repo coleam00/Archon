@@ -1012,6 +1012,7 @@ async function resolveNodeProviderAndModel(
       (node.fallbackModel ?? workflowLevelOptions.fallbackModel) !== undefined,
     ],
     ['sandbox', 'sandbox', (node.sandbox ?? workflowLevelOptions.sandbox) !== undefined],
+    ['settingSources', 'settingSources', node.settingSources !== undefined],
     ['env', 'envInjection', (config.envVars && Object.keys(config.envVars).length > 0) === true],
   ];
 
@@ -1092,6 +1093,7 @@ async function resolveNodeProviderAndModel(
     maxBudgetUsd: node.maxBudgetUsd,
     systemPrompt: node.systemPrompt,
     fallbackModel: fb,
+    settingSources: node.settingSources,
   };
 
   // Pass assistantConfig from config — provider parses internally
