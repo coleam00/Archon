@@ -75,6 +75,50 @@ const AXES: readonly { key: keyof ProviderCapabilities; label: string }[] = [
  */
 const SKIP_KEYS = new Set<keyof ProviderCapabilities>(['knownToolNames', 'renamedTools']);
 
+/**
+ * Per-cell caveats (#2219): capabilities that ARE wired for a provider but
+ * with semantics that differ from the axis's headline meaning. Each entry
+ * renders as a superscript marker on the cell (e.g. ✅¹) plus a numbered
+ * entry in the "Caveats" section under the table. Tier-valued axes
+ * (structuredOutput) already express their nuance directly in the cell — do
+ * not duplicate them here. `resolveCaveats` fails the generator on stale
+ * entries (unknown provider, axis-less key, or a caveat on a ❌ cell).
+ */
+const CAVEATS: readonly { provider: string; key: keyof ProviderCapabilities; note: string }[] = [
+  {
+    provider: 'codex',
+    key: 'skills',
+    note:
+      'Filesystem auto-discovery from `.agents/skills/` — per-node `skills:` lists are ' +
+      'informational; use `provider: claude` for node-scoped skills.',
+  },
+  {
+    provider: 'opencode',
+    key: 'agents',
+    note:
+      'Config-file-based agent selection (named agents from `opencode.json`) with per-call ' +
+      'model/tools overrides — not inline sub-agent definitions.',
+  },
+];
+
+const SUPERSCRIPT_DIGITS = ['⁰', '¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹'] as const;
+
+/** Render a positive integer as unicode superscript digits (1 → ¹, 12 → ¹²). */
+function superscript(n: number): string {
+  return String(n)
+    .split('')
+    .map(d => SUPERSCRIPT_DIGITS[Number(d)])
+    .join('');
+}
+
+/** A caveat validated against the registry and joined with its axis label. */
+interface ResolvedCaveat {
+  provider: string;
+  key: keyof ProviderCapabilities;
+  axisLabel: string;
+  note: string;
+}
+
 /** Render a single provider's value for an axis. */
 function renderCell(caps: ProviderCapabilities, key: keyof ProviderCapabilities): string {
   if (key === 'structuredOutput') {
@@ -107,7 +151,38 @@ function assertTotalCoverage(providers: ProviderInfo[]): void {
   }
 }
 
-function buildMarkdown(providers: ProviderInfo[]): string {
+/**
+ * Validate the CAVEATS table and resolve each entry to its matrix axis.
+ * Fails loudly on stale caveats: every caveat must point at a registered
+ * provider, at a capability the matrix renders as an axis, and at a cell that
+ * renders as supported — a caveat on a ❌ cell means the capability was turned
+ * off and the caveat text is stale.
+ */
+function resolveCaveats(providers: ProviderInfo[]): ResolvedCaveat[] {
+  const axisByKey = new Map(AXES.map(a => [a.key, a] as const));
+  return CAVEATS.map(caveat => {
+    const provider = providers.find(p => p.id === caveat.provider);
+    if (!provider) {
+      throw new Error(
+        `Caveat references unknown provider '${caveat.provider}'. Registered: ${providers.map(p => p.id).join(', ')}.`
+      );
+    }
+    const axis = axisByKey.get(caveat.key);
+    if (!axis) {
+      throw new Error(
+        `Caveat for '${caveat.provider}' references capability '${caveat.key}', which has no matrix axis.`
+      );
+    }
+    if (renderCell(provider.capabilities, caveat.key) === '❌') {
+      throw new Error(
+        `Stale caveat: '${caveat.provider}' no longer declares '${caveat.key}' (cell renders ❌). Remove the caveat entry.`
+      );
+    }
+    return { provider: caveat.provider, key: caveat.key, axisLabel: axis.label, note: caveat.note };
+  });
+}
+
+function buildMarkdown(providers: ProviderInfo[], caveats: ResolvedCaveat[]): string {
   const ids = providers.map(p => p.id);
 
   const providerList = providers
@@ -117,9 +192,17 @@ function buildMarkdown(providers: ProviderInfo[]): string {
   const header = `| Capability | ${ids.map(id => `\`${id}\``).join(' | ')} |`;
   const divider = `|${' --- |'.repeat(ids.length + 1)}`;
   const rows = AXES.map(axis => {
-    const cells = providers.map(p => renderCell(p.capabilities, axis.key));
+    const cells = providers.map(p => {
+      const cell = renderCell(p.capabilities, axis.key);
+      const idx = caveats.findIndex(c => c.provider === p.id && c.key === axis.key);
+      return idx === -1 ? cell : `${cell}${superscript(idx + 1)}`;
+    });
     return `| ${axis.label} | ${cells.join(' | ')} |`;
   }).join('\n');
+
+  const caveatList = caveats
+    .map((c, i) => `- ${superscript(i + 1)} \`${c.provider}\` — ${c.axisLabel} — ${c.note}`)
+    .join('\n');
 
   return [
     '---',
@@ -157,9 +240,12 @@ function buildMarkdown(providers: ProviderInfo[]): string {
     divider,
     rows,
     '',
+    ...(caveats.length > 0 ? ['## Caveats', '', caveatList, ''] : []),
     '## Legend',
     '',
     '- **✅ / ❌** — the per-node field is wired for this provider, or accepted-but-ignored.',
+    '- **✅¹ (superscript)** — supported, but with semantics that differ from the headline',
+    '  meaning of the axis — see [Caveats](#caveats).',
     '- **Structured output** — `enforced` (the SDK/backend grammar-constrains decoding),',
     '  `best-effort` (schema appended to the prompt, then validated + re-asked up to 3×),',
     '  or ❌ (unsupported). See [AI Assistants → Structured output guarantees](/getting-started/ai-assistants/#structured-output-guarantees).',
@@ -180,8 +266,9 @@ async function main(): Promise<void> {
     throw new Error('No providers registered — registry bootstrap failed.');
   }
   assertTotalCoverage(providers);
+  const caveats = resolveCaveats(providers);
 
-  const contents = buildMarkdown(providers);
+  const contents = buildMarkdown(providers, caveats);
 
   if (CHECK_ONLY) {
     let existing = '';
