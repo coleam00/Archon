@@ -56,14 +56,9 @@ export function isDocker(): boolean {
  *   - `WSL_DISTRO_NAME` env var is set (always true inside a WSL distro)
  *   - `/proc/sys/kernel/osrelease` contains "microsoft" (lower-cased)
  *
- * Used by callers that need to emit Windows-host-friendly URIs — most
- * notably the Web UI's "Open in IDE" button, which has to switch from
- * `vscode://file/...` to `vscode://vscode-remote/wsl+<distro>/...` when
- * the server is inside WSL but the browser is on the Windows host.
- *
- * Not cached: the env-var read is free and the `/proc` read is cheap
- * enough at the call frequency this hits (one per `/api/health` request,
- * which the Web UI polls every 30 s).
+ * Used by callers that need to emit Windows-host-friendly URIs
+ * (`vscode://vscode-remote/wsl+<distro>/...` instead of `vscode://file/...`)
+ * when the server is inside WSL but the browser is on the Windows host.
  */
 export function isWSL(): boolean {
   if (process.env.WSL_DISTRO_NAME) return true;
@@ -72,23 +67,24 @@ export function isWSL(): boolean {
     const release = readFileSync('/proc/sys/kernel/osrelease', 'utf8').toLowerCase();
     return release.includes('microsoft');
   } catch {
-    // No env var (checked above) and no readable /proc/sys/kernel/osrelease
-    // means neither WSL signal fires — we're not in WSL. Safe to return false:
-    // a false negative only downgrades the "Open in IDE" link to vscode://file/...,
-    // which is the correct form outside WSL anyway.
+    // Unable to read the fallback signal; return false conservatively. This
+    // can be a false negative (WSL with the env var absent and an unreadable
+    // /proc/sys/kernel/osrelease), in which case callers fall back to the
+    // plain vscode://file/... URI.
     return false;
   }
 }
 
 /**
- * Return the WSL distribution name (`Ubuntu`, `Debian`, …) when the process
- * is running inside WSL, otherwise `undefined`. The value comes straight
- * from the `WSL_DISTRO_NAME` env var that WSL sets in every distro.
+ * Return the configured `WSL_DISTRO_NAME` value (`Ubuntu`, `Debian`, …) if
+ * present, otherwise `undefined`. WSL sets this env var in every distro
+ * shell; it may also be set manually to opt into the WSL URI path.
  *
- * Returns `undefined` outside of WSL, even though `isWSL()` may technically
- * still be true via the `/proc` fallback — without the env var we don't
- * know what distro to put into a `vscode://vscode-remote/wsl+<distro>/...`
- * URI, and guessing is worse than a sentinel that callers can fall back on.
+ * Note this only reads the env var — `isWSL()` may still be true via the
+ * `/proc` fallback while this returns `undefined`. Without the env var we
+ * don't know what distro to put into a
+ * `vscode://vscode-remote/wsl+<distro>/...` URI, and guessing is worse than
+ * a sentinel that callers can fall back on.
  */
 export function getWSLDistroName(): string | undefined {
   return process.env.WSL_DISTRO_NAME ?? undefined;

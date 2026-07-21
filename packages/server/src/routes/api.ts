@@ -4166,6 +4166,7 @@ export function registerApiRoutes(
       .map(r => r.conversation_id)
       .filter(id => !lockActiveSet.has(id));
     const allActiveIds = [...stats.activeConversationIds, ...backgroundConversationIds];
+    const wslDistro = getWSLDistroName();
 
     return c.json({
       status: 'ok',
@@ -4179,7 +4180,7 @@ export function registerApiRoutes(
       version: appVersion,
       is_docker: isDocker(),
       is_wsl: isWSL(),
-      ...(getWSLDistroName() ? { wsl_distro: getWSLDistroName() } : {}),
+      ...(wslDistro ? { wsl_distro: wslDistro } : {}),
       activePlatforms: activePlatforms ? [...activePlatforms] : ['Web'],
     });
   });
