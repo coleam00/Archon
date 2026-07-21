@@ -79,7 +79,7 @@ argument-hint: <module-name>
 
 ### Step 3: Write the Instructions
 
-```markdown
+````markdown
 # Run Tests
 
 **Module**: $ARGUMENTS
@@ -117,7 +117,7 @@ If you can't find test files for `$ARGUMENTS`, say so clearly and list the files
 - [ ] Results reported with pass/fail counts
 - [ ] Failing tests identified with error messages
 - [ ] Clear recommendation for next step
-```
+````
 
 ### Step 4: Test It
 
