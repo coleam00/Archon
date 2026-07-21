@@ -6,11 +6,22 @@ set -e
 # which causes the Claude subprocess to fail silently when spawned with a missing cwd.
 mkdir -p /.archon/workspaces /.archon/worktrees
 
-# Determine if we need to use gosu for privilege dropping
+# Determine if we need to use gosu for privilege dropping.
+# Default: run commands as-is — already non-root (e.g., --user flag or
+# Kubernetes), or root via the explicit ARCHON_ALLOW_ROOT_FALLBACK opt-in below.
+RUNNER=""
 if [ "$(id -u)" = "0" ]; then
   # A blanket `chown -R` rewrites metadata for every inode (#1970); only files
   # with wrong ownership are touched.
   # find + chown -h leaves symlinks un-dereferenced (no-dereference by design).
+  #
+  # chown can fail when the host controls ownership: on macOS VirtioFS bind
+  # mounts, host UIDs cannot be remapped to appuser (1001) at all. On Linux,
+  # SELinux/AppArmor denials or read-only mounts produce the same failure and
+  # look identical from inside the container, so we cannot auto-distinguish.
+  # Failures are accumulated (not exited inline) so we can branch once below
+  # on the explicit ARCHON_ALLOW_ROOT_FALLBACK opt-in.
+  chown_failed=0
   fix_ownership() {
     local err
     # -o is correct: we want appuser:appuser on both, not "either matches".
@@ -19,7 +30,7 @@ if [ "$(id -u)" = "0" ]; then
         echo "$err" >&2
       fi
       echo "ERROR: Failed to fix ownership of $1 — volume may be read-only or mounted with incompatible options" >&2
-      exit 1
+      chown_failed=1
     fi
   }
   fix_ownership /.archon
@@ -28,10 +39,20 @@ if [ "$(id -u)" = "0" ]; then
   # and other user-specific state survive rebuilds. On bind mounts, host UIDs
   # don't map to appuser (1001), so fix ownership via fix_ownership as well.
   fix_ownership /home/appuser
-  RUNNER="gosu appuser"
-else
-  # Already running as non-root (e.g., --user flag or Kubernetes)
-  RUNNER=""
+  if [ "$chown_failed" = "0" ]; then
+    RUNNER="gosu appuser"
+  elif [ "${ARCHON_ALLOW_ROOT_FALLBACK:-0}" = "1" ]; then
+    # Explicit opt-in (macOS VirtioFS escape hatch): continue as root.
+    # IS_SANDBOX=1 satisfies ClaudeProvider's UID-0 guard
+    # (packages/providers/src/claude/provider.ts), which otherwise refuses
+    # bypassPermissions as root. Never auto-enabled — default stays fail-loud.
+    echo "WARNING: ARCHON_ALLOW_ROOT_FALLBACK=1 — continuing as root with IS_SANDBOX=1." >&2
+    export IS_SANDBOX=1
+  else
+    # Fail loud (default) — see the docker deployment guide for the
+    # ARCHON_ALLOW_ROOT_FALLBACK opt-in.
+    exit 1
+  fi
 fi
 
 # Warn if vars known to be ignored inside the container were set via env_file: .env.

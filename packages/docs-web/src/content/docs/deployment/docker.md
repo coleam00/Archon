@@ -512,6 +512,28 @@ PI_CODING_AGENT_DIR=/.archon/pi
 
 This must be set before the container starts; the Pi SDK reads the variable on each file path lookup.
 
+### Root fallback for macOS bind mounts (opt-in)
+
+On every start the entrypoint fixes ownership of `/.archon` and `/home/appuser` so they are writable by `appuser` (UID 1001), then drops privileges. On **macOS bind mounts (VirtioFS)** this ownership fix always fails — the host controls file ownership and refuses to remap host UIDs to the container's UID 1001 — so the container exits 1 and crash-loops. Read-only mounts and SELinux/AppArmor denials on Linux fail the same way.
+
+`ARCHON_ALLOW_ROOT_FALLBACK` is the explicit escape hatch for this case:
+
+```ini
+# .env — opt in to running as root when the ownership fix fails
+ARCHON_ALLOW_ROOT_FALLBACK=1
+```
+
+| Value | Behavior when the ownership fix fails |
+|-------|----------------------------------------|
+| unset / anything but `1` (default) | Print the underlying `chown` error and exit 1 (fail loud — unchanged) |
+| `1` | Print a warning, `export IS_SANDBOX=1`, and continue running as **root** (privileges are not dropped to `appuser`) |
+
+The variable has **no effect** when the ownership fix succeeds — Linux setups with correct volume ownership are untouched.
+
+:::caution
+This is a deliberate security tradeoff and is **never auto-enabled**. Running as root also sets `IS_SANDBOX=1`, which bypasses the Claude provider's UID-0 safety guard (it otherwise refuses `bypassPermissions` as root) — so AI subprocesses run as root inside the container. That is acceptable on a single-operator macOS dev machine where the bind mount already scopes what the container can touch; it is the wrong fix on Linux, where the failure means the volume ownership is actually broken — run `sudo chown -R 1001:1001 <path>` on the host instead of opting in.
+:::
+
 ### Folder-project container isolation (`--container`) is unavailable in Docker
 
 The folder-project **container backend** (`archon workflow run … --container`) launches a
@@ -729,11 +751,15 @@ When using `--profile with-db`, ensure:
 
 ### Permission errors in `/.archon/`
 
-The container runs as `appuser` (UID 1001). If using bind mounts instead of Docker volumes:
+The container runs as `appuser` (UID 1001). The entrypoint tries to fix ownership of `/.archon` and `/home/appuser` on every start and exits 1 (with the underlying `chown` error) when it can't.
+
+**On Linux** with bind mounts instead of Docker volumes, fix the ownership on the host:
 
 ```bash
 sudo chown -R 1001:1001 /path/to/archon-data
 ```
+
+**On macOS** (Docker Desktop / VirtioFS bind mounts), host `chown` does **not** help — the host refuses to remap ownership to the container's UID 1001 no matter what the files are owned by on the host. For that case (and other failures `chown` can't fix, like read-only mounts or SELinux/AppArmor denials), see [Root fallback for macOS bind mounts (opt-in)](#root-fallback-for-macos-bind-mounts-opt-in).
 
 ### Port conflicts
 
