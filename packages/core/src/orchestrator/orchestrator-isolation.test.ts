@@ -135,6 +135,7 @@ mock.module('@archon/isolation', () => ({
   },
   configureIsolation: mock(() => undefined),
   getIsolationProvider: mock(() => ({})),
+  classifyIsolationError: (err: Error) => err.message,
 }));
 
 mock.module('./prompt-builder', () => ({
