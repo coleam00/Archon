@@ -8,7 +8,7 @@ The in-console workflow builder. Ported from the standalone
   builder can't represent — `loop`, `approval`, `cancel`, `script` — plus the
   three existing kinds (`prompt`, `bash`, `command`), round-trippable with
   pure-function validation and typed fixtures.
-- **PR-2 (this layer): the visual editor.** React-Flow canvas, custom node
+- **PR-2 (merged): the visual editor.** React-Flow canvas, custom node
   rendering, palette, inspector (with `when:` builder), validation panel,
   read-only syntax-highlighted YAML preview (reusing the console's existing
   `react-markdown` + `rehype-highlight` stack — no new highlighting dep), and
@@ -18,13 +18,18 @@ The in-console workflow builder. Ported from the standalone
   in-memory `BuilderWorkflow`, plus a **fixture-backed** `/console/builder`
   route (sidebar "Workflow Builder" entry with a Beta pill) and a section on
   `/console/_preview`.
-- **PR-3 (next): connected mode.** `loadWorkflow`/`saveWorkflow` skill verbs,
-  the `:name` route param, cache wiring, server-tier validation.
+- **PR-3 (shipped): connected mode.** `loadWorkflow`/`saveWorkflow`/
+  `deleteWorkflow`/`validateWorkflow` skill verbs, the `:name` route param, a
+  project picker (workflows are discovered/saved per-codebase `cwd`), an explicit
+  Save flow with a dirty indicator + nav guard, server-tier validation surfaced
+  into the issue panel, and full CRUD — with bundled workflows opening read-only
+  and saving as a project override. See **PR-3 specifics** below.
 
-**Nothing in PR-2 performs server I/O.** `BuilderPage` takes
-`initialWorkflow: BuilderWorkflow` as a prop and reports edits via `onChange`;
-the route seeds it from PR-1 fixtures only. That seam is exactly what PR-3
-wraps — reviewable and revertable by construction.
+`BuilderPage` stays a **controlled component**: it takes
+`initialWorkflow: BuilderWorkflow` as a prop and reports edits via `onChange`.
+PR-3's only additive change to it is an optional `extraIssues?: Issue[]` prop
+(import + server issues merged into the panel). All server I/O, dirty/nav logic,
+and CRUD live in `BuilderConnected` + `connect/*`.
 
 ## What's here
 
@@ -46,8 +51,9 @@ builder/
 │                 #   reducer (state.ts), keymap bindings (console useKeymap)
 ├── components/   # PR-2: canvas, node view, palette, inspector (+ per-variant
 │                 #   sub-forms), WhenBuilder, IssueList, YamlPreview, Toolbar
-├── BuilderPage.tsx   # PR-2: the controlled assembly (the PR-3 seam)
-├── BuilderRoute.tsx  # PR-2: fixture-backed /console/builder route
+├── BuilderPage.tsx       # PR-2: the controlled assembly (+ PR-3 extraIssues prop)
+├── BuilderConnected.tsx  # PR-3: connected /console/builder[/:name] route
+├── connect/              # PR-3: pure save/rename/issue logic + selected-project hook
 └── **/*.test.ts  # bun:test units (pure logic only — no DOM, no mock.module)
 ```
 
@@ -76,12 +82,13 @@ PR-2:  flow/  yaml/  editor/        (pure: PR-1 + xyflow/dagre only)
           ↑
        BuilderPage.tsx              (controlled assembly; initialWorkflow prop)
           ↑
-       BuilderRoute.tsx · routes/PreviewPage.tsx   (fixture-backed surfaces)
+       BuilderConnected.tsx         (PR-3: skills + store/cache + react-router)
+       routes/PreviewPage.tsx       (fixture-backed visual surface)
 ```
 
-Lower layers never import upper layers, and nothing here imports skill verbs
-or `store/cache.ts` — that wiring is PR-3. Each module compiles in isolation —
-reviewable by construction.
+PR-1/PR-2 layers never import skill verbs or `store/cache.ts` — only
+`BuilderConnected.tsx` + `connect/*` (the PR-3 wiring) do. Each module compiles
+in isolation — reviewable by construction.
 
 ## PR-2 specifics
 
@@ -103,6 +110,46 @@ reviewable by construction.
 - **Positions are UI-only.** The wire `DagNode` has no position field; canvas
   positions live in editor state and are stripped by `flowToBuilder`, keeping
   PR-1's round-trip byte-identical.
+
+## PR-3 specifics (connected mode)
+
+- **Routes.** `/console/builder` (picker + open-a-workflow) and
+  `/console/builder/:name` (load + edit), both mounted to `BuilderConnected`.
+  The route `:name` is the filename; on every save the in-YAML `name:` is forced
+  equal to it, so filename and `name:` stay in sync (one name drives both).
+- **Project picker.** Workflows are discovered/saved per-codebase `cwd`, so a
+  project must be selected first. Selection persists in
+  `archon.console.builderProject` (localStorage, try/catch-guarded) and is
+  reflected as a `?project=<id>` search param, so a deep-link reload restores the
+  cwd. This is a deliberate divergence from the console's `/p/:projectId`
+  path-scoping (used for Runs/Chat) — the builder uses a global route + picker.
+- **Save flow.** Explicit Save = client-validate (`runValidation`, blocking
+  errors gate the save) → server-validate (`POST /api/workflows/validate`, which
+  returns HTTP 200 even when invalid — branch on `valid`) → `PUT`, then invalidate
+  the workflow + list caches. A dirty dot shows unsaved edits.
+- **Nav guard.** The app is a non-data `<BrowserRouter>`, so `useBlocker` is
+  unavailable. The guard is a `beforeunload` listener (reload/tab-close) plus a
+  `confirmIfDirty` wrapper around the header's OWN controls (project change,
+  open-another, New). **Known limitation:** the browser Back button and
+  `ProjectRail` clicks are NOT intercepted; a data-router migration is out of
+  scope.
+- **Bundled = read-only → Save-as.** `source === 'bundled'` opens read-only; the
+  Save button becomes "Save as" and writes a project override (the server also
+  400s a bundled delete, so Delete is hidden for bundled).
+- **CRUD.** New (seed a minimal single-prompt workflow, then create-on-save),
+  Rename (collision-guarded, new-then-old so a failed delete still leaves the new
+  file authoritative — surfaced as a non-fatal warning issue), Delete (confirm →
+  remove → navigate away).
+- **Issues panel.** Client + import + server/save issues all flow through the
+  existing `IssueList` via `BuilderPage`'s `extraIssues` prop, deduped by id.
+- **Save normalizes YAML key order.** The round-trip is **lossless but not
+  byte-identical** for real files — the model emits a normalized key order, so a
+  save can produce a slightly larger-than-expected (but correct) git diff. Dirty
+  detection is therefore on `BuilderWorkflow` identity from `onChange`, never on a
+  serialized-YAML string compare (which would falsely flag every load as dirty).
+- **Subdir limitation (known).** `GET /api/workflows/:name` does not recurse into
+  `.archon/workflows/<subdir>/`; subfoldered workflows won't load via the
+  single-name route and surface a "not found" empty state (offers New).
 
 ## Round-trip contract
 

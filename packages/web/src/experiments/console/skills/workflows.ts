@@ -1,6 +1,7 @@
 import { requestJson } from '../lib/http';
-import { toWorkflow, type Workflow } from '../primitives/workflow';
+import { toWorkflow, type Workflow, type WorkflowSource } from '../primitives/workflow';
 import type { WorkflowGraphNode } from '../primitives/workflow-graph';
+import type { WireWorkflowDefinition } from '../builder/types/wire';
 
 interface RawNode {
   id: string;
@@ -79,4 +80,98 @@ export async function getWorkflowGraph(name: string, cwd?: string): Promise<Work
       kind: nodeKind(n),
     })
   );
+}
+
+// ---------------------------------------------------------------------------
+// PR-3 connected-mode CRUD verbs. The single-name endpoints below are the live
+// seam the builder's BuilderConnected route saves through. URL/body shaping is
+// extracted into pure builders so it can be unit-tested without `fetch`.
+// ---------------------------------------------------------------------------
+
+/**
+ * Where a loaded workflow lives. Read-only iff `source === 'bundled'`.
+ * Re-exported from `primitives/workflow` (single source of truth) so the union
+ * cannot silently diverge between the list primitive and the CRUD verbs.
+ */
+export type { WorkflowSource };
+
+/** Save target — bundled opens read-only, so Save-as always writes a project override. */
+export type WorkflowSaveSource = 'project' | 'global';
+
+/** `GET /api/workflows/:name` response. */
+export interface GetWorkflowResponse {
+  workflow: WireWorkflowDefinition;
+  filename: string;
+  source: WorkflowSource;
+}
+
+/** Normalized result of `loadWorkflow`. */
+export interface LoadedWorkflow {
+  definition: WireWorkflowDefinition;
+  filename: string;
+  source: WorkflowSource;
+}
+
+/**
+ * `POST /api/workflows/validate` response — HTTP 200 even when invalid.
+ * Discriminated on `valid` so a `valid:false` body always carries the (possibly
+ * empty) `errors` field and the `valid:true` branch cannot claim errors.
+ */
+export type ValidateWorkflowResponse = { valid: true } | { valid: false; errors?: string[] };
+
+/** Build the single-name GET/PUT/DELETE path with an encoded `?cwd=` query. */
+export function buildWorkflowPath(name: string, cwd: string): string {
+  return `/api/workflows/${encodeURIComponent(name)}?cwd=${encodeURIComponent(cwd)}`;
+}
+
+/** Build the PUT/DELETE path, appending `&source=` to the cwd query. */
+export function buildSavePath(name: string, cwd: string, source: WorkflowSaveSource): string {
+  return `${buildWorkflowPath(name, cwd)}&source=${source}`;
+}
+
+/**
+ * Load a single workflow definition by name for the selected project.
+ *
+ * GOTCHA: the single-name `GET /api/workflows/:name` does NOT recurse into
+ * `.archon/workflows/<subdir>/` (matches `getWorkflowGraph`'s note). Workflows
+ * in subfolders won't load here — callers surface a "not found" empty state.
+ */
+export async function loadWorkflow(name: string, cwd: string): Promise<LoadedWorkflow> {
+  const res = await requestJson<GetWorkflowResponse>(buildWorkflowPath(name, cwd));
+  return { definition: res.workflow, filename: res.filename, source: res.source };
+}
+
+/** Persist (create or update) a workflow YAML via PUT `?cwd=&source=`. */
+export async function saveWorkflow(
+  name: string,
+  definition: WireWorkflowDefinition,
+  opts: { cwd: string; source: WorkflowSaveSource }
+): Promise<LoadedWorkflow> {
+  const res = await requestJson<GetWorkflowResponse>(buildSavePath(name, opts.cwd, opts.source), {
+    method: 'PUT',
+    body: JSON.stringify({ definition }),
+  });
+  return { definition: res.workflow, filename: res.filename, source: res.source };
+}
+
+/** Delete a user-defined workflow via DELETE `?cwd=&source=`. Bundled deletes 400 server-side. */
+export async function deleteWorkflow(
+  name: string,
+  opts: { cwd: string; source: WorkflowSaveSource }
+): Promise<void> {
+  await requestJson(buildSavePath(name, opts.cwd, opts.source), { method: 'DELETE' });
+}
+
+/**
+ * Server-tier validation. Returns HTTP 200 even when invalid, so `requestJson`
+ * will NOT throw — branch on `valid` and map `errors[]` into the issue panel.
+ * NO `?cwd=` (validation is stateless).
+ */
+export function validateWorkflow(
+  definition: WireWorkflowDefinition
+): Promise<ValidateWorkflowResponse> {
+  return requestJson<ValidateWorkflowResponse>('/api/workflows/validate', {
+    method: 'POST',
+    body: JSON.stringify({ definition }),
+  });
 }
