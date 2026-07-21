@@ -1,14 +1,20 @@
 import { describe, test, expect, beforeEach, afterEach, mock, spyOn, type Mock } from 'bun:test';
 import { writeFile, mkdir as realMkdir, rm } from 'fs/promises';
-import { basename, join } from 'path';
+import { join } from 'path';
 import { tmpdir, homedir } from 'os';
+// Loaded BEFORE mock.module replaces the module in the registry, so these are
+// the REAL identity validators — the mock re-exports them (no drift possible).
+import { parseOwnerRepo, resolveRepoProjectIdentity } from '@archon/paths';
 
 // ---------------------------------------------------------------------------
 // Mock @archon/paths: suppress logger, pass-through path functions
 // ---------------------------------------------------------------------------
-// Re-implement the path helpers inline so the mock doesn't depend on the real
-// module (mock.module replaces the *entire* module).  The path functions are
-// trivial join() wrappers driven by env-vars, so duplication is acceptable.
+// Re-implement the *path* helpers inline so the mock doesn't depend on the
+// real module's env handling (mock.module replaces the *entire* module).  The
+// path functions are trivial join() wrappers driven by env-vars, so
+// duplication is acceptable.  The identity validators (parseOwnerRepo,
+// resolveRepoProjectIdentity) are pure, so the mock passes the real ones
+// through instead of mirroring them.
 // ---------------------------------------------------------------------------
 interface MockLogger {
   fatal: ReturnType<typeof mock>;
@@ -45,30 +51,6 @@ function getArchonHome(): string {
     return '/.archon';
   }
   return process.env.ARCHON_HOME ?? join(homedir(), '.archon');
-}
-
-/** Mirror of @archon/paths parseOwnerRepo (must stay aligned with SAFE_NAME). */
-const SAFE_NAME = /^[a-zA-Z0-9._-]+$/;
-function parseOwnerRepo(name: string): { owner: string; repo: string } | null {
-  const parts = name.split('/');
-  if (parts.length !== 2) return null;
-  const [owner, repo] = parts;
-  if (!owner || !repo) return null;
-  if (owner === '.' || owner === '..' || repo === '.' || repo === '..') return null;
-  if (!SAFE_NAME.test(owner) || !SAFE_NAME.test(repo)) return null;
-  return { owner, repo };
-}
-
-/** Mirror of @archon/paths resolveRepoProjectIdentity (_local/<basename> fallback). */
-function resolveRepoProjectIdentity(
-  name: string,
-  cwd: string
-): { owner: string; repo: string } | null {
-  const parsed = parseOwnerRepo(name);
-  if (parsed) return parsed;
-  const repo = basename(cwd);
-  if (repo === '' || repo === '.' || repo === '..') return null;
-  return { owner: '_local', repo };
 }
 
 mock.module('@archon/paths', () => ({
@@ -322,16 +304,14 @@ describe('git utilities', () => {
     });
 
     test('ignores SSH-URL-shaped codebaseName (contains ":" / "@") and falls back to _local', () => {
-      // Regression guard (PR #1583): a codebase registered with
-      // name = "git@host.example:org/repo" used to be split naively at the last
-      // slash, yielding owner = "git@host.example:org" — that colon broke
-      // docker-compose volume parsing in worktrees (short-form
-      // `HOST:CONTAINER:OPT` mounts inside devcontainers). The strict validator
-      // must reject names containing characters outside `[A-Za-z0-9._-]` and
-      // fall back to the shared _local/<basename> identity.
+      // Regression guard (PR #1583): a name like "git@host.example:org/repo"
+      // used to be split naively at the last slash — the colon smuggled into
+      // the owner path segment broke docker-compose short-form volume specs
+      // (`HOST:CONTAINER:OPT`) inside devcontainers.
       delete process.env.WORKSPACE_PATH;
       delete process.env.ARCHON_DOCKER;
       delete process.env.ARCHON_HOME;
+      mockLogger.warn.mockClear();
       const result = git.getWorktreeBase(
         '/srv/projects/widget-app',
         'git@git.example.net:acme/widget-app'
@@ -340,6 +320,12 @@ describe('git utilities', () => {
         base: join(homedir(), '.archon', 'workspaces', '_local', 'widget-app', 'worktrees'),
         layout: 'workspace-scoped',
       });
+      // Rejection must stay observable — operators spot misconfigured
+      // codebases through this warn.
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        { codebaseName: 'git@git.example.net:acme/widget-app' },
+        'worktree.invalid_codebase_name_format'
+      );
       // Check only the path below homedir — on Windows the home directory
       // itself contains ":" in the drive letter (e.g. C:\Users\...).
       const relativeToHome = result.base.slice(homedir().length);
