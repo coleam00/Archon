@@ -59,6 +59,7 @@ import { deliverCredential } from '../credentials/delivery';
 import { listDecryptedUserProviderCredentials } from '../db/user-provider-key-store';
 import { getUserAiPrefs, type UserAiPrefs } from '../db/user-ai-prefs-store';
 import { createWorkflowDeps } from '../workflows/store-adapter';
+import { createChildWorktreeResolver } from '../workflows/child-isolation-resolver';
 import { loadConfig, loadRepoConfig } from '../config/config-loader';
 import type { MergedConfig } from '../config/config-types';
 import { generateAndSetTitle } from '../services/title-generator';
@@ -704,6 +705,22 @@ async function dispatchOrchestratorWorkflow(
   // executeWorkflow dispatch below (repo config worktree.baseBranch still wins).
   const codebaseBaseBranch = codebase.default_branch?.trim() || undefined;
 
+  // Per-child isolation resolver (#2121 slice 2, PR-A): a `workflow:` node with
+  // `isolation: 'worktree'` gets its own worktree per child. Built for git-repo
+  // codebases only — a folder project can't make worktrees, so the engine fails
+  // such a node fast (no resolver injected). Shared across every dispatch below.
+  const resolveChildIsolation =
+    codebase.kind !== 'folder'
+      ? createChildWorktreeResolver({
+          codebaseId: codebase.id,
+          codebaseName: codebase.name,
+          canonicalRepoPath: codebase.default_cwd,
+          baseBranch: codebaseBaseBranch,
+          createdByPlatform: platform.getPlatformType(),
+          createdByUserId: userId,
+        })
+      : undefined;
+
   // Capability gate: hard-fail before any worktree/clone/AI cost if the
   // workflow declares `requires: [github]` and the originating user hasn't
   // connected. No-op when per-user GitHub is disabled (solo PAT installs).
@@ -868,6 +885,7 @@ async function dispatchOrchestratorWorkflow(
           userId,
           source,
           baseBranch: codebaseBaseBranch,
+          resolveChildIsolation,
           ...prepared,
         }
       );
@@ -890,6 +908,7 @@ async function dispatchOrchestratorWorkflow(
           userId,
           source,
           baseBranch: codebaseBaseBranch,
+          resolveChildIsolation,
         }
       );
     }
@@ -926,6 +945,7 @@ async function dispatchOrchestratorWorkflow(
         userId,
         source,
         baseBranch: codebaseBaseBranch,
+        resolveChildIsolation,
       }
     );
   }

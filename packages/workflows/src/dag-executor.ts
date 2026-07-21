@@ -361,6 +361,12 @@ export interface RunChildWorkflowArgs {
   userId?: string;
   /** Codebase id inherited from the parent (env vars + attribution). */
   codebaseId?: string;
+  /**
+   * Per-child isolation mode (#2121 slice 2, PR-A). `'worktree'` runs the child in
+   * its own git worktree via the injected child-isolation resolver; `'inherit'`
+   * (or undefined) shares the parent's checkout. Threaded from `node.isolation`.
+   */
+  isolation?: 'inherit' | 'worktree';
   /** Present only when re-driving a FAILED child on parent resume (D5 recovery path). */
   resumeFailedChild?: WorkflowRun;
 }
@@ -5514,6 +5520,7 @@ async function executeWorkflowNode(
     conversationDbId: parentRun.conversation_id,
     userId: parentRun.user_id ?? undefined,
     codebaseId: parentRun.codebase_id ?? undefined,
+    isolation: node.isolation,
   };
 
   try {
