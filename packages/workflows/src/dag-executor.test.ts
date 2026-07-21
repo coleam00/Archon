@@ -163,6 +163,7 @@ const mockClaudeCapabilities = () => ({
   thinkingControl: true,
   fallbackModel: true,
   sandbox: true,
+  settingSources: true,
 });
 /** Limited capabilities for Codex mock */
 const mockCodexCapabilities = () => ({
@@ -179,6 +180,7 @@ const mockCodexCapabilities = () => ({
   thinkingControl: false,
   fallbackModel: false,
   sandbox: false,
+  settingSources: false,
 });
 
 /** Mock AI sendQuery generator */
@@ -1174,6 +1176,81 @@ describe('executeDagWorkflow -- tool restrictions', () => {
     const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
     const nodeConfig = optionsArg?.nodeConfig as Record<string, unknown>;
     expect(nodeConfig?.allowed_tools).toEqual(['Read', 'Grep']);
+  });
+
+  it('passes settingSources to sendQuery nodeConfig for Claude node', async () => {
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'dag-setting-sources',
+        nodes: [{ id: 'lean-review', command: 'my-cmd', settingSources: ['project'] }],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(mockSendQueryDag.mock.calls.length).toBeGreaterThan(0);
+    const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
+    const nodeConfig = optionsArg?.nodeConfig as Record<string, unknown>;
+    expect(nodeConfig?.settingSources).toEqual(['project']);
+    // Claude supports settingSources — no ignored-capability warning
+    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
+    const warnings = sendMessage.mock.calls
+      .map(call => call[1] as string)
+      .filter(msg => typeof msg === 'string' && msg.includes('settingSources'));
+    expect(warnings).toEqual([]);
+  });
+
+  it('warns that settingSources is ignored on a Codex node', async () => {
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'codex',
+      getCapabilities: mockCodexCapabilities,
+    }));
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'dag-setting-sources-codex',
+        nodes: [{ id: 'step1', command: 'my-cmd', provider: 'codex', settingSources: ['project'] }],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    // Capability gate: codex declares settingSources: false, so the executor
+    // must surface a visible "will be ignored" warning instead of a silent no-op.
+    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
+    const warnings = sendMessage.mock.calls
+      .map(call => call[1] as string)
+      .filter(msg => typeof msg === 'string' && msg.includes('settingSources'));
+    expect(warnings.length).toBe(1);
+    expect(warnings[0]).toContain("doesn't support");
   });
 
   it('routes Codex tier effort to assistantConfig.modelReasoningEffort', async () => {

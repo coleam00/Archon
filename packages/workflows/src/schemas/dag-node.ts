@@ -218,6 +218,12 @@ export const dagNodeBaseSchema = z.object({
   // programmatically by the orchestrator for prompt caching; Zod intentionally stays narrow.
   systemPrompt: z.string().min(1).optional(),
   fallbackModel: z.string().min(1).optional(),
+  // Per-node override for which filesystem setting sources Claude loads
+  // (CLAUDE.md, skills, commands, agents). Omitting it inherits the
+  // assistant-level default (['project', 'user'] when unset). Claude-only;
+  // other providers warn and ignore it. Lets a lean node (e.g. a reviewer)
+  // skip project/user context loading for faster startup.
+  settingSources: z.array(z.enum(['project', 'user'])).optional(),
   betas: betasSchema.optional(),
   sandbox: sandboxSettingsSchema.optional(),
   // Opt out of resume caching: when true, this node re-runs on resume even if a
@@ -493,6 +499,7 @@ export const BASH_NODE_AI_FIELDS: readonly string[] = [
   'maxBudgetUsd',
   'systemPrompt',
   'fallbackModel',
+  'settingSources',
   'betas',
   'sandbox',
   'persist_session',
@@ -794,6 +801,7 @@ export const dagNodeSchema = dagNodeBaseSchema
       ...(data.maxBudgetUsd !== undefined ? { maxBudgetUsd: data.maxBudgetUsd } : {}),
       ...(data.systemPrompt !== undefined ? { systemPrompt: data.systemPrompt } : {}),
       ...(data.fallbackModel !== undefined ? { fallbackModel: data.fallbackModel } : {}),
+      ...(data.settingSources !== undefined ? { settingSources: data.settingSources } : {}),
       ...(data.betas !== undefined ? { betas: data.betas } : {}),
       ...(data.sandbox !== undefined ? { sandbox: data.sandbox } : {}),
       ...(data.persist_session !== undefined ? { persist_session: data.persist_session } : {}),

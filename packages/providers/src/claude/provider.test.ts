@@ -132,6 +132,7 @@ describe('ClaudeProvider', () => {
         thinkingControl: true,
         fallbackModel: true,
         sandbox: true,
+        settingSources: true,
         nativeTools: true,
       });
     });
@@ -1206,6 +1207,41 @@ describe('ClaudeProvider', () => {
       expect(mockQuery).toHaveBeenCalledTimes(1);
       const callArgs = mockQuery.mock.calls[0][0] as { options: Record<string, unknown> };
       expect(callArgs.options.settingSources).toEqual(['project']);
+    });
+
+    test('per-node settingSources override wins over the assistant default', async () => {
+      mockQuery.mockImplementation(async function* () {
+        yield { type: 'result', session_id: 'test-session' };
+      });
+
+      for await (const _ of client.sendQuery('test', '/tmp', undefined, {
+        nodeConfig: { settingSources: ['project'] },
+        assistantConfig: { settingSources: ['project', 'user'] },
+      })) {
+        // consume
+      }
+
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+      const callArgs = mockQuery.mock.calls[0][0] as { options: Record<string, unknown> };
+      expect(callArgs.options.settingSources).toEqual(['project']);
+    });
+
+    test('per-node settingSources applies when no assistant default is set', async () => {
+      mockQuery.mockImplementation(async function* () {
+        yield { type: 'result', session_id: 'test-session' };
+      });
+
+      for await (const _ of client.sendQuery('test', '/tmp', undefined, {
+        nodeConfig: { settingSources: [] },
+      })) {
+        // consume
+      }
+
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+      const callArgs = mockQuery.mock.calls[0][0] as { options: Record<string, unknown> };
+      // An explicit empty array is a valid opt-out of ALL setting sources —
+      // it must not fall through to the ['project', 'user'] default.
+      expect(callArgs.options.settingSources).toEqual([]);
     });
 
     test('passes env from requestOptions into SDK options', async () => {

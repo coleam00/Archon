@@ -403,6 +403,44 @@ describe('dagNodeSchema — new Claude SDK options', () => {
       expect((result.data as PromptNode).fallbackModel).toBe('claude-haiku-4-5-20251001');
   });
 
+  test('parses settingSources array of valid sources', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'n',
+      prompt: 'do it',
+      settingSources: ['project'],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) expect((result.data as PromptNode).settingSources).toEqual(['project']);
+  });
+
+  test('rejects settingSources with invalid source value', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'n',
+      prompt: 'do it',
+      settingSources: ['project', 'global'],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  test('rejects non-array settingSources', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'n',
+      prompt: 'do it',
+      settingSources: 'project',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  test('strips settingSources from bash nodes', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'b',
+      bash: 'echo hi',
+      settingSources: ['project'],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) expect('settingSources' in result.data).toBe(false);
+  });
+
   test('strips AI-only fields from bash nodes', () => {
     const result = dagNodeSchema.safeParse({
       id: 'b',
