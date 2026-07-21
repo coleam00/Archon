@@ -69,7 +69,7 @@ export function WorkflowHistoryTable({
               </td>
               <td className="px-3 py-2">
                 <Link
-                  to={`/workflows/runs/${run.id}`}
+                  to={`/legacy/workflows/runs/${run.id}`}
                   className="text-text-primary hover:text-primary truncate block"
                 >
                   {run.workflow_name}
@@ -96,7 +96,7 @@ export function WorkflowHistoryTable({
               <td className="px-3 py-2">
                 <div className="flex items-center gap-2">
                   <Link
-                    to={`/workflows/runs/${run.id}`}
+                    to={`/legacy/workflows/runs/${run.id}`}
                     className="text-primary hover:text-primary/80 transition-colors"
                   >
                     View Logs

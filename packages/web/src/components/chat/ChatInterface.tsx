@@ -136,6 +136,8 @@ export function ChatInterface({ conversationId }: ChatInterfaceProps): React.Rea
   });
   // Default to true (hide button) until server confirms non-Docker — prevents broken vscode:// links
   const isDocker = health?.is_docker ?? true;
+  const isWsl = health?.is_wsl ?? false;
+  const wslDistro = health?.wsl_distro;
 
   // Sync messages to cache for persistence across navigation
   useEffect(() => {
@@ -628,7 +630,7 @@ export function ChatInterface({ conversationId }: ChatInterfaceProps): React.Rea
           // Cache messages under the new ID so the remounted ChatInterface picks them up
           // (navigate changes the key prop, causing unmount/remount — state is lost otherwise)
           setCachedMessages(newId, [userMsg, thinkingMsg]);
-          navigate(`/chat/${newId}`, { replace: true });
+          navigate(`/legacy/chat/${newId}`, { replace: true });
           // Trigger title + workflow refreshes after AI generates a proper title
           if (!hasTriggeredTitleRefresh.current && !message.startsWith('/')) {
             hasTriggeredTitleRefresh.current = true;
@@ -703,6 +705,8 @@ export function ChatInterface({ conversationId }: ChatInterfaceProps): React.Rea
         projectName={currentCodebase?.name ?? contextCodebase?.name}
         connected={isNewChat ? undefined : connected}
         isDocker={isDocker}
+        isWsl={isWsl}
+        wslDistro={wslDistro}
       />
       {(conversationsError || codebasesError) && (
         <div className="flex gap-2 px-4 py-1">

@@ -3,12 +3,55 @@ name: E2E Smoke Tests
 on:
   push:
     branches: [main, dev]
+  # The AI-credentialed smoke tiers (e2e-claude / e2e-codex / e2e-mixed) are
+  # OPT-IN. CI has no funded API keys, so they fail on every dev push with
+  # "credit balance too low" (Anthropic) / "quota exceeded" (OpenAI) — a
+  # permanently-red tier trains people to ignore the whole workflow. Those tiers
+  # now run locally on maintainer subscriptions as the pre-release ritual, and
+  # only run in CI when deliberately enabled: dispatch this workflow with
+  # run_ai_tiers=true, or set the repo variable RUN_AI_SMOKE=true (no file edit
+  # needed to re-enable). The deterministic + container tiers stay unconditional.
+  workflow_dispatch:
+    inputs:
+      run_ai_tiers:
+        description: 'Run the AI-credentialed smoke tiers (Claude/Codex/mixed). Requires funded ANTHROPIC_API_KEY / OPENAI_API_KEY secrets.'
+        type: boolean
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  # ─── Path gate: only run the container tier when container code changes ──
+  # Building the runner image adds minutes, so the container smoke is gated on
+  # the paths that can affect it. Every other job below runs unconditionally.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      container: ${{ steps.filter.outputs.container }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            container:
+              - 'packages/isolation/**'
+              - 'scripts/build-runner-image.sh'
+              # The smoke exercises the CLI --container/--folder dispatch + teardown
+              # and the Claude container-exec spawn, so changes there must trigger it.
+              - 'packages/cli/src/commands/workflow.ts'
+              - 'packages/providers/src/claude/container-*'
+              - '.github/workflows/e2e-smoke.yml'
+              - '.archon/workflows/test-workflows/e2e-container-smoke.yaml'
+              # Deliberately NOT packages/workflows/src/dag-executor.ts: it also
+              # runs container exec, but it churns on unrelated work and would make
+              # this gate near-unconditional. Accept the small coverage gap.
+
   # ─── Tier 1: Deterministic (no API keys needed) ────────────────────────
   e2e-deterministic:
     runs-on: ubuntu-latest
@@ -30,10 +73,116 @@ jobs:
       - name: Run deterministic workflow
         run: bun run cli workflow run e2e-deterministic --no-worktree "smoke test"
 
+  # ─── Tier 1b: Container isolation (Docker, no API keys needed) ──────────
+  # Deterministic slice of the container-isolation e2e (folder project +
+  # --container). Bash-node-only, so no AI credential is required. Gated on
+  # container-related paths via the `changes` job above.
+  e2e-container:
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: ${{ needs.changes.outputs.container == 'true' }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # Cheap fail-fast (no image/daemon needed): --container against the repo
+      # checkout (a git repo, not a folder project) must hard-error with the
+      # folder-only message before any container work.
+      - name: Negative — --container rejected on a repo project
+        run: |
+          set -uo pipefail
+          set +e
+          out="$(bun run cli workflow run e2e-container-smoke --container 'should be rejected' 2>&1)"
+          code=$?
+          set -e
+          echo "$out"
+          if [ "$code" -eq 0 ]; then
+            echo "FAIL: --container on a repo project exited 0 (expected non-zero)"; exit 1
+          fi
+          if ! printf '%s' "$out" | grep -q 'Container isolation is folder-project-only for now'; then
+            echo "FAIL: expected the folder-only error, got exit $code with different output"; exit 1
+          fi
+          echo "PASS: --container on a repo project rejected with the folder-only error (exit $code)"
+
+      - name: Build runner image
+        run: bun run build:runner-image
+
+      - name: Container smoke + teardown/host assertions
+        run: |
+          set -euo pipefail
+          # Force-remove any managed containers + archon-* volumes on exit so a
+          # failed run never leaks resources into later jobs on this runner.
+          # (Volumes are unlabeled, so they are matched by the `archon-` name
+          # prefix; only containers carry diy.archon.managed=true.)
+          cleanup() {
+            docker ps -aq --filter label=diy.archon.managed=true | xargs -r docker rm -f >/dev/null 2>&1 || true
+            docker volume ls --format '{{.Name}}' | grep '^archon-' | xargs -r docker volume rm -f >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          SCRATCH="$(mktemp -d)"
+          mkdir -p "$SCRATCH/.archon/workflows"
+          cp .archon/workflows/test-workflows/e2e-container-smoke.yaml "$SCRATCH/.archon/workflows/"
+          echo "scratch folder project: $SCRATCH"
+
+          # Register the scratch folder project on first use + run in a container.
+          # A non-zero exit here means an in-container assertion failed OR the
+          # container teardown failed — either way the run did not cleanly finish.
+          bun run cli workflow run e2e-container-smoke --folder --container --cwd "$SCRATCH" "container smoke"
+
+          # Phase C (#2160): a container run that produced changes ends PAUSED at
+          # the approval-gated write-back, with its container suspended and KEPT
+          # (paused runs are resumable by contract — that is not a leak). Reject
+          # the gate to discard the overlay and destroy the container — the
+          # Phase B semantic this smoke asserts. Guard on paused: a run with no
+          # changes finalizes without a gate.
+          RUN_ID="$(bun run cli workflow runs --status paused --limit 1 --all --json | jq -r '.runs[0].id // empty')"
+          if [ -n "$RUN_ID" ]; then
+            echo "rejecting write-back gate on paused run $RUN_ID (discard overlay)"
+            bun run cli workflow reject "$RUN_ID" "e2e smoke: discard overlay"
+          fi
+
+          # Host untouched: the rejected write-back discards the overlay, so the
+          # marker the run wrote into the workspace must NOT exist on the host.
+          if [ -f "$SCRATCH/container-smoke-overlay-marker.txt" ]; then
+            echo "FAIL: overlay write leaked to the host folder (rejected write-back must discard)"; exit 1
+          fi
+          echo "PASS: host folder unchanged after the container run"
+
+          # No managed containers left (teardown removed them).
+          leaked_c="$(docker ps -a --filter label=diy.archon.managed=true --format '{{.Names}}')"
+          if [ -n "$leaked_c" ]; then
+            echo "FAIL: managed containers leaked:"; echo "$leaked_c"; exit 1
+          fi
+          echo "PASS: no managed containers left"
+
+          # No archon-* volumes left (match by name prefix — volumes are unlabeled).
+          leaked_v="$(docker volume ls --format '{{.Name}}' | grep '^archon-' || true)"
+          if [ -n "$leaked_v" ]; then
+            echo "FAIL: archon volumes leaked:"; echo "$leaked_v"; exit 1
+          fi
+          echo "PASS: no archon-* volumes left"
+
   # ─── Tier 2a: Claude provider ──────────────────────────────────────────
   e2e-claude:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # OPT-IN (see the `on:` block). && binds tighter than ||, and the explicit
+    # parens make it unmistakable: run only when dispatched with run_ai_tiers
+    # OR when RUN_AI_SMOKE=true. On a push, event_name != workflow_dispatch, so
+    # the first clause is false and an unset RUN_AI_SMOKE ('' == 'true') is false
+    # too — the tier is skipped by default.
+    if: ${{ (github.event_name == 'workflow_dispatch' && inputs.run_ai_tiers) || (vars.RUN_AI_SMOKE == 'true') }}
     steps:
       - uses: actions/checkout@v4
 
@@ -64,6 +213,8 @@ jobs:
   e2e-codex:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # OPT-IN — same gate as e2e-claude (see the `on:` block).
+    if: ${{ (github.event_name == 'workflow_dispatch' && inputs.run_ai_tiers) || (vars.RUN_AI_SMOKE == 'true') }}
     steps:
       - uses: actions/checkout@v4
 
@@ -94,6 +245,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     needs: [e2e-claude, e2e-codex]
+    # OPT-IN — same gate as e2e-claude (see the `on:` block). Also skipped
+    # transitively when its needs are skipped, but the explicit gate keeps the
+    # RUN_AI_SMOKE escape hatch consistent across all three AI tiers.
+    if: ${{ (github.event_name == 'workflow_dispatch' && inputs.run_ai_tiers) || (vars.RUN_AI_SMOKE == 'true') }}
     steps:
       - uses: actions/checkout@v4
 

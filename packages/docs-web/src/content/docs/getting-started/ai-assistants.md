@@ -11,6 +11,19 @@ sidebar:
 
 You must configure **at least one** AI assistant. All four can be configured and mixed within workflows.
 
+For a canonical, at-a-glance comparison of which per-node features each provider supports, see the [Provider Capability Matrix](/reference/provider-capabilities/) — it is generated directly from the providers' capability declarations, so it never drifts from runtime behavior. The per-provider sections below add the field-level YAML syntax and caveats.
+
+## Structured output guarantees
+
+When a workflow node sets `output_format`, the guarantee level depends on the provider's tier (exposed as `capabilities.structuredOutput` on `GET /api/providers`):
+
+| Provider | Tier | How it works | On a validation miss |
+|----------|------|--------------|----------------------|
+| Claude, Codex, OpenCode | **enforced** | The SDK/backend grammar-constrains decoding (`output_config.format` / `outputSchema` / `format:{json_schema}`). | The node **fails** — a refusal or `max_tokens` truncation can still bypass grammar enforcement, so the parsed output is validated post-parse for these too. No reask (a failure here is a genuine edge). |
+| Pi, Copilot | **best-effort** | The schema is appended to the prompt; JSON is extracted from the response and structurally repaired (trailing commas, single quotes, truncated tails). | The executor re-asks (prompt + the schema errors) up to **3×**; if still invalid, the node **fails loudly**. |
+
+In all cases the parsed output is **validated against your `output_format` schema** before downstream nodes see it, and a node that declares `output_format` but produces no schema-valid output **fails** rather than silently degrading. See [Authoring Workflows → `output_format`](/guides/authoring-workflows/#output_format-for-structured-json) for field-access (`$node.output.field`) semantics.
+
 ## Claude Code
 
 **Recommended for Claude Pro/Max subscribers.**
@@ -85,6 +98,8 @@ Claude Code supports three authentication modes via `CLAUDE_USE_GLOBAL_AUTH`:
 2. **Explicit Tokens** (set to `false`): Uses tokens from env vars below
 3. **Auto-Detect** (not set): Uses tokens if present in env, otherwise global auth
 
+If both `CLAUDE_CODE_OAUTH_TOKEN` and `CLAUDE_API_KEY` are set, the OAuth token wins and no API key is passed to Claude. A per-user credential connected in Settings → Agents always takes precedence over these install-wide variables for that user's runs.
+
 ### Option 1: Global Auth (Recommended)
 
 ```ini
@@ -129,7 +144,7 @@ assistants:
     # claudeBinaryPath: /absolute/path/to/claude
 ```
 
-The `settingSources` option controls which `CLAUDE.md`, skill, command, and agent files the Claude Code SDK loads. The default is `['project', 'user']`, which loads both the project-level `<cwd>/.claude/` and your personal `~/.claude/`. Set it to `['project']` if you want to scope a workflow to project-only resources.
+The `settingSources` option controls which `CLAUDE.md`, skill, command, and agent files the Claude Code SDK loads. The default is `['project', 'user']`, which loads both the project-level `<cwd>/.claude/` and your personal `~/.claude/`. Set it to `['project']` if you want to scope a workflow to project-only resources. Individual workflow nodes can override this with a per-node `settingSources:` field (e.g. `settingSources: []` for a lean node that loads no setting sources at all) — see [Claude SDK Advanced Options](/guides/authoring-workflows/#claude-sdk-advanced-options).
 
 ### Set as Default (Optional)
 
@@ -217,7 +232,7 @@ You can configure Codex's behavior in `.archon/config.yaml`:
 ```yaml
 assistants:
   codex:
-    model: gpt-5.3-codex
+    model: gpt-5.6-sol
     modelReasoningEffort: medium  # 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
     webSearchMode: live           # 'disabled' | 'cached' | 'live'
     additionalDirectories:
@@ -294,7 +309,7 @@ assistants:
 | Skills | ✅ | SKILL.md files with YAML frontmatter, pattern-based permissions |
 | Tool restrictions | ✅ | `tools` / `disallowedTools` per agent; deny wins over allow |
 | Inline agents (`agents:`) | ✅ | File-materialized agents; single and parallel multi-agent fan-out |
-| Hooks | ✅ | Plugin hook system (tool, session, message hooks) |
+| Hooks | ❌ | Archon's per-node `hooks` field is Claude-SDK-shaped; the OpenCode provider has no translation site, so a node's `hooks:` is ignored (with a warning) |
 | Effort / reasoning control | ❌ | No per-request param; not configurable in agent file, opencode puts it in config. |
 | Thinking control | ❌ | No explicit `thinking` field in agent frontmatter; OpenCode auto-enables reasoning when `agents[].model` is a reasoning-capable model (e.g. `anthropic/claude-sonnet-4-5`) |
 | Fallback model | ❌ | No native failover in the SDK |
@@ -351,7 +366,7 @@ Pi supports both OAuth subscriptions and API keys. Archon's adapter reads your e
 
 | Pi provider id | Env var |
 |---|---|
-| `anthropic` | `ANTHROPIC_API_KEY` |
+| `anthropic` | `ANTHROPIC_OAUTH_TOKEN` (subscription, read first) or `ANTHROPIC_API_KEY` |
 | `openai` | `OPENAI_API_KEY` |
 | `google` | `GEMINI_API_KEY` |
 | `groq` | `GROQ_API_KEY` |
@@ -359,9 +374,9 @@ Pi supports both OAuth subscriptions and API keys. Archon's adapter reads your e
 | `cerebras` | `CEREBRAS_API_KEY` |
 | `xai` | `XAI_API_KEY` |
 | `openrouter` | `OPENROUTER_API_KEY` |
-| `huggingface` | `HUGGINGFACE_API_KEY` |
+| `huggingface` | `HF_TOKEN` |
 
-Additional cloud backends exist (Azure, Bedrock, Vertex, etc.) — file an issue if you need an env-var shortcut wired for them.
+The full backend → env-var map is generated from the installed Pi SDK (`bun run generate:pi-vendor-map`) and covers every key-based backend (DeepSeek, Together, Fireworks, Azure OpenAI, Vercel AI Gateway, Cloudflare, MiniMax, Moonshot, Z.AI, Xiaomi, …). Amazon Bedrock and Google Vertex authenticate via ambient cloud credentials (AWS chain / gcloud ADC) instead of a pasted key.
 
 **Local / custom providers (no credentials needed):**
 
@@ -408,7 +423,19 @@ Most extensions need three config surfaces:
 |---|---|
 | `extensionFlags` | Per-extension feature flags (maps 1:1 to Pi's `--flag` CLI switches) |
 | `env` | Env vars the extension reads at runtime (managed via `.archon/config.yaml` or the Web UI codebase env panel) |
-| Workflow-level `interactive: true` | Required for **approval-gate extensions** on the web UI — forces foreground execution so the user can respond |
+| `interactive: true` | Binds a UI context so approval-gate extensions can block for human input; also set the **workflow-level** `interactive: true` on the web UI so the run stays foreground |
+
+#### Scoping extension posture per node
+
+`enableExtensions`, `interactive`, and `extensionFlags` are the three fields that make up a node's **extension posture**. Setting them under `assistants.pi` applies the posture to *every* Pi node in *every* workflow — which is usually wrong. A planning extension like plannotator only belongs on the node that actually plans: if the same `plan: true` flag leaks into a downstream `implement` node, that node starts in planning mode, its code edits get blocked ("edits are limited to markdown files"), and it hangs waiting on a review nobody asked for.
+
+Scope the posture to the node that plays that role. Three layers resolve per node, in ascending precedence:
+
+1. **Assistant-level** (`assistants.pi.*`) — the install-wide default for every Pi node.
+2. **Install-level node map** (`assistants.pi.nodes.<nodeId>`) — overrides the default for a node id on this machine. Handy when you can't edit the workflow, but it's non-portable: the override lives in one machine's `config.yaml` and is keyed by node-id string, so a node rename silently orphans it.
+3. **Portable node `pi:` block** — the per-node posture written directly in the workflow YAML. It travels with the workflow and wins over both layers above. This is the recommended surface.
+
+Each layer's `extensionFlags` shallow-merge over the ones below it (later wins per key), so a node can negate an inherited flag with `plan: false`. The `pi:` block is honored on `prompt`, `command`, and `loop` nodes (a `loop:` node's per-iteration call is exactly where planning mode tends to leak); on a `loop_group` it's ignored with a warning — put it on the body nodes instead.
 
 **Example — [plannotator](https://github.com/dmcglinn/plannotator) (human-in-the-loop plan review):**
 
@@ -417,25 +444,60 @@ Most extensions need three config surfaces:
 pi install npm:@plannotator/pi-extension
 ```
 
+Keep `assistants.pi` free of the planning flag — set only the extension's runtime env there:
+
 ```yaml
 # .archon/config.yaml
 assistants:
   pi:
     model: anthropic/claude-haiku-4-5
-    extensionFlags:
-      plan: true              # enables the plannotator "plan" flag
     env:
       PLANNOTATOR_REMOTE: "1" # exposes the review URL on 127.0.0.1:19432 so you can open it from anywhere
 ```
 
+Then grant the `plan` flag and a UI context to the planner node, and explicitly deny them on the implement loop — right in the workflow, so the posture ships with it:
+
 ```yaml
-# .archon/workflows/my-piv.yaml
-name: my-piv
+# .archon/workflows/plan-then-build.yaml
+name: plan-then-build
 provider: pi
-interactive: true             # plannotator gates the node on human approval — required on web UI
+interactive: true             # workflow-level: keeps the run foreground on the web UI so you can approve
+nodes:
+  - id: plan
+    prompt: "Draft a plan for: $ARGUMENTS"
+    pi:
+      interactive: true        # bind the UI context — plannotator opens its review server
+      extensionFlags:
+        plan: true             # planning mode ON for this node only
+
+  - id: implement
+    depends_on: [plan]
+    loop:
+      prompt: "Implement the approved plan. Print DONE when finished."
+      until: "DONE"
+      max_iterations: 10
+    pi:
+      interactive: false       # no review server on the implement loop
+      extensionFlags:
+        plan: false            # planning mode OFF — code edits are allowed
 ```
 
-When the node runs, plannotator prints a review URL and blocks until you click approve/deny in the browser. Archon's CLI/SSE batch buffer flushes that URL to you immediately so you never get stuck waiting on a node that silently wants input.
+When the `plan` node runs, plannotator prints a review URL and blocks until you click approve/deny in the browser. Archon's CLI/SSE batch buffer flushes that URL to you immediately so you never get stuck waiting on a node that silently wants input. The `implement` loop then runs headless with edits allowed.
+
+If you can't edit the workflow (e.g. a bundled default), the same scoping is available install-side via the node map — same precedence, lower priority than the workflow's own `pi:` block:
+
+```yaml
+# .archon/config.yaml
+assistants:
+  pi:
+    nodes:
+      plan:
+        interactive: true
+        extensionFlags: { plan: true }
+      implement:
+        interactive: false
+        extensionFlags: { plan: false }
+```
 
 ### Model reference format
 
@@ -477,7 +539,7 @@ nodes:
 
 | Feature | Support | YAML field |
 |---|---|---|
-| Extensions (community + local) | ✅ (default on) | `enableExtensions: false` to disable; `interactive: false` to load without UI bridge; `extensionFlags: { <name>: true }` per extension |
+| Extensions (community + local) | ✅ (default on) | `enableExtensions: false` to disable; `interactive: false` to load without UI bridge; `extensionFlags: { <name>: true }` per extension. Scope per node with a `pi:` block (`pi: { interactive, enableExtensions, extensionFlags }`) — see [Scoping extension posture per node](#scoping-extension-posture-per-node) |
 | Session resume | ✅ | automatic (Archon persists `sessionId`) |
 | Tool restrictions | ✅ | `allowed_tools` / `denied_tools` (read, bash, edit, write, grep, find, ls) |
 | Thinking level | ✅ | `effort: low\|medium\|high\|max` (max → xhigh) |
@@ -488,7 +550,7 @@ nodes:
 | MCP servers | ❌ | Pi rejects MCP by design |
 | In-process native tools | ✅ | none — Archon's `manage_run` tool is auto-injected in project-scoped chat via Pi `customTools` (distinct from MCP, which Pi rejects). Gated on the `nativeTools` provider capability. |
 | Claude-SDK hooks | ❌ | Claude-specific format |
-| Structured output | ✅ (best-effort) | `output_format:` — schema is appended to the prompt and JSON is parsed out of the assistant text. Handles bare JSON, ```json```-fenced, and reasoning-model prose preambles like `Let me evaluate... {...}` (Minimax M2.x pattern). Trailing-text-interleaved cases still degrade cleanly to the missing-structured-output warning. Not SDK-enforced like Claude/Codex. |
+| Structured output | ✅ (best-effort) | `output_format:` — schema is appended to the prompt and JSON is parsed out of the assistant text. Handles bare JSON, ```json```-fenced, reasoning-model prose preambles like `Let me evaluate... {...}` (Minimax M2.x pattern), and structurally-corrupt JSON (trailing commas, single quotes, truncated tails) via repair. The parsed output is then **validated against the schema**; on a miss the executor re-asks (prompt + the schema errors) up to **3×**, and only then **fails** the node (it no longer degrades silently to a warning). Not SDK-enforced like Claude/Codex. |
 | Cost limits (`maxBudgetUsd`) | ❌ | tracked in result chunk, not enforced |
 | Fallback model | ❌ | not native in Pi |
 | Sandbox | ❌ | not native in Pi |
@@ -571,7 +633,7 @@ Copilot accepts OpenAI models (`gpt-5`, `gpt-5-mini`), Anthropic via BYOK (`clau
 | Tool restrictions | ✅ | `allowed_tools` → `availableTools`, `denied_tools` → `excludedTools` |
 | MCP servers | ✅ | `mcp: path/to/servers.json` → `SessionConfig.mcpServers` (env vars `$FOO` expanded; missing vars warned) |
 | Skills | ✅ | `skills: [name]` resolved from `.agents/skills/` or `.claude/skills/` (project or home) → `SessionConfig.skillDirectories` |
-| Structured output | ✅ | best-effort via prompt augmentation; unparseable output degrades to dag-executor's missing-output warning |
+| Structured output | ✅ | best-effort via prompt augmentation + repair; the parsed output is validated against the schema, the executor re-asks up to 3× on a miss, then **fails** the node (no longer a silent warning) |
 | Sub-agents (`agents:`) | ✅ | `name`/`description`/`prompt`/`tools` → `SessionConfig.customAgents`; Claude-specific fields (`model`, `disallowedTools`, `skills`, `maxTurns`) warn per agent and are ignored |
 | Fork-session retry | ⚠️ | Copilot SDK has no fork API — when Archon requests a fork (on retry), we create a fresh session and emit a system-chunk warning |
 | Hooks | ❌ | Archon hooks ≠ Copilot's `SessionHooks` event vocabulary |
@@ -589,6 +651,79 @@ DEFAULT_AI_ASSISTANT=copilot
 
 - [Adding a Community Provider](../contributing/adding-a-community-provider/) — the contributor-facing guide for extending Archon with your own provider.
 - [`@github/copilot-sdk`](https://www.npmjs.com/package/@github/copilot-sdk) — upstream SDK.
+
+## Per-user credentials and AI Settings
+
+Everything above configures the **install-wide** assistant credentials (env vars, `claude /login`, etc.) — every run uses the same shared keys. On a **shared Archon box** where several people use the same server, each user can instead connect **their own** provider — by API key or subscription — so their runs and chats bill to them, not to the install's shared key.
+
+### When you need this
+
+- You run Archon for a team and want each person to bring their own provider key or Claude Pro/Max / Copilot subscription.
+- You want a personal key isolated from the shared install key.
+
+Solo users don't need any of this — the install-wide setup above is enough.
+
+### Enabling it
+
+The credential vault is available on every install — Archon auto-provisions a local key at
+`~/.archon/credential-key` on first use. **No setup required for a solo install.**
+
+If you're running a managed or multi-user deploy and want to control the encryption key yourself
+(e.g. to rotate it, share it across containers, or keep it in a secrets manager), set
+`TOKEN_ENCRYPTION_KEY` and the local key file is skipped entirely:
+
+```ini
+# .env — generate with: openssl rand -hex 32
+TOKEN_ENCRYPTION_KEY=<64-char hex>
+```
+
+> **Rotating `TOKEN_ENCRYPTION_KEY`** (or deleting `~/.archon/credential-key`) invalidates all
+> stored user credentials — everyone must reconnect. `archon doctor` will report a
+> `mass_decrypt_failure` and include a re-connect hint if this happens.
+
+### Connecting from the console
+
+The console **AI Settings** page (Settings in the web UI) has four sections:
+
+- **Model Tiers** — map the `small` / `medium` / `large` tiers to a provider + model (and optional effort). This writes the install's `tiers:` config and works on **any** install, even without `TOKEN_ENCRYPTION_KEY` (it's non-secret config). Pi tier models show a cost/reasoning/context hint from Pi's model catalog.
+- **Model Aliases** — define `@custom` refs (e.g. `@fast`) usable in workflow `model:` fields, with the same scope toggle.
+- **Agents** — one card per agent (Claude Code, Codex, Pi, OpenCode, Copilot) with the credentials it can spend nested inside, each card showing a readiness state (ready / needs credential). Connect a credential for *your* user inside the agent that uses it. Credentials are keyed by **vendor** (`anthropic`, `openai`, `github-copilot`, `openrouter`, …), and one credential serves every agent that consumes it (an `anthropic` key powers Claude Code and Pi's anthropic backend — both cards reflect it). Every vendor accepts an **API key**; **`anthropic`**, **`openai`**, and **`github-copilot`** additionally offer **subscription login** (an OAuth flow — for `openai`/ChatGPT it is an Archon-owned PKCE flow where you paste the redirect URL or code back, [#1924](https://github.com/coleam00/Archon/issues/1924)). Legacy ids (`claude`/`codex`/`copilot`) are accepted and normalized. The **Pi** card keeps its 30+ backends behind a searchable "Add backend…" picker (with model counts from Pi's catalog) and shows ambient chains (Amazon Bedrock, Google Vertex) as status-only rows; the **OpenCode** card loads its backend catalog on demand from the embedded runtime — its connections are install-wide, not per-user.
+- **Defaults** — leads with a "Chat runs on [provider][model]" combo line in both scopes (the install line edits the default assistant + `assistants.<provider>.model`; the just-me line edits your personal default assistant + chat-model pin), with the per-provider model grid below as the advanced view.
+
+### Per-user model preferences ("Just me")
+
+When you're logged in (a web identity resolves), the **Model Tiers** and **Model Aliases** panels show a **"This install / Just me"** scope toggle, and **Defaults** gains a just-me "Chat runs on" combo (provider + model). The "Just me" scope stores your personal tiers/aliases/default assistant (and optional chat-model pin) in Archon's database and applies them as the **highest-precedence** layer — your overrides win over the install config for runs and chats *you* start, without changing anyone else's. This needs an identity but **no** `TOKEN_ENCRYPTION_KEY` (model names aren't secrets); on a solo install without web auth the toggle simply doesn't appear and everything behaves exactly as before.
+
+If a chat asks for the `large` tier and only a different tier is configured, Archon uses the nearest preset and posts a one-line notice telling you which tier answered and where to set `large`.
+
+### Connecting from the CLI
+
+The same actions are available headless via [`archon ai`](/reference/cli/#ai):
+
+```bash
+# Per-user credentials (need TOKEN_ENCRYPTION_KEY)
+echo "$MY_KEY" | archon ai key set openrouter   # API key for any vendor
+archon ai login anthropic                        # subscription (anthropic, openai, or github-copilot)
+archon ai list                                   # what's connected
+
+# Model tiers + aliases + default (ungated config — solo-OK)
+archon ai tier set large claude opus
+archon ai alias set @fast claude haiku
+archon ai default claude
+
+# The same, but just for YOU (per-user prefs; identity from ARCHON_USER_ID/$USER)
+archon ai tier set large claude opus --scope user
+archon ai default codex --scope user
+
+# Pin YOUR chat to a specific provider + model without touching the `large`
+# tier that workflows use (provider + model are written together; omitting
+# the model clears a previous pin)
+archon ai default pi openrouter/minimax/minimax-m2 --scope user
+```
+
+**How the chat model is resolved.** The provider comes from your personal default (if set), else the conversation's recorded assistant, else the install default. The model then resolves as: your `default_model` pin (only when your default provider matches the effective provider) → the configured `large` tier (yours > repo > global) → the install's `assistants.<provider>.model` (only when no `large` tier is configured anywhere) → the built-in tier default. Workflow nodes are unaffected — `model: large` keeps meaning the tier.
+
+The model-tier presets are the same ones you can hand-write in `~/.archon/config.yaml`; see [Configuration](/reference/configuration/) for the YAML format.
 
 ## How Assistant Selection Works
 

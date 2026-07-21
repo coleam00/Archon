@@ -535,7 +535,7 @@ function AssistantConfigSection({ config }: { config: SafeConfigResponse }): Rea
                       onChange={e => {
                         updateProviderSettings('codex', { model: e.target.value });
                       }}
-                      placeholder="gpt-5.3-codex"
+                      placeholder="gpt-5.6-sol"
                     />
 
                     <label htmlFor="reasoning">Reasoning Effort</label>

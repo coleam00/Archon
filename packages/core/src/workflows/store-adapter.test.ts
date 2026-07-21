@@ -30,6 +30,8 @@ mock.module('../db/workflows', () => ({
   failWorkflowRun: mockFailWorkflowRun,
   cancelWorkflowRun: mockCancelWorkflowRun,
   pauseWorkflowRun: mockPauseWorkflowRun,
+  claimWriteback: mock(() => Promise.resolve({ claimed: true })),
+  releaseWritebackClaim: mock(() => Promise.resolve()),
 }));
 
 const mockCreateWorkflowEvent = mock(() => Promise.resolve());
@@ -46,10 +48,56 @@ mock.module('../db/codebases', () => ({
 
 mock.module('@archon/providers', () => ({
   getAgentProvider: mock(() => ({})),
+  getRegisteredProviders: mock(() => []),
+  // Vendor → env-var map consumed by credentials/delivery (#1955). A realistic
+  // subset of the generated map (incl. HF_TOKEN, the upstream var).
+  PI_PROVIDER_ENV_VARS: {
+    anthropic: 'ANTHROPIC_API_KEY',
+    openai: 'OPENAI_API_KEY',
+    'github-copilot': 'COPILOT_GITHUB_TOKEN',
+    openrouter: 'OPENROUTER_API_KEY',
+    google: 'GEMINI_API_KEY',
+    groq: 'GROQ_API_KEY',
+    huggingface: 'HF_TOKEN',
+    'google-vertex': 'GOOGLE_CLOUD_API_KEY',
+  },
+  PI_AMBIENT_VENDORS: ['amazon-bedrock', 'google-vertex'],
 }));
 
 mock.module('../config/config-loader', () => ({
   loadConfig: mock(() => Promise.resolve({ assistant: 'claude' })),
+}));
+
+// Per-user provider credentials mocks
+const mockIsPerUserProviderKeysEnabled = mock(() => false);
+mock.module('../credentials/config', () => ({
+  isPerUserProviderKeysEnabled: mockIsPerUserProviderKeysEnabled,
+}));
+
+const mockListDecryptedUserProviderCredentials = mock(async () => []);
+mock.module('../db/user-provider-key-store', () => ({
+  listDecryptedUserProviderCredentials: mockListDecryptedUserProviderCredentials,
+  saveUserProviderKey: mock(() => Promise.resolve()),
+  getUserProviderKeyRecord: mock(() => Promise.resolve(null)),
+  listUserProviderKeys: mock(() => Promise.resolve([])),
+  deleteUserProviderKey: mock(() => Promise.resolve()),
+  getDecryptedProviderCredential: mock(() => Promise.resolve(null)),
+}));
+
+// github-auth mocks (required by store-adapter imports)
+mock.module('../github-auth/config', () => ({
+  isPerUserGitHubEnabled: mock(() => false),
+}));
+mock.module('../db/user-github-token-store', () => ({
+  getDecryptedAccessToken: mock(() => Promise.resolve(undefined)),
+}));
+mock.module('../db/env-vars', () => ({
+  getCodebaseEnvVars: mock(() => Promise.resolve({})),
+}));
+mock.module('../db/workflow-node-sessions', () => ({
+  getWorkflowNodeSession: mock(() => Promise.resolve(null)),
+  setWorkflowNodeSession: mock(() => Promise.resolve()),
+  deleteWorkflowNodeSessions: mock(() => Promise.resolve()),
 }));
 
 const { createWorkflowStore, createWorkflowDeps } = await import('./store-adapter');
@@ -70,6 +118,8 @@ describe('createWorkflowStore', () => {
       'completeWorkflowRun',
       'failWorkflowRun',
       'pauseWorkflowRun',
+      'claimWriteback',
+      'releaseWritebackClaim',
       'cancelWorkflowRun',
       'createWorkflowEvent',
       'getCompletedDagNodeOutputs',
@@ -158,5 +208,49 @@ describe('createWorkflowDeps', () => {
     expect(typeof deps.store.getWorkflowRun).toBe('function');
     expect(typeof deps.store.createWorkflowEvent).toBe('function');
     expect(typeof deps.store.getCodebase).toBe('function');
+  });
+
+  describe('provider credential fields', () => {
+    beforeEach(() => {
+      mockListDecryptedUserProviderCredentials.mockReset();
+      mockListDecryptedUserProviderCredentials.mockImplementation(async () => []);
+      mockIsPerUserProviderKeysEnabled.mockReset();
+      mockIsPerUserProviderKeysEnabled.mockImplementation(() => false);
+    });
+
+    test('exposes isPerUserProviderKeysEnabled and getUserProviderEnv', () => {
+      const deps = createWorkflowDeps();
+      expect(typeof deps.isPerUserProviderKeysEnabled).toBe('function');
+      expect(typeof deps.getUserProviderEnv).toBe('function');
+    });
+
+    test('getUserProviderEnv returns { env: {}, files: [] } when list query throws', async () => {
+      mockListDecryptedUserProviderCredentials.mockRejectedValueOnce(new Error('db gone'));
+      const deps = createWorkflowDeps();
+      const result = await deps.getUserProviderEnv?.('u-1', '/tmp/art');
+      expect(result).toEqual({ env: {}, files: [] });
+    });
+
+    // Regression guard for #2035: enabling the credential vault (auto-key on by
+    // default) must be ADDITIVE. An unconnected user yields an empty env bag, so
+    // their ambient ANTHROPIC_API_KEY / OPENAI_API_KEY pass through untouched —
+    // there is no scrub on the AI-provider path (unlike the GitHub org-token path).
+    // A future change that scrubbed ambient provider keys would fail this.
+    test('getUserProviderEnv is additive: unconnected user gets empty env (no ambient scrub)', async () => {
+      mockListDecryptedUserProviderCredentials.mockResolvedValueOnce([]);
+      const deps = createWorkflowDeps();
+      const result = await deps.getUserProviderEnv?.('u-unconnected', '/tmp/art');
+      expect(result).toEqual({ env: {}, files: [] });
+    });
+
+    test('getUserProviderEnv aggregates env from multiple providers', async () => {
+      mockListDecryptedUserProviderCredentials.mockResolvedValueOnce([
+        { provider: 'openrouter', cred: { kind: 'api_key', apiKey: 'or-k' } },
+        { provider: 'google', cred: { kind: 'api_key', apiKey: 'g-k' } },
+      ]);
+      const deps = createWorkflowDeps();
+      const result = await deps.getUserProviderEnv?.('u-1', '/tmp/art');
+      expect(result?.env).toMatchObject({ OPENROUTER_API_KEY: 'or-k', GEMINI_API_KEY: 'g-k' });
+    });
   });
 });

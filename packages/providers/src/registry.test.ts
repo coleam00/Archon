@@ -36,6 +36,7 @@ function makeMockProvider(id: string): IAgentProvider {
       fallbackModel: false,
       sandbox: false,
       nativeTools: false,
+      containerExec: false,
     }),
     async *sendQuery() {
       yield { type: 'result' as const };
@@ -53,6 +54,7 @@ function makeMockRegistration(
     factory: () => makeMockProvider(id),
     capabilities: makeMockProvider(id).getCapabilities(),
     builtIn: false,
+    credentials: { kind: 'static', specs: [] },
     ...overrides,
   };
 }
@@ -300,7 +302,7 @@ describe('registry', () => {
       expect(caps.envInjection).toBe(true);
       // Best-effort structured output via prompt engineering + post-parse —
       // not SDK-enforced like Claude/Codex, but wired up and tested.
-      expect(caps.structuredOutput).toBe(true);
+      expect(caps.structuredOutput).toBe('best-effort');
       // Still false (out of v2 scope)
       expect(caps.mcp).toBe(false);
       expect(caps.hooks).toBe(false);
@@ -342,14 +344,14 @@ describe('registry', () => {
       expect(opencodeEntries).toHaveLength(1);
     });
 
-    test('declares capabilities (sessionResume, mcp, structuredOutput, envInjection, hooks, skills, agents, toolRestrictions supported; effort/thinking off because opencode.json owns those)', () => {
+    test('declares capabilities (sessionResume, mcp, structuredOutput, envInjection, skills, agents, toolRestrictions supported; hooks off because nodeConfig.hooks has no translation site; effort/thinking off because opencode.json owns those)', () => {
       registerOpencodeProvider();
       const caps = getProviderCapabilities('opencode');
       expect(caps.sessionResume).toBe(true);
       expect(caps.mcp).toBe(true);
-      expect(caps.structuredOutput).toBe(true);
+      expect(caps.structuredOutput).toBe('enforced');
       expect(caps.envInjection).toBe(true);
-      expect(caps.hooks).toBe(true);
+      expect(caps.hooks).toBe(false);
       expect(caps.skills).toBe(true);
       expect(caps.agents).toBe(true);
       expect(caps.toolRestrictions).toBe(true);
@@ -404,7 +406,7 @@ describe('registry', () => {
       expect(caps.hooks).toBe(false);
       expect(caps.skills).toBe(true);
       expect(caps.toolRestrictions).toBe(true);
-      expect(caps.structuredOutput).toBe(true);
+      expect(caps.structuredOutput).toBe('best-effort');
       expect(caps.agents).toBe(true);
       expect(caps.fallbackModel).toBe(false);
       expect(caps.sandbox).toBe(false);

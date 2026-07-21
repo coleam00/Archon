@@ -7,6 +7,17 @@
  */
 
 import type { RepoPath, BranchName } from '@archon/git';
+import type {
+  ExecutionContext,
+  WriteBackFinalizeResult,
+  WriteBackApplySummary,
+} from '@archon/providers/types';
+
+// Re-exported so isolation consumers can source the execution-context contract
+// (and the write-back result shapes) from `@archon/isolation` alongside the
+// backend types that produce them, without reaching into
+// `@archon/providers/types` directly.
+export type { ExecutionContext, WriteBackFinalizeResult, WriteBackApplySummary };
 
 // --- Provider Types ---
 
@@ -41,6 +52,16 @@ interface IsolationRequestBase {
    * paths) back to the canonical repo path.
    */
   canonicalRepoPath: RepoPath;
+
+  /**
+   * Preferred base branch for new worktrees when repo config does not override
+   * it (`worktree.baseBranch` still wins).
+   *
+   * Populated from the registered codebase's stored `default_branch` so
+   * locally-registered repos with non-main defaults do not depend on
+   * `origin/HEAD` being set for auto-detection.
+   */
+  baseBranch?: BranchName;
 
   description?: string;
 
@@ -145,6 +166,8 @@ export interface WorktreeDestroyOptions extends DestroyOptions {
   canonicalRepoPath?: RepoPath;
   /** Delete the remote branch (best-effort, e.g., after PR merge) */
   deleteRemoteBranch?: boolean;
+  /** Git remote name for remote branch deletion (default: 'origin') */
+  remote?: string;
 }
 
 /**
@@ -272,6 +295,23 @@ export interface WorktreeCreateConfig {
    * @example '.worktrees'
    */
   path?: string;
+  /**
+   * Git remote name to use for fetch/push operations.
+   *
+   * When set, all git operations (fetch, push, branch tracking) use this
+   * remote instead of 'origin'. Useful for repos with multiple remotes or
+   * non-standard naming conventions.
+   *
+   * When omitted, auto-detected via `getDefaultRemote()`:
+   *   1. 'origin' if it exists
+   *   2. The sole remote if only one is configured
+   *   3. null when ambiguous — worktree creation then fails with an
+   *      actionable error listing the available remotes
+   *
+   * Sourced from `.archon/config.yaml > worktree.remote` in the repo.
+   * @example 'upstream'
+   */
+  remote?: string;
 }
 
 export type RepoConfigLoader = (repoPath: string) => Promise<WorktreeCreateConfig | null>;
@@ -315,6 +355,18 @@ export interface ResolveRequest {
     id: string;
     defaultCwd: string;
     name: string;
+    /**
+     * The codebase's stored default branch (from registration). Threaded into
+     * the provider's `IsolationRequest.baseBranch` as the fallback base for new
+     * worktrees when repo config sets no `worktree.baseBranch`.
+     */
+    defaultBranch?: BranchName | null;
+    /**
+     * Project kind. `'folder'` projects run in place at `defaultCwd` with no
+     * worktree isolation; the resolver short-circuits to `{ status: 'none' }`.
+     * Optional/absent is treated as `'repo'` (unchanged worktree behavior).
+     */
+    kind?: 'repo' | 'folder';
   } | null;
   hints?: IsolationHints;
   platformType: string;
@@ -346,3 +398,127 @@ export type IsolationResolution =
   | { status: 'stale_cleaned'; previousEnvId: string }
   | { status: 'none'; cwd: string }
   | { status: 'blocked'; reason: IsolationBlockReason; userMessage: string };
+
+// --- Isolation Backend Seam (folder projects only) ---
+//
+// Repo-kind projects keep the worktree path (IIsolationProvider above) untouched.
+// Folder-kind projects route through a pluggable backend selected by
+// `resolveFolderBackend()`. v1 backends: `in-place` (default, today's behavior)
+// and `container` (Phase B). Worktrees are deliberately NOT a backend — the two
+// lifecycles don't share an interface (user decision 2026-07-13).
+
+/**
+ * Minimal identity of a codebase a backend needs to prepare an environment.
+ * Container-specific inputs (image, network, run id) are added by Phase B — kept
+ * out of the Phase A contract to avoid speculative surface (YAGNI).
+ */
+export interface BackendPrepareRequest {
+  codebase: {
+    id: string;
+    /** Absolute path to the folder-project root. */
+    defaultCwd: string;
+    name: string;
+    kind: 'repo' | 'folder';
+  };
+}
+
+/**
+ * Result of a backend `prepare()`: the working directory the run should use and
+ * the execution context (host vs container) threaded through the engine to every
+ * provider turn and deterministic subprocess. `envId` references the tracked
+ * `isolation_environments` row when the backend created one (container backend,
+ * Phase B); in-place runs create no row and leave it undefined.
+ */
+export interface PreparedEnv {
+  cwd: string;
+  execContext: ExecutionContext;
+  envId?: string;
+  /**
+   * Overlay mount mode that actually took effect (container backend). `native`
+   * grants CAP_SYS_ADMIN, which lets in-container root remount the read-only lower
+   * read-write — i.e. the agent could bypass the write-back gate. The engine warns
+   * loudly at run start when this is `native` (see SECURITY.md). Absent for in-place.
+   */
+  overlayMode?: 'fuse' | 'native';
+}
+
+/**
+ * Isolation backend for FOLDER-kind projects. Every backend implements the core
+ * lifecycle (`prepare`/`destroy`); the pause/resume + write-back methods below
+ * are OPTIONAL because only the container backend (Phase C) needs them — the
+ * in-place backend has no container to stop, no overlay to diff, and never sets
+ * a `PreparedEnv.envId`, so the engine never calls them for it. The container
+ * backend implements all of them (required on its concrete type), so the CLI can
+ * pass it where the engine's non-optional write-back port is expected.
+ */
+export interface IIsolationBackend {
+  readonly id: 'in-place' | 'container';
+  prepare(req: BackendPrepareRequest): Promise<PreparedEnv>;
+  /** Tear down a prepared environment. No-op for in-place (nothing was created). */
+  destroy(envId: string): Promise<void>;
+
+  /**
+   * Suspend a running environment on pause (`docker stop`) so a multi-day wait at
+   * an approval / write-back gate costs ~0 resources. The upper volume persists;
+   * `resumeEnv` restarts it. Container-only.
+   */
+  suspend?(envId: string): Promise<void>;
+
+  /**
+   * Rediscover and restart a suspended environment for resume, returning a fresh
+   * {@link PreparedEnv} (the container id changes across a stop/recreate). Fails
+   * loudly when the un-applied work is gone (volume deleted) rather than silently
+   * restarting from an empty overlay. Container-only.
+   */
+  resumeEnv?(envId: string): Promise<PreparedEnv>;
+
+  /**
+   * Inspect the finished run's overlay diff and report whether a write-back
+   * approval gate is warranted (non-empty diff) plus the change summary to show
+   * the reviewer. Container-only; reads the volume via a helper (no running
+   * container required).
+   */
+  finalize?(envId: string): Promise<WriteBackFinalizeResult>;
+
+  /**
+   * Apply the overlay diff to the live project root (the ONE moment the live root
+   * is written): adds/modifies copy in, whiteouts delete. Container-only.
+   */
+  applyChanges?(envId: string): Promise<WriteBackApplySummary>;
+
+  /**
+   * Discard the overlay diff without touching the live root (write-back rejected).
+   * The volume is reclaimed by `destroy`. Container-only.
+   */
+  discardChanges?(envId: string): Promise<void>;
+}
+
+/**
+ * Resolved container-backend configuration. Sourced from the merged
+ * `.archon/config.yaml > container` section (repo over global) by the caller
+ * and handed to the container backend at construction. Kept in the isolation
+ * contract so both the CLI (which builds it from config) and the backend (which
+ * consumes it) share one shape.
+ */
+export interface ContainerBackendConfig {
+  /** Runner image tag, e.g. `archon-runner:0.5.0`. */
+  image: string;
+  /** Container network mode. `none` for no egress; `bridge` for default NAT. */
+  network: 'bridge' | 'none';
+  /** Hard memory cap in MiB (`docker run --memory <n>m`). */
+  memoryMb: number;
+  /** Process cap (`docker run --pids-limit <n>`), a fork-bomb guard. */
+  pidsLimit: number;
+}
+
+/**
+ * Docker label keys stamped on every Archon-managed container and volume, so
+ * `isolation list/cleanup` and Phase C resume can find them without guessing
+ * names. `managed` scopes ALL pruning (never a bare `docker prune`); `env-id`
+ * is the stable per-run handle used for name construction and rediscovery.
+ */
+export const CONTAINER_LABELS = {
+  managed: 'diy.archon.managed',
+  codebaseId: 'diy.archon.codebase-id',
+  envId: 'diy.archon.env-id',
+} as const;

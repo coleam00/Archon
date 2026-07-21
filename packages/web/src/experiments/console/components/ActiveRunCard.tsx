@@ -7,8 +7,11 @@ import { ApprovalPanel } from './ApprovalPanel';
 import { ApprovalContext } from './ApprovalContext';
 import type { Run } from '../primitives/run';
 import { shortRunId, formatElapsed, elapsedSince, formatCost } from '../lib/format';
-import { useIsDocker, openInIde } from '../lib/health';
+import { useIsDocker, useIdeEnv, openInIde } from '../lib/health';
 import { statusTextClass, statusLabel } from '../lib/run-status';
+
+/** Present + non-empty — narrows `string | null | undefined` to `string`. */
+const hasValue = (v: string | null | undefined): v is string => v != null && v !== '';
 
 interface ActiveRunCardProps {
   run: Run;
@@ -45,10 +48,12 @@ export function ActiveRunCard({
 }: ActiveRunCardProps): ReactElement {
   const navigate = useNavigate();
   const isDocker = useIsDocker();
+  const ideEnv = useIdeEnv();
   const elapsed = formatElapsed(elapsedSince(run.startedAt));
   const canOpen = run.projectId !== null && !run.id.startsWith('demo-');
   const canOpenIde =
     !isDocker && run.workingPath !== null && run.workingPath !== '' && !run.id.startsWith('demo-');
+  const showDetailGrid = run.userMessage !== '' || run.status === 'running';
 
   const onCardClick = (): void => {
     if (canOpen) navigate(`/console/p/${run.projectId}/r/${run.id}`);
@@ -70,9 +75,21 @@ export function ActiveRunCard({
             }
           : undefined
       }
-      className={`group relative overflow-hidden rounded border bg-surface transition-colors hover:bg-surface-hover ${
-        selected ? 'border-accent-bright/70 ring-2 ring-accent-bright/40' : 'border-border'
-      } ${canOpen ? 'cursor-pointer focus-visible:outline-none' : ''}`}
+      className={`group relative overflow-hidden rounded-[12px] border transition-colors hover:bg-surface-hover ${
+        run.status === 'running' ? 'bg-warning/[0.04]' : 'bg-surface'
+      } ${selected ? 'ring-2 ring-accent-bright/40' : ''} ${
+        canOpen ? 'cursor-pointer focus-visible:outline-none' : ''
+      }`}
+      // Inline because the console scope's wildcard border-color rule
+      // repaints Tailwind border utilities (see theme.css). Running cards
+      // get the design's amber tint.
+      style={{
+        borderColor: selected
+          ? 'color-mix(in oklch, var(--accent-bright), transparent 30%)'
+          : run.status === 'running'
+            ? 'color-mix(in oklch, var(--warning), transparent 70%)'
+            : 'var(--border)',
+      }}
     >
       <StatusStrip status={run.status} />
       <div className="pl-4 pr-4 py-3">
@@ -113,7 +130,7 @@ export function ActiveRunCard({
                 type="button"
                 onClick={e => {
                   e.stopPropagation();
-                  if (run.workingPath !== null) openInIde(run.workingPath);
+                  if (run.workingPath !== null) openInIde(run.workingPath, ideEnv);
                 }}
                 title={`Open ${run.workingPath} in IDE`}
                 aria-label="Open in IDE"
@@ -127,16 +144,25 @@ export function ActiveRunCard({
           </div>
         </div>
 
-        {/* Activity detail — running only */}
-        {run.status === 'running' ? (
+        {/* Provenance + activity detail: the triggering input (when present, truncated —
+            full text on hover), plus live node/tool rows while running. */}
+        {showDetailGrid ? (
           <div className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[12px]">
-            {run.currentNode !== null && run.currentNode !== undefined && run.currentNode !== '' ? (
+            {run.userMessage !== '' ? (
+              <>
+                <span className="font-mono text-text-tertiary">input</span>
+                <span className="truncate font-mono text-text-secondary" title={run.userMessage}>
+                  {run.userMessage}
+                </span>
+              </>
+            ) : null}
+            {run.status === 'running' && hasValue(run.currentNode) ? (
               <>
                 <span className="font-mono text-text-tertiary">node</span>
                 <span className="font-mono text-text-primary">{run.currentNode}</span>
               </>
             ) : null}
-            {run.lastTool !== null && run.lastTool !== undefined && run.lastTool !== '' ? (
+            {run.status === 'running' && hasValue(run.lastTool) ? (
               <>
                 <span className="font-mono text-text-tertiary">tool</span>
                 <span className="font-mono text-text-primary">
@@ -168,6 +194,22 @@ export function ActiveRunCard({
               <ApprovalPanel run={run} />
             </>
           )
+        ) : null}
+
+        {/* Resolved gate awaiting auto-resume — the run is still 'paused' in the
+            DB for the second or so between approve/reject and the executor
+            flipping it to running. Show a hint instead of stale gate buttons. */}
+        {run.status === 'paused' && run.gateResolved !== null && run.gateResolved !== undefined ? (
+          <div className="mt-2 flex items-center gap-2 rounded border border-border bg-surface-hover/40 px-3 py-2 text-[12px] text-text-secondary">
+            <span aria-hidden className="inline-block animate-pulse leading-none">
+              ▸
+            </span>
+            <span>
+              {run.gateResolved === 'approved'
+                ? 'Approved — resuming…'
+                : 'Rejected — running on-reject rework…'}
+            </span>
+          </div>
         ) : null}
       </div>
     </article>

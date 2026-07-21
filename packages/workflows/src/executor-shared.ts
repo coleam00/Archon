@@ -26,7 +26,11 @@ function getLog(): ReturnType<typeof createLogger> {
 /** Result of error classification */
 export type ErrorType = 'TRANSIENT' | 'FATAL' | 'UNKNOWN';
 
-/** Fatal error patterns - authentication/authorization issues that won't resolve with retry */
+/**
+ * Fatal error patterns - errors that won't resolve with retry: authentication/
+ * authorization failures and provider quota/limit-window exhaustion (a retry
+ * inside the same limit window is guaranteed to fail — see #2177).
+ */
 export const FATAL_PATTERNS = [
   'unauthorized',
   'forbidden',
@@ -37,6 +41,9 @@ export const FATAL_PATTERNS = [
   '403',
   'credit balance',
   'auth error',
+  'session limit', // Claude subscription 5h window — covers every detectCreditExhaustion session variant
+  'usage limit reached', // Claude CLI quota string, e.g. "Claude AI usage limit reached|<ts>"
+  'credit exhaustion', // synthesized "Credit exhaustion detected — resume when credits reset"
 ];
 
 /** Transient error patterns - temporary issues that may resolve with retry */
@@ -80,6 +87,27 @@ export function classifyError(error: Error): ErrorType {
     return 'TRANSIENT';
   }
   return 'UNKNOWN';
+}
+
+/**
+ * Map the retry-oriented {@link ErrorType} to the telemetry wire enum. The
+ * telemetry event carries ONLY this fixed-enum class — never error text.
+ */
+export function toTelemetryErrorClass(errorType: ErrorType): archonPaths.WorkflowErrorClass {
+  switch (errorType) {
+    case 'FATAL':
+      return 'fatal';
+    case 'TRANSIENT':
+      return 'transient';
+    case 'UNKNOWN':
+      return 'unknown';
+    default: {
+      // Exhaustiveness guard: a future ErrorType variant fails compilation
+      // here instead of silently sending `undefined` to the telemetry wire.
+      const exhaustive: never = errorType;
+      return exhaustive;
+    }
+  }
 }
 
 // ─── Subprocess Failure Formatting ───────────────────────────────────────────

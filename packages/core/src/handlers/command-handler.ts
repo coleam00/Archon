@@ -8,7 +8,7 @@ import { type Conversation, type CommandResult, ConversationNotFoundError } from
 import * as db from '../db/conversations';
 import * as codebaseDb from '../db/codebases';
 import * as sessionDb from '../db/sessions';
-import { listWorktrees, execFileAsync, toRepoPath } from '@archon/git';
+import { listWorktrees, execFileAsync, listChildRepos, toRepoPath } from '@archon/git';
 import { getIsolationProvider } from '@archon/isolation';
 import * as isolationEnvDb from '../db/isolation-environments';
 import {
@@ -34,8 +34,7 @@ import {
   abandonWorkflow,
   resetWorkflowNodeSessions,
 } from '../operations/workflow-operations';
-import { getTriggerForCommand, type DeactivatingCommand } from '../state/session-transitions';
-import { SessionNotFoundError } from '../db/sessions';
+import { safeDeactivateSession } from '../state/session-transitions';
 import { createLogger } from '@archon/paths';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -139,17 +138,35 @@ async function getCurrentBranch(repoPath: string): Promise<string> {
 }
 
 /**
+ * Format a folder project's contained git repos for status display.
+ * Truncates the visible list at 10 and appends a "(+N more)" count.
+ */
+function formatChildRepos(childRepos: string[]): string {
+  const MAX_SHOWN = 10;
+  const shown = childRepos.slice(0, MAX_SHOWN);
+  const remaining = childRepos.length - shown.length;
+  const suffix = remaining > 0 ? `, … (+${String(remaining)} more)` : '';
+  return `Contains ${String(childRepos.length)} git repo${childRepos.length === 1 ? '' : 's'}: ${shown.join(', ')}${suffix}`;
+}
+
+/**
  * Format repository context for user-facing display.
  * Shows "owner/repo @ branch" instead of filesystem paths.
  *
  * @returns Formatted context string. Never throws - falls back gracefully on errors.
  */
 async function formatRepoContext(
-  codebase: { name: string; default_cwd: string } | null,
+  codebase: { name: string; default_cwd: string; kind?: 'repo' | 'folder' } | null,
   isolationEnvId: string | null
 ): Promise<string> {
   if (!codebase) {
     return 'No codebase configured';
+  }
+
+  // Folder projects have no git — show an honest "no git" label instead of a
+  // branch (a folder root may not be a repo at all).
+  if (codebase.kind === 'folder') {
+    return `${codebase.name} (folder — no git)`;
   }
 
   // If in a worktree, use the worktree's branch name from database
@@ -177,8 +194,53 @@ async function formatRepoContext(
 }
 
 export function parseCommand(text: string): { command: string; args: string[] } {
-  // Match quoted strings or non-whitespace sequences
-  const matches = text.match(/"[^"]+"|'[^']+'|\S+/g) ?? [];
+  const matches: string[] = [];
+  let current = '';
+  let quote: '"' | "'" | null = null;
+  let escaping = false;
+  let hasToken = false;
+
+  for (const char of text.trim()) {
+    if (quote) {
+      hasToken = true;
+      if (escaping) {
+        current += char;
+        escaping = false;
+      } else if (char === '\\') {
+        escaping = true;
+      } else if (char === quote) {
+        quote = null;
+      } else {
+        current += char;
+      }
+      continue;
+    }
+
+    if (/\s/.test(char)) {
+      if (hasToken) {
+        matches.push(current);
+        current = '';
+        hasToken = false;
+      }
+      continue;
+    }
+
+    if (char === '"' || char === "'") {
+      quote = char;
+      hasToken = true;
+      continue;
+    }
+
+    current += char;
+    hasToken = true;
+  }
+
+  if (escaping) {
+    current += '\\';
+  }
+  if (hasToken) {
+    matches.push(current);
+  }
 
   if (matches.length === 0 || !matches[0]) {
     return { command: '', args: [] };
@@ -189,38 +251,17 @@ export function parseCommand(text: string): { command: string; args: string[] } 
   }
 
   const command = matches[0].substring(1); // Remove leading '/'
-  const args = matches.slice(1).map(arg => {
-    // Remove surrounding quotes if present
-    if ((arg.startsWith('"') && arg.endsWith('"')) || (arg.startsWith("'") && arg.endsWith("'"))) {
-      return arg.slice(1, -1);
-    }
-    return arg;
-  });
+  const args = matches.slice(1);
 
   return { command, args };
 }
 
-/**
- * Safely deactivate a session with TOCTOU race handling.
- * Between getActiveSession() and deactivateSession(), another process
- * (cleanup service, concurrent command) may have already deactivated it.
- * Treats SessionNotFoundError as benign in that case.
- */
-async function safeDeactivateSession(
-  sessionId: string,
-  commandName: DeactivatingCommand
-): Promise<void> {
-  const trigger = getTriggerForCommand(commandName);
-  try {
-    await sessionDb.deactivateSession(sessionId, trigger);
-    getLog().debug({ sessionId, trigger }, 'session_deactivated');
-  } catch (error) {
-    if (error instanceof SessionNotFoundError) {
-      getLog().debug({ sessionId, trigger }, 'session_already_deactivated');
-    } else {
-      throw error;
-    }
-  }
+function findWorkflowLoadError(
+  loadErrors: readonly WorkflowLoadError[],
+  workflowName: string
+): WorkflowLoadError | undefined {
+  // Stripping the .yaml/.yml extension already covers the exact-filename cases.
+  return loadErrors.find(error => error.filename.replace(/\.ya?ml$/, '') === workflowName);
 }
 
 async function handleWorktreeCommand(
@@ -237,6 +278,15 @@ async function handleWorktreeCommand(
   const codebase = await codebaseDb.getCodebase(conversation.codebase_id);
   if (!codebase) {
     return { success: false, message: 'Codebase not found.' };
+  }
+
+  // Worktrees are a git-repo concept — folder projects run in place and have no
+  // worktree lifecycle. Reject clearly rather than failing deep in git.
+  if (codebase.kind === 'folder') {
+    return {
+      success: false,
+      message: `/worktree is not applicable to folder projects. "${codebase.name}" runs in place (no git worktree).`,
+    };
   }
 
   const mainPath = codebase.default_cwd;
@@ -695,10 +745,46 @@ async function handleWorkflowCommand(
       }
       try {
         const run = await resumeWorkflow(runId);
-        const pathInfo = run.working_path ? `\nPath: \`${run.working_path}\`` : '';
+        let workflowEntries: readonly WorkflowWithSource[];
+        let loadErrors: readonly WorkflowLoadError[];
+        try {
+          const result = await discoverWorkflowsWithConfig(workflowCwd, loadConfig);
+          workflowEntries = result.workflows;
+          loadErrors = result.errors;
+        } catch (error) {
+          const err = error as Error;
+          getLog().error({ err, cwd: workflowCwd, runId }, 'cmd.workflow_resume_discovery_failed');
+          return {
+            success: false,
+            message: `Failed to load workflows: ${err.message}\n\nCheck .archon/workflows/ for YAML syntax issues.`,
+          };
+        }
+        const workflows = workflowEntries.map(ws => ws.workflow);
+        const workflow = resolveWorkflowName(run.workflow_name, workflows);
+        if (!workflow) {
+          const loadError = findWorkflowLoadError(loadErrors, run.workflow_name);
+          if (loadError) {
+            return {
+              success: false,
+              message: `Workflow \`${run.workflow_name}\` failed to load: ${loadError.error}\n\nFix the YAML file and try again.`,
+            };
+          }
+          return {
+            success: false,
+            message:
+              `Workflow \`${run.workflow_name}\` for run ${runId} was not found.\n\n` +
+              'Use /workflow list to check available workflows.',
+          };
+        }
         return {
           success: true,
-          message: `Workflow run \`${run.workflow_name}\` (${runId}) is ready to resume.${pathInfo}\nRun the same workflow again to auto-resume from completed nodes.`,
+          message: `Resuming workflow: \`${workflow.name}\``,
+          workflow: {
+            definition: workflow,
+            args: run.user_message,
+            resumeRunId: run.id,
+            resumeRun: run,
+          },
         };
       } catch (error) {
         const err = error as Error;
@@ -716,11 +802,15 @@ async function handleWorkflowCommand(
         };
       }
       try {
-        const run = await abandonWorkflow(runId);
-        return {
-          success: true,
-          message: `Abandoned workflow run \`${run.workflow_name}\` (${runId})`,
-        };
+        const { run, cascadeFailures, blockedParentRunId } = await abandonWorkflow(runId);
+        let message = `Abandoned workflow run \`${run.workflow_name}\` (${runId})`;
+        if (cascadeFailures > 0) {
+          message += `\n⚠️ ${String(cascadeFailures)} sub-run(s) could not be cancelled and may still be running — check /workflow status.`;
+        }
+        if (blockedParentRunId) {
+          message += `\n⚠️ Parent run ${blockedParentRunId} was blocked on this sub-run and stays paused. Resume it to fail the node cleanly, or abandon it too.`;
+        }
+        return { success: true, message };
       } catch (error) {
         const err = error as Error;
         getLog().error({ err, runId }, 'cmd.workflow_abandon_failed');
@@ -767,7 +857,13 @@ async function handleWorkflowCommand(
           message: 'Usage: /workflow approve <id> [comment]\n\nApproves a paused workflow run.',
         };
       }
-      const comment = args.slice(2).join(' ') || 'Approved';
+      // Pass the RAW comment through (undefined when the user typed none) —
+      // approveWorkflow defaults the recorded comment internally, but "no
+      // feedback" must survive so a signal-bearing interactive-loop gate
+      // finalizes instead of re-running (#2074, loop_feedback_given). Mirrors
+      // the HTTP route and CLI.
+      const rawComment = args.slice(2).join(' ');
+      const comment = rawComment.length > 0 ? rawComment : undefined;
       try {
         const result = await approveWorkflow(runId, comment);
         const pathInfo = result.workingPath ? `\nPath: \`${result.workingPath}\`` : '';
@@ -817,7 +913,9 @@ async function handleWorkflowCommand(
     case 'run': {
       // Directly invoke a workflow by name (bypasses AI router)
       const workflowName = args[1];
-      const workflowArgs = args.slice(2).join(' ');
+      const restArgs = args.slice(2);
+      const force = restArgs.includes('--force');
+      const workflowArgs = restArgs.filter(arg => arg !== '--force').join(' ');
 
       if (!workflowName) {
         return {
@@ -875,12 +973,7 @@ async function handleWorkflowCommand(
 
       if (!workflow) {
         // Check if the requested workflow had a load error
-        const loadError = loadErrors.find(
-          e =>
-            e.filename.replace(/\.ya?ml$/, '') === workflowName ||
-            e.filename === `${workflowName}.yaml` ||
-            e.filename === `${workflowName}.yml`
-        );
+        const loadError = findWorkflowLoadError(loadErrors, workflowName);
         if (loadError) {
           return {
             success: false,
@@ -906,6 +999,7 @@ async function handleWorkflowCommand(
         workflow: {
           definition: workflow,
           args: workflowArgs,
+          force: force ? true : undefined,
         },
       };
     }
@@ -955,6 +1049,7 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
 - \`/register-project <name> <path>\` — Register a local project
 - \`/update-project <name> <new-path>\` — Update a project's path
 - \`/remove-project <name>\` — Remove a registered project
+- \`/setproject <name>\` — Bind this conversation to a registered project
 
 **Session**
 - \`/status\` — Show current session and project info
@@ -988,12 +1083,22 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
       const codebase = conversation.codebase_id
         ? await codebaseDb.getCodebase(conversation.codebase_id)
         : null;
+      const isFolderProject = codebase?.kind === 'folder';
 
       if (codebase?.name) {
         const repoContext = await formatRepoContext(codebase, conversation.isolation_env_id);
+        // conversation.cwd is an explicit runtime override (set by worktree
+        // create/remove); when unset, the registered project root is the
+        // effective working directory. Same fallback as handleWorkflowCommand.
+        const effectiveCwd = conversation.cwd ?? codebase.default_cwd;
         msg += `\n\n## Conversation Context\n- Project: ${repoContext}`;
-        if (conversation.cwd) {
-          msg += `\n- Working Directory: ${conversation.cwd}`;
+        msg += `\n- Working Directory: ${effectiveCwd}`;
+        // For a folder project, surface the git repos contained under its root.
+        if (isFolderProject) {
+          const childRepos = await listChildRepos(codebase.default_cwd);
+          if (childRepos.length > 0) {
+            msg += `\n- ${formatChildRepos(childRepos)}`;
+          }
         }
       } else {
         msg += '\n\n## Conversation Context\n- Project: None — orchestrator will route as needed';
@@ -1031,8 +1136,9 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
         );
       }
 
-      // Add worktree breakdown if codebase is configured
-      if (codebase) {
+      // Add worktree breakdown if codebase is configured. Folder projects run in
+      // place and have no worktrees — skip the breakdown entirely.
+      if (codebase && !isFolderProject) {
         try {
           const breakdown = await getWorktreeStatusBreakdown(codebase.id, codebase.default_cwd);
           msg += `\n\nWorktrees: ${String(breakdown.total)} active`;
@@ -1099,15 +1205,24 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
       return handleWorkflowCommand(conversation, args);
 
     case 'init': {
-      // Create .archon structure in current repo
-      if (!conversation.cwd) {
+      // Create .archon structure in the effective working directory:
+      // the explicit runtime override (conversation.cwd) when set, else the
+      // selected project's root. Web-created project conversations have
+      // codebase_id but null cwd (issue #1993), so the fallback is what
+      // makes /init work there.
+      const initCodebase = conversation.codebase_id
+        ? await codebaseDb.getCodebase(conversation.codebase_id)
+        : null;
+      const initCwd = conversation.cwd ?? initCodebase?.default_cwd;
+      if (!initCwd) {
         return {
           success: false,
-          message: 'No working directory set. Register a project first with /register-project.',
+          message:
+            'No project selected. Pick one with /setproject <name> (register it first with /register-project if needed).',
         };
       }
 
-      const archonDir = join(conversation.cwd, '.archon');
+      const archonDir = join(initCwd, '.archon');
       const commandsDir = join(archonDir, 'commands');
       const configPath = join(archonDir, 'config.yaml');
 
@@ -1150,8 +1265,7 @@ description: Example command
 This is an example command.
 
 Arguments:
-- $1 - First positional argument
-- $ARGUMENTS - All arguments as string
+- $ARGUMENTS - The full trigger message
 
 Task: $ARGUMENTS
 `;

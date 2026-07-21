@@ -25,7 +25,7 @@ export interface ResolvedSkills {
  * cwd-bound scope and avoids ambiguity about which repo's skills win when
  * Archon runs out of a subdirectory.
  */
-function skillSearchRoots(cwd: string): string[] {
+export function skillSearchRoots(cwd: string): string[] {
   // Prefer `HOME` env var when set — Bun's os.homedir() bypasses `HOME` and
   // reads from the system uid lookup, which is correct in production but
   // makes tests using staged temp homes impossible.

@@ -3,11 +3,17 @@ import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
 import rehypeHighlight from 'rehype-highlight';
-import { StreamCard } from './StreamCard';
+import { AgentAvatar } from './AgentAvatar';
+import { formatClock } from '../lib/format';
 import type { Message } from '../primitives/message';
 
 interface MessageItemProps {
   message: Message;
+  /**
+   * `chat` (default) — Direction-B chat card. `log` — run-log styling
+   * (design v3 .log-agent-card): violet left accent + mono body, no avatar.
+   */
+  variant?: 'chat' | 'log';
 }
 
 const MD_COMPONENTS: Components = {
@@ -63,59 +69,127 @@ const MD_COMPONENTS: Components = {
   ),
 };
 
-const SHORT_USER_THRESHOLD = 140;
+const ERROR_BLOCK = (msg: string): ReactElement => (
+  <div className="mt-2 rounded border border-error/40 bg-error/10 px-2 py-1.5 font-mono text-[12px] text-error">
+    {msg}
+  </div>
+);
 
 /**
- * Single message rendered as a small card. Tool calls are broken out into
- * separate cards (see RunStream / ToolCallItem), so this one only renders
- * prose + error.
+ * Direction-B chat row. Role-branched:
+ *  - `user` → meta line + right-aligned outlined-magenta bubble (all lengths).
+ *  - `assistant`/`system` → meta line + 30px gradient-ring avatar + soft
+ *    surface-elevated card containing the markdown body.
  *
- * Short user messages render as compact single-line chips so the initial
- * `Fix issue #1179`-style prompts don't eat the same real estate as a 2000-char
- * agent response.
+ * Borders use inline `style.borderColor` because the console scope has a
+ * wildcard `border-color: var(--border)` rule that would repaint Tailwind's
+ * border-utility colors otherwise (see `theme.css`, mirrored in
+ * `StreamCard.tsx`).
  */
-export function MessageItem({ message }: MessageItemProps): ReactElement {
+export function MessageItem({ message, variant = 'chat' }: MessageItemProps): ReactElement {
   const kind = message.role;
   const content = message.content.trim();
+  const clock = formatClock(message.timestamp);
+  const log = variant === 'log';
 
-  // Compact chip form for short user prompts.
-  if (
-    kind === 'user' &&
-    message.error === null &&
-    content.length > 0 &&
-    content.length <= SHORT_USER_THRESHOLD &&
-    !content.includes('\n')
-  ) {
+  if (kind === 'user') {
     return (
-      <StreamCard
-        timestamp={message.timestamp}
-        kind="user"
-        compact
-        headerRight={
-          <span className="truncate font-mono text-[12px] text-text-primary">{content}</span>
-        }
-      />
+      <div className="flex flex-col items-end">
+        <header className="mb-2 flex flex-row-reverse items-center gap-[9px] font-mono">
+          <span
+            className="rounded px-[7px] py-[2px] text-[10px] font-bold uppercase tracking-[0.14em]"
+            style={{
+              color: 'var(--brand-magenta)',
+              background: 'color-mix(in oklch, var(--brand-magenta), transparent 88%)',
+            }}
+          >
+            You
+          </span>
+          <time
+            dateTime={message.timestamp}
+            title={clock}
+            className="text-[11px] tracking-[0.3px] text-text-tertiary"
+          >
+            {clock}
+          </time>
+        </header>
+        <div
+          className="max-w-[76%] self-end rounded-[14px_14px_4px_14px] px-[17px] py-[13px] text-[14.5px] leading-[1.5] break-words"
+          style={{
+            background: 'color-mix(in oklch, var(--brand-magenta), transparent 94%)',
+            border: '1px solid color-mix(in oklch, var(--brand-magenta), transparent 50%)',
+            color: 'color-mix(in oklch, white, var(--brand-magenta) 12%)',
+            boxShadow: '0 0 0 4px color-mix(in oklch, var(--brand-magenta), transparent 95%)',
+          }}
+        >
+          {content}
+        </div>
+        {message.error !== null ? ERROR_BLOCK(message.error.message) : null}
+      </div>
     );
   }
 
+  const label = kind === 'system' ? 'System' : 'Agent';
+
   return (
-    <StreamCard timestamp={message.timestamp} kind={kind}>
-      {content.length > 0 ? (
-        <div className="max-w-none text-[13px] leading-relaxed text-text-primary">
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm, remarkBreaks]}
-            rehypePlugins={[rehypeHighlight]}
-            components={MD_COMPONENTS}
+    <div className="flex flex-col">
+      <header className="mb-2 flex items-center gap-[9px] font-mono">
+        <span
+          className="rounded px-[7px] py-[2px] text-[10px] font-bold uppercase tracking-[0.14em]"
+          style={{
+            color: 'var(--brand-teal)',
+            background: 'color-mix(in oklch, var(--brand-teal), transparent 88%)',
+          }}
+        >
+          {label}
+        </span>
+        <time
+          dateTime={message.timestamp}
+          title={clock}
+          className="text-[11px] tracking-[0.3px] text-text-tertiary"
+        >
+          {clock}
+        </time>
+      </header>
+      <div className="flex max-w-full items-start gap-[13px]">
+        {log ? null : (
+          <div className="shrink-0">
+            <AgentAvatar size={30} />
+          </div>
+        )}
+        <div className="min-w-0 flex-1">
+          <div
+            className="rounded-[12px] border bg-[color:var(--surface-elevated)] px-4 py-[14px]"
+            style={
+              log
+                ? {
+                    borderColor: 'var(--border)',
+                    borderLeft: '3px solid var(--brand-violet)',
+                  }
+                : { borderColor: 'var(--border)' }
+            }
           >
-            {content}
-          </ReactMarkdown>
+            {content.length > 0 ? (
+              <div
+                className={
+                  log
+                    ? 'max-w-none font-mono text-[12px] leading-[1.7] text-text-secondary'
+                    : 'max-w-none text-[14.5px] leading-[1.62] text-text-primary'
+                }
+              >
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm, remarkBreaks]}
+                  rehypePlugins={[rehypeHighlight]}
+                  components={MD_COMPONENTS}
+                >
+                  {content}
+                </ReactMarkdown>
+              </div>
+            ) : null}
+            {message.error !== null ? ERROR_BLOCK(message.error.message) : null}
+          </div>
         </div>
-      ) : null}
-      {message.error !== null ? (
-        <div className="mt-2 rounded border border-error/40 bg-error/10 px-2 py-1.5 font-mono text-[12px] text-error">
-          {message.error.message}
-        </div>
-      ) : null}
-    </StreamCard>
+      </div>
+    </div>
   );
 }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import { useParams } from 'react-router';
 import { ChatStream } from '../components/ChatStream';
 import { ChatComposer } from '../components/ChatComposer';
@@ -25,6 +25,9 @@ const SETTLE_MS = 6000;
 // Hard cap so a turn that never produces a reply (server error, etc.) can't
 // disable the composer forever.
 const MAX_WAIT_MS = 300_000;
+// Distance from the bottom (px) within which we treat the scroll as "at bottom"
+// — drives both auto-scroll stickiness and the jump-to-bottom button's visibility.
+const NEAR_BOTTOM_PX = 120;
 
 /**
  * Project-scoped agent chat. A tab peer of the runs view under a project.
@@ -69,16 +72,33 @@ export function ChatPage(): ReactElement {
   // connects (which it can, cross-origin in dev). SSE is a pure accelerator.
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Non-error advisory (distinct channel from `error` so it doesn't read as a
+  // send failure) — e.g. files dropped from a first message.
+  const [notice, setNotice] = useState<string | null>(null);
 
-  // SSE accelerator: invalidates the message cache on text/tool events for
-  // snappy live updates when connected. Correctness doesn't depend on it.
-  useConversationSSE(activeConvId);
+  // Turn-completion state. The settle timer (below) is the correctness floor — it
+  // works even when SSE is absent. The SSE lock event is a fast-path on top of it.
+  const settleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const settleSigRef = useRef('');
+
+  // SSE accelerator: invalidates the message cache on text/tool events, and via
+  // onLockChange clears `busy` the instant the server releases the conversation
+  // lock (conversation_lock:false) instead of waiting out SETTLE_MS. Must be
+  // useCallback-stable — the hook's effect depends on it, so an inline lambda
+  // would reconnect the EventSource on every render.
+  const onLockChange = useCallback((locked: boolean): void => {
+    if (locked) return;
+    if (settleTimerRef.current !== null) {
+      clearTimeout(settleTimerRef.current);
+      settleTimerRef.current = null;
+    }
+    setBusy(false);
+  }, []);
+  useConversationSSE(activeConvId, onLockChange);
 
   // Derive turn state from the trailing message: a user message means a reply
   // is pending; once an assistant reply lands and stays stable for SETTLE_MS the
   // turn is done. This also recovers a reload mid-turn (trailing user message).
-  const settleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const settleSigRef = useRef('');
   useEffect(() => {
     const list = messages ?? [];
     const last = list[list.length - 1];
@@ -131,9 +151,10 @@ export function ChatPage(): ReactElement {
   // Reveal the raw tool trace inline (toggled from the working indicator).
   const [showTools, setShowTools] = useState(false);
 
-  const onSend = (text: string): void => {
+  const onSend = (text: string, files?: File[]): void => {
     if (projectId === undefined) return;
     setError(null);
+    setNotice(null);
     setBusy(true); // optimistic: disable the composer immediately
     void (async (): Promise<void> => {
       try {
@@ -142,8 +163,17 @@ export function ChatPage(): ReactElement {
           setActiveConvId(conv.conversationId);
           invalidate(K.conversations(projectId));
           invalidate(K.messages(conv.conversationId));
+          // createConversation is JSON-only — files can't ride the first message.
+          // Surface it as a non-error notice (not silently dropped); phrased so
+          // it's actionable once the agent replies (the composer is locked while
+          // `busy`), not "now".
+          if (files !== undefined && files.length > 0) {
+            setNotice(
+              "Files aren't attached to the first message of a new chat — re-attach and send them once the chat has started."
+            );
+          }
         } else {
-          await skill.sendMessage(activeConvId, text);
+          await skill.sendMessage(activeConvId, text, files);
           invalidate(K.messages(activeConvId));
         }
       } catch (e: unknown) {
@@ -161,13 +191,30 @@ export function ChatPage(): ReactElement {
   useEffect(() => {
     const el = scrollRef.current;
     if (el === null) return;
-    lastBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    lastBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX;
   });
   useEffect(() => {
     const el = scrollRef.current;
     if (el === null || !lastBottomRef.current) return;
     el.scrollTop = el.scrollHeight;
   }, [messages?.length]);
+
+  // Jump-to-bottom affordance: `atBottom` (state) drives the button's visibility;
+  // `lastBottomRef` (above) drives the auto-scroll stickiness. Keep them in sync.
+  const [atBottom, setAtBottom] = useState(true);
+  const handleScroll = useCallback((): void => {
+    const el = scrollRef.current;
+    if (el === null) return;
+    const near = el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX;
+    lastBottomRef.current = near;
+    setAtBottom(near);
+  }, []);
+  const scrollToBottom = useCallback((): void => {
+    const el = scrollRef.current;
+    if (el === null) return;
+    el.scrollTop = el.scrollHeight;
+    setAtBottom(true);
+  }, []);
 
   if (projectId === undefined) {
     return <EmptyState title="No project selected." />;
@@ -208,29 +255,55 @@ export function ChatPage(): ReactElement {
         <ProjectViewTabs projectId={projectId} active="chat" />
       </header>
 
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
-        {messageList.length === 0 && !busy ? (
-          <EmptyState
-            title="No messages yet."
-            hint="Ask the agent about this project, or tell it what to run."
-          />
-        ) : (
-          <StreamContextProvider value={{ runStartedAt: null }}>
-            <ChatStream messages={messageList} showTools={showTools} />
-            {busy ? (
-              <WorkingIndicator
-                activity={currentActivity}
-                expanded={showTools}
-                onToggle={() => {
-                  setShowTools(v => !v);
-                }}
+      <div className="relative min-h-0 flex-1">
+        <div
+          ref={scrollRef}
+          onScroll={handleScroll}
+          className="h-full overflow-y-auto px-[30px] pt-[26px] pb-[18px]"
+        >
+          {/* Match the composer's centered 940px column (design: .stream-inner) */}
+          <div className="mx-auto max-w-[940px]">
+            {messageList.length === 0 && !busy ? (
+              <EmptyState
+                title="No messages yet."
+                hint="Ask the agent about this project, or tell it what to run."
               />
-            ) : null}
-          </StreamContextProvider>
-        )}
+            ) : (
+              <StreamContextProvider value={{ runStartedAt: null }}>
+                <ChatStream messages={messageList} showTools={showTools} />
+                {busy ? (
+                  <WorkingIndicator
+                    activity={currentActivity}
+                    expanded={showTools}
+                    onToggle={() => {
+                      setShowTools(v => !v);
+                    }}
+                  />
+                ) : null}
+              </StreamContextProvider>
+            )}
+          </div>
+        </div>
+        {!atBottom ? (
+          <button
+            type="button"
+            onClick={scrollToBottom}
+            aria-label="Jump to bottom"
+            className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-full border border-border bg-surface-elevated px-3 py-1 text-[11px] text-text-secondary shadow-md transition-colors hover:text-text-primary"
+          >
+            <span aria-hidden>↓</span>
+            Jump to bottom
+          </button>
+        ) : null}
       </div>
 
       <WorkflowDock projectId={projectId} />
+
+      {notice !== null ? (
+        <div className="shrink-0 border-t border-warning/30 bg-warning/[0.06] px-6 py-2 font-mono text-[11px] text-warning">
+          {notice}
+        </div>
+      ) : null}
 
       {error !== null || loadError !== undefined ? (
         <div className="shrink-0 border-t border-error/30 bg-error/[0.06] px-6 py-2 font-mono text-[11px] text-error">

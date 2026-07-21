@@ -6,6 +6,7 @@ import { listWorkflows, createConversation, runWorkflow, deleteConversation } fr
 import { Button } from '@/components/ui/button';
 import { useProject } from '@/contexts/ProjectContext';
 import { WorkflowCard } from '@/components/workflows/WorkflowCard';
+import { partitionWorkflows } from '@/components/workflows/partition-workflows';
 import {
   getWorkflowCategory,
   getWorkflowDisplayName,
@@ -57,7 +58,7 @@ export function WorkflowList(): React.ReactElement {
       workflowStarted = true;
       setRunMessage('');
       setSelectedWorkflow(null);
-      navigate(`/chat/${conversationId}`);
+      navigate(`/legacy/chat/${conversationId}`);
     } catch (error) {
       console.error('[Workflows] Failed to run workflow', { error });
       setRunError(
@@ -83,7 +84,7 @@ export function WorkflowList(): React.ReactElement {
     : undefined;
 
   const {
-    data: workflows,
+    data: workflowsResult,
     isLoading: loadingWorkflows,
     isError: workflowsError,
   } = useQuery({
@@ -91,27 +92,34 @@ export function WorkflowList(): React.ReactElement {
     queryFn: () => listWorkflows(selectedCwd),
   });
 
-  // Filter workflows by search query and category
-  const filteredWorkflows = useMemo(() => {
-    if (!workflows) return [];
-    return workflows
+  const workflows = workflowsResult?.workflows;
+  const recommendedNames = workflowsResult?.recommended ?? [];
+
+  // Filter workflows + partition into recommended (declared order) and rest.
+  // Filters apply to both partitions; an empty recommended partition hides the header.
+  const { filteredWorkflows, recommendedWorkflows, restWorkflows } = useMemo(() => {
+    if (!workflows) {
+      return { filteredWorkflows: [], recommendedWorkflows: [], restWorkflows: [] };
+    }
+    const filtered = workflows
       .map(entry => entry.workflow)
       .filter(wf => {
-        // Search filter
         if (searchQuery) {
           const query = searchQuery.toLowerCase();
           const matchesName = wf.name.toLowerCase().includes(query);
           const matchesDesc = wf.description?.toLowerCase().includes(query) ?? false;
           if (!matchesName && !matchesDesc) return false;
         }
-        // Category filter
         if (activeCategory !== 'All') {
           const cat = getWorkflowCategory(wf.name, wf.description ?? '');
           if (cat !== activeCategory) return false;
         }
         return true;
       });
-  }, [workflows, searchQuery, activeCategory]);
+
+    const { recommended, rest } = partitionWorkflows(filtered, recommendedNames);
+    return { filteredWorkflows: filtered, recommendedWorkflows: recommended, restWorkflows: rest };
+  }, [workflows, searchQuery, activeCategory, recommendedNames]);
 
   if (loadingWorkflows) {
     return (
@@ -198,24 +206,55 @@ export function WorkflowList(): React.ReactElement {
             No workflows match your search.
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-            {filteredWorkflows.map(wf => (
-              <WorkflowCard
-                key={wf.name}
-                workflow={wf}
-                isSelected={selectedWorkflow === wf.name}
-                onToggle={(name): void => {
-                  setSelectedWorkflow(selectedWorkflow === name ? null : name);
-                  setRunMessage('');
-                  setRunError(null);
-                }}
-                onRun={(name): void => {
-                  setSelectedWorkflow(name);
-                  setRunMessage('');
-                  setRunError(null);
-                }}
-              />
-            ))}
+          <div className="space-y-4">
+            {recommendedWorkflows.length > 0 && (
+              <div className="space-y-3">
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-text-secondary">
+                  Recommended for this project
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+                  {recommendedWorkflows.map(wf => (
+                    <WorkflowCard
+                      key={wf.name}
+                      workflow={wf}
+                      isSelected={selectedWorkflow === wf.name}
+                      onToggle={(name): void => {
+                        setSelectedWorkflow(selectedWorkflow === name ? null : name);
+                        setRunMessage('');
+                        setRunError(null);
+                      }}
+                      onRun={(name): void => {
+                        setSelectedWorkflow(name);
+                        setRunMessage('');
+                        setRunError(null);
+                      }}
+                    />
+                  ))}
+                </div>
+                {restWorkflows.length > 0 && <hr className="border-border" />}
+              </div>
+            )}
+            {restWorkflows.length > 0 && (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+                {restWorkflows.map(wf => (
+                  <WorkflowCard
+                    key={wf.name}
+                    workflow={wf}
+                    isSelected={selectedWorkflow === wf.name}
+                    onToggle={(name): void => {
+                      setSelectedWorkflow(selectedWorkflow === name ? null : name);
+                      setRunMessage('');
+                      setRunError(null);
+                    }}
+                    onRun={(name): void => {
+                      setSelectedWorkflow(name);
+                      setRunMessage('');
+                      setRunError(null);
+                    }}
+                  />
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>

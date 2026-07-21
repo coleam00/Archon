@@ -7,6 +7,8 @@ interface WorkflowRunGroupProps {
   parentPlatformId: string | null;
   runs: DashboardRunResponse[];
   isDocker?: boolean;
+  isWsl?: boolean;
+  wslDistro?: string;
   onCancel: (runId: string) => void;
   onResume?: (runId: string) => void;
   onAbandon?: (runId: string) => void;
@@ -19,6 +21,8 @@ export function WorkflowRunGroup({
   parentPlatformId,
   runs,
   isDocker,
+  isWsl,
+  wslDistro,
   onCancel,
   onResume,
   onAbandon,
@@ -36,7 +40,7 @@ export function WorkflowRunGroup({
           <div className="h-px flex-1 bg-border" />
           <button
             onClick={(): void => {
-              navigate(`/chat/${encodeURIComponent(parentPlatformId)}`);
+              navigate(`/legacy/chat/${encodeURIComponent(parentPlatformId)}`);
             }}
             className="flex items-center gap-1.5 rounded-full border border-border bg-surface-elevated px-2.5 py-0.5 text-[11px] text-text-secondary hover:border-primary/40 hover:text-primary transition-colors shrink-0"
           >
@@ -54,6 +58,8 @@ export function WorkflowRunGroup({
             key={run.id}
             run={run}
             isDocker={isDocker}
+            isWsl={isWsl}
+            wslDistro={wslDistro}
             onCancel={onCancel}
             onResume={onResume}
             onAbandon={onAbandon}

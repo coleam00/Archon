@@ -74,6 +74,7 @@ mock.module('@archon/core', () => ({
   registerRepository: mock(async () => ({ codebaseId: 'x', alreadyExisted: false })),
   ConversationNotFoundError: class ConversationNotFoundError extends Error {},
   generateAndSetTitle: mock(async () => {}),
+  resolveTitleRequest: mock(async () => ({ provider: 'claude', options: {} })),
   isPerUserGitHubEnabled: () => false,
   getArchonWorkspacesPath: () => '/tmp/.archon/workspaces',
   createLogger: noopLogger,

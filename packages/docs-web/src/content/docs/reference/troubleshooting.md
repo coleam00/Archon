@@ -315,25 +315,19 @@ assistants:
 
 See the [AI Assistants → Binary path configuration](/getting-started/ai-assistants/#binary-path-configuration-compiled-binaries-only) guide for the full install matrix.
 
-## Workflows Hang Silently When Run Inside Claude Code
+## Workflows Time Out Waiting for the First Event
 
-**Symptom:** Workflows started from within a Claude Code session (e.g., via the Terminal tool) produce no output, or the CLI emits a warning about `CLAUDECODE=1` before the workflow hangs.
+**Symptom:** A workflow node produces no output and eventually fails on a first-event timeout.
 
-**Cause:** Nested Claude Code sessions can deadlock — the outer session waits for tool results that the inner session never delivers.
+**Cause:** A slow environment (cold model, constrained machine) can exceed the default 60-second wait for the AI provider's first event.
 
-**Fix:** Run `archon serve` from a regular shell outside Claude Code and use the Web UI or HTTP API instead.
-
-**Suppress the warning:** If you have a non-deadlocking setup and want to silence the warning:
-
-```bash
-ARCHON_SUPPRESS_NESTED_CLAUDE_WARNING=1 archon workflow run ...
-```
-
-**Adjust the timeout:** If your environment is slow and hitting the 60-second first-event timeout:
+**Fix:** Raise the timeout:
 
 ```bash
 ARCHON_CLAUDE_FIRST_EVENT_TIMEOUT_MS=120000 archon workflow run ...
 ```
+
+> Running `archon` from inside a Claude Code session (or another coding agent) is a supported, normal way to drive Archon — it no longer emits a warning.
 
 ## Worktree Belongs to a Different Clone
 

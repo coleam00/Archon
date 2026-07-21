@@ -26,6 +26,7 @@ Set these in your shell or `.env` file:
 | `GITEA_TOKEN` | No | Gitea/Forgejo access token — used to authenticate when cloning private Gitea/Forgejo repos (also used by the Gitea adapter) |
 | `LOG_LEVEL` | No | `debug`, `info` (default), `warn`, `error` |
 | `PORT` | No | Server port (default: 3090, Docker: 3000) |
+| `WSL_DISTRO_NAME` | No (WSL sets it automatically) | WSL distro name; Archon reads it to emit Windows-host-friendly `vscode://vscode-remote/wsl+<distro>/...` "Open in IDE" links. Override only to force a specific distro name into the URI. |
 
 ## Project Configuration
 
@@ -38,7 +39,7 @@ assistants:
     settingSources:
       - project
   codex:
-    model: gpt-5.3-codex
+    model: gpt-5.6-sol
     modelReasoningEffort: medium
 
 # docs:

@@ -4,7 +4,7 @@ import { LiveDot } from './LiveDot';
 import { OriginBadge } from './OriginBadge';
 import type { Run } from '../primitives/run';
 import { shortRunId, formatElapsed, elapsedSince, formatCost } from '../lib/format';
-import { useIsDocker, openInIde } from '../lib/health';
+import { useIsDocker, useIdeEnv, openInIde } from '../lib/health';
 import { statusLabel, statusTextClass } from '../lib/run-status';
 
 interface RunDetailHeaderProps {
@@ -36,6 +36,7 @@ export function RunDetailHeader({
   const isPaused = run.status === 'paused';
   const isRunning = run.status === 'running';
   const isDocker = useIsDocker();
+  const ideEnv = useIdeEnv();
   const canOpenIde = !isDocker && run.workingPath !== null && run.workingPath !== '';
 
   const copyRunId = async (): Promise<void> => {
@@ -126,7 +127,7 @@ export function RunDetailHeader({
           <button
             type="button"
             onClick={() => {
-              if (run.workingPath !== null) openInIde(run.workingPath);
+              if (run.workingPath !== null) openInIde(run.workingPath, ideEnv);
             }}
             title={`Open ${run.workingPath} in IDE`}
             aria-label="Open in IDE"
@@ -138,6 +139,19 @@ export function RunDetailHeader({
           </button>
         ) : null}
       </div>
+
+      {/* Provenance sub-row: the input that started this run. `w-full` forces its
+          own line in the flex-wrap header.
+          TODO(#1882): add a "from chat →" link back to the originating
+          conversation once the console chat route supports deep-linking. */}
+      {run.userMessage !== '' ? (
+        <div className="flex w-full min-w-0 items-baseline gap-2 text-[12px]">
+          <span className="shrink-0 font-mono text-text-tertiary">input</span>
+          <span className="truncate font-mono text-text-secondary" title={run.userMessage}>
+            {run.userMessage}
+          </span>
+        </div>
+      ) : null}
     </header>
   );
 }

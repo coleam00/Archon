@@ -17,6 +17,16 @@ import { createLogger } from '@archon/paths';
 import type { IGitHubAppAuthProvider } from '../github-auth';
 import { isPerUserGitHubEnabled } from '../github-auth/config';
 import { getDecryptedAccessToken } from '../db/user-github-token-store';
+import { isPerUserProviderKeysEnabled } from '../credentials/config';
+import { join } from 'node:path';
+import {
+  deliverCredential,
+  buildPiAuthJson,
+  PI_AUTH_JSON_RELATIVE_PATH,
+  PI_AUTH_PATH_ENV,
+} from '../credentials/delivery';
+import { listDecryptedUserProviderCredentials } from '../db/user-provider-key-store';
+import { getUserAiPrefs, type UserAiPrefs } from '../db/user-ai-prefs-store';
 
 // Compile-time assertion: MergedConfig must remain a structural subtype of WorkflowConfig.
 // If MergedConfig drifts from WorkflowConfig, this line becomes a type error.
@@ -33,6 +43,8 @@ export function createWorkflowStore(): IWorkflowStore {
   return {
     createWorkflowRun: workflowDb.createWorkflowRun,
     getWorkflowRun: workflowDb.getWorkflowRun,
+    findChildRuns: workflowDb.findChildRuns,
+    getRunAncestry: workflowDb.getRunAncestry,
     getActiveWorkflowRunByPath: workflowDb.getActiveWorkflowRunByPath,
     findResumableRun: workflowDb.findResumableRun,
     failOrphanedRuns: workflowDb.failOrphanedRuns,
@@ -47,6 +59,8 @@ export function createWorkflowStore(): IWorkflowStore {
     completeWorkflowRun: workflowDb.completeWorkflowRun,
     failWorkflowRun: workflowDb.failWorkflowRun,
     pauseWorkflowRun: workflowDb.pauseWorkflowRun,
+    claimWriteback: workflowDb.claimWriteback,
+    releaseWritebackClaim: workflowDb.releaseWritebackClaim,
     cancelWorkflowRun: workflowDb.cancelWorkflowRun,
     createWorkflowEvent: async (data): Promise<void> => {
       try {
@@ -123,6 +137,66 @@ export function createWorkflowDeps(): WorkflowDeps {
       } catch (err) {
         getLog().warn({ err: err as Error, userId }, 'workflow_deps.user_token_resolve_failed');
         return undefined;
+      }
+    },
+    // Per-user AI-provider credentials (Phase 2): list the user's decrypted
+    // credentials and translate each through the delivery map into an env bag
+    // (and optional file deliveries) for the run. Engine-facing contract is
+    // env+files only — the delivery map is owned here, not in @archon/workflows,
+    // so the workflow engine stays free of provider-specific knowledge.
+    isPerUserProviderKeysEnabled: () => isPerUserProviderKeysEnabled(),
+    getUserProviderEnv: async (
+      userId: string,
+      artifactsDir: string
+    ): Promise<{
+      env: Record<string, string>;
+      files: { path: string; contents: string }[];
+    }> => {
+      try {
+        const creds = await listDecryptedUserProviderCredentials(userId);
+        const env: Record<string, string> = {};
+        const files: { path: string; contents: string }[] = [];
+        for (const { provider, cred } of creds) {
+          try {
+            const result = deliverCredential(provider, cred, { artifactsDir });
+            Object.assign(env, result.env);
+            if (result.files) files.push(...result.files);
+          } catch (err) {
+            // Unknown provider / shape mismatch — log at ERROR (no per-credential
+            // user-facing skip event yet) and skip this credential rather than
+            // abort all delivery.
+            getLog().error(
+              { err: err as Error, userId, provider },
+              'workflow_deps.provider_creds_deliver_failed'
+            );
+          }
+        }
+        // Aggregate Pi auth.json (the user's keys + subscriptions) so a `pi` node
+        // consumes them via AuthStorage(authPath) without moving Pi's home. Needs
+        // a real artifactsDir (file delivery); the chat path is env-only.
+        if (artifactsDir) {
+          const piAuthJson = buildPiAuthJson(creds);
+          if (piAuthJson) {
+            const piAuthPath = join(artifactsDir, PI_AUTH_JSON_RELATIVE_PATH);
+            files.push({ path: piAuthPath, contents: piAuthJson });
+            env[PI_AUTH_PATH_ENV] = piAuthPath;
+          }
+        }
+        return { env, files };
+      } catch (err) {
+        getLog().warn({ err: err as Error, userId }, 'workflow_deps.provider_creds_resolve_failed');
+        return { env: {}, files: [] };
+      }
+    },
+    // Per-user AI prefs (Phase 3): personal tiers/aliases/default-provider,
+    // folded into buildAiProfile as the highest-precedence layer. Non-throwing —
+    // a DB failure means the run falls back to install-wide config.
+    getUserAiPrefs: async (userId: string): Promise<UserAiPrefs> => {
+      try {
+        return await getUserAiPrefs(userId);
+      } catch (err) {
+        getLog().warn({ err: err as Error, userId }, 'workflow_deps.user_ai_prefs_resolve_failed');
+        return {};
       }
     },
   };

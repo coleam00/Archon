@@ -44,11 +44,55 @@ export const WORKFLOW_EVENT_TYPES = [
   'workflow_cancelled',
   'workflow_artifact',
   'node_session_resumed',
+  // Phase 2 of #975 — subagent task lifecycle (aggregated from provider
+  // task_started / task_progress / task_notification chunks). Stored
+  // alongside other workflow_events for the timeline view; the SSE bridge
+  // fans out task_activity / hook_activity to live Web UI subscribers.
+  'task_activity',
+  'hook_activity',
+  // Container isolation backend lifecycle (folder-project container runs).
+  // `container_created`/`container_destroyed` bracket the run; `container_stopped`/
+  // `container_resumed` bracket a suspend/resume across a pause (Phase C).
+  'container_created',
+  'container_stopped',
+  'container_resumed',
+  'container_destroyed',
+  // Container write-back gate (Phase C): the finished run's overlay diff is
+  // requested (paused for approval), then applied to / discarded from the live root.
+  'writeback_requested',
+  'writeback_applied',
+  'writeback_discarded',
+  // Evidence gate (#2230): `evidence_policy.required` was set but
+  // `$ARTIFACTS_DIR/evidence.json` was absent at completion time — the run was
+  // refused terminal `completed` and marked failed. Data carries the expected path.
+  'evidence_validation_failed',
 ] as const;
 
 export type WorkflowEventType = (typeof WORKFLOW_EVENT_TYPES)[number];
 
-export interface IWorkflowStore {
+/**
+ * Run-tree navigation (#2121 Phase 2) — a narrow, distinct concern (walking the
+ * `parent_run_id` graph) kept out of the fat `IWorkflowStore` per the project's ISP
+ * rule. `IWorkflowStore` extends it so existing consumers don't churn, but a caller
+ * that only needs run-tree reads can depend on this alone.
+ */
+export interface IRunTreeStore {
+  /**
+   * Find every run whose `parent_run_id` is `parentRunId`. Used by a `workflow:`
+   * node's re-entry logic to locate its child (filtered further by
+   * `metadata.parent_node_id`) and by the abandon cascade to cancel children.
+   */
+  findChildRuns(parentRunId: string): Promise<WorkflowRun[]>;
+  /**
+   * Walk the `parent_run_id` chain from `runId` UP to the root, returning the
+   * ancestors (nearest parent first), depth-capped. Used by the runtime cycle
+   * guard (reject a child whose target name is already an ancestor) and to build
+   * the path-lock exclusion set.
+   */
+  getRunAncestry(runId: string): Promise<WorkflowRun[]>;
+}
+
+export interface IWorkflowStore extends IRunTreeStore {
   // Run lifecycle
   createWorkflowRun(data: {
     workflow_name: string;
@@ -60,6 +104,11 @@ export interface IWorkflowStore {
     parent_conversation_id?: string;
     /** Archon user UUID; populated via ExecuteWorkflowOptions.userId. */
     user_id?: string;
+    /**
+     * Run-tree parent (#2121 Phase 2). Set for a `workflow:` sub-run so its row
+     * links back to the spawning parent run; omitted for top-level runs.
+     */
+    parent_run_id?: string;
   }): Promise<WorkflowRun>;
   getWorkflowRun(id: string): Promise<WorkflowRun | null>;
   /**
@@ -77,10 +126,15 @@ export interface IWorkflowStore {
    * Stale `pending` rows (older than ~5 minutes) are treated as orphaned
    * and ignored, so leaks from crashed dispatches don't permanently block
    * a path.
+   *
+   * `excludeRunIds` additionally drops those run ids from the active set. A
+   * `workflow:` sub-run shares its parent's checkout (#2121 Phase 2), so the
+   * child's path-lock must exclude its ancestor chain — otherwise the child
+   * self-blocks against the parent's own `running`/`paused` row on that path.
    */
   getActiveWorkflowRunByPath(
     workingPath: string,
-    self?: { id: string; startedAt: Date }
+    self?: { id: string; startedAt: Date; excludeRunIds?: string[] }
   ): Promise<WorkflowRun | null>;
   findResumableRun(workflowName: string, workingPath: string): Promise<WorkflowRun | null>;
   failOrphanedRuns(): Promise<{ count: number }>;
@@ -93,7 +147,30 @@ export interface IWorkflowStore {
   getWorkflowRunStatus(id: string): Promise<WorkflowRunStatus | null>;
   completeWorkflowRun(id: string, metadata?: Record<string, unknown>): Promise<void>;
   failWorkflowRun(id: string, error: string): Promise<void>;
-  pauseWorkflowRun(id: string, approvalContext: ApprovalContext): Promise<void>;
+  /**
+   * Pause a running run for human review, stamping the approval context. Optional
+   * `extraMetadata` is folded into the SAME atomic metadata write (e.g. the
+   * container write-back gate's `pending_writeback` marker) so there is never a
+   * paused-without-marker window.
+   */
+  pauseWorkflowRun(
+    id: string,
+    approvalContext: ApprovalContext,
+    extraMetadata?: Record<string, unknown>
+  ): Promise<void>;
+
+  /**
+   * Atomically CLAIM the container write-back apply before the live root is mutated
+   * (retry-safe apply). Sets `metadata.writeback_apply_claimed` only while unset;
+   * returns whether THIS caller won. Apply the overlay only when `claimed`.
+   */
+  claimWriteback(id: string): Promise<{ claimed: boolean }>;
+
+  /**
+   * Release a claimed write-back apply after the apply FAILED, so a later resume can
+   * re-claim and retry. Best-effort (never throws in the caller's critical path).
+   */
+  releaseWritebackClaim(id: string): Promise<void>;
   cancelWorkflowRun(id: string): Promise<{ cancelled: boolean }>;
 
   /**
@@ -128,6 +205,8 @@ export interface IWorkflowStore {
     name: string;
     repository_url: string | null;
     default_cwd: string;
+    /** Project kind — 'folder' routes path resolution to _folder/<slug>/ storage. */
+    kind: 'repo' | 'folder';
   } | null>;
 
   // Per-node provider sessions persisted across workflow re-runs (opt-in via

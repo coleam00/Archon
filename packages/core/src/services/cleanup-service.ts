@@ -7,8 +7,10 @@ import * as conversationDb from '../db/conversations';
 import * as sessionDb from '../db/sessions';
 import { SessionNotFoundError } from '../db/sessions';
 import * as codebaseDb from '../db/codebases';
-import { getIsolationProvider, getPrState } from '@archon/isolation';
-import type { WorktreeStatusBreakdown, PrState } from '@archon/isolation';
+import * as workflowDb from '../db/workflows';
+import { getIsolationProvider, getPrState, ContainerBackend } from '@archon/isolation';
+import type { WorktreeStatusBreakdown, PrState, ContainerBackendConfig } from '@archon/isolation';
+import { TERMINAL_WORKFLOW_STATUSES } from '@archon/workflows/schemas/workflow-run';
 import {
   hasUncommittedChanges,
   worktreeExists,
@@ -24,12 +26,36 @@ import type { RepoPath, BranchName } from '@archon/git';
 import { createLogger } from '@archon/paths';
 import type { IsolationEnvironmentRow } from '@archon/isolation';
 import { ConversationNotFoundError } from '../types';
+import { loadRepoConfig } from '../config/config-loader';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('cleanup');
   return cachedLog;
+}
+
+/** Git context for a repo's cleanup operations, resolved from repo config. */
+interface RepoGitContext {
+  mainBranch: BranchName;
+  /** Configured remote name (worktree.remote); undefined means 'origin' downstream. */
+  remote?: string;
+}
+
+// Resolve the base branch and remote for a repo, preferring worktree.baseBranch /
+// worktree.remote from .archon/config.yaml before falling back to runtime git
+// detection. Repos that use 'master' as default and don't have <remote>/HEAD set
+// will fail getDefaultBranch — reading the config first avoids that error.
+// loadRepoConfig never throws (returns {} on missing/broken config), so a config
+// problem degrades to git detection instead of failing cleanup.
+async function resolveRepoGitContext(repoPath: RepoPath, cwd: string): Promise<RepoGitContext> {
+  const repoConfig = await loadRepoConfig(cwd);
+  const remote = repoConfig.worktree?.remote?.trim() || undefined;
+  const configured = repoConfig.worktree?.baseBranch?.trim();
+  if (configured) {
+    return { mainBranch: toBranchName(configured), remote };
+  }
+  return { mainBranch: await getDefaultBranch(repoPath, remote), remote };
 }
 
 // Configuration constants (configurable via env vars)
@@ -48,6 +74,145 @@ export interface CleanupReport {
   skipped: { id: string; reason: string }[];
   errors: { id: string; error: string }[];
   sessionsDeleted: number;
+}
+
+// ---------------------------------------------------------------------------
+// Container isolation environments (folder-project container backend, Phase C)
+// ---------------------------------------------------------------------------
+
+/**
+ * `ContainerBackend.destroy()` reads the container/volume names from the tracking
+ * row's metadata and IGNORES `config` (config is a prepare-time concern), so a
+ * placeholder is correct for the cleanup path — it never prepares a container.
+ */
+const CLEANUP_PLACEHOLDER_CONTAINER_CONFIG: ContainerBackendConfig = {
+  image: 'archon-runner:latest',
+  network: 'bridge',
+  memoryMb: 4096,
+  pidsLimit: 512,
+};
+
+export interface ContainerEnvSummary {
+  envId: string;
+  codebaseName: string;
+  workingPath: string;
+  ageDays: number;
+  runId: string | null;
+  runStatus: string | null;
+}
+
+export interface ContainerCleanupReport {
+  removed: string[];
+  skipped: { id: string; reason: string }[];
+  errors: { id: string; error: string }[];
+}
+
+/**
+ * Immediately reclaim (destroy) a single container isolation environment by id —
+ * used when a container run is ABANDONED (M2), so its container + upper volume don't
+ * linger until the scheduled reaper. Best-effort: throws on a genuine docker failure
+ * (the caller surfaces it), a no-op if the row/container is already gone. The
+ * placeholder config is unused by `destroy` (see CLEANUP_PLACEHOLDER_CONTAINER_CONFIG).
+ */
+export async function reclaimContainerEnv(envId: string): Promise<void> {
+  const backend = new ContainerBackend({
+    store: isolationEnvDb.createIsolationStore(),
+    config: CLEANUP_PLACEHOLDER_CONTAINER_CONFIG,
+  });
+  await backend.destroy(envId);
+}
+
+/**
+ * List active container isolation environments with their owning run's status.
+ * Read-only; used by `archon isolation list`.
+ */
+export async function listContainerEnvironments(): Promise<readonly ContainerEnvSummary[]> {
+  const rows = await isolationEnvDb.listActiveContainerEnvironments();
+  const summaries: ContainerEnvSummary[] = [];
+  for (const row of rows) {
+    // A lookup ERROR is reported as an explicit 'lookup-failed' status, NOT null — a
+    // null runId reads as "orphan" and would misrepresent an active run's container.
+    let run: Awaited<ReturnType<typeof workflowDb.getRunByIsolationEnvId>> | null = null;
+    let lookupFailed = false;
+    try {
+      run = await workflowDb.getRunByIsolationEnvId(row.id);
+    } catch (err) {
+      lookupFailed = true;
+      getLog().warn({ err, envId: row.id }, 'container_env_list_lookup_failed');
+    }
+    summaries.push({
+      envId: row.id,
+      codebaseName: row.codebase_name,
+      workingPath: row.working_path,
+      ageDays: Math.floor(row.days_since_created),
+      runId: run?.id ?? null,
+      runStatus: lookupFailed ? 'lookup-failed' : (run?.status ?? null),
+    });
+  }
+  return summaries;
+}
+
+/**
+ * Reap orphaned container isolation environments: remove the container + upper
+ * volume of TERMINAL (completed/failed/cancelled) or run-less container envs older
+ * than `daysStale`. A PAUSED run's container is NEVER touched — a paused container
+ * is awaited state, not garbage (No-Autonomous-Lifecycle-Mutation Across Process
+ * Boundaries); it is surfaced by `isolation list` with its age instead. All pruning
+ * is label-scoped (via the tracking row), never a bare `docker prune`.
+ */
+export async function cleanupContainerEnvironments(
+  daysStale = STALE_THRESHOLD_DAYS
+): Promise<ContainerCleanupReport> {
+  const report: ContainerCleanupReport = { removed: [], skipped: [], errors: [] };
+  const rows = await isolationEnvDb.listActiveContainerEnvironments();
+  if (rows.length === 0) return report;
+
+  const backend = new ContainerBackend({
+    store: isolationEnvDb.createIsolationStore(),
+    config: CLEANUP_PLACEHOLDER_CONTAINER_CONFIG,
+  });
+
+  for (const row of rows) {
+    // FAIL CLOSED on an ambiguous lookup (H3): a DB error is NOT "no run" — treating
+    // it as an orphan would destroy an active/paused run's container on a transient
+    // blip (violating No-Autonomous-Lifecycle-Mutation). Report + skip, never destroy.
+    let run: Awaited<ReturnType<typeof workflowDb.getRunByIsolationEnvId>> | null;
+    try {
+      run = await workflowDb.getRunByIsolationEnvId(row.id);
+    } catch (err) {
+      report.errors.push({
+        id: row.id,
+        error: `run lookup failed (NOT reaped): ${(err as Error).message}`,
+      });
+      getLog().warn({ err, envId: row.id }, 'container_env_reap_lookup_failed');
+      continue;
+    }
+    // Never reap an awaited (paused) or still-active (running/pending) run's
+    // container — only terminal runs, or orphans with no run at all.
+    if (run && !TERMINAL_WORKFLOW_STATUSES.includes(run.status)) {
+      report.skipped.push({
+        id: row.id,
+        reason: `run ${run.id.slice(0, 8)} is ${run.status}`,
+      });
+      continue;
+    }
+    if (row.days_since_created < daysStale) {
+      report.skipped.push({
+        id: row.id,
+        reason: `${Math.floor(row.days_since_created)}d old (< ${daysStale}d threshold)`,
+      });
+      continue;
+    }
+    try {
+      await backend.destroy(row.id);
+      report.removed.push(row.id);
+      getLog().info({ envId: row.id, runId: run?.id ?? null }, 'container_env_reaped');
+    } catch (err) {
+      report.errors.push({ id: row.id, error: (err as Error).message });
+      getLog().warn({ err, envId: row.id }, 'container_env_reap_failed');
+    }
+  }
+  return report;
 }
 
 /**
@@ -168,9 +333,16 @@ export async function removeEnvironment(
 
   // Get canonical repo path from codebase for branch cleanup
   let canonicalRepoPath: RepoPath | undefined;
+  let configuredRemote: string | undefined;
   if (env.codebase_id) {
     const codebase = await codebaseDb.getCodebase(env.codebase_id);
     canonicalRepoPath = codebase?.default_cwd ? toRepoPath(codebase.default_cwd) : undefined;
+    // Resolve the configured remote only when remote-branch deletion is requested —
+    // that's the one destroy path that pushes to a remote.
+    if (options?.deleteRemoteBranch && codebase?.default_cwd) {
+      const repoConfig = await loadRepoConfig(codebase.default_cwd);
+      configuredRemote = repoConfig.worktree?.remote?.trim() || undefined;
+    }
   }
 
   // Check if directory exists before attempting removal
@@ -195,6 +367,7 @@ export async function removeEnvironment(
       branchName: toBranchName(env.branch_name),
       canonicalRepoPath,
       deleteRemoteBranch: options?.deleteRemoteBranch,
+      remote: configuredRemote,
     });
 
     // Log warnings from partial failures
@@ -308,7 +481,7 @@ export async function runScheduledCleanup(): Promise<CleanupReport> {
 
         // Check if branch is merged
         const mainRepoPath = toRepoPath(env.codebase_default_cwd);
-        const mainBranch = await getDefaultBranch(mainRepoPath);
+        const { mainBranch } = await resolveRepoGitContext(mainRepoPath, env.codebase_default_cwd);
         const merged = await isBranchMerged(
           mainRepoPath,
           toBranchName(env.branch_name),
@@ -462,7 +635,7 @@ export async function getWorktreeStatusBreakdown(
     activeEnvs: [],
   };
 
-  const mainBranch = await getDefaultBranch(repoPath);
+  const { mainBranch } = await resolveRepoGitContext(repoPath, mainRepoPath);
 
   for (const env of environments) {
     // Skip Telegram (never shown as stale)
@@ -560,7 +733,8 @@ async function isSafeToRemove(
   branchName: BranchName,
   mainBranch: BranchName,
   prStateCache: Map<string, PrState>,
-  includeClosed: boolean
+  includeClosed: boolean,
+  remote?: string
 ): Promise<{ safe: boolean; openPr: boolean }> {
   // (a) Fast path — fast-forward / merge-commit ancestry
   if (await isBranchMerged(repoPath, branchName, mainBranch)) {
@@ -571,7 +745,7 @@ async function isSafeToRemove(
     return { safe: true, openPr: false };
   }
   // (c) GitHub PR state
-  const prState = await getPrState(branchName, repoPath, prStateCache);
+  const prState = await getPrState(branchName, repoPath, prStateCache, remote);
   if (prState === 'MERGED') return { safe: true, openPr: false };
   if (prState === 'CLOSED') return { safe: includeClosed, openPr: false };
   if (prState === 'OPEN') return { safe: false, openPr: true };
@@ -590,7 +764,7 @@ export async function cleanupMergedWorktrees(
   const result: CleanupOperationResult = { removed: [], skipped: [] };
   const environments = await isolationEnvDb.listByCodebase(codebaseId);
   const repoPath = toRepoPath(mainRepoPath);
-  const mainBranch = await getDefaultBranch(repoPath);
+  const { mainBranch, remote } = await resolveRepoGitContext(repoPath, mainRepoPath);
   const includeClosed = options.includeClosed ?? false;
   const prStateCache = new Map<string, PrState>();
 
@@ -605,12 +779,19 @@ export async function cleanupMergedWorktrees(
         branchName,
         mainBranch,
         prStateCache,
-        includeClosed
+        includeClosed,
+        remote
       );
       safe = decision.safe;
       openPr = decision.openPr;
     } catch (error) {
       const err = error as Error;
+      // Log before skipping — silent skips make transient git/network failures
+      // impossible to debug from the cleanup report alone.
+      getLog().warn(
+        { err, branchName: env.branch_name, repoPath: mainRepoPath },
+        'cleanup.merge_check_failed'
+      );
       result.skipped.push({
         branchName: env.branch_name,
         reason: `merge check failed: ${err.message}`,

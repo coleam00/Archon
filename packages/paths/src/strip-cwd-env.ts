@@ -84,16 +84,6 @@ export function stripCwdEnv(cwd: string = process.cwd()): void {
   // --- Pass 2: Nested Claude Code session markers ---
   // Pattern-matched (not hardcoded) so new CLAUDE_CODE_* markers added by
   // future Claude Code versions are automatically handled.
-  // Emit warning BEFORE deleting — downstream code won't see CLAUDECODE=1.
-  if (process.env.CLAUDECODE === '1' && !process.env.ARCHON_SUPPRESS_NESTED_CLAUDE_WARNING) {
-    process.stderr.write(
-      '\u26a0  Detected CLAUDECODE=1 \u2014 running inside a Claude Code session.\n' +
-        '   If workflows hang silently, this is a known class of issue.\n' +
-        '   Workaround: run `archon serve` from a regular shell.\n' +
-        '   Suppress: set ARCHON_SUPPRESS_NESTED_CLAUDE_WARNING=1\n' +
-        '   Details: https://github.com/coleam00/Archon/issues/1067\n'
-    );
-  }
   if (process.env.CLAUDECODE) {
     Reflect.deleteProperty(process.env, 'CLAUDECODE');
   }
@@ -107,4 +97,15 @@ export function stripCwdEnv(cwd: string = process.cwd()): void {
   // See: https://github.com/anthropics/claude-code/issues/4619
   Reflect.deleteProperty(process.env, 'NODE_OPTIONS');
   Reflect.deleteProperty(process.env, 'VSCODE_INSPECTOR_OPTIONS');
+  // Bun inspector vars (BUN_INSPECT, BUN_INSPECT_NOTIFY, ...) injected by IDE
+  // debuggers (e.g. PyCharm's Bun plugin) make every spawned bun subprocess try
+  // to bind the parent's debug socket → EADDRINUSE crash loop (see #2030).
+  // Bun read these before user code ran, so deleting them here never detaches
+  // the CURRENT process from its debugger — it only stops the leak into children.
+  // Pattern-matched so future BUN_INSPECT_* additions are covered too.
+  for (const key of Object.keys(process.env)) {
+    if (key.startsWith('BUN_INSPECT')) {
+      Reflect.deleteProperty(process.env, key);
+    }
+  }
 }

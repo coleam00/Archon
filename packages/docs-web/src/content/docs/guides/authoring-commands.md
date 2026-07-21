@@ -225,8 +225,7 @@ Archon replaces variables in command text before sending to the AI. The most com
 
 | Variable | Value |
 |----------|-------|
-| `$ARGUMENTS` / `$USER_MESSAGE` | User's input message |
-| `$1`, `$2`, `$3` | Positional arguments (direct invocation only) |
+| `$ARGUMENTS` / `$USER_MESSAGE` | User's whole input message (positional `$1`/`$2`/`$3` are not supported) |
 | `$ARTIFACTS_DIR` | Pre-created artifacts directory for this workflow run |
 | `$BASE_BRANCH` | Base branch (auto-detected or configured) |
 | `$DOCS_DIR` | Documentation directory path (default: `docs/`) |

@@ -36,13 +36,21 @@ export type GitError =
   | { code: 'no_space'; path: string }
   | { code: 'unknown'; message: string };
 
+/** Workspace sync mode */
+export type WorkspaceSyncMode = 'fast-forward' | 'fetch-only' | 'reset';
+
+/** Local branch state relative to origin/<branch> */
+export type WorkspaceSyncState = 'in_sync' | 'behind' | 'ahead' | 'diverged' | 'dirty';
+
 /** Result of a workspace sync operation */
 export interface WorkspaceSyncResult {
   branch: BranchName;
   synced: boolean;
-  /** HEAD SHA before the reset (short, 8 chars) */
+  mode: WorkspaceSyncMode;
+  state: WorkspaceSyncState;
+  /** HEAD SHA before the sync operation (short, 8 chars) */
   previousHead: string;
-  /** HEAD SHA after the reset (short, 8 chars) */
+  /** HEAD SHA after the sync operation (short, 8 chars) */
   newHead: string;
   /** True if the working tree was updated (HEAD changed) */
   updated: boolean;

@@ -28,6 +28,7 @@ import {
   isInlineScript,
   formatSubprocessFailure,
   classifyError,
+  toTelemetryErrorClass,
   safeSendMessage,
   type UnknownErrorTracker,
 } from './executor-shared';
@@ -658,8 +659,58 @@ describe('classifyError', () => {
     expect(classifyError(new Error('unauthorized: exited with code 1'))).toBe('FATAL');
   });
 
+  it('classifies session-limit and usage-limit errors as FATAL (never retried) — #2177', () => {
+    // Verbatim node_failed payload from the issue report — regression pin.
+    expect(
+      classifyError(
+        new Error(
+          'Claude session limit reached — resets 3:20pm (UTC). Abandon this run and retry after reset.'
+        )
+      )
+    ).toBe('FATAL');
+    // CLI-only quota string: not producible by detectCreditExhaustion, so the
+    // drift guard below cannot cover it.
+    expect(classifyError(new Error('Claude AI usage limit reached|1751234567'))).toBe('FATAL');
+  });
+
+  it('session-limit stays FATAL even when the message also matches a TRANSIENT pattern', () => {
+    expect(classifyError(new Error('rate limit: session limit reached'))).toBe('FATAL');
+  });
+
+  it('every detectCreditExhaustion output string classifies FATAL (drift guard)', () => {
+    const outputs = [
+      detectCreditExhaustion("You've hit your session limit · resets 3am"),
+      detectCreditExhaustion('session limit reached'),
+      detectCreditExhaustion('out of credits'),
+    ];
+    for (const msg of outputs) {
+      expect(msg).not.toBeNull();
+      expect(classifyError(new Error(msg as string))).toBe('FATAL');
+    }
+  });
+
   it('classifies unknown errors as UNKNOWN', () => {
     expect(classifyError(new Error('something completely unexpected happened'))).toBe('UNKNOWN');
+  });
+});
+
+describe('toTelemetryErrorClass', () => {
+  it('maps FATAL to fatal', () => {
+    expect(toTelemetryErrorClass('FATAL')).toBe('fatal');
+  });
+
+  it('maps TRANSIENT to transient', () => {
+    expect(toTelemetryErrorClass('TRANSIENT')).toBe('transient');
+  });
+
+  it('maps UNKNOWN to unknown', () => {
+    expect(toTelemetryErrorClass('UNKNOWN')).toBe('unknown');
+  });
+
+  it('round-trips classifyError output for every ErrorType', () => {
+    expect(toTelemetryErrorClass(classifyError(new Error('401 unauthorized')))).toBe('fatal');
+    expect(toTelemetryErrorClass(classifyError(new Error('rate limit: 429')))).toBe('transient');
+    expect(toTelemetryErrorClass(classifyError(new Error('mystery')))).toBe('unknown');
   });
 });
 

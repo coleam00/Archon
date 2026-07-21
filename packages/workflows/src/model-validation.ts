@@ -7,8 +7,9 @@
  *   - bare literal (anything else) → returned unchanged for SDK pass-through
  *
  * No side effects, no logger, no I/O. The `ResolvedAiProfile` is built once by
- * `buildAiProfile()` from layered config (tier defaults → global aliases → repo
- * aliases) and then handed to `resolveModelSpec()` per call.
+ * `buildAiProfile()` from layered config (tier defaults → global tiers → repo
+ * tiers → global aliases → repo aliases) and then handed to `resolveModelSpec()`
+ * per call.
  */
 
 import tierDefaults from './defaults/tier-defaults.json';
@@ -39,6 +40,9 @@ export interface RawAliasEntry {
 /** The aliases map from config YAML — keyed by alias name */
 export type RawAliasesConfig = Record<string, RawAliasEntry>;
 
+/** The tiers map from config YAML — keyed by small/medium/large */
+export type RawTiersConfig = Partial<Record<TierName, RawAliasEntry>>;
+
 /** The resolved AI profile — used by resolveModelSpec */
 export interface ResolvedAiProfile {
   defaultProvider: string;
@@ -66,7 +70,8 @@ const TIER_DEFAULTS = tierDefaults as Record<
   Record<TierName, { model: string; effort?: string }>
 >;
 
-function isTierName(value: string): value is TierName {
+/** True when `value` is one of the reserved tier keywords (small/medium/large). */
+export function isTierName(value: string): value is TierName {
   return (TIER_NAMES as readonly string[]).includes(value);
 }
 
@@ -95,15 +100,39 @@ function assertValidEntry(name: string, entry: RawAliasEntry): void {
   }
 }
 
+function assertValidTierName(name: string): asserts name is TierName {
+  if (!isTierName(name)) {
+    throw new Error(`Tier name '${name}' is invalid. Supported tiers: ${TIER_NAMES.join(', ')}.`);
+  }
+}
+
+function toModelAliasPreset(entry: RawAliasEntry): ModelAliasPreset {
+  return {
+    provider: entry.provider,
+    model: entry.model,
+    ...(entry.effort !== undefined ? { effort: entry.effort } : {}),
+    ...(entry.thinking !== undefined ? { thinking: entry.thinking } : {}),
+  };
+}
+
 export interface BuildAiProfileOptions {
+  /** Tier overrides from ~/.archon/config.yaml */
+  globalTiers?: RawTiersConfig;
+  /** Tier overrides from .archon/config.yaml (repo) — override globalTiers on key collision */
+  repoTiers?: RawTiersConfig;
   /** Aliases from ~/.archon/config.yaml */
   globalAliases?: RawAliasesConfig;
   /** Aliases from .archon/config.yaml (repo) — override globalAliases on key collision */
   repoAliases?: RawAliasesConfig;
+  /** Per-user tier overrides (DB) — highest precedence, override repoTiers on key collision */
+  userTiers?: RawTiersConfig;
+  /** Per-user aliases (DB) — highest precedence, override repoAliases on key collision */
+  userAliases?: RawAliasesConfig;
 }
 
 /**
- * Build a ResolvedAiProfile by layering tier defaults → global aliases → repo aliases.
+ * Build a ResolvedAiProfile by layering tier defaults → global tiers → repo tiers
+ * → per-user tiers → global aliases → repo aliases → per-user aliases.
  * Throws if any alias name collides with a reserved tier name, or if an alias
  * entry has an empty provider or model string, or if an alias key lacks the `@` prefix.
  */
@@ -127,22 +156,46 @@ export function buildAiProfile(
     }
   }
 
-  for (const layer of [options.globalAliases, options.repoAliases]) {
+  for (const layer of [options.globalTiers, options.repoTiers, options.userTiers]) {
+    if (!layer) continue;
+    for (const [name, entry] of Object.entries(layer)) {
+      assertValidTierName(name);
+      assertValidEntry(name, entry);
+      aliases[name] = toModelAliasPreset(entry);
+    }
+  }
+
+  for (const layer of [options.globalAliases, options.repoAliases, options.userAliases]) {
     if (!layer) continue;
     for (const [name, entry] of Object.entries(layer)) {
       assertNotReserved(name);
       assertCustomAliasPrefix(name);
       assertValidEntry(name, entry);
-      aliases[name] = {
-        provider: entry.provider,
-        model: entry.model,
-        ...(entry.effort !== undefined ? { effort: entry.effort } : {}),
-        ...(entry.thinking !== undefined ? { thinking: entry.thinking } : {}),
-      };
+      aliases[name] = toModelAliasPreset(entry);
     }
   }
 
   return { defaultProvider, aliases };
+}
+
+/**
+ * Resolve a tier ref against the profile, reporting WHICH tier in the
+ * fallback chain actually matched — `matchedTier !== requested` means the
+ * requested tier is unset and a sibling preset was used. Callers that want
+ * to surface a non-blocking "tier fell back" nudge use this; everything
+ * else keeps the simpler {@link resolveModelSpec}.
+ */
+export function resolveTierWithFallback(
+  profile: ResolvedAiProfile,
+  tier: TierName
+): { preset: ModelAliasPreset; matchedTier: TierName } {
+  for (const candidate of TIER_FALLBACK[tier]) {
+    const preset = profile.aliases[candidate];
+    if (preset) return { preset, matchedTier: candidate };
+  }
+  throw new Error(
+    `Tier '${tier}' has no configured preset and no built-in default for provider '${profile.defaultProvider}'. Configure 'tiers.small/medium/large' in .archon/config.yaml.`
+  );
 }
 
 /**
@@ -153,13 +206,7 @@ export function buildAiProfile(
  */
 export function resolveModelSpec(profile: ResolvedAiProfile, ref: string): ResolvedModelSpec {
   if (isTierName(ref)) {
-    for (const tier of TIER_FALLBACK[ref]) {
-      const preset = profile.aliases[tier];
-      if (preset) return preset;
-    }
-    throw new Error(
-      `Tier '${ref}' has no configured alias and no built-in default for provider '${profile.defaultProvider}'. Configure 'aliases.small/medium/large' in .archon/config.yaml.`
-    );
+    return resolveTierWithFallback(profile, ref).preset;
   }
 
   if (ref.startsWith('@')) {
@@ -176,4 +223,61 @@ export function resolveModelSpec(profile: ResolvedAiProfile, ref: string): Resol
 /** Type guard — narrows ResolvedModelSpec to its `{ literal }` variant. */
 export function isLiteralSpec(spec: ResolvedModelSpec): spec is { literal: string } {
   return 'literal' in spec;
+}
+
+/** Effort vocabularies per provider. Claude uses the generic node `effort`;
+ *  Codex uses `modelReasoningEffort` (distinct enum). */
+export const CLAUDE_EFFORTS: ReadonlySet<string> = new Set(['low', 'medium', 'high', 'max']);
+export const CODEX_REASONING_EFFORTS: ReadonlySet<string> = new Set([
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+]);
+
+/** Where a preset's `effort` should land for the resolved provider. */
+export type EffortRouting =
+  | { field: 'effort'; value: string }
+  | { field: 'modelReasoningEffort'; value: string };
+
+/**
+ * Route a preset's `effort` to the field the resolved provider understands —
+ * Claude's generic node `effort` or Codex's `modelReasoningEffort`. Returns
+ * `null` when the value isn't valid for that provider (e.g. a cross-provider
+ * mismatch like `effort: 'max'` on Codex); callers MUST surface that rather
+ * than silently dropping it. Single source of truth for both the DAG executor
+ * and the chat orchestrator.
+ */
+export function routePresetEffort(provider: string, effort: string): EffortRouting | null {
+  if (provider === 'claude' && CLAUDE_EFFORTS.has(effort)) {
+    return { field: 'effort', value: effort };
+  }
+  if (provider === 'codex' && CODEX_REASONING_EFFORTS.has(effort)) {
+    return { field: 'modelReasoningEffort', value: effort };
+  }
+  return null;
+}
+
+/**
+ * The effort vocabulary for a provider, or `null` if the provider has no known
+ * effort concept (Pi/OpenRouter/Copilot/OpenCode — effort doesn't route there).
+ * Lets the tier-config write path (route + CLI) validate `effort` UP FRONT
+ * instead of letting `routePresetEffort` silently drop an unknown value at run
+ * time (so `--effort ultra` errors instead of succeeding with no effect).
+ */
+export function validEffortsForProvider(provider: string): readonly string[] | null {
+  if (provider === 'claude') return [...CLAUDE_EFFORTS];
+  if (provider === 'codex') return [...CODEX_REASONING_EFFORTS];
+  return null;
+}
+
+/**
+ * True if `effort` is acceptable for `provider`. Providers WITHOUT a known
+ * effort vocabulary accept any value (we don't block what we can't validate;
+ * it's a no-op for them, not an error).
+ */
+export function isEffortValidForProvider(provider: string, effort: string): boolean {
+  const valid = validEffortsForProvider(provider);
+  return valid === null || valid.includes(effort);
 }

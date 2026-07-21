@@ -10,14 +10,21 @@ import { formatElapsed, elapsedSince, formatCost, formatClock } from '../lib/for
  */
 export function RunStartedLine({ run }: { run: Run }): ReactElement {
   return (
-    <div className="flex items-center gap-2 py-1 text-[11px]">
-      <span aria-hidden className="text-[color:var(--running)]">
-        ▶
-      </span>
-      <span className="font-medium text-text-secondary">Workflow {run.workflow} started</span>
-      <span className="font-mono text-text-tertiary">{formatClock(run.startedAt)}</span>
-      <div className="h-px flex-1 bg-border/50" aria-hidden />
-    </div>
+    <>
+      <div className="flex items-center gap-2 py-1 text-[11px]">
+        <span aria-hidden className="text-[color:var(--running)]">
+          ▶
+        </span>
+        <span className="font-medium text-text-secondary">Workflow {run.workflow} started</span>
+        <span className="font-mono text-text-tertiary">{formatClock(run.startedAt)}</span>
+        <div className="h-px flex-1 bg-border/50" aria-hidden />
+      </div>
+      {run.userMessage !== '' ? (
+        <div className="ml-[7px] border-l-2 border-border/60 pl-3 text-[11px] text-text-tertiary">
+          {run.userMessage}
+        </div>
+      ) : null}
+    </>
   );
 }
 

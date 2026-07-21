@@ -160,6 +160,11 @@ export function ProjectPalette({ open, onClose }: ProjectPaletteProps): ReactEle
                       />
                     ) : null}
                     <span className="text-[13px] font-medium text-text-primary">{p.name}</span>
+                    {p.kind === 'folder' ? (
+                      <span className="rounded-sm bg-surface-hover px-1 py-0.5 font-mono text-[9px] uppercase tracking-wide text-text-tertiary">
+                        folder
+                      </span>
+                    ) : null}
                     <span className="truncate font-mono text-[10.5px] text-text-tertiary">
                       {formatProjectLocator(p)}
                     </span>

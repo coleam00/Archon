@@ -33,6 +33,7 @@ Archon provides a unified directory and configuration system with:
 ├── worktrees/                # Legacy global worktrees (for repos not in workspaces/)
 ├── web-dist/<version>/       # Cached web UI dist (archon serve, binary only)
 ├── update-check.json         # Update check cache (binary builds only, 24h TTL)
+├── tier-notice.json          # One-time tier-default notice state (CLI, per version)
 └── config.yaml               # Global user configuration
 ```
 
@@ -112,6 +113,27 @@ function isDocker(): boolean {
   );
 }
 ```
+
+### WSL Detection
+
+```typescript
+function isWSL(): boolean {
+  // Either signal is sufficient:
+  //   - WSL_DISTRO_NAME env var is set (always true inside a WSL distro)
+  //   - /proc/sys/kernel/osrelease contains "microsoft" (lower-cased)
+  // The /proc read is wrapped in try/catch: on environments without a
+  // readable /proc (macOS, Windows, restricted sandboxes) it conservatively
+  // returns false.
+}
+
+function getWSLDistroName(): string | undefined {
+  // Returns the WSL_DISTRO_NAME env var if present, otherwise undefined.
+  // Only reads the env var — isWSL() may still be true via the /proc
+  // fallback while this returns undefined.
+}
+```
+
+Used to build Windows-host-friendly `vscode://vscode-remote/wsl+<distro>/...` IDE URIs when Archon runs inside WSL (surfaced as `is_wsl` / `wsl_distro` on `/api/health`).
 
 ### Platform-Specific Paths
 

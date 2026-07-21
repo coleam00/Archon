@@ -25,6 +25,43 @@ export class IsolationBlockedError extends Error {
  * user-input bug that should crash rather than be absorbed as blocked state.
  */
 const ERROR_PATTERNS: { pattern: string; message: string; known: boolean }[] = [
+  // ─── Container backend (Docker) ──────────────────────────────────────────
+  // Checked FIRST: the docker-permission message is more specific than the
+  // generic 'permission denied' worktree message below and must win.
+  {
+    pattern: 'cannot connect to the docker daemon',
+    message:
+      '**Error:** Cannot connect to the Docker daemon. Start Docker (Docker Desktop or ' +
+      '`systemctl start docker`) and retry, or run without `--container`.',
+    known: true,
+  },
+  {
+    pattern: 'is the docker daemon running',
+    message:
+      '**Error:** The Docker daemon is not reachable. Start Docker and retry, or run ' +
+      'without `--container`.',
+    known: true,
+  },
+  {
+    // Image-agnostic on purpose: this static message can't know the configured
+    // `container.image`. The docker preflight error (docker-exec.ts) already
+    // names the exact missing tag; this classifier fallback must NOT hardcode a
+    // tag (`archon-runner`) or it would contradict a custom `container.image`.
+    pattern: 'no such image',
+    message:
+      '**Error:** The Archon runner image is missing. Build it with ' +
+      '`bun run build:runner-image` (tags `archon-runner:<version>` + `:latest`), ' +
+      'or build your configured `container.image` from ' +
+      '`packages/isolation/docker/runner.Dockerfile`.',
+    known: true,
+  },
+  {
+    pattern: 'permission denied while trying to connect to the docker',
+    message:
+      '**Error:** Permission denied connecting to the Docker daemon. Add your user to the ' +
+      '`docker` group (`sudo usermod -aG docker $USER`, then re-login) or run Docker rootless.',
+    known: true,
+  },
   {
     pattern: 'permission denied',
     message:
@@ -77,6 +114,13 @@ const ERROR_PATTERNS: { pattern: string; message: string; known: boolean }[] = [
     message:
       '**Error:** No base branch configured. Set `worktree.baseBranch` in `.archon/config.yaml` ' +
       'or use the `--from` flag to select a branch (e.g., `--from dev`).',
+    known: true,
+  },
+  {
+    pattern: 'cannot detect default branch',
+    message:
+      '**Error:** No base branch could be detected. Set `worktree.baseBranch` in ' +
+      '`.archon/config.yaml` or update the registered codebase default branch.',
     known: true,
   },
   {

@@ -127,7 +127,7 @@ You can invoke a command directly through `archon-assist`:
 archon workflow run archon-assist "/command-invoke run-tests auth"
 ```
 
-Archon routes the `/command-invoke run-tests` instruction to the AI, which finds your `.archon/commands/run-tests.md`, substitutes `$ARGUMENTS` with `auth`, and runs the task.
+Archon routes the `/command-invoke run-tests` instruction to the AI, which finds your `.archon/commands/run-tests.md`, substitutes `$ARGUMENTS` with the entire argument you passed (`auth` here — `$ARGUMENTS` always holds the whole trigger message, never a single split token), and runs the task.
 
 You should see the AI find your auth module tests, run them, and produce a structured report.
 
@@ -137,16 +137,13 @@ You should see the AI find your auth module tests, run them, and produce a struc
 
 | Variable | Contains | Example |
 |----------|----------|---------|
-| `$ARGUMENTS` | Everything the user passed | `"auth module"` |
-| `$1` | First space-separated argument | `auth` (from `auth module`) |
-| `$2` | Second space-separated argument | `module` (from `auth module`) |
-| `$3` | Third space-separated argument | — |
+| `$ARGUMENTS` / `$USER_MESSAGE` | The whole trigger message, as one string | `"auth"` |
 | `$ARTIFACTS_DIR` | Absolute path to this run's artifact directory | `/home/user/.archon/workspaces/owner/repo/artifacts/runs/abc123/` |
 | `$WORKFLOW_ID` | Unique ID for the current workflow run | `abc123def456` |
 | `$BASE_BRANCH` | The base branch for the current worktree | `main` |
 | `$DOCS_DIR` | Documentation directory path | `docs/` |
 
-Use `$ARTIFACTS_DIR` whenever your command writes output files that a later step needs to read. Use `$1`, `$2`, `$3` when you want to treat arguments as structured positional inputs rather than a single string.
+Use `$ARTIFACTS_DIR` whenever your command writes output files that a later step needs to read. Positional arguments (`$1`, `$2`, `$3`) are not supported — the command receives the whole message via `$ARGUMENTS`; parse any structure out of it inside the command body.
 
 ---
 

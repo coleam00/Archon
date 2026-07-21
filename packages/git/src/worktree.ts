@@ -5,6 +5,7 @@ import {
   getArchonWorkspacesPath,
   getProjectWorktreesPath,
   parseOwnerRepo,
+  resolveRepoProjectIdentity,
 } from '@archon/paths';
 import { execFileAsync } from './exec';
 import type { RepoPath, BranchName, WorktreePath, WorktreeInfo } from './types';
@@ -48,13 +49,18 @@ export interface WorktreeBaseOverride {
  * Resolve the `{ owner, repo }` identity used to scope archon-managed worktrees.
  *
  * Precedence:
- *   1. Explicit `codebaseName` in `owner/repo` format (from the database / web UI)
+ *   1. Explicit `codebaseName` in strict `owner/repo` format (from the database /
+ *      web UI), validated by the shared `parseOwnerRepo()`
  *   2. Path segments when `repoPath` is already under `~/.archon/workspaces/owner/repo/`
- *   3. Last two path segments of `repoPath` (works for any local checkout)
+ *   3. The shared project-identity fallback: `_local/<basename(repoPath)>`
+ *      (`resolveRepoProjectIdentity()` in `@archon/paths`)
  *
- * The third fallback is what lets non-cloned / locally-registered repos still
- * land in the workspace-scoped layout — every repo gets a stable owner/repo
- * identity derived from its filesystem path.
+ * Identity decisions are delegated to `@archon/paths` so the worktree base
+ * always agrees with the storage identity that registration writes to disk and
+ * that log/artifact path resolution uses (#2227). Historically the fallback
+ * derived owner/repo from the last two path segments, inventing a junk "owner"
+ * from the checkout's parent directory and disagreeing with the `_local/`
+ * storage tree (#2132).
  */
 function resolveOwnerRepo(
   repoPath: RepoPath,
@@ -66,7 +72,8 @@ function resolveOwnerRepo(
     // mistakenly stored as the codebase name, "git@host:org/repo") would
     // otherwise become path segments and break tools that treat `:` as a
     // separator — most notably docker-compose short-form volume specs
-    // (`HOST:CONTAINER:OPT`). Reject and fall back to the path-derived layout.
+    // (`HOST:CONTAINER:OPT`). Reject and fall through to the path-derived
+    // identity (#1583).
     const parsed = parseOwnerRepo(codebaseName);
     if (parsed) return parsed;
     getLog().warn({ codebaseName }, 'worktree.invalid_codebase_name_format');
@@ -79,10 +86,18 @@ function resolveOwnerRepo(
       return { owner: parts[0], repo: parts[1] };
     }
   }
-  // Fallback: derive from path basename/parent-basename — covers local-registered
-  // repos that never lived under workspaces/. Delegates to extractOwnerRepo()
-  // which throws on pathologically short paths.
-  return extractOwnerRepo(repoPath);
+  // Fallback: the shared storage-identity resolver — the same
+  // `_local/<basename>` identity that registration creates on disk and that
+  // the workflow executor uses for logs/artifacts, so all project paths agree.
+  // The name (if any) was already rejected above, so this resolves purely from
+  // the path.
+  const identity = resolveRepoProjectIdentity(codebaseName ?? '', repoPath);
+  if (!identity) {
+    throw new Error(
+      `Cannot derive a project identity from path "${repoPath}": basename is empty or a dot segment`
+    );
+  }
+  return identity;
 }
 
 /**
@@ -385,18 +400,4 @@ export async function verifyWorktreeOwnership(
         'Remove it from that clone or use a different codebase registration.'
     );
   }
-}
-
-/**
- * Extract owner and repo name from the last two segments of a repository path.
- * Throws if the path has fewer than 2 non-empty segments.
- */
-export function extractOwnerRepo(repoPath: RepoPath): { owner: string; repo: string } {
-  const parts = repoPath.split(/[/\\]/).filter(p => p.length > 0);
-  if (parts.length < 2) {
-    throw new Error(
-      `Cannot extract owner/repo from path "${repoPath}": expected at least 2 path segments`
-    );
-  }
-  return { owner: parts[parts.length - 2], repo: parts[parts.length - 1] };
 }

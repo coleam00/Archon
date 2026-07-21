@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import type { DashboardRunResponse } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { ideUri } from '@/lib/ide-uri';
 import { formatDuration } from '@/lib/format';
 import { useWorkflowStore } from '@/stores/workflow-store';
 import type { WorkflowState } from '@/lib/types';
@@ -27,6 +28,8 @@ import { ConfirmRunActionDialog } from './ConfirmRunActionDialog';
 interface WorkflowRunCardProps {
   run: DashboardRunResponse;
   isDocker?: boolean;
+  isWsl?: boolean;
+  wslDistro?: string;
   onCancel: (runId: string) => void;
   onResume?: (runId: string) => void;
   onAbandon?: (runId: string) => void;
@@ -137,6 +140,8 @@ function NodeCountsSummary({ counts }: { counts: NodeCounts }): React.ReactEleme
 export function WorkflowRunCard({
   run,
   isDocker,
+  isWsl,
+  wslDistro,
   onCancel,
   onResume,
   onAbandon,
@@ -223,7 +228,7 @@ export function WorkflowRunCard({
         {run.parent_platform_id && run.parent_platform_id !== run.worker_platform_id && (
           <button
             onClick={(): void => {
-              navigate(`/chat/${encodeURIComponent(run.parent_platform_id ?? '')}`);
+              navigate(`/legacy/chat/${encodeURIComponent(run.parent_platform_id ?? '')}`);
             }}
             className="flex items-center gap-1 text-primary/80 hover:text-primary transition-colors"
           >
@@ -277,7 +282,7 @@ export function WorkflowRunCard({
       <div className="flex flex-wrap items-center gap-2 pt-1">
         <button
           onClick={(): void => {
-            navigate(`/workflows/runs/${run.id}`);
+            navigate(`/legacy/workflows/runs/${run.id}`);
           }}
           className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-text-secondary hover:bg-surface-elevated hover:text-text-primary transition-colors"
         >
@@ -287,7 +292,7 @@ export function WorkflowRunCard({
         {chatId && (
           <button
             onClick={(): void => {
-              navigate(`/chat/${encodeURIComponent(chatId)}`);
+              navigate(`/legacy/chat/${encodeURIComponent(chatId)}`);
             }}
             className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-text-secondary hover:bg-surface-elevated hover:text-text-primary transition-colors"
           >
@@ -297,7 +302,7 @@ export function WorkflowRunCard({
         )}
         {run.working_path && !isDocker && (
           <a
-            href={`vscode://file/${run.working_path.replace(/\\/g, '/')}`}
+            href={ideUri(run.working_path, { is_wsl: isWsl, wsl_distro: wslDistro })}
             target="_blank"
             rel="noopener noreferrer"
             className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-text-secondary hover:bg-surface-elevated hover:text-text-primary transition-colors"

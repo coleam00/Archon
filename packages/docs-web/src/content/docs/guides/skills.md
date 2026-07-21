@@ -13,11 +13,12 @@ DAG workflow nodes support a `skills` field that preloads named skills into the
 node's agent context. Each node gets specialized procedural knowledge — code review
 patterns, Remotion best practices, testing conventions — without polluting other nodes.
 
-Both Claude and Codex support skills. Claude injects per-node skills via the
-SDK's `AgentDefinition.skills` field (only listed skills are loaded for that node).
-Codex auto-discovers skills from the filesystem (`.agents/skills/`), so every
-installed skill is available on every Codex node — the YAML `skills:` list is
-informational for Codex.
+Skills work across providers, with two delivery models. Claude, Pi, OpenCode, and
+Copilot support **per-node** skill injection — only the skills listed on a node are
+loaded for that node (Claude injects them via the SDK's `AgentDefinition.skills`
+field). Codex instead auto-discovers skills from the filesystem (`.agents/skills/`),
+so every installed skill is available on every Codex node — the YAML `skills:` list
+is informational for Codex.
 
 ## Quick Start
 

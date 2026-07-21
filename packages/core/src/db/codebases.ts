@@ -1,9 +1,10 @@
 /**
  * Database operations for codebases
  */
+import { sep as pathSep } from 'path';
 import { pool, getDialect } from './connection';
 import type { Codebase } from '../types';
-import { createLogger } from '@archon/paths';
+import { createLogger, captureCodebaseRegistered } from '@archon/paths';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -16,16 +17,29 @@ export async function createCodebase(data: {
   name: string;
   repository_url?: string;
   default_cwd: string;
+  default_branch?: string | null;
   ai_assistant_type?: string;
+  kind?: 'repo' | 'folder';
 }): Promise<Codebase> {
   const assistantType = data.ai_assistant_type ?? process.env.DEFAULT_AI_ASSISTANT ?? 'claude';
   const result = await pool.query<Codebase>(
-    'INSERT INTO remote_agent_codebases (name, repository_url, default_cwd, ai_assistant_type) VALUES ($1, $2, $3, $4) RETURNING *',
-    [data.name, data.repository_url ?? null, data.default_cwd, assistantType]
+    'INSERT INTO remote_agent_codebases (name, repository_url, default_cwd, default_branch, ai_assistant_type, kind) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+    [
+      data.name,
+      data.repository_url ?? null,
+      data.default_cwd,
+      data.default_branch ?? null,
+      assistantType,
+      data.kind ?? 'repo',
+    ]
   );
   if (!result.rows[0]) {
     throw new Error('Failed to create codebase: INSERT succeeded but no row returned');
   }
+  // Anonymous count-only telemetry (activation funnel: install → registered a
+  // project). Every registration surface (HTTP clone/register, /register-project
+  // chat command) funnels through this INSERT — no name/path/URL is ever sent.
+  captureCodebaseRegistered();
   return result.rows[0];
 }
 
@@ -100,22 +114,28 @@ export async function findCodebaseByDefaultCwd(defaultCwd: string): Promise<Code
 }
 
 /**
- * Find a codebase whose `default_cwd` is an ancestor of the given path.
- * Used for worktree-based runs where the actual `cwd` is a worktree subdirectory
- * of the registered source path — an exact match via `findCodebaseByDefaultCwd`
- * would always return null in that case.
+ * Find a codebase whose `default_cwd` equals `cwdPath` or is a true ancestor
+ * DIRECTORY of it (boundary-anchored on the path separator). Used for
+ * subdirectory runs (worktree subdirs, or a subdirectory of a folder-project
+ * root) where an exact `findCodebaseByDefaultCwd` match returns null.
  *
- * Returns the codebase with the longest matching prefix (most specific match).
+ * Matching is done in application code, NOT via SQL `LIKE default_cwd || '%'`,
+ * which was wrong on two counts: (1) `_`/`%` in a stored path are LIKE
+ * wildcards, and (2) a bare `%` suffix has no separator boundary, so a sibling
+ * directory sharing a name prefix (`/x/platform` vs `/x/platform-staging`)
+ * would match. Returns the most specific (longest `default_cwd`) match.
  */
 export async function findCodebaseByPathPrefix(cwdPath: string): Promise<Codebase | null> {
-  const result = await pool.query<Codebase>(
-    `SELECT * FROM remote_agent_codebases
-     WHERE $1 LIKE default_cwd || '%'
-     ORDER BY length(default_cwd) DESC
-     LIMIT 1`,
-    [cwdPath]
-  );
-  return result.rows[0] || null;
+  const result = await pool.query<Codebase>('SELECT * FROM remote_agent_codebases');
+  let best: Codebase | null = null;
+  for (const row of result.rows) {
+    const base = row.default_cwd;
+    const isMatch = cwdPath === base || cwdPath.startsWith(base + pathSep);
+    if (isMatch && (best === null || base.length > best.default_cwd.length)) {
+      best = row;
+    }
+  }
+  return best;
 }
 
 export async function findCodebaseByName(name: string): Promise<Codebase | null> {
@@ -126,9 +146,21 @@ export async function findCodebaseByName(name: string): Promise<Codebase | null>
   return result.rows[0] || null;
 }
 
+/**
+ * Error thrown when an UPDATE matched no codebase row (row deleted between
+ * fetch and update). Lets callers distinguish "row gone" from operational
+ * DB failures (connection refused, timeout, constraint violation).
+ */
+export class CodebaseNotFoundError extends Error {
+  constructor(public codebaseId: string) {
+    super(`Codebase ${codebaseId} not found`);
+    this.name = 'CodebaseNotFoundError';
+  }
+}
+
 export async function updateCodebase(
   id: string,
-  data: { default_cwd?: string; repository_url?: string | null }
+  data: { default_cwd?: string; repository_url?: string | null; default_branch?: string | null }
 ): Promise<void> {
   const dialect = getDialect();
   const updates: string[] = [];
@@ -145,6 +177,11 @@ export async function updateCodebase(
     values.push(data.repository_url);
   }
 
+  if (data.default_branch !== undefined) {
+    updates.push(`default_branch = $${paramIndex++}`);
+    values.push(data.default_branch);
+  }
+
   if (updates.length === 0) return;
 
   updates.push(`updated_at = ${dialect.now()}`);
@@ -155,7 +192,7 @@ export async function updateCodebase(
     values
   );
   if ((result.rowCount ?? 0) === 0) {
-    throw new Error(`Codebase ${id} not found`);
+    throw new CodebaseNotFoundError(id);
   }
 }
 

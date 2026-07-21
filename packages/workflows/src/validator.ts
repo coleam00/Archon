@@ -10,7 +10,6 @@
  */
 
 import { join, resolve, isAbsolute } from 'path';
-import { homedir } from 'os';
 import { access, readFile } from 'fs/promises';
 import {
   createLogger,
@@ -22,7 +21,8 @@ import {
 import { execFileAsync } from '@archon/git';
 import { BUNDLED_COMMANDS, isBinaryBuild } from './defaults/bundled-defaults';
 import { isValidCommandName } from './command-validation';
-import { getProviderCapabilities, isRegisteredProvider } from '@archon/providers';
+import { levenshtein, findSimilar } from './utils/fuzzy-match';
+import { getProviderCapabilities, isRegisteredProvider, skillSearchRoots } from '@archon/providers';
 
 /** Lazy-initialized logger */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -30,11 +30,13 @@ function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('workflow.validator');
   return cachedLog;
 }
-import { isScriptNode } from './schemas';
-import type { WorkflowDefinition, DagNode } from './schemas';
+import { isBashNode, isLoopNode, isLoopGroupNode, isScriptNode, isIncludeNode } from './schemas';
+import type { WorkflowDefinition, DagNode, WorkflowSource } from './schemas';
 import type { ScriptRuntime } from './script-discovery';
 import { discoverScriptsForCwd } from './script-discovery';
 import { isInlineScript } from './executor-shared';
+import { buildAiProfile, resolveModelSpec } from './model-validation';
+import type { RawAliasesConfig, RawTiersConfig, ResolvedAiProfile } from './model-validation';
 
 // =============================================================================
 // Types
@@ -83,40 +85,17 @@ export interface CommandValidationResult {
 export interface ValidationConfig {
   loadDefaultCommands?: boolean;
   commandFolder?: string;
+  workflowSource?: WorkflowSource;
+  assistant?: string;
+  aliases?: RawAliasesConfig;
+  tiers?: RawTiersConfig;
 }
 
-// =============================================================================
-// Levenshtein distance and fuzzy matching
-// =============================================================================
-
-/** Classic Levenshtein distance between two strings */
-export function levenshtein(a: string, b: string): number {
-  const m = a.length;
-  const n = b.length;
-  const dp: number[][] = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0) as number[]);
-
-  for (let i = 0; i <= m; i++) dp[i][0] = i;
-  for (let j = 0; j <= n; j++) dp[0][j] = j;
-
-  for (let i = 1; i <= m; i++) {
-    for (let j = 1; j <= n; j++) {
-      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-      dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost);
-    }
-  }
-
-  return dp[m][n];
-}
-
-/** Find the closest matches from a list of candidates */
-export function findSimilar(name: string, candidates: string[], maxDistance?: number): string[] {
-  const threshold = maxDistance ?? Math.max(2, Math.floor(name.length * 0.3));
-  const scored = candidates
-    .map(c => ({ name: c, distance: levenshtein(name.toLowerCase(), c.toLowerCase()) }))
-    .filter(s => s.distance <= threshold && s.distance > 0)
-    .sort((a, b) => a.distance - b.distance);
-  return scored.slice(0, 3).map(s => s.name);
-}
+// Levenshtein distance and fuzzy matching now live in ./utils/fuzzy-match so lean
+// modules can reuse them without validator.ts's heavy deps (imported above for the
+// internal command/tool did-you-mean hints). Re-exported to preserve validator.ts's
+// public surface for existing importers (e.g. validator.test.ts).
+export { levenshtein, findSimilar };
 
 // =============================================================================
 // Command discovery
@@ -317,9 +296,84 @@ export async function validateWorkflowResources(
 ): Promise<ValidationIssue[]> {
   const issues: ValidationIssue[] = [];
   const availableCommands = await discoverAvailableCommands(cwd, config);
+  const requiresPortableModelRefs =
+    config?.workflowSource === 'bundled' || config?.workflowSource === 'global';
+  const modelProfileProvider = config?.assistant ?? defaultProvider ?? 'claude';
+  let aiProfile: ResolvedAiProfile | undefined;
 
-  for (const node of workflow.nodes) {
+  try {
+    aiProfile = buildAiProfile(modelProfileProvider, {
+      repoTiers: config?.tiers,
+      repoAliases: config?.aliases,
+    });
+  } catch (error) {
+    issues.push({
+      level: 'error',
+      field: 'model',
+      message: (error as Error).message,
+      hint: 'Fix tiers/aliases in .archon/config.yaml, or use literal provider model strings.',
+    });
+  }
+
+  const validateModelRef = (ref: string, nodeId?: string): void => {
+    if (!aiProfile) return;
+    try {
+      resolveModelSpec(aiProfile, ref);
+    } catch (error) {
+      issues.push({
+        level: 'error',
+        ...(nodeId !== undefined ? { nodeId } : {}),
+        field: 'model',
+        message: (error as Error).message,
+        hint: 'Fix tiers/aliases in .archon/config.yaml, or use a literal provider model string.',
+      });
+    }
+  };
+
+  if (requiresPortableModelRefs && workflow.model?.startsWith('@')) {
+    issues.push({
+      level: 'error',
+      field: 'model',
+      message: `Workflow '${workflow.name}' uses custom model alias '${workflow.model}', which is not portable for ${config.workflowSource} workflows`,
+      hint: 'Use small, medium, large, or a literal provider model string. Reserve @custom aliases for project workflows.',
+    });
+  }
+  if (workflow.model) validateModelRef(workflow.model);
+
+  // Flatten top-level nodes plus every loop_group body (recursing into nested
+  // loop_groups) so resource checks (commands, mcp, skills, scripts) validate
+  // body nodes too. ID-uniqueness/cycle checks are the loader's job; the validator
+  // only checks referenced resources exist, so flattening is safe here.
+  const allNodes: DagNode[] = [];
+  const collectNodes = (nodes: readonly DagNode[]): void => {
+    for (const n of nodes) {
+      allNodes.push(n);
+      if (isLoopGroupNode(n)) collectNodes(n.loop_group.nodes);
+    }
+  };
+  collectNodes(workflow.nodes);
+
+  for (const node of allNodes) {
+    // Include nodes carry no resources to check — the target workflow is resolved and
+    // inlined at DISCOVERY time (see include-expander.ts), so discovery-fed validation
+    // (CLI `validate workflows`) sees the already-expanded nodes and checks their
+    // commands/mcp/skills normally. This skip is DEFENSIVE-ONLY: no current caller reaches
+    // it with an unexpanded include node (POST /api/workflows/validate only runs
+    // parseWorkflow, not this resource pass). Kept so a future raw caller can't crash here.
+    if (isIncludeNode(node)) continue;
+
     const provider = resolveProvider(node, workflow.provider, defaultProvider);
+
+    if (requiresPortableModelRefs && 'model' in node && node.model?.startsWith('@')) {
+      issues.push({
+        level: 'error',
+        nodeId: node.id,
+        field: 'model',
+        message: `Node '${node.id}' uses custom model alias '${node.model}', which is not portable for ${config.workflowSource} workflows`,
+        hint: 'Use small, medium, large, or a literal provider model string. Reserve @custom aliases for project workflows.',
+      });
+    }
+    if ('model' in node && node.model) validateModelRef(node.model, node.id);
 
     // --- Command nodes: check file exists ---
     if ('command' in node && typeof node.command === 'string') {
@@ -349,6 +403,37 @@ export async function validateWorkflowResources(
           issue.suggestions = similar;
         }
         issues.push(issue);
+      }
+    }
+
+    // --- Loop nodes with loop.command: check file exists (parallel to command-node check above) ---
+    if (isLoopNode(node) && node.loop.command !== undefined) {
+      const loopCommand = node.loop.command;
+      if (!isValidCommandName(loopCommand)) {
+        issues.push({
+          level: 'error',
+          nodeId: node.id,
+          field: 'loop.command',
+          message: `Invalid command name '${loopCommand}' — must not contain '/', '\\', '..', or start with '.'`,
+          hint: 'Use a simple name like "my-command" (without path separators or the .md extension)',
+        });
+      } else {
+        const resolved = await resolveCommand(loopCommand, cwd, config);
+        if (!resolved) {
+          const similar = findSimilar(loopCommand, availableCommands);
+          const issue: ValidationIssue = {
+            level: 'error',
+            nodeId: node.id,
+            field: 'loop.command',
+            message: `Command '${loopCommand}' not found`,
+            hint: `Create .archon/commands/${loopCommand}.md or use an existing command name`,
+          };
+          if (similar.length > 0) {
+            issue.hint = `Did you mean: ${similar.map(s => `'${s}'`).join(', ')}? Or create .archon/commands/${loopCommand}.md`;
+            issue.suggestions = similar;
+          }
+          issues.push(issue);
+        }
       }
     }
 
@@ -407,20 +492,24 @@ export async function validateWorkflowResources(
 
     // --- Skills nodes: check skill directories exist ---
     if ('skills' in node && Array.isArray(node.skills)) {
+      const searchRoots = skillSearchRoots(cwd);
       for (const skillName of node.skills) {
-        const projectSkillPath = join(cwd, '.claude', 'skills', skillName, 'SKILL.md');
-        const userSkillPath = join(homedir(), '.claude', 'skills', skillName, 'SKILL.md');
+        let found = false;
+        for (const root of searchRoots) {
+          const skillPath = join(root, skillName, 'SKILL.md');
+          if (await fileExists(skillPath)) {
+            found = true;
+            break;
+          }
+        }
 
-        const projectExists = await fileExists(projectSkillPath);
-        const userExists = await fileExists(userSkillPath);
-
-        if (!projectExists && !userExists) {
+        if (!found) {
           issues.push({
             level: 'warning',
             nodeId: node.id,
             field: 'skills',
-            message: `Skill '${skillName}' not found in .claude/skills/ or ~/.claude/skills/`,
-            hint: `Install with: npx skills add <repo> — or create manually at .claude/skills/${skillName}/SKILL.md`,
+            message: `Skill '${skillName}' not found in .agents/skills/ or .claude/skills/ (project or user scope)`,
+            hint: `Install with: npx skills add <repo> — or create manually at .agents/skills/${skillName}/SKILL.md`,
           });
         }
       }
@@ -477,6 +566,55 @@ export async function validateWorkflowResources(
             hint: 'Remove tool restriction fields or switch to a provider that supports them',
           });
         }
+      } else if (caps.knownToolNames !== undefined && caps.knownToolNames.length > 0) {
+        // Warn on tool names outside the provider's audited built-in vocabulary
+        // (#2084): the SDK matches names as opaque strings, so a misspelled or
+        // stale name (e.g. `Task` after the Claude SDK renamed it to `Agent`)
+        // is a silent no-op at runtime. Warning-level only — MCP tool names and
+        // tools added by a newer SDK can't be proven invalid, so this must
+        // never hard-fail validation. Providers without a declared vocabulary
+        // skip the check entirely.
+        const known = caps.knownToolNames;
+        const toolLists = [
+          ['allowed_tools', 'allowed_tools' in node ? node.allowed_tools : undefined],
+          ['denied_tools', 'denied_tools' in node ? node.denied_tools : undefined],
+        ] as const;
+        for (const [field, entries] of toolLists) {
+          for (const entry of entries ?? []) {
+            // Permission-rule specifiers wrap a base name: `Bash(git:*)` → `Bash`.
+            const base = entry.split('(')[0].trim();
+            // MCP tool names (mcp__server, mcp__server__tool, mcp__server__*)
+            // are dynamic per-install — never flag them.
+            if (base === '' || base.startsWith('mcp__') || known.includes(base)) continue;
+
+            const renamed = caps.renamedTools?.[base];
+            if (renamed !== undefined) {
+              issues.push({
+                level: 'warning',
+                nodeId: node.id,
+                field,
+                message: `Tool '${base}' was renamed to '${renamed}' in the ${provider} SDK — the old name is silently ignored at runtime`,
+                hint: `Replace '${base}' with '${renamed}' in ${field}`,
+                suggestions: [renamed],
+              });
+              continue;
+            }
+
+            const similar = findSimilar(base, known);
+            const issue: ValidationIssue = {
+              level: 'warning',
+              nodeId: node.id,
+              field,
+              message: `Unknown tool '${base}' for provider '${provider}' — unrecognized names are silently ignored at runtime`,
+              hint: 'Use a built-in tool name, or the mcp__<server>__<tool> form for MCP tools',
+            };
+            if (similar.length > 0) {
+              issue.hint = `Did you mean: ${similar.map(s => `'${s}'`).join(', ')}? (MCP tools use the mcp__<server>__<tool> form)`;
+              issue.suggestions = similar;
+            }
+            issues.push(issue);
+          }
+        }
       }
     }
 
@@ -527,6 +665,41 @@ export async function validateWorkflowResources(
           hint: 'Remove deps or switch to runtime: uv if you need explicit dependency management',
         });
       }
+    }
+
+    // In bash node bodies (and loop `until_bash`, which substitutes the same way),
+    // $node.output values are injected PRE-QUOTED by Archon: small values are
+    // single-quoted inline ('the value'), large outputs (>32 KB) spill to a temp
+    // file as $(cat '/path'). Wrapping the substitution in double quotes breaks the
+    // SMALL case — var="$n.output" becomes var="'value'", embedding the literal
+    // single-quote chars as data. (For the large $(cat ...) case double-quoting is
+    // actually fine, but the author can't predict the size at write time, so the
+    // rule is unconditional: never double-quote.) Numeric/boolean FIELD values are
+    // injected raw, so double-quoting is harmless for those — which is why the bug
+    // is intermittent and easy to miss.
+    //   wrong="$n.output.field" → wrong="'ok'" (single quotes become part of the value)
+    //   right=$n.output.field   → right='ok' → bash assigns: ok
+    //
+    // The `(?:^|[=\s])"` prefix requires the opening `"` to be an operand (line
+    // start, after `=`, or after whitespace) so a *closing* quote of an unrelated
+    // earlier string doesn't cause a false positive (e.g. `echo "hi"; x=$a.output`).
+    // `[^"\n]` excludes newlines — a double-quote spanning lines is pathological.
+    const doubleQuotedOutputRef = /(?:^|[=\s])"[^"\n]*\$[a-zA-Z_][a-zA-Z0-9_-]*\.output/m;
+    const warnDoubleQuoted = (body: string, field: string): void => {
+      if (doubleQuotedOutputRef.test(body)) {
+        issues.push({
+          level: 'warning',
+          nodeId: node.id,
+          field,
+          message:
+            '`"$nodeId.output"` — double-quoting a substitution that is already shell-quoted by Archon produces the wrong value',
+          hint: 'Use `var=$node.output.field` (unquoted) — the substitution is injected already quoted. (Numeric/boolean fields are injected raw, so double-quoting is harmless for those, but the rule is uniform.)',
+        });
+      }
+    };
+    if (isBashNode(node)) warnDoubleQuoted(node.bash, 'bash');
+    if (isLoopNode(node) && node.loop.until_bash) {
+      warnDoubleQuoted(node.loop.until_bash, 'loop.until_bash');
     }
   }
 

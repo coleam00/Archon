@@ -17,6 +17,7 @@
 import { join, dirname, normalize, basename } from 'path';
 import { homedir } from 'os';
 import { access, mkdir, symlink, lstat, readdir, readlink, realpath, rm, stat } from 'fs/promises';
+import { readFileSync } from 'fs';
 import { createLogger } from './logger';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -46,6 +47,47 @@ export function isDocker(): boolean {
     (process.env.HOME === '/root' && Boolean(process.env.WORKSPACE_PATH)) ||
     process.env.ARCHON_DOCKER === 'true'
   );
+}
+
+/**
+ * Detect if running inside WSL (Windows Subsystem for Linux).
+ *
+ * Two signals (either is sufficient):
+ *   - `WSL_DISTRO_NAME` env var is set (always true inside a WSL distro)
+ *   - `/proc/sys/kernel/osrelease` contains "microsoft" (lower-cased)
+ *
+ * Used by callers that need to emit Windows-host-friendly URIs
+ * (`vscode://vscode-remote/wsl+<distro>/...` instead of `vscode://file/...`)
+ * when the server is inside WSL but the browser is on the Windows host.
+ */
+export function isWSL(): boolean {
+  if (process.env.WSL_DISTRO_NAME) return true;
+
+  try {
+    const release = readFileSync('/proc/sys/kernel/osrelease', 'utf8').toLowerCase();
+    return release.includes('microsoft');
+  } catch {
+    // Unable to read the fallback signal; return false conservatively. This
+    // can be a false negative (WSL with the env var absent and an unreadable
+    // /proc/sys/kernel/osrelease), in which case callers fall back to the
+    // plain vscode://file/... URI.
+    return false;
+  }
+}
+
+/**
+ * Return the configured `WSL_DISTRO_NAME` value (`Ubuntu`, `Debian`, …) if
+ * present, otherwise `undefined`. WSL sets this env var in every distro
+ * shell; it may also be set manually to opt into the WSL URI path.
+ *
+ * Note this only reads the env var — `isWSL()` may still be true via the
+ * `/proc` fallback while this returns `undefined`. Without the env var we
+ * don't know what distro to put into a
+ * `vscode://vscode-remote/wsl+<distro>/...` URI, and guessing is worse than
+ * a sentinel that callers can fall back on.
+ */
+export function getWSLDistroName(): string | undefined {
+  return process.env.WSL_DISTRO_NAME ?? undefined;
 }
 
 /**
@@ -104,6 +146,11 @@ export function getArchonWorktreesPath(): string {
  */
 export function getArchonConfigPath(): string {
   return join(getArchonHome(), 'config.yaml');
+}
+
+/** Path where the auto-provisioned encryption key is stored (~/.archon/credential-key). */
+export function getCredentialKeyPath(): string {
+  return join(getArchonHome(), 'credential-key');
 }
 
 /**
@@ -388,6 +435,35 @@ export function parseOwnerRepo(name: string): { owner: string; repo: string } | 
 }
 
 /**
+ * Resolve the `{ owner, repo }` storage identity for a registered *repo*-kind
+ * codebase. This is the single source of truth that keeps `registerRepository()`
+ * (which creates the on-disk `owner/repo` tree), the log/artifact path
+ * resolvers, and the worktree base (`getWorktreeBase()` in `@archon/git`) in
+ * agreement — a mismatch between them dropped no-remote repos' logs/artifacts
+ * into `<cwd>/.archon` instead of `ARCHON_HOME` (#2132), and later split
+ * worktrees and storage across two different workspace trees (#2227).
+ *
+ * - A `name` in exact `owner/repo` form (clones, web-registered repos) → that
+ *   owner/repo.
+ * - Otherwise — most commonly a no-remote local repo registered under its bare
+ *   directory basename — the working directory's basename scoped under the
+ *   `_local` pseudo-owner, mirroring what registration writes to disk.
+ *   `basename()` never contains a path separator, so the only traversal risk is
+ *   `..`; that, `.`, and an empty segment return null so the caller can fall
+ *   back to cwd-local storage.
+ */
+export function resolveRepoProjectIdentity(
+  name: string,
+  cwd: string
+): { owner: string; repo: string } | null {
+  const parsed = parseOwnerRepo(name);
+  if (parsed) return parsed;
+  const repo = basename(cwd);
+  if (repo === '' || repo === '.' || repo === '..') return null;
+  return { owner: '_local', repo };
+}
+
+/**
  * Get the project root directory for a given owner/repo.
  * Returns: ~/.archon/workspaces/owner/repo/
  */
@@ -441,6 +517,115 @@ export function getRunArtifactsPath(owner: string, repo: string, workflowRunId: 
  */
 export function getRunLogPath(owner: string, repo: string, workflowRunId: string): string {
   return join(getProjectLogsPath(owner, repo), `${workflowRunId}.jsonl`);
+}
+
+/**
+ * Restrict a workflow name or scope key to a single filesystem-safe path
+ * segment. Any character outside `[a-zA-Z0-9_-]` becomes `_`, so a stray
+ * separator or `..` can never escape the scopes directory. Distinct inputs can
+ * collide (e.g. `a.b` and `a_b`) — scope dirs hold per-node files keyed by node
+ * id, so a collision co-mingles two scopes' artifacts rather than corrupting
+ * either. Falls back to `'_'` for an empty input.
+ */
+export function sanitizeScopeSegment(value: string): string {
+  const safe = value.replace(/[^a-zA-Z0-9_-]/g, '_');
+  return safe.length > 0 ? safe : '_';
+}
+
+/**
+ * Get the stable cross-invocation artifact scope directory for a workflow +
+ * scope key (the conversation UUID — the same key `persist_session` uses).
+ * Lives alongside the per-run `runs/` layout under the same artifacts root, so
+ * it works for repo projects, folder projects, and unregistered-cwd fallbacks:
+ *
+ *   <artifactsRoot>/scopes/<workflow>/<scope>/
+ *
+ * Unlike `runs/<id>/`, this path is identical across invocations of the same
+ * workflow in the same scope — it is the durable location a later invocation
+ * (e.g. a cold session resume) can read prior typed artifacts from.
+ */
+export function getScopeArtifactsPath(
+  artifactsRoot: string,
+  workflowName: string,
+  scopeKey: string
+): string {
+  return join(
+    artifactsRoot,
+    'scopes',
+    sanitizeScopeSegment(workflowName),
+    sanitizeScopeSegment(scopeKey)
+  );
+}
+
+// =============================================================================
+// Folder-project ("_folder") path functions
+// =============================================================================
+//
+// Folder projects (kind: 'folder') are non-git workspaces — a multi-repo root
+// or a plain ops folder. They run in place at their real directory, so there is
+// no `source/` symlink and no `worktrees/` directory. Their named artifact and
+// log storage lives under a `_folder` pseudo-owner, mirroring the `_local`
+// pseudo-owner convention used for locally-registered repos.
+
+/**
+ * Slugify a folder-project display name into a filesystem-safe segment.
+ * Lowercases, keeps `[a-z0-9._-]`, collapses any other run of characters to a
+ * single `-`, and trims leading/trailing `-`. The result always satisfies
+ * {@link SAFE_NAME}. Falls back to `'folder'` when the name slugifies to empty
+ * (e.g. a name that is entirely separators or unicode).
+ *
+ * Note: distinct display names can collide (e.g. "My App" and "my-app" both →
+ * "my-app"); runs stay separated by run-id subdirectories, so collisions only
+ * co-mingle listing-level artifacts. Accepted for now — see plan Questionables.
+ */
+export function slugifyFolderName(name: string): string {
+  const slug = name
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return slug.length > 0 && SAFE_NAME.test(slug) ? slug : 'folder';
+}
+
+/**
+ * Get the project root directory for a folder project.
+ * Returns: ~/.archon/workspaces/_folder/<slug>/
+ */
+export function getFolderProjectRoot(slug: string): string {
+  return join(getArchonWorkspacesPath(), '_folder', slug);
+}
+
+/**
+ * Get the artifacts directory for a folder project.
+ * Returns: ~/.archon/workspaces/_folder/<slug>/artifacts/
+ */
+export function getFolderProjectArtifactsPath(slug: string): string {
+  return join(getFolderProjectRoot(slug), 'artifacts');
+}
+
+/**
+ * Get the logs directory for a folder project.
+ * Returns: ~/.archon/workspaces/_folder/<slug>/logs/
+ */
+export function getFolderProjectLogsPath(slug: string): string {
+  return join(getFolderProjectRoot(slug), 'logs');
+}
+
+/**
+ * Get the artifacts directory for a specific folder-project workflow run.
+ * Returns: ~/.archon/workspaces/_folder/<slug>/artifacts/runs/{id}/
+ */
+export function getFolderRunArtifactsPath(slug: string, workflowRunId: string): string {
+  return join(getFolderProjectArtifactsPath(slug), 'runs', workflowRunId);
+}
+
+/**
+ * Ensure the on-disk storage directories for a folder project exist.
+ * Creates artifacts/ and logs/ under _folder/<slug>/ (no source/ or worktrees/ —
+ * folder projects run at their real path and are never git-isolated).
+ */
+export async function ensureFolderProjectStructure(slug: string): Promise<void> {
+  const dirs = [getFolderProjectArtifactsPath(slug), getFolderProjectLogsPath(slug)];
+  await Promise.all(dirs.map(dir => mkdir(dir, { recursive: true })));
 }
 
 /**
