@@ -154,6 +154,60 @@ describe('Workflow Loader', () => {
       expect(result.workflows[0].workflow.container).toEqual({ enabled: true });
     });
 
+    it('should parse evidence_policy.required: true (#2230)', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      const yaml = `name: gated\ndescription: evidence gated\nevidence_policy:\n  required: true\nnodes:\n  - id: n\n    prompt: p\n`;
+      await writeFile(join(workflowDir, 'gated.yaml'), yaml);
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(0);
+      expect(result.workflows[0].workflow.evidence_policy).toEqual({ required: true });
+    });
+
+    it('should parse evidence_policy.required: false', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      const yaml = `name: ungated\ndescription: opt-out\nevidence_policy:\n  required: false\nnodes:\n  - id: n\n    prompt: p\n`;
+      await writeFile(join(workflowDir, 'ungated.yaml'), yaml);
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.workflows[0].workflow.evidence_policy).toEqual({ required: false });
+    });
+
+    it('should omit evidence_policy when not present', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      const yaml = `name: no-evidence\ndescription: none\nnodes:\n  - id: n\n    prompt: p\n`;
+      await writeFile(join(workflowDir, 'no-evidence.yaml'), yaml);
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.workflows[0].workflow.evidence_policy).toBeUndefined();
+    });
+
+    it('should REJECT a malformed evidence_policy block (fail-safe, not warn-and-ignore)', async () => {
+      // Silently dropping a declared terminal-success gate would let runs
+      // complete ungated — a malformed block must fail validation loudly.
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      const yaml = `name: bad-evidence\ndescription: bad\nevidence_policy:\n  required: "yes"\nnodes:\n  - id: n\n    prompt: p\n`;
+      await writeFile(join(workflowDir, 'bad-evidence.yaml'), yaml);
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.workflows).toHaveLength(0);
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0].errorType).toBe('validation_error');
+      expect(result.errors[0].error).toContain('evidence_policy');
+    });
+
+    it('should REJECT an empty evidence_policy block (required is mandatory)', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      const yaml = `name: empty-evidence\ndescription: bad\nevidence_policy: {}\nnodes:\n  - id: n\n    prompt: p\n`;
+      await writeFile(join(workflowDir, 'empty-evidence.yaml'), yaml);
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.workflows).toHaveLength(0);
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0].errorType).toBe('validation_error');
+      expect(result.errors[0].error).toContain('required: boolean');
+    });
+
     it('should omit container block when not present', async () => {
       const workflowDir = join(testDir, '.archon', 'workflows');
       await mkdir(workflowDir, { recursive: true });

@@ -586,7 +586,13 @@ export interface ChatTurnProperties {
 }
 
 /** Categorical terminal exit reason — a fixed enum, never raw error text. */
-export type WorkflowExitReason = 'no_nodes_completed' | 'node_error' | 'unhandled_error';
+export type WorkflowExitReason =
+  | 'no_nodes_completed'
+  | 'node_error'
+  | 'unhandled_error'
+  // Evidence gate (#2230): all nodes succeeded but `evidence_policy.required`
+  // found no `$ARTIFACTS_DIR/evidence.json`, so the run was marked failed.
+  | 'evidence_missing';
 
 /**
  * Categorical failure class derived from the engine's error classifier

@@ -10691,6 +10691,215 @@ describe('executeDagWorkflow -- final status derivation', () => {
   });
 });
 
+describe('executeDagWorkflow -- evidence gate (#2230)', () => {
+  // Thin terminal-success gate: when the workflow declares
+  // `evidence_policy.required: true`, the executor refuses terminal `completed`
+  // unless `$ARTIFACTS_DIR/evidence.json` exists. Presence check ONLY — the
+  // workflow's own bash/script nodes compute what counts as evidence.
+  let testDir: string;
+  let artifactsDir: string;
+
+  beforeEach(async () => {
+    testDir = join(
+      tmpdir(),
+      `dag-evidence-test-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
+    artifactsDir = join(testDir, 'artifacts');
+    await mkdir(testDir, { recursive: true });
+    mockCaptureWorkflowCompleted.mockClear();
+  });
+
+  afterEach(async () => {
+    try {
+      await rm(testDir, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup errors
+    }
+  });
+
+  async function runEvidenceWorkflow(opts: {
+    store: IWorkflowStore;
+    platform: IWorkflowPlatform;
+    evidencePolicy?: { required: boolean };
+    priorCompletedNodes?: Map<string, string>;
+  }): Promise<void> {
+    const mockDeps = createMockDeps(opts.store);
+    const workflowRun = makeWorkflowRun('dag-evidence-run');
+    const nodes: DagNode[] = [{ id: 'work', bash: 'echo done' } as BashNode];
+
+    await executeDagWorkflow(
+      mockDeps,
+      opts.platform,
+      'conv-evidence',
+      testDir,
+      {
+        name: 'evidence-test',
+        nodes,
+        ...(opts.evidencePolicy ? { evidence_policy: opts.evidencePolicy } : {}),
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      artifactsDir,
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      opts.priorCompletedNodes
+    );
+  }
+
+  it('required: true + missing evidence.json -> failWorkflowRun with explicit reason, never completed', async () => {
+    const mockStore = createMockStore();
+    const platform = createMockPlatform();
+
+    await runEvidenceWorkflow({
+      store: mockStore,
+      platform,
+      evidencePolicy: { required: true },
+    });
+
+    expect((mockStore.completeWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(0);
+    expect((mockStore.failWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(1);
+    const failCall = (mockStore.failWorkflowRun as ReturnType<typeof mock>).mock
+      .calls[0] as unknown[];
+    expect(failCall[1] as string).toContain('evidence_policy.required');
+    expect(failCall[1] as string).toContain(join(artifactsDir, 'evidence.json'));
+
+    // The user-facing message says exactly why
+    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
+    const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
+    expect(messages.some(m => m.includes('evidence_policy.required'))).toBe(true);
+  });
+
+  it('missing evidence writes a structured metadata.evidence_validation note', async () => {
+    const mockStore = createMockStore();
+    const platform = createMockPlatform();
+
+    await runEvidenceWorkflow({
+      store: mockStore,
+      platform,
+      evidencePolicy: { required: true },
+    });
+
+    const updateCalls = (mockStore.updateWorkflowRun as ReturnType<typeof mock>).mock
+      .calls as unknown[][];
+    const metadataCall = updateCalls.find(call => {
+      const updates = call[1] as { metadata?: Record<string, unknown> };
+      return updates?.metadata?.evidence_validation !== undefined;
+    });
+    expect(metadataCall).toBeDefined();
+    const note = (metadataCall?.[1] as { metadata: Record<string, unknown> }).metadata
+      .evidence_validation as Record<string, unknown>;
+    expect(note.status).toBe('missing');
+    expect(note.policy).toBe('evidence_policy.required');
+    expect(note.expected_path).toBe(join(artifactsDir, 'evidence.json'));
+    expect(typeof note.checked_at).toBe('string');
+  });
+
+  it('missing evidence persists an evidence_validation_failed workflow event and telemetry exit reason', async () => {
+    const mockStore = createMockStore();
+    const platform = createMockPlatform();
+
+    await runEvidenceWorkflow({
+      store: mockStore,
+      platform,
+      evidencePolicy: { required: true },
+    });
+
+    const eventCalls = (mockStore.createWorkflowEvent as ReturnType<typeof mock>).mock
+      .calls as unknown[][];
+    const evidenceEvent = eventCalls.find(
+      call => (call[0] as { event_type: string }).event_type === 'evidence_validation_failed'
+    );
+    expect(evidenceEvent).toBeDefined();
+    const eventData = (evidenceEvent?.[0] as { data: Record<string, unknown> }).data;
+    expect(eventData.expected_path).toBe(join(artifactsDir, 'evidence.json'));
+
+    const telemetryCalls = mockCaptureWorkflowCompleted.mock.calls as unknown[][];
+    const lastTelemetry = telemetryCalls.at(-1)?.[0] as Record<string, unknown>;
+    expect(lastTelemetry.outcome).toBe('failed');
+    expect(lastTelemetry.exitReason).toBe('evidence_missing');
+  });
+
+  it('required: true + evidence.json present -> completeWorkflowRun', async () => {
+    const mockStore = createMockStore();
+    const platform = createMockPlatform();
+    await mkdir(artifactsDir, { recursive: true });
+    await writeFile(join(artifactsDir, 'evidence.json'), '{"proof": "landed"}');
+
+    await runEvidenceWorkflow({
+      store: mockStore,
+      platform,
+      evidencePolicy: { required: true },
+    });
+
+    expect((mockStore.completeWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(1);
+    expect((mockStore.failWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(0);
+  });
+
+  it('no evidence_policy declared -> completes without checking for evidence.json', async () => {
+    const mockStore = createMockStore();
+    const platform = createMockPlatform();
+
+    await runEvidenceWorkflow({ store: mockStore, platform });
+
+    expect((mockStore.completeWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(1);
+    expect((mockStore.failWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(0);
+  });
+
+  it('required: false -> completes without checking for evidence.json', async () => {
+    const mockStore = createMockStore();
+    const platform = createMockPlatform();
+
+    await runEvidenceWorkflow({
+      store: mockStore,
+      platform,
+      evidencePolicy: { required: false },
+    });
+
+    expect((mockStore.completeWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(1);
+    expect((mockStore.failWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(0);
+  });
+
+  it('resumed run (all nodes prior-completed) with evidence.json now present -> completes', async () => {
+    // A run that failed the gate is resumed after evidence.json was produced:
+    // every node is skipped as prior-completed, the executor re-enters the
+    // completion path, and the gate now passes.
+    const mockStore = createMockStore();
+    const platform = createMockPlatform();
+    await mkdir(artifactsDir, { recursive: true });
+    await writeFile(join(artifactsDir, 'evidence.json'), '{"proof": "landed"}');
+
+    await runEvidenceWorkflow({
+      store: mockStore,
+      platform,
+      evidencePolicy: { required: true },
+      priorCompletedNodes: new Map([['work', 'done']]),
+    });
+
+    expect((mockStore.completeWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(1);
+    expect((mockStore.failWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(0);
+  });
+
+  it('resumed run without evidence.json -> fails the gate again', async () => {
+    const mockStore = createMockStore();
+    const platform = createMockPlatform();
+
+    await runEvidenceWorkflow({
+      store: mockStore,
+      platform,
+      evidencePolicy: { required: true },
+      priorCompletedNodes: new Map([['work', 'done']]),
+    });
+
+    expect((mockStore.completeWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(0);
+    expect((mockStore.failWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(1);
+  });
+});
+
 describe('provider resolution -- regression for #1610', () => {
   let testDir: string;
 

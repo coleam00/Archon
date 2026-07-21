@@ -92,6 +92,27 @@ export const workflowContainerPolicySchema = z.object({
 export type WorkflowContainerPolicy = z.infer<typeof workflowContainerPolicySchema>;
 
 // ---------------------------------------------------------------------------
+// Workflow-level evidence policy (#2230)
+// ---------------------------------------------------------------------------
+
+/**
+ * Terminal-success evidence gate. When `required: true`, the DAG executor
+ * refuses to flip the run to `completed` unless `$ARTIFACTS_DIR/evidence.json`
+ * exists — a missing file marks the run `failed` with a structured note at
+ * `metadata.evidence_validation`. The engine gates ONLY on file presence:
+ * producing (and validating the content of) the evidence belongs to the
+ * workflow's own bash/script nodes (constitution: code computes, YAML
+ * coordinates). Deliberately narrow — no schema validation, no content checks,
+ * no configurable path (deferred until the gate sees adoption; see #2230).
+ */
+export const workflowEvidencePolicySchema = z.object({
+  /** Refuse terminal `completed` unless `$ARTIFACTS_DIR/evidence.json` exists. */
+  required: z.boolean(),
+});
+
+export type WorkflowEvidencePolicy = z.infer<typeof workflowEvidencePolicySchema>;
+
+// ---------------------------------------------------------------------------
 // WorkflowBase — common fields shared by all workflow types
 // ---------------------------------------------------------------------------
 
@@ -110,6 +131,7 @@ export const workflowBaseSchema = z.object({
   sandbox: sandboxSettingsSchema.optional(),
   worktree: workflowWorktreePolicySchema.optional(),
   container: workflowContainerPolicySchema.optional(),
+  evidence_policy: workflowEvidencePolicySchema.optional(),
   /**
    * When `false`, the engine skips the path-exclusive lock for this workflow,
    * allowing N concurrent runs on the same live checkout. The author asserts

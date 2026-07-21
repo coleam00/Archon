@@ -93,6 +93,7 @@ export {
   modelReasoningEffortSchema,
   webSearchModeSchema,
   workflowRequirementSchema,
+  workflowEvidencePolicySchema,
   workflowBaseSchema,
   workflowDefinitionSchema,
 } from './workflow';
@@ -100,6 +101,7 @@ export type {
   ModelReasoningEffort,
   WebSearchMode,
   WorkflowRequirement,
+  WorkflowEvidencePolicy,
   WorkflowBase,
   WorkflowDefinition,
 } from './workflow';

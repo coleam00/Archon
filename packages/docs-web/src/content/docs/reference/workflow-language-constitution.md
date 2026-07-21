@@ -39,6 +39,7 @@ If a feature computes rather than coordinates, it is rejected — with the point
 | `include:` (load-time inlining, [#2121](https://github.com/coleam00/Archon/issues/2121)) | ✅ admitted | Textual composition, zero new runtime semantics — the engine sees a flat DAG |
 | `first_success` racing join (proposed, [#1764](https://github.com/coleam00/Archon/issues/1764)) | ✅ admissible | A join rule — coordination |
 | Runtime sub-runs (`workflow:`, #2121 Phase 2) | ✅ shipped (slice 1) | A sub-run is a governance object (own run record, own gates, own audit trail). Slice 1: shared checkout, `input:` string, gate-aware pause/resume; fan-out, `worktree` isolation, racing, and `with:` remain deferred |
+| `evidence_policy` terminal-success gate ([#2230](https://github.com/coleam00/Archon/issues/2230)) | ✅ admitted (thin slice) | A run-status transition (sibling of `approval:`) — the engine gates on `evidence.json` PRESENCE only; computing/validating the evidence stays in the workflow's script/bash nodes. The full typed-schema + reality-verification surface of PR #1601 was rejected as computation |
 | Arithmetic / string functions / regex in `when:` | ❌ rejected | Computation. A script node computes the decision; `when:` gates on its output |
 | Parentheses & nested boolean grouping in `when:` | ❌ rejected (see policy below) | The first step of home-growing an expression language |
 | Templating (Jinja-style interpolation, computed node ids) | ❌ rejected | Evaluation inside declaration — the Helm road |
