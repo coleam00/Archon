@@ -492,6 +492,25 @@ describe('cloneRepository', () => {
     });
   });
 
+  // ── GIT_TERMINAL_PROMPT fail-fast (salvaged from PR #1404, credit @mlnchk) ─
+  describe('fail-fast env', () => {
+    test('passes GIT_TERMINAL_PROMPT=0 to the git clone subprocess', async () => {
+      mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);
+
+      await cloneRepository('https://github.com/owner/repo');
+
+      const cloneCall = spyExecFileAsync.mock.calls.find(
+        (args: unknown[]) =>
+          args[0] === 'git' && Array.isArray(args[1]) && (args[1] as string[])[0] === 'clone'
+      );
+      expect(cloneCall).toBeDefined();
+      const opts = cloneCall?.[2] as { env?: Record<string, string> } | undefined;
+      expect(opts?.env?.GIT_TERMINAL_PROMPT).toBe('0');
+      // The rest of the environment must be inherited, not stripped
+      expect(opts?.env?.PATH).toBe(process.env.PATH);
+    });
+  });
+
   // ── resolveForgeAuth unit tests ──────────────────────────────────────────
   describe('resolveForgeAuth', () => {
     const { resolveForgeAuth } = require('./clone');

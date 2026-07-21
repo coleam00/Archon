@@ -381,7 +381,11 @@ export async function cloneRepository(repoUrl: string): Promise<RegisterResult> 
   }
 
   try {
-    await execFileAsync('git', ['clone', cloneUrl, targetPath]);
+    // GIT_TERMINAL_PROMPT=0 turns any missing-creds scenario into an
+    // immediate, readable error instead of a hung stdin credential prompt.
+    await execFileAsync('git', ['clone', cloneUrl, targetPath], {
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+    });
   } catch (error) {
     const safeErr = sanitizeError(error as Error);
     throw new Error(`Failed to clone repository: ${safeErr.message}`);
