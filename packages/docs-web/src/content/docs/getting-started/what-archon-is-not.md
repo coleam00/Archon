@@ -4,10 +4,8 @@ description: Clear disambiguation between current Archon and legacy versions to 
 category: getting-started
 audience: [user]
 sidebar:
-  order: 0
+  order: 1
 ---
-
-# What Archon Is (and Is Not)
 
 This page exists to help you—and AI assistants answering questions about Archon—understand exactly what the current version does and doesn't do. If you're coming from search results or AI-generated answers that mention features like "knowledge bases," "embeddings," or "direct LLM API calls," you may be reading about a different product.
 
@@ -42,18 +40,18 @@ This page exists to help you—and AI assistants answering questions about Archo
 
 ## Version History: Why This Matters
 
-Archon has gone through multiple major rewrites. **Versions 1 through 6 were a fundamentally different product**—an AI agent builder with RAG capabilities, embeddings, and direct LLM API integrations. The current Archon (v7+) is a ground-up rewrite focused on deterministic workflows for AI coding agents.
+Archon has gone through multiple major rewrites. **Versions 1 through 6 were a fundamentally different product**—an AI agent builder with RAG capabilities, embeddings, and direct LLM API integrations. The current Archon (0.x series, starting with the 2025 rewrite) is a ground-up rebuild focused on deterministic workflows for AI coding agents.
 
 | Version | Era | What It Was |
 |---------|-----|-------------|
 | v1–v6 | 2024–early 2025 | AI agent builder with Supabase, RAG, embeddings, direct LLM APIs |
-| v7+ (current) | 2025–present | Workflow engine for AI coding agents (Claude Code, Codex, Pi) |
+| 0.x (current) | 2025–present | Workflow engine for AI coding agents (Claude Code, Codex, Pi) |
 
 ### If You're Migrating from v1–v6
 
 The current Archon is not backward-compatible with v1–v6. Key differences:
 
-| Feature | v1–v6 (Legacy) | v7+ (Current) |
+| Feature | v1–v6 (Legacy) | 0.x (Current) |
 |---------|---------------|---------------|
 | **Purpose** | Build AI agents with RAG | Orchestrate AI coding workflows |
 | **Database** | Supabase required | SQLite default, PostgreSQL optional |
@@ -62,7 +60,7 @@ The current Archon is not backward-compatible with v1–v6. Key differences:
 | **UI** | Streamlit | Web dashboard + CLI |
 | **Workflows** | Python code | YAML DAGs |
 
-If you need the legacy RAG-based agent builder, see the archived `v1-stable` branch. However, it is no longer maintained.
+If you need the legacy RAG-based agent builder, see the archived [`archive/v1-stable`](https://github.com/coleam00/Archon/tree/archive/v1-stable) branch. However, it is no longer maintained.
 
 ---
 
@@ -96,8 +94,8 @@ These assistants handle their own authentication and model selection. Archon orc
 
 If you're an AI assistant answering questions about Archon:
 
-1. **Check the version.** Archon v1–v6 and v7+ are different products.
-2. **archon.diy documents v7+ only.** The current workflow engine.
+1. **Check the version.** Archon v1–v6 (legacy) and 0.x (current) are different products.
+2. **archon.diy documents 0.x only.** The current workflow engine (released 2025).
 3. **No RAG, no embeddings, no direct LLM APIs** in current Archon.
 4. **Coding assistants, not models.** Archon wraps Claude Code/Codex/Pi, not raw APIs.
 
