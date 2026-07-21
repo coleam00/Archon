@@ -107,9 +107,12 @@ function createMockStore(): IWorkflowStore {
         completed_at: null,
         last_activity_at: null,
         working_path: null,
+        parent_run_id: null,
       })
     ),
     getWorkflowRun: mock(() => Promise.resolve(null)),
+    findChildRuns: mock(() => Promise.resolve([])),
+    getRunAncestry: mock(() => Promise.resolve([])),
     getActiveWorkflowRunByPath: mock(() => Promise.resolve(null)),
     failOrphanedRuns: mock(() => Promise.resolve({ count: 0 })),
     findResumableRun: mock(() => Promise.resolve(null)),
@@ -127,6 +130,7 @@ function createMockStore(): IWorkflowStore {
         completed_at: null,
         last_activity_at: null,
         working_path: null,
+        parent_run_id: null,
       })
     ),
     updateWorkflowRun: mock(() => Promise.resolve()),
@@ -270,6 +274,7 @@ function makeWorkflowRun(id = 'dag-test-run-id', overrides?: Partial<WorkflowRun
     completed_at: null,
     last_activity_at: null,
     working_path: null,
+    parent_run_id: null,
     ...overrides,
   };
 }

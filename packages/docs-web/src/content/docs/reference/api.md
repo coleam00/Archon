@@ -266,9 +266,9 @@ Only user-defined workflows can be deleted. Bundled defaults cannot be removed.
 | GET | `/api/workflows/runs/by-worker/{platformId}` | Look up a run by worker conversation ID |
 | POST | `/api/workflows/runs/{runId}/cancel` | Cancel a running workflow |
 | POST | `/api/workflows/runs/{runId}/resume` | Resume a failed workflow |
-| POST | `/api/workflows/runs/{runId}/abandon` | Abandon a run (running, paused, or failed) |
-| POST | `/api/workflows/runs/{runId}/approve` | Approve a paused workflow |
-| POST | `/api/workflows/runs/{runId}/reject` | Reject a paused workflow |
+| POST | `/api/workflows/runs/{runId}/abandon` | Abandon a run (running, paused, or failed); cascade-cancels non-terminal `workflow:` sub-run descendants |
+| POST | `/api/workflows/runs/{runId}/approve` | Approve a paused workflow (400 if paused blocked on a `workflow:` child — approve the child) |
+| POST | `/api/workflows/runs/{runId}/reject` | Reject a paused workflow (400 if paused blocked on a `workflow:` child — reject the child) |
 | DELETE | `/api/workflows/runs/{runId}` | Delete a terminal run and its events |
 
 #### Run a Workflow
@@ -316,6 +316,8 @@ curl -X POST http://localhost:3090/api/workflows/runs/{runId}/reject \
   -H "Content-Type: application/json" \
   -d '{"reason": "Please add error handling first"}'
 ```
+
+**Sub-run child gates (#2121 Phase 2):** when a `workflow:` sub-run pauses at its own gate, its parent run pauses "blocked on child". Approve/reject the **child** run (its id is in the parent's block message) — the parent auto-resumes when the child completes. Calling approve/reject on the *parent's* id while it is blocked on a child returns **400** with a redirect to the child id. `abandon` on a parent cascade-cancels its non-terminal sub-run descendants; the response's `cascadeFailures` is non-zero if part of the tree could not be reached, and `blockedParentRunId` is set when the abandoned run was itself a child stranding a paused parent.
 
 ---
 

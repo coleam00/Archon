@@ -300,6 +300,26 @@ describe('expandWorkflowIncludes — fence-aware prose', () => {
     const b = nodeById(workflows.get('parent')!, 'inc__b');
     expect(b && 'bash' in b ? b.bash : '').toBe('echo $inc__a.output');
   });
+
+  // #2121 Phase 2: a `workflow:` (sub-run) node inside an included block is a live
+  // ref surface — its node id must namespace and its input: refs must rewrite so
+  // executeWorkflowNode's re-entry (keyed on the namespaced parent_node_id) and
+  // the child's $ARGUMENTS both see the right values.
+  test('workflow: node in an included block — id namespaced, input: refs rewritten, target untouched', () => {
+    const block = wf('blk', [
+      { id: 'plan', bash: 'echo plan' },
+      { id: 'sub', workflow: 'child-target', input: 'goal: $plan.output', depends_on: ['plan'] },
+    ]);
+    const parent = wf('parent', [{ id: 'inc', include: 'blk' }]);
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
+    expect(errors).toHaveLength(0);
+    const sub = nodeById(workflows.get('parent')!, 'inc__sub');
+    expect(sub).toBeDefined();
+    // The sibling ref inside input: is rewritten to the namespaced id…
+    expect(sub && 'input' in sub ? sub.input : '').toBe('goal: $inc__plan.output');
+    // …but the sub-run TARGET is a workflow name, not a node ref — never rewritten.
+    expect(sub && 'workflow' in sub ? sub.workflow : '').toBe('child-target');
+  });
 });
 
 // ---------------------------------------------------------------------------

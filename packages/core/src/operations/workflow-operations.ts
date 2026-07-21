@@ -9,6 +9,7 @@ import {
   RESUMABLE_WORKFLOW_STATUSES,
   isApprovalContext,
   isGateResolved,
+  isRunBlockedOnChild,
 } from '@archon/workflows/schemas/workflow-run';
 import type {
   WorkflowRun,
@@ -67,6 +68,90 @@ export interface RejectionOperationResult {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/** Safety bound on the abandon cascade walk (guards against corrupted run trees). */
+const MAX_CASCADE_RUNS = 500;
+
+/**
+ * Cascade-cancel the `workflow:` sub-run tree under `rootId` (#2121 Phase 2 / D7).
+ * A child sub-run shares the parent's conversation and runs in-process, so
+ * abandoning the parent must flip every non-terminal DESCENDANT to cancelled — not
+ * just direct children (a child may itself spawn grandchildren). Cooperative: each
+ * cancelled run's executor between-layer status poll then aborts it (~10s; there is
+ * no hard subprocess kill in slice 1). Best-effort — a per-run failure is logged,
+ * never thrown, so the parent abandon always succeeds; the failure COUNT is
+ * returned so callers can tell the user part of the tree may still be alive.
+ */
+async function cascadeCancelChildren(rootId: string): Promise<{ failures: number }> {
+  const queue: string[] = [rootId];
+  const seen = new Set<string>([rootId]);
+  let processed = 0;
+  let failures = 0;
+  while (queue.length > 0 && processed < MAX_CASCADE_RUNS) {
+    const parentId = queue.shift();
+    if (parentId === undefined) break;
+    processed++;
+    let children: WorkflowRun[];
+    try {
+      children = await workflowDb.findChildRuns(parentId);
+    } catch (err) {
+      getLog().warn({ err, parentId }, 'operations.workflow_abandon_cascade_lookup_failed');
+      failures++;
+      continue;
+    }
+    for (const child of children) {
+      if (seen.has(child.id)) continue;
+      seen.add(child.id);
+      queue.push(child.id); // traverse deeper even under an already-terminal child
+      if (child.status === 'completed' || child.status === 'cancelled') continue;
+      try {
+        await workflowDb.cancelWorkflowRun(child.id);
+      } catch (err) {
+        getLog().warn(
+          { err, childId: child.id },
+          'operations.workflow_abandon_cascade_cancel_failed'
+        );
+        failures++;
+      }
+    }
+  }
+  // Truncation is NOT silent success: if we hit the cap with the queue non-empty,
+  // an unbounded-deep/wide tree still has live descendants we never reached. Surface
+  // it via the same `failures` channel (caller reports "part of the tree may still be
+  // alive") AND a distinct log line, rather than returning a false all-clear.
+  if (queue.length > 0) {
+    getLog().warn(
+      { rootId, cap: MAX_CASCADE_RUNS, unreached: queue.length },
+      'operations.workflow_abandon_cascade_truncated'
+    );
+    failures += queue.length;
+  }
+  return { failures };
+}
+
+/**
+ * If `run` is a `workflow:` sub-run whose PARENT is currently paused blocked on it,
+ * return the parent's run id — abandoning the child strands that parent (nothing
+ * re-fires the auto-resume hook for a terminal-via-abandon child), so callers must
+ * tell the user to resume (fails the node cleanly) or abandon the parent too.
+ * Best-effort: lookup failures are logged and read as "no blocked parent".
+ */
+async function findParentBlockedOn(run: WorkflowRun): Promise<string | null> {
+  if (!run.parent_run_id) return null;
+  try {
+    const parent = await workflowDb.getWorkflowRun(run.parent_run_id);
+    // Shared invariant (isRunBlockedOnChild) — same predicate the auto-resume hook
+    // uses, so the two can't drift if the child_workflow gate shape changes.
+    if (parent && isRunBlockedOnChild(parent, run.id)) return parent.id;
+    return null;
+  } catch (err) {
+    getLog().warn(
+      { err, runId: run.id, parentRunId: run.parent_run_id },
+      'operations.workflow_abandon_parent_lookup_failed'
+    );
+    return null;
+  }
+}
+
 async function getRunOrThrow(runId: string, logEvent: string): Promise<WorkflowRun> {
   let run: WorkflowRun | null;
   try {
@@ -111,6 +196,22 @@ export async function resumeWorkflow(runId: string): Promise<WorkflowRun> {
   return run;
 }
 
+export interface AbandonWorkflowResult {
+  run: WorkflowRun;
+  /**
+   * Number of sub-run descendants the cascade failed to cancel (best-effort walk;
+   * failures are also logged). Non-zero means part of the tree may still be alive.
+   */
+  cascadeFailures: number;
+  /**
+   * When the abandoned run was itself a `workflow:` sub-run and its parent is
+   * paused blocked on it: the parent's run id. Nothing auto-resumes that parent
+   * (the hook only fires from inside the child's own execution) — the user should
+   * resume it (fails the node cleanly) or abandon it too.
+   */
+  blockedParentRunId: string | null;
+}
+
 /**
  * Abandon a workflow run (marks it as cancelled).
  *
@@ -119,7 +220,7 @@ export async function resumeWorkflow(runId: string): Promise<WorkflowRun> {
  * to discard it — hence the inline check here intentionally diverges from that
  * constant and blocks only the two non-resumable terminal states.
  */
-export async function abandonWorkflow(runId: string): Promise<WorkflowRun> {
+export async function abandonWorkflow(runId: string): Promise<AbandonWorkflowResult> {
   const run = await getRunOrThrow(runId, 'operations.workflow_abandon_lookup_failed');
   if (run.status === 'completed' || run.status === 'cancelled') {
     throw new Error(
@@ -137,6 +238,17 @@ export async function abandonWorkflow(runId: string): Promise<WorkflowRun> {
     );
     throw new Error(`Failed to abandon workflow run ${runId}: ${err.message}`);
   }
+  // Cascade-cancel the sub-run tree — ONLY when OUR cancel won the CAS (same guard as
+  // the container reclaim below): a false `cancelled` means a concurrent transition
+  // already took the run terminal, so its children are not ours to cancel.
+  let cascadeFailures = 0;
+  if (cancelled) {
+    ({ failures: cascadeFailures } = await cascadeCancelChildren(runId));
+  }
+  // Abandoning a CHILD strands a parent paused on it (the auto-resume hook only
+  // fires from inside the child's own execution) — detect and surface that so the
+  // caller can point the user at the blocked parent.
+  const blockedParentRunId = cancelled ? await findParentBlockedOn(run) : null;
   // M2 — reclaim a container run's container + upper volume immediately, in the SHARED
   // op so EVERY abandon surface (CLI, web API, chat, manage_run, Slack-cancel) frees the
   // resources now rather than waiting for the scheduled reaper. Best-effort: a reclaim
@@ -162,7 +274,7 @@ export async function abandonWorkflow(runId: string): Promise<WorkflowRun> {
       getLog().warn({ err, runId }, 'operations.workflow_abandon_container_reclaim_failed');
     }
   }
-  return run;
+  return { run, cascadeFailures, blockedParentRunId };
 }
 
 /**
@@ -190,6 +302,19 @@ export async function approveWorkflow(
     : undefined;
   if (!approval?.nodeId) {
     throw new Error('Workflow run is paused but missing approval context.');
+  }
+  if (approval.type === 'child_workflow') {
+    // A parent blocked on a `workflow:` sub-run has no approvable gate of its
+    // own — the pause resolves automatically when the child run completes.
+    // Falling through to the generic branch would stamp a node_completed for the
+    // parent's workflow node with empty output (the child's real output is then
+    // discarded on resume) and orphan the still-paused child. Redirect the
+    // operator to the child run, where the actual gate lives.
+    throw new Error(
+      `Run ${runId} is paused waiting on sub-run ${approval.childRunId ?? '<unknown>'} ` +
+        `('workflow:' node '${approval.nodeId}'). Approve or reject the child run instead` +
+        (approval.childRunId ? `: /workflow approve ${approval.childRunId}` : '.')
+    );
   }
   if (isGateResolved(approval)) {
     // Fast-path friendly error for the common (sequential) case. The run stays
@@ -331,6 +456,18 @@ export async function rejectWorkflow(
   const approval: ApprovalContext | undefined = isApprovalContext(rawApproval)
     ? rawApproval
     : undefined;
+  if (approval?.type === 'child_workflow') {
+    // Same redirect as approveWorkflow: the parent's pause is not a rejectable
+    // gate — cancelling the parent here would silently orphan the still-paused
+    // child run. Reject the child (its own gate) or abandon the parent (which
+    // cascade-cancels the subtree) instead.
+    throw new Error(
+      `Run ${runId} is paused waiting on sub-run ${approval.childRunId ?? '<unknown>'} ` +
+        `('workflow:' node '${approval.nodeId}'). Reject the child run instead` +
+        (approval.childRunId ? `: /workflow reject ${approval.childRunId}` : '.') +
+        ' To discard the whole tree, abandon this run.'
+    );
+  }
   if (approval && isGateResolved(approval)) {
     // Fast-path friendly error, same as approveWorkflow — the run stays 'paused'
     // after a resolution, so status alone no longer blocks a second reject. The

@@ -298,9 +298,13 @@ archon workflow abandon <run-id>
 archon workflow abandon <run-id> --json
 ```
 
+**Sub-run trees (#2121 Phase 2):** abandoning a parent that spawned `workflow:` sub-runs cascade-cancels every non-terminal descendant (children and grandchildren; already-terminal runs are left alone). The cancel is cooperative — each child's executor aborts at its next status check (~10s; no hard subprocess kill). If part of the tree could not be reached, the command reports the count so you know descendants may still be alive. Conversely, abandoning a **child** that its parent is paused-and-blocked on strands that parent (nothing re-fires the auto-resume hook); the command surfaces the blocked parent's run id so you can `resume` it (which fails the sub-run node cleanly) or abandon it too.
+
 ### `workflow approve`
 
 Approve a paused workflow run at an interactive approval gate. Optionally provide a comment that is available to the workflow via `$LOOP_USER_INPUT`.
+
+**Sub-run child gates (#2121 Phase 2):** when a `workflow:` sub-run pauses at its own gate, the parent run pauses "blocked on child". Approve (or reject) the **child** by its own run id — the id shown in the parent's block message — not the parent's; the parent auto-resumes when the child completes. `approve`/`reject` against the parent's id while it's blocked on a child are refused with a redirect to the child id.
 
 **Interactive-loop gates — finalize vs iterate:** when the gate paused on an iteration that emitted the loop's completion signal (`workflow get <run-id> --json` → `.metadata.approval.completionSignaled` is `true`), approving with **no comment** accepts the completion — the node finalizes from the already-computed output on resume, with no re-run. Approving **with** a comment runs another iteration using it as `$LOOP_USER_INPUT`. On a non-signaled gate, both forms run another iteration.
 

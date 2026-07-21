@@ -55,6 +55,13 @@ mock.module('@archon/git', () => ({
 const mockExecuteDagWorkflow = mock(async (): Promise<string | undefined> => undefined);
 mock.module('./dag-executor', () => ({
   executeDagWorkflow: mockExecuteDagWorkflow,
+  // Passthrough for the sub-run outcome mapper (#2121) — executor.ts imports it;
+  // no test here exercises the sub-run path, but the export must exist so the
+  // mocked module doesn't shadow it with `undefined`.
+  childOutcomeFromRun: mock((run: { id: string; status: string }) => ({
+    childRunId: run.id,
+    status: run.status,
+  })),
 }));
 
 // --- Mock logger functions ---
@@ -95,6 +102,8 @@ import type { WorkflowDefinition, WorkflowRun } from './schemas';
 function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
   return {
     getActiveWorkflowRunByPath: mock(async () => null),
+    findChildRuns: mock(async () => []),
+    getRunAncestry: mock(async () => []),
     failOrphanedRuns: mock(async () => ({ count: 0 })),
     createWorkflowRun: mock(async () => makeRun()),
     updateWorkflowRun: mock(async () => {}),

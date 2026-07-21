@@ -269,9 +269,20 @@ export class SqliteAdapter implements IDatabase {
           'ALTER TABLE remote_agent_workflow_runs ADD COLUMN user_id TEXT REFERENCES remote_agent_users(id) ON DELETE SET NULL'
         );
       }
+      // Run-tree parent (#2121 Phase 2). Self-referential FK — a `workflow:` sub-run
+      // links back to its spawning parent. ON DELETE SET NULL so deleting a parent
+      // orphans children rather than cascade-deleting their audit trail.
+      if (!wfColNames.has('parent_run_id')) {
+        this.db.run(
+          'ALTER TABLE remote_agent_workflow_runs ADD COLUMN parent_run_id TEXT REFERENCES remote_agent_workflow_runs(id) ON DELETE SET NULL'
+        );
+      }
       // Same rationale as idx_conversations_user_id above.
       this.db.run(
         'CREATE INDEX IF NOT EXISTS idx_workflow_runs_user_id ON remote_agent_workflow_runs(user_id) WHERE user_id IS NOT NULL'
+      );
+      this.db.run(
+        'CREATE INDEX IF NOT EXISTS idx_workflow_runs_parent_run ON remote_agent_workflow_runs(parent_run_id) WHERE parent_run_id IS NOT NULL'
       );
     } catch (e: unknown) {
       getLog().warn({ err: e as Error }, 'db.sqlite_migration_workflow_runs_columns_failed');
@@ -559,6 +570,7 @@ export class SqliteAdapter implements IDatabase {
         metadata TEXT DEFAULT '{}',
         parent_conversation_id TEXT REFERENCES remote_agent_conversations(id) ON DELETE SET NULL,
         user_id TEXT REFERENCES remote_agent_users(id) ON DELETE SET NULL,
+        parent_run_id TEXT REFERENCES remote_agent_workflow_runs(id) ON DELETE SET NULL,
         started_at TEXT DEFAULT (datetime('now')),
         completed_at TEXT,
         last_activity_at TEXT DEFAULT (datetime('now')),

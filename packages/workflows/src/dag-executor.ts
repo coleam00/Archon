@@ -42,6 +42,7 @@ import type {
   LoopNode,
   LoopGroupNode,
   ScriptNode,
+  WorkflowNode,
   NodeOutput,
   TriggerRule,
   WorkflowRun,
@@ -60,6 +61,7 @@ import {
   isCancelNode,
   isScriptNode,
   isIncludeNode,
+  isWorkflowNode,
   isPersistableNode,
   isApprovalContext,
 } from './schemas';
@@ -305,6 +307,84 @@ type NodeExecutionResult = NodeOutput & {
   /** Loop nodes only: number of iterations executed. */
   loopIterations?: number;
 };
+
+// ---------------------------------------------------------------------------
+// workflow: (sub-run) node — cross-run composition (#2121 Phase 2)
+// ---------------------------------------------------------------------------
+
+/** Terminal (or paused) outcome of a child sub-run, as consumed by a `workflow:` node. */
+export interface ChildWorkflowOutcome {
+  childRunId: string;
+  status: 'completed' | 'paused' | 'failed' | 'cancelled';
+  /** Child's terminal output (its first sink node's output), threaded as `$<id>.output`. */
+  output?: string;
+  /** Child run's total cost, rolled up into the parent node's costUsd (D8). */
+  costUsd?: number;
+  tokens?: TokenUsage;
+  error?: string;
+}
+
+/** Arguments for starting (or resuming a failed) child sub-run. */
+export interface RunChildWorkflowArgs {
+  parentRun: WorkflowRun;
+  nodeId: string;
+  childWorkflowName: string;
+  /** Data string forwarded as the child's user_message (substituted upstream). */
+  input: string;
+  cwd: string;
+  /** Platform conversation id (shared with the parent). */
+  conversationId: string;
+  /** DB conversation UUID (shared with the parent — satisfies the child's NOT-NULL FK). */
+  conversationDbId: string;
+  userId?: string;
+  /** Codebase id inherited from the parent (env vars + attribution). */
+  codebaseId?: string;
+  /** Present only when re-driving a FAILED child on parent resume (D5 recovery path). */
+  resumeFailedChild?: WorkflowRun;
+}
+
+/**
+ * Injected closure that starts a child workflow run in-process (#2121 Phase 2).
+ * Defined in executor.ts — it captures `executeWorkflow` from the SAME module, so
+ * there is no static import cycle — and threaded through executeDagWorkflow →
+ * RunLayersContext so a `workflow:` node can spawn its child without dag-executor
+ * importing executor.
+ */
+export type RunChildWorkflowFn = (args: RunChildWorkflowArgs) => Promise<ChildWorkflowOutcome>;
+
+/**
+ * Derive a child's node-facing outcome from its persisted run row. Cost, tokens,
+ * and the terminal `summary` are written into the child run's metadata at
+ * completion (see executeDagWorkflow completion + Task 12), so both the
+ * synchronous path (runChildWorkflow reads the row back) and the re-entry path
+ * (executeWorkflowNode finds an already-terminal child) read the same source.
+ */
+export function childOutcomeFromRun(run: WorkflowRun): ChildWorkflowOutcome {
+  if (run.status === 'running' || run.status === 'pending') {
+    // Fail fast instead of a blind narrowing cast: every caller must hand this a
+    // settled (terminal or paused) run. A non-settled status slipping through
+    // would fall out of interpret()'s switch and corrupt the node result with
+    // `undefined` — throwing turns that into a loud, attributable node failure.
+    throw new Error(
+      `Sub-run ${run.id} is still '${run.status}' — cannot derive a node outcome from an unsettled run.`
+    );
+  }
+  const md: Record<string, unknown> = run.metadata ?? {};
+  const input = typeof md.total_tokens_in === 'number' ? md.total_tokens_in : undefined;
+  const output = typeof md.total_tokens_out === 'number' ? md.total_tokens_out : undefined;
+  const tokens =
+    input !== undefined || output !== undefined
+      ? { input: input ?? 0, output: output ?? 0 }
+      : undefined;
+  return {
+    childRunId: run.id,
+    status: run.status,
+    output: typeof md.summary === 'string' ? md.summary : undefined,
+    costUsd: typeof md.total_cost_usd === 'number' ? md.total_cost_usd : undefined,
+    tokens,
+    error: typeof md.error === 'string' ? md.error : undefined,
+  };
+}
 
 /**
  * Sequential-session threading cursor. Tagged with the resolved provider that produced
@@ -2965,7 +3045,8 @@ async function executeLoopGroupNode(
   config: WorkflowConfig,
   issueContext?: string,
   stepNamePrefix = '',
-  execContext: ExecutionContext = { kind: 'host' }
+  execContext: ExecutionContext = { kind: 'host' },
+  runChildWorkflow?: RunChildWorkflowFn
 ): Promise<NodeExecutionResult> {
   const group = node.loop_group;
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -3111,6 +3192,9 @@ async function executeLoopGroupNode(
       platform,
       conversationId,
       cwd,
+      // Forwarded for completeness — a `workflow:` node inside a loop_group body is
+      // rejected at load time, so this closure is never actually invoked here.
+      runChildWorkflow,
       workflowRun,
       workflowName: node.id,
       config,
@@ -4837,6 +4921,259 @@ async function executeApprovalNode(
 }
 
 /**
+ * Execute a `workflow:` (sub-run) node (#2121 Phase 2). Starts — or, on parent
+ * resume, re-inspects — a CHILD workflow run and threads its terminal output back
+ * as this node's output. The re-entry table (D5) makes this idempotent and
+ * cross-process-safe:
+ *  - no child yet        → start one in-process, interpret the outcome.
+ *  - child completed     → thread its summary/cost (runLayers writes node_completed).
+ *  - child failed        → resume-through-parent ONCE, then re-interpret.
+ *  - child cancelled     → fail the node.
+ *  - child paused/running → pause the PARENT "blocked on child" WITHOUT writing
+ *    node_completed (mirrors executeApprovalNode), so the node re-runs when the
+ *    parent auto-resumes after the child terminates.
+ */
+async function executeWorkflowNode(
+  node: WorkflowNode,
+  ctx: RunLayersContext
+): Promise<NodeExecutionResult> {
+  const { deps, platform, conversationId, cwd, workflowRun: parentRun } = ctx;
+  const msgContext = { workflowId: parentRun.id, nodeName: node.id };
+
+  // Build the failed result AND persist a node_failed event with the reason. Unlike
+  // command/prompt/bash/script nodes (which write their own node_failed inside their
+  // executor), the workflow node returns a failed NodeExecutionResult that runLayers
+  // does NOT turn into an event — so without this the sub-run failure reason (cycle,
+  // unknown target, cancelled child, …) would be swallowed into the run-level DAG
+  // summary and never auditable per-node. Fire-and-forget like every other event.
+  const failResult = (error: string): NodeExecutionResult => {
+    deps.store
+      .createWorkflowEvent({
+        workflow_run_id: parentRun.id,
+        event_type: 'node_failed',
+        step_name: ctx.stepNamePrefix + node.id,
+        data: { error, type: 'workflow' },
+      })
+      .catch((err: Error) => {
+        getLog().error(
+          { err, workflowRunId: parentRun.id, eventType: 'node_failed' },
+          'workflow.event_persist_failed'
+        );
+      });
+    getWorkflowEventEmitter().emit({
+      type: 'node_failed',
+      runId: parentRun.id,
+      nodeId: node.id,
+      nodeName: node.id,
+      error,
+    });
+    return { state: 'failed', output: '', error };
+  };
+
+  if (!ctx.runChildWorkflow) {
+    // Fail fast: executor.ts MUST inject the closure. A missing one means a caller
+    // wired executeDagWorkflow without sub-run support — never silently no-op.
+    return failResult(
+      "Internal error: 'workflow:' node cannot run — runChildWorkflow closure was not injected."
+    );
+  }
+
+  // Resolve the input data string (workflow vars + $node.output refs), exactly as
+  // prompt/bash nodes resolve their text surface.
+  const rawInput = node.input ?? '';
+  const { prompt: substitutedInput } = substituteWorkflowVariables(
+    rawInput,
+    parentRun.id,
+    parentRun.user_message ?? '',
+    ctx.artifactsDir,
+    ctx.baseBranch,
+    ctx.docsDir,
+    ctx.issueContext
+  );
+  const input = substituteNodeOutputRefs(substitutedInput, ctx.nodeOutputs);
+
+  // Producer's declared field set (only when output_format declares object
+  // properties) so a downstream `$node.output.field` on a JSON-emitting child
+  // resolves declared-optional-absent → '' vs a typo → throw.
+  const declaredFields = declaredFieldsFromSchema(node.output_format);
+  // Build the completed result AND write the node_completed event. Unlike
+  // command/prompt/bash/script nodes (which write their own inside their executor)
+  // and unlike approval nodes (written by the approve handler), the workflow node
+  // writes node_completed HERE — and ONLY on true completion, never on the paused
+  // branch — so getCompletedDagNodeOutputs skips a truly-finished sub-run on resume
+  // but re-runs one still blocked on its child.
+  const asCompleted = (outcome: ChildWorkflowOutcome): NodeExecutionResult => {
+    if (outcome.output === undefined) {
+      // A completed child with no non-blank terminal output threads '' into
+      // $<node>.output — legal, but indistinguishable downstream from an
+      // intentional empty result, so leave a trace for the author.
+      getLog().warn(
+        { parentRunId: parentRun.id, nodeId: node.id, childRunId: outcome.childRunId },
+        'workflow.subrun_completed_without_output'
+      );
+    }
+    const output = outcome.output ?? '';
+    // Fire-and-forget (matches every other event write in this file): the run
+    // lifecycle must not hinge on the observability event. Awaiting it unguarded
+    // would let a transient event-store failure report a successfully-completed
+    // child as a FAILED parent node (it self-heals on resume, but reads wrong). A
+    // lost write just means the node re-runs on resume and re-threads the same
+    // completed child — idempotent.
+    deps.store
+      .createWorkflowEvent({
+        workflow_run_id: parentRun.id,
+        event_type: 'node_completed',
+        step_name: ctx.stepNamePrefix + node.id,
+        data: {
+          node_output: output,
+          type: 'workflow',
+          child_run_id: outcome.childRunId,
+          ...(outcome.costUsd !== undefined ? { cost_usd: outcome.costUsd } : {}),
+        },
+      })
+      .catch((err: Error) => {
+        getLog().error(
+          { err, workflowRunId: parentRun.id, eventType: 'node_completed' },
+          'workflow.event_persist_failed'
+        );
+      });
+    getWorkflowEventEmitter().emit({
+      type: 'node_completed',
+      runId: parentRun.id,
+      nodeId: node.id,
+      nodeName: node.id,
+      // The wrapper node has no meaningful duration of its own — the child run's
+      // own events carry real timing. Emitted as 0 to satisfy NodeCompletedEvent.
+      duration: 0,
+      ...(outcome.costUsd !== undefined ? { costUsd: outcome.costUsd } : {}),
+    });
+    return {
+      state: 'completed',
+      output,
+      ...(outcome.costUsd !== undefined ? { costUsd: outcome.costUsd } : {}),
+      ...(outcome.tokens !== undefined ? { tokens: outcome.tokens } : {}),
+      ...(declaredFields !== undefined ? { declaredFields } : {}),
+    };
+  };
+
+  // Pause the PARENT "blocked on child" — mirrors executeApprovalNode's PAUSE
+  // primitives: pause, emit, return {completed, ''} WITHOUT node_completed so the
+  // node re-runs on the parent's resume (getCompletedDagNodeOutputs reads only
+  // node_completed). The RESUME side deliberately differs: an approval gate is
+  // resolved externally by the approve handler, while this node re-runs and
+  // re-inspects its child. Also unlike the approval node, no approval_requested
+  // workflow_event row is persisted here — the block reason lives on the run
+  // itself (metadata.approval), and there is no human decision to audit for a
+  // gate that resolves automatically on child completion.
+  const pauseParentOnChild = async (childRunId: string): Promise<NodeExecutionResult> => {
+    // KNOWN LIMITATION (#2180): the run has a SINGLE approval-gate slot. If two
+    // gate-pausing nodes (two `workflow:` children, or a `workflow:` + an `approval:`)
+    // land in the SAME topological layer, the second pauseWorkflowRun matches 0 rows
+    // (the first already flipped running→paused) and throws — swallowed into a node
+    // failure the paused run then short-circuits past. The loser's child is real but
+    // unmentioned until a later resume re-pauses on it. A retry can't fix this (there
+    // is nowhere to record a second simultaneous block); the real fix is a gate queue
+    // or a load-time reject of multiple gate-pausing nodes per layer — tracked in #2180.
+    const message =
+      `Sub-run \`${node.workflow}\` (run \`${childRunId.slice(0, 8)}\`) is paused awaiting review. ` +
+      `Approve it by run id: \`/workflow approve ${childRunId}\``;
+    await deps.store.pauseWorkflowRun(parentRun.id, {
+      message,
+      nodeId: node.id,
+      type: 'child_workflow',
+      childRunId,
+    });
+    getWorkflowEventEmitter().emit({
+      type: 'approval_pending',
+      runId: parentRun.id,
+      nodeId: node.id,
+      message,
+    });
+    await safeSendMessage(
+      platform,
+      conversationId,
+      `⏸ **Blocked on sub-run** \`${node.workflow}\`: ${message}`,
+      msgContext
+    );
+    return { state: 'completed', output: '' };
+  };
+
+  const interpret = async (outcome: ChildWorkflowOutcome): Promise<NodeExecutionResult> => {
+    switch (outcome.status) {
+      case 'completed':
+        return asCompleted(outcome);
+      case 'paused':
+        return pauseParentOnChild(outcome.childRunId);
+      case 'failed':
+        return failResult(outcome.error ?? `Sub-run '${node.workflow}' failed`);
+      case 'cancelled':
+        return failResult(`Sub-run '${node.workflow}' was cancelled`);
+      default: {
+        // Compile-time exhaustiveness + runtime fail-loud: without this, a status
+        // outside the union would silently return `undefined` into runLayers.
+        const unreachable: never = outcome.status;
+        return failResult(
+          `Sub-run '${node.workflow}' returned unexpected status '${String(unreachable)}'`
+        );
+      }
+    }
+  };
+
+  // Re-entry: find THIS node's child (a parent may run several workflow: nodes, so
+  // filter by parent_node_id). At most one child per node in slice 1; if somehow
+  // several, the most recent wins.
+  let existing: WorkflowRun | undefined;
+  try {
+    const children = (await deps.store.findChildRuns(parentRun.id)).filter(
+      c => (c.metadata as Record<string, unknown> | undefined)?.parent_node_id === node.id
+    );
+    existing = children.length > 0 ? children[children.length - 1] : undefined;
+  } catch (err) {
+    return failResult(
+      `Failed to look up child runs for node '${node.id}': ${(err as Error).message}`
+    );
+  }
+
+  const childArgs = {
+    parentRun,
+    nodeId: node.id,
+    childWorkflowName: node.workflow,
+    input,
+    cwd,
+    conversationId,
+    conversationDbId: parentRun.conversation_id,
+    userId: parentRun.user_id ?? undefined,
+    codebaseId: parentRun.codebase_id ?? undefined,
+  };
+
+  try {
+    if (existing === undefined) {
+      return await interpret(await ctx.runChildWorkflow(childArgs));
+    }
+    if (existing.status === 'failed') {
+      // Resume-through-parent recovery (D5/#1764): re-drive the failed child once.
+      return await interpret(
+        await ctx.runChildWorkflow({ ...childArgs, resumeFailedChild: existing })
+      );
+    }
+    if (
+      existing.status === 'paused' ||
+      existing.status === 'running' ||
+      existing.status === 'pending'
+    ) {
+      // Still in progress (awaiting a human or a concurrent run). Re-pause the
+      // parent; NEVER resume a paused child.
+      return await pauseParentOnChild(existing.id);
+    }
+    // completed / cancelled — thread the outcome through the same state table a
+    // freshly-run child uses (interpret handles both).
+    return await interpret(childOutcomeFromRun(existing));
+  } catch (err) {
+    return failResult(`Sub-run '${node.workflow}' errored: ${(err as Error).message}`);
+  }
+}
+
+/**
  * True when a node participates in cross-run session persistence: a command/prompt
  * node (see {@link isPersistableNode}) that hasn't opted out via `context: 'fresh'`,
  * with `persist_session: true` set directly or inherited from the workflow-level
@@ -4904,6 +5241,14 @@ interface RunLayersContext {
   platform: IWorkflowPlatform;
   conversationId: string;
   cwd: string;
+  /**
+   * Injected closure that starts a child sub-run for a `workflow:` node (#2121
+   * Phase 2). Undefined when the caller (e.g. a unit test) doesn't wire it — a
+   * `workflow:` node then fails fast rather than silently no-op'ing. Forwarded
+   * into loop_group body contexts too, though a `workflow:` node inside a
+   * loop_group body is rejected at load time.
+   */
+  runChildWorkflow?: RunChildWorkflowFn;
   /** Where nodes in these layers execute (host, or the container in Phase B). Threaded
    *  into every AI turn's SendQueryOptions and every deterministic subprocess. */
   execContext: ExecutionContext;
@@ -5334,7 +5679,8 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               config,
               issueContext,
               stepNamePrefix,
-              execContext
+              execContext,
+              ctx.runChildWorkflow
             );
             return { nodeId: node.id, output };
           }
@@ -5430,6 +5776,17 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                   execContext
                 )
             );
+            return { nodeId: node.id, output };
+          }
+
+          // 3f. Workflow (sub-run) node dispatch — starts/re-inspects a child run
+          // (#2121 Phase 2). Makes no direct provider call; the closure captured on
+          // ctx.runChildWorkflow drives the child's own executeWorkflow. The
+          // output_type sidecar is handled by the shared completed-node path;
+          // node_completed is written inline by executeWorkflowNode itself (see
+          // asCompleted — only on true completion, never on the paused branch).
+          if (isWorkflowNode(node)) {
+            const output = await executeWorkflowNode(node, ctx);
             return { nodeId: node.id, output };
           }
 
@@ -6325,7 +6682,13 @@ export async function executeDagWorkflow(
    * Present only for container runs. Drives suspend-on-pause and the engine-level
    * write-back gate that runs after the last node before the run completes.
    */
-  containerCtx?: ContainerRunContext
+  containerCtx?: ContainerRunContext,
+  /**
+   * Injected closure that starts a child sub-run for a `workflow:` node (#2121
+   * Phase 2). executor.ts is the sole caller and passes it; other callers (unit
+   * tests) may omit it, in which case a `workflow:` node fails fast.
+   */
+  runChildWorkflow?: RunChildWorkflowFn
 ): Promise<string | undefined> {
   const dagStartTime = Date.now();
 
@@ -6470,6 +6833,7 @@ export async function executeDagWorkflow(
     conversationId,
     cwd,
     execContext,
+    runChildWorkflow,
     workflowRun,
     workflowName: workflow.name,
     config,
@@ -6698,12 +7062,30 @@ export async function executeDagWorkflow(
     if (gate === 'paused') return;
   }
 
+  // Terminal output (first sink node, non-blank, definition order) — the run's
+  // "summary". Computed BEFORE completeWorkflowRun so a sub-run can persist it into
+  // its own metadata: a `workflow:` parent re-reads it from there on auto-resume
+  // (the child's executeWorkflow return value is discarded across the human gate).
+  const allDependencies = new Set(workflow.nodes.flatMap(n => n.depends_on ?? []));
+  const terminalOutput = workflow.nodes
+    .filter(n => !allDependencies.has(n.id))
+    .map(n => nodeOutputs.get(n.id))
+    .find(o => o?.state === 'completed' && o.output.trim().length > 0)?.output;
+
   // Update DB and emit completion
   try {
     await deps.store.completeWorkflowRun(workflowRun.id, {
       node_counts: nodeCounts,
       // totalCostUsd starts at 0; only write metadata when at least one node reported cost
       ...(totalCostUsd > 0 ? { total_cost_usd: totalCostUsd } : {}),
+      // Persist token totals (D8) so a `workflow:` parent rolls up tokens as well as
+      // cost. Only when non-zero (telemetry-only fields otherwise).
+      ...(totalTokensIn > 0 ? { total_tokens_in: totalTokensIn } : {}),
+      ...(totalTokensOut > 0 ? { total_tokens_out: totalTokensOut } : {}),
+      // A sub-run persists its terminal summary so the parent can thread it as
+      // `$<node>.output` on re-entry. Gated on parent_run_id to bound metadata
+      // growth to child runs only (top-level runs return the summary directly).
+      ...(workflowRun.parent_run_id && terminalOutput ? { summary: terminalOutput } : {}),
     });
   } catch (dbErr) {
     getLog().error(
@@ -6753,14 +7135,7 @@ export async function executeDagWorkflow(
     });
   emitter.unregisterRun(workflowRun.id);
 
-  // Return the first terminal node's output (nodes with no dependents) for the parent
-  // conversation summary. For the common single-terminal case this is unambiguous; for
-  // multi-terminal DAGs the first completed node in definition order is used.
-  const allDependencies = new Set(workflow.nodes.flatMap(n => n.depends_on ?? []));
-  const terminalOutput = workflow.nodes
-    .filter(n => !allDependencies.has(n.id))
-    .map(n => nodeOutputs.get(n.id))
-    .find(o => o?.state === 'completed' && o.output.trim().length > 0)?.output;
-
+  // terminalOutput (computed above, before the completion write) is the run's
+  // summary for the parent conversation and the `workflow:` re-entry path.
   return terminalOutput;
 }

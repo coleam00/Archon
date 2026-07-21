@@ -17,7 +17,13 @@ mock.module('../db/workflows', () => ({
   listDashboardRuns: mockListDashboardRuns,
 }));
 
-const mockAbandon = mock((_id: string) => Promise.resolve({ id: 'r1abcdef', workflow_name: 'wf' }));
+const mockAbandon = mock((_id: string) =>
+  Promise.resolve({
+    run: { id: 'r1abcdef', workflow_name: 'wf' },
+    cascadeFailures: 0,
+    blockedParentRunId: null,
+  })
+);
 const mockApprove = mock((_id: string, _c?: string) =>
   Promise.resolve({ workflowName: 'wf', type: 'approval_gate' as const })
 );
@@ -291,7 +297,11 @@ describe('manage_run — destructive confirmation gate', () => {
 
   test('cancel with confirm cancels the run using the verified full id', async () => {
     mockFindByPrefix.mockResolvedValue([makeRun()]);
-    mockAbandon.mockResolvedValue({ id: 'r1abcdef-1234', workflow_name: 'archon-assist' });
+    mockAbandon.mockResolvedValue({
+      run: { id: 'r1abcdef-1234', workflow_name: 'archon-assist' },
+      cascadeFailures: 0,
+      blockedParentRunId: null,
+    });
     const tool = buildManageRunTool({ codebaseId: CODEBASE_ID });
     const out = await tool.handler({ action: 'cancel', runId: 'r1abcdef', confirm: true });
     expect(out).toContain('Cancelled');

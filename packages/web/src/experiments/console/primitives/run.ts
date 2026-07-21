@@ -49,6 +49,12 @@ export interface Run {
    * "resuming" hint instead of stale approve/reject buttons.
    */
   gateResolved?: 'approved' | 'rejected' | null;
+  /**
+   * Run-tree parent (#2121 Phase 2). Set when this run is a `workflow:` sub-run
+   * spawned by a parent run's node; null for top-level runs. Drives the "child of"
+   * affordance in the console so a sub-run isn't mistaken for an orphan top-level run.
+   */
+  parentRunId?: string | null;
 }
 
 // Server shapes we read from. These track the real server schema loosely —
@@ -74,6 +80,8 @@ interface RawWorkflowRun {
   codebase_name?: string | null;
   platform_type?: string | null;
   current_step_name?: string | null;
+  /** Run-tree parent id (#2121 Phase 2); null/absent for top-level runs. */
+  parent_run_id?: string | null;
 }
 
 const KNOWN_STATUSES: readonly RunStatus[] = [
@@ -172,5 +180,6 @@ export function toRun(raw: RawWorkflowRun): Run {
     lastTool: null,
     approval: parsedApproval,
     gateResolved,
+    parentRunId: raw.parent_run_id ?? null,
   };
 }

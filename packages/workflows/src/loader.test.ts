@@ -3184,6 +3184,170 @@ nodes:
   // -------------------------------------------------------------------------
   // Include nodes (load-time inlining)
   // -------------------------------------------------------------------------
+  describe('workflow (sub-run) nodes', () => {
+    async function loadOne(name: string, yaml: string) {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      await writeFile(join(workflowDir, `${name}.yaml`), yaml);
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      return result;
+    }
+
+    it('loads a workflow with a valid workflow: node (input + depends_on)', async () => {
+      const result = await loadOne(
+        'compose',
+        `
+name: compose
+description: Composes a sub-run
+nodes:
+  - id: plan
+    prompt: "plan"
+  - id: sub
+    workflow: child-wf
+    input: "$plan.output"
+    depends_on: [plan]
+  - id: after
+    prompt: "after"
+    depends_on: [sub]
+`
+      );
+      const errs = result.errors.filter(e => e.filename === 'compose.yaml');
+      expect(errs).toHaveLength(0);
+      const wf = result.workflows.find(w => w.workflow.name === 'compose');
+      expect(wf).toBeDefined();
+      const sub = wf!.workflow.nodes.find(n => n.id === 'sub');
+      expect(sub && 'workflow' in sub ? sub.workflow : undefined).toBe('child-wf');
+      expect(sub && 'input' in sub ? sub.input : undefined).toBe('$plan.output');
+      // A workflow: node is NOT expanded at load time (unlike include:).
+      expect(wf!.workflow.nodes.some(n => n.id === 'sub')).toBe(true);
+    });
+
+    it('catches a workflow.input $output ref to an unknown node', async () => {
+      const result = await loadOne(
+        'bad-ref',
+        `
+name: bad-ref
+description: input references a node that does not exist
+nodes:
+  - id: sub
+    workflow: child-wf
+    input: "$ghost.output"
+`
+      );
+      const err = result.errors.find(e => e.filename === 'bad-ref.yaml');
+      expect(err).toBeDefined();
+      expect(err?.error).toContain("references unknown node '$ghost.output'");
+    });
+
+    it("rejects 'with:' on a workflow node (deferred to slice 2)", async () => {
+      const result = await loadOne(
+        'with-reject',
+        `
+name: with-reject
+description: with on a workflow node
+nodes:
+  - id: sub
+    workflow: child-wf
+    with:
+      foo: bar
+`
+      );
+      const err = result.errors.find(e => e.filename === 'with-reject.yaml');
+      expect(err).toBeDefined();
+      expect(err?.error).toContain("'with:'");
+    });
+
+    it("rejects 'retry:' on a workflow node", async () => {
+      const result = await loadOne(
+        'retry-reject',
+        `
+name: retry-reject
+description: retry on a workflow node
+nodes:
+  - id: sub
+    workflow: child-wf
+    retry:
+      max_attempts: 2
+`
+      );
+      const err = result.errors.find(e => e.filename === 'retry-reject.yaml');
+      expect(err).toBeDefined();
+      expect(err?.error).toContain("'retry' is not supported on workflow nodes");
+    });
+
+    it("rejects isolation: 'worktree' on a workflow node (reserved for slice 2)", async () => {
+      const result = await loadOne(
+        'iso-reject',
+        `
+name: iso-reject
+description: isolation worktree on a workflow node
+nodes:
+  - id: sub
+    workflow: child-wf
+    isolation: worktree
+`
+      );
+      const err = result.errors.find(e => e.filename === 'iso-reject.yaml');
+      expect(err).toBeDefined();
+      expect(err?.error).toContain('worktree');
+    });
+
+    it("accepts isolation: 'inherit' on a workflow node", async () => {
+      const result = await loadOne(
+        'iso-ok',
+        `
+name: iso-ok
+description: isolation inherit is fine
+nodes:
+  - id: sub
+    workflow: child-wf
+    isolation: inherit
+`
+      );
+      const errs = result.errors.filter(e => e.filename === 'iso-ok.yaml');
+      expect(errs).toHaveLength(0);
+    });
+
+    it('rejects a workflow node inside a loop_group body', async () => {
+      const result = await loadOne(
+        'wf-in-loop-group',
+        `
+name: wf-in-loop-group
+description: workflow node nested in a loop_group body (rejected in slice 1)
+nodes:
+  - id: grp
+    loop_group:
+      until: DONE
+      max_iterations: 3
+      nodes:
+        - id: bad
+          workflow: child-wf
+`
+      );
+      const err = result.errors.find(e => e.filename === 'wf-in-loop-group.yaml');
+      expect(err).toBeDefined();
+      expect(err?.error).toContain('loop_group');
+      expect(err?.error).toContain("'workflow' (sub-run) is not supported");
+    });
+
+    it('rejects a node that sets both workflow and prompt (mutual exclusion)', async () => {
+      const result = await loadOne(
+        'both',
+        `
+name: both
+description: workflow and prompt together
+nodes:
+  - id: sub
+    workflow: child-wf
+    prompt: "also a prompt"
+`
+      );
+      const err = result.errors.find(e => e.filename === 'both.yaml');
+      expect(err).toBeDefined();
+      expect(err?.error).toMatch(/mutually exclusive/i);
+    });
+  });
+
   describe('include nodes', () => {
     it('should load and expand a workflow with an include node', async () => {
       const workflowDir = join(testDir, '.archon', 'workflows');

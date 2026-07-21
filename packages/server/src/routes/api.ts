@@ -107,6 +107,7 @@ import * as workflowEventDb from '@archon/core/db/workflow-events';
 import * as messageDb from '@archon/core/db/messages';
 import * as userDb from '@archon/core/db/users';
 import {
+  abandonWorkflow,
   approveWorkflow,
   rejectWorkflow,
   resetWorkflowNodeSessions,
@@ -3229,8 +3230,8 @@ export function registerApiRoutes(
       }
       // A `failed` run is terminal per TERMINAL_WORKFLOW_STATUSES but remains
       // resumable, so the user must be able to discard it — only the two
-      // non-resumable terminal states are blocked. Mirrors abandonWorkflow in
-      // workflow-operations.ts so the HTTP route agrees with CLI/chat (#1887).
+      // non-resumable terminal states are blocked (the 400 mapping lives here;
+      // abandonWorkflow re-validates).
       if (run.status === 'completed' || run.status === 'cancelled') {
         return apiError(
           c,
@@ -3238,8 +3239,18 @@ export function registerApiRoutes(
           `Cannot abandon run with status '${run.status}'. Only running, paused, or failed runs can be abandoned.`
         );
       }
-      await workflowDb.cancelWorkflowRun(runId);
-      return c.json({ success: true, message: `Abandoned workflow: ${run.workflow_name}` });
+      // Delegate to the SHARED op — a raw cancelWorkflowRun here previously skipped
+      // the sub-run cascade cancel AND the container reclaim (M2), so a web abandon
+      // orphaned children that CLI/chat abandons cleaned up.
+      const { cascadeFailures, blockedParentRunId } = await abandonWorkflow(runId);
+      let message = `Abandoned workflow: ${run.workflow_name}`;
+      if (cascadeFailures > 0) {
+        message += ` — warning: ${String(cascadeFailures)} sub-run(s) could not be cancelled and may still be running`;
+      }
+      if (blockedParentRunId) {
+        message += ` — parent run ${blockedParentRunId} was blocked on this sub-run and stays paused; resume it to fail the node cleanly or abandon it too`;
+      }
+      return c.json({ success: true, message });
     } catch (error) {
       getLog().error({ err: error, runId }, 'api.workflow_run_abandon_failed');
       return apiError(c, 500, 'Failed to abandon workflow run');
@@ -3261,6 +3272,16 @@ export function registerApiRoutes(
       const approval = isApprovalContext(approvalRaw) ? approvalRaw : undefined;
       if (!approval?.nodeId) {
         return apiError(c, 400, 'Workflow run is paused but missing approval context');
+      }
+      if (approval.type === 'child_workflow') {
+        // Not an approvable gate — the parent resumes automatically when the child
+        // completes. approveWorkflow throws the same redirect; map it to a 400
+        // here so the console gets the message instead of an opaque 500.
+        return apiError(
+          c,
+          400,
+          `Run is paused waiting on sub-run ${approval.childRunId ?? '<unknown>'}. Approve or reject the child run instead.`
+        );
       }
       if (isGateResolved(approval)) {
         // Post-#2075 the run stays 'paused' after approval, so status alone no
@@ -3332,6 +3353,15 @@ export function registerApiRoutes(
       }
       const approvalRaw = run.metadata.approval;
       const approval = isApprovalContext(approvalRaw) ? approvalRaw : undefined;
+      if (approval?.type === 'child_workflow') {
+        // Mirror of the approve route's guard — rejectWorkflow throws the same
+        // redirect; map it to a 400 with the child pointer.
+        return apiError(
+          c,
+          400,
+          `Run is paused waiting on sub-run ${approval.childRunId ?? '<unknown>'}. Reject the child run instead, or abandon this run to discard the whole tree.`
+        );
+      }
       if (approval && isGateResolved(approval)) {
         return apiError(
           c,

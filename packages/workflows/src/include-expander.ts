@@ -36,6 +36,7 @@ import {
   isCancelNode,
   isBashNode,
   isScriptNode,
+  isWorkflowNode,
 } from './schemas';
 import { createLogger } from '@archon/paths';
 import { validateDagStructure } from './loader';
@@ -131,8 +132,8 @@ class IncludeExpansionError extends Error {}
  *     `$verify.exit_code` pointing at a renamed sibling (silent fail-closed skip).
  *   - Prose (prompt / loop.prompt / approval.message) — canonical `.output` refs, but may
  *     embed fenced/inline code examples that must NOT be rewritten → fence-aware.
- *   - Code/expression (bash / script / loop.until_bash / loop_group.until_bash / cancel) —
- *     canonical `.output` refs are LIVE (never documentation) → rewritten verbatim.
+ *   - Code/expression (bash / script / loop.until_bash / loop_group.until_bash / cancel /
+ *     workflow.input) — canonical `.output` refs are LIVE (never documentation) → rewritten verbatim.
  *
  * KEEP IN SYNC (three ref-surface enumerations must agree): this rewrite, the loader's
  * validateDagStructure scan, and the substituteNodeOutputRefs call sites in dag-executor.ts.
@@ -162,6 +163,10 @@ function rewriteNodeOutputRefs(node: DagNode, rename: (id: string) => string): v
     node.bash = code(node.bash);
   } else if (isScriptNode(node)) {
     node.script = code(node.script);
+  } else if (isWorkflowNode(node)) {
+    // workflow.input is a live code/expression ref surface (a data string), so
+    // refs inside an included block's `workflow:` node namespace verbatim.
+    if (node.input !== undefined) node.input = code(node.input);
   } else if (isCancelNode(node)) {
     node.cancel = code(node.cancel);
   } else if ('prompt' in node && typeof node.prompt === 'string') {

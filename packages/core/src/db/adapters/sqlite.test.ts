@@ -410,6 +410,21 @@ describe('SqliteAdapter', () => {
       const missing = expected.filter(name => !sqliteTables.has(name)).sort();
       expect(missing).toEqual([]);
     });
+
+    /**
+     * The generic table-parity test above is table-name only — it gives no
+     * column coverage. `parent_run_id` (#2121 Phase 2) is added to BOTH schema
+     * sources (sqlite.ts createSchema + runtime ALTER, and 000_combined.sql). A
+     * column added to only one dialect is invisible on the default-SQLite path
+     * (VPS runs Postgres), so assert the fresh-schema column + its index exist.
+     */
+    test('parent_run_id column + index present on a fresh SQLite schema', () => {
+      db = createTestDb();
+      const workflowRunCols = raw_pragma(currentDbPath, 'remote_agent_workflow_runs');
+      expect(workflowRunCols).toContain('parent_run_id');
+      const indexes = raw_indexes(currentDbPath);
+      expect(indexes).toContain('idx_workflow_runs_parent_run');
+    });
   });
 });
 

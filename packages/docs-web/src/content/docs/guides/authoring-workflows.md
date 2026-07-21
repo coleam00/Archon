@@ -35,7 +35,7 @@ nodes:
     context: fresh
 ```
 
-> **Using defaults as templates:** Archon ships default workflows in `.archon/workflows/defaults/` (12 bundled into the binary, plus additional ones available on disk in source builds). Browse them for real-world examples, then copy and modify:
+> **Using defaults as templates:** Archon ships default workflows in `.archon/workflows/defaults/` (21 bundled into the binary; source builds also load them from disk). Browse them for real-world examples, then copy and modify:
 > ```bash
 > cp .archon/workflows/defaults/archon-fix-github-issue.yaml .archon/workflows/my-fix-issue.yaml
 > ```
@@ -191,6 +191,7 @@ nodes:
 | `approval` | object | Pauses workflow for human review. See [Approval Nodes](/guides/approval-nodes/) |
 | `cancel` | string | Terminates the workflow run with a reason string. Uses existing cancellation plumbing — in-flight parallel nodes are stopped |
 | `include` | string | Name of another workflow whose nodes are inlined into this DAG at load time as a namespaced sub-DAG. See [Reusing a Shared Sub-DAG](#reusing-a-shared-sub-dag-with-include) |
+| `workflow` | string | Name of another workflow to run as a governed **child sub-run** at execution time — its own run record, gates, artifacts, and cost. Optional `input` (data string). See [Composing a Governed Sub-Run](#composing-a-governed-sub-run-with-workflow) |
 
 **Common fields** — apply to all node types:
 
@@ -858,6 +859,90 @@ written the nodes by hand. There is no separate child run.
 A workflow used purely as a building block (like `archon-review-block`) still appears in
 `archon workflow list`. Mark it as a building block in its `description:` so it isn't picked
 for a standalone run.
+
+---
+
+## Composing a Governed Sub-Run with `workflow:`
+
+A `workflow:` node runs another workflow as a **child sub-run** — a genuinely separate
+`workflow_runs` record with its own artifacts directory, its own approval gates, its own
+cost line, and its own audit trail. The child's terminal output threads back into the
+parent as `$<nodeId>.output`, exactly like any other node.
+
+```yaml
+nodes:
+  - id: plan
+    prompt: "Plan the change described in $ARGUMENTS."
+    context: fresh
+
+  # `workflow:` names any discovered workflow (bundled / global / repo) to run as a
+  # child sub-run; `qa-block` here is a placeholder for your own workflow file.
+  # Its terminal output becomes $implement-qa.output.
+  - id: implement-qa
+    workflow: qa-block
+    input: "$plan.output"
+    depends_on: [plan]
+
+  - id: summarize
+    prompt: "Summarize the sub-run result:\n\n$implement-qa.output"
+    depends_on: [implement-qa]
+    context: fresh
+```
+
+### `include:` vs `workflow:` — which to use
+
+Both reuse another workflow. They differ in **governance**, not syntax:
+
+| | `include:` (load-time) | `workflow:` (run-time) |
+|---|---|---|
+| Run record | One — the block's nodes flatten into the parent's run | Two — the child gets its own `workflow_runs` row |
+| Artifacts / cost / resume | Shared with the parent | The child's own, separate |
+| Approval gate | The parent's single gate | The child pauses at **its own** gate, approved by the child's run id |
+| Output access | `$includeId.output` (terminal only) | `$nodeId.output` (child's terminal) |
+| When to reach for it | Textual reuse of a shared block (e.g. a review sub-DAG) | The block must be a separate **governance object** — separately auditable, gated, and cost-tracked |
+
+Rule of thumb: **`include:` for reuse, `workflow:` for a governed, separately-auditable
+sub-pipeline.**
+
+### Shared checkout, gates, and resume
+
+- **Shared checkout.** In this first slice the child runs in the **parent's checkout**
+  (`isolation: inherit`, the only accepted value — `isolation: worktree` is reserved and
+  rejected at load time). This is correct for sequential composition (plan → implement →
+  QA in one working tree). Per-child worktrees, parallel fan-out, and racing are a later
+  slice.
+- **Gates pause the whole tree.** When the child hits an approval gate, the child run
+  pauses **and** the parent pauses "blocked on child". A reviewer approves the **child** by
+  its own run id (`/workflow approve <childRunId>` — shown in the pause message). When the
+  child completes, the parent **auto-resumes** in-process, re-runs the `workflow:` node,
+  finds the child finished, and threads its output onward. Because the parent pauses at a
+  gate, mark a parent that contains a `workflow:` node with `interactive: true` so it runs
+  in the foreground on the web UI.
+- **Failure & recovery.** A failed child fails the node and the parent run. Recovery is
+  resume-through-parent: `/workflow resume <parentRunId>` re-drives the failed child once.
+  `retry:` is **not** allowed on a `workflow:` node (a retry would orphan the first child
+  run).
+- **Cancel cascade.** Abandoning the parent cancels its non-terminal descendants
+  cooperatively (their executors abort at the next status check, within ~10s — there is no
+  hard subprocess kill yet).
+- **Cost roll-up.** The child's total cost rolls up into the `workflow:` node's cost and
+  the parent's aggregate, and `parent_run_id` on the child row makes the run tree visible
+  in `archon workflow runs` and the console.
+
+### Non-goals (this slice)
+
+- **No `with:` named-parameter mapping** — use `input:` (a single data string). A
+  `workflow:` node with a `with:` key is rejected with a clear error.
+- **No dynamic fan-out / variable N**, **no `isolation: worktree`**, and **no racing** —
+  all reserved for a later slice.
+- **Not inside a `loop_group` body** — rejected at load time.
+- **Static target only.** `workflow:` takes a literal workflow name — no
+  `workflow: $something`. Self-reference and ancestor cycles (`A` → `B` → `A`) are rejected
+  at run time, and the sub-run tree is depth-capped.
+- **One blocking child gate at a time.** Two `workflow:` nodes in the same DAG layer
+  whose children both pause contend for the parent run's single approval slot — the
+  second pause fails its node. Sequence gated sub-runs with `depends_on` until a later
+  slice adds real concurrent gating.
 
 ---
 

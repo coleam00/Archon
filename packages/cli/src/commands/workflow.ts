@@ -2373,7 +2373,7 @@ export async function workflowAbandonCommand(
   if (json) {
     try {
       const resolvedId = await resolveRunIdArg(runId, cwd);
-      const run = await abandonWorkflow(resolvedId);
+      const { run, cascadeFailures, blockedParentRunId } = await abandonWorkflow(resolvedId);
       console.log(
         JSON.stringify(
           {
@@ -2382,6 +2382,8 @@ export async function workflowAbandonCommand(
             action: 'abandon',
             status: 'cancelled',
             workflowName: run.workflow_name,
+            ...(cascadeFailures > 0 ? { cascadeFailures } : {}),
+            ...(blockedParentRunId ? { blockedParentRunId } : {}),
           },
           null,
           2
@@ -2394,9 +2396,22 @@ export async function workflowAbandonCommand(
   }
 
   const resolvedId = await resolveRunIdArg(runId, cwd);
-  const run = await abandonWorkflow(resolvedId);
+  const { run, cascadeFailures, blockedParentRunId } = await abandonWorkflow(resolvedId);
   console.log(`Abandoned workflow run: ${resolvedId}`);
   console.log(`Workflow: ${run.workflow_name}`);
+  if (cascadeFailures > 0) {
+    console.log(
+      `Warning: ${String(cascadeFailures)} sub-run(s) could not be cancelled and may still be running — check \`archon workflow status\`.`
+    );
+  }
+  if (blockedParentRunId) {
+    console.log(
+      `Warning: parent run ${blockedParentRunId} was blocked on this sub-run and stays paused.`
+    );
+    console.log(
+      `  Resume it to fail the node cleanly (archon workflow resume ${blockedParentRunId}) or abandon it too.`
+    );
+  }
 }
 
 /**

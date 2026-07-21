@@ -802,11 +802,15 @@ async function handleWorkflowCommand(
         };
       }
       try {
-        const run = await abandonWorkflow(runId);
-        return {
-          success: true,
-          message: `Abandoned workflow run \`${run.workflow_name}\` (${runId})`,
-        };
+        const { run, cascadeFailures, blockedParentRunId } = await abandonWorkflow(runId);
+        let message = `Abandoned workflow run \`${run.workflow_name}\` (${runId})`;
+        if (cascadeFailures > 0) {
+          message += `\n⚠️ ${String(cascadeFailures)} sub-run(s) could not be cancelled and may still be running — check /workflow status.`;
+        }
+        if (blockedParentRunId) {
+          message += `\n⚠️ Parent run ${blockedParentRunId} was blocked on this sub-run and stays paused. Resume it to fail the node cleanly, or abandon it too.`;
+        }
+        return { success: true, message };
       } catch (error) {
         const err = error as Error;
         getLog().error({ err, runId }, 'cmd.workflow_abandon_failed');

@@ -459,7 +459,38 @@ export type IncludeNode = z.infer<typeof includeNodeSchema> & {
   script?: never;
 };
 
-/** A single node in a DAG workflow. command, prompt, bash, loop, loop_group, approval, cancel, script, and include are mutually exclusive. */
+/**
+ * Workflow (sub-run) node schema — starts another workflow as a CHILD RUN of the
+ * current run at execution time (see executeWorkflowNode in dag-executor.ts). Unlike
+ * `include:` (which flattens another workflow's nodes into ONE run at load time), a
+ * `workflow:` node spawns a genuinely separate `workflow_runs` row with its own
+ * artifacts, gates, cost line, and audit trail (#2121 Phase 2). `workflow` is the
+ * static target name; `input` is a data string (workflow-vars + `$node.output`
+ * substituted) forwarded as the child's user message. `isolation` is reserved for
+ * slice 2 (per-child worktree) — only `'inherit'` (the shared-checkout default) is
+ * accepted today. `output_format`/`output_type` from the base stay meaningful (the
+ * child's terminal output threads back as `$<id>.output`, field-accessible when a
+ * schema is declared and the child emits JSON).
+ */
+export const workflowNodeSchema = dagNodeBaseSchema.extend({
+  workflow: z.string().min(1, "'workflow' must be a non-empty workflow name"),
+  input: z.string().optional(),
+  isolation: z.literal('inherit').optional(),
+});
+
+/** DAG node that runs another workflow as a governed child sub-run at execution time */
+export type WorkflowNode = z.infer<typeof workflowNodeSchema> & {
+  command?: never;
+  prompt?: never;
+  bash?: never;
+  loop?: never;
+  loop_group?: never;
+  approval?: never;
+  cancel?: never;
+  script?: never;
+};
+
+/** A single node in a DAG workflow. command, prompt, bash, loop, loop_group, approval, cancel, script, include, and workflow are mutually exclusive. */
 export type DagNode =
   | CommandNode
   | PromptNode
@@ -469,7 +500,8 @@ export type DagNode =
   | ApprovalNode
   | CancelNode
   | ScriptNode
-  | IncludeNode;
+  | IncludeNode
+  | WorkflowNode;
 
 // ---------------------------------------------------------------------------
 // AI-specific fields that are meaningless on non-AI nodes
@@ -541,6 +573,19 @@ export const INCLUDE_NODE_IGNORED_FIELDS: readonly string[] = [
   'timeout',
 ];
 
+/**
+ * Fields that are meaningless on a workflow (sub-run) node — it starts a child
+ * run and makes no direct provider call, so every AI-turn field is ignored (the
+ * child's own nodes carry theirs). `output_format` is deliberately EXCLUDED from
+ * this list (unlike bash/include): it stays meaningful so `$<id>.output.field`
+ * works against a child that emits JSON. `output_type` (typed sidecar) and the
+ * structural graph fields (id / depends_on / when / trigger_rule / description /
+ * input / isolation) are likewise meaningful and absent here.
+ */
+export const WORKFLOW_NODE_IGNORED_FIELDS: readonly string[] = BASH_NODE_AI_FIELDS.filter(
+  f => f !== 'output_format'
+);
+
 // ---------------------------------------------------------------------------
 // dagNodeSchema — flat validation schema with transform to DagNode
 // ---------------------------------------------------------------------------
@@ -578,8 +623,16 @@ export const dagNodeSchema = dagNodeBaseSchema
     cancel: z.string().optional(),
     // Load-time inlining directive — the target workflow name.
     include: z.string().min(1, "'include' must be a non-empty workflow name").optional(),
+    // Runtime sub-run directive (#2121 Phase 2) — the child workflow name.
+    workflow: z.string().min(1, "'workflow' must be a non-empty workflow name").optional(),
+    // Sub-run input data string (workflow-var + $node.output substituted) forwarded
+    // as the child's user_message.
+    input: z.string().optional(),
+    // Per-child isolation. `'inherit'` (shared parent checkout) is the only value in
+    // slice 1; `'worktree'` is validated + rejected in superRefine (reserved slice 2).
+    isolation: z.enum(['inherit', 'worktree']).optional(),
     // Reserved for Phase 1b input mapping. Present only so the superRefine below can
-    // fail fast when it appears on an include node ("not yet supported").
+    // fail fast when it appears on an include or workflow node ("not yet supported").
     with: z.unknown().optional(),
     // Script-only
     script: z.string().optional(),
@@ -610,6 +663,7 @@ export const dagNodeSchema = dagNodeBaseSchema
     const hasCancel = typeof data.cancel === 'string' && data.cancel.trim().length > 0;
     const hasScript = typeof data.script === 'string' && data.script.trim().length > 0;
     const hasInclude = typeof data.include === 'string' && data.include.trim().length > 0;
+    const hasWorkflow = typeof data.workflow === 'string' && data.workflow.trim().length > 0;
 
     const modeCount = [
       hasCommand,
@@ -621,26 +675,56 @@ export const dagNodeSchema = dagNodeBaseSchema
       hasCancel,
       hasScript,
       hasInclude,
+      hasWorkflow,
     ].filter(Boolean).length;
 
     if (modeCount > 1) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message:
-          "'command', 'prompt', 'bash', 'loop', 'loop_group', 'approval', 'cancel', 'script', and 'include' are mutually exclusive",
+          "'command', 'prompt', 'bash', 'loop', 'loop_group', 'approval', 'cancel', 'script', 'include', and 'workflow' are mutually exclusive",
       });
       return z.NEVER;
     }
 
-    // 'with:' input mapping is deferred to Phase 1b — reject it now with a clear
-    // message rather than silently dropping it (fail-fast). Only meaningful on an
-    // include node; on other node types 'with' is an unknown field and is stripped.
+    // 'with:' input mapping is deferred (Phase 1b for include; slice 2 for workflow)
+    // — reject it now with a clear message rather than silently dropping it
+    // (fail-fast). Only meaningful on include/workflow nodes; elsewhere 'with' is an
+    // unknown field and is stripped.
     if (hasInclude && data.with !== undefined) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message:
           "'with:' input mapping is not yet supported on include nodes (Phase 1). Remove it.",
         path: ['with'],
+      });
+    }
+    if (hasWorkflow && data.with !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "'with:' named-parameter mapping is not yet supported on workflow nodes (slice 2). Use 'input:' instead.",
+        path: ['with'],
+      });
+    }
+    // 'retry:' on a workflow node would spawn a NEW child run and orphan the first —
+    // recovery is resume-through-parent, not retry (#1764). Reject fail-fast.
+    if (hasWorkflow && data.retry !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "'retry' is not supported on workflow nodes (a retry would orphan the first child run — resume through the parent instead)",
+        path: ['retry'],
+      });
+    }
+    // Per-child worktree isolation is a slice-2 capability (needs an injected
+    // isolation resolver). Reserve the field but reject 'worktree' now.
+    if (hasWorkflow && data.isolation === 'worktree') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "isolation: 'worktree' is not yet supported on workflow nodes (slice 2). The child shares the parent's checkout ('inherit').",
+        path: ['isolation'],
       });
     }
 
@@ -672,7 +756,7 @@ export const dagNodeSchema = dagNodeBaseSchema
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message:
-          "must have either 'command', 'prompt', 'bash', 'loop', 'loop_group', 'approval', 'cancel', 'script', or 'include'",
+          "must have either 'command', 'prompt', 'bash', 'loop', 'loop_group', 'approval', 'cancel', 'script', 'include', or 'workflow'",
       });
       return z.NEVER;
     }
@@ -840,6 +924,22 @@ export const dagNodeSchema = dagNodeBaseSchema
       // the loader warns about them via INCLUDE_NODE_IGNORED_FIELDS.
       return { ...structuralBase, include: data.include.trim() } as IncludeNode;
     }
+    if (data.workflow !== undefined && data.workflow.trim().length > 0) {
+      // A workflow (sub-run) node makes no direct provider call, so it carries only
+      // the structural graph fields plus the sub-run surface: the target name, the
+      // input data string, the reserved isolation mode, and the output typing fields
+      // (output_type → typed sidecar; output_format → `$id.output.field` on a JSON
+      // child). aiOnly / shared(retry) / exec-only base fields are dropped; the loader
+      // warns about them via WORKFLOW_NODE_IGNORED_FIELDS.
+      return {
+        ...structuralBase,
+        ...(data.output_type !== undefined ? { output_type: data.output_type } : {}),
+        ...(data.output_format !== undefined ? { output_format: data.output_format } : {}),
+        workflow: data.workflow.trim(),
+        ...(data.input !== undefined ? { input: data.input } : {}),
+        ...(data.isolation !== undefined ? { isolation: data.isolation } : {}),
+      } as WorkflowNode;
+    }
     // loop_group — guaranteed by superRefine to be defined at this point.
     // Spread aiOnly so group-level model/provider survive parsing — the executor forwards
     // them to body AI nodes unless overridden per-node ('loop:' historically drops them at
@@ -903,6 +1003,11 @@ export function isIncludeNode(node: DagNode): node is IncludeNode {
   return 'include' in node && typeof node.include === 'string';
 }
 
+/** Type guard: check if a DAG node is a workflow (runtime sub-run) node */
+export function isWorkflowNode(node: DagNode): node is WorkflowNode {
+  return 'workflow' in node && typeof node.workflow === 'string';
+}
+
 /** Type guard: validates a value is a known TriggerRule */
 export function isTriggerRule(value: unknown): value is TriggerRule {
   return typeof value === 'string' && (TRIGGER_RULES as readonly string[]).includes(value);
@@ -924,6 +1029,7 @@ export function isPersistableNode(node: DagNode): boolean {
     !isCancelNode(node) &&
     !isScriptNode(node) &&
     !isBashNode(node) &&
-    !isIncludeNode(node)
+    !isIncludeNode(node) &&
+    !isWorkflowNode(node)
   );
 }
