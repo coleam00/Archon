@@ -3613,7 +3613,8 @@ export interface components {
         interactive?: boolean;
         gate_message?: string;
         signal_completes?: boolean;
-        prompt: string;
+        prompt?: string;
+        command?: string;
       };
       loop_group?: {
         until: string;
