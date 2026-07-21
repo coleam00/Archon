@@ -348,7 +348,7 @@ EOF
 
 ## Phase 8: PR - Create Pull Request
 
-**Before creating a PR**, check if one already exists for this issue or branch using `gh pr list`. If a PR already exists, skip creation and use the existing one.
+**Before creating a PR**, check if one already exists for this issue or branch using `gh pr list --repo "$ORIGIN_REPO"` (resolve `ORIGIN_REPO=$(git remote get-url origin | sed -E 's#^.*[:/]([^/]+/[^/]+)$#\1#; s#\.git$##')` in the same shell — in a fork clone, gh otherwise targets the upstream parent). If a PR already exists, skip creation and use the existing one.
 
 ### 8.1 Push to Remote
 

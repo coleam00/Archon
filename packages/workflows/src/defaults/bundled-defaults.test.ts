@@ -120,10 +120,16 @@ describe('bundled-defaults', () => {
   });
 
   describe('fork-safe PR creation (#2226)', () => {
-    // In a clone of a fork, `gh pr create` without an explicit --repo resolves
-    // the base repo to the fork's UPSTREAM parent, publishing the user's diff
+    // In a clone of a fork, gh commands without an explicit --repo resolve the
+    // base repo to the fork's UPSTREAM parent, publishing the user's diff
     // against the upstream repo (accidental upstream PRs #1543/#1416). Every
-    // `gh pr create` invocation in the bundled defaults must pin `--repo`.
+    // `gh pr create` invocation in the bundled defaults must pin `--repo` —
+    // and so must the create-flow-adjacent `gh pr list/edit/ready` calls that
+    // discover or mutate the just-created PR (an empty/unset --repo value does
+    // NOT fail: gh silently falls back to its default resolution, verified).
+    // `gh pr view` is intentionally NOT guarded here: review-path commands
+    // (archon-pr-review-scope etc.) view explicit PR numbers supplied as
+    // workflow input — pinning those is a separate concern.
 
     // Join backslash-continued shell lines so multi-line `gh pr create \`
     // blocks are checked as a single command.
@@ -142,10 +148,12 @@ describe('bundled-defaults', () => {
       return merged;
     };
 
+    const GUARDED = /gh pr (create|list|edit|ready)\b/;
+
     const assertPinned = (bundle: Record<string, string>): void => {
       for (const [name, content] of Object.entries(bundle)) {
         for (const line of mergeContinuations(content)) {
-          if (!line.includes('gh pr create')) continue;
+          if (!GUARDED.test(line)) continue;
           // Prose references to a failed command (hook texts) are not invocations.
           if (line.includes('gh pr create failed')) continue;
           expect(`${name}: ${line.trim()}`).toContain('--repo');
@@ -153,11 +161,11 @@ describe('bundled-defaults', () => {
       }
     };
 
-    it('every gh pr create in bundled commands pins --repo', () => {
+    it('every gh pr create/list/edit/ready in bundled commands pins --repo', () => {
       assertPinned(BUNDLED_COMMANDS);
     });
 
-    it('every gh pr create in bundled workflows pins --repo', () => {
+    it('every gh pr create/list/edit/ready in bundled workflows pins --repo', () => {
       assertPinned(BUNDLED_WORKFLOWS);
     });
   });

@@ -228,6 +228,7 @@ Nothing to create a PR for.
 ### Branch Already Has PR
 
 ```bash
+ORIGIN_REPO=$(git remote get-url origin | sed -E 's#^.*[:/]([^/]+/[^/]+)$#\1#; s#\.git$##')
 gh pr view --repo "$ORIGIN_REPO" --web
 ```
 

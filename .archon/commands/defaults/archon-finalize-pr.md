@@ -206,6 +206,7 @@ gh pr create \
 **If PR already exists**, update it:
 
 ```bash
+ORIGIN_REPO=$(git remote get-url origin | sed -E 's#^.*[:/]([^/]+/[^/]+)$#\1#; s#\.git$##')
 gh pr edit {pr-number} --repo "$ORIGIN_REPO" --body-file $ARTIFACTS_DIR/pr-body.md
 ```
 
@@ -214,12 +215,14 @@ gh pr edit {pr-number} --repo "$ORIGIN_REPO" --body-file $ARTIFACTS_DIR/pr-body.
 If PR was created as draft, mark ready:
 
 ```bash
+ORIGIN_REPO=$(git remote get-url origin | sed -E 's#^.*[:/]([^/]+/[^/]+)$#\1#; s#\.git$##')
 gh pr ready {pr-number} --repo "$ORIGIN_REPO" 2>/dev/null || true
 ```
 
 ### 3.4 Capture PR Info
 
 ```bash
+ORIGIN_REPO=$(git remote get-url origin | sed -E 's#^.*[:/]([^/]+/[^/]+)$#\1#; s#\.git$##')
 gh pr view --repo "$ORIGIN_REPO" --json number,url,headRefName,baseRefName
 ```
 
@@ -395,7 +398,8 @@ Check:
 ```
 ❌ PR not found: #{number}
 
-The draft PR may have been closed or deleted. Create a new one:
+The draft PR may have been closed or deleted. Create a new one
+(re-run the `ORIGIN_REPO=...` resolve line first — it does not persist across shells):
 `gh pr create --repo "$ORIGIN_REPO" --title "..." --body "..."`
 ```
 
