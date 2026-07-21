@@ -554,6 +554,7 @@ async function runChildWorkflow(
     userId,
     codebaseId,
     isolation,
+    childIndex,
     resumeFailedChild,
   } = args;
 
@@ -648,6 +649,7 @@ async function runChildWorkflow(
       childIsolationEnv = await resolveChildIsolation.resolve({
         parentRun,
         nodeId,
+        childIndex,
         codebaseId,
       });
       childCwd = childIsolationEnv.cwd;
@@ -697,6 +699,11 @@ async function runChildWorkflow(
         user_id: userId,
         metadata: {
           parent_node_id: nodeId,
+          // Fan-out instance index (slice 2, PR-C) — stamped only for a fan-out child so
+          // parent resume can re-key the ordered instance set by index (findChildRuns is
+          // started_at-ordered, which ≠ items order under max_parallel concurrency). A
+          // single (non-fan-out) child carries no child_index.
+          ...(childIndex !== undefined ? { child_index: childIndex } : {}),
           // Record the child's own worktree env + branch (mirrors the container path's
           // isolation_env_id) so `isolation list` correlation + PR-E console grouping
           // can find it. Absent for `inherit`/shared-checkout children.
