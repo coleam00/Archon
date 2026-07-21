@@ -1883,8 +1883,22 @@ branch refs/heads/feature/auth
       expect(execSpy).toHaveBeenCalledWith(
         'git',
         ['clone', 'https://github.com/owner/repo.git', '/tmp/target'],
-        { timeout: 120000 }
+        {
+          timeout: 120000,
+          env: expect.objectContaining({ GIT_TERMINAL_PROMPT: '0' }) as NodeJS.ProcessEnv,
+        }
       );
+    });
+
+    test('passes GIT_TERMINAL_PROMPT=0 to the git clone subprocess', async () => {
+      execSpy.mockResolvedValue({ stdout: '', stderr: '' });
+
+      await git.cloneRepository('https://github.com/owner/repo.git', '/tmp/target');
+
+      const opts = execSpy.mock.calls[0]![2];
+      expect(opts?.env?.GIT_TERMINAL_PROMPT).toBe('0');
+      // The rest of the environment must be inherited, not stripped
+      expect(opts?.env?.PATH).toBe(process.env.PATH);
     });
 
     test('constructs authenticated URL with token', async () => {

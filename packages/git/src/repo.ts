@@ -351,7 +351,12 @@ export async function cloneRepository(
       cloneUrl = parsed.toString();
     }
 
-    await execFileAsync('git', ['clone', cloneUrl, targetPath], { timeout: 120000 });
+    // GIT_TERMINAL_PROMPT=0 turns any missing-creds scenario into an
+    // immediate, readable error instead of a hung stdin credential prompt.
+    await execFileAsync('git', ['clone', cloneUrl, targetPath], {
+      timeout: 120000,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+    });
     return { ok: true, value: undefined };
   } catch (error) {
     const err = error as Error;
