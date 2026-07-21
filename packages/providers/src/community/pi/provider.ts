@@ -13,6 +13,7 @@ import type {
   MessageChunk,
   ProviderCapabilities,
   SendQueryOptions,
+  SystemPromptInput,
 } from '../../types';
 
 import { PI_CAPABILITIES } from './capabilities';
@@ -228,6 +229,58 @@ import { augmentPromptForJsonSchema } from '../../shared/structured-output';
 export { augmentPromptForJsonSchema };
 
 /**
+ * Anthropic subscription OAuth access tokens are `sk-ant-oat…` (API keys are
+ * `sk-ant-api…`). This is the same content-shape discriminator pi-ai's
+ * createClient uses to pick OAuth vs API-key auth downstream, so Archon's
+ * detection can never disagree with the SDK's.
+ */
+function isAnthropicOAuthToken(token: string | null | undefined): boolean {
+  return typeof token === 'string' && token.startsWith('sk-ant-oat');
+}
+
+/**
+ * Archon's default system prompt for Pi sessions that authenticate to
+ * Anthropic with a SUBSCRIPTION OAuth token (Claude Pro/Max, `sk-ant-oat*`).
+ *
+ * WHY THIS EXISTS (load-bearing — do not drop without re-reading):
+ * Pi's built-in coding-agent system prompt (pi-coding-agent's
+ * `buildSystemPrompt`) embeds a self-referential "Pi documentation" block
+ * ("...read only when the user asks about pi itself, its SDK, extensions,
+ * themes, skills, or TUI...") plus an "operating inside pi, a coding agent
+ * harness" identity line. That block is dense with third-party-coding-tool
+ * vocabulary, and Anthropic's post-2026-04-04 subscription-OAuth enforcement
+ * classifies any request carrying it as a third-party app — returning
+ * `400 invalid_request_error "You're out of extra usage"` for Pro/Max OAuth
+ * tokens, even though the same token works for first-party Claude Code.
+ *
+ * Supplying ANY custom system prompt makes pi-coding-agent take its
+ * `customPrompt` branch, which omits the incriminating block entirely. pi-ai
+ * still prepends the OAuth-required "You are Claude Code, Anthropic's official
+ * CLI for Claude." block as system[0], so subscription tokens are accepted.
+ * Verified at the wire level (PR #1831): [CC, this-prompt] → HTTP 200;
+ * [CC, pi-default-with-docs-block] → HTTP 400.
+ *
+ * Scope is deliberately narrow: the fallback applies ONLY when the session
+ * will use Anthropic subscription-OAuth auth. API-key sessions and
+ * non-Anthropic backends keep Pi's built-in prompt (with its dynamic tool
+ * list) — there is no benefit to replacing it there. Workflow- or
+ * request-level `systemPrompt` still wins (see sendQuery step 4c).
+ */
+export const ARCHON_PI_ANTHROPIC_OAUTH_SYSTEM_PROMPT = `You are an expert coding assistant. You help users by reading files, executing commands, editing code, and writing new files.
+
+Use the available tools to accomplish the task:
+- read: examine file contents instead of cat/sed
+- bash: run shell commands (ls, grep, find, build, test)
+- edit: make precise, minimal text replacements; each match must be unique
+- write: create new files or fully rewrite existing ones
+
+Guidelines:
+- Prefer reading files before editing them.
+- Keep edits small and targeted; do not pad with unchanged context.
+- Be concise in your responses.
+- Show file paths clearly when working with files.`;
+
+/**
  * Pi community provider — wraps `@earendil-works/pi-coding-agent`'s full
  * coding-agent harness. Each `sendQuery()` call creates a fresh session
  * (no reuse) so concurrent calls don't collide.
@@ -389,8 +442,15 @@ export class PiProvider implements IAgentProvider {
     // Auth validation deferred for extension providers — they manage credentials
     // outside Pi's AuthStorage (e.g. kiro uses AWS SSO/OIDC via ~/.aws/sso/cache/).
     // Only validate early for static-catalog models where we can give actionable hints.
+    // The resolved credential is also kept for the Anthropic subscription-OAuth
+    // detection in step 4c; for 'anthropic' we resolve even when the model is
+    // deferred to extensions (AuthStorage reads are cheap and side-effect-free)
+    // so a catalog miss can never skip the OAuth-safe default prompt.
+    let resolvedKey: Awaited<ReturnType<typeof authStorage.getApiKey>> | undefined;
+    if (model || parsed.provider === 'anthropic') {
+      resolvedKey = await authStorage.getApiKey(parsed.provider);
+    }
     if (model) {
-      const resolvedKey = await authStorage.getApiKey(parsed.provider);
       if (!resolvedKey) {
         if (envVarName) {
           // Name the OAuth var first when the backend has one — a subscription
@@ -454,15 +514,39 @@ export class PiProvider implements IAgentProvider {
 
     //    4c. systemPrompt: request-level (AgentRequestOptions) wins over
     //        node-level; either overrides Pi's default.
-    //        Pi only supports string system prompts; ignore structured preset objects.
-    const rawSystemPrompt = requestOptions?.systemPrompt ?? nodeConfig?.systemPrompt;
-    const systemPrompt = typeof rawSystemPrompt === 'string' ? rawSystemPrompt : undefined;
-    if (rawSystemPrompt !== undefined && systemPrompt === undefined) {
+    //        Pi only supports string system prompts; structured preset objects
+    //        and string[] are dropped. Validate each level INDEPENDENTLY before
+    //        applying precedence — a non-string request-level value (e.g. a
+    //        preset object) must not win via `??` and mask a valid node-level
+    //        string.
+    const coerceStringPrompt = (
+      value: SystemPromptInput | undefined,
+      source: 'request' | 'node'
+    ): string | undefined => {
+      if (value === undefined) return undefined;
+      if (typeof value === 'string') return value;
       getLog().warn(
-        { systemPromptType: typeof rawSystemPrompt },
+        { systemPromptType: typeof value, systemPromptSource: source },
         'pi.system_prompt_dropped_non_string'
       );
-    }
+      return undefined;
+    };
+    const explicitSystemPrompt =
+      coerceStringPrompt(requestOptions?.systemPrompt, 'request') ??
+      coerceStringPrompt(nodeConfig?.systemPrompt, 'node');
+
+    //        When no explicit prompt is set AND this session authenticates to
+    //        Anthropic with a subscription OAuth token, fall back to
+    //        ARCHON_PI_ANTHROPIC_OAUTH_SYSTEM_PROMPT — Anthropic's OAuth
+    //        endpoint hard-400s Pi's self-identifying built-in prompt (see the
+    //        constant's doc comment). Every other session (API-key auth,
+    //        non-Anthropic backends) keeps `undefined` so Pi's built-in prompt,
+    //        with its dynamic tool list, stays intact.
+    const usesAnthropicOAuth =
+      parsed.provider === 'anthropic' && isAnthropicOAuthToken(resolvedKey);
+    const systemPrompt =
+      explicitSystemPrompt ??
+      (usesAnthropicOAuth ? ARCHON_PI_ANTHROPIC_OAUTH_SYSTEM_PROMPT : undefined);
 
     //    4d. skills: Archon uses name references (e.g. `skills: [agent-browser]`).
     //        Resolve each name against .agents/skills and .claude/skills (project
@@ -620,7 +704,12 @@ export class PiProvider implements IAgentProvider {
         cwd,
         thinkingLevel,
         toolCount: filteredTools?.length,
-        hasSystemPrompt: systemPrompt !== undefined,
+        systemPromptSource:
+          explicitSystemPrompt !== undefined
+            ? 'explicit'
+            : systemPrompt !== undefined
+              ? 'anthropic-oauth-default'
+              : 'pi-builtin',
         skillCount: skillPaths.length,
         missingSkillCount: missingSkills.length,
         extensionsEnabled: enableExtensions,
