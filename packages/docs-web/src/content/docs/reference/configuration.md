@@ -286,6 +286,7 @@ Environment variables override all other configuration. They are organized by ca
 | `SESSION_RETENTION_DAYS` | Delete inactive sessions older than N days | `30` |
 | `ARCHON_SUPPRESS_NESTED_CLAUDE_WARNING` | When set to `1`, suppresses the stderr warning emitted when `archon` is run inside a Claude Code session | -- |
 | `ARCHON_VERBOSE_BOOT` | When set to `1`, prints `[archon] loaded N keys from …` lines to stderr at boot. Also enabled by `LOG_LEVEL=debug` or `LOG_LEVEL=trace`. Silent by default to avoid interleaving with interactive command output. | -- |
+| `WSL_DISTRO_NAME` | Set automatically by WSL in every distro shell. Archon reads it (via `/api/health`) to emit Windows-host-friendly `vscode://vscode-remote/wsl+<distro>/...` "Open in IDE" URIs. You do not normally set this yourself; override it only to force a specific distro name into the URI. | -- (unset outside WSL) |
 
 ### AI Providers -- Claude
 
