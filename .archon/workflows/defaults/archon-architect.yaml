@@ -311,12 +311,14 @@ nodes:
 
       1. Stage all changes and create a single commit (or verify existing commits)
       2. Push the branch: `git push -u origin HEAD`
-      3. Check if a PR already exists: `gh pr list --head $(git branch --show-current)`
-      4. Create the PR targeting `$BASE_BRANCH` as the base branch:
-         `gh pr create --base $BASE_BRANCH --title "..." --body "..."`
+      3. Resolve the origin repo — in a fork clone, gh otherwise targets the upstream parent:
+         `ORIGIN_REPO=$(git remote get-url origin | sed -E 's#^.*[:/]([^/]+/[^/]+)$#\1#; s#\.git$##')`
+      4. Check if a PR already exists: `gh pr list --repo "$ORIGIN_REPO" --head $(git branch --show-current)`
+      5. Create the PR targeting `$BASE_BRANCH` as the base branch:
+         `gh pr create --repo "$ORIGIN_REPO" --base $BASE_BRANCH --title "..." --body "..."`
          - Title: concise description of what was simplified (under 70 chars)
          - Body: use the format below
-      5. Save the PR URL to `$ARTIFACTS_DIR/.pr-url`
+      6. Save the PR URL to `$ARTIFACTS_DIR/.pr-url`
 
       ## PR Body Format
 
@@ -362,17 +364,19 @@ nodes:
   - id: verify-pr-base
     bash: |
       set -euo pipefail
+      # Pin to the origin remote — in a fork clone, gh otherwise queries the upstream parent
+      ORIGIN_REPO=$(git remote get-url origin | sed -E 's#^.*[:/]([^/]+/[^/]+)$#\1#; s#\.git$##')
       HEAD_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-      PR_NUMBER=$(gh pr list --head "$HEAD_BRANCH" --state open --json number -q '.[0].number')
+      PR_NUMBER=$(gh pr list --repo "$ORIGIN_REPO" --head "$HEAD_BRANCH" --state open --json number -q '.[0].number')
       if [ -z "$PR_NUMBER" ]; then
         echo "No open PR found for branch $HEAD_BRANCH" >&2
         exit 1
       fi
       EXPECTED="$BASE_BRANCH"
-      ACTUAL=$(gh pr view "$PR_NUMBER" --json baseRefName -q '.baseRefName')
+      ACTUAL=$(gh pr view "$PR_NUMBER" --repo "$ORIGIN_REPO" --json baseRefName -q '.baseRefName')
       if [ "$ACTUAL" != "$EXPECTED" ]; then
         echo "Base mismatch on PR #$PR_NUMBER: expected=$EXPECTED actual=$ACTUAL — re-targeting" >&2
-        gh pr edit "$PR_NUMBER" --base "$EXPECTED"
+        gh pr edit "$PR_NUMBER" --repo "$ORIGIN_REPO" --base "$EXPECTED"
       else
         echo "PR base verified: $EXPECTED"
       fi
