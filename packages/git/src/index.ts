@@ -44,6 +44,10 @@ export {
   getLastCommitDate,
 } from './branch';
 
+// Forge detection
+export { detectForge } from './forge';
+export type { ForgeType, ForgeInfo } from './forge';
+
 // Repository operations
 export {
   findRepoRoot,
