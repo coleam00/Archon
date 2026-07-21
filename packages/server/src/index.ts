@@ -114,6 +114,7 @@ import {
   captureArchonActive,
 } from '@archon/paths';
 import { selectGitHubAuthMode, parseGitCredentialPath } from './github-auth-bootstrap';
+import { isDiscordMentionRequired } from './discord-mention';
 import {
   getAuth,
   closeAuth,
@@ -520,6 +521,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         | 'batch';
       discord = new DiscordAdapter(process.env.DISCORD_BOT_TOKEN, discordStreamingMode);
       const discordAdapter = discord; // Capture for use in callback
+      const discordRequireMention = isDiscordMentionRequired();
 
       // Register message handler
       discordAdapter.onMessage(async ({ message, platformUserId, displayName }) => {
@@ -529,10 +531,11 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         // Skip if no content
         if (!message.content) return;
 
-        // Check if bot was mentioned (required for activation)
-        // Exception: DMs don't require mention
+        // Check if bot was mentioned (required for activation unless
+        // DISCORD_REQUIRE_MENTION=false opts out of the gate)
+        // Exception: DMs never require mention
         const isDM = !message.guild;
-        if (!isDM && !discordAdapter.isBotMentioned(message)) {
+        if (!isDM && discordRequireMention && !discordAdapter.isBotMentioned(message)) {
           return; // Ignore messages that don't mention the bot
         }
 
