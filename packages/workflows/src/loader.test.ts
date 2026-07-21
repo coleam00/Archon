@@ -3275,21 +3275,20 @@ nodes:
       expect(err?.error).toContain("'retry' is not supported on workflow nodes");
     });
 
-    it("rejects isolation: 'worktree' on a workflow node (reserved for slice 2)", async () => {
+    it("accepts isolation: 'worktree' on a workflow node (slice 2, PR-A)", async () => {
       const result = await loadOne(
-        'iso-reject',
+        'iso-worktree',
         `
-name: iso-reject
-description: isolation worktree on a workflow node
+name: iso-worktree
+description: per-child worktree isolation on a workflow node
 nodes:
   - id: sub
     workflow: child-wf
     isolation: worktree
 `
       );
-      const err = result.errors.find(e => e.filename === 'iso-reject.yaml');
-      expect(err).toBeDefined();
-      expect(err?.error).toContain('worktree');
+      const errs = result.errors.filter(e => e.filename === 'iso-worktree.yaml');
+      expect(errs).toHaveLength(0);
     });
 
     it("accepts isolation: 'inherit' on a workflow node", async () => {
@@ -3306,6 +3305,23 @@ nodes:
       );
       const errs = result.errors.filter(e => e.filename === 'iso-ok.yaml');
       expect(errs).toHaveLength(0);
+    });
+
+    it("rejects 'isolation:' on a non-workflow node (S1)", async () => {
+      const result = await loadOne(
+        'iso-wrong-node',
+        `
+name: iso-wrong-node
+description: isolation on a prompt node is meaningless
+nodes:
+  - id: think
+    prompt: "do a thing"
+    isolation: worktree
+`
+      );
+      const err = result.errors.find(e => e.filename === 'iso-wrong-node.yaml');
+      expect(err).toBeDefined();
+      expect(err?.error).toContain('only supported on workflow');
     });
 
     it('rejects a workflow node inside a loop_group body', async () => {

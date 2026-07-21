@@ -54,6 +54,8 @@ mock.module('@archon/isolation', () => ({
   }),
   getPrState: mockGetPrState,
   ContainerBackend: MockContainerBackend,
+  // Loaded transitively via the orchestrator → child-isolation-resolver (PR-A).
+  classifyIsolationError: (err: Error) => err.message,
 }));
 
 // Mock isolation-environments DB

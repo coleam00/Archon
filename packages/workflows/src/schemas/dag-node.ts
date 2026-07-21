@@ -466,16 +466,17 @@ export type IncludeNode = z.infer<typeof includeNodeSchema> & {
  * `workflow:` node spawns a genuinely separate `workflow_runs` row with its own
  * artifacts, gates, cost line, and audit trail (#2121 Phase 2). `workflow` is the
  * static target name; `input` is a data string (workflow-vars + `$node.output`
- * substituted) forwarded as the child's user message. `isolation` is reserved for
- * slice 2 (per-child worktree) — only `'inherit'` (the shared-checkout default) is
- * accepted today. `output_format`/`output_type` from the base stay meaningful (the
- * child's terminal output threads back as `$<id>.output`, field-accessible when a
- * schema is declared and the child emits JSON).
+ * substituted) forwarded as the child's user message. `isolation` selects the
+ * child's checkout: `'inherit'` (default) shares the parent's checkout; `'worktree'`
+ * (slice 2, PR-A) runs the child in its own git worktree via an injected
+ * child-isolation resolver. `output_format`/`output_type` from the base stay
+ * meaningful (the child's terminal output threads back as `$<id>.output`,
+ * field-accessible when a schema is declared and the child emits JSON).
  */
 export const workflowNodeSchema = dagNodeBaseSchema.extend({
   workflow: z.string().min(1, "'workflow' must be a non-empty workflow name"),
   input: z.string().optional(),
-  isolation: z.literal('inherit').optional(),
+  isolation: z.enum(['inherit', 'worktree']).optional(),
 });
 
 /** DAG node that runs another workflow as a governed child sub-run at execution time */
@@ -628,8 +629,9 @@ export const dagNodeSchema = dagNodeBaseSchema
     // Sub-run input data string (workflow-var + $node.output substituted) forwarded
     // as the child's user_message.
     input: z.string().optional(),
-    // Per-child isolation. `'inherit'` (shared parent checkout) is the only value in
-    // slice 1; `'worktree'` is validated + rejected in superRefine (reserved slice 2).
+    // Per-child isolation. `'inherit'` (shared parent checkout) is the default;
+    // `'worktree'` (slice 2, PR-A) runs the child in its own git worktree via an
+    // injected child-isolation resolver.
     isolation: z.enum(['inherit', 'worktree']).optional(),
     // Reserved for Phase 1b input mapping. Present only so the superRefine below can
     // fail fast when it appears on an include or workflow node ("not yet supported").
@@ -717,13 +719,15 @@ export const dagNodeSchema = dagNodeBaseSchema
         path: ['retry'],
       });
     }
-    // Per-child worktree isolation is a slice-2 capability (needs an injected
-    // isolation resolver). Reserve the field but reject 'worktree' now.
-    if (hasWorkflow && data.isolation === 'worktree') {
+    // Per-child worktree isolation (slice 2, PR-A) is accepted on workflow nodes.
+    // The engine fails the node fast at runtime if no child-isolation resolver is
+    // injected — never a silent shared-checkout fallback. On every OTHER node type
+    // `isolation:` is meaningless (only a `workflow:` node spawns a child run) and
+    // would be silently dropped — reject it fail-fast, mirroring the `with:` guard.
+    if (!hasWorkflow && data.isolation !== undefined) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message:
-          "isolation: 'worktree' is not yet supported on workflow nodes (slice 2). The child shares the parent's checkout ('inherit').",
+        message: "'isolation' is only supported on workflow (sub-run) nodes.",
         path: ['isolation'],
       });
     }
