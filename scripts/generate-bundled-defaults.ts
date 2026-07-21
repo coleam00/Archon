@@ -24,10 +24,18 @@
  */
 import { access, readFile, readdir, writeFile } from 'fs/promises';
 import { join, resolve } from 'path';
+import { execFileAsync } from '@archon/git';
 
-const REPO_ROOT = resolve(import.meta.dir, '..');
-const COMMANDS_DIR = join(REPO_ROOT, '.archon/commands/defaults');
-const WORKFLOWS_DIR = join(REPO_ROOT, '.archon/workflows/defaults');
+// BUNDLED_DEFAULTS_REPO_ROOT is a test seam: the integration tests point the
+// script at a throwaway git repo (see
+// packages/workflows/src/defaults/generate-bundled-defaults.test.ts).
+const REPO_ROOT = process.env.BUNDLED_DEFAULTS_REPO_ROOT
+  ? resolve(process.env.BUNDLED_DEFAULTS_REPO_ROOT)
+  : resolve(import.meta.dir, '..');
+const COMMANDS_REL = '.archon/commands/defaults';
+const WORKFLOWS_REL = '.archon/workflows/defaults';
+const COMMANDS_DIR = join(REPO_ROOT, COMMANDS_REL);
+const WORKFLOWS_DIR = join(REPO_ROOT, WORKFLOWS_REL);
 const OUTPUT_PATH = join(
   REPO_ROOT,
   'packages/workflows/src/defaults/bundled-defaults.generated.ts'
@@ -48,6 +56,51 @@ async function ensureDir(dir: string, label: string): Promise<void> {
       `${label} directory not found: ${dir}\n` +
         `Run this script from the repo root (cwd was ${process.cwd()}), ` +
         'or verify the .archon/ tree exists.'
+    );
+  }
+}
+
+/**
+ * Refuse to embed files that git does not track (#1578). An untracked file in
+ * defaults/ would silently ship inside locally built binaries while being
+ * absent from every other checkout and from CI builds — fail loudly instead.
+ *
+ * Intentionally stricter than collectFiles(): `git ls-files` recurses into
+ * subdirectories and reports every untracked path, while the embedder only
+ * reads top-level files with matching extensions. The asymmetry is deliberate
+ * — anything untracked under defaults/ is a mistake worth flagging, even if
+ * the embedder would ignore it today.
+ */
+async function assertNoUntrackedFiles(
+  relDir: string,
+  label: string,
+  suggestedDest: string
+): Promise<void> {
+  let stdout: string;
+  try {
+    ({ stdout } = await execFileAsync(
+      'git',
+      ['ls-files', '--others', '--exclude-standard', relDir],
+      { cwd: REPO_ROOT }
+    ));
+  } catch (e) {
+    const err = e as Error & { stderr?: string };
+    const detail = err.stderr?.trim() || err.message;
+    // No fallback on purpose: skipping the check would re-introduce the exact
+    // failure mode this guard exists to catch (embedding untracked files).
+    throw new Error(
+      `Failed to run \`git ls-files\` to verify ${label} is fully tracked: ${detail}\n` +
+        'Is git installed and on PATH?',
+      { cause: err }
+    );
+  }
+  const untracked = stdout.trim().split('\n').filter(Boolean);
+  if (untracked.length > 0) {
+    const list = untracked.map(f => `  ${f}`).join('\n');
+    throw new Error(
+      `${label} contains untracked files that would be embedded into the binary bundle:\n${list}\n\n` +
+        'Untracked files in defaults/ — stage and commit them (git add + git commit),\n' +
+        `or move them to ${suggestedDest}.`
     );
   }
 }
@@ -135,6 +188,21 @@ async function main(): Promise<void> {
   await Promise.all([
     ensureDir(COMMANDS_DIR, 'Commands defaults'),
     ensureDir(WORKFLOWS_DIR, 'Workflows defaults'),
+  ]);
+
+  // Runs after ensureDir (a missing directory still wins) and before
+  // collectFiles (untracked files abort before being read into the bundle).
+  await Promise.all([
+    assertNoUntrackedFiles(
+      COMMANDS_REL,
+      'Commands defaults (.archon/commands/defaults/)',
+      '.archon/commands/ (project-scope) or ~/.archon/commands/ (home-scope)'
+    ),
+    assertNoUntrackedFiles(
+      WORKFLOWS_REL,
+      'Workflows defaults (.archon/workflows/defaults/)',
+      '.archon/workflows/ (project-scope) or ~/.archon/workflows/ (home-scope)'
+    ),
   ]);
 
   const [commands, workflows] = await Promise.all([

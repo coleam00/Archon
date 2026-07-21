@@ -40,6 +40,7 @@
     "setup-auth": "bun --filter @archon/server setup-auth"
   },
   "devDependencies": {
+    "@archon/git": "workspace:*",
     "@archon/providers": "workspace:*",
     "@eslint/js": "^9.39.1",
     "@types/bun": "latest",
