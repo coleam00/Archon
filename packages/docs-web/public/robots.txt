@@ -45,6 +45,3 @@ Allow: /
 # Default: Allow all
 User-agent: *
 Allow: /
-
-# Sitemaps
-Sitemap: https://archon.diy/sitemap-index.xml
