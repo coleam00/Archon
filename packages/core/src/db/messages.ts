@@ -48,6 +48,8 @@ export async function addMessage(
  * List messages for a conversation, oldest first.
  * Fetches the newest `limit` messages so that the most recent history is always
  * returned, then reverses to preserve chronological (oldest-first) order.
+ * `id DESC` breaks ties between rows sharing a created_at (SQLite stores
+ * 1-second granularity) so the LIMIT window is stable across refetches.
  * conversationId is the database UUID (not platform_conversation_id).
  */
 export async function listMessages(
@@ -57,7 +59,7 @@ export async function listMessages(
   const result = await pool.query<MessageRow>(
     `SELECT * FROM remote_agent_messages
      WHERE conversation_id = $1
-     ORDER BY created_at DESC
+     ORDER BY created_at DESC, id DESC
      LIMIT $2`,
     [conversationId, limit]
   );
@@ -83,7 +85,8 @@ export async function getRecentWorkflowResultMessages(
       `SELECT id, content, metadata FROM remote_agent_messages
        WHERE conversation_id = $1
        AND ${metadataFilter}
-       ORDER BY created_at DESC
+       -- id DESC tie-breaker: see listMessages() above for why.
+       ORDER BY created_at DESC, id DESC
        LIMIT $2`,
       [conversationId, limit]
     );
