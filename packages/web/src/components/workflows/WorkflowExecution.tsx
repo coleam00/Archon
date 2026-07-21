@@ -48,6 +48,7 @@ interface WorkflowRunQueryData {
   workerPlatformId: string | null;
   parentPlatformId: string | null;
   conversationPlatformId: string | null;
+  workingPath: string | null;
   codebaseId: string | null;
   events: WorkflowEventResponse[];
 }
@@ -199,6 +200,7 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
         workerPlatformId: data.run.worker_platform_id ?? null,
         parentPlatformId: data.run.parent_platform_id ?? null,
         conversationPlatformId: data.run.conversation_platform_id ?? null,
+        workingPath: data.run.working_path ?? null,
         codebaseId: data.run.codebase_id ?? null,
         events: data.events,
       };
@@ -215,6 +217,7 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
   const workerPlatformId = queryData?.workerPlatformId ?? null;
   const parentPlatformId = queryData?.parentPlatformId ?? null;
   const conversationPlatformId = queryData?.conversationPlatformId ?? null;
+  const workingPath = queryData?.workingPath ?? null;
   const error = queryError
     ? queryError instanceof Error
       ? queryError.message
@@ -607,7 +610,7 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
     if (isDag && activeView === 'chat' && parentPlatformId) {
       return (
         <div className="flex flex-col flex-1 overflow-hidden min-h-0">
-          <ChatInterface conversationId={parentPlatformId} />
+          <ChatInterface conversationId={parentPlatformId} cwdOverride={workingPath} />
         </div>
       );
     }

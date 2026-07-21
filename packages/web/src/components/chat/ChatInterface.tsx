@@ -38,6 +38,7 @@ import {
 } from '@/lib/message-cache';
 import { useProject } from '@/contexts/ProjectContext';
 import { ensureUtc } from '@/lib/format';
+import { resolveChatHeaderPath } from '@/lib/chat-header';
 
 function mapMessageRow(row: MessageResponse): ChatMessage {
   let meta: {
@@ -99,9 +100,13 @@ function mapMessageRow(row: MessageResponse): ChatMessage {
 
 interface ChatInterfaceProps {
   conversationId: string;
+  cwdOverride?: string | null;
 }
 
-export function ChatInterface({ conversationId }: ChatInterfaceProps): React.ReactElement {
+export function ChatInterface({
+  conversationId,
+  cwdOverride,
+}: ChatInterfaceProps): React.ReactElement {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { selectedProjectId } = useProject();
@@ -280,7 +285,7 @@ export function ChatInterface({ conversationId }: ChatInterfaceProps): React.Rea
       ? codebases?.find(cb => cb.id === selectedProjectId)
       : undefined;
   const headerTitle = currentConv?.title ?? 'Chat';
-  const headerSubtitle = currentConv?.cwd ?? undefined;
+  const headerSubtitle = resolveChatHeaderPath(currentConv?.cwd, cwdOverride);
 
   const nextId = (): string => {
     messageIdCounter.current += 1;
