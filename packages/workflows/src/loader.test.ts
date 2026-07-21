@@ -3307,6 +3307,23 @@ nodes:
       expect(errs).toHaveLength(0);
     });
 
+    it("rejects 'isolation:' on a non-workflow node (S1)", async () => {
+      const result = await loadOne(
+        'iso-wrong-node',
+        `
+name: iso-wrong-node
+description: isolation on a prompt node is meaningless
+nodes:
+  - id: think
+    prompt: "do a thing"
+    isolation: worktree
+`
+      );
+      const err = result.errors.find(e => e.filename === 'iso-wrong-node.yaml');
+      expect(err).toBeDefined();
+      expect(err?.error).toContain('only supported on workflow');
+    });
+
     it('rejects a workflow node inside a loop_group body', async () => {
       const result = await loadOne(
         'wf-in-loop-group',

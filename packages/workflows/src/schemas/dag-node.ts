@@ -721,7 +721,16 @@ export const dagNodeSchema = dagNodeBaseSchema
     }
     // Per-child worktree isolation (slice 2, PR-A) is accepted on workflow nodes.
     // The engine fails the node fast at runtime if no child-isolation resolver is
-    // injected — never a silent shared-checkout fallback.
+    // injected — never a silent shared-checkout fallback. On every OTHER node type
+    // `isolation:` is meaningless (only a `workflow:` node spawns a child run) and
+    // would be silently dropped — reject it fail-fast, mirroring the `with:` guard.
+    if (!hasWorkflow && data.isolation !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "'isolation' is only supported on workflow (sub-run) nodes.",
+        path: ['isolation'],
+      });
+    }
 
     if (modeCount === 0) {
       if (typeof data.bash === 'string') {

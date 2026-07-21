@@ -12,7 +12,7 @@
  * which does (mock.module is process-global and irreversible).
  */
 import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test';
-import { mkdir, writeFile, rm } from 'fs/promises';
+import { mkdir, writeFile, rm, cp } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -1250,5 +1250,227 @@ nodes:
     expect(child?.status).toBe('completed');
     // The child shares the parent's checkout.
     expect(child?.working_path).toBe(cwd);
+  });
+
+  it('threads the resolver into a nested child so a grandchild also isolates (I1)', async () => {
+    // parent → child-mid → grandchild-iso, all `isolation: worktree`. Without the
+    // resolver being threaded into the child's own executeWorkflow opts, the
+    // grandchild spawn would fail-fast "requires an injected resolver".
+    await writeWorkflow(
+      'grandchild-iso',
+      `
+name: grandchild-iso
+description: bottom of a nested isolation chain
+nodes:
+  - id: work
+    prompt: "grandchild does $ARGUMENTS"
+`
+    );
+    await writeWorkflow(
+      'child-mid',
+      `
+name: child-mid
+description: middle link that isolates its own child
+nodes:
+  - id: sub
+    workflow: grandchild-iso
+    input: "y"
+    isolation: worktree
+`
+    );
+    await writeWorkflow(
+      'parent-nested',
+      `
+name: parent-nested
+description: top of a nested isolation chain
+nodes:
+  - id: sub
+    workflow: child-mid
+    input: "x"
+    isolation: worktree
+`
+    );
+
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    const parent = await discover('parent-nested');
+
+    // Resolver returns a distinct worktree per parent run and copies the repo's
+    // `.archon` (workflows) into it — a real worktree is a checkout of the same repo,
+    // so the nested grandchild target stays discoverable from the child's worktree.
+    const calls: ChildIsolationRequest[] = [];
+    const resolver: ChildIsolationResolver = {
+      async resolve(req: ChildIsolationRequest): Promise<ChildIsolationResult> {
+        calls.push(req);
+        const dir = join(cwd, 'wt', `${req.parentRun.id}-child-${String(req.childIndex ?? 0)}`);
+        await mkdir(dir, { recursive: true });
+        await cp(join(cwd, '.archon'), join(dir, '.archon'), { recursive: true });
+        return {
+          cwd: dir,
+          envId: `env-${String(calls.length)}`,
+          branchName: `archon/task-${req.parentRun.id.slice(0, 8)}-child-0`,
+        };
+      },
+    };
+
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parent,
+      'goal',
+      'conv-db',
+      { resolveChildIsolation: resolver }
+    );
+
+    expect(result.success).toBe(true);
+    // Both levels invoked the resolver (proving it propagated to the grandchild).
+    expect(calls).toHaveLength(2);
+    const child = [...store.runs.values()].find(r => r.workflow_name === 'child-mid');
+    const grandchild = [...store.runs.values()].find(r => r.workflow_name === 'grandchild-iso');
+    expect(child?.status).toBe('completed');
+    expect(grandchild?.status).toBe('completed');
+    // Three distinct checkouts: parent (shared), child worktree, grandchild worktree.
+    expect(child?.working_path).not.toBe(cwd);
+    expect(grandchild?.working_path).not.toBe(cwd);
+    expect(grandchild?.working_path).not.toBe(child?.working_path);
+    // The child records its own worktree env + branch in metadata (S3).
+    expect((child?.metadata as Record<string, unknown>).isolation_env_id).toBeDefined();
+    expect(String((child?.metadata as Record<string, unknown>).branch_name)).toContain(
+      'archon/task-'
+    );
+  });
+
+  it('a resolver that throws fails the node cleanly with no orphan child (I5)', async () => {
+    await writeWorkflow(
+      'child-iso',
+      `
+name: child-iso
+description: child wanting its own worktree
+nodes:
+  - id: work
+    prompt: "do work for $ARGUMENTS"
+`
+    );
+    await writeWorkflow(
+      'parent-iso-throw',
+      `
+name: parent-iso-throw
+description: parent whose resolver blows up
+nodes:
+  - id: sub
+    workflow: child-iso
+    input: "x"
+    isolation: worktree
+`
+    );
+
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    const parent = await discover('parent-iso-throw');
+    const resolver: ChildIsolationResolver = {
+      resolve: () => Promise.reject(new Error('no space left on device')),
+    };
+
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parent,
+      'goal',
+      'conv-db',
+      { resolveChildIsolation: resolver }
+    );
+
+    expect(result.success).toBe(false);
+    const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'parent-iso-throw');
+    expect(parentRun?.status).toBe('failed');
+    const nodeFailed = store.events.find(
+      e => e.event_type === 'node_failed' && e.step_name === 'sub'
+    );
+    // Sub-run context prefix + the propagated resolver error (classification is the
+    // real resolver's job; the fake surfaces the raw message unchanged).
+    expect(String(nodeFailed?.data?.error)).toContain('Failed to create isolated worktree');
+    expect(String(nodeFailed?.data?.error)).toContain('no space left on device');
+    // No orphan child row — the fail happens before createWorkflowRun.
+    expect([...store.runs.values()].filter(r => r.parent_run_id !== null)).toHaveLength(0);
+  });
+
+  it('resume with a pruned child worktree fails cleanly, not a deep ENOENT (I2)', async () => {
+    // Child fails on its first pass so the parent has a resumable failed child; then
+    // its worktree is deleted (as `isolation cleanup` would) before the parent resume.
+    await writeWorkflow(
+      'child-iso-fail',
+      `
+name: child-iso-fail
+description: isolated child that fails first
+nodes:
+  - id: boom
+    bash: "exit 3"
+`
+    );
+    await writeWorkflow(
+      'parent-iso-resume',
+      `
+name: parent-iso-resume
+description: parent whose isolated child worktree gets pruned
+nodes:
+  - id: sub
+    workflow: child-iso-fail
+    input: "x"
+    isolation: worktree
+`
+    );
+
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    const parent = await discover('parent-iso-resume');
+    const childCwd = join(cwd, 'wt', 'pruned-child');
+    const { resolver } = makeFakeResolver(childCwd);
+
+    // First drive: resolver creates the worktree, child `exit 3` fails, parent fails.
+    const r1 = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parent,
+      'goal',
+      'conv-db',
+      { resolveChildIsolation: resolver }
+    );
+    expect(r1.success).toBe(false);
+    const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'parent-iso-resume');
+    const child = [...store.runs.values()].find(r => r.workflow_name === 'child-iso-fail');
+    expect(child?.status).toBe('failed');
+    expect(child?.working_path).toBe(childCwd);
+
+    // Prune the child's worktree, then resume the parent.
+    await rm(childCwd, { recursive: true, force: true });
+    const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(parentRun!.id))!);
+    const resumeOpts = hydrated ?? {
+      preCreatedRun: await store.resumeWorkflowRun(parentRun!.id),
+    };
+    const r2 = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parent,
+      'goal',
+      'conv-db',
+      { ...resumeOpts, resolveChildIsolation: resolver }
+    );
+
+    expect(r2.success).toBe(false);
+    // Clean, actionable message — not a raw ENOENT from executing in a vanished dir.
+    const nodeFailed = [...store.events]
+      .reverse()
+      .find(e => e.event_type === 'node_failed' && e.step_name === 'sub');
+    expect(String(nodeFailed?.data?.error)).toContain('working path no longer exists');
+    expect(String(nodeFailed?.data?.error)).toContain('cleaned up');
+    expect(String(nodeFailed?.data?.error)).not.toContain('ENOENT');
   });
 });
