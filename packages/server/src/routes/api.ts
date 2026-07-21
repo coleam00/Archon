@@ -6,6 +6,7 @@ import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { streamSSE } from 'hono/streaming';
 import { cors } from 'hono/cors';
 import type { WebAdapter } from '../adapters/web';
+import { boundMetadataToolOutputs } from '../adapters/web/truncate';
 import { rm, readFile, writeFile, unlink, mkdir, readdir, stat } from 'fs/promises';
 import { existsSync, readFileSync } from 'fs';
 import { normalize, join, sep, basename } from 'path';
@@ -2278,7 +2279,9 @@ export function registerApiRoutes(
         metadata = '{}';
       }
     }
-    return { ...row, metadata };
+    // Bound tool_result outputs in hydration responses — the DB keeps the full
+    // value; only the browser-bound payload is capped (see #2236).
+    return { ...row, metadata: boundMetadataToolOutputs(metadata) };
   }
 
   function toApiWorkflowRun(row: WorkflowRun): ApiWorkflowRun {
