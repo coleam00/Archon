@@ -1768,6 +1768,66 @@ describe('workflowRunCommand', () => {
     expect(opts.baseBranch).toBe('develop');
   });
 
+  it('rejects --base combined with --no-worktree', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
+      errors: [],
+    });
+
+    await expect(
+      workflowRunCommand('/test/path', 'assist', 'go', { noWorktree: true, baseBranch: 'epic/foo' })
+    ).rejects.toThrow(/--base has no effect with --no-worktree/i);
+  });
+
+  it('threads --base override into provider.create (baseOverride) and executeWorkflow opts (PR target)', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const conversationDb = await import('@archon/core/db/conversations');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const isolation = await import('@archon/isolation');
+
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
+      errors: [],
+    });
+    (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'conv-123',
+    });
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-123',
+      default_cwd: '/test/path',
+      default_branch: 'develop',
+    });
+    (conversationDb.updateConversation as ReturnType<typeof mock>).mockResolvedValueOnce(undefined);
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      workflowRunId: 'run-123',
+    });
+
+    // --base epic/foo dispatched via the baseBranch option (from the CLI flag)
+    await workflowRunCommand('/test/path', 'assist', 'hello', { baseBranch: 'epic/foo' });
+
+    const getIsolationProviderMock = isolation.getIsolationProvider as ReturnType<typeof mock>;
+    const provider = getIsolationProviderMock.mock.results.at(-1)?.value as
+      | { create: ReturnType<typeof mock> }
+      | undefined;
+    const lastCreateCall = provider?.create.mock.calls.at(-1)?.[0] as {
+      baseBranch?: string;
+      baseOverride?: string;
+    };
+    // Flag flows as the override (wins over config + codebase default in the
+    // provider); codebase default stays in the request as the fallback.
+    expect(lastCreateCall.baseOverride).toBe('epic/foo');
+    expect(lastCreateCall.baseBranch).toBe('develop');
+
+    // PR target / $BASE_BRANCH is overridden by the flag, not the codebase default
+    const executeSpy = executeWorkflow as ReturnType<typeof mock>;
+    const lastExecuteArgs = executeSpy.mock.calls.at(-1) as unknown[];
+    const opts = lastExecuteArgs[lastExecuteArgs.length - 1] as { baseBranch?: string };
+    expect(opts.baseBranch).toBe('epic/foo');
+  });
+
   it('threads codebase name into provider.create so single-segment checkout paths resolve', async () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
     const { executeWorkflow } = await import('@archon/workflows/executor');
