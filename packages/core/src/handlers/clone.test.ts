@@ -492,6 +492,28 @@ describe('cloneRepository', () => {
     });
   });
 
+  // ── GIT_TERMINAL_PROMPT fail-fast (salvaged from PR #1404, credit @mlnchk) ─
+  describe('fail-fast env', () => {
+    test('passes GIT_TERMINAL_PROMPT=0 to the git clone subprocess', async () => {
+      mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);
+
+      await cloneRepository('https://github.com/owner/repo');
+
+      const cloneCall = (
+        spyExecFileAsync.mock.calls as [string, string[], { env?: NodeJS.ProcessEnv }][]
+      ).find(args => args[0] === 'git' && args[1]?.[0] === 'clone');
+      expect(cloneCall).toBeDefined();
+      const env = cloneCall?.[2]?.env ?? {};
+      expect(env.GIT_TERMINAL_PROMPT).toBe('0');
+      // The rest of the environment must be inherited, not stripped. On
+      // Windows the key can be 'Path' — spreading process.env keeps the
+      // original casing — so locate the path key case-insensitively.
+      const pathKey = Object.keys(env).find(k => k.toLowerCase() === 'path');
+      expect(pathKey).toBeDefined();
+      expect(env[pathKey!]).toBe(process.env[pathKey!]);
+    });
+  });
+
   // ── resolveForgeAuth unit tests ──────────────────────────────────────────
   describe('resolveForgeAuth', () => {
     const { resolveForgeAuth } = require('./clone');

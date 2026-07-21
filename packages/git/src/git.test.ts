@@ -1883,8 +1883,26 @@ branch refs/heads/feature/auth
       expect(execSpy).toHaveBeenCalledWith(
         'git',
         ['clone', 'https://github.com/owner/repo.git', '/tmp/target'],
-        { timeout: 120000 }
+        {
+          timeout: 120000,
+          env: expect.objectContaining({ GIT_TERMINAL_PROMPT: '0' }) as NodeJS.ProcessEnv,
+        }
       );
+    });
+
+    test('passes GIT_TERMINAL_PROMPT=0 to the git clone subprocess', async () => {
+      execSpy.mockResolvedValue({ stdout: '', stderr: '' });
+
+      await git.cloneRepository('https://github.com/owner/repo.git', '/tmp/target');
+
+      const env = execSpy.mock.calls[0]![2]?.env ?? {};
+      expect(env.GIT_TERMINAL_PROMPT).toBe('0');
+      // The rest of the environment must be inherited, not stripped. On
+      // Windows the key can be 'Path' — spreading process.env keeps the
+      // original casing — so locate the path key case-insensitively.
+      const pathKey = Object.keys(env).find(k => k.toLowerCase() === 'path');
+      expect(pathKey).toBeDefined();
+      expect(env[pathKey!]).toBe(process.env[pathKey!]);
     });
 
     test('constructs authenticated URL with token', async () => {
