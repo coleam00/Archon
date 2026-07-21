@@ -3646,6 +3646,45 @@ describe('per-user AI prefs in chat + tier-fallback nudge', () => {
     expect(mockGetUserAiPrefsDb).toHaveBeenCalledWith('creator-1');
   });
 
+  test("per-user default provider wins over the conversation's stored assistant (#2241 chain)", async () => {
+    // Chain order: user pref → conversation row (creation-time default). The
+    // row says claude; the user's personal default assistant must win.
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeConversation({ user_id: 'user-9' } as Partial<Conversation>))
+    );
+    mockGetUserAiPrefsDb.mockImplementation(async () => ({ defaultProvider: 'codex' }));
+    mockLogger.debug.mockClear();
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'Hello');
+
+    const sendingLog = mockLogger.debug.mock.calls.find(c => c[1] === 'sending_to_ai') as
+      | [Record<string, unknown>, string]
+      | undefined;
+    expect(sendingLog).toBeDefined();
+    expect(sendingLog?.[0].assistantType).toBe('claude');
+    expect(sendingLog?.[0].resolvedAssistantType).toBe('codex');
+  });
+
+  test("without an identity the conversation's stored assistant drives the turn (#2241 chain)", async () => {
+    // No sender and no creator: the creation-time default on the conversation
+    // row (resolved from config since #2241) is what executes.
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeConversation({ ai_assistant_type: 'codex' }))
+    );
+    mockLogger.debug.mockClear();
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'Hello');
+
+    expect(mockGetUserAiPrefsDb).not.toHaveBeenCalled();
+    const sendingLog = mockLogger.debug.mock.calls.find(c => c[1] === 'sending_to_ai') as
+      | [Record<string, unknown>, string]
+      | undefined;
+    expect(sendingLog).toBeDefined();
+    expect(sendingLog?.[0].resolvedAssistantType).toBe('codex');
+  });
+
   test('structurally invalid stored prefs degrade to config-only (chat still answers)', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(
       Promise.resolve(makeConversation({ user_id: 'user-9' } as Partial<Conversation>))

@@ -1,5 +1,9 @@
-import { mock, describe, test, expect, beforeEach, afterEach } from 'bun:test';
+import { mock, describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test';
 import { createQueryResult, mockPostgresDialect } from '../test/mocks/database';
+// spyOn (NOT mock.module) for config-loader: this file shares a `bun test`
+// invocation with the real config-loader.test.ts and worktree-sync.test.ts —
+// a mock.module here would poison them (pattern: worktree-sync.test.ts).
+import * as configLoader from '../config/config-loader';
 
 const mockQuery = mock(() => Promise.resolve(createQueryResult([])));
 
@@ -25,21 +29,16 @@ describe('conversations', () => {
   });
 
   describe('getOrCreateConversation', () => {
-    let originalDefaultAiAssistant: string | undefined;
+    const mergedConfig = (assistant: string) =>
+      ({ assistant }) as Awaited<ReturnType<typeof configLoader.loadConfig>>;
+    let loadConfigSpy: ReturnType<typeof spyOn>;
 
     beforeEach(() => {
-      // Save and clear env var to ensure test isolation
-      originalDefaultAiAssistant = process.env.DEFAULT_AI_ASSISTANT;
-      delete process.env.DEFAULT_AI_ASSISTANT;
+      loadConfigSpy = spyOn(configLoader, 'loadConfig').mockResolvedValue(mergedConfig('claude'));
     });
 
     afterEach(() => {
-      // Restore original env var value
-      if (originalDefaultAiAssistant === undefined) {
-        delete process.env.DEFAULT_AI_ASSISTANT;
-      } else {
-        process.env.DEFAULT_AI_ASSISTANT = originalDefaultAiAssistant;
-      }
+      loadConfigSpy.mockRestore();
     });
 
     const existingConversation: Conversation = {
@@ -82,6 +81,7 @@ describe('conversations', () => {
       const result = await getOrCreateConversation('telegram', 'chat-789');
 
       expect(result).toEqual(newConversation);
+      expect(loadConfigSpy).toHaveBeenCalledTimes(1);
       expect(mockQuery).toHaveBeenCalledTimes(2);
       expect(mockQuery).toHaveBeenNthCalledWith(
         2,
@@ -119,11 +119,15 @@ describe('conversations', () => {
         'INSERT INTO remote_agent_conversations (platform_type, platform_conversation_id, ai_assistant_type, codebase_id, cwd, user_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
         ['telegram', 'chat-789', 'codex', 'codebase-123', null, null]
       );
+      // The codebase-level assistant short-circuits the config chain.
+      expect(loadConfigSpy).not.toHaveBeenCalled();
     });
 
-    test('uses DEFAULT_AI_ASSISTANT env var when set', async () => {
-      // Set env var for this test (afterEach will restore original)
-      process.env.DEFAULT_AI_ASSISTANT = 'codex';
+    // Harvested from PR #1826 (credit: @EugeneChan00) — the configured default
+    // assistant chain (config > DEFAULT_AI_ASSISTANT env > first built-in, all
+    // owned by loadConfig) must reach new conversations without a codebase.
+    test('resolves the configured default assistant when no codebase is scoped', async () => {
+      loadConfigSpy.mockResolvedValueOnce(mergedConfig('codex'));
 
       const newConversation: Conversation = {
         ...existingConversation,
@@ -134,17 +138,39 @@ describe('conversations', () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
       mockQuery.mockResolvedValueOnce(createQueryResult([newConversation]));
 
-      const result = await getOrCreateConversation('telegram', 'chat-789');
+      const result = await getOrCreateConversation('web', 'web-new-chat');
+
+      expect(result).toEqual(newConversation);
+      expect(loadConfigSpy).toHaveBeenCalledTimes(1);
+      expect(mockQuery).toHaveBeenNthCalledWith(
+        2,
+        'INSERT INTO remote_agent_conversations (platform_type, platform_conversation_id, ai_assistant_type, codebase_id, cwd, user_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+        ['web', 'web-new-chat', 'codex', null, null, null]
+      );
+    });
+
+    test('falls back to claude when config load fails', async () => {
+      loadConfigSpy.mockRejectedValueOnce(new Error('config unavailable'));
+
+      const newConversation: Conversation = {
+        ...existingConversation,
+        id: 'conv-new',
+      };
+
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([newConversation]));
+
+      const result = await getOrCreateConversation('web', 'web-new-chat');
 
       expect(result).toEqual(newConversation);
       expect(mockQuery).toHaveBeenNthCalledWith(
         2,
         'INSERT INTO remote_agent_conversations (platform_type, platform_conversation_id, ai_assistant_type, codebase_id, cwd, user_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
-        ['telegram', 'chat-789', 'codex', null, null, null]
+        ['web', 'web-new-chat', 'claude', null, null, null]
       );
     });
 
-    test('falls back to claude when codebase not found', async () => {
+    test('falls back to configured default when codebase not found', async () => {
       const newConversation: Conversation = {
         ...existingConversation,
         id: 'conv-new',
@@ -160,6 +186,8 @@ describe('conversations', () => {
       const result = await getOrCreateConversation('telegram', 'chat-789', 'non-existent-codebase');
 
       expect(result).toEqual(newConversation);
+      // Missing row → falls through to the config chain.
+      expect(loadConfigSpy).toHaveBeenCalledTimes(1);
       expect(mockQuery).toHaveBeenNthCalledWith(
         3,
         'INSERT INTO remote_agent_conversations (platform_type, platform_conversation_id, ai_assistant_type, codebase_id, cwd, user_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
@@ -213,6 +241,8 @@ describe('conversations', () => {
         'INSERT INTO remote_agent_conversations (platform_type, platform_conversation_id, ai_assistant_type, codebase_id, cwd, user_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
         ['discord', 'thread-123', 'codex', 'codebase-123', '/workspace/project', null]
       );
+      // Parent inheritance short-circuits the config chain.
+      expect(loadConfigSpy).not.toHaveBeenCalled();
     });
 
     test('does not inherit when parent has no context', async () => {
