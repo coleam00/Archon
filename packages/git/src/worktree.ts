@@ -67,13 +67,8 @@ function resolveOwnerRepo(
   codebaseName?: string
 ): { owner: string; repo: string } {
   if (codebaseName) {
-    // Strict validation: owner/repo must match SAFE_NAME (a-zA-Z0-9._-) on both
-    // segments. Names that smuggle `:` or `@` through (e.g. an SSH remote URL
-    // mistakenly stored as the codebase name, "git@host:org/repo") would
-    // otherwise become path segments and break tools that treat `:` as a
-    // separator — most notably docker-compose short-form volume specs
-    // (`HOST:CONTAINER:OPT`). Reject and fall through to the path-derived
-    // identity (#1583).
+    // Reject names containing ':' or '@' — they would become path segments and
+    // break docker-compose short-form volume specs (HOST:CONTAINER:OPT) (#1583).
     const parsed = parseOwnerRepo(codebaseName);
     if (parsed) return parsed;
     getLog().warn({ codebaseName }, 'worktree.invalid_codebase_name_format');
