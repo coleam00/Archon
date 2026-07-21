@@ -63,16 +63,10 @@ export default defineConfig({
             'AI workflow engine -- package your coding workflows as YAML, run them anywhere.',
           details: `Archon lets you define multi-step AI coding workflows (code review, bug fixes, features) in YAML and run them from CLI, Web UI, Slack, Telegram, GitHub, or Discord. Each workflow runs in an isolated git worktree.`,
 
-          // Make llms-small.txt actually small - core concepts only
-          exclude: [
-            'adapters/community/**', // Community adapters are reference material
-            'deployment/**', // Deployment is advanced
-            'contributing/**', // Not needed for using Archon
-            'reference/security', // Deep reference
-            'book/**', // Long-form content
-          ],
+          // No exclusions - include all Starlight docs for maximum sitemap coverage
+          exclude: [],
 
-          // Topic-based subsets for selective ingestion
+          // Topic-based subsets for selective ingestion - cover all major doc sections
           customSets: [
             {
               label: 'Quick Start',
@@ -80,20 +74,59 @@ export default defineConfig({
               paths: ['index', 'getting-started/**'],
             },
             {
+              label: 'The Book',
+              description: 'Tutorials and conceptual guides',
+              paths: ['book/**'],
+            },
+            {
+              label: 'Guides',
+              description: 'How-to guides for workflows, commands, and nodes',
+              paths: ['guides/**'],
+            },
+            {
               label: 'Adapters',
               description: 'Platform integrations (GitHub, Slack, Discord, etc.)',
               paths: ['adapters/**'],
+            },
+            {
+              label: 'Deployment',
+              description: 'Deployment guides for Docker, cloud, and local setups',
+              paths: ['deployment/**'],
             },
             {
               label: 'Reference',
               description: 'CLI commands, configuration, and API reference',
               paths: ['reference/**'],
             },
+            {
+              label: 'Contributing',
+              description: 'Contributor guides for developers',
+              paths: ['contributing/**'],
+            },
+          ],
+
+          // Links to non-Starlight pages in the sitemap
+          optionalLinks: [
+            {
+              label: 'Home',
+              url: 'https://archon.diy/',
+              description: 'Archon homepage',
+            },
+            {
+              label: 'Roadmap',
+              url: 'https://archon.diy/roadmap/',
+              description: 'Project roadmap and planned features',
+            },
+            {
+              label: 'Workflow Marketplace',
+              url: 'https://archon.diy/workflows/',
+              description: 'Browse and discover community workflows',
+            },
           ],
 
           // Control ordering - essentials first
-          promote: ['index', 'getting-started/**', 'guides/first-workflow'],
-          demote: ['reference/changelog', 'contributing/**'],
+          promote: ['index', 'getting-started/**', 'guides/authoring-workflows'],
+          demote: ['contributing/**'],
 
           // Aggressive minification for small version
           minify: {
