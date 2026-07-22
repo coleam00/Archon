@@ -15606,6 +15606,48 @@ describe('buildSubprocessDockerArgs — bash/script env isolation', () => {
   });
 });
 
+describe('buildSubprocessDockerArgs — container workdir + pathMap extension', () => {
+  // Our WSL sandbox mounts the worktree at /work (≠ host cwd) and the run meta
+  // dir (a win32 host path) at /archon-meta. The execContext's workdir + pathMap
+  // make forwarded paths resolve in-container.
+  const WORKTREE = '/home/bunny/archon/worktrees/marphob-page/s1';
+  const CTX_MAPPED = {
+    kind: 'container' as const,
+    containerId: 'cid-9',
+    workdir: '/work',
+    pathMap: [
+      { hostPrefix: WORKTREE, containerPrefix: '/work' },
+      {
+        hostPrefix: 'C:\\Users\\Buun\\.archon\\workspaces\\buun-dev\\marphob-page',
+        containerPrefix: '/archon-meta',
+      },
+    ],
+  };
+
+  it('runs at the in-container workdir, not the host worktree path', () => {
+    const args = buildSubprocessDockerArgs(CTX_MAPPED, 'bash', ['-c', 'true'], {
+      cwd: WORKTREE,
+      env: {},
+    });
+    expect(args.slice(0, 3)).toEqual(['exec', '-w', '/work']);
+  });
+
+  it('remaps ARTIFACTS_DIR (meta mount) and DOCS_DIR (worktree mount) forwarded via -e', () => {
+    const args = buildSubprocessDockerArgs(CTX_MAPPED, 'bash', ['-c', 'true'], {
+      cwd: WORKTREE,
+      env: {
+        ARTIFACTS_DIR:
+          'C:\\Users\\Buun\\.archon\\workspaces\\buun-dev\\marphob-page\\artifacts\\runs\\r1',
+        DOCS_DIR: `${WORKTREE}/docs`,
+        BASE_BRANCH: 'main',
+      },
+    });
+    expect(args).toContain('ARTIFACTS_DIR=/archon-meta/artifacts/runs/r1');
+    expect(args).toContain('DOCS_DIR=/work/docs');
+    expect(args).toContain('BASE_BRANCH=main'); // non-path value untouched
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Container write-back gate + suspend-on-pause (Phase C)
 // ---------------------------------------------------------------------------
