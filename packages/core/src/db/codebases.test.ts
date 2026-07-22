@@ -53,9 +53,9 @@ describe('codebases', () => {
     // Default spy: loadConfig resolves to 'claude' unless overridden per-test
     let loadConfigSpy: ReturnType<typeof spyOn>;
     beforeEach(() => {
-      loadConfigSpy = spyOn(configLoader, 'loadConfig').mockResolvedValue(
-        { assistant: 'claude' } as Awaited<ReturnType<typeof configLoader.loadConfig>>
-      );
+      loadConfigSpy = spyOn(configLoader, 'loadConfig').mockResolvedValue({
+        assistant: 'claude',
+      } as Awaited<ReturnType<typeof configLoader.loadConfig>>);
     });
     afterEach(() => {
       loadConfigSpy.mockRestore();
@@ -106,9 +106,9 @@ describe('codebases', () => {
     });
 
     test('resolves default assistant from loadConfig when ai_assistant_type omitted', async () => {
-      loadConfigSpy.mockResolvedValue(
-        { assistant: 'codex' } as Awaited<ReturnType<typeof configLoader.loadConfig>>
-      );
+      loadConfigSpy.mockResolvedValue({ assistant: 'codex' } as Awaited<
+        ReturnType<typeof configLoader.loadConfig>
+      >);
       mockQuery.mockResolvedValueOnce(
         createQueryResult([{ ...mockCodebase, ai_assistant_type: 'codex' }])
       );
