@@ -1,0 +1,17 @@
+# Exact fingerprints of adjudicated non-secret fixtures/placeholders.
+# Do not add path-wide or rule-wide exclusions; real findings must remain visible.
+2de90071a87324f612796a1033200c91c9e33855:packages/docs-web/src/content/docs/deployment/docker.md:generic-api-key:292
+380cfef5a8d03a220adf640cf893ac05daafdaa9:.env.example:generic-api-key:139
+380cfef5a8d03a220adf640cf893ac05daafdaa9:deploy/.env.example:generic-api-key:74
+380cfef5a8d03a220adf640cf893ac05daafdaa9:docs/docker.md:generic-api-key:279
+5e5f84413c2377867c776893fdd9f6df8d535b7e:CLAUDE.md:discord-client-id:246
+c8c9e49ba85b4d84c19c03a327f844da7eb4670f:.github/workflows/ci.yml:jwt:14
+d4e85132b931e5303e504085af6da153a3298a0a:src/utils/credential-sanitizer.test.ts:generic-api-key:8
+d535c832e38fd50625424f6d23962488c3b82dbf:packages/paths/src/telemetry.ts:generic-api-key:46
+e020e3353c2d80ed12689ab4b6c301da0df2a543:.github/workflows/ci.yml:generic-api-key:260
+e020e3353c2d80ed12689ab4b6c301da0df2a543:.github/workflows/ci.yml:jwt:14
+e45969772e74700e3c7a5264c1ccbccbcbf5b0a5:.agents/PRD.md:private-key:441
+e5f8f23681fb130f1881e8f5500ee0985e42aaf2:packages/core/src/github-auth/auth.test.ts:private-key:50
+e5f8f23681fb130f1881e8f5500ee0985e42aaf2:packages/docs-web/src/content/docs/adapters/github-app-setup.md:private-key:102
+f81b22e3292efd6463357de18070d81d78b512b9:packages/core/src/github-auth/auth.test.ts:private-key:50
+f81b22e3292efd6463357de18070d81d78b512b9:packages/docs-web/src/content/docs/adapters/github-app-setup.md:private-key:102
