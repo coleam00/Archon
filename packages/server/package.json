@@ -18,9 +18,9 @@
     "@archon/providers": "workspace:*",
     "@archon/workflows": "workspace:*",
     "@hono/zod-openapi": "^1.4.0",
-    "better-auth": "~1.3",
+    "better-auth": "~1.6.23",
     "dotenv": "^17.2.3",
-    "hono": "^4.12.16",
+    "hono": "^4.12.31",
     "pg": "^8.11.0",
     "zod": "^4.4.3"
   },

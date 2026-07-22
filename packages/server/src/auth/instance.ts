@@ -23,7 +23,7 @@ import { isWebAuthEnabled, parseAllowedEmails, isEmailAllowed, getSignupMode } f
 const log = createLogger('web-auth');
 
 /** The configured Better Auth instance type (inferred — no hand-written shape). */
-export type AuthInstance = ReturnType<typeof betterAuth>;
+export type AuthInstance = ReturnType<typeof buildAuth>;
 
 // `undefined` = not yet resolved; `null` = resolved-as-disabled. This lets a
 // disabled install short-circuit without re-checking env on every request.
@@ -61,7 +61,10 @@ export function getAuth(env: NodeJS.ProcessEnv = process.env): AuthInstance | nu
   return cached;
 }
 
-function buildAuth(env: NodeJS.ProcessEnv): AuthInstance {
+// The return type must remain inferred so AuthInstance preserves Better Auth's
+// concrete options; Auth<BetterAuthOptions> is invariant as of Better Auth 1.6.
+// eslint-disable-next-line @typescript-eslint/explicit-function-return-type
+function buildAuth(env: NodeJS.ProcessEnv) {
   // isWebAuthEnabled guarantees both are present; locals avoid `!` assertions.
   const connectionString = env.DATABASE_URL ?? '';
   const secret = env.BETTER_AUTH_SECRET ?? '';
@@ -100,7 +103,7 @@ function buildAuth(env: NodeJS.ProcessEnv): AuthInstance {
     databaseHooks: {
       user: {
         create: {
-          before: async (user: { email: string }) => {
+          before: async user => {
             // Defense in depth: `disableSignUp` (set above from getSignupMode)
             // already blocks registration in `disabled` mode before this hook
             // runs — re-check here so the hook stays correct on its own if that
@@ -113,6 +116,9 @@ function buildAuth(env: NodeJS.ProcessEnv): AuthInstance {
             // generic 500. An empty allowlist makes isEmailAllowed() return true,
             // so this hook is a no-op in `open` mode — `disableSignUp` and the
             // posture above are what actually govern whether signup is permitted.
+            if (!user.email) {
+              throw new APIError('BAD_REQUEST', { message: 'Email is required.' });
+            }
             if (!isEmailAllowed(user.email, allowedEmails)) {
               throw new APIError('FORBIDDEN', {
                 message: 'This email is not on the invite allowlist.',
