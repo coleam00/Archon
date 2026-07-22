@@ -214,7 +214,8 @@ function applyPresetOptions(
   if (
     preset.effort === undefined ||
     node.effort !== undefined ||
-    workflowLevelOptions.effort !== undefined
+    workflowLevelOptions.effort !== undefined ||
+    workflowLevelOptions.modelReasoningEffort !== undefined
   ) {
     return;
   }
@@ -290,7 +291,7 @@ export async function loadConfiguredMcpServerNames(
   }
 }
 
-/** Workflow-level Claude SDK options — per-node overrides take precedence via ?? */
+/** Workflow-level provider options — per-node overrides take precedence via ?? */
 interface WorkflowLevelOptions {
   effort?: EffortLevel;
   thinking?: ThinkingConfig;
