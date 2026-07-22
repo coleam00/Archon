@@ -49,6 +49,8 @@ import type {
   EffortLevel,
   ThinkingConfig,
   SandboxSettings,
+  ModelReasoningEffort,
+  WebSearchMode,
   WorkflowSource,
   LoopGateRunMetadata,
   ApprovalContext,
@@ -295,6 +297,10 @@ interface WorkflowLevelOptions {
   fallbackModel?: string;
   betas?: string[];
   sandbox?: SandboxSettings;
+  /** Codex-only literal workflow-level reasoning effort (#2246). */
+  modelReasoningEffort?: ModelReasoningEffort;
+  /** Codex-only literal workflow-level web-search mode (#2246). */
+  webSearchMode?: WebSearchMode;
   /** Workflow-level tier keyword (when `workflow.model` is small/medium/large), so
    *  nodes that inherit the workflow model can still surface the `← tier` annotation. */
   workflowTier?: 'small' | 'medium' | 'large';
@@ -1107,6 +1113,20 @@ async function resolveNodeProviderAndModel(
     nodeConfig,
     assistantConfig
   );
+
+  // Forward workflow-level literal Codex fields (#2246). The schema accepts these at
+  // the workflow level (workflow.ts:124-125) but they were never threaded — a workflow
+  // declaring `modelReasoningEffort: minimal` parsed fine and ran at the config/SDK
+  // default. Precedence: node-level (if ever added) > workflow-level > tier/alias preset
+  // > config.yaml. Applied AFTER applyPresetOptions so an explicit workflow value wins
+  // over a preset-routed effort (matches PR #2020's chosen precedence). Codex-specific
+  // keys; Claude/Pi config parsers ignore them, so this is a no-op for other providers.
+  if (workflowLevelOptions.modelReasoningEffort !== undefined) {
+    assistantConfig.modelReasoningEffort = workflowLevelOptions.modelReasoningEffort;
+  }
+  if (workflowLevelOptions.webSearchMode !== undefined) {
+    assistantConfig.webSearchMode = workflowLevelOptions.webSearchMode;
+  }
 
   const options: SendQueryOptions = {
     ...baseOptions,
@@ -6769,6 +6789,8 @@ export async function executeDagWorkflow(
     fallbackModel: workflow.fallbackModel,
     betas: workflow.betas,
     sandbox: workflow.sandbox,
+    modelReasoningEffort: workflow.modelReasoningEffort,
+    webSearchMode: workflow.webSearchMode,
     workflowTier,
   };
   const layers = buildTopologicalLayers(workflow.nodes);

@@ -9481,6 +9481,44 @@ describe('executeDagWorkflow -- Claude SDK advanced options', () => {
     expect(nodeConfig?.effort).toBe('high');
   });
 
+  it('forwards workflow-level modelReasoningEffort and webSearchMode to Codex assistantConfig (#2246)', async () => {
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'codex',
+      getCapabilities: mockCodexCapabilities,
+    }));
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'workflow-codex-options-test',
+        nodes: [{ id: 'step1', command: 'my-cmd' }],
+        modelReasoningEffort: 'minimal',
+        webSearchMode: 'live',
+      },
+      workflowRun,
+      'codex',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(mockSendQueryDag.mock.calls.length).toBeGreaterThan(0);
+    const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
+    const assistantConfig = optionsArg?.assistantConfig as Record<string, unknown>;
+    expect(assistantConfig?.modelReasoningEffort).toBe('minimal');
+    expect(assistantConfig?.webSearchMode).toBe('live');
+  });
+
   it('per-node effort overrides workflow-level effort', async () => {
     const mockDeps = createMockDeps();
     const platform = createMockPlatform();
