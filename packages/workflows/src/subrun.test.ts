@@ -305,6 +305,73 @@ function makeDeps(store: IWorkflowStore): WorkflowDeps {
   };
 }
 
+/**
+ * Racing (#2121 slice 2, PR-D) AI provider. A prompt containing `winMarker` yields
+ * `winnerOutput` immediately (the WINNER); every other ("loser") prompt behaves per
+ * `loserMode`:
+ *   - `block`: waits until the racing driver aborts its turn's `abortSignal`, sets
+ *     `abortObserved`, then throws — proving the best-effort hard-abort reached sendQuery.
+ *   - `fail`: throws immediately WITHOUT touching the signal — proving the cooperative
+ *     cancel (not the abort) is what tags a loser when abort is a no-op.
+ *   - `completeInvalid`: completes with non-JSON output — a completed-but-NOT-schema-valid
+ *     child that the winner-selection must reject when the node declares `output_format`.
+ */
+function makeRacingProvider(opts: {
+  winMarker: string;
+  loserMode: 'block' | 'fail' | 'completeInvalid';
+  winnerOutput?: string;
+  abortObserved?: { value: boolean };
+}): ReturnType<typeof makeProvider> {
+  const winnerOutput = opts.winnerOutput ?? 'winner-output';
+  return {
+    ...makeProvider(),
+    sendQuery: mock(async function* (
+      prompt: string,
+      _cwd: string,
+      _resume: string | undefined,
+      options?: { abortSignal?: AbortSignal }
+    ) {
+      if (prompt.includes(opts.winMarker)) {
+        yield { type: 'assistant', content: winnerOutput };
+        yield { type: 'result', sessionId: 'sess', cost: 0.02 };
+        return;
+      }
+      if (opts.loserMode === 'fail') {
+        throw new Error('loser turn failed on its own');
+      }
+      if (opts.loserMode === 'completeInvalid') {
+        yield { type: 'assistant', content: 'not-valid-json' };
+        yield { type: 'result', sessionId: 'sess', cost: 0.01 };
+        return;
+      }
+      // 'block': hang until the racing driver aborts this turn, then throw.
+      await new Promise<void>((_resolve, reject) => {
+        const sig = options?.abortSignal;
+        const onAbort = (): void => {
+          if (opts.abortObserved) opts.abortObserved.value = true;
+          reject(new Error('aborted by racing driver'));
+        };
+        if (sig?.aborted) {
+          onAbort();
+          return;
+        }
+        sig?.addEventListener('abort', onAbort, { once: true });
+      });
+      yield { type: 'result', sessionId: 'sess' }; // unreachable: the promise rejects
+    }) as unknown as ReturnType<typeof makeProvider>['sendQuery'],
+  };
+}
+
+function makeRacingDeps(
+  store: IWorkflowStore,
+  provider: ReturnType<typeof makeProvider>
+): WorkflowDeps {
+  return {
+    ...makeDeps(store),
+    getAgentProvider: mock(() => provider) as unknown as WorkflowDeps['getAgentProvider'],
+  };
+}
+
 function makePlatform(): IWorkflowPlatform {
   return {
     sendMessage: mock(() => Promise.resolve()),
@@ -2346,7 +2413,7 @@ nodes:
     depends_on: [plan]
     fan_out:
       items: "$plan.output"
-      max_parallel: 3
+      max_parallel: 1
 `
     );
 
@@ -2355,7 +2422,13 @@ nodes:
     const parent = await discover('fan-c2-usercancel');
     const { resolver } = makeFanResolver(cwd);
 
-    // Run 1: both children fail their first pass → node fails.
+    // max_parallel: 1 (serial) is load-bearing for determinism: child 0 fails FIRST and
+    // seals the all_success fail-fast before child 1 is ever spawned, so child A (index 0)
+    // is deterministically a PLAIN 'failed' child. With concurrent spawning the fail-fast
+    // could instead cooperatively-cancel child A (tagging it `fan_out_sibling`, which IS
+    // recoverable) before the test's own user-cancel lands — making the "untagged user
+    // cancel" premise, and the whole test, flaky.
+    // Run 1: child A fails its first pass → node fails (child 1 is never spawned).
     const r1 = await executeWorkflow(
       deps,
       makePlatform(),
@@ -2468,5 +2541,344 @@ nodes:
       expect(s.status).toBe('cancelled');
       expect((s.metadata as Record<string, unknown>).cancelled_reason).toBe('fan_out_sibling');
     }
+  });
+
+  // --- slice 2, PR-D: first_success racing ---------------------------------------
+
+  /** An AI racer whose single turn's prompt carries its per-item $ARGUMENTS, so the racing
+   *  provider can decide winner-vs-loser by inspecting the prompt. */
+  const raceChild = `
+name: race-child
+description: an AI racer keyed on its item
+nodes:
+  - id: attempt
+    prompt: "attempt $ARGUMENTS"
+`;
+
+  it('races 3 children (first_success): first completion wins, output threads, losers cancelled + tagged + hard-aborted', async () => {
+    await writeWorkflow('race-child', raceChild);
+    await writeWorkflow(
+      'race-parent',
+      `
+name: race-parent
+description: race 3 implementers, keep the first success
+nodes:
+  - id: plan
+    bash: |
+      printf '%s' '["WIN","lose-a","lose-b"]'
+  - id: work
+    workflow: race-child
+    depends_on: [plan]
+    fan_out:
+      items: "$plan.output"
+      join: first_success
+      max_parallel: 3
+`
+    );
+
+    const store = new InMemoryStore();
+    const abortObserved = { value: false };
+    // Winner yields immediately; the two losers BLOCK until the racing driver aborts them.
+    const provider = makeRacingProvider({ winMarker: 'WIN', loserMode: 'block', abortObserved });
+    const deps = makeRacingDeps(store, provider);
+    const { resolver } = makeFanResolver(cwd);
+    const parent = await discover('race-parent');
+
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parent,
+      'goal',
+      'conv-db',
+      {
+        resolveChildIsolation: resolver,
+      }
+    );
+
+    expect(result.success).toBe(true);
+    const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'race-parent');
+    expect(parentRun?.status).toBe('completed');
+
+    // The node completes with the WINNER's single output (not a JSON array).
+    const workCompleted = store.events.find(
+      e => e.event_type === 'node_completed' && e.step_name === 'work'
+    );
+    expect(workCompleted?.data?.node_output).toBe('winner-output');
+
+    // Exactly one child completed (the winner); the other two are LOSERS — cooperatively
+    // cancelled and tagged `fan_out_race_loser` (recoverable only when no winner survives).
+    const children = [...store.runs.values()].filter(r => r.workflow_name === 'race-child');
+    expect(children).toHaveLength(3);
+    const completed = children.filter(c => c.status === 'completed');
+    const losers = children.filter(c => c.status === 'cancelled');
+    expect(completed).toHaveLength(1);
+    expect(losers).toHaveLength(2);
+    for (const l of losers) {
+      expect((l.metadata as Record<string, unknown>).cancelled_reason).toBe('fan_out_race_loser');
+    }
+    // The best-effort hard-abort actually reached the losers' in-flight provider turns.
+    expect(abortObserved.value).toBe(true);
+  });
+
+  it('first_success winner is selected by schema validity and its output is field-accessible', async () => {
+    await writeWorkflow('race-child', raceChild);
+    await writeWorkflow(
+      'race-schema',
+      `
+name: race-schema
+description: only a schema-valid child can win
+nodes:
+  - id: plan
+    bash: |
+      printf '%s' '["BAD","GOOD","BAD"]'
+  - id: work
+    workflow: race-child
+    depends_on: [plan]
+    output_format:
+      type: object
+      properties:
+        fix:
+          type: string
+      required: [fix]
+    fan_out:
+      items: "$plan.output"
+      join: first_success
+      max_parallel: 3
+  - id: after
+    prompt: "use $work.output.fix"
+    depends_on: [work]
+`
+    );
+
+    const store = new InMemoryStore();
+    // The GOOD child emits schema-valid JSON; the BAD children COMPLETE with non-JSON (so
+    // they are completed-but-not-winners). 'after' also routes through this provider — its
+    // prompt lacks the winMarker, so it takes the completeInvalid branch and just completes.
+    const provider = makeRacingProvider({
+      winMarker: 'GOOD',
+      loserMode: 'completeInvalid',
+      winnerOutput: '{"fix":"applied"}',
+    });
+    const deps = makeRacingDeps(store, provider);
+    const { resolver } = makeFanResolver(cwd);
+    const parent = await discover('race-schema');
+
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parent,
+      'goal',
+      'conv-db',
+      {
+        resolveChildIsolation: resolver,
+      }
+    );
+
+    // The DAG completing proves `$work.output.fix` resolved (a broken field ref would fail
+    // the downstream node). The winner is the SCHEMA-VALID child, not a completed-invalid one.
+    expect(result.success).toBe(true);
+    const workCompleted = store.events.find(
+      e => e.event_type === 'node_completed' && e.step_name === 'work'
+    );
+    expect(workCompleted?.data?.node_output).toBe('{"fix":"applied"}');
+  });
+
+  it('first_success where every child fails fails the node (no winner)', async () => {
+    await writeWorkflow('race-child', raceChild);
+    await writeWorkflow(
+      'race-allfail',
+      `
+name: race-allfail
+description: no child can win
+nodes:
+  - id: plan
+    bash: |
+      printf '%s' '["a","b","c"]'
+  - id: work
+    workflow: race-child
+    depends_on: [plan]
+    fan_out:
+      items: "$plan.output"
+      join: first_success
+      max_parallel: 3
+`
+    );
+
+    const store = new InMemoryStore();
+    // winMarker 'ZZZ' matches no item → every child takes the 'fail' branch (throws).
+    const provider = makeRacingProvider({ winMarker: 'ZZZ', loserMode: 'fail' });
+    const deps = makeRacingDeps(store, provider);
+    const { resolver } = makeFanResolver(cwd);
+    const parent = await discover('race-allfail');
+
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parent,
+      'goal',
+      'conv-db',
+      {
+        resolveChildIsolation: resolver,
+      }
+    );
+
+    expect(result.success).toBe(false);
+    const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'race-allfail');
+    expect(parentRun?.status).toBe('failed');
+    const nodeFailed = store.events.find(
+      e => e.event_type === 'node_failed' && e.step_name === 'work'
+    );
+    expect(String(nodeFailed?.data?.error)).toContain('no child produced a schema-valid success');
+    // No child completed.
+    const children = [...store.runs.values()].filter(r => r.workflow_name === 'race-child');
+    expect(children.every(c => c.status !== 'completed')).toBe(true);
+  });
+
+  it('losers are cancelled + tagged by the cooperative floor even when the abort is a no-op', async () => {
+    await writeWorkflow('race-child', raceChild);
+    await writeWorkflow(
+      'race-coop',
+      `
+name: race-coop
+description: losers fail on their own, ignoring the abort signal
+nodes:
+  - id: plan
+    bash: |
+      printf '%s' '["WIN","lose-a","lose-b"]'
+  - id: work
+    workflow: race-child
+    depends_on: [plan]
+    fan_out:
+      items: "$plan.output"
+      join: first_success
+      max_parallel: 3
+`
+    );
+
+    const store = new InMemoryStore();
+    const abortObserved = { value: false };
+    // Losers throw immediately WITHOUT ever inspecting the abort signal — so the hard-abort
+    // is a no-op and only the cooperative cancel can mark them.
+    const provider = makeRacingProvider({ winMarker: 'WIN', loserMode: 'fail', abortObserved });
+    const deps = makeRacingDeps(store, provider);
+    const { resolver } = makeFanResolver(cwd);
+    const parent = await discover('race-coop');
+
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parent,
+      'goal',
+      'conv-db',
+      {
+        resolveChildIsolation: resolver,
+      }
+    );
+
+    expect(result.success).toBe(true);
+    const children = [...store.runs.values()].filter(r => r.workflow_name === 'race-child');
+    const losers = children.filter(c => c.status === 'cancelled');
+    expect(losers).toHaveLength(2);
+    for (const l of losers) {
+      expect((l.metadata as Record<string, unknown>).cancelled_reason).toBe('fan_out_race_loser');
+    }
+    // The abort was never the mechanism here — the cooperative cancel tagged the losers.
+    expect(abortObserved.value).toBe(false);
+  });
+
+  it('resume after a mid-race crash threads the existing winner without respawning (path a)', async () => {
+    await writeWorkflow('race-child', raceChild);
+    await writeWorkflow(
+      'race-solo',
+      `
+name: race-solo
+description: single fan-out node
+nodes:
+  - id: work
+    workflow: race-child
+    fan_out:
+      items: '["WIN","lose-a","lose-b"]'
+      join: first_success
+      max_parallel: 3
+`
+    );
+
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    const parent = await discover('race-solo');
+
+    // Seed a crashed-mid-race state: the parent's 'work' children exist — a COMPLETED winner
+    // (child_index 0, its terminal output stored as `summary`) and two race_loser-cancelled
+    // losers — but the parent wrote NO node_completed for 'work' (it crashed after the winner
+    // completed, before the aggregate). Resume must re-run 'work', detect the existing winner
+    // via path (a), and complete from it WITHOUT respawning anyone.
+    const parentRun = await store.createWorkflowRun({
+      workflow_name: 'race-solo',
+      conversation_id: 'conv-db',
+      user_message: 'goal',
+      working_path: cwd,
+    });
+    const seedChild = (
+      idx: number,
+      status: WorkflowRun['status'],
+      extra: Record<string, unknown>
+    ): void => {
+      const id = `seed-child-${String(idx)}`;
+      store.runs.set(id, {
+        id,
+        workflow_name: 'race-child',
+        conversation_id: 'conv-db',
+        parent_conversation_id: null,
+        codebase_id: null,
+        status,
+        user_message: 'x',
+        metadata: { parent_node_id: 'work', child_index: idx, ...extra },
+        started_at: new Date(),
+        completed_at: status === 'completed' || status === 'cancelled' ? new Date() : null,
+        last_activity_at: new Date(),
+        working_path: `${cwd}/seed-${String(idx)}`,
+        user_id: null,
+        parent_run_id: parentRun.id,
+      });
+    };
+    seedChild(0, 'completed', { summary: 'winner-output' });
+    seedChild(1, 'cancelled', { cancelled_reason: 'fan_out_race_loser' });
+    seedChild(2, 'cancelled', { cancelled_reason: 'fan_out_race_loser' });
+
+    // A failed parent with no completed nodes hydrates to null → flip to running and re-run.
+    const preCreatedRun = await store.resumeWorkflowRun(parentRun.id);
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parent,
+      'goal',
+      'conv-db',
+      {
+        preCreatedRun,
+      }
+    );
+
+    expect(result.success).toBe(true);
+    expect((await store.getWorkflowRun(parentRun.id))?.status).toBe('completed');
+    // The node completed from the SEEDED winner — its output threaded, no new child spawned.
+    const workCompleted = store.events.find(
+      e => e.event_type === 'node_completed' && e.step_name === 'work'
+    );
+    expect(workCompleted?.data?.node_output).toBe('winner-output');
+    const children = [...store.runs.values()].filter(r => r.workflow_name === 'race-child');
+    expect(children).toHaveLength(3); // only the 3 seeded rows — nobody was respawned
+    // The seeded losers stay terminal (a surviving winner is NOT re-driven).
+    const losers = children.filter(c => c.status === 'cancelled');
+    expect(losers).toHaveLength(2);
   });
 });
