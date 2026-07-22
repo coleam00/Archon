@@ -1,7 +1,10 @@
-import { mock, describe, test, expect, beforeEach } from 'bun:test';
+import { mock, describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test';
 import { join } from 'path';
 import { createQueryResult, mockPostgresDialect } from '../test/mocks/database';
 import { Codebase } from '../types';
+// spyOn (NOT mock.module) for config-loader: avoids poisoning config-loader.test.ts
+// in the same bun test invocation (pattern: conversations.test.ts).
+import * as configLoader from '../config/config-loader';
 
 const mockQuery = mock(() => Promise.resolve(createQueryResult([])));
 
@@ -47,6 +50,17 @@ describe('codebases', () => {
   };
 
   describe('createCodebase', () => {
+    // Default spy: loadConfig resolves to 'claude' unless overridden per-test
+    let loadConfigSpy: ReturnType<typeof spyOn>;
+    beforeEach(() => {
+      loadConfigSpy = spyOn(configLoader, 'loadConfig').mockResolvedValue(
+        { assistant: 'claude' } as Awaited<ReturnType<typeof configLoader.loadConfig>>
+      );
+    });
+    afterEach(() => {
+      loadConfigSpy.mockRestore();
+    });
+
     test('creates codebase with all fields', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([mockCodebase]));
 
@@ -91,23 +105,10 @@ describe('codebases', () => {
       );
     });
 
-    test('defaults ai_assistant_type to claude when no env var set', async () => {
-      delete process.env.DEFAULT_AI_ASSISTANT;
-      mockQuery.mockResolvedValueOnce(createQueryResult([mockCodebase]));
-
-      await createCodebase({
-        name: 'test-project',
-        default_cwd: '/workspace/test-project',
-      });
-
-      expect(mockQuery).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.arrayContaining(['claude'])
+    test('resolves default assistant from loadConfig when ai_assistant_type omitted', async () => {
+      loadConfigSpy.mockResolvedValue(
+        { assistant: 'codex' } as Awaited<ReturnType<typeof configLoader.loadConfig>>
       );
-    });
-
-    test('reads DEFAULT_AI_ASSISTANT env var when ai_assistant_type omitted', async () => {
-      process.env.DEFAULT_AI_ASSISTANT = 'codex';
       mockQuery.mockResolvedValueOnce(
         createQueryResult([{ ...mockCodebase, ai_assistant_type: 'codex' }])
       );
@@ -117,12 +118,27 @@ describe('codebases', () => {
         default_cwd: '/workspace/test-project',
       });
 
+      expect(loadConfigSpy).toHaveBeenCalledTimes(1);
       expect(mockQuery).toHaveBeenCalledWith(expect.any(String), expect.arrayContaining(['codex']));
-      delete process.env.DEFAULT_AI_ASSISTANT;
     });
 
-    test('explicit ai_assistant_type takes priority over env var', async () => {
-      process.env.DEFAULT_AI_ASSISTANT = 'codex';
+    test('falls back to claude when loadConfig throws', async () => {
+      loadConfigSpy.mockRejectedValue(new Error('config load failed'));
+      mockQuery.mockResolvedValueOnce(createQueryResult([mockCodebase]));
+
+      await createCodebase({
+        name: 'test-project',
+        default_cwd: '/workspace/test-project',
+      });
+
+      expect(loadConfigSpy).toHaveBeenCalledTimes(1);
+      expect(mockQuery).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.arrayContaining(['claude'])
+      );
+    });
+
+    test('explicit ai_assistant_type bypasses loadConfig', async () => {
       mockQuery.mockResolvedValueOnce(
         createQueryResult([{ ...mockCodebase, ai_assistant_type: 'pi' }])
       );
@@ -133,8 +149,8 @@ describe('codebases', () => {
         ai_assistant_type: 'pi',
       });
 
+      expect(loadConfigSpy).not.toHaveBeenCalled();
       expect(mockQuery).toHaveBeenCalledWith(expect.any(String), expect.arrayContaining(['pi']));
-      delete process.env.DEFAULT_AI_ASSISTANT;
     });
   });
 
