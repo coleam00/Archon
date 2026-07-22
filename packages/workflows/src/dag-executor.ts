@@ -49,6 +49,8 @@ import type {
   EffortLevel,
   ThinkingConfig,
   SandboxSettings,
+  ModelReasoningEffort,
+  WebSearchMode,
   WorkflowSource,
   LoopGateRunMetadata,
   ApprovalContext,
@@ -212,7 +214,8 @@ function applyPresetOptions(
   if (
     preset.effort === undefined ||
     node.effort !== undefined ||
-    workflowLevelOptions.effort !== undefined
+    workflowLevelOptions.effort !== undefined ||
+    workflowLevelOptions.modelReasoningEffort !== undefined
   ) {
     return;
   }
@@ -288,13 +291,17 @@ export async function loadConfiguredMcpServerNames(
   }
 }
 
-/** Workflow-level Claude SDK options — per-node overrides take precedence via ?? */
+/** Workflow-level provider options — per-node overrides take precedence via ?? */
 interface WorkflowLevelOptions {
   effort?: EffortLevel;
   thinking?: ThinkingConfig;
   fallbackModel?: string;
   betas?: string[];
   sandbox?: SandboxSettings;
+  /** Codex-only: workflow-level reasoning effort. */
+  modelReasoningEffort?: ModelReasoningEffort;
+  /** Codex-only: workflow-level web-search mode. */
+  webSearchMode?: WebSearchMode;
   /** Workflow-level tier keyword (when `workflow.model` is small/medium/large), so
    *  nodes that inherit the workflow model can still surface the `← tier` annotation. */
   workflowTier?: 'small' | 'medium' | 'large';
@@ -1107,6 +1114,15 @@ async function resolveNodeProviderAndModel(
     nodeConfig,
     assistantConfig
   );
+
+  // Applied AFTER applyPresetOptions so an explicit workflow value wins over a
+  // preset-routed effort. Precedence: workflow-level > tier preset > config.yaml.
+  if (workflowLevelOptions.modelReasoningEffort !== undefined) {
+    assistantConfig.modelReasoningEffort = workflowLevelOptions.modelReasoningEffort;
+  }
+  if (workflowLevelOptions.webSearchMode !== undefined) {
+    assistantConfig.webSearchMode = workflowLevelOptions.webSearchMode;
+  }
 
   const options: SendQueryOptions = {
     ...baseOptions,
@@ -6769,6 +6785,8 @@ export async function executeDagWorkflow(
     fallbackModel: workflow.fallbackModel,
     betas: workflow.betas,
     sandbox: workflow.sandbox,
+    modelReasoningEffort: workflow.modelReasoningEffort,
+    webSearchMode: workflow.webSearchMode,
     workflowTier,
   };
   const layers = buildTopologicalLayers(workflow.nodes);
