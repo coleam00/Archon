@@ -298,9 +298,9 @@ interface WorkflowLevelOptions {
   fallbackModel?: string;
   betas?: string[];
   sandbox?: SandboxSettings;
-  /** Codex-only literal workflow-level reasoning effort (#2246). */
+  /** Codex-only: workflow-level reasoning effort. */
   modelReasoningEffort?: ModelReasoningEffort;
-  /** Codex-only literal workflow-level web-search mode (#2246). */
+  /** Codex-only: workflow-level web-search mode. */
   webSearchMode?: WebSearchMode;
   /** Workflow-level tier keyword (when `workflow.model` is small/medium/large), so
    *  nodes that inherit the workflow model can still surface the `← tier` annotation. */
@@ -1115,13 +1115,8 @@ async function resolveNodeProviderAndModel(
     assistantConfig
   );
 
-  // Forward workflow-level literal Codex fields (#2246). The schema accepts these at
-  // the workflow level (workflow.ts:124-125) but they were never threaded — a workflow
-  // declaring `modelReasoningEffort: minimal` parsed fine and ran at the config/SDK
-  // default. Precedence: node-level (if ever added) > workflow-level > tier/alias preset
-  // > config.yaml. Applied AFTER applyPresetOptions so an explicit workflow value wins
-  // over a preset-routed effort (matches PR #2020's chosen precedence). Codex-specific
-  // keys; Claude/Pi config parsers ignore them, so this is a no-op for other providers.
+  // Applied AFTER applyPresetOptions so an explicit workflow value wins over a
+  // preset-routed effort. Precedence: workflow-level > tier preset > config.yaml.
   if (workflowLevelOptions.modelReasoningEffort !== undefined) {
     assistantConfig.modelReasoningEffort = workflowLevelOptions.modelReasoningEffort;
   }

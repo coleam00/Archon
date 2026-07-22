@@ -9481,7 +9481,7 @@ describe('executeDagWorkflow -- Claude SDK advanced options', () => {
     expect(nodeConfig?.effort).toBe('high');
   });
 
-  it('forwards workflow-level modelReasoningEffort and webSearchMode to Codex assistantConfig (#2246)', async () => {
+  it('forwards workflow-level modelReasoningEffort and webSearchMode to Codex assistantConfig', async () => {
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
       getType: () => 'codex',
@@ -9519,7 +9519,7 @@ describe('executeDagWorkflow -- Claude SDK advanced options', () => {
     expect(assistantConfig?.webSearchMode).toBe('live');
   });
 
-  it('workflow-level modelReasoningEffort wins over preset-routed effort (#2246)', async () => {
+  it('workflow-level modelReasoningEffort wins over preset-routed effort', async () => {
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
       getType: () => 'codex',
