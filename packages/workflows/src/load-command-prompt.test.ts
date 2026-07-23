@@ -68,20 +68,24 @@ describe('loadCommandPrompt — home-scope resolution', () => {
     if (result.success) expect(result.content).toBe('Personal helper body');
   });
 
-  it('resolves a symlinked home command and reads target content', async () => {
-    const sourceDir = mkdtempSync(join(tmpdir(), 'archon-command-source-'));
-    try {
-      writeFileSync(join(sourceDir, 'linked.md'), 'Linked body');
-      await fsSymlink(join(sourceDir, 'linked.md'), join(archonHome, 'commands', 'linked.md'));
+  it.skipIf(process.platform === 'win32')(
+    'resolves a symlinked home command and reads target content',
+    async () => {
+      // Skipped on Windows: fsSymlink requires elevated privileges or Developer Mode.
+      const sourceDir = mkdtempSync(join(tmpdir(), 'archon-command-source-'));
+      try {
+        writeFileSync(join(sourceDir, 'linked.md'), 'Linked body');
+        await fsSymlink(join(sourceDir, 'linked.md'), join(archonHome, 'commands', 'linked.md'));
 
-      const result = await loadCommandPrompt(makeDeps(false), repoRoot, 'linked');
+        const result = await loadCommandPrompt(makeDeps(false), repoRoot, 'linked');
 
-      expect(result.success).toBe(true);
-      if (result.success) expect(result.content).toBe('Linked body');
-    } finally {
-      rmSync(sourceDir, { recursive: true, force: true });
+        expect(result.success).toBe(true);
+        if (result.success) expect(result.content).toBe('Linked body');
+      } finally {
+        rmSync(sourceDir, { recursive: true, force: true });
+      }
     }
-  });
+  );
 
   it('repo command shadows home command with the same name', async () => {
     writeFileSync(join(archonHome, 'commands', 'shared.md'), 'HOME version');

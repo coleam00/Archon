@@ -239,19 +239,23 @@ describe('pathKind', () => {
     expect(resolver.pathKind('/definitely/does/not/exist/anywhere/12345')).toBe('missing');
   });
 
-  test('returns "missing" for a broken symlink without throwing', async () => {
-    // statSync follows symlinks by default — broken targets raise ENOENT,
-    // which must be caught and reported as 'missing' so the resolver's
-    // "file does not exist" path fires instead of an uncaught exception.
-    const { mkdtempSync, symlinkSync, rmSync } = await import('node:fs');
-    const { tmpdir } = await import('node:os');
-    const dir = mkdtempSync(join(tmpdir(), 'archon-pathkind-'));
-    const link = join(dir, 'broken-link');
-    try {
-      symlinkSync(join(dir, 'nonexistent-target'), link);
-      expect(resolver.pathKind(link)).toBe('missing');
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
+  test.skipIf(process.platform === 'win32')(
+    'returns "missing" for a broken symlink without throwing',
+    async () => {
+      // statSync follows symlinks by default — broken targets raise ENOENT,
+      // which must be caught and reported as 'missing' so the resolver's
+      // "file does not exist" path fires instead of an uncaught exception.
+      // Skipped on Windows: symlinkSync requires elevated privileges or Developer Mode.
+      const { mkdtempSync, symlinkSync, rmSync } = await import('node:fs');
+      const { tmpdir } = await import('node:os');
+      const dir = mkdtempSync(join(tmpdir(), 'archon-pathkind-'));
+      const link = join(dir, 'broken-link');
+      try {
+        symlinkSync(join(dir, 'nonexistent-target'), link);
+        expect(resolver.pathKind(link)).toBe('missing');
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
     }
-  });
+  );
 });

@@ -56,6 +56,8 @@ const TOGGLE_KEYS = {
   node: 'archon.console.runNodeFilter',
 } as const;
 
+const NEAR_BOTTOM_PX = 120;
+
 function readToggle(key: string, defaultOn: boolean): boolean {
   try {
     const stored = localStorage.getItem(key);
@@ -214,20 +216,50 @@ export function RunDetailPage(): ReactElement {
     }
   }, [detail, nodeOptions, selectedNodeId]);
 
-  // Auto-scroll to bottom on new content IF user is already near the bottom.
+  // Sticky-bottom follow-tail. `lastBottomRef` is the follow *intent*: start
+  // pinned, detach only when the user scrolls up (handleScroll), re-pin when they
+  // scroll back within NEAR_BOTTOM_PX of the end or hit the jump-to-bottom pill.
+  // A ResizeObserver snaps to the tail on any content growth while the intent
+  // holds — catching both new items and intra-message streaming height growth.
+  // Intent is driven purely by user action (scroll / pill), never by a post-commit
+  // position measurement: async content that arrives in multiple waves (events,
+  // then messages) must not be mistaken for the user having scrolled away.
   const lastBottomRef = useRef(true);
-  useEffect(() => {
+  const [atBottom, setAtBottom] = useState(true);
+  // Attached via callback ref so the observer's lifetime tracks the content div's
+  // DOM lifetime — it survives the loading early-return and the log/graph view
+  // toggle, where the scroll container remounts. Each fresh mount re-pins to the
+  // tail so a run always opens at its newest output (cold load with content
+  // already taller than the viewport, or a graph→log round-trip).
+  const roRef = useRef<ResizeObserver | null>(null);
+  const contentRef = useCallback((node: HTMLDivElement | null): void => {
+    roRef.current?.disconnect();
+    roRef.current = null;
+    if (node === null) return;
+    lastBottomRef.current = true;
+    setAtBottom(true);
+    const ro = new ResizeObserver(() => {
+      if (!lastBottomRef.current) return;
+      const el = scrollRef.current;
+      if (el !== null) el.scrollTop = el.scrollHeight;
+    });
+    ro.observe(node);
+    roRef.current = ro;
+  }, []);
+  const handleScroll = useCallback((): void => {
     const el = scrollRef.current;
     if (el === null) return;
-    // Near-bottom heuristic: within 120px of the end.
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
-    lastBottomRef.current = atBottom;
-  });
-  useEffect(() => {
+    const near = el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX;
+    lastBottomRef.current = near;
+    setAtBottom(near);
+  }, []);
+  const scrollToBottom = useCallback((): void => {
     const el = scrollRef.current;
-    if (el === null || !lastBottomRef.current) return;
+    if (el === null) return;
     el.scrollTop = el.scrollHeight;
-  }, [messages?.length, detail?.events.length]);
+    lastBottomRef.current = true;
+    setAtBottom(true);
+  }, []);
 
   // Keymap bindings: hoisted above early returns so the hook order is stable
   // across all render paths (loading, error, ready).
@@ -382,46 +414,59 @@ export function RunDetailPage(): ReactElement {
 
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           {view === 'log' ? (
-            <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
-              <div className="w-full px-6">
-                <div className="sticky top-0 z-10 -mx-6 bg-surface px-6">{toolbar}</div>
+            <div className="relative min-h-0 flex-1">
+              <div ref={scrollRef} onScroll={handleScroll} className="h-full overflow-y-auto">
+                <div ref={contentRef} className="w-full px-6">
+                  <div className="sticky top-0 z-10 -mx-6 bg-surface px-6">{toolbar}</div>
 
-                <div className="py-4">
-                  <RunStartedLine run={run} />
+                  <div className="py-4">
+                    <RunStartedLine run={run} />
 
-                  <div className="mt-2">
-                    <RunStream
-                      messages={messageList}
-                      events={events}
-                      showToolCalls={showToolCalls}
-                      showSystem={showSystem}
-                      selectedNodeId={selectedNodeId}
-                    />
-                  </div>
-
-                  <RunFinishedLine run={run} />
-
-                  {run.status === 'paused' &&
-                  run.approval !== null &&
-                  run.approval !== undefined ? (
-                    <div className="mt-6 rounded border border-warning/30 bg-warning/[0.04] p-4">
-                      <div className="mb-2 flex items-center gap-2">
-                        <span
-                          aria-hidden
-                          className="h-2 w-2 animate-pulse rounded-full bg-warning"
-                        />
-                        <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-warning">
-                          Waiting for approval
-                        </span>
-                      </div>
-                      <ApprovalContext run={run} />
-                      <div className="mt-2">
-                        <ApprovalPanel run={run} />
-                      </div>
+                    <div className="mt-2">
+                      <RunStream
+                        messages={messageList}
+                        events={events}
+                        showToolCalls={showToolCalls}
+                        showSystem={showSystem}
+                        selectedNodeId={selectedNodeId}
+                      />
                     </div>
-                  ) : null}
+
+                    <RunFinishedLine run={run} />
+
+                    {run.status === 'paused' &&
+                    run.approval !== null &&
+                    run.approval !== undefined ? (
+                      <div className="mt-6 rounded border border-warning/30 bg-warning/[0.04] p-4">
+                        <div className="mb-2 flex items-center gap-2">
+                          <span
+                            aria-hidden
+                            className="h-2 w-2 animate-pulse rounded-full bg-warning"
+                          />
+                          <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-warning">
+                            Waiting for approval
+                          </span>
+                        </div>
+                        <ApprovalContext run={run} />
+                        <div className="mt-2">
+                          <ApprovalPanel run={run} />
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
               </div>
+              {!atBottom ? (
+                <button
+                  type="button"
+                  onClick={scrollToBottom}
+                  aria-label="Jump to bottom"
+                  className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-full border border-border bg-surface-elevated px-3 py-1 text-[11px] text-text-secondary shadow-md transition-colors hover:text-text-primary"
+                >
+                  <span aria-hidden>↓</span>
+                  Jump to bottom
+                </button>
+              ) : null}
             </div>
           ) : view === 'graph' ? (
             <>
