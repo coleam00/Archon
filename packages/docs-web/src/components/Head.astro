@@ -1,0 +1,51 @@
+---
+/**
+ * Custom Head component override for Starlight.
+ * Adds:
+ * 1. JSON-LD structured data (schema.org TechArticle) for LLM citation accuracy and SEO
+ * 2. <link rel="alternate" type="text/markdown"> pointing to .md version of each page
+ *
+ * Combined from PRs #2068 (JSON-LD) and #2069 (markdown URLs).
+ */
+const { starlightRoute } = Astro.locals;
+const { head, entry, siteTitle } = starlightRoute;
+
+// Build the canonical URL for this page (same approach Starlight uses internally)
+const siteUrl = Astro.site?.href ?? 'https://archon.diy';
+const pageUrl = new URL(Astro.url.pathname, siteUrl).href;
+
+// Build the markdown alternate URL
+// HTML pages are at /path/to/page/ -> .md files are at /path/to/page.md
+const pathname = Astro.url.pathname;
+const mdPath = pathname === '/'
+  ? 'index.md'
+  : (pathname.endsWith('/') ? pathname.slice(0, -1) : pathname) + '.md';
+const mdUrl = new URL(mdPath, siteUrl).href;
+
+// Extract page metadata with fallbacks
+const pageTitle = entry.data.title ?? siteTitle ?? 'Archon';
+const pageDescription = entry.data.description ?? 'Archon documentation';
+
+// Build JSON-LD structured data for TechArticle
+const jsonLd = {
+  '@context': 'https://schema.org',
+  '@type': 'TechArticle',
+  headline: pageTitle,
+  description: pageDescription,
+  url: pageUrl,
+  isPartOf: {
+    '@type': 'WebSite',
+    name: 'Archon',
+    url: siteUrl,
+  },
+};
+---
+
+{/* Render original Starlight head elements */}
+{head.map(({ tag: Tag, attrs, content }) => <Tag {...attrs} set:html={content} />)}
+
+{/* Add JSON-LD structured data */}
+<script type="application/ld+json" set:html={JSON.stringify(jsonLd).replace(/</g, '\\u003c')} />
+
+{/* Add alternate link to markdown version */}
+<link rel="alternate" type="text/markdown" href={mdUrl} title={`${pageTitle} (Markdown)`} />
