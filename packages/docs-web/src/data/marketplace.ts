@@ -214,4 +214,16 @@ export const marketplaceEntries: MarketplaceEntry[] = [
     tags: ['automation', 'development'],
     archonVersionCompat: '>=0.5.0',
   },
+  {
+    slug: 'epic-piv-ticket',
+    name: 'Epic PIV Ticket',
+    author: 'TheSmokeDev',
+    description:
+      'One well-scoped GitHub issue in, a fully-gated draft PR out. A fresh-context worker implements; a deterministic test gate re-executes its recorded suite; an adversarial codex implementation review and an independent design review (any OpenAI-compatible model) gate the diff, with autonomous reconcile rounds, hard round caps, and fail-closed script verdicts. Never merges - you do.',
+    sourceUrl:
+      'https://github.com/TheSmokeDev/epic-piv-ticket/tree/fef6b1749f460fc9d5c5e60b4afc426851d6ec5f/marketplace/epic-piv-ticket',
+    sha: 'fef6b1749f460fc9d5c5e60b4afc426851d6ec5f',
+    tags: ['automation', 'development'],
+    archonVersionCompat: '>=0.6.0',
+  },
 ];
