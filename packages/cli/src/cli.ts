@@ -161,7 +161,7 @@ Options:
   --quiet, -q                Reduce log verbosity to warnings and errors only
   --verbose, -v              Show debug-level output
   --json                     Output machine-readable JSON (list/status/get/runs/approve/reject/abandon/resume)
-  --detach                   Run 'workflow run' in a detached background child (returns immediately)
+  --detach                   Run 'workflow run'/'approve'/'reject'/'resume' in a detached background child (returns immediately)
   --all                      For 'workflow runs': list across all projects (ignore cwd scope)
   --status <status>          For 'workflow runs': filter to one status (running, completed, failed, ...)
   --limit <n>                For 'workflow runs': max rows (default 20)
@@ -618,7 +618,7 @@ async function main(): Promise<number> {
               console.error('Usage: archon workflow resume <run-id>');
               return 1;
             }
-            await workflowResumeCommand(resumeRunId, jsonFlag, effectiveCwd);
+            await workflowResumeCommand(resumeRunId, jsonFlag, effectiveCwd, detachFlag);
             break;
           }
 
@@ -645,7 +645,13 @@ async function main(): Promise<number> {
             const rawApproveComment =
               (values.comment as string | undefined) || positionals.slice(3).join(' ');
             const approveComment = rawApproveComment.length > 0 ? rawApproveComment : undefined;
-            await workflowApproveCommand(approveRunId, approveComment, jsonFlag, effectiveCwd);
+            await workflowApproveCommand(
+              approveRunId,
+              approveComment,
+              jsonFlag,
+              effectiveCwd,
+              detachFlag
+            );
             break;
           }
 
@@ -658,7 +664,13 @@ async function main(): Promise<number> {
             const rawRejectReason =
               (values.reason as string | undefined) || positionals.slice(3).join(' ');
             const rejectReason = rawRejectReason.length > 0 ? rawRejectReason : undefined;
-            await workflowRejectCommand(rejectRunId, rejectReason, jsonFlag, effectiveCwd);
+            await workflowRejectCommand(
+              rejectRunId,
+              rejectReason,
+              jsonFlag,
+              effectiveCwd,
+              detachFlag
+            );
             break;
           }
 
