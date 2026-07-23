@@ -13,6 +13,8 @@ sidebar:
 
 Deploy Archon to a cloud VPS for 24/7 operation with automatic HTTPS and persistent uptime.
 
+> **Docker Compose deployment:** This guide uses the repository's Compose files. Edit `/opt/archon/.env` directly; do **not** run `archon setup` on the VPS. That wizard writes Archon-owned CLI environment files, not the repository `.env` consumed by Docker Compose.
+
 **Navigation:** [Prerequisites](#prerequisites) | [Server Setup](#1-server-provisioning--initial-setup) | [DNS Configuration](#2-dns-configuration) | [Repository Setup](#3-clone-repository) | [Environment Config](#4-environment-configuration) | [Database Migration](#5-database-migration) | [Caddy Setup](#6-caddy-configuration) | [Start Services](#7-start-services) | [Verify](#8-verify-deployment)
 
 ---

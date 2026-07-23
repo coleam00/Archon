@@ -41,13 +41,19 @@ Evidence: The same page's basic-auth example at `docker.md:307-311` and `.env.ex
 
 ## Implementation Plan
 
-### Step 1: Correct the form-auth environment example
+### Step 1: Clarify the Docker Compose configuration path
+
+**File**: `packages/docs-web/src/content/docs/deployment/cloud.md`
+
+Add a prominent note that this guide is for the repository's Docker Compose deployment: edit `/opt/archon/.env` directly and do not run `archon setup` on the VPS, because that wizard writes Archon-owned CLI environment scopes rather than the repository `.env` consumed by Compose.
+
+### Step 2: Correct the form-auth environment example
 
 **File**: `packages/docs-web/src/content/docs/deployment/docker.md`
 
 Change `AUTH_PASSWORD_HASH=$2b$12$REPLACE_WITH_YOUR_HASH` to `AUTH_PASSWORD_HASH=$$2b$$12$$REPLACE_WITH_YOUR_HASH`, followed by a sentence stating that every `$` must be written as `$$` because Docker Compose performs variable interpolation.
 
-### Step 2: Validate documentation consistency
+### Step 3: Validate documentation consistency
 
 Confirm the updated snippet matches the escaped examples in `.env.example`, `Caddyfile.example`, and the basic-auth section. Run the docs package checks or repository validation available in this checkout.
 
@@ -79,7 +85,7 @@ Manual verification: grep the form-auth example and confirm it contains `$$` for
 
 ## Scope Boundaries
 
-**IN SCOPE:** Correct the Docker form-auth documentation example and explain Compose escaping.
+**IN SCOPE:** Clarify the Docker Compose environment-file path in the cloud guide; correct the Docker form-auth documentation example and explain Compose escaping.
 
 **OUT OF SCOPE:** Runtime auth changes, CLI setup behavior, duplicating the Docker guide into the cloud page, or unrelated deployment refactors.
 
