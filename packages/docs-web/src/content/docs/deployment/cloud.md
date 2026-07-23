@@ -594,8 +594,11 @@ docker compose --profile cloud logs -f app
 curl https://archon.yourdomain.com/api/health
 # Expected: {"status":"ok"}
 
-# The response includes database connectivity and concurrency status
+# Confirms the server is responding and exposes concurrency status
 # Expected: {"status":"ok", ...}
+
+# Optional: verify database connectivity directly
+psql "$DATABASE_URL" -c 'SELECT 1'
 
 ```
 
