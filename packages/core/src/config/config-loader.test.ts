@@ -262,6 +262,28 @@ recommendedWorkflows: "archon-plan"
 
       expect(config.recommendedWorkflows).toBeUndefined();
     });
+
+    test('parses worktree.engine as worktrunk', async () => {
+      mockFsReadFile.mockResolvedValue(`
+worktree:
+  engine: worktrunk
+`);
+
+      const config = await loadRepoConfig('/test/repo');
+
+      expect(config.worktree?.engine).toBe('worktrunk');
+    });
+
+    test('worktree.engine is undefined when not configured (git engine applies by default)', async () => {
+      mockFsReadFile.mockResolvedValue(`
+worktree:
+  baseBranch: main
+`);
+
+      const config = await loadRepoConfig('/test/repo');
+
+      expect(config.worktree?.engine).toBeUndefined();
+    });
   });
 
   describe('loadConfig', () => {

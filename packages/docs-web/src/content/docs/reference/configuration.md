@@ -150,6 +150,8 @@ worktree:
                         # Must be relative; no absolute, no `..` segments.
   remote: origin        # Optional: git remote name for fetch/push. Auto-detected
                         # when omitted (origin if it exists, sole remote otherwise).
+  engine: git           # Optional: 'git' (default) or 'worktrunk'. See "Worktree engine
+                        # (worktree.engine)" below.
 
 # Documentation directory
 docs:
@@ -250,6 +252,24 @@ worktree:
 3. If auto-detection fails and a workflow references `$BASE_BRANCH`: Fails with an error explaining the resolution chain.
 
 **Docs path behavior:** The `docs.path` setting controls where the `$DOCS_DIR` variable points. When not configured, `$DOCS_DIR` defaults to `docs/`. Unlike `$BASE_BRANCH`, this variable always has a safe default and never throws an error. Configure it when your documentation lives outside the standard `docs/` directory (e.g., `packages/docs-web/src/content/docs`).
+
+### Worktree engine (`worktree.engine`)
+
+The low-level tool Archon uses to create and remove worktrees is pluggable:
+
+```yaml
+worktree:
+  engine: worktrunk  # Optional: 'git' (default) or 'worktrunk'
+```
+
+- **`git`** (default) — raw `git worktree` commands. Zero behavior change from earlier Archon versions.
+- **`worktrunk`** — shells out to [`wt`](https://worktrunk.dev), a git worktree manager built for parallel AI agent workflows. When Archon creates or removes a worktree, your worktrunk hooks (env setup, dependency install, cleanup, etc.) run exactly as they would for a worktree you created by hand, and the worktree shows up in `wt list` alongside everything else.
+
+Archon still owns the worktree's filesystem location in both engines — worktrunk's own path template is overridden per invocation, so `worktree.path`, the default `~/.archon/workspaces/<owner>/<repo>/worktrees/` layout, and the environment registry all behave identically regardless of engine.
+
+**Requirements for `worktrunk`:** the `wt` binary must be on `PATH` and at least the minimum version Archon has verified against. If it's missing or too old, worktree creation **fails with an actionable error naming `wt`** — there is no silent fallback to the git engine. An unrecognized `engine` value fails the same way.
+
+**Not affected by `worktree.engine`:** fork-PR review checkouts (`refs/pull/N/head`) always use raw git — there is no worktrunk equivalent for synthetic review branches. Branch creation/deletion semantics, adoption, `copyFiles`, and submodule init are identical regardless of engine; only the underlying add/remove/list plumbing changes.
 
 ### Recommended workflows (`recommendedWorkflows`)
 

@@ -83,9 +83,9 @@ Compares `store.countActiveByCodebase()` against `maxWorktrees` (default 25). If
 - Auto-detects default branch: `symbolic-ref` → `origin/main` → `master`
 
 **3. Create worktree**
-- For PRs (same-repo): `git fetch origin prBranch` → `git worktree add path -b prBranch origin/prBranch`
-- For PRs (fork): fetch `refs/pull/{N}/head` → create at SHA → checkout branch
-- For all others: `git worktree add path -b branchName origin/{baseBranch}`
+- For PRs (same-repo): `git fetch origin prBranch` → engine `add()` (`git worktree add`/`wt switch --create`, tracking `origin/prBranch`)
+- For PRs (fork): fetch `refs/pull/{N}/head` → create at SHA → checkout branch — **always raw git**, regardless of the configured engine (no worktrunk equivalent for synthetic review branches)
+- For all others: engine `add()` with start-point `origin/{baseBranch}`
 - Before creation: `cleanOrphanDirectoryIfExists()` removes stale non-worktree directories
 
 **4. Copy configured files**
@@ -93,6 +93,21 @@ Compares `store.countActiveByCodebase()` against `maxWorktrees` (default 25). If
 - User config: additional paths from `.archon/config.yaml` `worktree.copyFiles`
 - Supports `"source -> destination"` arrow syntax
 - Path traversal blocked (security check via `isPathWithinRoot()`)
+
+---
+
+## Worktree Engine (`packages/isolation/src/engine/`, #2260)
+
+The low-level add/remove/list/prune plumbing behind `WorktreeProvider` is pluggable via `worktree.engine` in `.archon/config.yaml` (`'git'` default, `'worktrunk'` opt-in). `WorktreeProvider` resolves the engine once per `create()`/`destroy()`/`list()` call (`resolveWorktreeEngine()` in `resolve.ts`) and never bypasses it for the paths engines cover — all provider-level logic (branch naming, adoption, copyFiles, submodules, branch cleanup) stays engine-independent.
+
+| File | Purpose |
+|------|---------|
+| `engine/types.ts` | `WorktreeEngine` interface: `add`/`remove`/`list`/`prune` |
+| `engine/git-engine.ts` | `GitWorktreeEngine` — the historical raw `git worktree` commands, moved behind the interface verbatim |
+| `engine/worktrunk-engine.ts` | `WorktrunkEngine` — shells out to `wt`; pins the worktree destination via `--config-set worktree-path="<literal>"` so Archon's path layout is unaffected; preflights the binary (`wt --version`) and fails fast (cached only on success) if missing or below `MIN_WORKTRUNK_VERSION` |
+| `engine/resolve.ts` | `resolveWorktreeEngine(engine?: string)` — maps the config string to a singleton engine instance; throws on an unrecognized value (no silent git fallback) |
+
+Fork-PR checkout (`refs/pull/N/head`) always uses raw `git worktree add` directly — never routed through the configured engine (issue #2260 non-goal). Best-effort orphan cleanup after a partial PR-creation failure (`cleanOrphanWorktreeIfExists`) also stays on raw git deliberately: it's cleaning up an ordinary git worktree regardless of which engine created it, so `git worktree remove` works either way, and skipping worktrunk's remove hooks in this rare error-recovery path is an acceptable simplification.
 
 ---
 
@@ -225,6 +240,7 @@ If merged cleanup frees space → proceed with creation. If not → block with f
 | Factory / singleton | `packages/isolation/src/factory.ts` |
 | 7-step resolver | `packages/isolation/src/resolver.ts` |
 | `WorktreeProvider` | `packages/isolation/src/providers/worktree.ts` |
+| `WorktreeEngine` interface + git/worktrunk impls | `packages/isolation/src/engine/` |
 | File copy utilities | `packages/isolation/src/worktree-copy.ts` |
 | Error classification | `packages/isolation/src/errors.ts` |
 | Cleanup service | `packages/core/src/services/cleanup-service.ts` |
