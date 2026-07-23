@@ -125,25 +125,39 @@ const atomPattern =
   /^\$([a-zA-Z_][a-zA-Z0-9_-]*)\.output(?:\.([a-zA-Z_][a-zA-Z0-9_]*))?\s*(==|!=|<=|>=|<|>)\s*'([^']*)'$/;
 
 /**
+ * Why an atom failed to parse — additive diagnostic info alongside the
+ * `parsed: false` contract established by #1673 (never changes `parsed`'s
+ * meaning, only explains it):
+ *   'syntax'             — the `when:` expression itself doesn't match the
+ *                           supported grammar (typo, unsupported operator, etc.)
+ *   'output_unresolvable' — the expression's syntax is fine, but the upstream
+ *                           node's output couldn't be resolved as JSON for the
+ *                           referenced field (commonly: that node was rate-limited
+ *                           or errored and returned prose instead of structured
+ *                           output). Different root cause, different fix.
+ */
+export type AtomFailureReason = 'syntax' | 'output_unresolvable';
+
+/**
  * Evaluate a single atomic condition expression against upstream node outputs.
  */
 function evaluateAtom(
   expr: string,
   nodeOutputs: Map<string, NodeOutput>
-): { result: boolean; parsed: boolean } {
+): { result: boolean; parsed: boolean; reason?: AtomFailureReason } {
   const trimmed = expr.trim();
   const match = atomPattern.exec(trimmed);
 
   if (!match) {
     getLog().debug({ expr }, 'condition_parse_failed');
-    return { result: false, parsed: false };
+    return { result: false, parsed: false, reason: 'syntax' };
   }
 
   const [, nodeId, field, operator, expected] = match;
 
   if (nodeId === undefined || operator === undefined || expected === undefined) {
     getLog().debug({ expr }, 'condition_parse_unexpected_undefined');
-    return { result: false, parsed: false };
+    return { result: false, parsed: false, reason: 'syntax' };
   }
 
   let actual: string;
@@ -151,7 +165,7 @@ function evaluateAtom(
     actual = resolveOutputRef(nodeId, field, nodeOutputs);
   } catch (err) {
     if (err instanceof OutputRefParseError) {
-      return { result: false, parsed: false };
+      return { result: false, parsed: false, reason: 'output_unresolvable' };
     }
     throw err;
   }
@@ -165,7 +179,7 @@ function evaluateAtom(
     const expectedNum = parseFloat(expected);
     if (!Number.isFinite(actualNum) || !Number.isFinite(expectedNum)) {
       getLog().debug({ expr, actual, expected }, 'condition_numeric_parse_failed');
-      return { result: false, parsed: false };
+      return { result: false, parsed: false, reason: 'syntax' };
     }
     if (operator === '<') result = actualNum < expectedNum;
     else if (operator === '>') result = actualNum > expectedNum;
@@ -185,13 +199,16 @@ function evaluateAtom(
  *
  * @param expr - The when: expression string e.g. "$classify.output.type == 'BUG'"
  * @param nodeOutputs - Map of nodeId → NodeOutput for all settled upstream nodes (completed, failed, or skipped)
- * @returns `{ result: boolean; parsed: boolean }` — result is true to run the node, false to skip;
- *   parsed is false when the expression could not be parsed (fail-closed: result defaults to false)
+ * @returns `{ result: boolean; parsed: boolean; reason?: AtomFailureReason }` — result is true to
+ *   run the node, false to skip; parsed is false when the expression could not be parsed
+ *   (fail-closed: result defaults to false). `reason` is additive diagnostic info (never changes
+ *   `parsed`'s meaning) distinguishing an actual syntax error from a valid expression whose
+ *   referenced upstream output couldn't be resolved as JSON — see `AtomFailureReason`.
  */
 export function evaluateCondition(
   expr: string,
   nodeOutputs: Map<string, NodeOutput>
-): { result: boolean; parsed: boolean } {
+): { result: boolean; parsed: boolean; reason?: AtomFailureReason } {
   const trimmed = expr.trim();
 
   // Split on || — OR has lower precedence
@@ -203,8 +220,8 @@ export function evaluateCondition(
     let orClauseResult = true;
 
     for (const atom of andAtoms) {
-      const { result, parsed } = evaluateAtom(atom, nodeOutputs);
-      if (!parsed) return { result: false, parsed: false }; // fail-closed on any parse error
+      const { result, parsed, reason } = evaluateAtom(atom, nodeOutputs);
+      if (!parsed) return { result: false, parsed: false, reason }; // fail-closed on any parse error
       if (!result) {
         orClauseResult = false;
         break; // short-circuit AND

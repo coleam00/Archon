@@ -2666,18 +2666,28 @@ export async function executeDagWorkflow(
 
           // 2. Evaluate when: condition
           if (node.when !== undefined) {
-            const { result: conditionPasses, parsed: conditionParsed } = evaluateCondition(
-              node.when,
-              nodeOutputs
-            );
+            const {
+              result: conditionPasses,
+              parsed: conditionParsed,
+              reason: conditionFailureReason,
+            } = evaluateCondition(node.when, nodeOutputs);
             if (!conditionParsed) {
-              const parseErrMsg = `\u26a0\ufe0f Node '${node.id}': unparseable \`when:\` expression "${node.when}" \u2014 node skipped (fail-closed). Check syntax: \`$nodeId.output == 'VALUE'\`, \`$nodeId.output > '5'\`, or compound \`$a.output == 'X' && $b.output != 'Y'\`.`;
+              // Two different root causes get fail-closed to the same `parsed: false` (#1673's
+              // contract, unchanged) but deserve different messages: a genuine syntax error in
+              // the `when:` expression itself vs. valid syntax whose referenced upstream output
+              // couldn't be resolved as JSON (commonly: that upstream node was rate-limited or
+              // errored and returned prose instead of structured output \u2014 a data problem, not a
+              // syntax problem, and telling the user to "check syntax" for that case is misleading).
+              const parseErrMsg =
+                conditionFailureReason === 'output_unresolvable'
+                  ? `\u26a0\ufe0f Node '${node.id}': the \`when:\` expression "${node.when}" has valid syntax, but the referenced upstream node's output couldn't be parsed as JSON \u2014 node skipped (fail-closed). This usually means the upstream node was rate-limited, erred, or otherwise didn't return real structured output. Check that node's actual output before assuming the condition itself is wrong.`
+                  : `\u26a0\ufe0f Node '${node.id}': unparseable \`when:\` expression "${node.when}" \u2014 node skipped (fail-closed). Check syntax: \`$nodeId.output == 'VALUE'\`, \`$nodeId.output > '5'\`, or compound \`$a.output == 'X' && $b.output != 'Y'\`.`;
               await safeSendMessage(platform, conversationId, parseErrMsg, {
                 workflowId: workflowRun.id,
                 nodeName: node.id,
               });
               getLog().error(
-                { nodeId: node.id, when: node.when },
+                { nodeId: node.id, when: node.when, reason: conditionFailureReason },
                 'dag_node_skipped_condition_parse_error'
               );
               await logNodeSkip(
@@ -2693,7 +2703,11 @@ export async function executeDagWorkflow(
                   workflow_run_id: workflowRun.id,
                   event_type: 'node_skipped',
                   step_name: node.id,
-                  data: { reason: 'when_condition_parse_error', expr: node.when },
+                  data: {
+                    reason: 'when_condition_parse_error',
+                    subReason: conditionFailureReason,
+                    expr: node.when,
+                  },
                 })
                 .catch((err: Error) => {
                   getLog().error(

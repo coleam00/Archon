@@ -511,4 +511,33 @@ describe('evaluateCondition', () => {
     expect(result).toBe(false);
     expect(parsed).toBe(false);
   });
+
+  // --- reason: distinguishes syntax errors from unresolvable-output errors,
+  // additive to the #1673 parsed:false contract (never changes `parsed` itself) ---
+
+  it("reason: 'syntax' for a genuinely malformed expression", () => {
+    const outputs = new Map([['n', makeOutput('{"x": "y"}')]]);
+    const { parsed, reason } = evaluateCondition('not a valid expression at all', outputs);
+    expect(parsed).toBe(false);
+    expect(reason).toBe('syntax');
+  });
+
+  it("reason: 'output_unresolvable' for valid syntax whose upstream output isn't JSON", () => {
+    // Mirrors the real-world case this was added for: an upstream node rate-limited
+    // mid-run and returned prose ("You've hit your session limit...") instead of the
+    // structured JSON its output_format required.
+    const outputs = new Map([
+      ['gate', makeOutput("You've hit your session limit · resets 4:50pm (Europe/Amsterdam)")],
+    ]);
+    const { parsed, reason } = evaluateCondition("$gate.output.verdict == 'review'", outputs);
+    expect(parsed).toBe(false);
+    expect(reason).toBe('output_unresolvable');
+  });
+
+  it('reason is undefined on a successful parse', () => {
+    const outputs = new Map([['n', makeOutput('{"x": "y"}')]]);
+    const { parsed, reason } = evaluateCondition("$n.output.x == 'y'", outputs);
+    expect(parsed).toBe(true);
+    expect(reason).toBeUndefined();
+  });
 });

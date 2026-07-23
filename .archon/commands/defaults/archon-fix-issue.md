@@ -23,6 +23,26 @@ Execute the implementation plan from `/investigate-issue`:
 
 **Golden Rule**: Follow the artifact. If something seems wrong, validate it first - don't silently deviate.
 
+**You are running unattended — there is no human on the other end of this
+run who can answer a mid-execution question.** This command executes as a
+DAG node dispatched from the CLI or a scheduled trigger; pausing to ask
+"how do you want me to proceed?" produces a message nobody will ever read,
+and the node then reports "complete" having implemented nothing — silently
+turning real, actionable ambiguity into a no-op. When the artifact, the
+issue body, or the existing codebase doesn't fully resolve a design
+decision:
+- Make the most reasonable, defensible choice yourself, using whatever
+  research/investigation context is available (web research, existing code
+  patterns, explicit preferences stated in the issue body).
+- Record the decision and your reasoning in the implementation report's
+  "Deviations from Investigation" section (Phase 8) — this is the
+  mechanism for surfacing judgment calls to a human, not a chat question.
+- Only genuinely stop short of implementing if the ambiguity is severe
+  enough that any choice risks real harm (e.g., conflicting/contradictory
+  instructions, a decision that can't be reversed later) — and even then,
+  write that reasoning to the implementation artifact rather than just
+  ending the turn with a question.
+
 ---
 
 ## Phase 1: LOAD - Get the Artifact
@@ -54,12 +74,14 @@ cat {artifact-path}
 
 ### 1.3 Validate Artifact Exists
 
-**If artifact not found:**
-```
-❌ Investigation artifact not found at $ARTIFACTS_DIR/investigation.md
-
-Run `/investigate-issue {number}` first to create the implementation plan.
-```
+**If artifact not found:** don't just report the error and stop — per the
+unattended-execution note above, no one will see that message in time to
+re-run `/investigate-issue` for you. Instead, do the investigation
+yourself: read the issue body (via `$CONTEXT` or `gh issue view`), read the
+relevant code directly, and proceed with implementation using that as your
+plan. Note in the implementation report's Deviations section that the
+investigation artifact was missing and you substituted a direct read of
+the issue/codebase for it.
 
 **PHASE_1_CHECKPOINT:**
 - [ ] Artifact found and loaded
@@ -77,18 +99,11 @@ For each file mentioned in the artifact:
 - Compare to what artifact expects
 - Check if the "current code" snippets match reality
 
-**If significant drift detected:**
-```
-⚠️ Code has changed since investigation:
-
-File: src/x.ts:45
-- Artifact expected: {snippet}
-- Actual code: {different snippet}
-
-Options:
-1. Re-run /investigate-issue to get fresh analysis
-2. Proceed carefully with manual adjustments
-```
+**If significant drift detected:** proceed with manual adjustments — re-read
+the actual current code and adapt the artifact's plan to match reality,
+rather than pausing to offer a choice no one is present to make. Note the
+drift and how you adjusted for it in the implementation report's
+Deviations section.
 
 ### 2.2 Confirm Approach Makes Sense
 
@@ -97,10 +112,11 @@ Ask yourself:
 - Are there obvious problems with the approach?
 - Has something changed that invalidates the plan?
 
-**If plan seems wrong:**
-- STOP
-- Explain what's wrong
-- Suggest re-investigation
+**If plan seems wrong:** don't just stop and suggest re-investigation — per
+the unattended-execution note above, do the re-investigation yourself
+(re-read the current code, revise the approach) and proceed with the
+corrected plan. Document what was wrong with the original plan and how you
+corrected it in the implementation report's Deviations section.
 
 **PHASE_2_CHECKPOINT:**
 - [ ] Artifact matches current codebase state
@@ -447,9 +463,9 @@ Proceeding to PR creation...
 ## Handling Edge Cases
 
 ### Artifact is outdated
-- Warn user about drift
-- Suggest re-running `/investigate-issue`
-- Can proceed with caution if changes are minor
+- Re-read the current code yourself and proceed with an adjusted plan —
+  don't just warn and suggest a re-run no one is present to act on
+- Note the drift and the adjustment in the implementation report
 
 ### Tests fail after implementation
 - Debug the failure
