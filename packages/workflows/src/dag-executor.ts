@@ -1337,6 +1337,31 @@ async function executeNodeInternal(
   } catch (error) {
     const err = error as Error;
     getLog().error({ nodeId: node.id, error: err.message }, 'dag.node_prompt_substitution_failed');
+    await logNodeError(logDir, workflowRun.id, node.id, err.message);
+    // Emit the terminal event (mirrors the command-load failure path above).
+    // Without it the node emits node_started and then vanishes with no terminal
+    // event, so downstream all_success rules silently skip instead of the run
+    // surfacing the failure.
+    deps.store
+      .createWorkflowEvent({
+        workflow_run_id: workflowRun.id,
+        event_type: 'node_failed',
+        step_name: stepName,
+        data: { error: err.message },
+      })
+      .catch((persistErr: Error) => {
+        getLog().error(
+          { err: persistErr, workflowRunId: workflowRun.id, eventType: 'node_failed' },
+          'workflow_event_persist_failed'
+        );
+      });
+    emitter.emit({
+      type: 'node_failed',
+      runId: workflowRun.id,
+      nodeId: node.id,
+      nodeName: node.command ?? node.id,
+      error: err.message,
+    });
     await safeSendMessage(
       platform,
       conversationId,

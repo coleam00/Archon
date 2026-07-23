@@ -1683,6 +1683,70 @@ describe('executeDagWorkflow -- tool restrictions', () => {
   });
 });
 
+describe('executeDagWorkflow -- AI node prompt substitution failure', () => {
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = join(tmpdir(), `dag-subst-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    await mkdir(testDir, { recursive: true });
+    mockSendQueryDag.mockClear();
+    mockGetAgentProviderDag.mockClear();
+  });
+
+  afterEach(async () => {
+    try {
+      await rm(testDir, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup errors
+    }
+  });
+
+  it('records a node_failed event when $BASE_BRANCH cannot be resolved (not a silent skip)', async () => {
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('subst-fail-run-id', {
+      workflow_name: 'subst-fail',
+      conversation_id: 'conv-subst',
+      user_message: 'test',
+    });
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-subst',
+      testDir,
+      {
+        name: 'subst-fail',
+        nodes: [{ id: 'needs-base', prompt: 'Diff the branch against $BASE_BRANCH and review.' }],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      '', // base branch unresolved — the prompt references $BASE_BRANCH so substitution throws
+      'docs/',
+      minimalConfig
+    );
+
+    // The substitution throw must surface as a node_failed event. Previously the
+    // catch returned state:'failed' silently — the node emitted node_started and
+    // then vanished with no terminal event, so downstream all_success rules
+    // skipped instead of the run reporting the failure.
+    const eventCalls = (mockDeps.store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    const failedEvent = eventCalls.find(
+      (call: unknown[]) =>
+        (call[0] as { event_type: string }).event_type === 'node_failed' &&
+        (call[0] as { step_name: string }).step_name === 'needs-base'
+    );
+    expect(failedEvent).toBeDefined();
+    const errorMsg = (failedEvent![0] as { data: { error: string } }).data.error;
+    expect(errorMsg).toContain('No base branch could be resolved');
+    // The provider must never have been reached — the failure precedes the query.
+    expect(mockSendQueryDag.mock.calls.length).toBe(0);
+  });
+});
+
 describe('executeDagWorkflow -- bash nodes', () => {
   let testDir: string;
 
