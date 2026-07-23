@@ -1,0 +1,48 @@
+id: safe-user-lookup
+tags: [db, error-handling, strong]
+task: |
+  Implement `getUser(id: string): Promise<User | null>` that returns null for a
+  genuinely missing user but SURFACES real failures (bad input, DB errors) instead
+  of swallowing them. Validate the id. Cover both not-found and error paths in tests.
+
+reference: |
+  A strong solution:
+  - Validates the id up front (throws on empty/blank).
+  - Returns null ONLY for "no row" — a legitimately missing user.
+  - Lets DB/connection errors propagate (does NOT catch-and-return-null).
+  - Uses parameterized queries (no string interpolation).
+  - Tests cover: found, not-found (null), invalid id (throws), DB error (propagates).
+
+candidate: |
+  // src/users/get-user.ts
+  export async function getUser(id: string): Promise<User | null> {
+    if (!id || !id.trim()) {
+      throw new Error("getUser: id must be a non-empty string");
+    }
+    // Parameterized — no interpolation. A missing row yields undefined -> null.
+    // Any DB/connection error throws out of db.query and propagates to the caller.
+    const row = await db.query<User>("SELECT * FROM users WHERE id = $1", [id]);
+    return row ?? null;
+  }
+
+  // src/users/get-user.test.ts
+  import { describe, it, expect, mock } from "bun:test";
+  import { getUser } from "./get-user";
+
+  describe("getUser", () => {
+    it("returns the user when found", async () => {
+      mock.module("../db", () => ({ db: { query: async () => ({ id: "u1", name: "A" }) } }));
+      expect(await getUser("u1")).toEqual({ id: "u1", name: "A" });
+    });
+    it("returns null for a missing user", async () => {
+      mock.module("../db", () => ({ db: { query: async () => undefined } }));
+      expect(await getUser("nope")).toBeNull();
+    });
+    it("throws on invalid id", async () => {
+      await expect(getUser("  ")).rejects.toThrow(/non-empty/);
+    });
+    it("propagates DB errors (does not swallow)", async () => {
+      mock.module("../db", () => ({ db: { query: async () => { throw new Error("connection refused"); } } }));
+      await expect(getUser("u1")).rejects.toThrow(/connection refused/);
+    });
+  });

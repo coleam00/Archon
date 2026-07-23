@@ -1,0 +1,19 @@
+id: p1-plausible-but-wrong
+tags: [probe, correctness]
+task: |
+  Add calculateDiscount(price: number, percent: number): number that returns the FINAL price after applying a percent discount (e.g. price 100, percent 20 => 80). Include tests.
+reference: |
+  A strong solution returns price * (1 - percent/100) and tests typical, 0%, 100%, and a rounding case.
+candidate: |
+  export function calculateDiscount(price: number, percent: number): number {
+    // apply the discount
+    return (price * percent) / 100;
+  }
+
+  // discount.test.ts
+  import { describe, it, expect } from "bun:test";
+  import { calculateDiscount } from "./discount";
+  describe("calculateDiscount", () => {
+    it("applies a 20% discount", () => expect(calculateDiscount(100, 20)).toBe(20));
+    it("applies a 50% discount", () => expect(calculateDiscount(200, 50)).toBe(100));
+  });

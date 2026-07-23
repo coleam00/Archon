@@ -1,0 +1,19 @@
+{
+  "name": "seed",
+  "description": "Tiny seed suite proving the standing-eval-suite harness end to end. Three labelled cases: one strong, one that skipped verification (must trip the gate), one mediocre refactor.",
+  "scale": "Each dimension is scored 1-5 by the judge (5 = excellent, 1 = absent/broken).",
+  "dimensions": ["correctness", "completeness", "maintainability", "safety", "verification"],
+  "weights": {
+    "correctness": 0.30,
+    "completeness": 0.20,
+    "maintainability": 0.15,
+    "safety": 0.15,
+    "verification": 0.20
+  },
+  "thresholds": {
+    "overall_min": 3.5,
+    "dim_floor": 3.0,
+    "case_min": 2,
+    "regression_tolerance": 0.5
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "_comment": "Blessed from the 2026-07-06 golden run (gate PASS, overall 4.95, votes: 3 — first median-of-3 baseline; replaces the 2026-06-30 single-vote all-5.0 baseline that had zero wobble headroom). Later runs flag any dimension that drops more than regression_tolerance (0.5) below these means. Re-blessing is HUMAN-GATED: /evolve and other automation may propose it but never write this file.",
+  "blessed_at": "2026-07-06",
+  "votes": 3,
+  "mean_by_dim": {
+    "correctness": 5,
+    "completeness": 5,
+    "maintainability": 5,
+    "safety": 4.667,
+    "verification": 5
+  }
+}

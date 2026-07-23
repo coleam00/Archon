@@ -1,0 +1,323 @@
+name: standing-eval-suite
+description: |
+  EXPERIMENTAL: the "standing eval suite" right-edge of the vibe-coding SDLC
+  (companion to agentic-eval-gate, which is one-shot-diff only). Scores a curated,
+  version-controlled set of LABELLED cases against a 5-dimension rubric, aggregates
+  deterministically, compares to a committed baseline, and gates — so quality is
+  measured over TIME, not per-change. This is "evals are the new tests" + the
+  quality flywheel: when something escapes the gate, add a case and it can never
+  regress silently again.
+
+  Dataset lives at `.archon/evals/<suite>/`:
+    suite.json      — rubric dims + weights + thresholds (+ optional baseline.json)
+    cases/*.yaml    — one labelled case each (task / candidate / reference)
+  Select a suite with the EVAL_SUITE env var (default: seed).
+
+  v1 SCOPE (this file): scores PRE-SUPPLIED candidates carried in each case
+  (`candidate:`). Read-only — never edits the repo. Deterministic aggregation;
+  the LLM judge only scores 1-5 per dimension.
+
+  N-VOTE JUDGING (added 2026-07-06, roadmap A4): three independent fresh-context
+  judge votes (score-1/2/3, identical prompts, only the output filename differs);
+  the aggregate takes the per-case-per-dimension MEDIAN. De-flakes the ±1
+  single-vote wobble that made tiny-suite baselines throw false regressions.
+
+  DETECTION SEMANTICS (added 2026-07-06, roadmap A3): a suite MAY carry a
+  `labels.json` next to suite.json — failure-derived cases whose `candidate:` is
+  an escaped DEFECT. For those, the gate INVERTS: the median score on the labelled
+  trap dimension must be <= max_score (the judge must CATCH the defect), and
+  labelled cases are excluded from the mean/threshold math. Labels live OUTSIDE
+  the case YAMLs so the judge stays blind. See .archon/evals/README.md.
+
+  NOT YET (v2): regenerating candidates by invoking a target workflow per case
+  (needs worktree isolation), per-case fan-out via a loop node for large suites,
+  and an `eval add-case` flywheel helper (the manual recipe is in /evolve).
+
+  Model routing (the paper's "routing as a financial lever"): scoring uses the
+  `medium` tier ×3 votes; the readable verdict uses `small`; load + aggregate use
+  no model. Cost per run: 3 medium + 1 small call regardless of suite size.
+
+  IMPLEMENTATION NOTE: the two deterministic nodes are NAMED scripts
+  (.archon/scripts/eval-*.ts), not inline `script: |` bodies. Inline multi-line
+  scripts are passed to `bun -e` as one argv string and truncate at the first
+  newline on Windows — named scripts run via `bun run <file>` and are safe.
+
+tags: [eval, suite, regression, agentic-engineering, sdlc]
+provider: claude
+mutates_checkout: false
+# Read the operator's LIVE checkout (where .archon/evals/<suite> lives), not an
+# isolated empty worktree. No $BASE_BRANCH / base tokens anywhere (not even in
+# comments) — they force eager base resolution that hard-fails on no-origin repos.
+worktree:
+  enabled: false
+
+nodes:
+  # NOTE: score-1/2/3 prompts are currently duplicated; they differ only in output filename.
+  # Future: extract shared judge prompt to a separate template when Archon adds workflow
+  # templating/includes support. For now, keep all three in sync manually.
+
+  # ─── 1. LOAD SUITE (deterministic, no AI) ─────────────────────────────
+  # Validates the dataset exists and writes the case-path queue for the judge.
+  - id: load-suite
+    script: eval-load-suite
+    runtime: bun
+    timeout: 30000
+
+  # ─── 2. SCORE CASES — 3 INDEPENDENT VOTES (reasoning judge ×3) ────────
+  # Three fresh-context votes with IDENTICAL prompts (only the output filename
+  # differs); they run concurrently (same topological layer). The aggregate takes
+  # the per-case-per-dimension median. Blindness is MANDATED, not hoped-for
+  # (read-scope restricted to queue.txt files; no Bash), so suite-dir labels/
+  # baselines can't leak into scoring. v2 replaces the whole-suite pass with a
+  # loop: node (one fresh-context iteration per case) for large suites.
+  - id: score-1
+    depends_on: [load-suite]
+    model: medium
+    context: fresh
+    allowed_tools: [Read, Write]
+    timeout: 300000
+    prompt: |
+      You are a strict eval JUDGE. Score each labelled case on a fixed 5-dimension
+      rubric. Be conservative: when evidence for a dimension is absent, score it
+      LOW — "set the bar at the eval, not the demo." Do NOT edit any repo files.
+
+      ## Where the cases are
+      The file `$ARTIFACTS_DIR/eval/queue.txt` contains one absolute path per line,
+      each pointing at a YAML case file. Read that list, then Read EVERY case file.
+
+      **CRITICAL BLINDNESS CONSTRAINT:** Read ONLY queue.txt and the exact case files it lists.
+      Do NOT read, attempt to read, infer, or reference labels.json, human-labels.json,
+      baseline.json, suite.json, or ANY other file in the eval directory. Violation ruins
+      the calibration. If you find yourself considering reading any file not in the queue,
+      STOP and explain why you need it instead of reading it.
+      Each case has: `id`, `task` (the spec), `candidate` (the work under test),
+      and `reference` (what a correct/strong solution looks like).
+
+      ## The 5 dimensions (score each 1-5: 5 = excellent, 1 = absent/broken)
+      - correctness    — does the candidate actually satisfy the task?
+      - completeness    — are ALL acceptance criteria met, not just the happy path?
+                          SCOPE: judge against the acceptance criteria stated in
+                          the case's task, not against features the task never
+                          asked for.
+      - maintainability — clarity, structure, fit with conventions.
+      - safety          — input validation, error handling, secrets/auth/shell/SQL/paths.
+                          SCOPE: for a candidate with no external/user inputs,
+                          judge on error handling and unsafe operations actually
+                          present, not on the absence of input validation it had
+                          no occasion to need.
+      - verification    — were tests/checks ACTUALLY present for the new behavior?
+                          New/changed behavior with no tests scores LOW here.
+                          MANDATORY inspection: read any check/CI script the
+                          candidate claims (package.json scripts, shell steps). A
+                          "check" that does not execute real tooling — echo/no-op
+                          stubs, commands whose exit code cannot reflect the
+                          code's state — is NOT verification: treat it as absent
+                          (score 1-2) no matter how real the unit tests are.
+
+      Judge the candidate against the reference and the task. Give a one-line
+      rationale per dimension grounded in what the candidate actually contains.
+
+      ## Output (REQUIRED)
+      Write a single JSON ARRAY to `$ARTIFACTS_DIR/eval/results-1.json` using the
+      Write tool — one object per case, in this exact shape:
+      [
+        {
+          "case_id": "<the case id>",
+          "scores": {
+            "correctness":    { "score": 1, "rationale": "..." },
+            "completeness":   { "score": 1, "rationale": "..." },
+            "maintainability":{ "score": 1, "rationale": "..." },
+            "safety":         { "score": 1, "rationale": "..." },
+            "verification":   { "score": 1, "rationale": "..." }
+          }
+        }
+      ]
+      Include EVERY case from the queue exactly once. Valid JSON only (no comments,
+      no trailing commas).
+      **CRITICAL: When writing JSON strings that contain backslashes, quotes, or
+      special characters (from code examples, regex patterns, etc.), escape them
+      properly: backslash becomes \\, quote becomes \", newline becomes \n, etc.
+      Your rationale text will contain code/regex examples — ensure all special
+      characters are JSON-escaped. Use JSON.stringify() semantics.**
+      After writing, reply with a one-line confirmation of how many cases you scored.
+
+  - id: score-2
+    depends_on: [load-suite]
+    model: medium
+    context: fresh
+    allowed_tools: [Read, Write]
+    timeout: 300000
+    prompt: |
+      You are a strict eval JUDGE. Score each labelled case on a fixed 5-dimension
+      rubric. Be conservative: when evidence for a dimension is absent, score it
+      LOW — "set the bar at the eval, not the demo." Do NOT edit any repo files.
+
+      ## Where the cases are
+      The file `$ARTIFACTS_DIR/eval/queue.txt` contains one absolute path per line,
+      each pointing at a YAML case file. Read that list, then Read EVERY case file.
+
+      **CRITICAL BLINDNESS CONSTRAINT:** Read ONLY queue.txt and the exact case files it lists.
+      Do NOT read, attempt to read, infer, or reference labels.json, human-labels.json,
+      baseline.json, suite.json, or ANY other file in the eval directory. Violation ruins
+      the calibration. If you find yourself considering reading any file not in the queue,
+      STOP and explain why you need it instead of reading it.
+      Each case has: `id`, `task` (the spec), `candidate` (the work under test),
+      and `reference` (what a correct/strong solution looks like).
+
+      ## The 5 dimensions (score each 1-5: 5 = excellent, 1 = absent/broken)
+      - correctness    — does the candidate actually satisfy the task?
+      - completeness    — are ALL acceptance criteria met, not just the happy path?
+                          SCOPE: judge against the acceptance criteria stated in
+                          the case's task, not against features the task never
+                          asked for.
+      - maintainability — clarity, structure, fit with conventions.
+      - safety          — input validation, error handling, secrets/auth/shell/SQL/paths.
+                          SCOPE: for a candidate with no external/user inputs,
+                          judge on error handling and unsafe operations actually
+                          present, not on the absence of input validation it had
+                          no occasion to need.
+      - verification    — were tests/checks ACTUALLY present for the new behavior?
+                          New/changed behavior with no tests scores LOW here.
+                          MANDATORY inspection: read any check/CI script the
+                          candidate claims (package.json scripts, shell steps). A
+                          "check" that does not execute real tooling — echo/no-op
+                          stubs, commands whose exit code cannot reflect the
+                          code's state — is NOT verification: treat it as absent
+                          (score 1-2) no matter how real the unit tests are.
+
+      Judge the candidate against the reference and the task. Give a one-line
+      rationale per dimension grounded in what the candidate actually contains.
+
+      ## Output (REQUIRED)
+      Write a single JSON ARRAY to `$ARTIFACTS_DIR/eval/results-2.json` using the
+      Write tool — one object per case, in this exact shape:
+      [
+        {
+          "case_id": "<the case id>",
+          "scores": {
+            "correctness":    { "score": 1, "rationale": "..." },
+            "completeness":   { "score": 1, "rationale": "..." },
+            "maintainability":{ "score": 1, "rationale": "..." },
+            "safety":         { "score": 1, "rationale": "..." },
+            "verification":   { "score": 1, "rationale": "..." }
+          }
+        }
+      ]
+      Include EVERY case from the queue exactly once. Valid JSON only (no comments,
+      no trailing commas).
+      **CRITICAL: When writing JSON strings that contain backslashes, quotes, or
+      special characters (from code examples, regex patterns, etc.), escape them
+      properly: backslash becomes \\, quote becomes \", newline becomes \n, etc.
+      Your rationale text will contain code/regex examples — ensure all special
+      characters are JSON-escaped. Use JSON.stringify() semantics.**
+      After writing, reply with a one-line confirmation of how many cases you scored.
+
+  - id: score-3
+    depends_on: [load-suite]
+    model: medium
+    context: fresh
+    allowed_tools: [Read, Write]
+    timeout: 300000
+    prompt: |
+      You are a strict eval JUDGE. Score each labelled case on a fixed 5-dimension
+      rubric. Be conservative: when evidence for a dimension is absent, score it
+      LOW — "set the bar at the eval, not the demo." Do NOT edit any repo files.
+
+      ## Where the cases are
+      The file `$ARTIFACTS_DIR/eval/queue.txt` contains one absolute path per line,
+      each pointing at a YAML case file. Read that list, then Read EVERY case file.
+
+      **CRITICAL BLINDNESS CONSTRAINT:** Read ONLY queue.txt and the exact case files it lists.
+      Do NOT read, attempt to read, infer, or reference labels.json, human-labels.json,
+      baseline.json, suite.json, or ANY other file in the eval directory. Violation ruins
+      the calibration. If you find yourself considering reading any file not in the queue,
+      STOP and explain why you need it instead of reading it.
+      Each case has: `id`, `task` (the spec), `candidate` (the work under test),
+      and `reference` (what a correct/strong solution looks like).
+
+      ## The 5 dimensions (score each 1-5: 5 = excellent, 1 = absent/broken)
+      - correctness    — does the candidate actually satisfy the task?
+      - completeness    — are ALL acceptance criteria met, not just the happy path?
+                          SCOPE: judge against the acceptance criteria stated in
+                          the case's task, not against features the task never
+                          asked for.
+      - maintainability — clarity, structure, fit with conventions.
+      - safety          — input validation, error handling, secrets/auth/shell/SQL/paths.
+                          SCOPE: for a candidate with no external/user inputs,
+                          judge on error handling and unsafe operations actually
+                          present, not on the absence of input validation it had
+                          no occasion to need.
+      - verification    — were tests/checks ACTUALLY present for the new behavior?
+                          New/changed behavior with no tests scores LOW here.
+                          MANDATORY inspection: read any check/CI script the
+                          candidate claims (package.json scripts, shell steps). A
+                          "check" that does not execute real tooling — echo/no-op
+                          stubs, commands whose exit code cannot reflect the
+                          code's state — is NOT verification: treat it as absent
+                          (score 1-2) no matter how real the unit tests are.
+
+      Judge the candidate against the reference and the task. Give a one-line
+      rationale per dimension grounded in what the candidate actually contains.
+
+      ## Output (REQUIRED)
+      Write a single JSON ARRAY to `$ARTIFACTS_DIR/eval/results-3.json` using the
+      Write tool — one object per case, in this exact shape:
+      [
+        {
+          "case_id": "<the case id>",
+          "scores": {
+            "correctness":    { "score": 1, "rationale": "..." },
+            "completeness":   { "score": 1, "rationale": "..." },
+            "maintainability":{ "score": 1, "rationale": "..." },
+            "safety":         { "score": 1, "rationale": "..." },
+            "verification":   { "score": 1, "rationale": "..." }
+          }
+        }
+      ]
+      Include EVERY case from the queue exactly once. Valid JSON only (no comments,
+      no trailing commas).
+      **CRITICAL: When writing JSON strings that contain backslashes, quotes, or
+      special characters (from code examples, regex patterns, etc.), escape them
+      properly: backslash becomes \\, quote becomes \", newline becomes \n, etc.
+      Your rationale text will contain code/regex examples — ensure all special
+      characters are JSON-escaped. Use JSON.stringify() semantics.**
+      After writing, reply with a one-line confirmation of how many cases you scored.
+
+  # ─── 3. AGGREGATE (deterministic gate, no AI) ─────────────────────────
+  # The authoritative gate. Median-of-3 per case per dimension, queue-identity
+  # check (every queued case scored exactly once per vote), optional labels.json
+  # detection gate, thresholds, baseline regression. Pure JSON math.
+  - id: aggregate
+    depends_on: [score-1, score-2, score-3]
+    script: eval-aggregate
+    runtime: bun
+    timeout: 30000
+
+  # ─── 4. VERDICT (cheap readable synthesis) ────────────────────────────
+  # The aggregate node already decided the gate. This only narrates it for humans.
+  - id: verdict
+    depends_on: [aggregate]
+    model: small
+    context: fresh
+    allowed_tools: []
+    timeout: 60000
+    prompt: |
+      The deterministic scorecard below already contains the AUTHORITATIVE gate
+      decision. Restate it for a human — do NOT recompute or override it. If the
+      gate is FAIL, lead with the concrete blocking reasons (dimension-floor
+      failures, per-case failures, regressions).
+
+      ## Scorecard
+      $aggregate.output
+    output_format:
+      type: object
+      properties:
+        gate:
+          type: string
+          enum: [PASS, FAIL]
+        overall: { type: number }
+        blocking:
+          type: array
+          items: { type: string }
+        summary: { type: string }
+      required: [gate, summary]

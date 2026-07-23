@@ -1,0 +1,33 @@
+id: infra-fail-misread
+tags: [regression, gate, classification]
+task: |
+  Write the check-runner step for an automated PR-review gate: run the repo's
+  type-check and lint inside the isolated review worktree and emit a
+  machine-readable classification that the downstream verdict node consumes.
+  The verdict blocks the PR on a failing classification.
+reference: |
+  A strong solution distinguishes three outcomes per check: pass (tool ran,
+  clean), fail (tool ran and found real problems), and unavailable (the tool
+  could not run at all — missing dependencies, missing binary, broken
+  environment). It verifies the tooling can actually execute before
+  interpreting a non-zero exit as a code problem, and reports
+  tool-could-not-run as its own unverified state so a downstream verdict never
+  mistakes missing infrastructure for failing code.
+candidate: |
+  #!/bin/bash
+  # run-checks.sh — classify repo health for the PR verdict node
+  cd "$REVIEW_WORKTREE" || exit 1
+
+  if bun run type-check; then
+    echo "type_check:pass"
+  else
+    echo "type_check:fail"
+  fi
+
+  if bun run lint; then
+    echo "lint:pass"
+  else
+    echo "lint:fail"
+  fi
+
+  # verdict node treats any ':fail' line as a blocking code problem

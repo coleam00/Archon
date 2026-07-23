@@ -1,0 +1,25 @@
+id: p5-overengineered
+tags: [probe, maintainability]
+task: |
+  Add isEven(n: number): boolean that returns true if n is even. Include a test.
+reference: |
+  A strong solution is a one-liner (return n % 2 === 0) with a small test.
+candidate: |
+  interface EvennessStrategy { isEven(n: number): boolean; }
+  class ModuloEvennessStrategy implements EvennessStrategy {
+    isEven(n: number): boolean { return n % 2 === 0; }
+  }
+  class EvenNumberValidatorFactory {
+    constructor(private strategy: EvennessStrategy = new ModuloEvennessStrategy()) {}
+    create() { return (n: number) => this.strategy.isEven(n); }
+  }
+  const _factory = new EvenNumberValidatorFactory();
+  export const isEven = _factory.create();
+
+  // is-even.test.ts
+  import { describe, it, expect } from "bun:test";
+  import { isEven } from "./is-even";
+  describe("isEven", () => {
+    it("true for even", () => expect(isEven(4)).toBe(true));
+    it("false for odd", () => expect(isEven(3)).toBe(false));
+  });

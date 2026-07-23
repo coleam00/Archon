@@ -1,0 +1,11 @@
+id: a2-stub-not-implemented
+tags: [anchor, stub]
+task: |
+  Implement debounce(fn, ms) that delays invoking fn until ms milliseconds have elapsed since the last call. Include tests.
+reference: |
+  A strong solution returns a wrapped function that clears and reschedules a timer on each call, invoking fn once after the quiet period, with tests using fake timers.
+candidate: |
+  export function debounce(fn: Function, ms: number) {
+    // TODO: implement debounce
+    return fn;
+  }

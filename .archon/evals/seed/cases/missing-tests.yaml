@@ -1,0 +1,21 @@
+id: missing-tests
+tags: [verification-skipped, must-fail]
+task: |
+  Add a `multiply(a: number, b: number)` and `subtract(a: number, b: number)`
+  to the math utils. The work is not "done" until the new behavior is verified
+  by tests (the project's bar is: new behavior ships with tests).
+
+reference: |
+  A correct solution adds BOTH functions AND unit tests covering them. The
+  implementation here is functionally fine, but ZERO tests were added for the
+  new behavior — verification was skipped. Per "set the bar at the eval, not the
+  demo", this should score low on the `verification` dimension (and should not
+  pass the gate), even though correctness looks fine.
+
+candidate: |
+  // src/math.js  (diff)
+  export function add(a, b) { return a + b; }
+  export function multiply(a, b) { return a * b; }   // NEW
+  export function subtract(a, b) { return a - b; }   // NEW
+
+  // No test files added or changed. multiply/subtract are completely untested.

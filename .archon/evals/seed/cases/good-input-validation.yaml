@@ -1,0 +1,45 @@
+id: good-input-validation
+tags: [validation, strong-example]
+task: |
+  Add a `parsePort(raw: string): number` helper that converts a string to a TCP
+  port number. It must reject anything that is not an integer in 1..65535 by
+  throwing a clear Error, and it must be covered by tests.
+
+reference: |
+  A correct solution:
+  - Parses with strict integer semantics (rejects "80abc", "3.14", "", "  ").
+  - Enforces the 1..65535 range (rejects 0, 65536, negatives).
+  - Throws an Error with an actionable message naming the bad input.
+  - Ships unit tests covering the happy path AND each rejection branch.
+
+candidate: |
+  // src/net/parse-port.ts
+  export function parsePort(raw: string): number {
+    if (!/^\d+$/.test(raw.trim())) {
+      throw new Error(`Invalid port "${raw}": expected an integer`);
+    }
+    const n = Number(raw.trim());
+    if (!Number.isInteger(n) || n < 1 || n > 65535) {
+      throw new Error(`Invalid port "${raw}": must be 1..65535`);
+    }
+    return n;
+  }
+
+  // src/net/parse-port.test.ts
+  import { describe, it, expect } from "bun:test";
+  import { parsePort } from "./parse-port";
+  describe("parsePort", () => {
+    it("parses valid ports", () => {
+      expect(parsePort("80")).toBe(80);
+      expect(parsePort(" 65535 ")).toBe(65535);
+    });
+    it("rejects non-integers", () => {
+      for (const bad of ["", "  ", "80abc", "3.14", "-1"]) {
+        expect(() => parsePort(bad)).toThrow();
+      }
+    });
+    it("rejects out-of-range", () => {
+      expect(() => parsePort("0")).toThrow();
+      expect(() => parsePort("65536")).toThrow();
+    });
+  });

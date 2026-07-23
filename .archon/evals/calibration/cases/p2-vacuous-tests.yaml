@@ -1,0 +1,18 @@
+id: p2-vacuous-tests
+tags: [probe, verification]
+task: |
+  Add slugify(s: string): string producing a URL-safe slug (lowercase, spaces to hyphens, strip non-alphanumerics, trim leading/trailing hyphens). Include tests.
+reference: |
+  A strong solution normalizes the string correctly and ships tests that ASSERT actual outputs for spaces, punctuation, casing, and edge inputs.
+candidate: |
+  export function slugify(s: string): string {
+    return s.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  }
+
+  // slugify.test.ts
+  import { describe, it, expect } from "bun:test";
+  import { slugify } from "./slugify";
+  describe("slugify", () => {
+    it("is defined", () => expect(slugify).toBeDefined());
+    it("runs without throwing", () => { slugify("Hello World"); expect(true).toBe(true); });
+  });

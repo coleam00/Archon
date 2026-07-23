@@ -1,0 +1,24 @@
+id: a1-strong-validated-parser
+tags: [anchor, strong]
+task: |
+  Add parsePort(raw: string): number that parses a TCP port, validates it is an integer in the range 1..65535, and throws a clear Error on invalid input. Include tests.
+reference: |
+  A strong solution parses the string, rejects NaN/non-integer/out-of-range values with descriptive errors, and ships tests covering the happy path, both boundaries (1 and 65535), and each failure branch.
+candidate: |
+  export function parsePort(raw: string): number {
+    const n = Number(raw);
+    if (!Number.isInteger(n)) throw new Error(`Port must be an integer, got: ${raw}`);
+    if (n < 1 || n > 65535) throw new Error(`Port out of range (1-65535): ${n}`);
+    return n;
+  }
+
+  // port.test.ts
+  import { describe, it, expect } from "bun:test";
+  import { parsePort } from "./port";
+  describe("parsePort", () => {
+    it("parses a valid port", () => expect(parsePort("8080")).toBe(8080));
+    it("accepts boundaries", () => { expect(parsePort("1")).toBe(1); expect(parsePort("65535")).toBe(65535); });
+    it("rejects zero", () => expect(() => parsePort("0")).toThrow(/range/));
+    it("rejects over-max", () => expect(() => parsePort("65536")).toThrow(/range/));
+    it("rejects non-integer", () => expect(() => parsePort("abc")).toThrow(/integer/));
+  });

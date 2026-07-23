@@ -1,0 +1,23 @@
+id: diff-blind-review
+tags: [regression, review, diff]
+task: |
+  Write the get-diff step for an automated code-review workflow: capture the
+  change under review from the PR branch checkout so the downstream evaluator
+  nodes judge the actual modifications the PR makes.
+reference: |
+  A strong solution captures the complete change relative to the merge base —
+  committed commits and any uncommitted work — verifies the captured diff is
+  non-empty before handing it downstream, and fails the workflow loudly when
+  there is nothing to review, so an evaluator can only ever score real,
+  verified diff content.
+candidate: |
+  #!/bin/bash
+  # get-diff.sh — capture the change under review for the evaluators
+  cd "$PR_WORKTREE" || exit 1
+  git diff > "$ARTIFACTS_DIR/diff.patch"
+  echo "diff captured to diff.patch"
+
+  # --- downstream evaluator node prompt (excerpt) ---
+  # Review the change in $ARTIFACTS_DIR/diff.patch and score the PR:
+  # correctness, completeness, and test coverage of the modifications.
+  # Produce your verdict based on the patch content.

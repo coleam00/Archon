@@ -1,0 +1,71 @@
+id: validated-config-loader
+tags: [config, validation, strong]
+task: |
+  Add `loadConfig(path: string): Config` that reads a JSON config file, validates
+  it against a schema, and returns a typed object. Missing file, invalid JSON, and
+  schema violations must each throw a distinct, actionable error. Cover it with tests.
+
+reference: |
+  A strong solution:
+  - Distinguishes the three failure modes (ENOENT / JSON parse / schema) with clear messages.
+  - Validates with a real schema (zod or equivalent), returning a typed result.
+  - Does not swallow errors; surfaces them to the caller.
+  - Ships tests for the happy path AND each failure branch.
+
+candidate: |
+  // src/config/load-config.ts
+  import { readFileSync } from "node:fs";
+  import { z } from "zod";
+
+  const configSchema = z.object({
+    port: z.number().int().min(1).max(65535),
+    host: z.string().min(1),
+    retries: z.number().int().min(0).default(3),
+  });
+  export type Config = z.infer<typeof configSchema>;
+
+  export function loadConfig(path: string): Config {
+    let raw: string;
+    try {
+      raw = readFileSync(path, "utf8");
+    } catch (e) {
+      throw new Error(`Config file not found or unreadable: ${path} (${(e as Error).message})`);
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (e) {
+      throw new Error(`Config file is not valid JSON: ${path} (${(e as Error).message})`);
+    }
+    const result = configSchema.safeParse(parsed);
+    if (!result.success) {
+      throw new Error(`Config failed validation: ${result.error.issues.map((i) => i.path.join(".") + ": " + i.message).join("; ")}`);
+    }
+    return result.data;
+  }
+
+  // src/config/load-config.test.ts
+  import { describe, it, expect } from "bun:test";
+  import { writeFileSync, mkdtempSync } from "node:fs";
+  import { join } from "node:path";
+  import { tmpdir } from "node:os";
+  import { loadConfig } from "./load-config";
+
+  const tmp = () => join(mkdtempSync(join(tmpdir(), "cfg-")), "c.json");
+  describe("loadConfig", () => {
+    it("loads a valid config", () => {
+      const p = tmp(); writeFileSync(p, JSON.stringify({ port: 8080, host: "localhost" }));
+      expect(loadConfig(p)).toEqual({ port: 8080, host: "localhost", retries: 3 });
+    });
+    it("throws on missing file", () => {
+      expect(() => loadConfig("/no/such/file.json")).toThrow(/not found/);
+    });
+    it("throws on invalid JSON", () => {
+      const p = tmp(); writeFileSync(p, "{not json");
+      expect(() => loadConfig(p)).toThrow(/not valid JSON/);
+    });
+    it("throws on schema violation", () => {
+      const p = tmp(); writeFileSync(p, JSON.stringify({ port: 99999, host: "" }));
+      expect(() => loadConfig(p)).toThrow(/validation/);
+    });
+  });
