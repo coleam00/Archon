@@ -4073,4 +4073,108 @@ nodes:
       }
     });
   });
+
+  describe('unknown key warnings (#2213)', () => {
+    it('should warn when a node has an unknown key', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      const yaml = [
+        'name: test',
+        'description: test',
+        'nodes:',
+        '  - id: plan',
+        '    command: my-command',
+        '    unknown_field: true',
+      ].join('\n');
+      await writeFile(join(workflowDir, 'test.yaml'), yaml);
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.workflows.length).toBe(1);
+      const pw = result.workflows[0].parseWarnings ?? [];
+      expect(pw.length).toBe(1);
+      expect(pw[0]).toContain("unknown key 'unknown_field'");
+      expect(pw[0]).toContain('will be ignored');
+    });
+
+    it('should hint when a workflow-level key is misplaced on a node', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      // 'interactive' is valid at workflow level but not on individual nodes
+      const yaml = [
+        'name: test',
+        'description: test',
+        'nodes:',
+        '  - id: plan',
+        '    command: my-command',
+        '    interactive: true',
+      ].join('\n');
+      await writeFile(join(workflowDir, 'test.yaml'), yaml);
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.workflows.length).toBe(1);
+      const pw = result.workflows[0].parseWarnings ?? [];
+      expect(pw.length).toBe(1);
+      expect(pw[0]).toContain("'interactive'");
+      expect(pw[0]).toContain('valid at workflow level');
+    });
+
+    it('should warn when the workflow itself has an unknown key', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      const yaml = [
+        'name: test',
+        'description: test',
+        'max_retries: 3',
+        'nodes:',
+        '  - id: n',
+        '    prompt: p',
+      ].join('\n');
+      await writeFile(join(workflowDir, 'test.yaml'), yaml);
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.workflows.length).toBe(1);
+      const pw = result.workflows[0].parseWarnings ?? [];
+      expect(pw.length).toBe(1);
+      expect(pw[0]).toContain("unknown key 'max_retries'");
+    });
+
+    it('should not warn for valid node keys', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      const yaml = [
+        'name: test',
+        'description: test',
+        'nodes:',
+        '  - id: n',
+        '    prompt: hello',
+        '    model: some-model',
+        '    context: fresh',
+      ].join('\n');
+      await writeFile(join(workflowDir, 'test.yaml'), yaml);
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.workflows.length).toBe(1);
+      const pw = result.workflows[0].parseWarnings ?? [];
+      expect(pw.length).toBe(0);
+    });
+
+    it('should collect warnings from multiple nodes', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      const yaml = [
+        'name: test',
+        'description: test',
+        'nodes:',
+        '  - id: a',
+        '    prompt: hello',
+        '    typo_key: 1',
+        '  - id: b',
+        '    bash: echo hi',
+        '    another_typo: 2',
+      ].join('\n');
+      await writeFile(join(workflowDir, 'test.yaml'), yaml);
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.workflows.length).toBe(1);
+      const pw = result.workflows[0].parseWarnings ?? [];
+      expect(pw.length).toBe(2);
+      expect(pw[0]).toContain("Node 'a'");
+      expect(pw[1]).toContain("Node 'b'");
+    });
+  });
 });

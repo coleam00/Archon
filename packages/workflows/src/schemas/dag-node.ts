@@ -594,6 +594,67 @@ export const WORKFLOW_NODE_IGNORED_FIELDS: readonly string[] = BASH_NODE_AI_FIEL
 );
 
 // ---------------------------------------------------------------------------
+// Known node keys — used by the loader to detect unknown/misplaced keys
+// ---------------------------------------------------------------------------
+
+/**
+ * All keys accepted by the flat dagNodeSchema (base + mode-specific + mode-only).
+ * Used by parseDagNode to warn on unknown keys that Zod's default strip would
+ * silently drop (#2213). Keep in sync with dagNodeBaseSchema + the .extend()
+ * block below.
+ */
+export const KNOWN_DAG_NODE_KEYS: ReadonlySet<string> = new Set([
+  // dagNodeBaseSchema
+  'id',
+  'description',
+  'depends_on',
+  'when',
+  'trigger_rule',
+  'model',
+  'provider',
+  'context',
+  'output_format',
+  'allowed_tools',
+  'denied_tools',
+  'idle_timeout',
+  'retry',
+  'hooks',
+  'mcp',
+  'skills',
+  'agents',
+  'pi',
+  'effort',
+  'thinking',
+  'maxBudgetUsd',
+  'systemPrompt',
+  'fallbackModel',
+  'settingSources',
+  'betas',
+  'sandbox',
+  'always_run',
+  'persist_session',
+  'output_type',
+  // Mode fields (exactly one required)
+  'command',
+  'prompt',
+  'bash',
+  'loop',
+  'loop_group',
+  'approval',
+  'cancel',
+  'include',
+  'workflow',
+  // Mode-specific fields
+  'input',
+  'isolation',
+  'with',
+  'script',
+  'runtime',
+  'deps',
+  'timeout',
+]);
+
+// ---------------------------------------------------------------------------
 // dagNodeSchema — flat validation schema with transform to DagNode
 // ---------------------------------------------------------------------------
 

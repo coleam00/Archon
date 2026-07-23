@@ -106,7 +106,7 @@ export async function validateWorkflowsCommand(
   }
 
   // Validate successfully parsed workflows (Level 3)
-  for (const { workflow, source } of workflowEntries) {
+  for (const { workflow, source, parseWarnings } of workflowEntries) {
     const issues = await validateWorkflowResources(
       workflow,
       cwd,
@@ -119,6 +119,14 @@ export async function validateWorkflowsCommand(
       },
       defaultProvider
     );
+
+    // Surface parse-time unknown-key warnings (#2213) as validation issues
+    if (parseWarnings && parseWarnings.length > 0) {
+      for (const warning of parseWarnings) {
+        issues.push({ level: 'warning', field: 'unknown_key', message: warning });
+      }
+    }
+
     results.push(makeWorkflowResult(workflow.name, issues));
   }
 
