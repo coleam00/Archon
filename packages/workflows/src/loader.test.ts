@@ -4176,5 +4176,26 @@ nodes:
       expect(pw[0]).toContain("Node 'a'");
       expect(pw[1]).toContain("Node 'b'");
     });
+
+    it('should hint when a node-only key is misplaced at workflow level', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      // 'command' is valid on nodes but not at workflow level
+      const yaml = [
+        'name: test',
+        'description: test',
+        'command: my-command',
+        'nodes:',
+        '  - id: n',
+        '    prompt: p',
+      ].join('\n');
+      await writeFile(join(workflowDir, 'test.yaml'), yaml);
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.workflows.length).toBe(1);
+      const pw = result.workflows[0].parseWarnings ?? [];
+      expect(pw.length).toBe(1);
+      expect(pw[0]).toContain("'command'");
+      expect(pw[0]).toContain('valid on individual nodes');
+    });
   });
 });
