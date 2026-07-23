@@ -158,6 +158,58 @@ export const workflowBaseSchema = z.object({
 export type WorkflowBase = z.infer<typeof workflowBaseSchema>;
 
 // ---------------------------------------------------------------------------
+// Known workflow keys — used by the loader to detect unknown/misplaced keys
+// ---------------------------------------------------------------------------
+
+/**
+ * All keys accepted at the workflow level (workflowBaseSchema + nodes).
+ * Used by parseWorkflow to warn on unknown keys (#2213). Keep in sync with
+ * workflowBaseSchema + workflowDefinitionSchema.
+ */
+export const KNOWN_WORKFLOW_KEYS: ReadonlySet<string> = new Set([
+  'name',
+  'description',
+  'provider',
+  'model',
+  'modelReasoningEffort',
+  'webSearchMode',
+  'interactive',
+  'effort',
+  'thinking',
+  'fallbackModel',
+  'betas',
+  'sandbox',
+  'worktree',
+  'container',
+  'evidence_policy',
+  'mutates_checkout',
+  'persist_sessions',
+  'tags',
+  'requires',
+  'nodes',
+]);
+
+/**
+ * Workflow-only keys that are not valid on individual nodes. Used to produce a
+ * precise hint when a workflow-level key is misplaced on a node (#2213).
+ */
+export const WORKFLOW_ONLY_KEYS: ReadonlySet<string> = new Set([
+  'name',
+  'description',
+  'interactive',
+  'webSearchMode',
+  'modelReasoningEffort',
+  'worktree',
+  'container',
+  'evidence_policy',
+  'mutates_checkout',
+  'persist_sessions',
+  'tags',
+  'requires',
+  'nodes',
+]);
+
+// ---------------------------------------------------------------------------
 // WorkflowDefinition — DAG-based workflow with nodes
 // ---------------------------------------------------------------------------
 
@@ -219,6 +271,8 @@ export type WorkflowSource = 'bundled' | 'global' | 'project';
 export interface WorkflowWithSource {
   readonly workflow: WorkflowDefinition;
   readonly source: WorkflowSource;
+  /** Warnings from YAML parsing (e.g. unknown keys) — never hard-fails. */
+  readonly parseWarnings?: readonly string[];
 }
 
 /**

@@ -59,6 +59,7 @@ export {
   LOOP_GROUP_NODE_AI_FIELDS,
   INCLUDE_NODE_IGNORED_FIELDS,
   WORKFLOW_NODE_IGNORED_FIELDS,
+  KNOWN_DAG_NODE_KEYS,
   effortLevelSchema,
   thinkingConfigSchema,
   sandboxSettingsSchema,
@@ -96,6 +97,8 @@ export {
   workflowEvidencePolicySchema,
   workflowBaseSchema,
   workflowDefinitionSchema,
+  KNOWN_WORKFLOW_KEYS,
+  WORKFLOW_ONLY_KEYS,
 } from './workflow';
 export type {
   ModelReasoningEffort,
