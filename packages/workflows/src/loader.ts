@@ -774,7 +774,10 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
     const rawKeys = Object.keys(raw);
     for (const key of rawKeys) {
       if (!KNOWN_WORKFLOW_KEYS.has(key)) {
-        parseWarnings.push(`Workflow '${raw.name}': unknown key '${key}' will be ignored`);
+        const hint = KNOWN_DAG_NODE_KEYS.has(key)
+          ? ` ('${key}' is valid on individual nodes, not at workflow level)`
+          : '';
+        parseWarnings.push(`Workflow '${raw.name}': unknown key '${key}' will be ignored${hint}`);
         getLog().warn({ workflowName: raw.name, key }, 'workflow_unknown_key_ignored');
       }
     }
