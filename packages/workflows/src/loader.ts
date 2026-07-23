@@ -774,9 +774,7 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
     const rawKeys = Object.keys(raw);
     for (const key of rawKeys) {
       if (!KNOWN_WORKFLOW_KEYS.has(key)) {
-        parseWarnings.push(
-          `Workflow '${raw.name as string}': unknown key '${key}' will be ignored`
-        );
+        parseWarnings.push(`Workflow '${raw.name}': unknown key '${key}' will be ignored`);
         getLog().warn({ workflowName: raw.name, key }, 'workflow_unknown_key_ignored');
       }
     }
