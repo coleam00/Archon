@@ -36,9 +36,14 @@ export const GET: APIRoute = async ({ props }) => {
   // Add title as h1
   segments.push(`# ${entry.data.title}`);
 
-  // Add description as blockquote if present
+  // Add description as blockquote if present (handle multiline)
   if (entry.data.description) {
-    segments.push(`> ${entry.data.description}`);
+    segments.push(
+      entry.data.description
+        .split(/\r?\n/)
+        .map((line: string) => `> ${line}`)
+        .join('\n'),
+    );
   }
 
   // Add the raw markdown body (frontmatter already stripped by content collection)
