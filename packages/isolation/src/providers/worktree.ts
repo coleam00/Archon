@@ -2,6 +2,12 @@
  * Worktree Provider - Git worktree-based isolation
  *
  * Default isolation provider using git worktrees.
+ *
+ * The low-level worktree plumbing (add/remove/list/prune) is pluggable via
+ * `worktree.engine` in `.archon/config.yaml` — see `../engine/types.ts`. All
+ * provider logic (branch naming, adoption, fork-PR fetching, copyFiles,
+ * submodules, branch cleanup) is engine-independent and behaves identically
+ * for both engines.
  */
 
 import { createHash } from 'crypto';
@@ -29,6 +35,8 @@ import type { WorktreeBaseOverride } from '@archon/git';
 import { getArchonWorkspacesPath } from '@archon/paths';
 import type { RepoPath, WorktreeInfo } from '@archon/git';
 import { copyWorktreeFiles } from '../worktree-copy';
+import { resolveWorktreeEngine } from '../engine/resolve';
+import type { WorktreeEngine } from '../engine/types';
 import type {
   DestroyResult,
   IIsolationProvider,
@@ -224,16 +232,20 @@ export class WorktreeProvider implements IIsolationProvider {
       return result;
     }
 
+    // Engine selection mirrors create(): per-repo config, loud failure. A
+    // worktrunk-managed worktree removed via raw git would silently skip the
+    // user's pre-remove hooks, so a broken config blocks removal rather than
+    // guessing.
+    const engine = await this.resolveEngineFor(repoPath);
+
     // Only attempt worktree removal if path exists
     if (pathExists) {
-      const gitArgs = ['-C', repoPath, 'worktree', 'remove'];
-      if (options?.force) {
-        gitArgs.push('--force');
-      }
-      gitArgs.push(worktreePath);
-
       try {
-        await execFileAsync('git', gitArgs, { timeout: GIT_OPERATION_TIMEOUT_MS });
+        await engine.remove({
+          repoPath: toRepoPath(repoPath),
+          worktreePath: toWorktreePath(worktreePath),
+          force: options?.force ?? false,
+        });
         result.worktreeRemoved = true;
       } catch (error) {
         if (!this.isWorktreeMissingError(error)) {
@@ -267,7 +279,7 @@ export class WorktreeProvider implements IIsolationProvider {
     // Prune stale worktree references — runs even when path is already gone,
     // because git may still have a stale ref for a manually-deleted worktree
     try {
-      await execFileAsync('git', ['-C', repoPath, 'worktree', 'prune'], { timeout: 15000 });
+      await engine.prune(toRepoPath(repoPath));
     } catch (_error) {
       // Best-effort — pruning failure is not critical
       getLog().debug({ repoPath }, 'worktree_prune_failed');
@@ -303,8 +315,30 @@ export class WorktreeProvider implements IIsolationProvider {
   }
 
   /**
+   * Resolve the worktree engine for a repo from its `.archon/config.yaml`.
+   *
+   * Config load failure is fatal (mirrors `create()`): silently defaulting to
+   * the git engine would strip a worktrunk-managed repo of its hooks. An
+   * invalid `worktree.engine` value throws its own actionable error from
+   * `resolveWorktreeEngine()`.
+   */
+  private async resolveEngineFor(repoPath: string): Promise<WorktreeEngine> {
+    let repoConfig: WorktreeCreateConfig | null;
+    try {
+      repoConfig = await this.loadConfig(repoPath);
+    } catch (error) {
+      const err = error as Error;
+      getLog().error({ err, repoPath }, 'repo_config_load_failed');
+      throw new Error(`Failed to load config: ${err.message}`);
+    }
+    return resolveWorktreeEngine(repoConfig?.engine);
+  }
+
+  /**
    * Check if an error indicates the worktree path is missing.
    * Checks both message and stderr for robustness across git versions/locales.
+   * 'No branch named' is worktrunk's phrasing when the argument matches
+   * neither a branch nor a registered worktree path.
    */
   private isWorktreeMissingError(error: unknown): boolean {
     const err = error as Error & { stderr?: string };
@@ -312,7 +346,8 @@ export class WorktreeProvider implements IIsolationProvider {
     return (
       errorText.includes('No such file or directory') ||
       errorText.includes('does not exist') ||
-      errorText.includes('is not a working tree')
+      errorText.includes('is not a working tree') ||
+      errorText.includes('No branch named')
     );
   }
 
@@ -464,7 +499,8 @@ export class WorktreeProvider implements IIsolationProvider {
   async list(codebaseId: string): Promise<IsolatedEnvironment[]> {
     // codebaseId is the canonical repo path for worktrees
     const repoPath = toRepoPath(codebaseId);
-    const worktrees = await listWorktrees(repoPath);
+    const engine = await this.resolveEngineFor(repoPath);
+    const worktrees = await engine.list(repoPath);
 
     // Filter out main repo (first worktree is typically the main checkout)
     return worktrees
@@ -707,6 +743,11 @@ export class WorktreeProvider implements IIsolationProvider {
   ): Promise<{ warnings: string[] }> {
     const repoPath = request.canonicalRepoPath;
 
+    // Engine selection is per-repo config (worktree.engine). An invalid value
+    // fails loudly here — before any sync/fetch work — rather than silently
+    // falling back to the git engine.
+    const engine = resolveWorktreeEngine(worktreeConfig?.engine);
+
     // Resolve git remote name: explicit config > auto-detect > actionable error
     const remote = await this.resolveRemote(repoPath, worktreeConfig?.remote);
 
@@ -726,10 +767,18 @@ export class WorktreeProvider implements IIsolationProvider {
 
     if (isPRIsolationRequest(request)) {
       // For PRs: fetch and checkout the PR branch (actual or synthetic)
-      await this.createFromPR(request, worktreePath, remote);
+      await this.createFromPR(request, worktreePath, engine, remote);
     } else {
       // For issues, tasks, threads: create new branch
-      await this.createNewBranch(request, repoPath, worktreePath, branchName, baseBranch, remote);
+      await this.createNewBranch(
+        request,
+        repoPath,
+        worktreePath,
+        branchName,
+        baseBranch,
+        engine,
+        remote
+      );
     }
 
     // Stamp the originating user's git identity on this worktree so workflow
@@ -973,6 +1022,7 @@ export class WorktreeProvider implements IIsolationProvider {
   private async createFromPR(
     request: PRIsolationRequest,
     worktreePath: string,
+    engine: WorktreeEngine,
     remote = 'origin'
   ): Promise<void> {
     // Clean up any orphan directory before creating worktree
@@ -984,9 +1034,11 @@ export class WorktreeProvider implements IIsolationProvider {
     try {
       if (!request.isForkPR) {
         // Same-repo PR: Use the actual branch so changes push directly to PR
-        await this.createFromSameRepoPR(repoPath, worktreePath, request.prBranch, remote);
+        await this.createFromSameRepoPR(repoPath, worktreePath, request.prBranch, engine, remote);
       } else {
-        // Fork PR: Use synthetic review branch
+        // Fork PR: Use synthetic review branch. Always raw git regardless of
+        // the configured engine — `refs/pull/N/head` fetching and synthetic
+        // review branches have no worktrunk equivalent (#2260 non-goal).
         await this.createFromForkPR(repoPath, worktreePath, prNumber, remote, request.prSha);
       }
     } catch (error) {
@@ -1005,6 +1057,7 @@ export class WorktreeProvider implements IIsolationProvider {
     repoPath: string,
     worktreePath: string,
     prBranch: string,
+    engine: WorktreeEngine,
     remote = 'origin'
   ): Promise<void> {
     // Fetch the PR's actual branch
@@ -1015,17 +1068,21 @@ export class WorktreeProvider implements IIsolationProvider {
     // Try to create worktree with the branch
     try {
       // If branch doesn't exist locally, create it tracking remote
-      await execFileAsync(
-        'git',
-        ['-C', repoPath, 'worktree', 'add', worktreePath, '-b', prBranch, `${remote}/${prBranch}`],
-        { timeout: GIT_OPERATION_TIMEOUT_MS }
-      );
+      await engine.add({
+        repoPath: toRepoPath(repoPath),
+        worktreePath: toWorktreePath(worktreePath),
+        branch: toBranchName(prBranch),
+        startPoint: `${remote}/${prBranch}`,
+        track: true,
+      });
     } catch (error) {
       const err = error as Error & { stderr?: string };
       // Branch already exists locally - use it directly
       if (err.stderr?.includes('already exists')) {
-        await execFileAsync('git', ['-C', repoPath, 'worktree', 'add', worktreePath, prBranch], {
-          timeout: GIT_OPERATION_TIMEOUT_MS,
+        await engine.add({
+          repoPath: toRepoPath(repoPath),
+          worktreePath: toWorktreePath(worktreePath),
+          branch: toBranchName(prBranch),
         });
       } else {
         throw error;
@@ -1132,6 +1189,7 @@ export class WorktreeProvider implements IIsolationProvider {
     worktreePath: string,
     branchName: string,
     baseBranch: string,
+    engine: WorktreeEngine,
     remote = 'origin'
   ): Promise<void> {
     // Clean up any orphan directory before creating worktree
@@ -1144,25 +1202,15 @@ export class WorktreeProvider implements IIsolationProvider {
         : `${remote}/${baseBranch}`;
 
     try {
-      // `--no-track` keeps `branch.<name>.merge` unset; otherwise `gh pr view`
-      // (no PR number) resolves to the base branch's PR via upstream config.
-      await execFileAsync(
-        'git',
-        [
-          '-C',
-          repoPath,
-          'worktree',
-          'add',
-          '--no-track',
-          worktreePath,
-          '-b',
-          branchName,
-          startPoint,
-        ],
-        {
-          timeout: GIT_OPERATION_TIMEOUT_MS,
-        }
-      );
+      // No tracking (git: `--no-track`) keeps `branch.<name>.merge` unset;
+      // otherwise `gh pr view` (no PR number) resolves to the base branch's PR
+      // via upstream config.
+      await engine.add({
+        repoPath: toRepoPath(repoPath),
+        worktreePath: toWorktreePath(worktreePath),
+        branch: toBranchName(branchName),
+        startPoint,
+      });
     } catch (error) {
       const err = error as Error & { stderr?: string };
       // Branch already exists - reset to intended start-point and use it
@@ -1187,8 +1235,10 @@ export class WorktreeProvider implements IIsolationProvider {
         await execFileAsync('git', ['-C', repoPath, 'branch', '-f', branchName, startPoint], {
           timeout: 10000,
         });
-        await execFileAsync('git', ['-C', repoPath, 'worktree', 'add', worktreePath, branchName], {
-          timeout: GIT_OPERATION_TIMEOUT_MS,
+        await engine.add({
+          repoPath: toRepoPath(repoPath),
+          worktreePath: toWorktreePath(worktreePath),
+          branch: toBranchName(branchName),
         });
       } else {
         throw error;
@@ -1286,6 +1336,11 @@ export class WorktreeProvider implements IIsolationProvider {
   /**
    * Clean up a git-registered worktree that was left by a partial failure.
    * Best-effort: logs errors but doesn't throw (the original error is more important).
+   *
+   * Intentionally raw git (not the configured engine): a worktrunk-created
+   * worktree is an ordinary git worktree, so `git worktree remove` cleans it up
+   * correctly here too — this rare error-recovery path just skips worktrunk's
+   * remove hooks, which is acceptable for a best-effort partial-failure cleanup.
    */
   private async cleanOrphanWorktreeIfExists(repoPath: string, worktreePath: string): Promise<void> {
     try {

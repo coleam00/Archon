@@ -3233,4 +3233,133 @@ describe('WorktreeProvider', () => {
       );
     });
   });
+
+  describe('worktree engine selection (#2260)', () => {
+    const baseRequest: IsolationRequest = {
+      codebaseId: 'cb-123',
+      canonicalRepoPath: '/workspace/repo',
+      workflowType: 'issue',
+      identifier: '42',
+    };
+
+    /** Route `wt --version` to a fixed success response; other `wt` calls resolve empty by default. */
+    function mockWtAvailable(): void {
+      execSpy.mockImplementation(async (cmd: string, args: string[]) => {
+        if (cmd === 'wt' && args[0] === '--version') {
+          return { stdout: 'wt 0.61.0\n', stderr: '' };
+        }
+        return { stdout: '', stderr: '' };
+      });
+    }
+
+    test('create() routes through wt switch --create when worktree.engine is worktrunk', async () => {
+      mockWtAvailable();
+      const worktrunkLoader: RepoConfigLoader = async () => ({
+        baseBranch: 'main',
+        engine: 'worktrunk',
+      });
+      const worktrunkProvider = new WorktreeProvider(worktrunkLoader);
+
+      const env = await worktrunkProvider.create(baseRequest);
+
+      expect(env.branchName).toBe('archon/issue-42');
+      expect(execSpy).toHaveBeenCalledWith(
+        'wt',
+        expect.arrayContaining([
+          'switch',
+          '--create',
+          'archon/issue-42',
+          '--base',
+          'origin/main',
+          '--no-cd',
+          '--yes',
+          '-C',
+          '/workspace/repo',
+        ]),
+        expect.any(Object)
+      );
+      // The raw git worktree add path must not have run.
+      const gitAddCalls = execSpy.mock.calls.filter(
+        call => call[0] === 'git' && (call[1] as string[]).includes('add')
+      );
+      expect(gitAddCalls).toHaveLength(0);
+    });
+
+    test('destroy() routes through wt remove --foreground --no-delete-branch when configured', async () => {
+      mockWtAvailable();
+      mockAccess.mockResolvedValue(undefined);
+      const worktrunkLoader: RepoConfigLoader = async () => ({ engine: 'worktrunk' });
+      const worktrunkProvider = new WorktreeProvider(worktrunkLoader);
+
+      await worktrunkProvider.destroy('/workspace/repo/worktrees/issue-42', {
+        canonicalRepoPath: git.toRepoPath('/workspace/repo'),
+      });
+
+      expect(execSpy).toHaveBeenCalledWith(
+        'wt',
+        expect.arrayContaining([
+          'remove',
+          '/workspace/repo/worktrees/issue-42',
+          '--foreground',
+          '--no-delete-branch',
+          '--yes',
+          '-C',
+          '/workspace/repo',
+        ]),
+        expect.any(Object)
+      );
+    });
+
+    test('list() routes through wt list --format json when configured', async () => {
+      execSpy.mockImplementation(async (cmd: string, args: string[]) => {
+        if (cmd === 'wt' && args[0] === '--version') {
+          return { stdout: 'wt 0.61.0\n', stderr: '' };
+        }
+        if (cmd === 'wt' && args[0] === 'list') {
+          return {
+            stdout: JSON.stringify([
+              { branch: 'main', path: '/workspace/repo', kind: 'worktree' },
+              {
+                branch: 'issue-42',
+                path: '/workspace/repo/worktrees/issue-42',
+                kind: 'worktree',
+              },
+            ]),
+            stderr: '',
+          };
+        }
+        return { stdout: '', stderr: '' };
+      });
+      const worktrunkLoader: RepoConfigLoader = async () => ({ engine: 'worktrunk' });
+      const worktrunkProvider = new WorktreeProvider(worktrunkLoader);
+
+      const result = await worktrunkProvider.list('/workspace/repo');
+
+      expect(result).toHaveLength(1);
+      expect(result[0].branchName).toBe('issue-42');
+    });
+
+    test('an unrecognized worktree.engine value fails loudly with no silent fallback to git', async () => {
+      const badLoader: RepoConfigLoader = async () => ({ engine: 'docker' });
+      const badProvider = new WorktreeProvider(badLoader);
+
+      await expect(badProvider.create(baseRequest)).rejects.toThrow(
+        /worktree\.engine must be one of/
+      );
+
+      // No git worktree add should have run either — the failure happens before any git op.
+      const gitAddCalls = execSpy.mock.calls.filter(
+        call => call[0] === 'git' && (call[1] as string[]).includes('add')
+      );
+      expect(gitAddCalls).toHaveLength(0);
+    });
+
+    test('an unset engine still uses the git engine (zero behavior change)', async () => {
+      const env = await provider.create(baseRequest);
+
+      expect(env.branchName).toBe('archon/issue-42');
+      const wtCalls = execSpy.mock.calls.filter(call => call[0] === 'wt');
+      expect(wtCalls).toHaveLength(0);
+    });
+  });
 });

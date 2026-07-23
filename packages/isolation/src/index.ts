@@ -66,6 +66,18 @@ export type { IsolationResolverDeps } from './resolver';
 // --- Provider ---
 export { WorktreeProvider } from './providers/worktree';
 
+// --- Worktree engine (pluggable low-level plumbing: git | worktrunk) ---
+export { WORKTREE_ENGINE_IDS } from './engine/types';
+export type {
+  WorktreeEngine,
+  WorktreeEngineId,
+  AddWorktreeOptions,
+  RemoveWorktreeOptions,
+} from './engine/types';
+export { GitWorktreeEngine } from './engine/git-engine';
+export { WorktrunkEngine, MIN_WORKTRUNK_VERSION } from './engine/worktrunk-engine';
+export { resolveWorktreeEngine } from './engine/resolve';
+
 // --- PR state lookup ---
 export { getPrState } from './pr-state';
 export type { PrState } from './pr-state';

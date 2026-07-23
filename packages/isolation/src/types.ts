@@ -277,6 +277,22 @@ export interface WorktreeCreateConfig {
   baseBranch?: string;
   copyFiles?: string[];
   /**
+   * Low-level worktree engine: `'git'` (default) uses raw `git worktree`
+   * commands; `'worktrunk'` shells out to the `wt` CLI
+   * (https://worktrunk.dev) so per-repo worktrunk hooks run and Archon-managed
+   * worktrees appear in `wt list`. With `'worktrunk'` set but no usable `wt`
+   * binary on PATH (missing or older than the minimum supported version),
+   * worktree operations fail fast with an actionable error — no silent
+   * fallback to git. Unrecognized values also fail fast.
+   *
+   * Typed as `string` (not the engine-id union) because this shape mirrors the
+   * raw YAML — validation happens in `resolveWorktreeEngine()`.
+   *
+   * Sourced from `.archon/config.yaml > worktree.engine` in the repo.
+   * @example 'worktrunk'
+   */
+  engine?: string;
+  /**
    * Initialize git submodules in the worktree. Defaults to enabled — a worktree
    * with uninitialized submodules is a silent broken state for monorepos.
    * Set to `false` to opt out. No-op when `.gitmodules` is absent.

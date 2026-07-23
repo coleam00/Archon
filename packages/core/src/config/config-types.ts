@@ -284,6 +284,28 @@ export interface RepoConfig {
      * @example 'upstream'
      */
     remote?: string;
+
+    /**
+     * Low-level worktree engine for this repo.
+     *
+     * - `'git'` (default) — raw `git worktree` commands, the historical behavior
+     * - `'worktrunk'` — shells out to the `wt` CLI (https://worktrunk.dev) so
+     *   per-repo worktrunk hooks (env setup, dependency install, cleanup) run
+     *   when Archon creates or removes worktrees, and Archon-managed worktrees
+     *   show up in `wt list`
+     *
+     * Worktree destination paths stay under Archon's control in both engines
+     * (pinned per invocation), so `worktree.path` and the environment registry
+     * behave identically. Fork-PR checkouts always use raw git.
+     *
+     * Fail Fast: with `'worktrunk'` set but no usable `wt` binary on PATH
+     * (missing, or older than the minimum supported version), worktree
+     * operations fail with an actionable error — no silent fallback to git.
+     * Unrecognized values also fail loudly.
+     *
+     * @default 'git'
+     */
+    engine?: 'git' | 'worktrunk';
   };
 
   /**
