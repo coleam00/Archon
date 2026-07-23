@@ -350,9 +350,11 @@ An alternative to basic auth that serves a styled HTML login form instead of the
 
    ```ini
    AUTH_USERNAME=admin
-   AUTH_PASSWORD_HASH=$2b$12$REPLACE_WITH_YOUR_HASH
+   AUTH_PASSWORD_HASH=$$2b$$12$$REPLACE_WITH_YOUR_HASH
    COOKIE_SECRET=REPLACE_WITH_64_HEX_CHARS
    ```
+
+   Escape every `$` in the bcrypt hash as `$$`; otherwise Docker Compose treats it as variable interpolation.
 
 4. Update `Caddyfile` (copy from `Caddyfile.example` if not done yet):
 

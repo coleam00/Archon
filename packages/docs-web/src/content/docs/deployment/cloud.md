@@ -13,6 +13,8 @@ sidebar:
 
 Deploy Archon to a cloud VPS for 24/7 operation with automatic HTTPS and persistent uptime.
 
+> **Docker Compose deployment:** This guide uses the repository's Compose files. Edit `/opt/archon/.env` directly; do **not** run `archon setup` on the VPS. That wizard writes Archon-owned CLI environment files, not the repository `.env` consumed by Docker Compose.
+
 **Navigation:** [Prerequisites](#prerequisites) | [Server Setup](#1-server-provisioning--initial-setup) | [DNS Configuration](#2-dns-configuration) | [Repository Setup](#3-clone-repository) | [Environment Config](#4-environment-configuration) | [Database Migration](#5-database-migration) | [Caddy Setup](#6-caddy-configuration) | [Start Services](#7-start-services) | [Verify](#8-verify-deployment)
 
 ---
@@ -269,9 +271,8 @@ DATABASE_URL=postgresql://user:password@host:5432/dbname
 GH_TOKEN=ghp_your_token_here
 GITHUB_TOKEN=ghp_your_token_here
 
-# Server settings
-PORT=3090
-ARCHON_HOME=/tmp/archon  # Override base directory (optional)
+# Server settings (Docker Compose defaults to port 3000)
+PORT=3000
 ```
 
 **GitHub Token Setup:**
@@ -505,8 +506,29 @@ DOMAIN=archon.yourdomain.com
 
 - Automatically obtains SSL certificates from Let's Encrypt
 - Handles HTTPS (443) and HTTP (80) -> HTTPS redirect
-- Proxies requests to app container on port 3090
+- Proxies requests to the app container
 - Renews certificates automatically
+
+### Optional: Form-Based Authentication
+
+For a styled login page, use the `auth-service` profile. Generate a bcrypt hash and cookie secret:
+
+```bash
+docker compose --profile auth run --rm auth-service \
+  node -e "require('bcryptjs').hash('YOUR_PASSWORD', 12).then(h => console.log(h))"
+docker run --rm node:22-alpine \
+  node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
+
+Add the results to `/opt/archon/.env`:
+
+```ini
+AUTH_USERNAME=admin
+AUTH_PASSWORD_HASH=$$2b$$12$$REPLACE_WITH_YOUR_HASH
+COOKIE_SECRET=REPLACE_WITH_64_HEX_CHARS
+```
+
+Escape **every** `$` in the bcrypt hash as `$$`; otherwise Docker Compose treats it as variable interpolation. In `Caddyfile`, uncomment the `Option A` form-auth blocks and comment out the default no-auth `handle` block. Start with `--profile cloud --profile auth` (and add `--profile with-db` when using the local PostgreSQL container).
 
 ---
 
@@ -548,7 +570,7 @@ docker compose --profile with-db --profile cloud logs -f postgres
 ### Monitor Startup
 
 ```bash
-# Watch logs for successful startup (use --profile with-db for local PostgreSQL)
+# Watch logs for successful startup (add --profile with-db for local PostgreSQL)
 docker compose --profile cloud logs -f app
 
 # Look for:
@@ -572,13 +594,12 @@ docker compose --profile cloud logs -f app
 curl https://archon.yourdomain.com/api/health
 # Expected: {"status":"ok"}
 
-# Database connectivity
-curl https://archon.yourdomain.com/api/health/db
-# Expected: {"status":"ok","database":"connected"}
+# Confirms the server is responding and exposes concurrency status
+# Expected: {"status":"ok", ...}
 
-# Concurrency status
-curl https://archon.yourdomain.com/api/health/concurrency
-# Expected: {"status":"ok","active":0,"queued":0,"maxConcurrent":10}
+# Optional: verify database connectivity directly
+psql "$DATABASE_URL" -c 'SELECT 1'
+
 ```
 
 ### Check SSL Certificate
