@@ -27,6 +27,7 @@ import {
   LOOP_GROUP_NODE_AI_FIELDS,
   INCLUDE_NODE_IGNORED_FIELDS,
   WORKFLOW_NODE_IGNORED_FIELDS,
+  KNOWN_DAG_NODE_KEYS,
   effortLevelSchema,
   thinkingConfigSchema,
   sandboxSettingsSchema,
@@ -37,6 +38,8 @@ import {
   webSearchModeSchema,
   workflowRequirementSchema,
   workflowEvidencePolicySchema,
+  KNOWN_WORKFLOW_KEYS,
+  WORKFLOW_ONLY_KEYS,
 } from './schemas/workflow';
 import type { WorkflowRequirement, WorkflowEvidencePolicy } from './schemas/workflow';
 import { workflowNodeHooksSchema } from './schemas/hooks';
@@ -98,7 +101,12 @@ function formatNodeIssue(id: string, issue: z.ZodIssue): string {
  * Replaces the former parseDagNode + parseRetryConfig + parseToolList +
  * parseNodeHooks + parseIdleTimeout functions.
  */
-function parseDagNode(raw: unknown, index: number, errors: string[]): DagNode | null {
+function parseDagNode(
+  raw: unknown,
+  index: number,
+  errors: string[],
+  warnings: string[]
+): DagNode | null {
   // Extract id early for error messages (may be empty/invalid — schema will catch it)
   const rawId =
     raw !== null && typeof raw === 'object' && 'id' in raw
@@ -115,6 +123,22 @@ function parseDagNode(raw: unknown, index: number, errors: string[]): DagNode | 
   }
 
   const node = result.data;
+
+  // Warn about unknown keys on the raw node that Zod silently stripped (#2213).
+  // This catches misplaced workflow-level keys (e.g. `interactive:` on a command node)
+  // and typos (e.g. `contxt:` instead of `context:`).
+  if (raw !== null && typeof raw === 'object') {
+    const rawKeys = Object.keys(raw as Record<string, unknown>);
+    for (const key of rawKeys) {
+      if (!KNOWN_DAG_NODE_KEYS.has(key)) {
+        const hint = WORKFLOW_ONLY_KEYS.has(key)
+          ? ` ('${key}' is valid at workflow level, not on individual nodes)`
+          : '';
+        warnings.push(`Node '${id}': unknown key '${key}' will be ignored${hint}`);
+        getLog().warn({ id: node.id, key }, 'node_unknown_key_ignored');
+      }
+    }
+  }
 
   // Warn about AI-specific fields on non-AI nodes (runtime behavior, not schema errors)
   let nonAiNode: { type: string; fields: readonly string[] } | undefined;
@@ -316,8 +340,8 @@ export function validateDagStructure(
 }
 
 export type ParseResult =
-  | { workflow: WorkflowDefinition; error: null }
-  | { workflow: null; error: WorkflowLoadError };
+  | { workflow: WorkflowDefinition; error: null; warnings: string[] }
+  | { workflow: null; error: WorkflowLoadError; warnings?: never };
 
 /**
  * Parse and validate a workflow YAML file
@@ -393,8 +417,9 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
 
     // Parse DAG nodes using dagNodeSchema
     const validationErrors: string[] = [];
+    const parseWarnings: string[] = [];
     const dagNodes = (raw.nodes as unknown[])
-      .map((n: unknown, i: number) => parseDagNode(n, i, validationErrors))
+      .map((n: unknown, i: number) => parseDagNode(n, i, validationErrors, parseWarnings))
       .filter((n): n is DagNode => n !== null);
 
     if (dagNodes.length !== (raw.nodes as unknown[]).length) {
@@ -745,6 +770,18 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
       }
     }
 
+    // Detect unknown workflow-level keys (#2213)
+    const rawKeys = Object.keys(raw);
+    for (const key of rawKeys) {
+      if (!KNOWN_WORKFLOW_KEYS.has(key)) {
+        const hint = KNOWN_DAG_NODE_KEYS.has(key)
+          ? ` ('${key}' is valid on individual nodes, not at workflow level)`
+          : '';
+        parseWarnings.push(`Workflow '${raw.name}': unknown key '${key}' will be ignored${hint}`);
+        getLog().warn({ workflowName: raw.name, key }, 'workflow_unknown_key_ignored');
+      }
+    }
+
     return {
       workflow: {
         name: raw.name,
@@ -769,6 +806,7 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
         ...(requires !== undefined ? { requires } : {}),
       },
       error: null,
+      warnings: parseWarnings,
     };
   } catch (error) {
     const err = error as Error;
