@@ -30,20 +30,19 @@ nodes:
   # ═══════════════════════════════════════════════════════════════
 
   - id: extract-pr-number
-    prompt: |
-      Find the GitHub PR number for this request.
-
-      Request: $ARGUMENTS
-
-      Rules:
-      - If the message contains an explicit PR number (e.g., "#1428", "PR 1428", "1428"), extract that number.
-      - If the message contains a PR URL (https://github.com/.../pull/N), extract N.
-      - If you cannot determine a single PR number, output ERROR.
-
-      CRITICAL: Output ONLY the bare number with no quotes, markdown, or explanation.
-      Example correct output: 1428
-    allowed_tools: []
-    idle_timeout: 30000
+    bash: |
+      # PR-number parsing lives in a tested script so its edge cases are pinned
+      # (.archon/scripts/extract-pr-number.ts): anchored forms (#N, PR N,
+      # pull/N, issues/N) win, a bare number is accepted only when it is the
+      # WHOLE input, multiple distinct anchored numbers error loudly, and a URL
+      # org/repo slug (e.g. coleam00, pr2-tool) never leaks a stray digit. The
+      # script writes $ARTIFACTS_DIR/.pr-number (checked) and prints the number.
+      #
+      # $ARGUMENTS arrives as a subprocess env var (never textually
+      # interpolated) and is passed as a single argv element, so this is
+      # injection-safe. A non-zero exit (no number / ambiguous) fails the node.
+      bun --no-env-file run .archon/scripts/extract-pr-number.ts "$ARGUMENTS"
+    timeout: 10000
 
   # ═══════════════════════════════════════════════════════════════
   # PHASE 2: GATHER PR DATA (parallel)
@@ -51,12 +50,8 @@ nodes:
 
   - id: fetch-pr
     bash: |
-      PR_NUM=$(echo "$extract-pr-number.output" | tr -d "'\"\`\n " | grep -oE '[0-9]+' | head -1)
-      if [ -z "$PR_NUM" ]; then
-        echo "Failed to extract PR number from: $extract-pr-number.output" >&2
-        exit 1
-      fi
-      echo "$PR_NUM" > "$ARTIFACTS_DIR/.pr-number"
+      # extract-pr-number already validated + wrote the number to .pr-number.
+      PR_NUM=$(cat "$ARTIFACTS_DIR/.pr-number")
       gh pr view "$PR_NUM" --json number,title,body,labels,comments,reviews,state,mergeable,mergeStateStatus,additions,deletions,changedFiles,files,author,createdAt,updatedAt,baseRefName,headRefName,reviewDecision,reviewRequests,isDraft
     depends_on: [extract-pr-number]
     timeout: 30000
@@ -208,7 +203,7 @@ nodes:
     timeout: 10000
     depends_on: [post-review]
     script: |
-      import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+      import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
       import { resolve } from 'node:path';
 
       const baseDir = resolve(process.cwd(), '.archon/maintainer-standup');
@@ -222,7 +217,14 @@ nodes:
       if (existsSync(reviewedPath)) {
         try {
           reviewed = JSON.parse(readFileSync(reviewedPath, 'utf8'));
-        } catch {
+        } catch (err) {
+          // Corrupt state is not silently reset: log before falling back so the
+          // wiped history leaves a diagnostic trace (unlike a bare catch, which
+          // would erase every recorded review with no signal).
+          console.error(
+            `record-review: reviewed-prs.json is corrupt (${(err as Error).message}); ` +
+              `starting from empty. Prior review markers are lost — restore from git if they mattered.`,
+          );
           reviewed = {};
         }
       }
@@ -233,7 +235,16 @@ nodes:
         run_id: '$WORKFLOW_ID',
       };
 
-      writeFileSync(reviewedPath, JSON.stringify(reviewed, null, 2) + '\n');
+      // Atomic write. This workflow sets mutates_checkout: false, so two
+      // reviews can run concurrently and both read-modify-write this shared
+      // file. Write a temp file in the same directory, then rename over the
+      // target — rename is atomic on POSIX, so a concurrent reader never sees a
+      // half-written file. Last writer wins: an interleaved pair may still drop
+      // one record, which is acceptable here (the standup only needs a
+      // recent-enough "reviewed" marker, and the next review re-adds it).
+      const tmpPath = resolve(baseDir, `.reviewed-prs.${process.pid}.tmp`);
+      writeFileSync(tmpPath, JSON.stringify(reviewed, null, 2) + '\n');
+      renameSync(tmpPath, reviewedPath);
       console.log(`Recorded review of PR #${prNumber}`);
 
   # ═══════════════════════════════════════════════════════════════

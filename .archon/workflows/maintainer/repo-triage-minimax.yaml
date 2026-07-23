@@ -50,7 +50,7 @@ nodes:
         5. Persist state so future runs remember what's already been processed
 
       Labelling is NOT performed by this Pi/Minimax variant — it requires
-      Claude's Task tool to invoke the on-disk `triage-agent` sub-agent.
+      Claude's Agent tool to invoke the on-disk `triage-agent` sub-agent.
       Run `repo-triage.yaml` (the Claude variant) when label-coverage matters.
 
       # State file
@@ -124,7 +124,7 @@ nodes:
       in a single pass.
 
       For each issue that needs a brief, build this object IN-LINE
-      (no Task calls, no sub-agent — Pi handles everything in one turn):
+      (no Agent calls, no sub-agent — Pi handles everything in one turn):
 
           {
             "number": <N>,
@@ -371,7 +371,7 @@ nodes:
 
       You already have the closed-issue list (with title + body) in
       `$ARTIFACTS_DIR/closed-issues.json`. Read it once and process every
-      entry needing a brief in a single pass — no Task fan-out, no
+      entry needing a brief in a single pass — no Agent fan-out, no
       sub-agent. For each closed issue, build this object inline:
 
           {
@@ -576,7 +576,7 @@ nodes:
       You already have the open and closed PR lists (with title + body)
       in `$ARTIFACTS_DIR/open-prs.json` and `closed-prs.json`. Read them
       once and process every PR needing a brief in a single pass — no
-      Task fan-out, no sub-agent.
+      Agent fan-out, no sub-agent.
 
       For each PR needing a brief, fetch the diff (no `gh pr view` is
       needed because title + body are already in the JSON dump):
@@ -718,7 +718,7 @@ nodes:
       Your job on every (non-dry, non-skipped) run:
         1. For every open PR not yet fully processed, identify related
            open issues by reading the PR title/body/diff and comparing
-           against the open-issue list (inline — no Task fan-out).
+           against the open-issue list (inline — no Agent fan-out).
         2. Add a `Closes #X` SUGGESTION comment on the PR only when the
            PR fully addresses the issue, after re-reading the issue + PR diff.
         3. Otherwise post a conservative "related to #X" cross-reference
@@ -1025,7 +1025,7 @@ nodes:
     allowed_tools: [Bash, Read, Write]
     prompt: |
       You post gentle reminders on GitHub issues and PRs that have gone
-      quiet. No auto-close. No Task fan-out needed — this is direct work.
+      quiet. No auto-close. No Agent fan-out needed — this is direct work.
 
       # Mode check — READ FIRST
 
@@ -1150,7 +1150,7 @@ nodes:
   # Digest — runs LAST, after every other node. Reads each prior node's
   # final assistant output via $<nodeId>.output and synthesises one
   # maintainer-facing report to $ARTIFACTS_DIR/digest.md. Pure synthesis —
-  # no gh calls, no mutations, no Task fan-out.
+  # no gh calls, no mutations, no Agent fan-out.
   # ---------------------------------------------------------------------------
   - id: digest
     depends_on:

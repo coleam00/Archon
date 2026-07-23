@@ -25,6 +25,7 @@
     "generate:capability-matrix": "bun run scripts/generate-capability-matrix.ts",
     "check:capability-matrix": "bun run scripts/generate-capability-matrix.ts --check",
     "test": "bun --filter '*' --parallel test",
+    "test:archon-scripts": "bun test ./.archon/scripts/",
     "test:watch": "bun --filter @archon/server test:watch",
     "type-check": "bun --filter '*' type-check && bun x tsc --noEmit -p scripts/tsconfig.json",
     "lint": "bun x eslint . --cache",
@@ -35,7 +36,7 @@
     "build:web": "bun --filter @archon/web build",
     "dev:docs": "bun --filter @archon/docs-web dev",
     "build:docs": "bun --filter @archon/docs-web build",
-    "validate": "bun run check:bundled && bun run check:bundled-skill && bun run check:bundled-schema && bun run check:pi-vendor-map && bun run check:capability-matrix && bun run type-check && bun run lint --max-warnings 0 && bun run format:check && bun run test",
+    "validate": "bun run check:bundled && bun run check:bundled-skill && bun run check:bundled-schema && bun run check:pi-vendor-map && bun run check:capability-matrix && bun run type-check && bun run lint --max-warnings 0 && bun run format:check && bun run test && bun run test:archon-scripts",
     "prepare": "husky",
     "setup-auth": "bun --filter @archon/server setup-auth"
   },
