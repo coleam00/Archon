@@ -18,9 +18,11 @@ argument-hint: (none - reads all review artifacts from $ARTIFACTS_DIR/review/)
 
 ## Your Mission
 
-Read all review artifacts and fix EVERYTHING surfaced. Unlike conservative auto-fix, you lean aggressively towards fixing. LLMs are fast at generating code — use that advantage to add tests, fix docs, improve error handling, and address all findings.
+Read all review artifacts and fix everything surfaced **that falls within this PR's diff**. Within that boundary you lean aggressively towards fixing — LLMs are fast at generating code, so use that to add tests for the PR's own code, fix docs, improve error handling, and address all in-scope findings.
 
-**Philosophy**: Fix it unless it's clearly a NEW unrelated concern that deserves its own issue. Adding tests for existing code? Fix it. Updating docs? Fix it. Adding missing error handling? Fix it. The bar for skipping is HIGH — only skip when the fix would introduce a genuinely new feature or concern outside the PR's scope.
+**Scope is a hard boundary, not a judgment call (see Phase 1.3).** You may only edit files this PR already changed (`git diff $BASE_BRANCH...HEAD`), plus a **new** test/doc file that pairs 1:1 with one of those files. A finding about any **other** file — even a real, valid one — is **not yours to fix in this PR**: record it under "Suggested Follow-up Issues" instead. Aggressive *inside* the diff; never *outside* it. This is enforced by a hard gate in Phase 5 before commit.
+
+**Philosophy**: Within the PR's diff scope, fix it — real bugs, missing tests for the PR's own changed code, docs, error handling, naming. You skip a finding for exactly two reasons: (a) it targets a file **outside the diff scope** → record a follow-up issue (this is the most common skip and it is correct), or (b) it would introduce a **genuinely new feature / architectural change**. The bar for editing outside the diff is absolute: you don't.
 
 **Output artifact**: `$ARTIFACTS_DIR/review/fix-report.md`
 **Git action**: Commit AND push fixes to the PR branch
@@ -35,7 +37,8 @@ Read all review artifacts and fix EVERYTHING surfaced. Unlike conservative auto-
 ```bash
 PR_NUMBER=$(cat $ARTIFACTS_DIR/.pr-number)
 HEAD_BRANCH=$(gh pr view $PR_NUMBER --json headRefName --jq '.headRefName')
-echo "PR: $PR_NUMBER, Branch: $HEAD_BRANCH"
+BASE_BRANCH=$(gh pr view $PR_NUMBER --json baseRefName --jq '.baseRefName')
+echo "PR: $PR_NUMBER, Head: $HEAD_BRANCH, Base: $BASE_BRANCH"
 ```
 
 ### 1.2 Checkout PR Branch
@@ -53,7 +56,24 @@ git branch --show-current
 git status --porcelain
 ```
 
-### 1.3 Read All Review Artifacts
+### 1.3 Compute the PR Diff Scope (allow-list)
+
+This PR's scope is the set of files it already changed. Compute it now — every fix you make must stay inside it. This is the guard that prevents the self-fix step from editing unrelated files.
+
+```bash
+git fetch origin $BASE_BRANCH
+# The allow-list: files this PR touched, measured from the merge-base.
+git diff origin/$BASE_BRANCH...HEAD --name-only | sort -u > /tmp/scope-allowlist.txt
+echo "In-scope files (this is the ONLY set you may edit):"; cat /tmp/scope-allowlist.txt
+```
+
+**The rule (enforced by the hard gate in Phase 5):**
+
+- You MAY edit any file in the allow-list.
+- You MAY create a **new** test or doc file that pairs 1:1 with an in-scope source file (e.g. `foo.test.ts` for an in-scope `foo.ts`, or that file's doc page).
+- You MAY NOT touch any other file. A finding about an out-of-scope file is real but **not yours to fix here** — record it under "Suggested Follow-up Issues," do not edit it.
+
+### 1.4 Read All Review Artifacts
 
 ```bash
 ls $ARTIFACTS_DIR/review/
@@ -67,16 +87,17 @@ for f in $ARTIFACTS_DIR/review/*.md; do
 done
 ```
 
-### 1.4 Extract All Findings
+### 1.5 Extract All Findings
 
-Compile a unified list of ALL findings with severity, location, and suggested fix.
+Compile a unified list of ALL findings with severity, location, and suggested fix. Tag each finding **in-scope** or **out-of-scope** by checking its file against the allow-list from 1.3.
 
 **PHASE_1_CHECKPOINT:**
 
-- [ ] PR number and branch identified
+- [ ] PR number, head, and base branch identified
 - [ ] On correct PR branch
+- [ ] Scope allow-list computed (1.3)
 - [ ] All review artifacts read
-- [ ] All findings extracted
+- [ ] All findings extracted and tagged in-scope / out-of-scope
 
 ---
 
@@ -84,32 +105,35 @@ Compile a unified list of ALL findings with severity, location, and suggested fi
 
 For each finding, decide: **FIX** or **SKIP**.
 
-### FIX (default — lean towards fixing):
+**Gate every finding on scope first.** If the finding's file is **not** in the 1.3 allow-list (and the fix isn't a new test/doc paired 1:1 with an in-scope source file), it is **SKIP → follow-up issue**, full stop — no matter how real or easy it is. Only findings that pass this scope gate proceed to the FIX/SKIP judgment below.
+
+### FIX (for in-scope findings, lean towards fixing):
 
 - Real bugs, type errors, silent failures, code quality issues
-- Missing tests for changed or existing code touched by the PR
-- Missing or outdated documentation
+- Missing tests for the **PR's own changed code** (an in-scope file)
+- Missing or outdated documentation **for an in-scope file**
 - Error handling gaps
 - Comment quality issues
 - Import organization
 - Naming improvements
-- Any finding where the fix is concrete and the code is within the PR's touched area
+- Any finding where the fix is concrete and the file is in the scope allow-list (1.3)
 
-### SKIP only if:
+### SKIP if:
 
+- **The finding targets a file NOT in the scope allow-list (1.3)** → record it as a follow-up issue. This is the most common skip, and it is correct — do not edit out-of-scope files.
 - The fix introduces a **genuinely new feature** not related to the PR
 - The fix requires **architectural changes** that affect untouched subsystems
-- The fix is about code **completely unrelated** to the PR's changes
 - The finding is factually wrong or based on a misunderstanding
 
-**Key principle**: If the review agent found it while reviewing THIS PR, it's fair game to fix. Tests, docs, simplification, error handling — all fixable. The only skip reason is "this is a new concern that deserves its own issue."
+**Key principle**: In-scope (a file the PR already changed, or a new test/doc paired to one) → fair game to fix aggressively. Out-of-scope → a follow-up issue, never an edit. "The reviewer mentioned it" does **not** make an out-of-scope file fixable here.
 
-For each skipped finding, write down **the specific reason**.
+For each skipped finding, write down **the specific reason** (for out-of-scope skips: name the file and that it's not in the allow-list).
 
 **PHASE_2_CHECKPOINT:**
 
 - [ ] Every finding marked FIX or SKIP
-- [ ] Skip reasons documented (should be very few)
+- [ ] Every out-of-scope finding routed to a follow-up issue, not an edit
+- [ ] Skip reasons documented
 
 ---
 
@@ -174,12 +198,22 @@ All must pass. If something fails after a fix:
 
 ## Phase 5: COMMIT AND PUSH
 
-### 5.1 Stage and Commit
+### 5.1 Enforce scope (hard gate), then stage and commit
 
-Only stage files you actually changed:
+**Scope gate — run this BEFORE staging.** Every file you changed must be in the allow-list (1.3), or a new test/doc paired 1:1 with an in-scope source file. Anything else is a scope leak and must not be committed:
 
 ```bash
-git add {specific files}
+git diff --name-only | sort -u > /tmp/changed.txt
+# Files you changed that are NOT in the allow-list:
+comm -23 /tmp/changed.txt /tmp/scope-allowlist.txt
+```
+
+For each path that prints: if it is **not** a new test/doc paired 1:1 with an in-scope source file, it is **out of scope** — revert it (`git checkout -- <path>` for an edit, or `rm <path>` for a stray new file) and move the finding to "Suggested Follow-up Issues." Re-run the check until it prints only justified paired new files (ideally nothing).
+
+Then stage **only** the in-scope files you changed — never `git add -A`, `git add .`, or `git add -u`:
+
+```bash
+git add {specific in-scope files}
 git status
 git commit -m "$(cat <<'EOF'
 fix: address review findings
@@ -211,6 +245,7 @@ git push origin $HEAD_BRANCH
 
 **PHASE_5_CHECKPOINT:**
 
+- [ ] Scope gate passed — no out-of-scope files staged
 - [ ] Changes committed
 - [ ] Pushed to PR branch
 
@@ -417,10 +452,11 @@ Fix report: $ARTIFACTS_DIR/review/fix-report.md
 ## Success Criteria
 
 - **ON_CORRECT_BRANCH**: Working on PR's head branch
-- **ALL_FINDINGS_ADDRESSED**: Every finding is fixed, skipped (with reason), or blocked (with reason)
-- **AGGRESSIVE_FIXING**: Most findings fixed — skip rate should be very low
-- **TESTS_ADDED**: Missing test coverage addressed
-- **DOCS_UPDATED**: Documentation gaps filled
+- **SCOPE_RESPECTED**: Every change is inside the 1.3 allow-list (or a new test/doc paired 1:1 with an in-scope source file); out-of-scope findings are routed to follow-up issues, never edited
+- **ALL_FINDINGS_ADDRESSED**: Every finding is fixed (in-scope), skipped (with reason), or blocked (with reason)
+- **AGGRESSIVE_WITHIN_SCOPE**: In-scope findings fixed thoroughly; out-of-scope skips are expected and correct, not a failure
+- **TESTS_ADDED**: Missing test coverage for the PR's own code addressed
+- **DOCS_UPDATED**: Documentation gaps for in-scope files filled
 - **VALIDATION_PASSED**: Type check, lint, and tests all pass
 - **COMMITTED_AND_PUSHED**: Changes committed and pushed to PR branch
 - **REPORTED**: Fix report artifact written and GitHub comment posted
