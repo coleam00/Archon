@@ -331,6 +331,13 @@ export async function discoverWorkflows(
     for (const [filename, warnings] of result.parseWarnings) {
       allParseWarnings.set(filename, warnings);
     }
+    // Clear stale warnings for overridden filenames that have no warnings in the
+    // new scope (a clean project file should not inherit bundled-scope warnings).
+    for (const filename of result.workflows.keys()) {
+      if (!result.parseWarnings.has(filename)) {
+        allParseWarnings.delete(filename);
+      }
+    }
   };
   const allErrors: WorkflowLoadError[] = [];
 
