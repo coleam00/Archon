@@ -5,6 +5,7 @@ import { sep as pathSep } from 'path';
 import { pool, getDialect } from './connection';
 import type { Codebase } from '../types';
 import { createLogger, captureCodebaseRegistered } from '@archon/paths';
+import { loadConfig } from '../config/config-loader';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -21,7 +22,19 @@ export async function createCodebase(data: {
   ai_assistant_type?: string;
   kind?: 'repo' | 'folder';
 }): Promise<Codebase> {
-  const assistantType = data.ai_assistant_type ?? process.env.DEFAULT_AI_ASSISTANT ?? 'claude';
+  let assistantType = data.ai_assistant_type;
+  if (assistantType == null) {
+    try {
+      const config = await loadConfig(data.default_cwd);
+      assistantType = config.assistant;
+    } catch (err) {
+      getLog().warn(
+        { err: err instanceof Error ? err.message : String(err) },
+        'db.codebase_default_assistant_config_load_failed'
+      );
+    }
+  }
+  assistantType ??= 'claude';
   const result = await pool.query<Codebase>(
     'INSERT INTO remote_agent_codebases (name, repository_url, default_cwd, default_branch, ai_assistant_type, kind) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
     [
