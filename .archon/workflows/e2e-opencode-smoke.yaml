@@ -14,6 +14,6 @@ nodes:
     idle_timeout: 60000
 
   - id: assert
-    bash: "echo \"$simple.output\" | grep -q \"OPENCODE_OK\" && echo \"PASS\" ||
+    bash: "echo $simple.output | grep -q \"OPENCODE_OK\" && echo \"PASS\" ||
       (echo \"FAIL\"; exit 1)"
     depends_on: [ simple ]
