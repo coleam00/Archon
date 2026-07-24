@@ -48,12 +48,12 @@ nodes:
       for name in bash-echo script-bun script-python bash-read-output branch-true merge-node; do
         echo "$name output received"
       done
-      bash_echo="$bash-echo.output"
-      script_bun="$script-bun.output"
-      script_python="$script-python.output"
-      bash_read="$bash-read-output.output"
-      branch_t="$branch-true.output"
-      merge="$merge-node.output"
+      bash_echo=$bash-echo.output
+      script_bun=$script-bun.output
+      script_python=$script-python.output
+      bash_read=$bash-read-output.output
+      branch_t=$branch-true.output
+      merge=$merge-node.output
       if [ -z "$bash_echo" ]; then echo "FAIL: bash-echo empty"; fail=1; fi
       if [ -z "$script_bun" ]; then echo "FAIL: script-bun empty"; fail=1; fi
       if [ -z "$script_python" ]; then echo "FAIL: script-python empty"; fail=1; fi
