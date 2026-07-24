@@ -41,9 +41,9 @@ nodes:
 
   - id: assert
     bash: |
-      echo "$multi.output" | grep -q "FIRST_MULTI_AGENT_OK" \
-      && echo "$multi.output" | grep -q "SECOND_MULTI_AGENT_OK" \
-      && echo "$inline.output" | grep -q "INLINE_AGENT_OK" \
+      echo $multi.output | grep -q "FIRST_MULTI_AGENT_OK" \
+      && echo $multi.output | grep -q "SECOND_MULTI_AGENT_OK" \
+      && echo $inline.output | grep -q "INLINE_AGENT_OK" \
       && echo "PASS: both agents in multi node executed parallel, inline agent verified" \
       || (echo "FAIL: multi/inline agent output assertion failed"; exit 1)
     timeout: 60000

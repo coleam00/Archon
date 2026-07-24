@@ -26,4 +26,5 @@ nodes:
   - id: bad-ref
     depends_on: [classify]
     bash: |
-      echo "this line should never print: $classify.output.nonexistent_field"
+      bad_ref=$classify.output.nonexistent_field
+      echo "this line should never print: $bad_ref"

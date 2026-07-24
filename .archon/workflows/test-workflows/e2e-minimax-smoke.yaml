@@ -64,10 +64,10 @@ nodes:
   - id: assert
     depends_on: [hello, identify, json]
     bash: |
-      math="$hello.output"
-      ident="$identify.output"
-      jname="$json.output.name"
-      jok="$json.output.ok"
+      math=$hello.output
+      ident=$identify.output
+      jname=$json.output.name
+      jok=$json.output.ok
 
       echo "── results ──"
       echo "math      = $math"

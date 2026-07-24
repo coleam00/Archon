@@ -51,8 +51,10 @@ nodes:
       set -euo pipefail
 
       echo "::: Validating release preconditions :::"
-      echo "Bump:    $parse-args.output.bump"
-      echo "Dry run: $parse-args.output.dryRun"
+      bump=$parse-args.output.bump
+      dry_run=$parse-args.output.dryRun
+      echo "Bump:    $bump"
+      echo "Dry run: $dry_run"
       echo
 
       git fetch origin --quiet
@@ -533,7 +535,8 @@ nodes:
       git add -A
       git status --short
 
-      git commit -m "Release $bump-version.output.newVersion"
+      new_version=$bump-version.output.newVersion
+      git commit -m "Release $new_version"
       git push origin dev
     timeout: 60000
     depends_on: [write-files, bump-version]
