@@ -119,6 +119,26 @@ describe('codebases', () => {
       });
 
       expect(loadConfigSpy).toHaveBeenCalledTimes(1);
+      expect(loadConfigSpy).toHaveBeenCalledWith('/workspace/test-project');
+      expect(mockQuery).toHaveBeenCalledWith(expect.any(String), expect.arrayContaining(['codex']));
+    });
+
+    test('resolves default assistant from loadConfig when ai_assistant_type is null', async () => {
+      loadConfigSpy.mockResolvedValue({ assistant: 'codex' } as Awaited<
+        ReturnType<typeof configLoader.loadConfig>
+      >);
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([{ ...mockCodebase, ai_assistant_type: 'codex' }])
+      );
+
+      await createCodebase({
+        name: 'test-project',
+        default_cwd: '/workspace/test-project',
+        ai_assistant_type: null as unknown as undefined,
+      });
+
+      expect(loadConfigSpy).toHaveBeenCalledTimes(1);
+      expect(loadConfigSpy).toHaveBeenCalledWith('/workspace/test-project');
       expect(mockQuery).toHaveBeenCalledWith(expect.any(String), expect.arrayContaining(['codex']));
     });
 

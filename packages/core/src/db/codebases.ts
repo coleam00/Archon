@@ -23,9 +23,9 @@ export async function createCodebase(data: {
   kind?: 'repo' | 'folder';
 }): Promise<Codebase> {
   let assistantType = data.ai_assistant_type;
-  if (assistantType === undefined) {
+  if (assistantType == null) {
     try {
-      const config = await loadConfig();
+      const config = await loadConfig(data.default_cwd);
       assistantType = config.assistant;
     } catch (err) {
       getLog().warn(
