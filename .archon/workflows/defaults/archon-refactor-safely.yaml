@@ -6,6 +6,7 @@ description: |
   Does: Scans refactoring scope -> analyzes impact (read-only) -> plans ordered task list ->
         executes with type-check hooks after every edit -> validates full suite ->
         verifies behavior preservation (read-only) -> creates PR with before/after comparison.
+  Requires: TypeScript/Bun project with type-check, lint, format:check, and test scripts.
   NOT for: Bug fixes (use archon-fix-github-issue), feature development (use archon-feature-development),
            general architecture sweeps (use archon-architect), PR reviews.
 
@@ -19,6 +20,57 @@ provider: claude
 
 nodes:
   # ═══════════════════════════════════════════════════════════════
+  # PREFLIGHT — Reject unsupported project shapes before any AI work
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: check-project
+    bash: |
+      set -euo pipefail
+
+      if [ ! -f "package.json" ]; then
+        echo "ERROR: archon-refactor-safely requires a TypeScript project with a root package.json." >&2
+        echo "This workflow scans .ts files and runs Bun validation scripts." >&2
+        exit 1
+      fi
+
+      if ! command -v bun >/dev/null 2>&1; then
+        echo "ERROR: archon-refactor-safely requires Bun on PATH." >&2
+        exit 1
+      fi
+
+      SOURCE_FILE=$(find . -type f -name '*.ts' \
+        -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/.archon/*' -not -path '*/dist/*' \
+        -not -name '*.test.ts' -not -name '*.d.ts' -print -quit 2>/dev/null)
+      if [ -z "$SOURCE_FILE" ]; then
+        echo "ERROR: archon-refactor-safely requires a TypeScript project with at least one application .ts file." >&2
+        echo "Files under .archon, node_modules, .git, and dist do not count as project source." >&2
+        exit 1
+      fi
+
+      if ! MISSING_SCRIPTS=$(bun -e '
+        const pkg = await Bun.file("package.json").json();
+        const required = ["type-check", "lint", "format:check", "test"];
+        const scripts = pkg.scripts ?? {};
+        console.log(
+          required
+            .filter(name => typeof scripts[name] !== "string" || scripts[name].trim() === "")
+            .join(", ")
+        );
+      '); then
+        echo "ERROR: package.json could not be parsed by Bun." >&2
+        exit 1
+      fi
+
+      if [ -n "$MISSING_SCRIPTS" ]; then
+        echo "ERROR: archon-refactor-safely is missing required package.json scripts: $MISSING_SCRIPTS" >&2
+        echo "Required scripts: type-check, lint, format:check, test." >&2
+        exit 1
+      fi
+
+      echo "PROJECT_READY: TypeScript/Bun project with required validation scripts detected."
+    timeout: 60000
+
+  # ═══════════════════════════════════════════════════════════════
   # PHASE 1: SCAN — Find files matching the refactoring target
   # ═══════════════════════════════════════════════════════════════
 
@@ -29,17 +81,17 @@ nodes:
       echo ""
 
       echo "=== FILE SIZE ANALYSIS (source files by size) ==="
-      find . -name '*.ts' -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/dist/*' -not -name '*.test.ts' -not -name '*.d.ts' \
+      find . -name '*.ts' -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/.archon/*' -not -path '*/dist/*' -not -name '*.test.ts' -not -name '*.d.ts' \
         -exec wc -l {} + 2>/dev/null | sort -rn | head -30
       echo ""
 
       echo "=== FILES OVER 500 LINES ==="
-      find . -name '*.ts' -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/dist/*' -not -name '*.test.ts' -not -name '*.d.ts' \
+      find . -name '*.ts' -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/.archon/*' -not -path '*/dist/*' -not -name '*.test.ts' -not -name '*.d.ts' \
         -exec sh -c 'lines=$(wc -l < "$1"); if [ "$lines" -gt 500 ]; then echo "$lines $1"; fi' _ {} \; 2>/dev/null | sort -rn
       echo ""
 
       echo "=== FUNCTION COUNT PER FILE (top 20) ==="
-      for f in $(find . -name '*.ts' -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/dist/*' -not -name '*.test.ts' -not -name '*.d.ts'); do
+      for f in $(find . -name '*.ts' -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/.archon/*' -not -path '*/dist/*' -not -name '*.test.ts' -not -name '*.d.ts'); do
         count=$(grep -cE '^\s*(export\s+)?(async\s+)?function\s|=>\s*\{' "$f" 2>/dev/null) || count=0
         if [ "$count" -gt 5 ]; then
           echo "$count functions: $f"
@@ -48,12 +100,13 @@ nodes:
       echo ""
 
       echo "=== EXPORT ANALYSIS (files with many exports) ==="
-      for f in $(find . -name '*.ts' -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/dist/*' -not -name '*.test.ts' -not -name '*.d.ts'); do
+      for f in $(find . -name '*.ts' -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/.archon/*' -not -path '*/dist/*' -not -name '*.test.ts' -not -name '*.d.ts'); do
         count=$(grep -c "^export " "$f" 2>/dev/null) || count=0
         if [ "$count" -gt 5 ]; then
           echo "$count exports: $f"
         fi
       done | sort -rn | head -20
+    depends_on: [check-project]
     timeout: 60000
 
   # ═══════════════════════════════════════════════════════════════
@@ -309,7 +362,7 @@ nodes:
       echo ""
       echo "=== FILE SIZE CHECK ==="
       echo "Files still over 500 lines:"
-      find . -name '*.ts' -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/dist/*' -not -name '*.test.ts' -not -name '*.d.ts' \
+      find . -name '*.ts' -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/.archon/*' -not -path '*/dist/*' -not -name '*.test.ts' -not -name '*.d.ts' \
         -exec sh -c 'lines=$(wc -l < "$1"); if [ "$lines" -gt 500 ]; then echo "$lines $1"; fi' _ {} \; 2>/dev/null | sort -rn
       echo ""
 

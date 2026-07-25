@@ -1,7 +1,12 @@
-import { describe, it, expect } from 'bun:test';
-import { readFileSync, readdirSync } from 'fs';
-import { join } from 'path';
+import { afterEach, beforeAll, describe, it, expect } from 'bun:test';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { delimiter, dirname, join } from 'path';
+import { spawnSync } from 'child_process';
+import { resolveBashPath } from '@archon/git';
 import { isBinaryBuild, BUNDLED_COMMANDS, BUNDLED_WORKFLOWS } from './bundled-defaults';
+import { parseWorkflow } from '../loader';
+import { registerBuiltinProviders } from '@archon/providers';
 
 // Resolve the on-disk defaults directories relative to this test file so the
 // tests work regardless of cwd. From packages/workflows/src/defaults go up
@@ -9,6 +14,62 @@ import { isBinaryBuild, BUNDLED_COMMANDS, BUNDLED_WORKFLOWS } from './bundled-de
 const REPO_ROOT = join(import.meta.dir, '..', '..', '..', '..');
 const COMMANDS_DIR = join(REPO_ROOT, '.archon/commands/defaults');
 const WORKFLOWS_DIR = join(REPO_ROOT, '.archon/workflows/defaults');
+const temporaryProjects: string[] = [];
+
+beforeAll(() => {
+  registerBuiltinProviders();
+});
+
+afterEach(() => {
+  for (const project of temporaryProjects.splice(0)) {
+    rmSync(project, { recursive: true, force: true });
+  }
+});
+
+function refactorProjectCheckScript(): string {
+  const parsed = parseWorkflow(
+    BUNDLED_WORKFLOWS['archon-refactor-safely'],
+    'archon-refactor-safely.yaml'
+  );
+  if (parsed.error || !parsed.workflow) {
+    throw new Error(parsed.error?.error ?? 'archon-refactor-safely did not parse');
+  }
+  const node = parsed.workflow.nodes.find(candidate => candidate.id === 'check-project');
+  if (!node || !('bash' in node) || typeof node.bash !== 'string') {
+    throw new Error('archon-refactor-safely check-project bash node is missing');
+  }
+  return node.bash;
+}
+
+function runRefactorProjectCheck(project: string): {
+  exitCode: number;
+  output: string;
+} {
+  const inheritedPath =
+    Object.entries(process.env).find(([key]) => key.toLowerCase() === 'path')?.[1] ?? '';
+  const environment = Object.fromEntries(
+    Object.entries(process.env).filter(([key]) => key.toLowerCase() !== 'path')
+  );
+  environment.PATH = `${dirname(process.execPath)}${delimiter}${inheritedPath}`;
+
+  const result = spawnSync(resolveBashPath(), ['-c', refactorProjectCheckScript()], {
+    cwd: project,
+    encoding: 'utf8',
+    env: environment,
+  });
+  if (result.error) throw result.error;
+
+  return {
+    exitCode: result.status ?? 1,
+    output: `${result.stdout}${result.stderr}`,
+  };
+}
+
+function createTemporaryProject(): string {
+  const project = mkdtempSync(join(tmpdir(), 'archon-refactor-project-check-'));
+  temporaryProjects.push(project);
+  return project;
+}
 
 describe('bundled-defaults', () => {
   describe('isBinaryBuild', () => {
@@ -108,6 +169,85 @@ describe('bundled-defaults', () => {
         'sed "s/SPRINT_COUNT_PLACEHOLDER/$SPRINT_COUNT/" "$ARTIFACTS/state.json" > "$STATE_TMP"'
       );
       expect(content).not.toContain('sed -i "s/SPRINT_COUNT_PLACEHOLDER/$SPRINT_COUNT/"');
+    });
+
+    describe('archon-refactor-safely project preflight (#2018)', () => {
+      it('rejects a non-TypeScript repository before any AI node runs', () => {
+        const project = createTemporaryProject();
+        writeFileSync(join(project, 'pyproject.toml'), '[project]\nname = "example"\n');
+        writeFileSync(join(project, 'main.py'), 'print("hello")\n');
+        writeFileSync(
+          join(project, 'package.json'),
+          JSON.stringify({
+            scripts: {
+              'type-check': 'tsc --noEmit',
+              lint: 'eslint .',
+              'format:check': 'prettier --check .',
+              test: 'bun test',
+            },
+          })
+        );
+        mkdirSync(join(project, '.archon/scripts'), { recursive: true });
+        writeFileSync(join(project, '.archon/scripts/helper.ts'), 'export {};\n');
+
+        const result = runRefactorProjectCheck(project);
+
+        expect(result.exitCode).not.toBe(0);
+        expect(result.output).toContain(
+          'requires a TypeScript project with at least one application .ts file'
+        );
+        expect(result.output).toContain('Files under .archon');
+      });
+
+      it('reports missing validation scripts required by the workflow', () => {
+        const project = createTemporaryProject();
+        mkdirSync(join(project, 'src'));
+        writeFileSync(join(project, 'src/index.ts'), 'export const value = 1;\n');
+        writeFileSync(
+          join(project, 'package.json'),
+          JSON.stringify({ scripts: { test: 'bun test' } })
+        );
+
+        const result = runRefactorProjectCheck(project);
+
+        expect(result.exitCode).not.toBe(0);
+        expect(result.output).toContain('missing required package.json scripts');
+        expect(result.output).toContain('type-check');
+        expect(result.output).toContain('lint');
+        expect(result.output).toContain('format:check');
+      });
+
+      it('accepts a TypeScript project with every required validation script', () => {
+        const project = createTemporaryProject();
+        mkdirSync(join(project, 'src'));
+        writeFileSync(join(project, 'src/index.ts'), 'export const value = 1;\n');
+        writeFileSync(
+          join(project, 'package.json'),
+          JSON.stringify({
+            scripts: {
+              'type-check': 'tsc --noEmit',
+              lint: 'eslint .',
+              'format:check': 'prettier --check .',
+              test: 'bun test',
+            },
+          })
+        );
+
+        const result = runRefactorProjectCheck(project);
+
+        expect(result.exitCode).toBe(0);
+        expect(result.output).toContain('PROJECT_READY');
+      });
+
+      it('gates scope scanning on the project preflight', () => {
+        const parsed = parseWorkflow(
+          BUNDLED_WORKFLOWS['archon-refactor-safely'],
+          'archon-refactor-safely.yaml'
+        );
+        expect(parsed.error).toBeNull();
+        const scanNode = parsed.workflow?.nodes.find(candidate => candidate.id === 'scan-scope');
+        expect(scanNode?.depends_on).toEqual(['check-project']);
+      });
     });
 
     it('should have valid YAML structure', () => {
