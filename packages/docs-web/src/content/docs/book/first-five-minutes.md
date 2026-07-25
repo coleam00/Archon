@@ -48,7 +48,7 @@ You should see something like `archon v0.2.12`. That's it — Archon is installe
 
 ## Your First Win: Ask a Question (90 seconds)
 
-Navigate to any git repository on your machine, then run:
+Navigate to any git repository on your machine (run `git init` first if the folder isn't a repo yet), then run:
 
 ```bash
 cd /path/to/your/project
