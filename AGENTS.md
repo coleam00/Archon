@@ -37,6 +37,7 @@
 
 **Git Workflow and Releases**
 
+- **Read [`CONTRIBUTING.md`](./CONTRIBUTING.md) before committing or opening a PR.** It is the source of truth for contributor workflow and carries rules that are deliberately NOT duplicated here — notably commit-message conventions (present tense, first line under 72 characters) and the marketplace submission process. The bullets below cover branch/release policy only; they are not the complete contributor checklist.
 - `main` is the release branch. Never commit directly to `main`.
 - `dev` is the working branch. All feature work branches off `dev` and merges back into `dev`.
 - All PRs must use the template at `.github/pull_request_template.md` — fill in every section. When opening a PR via `gh pr create`, copy the template into the body explicitly; GitHub only auto-applies it through the web UI.
