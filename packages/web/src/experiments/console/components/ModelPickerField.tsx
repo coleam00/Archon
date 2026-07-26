@@ -116,9 +116,14 @@ function ModelCombobox({
   piModels,
 }: ModelPickerFieldProps): ReactElement {
   const [open, setOpen] = useState(false);
+  // Filter suggestions by the text typed SINCE focus, not the saved value: a
+  // field holding 'haiku' must open showing the whole list (browse), and only
+  // narrow once the user actually types (search). Reset on every focus.
+  const [edited, setEdited] = useState(false);
   // Pi only: include backends without a usable credential in the suggestions.
   const [showAll, setShowAll] = useState(false);
   const shape = modelPickerShape(agentId);
+  const query = edited ? value : '';
 
   // OpenCode on-demand backend list. Per-field state by design: the endpoint
   // is only hit on this field's explicit "Load backend suggestions" click.
@@ -152,18 +157,18 @@ function ModelCombobox({
     }
   };
 
-  // Suggestions per shape; the field's text doubles as the search query.
+  // Suggestions per shape; text typed since focus is the search query.
   const backends = shape === 'pi' ? usablePiBackends(agents) : null;
   const pi =
-    shape === 'pi' ? piModelOptions(piModels, value, backends, showAll, PI_SUGGESTION_LIMIT) : null;
+    shape === 'pi' ? piModelOptions(piModels, query, backends, showAll, PI_SUGGESTION_LIMIT) : null;
   let options: ModelOption[];
   if (pi !== null) {
     options = pi.options;
   } else if (shape === 'opencode') {
     options =
-      ocPhase === 'loaded' ? filterModelOptions(opencodeBackendOptions(ocProviders), value) : [];
+      ocPhase === 'loaded' ? filterModelOptions(opencodeBackendOptions(ocProviders), query) : [];
   } else {
-    options = filterModelOptions(curatedOptionsForAgent(agentId), value);
+    options = filterModelOptions(curatedOptionsForAgent(agentId), query);
   }
 
   const pick = (o: ModelOption): void => {
@@ -185,9 +190,11 @@ function ModelCombobox({
         value={value}
         onChange={e => {
           onChange(e.target.value);
+          setEdited(true);
           setOpen(true);
         }}
         onFocus={() => {
+          setEdited(false);
           setOpen(true);
         }}
         onBlur={() => {
