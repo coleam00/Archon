@@ -3865,6 +3865,44 @@ describe('workflowCleanupCommand', () => {
       'Failed to clean up workflow runs: disk full'
     );
   });
+
+  it('should emit compact JSON when json=true and runs are deleted', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.deleteOldWorkflowRuns as ReturnType<typeof mock>).mockResolvedValueOnce({
+      count: 5,
+    });
+
+    await workflowCleanupCommand(30, true);
+
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const parsed = JSON.parse(consoleSpy.mock.calls[0][0] as string) as {
+      deleted: number;
+      days: number;
+    };
+    expect(parsed.deleted).toBe(5);
+    expect(parsed.days).toBe(30);
+    expect(consoleSpy.mock.calls[0][0] as string).not.toContain('\n');
+    expect(consoleSpy.mock.calls[0][0] as string).not.toContain('Deleted');
+  });
+
+  it('should emit compact JSON when json=true and count is 0', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.deleteOldWorkflowRuns as ReturnType<typeof mock>).mockResolvedValueOnce({
+      count: 0,
+    });
+
+    await workflowCleanupCommand(7, true);
+
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const parsed = JSON.parse(consoleSpy.mock.calls[0][0] as string) as {
+      deleted: number;
+      days: number;
+    };
+    expect(parsed.deleted).toBe(0);
+    expect(parsed.days).toBe(7);
+    expect(consoleSpy.mock.calls[0][0] as string).not.toContain('\n');
+    expect(consoleSpy.mock.calls[0][0] as string).not.toContain('No workflow runs');
+  });
 });
 
 describe('workflowRejectCommand', () => {

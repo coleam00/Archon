@@ -669,7 +669,7 @@ async function main(): Promise<number> {
               console.error('  days: delete terminal runs older than N days (default: 7)');
               return 1;
             }
-            await workflowCleanupCommand(days);
+            await workflowCleanupCommand(days, jsonFlag);
             break;
           }
 

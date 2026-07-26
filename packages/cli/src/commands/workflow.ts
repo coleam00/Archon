@@ -2688,9 +2688,13 @@ export async function workflowResetSessionsCommand(
 /**
  * Delete terminal workflow runs older than the given number of days.
  */
-export async function workflowCleanupCommand(days: number): Promise<void> {
+export async function workflowCleanupCommand(days: number, json?: boolean): Promise<void> {
   try {
     const { count } = await workflowDb.deleteOldWorkflowRuns(days);
+    if (json) {
+      console.log(JSON.stringify({ deleted: count, days }));
+      return;
+    }
     if (count === 0) {
       console.log(`No workflow runs older than ${days} days to clean up.`);
     } else {
