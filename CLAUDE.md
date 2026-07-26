@@ -245,7 +245,7 @@ bun run cli workflow resume <run-id>
 bun run cli workflow abandon <run-id>
 
 # Most read/write subcommands accept --json for machine-readable output:
-#   list, status, runs, get, approve, reject, abandon, resume.
+#   list, status, runs, get, approve, reject, abandon, resume, cleanup.
 # For approve/reject/resume, --json records/validates the decision and returns a
 # clean JSON line WITHOUT the inline auto-resume (drive continuation separately).
 

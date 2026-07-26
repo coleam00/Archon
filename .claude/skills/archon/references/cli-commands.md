@@ -133,13 +133,14 @@ archon workflow resume abc123
 archon workflow resume abc123 "continue with the plan"
 ```
 
-### `archon workflow cleanup [days]`
+### `archon workflow cleanup [days] [--json]`
 
 **Deletes** old terminal workflow runs (`completed`/`failed`/`cancelled`) from the database for disk hygiene. Does NOT transition `running` rows — use `abandon`/`cancel` for those.
 
 ```bash
 archon workflow cleanup             # Default: 7 days
 archon workflow cleanup 30          # Custom: 30 days
+archon workflow cleanup --json      # Machine-readable: {"deleted":N,"days":D}
 ```
 
 ### `archon workflow reset-sessions <workflow-name> [--scope <key>] [--node <id>] [--yes] [--json]`

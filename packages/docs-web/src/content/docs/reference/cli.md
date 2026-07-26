@@ -334,6 +334,7 @@ Delete old terminal workflow run records from the database.
 ```bash
 archon workflow cleanup        # Default: 7 days
 archon workflow cleanup 30     # Custom threshold
+archon workflow cleanup --json # Machine-readable: {"deleted":N,"days":D}
 ```
 
 ### `workflow reset-sessions`
@@ -513,7 +514,7 @@ archon version
 | `--cwd <path>` | Override working directory (default: current directory) |
 | `--quiet`, `-q` | Reduce log verbosity to warnings and errors only |
 | `--verbose`, `-v` | Show debug-level output |
-| `--json` | Output machine-readable JSON (workflow `list`, `status`, `runs`, `get`, and the write commands `approve`/`reject`/`abandon`/`resume`). Implies log suppression so stdout is exactly the JSON payload. |
+| `--json` | Output machine-readable JSON (workflow `list`, `status`, `runs`, `get`, and the write commands `approve`/`reject`/`abandon`/`resume`/`cleanup`). Implies log suppression so stdout is exactly the JSON payload. |
 | `--help`, `-h` | Show help message |
 
 ## Working Directory
