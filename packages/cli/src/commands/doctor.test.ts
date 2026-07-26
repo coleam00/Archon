@@ -27,6 +27,7 @@ import {
   checkTelemetry,
   checkFolderProject,
   doctorCommand,
+  type ClaudeBinaryDeps,
   type CodexBinaryDeps,
   type DatabaseDeps,
   type FolderProjectDeps,
@@ -45,23 +46,32 @@ describe('checkClaudeBinary', () => {
     execSpy.mockRestore();
   });
 
+  const noDeps = async (): Promise<ClaudeBinaryDeps> => ({});
+
   it('returns skip when not in binary mode', async () => {
-    const result = await checkClaudeBinary({}, false);
+    const result = await checkClaudeBinary(false);
     expect(result.status).toBe('skip');
     expect(result.label).toBe('Claude binary');
     expect(execSpy).not.toHaveBeenCalled();
   });
 
-  it('returns fail in binary mode when CLAUDE_BIN_PATH is unset', async () => {
-    const result = await checkClaudeBinary({}, true);
+  it('returns fail in binary mode when the whole resolution chain is empty', async () => {
+    const result = await checkClaudeBinary(true, noDeps, async () => {
+      throw new Error('Claude Code not found. Archon requires the Claude Code executable');
+    });
     expect(result.status).toBe('fail');
-    expect(result.message).toContain('CLAUDE_BIN_PATH');
+    // The resolver's install instructions are surfaced verbatim — they are the
+    // actionable message, unlike the old "CLAUDE_BIN_PATH is not set".
+    expect(result.message).toContain('Claude Code not found');
     expect(execSpy).not.toHaveBeenCalled();
   });
 
   it('returns pass in binary mode when binary spawns successfully', async () => {
     execSpy.mockResolvedValue({ stdout: '1.0.0', stderr: '' });
-    const result = await checkClaudeBinary({ CLAUDE_BIN_PATH: '/opt/claude' }, true);
+    const result = await checkClaudeBinary(true, noDeps, async () => ({
+      path: '/opt/claude',
+      source: 'env',
+    }));
     expect(result.status).toBe('pass');
     expect(result.message).toContain('/opt/claude');
     expect(execSpy).toHaveBeenCalledWith('/opt/claude', ['--version'], expect.any(Object));
@@ -69,10 +79,63 @@ describe('checkClaudeBinary', () => {
 
   it('returns fail in binary mode when spawn throws', async () => {
     execSpy.mockRejectedValue(new Error('ENOENT'));
-    const result = await checkClaudeBinary({ CLAUDE_BIN_PATH: '/opt/claude' }, true);
+    const result = await checkClaudeBinary(true, noDeps, async () => ({
+      path: '/opt/claude',
+      source: 'env',
+    }));
     expect(result.status).toBe('fail');
     expect(result.message).toContain('did not spawn');
     expect(result.message).toContain('ENOENT');
+  });
+
+  // #2263: doctor previously read only CLAUDE_BIN_PATH and hard-FAILed setups
+  // configured via assistants.claude.claudeBinaryPath — the documented fix for
+  // compiled builds — even though those setups run workflows fine.
+  it('passes when the binary comes from config rather than CLAUDE_BIN_PATH (#2263)', async () => {
+    execSpy.mockResolvedValue({ stdout: '1.0.0', stderr: '' });
+    let sawConfigPath: string | undefined;
+    const result = await checkClaudeBinary(
+      true,
+      async () => ({ configBinaryPath: '/Users/me/bin/claude' }),
+      async configPath => {
+        sawConfigPath = configPath;
+        return { path: configPath as string, source: 'config' };
+      }
+    );
+
+    // The config path must actually reach the resolver, not be ignored.
+    expect(sawConfigPath).toBe('/Users/me/bin/claude');
+    expect(result.status).toBe('pass');
+    expect(result.message).toContain('/Users/me/bin/claude');
+    // Which tier resolved it is surfaced so users can see what the runtime does.
+    expect(result.message).toContain('via config');
+    expect(result.message).not.toContain('CLAUDE_BIN_PATH is not set');
+  });
+
+  it('reports the autodetect tier when the native installer path resolves', async () => {
+    execSpy.mockResolvedValue({ stdout: '1.0.0', stderr: '' });
+    const result = await checkClaudeBinary(true, noDeps, async () => ({
+      path: '/home/me/.local/bin/claude',
+      source: 'autodetect',
+    }));
+    expect(result.status).toBe('pass');
+    expect(result.message).toContain('via autodetect');
+  });
+
+  it('degrades to env/autodetect when config loading throws', async () => {
+    execSpy.mockResolvedValue({ stdout: '1.0.0', stderr: '' });
+    const result = await checkClaudeBinary(
+      true,
+      async () => {
+        throw new Error('malformed config.yaml');
+      },
+      async configPath => {
+        expect(configPath).toBeUndefined();
+        return { path: '/opt/claude', source: 'env' };
+      }
+    );
+    // A broken config must not fail the binary check outright.
+    expect(result.status).toBe('pass');
   });
 });
 

@@ -14,6 +14,10 @@ import {
   resolveCodexBinaryWithSource,
   type CodexBinarySource,
 } from '@archon/providers/codex/binary-resolver';
+import {
+  resolveClaudeBinaryWithSource,
+  type ClaudeBinarySource,
+} from '@archon/providers/claude/binary-resolver';
 import type { Codebase, SchemaVersionInfo } from '@archon/core';
 
 // Vendor-canonical credential id for Codex (since #1955 credentials are keyed
@@ -47,34 +51,88 @@ export interface CheckResult {
   message: string;
 }
 
+export interface ClaudeBinaryDeps {
+  /** `assistants.claude.claudeBinaryPath` from the merged config, if configured. */
+  configBinaryPath?: string;
+}
+
+/**
+ * Verify the Claude Code binary resolves and spawns.
+ *
+ * Delegates to the SAME resolver the runtime uses
+ * (`resolveClaudeBinaryWithSource`) instead of reading `CLAUDE_BIN_PATH`
+ * directly, and reports which tier produced the path (env / config /
+ * autodetect). Reading only the env var made doctor report a hard FAIL on
+ * setups that run fine, because `assistants.claude.claudeBinaryPath` is the
+ * documented way to configure compiled builds — training users to ignore the
+ * one tool meant to catch real environment breakage (#2263).
+ */
 export async function checkClaudeBinary(
-  env: NodeJS.ProcessEnv,
   // Injected so tests can drive the binary-mode branch — `BUNDLED_IS_BINARY`
-  // is a static const re-export and cannot be spied at runtime.
-  isBinary: boolean = BUNDLED_IS_BINARY
+  // is a static const re-export and cannot be spied at runtime. Kept (rather
+  // than inferred from a nullish resolve result like `checkCodexBinary` does)
+  // because Claude's resolver honors CLAUDE_BIN_PATH in dev mode too, so a
+  // truthy result is NOT proof of binary mode.
+  isBinary: boolean = BUNDLED_IS_BINARY,
+  loadDeps: () => Promise<ClaudeBinaryDeps> = defaultLoadClaudeBinaryDeps,
+  resolve: (
+    configPath?: string
+  ) => Promise<
+    { path: string; source: ClaudeBinarySource } | undefined
+  > = resolveClaudeBinaryWithSource
 ): Promise<CheckResult> {
   const label = 'Claude binary';
   if (!isBinary) {
     return { label, status: 'skip', message: 'dev mode (SDK resolves via node_modules)' };
   }
-  const path = env.CLAUDE_BIN_PATH;
-  if (!path) {
+
+  let deps: ClaudeBinaryDeps;
+  try {
+    deps = await loadDeps();
+  } catch (err) {
+    // Config load can throw (e.g. malformed YAML) — degrade to env/autodetect
+    // rather than failing the whole check. Mirrors checkCodexBinary.
+    getLog().debug({ err }, 'doctor.claude_deps_load_failed');
+    deps = {};
+  }
+
+  let resolved: { path: string; source: ClaudeBinarySource } | undefined;
+  try {
+    resolved = await resolve(deps.configBinaryPath);
+  } catch (err) {
+    // Binary mode + whole chain empty → the resolver throws with install
+    // instructions. That message is the actionable one, so surface it verbatim.
+    return { label, status: 'fail', message: (err as Error).message };
+  }
+
+  // Defensive: the resolver only returns undefined outside binary mode, which
+  // the isBinary guard above already handled.
+  if (!resolved) {
+    return { label, status: 'skip', message: 'dev mode (SDK resolves via node_modules)' };
+  }
+
+  try {
+    await execFileAsync(resolved.path, ['--version'], { timeout: 5000 });
     return {
       label,
-      status: 'fail',
-      message: 'CLAUDE_BIN_PATH is not set. Run `archon setup` to configure.',
+      status: 'pass',
+      message: `${resolved.path} (via ${resolved.source}, spawns OK)`,
     };
-  }
-  try {
-    await execFileAsync(path, ['--version'], { timeout: 5000 });
-    return { label, status: 'pass', message: `${path} (spawns OK)` };
   } catch (err) {
     return {
       label,
       status: 'fail',
-      message: `${path} did not spawn: ${(err as Error).message}`,
+      message: `${resolved.path} did not spawn: ${(err as Error).message}`,
     };
   }
+}
+
+async function defaultLoadClaudeBinaryDeps(): Promise<ClaudeBinaryDeps> {
+  // Lazy import so doctor doesn't pull the full @archon/core graph for an
+  // unrelated check (matches defaultLoadCodexBinaryDeps).
+  const { loadConfig } = await import('@archon/core');
+  const config = await loadConfig(process.cwd());
+  return { configBinaryPath: config.assistants.claude.claudeBinaryPath };
 }
 
 export interface CodexBinaryDeps {
@@ -670,7 +728,7 @@ export async function doctorCommand(
   const promises = checks
     ? checks.map(fn => fn())
     : [
-        checkClaudeBinary(env),
+        checkClaudeBinary(),
         checkCodexBinary(env),
         checkGhAuth(env),
         checkPi(env),

@@ -112,6 +112,9 @@ const INSTALL_INSTRUCTIONS =
   '        claudeBinaryPath: /absolute/path/to/claude\n\n' +
   'See: https://archon.diy/docs/reference/configuration#claude';
 
+/** Which resolution tier produced the Claude binary path. */
+export type ClaudeBinarySource = 'env' | 'config' | 'autodetect';
+
 /**
  * Resolve the path to the Claude Code executable (native binary in SDK 0.2.x;
  * legacy `cli.js` is still accepted for operators pinned to npm-installed
@@ -126,6 +129,21 @@ const INSTALL_INSTRUCTIONS =
 export async function resolveClaudeBinaryPath(
   configClaudeBinaryPath?: string
 ): Promise<string | undefined> {
+  const resolved = await resolveClaudeBinaryWithSource(configClaudeBinaryPath);
+  return resolved?.path;
+}
+
+/**
+ * Same resolution as {@link resolveClaudeBinaryPath}, but also reports which
+ * tier produced the path. Used by `archon doctor` to tell the user how the
+ * binary was found (env / config / autodetect) instead of asserting that only
+ * `CLAUDE_BIN_PATH` counts (#2263). Returns undefined when the SDK should
+ * resolve the binary itself; throws with install instructions in binary mode
+ * when the whole chain comes up empty.
+ */
+export async function resolveClaudeBinaryWithSource(
+  configClaudeBinaryPath?: string
+): Promise<{ path: string; source: ClaudeBinarySource } | undefined> {
   // 1. Environment variable override — honored in dev mode too, so operators
   // on libc mismatches (e.g. glibc host with the SDK's musl variant first in
   // its resolution order) can pin a known-good binary without a compiled build.
@@ -133,7 +151,7 @@ export async function resolveClaudeBinaryPath(
   if (envPath) {
     const resolvedEnv = validateAndExpand(envPath, 'CLAUDE_BIN_PATH');
     getLog().info({ binaryPath: resolvedEnv, source: 'env' }, 'claude.binary_resolved');
-    return resolvedEnv;
+    return { path: resolvedEnv, source: 'env' };
   }
 
   if (!BUNDLED_IS_BINARY) return undefined;
@@ -145,7 +163,7 @@ export async function resolveClaudeBinaryPath(
       'assistants.claude.claudeBinaryPath'
     );
     getLog().info({ binaryPath: resolvedConfig, source: 'config' }, 'claude.binary_resolved');
-    return resolvedConfig;
+    return { path: resolvedConfig, source: 'config' };
   }
 
   // 3. Autodetect — the Anthropic native installer
@@ -161,7 +179,7 @@ export async function resolveClaudeBinaryPath(
       { binaryPath: nativeInstallerPath, source: 'autodetect' },
       'claude.binary_resolved'
     );
-    return nativeInstallerPath;
+    return { path: nativeInstallerPath, source: 'autodetect' };
   }
 
   // 4. Not found — throw with install instructions
