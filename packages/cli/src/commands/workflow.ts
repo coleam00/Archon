@@ -240,12 +240,18 @@ export function buildDetachedRunCmd(
   cwd: string,
   extraArgs: string[]
 ): string[] {
-  // In a compiled binary, execPath IS the archon binary and there is no
-  // entry-script argv[1]; in dev, execPath is bun and argv[1] is the cli entry.
+  // Only the command prefix differs between modes: in a compiled binary
+  // execPath IS the archon binary and re-invoking it needs no entry script; in
+  // dev, execPath is bun and argv[1] is the cli entry that bun must be handed.
   const baseCmd = isBinary ? [execPath] : [execPath, argv[1]];
-  const userArgs = (isBinary ? argv.slice(1) : argv.slice(2)).filter(
-    arg => arg !== '--detach' && arg !== '--json'
-  );
+  // User args always start at argv[2] in BOTH modes. A Bun single-file
+  // executable does have an argv[1] — the virtual entry path
+  // (`/$bunfs/root/<name>`, `B:/~BUN/root/<name>.exe` on Windows) — so slicing
+  // from 1 in binary mode leaked that path in as the child's first token and
+  // the child died with `Unknown command: B:/~BUN/root/archon-...exe` (#2248).
+  // cli.ts's own parser reads `process.argv.slice(2)` unconditionally, which is
+  // the contract this must match.
+  const userArgs = argv.slice(2).filter(arg => arg !== '--detach' && arg !== '--json');
   // --cwd is appended last (parseArgs last-wins) so the child resolves the same
   // absolute working dir regardless of any relative --cwd the caller passed.
   return [...baseCmd, ...userArgs, '--cwd', cwd, ...extraArgs];

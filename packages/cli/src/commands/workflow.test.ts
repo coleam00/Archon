@@ -3222,11 +3222,18 @@ describe('buildDetachedRunCmd', () => {
     expect(cmd).toContain('--conversation-id');
   });
 
-  it('binary mode: uses [execPath] only (no duplicated entry arg), slices argv(1)', () => {
+  // A Bun single-file executable's argv is NOT [binary, ...userArgs]. Bun
+  // injects a virtual entry path at argv[1] and reports argv[0] as 'bun':
+  //   ['bun', '/$bunfs/root/archon', 'workflow', 'run', ...]
+  // Verified against a real `bun build --compile` artifact. The previous
+  // fixture modelled a compiled argv with no argv[1] at all, which is why
+  // #2248 (detached child dies with `Unknown command: B:/~BUN/root/...`)
+  // shipped green.
+  it('binary mode: uses [execPath] only (no duplicated entry arg), drops the Bun SFE virtual argv[1]', () => {
     const cmd = buildDetachedRunCmd(
       true,
       '/usr/local/bin/archon',
-      ['/usr/local/bin/archon', 'workflow', 'run', 'assist', 'hello', '--detach', '--json'],
+      ['bun', '/$bunfs/root/archon', 'workflow', 'run', 'assist', 'hello', '--detach', '--json'],
       '/abs/cwd',
       ['--branch', 'assist-123']
     );
@@ -3234,12 +3241,40 @@ describe('buildDetachedRunCmd', () => {
     expect(cmd[0]).toBe('/usr/local/bin/archon');
     // The binary path must appear exactly once — never duplicated as argv[1].
     expect(cmd.filter(arg => arg === '/usr/local/bin/archon')).toHaveLength(1);
+    // The virtual entry path must never reach the child: cli.ts parses
+    // process.argv.slice(2), so a leaked argv[1] becomes the child's command.
+    expect(cmd.some(arg => arg.includes('$bunfs'))).toBe(false);
     expect(cmd[1]).toBe('workflow');
     expect(cmd).not.toContain('--detach');
     expect(cmd).not.toContain('--json');
     const cwdIdx = cmd.indexOf('--cwd');
     expect(cmd[cwdIdx + 1]).toBe('/abs/cwd');
     expect(cmd.slice(cwdIdx + 2)).toEqual(['--branch', 'assist-123']);
+  });
+
+  it('binary mode: drops the Windows Bun SFE virtual argv[1] (#2248 repro)', () => {
+    const cmd = buildDetachedRunCmd(
+      true,
+      'C:\\Users\\dev\\archon.exe',
+      [
+        'bun',
+        'B:/~BUN/root/archon-windows-x64.exe',
+        'workflow',
+        'run',
+        'assist',
+        'hello',
+        '--detach',
+        '--json',
+      ],
+      'C:\\checkout',
+      ['--branch', 'assist-123']
+    );
+
+    expect(cmd[0]).toBe('C:\\Users\\dev\\archon.exe');
+    // The exact token that appeared as `Unknown command: ...` in the report.
+    expect(cmd).not.toContain('B:/~BUN/root/archon-windows-x64.exe');
+    expect(cmd[1]).toBe('workflow');
+    expect(cmd[2]).toBe('run');
   });
 });
 
