@@ -115,6 +115,12 @@ const INSTALL_INSTRUCTIONS =
 /** Which resolution tier produced the Claude binary path. */
 export type ClaudeBinarySource = 'env' | 'config' | 'autodetect';
 
+/** A resolved Claude binary path plus the tier that produced it. */
+export interface ClaudeBinaryResolution {
+  path: string;
+  source: ClaudeBinarySource;
+}
+
 /**
  * Resolve the path to the Claude Code executable (native binary in SDK 0.2.x;
  * legacy `cli.js` is still accepted for operators pinned to npm-installed
@@ -143,7 +149,7 @@ export async function resolveClaudeBinaryPath(
  */
 export async function resolveClaudeBinaryWithSource(
   configClaudeBinaryPath?: string
-): Promise<{ path: string; source: ClaudeBinarySource } | undefined> {
+): Promise<ClaudeBinaryResolution | undefined> {
   // 1. Environment variable override — honored in dev mode too, so operators
   // on libc mismatches (e.g. glibc host with the SDK's musl variant first in
   // its resolution order) can pin a known-good binary without a compiled build.

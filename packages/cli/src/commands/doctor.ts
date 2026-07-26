@@ -16,7 +16,7 @@ import {
 } from '@archon/providers/codex/binary-resolver';
 import {
   resolveClaudeBinaryWithSource,
-  type ClaudeBinarySource,
+  type ClaudeBinaryResolution,
 } from '@archon/providers/claude/binary-resolver';
 import type { Codebase, SchemaVersionInfo } from '@archon/core';
 
@@ -77,9 +77,7 @@ export async function checkClaudeBinary(
   loadDeps: () => Promise<ClaudeBinaryDeps> = defaultLoadClaudeBinaryDeps,
   resolve: (
     configPath?: string
-  ) => Promise<
-    { path: string; source: ClaudeBinarySource } | undefined
-  > = resolveClaudeBinaryWithSource
+  ) => Promise<ClaudeBinaryResolution | undefined> = resolveClaudeBinaryWithSource
 ): Promise<CheckResult> {
   const label = 'Claude binary';
   if (!isBinary) {
@@ -96,7 +94,7 @@ export async function checkClaudeBinary(
     deps = {};
   }
 
-  let resolved: { path: string; source: ClaudeBinarySource } | undefined;
+  let resolved: ClaudeBinaryResolution | undefined;
   try {
     resolved = await resolve(deps.configBinaryPath);
   } catch (err) {
