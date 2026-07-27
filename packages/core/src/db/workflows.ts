@@ -639,6 +639,15 @@ export async function findResumableRun(
  * Used by the orchestrator (all platforms) to detect approved runs that need foreground resume
  * on the prior run's worktree. Codebase scope prevents cross-project resume on persistent
  * chat conversation IDs (Telegram chat_id, Slack thread, etc.).
+ *
+ * Ordering is status-first, then recency WITHIN a status — not bare recency. The two statuses
+ * are not interchangeable candidates for the caller: a `paused` run is an open gate that is
+ * legitimately waiting and gets hydrated and resumed, while a `failed` one is deliberately gated
+ * behind an explicit user prompt first (#1549). Ordering purely by `started_at` therefore lets a
+ * newer failure shadow an older open gate, and approving that gate resumes nothing.
+ *
+ * Contrast with getActiveWorkflowRunByPath below, which sorts the opposite way (older-wins) —
+ * it answers "who took the path lock first", a different question.
  */
 export async function findResumableRunByParentConversation(
   workflowName: string,
@@ -652,7 +661,7 @@ export async function findResumableRunByParentConversation(
          AND parent_conversation_id = $2
          AND codebase_id = $3
          AND status IN ('failed', 'paused')
-       ORDER BY started_at DESC
+       ORDER BY CASE WHEN status = 'paused' THEN 0 ELSE 1 END, started_at DESC
        LIMIT 1`,
       [workflowName, parentConversationId, codebaseId]
     );
