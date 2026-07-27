@@ -62,6 +62,12 @@ describe('resolveClaudeBinaryPath (binary mode)', () => {
 
     const result = await resolver.resolveClaudeBinaryPath('/custom/claude/cli.js');
     expect(result).toBe('/custom/claude/cli.js');
+    // Mislabeling this tier as 'env' ships green but makes doctor print
+    // "via env" for a config-resolved path — the exact diagnostic #2263 added.
+    expect(mockLogger.info).toHaveBeenCalledWith(
+      { binaryPath: '/custom/claude/cli.js', source: 'config' },
+      'claude.binary_resolved'
+    );
   });
 
   test('throws when config claudeBinaryPath file does not exist', async () => {

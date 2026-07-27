@@ -26,6 +26,7 @@ import {
   checkTelegram,
   checkTelemetry,
   checkFolderProject,
+  defaultLoadClaudeBinaryDeps,
   doctorCommand,
   type ClaudeBinaryDeps,
   type CodexBinaryDeps,
@@ -34,6 +35,7 @@ import {
   type OpenCodeDeps,
 } from './doctor';
 import * as doctorModule from './doctor';
+import type { MergedConfig } from '@archon/core';
 
 describe('checkClaudeBinary', () => {
   let execSpy: ReturnType<typeof spyOn<typeof git, 'execFileAsync'>>;
@@ -136,6 +138,44 @@ describe('checkClaudeBinary', () => {
     );
     // A broken config must not fail the binary check outright.
     expect(result.status).toBe('pass');
+  });
+
+  // The tests above inject BOTH seams, so they only prove parameter plumbing
+  // inside checkClaudeBinary. The two below exercise the real
+  // defaultLoadClaudeBinaryDeps, which is where #2263 actually lived: reading
+  // the wrong config key type-checks and would otherwise ship green.
+  // The stub config deliberately carries a DIFFERENT value under
+  // assistants.codex.codexBinaryPath so a key mix-up fails loudly rather than
+  // resolving to the same string by accident.
+  const stubConfig = async (): Promise<Pick<MergedConfig, 'assistants'>> => ({
+    assistants: {
+      claude: { claudeBinaryPath: '/from/claude/config' },
+      codex: { codexBinaryPath: '/from/codex/config' },
+    },
+  });
+
+  it('reads assistants.claude.claudeBinaryPath, not another assistant key (#2263)', async () => {
+    const deps = await defaultLoadClaudeBinaryDeps(stubConfig);
+    expect(deps.configBinaryPath).toBe('/from/claude/config');
+  });
+
+  it('routes the real deps loader through to the resolver (#2263 wiring guard)', async () => {
+    execSpy.mockResolvedValue({ stdout: '1.0.0', stderr: '' });
+    let sawConfigPath: string | undefined;
+
+    const result = await checkClaudeBinary(
+      true,
+      // The real loader, not a fake — this is the link the bug broke.
+      () => defaultLoadClaudeBinaryDeps(stubConfig),
+      async configPath => {
+        sawConfigPath = configPath;
+        return { path: configPath as string, source: 'config' };
+      }
+    );
+
+    expect(sawConfigPath).toBe('/from/claude/config');
+    expect(result.status).toBe('pass');
+    expect(result.message).toContain('via config');
   });
 });
 

@@ -18,7 +18,7 @@ import {
   resolveClaudeBinaryWithSource,
   type ClaudeBinaryResolution,
 } from '@archon/providers/claude/binary-resolver';
-import type { Codebase, SchemaVersionInfo } from '@archon/core';
+import type { Codebase, MergedConfig, SchemaVersionInfo } from '@archon/core';
 
 // Vendor-canonical credential id for Codex (since #1955 credentials are keyed
 // by vendor, not agent). A connected `openai` key signals Codex intent even
@@ -125,11 +125,19 @@ export async function checkClaudeBinary(
   }
 }
 
-async function defaultLoadClaudeBinaryDeps(): Promise<ClaudeBinaryDeps> {
-  // Lazy import so doctor doesn't pull the full @archon/core graph for an
-  // unrelated check (matches defaultLoadCodexBinaryDeps).
-  const { loadConfig } = await import('@archon/core');
-  const config = await loadConfig(process.cwd());
+export async function defaultLoadClaudeBinaryDeps(
+  // Injected so the config-key mapping — the tier #2263 was actually about —
+  // can be asserted without mock.module(), which is process-global and would
+  // leak into every other test in this file's batch. Defaults to the real
+  // lazy import so the production path is the zero-argument call.
+  loadMergedConfig: (cwd: string) => Promise<Pick<MergedConfig, 'assistants'>> = async cwd => {
+    // Lazy import so doctor doesn't pull the full @archon/core graph for an
+    // unrelated check (matches defaultLoadCodexBinaryDeps).
+    const { loadConfig } = await import('@archon/core');
+    return loadConfig(cwd);
+  }
+): Promise<ClaudeBinaryDeps> {
+  const config = await loadMergedConfig(process.cwd());
   return { configBinaryPath: config.assistants.claude.claudeBinaryPath };
 }
 
