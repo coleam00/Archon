@@ -60,6 +60,7 @@ export {
   INCLUDE_NODE_IGNORED_FIELDS,
   WORKFLOW_NODE_IGNORED_FIELDS,
   KNOWN_DAG_NODE_KEYS,
+  dagNodeFlatSchema,
   effortLevelSchema,
   thinkingConfigSchema,
   sandboxSettingsSchema,

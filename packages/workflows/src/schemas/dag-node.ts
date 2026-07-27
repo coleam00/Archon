@@ -594,66 +594,60 @@ export const WORKFLOW_NODE_IGNORED_FIELDS: readonly string[] = BASH_NODE_AI_FIEL
   f => f !== 'output_format'
 );
 
+/**
+ * Flat schema with all DAG node fields (base + mode + mode-specific) before
+ * superRefine/transform. Exported so KNOWN_DAG_NODE_KEYS can be derived from
+ * its shape, and for any future use that needs the pre-validation object type.
+ */
+export const dagNodeFlatSchema = dagNodeBaseSchema.extend({
+  // Mode fields (exactly one required)
+  command: z.string().optional(),
+  prompt: z.string().optional(),
+  bash: z.string().optional(),
+  loop: loopNodeConfigSchema.optional(),
+  loop_group: loopGroupNodeConfigSchema.optional(),
+  approval: z
+    .object({
+      message: z.string().min(1, "'approval.message' must not be empty"),
+      capture_response: z.boolean().optional(),
+      on_reject: approvalOnRejectSchema.optional(),
+    })
+    .optional(),
+  cancel: z.string().optional(),
+  // Load-time inlining directive — the target workflow name.
+  include: z.string().min(1, "'include' must be a non-empty workflow name").optional(),
+  // Runtime sub-run directive (#2121 Phase 2) — the child workflow name.
+  workflow: z.string().min(1, "'workflow' must be a non-empty workflow name").optional(),
+  // Sub-run input data string (workflow-var + $node.output substituted) forwarded
+  // as the child's user_message.
+  input: z.string().optional(),
+  // Per-child isolation. `'inherit'` shares the parent checkout; `'worktree'` runs
+  // the child in its own git worktree via an injected child-isolation resolver.
+  isolation: z.enum(['inherit', 'worktree']).optional(),
+  // Reserved for Phase 1b input mapping. Present only so the superRefine below can
+  // fail fast when it appears on an include or workflow node ("not yet supported").
+  with: z.unknown().optional(),
+  // Script-only
+  script: z.string().optional(),
+  runtime: z.enum(['bun', 'uv']).optional(),
+  deps: z.array(z.string().min(1, 'each dep must be a non-empty string')).optional(),
+  // Bash/Script shared
+  timeout: z.number().optional(),
+});
+
 // ---------------------------------------------------------------------------
 // Known node keys — used by the loader to detect unknown/misplaced keys
 // ---------------------------------------------------------------------------
 
 /**
  * All keys accepted by the flat dagNodeSchema (base + mode-specific + mode-only).
+ * Derived from the dagNodeFlatSchema shape — no hand-maintained list needed.
  * Used by parseDagNode to warn on unknown keys that Zod's default strip would
- * silently drop (#2213). Keep in sync with dagNodeBaseSchema + the .extend()
- * block below.
+ * silently drop (#2213).
  */
-export const KNOWN_DAG_NODE_KEYS: ReadonlySet<string> = new Set([
-  // dagNodeBaseSchema
-  'id',
-  'description',
-  'depends_on',
-  'when',
-  'trigger_rule',
-  'model',
-  'provider',
-  'context',
-  'output_format',
-  'allowed_tools',
-  'denied_tools',
-  'idle_timeout',
-  'retry',
-  'hooks',
-  'mcp',
-  'skills',
-  'agents',
-  'pi',
-  'effort',
-  'thinking',
-  'maxBudgetUsd',
-  'systemPrompt',
-  'fallbackModel',
-  'settingSources',
-  'betas',
-  'sandbox',
-  'always_run',
-  'persist_session',
-  'output_type',
-  // Mode fields (exactly one required)
-  'command',
-  'prompt',
-  'bash',
-  'loop',
-  'loop_group',
-  'approval',
-  'cancel',
-  'include',
-  'workflow',
-  // Mode-specific fields
-  'input',
-  'isolation',
-  'with',
-  'script',
-  'runtime',
-  'deps',
-  'timeout',
-]);
+export const KNOWN_DAG_NODE_KEYS: ReadonlySet<string> = new Set(
+  Object.keys(dagNodeFlatSchema.shape)
+);
 
 // ---------------------------------------------------------------------------
 // dagNodeSchema — flat validation schema with transform to DagNode
@@ -674,43 +668,7 @@ export const KNOWN_DAG_NODE_KEYS: ReadonlySet<string> = new Set([
  * dag-executor.ts (node-level). Model strings are passed through to the SDK
  * unchanged — the SDK is the source of truth for what model names exist.
  */
-export const dagNodeSchema = dagNodeBaseSchema
-  .extend({
-    // Mode fields (exactly one required)
-    command: z.string().optional(),
-    prompt: z.string().optional(),
-    bash: z.string().optional(),
-    loop: loopNodeConfigSchema.optional(),
-    loop_group: loopGroupNodeConfigSchema.optional(),
-    approval: z
-      .object({
-        message: z.string().min(1, "'approval.message' must not be empty"),
-        capture_response: z.boolean().optional(),
-        on_reject: approvalOnRejectSchema.optional(),
-      })
-      .optional(),
-    cancel: z.string().optional(),
-    // Load-time inlining directive — the target workflow name.
-    include: z.string().min(1, "'include' must be a non-empty workflow name").optional(),
-    // Runtime sub-run directive (#2121 Phase 2) — the child workflow name.
-    workflow: z.string().min(1, "'workflow' must be a non-empty workflow name").optional(),
-    // Sub-run input data string (workflow-var + $node.output substituted) forwarded
-    // as the child's user_message.
-    input: z.string().optional(),
-    // Per-child isolation. `'inherit'` (shared parent checkout) is the default;
-    // `'worktree'` (slice 2, PR-A) runs the child in its own git worktree via an
-    // injected child-isolation resolver.
-    isolation: z.enum(['inherit', 'worktree']).optional(),
-    // Reserved for Phase 1b input mapping. Present only so the superRefine below can
-    // fail fast when it appears on an include or workflow node ("not yet supported").
-    with: z.unknown().optional(),
-    // Script-only
-    script: z.string().optional(),
-    runtime: z.enum(['bun', 'uv']).optional(),
-    deps: z.array(z.string().min(1, 'each dep must be a non-empty string')).optional(),
-    // Bash/Script shared
-    timeout: z.number().optional(),
-  })
+export const dagNodeSchema = dagNodeFlatSchema
   .superRefine((data, ctx) => {
     const id = data.id.trim();
 
