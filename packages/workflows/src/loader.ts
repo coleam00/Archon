@@ -141,9 +141,12 @@ function parseDagNode(
     const rawKeys = Object.keys(raw as Record<string, unknown>);
     for (const key of rawKeys) {
       if (!KNOWN_DAG_NODE_KEYS.has(key)) {
-        const hint = WORKFLOW_ONLY_KEYS.has(key)
-          ? ` ('${key}' is valid at workflow level, not on individual nodes)`
-          : '';
+        const hint =
+          key === 'interactive'
+            ? " ('interactive' at workflow level forces foreground execution; for a human gate on this node, use 'loop.gate_message' or an 'approval:' node)"
+            : WORKFLOW_ONLY_KEYS.has(key)
+              ? ` ('${key}' is valid at workflow level, not on individual nodes)`
+              : '';
         warnings.push(`Node '${id}': unknown key '${key}' will be ignored${hint}`);
         getLog().warn({ id: node.id, key }, 'node_unknown_key_ignored');
       }

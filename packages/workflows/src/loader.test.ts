@@ -4348,7 +4348,7 @@ nodes:
       const pw = result.workflows[0].parseWarnings ?? [];
       expect(pw.length).toBe(1);
       expect(pw[0]).toContain("'interactive'");
-      expect(pw[0]).toContain('valid at workflow level');
+      expect(pw[0]).toContain('gate_message');
     });
 
     it('should warn when the workflow itself has an unknown key', async () => {

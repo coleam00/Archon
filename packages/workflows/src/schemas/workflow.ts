@@ -9,6 +9,7 @@ import {
   thinkingConfigSchema,
   sandboxSettingsSchema,
   betasSchema,
+  KNOWN_DAG_NODE_KEYS,
 } from './dag-node';
 
 // ---------------------------------------------------------------------------
@@ -158,58 +159,6 @@ export const workflowBaseSchema = z.object({
 export type WorkflowBase = z.infer<typeof workflowBaseSchema>;
 
 // ---------------------------------------------------------------------------
-// Known workflow keys — used by the loader to detect unknown/misplaced keys
-// ---------------------------------------------------------------------------
-
-/**
- * All keys accepted at the workflow level (workflowBaseSchema + nodes).
- * Used by parseWorkflow to warn on unknown keys (#2213). Keep in sync with
- * workflowBaseSchema + workflowDefinitionSchema.
- */
-export const KNOWN_WORKFLOW_KEYS: ReadonlySet<string> = new Set([
-  'name',
-  'description',
-  'provider',
-  'model',
-  'modelReasoningEffort',
-  'webSearchMode',
-  'interactive',
-  'effort',
-  'thinking',
-  'fallbackModel',
-  'betas',
-  'sandbox',
-  'worktree',
-  'container',
-  'evidence_policy',
-  'mutates_checkout',
-  'persist_sessions',
-  'tags',
-  'requires',
-  'nodes',
-]);
-
-/**
- * Workflow-only keys that are not valid on individual nodes. Used to produce a
- * precise hint when a workflow-level key is misplaced on a node (#2213).
- */
-export const WORKFLOW_ONLY_KEYS: ReadonlySet<string> = new Set([
-  'name',
-  'description',
-  'interactive',
-  'webSearchMode',
-  'modelReasoningEffort',
-  'worktree',
-  'container',
-  'evidence_policy',
-  'mutates_checkout',
-  'persist_sessions',
-  'tags',
-  'requires',
-  'nodes',
-]);
-
-// ---------------------------------------------------------------------------
 // WorkflowDefinition — DAG-based workflow with nodes
 // ---------------------------------------------------------------------------
 
@@ -223,6 +172,28 @@ export const workflowDefinitionSchema = workflowBaseSchema.extend({
 
 /** Workflow definition with fully typed nodes (DagNode[]) derived from the schema. */
 export type WorkflowDefinition = z.infer<typeof workflowDefinitionSchema> & { prompt?: never };
+
+// ---------------------------------------------------------------------------
+// Known workflow keys — used by the loader to detect unknown/misplaced keys
+// ---------------------------------------------------------------------------
+
+/**
+ * All keys accepted at the workflow level.
+ * Derived from workflowDefinitionSchema shape — no hand-maintained list needed.
+ * Used by parseWorkflow to warn on unknown keys (#2213).
+ */
+export const KNOWN_WORKFLOW_KEYS: ReadonlySet<string> = new Set(
+  Object.keys(workflowDefinitionSchema.shape)
+);
+
+/**
+ * Workflow-only keys that are not valid on individual nodes. Used to produce a
+ * precise hint when a workflow-level key is misplaced on a node (#2213).
+ * Computed as the difference between workflow keys and node keys.
+ */
+export const WORKFLOW_ONLY_KEYS: ReadonlySet<string> = new Set(
+  [...KNOWN_WORKFLOW_KEYS].filter(k => !KNOWN_DAG_NODE_KEYS.has(k))
+);
 
 // ---------------------------------------------------------------------------
 // LoadCommandResult — discriminated union for command load outcomes
