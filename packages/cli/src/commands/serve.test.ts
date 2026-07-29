@@ -9,7 +9,7 @@ import {
   afterEach,
   spyOn,
 } from 'bun:test';
-import { existsSync, mkdtempSync, rmSync } from 'fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -152,6 +152,16 @@ function concatBytes(blocks: Uint8Array[]): Uint8Array {
   return out;
 }
 
+/**
+ * The exact bytes the fixture claims to carry. Every test that extracts asserts
+ * the file lands with THIS content, not merely that a file exists — a hand-rolled
+ * binary format that nothing validates is a worse trap than the hang it replaced.
+ * A `size` field short by a few bytes, dropped padding, or a missing terminator
+ * all still produce an `index.html` and a `tar` exit 0; only comparing content
+ * catches them.
+ */
+const FIXTURE_INDEX_HTML = '<html>ok</html>';
+
 /** `web/` + `web/index.html`, tarred and gzipped — the shape `archon serve` downloads. */
 function buildWebTarball(indexHtml: string): Uint8Array {
   const body = new TextEncoder().encode(indexHtml);
@@ -180,7 +190,7 @@ describe('downloadWebDist', () => {
     // (see buildWebTarball) rather than by shelling out to `tar czf -`, so the
     // hook cannot hang on a subprocess (#2306).
     tmpRoot = mkdtempSync(join(tmpdir(), 'serve-webdist-test-'));
-    tarballBytes = buildWebTarball('<html>ok</html>');
+    tarballBytes = buildWebTarball(FIXTURE_INDEX_HTML);
     const hasher = new Bun.CryptoHasher('sha256');
     hasher.update(tarballBytes);
     tarballHash = hasher.digest('hex');
@@ -206,7 +216,9 @@ describe('downloadWebDist', () => {
 
     await downloadWebDist('9.9.9', targetDir, tarballHash);
 
-    expect(existsSync(join(targetDir, 'index.html'))).toBe(true);
+    // Content, not just existence — a truncated or corrupt fixture still yields
+    // an index.html and a `tar` exit 0, so only this assertion catches it.
+    expect(readFileSync(join(targetDir, 'index.html'), 'utf8')).toBe(FIXTURE_INDEX_HTML);
     // Only the tarball is fetched — checksums.txt must NOT be requested.
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(String(fetchSpy.mock.calls[0]?.[0])).toContain('archon-web.tar.gz');
@@ -236,11 +248,34 @@ describe('downloadWebDist', () => {
 
     await downloadWebDist('9.9.9', targetDir, '');
 
-    expect(existsSync(join(targetDir, 'index.html'))).toBe(true);
+    expect(readFileSync(join(targetDir, 'index.html'), 'utf8')).toBe(FIXTURE_INDEX_HTML);
     // Remote path fetches both checksums.txt and the tarball.
     expect(fetchSpy).toHaveBeenCalledTimes(2);
     const urls = fetchSpy.mock.calls.map(call => String(call[0]));
     expect(urls.some(u => u.includes('checksums.txt'))).toBe(true);
+  });
+});
+
+// Structural conformance of the hand-rolled archive, checked against the POSIX
+// ustar spec rather than against the writer itself.
+//
+// The extraction tests above catch a wrong *payload* (a short `size` field
+// truncates the file, which the content assertions see). They do NOT catch a
+// wrong *envelope*: bsdtar happily extracts an archive with no end-of-archive
+// marker and no block padding, so on macOS those corruptions pass silently and
+// would only surface as a platform-specific CI failure — precisely the class of
+// bug this file is being changed to remove. Hence these two.
+describe('buildWebTarball structural conformance', () => {
+  const archive = Bun.gunzipSync(buildWebTarball(FIXTURE_INDEX_HTML));
+
+  it('is a whole number of 512-byte blocks', () => {
+    expect(archive.length % 512).toBe(0);
+  });
+
+  it('ends with the two zero blocks that mark end-of-archive', () => {
+    const terminator = archive.subarray(archive.length - 1024);
+    expect(terminator.length).toBe(1024);
+    expect(terminator.every(byte => byte === 0)).toBe(true);
   });
 });
 
