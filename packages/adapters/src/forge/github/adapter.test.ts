@@ -361,11 +361,7 @@ describe('GitHubAdapter', () => {
       const payload = createCommentPayload('@archon help', undefined); // no comment.user
       // sender.login defaults to 'user123' in createCommentPayload when commentAuthor is undefined.
 
-      try {
-        await adapter.handleWebhook(payload, 'mock-signature');
-      } catch {
-        // Expected — Octokit not mocked for the message path.
-      }
+      await adapter.handleWebhook(payload, 'mock-signature');
 
       // Identity resolution must run, and must have used sender.login.
       const calls = mockFindOrCreateUserByPlatformIdentity.mock.calls;
@@ -398,11 +394,7 @@ describe('GitHubAdapter', () => {
         sender: { login: 'pr-author' },
       });
 
-      try {
-        await adapter.handleWebhook(payload, 'mock-signature');
-      } catch {
-        // Expected — Octokit not mocked.
-      }
+      await adapter.handleWebhook(payload, 'mock-signature');
 
       const calls = mockFindOrCreateUserByPlatformIdentity.mock.calls;
       expect(calls.length).toBeGreaterThan(0);
@@ -415,11 +407,9 @@ describe('GitHubAdapter', () => {
       mockFindOrCreateUserByPlatformIdentity.mockRejectedValueOnce(new Error('db down'));
       const payload = createCommentPayload('@archon help', 'user123');
 
-      try {
-        await adapter.handleWebhook(payload, 'mock-signature');
-      } catch {
-        // Octokit not mocked downstream — that's fine.
-      }
+      // Deliberately NOT wrapped in try/catch: "never throws" is the assertion.
+      await adapter.handleWebhook(payload, 'mock-signature');
+
       // The user-resolution failure was caught and warn-logged; the webhook
       // handler proceeded past it (DB write for the conversation still happened).
       expect(mockGetOrCreateConversation).toHaveBeenCalled();
@@ -450,11 +440,7 @@ describe('GitHubAdapter', () => {
       const payload = createCommentPayload('@archon please help', 'user123');
 
       // handleWebhook progresses past self-filtering into DB/Octokit operations
-      try {
-        await adapter.handleWebhook(payload, 'mock-signature');
-      } catch {
-        // Expected - Octokit API not mocked for this test
-      }
+      await adapter.handleWebhook(payload, 'mock-signature');
 
       // Real user comments proceed to conversation creation (not self-filtered)
       expect(mockGetOrCreateConversation).toHaveBeenCalled();
@@ -480,11 +466,7 @@ describe('GitHubAdapter', () => {
       const payload = createCommentPayload('@archon fix this', 'Wirasm');
 
       // handleWebhook progresses past self-filtering into DB/Octokit operations
-      try {
-        await adapter.handleWebhook(payload, 'mock-signature');
-      } catch {
-        // Expected - Octokit API not mocked for this test
-      }
+      await adapter.handleWebhook(payload, 'mock-signature');
 
       // Comment without marker proceeds to conversation creation (not self-filtered)
       expect(mockGetOrCreateConversation).toHaveBeenCalled();
@@ -495,11 +477,7 @@ describe('GitHubAdapter', () => {
       const payload = createCommentPayload('@archon help', undefined); // No user field
 
       // Should not crash on undefined user
-      try {
-        await adapter.handleWebhook(payload, 'mock-signature');
-      } catch {
-        // Expected - Octokit API not mocked for this test
-      }
+      await adapter.handleWebhook(payload, 'mock-signature');
 
       // Missing user should not trigger self-filtering (proceeds to conversation creation)
       expect(mockGetOrCreateConversation).toHaveBeenCalled();
