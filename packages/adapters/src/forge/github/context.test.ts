@@ -6,6 +6,15 @@
  *
  * Separated from adapter.test.ts because these require heavy module mocking
  * of @archon/core and database modules to test the full handleWebhook flow.
+ *
+ * ARCHON_HOME INVARIANT (#2305): this file must create nothing under
+ * `$ARCHON_HOME`. `mock.module()` MERGES over the real module instead of
+ * replacing it, so any export omitted from a factory below keeps its REAL
+ * implementation. Two omissions made this "fully mocked" file open a real
+ * SQLite database and write a real `config.yaml`; see the notes on the
+ * `@archon/core/db/users` and `@archon/core/config/resolve-assistant` mocks.
+ * To re-audit, run this file with `ARCHON_HOME` pointed at an empty temp dir
+ * and assert nothing appears in it.
  */
 import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test';
 import { createHmac } from 'crypto';
@@ -97,6 +106,32 @@ mock.module('@archon/core/db/codebases', () => ({
   findCodebaseByRepoUrl: mockFindCodebaseByRepoUrl,
   createCodebase: mockCreateCodebase,
   updateCodebase: mock(async () => {}),
+}));
+
+// handleWebhook step 5b resolves the commenting GitHub login to an Archon user.
+// The adapter imports this from the `@archon/core/db/users` SUBPATH, which the
+// `@archon/core` factory above does not cover — so it stayed real and every test
+// here opened (and schema-initialised) a real SQLite database on disk (#2305).
+const mockFindOrCreateUserByPlatformIdentity = mock(async () => ({
+  id: 'user-test-uuid',
+  display_name: 'Test',
+  email: null,
+  created_at: new Date(),
+  updated_at: new Date(),
+}));
+
+mock.module('@archon/core/db/users', () => ({
+  findOrCreateUserByPlatformIdentity: mockFindOrCreateUserByPlatformIdentity,
+}));
+
+// getOrCreateCodebaseForRepo passes `await resolveDefaultAssistant(path)` to
+// createCodebase. Also a subpath import (`@archon/core/config/resolve-assistant`)
+// and also left real: it calls loadGlobalConfig(), which WRITES a default
+// ~/.archon/config.yaml when the file does not exist (#2305).
+const mockResolveDefaultAssistant = mock(async () => 'claude' as const);
+
+mock.module('@archon/core/config/resolve-assistant', () => ({
+  resolveDefaultAssistant: mockResolveDefaultAssistant,
 }));
 
 mock.module('child_process', () => ({

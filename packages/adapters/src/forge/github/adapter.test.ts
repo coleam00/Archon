@@ -3,6 +3,22 @@
  *
  * Note: Database modules are mocked to prevent self-filtering tests from
  * writing phantom records (e.g., testuser/testrepo) to the real SQLite DB.
+ *
+ * ARCHON_HOME INVARIANT (#2305): this file must create nothing under
+ * `$ARCHON_HOME`. `mock.module()` MERGES over the real module rather than
+ * replacing it, so every export a factory below omits keeps its REAL
+ * implementation and quietly does real I/O. Three such gaps produced a real
+ * `archon.db`, `config.yaml` and `bin/git-credential-archon`:
+ *
+ *   - `resolveDefaultAssistant` (step 6, via getOrCreateCodebaseForRepo)
+ *     → loadGlobalConfig() CREATES ~/.archon/config.yaml when absent
+ *   - `installCredentialHelper` (step 8, App-mode clone)
+ *     → copies the helper script into ~/.archon/bin/
+ *   - `handleMessage`           (step 13, orchestrator)
+ *     → opens the real SQLite database and creates ~/.archon/workspaces/
+ *
+ * All three are stubbed below. To re-audit, run this file with `ARCHON_HOME`
+ * pointed at an empty temp dir and assert nothing appears in it.
  */
 import {
   describe,
@@ -104,6 +120,17 @@ mock.module('@archon/core/db/users', () => ({
   findOrCreateUserByPlatformIdentity: mockFindOrCreateUserByPlatformIdentity,
 }));
 
+// getOrCreateCodebaseForRepo passes `await resolveDefaultAssistant(path)` to
+// createCodebase. The real implementation reads the global config and, when
+// ~/.archon/config.yaml does not exist, WRITES a default one (see
+// createDefaultConfig in @archon/core/config/config-loader). Every test that
+// gets past self-filtering reaches it, so leaving it real meant this suite
+// created a config file in the developer's real ~/.archon (#2305).
+const mockResolveDefaultAssistant = mock(async () => 'claude' as const);
+mock.module('@archon/core/config/resolve-assistant', () => ({
+  resolveDefaultAssistant: mockResolveDefaultAssistant,
+}));
+
 // Mock @archon/git for ensureRepoReady integration tests
 const mockCloneRepository = mock(async () => ({ ok: true, value: undefined }));
 const mockSyncRepository = mock(async () => ({ ok: true, value: undefined }));
@@ -146,6 +173,86 @@ const mockLockManager = {
     activeConversationIds: [],
   }),
 } as unknown as ConversationLockManager;
+
+/**
+ * File-wide stubs for the `@archon/core` functions `handleWebhook()` reaches in
+ * its final steps. `spyOn` (not `mock.module`) because `context.test.ts` already
+ * mock.modules `@archon/core` with a different shape, and two conflicting
+ * factories for one path is exactly the pollution CLAUDE.md forbids — and
+ * because spies are reversible.
+ *
+ * Lifetime is deliberately the WHOLE FILE, not a single describe block. The
+ * `handleMessage` spy used to be scoped to `webhook delivery dedup`, whose
+ * `afterAll` restored it before `App mode` ran — which is how the App-mode
+ * webhook test ended up running the real orchestrator and opening the real
+ * SQLite database (#2305).
+ */
+let handleMessageSpy: ReturnType<typeof spyOn<typeof core, 'handleMessage'>>;
+let installCredentialHelperSpy: ReturnType<typeof spyOn<typeof core, 'installCredentialHelper'>>;
+let getLinkedIssueNumbersSpy: ReturnType<typeof spyOn<typeof core, 'getLinkedIssueNumbers'>>;
+
+beforeAll(() => {
+  handleMessageSpy = spyOn(core, 'handleMessage').mockImplementation(async () => {});
+  installCredentialHelperSpy = spyOn(core, 'installCredentialHelper').mockImplementation(
+    async () => ({ kind: 'installed', helperPath: '/stub/.archon/bin/git-credential-archon' })
+  );
+  getLinkedIssueNumbersSpy = spyOn(core, 'getLinkedIssueNumbers').mockImplementation(
+    async () => []
+  );
+});
+
+afterAll(() => {
+  handleMessageSpy.mockRestore();
+  installCredentialHelperSpy.mockRestore();
+  getLinkedIssueNumbersSpy.mockRestore();
+});
+
+/**
+ * Every Octokit REST endpoint `handleWebhook()` can reach, stubbed to RESOLVE:
+ * `repos.get` (step 7), `issues.createComment` (postComment), `pulls.get`
+ * (step 10, PR payloads) and `issues.listComments` (step 12, thread context).
+ *
+ * Resolving is the point. A stub that only makes `repos.get` REJECT looks
+ * complete but merely stops the flow at step 7's catch-and-return, leaving
+ * steps 8-13 unmocked; the first payload or code change that gets past step 7
+ * then silently falls into real I/O. Stub the whole surface instead.
+ */
+interface OctokitStubs {
+  reposGet: ReturnType<typeof mock>;
+  listComments: ReturnType<typeof mock>;
+  createComment: ReturnType<typeof mock>;
+  pullsGet: ReturnType<typeof mock>;
+}
+
+function createOctokitStubs(): OctokitStubs {
+  return {
+    reposGet: mock(async () => ({ data: { default_branch: 'main' } })),
+    listComments: mock(async () => ({ data: [] })),
+    createComment: mock(async () => ({ data: {} })),
+    pullsGet: mock(async () => ({
+      data: {
+        head: {
+          ref: 'feature-branch',
+          sha: 'abc123def456',
+          repo: { full_name: 'testuser/testrepo' },
+        },
+        base: { repo: { full_name: 'testuser/testrepo' } },
+      },
+    })),
+  };
+}
+
+/** Replace an adapter's private Octokit client with the full stub surface. */
+function installOctokitStubs(adapter: GitHubAdapter, stubs: OctokitStubs): void {
+  // @ts-expect-error - replacing private Octokit client for testing
+  adapter.octokit = {
+    rest: {
+      repos: { get: stubs.reposGet },
+      issues: { listComments: stubs.listComments, createComment: stubs.createComment },
+      pulls: { get: stubs.pullsGet },
+    },
+  };
+}
 
 /**
  * Helper to create a test adapter with mocked Octokit createComment method.
@@ -267,35 +374,19 @@ describe('GitHubAdapter', () => {
     let originalAllowedUsers: string | undefined;
 
     /**
-     * 401 "Bad credentials" — exactly what api.github.com returns for the fake
-     * token these tests construct the adapter with. Reproducing it locally keeps
-     * the exercised code path byte-identical to the live one (PAT mode rethrows
-     * 401 immediately; only App mode retries — see withTokenRefresh).
-     */
-    function badCredentials(): Error {
-      return Object.assign(new Error('Bad credentials'), { status: 401 });
-    }
-
-    /**
-     * Creates an adapter with mocked signature verification for self-filtering tests.
+     * Creates an adapter with mocked signature verification and a COMPLETE
+     * Octokit stub for self-filtering tests.
      *
-     * The private Octokit client is stubbed. Without it, every payload that
-     * survives self-filtering runs handleWebhook() into step 7 (`repos.get`) and
-     * its error path (`postComment`), issuing two REAL requests to
-     * api.github.com per test. That made these unit tests depend on an external
-     * service inside Bun's 5000 ms per-test budget, which is the root cause of
-     * the intermittent timeouts in #2186. See also the sibling
-     * `webhook delivery dedup` block, which has always stubbed its client.
+     * Complete means every stub resolves, so a payload that survives
+     * self-filtering runs `handleWebhook()` to completion under mocks —
+     * `ensureRepoReady` (@archon/git + @archon/paths mocks), `handleMessage`
+     * and `installCredentialHelper` (file-level spies). Nothing here depends on
+     * a call failing to stop the flow early, and nothing reaches the network,
+     * the real database, or `$ARCHON_HOME`.
      *
-     * COUPLING — why these tests can safely `await handleWebhook` unwrapped:
-     * handleWebhook has no top-level try/catch and its containment is per-step
-     * and partial (step 6b throws deliberately). Nothing throws here only
-     * because the stubbed 401 lands in step 7's catch, which sends the error
-     * message and RETURNS (adapter.ts:1094-1107), so steps 8-10 —
-     * `ensureRepoReady`, `getLinkedIssueNumbers`, `pulls.get`, `handleMessage`,
-     * all unmocked — are never reached. Make `repos.get` RESOLVE instead of
-     * reject and all these tests fall through into that unmocked territory at
-     * once. If you need that, stub steps 8-10 too (see `createDedupAdapter`).
+     * These tests assert self-filtering and user attribution, both of which
+     * happen at steps 4-5b — before any of the stubbed calls — so how far the
+     * flow runs afterwards is deliberately not load-bearing for them.
      */
     function createSelfFilterAdapter(botMention = 'archon'): GitHubAdapter {
       const adapter = new GitHubAdapter(
@@ -306,17 +397,7 @@ describe('GitHubAdapter', () => {
       );
       // @ts-expect-error - accessing private method for testing
       adapter.verifySignature = mock(() => true);
-      // @ts-expect-error - replacing private Octokit client for testing
-      adapter.octokit = {
-        rest: {
-          repos: {
-            get: mock(() => Promise.reject(badCredentials())),
-          },
-          issues: {
-            createComment: mock(() => Promise.reject(badCredentials())),
-          },
-        },
-      };
+      installOctokitStubs(adapter, createOctokitStubs());
       return adapter;
     }
 
@@ -496,24 +577,13 @@ describe('GitHubAdapter', () => {
 
   describe('webhook delivery dedup', () => {
     let originalAllowedUsers: string | undefined;
-    let handleMessageSpy: ReturnType<typeof spyOn<typeof core, 'handleMessage'>>;
-
-    interface DedupOctokitStubs {
-      reposGet: ReturnType<typeof mock>;
-      listComments: ReturnType<typeof mock>;
-      createComment: ReturnType<typeof mock>;
-    }
 
     /**
      * Adapter whose private Octokit client is replaced with local stubs so
      * handleWebhook() runs its full downstream path without live API calls.
      */
-    function createDedupAdapter(): { adapter: GitHubAdapter; octokit: DedupOctokitStubs } {
-      const octokit: DedupOctokitStubs = {
-        reposGet: mock(async () => ({ data: { default_branch: 'main' } })),
-        listComments: mock(async () => ({ data: [] })),
-        createComment: mock(async () => ({ data: {} })),
-      };
+    function createDedupAdapter(): { adapter: GitHubAdapter; octokit: OctokitStubs } {
+      const octokit = createOctokitStubs();
       const adapter = new GitHubAdapter(
         { kind: 'pat', token: 'fake-token-for-testing' },
         'fake-webhook-secret',
@@ -522,13 +592,7 @@ describe('GitHubAdapter', () => {
       );
       // @ts-expect-error - accessing private method for testing
       adapter.verifySignature = mock(() => true);
-      // @ts-expect-error - replacing private Octokit client for testing
-      adapter.octokit = {
-        rest: {
-          repos: { get: octokit.reposGet },
-          issues: { listComments: octokit.listComments, createComment: octokit.createComment },
-        },
-      };
+      installOctokitStubs(adapter, octokit);
       return { adapter, octokit };
     }
 
@@ -574,14 +638,6 @@ describe('GitHubAdapter', () => {
     ): Promise<void> {
       await adapter.handleWebhook(payload, 'mock-signature', deliveryId);
     }
-
-    beforeAll(() => {
-      handleMessageSpy = spyOn(core, 'handleMessage').mockImplementation(async () => {});
-    });
-
-    afterAll(() => {
-      handleMessageSpy.mockRestore();
-    });
 
     beforeEach(() => {
       originalAllowedUsers = process.env.GITHUB_ALLOWED_USERS;
@@ -1467,6 +1523,7 @@ describe('GitHubAdapter', () => {
       mockFindCodebaseByRepoUrl.mockClear();
       mockCreateCodebase.mockClear();
       mockFindOrCreateUserByPlatformIdentity.mockClear();
+      installCredentialHelperSpy.mockClear();
     });
 
     test('getInstallationToken called once per (owner, repo) for sendMessage', async () => {
@@ -1662,14 +1719,36 @@ describe('GitHubAdapter', () => {
         await adapter.ensureRepoReady('owner', 'repo', 'main', '/tmp/clone-test', false);
       } catch {
         // ensureRepoReady may throw inside addSafeDirectory on the bogus path;
-        // we only care that installCredentialHelper attempted its git-config call.
+        // we only care that installCredentialHelper was reached.
       }
-      // installCredentialHelper calls `git -C <worktreePath> config ...`.
-      const gitConfigCalls = mockExecFileAsync.mock.calls.filter(call => {
-        const args = call[1];
-        return Array.isArray(args) && args.includes('config');
-      });
-      expect(gitConfigCalls.length).toBeGreaterThanOrEqual(1);
+      // Asserted on the function itself rather than through its `git config`
+      // side effect. The old proxy assertion required running the REAL
+      // installCredentialHelper, which copies the helper script into
+      // $ARCHON_HOME/bin/ — a genuine write into the developer's ~/.archon from
+      // a unit test (#2305). What this test is actually about is the adapter's
+      // wiring: App-mode clone → install helper on the cloned path. The helper's
+      // own copy/chmod/git-config behaviour is covered directly by
+      // packages/core/src/github-auth/credential-helper-install.test.ts.
+      expect(installCredentialHelperSpy).toHaveBeenCalledWith('/tmp/clone-test');
+    });
+
+    test('credential helper install is NOT attempted in PAT mode', async () => {
+      const patAdapter = new GitHubAdapter(
+        { kind: 'pat', token: 'fake-token' },
+        'fake-webhook-secret',
+        mockLockManager,
+        'archon'
+      );
+      try {
+        // @ts-expect-error - calling private method
+        await patAdapter.ensureRepoReady('owner', 'repo', 'main', '/tmp/clone-test-pat', false);
+      } catch {
+        // Same bogus-path tolerance as the App-mode case above.
+      }
+      // Pins the `this.auth.kind === 'app'` guard: PAT operators never get the
+      // helper installed. Without this, stubbing installCredentialHelper above
+      // would let the guard be deleted with both tests still green.
+      expect(installCredentialHelperSpy).not.toHaveBeenCalled();
     });
   });
 });
