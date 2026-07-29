@@ -107,6 +107,6 @@ These are the specific mechanisms by which workflow languages rot. Each is liste
 
 For **contributors**: cite this page in `feat(workflows)` PRs that touch the YAML surface. A reviewer's first question is the admissibility test, not the implementation.
 
-For **workflow authors**: if you're fighting the YAML — wanting arithmetic in `when:`, string manipulation in a field, cleverness in structure — the language is telling you the logic belongs one level down — into a `script:`/`bash:` node or a `prompt:`, whichever fits the problem (see *The rule*: that choice is yours, not the constitution's) — and let the YAML do what it's for: wiring the pieces the engine governs.
+For **workflow authors**: if you're fighting the YAML — wanting arithmetic in `when:`, string manipulation in a field, cleverness in structure — the language is telling you the logic belongs one level down — into a `script:`/`bash:` node or a `prompt:`, whichever fits the problem (see *The rule*: that choice is yours, not the constitution's) — leaving the YAML to do what it's for: wiring the pieces the engine governs.
 
 For **the roadmap**: the constitution is why Archon can keep its declarative surface while workflows-as-code frameworks exist. The trade — auditability, the visual builder, non-engineer operators — stays won exactly as long as the YAML stays a coordination language. The day it computes, it loses to both alternatives at once.
