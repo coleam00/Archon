@@ -47,17 +47,25 @@ function fakeResolveProjectStorageKey(
   }
   return { kind: 'cwd', cwd };
 }
+/** Root of the fake workspace tree; segments joined so win32 separators match. */
+const WS = join('/tmp', 'ws');
+function wsPath(...segments: string[]): string {
+  return join(WS, ...segments);
+}
+
 function fakeStoragePathsForRoot(root: string): {
   root: string;
   artifactsRoot: string;
   logsDir: string;
   stateRoot: string;
 } {
+  // join(), not template literals — production composes these with join(), so a
+  // forward-slash fake would never match on Windows.
   return {
     root,
-    artifactsRoot: `${root}/artifacts`,
-    logsDir: `${root}/logs`,
-    stateRoot: `${root}/state`,
+    artifactsRoot: join(root, 'artifacts'),
+    logsDir: join(root, 'logs'),
+    stateRoot: join(root, 'state'),
   };
 }
 function fakeGetProjectStoragePaths(
@@ -65,10 +73,10 @@ function fakeGetProjectStoragePaths(
 ): ReturnType<typeof fakeStoragePathsForRoot> {
   const root =
     key.kind === 'repo'
-      ? `/tmp/ws/${key.owner}/${key.repo}`
+      ? wsPath(key.owner, key.repo)
       : key.kind === 'folder'
-        ? `/tmp/ws/_folder/${key.slug}`
-        : `/tmp/ws/_cwd/${key.cwd.split('/').filter(Boolean).pop() ?? '_'}`;
+        ? wsPath('_folder', key.slug)
+        : wsPath('_cwd', key.cwd.split('/').filter(Boolean).pop() ?? '_');
   return fakeStoragePathsForRoot(root);
 }
 
@@ -88,8 +96,8 @@ mock.module('@archon/paths', () => ({
   ),
   getFolderProjectLogsPath: mock((slug: string) => `/tmp/_folder/${slug}/logs`),
   getFolderProjectArtifactsPath: mock((slug: string) => `/tmp/_folder/${slug}/artifacts`),
-  getScopeArtifactsPath: mock(
-    (root: string, wf: string, scope: string) => `${root}/scopes/${wf}/${scope}`
+  getScopeArtifactsPath: mock((root: string, wf: string, scope: string) =>
+    join(root, 'scopes', wf, scope)
   ),
   captureWorkflowInvoked: mockCaptureWorkflowInvoked,
   captureWorkflowCompleted: mockCaptureWorkflowCompleted,
@@ -1197,7 +1205,9 @@ describe('executeWorkflow', () => {
       // conversation UUID ('conv-1' from the createWorkflowRun mock;
       // getScopeArtifactsPath is mocked to `${root}/scopes/${wf}/${scope}`).
       const scopeArg = mockExecuteDagWorkflow.mock.calls[0]?.[20] as string | undefined;
-      expect(scopeArg).toBe('/tmp/ws/_cwd/tmp/artifacts/scopes/test-workflow/conv-1');
+      expect(scopeArg).toBe(
+        wsPath('_cwd', 'tmp', 'artifacts', 'scopes', 'test-workflow', 'conv-1')
+      );
     });
 
     it('passes undefined scopeArtifactsDir when the workflow uses no session persistence', async () => {
@@ -1997,11 +2007,13 @@ describe('resolveProjectPaths', () => {
 
     const paths = await resolveProjectPaths(deps, '/tmp/platform', RUN_ID, 'cb-folder');
 
-    expect(paths.artifactsDir).toBe('/tmp/ws/_folder/My Platform/artifacts/runs/run-xyz');
-    expect(paths.logDir).toBe('/tmp/ws/_folder/My Platform/logs');
-    expect(paths.artifactsRoot).toBe('/tmp/ws/_folder/My Platform/artifacts');
-    expect(paths.stateDir).toBe('/tmp/ws/_folder/My Platform/state');
-    expect(paths.outputRoot).toBe('/tmp/ws/_folder/My Platform');
+    expect(paths.artifactsDir).toBe(
+      wsPath('_folder', 'My Platform', 'artifacts', 'runs', 'run-xyz')
+    );
+    expect(paths.logDir).toBe(wsPath('_folder', 'My Platform', 'logs'));
+    expect(paths.artifactsRoot).toBe(wsPath('_folder', 'My Platform', 'artifacts'));
+    expect(paths.stateDir).toBe(wsPath('_folder', 'My Platform', 'state'));
+    expect(paths.outputRoot).toBe(wsPath('_folder', 'My Platform'));
   });
 
   it('routes repo projects to owner/repo/ storage (unchanged)', async () => {
@@ -2018,11 +2030,11 @@ describe('resolveProjectPaths', () => {
 
     const result = await resolveProjectPaths(deps, '/repos/widget', RUN_ID, 'cb-repo');
 
-    expect(result.artifactsDir).toBe('/tmp/ws/acme/widget/artifacts/runs/run-xyz');
-    expect(result.logDir).toBe('/tmp/ws/acme/widget/logs');
-    expect(result.artifactsRoot).toBe('/tmp/ws/acme/widget/artifacts');
-    expect(result.stateDir).toBe('/tmp/ws/acme/widget/state');
-    expect(result.outputRoot).toBe('/tmp/ws/acme/widget');
+    expect(result.artifactsDir).toBe(wsPath('acme', 'widget', 'artifacts', 'runs', 'run-xyz'));
+    expect(result.logDir).toBe(wsPath('acme', 'widget', 'logs'));
+    expect(result.artifactsRoot).toBe(wsPath('acme', 'widget', 'artifacts'));
+    expect(result.stateDir).toBe(wsPath('acme', 'widget', 'state'));
+    expect(result.outputRoot).toBe(wsPath('acme', 'widget'));
   });
 
   it('routes a no-remote local repo to _local/<basename> storage (#2132)', async () => {
@@ -2042,9 +2054,9 @@ describe('resolveProjectPaths', () => {
 
     // Delegates to the ONE shared resolver rather than re-deriving identity.
     expect(paths.resolveProjectStorageKey).toHaveBeenCalled();
-    expect(result.artifactsDir).toBe('/tmp/ws/_local/workspace/artifacts/runs/run-xyz');
-    expect(result.logDir).toBe('/tmp/ws/_local/workspace/logs');
-    expect(result.stateDir).toBe('/tmp/ws/_local/workspace/state');
+    expect(result.artifactsDir).toBe(wsPath('_local', 'workspace', 'artifacts', 'runs', 'run-xyz'));
+    expect(result.logDir).toBe(wsPath('_local', 'workspace', 'logs'));
+    expect(result.stateDir).toBe(wsPath('_local', 'workspace', 'state'));
   });
 
   it('routes an unregistered cwd to _cwd/<basename> UNDER ARCHON_HOME, never into the repo', async () => {
@@ -2054,10 +2066,13 @@ describe('resolveProjectPaths', () => {
     const result = await resolveProjectPaths(deps, '/some/cwd', RUN_ID, 'missing-id');
 
     // Breaking change (#2200 A4): this used to be <cwd>/.archon/artifacts/...
-    expect(result.artifactsDir).toBe('/tmp/ws/_cwd/cwd/artifacts/runs/run-xyz');
-    expect(result.logDir).toBe('/tmp/ws/_cwd/cwd/logs');
-    expect(result.stateDir).toBe('/tmp/ws/_cwd/cwd/state');
-    expect(result.artifactsDir.startsWith('/some/cwd')).toBe(false);
+    expect(result.artifactsDir).toBe(wsPath('_cwd', 'cwd', 'artifacts', 'runs', 'run-xyz'));
+    expect(result.logDir).toBe(wsPath('_cwd', 'cwd', 'logs'));
+    expect(result.stateDir).toBe(wsPath('_cwd', 'cwd', 'state'));
+    // Positive form: asserting only `!startsWith('/some/cwd')` passes trivially
+    // on win32 (where the result is backslash-separated), so assert the path is
+    // actually rooted in the workspace tree.
+    expect(result.artifactsDir.startsWith(wsPath('_cwd'))).toBe(true);
   });
 
   it('routes to _cwd/<basename> when no codebaseId is provided', async () => {
@@ -2065,10 +2080,10 @@ describe('resolveProjectPaths', () => {
 
     const result = await resolveProjectPaths(deps, '/some/cwd', RUN_ID);
 
-    expect(result.artifactsDir).toBe('/tmp/ws/_cwd/cwd/artifacts/runs/run-xyz');
-    expect(result.logDir).toBe('/tmp/ws/_cwd/cwd/logs');
-    expect(result.artifactsRoot).toBe('/tmp/ws/_cwd/cwd/artifacts');
-    expect(result.stateDir).toBe('/tmp/ws/_cwd/cwd/state');
+    expect(result.artifactsDir).toBe(wsPath('_cwd', 'cwd', 'artifacts', 'runs', 'run-xyz'));
+    expect(result.logDir).toBe(wsPath('_cwd', 'cwd', 'logs'));
+    expect(result.artifactsRoot).toBe(wsPath('_cwd', 'cwd', 'artifacts'));
+    expect(result.stateDir).toBe(wsPath('_cwd', 'cwd', 'state'));
   });
 
   it('still returns all five paths when the codebase lookup throws', async () => {
@@ -2079,9 +2094,9 @@ describe('resolveProjectPaths', () => {
 
     const result = await resolveProjectPaths(deps, '/some/cwd', RUN_ID, 'cb-boom');
 
-    expect(result.artifactsDir).toBe('/tmp/ws/_cwd/cwd/artifacts/runs/run-xyz');
-    expect(result.stateDir).toBe('/tmp/ws/_cwd/cwd/state');
-    expect(result.outputRoot).toBe('/tmp/ws/_cwd/cwd');
+    expect(result.artifactsDir).toBe(wsPath('_cwd', 'cwd', 'artifacts', 'runs', 'run-xyz'));
+    expect(result.stateDir).toBe(wsPath('_cwd', 'cwd', 'state'));
+    expect(result.outputRoot).toBe(wsPath('_cwd', 'cwd'));
   });
 
   it('a persisted output_root short-circuits identity resolution entirely', async () => {
@@ -2097,17 +2112,17 @@ describe('resolveProjectPaths', () => {
     (paths.resolveProjectStorageKey as ReturnType<typeof mock>).mockClear();
 
     const result = await resolveProjectPaths(deps, '/repos/widget', RUN_ID, 'cb-repo', {
-      persistedOutputRoot: '/tmp/ws/acme/original',
+      persistedOutputRoot: wsPath('acme', 'original'),
     });
 
     // The codebase was renamed since the run started — the durable pointer wins
     // and the row is never even read (#1192 decoupling).
     expect(getCodebase).not.toHaveBeenCalled();
     expect(paths.resolveProjectStorageKey).not.toHaveBeenCalled();
-    expect(result.outputRoot).toBe('/tmp/ws/acme/original');
-    expect(result.artifactsDir).toBe('/tmp/ws/acme/original/artifacts/runs/run-xyz');
-    expect(result.logDir).toBe('/tmp/ws/acme/original/logs');
-    expect(result.stateDir).toBe('/tmp/ws/acme/original/state');
+    expect(result.outputRoot).toBe(wsPath('acme', 'original'));
+    expect(result.artifactsDir).toBe(wsPath('acme', 'original', 'artifacts', 'runs', 'run-xyz'));
+    expect(result.logDir).toBe(wsPath('acme', 'original', 'logs'));
+    expect(result.stateDir).toBe(wsPath('acme', 'original', 'state'));
   });
 
   it('a null persisted output_root re-derives from identity', async () => {
@@ -2126,7 +2141,7 @@ describe('resolveProjectPaths', () => {
       persistedOutputRoot: null,
     });
 
-    expect(result.outputRoot).toBe('/tmp/ws/acme/widget');
+    expect(result.outputRoot).toBe(wsPath('acme', 'widget'));
   });
 });
 
