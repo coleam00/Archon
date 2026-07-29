@@ -90,15 +90,24 @@ nodes:
           fail=1
         fi
       }
-      check prompt-node $prompt-node.output
-      check command-node $command-node.output
-      check loop-node $loop-node.output
-      check bash-json-node $bash-json-node.output
-      check script-bun-node $script-bun-node.output
-      check script-python-node $script-python-node.output
-      check downstream $downstream.output
-      check gated $gated.output
-      check merge $merge.output
+      v=$prompt-node.output
+      check prompt-node        "$v"
+      v=$command-node.output
+      check command-node       "$v"
+      v=$loop-node.output
+      check loop-node          "$v"
+      v=$bash-json-node.output
+      check bash-json-node     "$v"
+      v=$script-bun-node.output
+      check script-bun-node    "$v"
+      v=$script-python-node.output
+      check script-python-node "$v"
+      v=$downstream.output
+      check downstream         "$v"
+      v=$gated.output
+      check gated              "$v"
+      v=$merge.output
+      check merge              "$v"
       if [ "$fail" -eq 1 ]; then exit 1; fi
       echo "PASS: all 9 node types produced output"
     depends_on: [merge, loop-node, command-node]

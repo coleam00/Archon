@@ -113,11 +113,6 @@ nodes:
   # 12. Verify every upstream node produced non-empty output, including
   #     dot-access on the structured-output node (proves output_format
   #     parsed and downstream consumers can index into it).
-  #     Note: value-equality on string fields is avoided on purpose —
-  #     shellQuote() wraps strings in literal single quotes, so a literal
-  #     `[ "$x" != "ok" ]` would always fail. Non-emptiness is the right
-  #     bar for a smoke; the `when:` gate on structured-check already
-  #     proved the value matched 'ok' to reach this node.
   - id: assert
     bash: |
       fail=0
@@ -129,17 +124,28 @@ nodes:
           fail=1
         fi
       }
-      check prompt-node       $prompt-node.output
-      check command-node      $command-node.output
-      check loop-node         $loop-node.output
-      check bash-json-node    $bash-json-node.output
-      check script-bun-node   $script-bun-node.output
-      check script-python-node $script-python-node.output
-      check downstream        $downstream.output
-      check gated             $gated.output
-      check merge             $merge.output
-      check structured.status $structured-node.output.status
-      check structured.value  $structured-node.output.value
+      v=$prompt-node.output
+      check prompt-node        "$v"
+      v=$command-node.output
+      check command-node       "$v"
+      v=$loop-node.output
+      check loop-node          "$v"
+      v=$bash-json-node.output
+      check bash-json-node     "$v"
+      v=$script-bun-node.output
+      check script-bun-node    "$v"
+      v=$script-python-node.output
+      check script-python-node "$v"
+      v=$downstream.output
+      check downstream         "$v"
+      v=$gated.output
+      check gated              "$v"
+      v=$merge.output
+      check merge              "$v"
+      v=$structured-node.output.status
+      check structured.status  "$v"
+      v=$structured-node.output.value
+      check structured.value   "$v"
 
       if [ "$fail" -eq 1 ]; then exit 1; fi
       echo "PASS: all node types + structured output verified"
