@@ -137,9 +137,11 @@ const mockSyncRepository = mock(async () => ({ ok: true, value: undefined }));
 const mockAddSafeDirectory = mock(async () => undefined);
 const mockIsWorktreePath = mock(async () => false);
 
-// execFileAsync is used by installCredentialHelper (which runs after a
-// successful App-mode clone). We don't need to assert against it here; it
-// just has to be a no-op rather than `undefined` (which would TypeError).
+// execFileAsync is exported by @archon/git and must exist on the mocked
+// namespace rather than be `undefined` (which would TypeError if reached).
+// Nothing in this file asserts against it: installCredentialHelper, its only
+// caller on this path, is stubbed at file scope (see below), and its use of
+// execFileAsync is covered in @archon/core instead.
 const mockExecFileAsync = mock(async () => ({ stdout: '', stderr: '' }));
 
 mock.module('@archon/git', () => ({
