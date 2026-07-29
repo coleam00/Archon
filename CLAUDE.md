@@ -151,7 +151,7 @@ bun test packages/core/src/handlers/command-handler.test.ts  # Single file
 
 **Test isolation (mock.module pollution):** Bun's `mock.module()` permanently replaces modules in the process-wide cache — `mock.restore()` does NOT undo it ([oven-sh/bun#7823](https://github.com/oven-sh/bun/issues/7823)). To prevent cross-file pollution, packages that have conflicting `mock.module()` calls split their tests into separate `bun test` invocations: `@archon/core` (20 batches), `@archon/workflows` (5), `@archon/adapters` (6), `@archon/isolation` (3). See each package's `package.json` for the exact splits.
 
-**Do NOT run `bun test` from the repo root** — it discovers all test files across all packages and runs them in one process, causing ~135 mock pollution failures. Always use `bun run test` (which uses `bun --filter '*' test` for per-package isolation).
+**Do NOT run `bun test` from the repo root** — it discovers all test files across all packages and runs them in one process, causing ~135 mock pollution failures. Always use `bun run test` (which uses `bun --filter '*' --parallel test` for per-package isolation). Note the `--parallel`: all ten package test processes run concurrently, and each one that spawns subprocesses competes for the same cores — which is why subprocess-spawning tests should stay rare and cheap (see #2306).
 
 ### Type Checking & Linting
 

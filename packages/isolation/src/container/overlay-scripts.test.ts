@@ -11,6 +11,7 @@
  */
 import { describe, test, expect } from 'bun:test';
 import { execFileSync } from 'child_process';
+import { resolveBashPath } from '@archon/git';
 import {
   mkdtempSync,
   mkdirSync,
@@ -43,6 +44,14 @@ const hasMkfifo = (() => {
   }
 })();
 
+// Resolved ONCE, via the same helper every production bash spawn uses. A bare
+// `execFileSync('bash', …)` is the one thing this file must not do on Windows:
+// CreateProcess searches System32 before PATH, so it resolves to the WSL
+// launcher (`C:\Windows\System32\bash.exe`) rather than Git-Bash — the exact
+// trap resolveBashPath() was written for (#1326). Resolving eagerly also keeps
+// the per-test cost to the spawn itself.
+const bashPath = resolveBashPath();
+
 /** Run a walk script under bash; returns NUL-split records + raw stdout/stderr. */
 function runScript(
   script: string,
@@ -54,7 +63,7 @@ function runScript(
   let stderr = '';
   let code = 0;
   try {
-    stdout = execFileSync('bash', ['-c', script, 'archon-overlay', upper, other, ws], {
+    stdout = execFileSync(bashPath, ['-c', script, 'archon-overlay', upper, other, ws], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
     });
