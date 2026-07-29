@@ -34,6 +34,11 @@ nodes:
   # Deliberately directory-level, never file-level: it names no state file, so a
   # sixth state file added later is covered by construction.
   - id: state-preflight
+    # Re-checked on every resume, never served from the resume cache: this is a
+    # precondition, not a work step, and it is a pure read with no side effects.
+    # Without this a resume would skip it (`prior_success`) and run against
+    # whatever $STATE_DIR looks like now rather than what it looked like then.
+    always_run: true
     bash: |
       set -euo pipefail
 
