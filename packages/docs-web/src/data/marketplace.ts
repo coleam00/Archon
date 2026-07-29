@@ -143,6 +143,7 @@ export const marketplaceEntries: MarketplaceEntry[] = [
     tags: ['automation'],
     archonVersionCompat: '>=0.3.0',
   },
+  {
     slug: 'archon-comprehensive-mr-review',
     name: 'Comprehensive GitLab MR Review',
     author: 'lraphael',
