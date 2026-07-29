@@ -128,7 +128,7 @@ docker compose --profile with-db up -d
 ```
 
 Then add to `.env`:
-```dotenv
+```ini
 DATABASE_URL=postgresql://postgres:postgres@postgres:5432/remote_coding_agent
 ```
 
