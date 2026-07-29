@@ -38,8 +38,17 @@ function describeTarget(input: FetchTarget): string {
   return input.url;
 }
 
+/** `init.method` wins (that is fetch's own precedence), then a Request's own
+ *  method, then the default. Getting this right matters: the whole point of the
+ *  guard is that its message identifies the offending call precisely. */
+function describeMethod(input: FetchTarget, init?: RequestInit): string {
+  if (init?.method !== undefined) return init.method;
+  if (typeof input !== 'string' && !(input instanceof URL)) return input.method;
+  return 'GET';
+}
+
 globalThis.fetch = ((input: FetchTarget, init?: RequestInit): Promise<Response> => {
-  const target = `${init?.method ?? 'GET'} ${describeTarget(input)}`;
+  const target = `${describeMethod(input, init)} ${describeTarget(input)}`;
   violations.push(target);
   return Promise.reject(
     new Error(`Blocked live network request from an adapter unit test: ${target}`)
