@@ -141,7 +141,7 @@ nodes:
 
 Variables are substituted in a defined order:
 
-1. **Workflow variables** -- `$WORKFLOW_ID`, `$USER_MESSAGE`, `$ARGUMENTS`, `$ARTIFACTS_DIR`, `$BASE_BRANCH`, `$DOCS_DIR`, `$LOOP_USER_INPUT`, `$REJECTION_REASON`, `$LOOP_PREV_OUTPUT`
+1. **Workflow variables** -- `$WORKFLOW_ID`, `$USER_MESSAGE`, `$ARGUMENTS`, `$ARTIFACTS_DIR`, `$STATE_DIR`, `$BASE_BRANCH`, `$DOCS_DIR`, `$LOOP_USER_INPUT`, `$REJECTION_REASON`, `$LOOP_PREV_OUTPUT`
 2. **Context variables** -- `$CONTEXT`, `$EXTERNAL_CONTEXT`, `$ISSUE_CONTEXT`
 3. **Node output references** -- `$nodeId.output`, `$nodeId.output.field`
 
@@ -158,6 +158,7 @@ Positional arguments (`$1` through `$9`) are **not** supported in any context â€
 | `$ARGUMENTS` / `$USER_MESSAGE` | Yes | Yes (both aliases) | No |
 | `$WORKFLOW_ID` | Yes | No | No |
 | `$ARTIFACTS_DIR` | Yes | No | No |
+| `$STATE_DIR` | Yes | No | No |
 | `$BASE_BRANCH` | Yes | No | No |
 | `$DOCS_DIR` | Yes | No | No |
 | `$CONTEXT` / aliases | Yes | No | No |

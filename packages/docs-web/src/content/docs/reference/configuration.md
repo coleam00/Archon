@@ -324,10 +324,11 @@ every other run, and a `docker exec` into a specific container within the cleanu
 for a container run. The blast radius is bounded: container mode is folder-projects-only
 and works only with `containerExec`-capable providers.
 
-**Workaround.** A node whose output must reach the host should write into the **workspace**
-(`$WS`, the overlay-mounted project root) rather than `$ARTIFACTS_DIR` / `$STATE_DIR`.
-Workspace writes ride the existing overlay diff plus the approval-gated write-back, so they
-do land on the host.
+**Workaround.** A node whose output must reach the host should write into the **project
+root** — the node's working directory inside the container, which is the overlay mount —
+rather than into `$ARTIFACTS_DIR` / `$STATE_DIR`. A plain relative path does this. Writes
+there ride the existing overlay diff plus the approval-gated write-back, so they do land on
+the host.
 
 ## Environment Variables
 

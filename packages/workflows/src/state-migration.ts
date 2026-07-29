@@ -25,16 +25,30 @@ function getLog(): ReturnType<typeof createLogger> {
 }
 
 /**
- * Process-scoped so the warning fires exactly once regardless of how many runs
- * start. Exported reset so tests can observe more than the first case.
+ * Which working directories have already been probed in this process.
+ *
+ * Keyed by `cwd`, NOT a single process-wide boolean: the probed path is
+ * per-project (`<cwd>/.archon/state`), so a global latch would let the first run
+ * in a process — any project, legacy directory or not — permanently suppress
+ * detection for every other project. On a server handling many codebases (the
+ * normal deployment shape) that means the check effectively never fires, and
+ * this WARN is the only automatic signal a user gets that cross-run state inside
+ * a worktree is being destroyed on every run.
+ *
+ * (The pattern was adapted from `maybeWarnLegacyHomePath` in
+ * `workflow-discovery.ts`, where a process-wide latch IS correct because that
+ * function probes one fixed, cwd-independent path.)
+ *
+ * Exported reset so tests can observe more than the first case per cwd.
  */
-let hasWarnedLegacyStatePath = false;
+const probedCwds = new Set<string>();
 export function resetLegacyStateWarningForTests(): void {
-  hasWarnedLegacyStatePath = false;
+  probedCwds.clear();
 }
 
 /**
- * Warn once if a legacy `<cwd>/.archon/state/` directory is present.
+ * Warn once per working directory if a legacy `<cwd>/.archon/state/` directory
+ * is present.
  *
  * `isolated` (the run's worktree posture) escalates the wording, and only the
  * wording: inside a worktree the legacy directory is about to be DELETED with
@@ -47,16 +61,18 @@ export function resetLegacyStateWarningForTests(): void {
  */
 export async function maybeWarnLegacyStatePath(
   cwd: string,
-  outputRoot: string,
+  stateDir: string,
   isolated: boolean
 ): Promise<void> {
-  if (hasWarnedLegacyStatePath) return;
-  // Set the flag eagerly so concurrent workflow starts in one process can't
-  // both pass the guard and double-warn.
-  hasWarnedLegacyStatePath = true;
+  if (probedCwds.has(cwd)) return;
+  // Record eagerly so concurrent workflow starts on the same cwd can't both
+  // pass the guard and double-warn.
+  probedCwds.add(cwd);
 
   const legacyPath = join(cwd, '.archon', 'state');
-  const newPath = join(outputRoot, 'state');
+  // Taken from the centralized resolver rather than re-composed here, so this
+  // file holds no hard-coded knowledge of the tree layout.
+  const newPath = stateDir;
   try {
     await access(legacyPath);
   } catch (error) {

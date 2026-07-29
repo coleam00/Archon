@@ -25,7 +25,7 @@
     "generate:capability-matrix": "bun run scripts/generate-capability-matrix.ts",
     "check:capability-matrix": "bun run scripts/generate-capability-matrix.ts --check",
     "test:install": "bash scripts/test-install.sh",
-    "test": "bun --filter '*' --parallel test",
+    "test": "bun --filter '*' --parallel test && bun test ./scripts/",
     "test:watch": "bun --filter @archon/server test:watch",
     "type-check": "bun --filter '*' type-check && bun x tsc --noEmit -p scripts/tsconfig.json",
     "lint": "bun x eslint . --cache",
@@ -41,7 +41,9 @@
     "setup-auth": "bun --filter @archon/server setup-auth"
   },
   "devDependencies": {
+    "@archon/core": "workspace:*",
     "@archon/git": "workspace:*",
+    "@archon/paths": "workspace:*",
     "@archon/providers": "workspace:*",
     "@eslint/js": "^9.39.1",
     "@types/bun": "latest",

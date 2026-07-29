@@ -21,15 +21,21 @@
  *
  * Safety:
  *   - Dry run by default; `--apply` is required to touch anything.
- *   - Never overwrites an existing destination file — it reports the conflict
- *     and exits non-zero so you resolve it deliberately.
+ *   - The pre-flight decides the WHOLE migration before moving a byte, so any
+ *     refusal (destination collision, nested directory) leaves the source
+ *     untouched — a partial migration can never be reported as success.
+ *   - `.initialized` is written ONLY after every entry moved, or when there was
+ *     genuinely nothing to migrate. Marking a partial migration complete would
+ *     tell the triage workflows' `state-preflight` gate that an incomplete state
+ *     directory is authoritative — the exact reset the gate exists to prevent.
  *   - Idempotent: re-running after a successful migration finds nothing to do.
  *   - Copy-then-delete, so an interrupted run leaves the source intact.
  *
  * Exit codes:
- *   0  nothing to do, dry run completed, or migration succeeded
+ *   0  nothing to do, dry run completed, or migration fully succeeded
  *   1  unexpected error
- *   2  destination conflicts found (nothing was moved)
+ *   2  refused — destination collisions and/or nested directories; nothing was
+ *      moved and `.initialized` was NOT written
  */
 import { readdir, mkdir, stat, copyFile, rm, writeFile } from 'fs/promises';
 import { join, resolve } from 'path';
@@ -64,6 +70,52 @@ async function resolveKey(cwd: string): Promise<ProjectStorageKey> {
   return { kind: 'cwd', cwd };
 }
 
+function plural(n: number): string {
+  return `${String(n)} entr${n === 1 ? 'y' : 'ies'}`;
+}
+
+/**
+ * Record that this project's `$STATE_DIR` is deliberately in its current shape —
+ * either freshly migrated, or confirmed to have nothing to migrate. Stateful
+ * workflows read this marker to tell "legitimately empty" from "state is still
+ * sitting unmigrated somewhere else".
+ *
+ * Written ONLY on a fully successful `--apply`: a partial migration must never
+ * be marked complete, or the marker waves through exactly the reset it exists
+ * to prevent.
+ */
+async function markInitialized(stateRoot: string): Promise<void> {
+  await mkdir(stateRoot, { recursive: true });
+  await writeFile(join(stateRoot, '.initialized'), '');
+}
+
+/** True when `path` exists; narrowed to ENOENT so EACCES/EIO surface. */
+async function exists(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    // A destination we cannot even stat must not be reported as "safe to move".
+    throw error;
+  }
+}
+
+/**
+ * Nothing to migrate. On `--apply` this is still a successful outcome, so the
+ * destination is marked — otherwise an operator who correctly runs the migration
+ * on a project with no legacy state would be left with an unmarked `$STATE_DIR`.
+ */
+async function reportNoop(message: string, stateRoot: string): Promise<void> {
+  console.log(message);
+  if (!APPLY) {
+    console.log('Dry run — re-run with --apply to mark $STATE_DIR initialized.');
+    return;
+  }
+  await markInitialized(stateRoot);
+  console.log(`Marked ${join(stateRoot, '.initialized')}`);
+}
+
 async function main(): Promise<void> {
   const legacyDir = join(CWD, '.archon', 'state');
   const key = await resolveKey(CWD);
@@ -79,32 +131,44 @@ async function main(): Promise<void> {
     entries = await readdir(legacyDir);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      console.log('Nothing to migrate — no legacy .archon/state/ directory.');
+      await reportNoop('Nothing to migrate — no legacy .archon/state/ directory.', stateRoot);
       return;
     }
     throw error;
   }
   if (entries.length === 0) {
-    console.log('Nothing to migrate — legacy .archon/state/ is empty.');
+    await reportNoop('Nothing to migrate — legacy .archon/state/ is empty.', stateRoot);
     return;
   }
 
-  // Pre-flight: never clobber. Report every conflict at once rather than
-  // failing halfway through a partial move.
+  // Pre-flight: decide the ENTIRE migration before moving a single byte, so
+  // every refusal leaves the source untouched and no partial move can be
+  // reported as success. Two blocking conditions, reported together:
+  //   - a destination file already exists (never clobber)
+  //   - a nested directory (state files are flat JSON; recursing or flattening
+  //     would be a guess, and skipping it would leave state behind)
   const conflicts: string[] = [];
+  const directories: string[] = [];
   for (const name of entries) {
-    try {
-      await stat(join(stateRoot, name));
-      conflicts.push(name);
-    } catch {
-      // Absent — safe to move.
-    }
+    if (await exists(join(stateRoot, name))) conflicts.push(name);
+    const info = await stat(join(legacyDir, name));
+    if (info.isDirectory()) directories.push(name);
   }
-  if (conflicts.length > 0) {
-    console.error('Refusing to migrate — these already exist in $STATE_DIR:');
-    for (const name of conflicts) console.error(`  ${join(stateRoot, name)}`);
+
+  if (conflicts.length > 0 || directories.length > 0) {
+    console.error('Refusing to migrate — nothing was moved.');
+    if (conflicts.length > 0) {
+      console.error('');
+      console.error('Already present in $STATE_DIR (resolve by hand, keep the newer copy):');
+      for (const name of conflicts) console.error(`  ${join(stateRoot, name)}`);
+    }
+    if (directories.length > 0) {
+      console.error('');
+      console.error('Nested directories (move these by hand, then re-run):');
+      for (const name of directories) console.error(`  ${join(legacyDir, name)}`);
+    }
     console.error('');
-    console.error('Resolve each by hand (keep the newer copy), then re-run.');
+    console.error('$STATE_DIR was NOT marked initialized — re-run after resolving.');
     process.exit(2);
   }
 
@@ -115,35 +179,26 @@ async function main(): Promise<void> {
   if (!APPLY) {
     console.log('');
     console.log(
-      `Dry run — nothing was moved. Re-run with --apply to migrate ${String(entries.length)} entr${entries.length === 1 ? 'y' : 'ies'}.`
+      `Dry run — nothing was moved. Re-run with --apply to migrate ${plural(entries.length)}.`
     );
     return;
   }
 
   await mkdir(stateRoot, { recursive: true });
+  let moved = 0;
   for (const name of entries) {
-    const src = join(legacyDir, name);
-    const dest = join(stateRoot, name);
-    const info = await stat(src);
-    if (info.isDirectory()) {
-      // State files are flat JSON in practice; a nested directory is unexpected
-      // enough that silently flattening or recursing would be a guess.
-      console.error(`Skipping directory (move it by hand): ${src}`);
-      continue;
-    }
     // Copy first, then remove — an interrupted run leaves the source intact.
-    await copyFile(src, dest);
-    await rm(src);
+    await copyFile(join(legacyDir, name), join(stateRoot, name));
+    await rm(join(legacyDir, name));
+    moved++;
   }
 
-  // Mark the destination initialized so a stateful workflow can tell a genuine
-  // first run from an unmigrated one (see the triage workflows' ABORT guard).
-  await writeFile(join(stateRoot, '.initialized'), '');
+  // Every entry moved (the pre-flight guarantees no skips), so the destination
+  // is now the complete state — safe to mark.
+  await markInitialized(stateRoot);
 
   console.log('');
-  console.log(
-    `Migrated ${String(entries.length)} entr${entries.length === 1 ? 'y' : 'ies'} to ${stateRoot}`
-  );
+  console.log(`Migrated ${plural(moved)} to ${stateRoot}`);
   console.log('Remaining step: confirm the legacy directory is empty, then remove it:');
   console.log(`  rmdir "${legacyDir}"`);
 }

@@ -45,7 +45,7 @@ afterEach(async () => {
 
 describe('maybeWarnLegacyStatePath', () => {
   it('is silent when no legacy .archon/state exists (ENOENT happy path)', async () => {
-    await maybeWarnLegacyStatePath(dir, '/out/root', false);
+    await maybeWarnLegacyStatePath(dir, '/out/root/state', false);
     expect(warnCalls).toHaveLength(0);
   });
 
@@ -54,14 +54,33 @@ describe('maybeWarnLegacyStatePath', () => {
     await mkdir(legacy, { recursive: true });
     await writeFile(join(legacy, 'triage-state.json'), '{}');
 
-    await maybeWarnLegacyStatePath(dir, '/out/root', false);
+    await maybeWarnLegacyStatePath(dir, '/out/root/state', false);
 
     expect(warnCalls).toHaveLength(1);
     expect(warnCalls[0].event).toBe('workflow.legacy_state_path_detected');
     expect(warnCalls[0].payload.legacyPath).toBe(legacy);
-    expect(warnCalls[0].payload.newPath).toBe(join('/out/root', 'state'));
+    expect(warnCalls[0].payload.newPath).toBe('/out/root/state');
     expect(String(warnCalls[0].payload.moveCommand)).toContain('mv ');
     expect(String(warnCalls[0].payload.moveCommand)).toContain(legacy);
+  });
+
+  it('probes each project independently — one project cannot suppress another', async () => {
+    // Regression guard: a process-wide latch meant the first run in a server
+    // process (any project, legacy dir or not) silenced detection everywhere.
+    const other = await mkdtemp(join(tmpdir(), 'archon-state-migration-other-'));
+    await mkdir(join(other, '.archon', 'state'), { recursive: true });
+    try {
+      // A project with NO legacy dir goes first and must not latch the check.
+      await maybeWarnLegacyStatePath(dir, '/out/root/state', false);
+      expect(warnCalls).toHaveLength(0);
+
+      await maybeWarnLegacyStatePath(other, '/out/other/state', false);
+
+      expect(warnCalls).toHaveLength(1);
+      expect(warnCalls[0].payload.legacyPath).toBe(join(other, '.archon', 'state'));
+    } finally {
+      await rm(other, { recursive: true, force: true });
+    }
   });
 
   it('warns exactly once across concurrent workflow starts', async () => {
@@ -79,7 +98,7 @@ describe('maybeWarnLegacyStatePath', () => {
   it('escalates the wording for an isolated (worktree) run', async () => {
     await mkdir(join(dir, '.archon', 'state'), { recursive: true });
 
-    await maybeWarnLegacyStatePath(dir, '/out/root', true);
+    await maybeWarnLegacyStatePath(dir, '/out/root/state', true);
 
     expect(warnCalls).toHaveLength(1);
     // Same event name, distinct message + an isolated flag: inside a worktree
@@ -92,7 +111,7 @@ describe('maybeWarnLegacyStatePath', () => {
   it('does not warn for a worktree run that has no legacy directory (correct $STATE_DIR use)', async () => {
     // The intended case: an isolated run using $STATE_DIR. Worktree-ness alone
     // must never trigger the warning, or it fires on every correct use.
-    await maybeWarnLegacyStatePath(dir, '/out/root', true);
+    await maybeWarnLegacyStatePath(dir, '/out/root/state', true);
     expect(warnCalls).toHaveLength(0);
   });
 
@@ -100,12 +119,12 @@ describe('maybeWarnLegacyStatePath', () => {
     const legacy = join(dir, '.archon', 'state');
     await mkdir(legacy, { recursive: true });
     await writeFile(join(legacy, 'old.json'), '{"seen":1}');
-    const outputRoot = join(dir, 'output-root');
+    const stateDir = join(dir, 'output-root', 'state');
 
-    await maybeWarnLegacyStatePath(dir, outputRoot, true);
+    await maybeWarnLegacyStatePath(dir, stateDir, true);
 
     expect(await readdir(legacy)).toEqual(['old.json']);
     // The destination is NOT created as a side effect of the probe.
-    await expect(readdir(outputRoot)).rejects.toThrow();
+    await expect(readdir(stateDir)).rejects.toThrow();
   });
 });

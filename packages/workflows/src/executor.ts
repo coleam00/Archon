@@ -1452,13 +1452,19 @@ export async function executeWorkflow(
   // Record the resolved root ONCE, so every later reader (artifact routes, CLI)
   // addresses this run's output by a durable pointer instead of re-deriving it
   // from a codebase name that may since have been renamed (#1192). Never
-  // overwritten — a resumed run already has one. Best-effort: a failed write
-  // leaves the row on the pre-#2200 re-derive path, which still works today.
+  // overwritten — a resumed run already has one, and the store additionally
+  // enforces write-once via COALESCE.
+  //
+  // A failure here is NOT retried: the guard is `if (!output_root)`, so this run
+  // keeps a NULL pointer for its whole lifetime and permanently stays on the
+  // re-derive path — the exact orphaning #1192 makes possible. It does not
+  // justify failing an otherwise healthy run (re-derivation works today), but it
+  // is a durable per-run degradation, so it logs at ERROR rather than WARN.
   if (!workflowRun.output_root) {
     await deps.store
       .updateWorkflowRun(workflowRun.id, { output_root: outputRoot })
       .catch((err: Error) => {
-        getLog().warn(
+        getLog().error(
           { err, workflowRunId: workflowRun.id, outputRoot },
           'workflow.output_root_persist_failed'
         );
@@ -1466,7 +1472,7 @@ export async function executeWorkflow(
   }
 
   // Detect (never move) a legacy repo-local `.archon/state/` directory.
-  await maybeWarnLegacyStatePath(cwd, outputRoot, workflow.worktree?.enabled !== false);
+  await maybeWarnLegacyStatePath(cwd, stateDir, workflow.worktree?.enabled !== false);
 
   // Stable cross-invocation artifact scope (#1846): only for persist_session
   // workflows with a conversation scope. Undefined otherwise — zero new dirs.

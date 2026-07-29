@@ -11464,6 +11464,59 @@ describe('executeDagWorkflow -- script nodes', () => {
     expect(prompt).not.toContain('$WORKFLOW_ID');
   });
 
+  it('STATE_DIR reaches script and bash subprocesses as an env var, not just as text', async () => {
+    // The textual `$STATE_DIR` path is protected by the fail-fast in
+    // executor-shared (referenced-but-unresolved throws). The ENV-BAG path is
+    // not: a dropped `STATE_DIR: stateDir` beside `ARTIFACTS_DIR` would be
+    // silent, since a node reading `process.env.STATE_DIR` would just see
+    // undefined. This locks both delivery channels.
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('wf-statedir-env', {
+      workflow_name: 'state-dir-env-test',
+      conversation_id: 'conv-statedir',
+      user_message: 'state dir env test',
+    });
+
+    const stateDir = join(testDir, 'state');
+    const commandsDir = join(testDir, '.archon', 'commands');
+    await mkdir(commandsDir, { recursive: true });
+    await writeFile(
+      join(commandsDir, 'check-state.md'),
+      'script=$from-script.output bash=$from-bash.output'
+    );
+
+    const nodes: DagNode[] = [
+      // Reads the ENV var — never mentions the literal variable, so the textual
+      // substitution path cannot make this pass.
+      { id: 'from-script', script: 'console.log(process.env.STATE_DIR)', runtime: 'bun' },
+      { id: 'from-bash', bash: 'printf %s "$STATE_DIR"' },
+      { id: 'check', command: 'check-state', depends_on: ['from-script', 'from-bash'] },
+    ];
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-statedir',
+      testDir,
+      { name: 'state-dir-env', nodes },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      stateDir,
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(mockSendQueryDag.mock.calls.length).toBe(1);
+    const prompt = mockSendQueryDag.mock.calls[0][0] as string;
+    expect(prompt).toContain(`script=${stateDir}`);
+    expect(prompt).toContain(`bash=${stateDir}`);
+  });
+
   it('named script not found at runtime results in failed state and platform message', async () => {
     const mockDeps = createMockDeps();
     const platform = createMockPlatform();

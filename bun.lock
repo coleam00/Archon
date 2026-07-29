@@ -9,7 +9,9 @@
         "@opencode-ai/sdk": "^1.17.3",
       },
       "devDependencies": {
+        "@archon/core": "workspace:*",
         "@archon/git": "workspace:*",
+        "@archon/paths": "workspace:*",
         "@archon/providers": "workspace:*",
         "@eslint/js": "^9.39.1",
         "@types/bun": "latest",

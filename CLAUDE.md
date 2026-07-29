@@ -356,7 +356,7 @@ state: it had no engine support (prompts did `mkdir -p .archon/state` relative t
 inside an isolated run it wrote to the worktree and died at cleanup, and in a user's repo it
 was stageable. Use `$STATE_DIR` instead. Archon detects a legacy directory, WARNs once with
 the `mv`, and never moves it; `scripts/migrate-state-dir.ts` is the operator's one-shot
-(`--dry-run` by default).
+(dry run by default; pass `--apply` to move).
 
 - `ARCHON_HOME` - Override the base directory (default: `~/.archon`)
 - Docker: Paths automatically set to `/.archon/`

@@ -897,7 +897,13 @@ export async function updateWorkflowRun(
   }
   if (updates.output_root !== undefined) {
     values.push(updates.output_root);
-    setClauses.push(`output_root = $${values.length}`);
+    // COALESCE makes write-once structural rather than doc-only (#2200): the
+    // first non-null write sticks and every later one is a no-op, so a resume
+    // that re-derived a different root (renamed codebase, #1192) can never
+    // orphan the artifacts this run actually wrote. No behaviour change for the
+    // executor, which already guards on a null pointer — this is the backstop
+    // for any future caller that forgets to.
+    setClauses.push(`output_root = COALESCE(output_root, $${values.length})`);
   }
 
   if (setClauses.length === 0) return;
