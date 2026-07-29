@@ -16,7 +16,7 @@ Archon's workflow YAML is deliberately held on the right side of that line. This
 
 > **YAML coordinates. Code computes. Agents judge.**
 
-The workflow YAML exists to express what the **engine** must see in order to govern a run: ordering, gating, retrying, joining, pausing for humans, session identity, artifact identity, and reusable structure. Everything that *computes a value or transforms data* stays out of the YAML and lives inside a node. The YAML is the wiring between nodes — nothing more.
+The workflow YAML exists to express what the **engine** must see in order to govern a run: ordering, gating, retrying, joining, pausing for humans, session identity, artifact identity, and reusable structure. Everything that *computes a value or transforms data* stays out of the YAML and lives inside a node's **body** — the `bash:`/`script:` source or the `prompt:` text. The surrounding node fields (`when:`, `retry:`, `output_format:`, …) are YAML surface and stay declarative. The YAML is the wiring between nodes — nothing more.
 
 **What this rule is about, and what it is not.** The partition governs **what may enter the YAML surface**, not what an agent may do inside a node. "Code computes, agents judge" is shorthand for *the language does not compute* — it is not a prohibition on a prompt performing computation.
 
@@ -83,9 +83,9 @@ These are the specific mechanisms by which workflow languages rot. Each is liste
 
 **Archon today (observed).** The defaults audit found a 9-node review block copy-pasted into five workflows and a byte-identical bash node in up to nine — precisely because composition was missing. That evidence produced `include:` (#2121), a constitutional feature. The same audit found the opposite failure too: deterministic validation suites narrated as AI prose because authors lacked a polyglot pattern — resolved not with a YAML feature but with a *pattern* (detect with AI → execute with bash → fix with AI).
 
-**Lever — audit the workarounds, not the requests.** Periodically audit real workflows (bundled and user-reported) for repeated structure and embedded logic. Each finding gets classified: missing *coordination* primitive → design it constitutionally; missing *pattern* → document the pattern; missing *computation* → point to script nodes. The workaround corpus, not the feature-request queue, decides what the language needs.
+**Lever — audit the workarounds, not the requests.** Periodically audit real workflows (bundled and user-reported) for repeated structure and embedded logic. Each finding gets classified: missing *coordination* primitive → design it constitutionally; missing *pattern* → document the pattern; computation that has leaked *into the YAML surface* → point to script nodes (this bucket is about the language, never about rewriting an author's prompt — see *Read "prompt-embedded logic" carefully* below). The workaround corpus, not the feature-request queue, decides what the language needs.
 
-**Read "prompt-embedded logic" carefully.** It is a signal for *language design* — evidence that a coordination primitive or a documented pattern may be missing. It is **not** a finding against the workflow, and not a mandate to refactor authored prompts into script nodes. A prompt doing deterministic work is only a smell when the same shape recurs across many workflows, which is what indicates a missing primitive. One workflow whose author chose a prompt for a computation is that author exercising a legitimate choice (see *The rule*).
+**Read "prompt-embedded logic" carefully.** It is a signal for *language design* — evidence that a coordination primitive or a documented pattern may be missing. It is **not** a finding against the workflow, and not a mandate to refactor authored prompts into script nodes. A prompt doing deterministic work becomes a smell when the same shape **recurs** — across workflows, or across nodes within one workflow — because recurrence is what indicates a missing primitive or an undocumented pattern. (The polyglot-validate gap above was exactly that, found in a single workflow.) What is *not* a smell is one author choosing a prompt for one computation: that is the author exercising a legitimate choice (see *The rule*), and it is a finding about the language only when it repeats.
 
 ### 4. Schema width (the parameter matrix is a symptom)
 
@@ -107,6 +107,6 @@ These are the specific mechanisms by which workflow languages rot. Each is liste
 
 For **contributors**: cite this page in `feat(workflows)` PRs that touch the YAML surface. A reviewer's first question is the admissibility test, not the implementation.
 
-For **workflow authors**: if you're fighting the YAML — wanting arithmetic in `when:`, string manipulation in a field, cleverness in structure — the language is telling you the logic belongs one level down. Compute in a script node, decide in a prompt, and let the YAML do what it's for: wiring the pieces the engine governs.
+For **workflow authors**: if you're fighting the YAML — wanting arithmetic in `when:`, string manipulation in a field, cleverness in structure — the language is telling you the logic belongs one level down. Move the logic one level down — into a `script:`/`bash:` node or a `prompt:`, whichever fits the problem (see *The rule*: that choice is yours, not the constitution's) — and let the YAML do what it's for: wiring the pieces the engine governs.
 
 For **the roadmap**: the constitution is why Archon can keep its declarative surface while workflows-as-code frameworks exist. The trade — auditability, the visual builder, non-engineer operators — stays won exactly as long as the YAML stays a coordination language. The day it computes, it loses to both alternatives at once.
