@@ -16,7 +16,18 @@ Archon's workflow YAML is deliberately held on the right side of that line. This
 
 > **YAML coordinates. Code computes. Agents judge.**
 
-The workflow YAML exists to express what the **engine** must see in order to govern a run: ordering, gating, retrying, joining, pausing for humans, session identity, artifact identity, and reusable structure. Everything that *computes a value or transforms data* belongs in a `bash:`/`script:` node. Everything that *requires judgment* belongs in a prompt. The YAML is the wiring between them — nothing more.
+The workflow YAML exists to express what the **engine** must see in order to govern a run: ordering, gating, retrying, joining, pausing for humans, session identity, artifact identity, and reusable structure. Everything that *computes a value or transforms data* stays out of the YAML and lives inside a node. The YAML is the wiring between nodes — nothing more.
+
+**What this rule is about, and what it is not.** The partition governs **what may enter the YAML surface**, not what an agent may do inside a node. "Code computes, agents judge" is shorthand for *the language does not compute* — it is not a prohibition on a prompt performing computation.
+
+A prompt that computes is a **legitimate authoring choice**, and frequently the right one. `bash:`/`script:` nodes and `prompt:` nodes are both escape hatches from the language; choosing between them is an ordinary engineering decision the workflow author owns, not a constitutional question:
+
+- Reach for a **script node** when the rule is known, fixed, and cheap to state — parsing JSON, arithmetic, comparing versions, reshaping a list.
+- Reach for a **prompt** when the author does not know the rule, or knows it will not survive contact with real inputs, and wants the model to decide. Models are capable; forcing an uncertain rule into a script only freezes a guess into code.
+
+Neither choice touches the language, so neither is the constitution's business.
+
+**The one narrow case that argues for determinism** — and it is a reliability argument, not a constitutional one: a check with **no judgment content** (a boolean with exactly one correct answer, like "does this file exist") whose failure has **irreversible external consequences** is better expressed as a node that cannot decline to fire. Not because a prompt cannot evaluate it, but because the cost of it not firing is unrecoverable. Cite reliability when you make that argument; do not cite this page.
 
 This is not an aesthetic preference. The declarative surface is what makes Archon's core promises possible: load-time validation, the visual builder, resumability, audit trails, and approval gates all depend on the engine being able to *statically see* the workflow's structure. Every unit of computation that leaks into the YAML is a unit the engine can no longer validate, render, resume, or audit — and a unit that a script node would have handled better.
 
@@ -73,6 +84,8 @@ These are the specific mechanisms by which workflow languages rot. Each is liste
 **Archon today (observed).** The defaults audit found a 9-node review block copy-pasted into five workflows and a byte-identical bash node in up to nine — precisely because composition was missing. That evidence produced `include:` (#2121), a constitutional feature. The same audit found the opposite failure too: deterministic validation suites narrated as AI prose because authors lacked a polyglot pattern — resolved not with a YAML feature but with a *pattern* (detect with AI → execute with bash → fix with AI).
 
 **Lever — audit the workarounds, not the requests.** Periodically audit real workflows (bundled and user-reported) for repeated structure and embedded logic. Each finding gets classified: missing *coordination* primitive → design it constitutionally; missing *pattern* → document the pattern; missing *computation* → point to script nodes. The workaround corpus, not the feature-request queue, decides what the language needs.
+
+**Read "prompt-embedded logic" carefully.** It is a signal for *language design* — evidence that a coordination primitive or a documented pattern may be missing. It is **not** a finding against the workflow, and not a mandate to refactor authored prompts into script nodes. A prompt doing deterministic work is only a smell when the same shape recurs across many workflows, which is what indicates a missing primitive. One workflow whose author chose a prompt for a computation is that author exercising a legitimate choice (see *The rule*).
 
 ### 4. Schema width (the parameter matrix is a symptom)
 
