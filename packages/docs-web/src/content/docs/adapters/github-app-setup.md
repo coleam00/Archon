@@ -176,7 +176,7 @@ Archon enforces this at startup: with App mode active and the server bound to a 
 
 Example Caddy snippet that drops `/internal/*` (bare-metal):
 
-```caddyfile
+```txt
 example.com {
   @internal path /internal/*
   respond @internal 404
@@ -203,7 +203,7 @@ The `!override` tag (compose-spec) replaces the base file's `ports` list instead
 
 Insert this `handle` block before the fallthrough `handle { }` block:
 
-```caddyfile
+```txt
 handle /internal/* {
   respond "Not Found" 404
 }
