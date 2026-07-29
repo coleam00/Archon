@@ -753,6 +753,8 @@ This ensures type compatibility with SDK updates and eliminates `as any` casts.
 - Clean up test data after each test
 
 **Mock isolation rules (IMPORTANT):**
+- **`mock.module()` MERGES over the real module — it does NOT replace the namespace.** An export omitted from the factory keeps its REAL implementation (verified on bun 1.3.11). So adding a new export to a production module silently un-mocks it in every test that mocks that module, and those tests start doing real I/O with no signal. This is exactly how `/workflow abandon` tests began opening a real SQLite DB: `findChildRuns` was added to `db/workflows` by #2121 but never added to `command-handler.test.ts`'s factory (see #2240). **When you add an export to a module, grep for `mock.module('<that module>'` and update every factory.**
+- Unit tests must not touch real external resources. A missing stub does not fail loudly — it stalls, and the only bound is Bun's 5000 ms per-test timeout, which surfaces on CI as an intermittent, hard-to-attribute timeout (#2186, #2240). `@archon/adapters` enforces this for the network via `packages/adapters/bunfig.toml` → `src/test/no-network.ts`; other packages can adopt it with the same three lines. To audit a suspect file, run it with `ARCHON_HOME` pointed at an empty temp dir and check whether an `archon.db` appears.
 - Bun's `mock.module()` is process-global and irreversible — `mock.restore()` does NOT undo it
 - Do NOT add `afterAll(() => mock.restore())` for `mock.module()` cleanup — it has no effect
 - Use `spyOn()` for internal modules that other test files import directly (e.g., `spyOn(git, 'checkout')`) — `spy.mockRestore()` DOES work for spies

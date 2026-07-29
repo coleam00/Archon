@@ -1,0 +1,13 @@
+# Package-local Bun config.
+#
+# The repo-root bunfig.toml is NOT read here: `bun run test` runs
+# `bun --filter '*' --parallel test`, which executes each package's script with
+# cwd set to that package, and Bun only reads bunfig.toml from the cwd. So the
+# guard has to be registered per package that needs it.
+#
+# Adapters are the one package whose unit tests instantiate production API
+# clients (Octokit, bare fetch against a base URL), so they are the one place a
+# forgotten stub turns into a live request and an intermittent CI timeout.
+# See src/test/no-network.ts and #2186.
+[test]
+preload = ["./src/test/no-network.ts"]

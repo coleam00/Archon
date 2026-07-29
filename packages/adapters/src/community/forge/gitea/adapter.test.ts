@@ -4,7 +4,7 @@
  * Note: These tests focus on adapter-specific functionality without mocking
  * database modules to avoid test pollution issues with Bun's mock.module.
  */
-import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test';
+import { describe, test, expect, mock, spyOn, beforeEach, afterEach } from 'bun:test';
 
 // Mock @archon/paths to suppress noisy logger output during tests
 const mockLogger = {
@@ -840,7 +840,17 @@ describe('GiteaAdapter', () => {
   });
 
   describe('user identity resolution', () => {
+    // Tests here drive handleWebhook() all the way to handleMessage, which first
+    // calls fetchCommentHistory() — a bare `fetch` against the adapter's
+    // baseUrl. Left unstubbed that is a real DNS + TCP attempt to
+    // gitea.example.com on every run, making the test's outcome depend on an
+    // external host inside Bun's 5000 ms per-test budget (#2186). Stub it.
+    let fetchSpy: ReturnType<typeof spyOn<typeof globalThis, 'fetch'>>;
+
     beforeEach(() => {
+      fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(
+        () => Promise.resolve(new Response('[]', { status: 200 })) as ReturnType<typeof fetch>
+      );
       mockFindOrCreateUserByPlatformIdentity.mockClear();
       mockFindOrCreateUserByPlatformIdentity.mockImplementation(async () => ({
         id: 'user-test-uuid',
@@ -849,6 +859,10 @@ describe('GiteaAdapter', () => {
         created_at: new Date(),
         updated_at: new Date(),
       }));
+    });
+
+    afterEach(() => {
+      fetchSpy.mockRestore();
     });
 
     function createWebhookAdapter(): GiteaAdapter {

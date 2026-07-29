@@ -267,7 +267,25 @@ describe('GitHubAdapter', () => {
     let originalAllowedUsers: string | undefined;
 
     /**
+     * 401 "Bad credentials" — exactly what api.github.com returns for the fake
+     * token these tests construct the adapter with. Reproducing it locally keeps
+     * the exercised code path byte-identical to the live one (PAT mode rethrows
+     * 401 immediately; only App mode retries — see withTokenRefresh).
+     */
+    function badCredentials(): Error {
+      return Object.assign(new Error('Bad credentials'), { status: 401 });
+    }
+
+    /**
      * Creates an adapter with mocked signature verification for self-filtering tests.
+     *
+     * The private Octokit client is stubbed. Without it, every payload that
+     * survives self-filtering runs handleWebhook() into step 7 (`repos.get`) and
+     * its error path (`postComment`), issuing two REAL requests to
+     * api.github.com per test. That made these unit tests depend on an external
+     * service inside Bun's 5000 ms per-test budget, which is the root cause of
+     * the intermittent cross-OS timeouts in #2186. See also the sibling
+     * `webhook delivery dedup` block, which has always stubbed its client.
      */
     function createSelfFilterAdapter(botMention = 'archon'): GitHubAdapter {
       const adapter = new GitHubAdapter(
@@ -278,6 +296,17 @@ describe('GitHubAdapter', () => {
       );
       // @ts-expect-error - accessing private method for testing
       adapter.verifySignature = mock(() => true);
+      // @ts-expect-error - replacing private Octokit client for testing
+      adapter.octokit = {
+        rest: {
+          repos: {
+            get: mock(() => Promise.reject(badCredentials())),
+          },
+          issues: {
+            createComment: mock(() => Promise.reject(badCredentials())),
+          },
+        },
+      };
       return adapter;
     }
 

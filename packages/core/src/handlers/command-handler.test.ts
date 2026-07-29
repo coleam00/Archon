@@ -38,6 +38,13 @@ const mockGetWorkflowRun = mock(() => Promise.resolve(null));
 const mockResumeWorkflowRun = mock(() => Promise.resolve({ id: 'run-id', status: 'running' }));
 const mockFailWorkflowRun = mock(() => Promise.resolve());
 const mockUpdateWorkflowRun = mock(() => Promise.resolve());
+// /workflow abandon cascade-cancels the sub-run tree (#2121 Phase 2), walking it
+// via findChildRuns. This entry is load-bearing: mock.module MERGES over the real
+// module rather than replacing the namespace, so an omitted export keeps its REAL
+// implementation. While this was missing, every abandon test ran the real
+// findChildRuns → pool.query → created and schema-initialised a real SQLite
+// database on disk, in a test that reads as fully mocked (#2240).
+const mockFindChildRuns = mock(() => Promise.resolve([]));
 // CAS gate resolvers (#2113) — approve/reject stamp the resolution atomically here
 // instead of via updateWorkflowRun. resolveAndCancelApprovalGate is the atomic
 // resolve+cancel for terminal reject outcomes. Default to "won the race".
@@ -94,6 +101,7 @@ mock.module('../db/workflows', () => ({
   cancelWorkflowRun: mockCancelWorkflowRun,
   listWorkflowRuns: mockListWorkflowRuns,
   getWorkflowRun: mockGetWorkflowRun,
+  findChildRuns: mockFindChildRuns,
   resumeWorkflowRun: mockResumeWorkflowRun,
   failWorkflowRun: mockFailWorkflowRun,
   updateWorkflowRun: mockUpdateWorkflowRun,
@@ -1775,6 +1783,13 @@ describe('CommandHandler', () => {
         expect(result.message).toContain('Abandoned');
         expect(result.message).toContain('implement');
         expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-123');
+        // The cascade walk must actually run against the mock, not merely be
+        // survived. cascadeCancelChildren swallows its own errors into a failure
+        // count, so a cascade that is broken — or one silently talking to a real
+        // database — still reports "Abandoned"; the only visible tell is this
+        // warning suffix. Assert both halves so the stub cannot regress unnoticed.
+        expect(result.message).not.toContain('could not be cancelled');
+        expect(mockFindChildRuns).toHaveBeenCalledWith('run-123');
       });
 
       test('should reject abandon of already-terminal run', async () => {
