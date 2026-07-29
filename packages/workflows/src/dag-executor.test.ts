@@ -1747,6 +1747,7 @@ describe('executeDagWorkflow -- AI node prompt substitution failure', () => {
       'claude',
       undefined,
       join(testDir, 'artifacts'),
+      join(testDir, 'state'),
       join(testDir, 'logs'),
       '', // base branch unresolved — the prompt references $BASE_BRANCH so substitution throws
       'docs/',
