@@ -284,8 +284,18 @@ describe('GitHubAdapter', () => {
      * its error path (`postComment`), issuing two REAL requests to
      * api.github.com per test. That made these unit tests depend on an external
      * service inside Bun's 5000 ms per-test budget, which is the root cause of
-     * the intermittent cross-OS timeouts in #2186. See also the sibling
+     * the intermittent timeouts in #2186. See also the sibling
      * `webhook delivery dedup` block, which has always stubbed its client.
+     *
+     * COUPLING — why these tests can safely `await handleWebhook` unwrapped:
+     * handleWebhook has no top-level try/catch and its containment is per-step
+     * and partial (step 6b throws deliberately). Nothing throws here only
+     * because the stubbed 401 lands in step 7's catch, which sends the error
+     * message and RETURNS (adapter.ts:1094-1107), so steps 8-10 —
+     * `ensureRepoReady`, `getLinkedIssueNumbers`, `pulls.get`, `handleMessage`,
+     * all unmocked — are never reached. Make `repos.get` RESOLVE instead of
+     * reject and all these tests fall through into that unmocked territory at
+     * once. If you need that, stub steps 8-10 too (see `createDedupAdapter`).
      */
     function createSelfFilterAdapter(botMention = 'archon'): GitHubAdapter {
       const adapter = new GitHubAdapter(
