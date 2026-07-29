@@ -625,8 +625,10 @@ describe('archon-paths', () => {
         logsDir: join(root, 'logs'),
         stateRoot: join(root, 'state'),
       });
-      expect(paths.root.startsWith('/custom/archon')).toBe(true);
-      expect(paths.root).not.toContain('.archon/artifacts');
+      // Build both expectations with join() — on Windows the separators differ
+      // from the POSIX literals and a hard-coded '/custom/archon' never matches.
+      expect(paths.root.startsWith(join('/custom/archon', 'workspaces'))).toBe(true);
+      expect(paths.root).not.toContain(join('.archon', 'artifacts'));
     });
 
     test('cwd basename is sanitised to a single traversal-safe segment', () => {

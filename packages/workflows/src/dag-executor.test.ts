@@ -11488,10 +11488,13 @@ describe('executeDagWorkflow -- script nodes', () => {
     );
 
     const nodes: DagNode[] = [
-      // Reads the ENV var — never mentions the literal variable, so the textual
-      // substitution path cannot make this pass.
+      // Both read the ENV var and neither contains the literal `$STATE_DIR`, so
+      // the textual substitution path cannot make this pass. `${STATE_DIR}` in
+      // the bash body survives substitution (the engine replaces the exact
+      // string `$STATE_DIR`) and is expanded by the shell from the env bag —
+      // which also keeps a Windows path out of the script text entirely.
       { id: 'from-script', script: 'console.log(process.env.STATE_DIR)', runtime: 'bun' },
-      { id: 'from-bash', bash: 'printf %s "$STATE_DIR"' },
+      { id: 'from-bash', bash: 'printf %s "${STATE_DIR}"' },
       { id: 'check', command: 'check-state', depends_on: ['from-script', 'from-bash'] },
     ];
 
