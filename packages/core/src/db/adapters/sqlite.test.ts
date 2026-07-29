@@ -498,6 +498,42 @@ describe('SqliteAdapter', () => {
       expect(rows[0]?.app_version).toBe(APP_VERSION);
     });
 
+    /**
+     * migrateColumns() suppresses each table's failure so one bad ALTER cannot abort
+     * startup — which means the schema may genuinely be incomplete. Stamping this
+     * build onto that database would make the vintage a wrong answer that gets
+     * believed, which is worse than no answer at all.
+     */
+    test('does not record a vintage when a column migration failed', async () => {
+      currentDbPath = join(
+        import.meta.dir,
+        `.test-sqlite-adapter-${Date.now()}-${Math.random().toString(36).slice(2)}.db`
+      );
+      // Seed a `remote_agent_users` whose shape makes migrateColumns' ALTER fail:
+      // adding a NOT NULL column with a DEFAULT is fine, so instead occupy the name
+      // with an incompatible object — a view cannot be ALTERed.
+      const seed = new Database(currentDbPath);
+      seed.run('CREATE TABLE remote_agent_users_backing (id TEXT PRIMARY KEY)');
+      seed.run('CREATE VIEW remote_agent_users AS SELECT id FROM remote_agent_users_backing');
+      seed.close();
+
+      db = new SqliteAdapter(currentDbPath);
+
+      const rows = raw_query(
+        currentDbPath,
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='remote_agent_schema_version'"
+      ) as { name: string }[];
+      // The table itself is created by createSchema(); the row must be absent.
+      expect(rows).toHaveLength(1);
+
+      const versionRows = raw_query(
+        currentDbPath,
+        'SELECT app_version FROM remote_agent_schema_version'
+      ) as { app_version: string }[];
+      expect(versionRows).toHaveLength(0);
+      expect(await readSchemaVersion(db)).toBeNull();
+    });
+
     test('readSchemaVersion surfaces the row through the adapter', async () => {
       db = createTestDb();
       const info = await readSchemaVersion(db);

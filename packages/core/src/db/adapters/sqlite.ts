@@ -175,8 +175,8 @@ export class SqliteAdapter implements IDatabase {
     // no way left to tell a fresh database from one that predates version tracking.
     const preExisting = this.hasAnyArchonTable();
     this.createSchema();
-    this.migrateColumns();
-    this.recordSchemaVersion(preExisting);
+    const allApplied = this.migrateColumns();
+    this.recordSchemaVersion(preExisting, allApplied);
   }
 
   /** True when core Archon tables already exist — i.e. this is not a fresh database. */
@@ -193,8 +193,22 @@ export class SqliteAdapter implements IDatabase {
    *
    * Writes only when the value actually changes, so the common case (every CLI
    * invocation is a fresh process opening a fresh connection) stays read-only.
+   *
+   * Skipped entirely when `allApplied` is false: migrateColumns() suppresses each
+   * table's failure so one bad ALTER cannot abort startup, which means the schema
+   * may be genuinely incomplete. Stamping this build's version onto that database
+   * would turn the vintage into a wrong answer that gets believed — strictly worse
+   * than the "not recorded" / stale-version state a reader can act on. The next
+   * successful open records it.
    */
-  private recordSchemaVersion(preExisting: boolean): void {
+  private recordSchemaVersion(preExisting: boolean, allApplied: boolean): void {
+    if (!allApplied) {
+      getLog().warn(
+        { appVersion: APP_VERSION },
+        'db.sqlite_schema_version_skipped_incomplete_migration'
+      );
+      return;
+    }
     try {
       const existing = this.db
         .prepare('SELECT app_version FROM remote_agent_schema_version WHERE id = 1')
@@ -226,7 +240,12 @@ export class SqliteAdapter implements IDatabase {
    * so new columns must be added via ALTER TABLE for databases created before
    * the columns were added to createSchema().
    */
-  private migrateColumns(): void {
+  private migrateColumns(): boolean {
+    // Each block below suppresses its own failure so one bad table cannot abort
+    // schema init. This flag carries that outcome to recordSchemaVersion(): a
+    // database missing a failed migration must NOT be stamped as fully applied
+    // by this build, or the vintage becomes a wrong answer that gets believed.
+    let allApplied = true;
     // Users columns. `role` is the web-auth identity seam (default 'admin').
     // Better Auth's own tables are PostgreSQL-only — web auth is never enabled
     // on SQLite — so only the role column is backfilled here.
@@ -240,6 +259,7 @@ export class SqliteAdapter implements IDatabase {
       }
     } catch (e: unknown) {
       getLog().warn({ err: e as Error }, 'db.sqlite_migration_users_columns_failed');
+      allApplied = false;
     }
 
     // Codebases columns
@@ -259,6 +279,7 @@ export class SqliteAdapter implements IDatabase {
       }
     } catch (e: unknown) {
       getLog().warn({ err: e as Error }, 'db.sqlite_migration_codebases_columns_failed');
+      allApplied = false;
     }
 
     // Conversations columns
@@ -291,6 +312,7 @@ export class SqliteAdapter implements IDatabase {
       );
     } catch (e: unknown) {
       getLog().warn({ err: e as Error }, 'db.sqlite_migration_conversations_columns_failed');
+      allApplied = false;
     }
 
     // Workflow runs columns
@@ -332,6 +354,7 @@ export class SqliteAdapter implements IDatabase {
       );
     } catch (e: unknown) {
       getLog().warn({ err: e as Error }, 'db.sqlite_migration_workflow_runs_columns_failed');
+      allApplied = false;
     }
 
     // Sessions columns
@@ -346,6 +369,7 @@ export class SqliteAdapter implements IDatabase {
       }
     } catch (e: unknown) {
       getLog().warn({ err: e as Error }, 'db.sqlite_migration_session_columns_failed');
+      allApplied = false;
     }
 
     // Messages columns
@@ -361,6 +385,7 @@ export class SqliteAdapter implements IDatabase {
       }
     } catch (e: unknown) {
       getLog().warn({ err: e as Error }, 'db.sqlite_migration_messages_columns_failed');
+      allApplied = false;
     }
 
     // Isolation environments columns
@@ -381,6 +406,7 @@ export class SqliteAdapter implements IDatabase {
         { err: e as Error },
         'db.sqlite_migration_isolation_environments_columns_failed'
       );
+      allApplied = false;
     }
 
     // User AI prefs columns. #1998: default_model is the per-user default
@@ -397,6 +423,7 @@ export class SqliteAdapter implements IDatabase {
       }
     } catch (e: unknown) {
       getLog().warn({ err: e as Error }, 'db.sqlite_migration_user_ai_prefs_columns_failed');
+      allApplied = false;
     }
 
     // #1955: credential rows are vendor-keyed (claude→anthropic, codex→openai,
@@ -438,7 +465,10 @@ export class SqliteAdapter implements IDatabase {
       }
     } catch (e: unknown) {
       getLog().warn({ err: e as Error }, 'db.sqlite_migration_provider_key_vendor_ids_failed');
+      allApplied = false;
     }
+
+    return allApplied;
   }
 
   /**
