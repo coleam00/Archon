@@ -11,6 +11,16 @@
  * `execFileAsync` is stubbed with spyOn (reversible; no mock.module pollution)
  * so no real `git` process runs and the registered helper path can be asserted
  * exactly.
+ *
+ * KNOWN UNCOVERED BRANCH — the `skipped` discriminant
+ * (`reason: 'source-script-not-on-disk'`, the compiled-binary path where
+ * `scripts/` does not ship). Reaching it requires `existsSync(sourceScriptPath())`
+ * to be false, and `sourceScriptPath()` resolves from `import.meta.dir` with no
+ * injection seam. The only ways in are (a) `mock.module('node:fs', …)`, which is
+ * process-global and irreversible in Bun and would poison every other test in
+ * this package's batch, or (b) adding a parameter to production code purely for
+ * testability. Neither is worth it for a branch whose entire effect is which log
+ * line the caller emits. Left deliberately uncovered rather than faked.
  */
 import { describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test';
 import { mkdtemp, rm, readFile, writeFile, mkdir, stat } from 'node:fs/promises';
@@ -57,13 +67,6 @@ describe('installCredentialHelper', () => {
     expect(contents).toContain('git-credential');
     expect(contents.length).toBeGreaterThan(0);
 
-    // Executable bit — without it git cannot invoke the helper at all. This
-    // pins the OUTCOME, not the mechanism: today it holds both because
-    // copyFileSync preserves the source script's 0755 and because of the
-    // explicit chmodSync, so removing the chmod alone would not fail this.
-    const mode = (await stat(helperPath)).mode & 0o777;
-    expect(mode & 0o111).not.toBe(0);
-
     // Registered under the exact git config key the credential protocol reads.
     expect(execSpy).toHaveBeenCalledWith(
       'git',
@@ -71,6 +74,30 @@ describe('installCredentialHelper', () => {
       { timeout: 5000 }
     );
   });
+
+  /**
+   * POSIX ONLY. Windows has no execute permission bit — Node reports 0o666 for
+   * every regular file there, so `mode & 0o111` is unconditionally 0 and the
+   * assertion cannot hold. Asserting it unguarded is what turned windows-latest
+   * red on the first push of #2307; scoping it as its own skipped test makes
+   * the platform dependency visible in the run output rather than hidden inside
+   * an `if` in a longer test.
+   *
+   * Pins the OUTCOME, not the mechanism: it holds both because copyFileSync
+   * preserves the source script's 0755 and because of the explicit chmodSync,
+   * so removing the chmod alone would not fail this.
+   */
+  test.skipIf(process.platform === 'win32')(
+    'installed helper is executable (POSIX only)',
+    async () => {
+      const result = await installCredentialHelper('/tmp/some-worktree');
+      expect(result.kind).toBe('installed');
+
+      const helperPath = join(archonHome, 'bin', 'git-credential-archon');
+      const mode = (await stat(helperPath)).mode & 0o777;
+      expect(mode & 0o111).not.toBe(0);
+    }
+  );
 
   test('is idempotent — an existing helper is not overwritten but is re-registered', async () => {
     const binDir = join(archonHome, 'bin');

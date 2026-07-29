@@ -31,6 +31,9 @@ import {
   beforeEach,
   afterEach,
 } from 'bun:test';
+import { randomUUID } from 'node:crypto';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 // Mock logger to suppress noisy output during tests
 const mockLogger = {
@@ -208,6 +211,19 @@ afterAll(() => {
   installCredentialHelperSpy.mockRestore();
   getLinkedIssueNumbersSpy.mockRestore();
 });
+
+/**
+ * A path that is guaranteed not to exist, so `ensureRepoReady` takes its CLONE
+ * branch rather than the "directory already exists → sync" branch.
+ *
+ * Shared literals like `/tmp/clone-test` are a collision waiting to happen, and
+ * the failure is silent in the wrong direction: on a machine where the path
+ * exists, a `not.toHaveBeenCalled()` assertion downstream of the clone branch
+ * passes for the wrong reason. Unique per call, and never created.
+ */
+function unclonedPath(): string {
+  return join(tmpdir(), `archon-clone-test-${randomUUID()}`);
+}
 
 /**
  * Every Octokit REST endpoint `handleWebhook()` can reach, stubbed to RESOLVE:
@@ -1710,13 +1726,18 @@ describe('GitHubAdapter', () => {
 
     test('credential helper install is attempted after successful App-mode clone', async () => {
       const { adapter } = createAppModeAdapter();
+      const clonePath = unclonedPath();
       try {
         // @ts-expect-error - calling private method
-        await adapter.ensureRepoReady('owner', 'repo', 'main', '/tmp/clone-test', false);
+        await adapter.ensureRepoReady('owner', 'repo', 'main', clonePath, false);
       } catch {
         // ensureRepoReady may throw inside addSafeDirectory on the bogus path;
         // we only care that installCredentialHelper was reached.
       }
+      // Control: prove the CLONE branch ran. Without it, a path that happens to
+      // exist would send ensureRepoReady down the sync branch and this test
+      // would report on a flow it never entered.
+      expect(mockCloneRepository).toHaveBeenCalled();
       // Asserted on the function itself rather than through its `git config`
       // side effect. The old proxy assertion required running the REAL
       // installCredentialHelper, which copies the helper script into
@@ -1725,7 +1746,7 @@ describe('GitHubAdapter', () => {
       // wiring: App-mode clone → install helper on the cloned path. The helper's
       // own copy/chmod/git-config behaviour is covered directly by
       // packages/core/src/github-auth/credential-helper-install.test.ts.
-      expect(installCredentialHelperSpy).toHaveBeenCalledWith('/tmp/clone-test');
+      expect(installCredentialHelperSpy).toHaveBeenCalledWith(clonePath);
     });
 
     test('credential helper install is NOT attempted in PAT mode', async () => {
@@ -1737,10 +1758,16 @@ describe('GitHubAdapter', () => {
       );
       try {
         // @ts-expect-error - calling private method
-        await patAdapter.ensureRepoReady('owner', 'repo', 'main', '/tmp/clone-test-pat', false);
+        await patAdapter.ensureRepoReady('owner', 'repo', 'main', unclonedPath(), false);
       } catch {
         // Same bogus-path tolerance as the App-mode case above.
       }
+      // Control FIRST, and load-bearing here: this is a `not.toHaveBeenCalled`
+      // assertion, so anything that stops ensureRepoReady before the credential
+      // block makes it pass VACUOUSLY — the exact silent-pass shape this PR
+      // exists to remove. Asserting the clone branch ran means the negative can
+      // only be satisfied by the auth-kind guard.
+      expect(mockCloneRepository).toHaveBeenCalled();
       // Pins the `this.auth.kind === 'app'` guard: PAT operators never get the
       // helper installed. Without this, stubbing installCredentialHelper above
       // would let the guard be deleted with both tests still green.
