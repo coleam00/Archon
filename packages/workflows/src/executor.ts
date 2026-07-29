@@ -310,9 +310,21 @@ export async function resolveProjectPaths(
   opts?: { persistedOutputRoot?: string | null }
 ): Promise<ResolvedProjectPaths> {
   if (opts?.persistedOutputRoot) {
-    return composeRunPaths(
-      archonPaths.getStoragePathsForRoot(opts.persistedOutputRoot),
-      workflowRunId
+    // The engine only ever persists an in-tree root, so an out-of-tree value is
+    // corruption or a hand edit. Acting on it would let a relative or
+    // whitespace root scatter this run's artifacts AND its shared state under
+    // whatever the server's cwd happens to be. Ignore it and re-derive: the run
+    // still lands somewhere correct, and the write-once guard means we never
+    // overwrite the bad value silently. Readers apply the same boundary.
+    if (archonPaths.isInsideArchonHome(opts.persistedOutputRoot)) {
+      return composeRunPaths(
+        archonPaths.getStoragePathsForRoot(opts.persistedOutputRoot),
+        workflowRunId
+      );
+    }
+    getLog().error(
+      { workflowRunId, persistedOutputRoot: opts.persistedOutputRoot },
+      'workflow.output_root_outside_archon_home'
     );
   }
 

@@ -18,6 +18,7 @@ import { tmpdir } from 'os';
 import { join, resolve } from 'path';
 
 const SCRIPT = resolve(import.meta.dir, 'migrate-state-dir.ts');
+const REPO_ROOT = resolve(import.meta.dir, '..');
 
 let sandbox: string;
 let archonHome: string;
@@ -83,9 +84,23 @@ async function seedLegacy(files: Record<string, string>): Promise<void> {
   }
 }
 
-async function isMarked(): Promise<boolean> {
+async function isMarked(at: string = stateRoot): Promise<boolean> {
   try {
-    await readFile(join(stateRoot, '.initialized'));
+    await readFile(join(at, '.initialized'));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Distinguishes "directory absent" from "directory empty" — `listOrEmpty`
+ * collapses both to `[]`, which makes `toEqual([])` unable to tell a refusal
+ * that created nothing from one that created an empty tree.
+ */
+async function dirExists(dir: string): Promise<boolean> {
+  try {
+    await readdir(dir);
     return true;
   } catch {
     return false;
@@ -207,24 +222,129 @@ describe('migrate-state-dir', () => {
 
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain('--cwd requires a directory path');
-      expect(await listOrEmpty(join(archonHome, 'workspaces'))).toEqual([]);
-      expect(await isMarked()).toBe(false);
+      // `workspaces/` absent entirely — not merely empty.
+      expect(await dirExists(join(archonHome, 'workspaces'))).toBe(false);
     });
 
-    test('--cwd with no value at all exits 1', async () => {
+    test('--cwd with no value at all exits 1 and writes nothing', async () => {
       const result = await runRaw('--cwd');
 
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain('--cwd requires a directory path');
+      expect(await dirExists(join(archonHome, 'workspaces'))).toBe(false);
     });
 
-    test('an unknown flag exits 1 rather than being ignored', async () => {
+    test('an unknown flag exits 1 rather than being ignored, and writes nothing', async () => {
       // `--dry-run` looks plausible (dry run IS the default), so silently
       // accepting it would teach a wrong invocation that happens to work.
       const result = await runRaw('--dry-run');
 
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("Unknown argument: '--dry-run'");
+      expect(await dirExists(join(archonHome, 'workspaces'))).toBe(false);
+    });
+
+    test('a repeated --cwd exits 1 rather than silently using the last', async () => {
+      const result = await runRaw('--cwd', repo, '--cwd', '/somewhere/else', '--apply');
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('--cwd was given more than once');
+      expect(await dirExists(join(archonHome, 'workspaces'))).toBe(false);
+    });
+
+    test('a nonexistent --cwd exits 1 instead of a confident no-op success', async () => {
+      // Previously this resolved to the _cwd fallback, found no legacy state,
+      // and reported success while marking a directory nobody asked for.
+      const result = await runRaw('--cwd', join(sandbox, 'no-such-dir'), '--apply');
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('Directory does not exist');
+      expect(await dirExists(join(archonHome, 'workspaces'))).toBe(false);
+    });
+  });
+
+  describe('subdirectory invocation (C5)', () => {
+    // `findCodebaseByPathPrefix` matches any SUBDIRECTORY of a registered
+    // project, so the destination climbed to the project root while the source
+    // stayed at the literal cwd. The script then found no legacy state *under
+    // the subdirectory*, declared "nothing to migrate", and wrote `.initialized`
+    // into the REAL project's state root — disarming `state-preflight` for a
+    // project whose state had never been migrated.
+    const PROJECT_NAME = 'acme/myrepo';
+    let subdir: string;
+    let projectStateRoot: string;
+
+    /**
+     * Registered in a SUBPROCESS: @archon/core's DB connection is a module-level
+     * singleton, so registering in-process would cache a handle to the first
+     * test's temp ARCHON_HOME and fail with SQLITE_IOERR_VNODE once that
+     * directory is torn down.
+     */
+    async function registerProject(): Promise<void> {
+      const src = [
+        "const db = await import('@archon/core/db/codebases');",
+        'await db.createCodebase({',
+        `  name: ${JSON.stringify(PROJECT_NAME)},`,
+        `  repository_url: ${JSON.stringify(`https://github.com/${PROJECT_NAME}`)},`,
+        `  default_cwd: ${JSON.stringify(repo)},`,
+        "  default_branch: 'main',",
+        '});',
+      ].join('\n');
+      const proc = Bun.spawn(['bun', '-e', src], {
+        cwd: REPO_ROOT,
+        env: { ...process.env, ARCHON_HOME: archonHome, LOG_LEVEL: 'silent' },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      const stderr = await new Response(proc.stderr).text();
+      const code = await proc.exited;
+      if (code !== 0) throw new Error(`registerProject failed (${String(code)}): ${stderr}`);
+    }
+
+    beforeEach(async () => {
+      subdir = join(repo, 'packages', 'foo');
+      await mkdir(subdir, { recursive: true });
+      projectStateRoot = join(archonHome, 'workspaces', 'acme', 'myrepo', 'state');
+      await registerProject();
+    });
+
+    test('migrates the PROJECT root when invoked from a subdirectory', async () => {
+      await seedLegacy({ 'triage-state.json': '{"real":"state"}' });
+
+      const proc = Bun.spawn(['bun', 'run', SCRIPT, '--cwd', subdir, '--apply'], {
+        env: { ...process.env, ARCHON_HOME: archonHome, LOG_LEVEL: 'silent' },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      const stdout = await new Response(proc.stdout).text();
+      expect(await proc.exited).toBe(0);
+
+      // It says out loud that it climbed, rather than silently retargeting.
+      expect(stdout).toContain('resolved to the registered project root');
+      // The state actually moved — the old behaviour left it behind.
+      expect(await listOrEmpty(legacyDir)).toEqual([]);
+      expect(await listOrEmpty(projectStateRoot)).toEqual(['.initialized', 'triage-state.json']);
+    });
+
+    test('refuses when BOTH the subdirectory and the project root hold legacy state', async () => {
+      // Ambiguous: migrating only the project's while marking would leave the
+      // subdirectory's unmigrated behind a satisfied marker — C5 one level down.
+      await seedLegacy({ 'triage-state.json': '{"project":true}' });
+      await mkdir(join(subdir, '.archon', 'state'), { recursive: true });
+      await writeFile(join(subdir, '.archon', 'state', 'other.json'), '{"subdir":true}');
+
+      const proc = Bun.spawn(['bun', 'run', SCRIPT, '--cwd', subdir, '--apply'], {
+        env: { ...process.env, ARCHON_HOME: archonHome, LOG_LEVEL: 'silent' },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      const stderr = await new Response(proc.stderr).text();
+
+      expect(await proc.exited).toBe(2);
+      expect(stderr).toContain('two candidate sources');
+      // Nothing moved, and critically nothing marked.
+      expect(await listOrEmpty(legacyDir)).toEqual(['triage-state.json']);
+      expect(await isMarked(projectStateRoot)).toBe(false);
     });
   });
 

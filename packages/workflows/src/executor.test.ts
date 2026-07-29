@@ -90,6 +90,8 @@ mock.module('@archon/paths', () => ({
   resolveProjectStorageKey: mock(fakeResolveProjectStorageKey),
   getProjectStoragePaths: mock(fakeGetProjectStoragePaths),
   getStoragePathsForRoot: mock(fakeStoragePathsForRoot),
+  // The fake tree is rooted at WS, so that is this suite's ARCHON_HOME.
+  isInsideArchonHome: mock((candidate: string) => candidate.startsWith(WS)),
   slugifyFolderName: mock((name: string) => name),
   getFolderRunArtifactsPath: mock(
     (slug: string, runId: string) => `/tmp/_folder/${slug}/artifacts/runs/${runId}`
@@ -2123,6 +2125,30 @@ describe('resolveProjectPaths', () => {
     expect(result.artifactsDir).toBe(wsPath('acme', 'original', 'artifacts', 'runs', 'run-xyz'));
     expect(result.logDir).toBe(wsPath('acme', 'original', 'logs'));
     expect(result.stateDir).toBe(wsPath('acme', 'original', 'state'));
+  });
+
+  it('an output_root outside ARCHON_HOME is refused and re-derived', async () => {
+    // The engine only ever persists an in-tree root, so this is corruption or a
+    // hand edit. Acting on it would scatter artifacts AND shared state under the
+    // server's cwd. Two shapes that both escape: absolute-elsewhere and relative.
+    const store = makeStore({
+      getCodebase: mock(async () => ({
+        id: 'cb-repo',
+        name: 'acme/widget',
+        repository_url: null,
+        default_cwd: '/repos/widget',
+        kind: 'repo' as const,
+      })),
+    });
+    const deps = makeDeps(store);
+
+    for (const hostile of ['/etc', '   ', 'relative/path']) {
+      const result = await resolveProjectPaths(deps, '/repos/widget', RUN_ID, 'cb-repo', {
+        persistedOutputRoot: hostile,
+      });
+      expect(result.outputRoot).toBe(wsPath('acme', 'widget'));
+      expect(result.stateDir).toBe(wsPath('acme', 'widget', 'state'));
+    }
   });
 
   it('a null persisted output_root re-derives from identity', async () => {

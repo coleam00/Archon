@@ -11,6 +11,7 @@ import {
   resolveProjectStorageKey,
   getRunArtifactsDirForKey,
   getRunArtifactsDirForRoot,
+  isInsideArchonHome,
 } from '@archon/paths';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { readdir, readFile, stat } from 'fs/promises';
@@ -220,7 +221,9 @@ export async function resolveArtifactsDir(
 ): Promise<string | null> {
   const candidates: string[] = [];
 
-  if (run.output_root) {
+  // Same trust boundary the artifact routes and the executor apply: a persisted
+  // root outside ARCHON_HOME is corruption, not a location to read from.
+  if (run.output_root && isInsideArchonHome(run.output_root)) {
     candidates.push(getRunArtifactsDirForRoot(run.output_root, run.id));
   }
 

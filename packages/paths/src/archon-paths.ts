@@ -22,7 +22,7 @@
  * For Docker: /.archon/
  */
 
-import { join, dirname, normalize, basename } from 'path';
+import { join, dirname, normalize, basename, sep } from 'path';
 import { homedir } from 'os';
 import { access, mkdir, symlink, lstat, readdir, readlink, realpath, rm, stat } from 'fs/promises';
 import { readFileSync } from 'fs';
@@ -641,9 +641,16 @@ export function resolveProjectStorageKey(
  * unregistered run's artifacts and logs to `<cwd>/.archon/`, i.e. into the
  * user's repository, where a worktree teardown destroyed them and `git status`
  * showed them. Relocating it is a breaking change accepted in #2200 so that
- * EVERY run's output is retrievable from one tree. Distinct working directories
- * sharing a basename share a project root; runs stay separated by their run-id
- * subdirectory, exactly as folder-slug collisions already are.
+ * EVERY run's output is retrievable from one tree.
+ *
+ * COLLISIONS: distinct working directories sharing a basename share a project
+ * root. For `artifacts/` and `logs/` that is benign — both are keyed by run id,
+ * so the two projects' runs never touch the same file. `stateRoot` is NOT:
+ * `$STATE_DIR` is per project by design and has no run-id segment, so two local
+ * repos both called `api` share one `state/` and therefore one
+ * `triage-state.json`. Register a colliding project with a distinct name, or
+ * namespace inside `$STATE_DIR` (`$STATE_DIR/<something-unique>/`), if that
+ * matters. Same caveat applies to `_folder` slug collisions.
  */
 export function getProjectStoragePaths(key: ProjectStorageKey): ProjectStoragePaths {
   let root: string;
@@ -662,11 +669,34 @@ export function getProjectStoragePaths(key: ProjectStorageKey): ProjectStoragePa
 }
 
 /**
+ * True when `candidate` resolves inside `ARCHON_HOME`.
+ *
+ * Every storage key kind composes under `ARCHON_HOME` — including the `_cwd`
+ * pseudo-project since #2200 — so this is the trust boundary for any path that
+ * did NOT come straight from {@link getProjectStoragePaths}. In practice that
+ * means a persisted `workflow_runs.output_root`: the engine only ever writes an
+ * in-tree value, so an out-of-tree one is corruption or a hand edit, and acting
+ * on it would let a relative or whitespace root scatter a run's artifacts AND
+ * its shared state under whatever the server's cwd happens to be.
+ *
+ * Rejects relative paths implicitly — they cannot start with the absolute home.
+ */
+export function isInsideArchonHome(candidate: string): boolean {
+  const home = normalize(getArchonHome());
+  const normalised = normalize(candidate);
+  return normalised === home || normalised.startsWith(home + sep);
+}
+
+/**
  * Compose the output roots from an already-resolved project root — the branch
  * taken when a run recorded its `output_root` at start and must NOT re-derive
  * identity (a renamed codebase would otherwise orphan its artifacts, #1192).
  * Shares the layout rule with {@link getProjectStoragePaths} so a persisted root
  * and a freshly-derived one can never disagree about where `artifacts/` lives.
+ *
+ * Callers passing a value that came from the DB must gate it on
+ * {@link isInsideArchonHome} first — this function is a pure composer and
+ * trusts its input.
  */
 export function getStoragePathsForRoot(root: string): ProjectStoragePaths {
   return {
@@ -718,8 +748,10 @@ export function getRunArtifactsDirForRoot(root: string, workflowRunId: string): 
  * (e.g. a name that is entirely separators or unicode).
  *
  * Note: distinct display names can collide (e.g. "My App" and "my-app" both →
- * "my-app"); runs stay separated by run-id subdirectories, so collisions only
- * co-mingle listing-level artifacts. Accepted for now — see plan Questionables.
+ * "my-app"). Run artifacts and logs stay separated by run-id subdirectories, so
+ * a collision only co-mingles listing-level artifacts — but `state/` has no
+ * run-id segment, so colliding projects genuinely SHARE their `$STATE_DIR`
+ * files. Accepted for now — see plan Questionables.
  */
 export function slugifyFolderName(name: string): string {
   const slug = name

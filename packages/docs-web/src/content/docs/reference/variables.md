@@ -74,6 +74,13 @@ warning with the exact `mv` command and moves nothing.
 [Authoring Workflows](/guides/authoring-workflows/#cross-run-state-with-state_dir) for
 the read-modify-write hazard and how to avoid it.
 
+**Name collisions.** The project segment is derived from the project's identity, and distinct
+projects can derive the same one — two no-remote local repos both called `api`, or two folder
+projects whose display names slugify identically. Artifacts and logs are keyed by run id, so a
+collision is harmless there. `$STATE_DIR` has no run-id segment, so colliding projects
+genuinely **share** their state files. If that matters, register one of them under a distinct
+name, or namespace inside `$STATE_DIR`.
+
 ## Positional Arguments (not supported)
 
 Archon does **not** support positional arguments (`$1`, `$2`, `$3`, … `$9`).

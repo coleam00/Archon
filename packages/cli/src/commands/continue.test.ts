@@ -96,6 +96,27 @@ describe('resolveArtifactsDir', () => {
     expect(result).toBe(dir);
   });
 
+  test('ignores an output_root outside ARCHON_HOME rather than reading from it', async () => {
+    // Same trust boundary the artifact routes and the executor apply. The
+    // codebase still resolves, so the run remains readable — the hostile
+    // pointer is simply not a candidate.
+    const dir = join(archonHome, 'workspaces', '_local', 'workspace', 'artifacts', 'runs', 'r7');
+    await mkdir(dir, { recursive: true });
+    mockGetCodebase.mockImplementationOnce(async () => ({
+      kind: 'repo',
+      name: 'workspace',
+      default_cwd: '/home/u/workspace',
+    }));
+
+    const result = await resolveArtifactsDir(
+      { id: 'r7', output_root: '/etc' },
+      'cb-7',
+      '/home/u/workspace'
+    );
+
+    expect(result).toBe(dir);
+  });
+
   test('falls back to the legacy in-repo location for pre-#2200 runs', async () => {
     const workingPath = await mkdtemp(join(tmpdir(), 'archon-legacy-'));
     const legacy = join(workingPath, '.archon', 'artifacts', 'runs', 'r4');

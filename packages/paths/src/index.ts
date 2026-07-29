@@ -37,6 +37,7 @@ export {
   resolveProjectStorageKey,
   getProjectStoragePaths,
   getStoragePathsForRoot,
+  isInsideArchonHome,
   getRunArtifactsDirForKey,
   getRunArtifactsDirForRoot,
   slugifyFolderName,

@@ -75,6 +75,7 @@ import {
   resolveProjectStorageKey,
   getRunArtifactsDirForKey,
   getRunArtifactsDirForRoot,
+  isInsideArchonHome,
   getArchonHome,
   isDocker,
   isWSL,
@@ -273,19 +274,6 @@ function resolveRunArtifactDir(
   }
   if (!codebase?.name) return null;
   return getRunArtifactsDirForKey(resolveProjectStorageKey(codebase, codebase.default_cwd), runId);
-}
-
-/**
- * Defense-in-depth: even though registration sanitises codebase names, ensure a
- * resolved artifact dir stays inside ARCHON_HOME — a maliciously crafted
- * owner/repo containing `..` would otherwise escape the tree. Every storage key
- * kind (including the unregistered-cwd `_cwd` pseudo-project since #2200)
- * resolves under ARCHON_HOME, so this applies uniformly with no exemptions.
- */
-function isInsideArchonHome(dir: string): boolean {
-  const archonHome = normalize(getArchonHome());
-  const normalisedDir = normalize(dir);
-  return normalisedDir.startsWith(archonHome + sep) || normalisedDir === archonHome;
 }
 
 // =========================================================================

@@ -64,6 +64,13 @@ function parseArgs(argv: readonly string[]): { apply: boolean; cwd: string } {
       continue;
     }
     if (arg === '--cwd') {
+      if (cwd !== undefined) {
+        // Silently taking the last would let a copy-paste slip operate on a
+        // different project than the one the operator is reading in their shell.
+        console.error('--cwd was given more than once; pass it exactly once.');
+        console.error('Usage: bun run scripts/migrate-state-dir.ts [--cwd <path>] [--apply]');
+        process.exit(1);
+      }
       const value = argv[i + 1];
       if (value === undefined || value.startsWith('-')) {
         console.error(
@@ -87,23 +94,58 @@ function parseArgs(argv: readonly string[]): { apply: boolean; cwd: string } {
 const { apply: APPLY, cwd: CWD } = parseArgs(process.argv.slice(2));
 
 /**
- * Resolve the storage key the same way a run would: look the project up by its
- * working directory, then delegate. An unregistered directory resolves to the
- * `_cwd` pseudo-project, exactly as the executor's fallback does.
+ * Where a migration reads from and writes to, resolved from ONE anchor.
+ *
+ * The anchor exists because source and destination used to be derived
+ * independently and could disagree. `findCodebaseByPathPrefix` matches any
+ * SUBDIRECTORY of a registered project, so the destination climbed to the
+ * project while the source stayed at the literal cwd. Run from
+ * `<project>/packages/foo` and the script looked for legacy state under the
+ * subdirectory, found none, declared "nothing to migrate", and wrote
+ * `.initialized` into the REAL project's state root — disarming the
+ * `state-preflight` gate for a project whose state was never migrated. Deriving
+ * both from `anchor` makes that disagreement unrepresentable.
  */
-async function resolveKey(cwd: string): Promise<ProjectStorageKey> {
+interface MigrationTarget {
+  key: ProjectStorageKey;
+  /** The directory BOTH the legacy source and the destination derive from. */
+  anchor: string;
+  /** True when the anchor differs from the invocation cwd (climbed to a project root). */
+  climbed: boolean;
+}
+
+async function resolveTarget(cwd: string): Promise<MigrationTarget> {
   try {
     const codebase =
       (await codebaseDb.findCodebaseByDefaultCwd(cwd)) ??
       (await codebaseDb.findCodebaseByPathPrefix(cwd));
-    if (codebase) return resolveProjectStorageKey(codebase, cwd);
+    if (codebase) {
+      // resolveProjectStorageKey derives the destination from
+      // codebase.default_cwd, so the source must anchor there too.
+      const anchor = resolve(codebase.default_cwd);
+      return {
+        key: resolveProjectStorageKey(codebase, anchor),
+        anchor,
+        climbed: anchor !== cwd,
+      };
+    }
     console.log(`No registered project matches ${cwd} — using the _cwd fallback.`);
   } catch (error) {
     // A DB that is unreachable must not silently produce the wrong destination.
     console.error(`Could not read the codebase registry: ${(error as Error).message}`);
     process.exit(1);
   }
-  return { kind: 'cwd', cwd };
+  return { key: { kind: 'cwd', cwd }, anchor: cwd, climbed: false };
+}
+
+/** True when `dir` exists and holds at least one entry. */
+async function hasEntries(dir: string): Promise<boolean> {
+  try {
+    return (await readdir(dir)).length > 0;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
 }
 
 function plural(n: number): string {
@@ -153,14 +195,44 @@ async function reportNoop(message: string, stateRoot: string): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  const legacyDir = join(CWD, '.archon', 'state');
-  const key = await resolveKey(CWD);
+  // The cwd must exist before anything else: `--cwd /typo` otherwise resolves to
+  // the _cwd fallback, finds no legacy state, and reports a confident success
+  // while marking a project directory nobody asked for.
+  try {
+    if (!(await stat(CWD)).isDirectory()) {
+      console.error(`Not a directory: ${CWD}`);
+      process.exit(1);
+    }
+  } catch {
+    console.error(`Directory does not exist: ${CWD}`);
+    console.error('Pass an existing project directory with --cwd, or omit it to use the cwd.');
+    process.exit(1);
+  }
+
+  const { key, anchor, climbed } = await resolveTarget(CWD);
+  const legacyDir = join(anchor, '.archon', 'state');
   const { stateRoot } = getProjectStoragePaths(key);
 
-  console.log(`Repository:  ${CWD}`);
+  console.log(`Project:     ${anchor}`);
+  if (climbed) {
+    console.log(`             (invoked from ${CWD}; resolved to the registered project root)`);
+  }
   console.log(`Legacy dir:  ${legacyDir}`);
   console.log(`$STATE_DIR:  ${stateRoot}`);
   console.log('');
+
+  // Climbing means the invocation cwd is NOT where we read from. If that cwd has
+  // its own legacy state, migrating the project's and marking would leave the
+  // subdirectory's unmigrated behind a satisfied marker — C5 all over again, one
+  // level down. Ambiguous input gets a refusal, not a guess.
+  if (climbed && (await hasEntries(join(CWD, '.archon', 'state')))) {
+    console.error('Refusing to migrate — two candidate sources, and only one would be moved:');
+    console.error(`  ${join(CWD, '.archon', 'state')}   (the directory you invoked from)`);
+    console.error(`  ${legacyDir}   (the registered project root)`);
+    console.error('');
+    console.error('Re-run with --cwd pointing at exactly the one you mean.');
+    process.exit(2);
+  }
 
   let entries: string[];
   try {
