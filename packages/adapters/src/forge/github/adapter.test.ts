@@ -226,8 +226,12 @@ interface OctokitStubs {
   pullsGet: ReturnType<typeof mock>;
 }
 
-function createOctokitStubs(): OctokitStubs {
-  return {
+/**
+ * Replaces an adapter's private Octokit client with that surface and returns
+ * the stubs, for the callers that assert against them.
+ */
+function installOctokitStubs(adapter: GitHubAdapter): OctokitStubs {
+  const stubs: OctokitStubs = {
     reposGet: mock(async () => ({ data: { default_branch: 'main' } })),
     listComments: mock(async () => ({ data: [] })),
     createComment: mock(async () => ({ data: {} })),
@@ -242,10 +246,6 @@ function createOctokitStubs(): OctokitStubs {
       },
     })),
   };
-}
-
-/** Replace an adapter's private Octokit client with the full stub surface. */
-function installOctokitStubs(adapter: GitHubAdapter, stubs: OctokitStubs): void {
   // @ts-expect-error - replacing private Octokit client for testing
   adapter.octokit = {
     rest: {
@@ -254,6 +254,7 @@ function installOctokitStubs(adapter: GitHubAdapter, stubs: OctokitStubs): void 
       pulls: { get: stubs.pullsGet },
     },
   };
+  return stubs;
 }
 
 /**
@@ -376,15 +377,10 @@ describe('GitHubAdapter', () => {
     let originalAllowedUsers: string | undefined;
 
     /**
-     * Creates an adapter with mocked signature verification and a COMPLETE
-     * Octokit stub for self-filtering tests.
-     *
-     * Complete means every stub resolves, so a payload that survives
-     * self-filtering runs `handleWebhook()` to completion under mocks —
-     * `ensureRepoReady` (@archon/git + @archon/paths mocks), `handleMessage`
-     * and `installCredentialHelper` (file-level spies). Nothing here depends on
-     * a call failing to stop the flow early, and nothing reaches the network,
-     * the real database, or `$ARCHON_HOME`.
+     * Creates an adapter with mocked signature verification and the full
+     * resolving Octokit surface (see `installOctokitStubs`), so a payload that
+     * survives self-filtering runs `handleWebhook()` to completion under mocks.
+     * NOTHING here depends on a call failing to stop the flow early.
      *
      * These tests assert self-filtering and user attribution, both of which
      * happen at steps 4-5b — before any of the stubbed calls — so how far the
@@ -399,7 +395,7 @@ describe('GitHubAdapter', () => {
       );
       // @ts-expect-error - accessing private method for testing
       adapter.verifySignature = mock(() => true);
-      installOctokitStubs(adapter, createOctokitStubs());
+      installOctokitStubs(adapter);
       return adapter;
     }
 
@@ -585,7 +581,6 @@ describe('GitHubAdapter', () => {
      * handleWebhook() runs its full downstream path without live API calls.
      */
     function createDedupAdapter(): { adapter: GitHubAdapter; octokit: OctokitStubs } {
-      const octokit = createOctokitStubs();
       const adapter = new GitHubAdapter(
         { kind: 'pat', token: 'fake-token-for-testing' },
         'fake-webhook-secret',
@@ -594,8 +589,7 @@ describe('GitHubAdapter', () => {
       );
       // @ts-expect-error - accessing private method for testing
       adapter.verifySignature = mock(() => true);
-      installOctokitStubs(adapter, octokit);
-      return { adapter, octokit };
+      return { adapter, octokit: installOctokitStubs(adapter) };
     }
 
     function createIdentifiedCommentPayload(
