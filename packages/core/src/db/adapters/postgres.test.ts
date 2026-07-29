@@ -62,6 +62,9 @@ mock.module('../bundled-schema', () => ({
 
 // ---- import after mocks are registered ------------------------------------
 import { PostgresAdapter, postgresDialect } from './postgres';
+// Assert against the same constant the adapter writes, so the vintage tests stay
+// correct in both source builds ('dev') and compiled binaries (the real semver).
+import { APP_VERSION } from '../schema-version';
 
 // ---------------------------------------------------------------------------
 
@@ -386,6 +389,62 @@ describe('PostgresAdapter', () => {
       expect(issued).toContain('SELECT pg_advisory_xact_lock(1796)');
       expect(issued).toContain('-- schema sql');
       expect(issued[issued.length - 1]).toBe('COMMIT');
+    });
+
+    /**
+     * Schema vintage (#2316). The upsert must live inside the same advisory-locked
+     * transaction as the schema SQL — outside it, two concurrent boots could
+     * interleave and record a vintage that doesn't match the schema they applied.
+     */
+    test('records the schema vintage inside the schema transaction', async () => {
+      const issued: { sql: string; params?: unknown[] }[] = [];
+      mockClient = {
+        query: async (sql: string, params?: unknown[]) => {
+          issued.push({ sql, params });
+          // Fresh database: the pre-existence probe finds no codebases table.
+          if (sql.includes('to_regclass')) return { rows: [{ exists: false }], rowCount: 1 };
+          return { rows: [], rowCount: 0 };
+        },
+        release: () => {},
+      };
+      mockSchemaSQL = '-- schema sql';
+
+      const a = new PostgresAdapter('postgresql://localhost:5432/testdb');
+      await a.query('SELECT 1');
+
+      const probeIdx = issued.findIndex(q => q.sql.includes('to_regclass'));
+      const schemaIdx = issued.findIndex(q => q.sql === '-- schema sql');
+      const versionIdx = issued.findIndex(q => q.sql.includes('remote_agent_schema_version'));
+      const commitIdx = issued.findIndex(q => q.sql === 'COMMIT');
+
+      // Probe must precede the schema SQL — afterwards a pre-existing database is
+      // indistinguishable from a fresh one.
+      expect(probeIdx).toBeGreaterThan(0);
+      expect(probeIdx).toBeLessThan(schemaIdx);
+      expect(versionIdx).toBeGreaterThan(schemaIdx);
+      expect(versionIdx).toBeLessThan(commitIdx);
+      // Fresh database: creation vintage recorded, not left unknown.
+      expect(issued[versionIdx]?.params).toEqual([APP_VERSION, APP_VERSION]);
+    });
+
+    test('leaves the creation vintage unknown for a pre-existing database', async () => {
+      const issued: { sql: string; params?: unknown[] }[] = [];
+      mockClient = {
+        query: async (sql: string, params?: unknown[]) => {
+          issued.push({ sql, params });
+          if (sql.includes('to_regclass')) return { rows: [{ exists: true }], rowCount: 1 };
+          return { rows: [], rowCount: 0 };
+        },
+        release: () => {},
+      };
+      mockSchemaSQL = '-- schema sql';
+
+      const a = new PostgresAdapter('postgresql://localhost:5432/testdb');
+      await a.query('SELECT 1');
+
+      const version = issued.find(q => q.sql.includes('remote_agent_schema_version'));
+      // NULL, never a guess: this database existed before vintage tracking.
+      expect(version?.params).toEqual([null, APP_VERSION]);
     });
 
     test('schema SQL runs exactly once across multiple queries', async () => {

@@ -14,7 +14,7 @@ import {
   resolveCodexBinaryWithSource,
   type CodexBinarySource,
 } from '@archon/providers/codex/binary-resolver';
-import type { Codebase } from '@archon/core';
+import type { Codebase, SchemaVersionInfo } from '@archon/core';
 
 // Vendor-canonical credential id for Codex (since #1955 credentials are keyed
 // by vendor, not agent). A connected `openai` key signals Codex intent even
@@ -339,6 +339,18 @@ export async function checkPi(env: NodeJS.ProcessEnv): Promise<CheckResult> {
 export interface DatabaseDeps {
   pool: { query: (sql: string) => Promise<unknown> };
   getDatabaseType: () => string;
+  getSchemaVersion: () => Promise<SchemaVersionInfo | null>;
+}
+
+/**
+ * Render the schema vintage (#2316) for the Database check. A bug report that can
+ * state which build created the database — and which last wrote to it — is the whole
+ * point, so an unknown or unrecorded vintage is reported as such rather than hidden.
+ */
+function describeSchemaVersion(info: SchemaVersionInfo | null): string {
+  if (!info) return 'schema vintage not recorded';
+  const created = info.createdAppVersion ?? '<unknown — predates version tracking>';
+  return `schema created by ${created}, last applied by ${info.appVersion}`;
 }
 
 export async function checkDatabase(
@@ -364,7 +376,21 @@ export async function checkDatabase(
   try {
     const dbType = deps.getDatabaseType();
     await deps.pool.query('SELECT 1');
-    return { label, status: 'pass', message: `reachable (${dbType})` };
+
+    // The vintage is diagnostic metadata: a failure to read it must not turn a
+    // reachable database into a failed check. Degrade the message instead.
+    let schemaInfo: SchemaVersionInfo | null = null;
+    try {
+      schemaInfo = await deps.getSchemaVersion();
+    } catch (err) {
+      getLog().warn({ err }, 'doctor.schema_version_read_failed');
+    }
+
+    return {
+      label,
+      status: 'pass',
+      message: `reachable (${dbType}); ${describeSchemaVersion(schemaInfo)}`,
+    };
   } catch (err) {
     getLog().error({ err }, 'doctor.db_query_failed');
     return { label, status: 'fail', message: `not reachable: ${(err as Error).message}` };
@@ -374,8 +400,8 @@ export async function checkDatabase(
 async function defaultLoadDatabaseDeps(): Promise<DatabaseDeps> {
   // Lazy import so doctor doesn't pull in the full @archon/core graph just to
   // print --help or run a different check.
-  const { pool, getDatabaseType } = await import('@archon/core');
-  return { pool, getDatabaseType };
+  const { pool, getDatabaseType, getSchemaVersion } = await import('@archon/core');
+  return { pool, getDatabaseType, getSchemaVersion };
 }
 
 type FolderCodebase = Pick<Codebase, 'name' | 'default_cwd' | 'kind'>;

@@ -6,6 +6,7 @@ import { existsSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
 import type { IDatabase, QueryResult, SqlDialect } from './types';
 import { createLogger } from '@archon/paths';
+import { APP_VERSION } from '../schema-version';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -170,8 +171,53 @@ export class SqliteAdapter implements IDatabase {
    * ensuring new tables from migrations are created in existing databases.
    */
   private initSchema(): void {
+    // Probe BEFORE createSchema(): once CREATE TABLE IF NOT EXISTS has run there is
+    // no way left to tell a fresh database from one that predates version tracking.
+    const preExisting = this.hasAnyArchonTable();
     this.createSchema();
     this.migrateColumns();
+    this.recordSchemaVersion(preExisting);
+  }
+
+  /** True when core Archon tables already exist — i.e. this is not a fresh database. */
+  private hasAnyArchonTable(): boolean {
+    const row = this.db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+      .get('remote_agent_codebases');
+    return row !== null && row !== undefined;
+  }
+
+  /**
+   * Record which Archon build created this database and which last applied schema
+   * to it (#2316). Diagnostic only — nothing gates on these values.
+   *
+   * Writes only when the value actually changes, so the common case (every CLI
+   * invocation is a fresh process opening a fresh connection) stays read-only.
+   */
+  private recordSchemaVersion(preExisting: boolean): void {
+    try {
+      const existing = this.db
+        .prepare('SELECT app_version FROM remote_agent_schema_version WHERE id = 1')
+        .get() as { app_version: string } | null;
+
+      if (!existing) {
+        this.db.run(
+          'INSERT INTO remote_agent_schema_version (id, created_app_version, app_version) VALUES (1, ?, ?)',
+          // NULL, not a guess: a database that predates this table has an unknowable
+          // creation vintage, and that unknowability is the fact worth reporting.
+          [preExisting ? null : APP_VERSION, APP_VERSION]
+        );
+      } else if (existing.app_version !== APP_VERSION) {
+        this.db.run(
+          "UPDATE remote_agent_schema_version SET app_version = ?, applied_at = datetime('now') WHERE id = 1",
+          [APP_VERSION]
+        );
+      }
+    } catch (e: unknown) {
+      // Deliberate, logged fallback: the vintage row is diagnostic metadata and must
+      // never be able to stop the database from opening (e.g. a read-only DB file).
+      getLog().warn({ err: e as Error }, 'db.sqlite_schema_version_record_failed');
+    }
   }
 
   /**
@@ -406,6 +452,18 @@ export class SqliteAdapter implements IDatabase {
    */
   private createSchema(): void {
     this.db.run(`
+      -- Schema vintage (#2316): which Archon build created this database, and which
+      -- last applied schema to it. Diagnostic only — nothing gates on these values.
+      -- Single row (id = 1); written by recordSchemaVersion() from APP_VERSION so the
+      -- version string has exactly one source of truth.
+      CREATE TABLE IF NOT EXISTS remote_agent_schema_version (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        created_app_version TEXT,
+        app_version TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
       -- Users table (Archon identity, platform-agnostic)
       CREATE TABLE IF NOT EXISTS remote_agent_users (
         id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),

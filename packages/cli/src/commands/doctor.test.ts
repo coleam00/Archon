@@ -380,10 +380,18 @@ describe('checkPi', () => {
 });
 
 describe('checkDatabase', () => {
+  const schemaVersion = {
+    createdAppVersion: '0.5.3',
+    appVersion: '0.6.0',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    appliedAt: '2026-07-01T00:00:00.000Z',
+  };
+
   it('returns pass when query succeeds', async () => {
     const deps: DatabaseDeps = {
       pool: { query: async () => undefined },
       getDatabaseType: () => 'sqlite',
+      getSchemaVersion: async () => schemaVersion,
     };
     const result = await checkDatabase(async () => deps);
     expect(result.status).toBe('pass');
@@ -394,10 +402,61 @@ describe('checkDatabase', () => {
     const deps: DatabaseDeps = {
       pool: { query: async () => undefined },
       getDatabaseType: () => 'postgres',
+      getSchemaVersion: async () => schemaVersion,
     };
     const result = await checkDatabase(async () => deps);
     expect(result.status).toBe('pass');
     expect(result.message).toContain('postgres');
+  });
+
+  // Schema vintage (#2316): a bug report has to be able to state which build
+  // created the database and which last wrote to it.
+  it('reports both schema vintages when recorded', async () => {
+    const deps: DatabaseDeps = {
+      pool: { query: async () => undefined },
+      getDatabaseType: () => 'sqlite',
+      getSchemaVersion: async () => schemaVersion,
+    };
+    const result = await checkDatabase(async () => deps);
+    expect(result.message).toContain('schema created by 0.5.3');
+    expect(result.message).toContain('last applied by 0.6.0');
+  });
+
+  it('says the creation vintage is unknown rather than inventing one', async () => {
+    const deps: DatabaseDeps = {
+      pool: { query: async () => undefined },
+      getDatabaseType: () => 'sqlite',
+      getSchemaVersion: async () => ({ ...schemaVersion, createdAppVersion: null }),
+    };
+    const result = await checkDatabase(async () => deps);
+    expect(result.status).toBe('pass');
+    expect(result.message).toContain('predates version tracking');
+    expect(result.message).toContain('last applied by 0.6.0');
+  });
+
+  it('reports an unrecorded vintage without failing the check', async () => {
+    const deps: DatabaseDeps = {
+      pool: { query: async () => undefined },
+      getDatabaseType: () => 'sqlite',
+      getSchemaVersion: async () => null,
+    };
+    const result = await checkDatabase(async () => deps);
+    expect(result.status).toBe('pass');
+    expect(result.message).toContain('schema vintage not recorded');
+  });
+
+  it('stays "pass" when the vintage read throws — the database is still reachable', async () => {
+    const deps: DatabaseDeps = {
+      pool: { query: async () => undefined },
+      getDatabaseType: () => 'sqlite',
+      getSchemaVersion: async () => {
+        throw new Error('no such table: remote_agent_schema_version');
+      },
+    };
+    const result = await checkDatabase(async () => deps);
+    expect(result.status).toBe('pass');
+    expect(result.message).toContain('reachable (sqlite)');
+    expect(result.message).toContain('schema vintage not recorded');
   });
 
   it('returns fail with "not reachable" when query throws', async () => {
@@ -408,6 +467,7 @@ describe('checkDatabase', () => {
         },
       },
       getDatabaseType: () => 'postgres',
+      getSchemaVersion: async () => schemaVersion,
     };
     const result = await checkDatabase(async () => deps);
     expect(result.status).toBe('fail');

@@ -6,6 +6,7 @@ import type { PoolClient } from 'pg';
 import type { DbNotificationListener, IDatabase, QueryResult, SqlDialect } from './types';
 import { createLogger } from '@archon/paths';
 import { getSchemaSQL } from '../bundled-schema';
+import { APP_VERSION } from '../schema-version';
 
 /**
  * Postgres-only: NOTIFY `archon_dashboard_event` on every workflow_events insert, so
@@ -74,9 +75,27 @@ export class PostgresAdapter implements IDatabase, DbNotificationListener {
       // Key 1796 is arbitrary — just needs to be stable across processes.
       await client.query('BEGIN');
       await client.query('SELECT pg_advisory_xact_lock(1796)');
+      // Probe before applying: afterwards every table exists, and a database that
+      // predates schema-version tracking is indistinguishable from a fresh one.
+      const probe = await client.query<{ exists: boolean }>(
+        "SELECT to_regclass('remote_agent_codebases') IS NOT NULL AS exists"
+      );
+      const preExisting = probe.rows[0]?.exists ?? false;
       // The SQL is fully idempotent (CREATE TABLE IF NOT EXISTS,
       // ADD COLUMN IF NOT EXISTS, CREATE INDEX IF NOT EXISTS).
       await client.query(sql);
+      // Schema vintage (#2316), inside the same locked transaction so concurrent
+      // boots stay serialized. ON CONFLICT never touches created_app_version, so the
+      // creation vintage is written once and never revised; the DO UPDATE is a no-op
+      // when the app version has not changed.
+      await client.query(
+        `INSERT INTO remote_agent_schema_version (id, created_app_version, app_version)
+         VALUES (1, $1, $2)
+         ON CONFLICT (id) DO UPDATE
+           SET app_version = EXCLUDED.app_version, applied_at = NOW()
+           WHERE remote_agent_schema_version.app_version IS DISTINCT FROM EXCLUDED.app_version`,
+        [preExisting ? null : APP_VERSION, APP_VERSION]
+      );
       await client.query('COMMIT');
       getLog().info('db.postgres_schema_init_completed');
     } catch (e) {

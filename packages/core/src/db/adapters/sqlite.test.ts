@@ -1,6 +1,7 @@
 import { describe, test, expect, afterEach } from 'bun:test';
 import { SqliteAdapter } from './sqlite';
 import { getSchemaSQL } from '../bundled-schema';
+import { APP_VERSION, readSchemaVersion } from '../schema-version';
 import { Database } from 'bun:sqlite';
 import { unlinkSync } from 'fs';
 import { join } from 'path';
@@ -424,6 +425,87 @@ describe('SqliteAdapter', () => {
       expect(workflowRunCols).toContain('parent_run_id');
       const indexes = raw_indexes(currentDbPath);
       expect(indexes).toContain('idx_workflow_runs_parent_run');
+    });
+  });
+
+  /**
+   * Schema vintage (#2316). The value that matters most is the one the adapter
+   * refuses to invent: a database created before this table existed has an
+   * unknowable creation vintage, and must report NULL rather than today's build.
+   */
+  describe('schema version', () => {
+    test('records the creating build on a fresh database', () => {
+      db = createTestDb();
+      const rows = raw_query(
+        currentDbPath,
+        'SELECT id, created_app_version, app_version FROM remote_agent_schema_version'
+      ) as { id: number; created_app_version: string | null; app_version: string }[];
+
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.id).toBe(1);
+      expect(rows[0]?.created_app_version).toBe(APP_VERSION);
+      expect(rows[0]?.app_version).toBe(APP_VERSION);
+    });
+
+    test('reopening a database does not revise the creation vintage', async () => {
+      db = createTestDb();
+      const dbPath = currentDbPath;
+      await db.close();
+
+      // Second open of the same file: created_app_version must survive untouched,
+      // which is what makes it a record of the database rather than of this process.
+      const reopened = new SqliteAdapter(dbPath);
+      try {
+        const rows = raw_query(
+          dbPath,
+          'SELECT created_app_version, app_version FROM remote_agent_schema_version'
+        ) as { created_app_version: string | null; app_version: string }[];
+
+        expect(rows).toHaveLength(1);
+        expect(rows[0]?.created_app_version).toBe(APP_VERSION);
+        expect(rows[0]?.app_version).toBe(APP_VERSION);
+      } finally {
+        await reopened.close();
+        db = reopened;
+      }
+    });
+
+    test('records a NULL creation vintage for a database that predates the table', async () => {
+      // Simulate a pre-#2316 database: core tables already present, no version row.
+      currentDbPath = join(
+        import.meta.dir,
+        `.test-sqlite-adapter-${Date.now()}-${Math.random().toString(36).slice(2)}.db`
+      );
+      const seed = new Database(currentDbPath);
+      seed.run(
+        `CREATE TABLE remote_agent_codebases (
+           id TEXT PRIMARY KEY,
+           name TEXT NOT NULL,
+           default_cwd TEXT NOT NULL
+         )`
+      );
+      seed.close();
+
+      db = new SqliteAdapter(currentDbPath);
+      const rows = raw_query(
+        currentDbPath,
+        'SELECT created_app_version, app_version FROM remote_agent_schema_version'
+      ) as { created_app_version: string | null; app_version: string }[];
+
+      expect(rows).toHaveLength(1);
+      // Never back-filled with a guess — the unknowability is the reportable fact.
+      expect(rows[0]?.created_app_version).toBeNull();
+      expect(rows[0]?.app_version).toBe(APP_VERSION);
+    });
+
+    test('readSchemaVersion surfaces the row through the adapter', async () => {
+      db = createTestDb();
+      const info = await readSchemaVersion(db);
+
+      expect(info).not.toBeNull();
+      expect(info?.createdAppVersion).toBe(APP_VERSION);
+      expect(info?.appVersion).toBe(APP_VERSION);
+      expect(info?.appliedAt).toBeTruthy();
     });
   });
 });

@@ -194,6 +194,16 @@ This runs `check:bundled`, `check:bundled-skill`, `check:bundled-schema`, `check
 - **Without `DATABASE_URL`**: Uses SQLite at `~/.archon/archon.db` (auto-initialized, recommended for most users)
 - **With `DATABASE_URL` set**: Uses PostgreSQL (schema auto-applied on startup; no manual `psql` needed). The Postgres adapter runs the idempotent `migrations/000_combined.sql` inside an advisory-lock transaction on first connection, so upgrades that add tables or columns converge automatically.
 
+**Schema changes are additive-only (both dialects) — this is a hard rule, not a convention.**
+
+There is no migration ledger and no version gate. Both schemas are re-applied in full on every connection, by every process that opens the database — the server, *every* CLI invocation, every `--detach` child — including an **older** Archon binary that happens to be on `PATH` beside a dev checkout. Any writer may apply any vintage of the schema at any time. Therefore:
+
+- **Only ADD** tables, columns, and indexes. Never rename, retype, or drop anything a shipped version still reads or writes.
+- **Every `ADD COLUMN ... NOT NULL` must carry a `DEFAULT`.** Without one the statement fails outright on a non-empty table, and a writer that predates the column would produce rows the newer writer rejects. This holds for all 36 `ADD COLUMN` statements in the tree today — keep it that way.
+- **Adding `NOT NULL` to a column already in a `CREATE TABLE` body only binds databases created after the change.** `CREATE TABLE IF NOT EXISTS` is a no-op on existing tables and SQLite has no `ALTER COLUMN`, so the old shape survives forever. Treat such a constraint as documentation and keep application code tolerant of NULL, or do a full table rebuild in `migrateColumns()`.
+- **Mirror every change into both schemas** (see the generated-files note in the Defaults section). The parity test in `sqlite.test.ts` compares **table names only** — a column present in one dialect and missing in the other passes CI.
+- `remote_agent_schema_version` records which Archon build created the database and which last applied schema to it, surfaced by `archon doctor` and `GET /api/health`. It is diagnostic only — nothing gates on it, and the values come from `APP_VERSION` in `packages/core/src/db/schema-version.ts`, never from a hand-bumped number.
+
 ### CLI (Command Line)
 
 Run workflows directly from the command line without needing the server. Workflow and isolation commands require running from within a git repository (subdirectories work - resolves to repo root).
@@ -475,7 +485,7 @@ import type { DagNode, WorkflowDefinition } from '@/lib/api';
 
 ### Database Schema
 
-**18 Tables (all prefixed with `remote_agent_`):**
+**19 Tables (all prefixed with `remote_agent_`):**
 1. **`codebases`** - Repository/project metadata and commands (JSONB); `kind` (`'repo'`/`'folder'`, default `'repo'`) discriminates git repos from **folder projects** (non-git workspaces — multi-repo roots or plain ops folders — that run in place with named `_folder/<slug>/` storage; `repository_url`/`default_branch` are null)
 2. **`conversations`** - Track platform conversations with titles and soft-delete support; nullable `user_id` records first creator (provenance + execution-identity **fallback** only — chat turns execute as the message sender, #1982)
 3. **`sessions`** - Track AI SDK sessions with resume capability
@@ -491,6 +501,7 @@ import type { DagNode, WorkflowDefinition } from '@/lib/api';
 13. **`user_provider_keys`** - Per-user AI-provider credentials encrypted at rest (AES-256-GCM); one row per `(user_id, provider)` (`UNIQUE(user_id, provider)`), cascades on user deletion; `kind` is `api_key` or `oauth`; resolved + injected into the **acting user's** (run starter / message sender) runs/chat env at execution time. Always available — the encryption key is auto-provisioned at `~/.archon/credential-key` when `TOKEN_ENCRYPTION_KEY` is not set. Since #1955 the `provider` column holds **vendor-canonical credential ids** (`anthropic`, `openai`, `github-copilot`, plus the Pi backend vendors) — NOT agent ids; legacy `claude`/`codex`/`copilot` rows are renamed by an idempotent startup data fix (vendor row wins on conflict), and the connectable catalog is derived from provider registrations (`acceptedCredentials` via `credentials:` on `ProviderRegistration`), never hand-listed
 14. **`user_ai_prefs`** - Per-user AI preferences (Phase 3): personal model `tiers`/`aliases` (JSON-as-TEXT) + `default_provider` + `default_model` (#1998 — per-user default CHAT model, written atomically with `default_provider`; replaces the `large`-tier lookup for direct chat only when the effective provider matches — workflows still resolve `large`). NON-encrypted (model names aren't secrets — mirrors `codebase_env_vars`, not the provider-key store); one row per user (`UNIQUE(user_id)`), cascades on user deletion. Folded into `buildAiProfile` as the highest-precedence layer at the userId-aware seams (workflow executor: run starter; chat orchestrator: message **sender**-first, conversation creator only as fallback — #1982); needs a web/CLI identity but NO `TOKEN_ENCRYPTION_KEY`
 15–18. **`remote_agent_auth_user` / `remote_agent_auth_session` / `remote_agent_auth_account` / `remote_agent_auth_verification`** - Better Auth tables for opt-in web login (**PostgreSQL only**; always created on Postgres via the idempotent schema apply, but populated only when web auth is enabled — `DATABASE_URL` + `BETTER_AUTH_SECRET`). Owned and shaped by Better Auth (text ids, camelCase columns); Archon never queries them directly — a session maps to the canonical `users` row via `user_identities('web', <betterAuthUserId>)`
+19. **`schema_version`** - Diagnostic schema vintage (#2316): single row (`id = 1`) recording `created_app_version` (the Archon build that created this database — NULL, never guessed, for databases predating the table) and `app_version`/`applied_at` (the build that last applied schema). Written from `APP_VERSION` by both adapters' existing idempotent apply-on-connect path, and only when the value changes. Surfaced by `archon doctor` and `GET /api/health`; **nothing gates on it**
 
 **Key Patterns:**
 - Conversation ID format: Platform-specific (`thread_ts`, `chat_id`, `user/repo#123`)

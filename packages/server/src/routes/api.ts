@@ -19,10 +19,12 @@ import type {
   GlobalConfig,
   TiersPatch,
   UserRole,
+  SchemaVersionInfo,
 } from '@archon/core';
 import {
   handleMessage,
   getDatabaseType,
+  getSchemaVersion,
   loadConfig,
   loadRepoConfig,
   toSafeConfig,
@@ -1298,6 +1300,16 @@ const getHealthRoute = createRoute({
               is_wsl: z.boolean(),
               wsl_distro: z.string().optional(),
               activePlatforms: z.array(z.string()).optional(),
+              // Schema vintage (#2316) so a bug report can state which Archon build
+              // created this database and which last applied schema to it. Omitted
+              // when unrecorded or unreadable — health must answer regardless.
+              schema: z
+                .object({
+                  createdAppVersion: z.string().nullable(),
+                  appVersion: z.string(),
+                  appliedAt: z.string().nullable(),
+                })
+                .optional(),
             })
             .openapi('HealthResponse'),
         },
@@ -4320,6 +4332,16 @@ export function registerApiRoutes(
     const allActiveIds = [...stats.activeConversationIds, ...backgroundConversationIds];
     const wslDistro = getWSLDistroName();
 
+    // Health is public (PUBLIC_API_GATE_PREFIXES) and must stay answerable when the
+    // database is degraded, so a failed vintage read is logged and the key omitted
+    // rather than turning the healthcheck into a 500.
+    let schema: SchemaVersionInfo | undefined;
+    try {
+      schema = (await getSchemaVersion()) ?? undefined;
+    } catch (err) {
+      getLog().warn({ err }, 'api.schema_version_read_failed');
+    }
+
     return c.json({
       status: 'ok',
       adapter: 'web',
@@ -4334,6 +4356,15 @@ export function registerApiRoutes(
       is_wsl: isWSL(),
       ...(wslDistro ? { wsl_distro: wslDistro } : {}),
       activePlatforms: activePlatforms ? [...activePlatforms] : ['Web'],
+      ...(schema
+        ? {
+            schema: {
+              createdAppVersion: schema.createdAppVersion,
+              appVersion: schema.appVersion,
+              appliedAt: schema.appliedAt,
+            },
+          }
+        : {}),
     });
   });
 
