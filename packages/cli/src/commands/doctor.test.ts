@@ -387,24 +387,25 @@ describe('checkDatabase', () => {
     appliedAt: '2026-07-01T00:00:00.000Z',
   };
 
-  it('returns pass when query succeeds', async () => {
-    const deps: DatabaseDeps = {
+  // Mirrors the makeDeps() helper in the checkFolderProject block below, so each
+  // test states only the field it varies.
+  function makeDeps(over: Partial<DatabaseDeps> = {}): DatabaseDeps {
+    return {
       pool: { query: async () => undefined },
       getDatabaseType: () => 'sqlite',
       getSchemaVersion: async () => schemaVersion,
+      ...over,
     };
-    const result = await checkDatabase(async () => deps);
+  }
+
+  it('returns pass when query succeeds', async () => {
+    const result = await checkDatabase(async () => makeDeps());
     expect(result.status).toBe('pass');
     expect(result.message).toContain('sqlite');
   });
 
   it('reports postgres dbType when configured', async () => {
-    const deps: DatabaseDeps = {
-      pool: { query: async () => undefined },
-      getDatabaseType: () => 'postgres',
-      getSchemaVersion: async () => schemaVersion,
-    };
-    const result = await checkDatabase(async () => deps);
+    const result = await checkDatabase(async () => makeDeps({ getDatabaseType: () => 'postgres' }));
     expect(result.status).toBe('pass');
     expect(result.message).toContain('postgres');
   });
@@ -412,64 +413,52 @@ describe('checkDatabase', () => {
   // Schema vintage (#2316): a bug report has to be able to state which build
   // created the database and which last wrote to it.
   it('reports both schema vintages when recorded', async () => {
-    const deps: DatabaseDeps = {
-      pool: { query: async () => undefined },
-      getDatabaseType: () => 'sqlite',
-      getSchemaVersion: async () => schemaVersion,
-    };
-    const result = await checkDatabase(async () => deps);
+    const result = await checkDatabase(async () => makeDeps());
     expect(result.message).toContain('schema created by 0.5.3');
     expect(result.message).toContain('last applied by 0.6.0');
   });
 
   it('says the creation vintage is unknown rather than inventing one', async () => {
-    const deps: DatabaseDeps = {
-      pool: { query: async () => undefined },
-      getDatabaseType: () => 'sqlite',
-      getSchemaVersion: async () => ({ ...schemaVersion, createdAppVersion: null }),
-    };
-    const result = await checkDatabase(async () => deps);
+    const result = await checkDatabase(async () =>
+      makeDeps({ getSchemaVersion: async () => ({ ...schemaVersion, createdAppVersion: null }) })
+    );
     expect(result.status).toBe('pass');
     expect(result.message).toContain('predates version tracking');
     expect(result.message).toContain('last applied by 0.6.0');
   });
 
   it('reports an unrecorded vintage without failing the check', async () => {
-    const deps: DatabaseDeps = {
-      pool: { query: async () => undefined },
-      getDatabaseType: () => 'sqlite',
-      getSchemaVersion: async () => null,
-    };
-    const result = await checkDatabase(async () => deps);
+    const result = await checkDatabase(async () =>
+      makeDeps({ getSchemaVersion: async () => null })
+    );
     expect(result.status).toBe('pass');
     expect(result.message).toContain('schema vintage not recorded');
   });
 
   it('stays "pass" when the vintage read throws — the database is still reachable', async () => {
-    const deps: DatabaseDeps = {
-      pool: { query: async () => undefined },
-      getDatabaseType: () => 'sqlite',
-      getSchemaVersion: async () => {
-        throw new Error('no such table: remote_agent_schema_version');
-      },
-    };
-    const result = await checkDatabase(async () => deps);
+    const result = await checkDatabase(async () =>
+      makeDeps({
+        getSchemaVersion: async () => {
+          throw new Error('no such table: remote_agent_schema_version');
+        },
+      })
+    );
     expect(result.status).toBe('pass');
     expect(result.message).toContain('reachable (sqlite)');
     expect(result.message).toContain('schema vintage not recorded');
   });
 
   it('returns fail with "not reachable" when query throws', async () => {
-    const deps: DatabaseDeps = {
-      pool: {
-        query: async () => {
-          throw new Error('connection refused');
+    const result = await checkDatabase(async () =>
+      makeDeps({
+        pool: {
+          query: async () => {
+            throw new Error('connection refused');
+          },
         },
-      },
-      getDatabaseType: () => 'postgres',
-      getSchemaVersion: async () => schemaVersion,
-    };
-    const result = await checkDatabase(async () => deps);
+        getDatabaseType: () => 'postgres',
+      })
+    );
     expect(result.status).toBe('fail');
     expect(result.message).toContain('not reachable');
     expect(result.message).toContain('connection refused');

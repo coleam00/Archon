@@ -4334,10 +4334,20 @@ export function registerApiRoutes(
 
     // Health is public (PUBLIC_API_GATE_PREFIXES) and must stay answerable when the
     // database is degraded, so a failed vintage read is logged and the key omitted
-    // rather than turning the healthcheck into a 500.
-    let schema: SchemaVersionInfo | undefined;
+    // rather than turning the healthcheck into a 500. `createdAt` is deliberately not
+    // exposed — the two version strings plus applied_at are what a bug report needs.
+    let schema:
+      | Pick<SchemaVersionInfo, 'createdAppVersion' | 'appVersion' | 'appliedAt'>
+      | undefined;
     try {
-      schema = (await getSchemaVersion()) ?? undefined;
+      const info = await getSchemaVersion();
+      if (info) {
+        schema = {
+          createdAppVersion: info.createdAppVersion,
+          appVersion: info.appVersion,
+          appliedAt: info.appliedAt,
+        };
+      }
     } catch (err) {
       getLog().warn({ err }, 'api.schema_version_read_failed');
     }
@@ -4356,15 +4366,7 @@ export function registerApiRoutes(
       is_wsl: isWSL(),
       ...(wslDistro ? { wsl_distro: wslDistro } : {}),
       activePlatforms: activePlatforms ? [...activePlatforms] : ['Web'],
-      ...(schema
-        ? {
-            schema: {
-              createdAppVersion: schema.createdAppVersion,
-              appVersion: schema.appVersion,
-              appliedAt: schema.appliedAt,
-            },
-          }
-        : {}),
+      ...(schema ? { schema } : {}),
     });
   });
 

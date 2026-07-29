@@ -27,9 +27,6 @@ import type { IDatabase } from './adapters/types';
  */
 export const APP_VERSION = BUNDLED_VERSION;
 
-/** Table holding the single (id = 1) vintage row. */
-export const SCHEMA_VERSION_TABLE = 'remote_agent_schema_version';
-
 export interface SchemaVersionInfo {
   /**
    * Archon build that created this database, or null when the database predates
@@ -69,7 +66,7 @@ function toIso(value: string | Date | null): string | null {
 export async function readSchemaVersion(db: IDatabase): Promise<SchemaVersionInfo | null> {
   const result = await db.query<SchemaVersionRow>(
     `SELECT created_app_version, app_version, created_at, applied_at
-     FROM ${SCHEMA_VERSION_TABLE} WHERE id = 1`
+     FROM remote_agent_schema_version WHERE id = 1`
   );
 
   const row = result.rows[0];

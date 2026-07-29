@@ -427,6 +427,37 @@ describe('PostgresAdapter', () => {
       expect(issued[versionIdx]?.params).toEqual([APP_VERSION, APP_VERSION]);
     });
 
+    /**
+     * The vintage row is diagnostic metadata. A failure to write it must roll back
+     * only that statement — if it aborted initSchema, schemaInitPromise would reject
+     * and every later query would too, bricking the adapter over a row nothing gates on.
+     */
+    test('a failed vintage write rolls back to the savepoint and still commits', async () => {
+      const issued: string[] = [];
+      mockClient = {
+        query: async (sql: string) => {
+          issued.push(sql);
+          if (sql.includes('to_regclass')) return { rows: [{ exists: false }], rowCount: 1 };
+          if (sql.includes('INSERT INTO remote_agent_schema_version')) {
+            throw new Error('permission denied for table remote_agent_schema_version');
+          }
+          return { rows: [], rowCount: 0 };
+        },
+        release: () => {},
+      };
+      mockSchemaSQL = '-- schema sql';
+
+      const a = new PostgresAdapter('postgresql://localhost:5432/testdb');
+
+      // The adapter must remain usable — this is the whole point of the savepoint.
+      await expect(a.query('SELECT 1')).resolves.toBeDefined();
+
+      expect(issued).toContain('SAVEPOINT schema_version');
+      expect(issued).toContain('ROLLBACK TO SAVEPOINT schema_version');
+      expect(issued).toContain('COMMIT');
+      expect(issued).not.toContain('ROLLBACK');
+    });
+
     test('leaves the creation vintage unknown for a pre-existing database', async () => {
       const issued: { sql: string; params?: unknown[] }[] = [];
       mockClient = {

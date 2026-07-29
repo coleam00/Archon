@@ -84,18 +84,7 @@ export class PostgresAdapter implements IDatabase, DbNotificationListener {
       // The SQL is fully idempotent (CREATE TABLE IF NOT EXISTS,
       // ADD COLUMN IF NOT EXISTS, CREATE INDEX IF NOT EXISTS).
       await client.query(sql);
-      // Schema vintage (#2316), inside the same locked transaction so concurrent
-      // boots stay serialized. ON CONFLICT never touches created_app_version, so the
-      // creation vintage is written once and never revised; the DO UPDATE is a no-op
-      // when the app version has not changed.
-      await client.query(
-        `INSERT INTO remote_agent_schema_version (id, created_app_version, app_version)
-         VALUES (1, $1, $2)
-         ON CONFLICT (id) DO UPDATE
-           SET app_version = EXCLUDED.app_version, applied_at = NOW()
-           WHERE remote_agent_schema_version.app_version IS DISTINCT FROM EXCLUDED.app_version`,
-        [preExisting ? null : APP_VERSION, APP_VERSION]
-      );
+      await this.recordSchemaVersion(client, preExisting);
       await client.query('COMMIT');
       getLog().info('db.postgres_schema_init_completed');
     } catch (e) {
@@ -122,6 +111,40 @@ export class PostgresAdapter implements IDatabase, DbNotificationListener {
     // TRIGGER must not fail boot — the dashboard poller's interval backstop still
     // streams CLI runs, just without the instant LISTEN/NOTIFY push.
     await this.installNotifyTrigger();
+  }
+
+  /**
+   * Record which Archon build created this database and which last applied schema
+   * to it (#2316). Runs inside the caller's advisory-locked schema transaction so
+   * concurrent boots stay serialized. ON CONFLICT never touches created_app_version,
+   * so the creation vintage is written once and never revised; the DO UPDATE is a
+   * no-op when the app version has not changed.
+   *
+   * Behind a SAVEPOINT on purpose: the vintage row is diagnostic metadata and a
+   * failure to write it must not abort the schema transaction. Without this, a throw
+   * here would reject `schemaInitPromise` — which every query()/withTransaction()
+   * awaits — bricking the adapter for the life of the process over a row nothing
+   * gates on. Mirrors the warn-and-continue guarantee the SQLite adapter gives.
+   */
+  private async recordSchemaVersion(client: PoolClient, preExisting: boolean): Promise<void> {
+    await client.query('SAVEPOINT schema_version');
+    try {
+      await client.query(
+        `INSERT INTO remote_agent_schema_version (id, created_app_version, app_version)
+         VALUES (1, $1, $2)
+         ON CONFLICT (id) DO UPDATE
+           SET app_version = EXCLUDED.app_version, applied_at = NOW()
+           WHERE remote_agent_schema_version.app_version IS DISTINCT FROM EXCLUDED.app_version`,
+        [preExisting ? null : APP_VERSION, APP_VERSION]
+      );
+      await client.query('RELEASE SAVEPOINT schema_version');
+    } catch (e) {
+      await client.query('ROLLBACK TO SAVEPOINT schema_version');
+      getLog().warn(
+        { err: e instanceof Error ? e : new Error(String(e)) },
+        'db.postgres_schema_version_record_failed'
+      );
+    }
   }
 
   /**
