@@ -299,7 +299,35 @@ container:
   write_back: approve # 'approve' (default) pauses at a write-back gate; 'auto' applies without pausing
 ```
 
-**Prerequisites:** Docker, and the runner image built once with `bun run build:runner-image` (tags `archon-runner:<version>` + `:latest`). Container mode is **folder-project-only** (a repo project errors). Pausing workflows (approval/interactive gates) **are** supported — a pause `docker stop`s the container (near-zero resources while awaiting a decision) and resume rediscovers and restarts it. `$ARTIFACTS_DIR` is not mounted into the container (see [variables](/reference/variables/)). For the full flow, pause economics, and security posture, see the [Container isolation guide](/guides/container-isolation/) and `packages/isolation/docker/SECURITY.md`.
+**Prerequisites:** Docker, and the runner image built once with `bun run build:runner-image` (tags `archon-runner:<version>` + `:latest`). Container mode is **folder-project-only** (a repo project errors). Pausing workflows (approval/interactive gates) **are** supported — a pause `docker stop`s the container (near-zero resources while awaiting a decision) and resume rediscovers and restarts it. Neither `$ARTIFACTS_DIR` nor `$STATE_DIR` is mounted into the container — see [Container runs and run output](#container-runs-and-run-output) below. For the full flow, pause economics, and security posture, see the [Container isolation guide](/guides/container-isolation/) and `packages/isolation/docker/SECURITY.md`.
+
+### Container runs and run output
+
+Container runs are the one place where a run's output is **not** addressable from the host
+filesystem by run id. This is a documented limitation, not an oversight — the accurate
+picture:
+
+- A container run has exactly two mounts: the project root at `/mnt/lower` (read-only) and
+  the per-run overlay volume at `/mnt/upper`. `ARCHON_HOME` is never mounted.
+- `ARTIFACTS_DIR` and `STATE_DIR` reach the container only as environment variables, so a
+  node that writes to either from *inside* the container writes into the container's own
+  ephemeral layer, not to the host.
+- The container is **not** destroyed when the run completes. It is removed by the cleanup
+  service (7-day stale window by default) or by an explicit teardown, and `destroy()`
+  removes the container *and* its volume. Until then those files remain readable with
+  `docker exec`.
+
+Net effect: container-run output is a roughly 7-day TTL on an ephemeral container layer,
+reachable by `docker exec`, and **not** addressable by run id from the host. Retrieval is
+therefore non-uniform — "point an agent at run X's artifacts" is a filesystem path for
+every other run, and a `docker exec` into a specific container within the cleanup window
+for a container run. The blast radius is bounded: container mode is folder-projects-only
+and works only with `containerExec`-capable providers.
+
+**Workaround.** A node whose output must reach the host should write into the **workspace**
+(`$WS`, the overlay-mounted project root) rather than `$ARTIFACTS_DIR` / `$STATE_DIR`.
+Workspace writes ride the existing overlay diff plus the approval-gated write-back, so they
+do land on the host.
 
 ## Environment Variables
 

@@ -129,6 +129,16 @@ export const workflowRunSchema = z.object({
    * resume.
    */
   parent_run_id: z.string().nullable(),
+  /**
+   * Durable pointer to this run's storage tree (#2200) — the resolved
+   * `~/.archon/workspaces/<project>/` root its artifacts, logs, and state live
+   * under. Written ONCE at run start and never rewritten (a resume must not
+   * re-derive it). Readers prefer it and only fall back to deriving identity
+   * from the codebase row when it is null, which is what keeps historical
+   * artifacts addressable across a codebase rename (#1192). Null on rows
+   * created before the column existed.
+   */
+  output_root: z.string().nullable(),
 });
 
 export type WorkflowRun = z.infer<typeof workflowRunSchema>;

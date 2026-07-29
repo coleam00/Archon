@@ -24,24 +24,48 @@ Archon provides a unified directory and configuration system with:
 ### User-Level: `~/.archon/`
 
 ```
-~/.archon/                    # ARCHON_HOME
-├── workspaces/               # Cloned repositories (project-centric layout)
-│   └── owner/
-│       └── repo/
-│           ├── source/       # Clone or symlink -> local path
-│           └── worktrees/    # Git worktrees for this project
-├── worktrees/                # Legacy global worktrees (for repos not in workspaces/)
-├── web-dist/<version>/       # Cached web UI dist (archon serve, binary only)
-├── update-check.json         # Update check cache (binary builds only, 24h TTL)
-├── tier-notice.json          # One-time tier-default notice state (CLI, per version)
-└── config.yaml               # Global user configuration
+~/.archon/                          # ARCHON_HOME
+├── workspaces/                     # Per-project storage (project-centric layout)
+│   ├── <owner>/<repo>/             #   a registered repo with a remote
+│   ├── _local/<basename>/          #   a no-remote local git repo
+│   ├── _folder/<slug>/             #   a folder project (non-git; runs in place)
+│   └── _cwd/<basename>/            #   an unregistered working directory
+│       ├── source/                 # Clone or symlink -> local path (repo kinds only)
+│       ├── worktrees/              # Git worktrees for this project (repo kinds only)
+│       ├── artifacts/              # Workflow artifacts — NEVER in git
+│       │   ├── runs/<run-id>/      #   $ARTIFACTS_DIR for one run
+│       │   │   └── nodes/          #     typed output sidecars (<id>.md + <id>.meta.json)
+│       │   ├── scopes/<workflow>/<scope>/   # cross-invocation artifacts (persist_session)
+│       │   └── uploads/<conv-id>/  #   Web UI file uploads (ephemeral)
+│       ├── logs/<run-id>.jsonl     # Workflow execution logs
+│       └── state/                  # $STATE_DIR — cross-run state, shared per project
+├── workflows/  commands/  scripts/ # Home-scoped ("global") definitions
+├── worktrees/                      # Legacy global worktrees (repos not in workspaces/)
+├── vendor/codex/                   # Codex native binary (binary builds, user-placed)
+├── web-dist/<version>/             # Cached web UI dist (archon serve, binary only)
+├── update-check.json               # Update check cache (binary builds only, 24h TTL)
+├── tier-notice.json                # One-time tier-default notice state (CLI, per version)
+├── credential-key                  # Auto-provisioned per-user credential encryption key
+├── archon.db                       # SQLite database (when DATABASE_URL is unset)
+└── config.yaml                     # Global user configuration
 ```
 
 **Purpose:**
-- `workspaces/` - Repositories cloned via `/clone` command or GitHub adapter
-- `workspaces/owner/repo/worktrees/` - Git worktrees for this project (new registrations)
+- `workspaces/<project>/` - Everything one project produces. The project segment is
+  resolved once per run from the codebase identity: `owner/repo` for a repo with a
+  remote, `_local/<basename>` for a no-remote local repo, `_folder/<slug>` for a folder
+  project, and `_cwd/<basename>` when a run has no registered codebase at all. Folder
+  projects and `_cwd` projects have no `source/` or `worktrees/` — they run in place.
+- `workspaces/<project>/artifacts/` - Run output. `$ARTIFACTS_DIR` is
+  `artifacts/runs/<run-id>/`.
+- `workspaces/<project>/logs/` - One JSONL execution log per run.
+- `workspaces/<project>/state/` - `$STATE_DIR`. Cross-run workflow state, shared by every
+  workflow in the project. Survives worktree teardown; never visible to git.
 - `worktrees/` - Legacy fallback for repos not registered under `workspaces/`
 - `config.yaml` - Non-secret user preferences
+
+Each run also records the project root it resolved in `workflow_runs.output_root`, so an
+old run's artifacts stay addressable even if the codebase is later renamed.
 
 ### Repo-Level: `.archon/`
 
@@ -53,7 +77,6 @@ any-repo/.archon/
 ├── workflows/                # Workflow definitions (YAML files)
 │   └── pr-review.yaml
 ├── scripts/                  # Named scripts for script: nodes (.ts/.js for bun, .py for uv)
-├── state/                    # Cross-run workflow state (gitignored)
 └── config.yaml               # Repo-specific configuration
 ```
 
@@ -61,8 +84,28 @@ any-repo/.archon/
 - `commands/` - Slash commands (auto-loaded on clone)
 - `workflows/` - YAML workflow definitions, discovered recursively at runtime
 - `scripts/` - Named scripts referenced by `script:` nodes
-- `state/` - Cross-run memory written by workflows (e.g. `repo-triage` dedup state). Gitignored; never committed.
 - `config.yaml` - Project-specific settings
+
+The repo directory holds **source** only. Everything a run produces lives under
+`~/.archon/workspaces/<project>/`.
+
+#### Legacy: `.archon/state/`
+
+`.archon/state/` was a prompt-level convention with no engine support — workflows did
+`mkdir -p .archon/state` relative to cwd. It had two problems: inside an isolated run that
+path is the *worktree*, so the "cross-run memory" was destroyed at cleanup; and Archon
+never writes a `.gitignore`, so in a user's repository the directory was fully stageable.
+
+It is replaced by [`$STATE_DIR`](/reference/variables/). If Archon finds a legacy
+directory when a run starts it logs one warning with the exact move command and **moves
+nothing**:
+
+```bash
+mv <repo>/.archon/state/* ~/.archon/workspaces/<project>/state/
+```
+
+Then replace `.archon/state/` with `$STATE_DIR/` in the workflow's prompts and scripts, and
+delete any `mkdir -p .archon/state` — the executor pre-creates `$STATE_DIR`.
 
 ### Docker: `/.archon/`
 

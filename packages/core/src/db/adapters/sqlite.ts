@@ -345,6 +345,12 @@ export class SqliteAdapter implements IDatabase {
           'ALTER TABLE remote_agent_workflow_runs ADD COLUMN parent_run_id TEXT REFERENCES remote_agent_workflow_runs(id) ON DELETE SET NULL'
         );
       }
+      // Durable output root (#2200). The resolved ~/.archon/workspaces/<project>/
+      // directory this run's artifacts, logs, and state live under, written once
+      // at run start so historical artifacts survive a codebase rename (#1192).
+      if (!wfColNames.has('output_root')) {
+        this.db.run('ALTER TABLE remote_agent_workflow_runs ADD COLUMN output_root TEXT');
+      }
       // Same rationale as idx_conversations_user_id above.
       this.db.run(
         'CREATE INDEX IF NOT EXISTS idx_workflow_runs_user_id ON remote_agent_workflow_runs(user_id) WHERE user_id IS NOT NULL'
@@ -694,7 +700,8 @@ export class SqliteAdapter implements IDatabase {
         started_at TEXT DEFAULT (datetime('now')),
         completed_at TEXT,
         last_activity_at TEXT DEFAULT (datetime('now')),
-        working_path TEXT
+        working_path TEXT,
+        output_root TEXT
       );
 
       -- Workflow events table

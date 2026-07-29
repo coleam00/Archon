@@ -24,6 +24,54 @@ const mockLogger = {
 // Hoisted so tests can assert on the completion call (outcome / exit reason).
 const mockCaptureWorkflowInvoked = mock(() => {});
 const mockCaptureWorkflowCompleted = mock(() => {});
+/**
+ * Deterministic stand-ins for the shared identity→paths resolver (#2200). They
+ * mirror the real branch order and layout, so `resolveProjectPaths` is exercised
+ * as delegation rather than re-implementation, while the asserted paths stay
+ * readable literals rooted at `/tmp/ws`.
+ */
+type FakeStorageKey =
+  | { kind: 'repo'; owner: string; repo: string }
+  | { kind: 'folder'; slug: string }
+  | { kind: 'cwd'; cwd: string };
+function fakeResolveProjectStorageKey(
+  codebase: { kind?: string | null; name: string; default_cwd: string } | null | undefined,
+  cwd: string
+): FakeStorageKey {
+  if (codebase) {
+    if (codebase.kind === 'folder') return { kind: 'folder', slug: codebase.name };
+    const [owner, repo] = codebase.name.split('/');
+    if (owner && repo) return { kind: 'repo', owner, repo };
+    const base = codebase.default_cwd.split('/').filter(Boolean).pop();
+    if (base && base !== '.' && base !== '..') return { kind: 'repo', owner: '_local', repo: base };
+  }
+  return { kind: 'cwd', cwd };
+}
+function fakeStoragePathsForRoot(root: string): {
+  root: string;
+  artifactsRoot: string;
+  logsDir: string;
+  stateRoot: string;
+} {
+  return {
+    root,
+    artifactsRoot: `${root}/artifacts`,
+    logsDir: `${root}/logs`,
+    stateRoot: `${root}/state`,
+  };
+}
+function fakeGetProjectStoragePaths(
+  key: FakeStorageKey
+): ReturnType<typeof fakeStoragePathsForRoot> {
+  const root =
+    key.kind === 'repo'
+      ? `/tmp/ws/${key.owner}/${key.repo}`
+      : key.kind === 'folder'
+        ? `/tmp/ws/_folder/${key.slug}`
+        : `/tmp/ws/_cwd/${key.cwd.split('/').filter(Boolean).pop() ?? '_'}`;
+  return fakeStoragePathsForRoot(root);
+}
+
 mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
   parseOwnerRepo: mock(() => null),
@@ -31,6 +79,9 @@ mock.module('@archon/paths', () => ({
   getRunArtifactsPath: mock(() => '/tmp/artifacts'),
   getProjectLogsPath: mock(() => '/tmp/logs'),
   getProjectArtifactsPath: mock(() => '/tmp/artifacts-root'),
+  resolveProjectStorageKey: mock(fakeResolveProjectStorageKey),
+  getProjectStoragePaths: mock(fakeGetProjectStoragePaths),
+  getStoragePathsForRoot: mock(fakeStoragePathsForRoot),
   slugifyFolderName: mock((name: string) => name),
   getFolderRunArtifactsPath: mock(
     (slug: string, runId: string) => `/tmp/_folder/${slug}/artifacts/runs/${runId}`
@@ -792,7 +843,7 @@ describe('executeWorkflow', () => {
       );
       expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(1);
       // docsDir is arg index 11 (0-indexed) of executeDagWorkflow
-      const docsDir = mockExecuteDagWorkflow.mock.calls[0]?.[11];
+      const docsDir = mockExecuteDagWorkflow.mock.calls[0]?.[12];
       expect(docsDir).toBe('docs/');
     });
 
@@ -823,7 +874,7 @@ describe('executeWorkflow', () => {
         'db-conv-1'
       );
       expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(1);
-      const docsDir = mockExecuteDagWorkflow.mock.calls[0]?.[11];
+      const docsDir = mockExecuteDagWorkflow.mock.calls[0]?.[12];
       expect(docsDir).toBe('packages/docs-web/src/content/docs');
     });
   });
@@ -852,7 +903,7 @@ describe('executeWorkflow', () => {
       );
 
       expect(mockGetDefaultBranch).not.toHaveBeenCalled();
-      expect(mockExecuteDagWorkflow.mock.calls[0]?.[10]).toBe('develop');
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[11]).toBe('develop');
     });
 
     it('prefers repo config baseBranch over caller-provided baseBranch', async () => {
@@ -878,7 +929,7 @@ describe('executeWorkflow', () => {
       );
 
       expect(mockGetDefaultBranch).not.toHaveBeenCalled();
-      expect(mockExecuteDagWorkflow.mock.calls[0]?.[10]).toBe('main');
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[11]).toBe('main');
     });
 
     it('prefers baseOverride over repo config baseBranch', async () => {
@@ -926,7 +977,7 @@ describe('executeWorkflow', () => {
       );
 
       expect(mockGetDefaultBranch).toHaveBeenCalledWith('/tmp/worktree');
-      expect(mockExecuteDagWorkflow.mock.calls[0]?.[10]).toBe('main');
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[11]).toBe('main');
     });
 
     it('skips git auto-detection for a folder-kind codebase, no ERROR/WARN spam (#2159)', async () => {
@@ -956,7 +1007,7 @@ describe('executeWorkflow', () => {
       // benign auto-detect WARN is never emitted and $BASE_BRANCH resolves to
       // empty (unresolved-but-not-referenced).
       expect(mockGetDefaultBranch).not.toHaveBeenCalled();
-      expect(mockExecuteDagWorkflow.mock.calls[0]?.[10]).toBe('');
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[11]).toBe('');
       const warnedAutoDetect = (mockLogFn.mock.calls as unknown[][]).some(
         args => args[1] === 'workflow.base_branch_auto_detect_failed'
       );
@@ -987,7 +1038,7 @@ describe('executeWorkflow', () => {
       );
 
       expect(mockGetDefaultBranch).toHaveBeenCalledWith('/tmp/worktree');
-      expect(mockExecuteDagWorkflow.mock.calls[0]?.[10]).toBe('main');
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[11]).toBe('main');
     });
   });
 
@@ -1039,7 +1090,7 @@ describe('executeWorkflow', () => {
       // dag-executor signature: deps, platform, conversationId, cwd, workflow,
       // workflowRun, provider, model, artifactsDir, logDir, baseBranch,
       // docsDir, config, configuredCommandFolder, issueContext, priorCompletedNodes
-      const passedPriors = mockExecuteDagWorkflow.mock.calls[0]?.[15] as
+      const passedPriors = mockExecuteDagWorkflow.mock.calls[0]?.[16] as
         | Map<string, string>
         | undefined;
       expect(passedPriors).toBe(priorCompletedNodes);
@@ -1141,12 +1192,12 @@ describe('executeWorkflow', () => {
         'test message',
         'db-conv-1'
       );
-      // Positional arg 19 = scopeArtifactsDir (after workflowPreset). Root is the
-      // cwd fallback (.archon/artifacts); scope = workflow name + conversation UUID
-      // ('conv-1' from the createWorkflowRun mock; getScopeArtifactsPath is mocked
-      // to `${root}/scopes/${wf}/${scope}`).
-      const scopeArg = mockExecuteDagWorkflow.mock.calls[0]?.[19] as string | undefined;
-      expect(scopeArg).toBe(`${join('/tmp', '.archon', 'artifacts')}/scopes/test-workflow/conv-1`);
+      // Positional arg 20 = scopeArtifactsDir (after workflowPreset). Root is the
+      // unregistered-cwd project (`_cwd/tmp`, #2200); scope = workflow name +
+      // conversation UUID ('conv-1' from the createWorkflowRun mock;
+      // getScopeArtifactsPath is mocked to `${root}/scopes/${wf}/${scope}`).
+      const scopeArg = mockExecuteDagWorkflow.mock.calls[0]?.[20] as string | undefined;
+      expect(scopeArg).toBe('/tmp/ws/_cwd/tmp/artifacts/scopes/test-workflow/conv-1');
     });
 
     it('passes undefined scopeArtifactsDir when the workflow uses no session persistence', async () => {
@@ -1161,7 +1212,7 @@ describe('executeWorkflow', () => {
         'test message',
         'db-conv-1'
       );
-      const scopeArg = mockExecuteDagWorkflow.mock.calls[0]?.[19] as string | undefined;
+      const scopeArg = mockExecuteDagWorkflow.mock.calls[0]?.[20] as string | undefined;
       expect(scopeArg).toBeUndefined();
     });
   });
@@ -1227,7 +1278,7 @@ describe('executeWorkflow', () => {
       expect(store.getCodebaseEnvVars).toHaveBeenCalledWith('codebase-1');
 
       // The config passed to executeDagWorkflow (arg index 12) should have merged envVars
-      const configArg = mockExecuteDagWorkflow.mock.calls[0]?.[12] as WorkflowConfig | undefined;
+      const configArg = mockExecuteDagWorkflow.mock.calls[0]?.[13] as WorkflowConfig | undefined;
       expect(configArg?.envVars).toEqual({ FILE_KEY: 'file_val', DB_KEY: 'db_val' });
     });
 
@@ -1318,7 +1369,7 @@ describe('executeWorkflow', () => {
         'db-c1',
         { codebaseId: 'codebase-1', userId: 'u-1' }
       );
-      const configArg = mockExecuteDagWorkflow.mock.calls[0]?.[12] as WorkflowConfig | undefined;
+      const configArg = mockExecuteDagWorkflow.mock.calls[0]?.[13] as WorkflowConfig | undefined;
       expect(configArg?.envVars).toMatchObject({
         DB_KEY: 'db_val',
         SHARED_KEY: 'user_wins',
@@ -1644,7 +1695,7 @@ describe('telemetry wiring', () => {
       }
     );
 
-    expect(mockExecuteDagWorkflow.mock.calls[0]?.[16]).toBe('bundled');
+    expect(mockExecuteDagWorkflow.mock.calls[0]?.[17]).toBe('bundled');
   });
 
   it('resolves top-level workflow tier refs before calling the DAG executor', async () => {
@@ -1676,14 +1727,14 @@ describe('telemetry wiring', () => {
 
     expect(mockExecuteDagWorkflow.mock.calls[0]?.[6]).toBe('codex');
     expect(mockExecuteDagWorkflow.mock.calls[0]?.[7]).toBe('gpt-5.5');
-    expect(mockExecuteDagWorkflow.mock.calls[0]?.[17]).toEqual(
+    expect(mockExecuteDagWorkflow.mock.calls[0]?.[18]).toEqual(
       expect.objectContaining({
         aliases: expect.objectContaining({
           large: { provider: 'codex', model: 'gpt-5.5', effort: 'high' },
         }),
       })
     );
-    expect(mockExecuteDagWorkflow.mock.calls[0]?.[18]).toEqual({
+    expect(mockExecuteDagWorkflow.mock.calls[0]?.[19]).toEqual({
       provider: 'codex',
       model: 'gpt-5.5',
       effort: 'high',
@@ -1831,7 +1882,7 @@ describe('telemetry wiring', () => {
       'db-conv-1'
     );
 
-    expect(mockExecuteDagWorkflow.mock.calls[0]?.[16]).toBeUndefined();
+    expect(mockExecuteDagWorkflow.mock.calls[0]?.[17]).toBeUndefined();
   });
 });
 
@@ -1946,18 +1997,14 @@ describe('resolveProjectPaths', () => {
 
     const paths = await resolveProjectPaths(deps, '/tmp/platform', RUN_ID, 'cb-folder');
 
-    // slugifyFolderName is mocked to identity, so slug === name here
-    expect(paths.artifactsDir).toBe('/tmp/_folder/My Platform/artifacts/runs/run-xyz');
-    expect(paths.logDir).toBe('/tmp/_folder/My Platform/logs');
-    expect(paths.artifactsRoot).toBe('/tmp/_folder/My Platform/artifacts');
+    expect(paths.artifactsDir).toBe('/tmp/ws/_folder/My Platform/artifacts/runs/run-xyz');
+    expect(paths.logDir).toBe('/tmp/ws/_folder/My Platform/logs');
+    expect(paths.artifactsRoot).toBe('/tmp/ws/_folder/My Platform/artifacts');
+    expect(paths.stateDir).toBe('/tmp/ws/_folder/My Platform/state');
+    expect(paths.outputRoot).toBe('/tmp/ws/_folder/My Platform');
   });
 
   it('routes repo projects to owner/repo/ storage (unchanged)', async () => {
-    const paths = await import('@archon/paths');
-    (paths.resolveRepoProjectIdentity as ReturnType<typeof mock>).mockReturnValueOnce({
-      owner: 'acme',
-      repo: 'widget',
-    });
     const store = makeStore({
       getCodebase: mock(async () => ({
         id: 'cb-repo',
@@ -1971,20 +2018,15 @@ describe('resolveProjectPaths', () => {
 
     const result = await resolveProjectPaths(deps, '/repos/widget', RUN_ID, 'cb-repo');
 
-    // getRunArtifactsPath/getProjectLogsPath/getProjectArtifactsPath are mocked to constants
-    expect(result.artifactsDir).toBe('/tmp/artifacts');
-    expect(result.logDir).toBe('/tmp/logs');
-    expect(result.artifactsRoot).toBe('/tmp/artifacts-root');
+    expect(result.artifactsDir).toBe('/tmp/ws/acme/widget/artifacts/runs/run-xyz');
+    expect(result.logDir).toBe('/tmp/ws/acme/widget/logs');
+    expect(result.artifactsRoot).toBe('/tmp/ws/acme/widget/artifacts');
+    expect(result.stateDir).toBe('/tmp/ws/acme/widget/state');
+    expect(result.outputRoot).toBe('/tmp/ws/acme/widget');
   });
 
   it('routes a no-remote local repo to _local/<basename> storage (#2132)', async () => {
     const paths = await import('@archon/paths');
-    // A bare-basename codebase name resolves to the _local pseudo-owner rather
-    // than falling through to <cwd>/.archon.
-    (paths.resolveRepoProjectIdentity as ReturnType<typeof mock>).mockReturnValueOnce({
-      owner: '_local',
-      repo: 'workspace',
-    });
     const store = makeStore({
       getCodebase: mock(async () => ({
         id: 'cb-local',
@@ -1998,38 +2040,93 @@ describe('resolveProjectPaths', () => {
 
     const result = await resolveProjectPaths(deps, '/home/username/workspace', RUN_ID, 'cb-local');
 
-    expect(paths.resolveRepoProjectIdentity).toHaveBeenCalledWith(
-      'workspace',
-      '/home/username/workspace'
-    );
-    expect(paths.getRunArtifactsPath).toHaveBeenCalledWith('_local', 'workspace', RUN_ID);
-    expect(paths.getProjectLogsPath).toHaveBeenCalledWith('_local', 'workspace');
-    // Routed to project storage (mocked constants), NOT the cwd fallback.
-    expect(result.artifactsDir).toBe('/tmp/artifacts');
-    expect(result.logDir).toBe('/tmp/logs');
-    expect(result.artifactsRoot).toBe('/tmp/artifacts-root');
+    // Delegates to the ONE shared resolver rather than re-deriving identity.
+    expect(paths.resolveProjectStorageKey).toHaveBeenCalled();
+    expect(result.artifactsDir).toBe('/tmp/ws/_local/workspace/artifacts/runs/run-xyz');
+    expect(result.logDir).toBe('/tmp/ws/_local/workspace/logs');
+    expect(result.stateDir).toBe('/tmp/ws/_local/workspace/state');
   });
 
-  it('falls back to cwd-based paths when no codebase is registered', async () => {
+  it('routes an unregistered cwd to _cwd/<basename> UNDER ARCHON_HOME, never into the repo', async () => {
     const store = makeStore({ getCodebase: mock(async () => null) });
     const deps = makeDeps(store);
 
     const result = await resolveProjectPaths(deps, '/some/cwd', RUN_ID, 'missing-id');
 
-    // The fallback uses the real join(), so build expectations with join() too
-    // (on Windows the separators differ from the POSIX literals).
-    expect(result.artifactsDir).toBe(join('/some/cwd', '.archon', 'artifacts', 'runs', RUN_ID));
-    expect(result.logDir).toBe(join('/some/cwd', '.archon', 'logs'));
+    // Breaking change (#2200 A4): this used to be <cwd>/.archon/artifacts/...
+    expect(result.artifactsDir).toBe('/tmp/ws/_cwd/cwd/artifacts/runs/run-xyz');
+    expect(result.logDir).toBe('/tmp/ws/_cwd/cwd/logs');
+    expect(result.stateDir).toBe('/tmp/ws/_cwd/cwd/state');
+    expect(result.artifactsDir.startsWith('/some/cwd')).toBe(false);
   });
 
-  it('falls back to cwd-based paths when no codebaseId is provided', async () => {
+  it('routes to _cwd/<basename> when no codebaseId is provided', async () => {
     const deps = makeDeps();
 
     const result = await resolveProjectPaths(deps, '/some/cwd', RUN_ID);
 
-    expect(result.artifactsDir).toBe(join('/some/cwd', '.archon', 'artifacts', 'runs', RUN_ID));
-    expect(result.logDir).toBe(join('/some/cwd', '.archon', 'logs'));
-    expect(result.artifactsRoot).toBe(join('/some/cwd', '.archon', 'artifacts'));
+    expect(result.artifactsDir).toBe('/tmp/ws/_cwd/cwd/artifacts/runs/run-xyz');
+    expect(result.logDir).toBe('/tmp/ws/_cwd/cwd/logs');
+    expect(result.artifactsRoot).toBe('/tmp/ws/_cwd/cwd/artifacts');
+    expect(result.stateDir).toBe('/tmp/ws/_cwd/cwd/state');
+  });
+
+  it('still returns all five paths when the codebase lookup throws', async () => {
+    const store = makeStore({
+      getCodebase: mock(() => Promise.reject(new Error('db down'))),
+    });
+    const deps = makeDeps(store);
+
+    const result = await resolveProjectPaths(deps, '/some/cwd', RUN_ID, 'cb-boom');
+
+    expect(result.artifactsDir).toBe('/tmp/ws/_cwd/cwd/artifacts/runs/run-xyz');
+    expect(result.stateDir).toBe('/tmp/ws/_cwd/cwd/state');
+    expect(result.outputRoot).toBe('/tmp/ws/_cwd/cwd');
+  });
+
+  it('a persisted output_root short-circuits identity resolution entirely', async () => {
+    const paths = await import('@archon/paths');
+    const getCodebase = mock(async () => ({
+      id: 'cb-repo',
+      name: 'acme/renamed-since',
+      repository_url: null,
+      default_cwd: '/repos/widget',
+      kind: 'repo' as const,
+    }));
+    const deps = makeDeps(makeStore({ getCodebase }));
+    (paths.resolveProjectStorageKey as ReturnType<typeof mock>).mockClear();
+
+    const result = await resolveProjectPaths(deps, '/repos/widget', RUN_ID, 'cb-repo', {
+      persistedOutputRoot: '/tmp/ws/acme/original',
+    });
+
+    // The codebase was renamed since the run started — the durable pointer wins
+    // and the row is never even read (#1192 decoupling).
+    expect(getCodebase).not.toHaveBeenCalled();
+    expect(paths.resolveProjectStorageKey).not.toHaveBeenCalled();
+    expect(result.outputRoot).toBe('/tmp/ws/acme/original');
+    expect(result.artifactsDir).toBe('/tmp/ws/acme/original/artifacts/runs/run-xyz');
+    expect(result.logDir).toBe('/tmp/ws/acme/original/logs');
+    expect(result.stateDir).toBe('/tmp/ws/acme/original/state');
+  });
+
+  it('a null persisted output_root re-derives from identity', async () => {
+    const store = makeStore({
+      getCodebase: mock(async () => ({
+        id: 'cb-repo',
+        name: 'acme/widget',
+        repository_url: null,
+        default_cwd: '/repos/widget',
+        kind: 'repo' as const,
+      })),
+    });
+    const deps = makeDeps(store);
+
+    const result = await resolveProjectPaths(deps, '/repos/widget', RUN_ID, 'cb-repo', {
+      persistedOutputRoot: null,
+    });
+
+    expect(result.outputRoot).toBe('/tmp/ws/acme/widget');
   });
 });
 

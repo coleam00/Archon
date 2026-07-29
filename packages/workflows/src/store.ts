@@ -153,9 +153,15 @@ export interface IWorkflowStore extends IRunTreeStore {
   findResumableRun(workflowName: string, workingPath: string): Promise<WorkflowRun | null>;
   failOrphanedRuns(): Promise<{ count: number }>;
   resumeWorkflowRun(id: string): Promise<WorkflowRun>;
+  /**
+   * `output_root` (#2200) is write-once: the executor sets it at run start only
+   * when the persisted value is null. Re-writing it on resume would re-derive
+   * the path from a possibly-renamed codebase and orphan the run's artifacts,
+   * defeating the whole point of persisting it.
+   */
   updateWorkflowRun(
     id: string,
-    updates: Partial<Pick<WorkflowRun, 'status' | 'metadata'>>
+    updates: Partial<Pick<WorkflowRun, 'status' | 'metadata' | 'output_root'>>
   ): Promise<void>;
   updateWorkflowActivity(id: string): Promise<void>;
   getWorkflowRunStatus(id: string): Promise<WorkflowRunStatus | null>;

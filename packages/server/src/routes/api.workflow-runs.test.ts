@@ -1,4 +1,6 @@
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { mkdir, rm, writeFile } from 'fs/promises';
+import { join } from 'path';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import type { ConversationLockManager } from '@archon/core';
 import type { WebAdapter } from '../adapters/web';
@@ -111,6 +113,71 @@ mock.module('@archon/core', () => ({
   }),
 }));
 
+/**
+ * Deterministic stand-ins for the shared identity→paths helpers (#2200),
+ * mirroring the real branch order and layout under the mocked ARCHON_HOME.
+ */
+type FakeStorageKey =
+  | { kind: 'repo'; owner: string; repo: string }
+  | { kind: 'folder'; slug: string }
+  | { kind: 'cwd'; cwd: string };
+
+function parseOwnerRepoFake(name: string): { owner: string; repo: string } | null {
+  const parts = name.split('/');
+  if (parts.length !== 2) return null;
+  const [owner, repo] = parts;
+  if (!owner || !repo) return null;
+  if (owner === '.' || owner === '..' || repo === '.' || repo === '..') return null;
+  if (!/^[a-zA-Z0-9._-]+$/.test(owner) || !/^[a-zA-Z0-9._-]+$/.test(repo)) return null;
+  return { owner, repo };
+}
+
+function basenameFake(p: string): string {
+  return p.split('/').filter(Boolean).pop() ?? '';
+}
+
+function resolveProjectStorageKeyFake(
+  codebase: { kind?: string | null; name: string; default_cwd: string } | null | undefined,
+  cwd: string
+): FakeStorageKey {
+  if (codebase) {
+    if (codebase.kind === 'folder') {
+      const slug =
+        codebase.name
+          .toLowerCase()
+          .replace(/[^a-z0-9._-]+/g, '-')
+          .replace(/^-+|-+$/g, '') || 'folder';
+      return { kind: 'folder', slug };
+    }
+    const parsed = parseOwnerRepoFake(codebase.name);
+    if (parsed) return { kind: 'repo', ...parsed };
+    const base = basenameFake(codebase.default_cwd);
+    if (base && base !== '.' && base !== '..') return { kind: 'repo', owner: '_local', repo: base };
+  }
+  return { kind: 'cwd', cwd };
+}
+
+function storageRootFake(key: FakeStorageKey): string {
+  const ws = '/tmp/.archon/workspaces';
+  if (key.kind === 'repo') return `${ws}/${key.owner}/${key.repo}`;
+  if (key.kind === 'folder') return `${ws}/_folder/${key.slug}`;
+  return `${ws}/_cwd/${basenameFake(key.cwd) || '_'}`;
+}
+
+function storagePathsForRootFake(root: string): {
+  root: string;
+  artifactsRoot: string;
+  logsDir: string;
+  stateRoot: string;
+} {
+  return {
+    root,
+    artifactsRoot: `${root}/artifacts`,
+    logsDir: `${root}/logs`,
+    stateRoot: `${root}/state`,
+  };
+}
+
 const mockCaptureApprovalResolved = mock(() => undefined);
 mock.module('@archon/paths', () => ({
   captureApprovalResolved: mockCaptureApprovalResolved,
@@ -138,15 +205,13 @@ mock.module('@archon/paths', () => ({
     `/tmp/.archon/workspaces/${owner}/${repo}/artifacts/runs/${runId}`,
   // Mirrors the real parseOwnerRepo semantics (exactly owner/repo, no
   // traversal segments, GitHub-safe characters only).
-  parseOwnerRepo: (name: string): { owner: string; repo: string } | null => {
-    const parts = name.split('/');
-    if (parts.length !== 2) return null;
-    const [owner, repo] = parts;
-    if (!owner || !repo) return null;
-    if (owner === '.' || owner === '..' || repo === '.' || repo === '..') return null;
-    if (!/^[a-zA-Z0-9._-]+$/.test(owner) || !/^[a-zA-Z0-9._-]+$/.test(repo)) return null;
-    return { owner, repo };
-  },
+  parseOwnerRepo: parseOwnerRepoFake,
+  // Mirrors the real identity→paths resolver (#2200) so the routes are
+  // exercised as delegation, with paths rooted at the mocked ARCHON_HOME.
+  resolveProjectStorageKey: resolveProjectStorageKeyFake,
+  getStoragePathsForRoot: storagePathsForRootFake,
+  getRunArtifactsDirForKey: (key: FakeStorageKey, runId: string): string =>
+    `${storageRootFake(key)}/artifacts/runs/${runId}`,
 }));
 
 mockAllWorkflowModules();
@@ -2077,7 +2142,9 @@ describe('GET /api/runs/:runId/artifacts', () => {
     expect(response.status).toBe(404);
   });
 
-  test('returns empty files when run has no codebase_id', async () => {
+  // #2200: an unresolvable output location is an explicit 404. An empty 200 was
+  // indistinguishable from "the run produced nothing".
+  test('returns 404 when run has no codebase_id and no output_root', async () => {
     mockGetWorkflowRun.mockImplementationOnce(async () => ({
       ...MOCK_RUNNING_RUN,
       id: 'run-orphan',
@@ -2085,24 +2152,103 @@ describe('GET /api/runs/:runId/artifacts', () => {
     }));
     const { app } = makeApp();
     const response = await app.request('/api/runs/run-orphan/artifacts');
-    expect(response.status).toBe(200);
-    const body = (await response.json()) as { files: unknown[] };
-    expect(body.files).toEqual([]);
+    expect(response.status).toBe(404);
     expect(mockGetCodebase).not.toHaveBeenCalled();
   });
 
-  test('returns empty files when codebase name lacks owner/repo shape', async () => {
+  test('resolves a bare-basename (_local) codebase instead of failing the parse', async () => {
+    const runId = 'run-local-listing';
+    const dir = `/tmp/.archon/workspaces/_local/workspace/artifacts/runs/${runId}`;
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'plan.md'), '# plan');
+    try {
+      mockGetWorkflowRun.mockImplementationOnce(async () => ({
+        ...MOCK_RUNNING_RUN,
+        id: runId,
+        codebase_id: 'cb-1',
+      }));
+      mockGetCodebase.mockImplementationOnce(async () => ({
+        name: 'workspace',
+        kind: 'repo',
+        default_cwd: '/home/u/workspace',
+      }));
+      const { app } = makeApp();
+      const response = await app.request(`/api/runs/${runId}/artifacts`);
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { files: { path: string }[] };
+      // Before #2200 this returned an empty list — parseOwnerRepo(name) was null.
+      expect(body.files.map(f => f.path)).toEqual(['plan.md']);
+    } finally {
+      await rm('/tmp/.archon/workspaces/_local', { recursive: true, force: true });
+    }
+  });
+
+  test('resolves a folder project to _folder/<slug> storage', async () => {
+    const runId = 'run-folder-listing';
+    const dir = `/tmp/.archon/workspaces/_folder/my-ops-folder/artifacts/runs/${runId}`;
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'report.md'), '# report');
+    try {
+      mockGetWorkflowRun.mockImplementationOnce(async () => ({
+        ...MOCK_RUNNING_RUN,
+        id: runId,
+        codebase_id: 'cb-folder',
+      }));
+      mockGetCodebase.mockImplementationOnce(async () => ({
+        name: 'My Ops Folder',
+        kind: 'folder',
+        default_cwd: '/srv/ops',
+      }));
+      const { app } = makeApp();
+      const response = await app.request(`/api/runs/${runId}/artifacts`);
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { files: { path: string }[] };
+      expect(body.files.map(f => f.path)).toEqual(['report.md']);
+    } finally {
+      await rm('/tmp/.archon/workspaces/_folder', { recursive: true, force: true });
+    }
+  });
+
+  test('a persisted output_root wins over a codebase renamed since the run', async () => {
+    const runId = 'run-persisted-root';
+    const root = '/tmp/.archon/workspaces/acme/original';
+    const dir = `${root}/artifacts/runs/${runId}`;
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'out.md'), 'x');
+    try {
+      mockGetWorkflowRun.mockImplementationOnce(async () => ({
+        ...MOCK_RUNNING_RUN,
+        id: runId,
+        codebase_id: 'cb-renamed',
+        output_root: root,
+      }));
+      mockGetCodebase.mockImplementationOnce(async () => ({
+        name: 'acme/renamed-since',
+        kind: 'repo',
+        default_cwd: '/repos/renamed',
+      }));
+      const { app } = makeApp();
+      const response = await app.request(`/api/runs/${runId}/artifacts`);
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { files: { path: string }[] };
+      expect(body.files.map(f => f.path)).toEqual(['out.md']);
+    } finally {
+      await rm('/tmp/.archon/workspaces/acme', { recursive: true, force: true });
+    }
+  });
+
+  test('the ARCHON_HOME containment guard rejects an output_root outside the tree', async () => {
     mockGetWorkflowRun.mockImplementationOnce(async () => ({
       ...MOCK_RUNNING_RUN,
-      id: 'run-no-slash',
+      id: 'run-escape-root',
       codebase_id: 'cb-1',
+      output_root: '/etc',
     }));
-    mockGetCodebase.mockImplementationOnce(async () => ({ name: 'plain-name' }));
     const { app } = makeApp();
-    const response = await app.request('/api/runs/run-no-slash/artifacts');
-    expect(response.status).toBe(200);
-    const body = (await response.json()) as { files: unknown[] };
-    expect(body.files).toEqual([]);
+    const response = await app.request('/api/runs/run-escape-root/artifacts');
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toContain('Invalid artifact path');
   });
 
   test('returns 500 + logs when the codebase lookup throws', async () => {
@@ -2119,55 +2265,29 @@ describe('GET /api/runs/:runId/artifacts', () => {
     expect(response.status).toBe(500);
   });
 
-  // Traversal-shaped codebase names are now rejected up-front by
-  // parseOwnerRepo (exact owner/repo, no `..`/`.` segments, safe characters
-  // only) before any path is built — they never reach getRunArtifactsPath.
-  // The downstream ARCHON_HOME containment check remains as a second layer.
-  test('returns empty files when the codebase name is a traversal attempt', async () => {
-    mockGetWorkflowRun.mockImplementationOnce(async () => ({
-      ...MOCK_RUNNING_RUN,
-      id: 'run-escape',
-      codebase_id: 'cb-escape',
-    }));
-    mockGetCodebase.mockImplementationOnce(async () => ({ name: '../../etc/passwd' }));
-    const { app } = makeApp();
-    const response = await app.request('/api/runs/run-escape/artifacts');
-    expect(response.status).toBe(200);
-    const body = (await response.json()) as { files: unknown[] };
-    expect(body.files).toEqual([]);
-  });
-
-  test('returns empty files for names with more than two segments or unsafe chars', async () => {
-    for (const name of ['a/b/c', '../repo', 'owner/..', 'ow ner/repo']) {
+  // Traversal-shaped codebase names never produce a traversal path: they fail
+  // parseOwnerRepo and fall through to `_local/<basename(default_cwd)>`, which
+  // is a single sanitised segment. The result is a real (empty) project dir,
+  // NOT an escape — and the ARCHON_HOME containment check is the second layer.
+  test('a traversal-shaped codebase name resolves inside ARCHON_HOME, never outside it', async () => {
+    for (const name of ['../../etc/passwd', 'a/b/c', '../repo', 'owner/..', 'ow ner/repo']) {
       mockGetWorkflowRun.mockImplementationOnce(async () => ({
         ...MOCK_RUNNING_RUN,
         id: 'run-bad-name',
         codebase_id: 'cb-bad',
       }));
-      mockGetCodebase.mockImplementationOnce(async () => ({ name }));
+      mockGetCodebase.mockImplementationOnce(async () => ({
+        name,
+        kind: 'repo',
+        default_cwd: '/home/u/checkout',
+      }));
       const { app } = makeApp();
       const response = await app.request('/api/runs/run-bad-name/artifacts');
+      // Resolved to _local/checkout (which does not exist) → empty list, not an escape.
       expect(response.status).toBe(200);
       const body = (await response.json()) as { files: unknown[] };
       expect(body.files).toEqual([]);
     }
-  });
-
-  // Folder projects (kind: 'folder') have plain display names without an
-  // owner/repo shape; the listing route has never resolved their `_folder/`
-  // storage and must keep returning an empty list rather than erroring.
-  test('returns empty files for a folder-project style name (unchanged behavior)', async () => {
-    mockGetWorkflowRun.mockImplementationOnce(async () => ({
-      ...MOCK_RUNNING_RUN,
-      id: 'run-folder',
-      codebase_id: 'cb-folder',
-    }));
-    mockGetCodebase.mockImplementationOnce(async () => ({ name: 'my ops folder' }));
-    const { app } = makeApp();
-    const response = await app.request('/api/runs/run-folder/artifacts');
-    expect(response.status).toBe(200);
-    const body = (await response.json()) as { files: unknown[] };
-    expect(body.files).toEqual([]);
   });
 });
 
@@ -2176,51 +2296,104 @@ describe('GET /api/runs/:runId/artifacts', () => {
 // (owner/repo derivation only; content serving hits the real filesystem)
 // ---------------------------------------------------------------------------
 
-describe('GET /api/artifacts/:runId/* owner/repo guard', () => {
+describe('GET /api/artifacts/:runId/* storage-key resolution', () => {
   beforeEach(() => {
     mockGetWorkflowRun.mockReset();
     mockGetCodebase.mockReset();
   });
 
-  test('returns 404 when the codebase name is a traversal attempt', async () => {
+  test('returns 404 when there is no codebase and no output_root to resolve from', async () => {
     mockGetWorkflowRun.mockImplementationOnce(async () => ({
       ...MOCK_RUNNING_RUN,
-      id: 'run-serve-escape',
-      codebase_id: 'cb-escape',
+      id: 'run-serve-orphan',
+      codebase_id: null,
     }));
-    mockGetCodebase.mockImplementationOnce(async () => ({ name: '../../etc/passwd' }));
     const { app } = makeApp();
-    const response = await app.request('/api/artifacts/run-serve-escape/plan.md');
+    const response = await app.request('/api/artifacts/run-serve-orphan/plan.md');
     expect(response.status).toBe(404);
     const body = (await response.json()) as { error: string };
-    expect(body.error).toContain('could not determine owner/repo');
+    expect(body.error).toContain('could not resolve');
   });
 
-  test('returns 404 for a folder-project style name (unchanged behavior)', async () => {
+  test('serves a folder project’s artifact (404 before #2200)', async () => {
+    const runId = 'run-serve-folder';
+    const dir = `/tmp/.archon/workspaces/_folder/my-ops-folder/artifacts/runs/${runId}`;
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'plan.md'), '# folder plan');
+    try {
+      mockGetWorkflowRun.mockImplementationOnce(async () => ({
+        ...MOCK_RUNNING_RUN,
+        id: runId,
+        codebase_id: 'cb-folder',
+      }));
+      mockGetCodebase.mockImplementationOnce(async () => ({
+        name: 'My Ops Folder',
+        kind: 'folder',
+        default_cwd: '/srv/ops',
+      }));
+      const { app } = makeApp();
+      const response = await app.request(`/api/artifacts/${runId}/plan.md`);
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe('# folder plan');
+    } finally {
+      await rm('/tmp/.archon/workspaces/_folder', { recursive: true, force: true });
+    }
+  });
+
+  test('serves a no-remote local repo’s artifact (404 before #2200)', async () => {
+    const runId = 'run-serve-local';
+    const dir = `/tmp/.archon/workspaces/_local/workspace/artifacts/runs/${runId}`;
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'plan.md'), '# local plan');
+    try {
+      mockGetWorkflowRun.mockImplementationOnce(async () => ({
+        ...MOCK_RUNNING_RUN,
+        id: runId,
+        codebase_id: 'cb-local',
+      }));
+      mockGetCodebase.mockImplementationOnce(async () => ({
+        name: 'workspace',
+        kind: 'repo',
+        default_cwd: '/home/u/workspace',
+      }));
+      const { app } = makeApp();
+      const response = await app.request(`/api/artifacts/${runId}/plan.md`);
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe('# local plan');
+    } finally {
+      await rm('/tmp/.archon/workspaces/_local', { recursive: true, force: true });
+    }
+  });
+
+  test('rejects an output_root that escapes ARCHON_HOME', async () => {
     mockGetWorkflowRun.mockImplementationOnce(async () => ({
       ...MOCK_RUNNING_RUN,
-      id: 'run-serve-folder',
-      codebase_id: 'cb-folder',
+      id: 'run-serve-escape-root',
+      codebase_id: 'cb-1',
+      output_root: '/etc',
     }));
-    mockGetCodebase.mockImplementationOnce(async () => ({ name: 'my ops folder' }));
     const { app } = makeApp();
-    const response = await app.request('/api/artifacts/run-serve-folder/plan.md');
-    expect(response.status).toBe(404);
+    const response = await app.request('/api/artifacts/run-serve-escape-root/passwd');
+    expect(response.status).toBe(400);
     const body = (await response.json()) as { error: string };
-    expect(body.error).toContain('could not determine owner/repo');
+    expect(body.error).toContain('Invalid artifact path');
   });
 
-  test('a valid owner/repo name passes the parse and proceeds to the file read', async () => {
+  test('a valid owner/repo name resolves and proceeds to the file read', async () => {
     mockGetWorkflowRun.mockImplementationOnce(async () => ({
       ...MOCK_RUNNING_RUN,
       id: 'run-serve-ok',
       codebase_id: 'cb-ok',
     }));
-    mockGetCodebase.mockImplementationOnce(async () => ({ name: 'acme/widgets' }));
+    mockGetCodebase.mockImplementationOnce(async () => ({
+      name: 'acme/widgets',
+      kind: 'repo',
+      default_cwd: '/repos/widgets',
+    }));
     const { app } = makeApp();
     const response = await app.request('/api/artifacts/run-serve-ok/plan.md');
     // Artifact dir does not exist on disk → ENOENT, distinct from the
-    // owner/repo rejection above.
+    // unresolvable-location rejection above.
     expect(response.status).toBe(404);
     const body = (await response.json()) as { error: string };
     expect(body.error).toBe('Artifact file not found');

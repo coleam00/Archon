@@ -72,7 +72,9 @@ import {
   getArchonWorkspacesPath,
   getHomeCommandsPath,
   getHomeWorkflowsPath,
-  getRunArtifactsPath,
+  resolveProjectStorageKey,
+  getRunArtifactsDirForKey,
+  getStoragePathsForRoot,
   getArchonHome,
   isDocker,
   isWSL,
@@ -80,7 +82,6 @@ import {
   checkForUpdate,
   BUNDLED_IS_BINARY,
   BUNDLED_VERSION,
-  parseOwnerRepo,
 } from '@archon/paths';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { parseWorkflow } from '@archon/workflows/loader';
@@ -241,6 +242,51 @@ if (BUNDLED_IS_BINARY) {
 }
 
 type WorkflowSource = 'project' | 'bundled' | 'global';
+
+/**
+ * Resolve the on-disk artifact directory for a run, for EVERY project kind
+ * (#2200).
+ *
+ * Both artifact routes previously did `parseOwnerRepo(codebase.name)` alone,
+ * which returns null for a folder project (display name, no slash) and for a
+ * no-remote local repo (bare basename) — so artifact browsing was silently dead
+ * for two of the three project kinds Archon can register.
+ *
+ * Order mirrors the executor: a persisted `output_root` wins outright (a
+ * codebase renamed since the run must not orphan its artifacts, #1192);
+ * otherwise the shared `resolveProjectStorageKey` derives the key. Returns null
+ * only when there is no codebase row to derive from at all — callers surface
+ * that as an explicit 404 rather than an empty success.
+ *
+ * The `cwd` argument is `codebase.default_cwd` here, while the executor passes
+ * the RUN's cwd (which inside a worktree is the worktree path). That only
+ * differs for the `{ kind: 'cwd' }` fallback, and every run since #2200
+ * persists `output_root`, so this path never re-derives for a modern run.
+ */
+function resolveRunArtifactDir(
+  run: { output_root?: string | null },
+  codebase: { kind?: string | null; name: string; default_cwd: string } | null,
+  runId: string
+): string | null {
+  if (run.output_root) {
+    return join(getStoragePathsForRoot(run.output_root).artifactsRoot, 'runs', runId);
+  }
+  if (!codebase?.name) return null;
+  return getRunArtifactsDirForKey(resolveProjectStorageKey(codebase, codebase.default_cwd), runId);
+}
+
+/**
+ * Defense-in-depth: even though registration sanitises codebase names, ensure a
+ * resolved artifact dir stays inside ARCHON_HOME — a maliciously crafted
+ * owner/repo containing `..` would otherwise escape the tree. Every storage key
+ * kind (including the unregistered-cwd `_cwd` pseudo-project since #2200)
+ * resolves under ARCHON_HOME, so this applies uniformly with no exemptions.
+ */
+function isInsideArchonHome(dir: string): boolean {
+  const archonHome = normalize(getArchonHome());
+  const normalisedDir = normalize(dir);
+  return normalisedDir.startsWith(archonHome + sep) || normalisedDir === archonHome;
+}
 
 // =========================================================================
 // OpenAPI route configs (module-scope — pure config, no runtime dependencies)
@@ -3985,22 +4031,22 @@ export function registerApiRoutes(
         return apiError(c, 500, 'Failed to look up codebase');
       }
     }
-    if (!codebase?.name) return c.json({ files: [] });
-    const parsed = parseOwnerRepo(codebase.name);
-    if (!parsed) return c.json({ files: [] });
-    const { owner, repo } = parsed;
-
-    const artifactDir = getRunArtifactsPath(owner, repo, runId);
-    // Defense-in-depth: even though registration sanitises codebase names,
-    // ensure the resolved dir stays inside ARCHON_HOME — a maliciously
-    // crafted owner/repo containing `..` would otherwise escape the tree.
-    const archonHome = getArchonHome();
-    const normalisedDir = normalize(artifactDir);
-    if (
-      !normalisedDir.startsWith(normalize(archonHome) + sep) &&
-      normalisedDir !== normalize(archonHome)
-    ) {
-      getLog().warn({ runId, artifactDir, archonHome }, 'artifacts.path_escape_blocked');
+    // An empty 200 here is indistinguishable from "the run produced nothing",
+    // so an unresolvable output location is an explicit 404 (Fail Fast).
+    const artifactDir = resolveRunArtifactDir(run, codebase, runId);
+    if (!artifactDir) {
+      getLog().warn({ runId, codebaseId: run.codebase_id }, 'artifacts.output_location_unresolved');
+      return apiError(
+        c,
+        404,
+        'Artifacts not available: could not resolve this run’s output location'
+      );
+    }
+    if (!isInsideArchonHome(artifactDir)) {
+      getLog().warn(
+        { runId, artifactDir, archonHome: getArchonHome() },
+        'artifacts.path_escape_blocked'
+      );
       return apiError(c, 400, 'Invalid artifact path');
     }
 
@@ -4103,20 +4149,28 @@ export function registerApiRoutes(
       return apiError(c, 404, 'Workflow run not found');
     }
 
-    // Derive owner/repo from codebase name (format: "owner/repo")
+    // Resolve the run's output tree for every project kind — a persisted
+    // output_root first, else the shared identity→paths resolver (#2200).
     const codebase = run.codebase_id ? await codebaseDb.getCodebase(run.codebase_id) : null;
-    if (!codebase?.name) {
-      getLog().error({ runId, codebaseId: run.codebase_id }, 'artifacts.codebase_lookup_failed');
-      return apiError(c, 404, 'Artifact not available: codebase not found');
+    const artifactDir = resolveRunArtifactDir(run, codebase, runId);
+    if (!artifactDir) {
+      getLog().error(
+        { runId, codebaseId: run.codebase_id },
+        'artifacts.output_location_unresolved'
+      );
+      return apiError(
+        c,
+        404,
+        'Artifact not available: could not resolve this run’s output location'
+      );
     }
-    const parsed = parseOwnerRepo(codebase.name);
-    if (!parsed) {
-      getLog().error({ runId, codebaseName: codebase.name }, 'artifacts.owner_repo_parse_failed');
-      return apiError(c, 404, 'Artifact not available: could not determine owner/repo');
+    if (!isInsideArchonHome(artifactDir)) {
+      getLog().warn(
+        { runId, artifactDir, archonHome: getArchonHome() },
+        'artifacts.path_escape_blocked'
+      );
+      return apiError(c, 400, 'Invalid artifact path');
     }
-    const { owner, repo } = parsed;
-
-    const artifactDir = getRunArtifactsPath(owner, repo, runId);
     const filePath = join(artifactDir, filename);
 
     // Final safety check: ensure resolved path stays within artifact directory

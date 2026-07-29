@@ -29,6 +29,7 @@ import {
 import { executeDagWorkflow, childOutcomeFromRun } from './dag-executor';
 import type { RunChildWorkflowArgs, ChildWorkflowOutcome } from './dag-executor';
 import { discoverWorkflowsWithConfig } from './workflow-discovery';
+import { maybeWarnLegacyStatePath } from './state-migration';
 import { resolveWorkflowName } from './router';
 import { logWorkflowStart, logWorkflowError } from './logger';
 import { formatDuration, parseDbTimestamp } from './utils/duration';
@@ -268,11 +269,32 @@ async function isFolderCodebase(
   }
 }
 
+/** The four run-scoped output directories plus the project root they hang off. */
+export interface ResolvedProjectPaths {
+  artifactsDir: string;
+  logDir: string;
+  artifactsRoot: string;
+  /** `$STATE_DIR` — per-PROJECT cross-run state, shared by every workflow. */
+  stateDir: string;
+  /** The project root persisted to `workflow_runs.output_root`. */
+  outputRoot: string;
+}
+
 /**
- * Resolve the artifacts and log directories for a workflow run.
- * Looks up the codebase by ID once, parses owner/repo, and returns project-scoped paths.
- * Folder projects route to `_folder/<slug>/` storage; falls back to cwd-based
- * paths for unregistered repos.
+ * Resolve the output directories for a workflow run.
+ *
+ * Resolution order:
+ *  1. A persisted `output_root` (from the run row) wins outright — a run that
+ *     already recorded where its output lives must never re-derive it, or a
+ *     renamed codebase (#1192) would orphan its artifacts mid-run.
+ *  2. Otherwise look the codebase up once and delegate to the single shared
+ *     identity→paths resolver in `@archon/paths`, which handles repo,
+ *     `_local`, and folder projects.
+ *  3. With no codebase (or a lookup failure, or an unresolvable identity) the
+ *     run falls back to the `_cwd/<basename>` pseudo-project — still UNDER
+ *     `ARCHON_HOME`. This used to write into `<cwd>/.archon/`, i.e. the user's
+ *     repository; relocating it is the breaking change accepted in #2200 so
+ *     that every run's output survives worktree teardown and is retrievable.
  *
  * `artifactsRoot` is the parent of the `runs/` layout (`.../artifacts`) — the base
  * that run-scoped (`runs/<id>/`) and scope-scoped (`scopes/<workflow>/<scope>/`,
@@ -284,60 +306,57 @@ export async function resolveProjectPaths(
   deps: WorkflowDeps,
   cwd: string,
   workflowRunId: string,
-  codebaseId?: string
-): Promise<{ artifactsDir: string; logDir: string; artifactsRoot: string }> {
+  codebaseId?: string,
+  opts?: { persistedOutputRoot?: string | null }
+): Promise<ResolvedProjectPaths> {
+  if (opts?.persistedOutputRoot) {
+    return composeRunPaths(
+      archonPaths.getStoragePathsForRoot(opts.persistedOutputRoot),
+      workflowRunId
+    );
+  }
+
+  let key: archonPaths.ProjectStorageKey | undefined;
   if (codebaseId) {
     try {
       const codebase = await deps.store.getCodebase(codebaseId);
       if (codebase) {
-        // Folder projects run in place — route their named storage to
-        // _folder/<slug>/ instead of owner/repo/ (the name isn't owner/repo).
-        if (codebase.kind === 'folder') {
-          const slug = archonPaths.slugifyFolderName(codebase.name);
-          return {
-            artifactsDir: archonPaths.getFolderRunArtifactsPath(slug, workflowRunId),
-            logDir: archonPaths.getFolderProjectLogsPath(slug),
-            artifactsRoot: archonPaths.getFolderProjectArtifactsPath(slug),
-          };
+        key = archonPaths.resolveProjectStorageKey(codebase, cwd);
+        if (key.kind === 'cwd') {
+          // The codebase exists but neither an owner/repo nor a _local identity
+          // could be derived from it — the run still gets external storage, but
+          // keyed on the working directory rather than the project.
+          getLog().warn(
+            { codebaseName: codebase.name, cwd: codebase.default_cwd },
+            'codebase_project_identity_unresolved'
+          );
         }
-        // Repo projects: parse `owner/repo`, or scope a no-remote local repo
-        // under `_local/<basename(cwd)>` — the same identity registration wrote
-        // to disk. Without this branch the paths below fall through to the
-        // <cwd>/.archon fallback, dumping logs/artifacts outside ARCHON_HOME
-        // (#2132).
-        const identity = archonPaths.resolveRepoProjectIdentity(
-          codebase.name,
-          codebase.default_cwd
-        );
-        if (identity) {
-          return {
-            artifactsDir: archonPaths.getRunArtifactsPath(
-              identity.owner,
-              identity.repo,
-              workflowRunId
-            ),
-            logDir: archonPaths.getProjectLogsPath(identity.owner, identity.repo),
-            artifactsRoot: archonPaths.getProjectArtifactsPath(identity.owner, identity.repo),
-          };
-        }
-        getLog().warn(
-          { codebaseName: codebase.name, cwd: codebase.default_cwd },
-          'codebase_project_identity_unresolved'
-        );
       }
     } catch (error) {
-      const fallbackArtifactsDir = join(cwd, '.archon', 'artifacts', 'runs', workflowRunId);
       getLog().error(
-        { err: error as Error, codebaseId, fallbackArtifactsDir },
+        { err: error as Error, codebaseId, cwd },
         'project_paths_resolve_failed_using_fallback'
       );
     }
   }
-  // Fallback for unregistered repos
+
+  return composeRunPaths(
+    archonPaths.getProjectStoragePaths(key ?? { kind: 'cwd', cwd }),
+    workflowRunId
+  );
+}
+
+/** Project-level roots → the run-scoped view the executor threads downstream. */
+function composeRunPaths(
+  storage: archonPaths.ProjectStoragePaths,
+  workflowRunId: string
+): ResolvedProjectPaths {
   return {
-    artifactsDir: join(cwd, '.archon', 'artifacts', 'runs', workflowRunId),
-    logDir: join(cwd, '.archon', 'logs'),
-    artifactsRoot: join(cwd, '.archon', 'artifacts'),
+    artifactsDir: join(storage.artifactsRoot, 'runs', workflowRunId),
+    logDir: storage.logsDir,
+    artifactsRoot: storage.artifactsRoot,
+    stateDir: storage.stateRoot,
+    outputRoot: storage.root,
   };
 }
 
@@ -598,6 +617,14 @@ async function runChildWorkflow(
   //    as a cycle by canonical name, not left to the less-informative depth cap.
   let childWorkflow: WorkflowDefinition | undefined;
   try {
+    // DELIBERATE AFFORDANCE — do not "fix" this by adding a load-time existence
+    // check for `workflow:` targets. Discovery runs HERE, when the node executes,
+    // so a run can author a workflow mid-flight and then execute it as a governed
+    // child run; a load-time check would compile, pass every existing test, and
+    // silently delete that capability. Recorded in the constitution's case-law
+    // table (reference/workflow-language-constitution.md) and locked by
+    // `describe('workflow: late resolution is a deliberate affordance')` in
+    // subrun.test.ts.
     const { workflows } = await discoverWorkflowsWithConfig(cwd, deps.loadConfig);
     childWorkflow = resolveWorkflowName(
       childWorkflowName,
@@ -1412,13 +1439,34 @@ export async function executeWorkflow(
     }
   }
 
-  // Resolve external artifact and log directories
-  const { artifactsDir, logDir, artifactsRoot } = await resolveProjectPaths(
+  // Resolve external artifact, log, and state directories. A resumed run
+  // carries its `output_root` and short-circuits identity resolution entirely.
+  const { artifactsDir, logDir, artifactsRoot, stateDir, outputRoot } = await resolveProjectPaths(
     deps,
     cwd,
     workflowRun.id,
-    codebaseId
+    codebaseId,
+    { persistedOutputRoot: workflowRun.output_root }
   );
+
+  // Record the resolved root ONCE, so every later reader (artifact routes, CLI)
+  // addresses this run's output by a durable pointer instead of re-deriving it
+  // from a codebase name that may since have been renamed (#1192). Never
+  // overwritten — a resumed run already has one. Best-effort: a failed write
+  // leaves the row on the pre-#2200 re-derive path, which still works today.
+  if (!workflowRun.output_root) {
+    await deps.store
+      .updateWorkflowRun(workflowRun.id, { output_root: outputRoot })
+      .catch((err: Error) => {
+        getLog().warn(
+          { err, workflowRunId: workflowRun.id, outputRoot },
+          'workflow.output_root_persist_failed'
+        );
+      });
+  }
+
+  // Detect (never move) a legacy repo-local `.archon/state/` directory.
+  await maybeWarnLegacyStatePath(cwd, outputRoot, workflow.worktree?.enabled !== false);
 
   // Stable cross-invocation artifact scope (#1846): only for persist_session
   // workflows with a conversation scope. Undefined otherwise — zero new dirs.
@@ -1430,14 +1478,17 @@ export async function executeWorkflow(
 
   // Pre-create the artifacts directory so commands can write to it immediately
   // (and the durable scope dir, when the workflow opted into one — same disk,
-  // same failure mode, same fatal treatment).
+  // same failure mode, same fatal treatment). `stateDir` is pre-created here
+  // too so `$STATE_DIR` is usable from the first node without an mkdir, and an
+  // unwritable state dir fails the run rather than silently degrading.
   try {
     await mkdir(artifactsDir, { recursive: true });
+    await mkdir(stateDir, { recursive: true });
     if (scopeArtifactsDir) await mkdir(scopeArtifactsDir, { recursive: true });
   } catch (error) {
     const err = error as NodeJS.ErrnoException;
     getLog().error(
-      { err, artifactsDir, workflowRunId: workflowRun.id },
+      { err, artifactsDir, stateDir, workflowRunId: workflowRun.id },
       'workflow.artifacts_dir_create_failed'
     );
     await deps.store
@@ -1459,7 +1510,7 @@ export async function executeWorkflow(
       error: `Artifacts directory creation failed: ${err.message}`,
     };
   }
-  getLog().debug({ artifactsDir, logDir }, 'workflow_paths_resolved');
+  getLog().debug({ artifactsDir, logDir, stateDir, outputRoot }, 'workflow_paths_resolved');
 
   // Per-user AI-provider credentials (Phase 2). Resolved AFTER artifactsDir is
   // created because file-based deliveries (Codex `CODEX_HOME/auth.json`) live
@@ -1659,6 +1710,7 @@ export async function executeWorkflow(
       resolvedProvider,
       resolvedModel,
       artifactsDir,
+      stateDir,
       logDir,
       baseBranch,
       docsDir,

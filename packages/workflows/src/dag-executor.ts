@@ -1279,6 +1279,7 @@ async function executeNodeInternal(
   provider: string,
   nodeOptions: SendQueryOptions | undefined,
   artifactsDir: string,
+  stateDir: string,
   logDir: string,
   baseBranch: string,
   docsDir: string,
@@ -1387,7 +1388,8 @@ async function executeNodeInternal(
       baseBranch,
       docsDir,
       issueContext,
-      `dag node '${node.id}' prompt`
+      `dag node '${node.id}' prompt`,
+      { stateDir }
     );
   } catch (error) {
     const err = error as Error;
@@ -2585,6 +2587,7 @@ async function executeBashNode(
   workflowRun: WorkflowRun,
   node: BashNode,
   artifactsDir: string,
+  stateDir: string,
   logDir: string,
   baseBranch: string,
   docsDir: string,
@@ -2638,7 +2641,7 @@ async function executeBashNode(
     undefined,
     undefined,
     undefined,
-    { shellSafe: true }
+    { shellSafe: true, stateDir }
   );
   const finalScript = substituteNodeOutputRefs(substitutedScript, nodeOutputs, true, logDir);
 
@@ -2654,6 +2657,7 @@ async function executeBashNode(
   const subprocessEnv: NodeJS.ProcessEnv = {
     ...(envVars ?? {}),
     ARTIFACTS_DIR: artifactsDir,
+    STATE_DIR: stateDir,
     LOG_DIR: logDir,
     BASE_BRANCH: baseBranch,
     USER_MESSAGE: workflowRun.user_message,
@@ -2839,6 +2843,7 @@ async function executeScriptNode(
   workflowRun: WorkflowRun,
   node: ScriptNode,
   artifactsDir: string,
+  stateDir: string,
   logDir: string,
   baseBranch: string,
   docsDir: string,
@@ -2903,7 +2908,7 @@ async function executeScriptNode(
     undefined,
     undefined,
     undefined,
-    { shellSafe: true }
+    { shellSafe: true, stateDir }
   );
   const finalScript = substituteNodeOutputRefs(substitutedScript, nodeOutputs, false);
 
@@ -2923,6 +2928,7 @@ async function executeScriptNode(
   const subprocessEnv: NodeJS.ProcessEnv = {
     ...(envVars ?? {}),
     ARTIFACTS_DIR: artifactsDir,
+    STATE_DIR: stateDir,
     LOG_DIR: logDir,
     BASE_BRANCH: baseBranch,
     USER_MESSAGE: workflowRun.user_message,
@@ -3301,6 +3307,7 @@ async function executeLoopGroupNode(
   aiProfile: ResolvedAiProfile | undefined,
   workflowPreset: ModelAliasPreset | undefined,
   artifactsDir: string,
+  stateDir: string,
   logDir: string,
   baseBranch: string,
   docsDir: string,
@@ -3477,6 +3484,7 @@ async function executeLoopGroupNode(
       aiProfile,
       workflowPreset,
       artifactsDir,
+      stateDir,
       logDir,
       baseBranch,
       docsDir,
@@ -3609,7 +3617,7 @@ async function executeLoopGroupNode(
           i === startIteration ? loopUserInput : undefined,
           undefined,
           undefined,
-          { shellSafe: true }
+          { shellSafe: true, stateDir }
         );
         const substitutedBash = substituteNodeOutputRefs(
           bashPrompt,
@@ -3981,6 +3989,7 @@ async function executeLoopNode(
   workflowProvider: string,
   resolvedOptions: SendQueryOptions | undefined,
   artifactsDir: string,
+  stateDir: string,
   logDir: string,
   baseBranch: string,
   docsDir: string,
@@ -4332,7 +4341,8 @@ async function executeLoopNode(
         issueContext,
         i === startIteration ? loopUserInput : '',
         undefined, // rejectionReason
-        i === startIteration ? '' : lastIterationOutput
+        i === startIteration ? '' : lastIterationOutput,
+        { stateDir }
       );
       const finalPrompt = substituteNodeOutputRefs(substitutedPrompt, nodeOutputs);
 
@@ -4804,7 +4814,7 @@ async function executeLoopNode(
           undefined,
           undefined,
           undefined,
-          { shellSafe: true }
+          { shellSafe: true, stateDir }
         );
         const substitutedBash = substituteNodeOutputRefs(
           bashPrompt,
@@ -5126,6 +5136,7 @@ async function executeApprovalNode(
   workflowModel: string | undefined,
   cwd: string,
   artifactsDir: string,
+  stateDir: string,
   logDir: string,
   baseBranch: string,
   docsDir: string,
@@ -5198,7 +5209,9 @@ async function executeApprovalNode(
       docsDir,
       issueContext,
       undefined, // loopUserInput
-      rejectionReason
+      rejectionReason,
+      undefined, // loopPrevOutput
+      { stateDir }
     );
 
     // Build a synthetic PromptNode to reuse executeNodeInternal.
@@ -5252,6 +5265,7 @@ async function executeApprovalNode(
       provider,
       nodeOptions,
       artifactsDir,
+      stateDir,
       logDir,
       baseBranch,
       docsDir,
@@ -5387,7 +5401,11 @@ async function executeWorkflowNode(
     ctx.artifactsDir,
     ctx.baseBranch,
     ctx.docsDir,
-    ctx.issueContext
+    ctx.issueContext,
+    undefined, // loopUserInput
+    undefined, // rejectionReason
+    undefined, // loopPrevOutput
+    { stateDir: ctx.stateDir }
   );
   const input = substituteNodeOutputRefs(substitutedInput, ctx.nodeOutputs);
 
@@ -6429,6 +6447,12 @@ interface RunLayersContext {
   aiProfile?: ResolvedAiProfile;
   workflowPreset?: ModelAliasPreset;
   artifactsDir: string;
+  /**
+   * `$STATE_DIR` — the per-PROJECT cross-run state directory (#2200), shared by
+   * every workflow in the project and pre-created by the executor. A run-level
+   * invariant like `artifactsDir`; forwarded unchanged into loop_group bodies.
+   */
+  stateDir: string;
   logDir: string;
   baseBranch: string;
   docsDir: string;
@@ -6506,6 +6530,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
     aiProfile,
     workflowPreset,
     artifactsDir,
+    stateDir,
     logDir,
     baseBranch,
     docsDir,
@@ -6746,6 +6771,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                   workflowRun,
                   node,
                   artifactsDir,
+                  stateDir,
                   logDir,
                   baseBranch,
                   docsDir,
@@ -6793,6 +6819,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               loopProvider,
               loopOptions,
               artifactsDir,
+              stateDir,
               logDir,
               baseBranch,
               docsDir,
@@ -6847,6 +6874,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               aiProfile,
               workflowPreset,
               artifactsDir,
+              stateDir,
               logDir,
               baseBranch,
               docsDir,
@@ -6872,6 +6900,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               workflowModel,
               cwd,
               artifactsDir,
+              stateDir,
               logDir,
               baseBranch,
               docsDir,
@@ -6939,6 +6968,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                   workflowRun,
                   node,
                   artifactsDir,
+                  stateDir,
                   logDir,
                   baseBranch,
                   docsDir,
@@ -7105,6 +7135,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                 provider,
                 nodeOptions,
                 artifactsDir,
+                stateDir,
                 logDir,
                 baseBranch,
                 docsDir,
@@ -7833,6 +7864,7 @@ export async function executeDagWorkflow(
   workflowProvider: string,
   workflowModel: string | undefined,
   artifactsDir: string,
+  stateDir: string,
   logDir: string,
   baseBranch: string,
   docsDir: string,
@@ -8024,6 +8056,7 @@ export async function executeDagWorkflow(
     aiProfile,
     workflowPreset,
     artifactsDir,
+    stateDir,
     logDir,
     baseBranch,
     docsDir,

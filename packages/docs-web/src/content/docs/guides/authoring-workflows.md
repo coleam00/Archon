@@ -821,6 +821,81 @@ Successful bash stdout is retained by default on the completed run as a bounded 
 
 ---
 
+## Cross-Run State with `$STATE_DIR`
+
+`$ARTIFACTS_DIR` is scoped to **one run**. When a workflow needs to remember something
+*between* runs — a dedup ledger of issues already commented on, a "last processed" cursor,
+a nudge log — write it to `$STATE_DIR`:
+
+```yaml
+nodes:
+  - id: load-state
+    runtime: bun
+    script: |
+      import { readFile } from 'fs/promises';
+      const path = `${process.env.STATE_DIR}/triage/seen.json`;
+      let seen: string[] = [];
+      try {
+        seen = JSON.parse(await readFile(path, 'utf-8'));
+      } catch {
+        // First run — no ledger yet.
+      }
+      console.log(JSON.stringify({ seen }));
+```
+
+`$STATE_DIR` is `~/.archon/workspaces/<project>/state/`, pre-created before the first node
+runs, and delivered to `bash:`/`script:` subprocesses as the `STATE_DIR` environment
+variable as well.
+
+**It is scoped per project, not per workflow.** Every workflow in the project sees the same
+directory. That is deliberate — it is what lets two cooperating workflows (say a triage pair
+that must not both comment on the same issue) share one ledger. If you want isolation,
+namespace it yourself: `$STATE_DIR/<workflow-name>/`, exactly as you already organize
+subdirectories inside `$ARTIFACTS_DIR`.
+
+### Concurrency: no locking, and what that means
+
+The engine does **no** locking on `$STATE_DIR`. Two runs of the same stateful workflow in
+one project — each in its own worktree, so the working-path lock does not serialize them —
+share one directory, and the failure mode is a lost update:
+
+1. Run A reads `{1, 2}`
+2. Run B reads `{1, 2}`
+3. Run A writes `{1, 2, 3}`
+4. Run B writes `{1, 2, 4}` — A's entry is gone
+
+For a dedup ledger that means an item gets reprocessed on the next run: a duplicate comment,
+a repeated nudge. Note that write-then-rename prevents *torn reads* but does **not** prevent
+lost updates — the read happened before either write.
+
+This is an **authoring** concern, not an engine one. Options, in order of preference:
+
+- **Append-only ledger.** Concurrent small `O_APPEND` writes are atomic on POSIX, so each
+  run appends its own lines and readers fold the file. This is the fix if lost updates
+  matter.
+- **Accept last-writer-wins.** Fine when the state is a cache or a cursor that self-corrects.
+- **Don't run the workflow concurrently.** A workflow with `worktree: enabled: false` shares
+  one working path and is already serialized by the path lock.
+
+Put the state write in a `script:` node, not in an AI node's Write tool. A `script:` node is
+a guarantee; a prompt instructing an AI node to append is a convention it may not follow.
+
+### When you *want* output in the repository
+
+`$STATE_DIR` and `$ARTIFACTS_DIR` both live outside the repo on purpose: run output should
+never land in a user's git history, and inside an isolated run anything written to the
+worktree is destroyed at cleanup. Three sanctioned ways to get content into git anyway:
+
+1. **It is repo content.** Documentation, generated code, a committed spec — write it into
+   the worktree like any other file and let the workflow commit it normally. This is not an
+   exception; it is the normal path for anything that *is* source.
+2. **An explicit copy node.** Produce the file in `$ARTIFACTS_DIR`, then add a `bash:` node
+   that copies exactly what should be versioned into the worktree, and commit it. The copy
+   is visible in the DAG, so "why is this in my repo" has an answer.
+3. **Traceability without git.** If you only need to *find* the output later, you do not need
+   it in the repo at all: the artifact routes (`GET /api/runs/:runId/artifacts`) and
+   `output_type` sidecars address a run's output by run id and by type.
+
 ## Reusing a Shared Sub-DAG with `include:`
 
 An `include:` node inlines another workflow's nodes into the current DAG. This lets you

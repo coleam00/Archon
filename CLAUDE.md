@@ -221,7 +221,7 @@ are more current than any tree drawn here.
 2. **`conversations`** - Track platform conversations with titles and soft-delete support; nullable `user_id` records first creator (provenance + execution-identity **fallback** only — chat turns execute as the message sender, #1982)
 3. **`sessions`** - Track AI SDK sessions with resume capability
 4. **`isolation_environments`** - Isolation tracking (git worktrees AND folder-project containers — `provider` is `'worktree'`/`'container'`; container rows use a `''` `branch_name` sentinel and store `{containerId, volume, image, overlayMode, …}` in `metadata`); nullable `created_by_user_id` preserves first creator
-5. **`workflow_runs`** - Workflow execution tracking and state; nullable `user_id` for per-run attribution; nullable `parent_run_id` (self-referential FK, `ON DELETE SET NULL`) links a `workflow:` sub-run to the parent run that spawned it (#2121 Phase 2)
+5. **`workflow_runs`** - Workflow execution tracking and state; nullable `user_id` for per-run attribution; nullable `parent_run_id` (self-referential FK, `ON DELETE SET NULL`) links a `workflow:` sub-run to the parent run that spawned it (#2121 Phase 2); nullable `output_root` records the resolved `~/.archon/workspaces/<project>/` this run's artifacts, logs, and state live under, written ONCE at run start (never on resume) so historical artifacts stay addressable across a codebase rename (#2200/#1192) — readers prefer it and re-derive identity only when it is NULL
 6. **`workflow_events`** - Step-level workflow event log (step transitions, artifacts, errors)
 7. **`messages`** - Conversation message history with tool call metadata (JSONB); nullable `user_id` (NULL for assistant rows). Split write-path: the **web** adapter persists its own turns via `MessagePersistence`; the **orchestrator** persists non-web turns (Slack/Telegram/GitHub/Discord/CLI) fire-and-forget, guarded by `isWebAdapter` to avoid double-writing web turns — only AI-bound turns get a user row (deterministic-command and approval-only turns return earlier), so a `user` row always pairs with an `assistant` row
 8. **`codebase_env_vars`** - Per-project env vars injected into project-scoped execution surfaces (Claude, Codex, bash/script nodes, and direct chat when codebase-scoped), managed via Web UI or `env:` in config
@@ -347,9 +347,19 @@ What matters here: **artifacts and logs live outside the repo and must never be 
 ├── commands/       # Custom commands
 ├── workflows/      # Workflow definitions (YAML files)
 ├── scripts/        # Named scripts for script: nodes (.ts/.js for bun, .py for uv)
-├── state/          # Cross-run workflow state (gitignored — never in git)
 └── config.yaml     # Repo-specific configuration
 ```
+
+The repo directory holds SOURCE only — every byte a run produces lives under
+`~/.archon/workspaces/<project>/`. `.archon/state/` is the LEGACY location for cross-run
+state: it had no engine support (prompts did `mkdir -p .archon/state` relative to cwd), so
+inside an isolated run it wrote to the worktree and died at cleanup, and in a user's repo it
+was stageable. Use `$STATE_DIR` instead. Archon detects a legacy directory, WARNs once with
+the `mv`, and never moves it; `scripts/migrate-state-dir.ts` is the operator's one-shot
+(`--dry-run` by default).
+
+- `ARCHON_HOME` - Override the base directory (default: `~/.archon`)
+- Docker: Paths automatically set to `/.archon/`
 
 ## Development Guidelines
 
@@ -422,6 +432,7 @@ Structured logging uses Pino via `createLogger('<module>')` from `@archon/paths`
 **Variable Substitution:**
 - `$ARGUMENTS`, `$USER_MESSAGE` - The user's full trigger message as a single string. Positional `$1`/`$2`/`$3` args are NOT supported — command/workflow prompts receive the whole message only.
 - `$ARTIFACTS_DIR` - External artifacts directory for the current workflow run (pre-created by executor)
+- `$STATE_DIR` - External cross-run state directory (`~/.archon/workspaces/<project>/state/`), pre-created by the executor. Scoped per PROJECT — shared by every workflow, conversation, and invocation surface; namespace inside it (`$STATE_DIR/<name>/`) for isolation. Survives worktree teardown and never appears in `git status`. Throws when referenced but unresolved, mirroring `$BASE_BRANCH`. No engine locking — see the authoring guide for the concurrent read-modify-write hazard.
 - `$WORKFLOW_ID` - The workflow run ID
 - `$BASE_BRANCH` - Base branch; auto-detected from git when `worktree.baseBranch` is not set; fails only if referenced in a prompt and auto-detection also fails
 - `$DOCS_DIR` - Documentation directory path; configured via `docs.path` in `.archon/config.yaml`. Defaults to `docs/`. Never throws.

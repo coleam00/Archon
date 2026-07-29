@@ -6,7 +6,12 @@ import * as isolationDb from '@archon/core/db/isolation-environments';
 import * as codebaseDb from '@archon/core/db/codebases';
 import * as workflowDb from '@archon/core/db/workflows';
 import { execFileAsync } from '@archon/git';
-import { createLogger, getRunArtifactsPath, resolveRepoProjectIdentity } from '@archon/paths';
+import {
+  createLogger,
+  resolveProjectStorageKey,
+  getRunArtifactsDirForKey,
+  getStoragePathsForRoot,
+} from '@archon/paths';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { readdir, readFile, stat } from 'fs/promises';
 import { join } from 'path';
@@ -147,7 +152,7 @@ async function buildContextPreamble(
 
   // Artifacts from prior run
   if (priorRun) {
-    const artifactSummary = await loadArtifactSummary(priorRun.id, codebaseId, workingPath);
+    const artifactSummary = await loadArtifactSummary(priorRun, codebaseId, workingPath);
     if (artifactSummary) {
       sections.push(`### Artifacts\n\n${artifactSummary}`);
     }
@@ -161,12 +166,12 @@ async function buildContextPreamble(
  * Returns a summary string or empty string if no artifacts found.
  */
 async function loadArtifactSummary(
-  runId: string,
+  run: Pick<WorkflowRun, 'id' | 'output_root'>,
   codebaseId: string,
   workingPath: string
 ): Promise<string> {
-  // Try project-scoped path first (via codebase name → owner/repo)
-  const artifactsDir = await resolveArtifactsDir(runId, codebaseId, workingPath);
+  // Durable output_root first, then the shared identity→paths resolver.
+  const artifactsDir = await resolveArtifactsDir(run, codebaseId, workingPath);
   if (!artifactsDir) return '';
 
   try {
@@ -199,43 +204,49 @@ async function loadArtifactSummary(
 
 /**
  * Resolve the artifacts directory for a prior run.
- * Tries project-scoped path first, falls back to cwd-based path.
+ *
+ * Delegates to the ONE shared identity→paths resolver (#2200), so folder
+ * projects — which this function had no branch for at all — resolve here
+ * exactly as they do in the executor and the HTTP artifact routes. A persisted
+ * `output_root` wins outright, since the codebase may have been renamed since.
+ * Falls back to the legacy in-repo location last, for runs that predate #2200.
+ *
+ * Exported for unit testing of the candidate order.
  */
-async function resolveArtifactsDir(
-  runId: string,
+export async function resolveArtifactsDir(
+  run: Pick<WorkflowRun, 'id' | 'output_root'>,
   codebaseId: string,
   workingPath: string
 ): Promise<string | null> {
-  // Try project-scoped path via codebase name
+  const candidates: string[] = [];
+
+  if (run.output_root) {
+    candidates.push(join(getStoragePathsForRoot(run.output_root).artifactsRoot, 'runs', run.id));
+  }
+
   try {
     const codebase = await codebaseDb.getCodebase(codebaseId);
     if (codebase) {
-      // Mirror the executor's identity resolution so no-remote local repos
-      // (scoped under _local/<basename>) are found here too, not just repos
-      // with an owner/repo name (#2132).
-      const identity = resolveRepoProjectIdentity(codebase.name, codebase.default_cwd);
-      if (identity) {
-        const dir = getRunArtifactsPath(identity.owner, identity.repo, runId);
-        try {
-          await stat(dir);
-          return dir;
-        } catch {
-          // Path doesn't exist, try fallback
-        }
-      }
+      candidates.push(
+        getRunArtifactsDirForKey(resolveProjectStorageKey(codebase, codebase.default_cwd), run.id)
+      );
     }
   } catch {
-    // DB lookup failed, try fallback
+    // DB lookup failed — fall through to the remaining candidates.
   }
 
-  // Fallback: cwd-based path
-  const fallback = join(workingPath, '.archon', 'artifacts', 'runs', runId);
-  try {
-    await stat(fallback);
-    return fallback;
-  } catch {
-    return null;
+  // Legacy in-repo location: only runs that started before #2200 wrote here.
+  candidates.push(join(workingPath, '.archon', 'artifacts', 'runs', run.id));
+
+  for (const dir of candidates) {
+    try {
+      await stat(dir);
+      return dir;
+    } catch {
+      // Not on disk — try the next candidate.
+    }
   }
+  return null;
 }
 
 /**

@@ -705,6 +705,17 @@ describe('SqliteAdapter', () => {
       const indexes = raw_indexes(currentDbPath);
       expect(indexes).toContain('idx_workflow_runs_parent_run');
     });
+
+    /**
+     * Same rationale as parent_run_id above: `output_root` (#2200) is the
+     * durable pointer to a run's storage tree. Missing on SQLite it would be
+     * invisible on the Postgres VPS while breaking every default install.
+     */
+    test('output_root column present on a fresh SQLite schema and in the Postgres migration', () => {
+      db = createTestDb();
+      expect(raw_pragma(currentDbPath, 'remote_agent_workflow_runs')).toContain('output_root');
+      expect(getSchemaSQL()).toContain('output_root');
+    });
   });
 
   /**

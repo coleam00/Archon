@@ -20,6 +20,7 @@ These variables are substituted by the workflow executor in all node types (`com
 | `$USER_MESSAGE` | Same as `$ARGUMENTS` | Alias |
 | `$WORKFLOW_ID` | Unique ID for the current workflow run | Useful for artifact naming and log correlation |
 | `$ARTIFACTS_DIR` | Pre-created external artifacts directory (`~/.archon/workspaces/<owner>/<repo>/artifacts/runs/<id>/`) | Always exists before node execution; stored outside the repo to avoid polluting the working tree. **Container runs (`--container`):** this host path is **not mounted into the container**, so a node that writes *directly* to `$ARTIFACTS_DIR` from inside the container will fail — write to the workspace instead. Engine-written typed-output sidecars still work (they are written on the host from captured stdout). |
+| `$STATE_DIR` | Pre-created external cross-run state directory (`~/.archon/workspaces/<project>/state/`) | Scoped per **project** — shared across every workflow, every conversation, and every invocation surface, so cooperating workflows can share memory. Namespace inside it yourself (`$STATE_DIR/<name>/`) if you want isolation. Survives worktree teardown, and never appears in `git status`. Throws if referenced but unresolved, exactly like `$BASE_BRANCH`. **Container runs (`--container`):** same caveat as `$ARTIFACTS_DIR` — the host path is not mounted into the container, so a node writing there from inside the container writes to the container's ephemeral layer. |
 | `$BASE_BRANCH` | Base branch for git operations | Resolved in order: the `--base <branch>` flag on `archon workflow run` (per dispatch), then `worktree.baseBranch` in `.archon/config.yaml`, then the registered codebase's stored default branch, then git auto-detection. `--base` sets the worktree cut-from too, so this variable always names the branch the worktree was actually cut from -- unless `--from` was also passed, which overrides only the cut-from. See [Base branch precedence](/reference/cli/#base-branch-precedence). Throws an error if referenced in a prompt but cannot be resolved |
 | `$DOCS_DIR` | Documentation directory path | Configured via `docs.path` in `.archon/config.yaml`. Defaults to `docs/` when not set. Never throws |
 | `$CONTEXT` | GitHub issue or PR context, if available | Populated when the workflow is triggered from a GitHub issue/PR. Replaced with empty string when unavailable |
@@ -45,6 +46,33 @@ Unlike other variables, `$BASE_BRANCH` will cause the workflow to **fail immedia
 - Auto-detection from git fails
 
 If the variable is not referenced, no error occurs even if the base branch cannot be determined.
+
+### `$STATE_DIR` — durable cross-run state
+
+`$STATE_DIR` is the external home for state a workflow needs to remember **between**
+runs: a dedup ledger, a "last processed" cursor, a nudge log. It is created before the
+first node runs and lives at `~/.archon/workspaces/<project>/state/`, a sibling of
+`artifacts/` and `logs/`.
+
+Two properties matter:
+
+- **It is per project, not per workflow.** Two cooperating workflows in one project see
+  the same directory, which is what lets a pair of related workflows share one ledger.
+  If you want isolation, namespace it yourself: `$STATE_DIR/my-workflow/`.
+- **It is outside the repository and outside the worktree.** State written here survives
+  worktree teardown and can never be staged into git — which is exactly what the older
+  `.archon/state/` convention could not promise (inside an isolated run that path *is*
+  the worktree, so it was deleted at cleanup).
+
+Like `$BASE_BRANCH`, referencing `$STATE_DIR` where no state directory could be resolved
+**throws** rather than substituting an empty string.
+
+If Archon finds a legacy `<repo>/.archon/state/` directory when a run starts, it logs one
+warning with the exact `mv` command and moves nothing.
+
+**Concurrency.** The engine does no locking on `$STATE_DIR`. See
+[Authoring Workflows](/guides/authoring-workflows/#cross-run-state-with-state_dir) for
+the read-modify-write hazard and how to avoid it.
 
 ## Positional Arguments (not supported)
 
