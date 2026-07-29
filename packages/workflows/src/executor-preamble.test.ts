@@ -3,7 +3,10 @@
  * detection, and resume logic.  These run before DAG dispatch and are exercised
  * with minimal DAG workflow fixtures.
  */
-import { describe, it, expect, mock, beforeEach } from 'bun:test';
+import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test';
+import { mkdtemp, rm } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
 import type { IWorkflowStore } from './store';
 import type { WorkflowDefinition, WorkflowRun } from './schemas';
@@ -167,13 +170,29 @@ function findMessage(platform: IWorkflowPlatform, text: string): unknown[] | und
 // ---------------------------------------------------------------------------
 
 describe('executeWorkflow preamble', () => {
-  beforeEach(() => {
+  // The @archon/paths mock above is PARTIAL — unlisted exports fall through to
+  // the real module, so the real storage resolver runs and the executor
+  // pre-creates artifacts/ + state/ under the real ARCHON_HOME. These cases run
+  // with cwd '/tmp', which resolves to `_cwd/tmp`, so without this redirect the
+  // suite writes into the developer's actual ~/.archon.
+  const originalArchonHome = process.env.ARCHON_HOME;
+  let tmpHome: string;
+
+  beforeEach(async () => {
+    tmpHome = await mkdtemp(join(tmpdir(), 'archon-preamble-home-'));
+    process.env.ARCHON_HOME = tmpHome;
     mockLogFn.mockClear();
     mockExecuteDagWorkflow.mockClear();
     mockEmitter.registerRun.mockClear();
     mockEmitter.unregisterRun.mockClear();
     mockEmitter.emit.mockClear();
     mockExecuteDagWorkflow.mockImplementation(async () => {});
+  });
+
+  afterEach(async () => {
+    if (originalArchonHome === undefined) delete process.env.ARCHON_HOME;
+    else process.env.ARCHON_HOME = originalArchonHome;
+    await rm(tmpHome, { recursive: true, force: true });
   });
 
   // -------------------------------------------------------------------------
