@@ -83,6 +83,21 @@ describe('maybeWarnLegacyStatePath', () => {
     }
   });
 
+  it('a cwd with no legacy dir does not consume its own latch', async () => {
+    // Mutation guard: with the latch set BEFORE the probe (the earlier shape),
+    // the first silent call burns the latch for this cwd and a legacy directory
+    // appearing later in the same process is never reported. The cross-project
+    // test above does NOT kill that mutant — this one does.
+    await maybeWarnLegacyStatePath(dir, '/out/root/state', false);
+    expect(warnCalls).toHaveLength(0);
+
+    await mkdir(join(dir, '.archon', 'state'), { recursive: true });
+    await maybeWarnLegacyStatePath(dir, '/out/root/state', false);
+
+    expect(warnCalls).toHaveLength(1);
+    expect(warnCalls[0].event).toBe('workflow.legacy_state_path_detected');
+  });
+
   it('warns exactly once across concurrent workflow starts', async () => {
     await mkdir(join(dir, '.archon', 'state'), { recursive: true });
 

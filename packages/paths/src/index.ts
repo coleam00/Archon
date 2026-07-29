@@ -38,6 +38,7 @@ export {
   getProjectStoragePaths,
   getStoragePathsForRoot,
   getRunArtifactsDirForKey,
+  getRunArtifactsDirForRoot,
   slugifyFolderName,
   getFolderProjectRoot,
   getFolderProjectArtifactsPath,

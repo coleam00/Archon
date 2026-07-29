@@ -41,9 +41,12 @@ function getLog(): ReturnType<typeof createLogger> {
  *
  * Exported reset so tests can observe more than the first case per cwd.
  */
-const probedCwds = new Set<string>();
+const warnedCwds = new Set<string>();
+/** Deduplicates concurrent probes of the same cwd without latching the result. */
+const inFlightProbes = new Map<string, Promise<void>>();
 export function resetLegacyStateWarningForTests(): void {
-  probedCwds.clear();
+  warnedCwds.clear();
+  inFlightProbes.clear();
 }
 
 /**
@@ -64,11 +67,30 @@ export async function maybeWarnLegacyStatePath(
   stateDir: string,
   isolated: boolean
 ): Promise<void> {
-  if (probedCwds.has(cwd)) return;
-  // Record eagerly so concurrent workflow starts on the same cwd can't both
-  // pass the guard and double-warn.
-  probedCwds.add(cwd);
+  // Latched only once this cwd has actually produced a warning. Latching before
+  // the probe would let a cwd with NO legacy directory consume its own latch, so
+  // a legacy directory created later in the same process would never be
+  // reported for that cwd again.
+  if (warnedCwds.has(cwd)) return;
 
+  // Concurrent starts on the same cwd share one probe rather than each running
+  // their own — that is what the pre-probe latch was really buying, and an
+  // in-flight promise buys it without swallowing future probes.
+  const existing = inFlightProbes.get(cwd);
+  if (existing) return existing;
+
+  const probe = probeLegacyStatePath(cwd, stateDir, isolated).finally(() => {
+    inFlightProbes.delete(cwd);
+  });
+  inFlightProbes.set(cwd, probe);
+  return probe;
+}
+
+async function probeLegacyStatePath(
+  cwd: string,
+  stateDir: string,
+  isolated: boolean
+): Promise<void> {
   const legacyPath = join(cwd, '.archon', 'state');
   // Taken from the centralized resolver rather than re-composed here, so this
   // file holds no hard-coded knowledge of the tree layout.
@@ -80,9 +102,13 @@ export async function maybeWarnLegacyStatePath(
     if (err.code === 'ENOENT') return; // happy path — legacy location not in use
     // EACCES/EPERM/EIO: the directory exists but is unreadable. Surface at WARN
     // rather than swallowing — a silent debug would hide a real permission issue.
+    warnedCwds.add(cwd);
     getLog().warn({ err, legacyPath }, 'workflow.legacy_state_path_probe_error');
     return;
   }
+
+  // A definitive detection — latch so later runs on this cwd stay quiet.
+  warnedCwds.add(cwd);
 
   const moveCommand = `mv "${legacyPath}"/* "${newPath}"/`;
   const message = isolated

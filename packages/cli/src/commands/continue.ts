@@ -10,7 +10,7 @@ import {
   createLogger,
   resolveProjectStorageKey,
   getRunArtifactsDirForKey,
-  getStoragePathsForRoot,
+  getRunArtifactsDirForRoot,
 } from '@archon/paths';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { readdir, readFile, stat } from 'fs/promises';
@@ -221,7 +221,7 @@ export async function resolveArtifactsDir(
   const candidates: string[] = [];
 
   if (run.output_root) {
-    candidates.push(join(getStoragePathsForRoot(run.output_root).artifactsRoot, 'runs', run.id));
+    candidates.push(getRunArtifactsDirForRoot(run.output_root, run.id));
   }
 
   try {

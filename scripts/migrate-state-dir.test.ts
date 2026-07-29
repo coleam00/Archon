@@ -46,6 +46,22 @@ interface RunResult {
   stderr: string;
 }
 
+/** Run with raw argv — no implicit `--cwd`, for argument-parsing cases. */
+async function runRaw(...args: string[]): Promise<RunResult> {
+  const proc = Bun.spawn(['bun', 'run', SCRIPT, ...args], {
+    env: { ...process.env, ARCHON_HOME: archonHome, LOG_LEVEL: 'silent' },
+    cwd: repo,
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  return { exitCode, stdout, stderr };
+}
+
 async function runMigration(...args: string[]): Promise<RunResult> {
   const proc = Bun.spawn(['bun', 'run', SCRIPT, '--cwd', repo, ...args], {
     env: { ...process.env, ARCHON_HOME: archonHome, LOG_LEVEL: 'silent' },
@@ -179,6 +195,52 @@ describe('migrate-state-dir', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('re-run with --apply');
     expect(await isMarked()).toBe(false);
+  });
+
+  describe('argument parsing', () => {
+    // A migration tool that silently operates on the wrong directory is the
+    // failure family this script exists to prevent. `--cwd --apply` used to
+    // swallow the flag as a path, resolve to <pwd>/--apply, find no legacy
+    // state, and exit 0 having written a junk `.initialized`.
+    test('--cwd followed by a flag exits 1 and writes nothing', async () => {
+      const result = await runRaw('--cwd', '--apply');
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('--cwd requires a directory path');
+      expect(await listOrEmpty(join(archonHome, 'workspaces'))).toEqual([]);
+      expect(await isMarked()).toBe(false);
+    });
+
+    test('--cwd with no value at all exits 1', async () => {
+      const result = await runRaw('--cwd');
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('--cwd requires a directory path');
+    });
+
+    test('an unknown flag exits 1 rather than being ignored', async () => {
+      // `--dry-run` looks plausible (dry run IS the default), so silently
+      // accepting it would teach a wrong invocation that happens to work.
+      const result = await runRaw('--dry-run');
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("Unknown argument: '--dry-run'");
+    });
+  });
+
+  test('progress lines are printed only for entries actually moved', async () => {
+    // Printed before the copy loop, a mid-run failure would claim moves that
+    // never happened.
+    await seedLegacy({ 'a.json': '1', 'b.json': '2' });
+
+    const dry = await runMigration();
+    expect(dry.stdout).toContain('would move  a.json');
+    expect(dry.stdout).not.toContain('moved  a.json');
+
+    const applied = await runMigration('--apply');
+    expect(applied.stdout).toContain('moved  a.json');
+    expect(applied.stdout).toContain('moved  b.json');
+    expect(applied.stdout).not.toContain('would move');
   });
 
   test('re-running after a successful migration is an idempotent no-op', async () => {

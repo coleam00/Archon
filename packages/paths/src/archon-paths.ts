@@ -3,13 +3,21 @@
  *
  * Directory structure:
  * ~/.archon/                              # User-level (ARCHON_HOME)
- * ├── workspaces/owner/repo/             # Project-centric layout
- * │   ├── source/                        # Clone or symlink → local path
- * │   ├── worktrees/                     # Git worktrees for this project
+ * ├── workspaces/<project>/              # Project-centric layout, where <project> is
+ * │   │                                  #   <owner>/<repo>   registered repo with a remote
+ * │   │                                  #   _local/<basename>  no-remote local git repo
+ * │   │                                  #   _folder/<slug>     folder project (non-git)
+ * │   │                                  #   _cwd/<basename>    unregistered working dir
+ * │   ├── source/                        # Clone or symlink → local path (repo kinds only)
+ * │   ├── worktrees/                     # Git worktrees for this project (repo kinds only)
  * │   ├── artifacts/runs/{workflow-id}/  # Workflow artifacts (NEVER in git)
- * │   └── logs/{workflow-id}.jsonl       # Workflow execution logs
+ * │   ├── logs/{workflow-id}.jsonl       # Workflow execution logs
+ * │   └── state/                         # $STATE_DIR — cross-run state, shared per project
  * ├── worktrees/                         # Legacy global worktrees (for repos not in workspaces/)
  * └── config.yaml                        # Global config
+ *
+ * `resolveProjectStorageKey` + `getProjectStoragePaths` are the single source of
+ * truth for that mapping; every consumer resolves through them.
  *
  * For Docker: /.archon/
  */
@@ -675,7 +683,21 @@ export function getStoragePathsForRoot(root: string): ProjectStoragePaths {
  * for their respective kinds, and the only way to get it for `'cwd'`.
  */
 export function getRunArtifactsDirForKey(key: ProjectStorageKey, workflowRunId: string): string {
-  return join(getProjectStoragePaths(key).artifactsRoot, 'runs', workflowRunId);
+  return getRunArtifactsDirForRoot(getProjectStoragePaths(key).root, workflowRunId);
+}
+
+/**
+ * Get a run's artifacts directory from an already-resolved project root — the
+ * branch taken when a run's `output_root` was persisted at start.
+ *
+ * This is the single place the `<artifactsRoot>/runs/<id>` layout is composed
+ * for the persisted-root path, and it is deliberately shared by the WRITER
+ * (the executor, which creates the directory) and the READERS (the artifact
+ * routes and the CLI). Those drifting apart is #2200's own bug one level down:
+ * a run would write its output somewhere no reader looks.
+ */
+export function getRunArtifactsDirForRoot(root: string, workflowRunId: string): string {
+  return join(getStoragePathsForRoot(root).artifactsRoot, 'runs', workflowRunId);
 }
 
 // =============================================================================

@@ -260,6 +260,50 @@ describe('workflows database', () => {
       ]);
     });
 
+    // output_root (#2200) is the durable pointer to a run's storage tree. It is
+    // write-once at the DB layer via COALESCE so a caller that forgets the
+    // null-guard cannot repoint a run mid-life and orphan its artifacts.
+    test('writes output_root through COALESCE so the first value wins', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+
+      await updateWorkflowRun('workflow-run-123', { output_root: '/home/u/.archon/ws/acme/x' });
+
+      const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(query).toContain('output_root = COALESCE(output_root, $1)');
+      expect(params).toEqual(['/home/u/.archon/ws/acme/x', 'workflow-run-123']);
+    });
+
+    test('output_root placeholder is numbered correctly alongside other fields', async () => {
+      // The SET clause is built by hand with positional placeholders, so an
+      // off-by-one here would silently bind the wrong value.
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+
+      await updateWorkflowRun('workflow-run-123', {
+        status: 'running',
+        metadata: { step: 'plan' },
+        output_root: '/root/x',
+      });
+
+      const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(query).toContain('status = $1');
+      expect(query).toContain('output_root = COALESCE(output_root, $3)');
+      expect(params).toEqual([
+        'running',
+        JSON.stringify({ step: 'plan' }),
+        '/root/x',
+        'workflow-run-123',
+      ]);
+    });
+
+    test('omitting output_root leaves it out of the SET clause entirely', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+
+      await updateWorkflowRun('workflow-run-123', { status: 'completed' });
+
+      const [query] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(query).not.toContain('output_root');
+    });
+
     test('updates multiple fields', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
 

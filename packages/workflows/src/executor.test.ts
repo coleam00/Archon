@@ -2146,7 +2146,10 @@ describe('resolveProjectPaths', () => {
 });
 
 describe('resolveScopeArtifactsDir', () => {
-  const ROOT = '/tmp/artifacts-root';
+  // join()-built: getScopeArtifactsPath composes with join(), so a template
+  // literal expectation is forward-slashed and never matches on win32.
+  const ROOT = join('/tmp', 'artifacts-root');
+  const scopeDir = (wf: string, scope: string): string => join(ROOT, 'scopes', wf, scope);
 
   it('returns the scope dir for a workflow with a persist_session node', () => {
     const workflow = {
@@ -2156,7 +2159,7 @@ describe('resolveScopeArtifactsDir', () => {
       ] as WorkflowDefinition['nodes'],
     };
     expect(resolveScopeArtifactsDir(workflow, 'conv-1', ROOT)).toBe(
-      `${ROOT}/scopes/feature-dev/conv-1`
+      scopeDir('feature-dev', 'conv-1')
     );
   });
 
@@ -2167,7 +2170,7 @@ describe('resolveScopeArtifactsDir', () => {
       nodes: [{ id: 'planner', prompt: 'plan' }] as WorkflowDefinition['nodes'],
     };
     expect(resolveScopeArtifactsDir(workflow, 'conv-1', ROOT)).toBe(
-      `${ROOT}/scopes/feature-dev/conv-1`
+      scopeDir('feature-dev', 'conv-1')
     );
   });
 

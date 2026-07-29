@@ -3,7 +3,7 @@
  */
 import { mkdir, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
-import { dirname, join } from 'path';
+import { dirname } from 'path';
 import type { IWorkflowPlatform, WorkflowMessageMetadata } from './deps';
 import type { WorkflowDeps, WorkflowConfig } from './deps';
 import * as archonPaths from '@archon/paths';
@@ -352,7 +352,7 @@ function composeRunPaths(
   workflowRunId: string
 ): ResolvedProjectPaths {
   return {
-    artifactsDir: join(storage.artifactsRoot, 'runs', workflowRunId),
+    artifactsDir: archonPaths.getRunArtifactsDirForRoot(storage.root, workflowRunId),
     logDir: storage.logsDir,
     artifactsRoot: storage.artifactsRoot,
     stateDir: storage.stateRoot,

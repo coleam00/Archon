@@ -74,7 +74,7 @@ import {
   getHomeWorkflowsPath,
   resolveProjectStorageKey,
   getRunArtifactsDirForKey,
-  getStoragePathsForRoot,
+  getRunArtifactsDirForRoot,
   getArchonHome,
   isDocker,
   isWSL,
@@ -269,7 +269,7 @@ function resolveRunArtifactDir(
   runId: string
 ): string | null {
   if (run.output_root) {
-    return join(getStoragePathsForRoot(run.output_root).artifactsRoot, 'runs', runId);
+    return getRunArtifactsDirForRoot(run.output_root, runId);
   }
   if (!codebase?.name) return null;
   return getRunArtifactsDirForKey(resolveProjectStorageKey(codebase, codebase.default_cwd), runId);

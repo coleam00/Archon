@@ -46,9 +46,45 @@ import {
 } from '@archon/paths';
 import * as codebaseDb from '@archon/core/db/codebases';
 
-const APPLY = process.argv.includes('--apply');
-const cwdFlag = process.argv.indexOf('--cwd');
-const CWD = cwdFlag !== -1 ? resolve(process.argv[cwdFlag + 1] ?? '.') : process.cwd();
+/**
+ * Parse argv strictly. A migration tool that silently operates on the wrong
+ * directory is the exact failure family this script exists to prevent, so a
+ * malformed invocation exits non-zero rather than guessing: `--cwd --apply`
+ * used to swallow the flag as a path, resolve to `<pwd>/--apply`, find no legacy
+ * state, and report success while writing a junk `.initialized` marker.
+ */
+function parseArgs(argv: readonly string[]): { apply: boolean; cwd: string } {
+  let apply = false;
+  let cwd: string | undefined;
+
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === '--apply') {
+      apply = true;
+      continue;
+    }
+    if (arg === '--cwd') {
+      const value = argv[i + 1];
+      if (value === undefined || value.startsWith('-')) {
+        console.error(
+          `--cwd requires a directory path${value === undefined ? '' : `, got '${value}'`}.`
+        );
+        console.error('Usage: bun run scripts/migrate-state-dir.ts [--cwd <path>] [--apply]');
+        process.exit(1);
+      }
+      cwd = value;
+      i++; // consume the value
+      continue;
+    }
+    console.error(`Unknown argument: '${arg}'.`);
+    console.error('Usage: bun run scripts/migrate-state-dir.ts [--cwd <path>] [--apply]');
+    process.exit(1);
+  }
+
+  return { apply, cwd: resolve(cwd ?? '.') };
+}
+
+const { apply: APPLY, cwd: CWD } = parseArgs(process.argv.slice(2));
 
 /**
  * Resolve the storage key the same way a run would: look the project up by its
@@ -172,11 +208,10 @@ async function main(): Promise<void> {
     process.exit(2);
   }
 
-  for (const name of entries) {
-    console.log(`${APPLY ? 'move' : 'would move'}  ${name}`);
-  }
-
   if (!APPLY) {
+    for (const name of entries) {
+      console.log(`would move  ${name}`);
+    }
     console.log('');
     console.log(
       `Dry run — nothing was moved. Re-run with --apply to migrate ${plural(entries.length)}.`
@@ -191,6 +226,9 @@ async function main(): Promise<void> {
     await copyFile(join(legacyDir, name), join(stateRoot, name));
     await rm(join(legacyDir, name));
     moved++;
+    // Reported AFTER the move, so a run that dies partway through has not
+    // already claimed entries it never got to.
+    console.log(`moved  ${name}`);
   }
 
   // Every entry moved (the pre-flight guarantees no skips), so the destination
