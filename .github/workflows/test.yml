@@ -13,6 +13,11 @@ concurrency:
 jobs:
   test:
     strategy:
+      # Both legs must always report. With the default fail-fast, an ubuntu
+      # failure cancels windows, so a windows-only break stays invisible until
+      # the next round — and a cancelled leg blocks a merge once it is a
+      # required check.
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
