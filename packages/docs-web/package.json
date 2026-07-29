@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "astro dev",
     "build": "astro build && bun run scripts/normalize-llms-txt.js",
-    "preview": "astro preview"
+    "preview": "astro preview",
+    "type-check": "astro sync && bun x tsc --noEmit"
   },
   "dependencies": {
     "astro": "^6.1.0",
