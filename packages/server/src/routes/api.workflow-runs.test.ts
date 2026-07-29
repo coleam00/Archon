@@ -2247,18 +2247,54 @@ describe('GET /api/runs/:runId/artifacts', () => {
     expect(body.files.map(f => f.path)).toEqual(['out.md']);
   });
 
-  test('the ARCHON_HOME containment guard rejects an output_root outside the tree', async () => {
+  test('an out-of-tree output_root falls through to re-derivation, keeping the tree relocatable', async () => {
+    // Durability, not just correctness: move ARCHON_HOME (machine migration,
+    // restored backup, the ARCHON_DATA split) and EVERY stamped root is
+    // out-of-tree. Hard-failing here would permanently un-browse every
+    // historical run whose artifacts are sitting right there under the new
+    // home — and output_root is write-once via COALESCE, so the app could never
+    // clear the column to recover.
+    const runId = 'run-stale-root';
+    const dir = join(wsRoot(), '_local', 'workspace', 'artifacts', 'runs', runId);
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'plan.md'), '# still here');
+
+    mockGetWorkflowRun.mockImplementationOnce(async () => ({
+      ...MOCK_RUNNING_RUN,
+      id: runId,
+      codebase_id: 'cb-1',
+      // A root from the OLD home — the shape every run has after a relocation.
+      output_root: '/previous/archon/home/workspaces/_local/workspace',
+    }));
+    mockGetCodebase.mockImplementationOnce(async () => ({
+      name: 'workspace',
+      kind: 'repo',
+      default_cwd: '/home/u/workspace',
+    }));
+
+    const { app } = makeApp();
+    const response = await app.request(`/api/runs/${runId}/artifacts`);
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { files: { path: string }[] };
+    expect(body.files.map(f => f.path)).toEqual(['plan.md']);
+  });
+
+  test('the containment guard still rejects a DERIVED path that escapes the tree', async () => {
+    // The guard's live purpose after the fix: nothing re-derivable, and a
+    // persisted root that cannot be trusted, must not serve a path outside
+    // ARCHON_HOME.
     mockGetWorkflowRun.mockImplementationOnce(async () => ({
       ...MOCK_RUNNING_RUN,
       id: 'run-escape-root',
-      codebase_id: 'cb-1',
+      codebase_id: null,
       output_root: '/etc',
     }));
     const { app } = makeApp();
     const response = await app.request('/api/runs/run-escape-root/artifacts');
-    expect(response.status).toBe(400);
-    const body = (await response.json()) as { error: string };
-    expect(body.error).toContain('Invalid artifact path');
+    // No codebase to re-derive from, and the persisted root is untrusted, so the
+    // location is genuinely unresolvable.
+    expect(response.status).toBe(404);
   });
 
   test('returns 500 + logs when the codebase lookup throws', async () => {
@@ -2378,18 +2414,45 @@ describe('GET /api/artifacts/:runId/* storage-key resolution', () => {
     expect(await response.text()).toBe('# local plan');
   });
 
-  test('rejects an output_root that escapes ARCHON_HOME', async () => {
+  test('an out-of-tree output_root falls through to re-derivation and still serves', async () => {
+    // Same relocation case as the list route: a stamped root from a previous
+    // ARCHON_HOME must not permanently un-serve a run whose file is present.
+    const runId = 'run-serve-stale-root';
+    const dir = join(wsRoot(), '_local', 'workspace', 'artifacts', 'runs', runId);
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'plan.md'), '# still here');
+
+    mockGetWorkflowRun.mockImplementationOnce(async () => ({
+      ...MOCK_RUNNING_RUN,
+      id: runId,
+      codebase_id: 'cb-1',
+      output_root: '/previous/archon/home/workspaces/_local/workspace',
+    }));
+    mockGetCodebase.mockImplementationOnce(async () => ({
+      name: 'workspace',
+      kind: 'repo',
+      default_cwd: '/home/u/workspace',
+    }));
+
+    const { app } = makeApp();
+    const response = await app.request(`/api/artifacts/${runId}/plan.md`);
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('# still here');
+  });
+
+  test('an untrusted output_root with nothing to re-derive from is unresolvable', async () => {
     mockGetWorkflowRun.mockImplementationOnce(async () => ({
       ...MOCK_RUNNING_RUN,
       id: 'run-serve-escape-root',
-      codebase_id: 'cb-1',
+      codebase_id: null,
       output_root: '/etc',
     }));
     const { app } = makeApp();
     const response = await app.request('/api/artifacts/run-serve-escape-root/passwd');
-    expect(response.status).toBe(400);
+    expect(response.status).toBe(404);
     const body = (await response.json()) as { error: string };
-    expect(body.error).toContain('Invalid artifact path');
+    expect(body.error).toContain('could not resolve');
   });
 
   test('a valid owner/repo name resolves and proceeds to the file read', async () => {

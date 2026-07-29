@@ -269,7 +269,16 @@ function resolveRunArtifactDir(
   codebase: { kind?: string | null; name: string; default_cwd: string } | null,
   runId: string
 ): string | null {
-  if (run.output_root) {
+  // The containment check belongs INSIDE this branch, not after it. A persisted
+  // root is a cache of where the run wrote, not an authority: move ARCHON_HOME
+  // (machine migration, restored backup, the documented ARCHON_DATA split) and
+  // every stamped root is suddenly out-of-tree. Guarding after the fact would
+  // hard-400 every historical run even when its artifacts sit re-derivable and
+  // physically present under the new home — and `output_root` is write-once via
+  // COALESCE, so the app could never clear the column to recover. Falling
+  // through to re-derivation keeps the tree relocatable, which is how it behaved
+  // before the column existed. Matches `continue.ts`.
+  if (run.output_root && isInsideArchonHome(run.output_root)) {
     return getRunArtifactsDirForRoot(run.output_root, runId);
   }
   if (!codebase?.name) return null;
@@ -709,8 +718,12 @@ const listRunArtifactsRoute = createRoute({
   summary: "List a run's artifact files",
   description:
     "Walks the run's artifact directory and returns relative file paths with size + " +
-    'mtime. Drives the console Artifacts tab. Returns `{ files: [] }` when the run ' +
-    'has no codebase or the codebase name is not in `owner/repo` form.',
+    'mtime. Drives the console Artifacts tab. Resolves for every project kind — ' +
+    "`owner/repo`, `_local/<basename>`, and `_folder/<slug>` — preferring the run's " +
+    'persisted `output_root` and re-deriving from the codebase when it is absent or ' +
+    'no longer inside ARCHON_HOME. Returns `{ files: [] }` only when the location ' +
+    'resolved and the run genuinely wrote nothing; returns 404 when the output ' +
+    'location cannot be resolved at all.',
   request: {
     params: z.object({ runId: z.string() }),
   },

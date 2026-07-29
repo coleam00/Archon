@@ -875,7 +875,10 @@ This is an **authoring** concern, not an engine one. Options, in order of prefer
   matter.
 - **Accept last-writer-wins.** Fine when the state is a cache or a cursor that self-corrects.
 - **Don't run the workflow concurrently.** A workflow with `worktree: enabled: false` shares
-  one working path and is already serialized by the path lock.
+  one working path, and the path lock **rejects** a second run on that path outright — it
+  does not queue it. So concurrent state writes cannot arise there in the first place; the
+  second invocation fails fast with "This worktree is in use" and the operator re-runs it
+  afterwards.
 
 Put the state write in a `script:` node, not in an AI node's Write tool. A `script:` node is
 a guarantee; a prompt instructing an AI node to append is a convention it may not follow.
