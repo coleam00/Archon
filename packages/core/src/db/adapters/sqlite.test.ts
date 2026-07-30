@@ -374,30 +374,67 @@ describe('SqliteAdapter', () => {
      *
      * Better Auth's remote_agent_auth_* tables are intentionally Postgres-only
      * (web auth never runs on SQLite — see migrateColumns() and CLAUDE.md), so
-     * the table-parity check excludes that prefix. The separate, exact
+     * the parity checks exclude that prefix. The separate, exact
      * remote_agent_codebases.allow_env_keys column exception is tracked by
      * #2318; keep it column-specific. A genuinely new Postgres-only table
      * must be added to the table allowlist with a justifying comment.
+     *
+     * Table discovery is deliberately independent of column-body parsing: a
+     * table that is present in the migration but missing from sqlite.ts is the
+     * original drift class (PR #2033), and it must stay caught even if its
+     * CREATE body is unparseable for any reason.
      */
     const POSTGRES_ONLY_PREFIX = 'remote_agent_auth_';
     // #2318 owns this known dead Postgres-only residue. Keep the exception
     // column-specific so every other codebases column remains protected.
     const POSTGRES_ONLY_COLUMNS = new Set(['remote_agent_codebases.allow_env_keys']);
+    // Reverse-direction residue: declared in sqlite.ts, never added to the
+    // migration, and read by nothing. Harmless but real — and reverse drift is
+    // the works-locally / breaks-on-the-Postgres-VPS direction, so the check
+    // itself is worth keeping even though today it costs one entry.
+    const SQLITE_ONLY_COLUMNS = new Set(['remote_agent_isolation_environments.updated_at']);
     const TABLE_CONSTRAINTS = new Set(['check', 'constraint', 'foreign', 'primary', 'unique']);
+    /**
+     * Floor for the number of non-auth columns actually compared. A parser bug
+     * that silently drops columns (rather than mismatching them) makes the
+     * comparison pass vacuously, which is exactly how a truncating body regex
+     * shipped: a `);` inside a comment cut a table from 7 columns to 3 and the
+     * suite stayed green. Adjust when the schema legitimately changes size —
+     * the failure names the count, so the intended value is never a guess.
+     */
+    const MIN_NON_AUTH_COLUMNS = 136;
+
+    /**
+     * Archon table names declared by the Postgres migration. Body-independent
+     * on purpose — see the note above about the PR #2033 drift class.
+     */
+    function postgresArchonTables(): string[] {
+      const re = /CREATE TABLE(?:\s+IF NOT EXISTS)?\s+"?([a-z0-9_]+)"?/gi;
+      // All Archon tables share this prefix (CLAUDE.md).
+      const names = [...stripSqlComments(getSchemaSQL()).matchAll(re)]
+        .map(m => m[1].toLowerCase())
+        .filter(name => name.startsWith('remote_agent_'));
+      return [...new Set(names)];
+    }
 
     /** Extract Archon table columns declared or added by the Postgres migration. */
     function postgresArchonColumns(): Map<string, Set<string>> {
-      const sql = getSchemaSQL();
+      // Comments are stripped first: `migrations/000_combined.sql` writes `);`
+      // inside prose comments as a matter of house style, and any paren- or
+      // semicolon-sensitive scan would otherwise end a table body early.
+      const sql = stripSqlComments(getSchemaSQL());
       const columnsByTable = new Map<string, Set<string>>();
-      const createTableRe =
-        /CREATE TABLE(?:\s+IF NOT EXISTS)?\s+"?([a-z0-9_]+)"?\s*\(([\s\S]*?)\);/gi;
+      const createTableRe = /CREATE TABLE(?:\s+IF NOT EXISTS)?\s+"?([a-z0-9_]+)"?\s*\(/gi;
 
       for (const match of sql.matchAll(createTableRe)) {
         const table = match[1].toLowerCase();
         if (!table.startsWith('remote_agent_')) continue;
 
-        const columns = new Set<string>();
-        for (const declaration of match[2].split('\n')) {
+        const columns = columnsByTable.get(table) ?? new Set<string>();
+        // Depth-tracked so nested parens in REFERENCES / CHECK / DEFAULT
+        // clauses cannot terminate the body or split a declaration.
+        const body = readBalancedParens(sql, match.index + match[0].length - 1);
+        for (const declaration of splitTopLevelCommas(body)) {
           const identifier = declaration.trim().match(/^(?:"([^"]+)"|([a-z_][a-z0-9_]*))/i);
           if (!identifier) continue;
 
@@ -420,6 +457,14 @@ describe('SqliteAdapter', () => {
       return columnsByTable;
     }
 
+    /** Table → columns as the fresh SQLite schema (createSchema()) built them. */
+    async function sqliteSchemaColumns(): Promise<Map<string, Set<string>>> {
+      const result = await db.query<{ name: string }>(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+      );
+      return new Map(result.rows.map(r => [r.name, new Set(raw_pragma(currentDbPath, r.name))]));
+    }
+
     test('every non-auth Postgres table is created by the SQLite schema', async () => {
       db = createTestDb();
       const result = await db.query<{ name: string }>(
@@ -427,8 +472,7 @@ describe('SqliteAdapter', () => {
       );
       const sqliteTables = new Set(result.rows.map(r => r.name));
 
-      const postgresColumns = postgresArchonColumns();
-      const expected = [...postgresColumns.keys()].filter(
+      const expected = postgresArchonTables().filter(
         table => !table.startsWith(POSTGRES_ONLY_PREFIX)
       );
       // Sanity: the parse found the table set, including the exact table whose
@@ -441,29 +485,95 @@ describe('SqliteAdapter', () => {
       expect(missing).toEqual([]);
     });
 
-    test('every non-auth Postgres column exists in a fresh SQLite schema', () => {
+    test('every non-auth Postgres column exists in a fresh SQLite schema', async () => {
       db = createTestDb();
       const postgresColumns = postgresArchonColumns();
-      const codebaseColumns = postgresColumns.get('remote_agent_codebases');
-      const userColumns = postgresColumns.get('remote_agent_users');
+      const sqliteColumns = await sqliteSchemaColumns();
 
       // Anti-vacuity checks cover a CREATE declaration and an ALTER-only one.
-      expect(codebaseColumns?.has('allow_env_keys')).toBe(true);
-      expect(userColumns?.has('role')).toBe(true);
+      // Deliberately NOT an allowlisted column: fixing a listed drift should
+      // require editing the allowlist and nothing else.
+      expect(postgresColumns.get('remote_agent_codebases')?.has('default_cwd')).toBe(true);
+      expect(postgresColumns.get('remote_agent_users')?.has('role')).toBe(true);
 
       const missing: string[] = [];
-      for (const [table, expectedColumns] of postgresColumns) {
+      let compared = 0;
+      for (const table of postgresArchonTables()) {
         if (table.startsWith(POSTGRES_ONLY_PREFIX)) continue;
-        const sqliteColumns = new Set(raw_pragma(currentDbPath, table));
+        const expectedColumns = postgresColumns.get(table) ?? new Set<string>();
+        const actualColumns = sqliteColumns.get(table) ?? new Set<string>();
         for (const column of expectedColumns) {
+          compared++;
           const qualifiedColumn = `${table}.${column}`;
-          if (!sqliteColumns.has(column) && !POSTGRES_ONLY_COLUMNS.has(qualifiedColumn)) {
+          if (!actualColumns.has(column) && !POSTGRES_ONLY_COLUMNS.has(qualifiedColumn)) {
             missing.push(qualifiedColumn);
           }
         }
       }
 
+      expect(compared).toBeGreaterThanOrEqual(MIN_NON_AUTH_COLUMNS);
       expect(missing.sort()).toEqual([]);
+    });
+
+    test('every SQLite column exists in the Postgres migration', async () => {
+      db = createTestDb();
+      const postgresColumns = postgresArchonColumns();
+      const sqliteColumns = await sqliteSchemaColumns();
+
+      const extra: string[] = [];
+      for (const [table, actualColumns] of sqliteColumns) {
+        const expectedColumns = postgresColumns.get(table);
+        // No Postgres counterpart at all: a SQLite-only table. Nothing else
+        // checks this direction, so report the whole table rather than 20
+        // individual column lines.
+        if (!expectedColumns) {
+          extra.push(`${table}.*`);
+          continue;
+        }
+        for (const column of actualColumns) {
+          const qualifiedColumn = `${table}.${column}`;
+          if (!expectedColumns.has(column) && !SQLITE_ONLY_COLUMNS.has(qualifiedColumn)) {
+            extra.push(qualifiedColumn);
+          }
+        }
+      }
+
+      expect(extra.sort()).toEqual([]);
+    });
+
+    /**
+     * Self-expiring allowlists: an entry stops being an exception the moment
+     * the drift it names is fixed, so assert each one still describes reality.
+     * Fixing #2318 (dropping allow_env_keys from the migration) fails here
+     * until the allowlist entry is deleted — the exception cannot outlive its
+     * reason and quietly keep a real column unprotected.
+     */
+    test('parity allowlists still describe real drift', async () => {
+      db = createTestDb();
+      const postgresColumns = postgresArchonColumns();
+      const sqliteColumns = await sqliteSchemaColumns();
+
+      const stale: string[] = [];
+      for (const qualifiedColumn of POSTGRES_ONLY_COLUMNS) {
+        const [table, column] = qualifiedColumn.split('.');
+        if (!postgresColumns.get(table)?.has(column)) {
+          stale.push(`${qualifiedColumn} (no longer in the Postgres migration)`);
+        }
+        if (sqliteColumns.get(table)?.has(column)) {
+          stale.push(`${qualifiedColumn} (now exists in SQLite)`);
+        }
+      }
+      for (const qualifiedColumn of SQLITE_ONLY_COLUMNS) {
+        const [table, column] = qualifiedColumn.split('.');
+        if (!sqliteColumns.get(table)?.has(column)) {
+          stale.push(`${qualifiedColumn} (no longer in the SQLite schema)`);
+        }
+        if (postgresColumns.get(table)?.has(column)) {
+          stale.push(`${qualifiedColumn} (now exists in the Postgres migration)`);
+        }
+      }
+
+      expect(stale.sort()).toEqual([]);
     });
 
     test('parent_run_id index exists on a fresh SQLite schema', () => {
@@ -590,6 +700,77 @@ describe('SqliteAdapter', () => {
     });
   });
 });
+
+/**
+ * Advance past a SQL string literal / quoted identifier that opens at `start`,
+ * returning the index of its closing quote. Doubled quotes escape.
+ */
+function skipQuoted(sql: string, start: number): number {
+  const quote = sql[start];
+  for (let i = start + 1; i < sql.length; i++) {
+    if (sql[i] !== quote) continue;
+    // A doubled quote escapes itself — not the end of the literal.
+    if (sql[i + 1] === quote) i++;
+    else return i;
+  }
+  return sql.length;
+}
+
+/** Remove SQL line and block comments, preserving quoted text. */
+function stripSqlComments(sql: string): string {
+  let out = '';
+  let i = 0;
+  while (i < sql.length) {
+    if (sql[i] === "'" || sql[i] === '"') {
+      const end = skipQuoted(sql, i);
+      out += sql.slice(i, end + 1);
+      i = end + 1;
+    } else if (sql[i] === '-' && sql[i + 1] === '-') {
+      while (i < sql.length && sql[i] !== '\n') i++;
+    } else if (sql[i] === '/' && sql[i + 1] === '*') {
+      const end = sql.indexOf('*/', i + 2);
+      i = end === -1 ? sql.length : end + 2;
+    } else {
+      out += sql[i];
+      i++;
+    }
+  }
+  return out;
+}
+
+/**
+ * Return the text between the `(` at `openIndex` and its matching `)`, tracking
+ * nesting depth so `REFERENCES t(id)` / `CHECK (id = 1)` / `DEFAULT NOW()` do
+ * not end the body early. Throws rather than returning a truncated body — a
+ * silently short column list is the failure mode this whole parser guards.
+ */
+function readBalancedParens(sql: string, openIndex: number): string {
+  let depth = 0;
+  for (let i = openIndex; i < sql.length; i++) {
+    if (sql[i] === "'" || sql[i] === '"') i = skipQuoted(sql, i);
+    else if (sql[i] === '(') depth++;
+    else if (sql[i] === ')' && --depth === 0) return sql.slice(openIndex + 1, i);
+  }
+  throw new Error(`Unbalanced parentheses in schema SQL at index ${openIndex}`);
+}
+
+/** Split a CREATE TABLE body on its top-level commas (depth- and quote-aware). */
+function splitTopLevelCommas(body: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < body.length; i++) {
+    if (body[i] === "'" || body[i] === '"') i = skipQuoted(body, i);
+    else if (body[i] === '(') depth++;
+    else if (body[i] === ')') depth--;
+    else if (body[i] === ',' && depth === 0) {
+      parts.push(body.slice(start, i));
+      start = i + 1;
+    }
+  }
+  parts.push(body.slice(start));
+  return parts;
+}
 
 function raw_pragma(dbPath: string, table: string): string[] {
   const raw = new Database(dbPath, { readonly: true });
