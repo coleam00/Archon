@@ -4802,6 +4802,84 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
     expect(completedEvent?.[0].data).not.toHaveProperty('tokens');
   });
 
+  it('persists only {input, output} — provider-defined total/cost are not part of the shape', async () => {
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'out' };
+      // Pi/OpenCode shape: `total` folds in cache/reasoning tokens, so it is NOT
+      // input + output. Persisting it would hand consumers a field they cannot
+      // interpret without knowing the provider; `cost` duplicates cost_usd.
+      yield {
+        type: 'result',
+        sessionId: 'shape-sid',
+        tokens: { input: 100, output: 10, total: 900, cost: 0.5 },
+      };
+    });
+
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+
+    await executeDagWorkflow(
+      mockDeps,
+      createMockPlatform(),
+      'conv-shape',
+      testDir,
+      { name: 'token-shape', nodes: [{ id: 'step1', command: 'step1' }] },
+      makeWorkflowRun('token-shape-run'),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls as Array<
+      [{ event_type: string; step_name: string; data?: Record<string, unknown> }]
+    >;
+    const completedEvent = eventCalls.find(
+      ([event]) => event.event_type === 'node_completed' && event.step_name === 'step1'
+    );
+    expect(completedEvent?.[0].data?.tokens).toEqual({ input: 100, output: 10 });
+  });
+
+  it('drops non-finite provider token counts instead of persisting them', async () => {
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'out' };
+      yield { type: 'result', sessionId: 'nan-sid', tokens: { input: NaN, output: 10 } };
+    });
+
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+
+    await executeDagWorkflow(
+      mockDeps,
+      createMockPlatform(),
+      'conv-nan',
+      testDir,
+      { name: 'nan-tokens', nodes: [{ id: 'step1', command: 'step1' }] },
+      makeWorkflowRun('nan-tokens-run'),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls as Array<
+      [{ event_type: string; step_name: string; data?: Record<string, unknown> }]
+    >;
+    const completedEvent = eventCalls.find(
+      ([event]) => event.event_type === 'node_completed' && event.step_name === 'step1'
+    );
+    expect(completedEvent).toBeDefined();
+    // A NaN would serialize to `{input: null, output: 10}` — a wrong number that
+    // gets believed. Absence is the honest answer.
+    expect(completedEvent?.[0].data).not.toHaveProperty('tokens');
+  });
+
   // ─── Background Agent Task Gating (#2083) ───────────────────────────────
 
   describe('background task completion gating (#2083)', () => {
@@ -6485,7 +6563,7 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
           type: 'assistant',
           content: 'Plan approved. Proceeding. <promise>APPROVED</promise>',
         };
-        yield { type: 'result', sessionId: 'loop-session-2' };
+        yield { type: 'result', sessionId: 'loop-session-2', tokens: { input: 40, output: 4 } };
       });
 
       const mockDeps = createMockDeps();
@@ -6538,6 +6616,9 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         // The gate persists the signal state (#2074) so a bare approve can
         // finalize at resume instead of re-running the iteration.
         completionSignaled: true,
+        // ...and the usage consumed up to the gate (#2333), so the finalize path
+        // does not report a silent zero for iterations that really ran.
+        signaledTokens: { input: 40, output: 4 },
       });
       const signaledOutput = (pauseCalls[0][1] as { signaledOutput: string }).signaledOutput;
       expect(signaledOutput).toContain('Plan approved');
@@ -6753,6 +6834,7 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
             message: 'gate',
             completionSignaled: true,
             signaledOutput: 'REPORT',
+            signaledTokens: { input: 40, output: 4 },
           },
           loop_user_input: 'Approved',
           loop_feedback_given: false,
@@ -6805,6 +6887,81 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       );
       expect(completed.length).toBe(1);
       expect(completed[0][0].data.node_output).toBe('REPORT');
+      // The finalize row reports the usage the pausing invocation consumed (#2333).
+      // Without this it persists duration_ms: 0 and no tokens for iterations that
+      // really ran — a silent zero, not an absence.
+      expect(completed[0][0].data.tokens).toEqual({ input: 40, output: 4 });
+    });
+
+    it('finalize omits tokens when the gate persisted none (legacy pause / no usage) (#2333)', async () => {
+      mockSendQueryDag.mockImplementation(function* () {
+        yield { type: 'assistant', content: 'should never run' };
+        yield { type: 'result', sessionId: 'never' };
+      });
+
+      const mockDeps = createMockDeps();
+      const workflowRun = makeWorkflowRun('finalize-no-tokens-run', {
+        metadata: {
+          approval: {
+            type: 'interactive_loop',
+            nodeId: 'refine',
+            iteration: 1,
+            sessionId: 'sig-session-1',
+            message: 'gate',
+            completionSignaled: true,
+            signaledOutput: 'REPORT',
+            // No signaledTokens key at all — a run paused by a build predating #2333.
+          },
+          loop_user_input: 'Approved',
+          loop_feedback_given: false,
+        },
+      });
+
+      await executeDagWorkflow(
+        mockDeps,
+        createMockPlatform(),
+        'conv-dag',
+        testDir,
+        {
+          name: 'finalize-on-approve',
+          nodes: [
+            {
+              id: 'refine',
+              loop: {
+                prompt: 'Refine.',
+                until: 'APPROVED',
+                max_iterations: 10,
+                interactive: true,
+                gate_message: 'Review.',
+              },
+            },
+          ],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      expect(mockSendQueryDag.mock.calls.length).toBe(0);
+      const eventCalls = (
+        mockDeps.store.createWorkflowEvent as Mock<
+          (e: {
+            event_type: string;
+            step_name: string;
+            data: Record<string, unknown>;
+          }) => Promise<void>
+        >
+      ).mock.calls;
+      const completed = eventCalls.filter(
+        c => c[0].event_type === 'node_completed' && c[0].step_name === 'refine'
+      );
+      expect(completed.length).toBe(1);
+      expect(completed[0][0].data).not.toHaveProperty('tokens');
     });
 
     it('iterates at resume when feedback was given, even on a signal-bearing gate (#2074 C)', async () => {
@@ -14519,14 +14676,37 @@ describe('executeDagWorkflow -- loop_group node', () => {
     const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls as Array<
       [{ event_type: string; step_name: string; data?: Record<string, unknown> }]
     >;
-    const completedEvent = eventCalls.find(
+    // The BODY node's per-iteration rows are the authoritative per-node usage.
+    const bodyEvents = eventCalls.filter(
+      ([arg]) => arg.event_type === 'node_completed' && arg.step_name === 'paid.work'
+    );
+    expect(bodyEvents.map(([arg]) => arg.data?.tokens)).toEqual([
+      { input: 100, output: 10 },
+      { input: 200, output: 20 },
+    ]);
+    // The GROUP row must NOT repeat the same total under the same field name: body
+    // rows and the aggregate live in one event stream, so a consumer summing
+    // `data.tokens` would otherwise count this group twice (600/60 for 300/30).
+    const groupEvent = eventCalls.find(
       ([arg]) => arg.event_type === 'node_completed' && arg.step_name === 'paid'
     );
-    expect(completedEvent).toBeDefined();
-    expect(completedEvent?.[0].data?.tokens).toEqual({ input: 300, output: 30 });
+    expect(groupEvent).toBeDefined();
+    expect(groupEvent?.[0].data).not.toHaveProperty('tokens');
+    // The property the persisted stream must hold: a naive consumer summing every
+    // node_completed row's tokens gets the run's real usage, with no discriminator.
+    const naiveSum = eventCalls
+      .filter(([arg]) => arg.event_type === 'node_completed')
+      .reduce(
+        (acc, [arg]) => {
+          const t = arg.data?.tokens as { input: number; output: number } | undefined;
+          return t ? { input: acc.input + t.input, output: acc.output + t.output } : acc;
+        },
+        { input: 0, output: 0 }
+      );
+    expect(naiveSum).toEqual({ input: 300, output: 30 });
   });
 
-  it('omits tokens from a loop_group node_completed event when providers report no usage', async () => {
+  it('omits tokens from loop_group body node_completed events when providers report no usage', async () => {
     mockSendQueryDag.mockImplementation(function* () {
       yield { type: 'assistant', content: 'done\nDONE' };
       yield { type: 'result', sessionId: 'lg-no-usage-sid' };
@@ -14566,11 +14746,17 @@ describe('executeDagWorkflow -- loop_group node', () => {
     const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls as Array<
       [{ event_type: string; step_name: string; data?: Record<string, unknown> }]
     >;
-    const completedEvent = eventCalls.find(
+    const bodyEvent = eventCalls.find(
+      ([event]) =>
+        event.event_type === 'node_completed' && event.step_name === 'no-usage-group.work'
+    );
+    expect(bodyEvent).toBeDefined();
+    expect(bodyEvent?.[0].data).not.toHaveProperty('tokens');
+    const groupEvent = eventCalls.find(
       ([event]) => event.event_type === 'node_completed' && event.step_name === 'no-usage-group'
     );
-    expect(completedEvent).toBeDefined();
-    expect(completedEvent?.[0].data).not.toHaveProperty('tokens');
+    expect(groupEvent).toBeDefined();
+    expect(groupEvent?.[0].data).not.toHaveProperty('tokens');
   });
 
   it('SESSION: fresh_context=false threads the body session between iterations', async () => {

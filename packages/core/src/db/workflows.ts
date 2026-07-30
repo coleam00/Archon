@@ -965,6 +965,7 @@ export async function pauseWorkflowRun(
             // null as absent (`!= null`).
             completionSignaled: approvalContext.completionSignaled ?? null,
             signaledOutput: approvalContext.signaledOutput ?? null,
+            signaledTokens: approvalContext.signaledTokens ?? null,
             onRejectPrompt: approvalContext.onRejectPrompt ?? null,
             onRejectMaxAttempts: approvalContext.onRejectMaxAttempts ?? null,
             captureResponse: approvalContext.captureResponse ?? null,

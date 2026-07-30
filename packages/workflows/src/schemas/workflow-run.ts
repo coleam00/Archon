@@ -216,6 +216,20 @@ export interface ApprovalContext {
    */
   signaledOutput?: string | null;
   /**
+   * Interactive-loop only. Token usage accumulated by the invocation that produced the
+   * signal-bearing paused iteration, persisted so the finalize-on-approve path can write
+   * a node_completed carrying the usage it really consumed instead of a silent zero
+   * (#2333). Only set when completionSignaled is true; null otherwise.
+   *
+   * Scope note: this is the PAUSING invocation's total, matching what the normal
+   * (re-run) completion path reports — a loop that gated more than once attributes each
+   * invocation's usage to that invocation, and earlier ones are only visible in the
+   * run-level totals. The gate loses `cost_usd` and the resolved model the same way;
+   * those belong to the single "preserve terminal provider stats across a gate" fix
+   * tracked by #2345.
+   */
+  signaledTokens?: { input: number; output: number } | null;
+  /**
    * Interactive-loop only. Read-once snapshot of a command-backed loop's
    * (`loop.command`) loaded prompt body, persisted at gate pause so the resumed
    * invocation reuses the exact text the run started with — a command file
