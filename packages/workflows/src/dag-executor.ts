@@ -1578,6 +1578,34 @@ async function executeNodeInternal(
             );
           });
       } else if (msg.type === 'tool_result' && msg.toolName) {
+        const now = Date.now();
+        if (lastToolStartedAt) {
+          const completedTool = lastToolStartedAt;
+          getWorkflowEventEmitter().emit({
+            type: 'tool_completed',
+            runId: workflowRun.id,
+            toolName: completedTool.toolName,
+            stepName: node.id,
+            durationMs: now - completedTool.startedAt,
+          });
+          deps.store
+            .createWorkflowEvent({
+              workflow_run_id: workflowRun.id,
+              event_type: 'tool_completed',
+              step_name: stepName,
+              data: {
+                tool_name: completedTool.toolName,
+                duration_ms: now - completedTool.startedAt,
+              },
+            })
+            .catch((err: Error) => {
+              getLog().error(
+                { err, workflowRunId: workflowRun.id, eventType: 'tool_completed' },
+                'workflow_event_persist_failed'
+              );
+            });
+          lastToolStartedAt = null;
+        }
         if (streamingMode === 'stream' && platform.sendStructuredEvent) {
           await platform.sendStructuredEvent(conversationId, msg);
         }
@@ -4279,8 +4307,35 @@ async function executeLoopNode(
             .catch((err: Error) => {
               logEventStoreError(err, i);
             });
-        } else if (msg.type === 'tool_result' && platform.sendStructuredEvent) {
-          await platform.sendStructuredEvent(conversationId, msg);
+        } else if (msg.type === 'tool_result' && msg.toolName) {
+          const now = Date.now();
+          if (lastToolStartedAt) {
+            const completedTool = lastToolStartedAt;
+            getWorkflowEventEmitter().emit({
+              type: 'tool_completed',
+              runId: workflowRun.id,
+              toolName: completedTool.toolName,
+              stepName: node.id,
+              durationMs: now - completedTool.startedAt,
+            });
+            deps.store
+              .createWorkflowEvent({
+                workflow_run_id: workflowRun.id,
+                event_type: 'tool_completed',
+                step_name: stepName,
+                data: {
+                  tool_name: completedTool.toolName,
+                  duration_ms: now - completedTool.startedAt,
+                },
+              })
+              .catch((err: Error) => {
+                logEventStoreError(err, i);
+              });
+            lastToolStartedAt = null;
+          }
+          if (platform.sendStructuredEvent) {
+            await platform.sendStructuredEvent(conversationId, msg);
+          }
         }
         // rate_limit chunks: already log.warn'd in claude.ts; not surfaced to SSE per design
       }
