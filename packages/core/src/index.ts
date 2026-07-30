@@ -39,10 +39,12 @@ export {
   getDialect,
   getDatabaseType,
   getDbNotificationListener,
+  getSchemaVersion,
   closeDatabase,
   resetDatabase,
 } from './db/connection';
 export type { IDatabase, SqlDialect, DbNotificationListener } from './db/adapters/types';
+export type { SchemaVersionInfo } from './db/schema-version';
 
 // Namespaced db modules for explicit access
 export * as conversationDb from './db/conversations';

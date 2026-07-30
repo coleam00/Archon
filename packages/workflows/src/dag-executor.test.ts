@@ -3503,6 +3503,54 @@ describe('executeDagWorkflow -- tool_completed event emission', () => {
     expect(typeof completedEvents[0][0].data?.duration_ms).toBe('number');
   });
 
+  it('emits a DAG tool_completed duration at tool_result, excluding later assistant time', async () => {
+    const mockStore = createMockStore();
+    const mockDeps = createMockDeps(mockStore);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'tool', toolName: 'read_file', toolInput: { path: '/a' } };
+      setSystemTime(new Date('2026-01-01T00:00:00.050Z'));
+      yield { type: 'tool_result', toolName: 'read_file', toolOutput: 'contents' };
+      setSystemTime(new Date('2026-01-01T00:01:00.050Z'));
+      yield { type: 'assistant', content: 'post-tool reasoning' };
+      yield { type: 'result', sessionId: 'dag-sess-tool-result' };
+    });
+
+    try {
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-dag-tool-result',
+        testDir,
+        { name: 'dag-tool-result-test', nodes: [node('my-cmd')] },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+    } finally {
+      setSystemTime();
+    }
+
+    const completedEvents = (
+      mockStore.createWorkflowEvent as ReturnType<typeof mock>
+    ).mock.calls.filter(
+      ([event]: [{ event_type: string }]) => event.event_type === 'tool_completed'
+    );
+    expect(completedEvents).toHaveLength(1);
+    expect(completedEvents[0][0].data).toMatchObject({
+      tool_name: 'read_file',
+      duration_ms: 50,
+    });
+  });
+
   it('should not emit tool_completed when no tools were called in DAG node', async () => {
     const mockStore = createMockStore();
     const mockDeps = createMockDeps(mockStore);
@@ -4902,6 +4950,66 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
   // ─── Loop Node Tests ─────────────────────────────────────────────────────
 
   describe('loop node execution', () => {
+    it('emits a loop tool_completed duration at tool_result, excluding later assistant time', async () => {
+      const store = createMockStore();
+      const mockDeps = createMockDeps(store);
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun('loop-tool-result-run');
+
+      setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+      mockSendQueryDag.mockImplementation(function* () {
+        yield { type: 'tool', toolName: 'read_file', toolInput: { path: '/a' } };
+        setSystemTime(new Date('2026-01-01T00:00:00.050Z'));
+        yield { type: 'tool_result', toolName: 'read_file', toolOutput: 'contents' };
+        setSystemTime(new Date('2026-01-01T00:01:00.050Z'));
+        yield { type: 'assistant', content: 'Done. <promise>COMPLETE</promise>' };
+        yield { type: 'result', sessionId: 'loop-sess-tool-result' };
+      });
+
+      try {
+        await executeDagWorkflow(
+          mockDeps,
+          platform,
+          'conv-dag',
+          testDir,
+          {
+            name: 'dag-loop-tool-result',
+            nodes: [
+              {
+                id: 'my-loop',
+                loop: {
+                  prompt: 'Do a task. When done, output <promise>COMPLETE</promise>.',
+                  until: 'COMPLETE',
+                  max_iterations: 5,
+                },
+              },
+            ],
+          },
+          workflowRun,
+          'claude',
+          undefined,
+          join(testDir, 'artifacts'),
+          join(testDir, 'logs'),
+          'main',
+          'docs/',
+          minimalConfig
+        );
+      } finally {
+        setSystemTime();
+      }
+
+      const completedEvents = (
+        store.createWorkflowEvent as ReturnType<typeof mock>
+      ).mock.calls.filter(
+        ([event]: [{ event_type: string }]) => event.event_type === 'tool_completed'
+      );
+      expect(completedEvents).toHaveLength(1);
+      expect(completedEvents[0][0].data).toMatchObject({
+        tool_name: 'read_file',
+        duration_ms: 50,
+      });
+    });
+
     it('completes on <promise>COMPLETE</promise> signal in first iteration', async () => {
       mockSendQueryDag.mockImplementation(function* () {
         yield { type: 'assistant', content: 'Did the task. <promise>COMPLETE</promise>' };

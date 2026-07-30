@@ -42,6 +42,20 @@ if [ "$translated" = "fail" ]; then
 fi
 echo "$translated"
 EOF
+  # detect_with_mocks SOURCES the installer, so it depends on the source-guard
+  # suppressing main(). If that guard ever regresses, main() runs and reaches the real
+  # release URL over curl -- and sudo mkdir/mv with a non-writable INSTALL_DIR -- during
+  # `bun run validate`. These stubs turn that latent network/privilege side effect into a
+  # deterministic local failure.
+  for forbidden in curl sudo; do
+    cat >"$mock_dir/$forbidden" <<EOF
+#!/usr/bin/env bash
+echo "TEST BUG: sourced installer invoked $forbidden — the source guard is not suppressing main()" >&2
+exit 99
+EOF
+    chmod +x "$mock_dir/$forbidden"
+  done
+
   chmod +x "$mock_dir/uname" "$mock_dir/sysctl"
   echo "$mock_dir"
 }
@@ -70,6 +84,12 @@ assert_platform Darwin x86_64 fail darwin-x64 "Native Intel platform without Ros
 
 cmp -s "$installer" "$repo_root/packages/docs-web/public/install" \
   || fail "public installer mirror differs from scripts/install.sh"
+
+# The PowerShell pair needs the same guard. It had ALREADY drifted: the public copy
+# was missing the @() array wrapper from 53cabd44 (#1000), so `irm … | iex` shipped a
+# PATH-corrupting installer to Windows users while the repo copy was fixed. #2339.
+cmp -s "$repo_root/scripts/install.ps1" "$repo_root/packages/docs-web/public/install.ps1" \
+  || fail "public install.ps1 mirror differs from scripts/install.ps1"
 
 mock_dir="$tmp_dir/install-mocks"
 install_dir="$tmp_dir/install-bin"
@@ -129,5 +149,26 @@ case "$install_output" in
   *"archon 1.2.3"*) ;;
   *) fail "Installer prints verified version" ;;
 esac
+
+# Regression for #2338: the installer must survive being READ FROM STDIN, which is how
+# `curl -fsSL … | bash` delivers it. There BASH_SOURCE[0] is unbound, and with `set -u` a
+# bare reference aborted the script before main() ran — the documented install path failed
+# for every user on every platform. Every other case here invokes the installer by path or
+# sources it, so none of them can catch this.
+#
+# Mocked curl + a scratch INSTALL_DIR keep this off the network and out of the real system.
+piped_status=0
+piped_stderr="$(PATH="$success_mock_dir:$PATH" INSTALL_DIR="$tmp_dir/piped-bin" \
+  SKIP_CHECKSUM=true bash <"$installer" 2>&1 >/dev/null)" || piped_status=$?
+# Specific diagnosis FIRST, generic assertion second. With the order reversed the
+# assert_equals fired on any regression and this case block was dead code, so the
+# #2338 failure reported only "expected 0, got 1" with no hint at the cause.
+case "$piped_stderr" in
+  *"unbound variable"*)
+    fail "installer aborts when piped to bash (BASH_SOURCE unbound under set -u) — see #2338"
+    ;;
+esac
+assert_equals "0" "$piped_status" "Piped installer exits successfully"
+assert_equals "archon 1.2.3" "$("$tmp_dir/piped-bin/archon" version)" "Piped installer installs a working binary"
 
 echo "Installer tests passed"
