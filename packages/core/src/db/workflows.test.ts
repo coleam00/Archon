@@ -908,9 +908,10 @@ describe('workflows database', () => {
       const [updateQuery, updateParams] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(updateQuery).toContain("status = 'running'");
       expect(updateQuery).toContain('completed_at = NULL');
+      expect(updateQuery).toContain('metadata = metadata || $3::jsonb');
       // $1 = id, $2 = ORPHAN_RESUME_STALE_DAYS. The day param MUST be bound or the
       // CAS predicate's `< $2 days` references an unbound placeholder (PR #1830 C1).
-      expect(updateParams).toEqual(['workflow-run-123', 1]);
+      expect(updateParams).toEqual(['workflow-run-123', 1, JSON.stringify({ error: null })]);
       // Second call: SELECT
       const [selectQuery, selectParams] = mockQuery.mock.calls[1] as [string, unknown[]];
       expect(selectQuery).toContain('SELECT *');
@@ -949,7 +950,7 @@ describe('workflows database', () => {
       expect(updateQuery).toContain("status = 'running' AND");
       // The stale-orphan arm references $2 — it MUST be bound to the day count.
       expect(updateQuery).toContain('$2');
-      expect(updateParams).toEqual(['workflow-run-123', 1]);
+      expect(updateParams).toEqual(['workflow-run-123', 1, JSON.stringify({ error: null })]);
     });
 
     test('throws when no row matched and the run is gone (not found)', async () => {

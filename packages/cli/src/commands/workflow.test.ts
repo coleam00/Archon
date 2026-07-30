@@ -2374,6 +2374,22 @@ describe('workflowGetCommand', () => {
     expect(consoleSpy).toHaveBeenCalledWith('  Error:  Step failed: build');
   });
 
+  it('does not print an error for a completed run with cleared error metadata', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-completed',
+      workflow_name: 'implement',
+      status: 'completed',
+      working_path: '/tmp/wt',
+      started_at: new Date(),
+      metadata: { error: null },
+    });
+
+    await workflowGetCommand('run-completed');
+
+    expect(consoleSpy.mock.calls.some(([line]) => String(line).startsWith('  Error:'))).toBe(false);
+  });
+
   it('emits the raw run as a single clean JSON object', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({

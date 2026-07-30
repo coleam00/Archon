@@ -701,9 +701,10 @@ export async function resumeWorkflowRun(id: string): Promise<WorkflowRun> {
        SET status = 'running',
            completed_at = NULL,
            started_at = ${dialect.now()},
-           last_activity_at = ${dialect.now()}
+           last_activity_at = ${dialect.now()},
+           metadata = ${dialect.jsonMerge('metadata', 3)}
        WHERE id = $1 AND ${resumableStatusClause(dialect, 2)}`,
-      [id, ORPHAN_RESUME_STALE_DAYS]
+      [id, ORPHAN_RESUME_STALE_DAYS, JSON.stringify({ error: null })]
     );
   } catch (error) {
     const err = error as Error;

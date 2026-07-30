@@ -60,12 +60,17 @@ await db.query(
 );
 
 /** Insert a run with an explicit status and a SQL expression for last_activity_at. */
-async function seed(id: string, status: string, lastActivityExpr: string): Promise<void> {
+async function seed(
+  id: string,
+  status: string,
+  lastActivityExpr: string,
+  metadata: Record<string, unknown> = {}
+): Promise<void> {
   await db.query(
     `INSERT INTO remote_agent_workflow_runs
-       (id, workflow_name, conversation_id, user_message, status, started_at, last_activity_at)
-     VALUES ($1, 'wf', 'conv-1', 'msg', $2, datetime('now'), ${lastActivityExpr})`,
-    [id, status]
+       (id, workflow_name, conversation_id, user_message, status, started_at, last_activity_at, metadata)
+     VALUES ($1, 'wf', 'conv-1', 'msg', $2, datetime('now'), ${lastActivityExpr}, $3)`,
+    [id, status, JSON.stringify(metadata)]
   );
 }
 
@@ -81,6 +86,17 @@ describe('resumeWorkflowRun — real SQLite (CAS + orphan recovery)', () => {
   test('resumes a failed run', async () => {
     await seed('failed', 'failed', "datetime('now')");
     expect((await resumeWorkflowRun('failed')).status).toBe('running');
+  });
+
+  test('clears a failed run error when resuming', async () => {
+    await seed('failed-with-error', 'failed', "datetime('now')", {
+      error: 'Process terminated (SIGTERM)',
+    });
+
+    const resumed = await resumeWorkflowRun('failed-with-error');
+
+    expect(resumed.status).toBe('running');
+    expect((await getWorkflowRun('failed-with-error'))?.metadata.error ?? null).toBeNull();
   });
 
   test('resumes a paused run', async () => {
