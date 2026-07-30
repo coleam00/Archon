@@ -378,18 +378,44 @@ describe('SqliteAdapter', () => {
      * table must be added to this allowlist with a justifying comment.
      */
     const POSTGRES_ONLY_PREFIX = 'remote_agent_auth_';
+    // #2318 owns this known dead Postgres-only residue. Keep the exception
+    // column-specific so every other codebases column remains protected.
+    const POSTGRES_ONLY_COLUMNS = new Set(['remote_agent_codebases.allow_env_keys']);
+    const TABLE_CONSTRAINTS = new Set(['check', 'constraint', 'foreign', 'primary', 'unique']);
 
-    /** Extract Archon table names declared in the Postgres migration. */
-    function postgresArchonTables(): string[] {
+    /** Extract Archon table columns declared or added by the Postgres migration. */
+    function postgresArchonColumns(): Map<string, Set<string>> {
       const sql = getSchemaSQL();
-      const re = /CREATE TABLE(?:\s+IF NOT EXISTS)?\s+"?([a-z0-9_]+)"?/gi;
-      // All Archon tables share this prefix (CLAUDE.md); the filter also drops
-      // false positives — e.g. "above" captured from "...CREATE TABLE above)"
-      // inside a SQL comment.
-      const names = [...sql.matchAll(re)]
-        .map(m => m[1].toLowerCase())
-        .filter(name => name.startsWith('remote_agent_'));
-      return [...new Set(names)];
+      const columnsByTable = new Map<string, Set<string>>();
+      const createTableRe =
+        /CREATE TABLE(?:\s+IF NOT EXISTS)?\s+"?([a-z0-9_]+)"?\s*\(([\s\S]*?)\);/gi;
+
+      for (const match of sql.matchAll(createTableRe)) {
+        const table = match[1].toLowerCase();
+        if (!table.startsWith('remote_agent_')) continue;
+
+        const columns = new Set<string>();
+        for (const declaration of match[2].split('\n')) {
+          const identifier = declaration.trim().match(/^(?:"([^"]+)"|([a-z_][a-z0-9_]*))/i);
+          if (!identifier) continue;
+
+          const column = identifier[1] ?? identifier[2].toLowerCase();
+          if (!TABLE_CONSTRAINTS.has(column.toLowerCase())) columns.add(column);
+        }
+        columnsByTable.set(table, columns);
+      }
+
+      const addColumnRe =
+        /ALTER TABLE\s+"?([a-z0-9_]+)"?\s+ADD COLUMN IF NOT EXISTS\s+"?([a-z_][a-z0-9_]*)"?/gi;
+      for (const match of sql.matchAll(addColumnRe)) {
+        const table = match[1].toLowerCase();
+        if (!table.startsWith('remote_agent_')) continue;
+        const columns = columnsByTable.get(table) ?? new Set<string>();
+        columns.add(match[2].toLowerCase());
+        columnsByTable.set(table, columns);
+      }
+
+      return columnsByTable;
     }
 
     test('every non-auth Postgres table is created by the SQLite schema', async () => {
@@ -399,8 +425,9 @@ describe('SqliteAdapter', () => {
       );
       const sqliteTables = new Set(result.rows.map(r => r.name));
 
-      const expected = postgresArchonTables().filter(
-        name => !name.startsWith(POSTGRES_ONLY_PREFIX)
+      const postgresColumns = postgresArchonColumns();
+      const expected = [...postgresColumns.keys()].filter(
+        table => !table.startsWith(POSTGRES_ONLY_PREFIX)
       );
       // Sanity: the parse found the table set, including the exact table whose
       // absence triggered this regression — guards against the regex silently
@@ -412,17 +439,34 @@ describe('SqliteAdapter', () => {
       expect(missing).toEqual([]);
     });
 
-    /**
-     * The generic table-parity test above is table-name only — it gives no
-     * column coverage. `parent_run_id` (#2121 Phase 2) is added to BOTH schema
-     * sources (sqlite.ts createSchema + runtime ALTER, and 000_combined.sql). A
-     * column added to only one dialect is invisible on the default-SQLite path
-     * (VPS runs Postgres), so assert the fresh-schema column + its index exist.
-     */
-    test('parent_run_id column + index present on a fresh SQLite schema', () => {
+    test('every non-auth Postgres column exists in a fresh SQLite schema', () => {
       db = createTestDb();
-      const workflowRunCols = raw_pragma(currentDbPath, 'remote_agent_workflow_runs');
-      expect(workflowRunCols).toContain('parent_run_id');
+      const postgresColumns = postgresArchonColumns();
+      const codebaseColumns = postgresColumns.get('remote_agent_codebases');
+      const userAiPrefColumns = postgresColumns.get('remote_agent_user_ai_prefs');
+
+      // Anti-vacuity checks cover both a CREATE declaration and a column also
+      // present in an idempotent ALTER block.
+      expect(codebaseColumns?.has('allow_env_keys')).toBe(true);
+      expect(userAiPrefColumns?.has('default_model')).toBe(true);
+
+      const missing: string[] = [];
+      for (const [table, expectedColumns] of postgresColumns) {
+        if (table.startsWith(POSTGRES_ONLY_PREFIX)) continue;
+        const sqliteColumns = new Set(raw_pragma(currentDbPath, table));
+        for (const column of expectedColumns) {
+          const qualifiedColumn = `${table}.${column}`;
+          if (!sqliteColumns.has(column) && !POSTGRES_ONLY_COLUMNS.has(qualifiedColumn)) {
+            missing.push(qualifiedColumn);
+          }
+        }
+      }
+
+      expect(missing.sort()).toEqual([]);
+    });
+
+    test('parent_run_id index exists on a fresh SQLite schema', () => {
+      db = createTestDb();
       const indexes = raw_indexes(currentDbPath);
       expect(indexes).toContain('idx_workflow_runs_parent_run');
     });
