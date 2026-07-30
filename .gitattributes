@@ -3,6 +3,7 @@
 
 # Force LF line endings for files that run inside Linux containers
 *.sh text eol=lf
+packages/docs-web/public/install text eol=lf
 docker-entrypoint.sh text eol=lf
 Caddyfile text eol=lf
 Caddyfile.example text eol=lf
