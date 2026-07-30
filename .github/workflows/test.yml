@@ -47,6 +47,9 @@ jobs:
       - name: Check formatting
         run: bun run format:check
 
+      - name: Run installer tests
+        run: bun run test:install
+
       - name: Run tests
         run: bun run test
 
