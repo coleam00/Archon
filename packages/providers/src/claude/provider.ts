@@ -34,7 +34,7 @@ import {
   type HookCallback,
   type HookCallbackMatcher,
   type SDKAssistantMessageError,
-  type TerminalReason,
+  type SDKResultMessage,
 } from '@anthropic-ai/claude-agent-sdk';
 import type {
   IAgentProvider,
@@ -991,40 +991,21 @@ async function* streamClaudeMessages(
       getLog().warn({ rateLimitInfo: rateLimitMsg.rate_limit_info }, 'claude.rate_limit_event');
       yield { type: 'rate_limit', rateLimitInfo: rateLimitMsg.rate_limit_info ?? {} };
     } else if (event.type === 'result') {
-      const resultMsg = msg as {
-        session_id?: string;
-        is_error?: boolean;
-        subtype?: string;
-        usage?: { input_tokens?: number; output_tokens?: number; total_tokens?: number };
-        structured_output?: unknown;
-        total_cost_usd?: number;
-        stop_reason?: string | null;
-        num_turns?: number;
-        errors?: string[];
-        result?: string;
-        terminal_reason?: TerminalReason;
-        api_error_status?: number | null;
-        model_usage?: Record<
-          string,
-          {
-            input_tokens: number;
-            output_tokens: number;
-            cache_read_input_tokens?: number;
-            cache_creation_input_tokens?: number;
-          }
-        >;
-      };
+      const resultMsg = msg as SDKResultMessage;
+      const resolvedModelId = resultMsg.modelUsage
+        ? Object.keys(resultMsg.modelUsage)[0]
+        : undefined;
       // The terminal result resolves any recorded synthetic error message.
       const syntheticError = pendingSdkError;
       pendingSdkError = undefined;
       const tokens = normalizeClaudeUsage(resultMsg.usage);
-      const sdkErrors = Array.isArray(resultMsg.errors) ? resultMsg.errors : undefined;
+      const sdkErrors = 'errors' in resultMsg ? resultMsg.errors : undefined;
 
       // `is_error: true` + `subtype: 'success'` is ambiguous: it is BOTH the
       // SDK's stop-sequence termination encoding (#1425, a legitimate success)
       // AND its API-failure-as-text encoding (#1797 — auth/billing/rate-limit
       // errors that even set stop_reason: 'stop_sequence').
-      const isSuccessWithErrorFlag = resultMsg.is_error === true && resultMsg.subtype === 'success';
+      const isSuccessWithErrorFlag = resultMsg.is_error && resultMsg.subtype === 'success';
 
       // Disambiguate structurally: a preceding synthetic error message
       // (primary, typed signal), or the typed terminal_reason 'api_error'
@@ -1057,7 +1038,7 @@ async function* streamClaudeMessages(
       // Fail-safe (never observed in practice): a synthetic error message
       // followed by a non-error result. Yield the withheld text late rather
       // than silently swallowing content.
-      if (syntheticError !== undefined && resultMsg.is_error !== true) {
+      if (syntheticError !== undefined && !resultMsg.is_error) {
         getLog().warn(
           { sessionId: resultMsg.session_id, errorCode: syntheticError.code },
           'claude.synthetic_error_not_confirmed'
@@ -1071,7 +1052,7 @@ async function* streamClaudeMessages(
       // subtype: 'success' — its encoding of "non-default termination, not a
       // failure". Treat that pair as a clean success so downstream consumers
       // (which gate failure on isError) don't misclassify it.
-      const isRealError = resultMsg.is_error === true && !isSuccessWithErrorFlag;
+      const isRealError = resultMsg.is_error && !isSuccessWithErrorFlag;
       if (isRealError) {
         getLog().error(
           {
@@ -1095,7 +1076,7 @@ async function* streamClaudeMessages(
         type: 'result',
         sessionId: resultMsg.session_id,
         ...(tokens ? { tokens } : {}),
-        ...(resultMsg.structured_output !== undefined
+        ...('structured_output' in resultMsg && resultMsg.structured_output !== undefined
           ? { structuredOutput: resultMsg.structured_output }
           : {}),
         ...(isRealError ? { isError: true, errorSubtype: resultMsg.subtype } : {}),
@@ -1103,9 +1084,7 @@ async function* streamClaudeMessages(
         ...(resultMsg.total_cost_usd !== undefined ? { cost: resultMsg.total_cost_usd } : {}),
         ...(resultMsg.stop_reason != null ? { stopReason: resultMsg.stop_reason } : {}),
         ...(resultMsg.num_turns !== undefined ? { numTurns: resultMsg.num_turns } : {}),
-        ...(resultMsg.model_usage
-          ? { modelUsage: resultMsg.model_usage as Record<string, unknown> }
-          : {}),
+        ...(resolvedModelId ? { resolvedModel: { id: resolvedModelId } } : {}),
       };
     }
   }

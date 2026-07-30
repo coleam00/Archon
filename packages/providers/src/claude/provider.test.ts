@@ -236,7 +236,7 @@ describe('ClaudeProvider', () => {
       });
     });
 
-    test('yields result with cost, stopReason, numTurns, modelUsage when SDK provides them', async () => {
+    test('yields result with cost, stopReason, numTurns, and a resolved model when SDK provides them', async () => {
       mockQuery.mockImplementation(async function* () {
         yield {
           type: 'result',
@@ -244,7 +244,7 @@ describe('ClaudeProvider', () => {
           total_cost_usd: 0.0042,
           stop_reason: 'end_turn',
           num_turns: 3,
-          model_usage: {
+          modelUsage: {
             'claude-sonnet-4-6': {
               input_tokens: 100,
               output_tokens: 50,
@@ -266,17 +266,11 @@ describe('ClaudeProvider', () => {
         cost: 0.0042,
         stopReason: 'end_turn',
         numTurns: 3,
-        modelUsage: {
-          'claude-sonnet-4-6': {
-            input_tokens: 100,
-            output_tokens: 50,
-            cache_read_input_tokens: 10,
-          },
-        },
+        resolvedModel: { id: 'claude-sonnet-4-6' },
       });
     });
 
-    test('omits cost, stopReason, numTurns, modelUsage when SDK result has none', async () => {
+    test('omits cost, stopReason, numTurns, and resolvedModel when SDK result has none', async () => {
       mockQuery.mockImplementation(async function* () {
         yield { type: 'result', session_id: 'sid-bare' };
       });
@@ -289,7 +283,7 @@ describe('ClaudeProvider', () => {
       expect(chunks[0]).not.toHaveProperty('cost');
       expect(chunks[0]).not.toHaveProperty('stopReason');
       expect(chunks[0]).not.toHaveProperty('numTurns');
-      expect(chunks[0]).not.toHaveProperty('modelUsage');
+      expect(chunks[0]).not.toHaveProperty('resolvedModel');
     });
 
     test('omits stopReason when stop_reason is null', async () => {

@@ -21,6 +21,7 @@ import type {
   NodeConfig,
   ProviderCapabilities,
   TokenUsage,
+  ResolvedModel,
   ExecutionContext,
   OverlayChangeSummary,
 } from '@archon/providers/types';
@@ -1385,7 +1386,7 @@ async function executeNodeInternal(
   let nodeCostUsd: number | undefined;
   let nodeStopReason: string | undefined;
   let nodeNumTurns: number | undefined;
-  let nodeModelUsage: Record<string, unknown> | undefined;
+  let nodeResolvedModel: ResolvedModel | undefined;
   const batchMessages: string[] = [];
 
   // Create per-node abort controller for idle timeout cleanup
@@ -1616,7 +1617,7 @@ async function executeNodeInternal(
         if (msg.cost !== undefined) nodeCostUsd = msg.cost;
         if (msg.stopReason !== undefined) nodeStopReason = msg.stopReason;
         if (msg.numTurns !== undefined) nodeNumTurns = msg.numTurns;
-        if (msg.modelUsage) nodeModelUsage = msg.modelUsage;
+        if (msg.resolvedModel) nodeResolvedModel = msg.resolvedModel;
         if (msg.structuredOutput !== undefined) structuredOutput = msg.structuredOutput;
         // Fail the node if the SDK reports a cost cap exceeded error
         if (msg.isError && msg.errorSubtype === 'error_max_budget_usd') {
@@ -2219,7 +2220,9 @@ async function executeNodeInternal(
           ...(nodeCostUsd !== undefined ? { cost_usd: nodeCostUsd } : {}),
           ...(nodeStopReason ? { stop_reason: nodeStopReason } : {}),
           ...(nodeNumTurns !== undefined ? { num_turns: nodeNumTurns } : {}),
-          ...(nodeModelUsage ? { model_usage: nodeModelUsage } : {}),
+          ...(nodeResolvedModel
+            ? { model_usage: { requested: resolvedModel, resolved: nodeResolvedModel.id } }
+            : {}),
           // Background Agent tasks still live when the stream ended (#2083) —
           // this node's artifacts may be incomplete.
           ...(backgroundTasksIncomplete.length > 0

@@ -168,6 +168,9 @@ export function buildResultChunk(messages: readonly unknown[]): MessageChunk {
     tokens,
     ...(tokens.cost !== undefined ? { cost: tokens.cost } : {}),
     ...(last.stopReason ? { stopReason: last.stopReason } : {}),
+    ...(typeof last.responseModel === 'string' && last.responseModel.length > 0
+      ? { resolvedModel: { id: last.responseModel } }
+      : {}),
     ...(isError
       ? {
           isError: true,

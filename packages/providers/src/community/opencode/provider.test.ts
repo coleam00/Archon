@@ -304,12 +304,7 @@ describe('OpencodeProvider', () => {
         tokens: { input: 11, output: 7, total: 21, cost: 0.42 },
         cost: 0.42,
         stopReason: 'stop',
-        modelUsage: {
-          providerID: 'anthropic',
-          modelID: 'claude-sonnet',
-          reasoning: 3,
-          cache: 1,
-        },
+        resolvedModel: { id: 'claude-sonnet' },
       },
     ]);
   });
@@ -427,12 +422,6 @@ describe('OpencodeProvider', () => {
         type: 'result',
         sessionId: 'session-1',
         structuredOutput: { answer: 'ok', confidence: 0.9 },
-        modelUsage: {
-          providerID: undefined,
-          modelID: undefined,
-          reasoning: undefined,
-          cache: undefined,
-        },
       },
     ]);
   });
@@ -476,12 +465,6 @@ describe('OpencodeProvider', () => {
       {
         type: 'result',
         sessionId: 'session-1',
-        modelUsage: {
-          providerID: undefined,
-          modelID: undefined,
-          reasoning: undefined,
-          cache: undefined,
-        },
       },
     ]);
     expect(mockLogger.warn).toHaveBeenCalledTimes(1);

@@ -347,7 +347,9 @@ export type MessageChunk =
       cost?: number;
       stopReason?: string;
       numTurns?: number;
-      modelUsage?: Record<string, unknown>;
+      // Concrete provider-reported model. Omitted for providers such as Codex
+      // whose SDK completion events do not expose the resolved model.
+      resolvedModel?: ResolvedModel;
       // Session-resume outcome: true = restored, false = requested but fell back
       // to a fresh session, omitted = no resume requested. Set only when
       // resumeSessionId was passed (stamp it via withResumedOutcome).

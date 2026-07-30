@@ -171,6 +171,11 @@ export interface TokenUsage {
   cost?: number;
 }
 
+/** Concrete model identifier reported by a provider after a request completes. */
+export interface ResolvedModel {
+  id: string;
+}
+
 /**
  * Message chunk from AI assistant.
  * Discriminated union with per-type required fields for type safety.
@@ -199,7 +204,8 @@ export type MessageChunk =
       cost?: number;
       stopReason?: string;
       numTurns?: number;
-      modelUsage?: Record<string, unknown>;
+      /** Concrete model reported by the provider; omitted when its SDK does not expose one. */
+      resolvedModel?: ResolvedModel;
       /**
        * Outcome of a session-resume attempt, so a failed resume is observable
        * instead of silently continuing with a fresh (cold) session:

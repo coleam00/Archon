@@ -4673,7 +4673,7 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
 
     mockSendQueryDag.mockImplementation(function* () {
       yield { type: 'assistant', content: 'the node output text' };
-      yield { type: 'result', sessionId: 'sid' };
+      yield { type: 'result', sessionId: 'sid', resolvedModel: { id: 'claude-opus-5' } };
     });
 
     await executeDagWorkflow(
@@ -4681,7 +4681,10 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       platform,
       'conv-output',
       testDir,
-      { name: 'single-node', nodes: [{ id: 'step1', command: 'step1' }] },
+      {
+        name: 'single-node',
+        nodes: [{ id: 'step1', command: 'step1', model: 'requested-model' }],
+      },
       workflowRun,
       'claude',
       undefined,
@@ -4702,6 +4705,10 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
     expect((completedEvent![0] as { data: { node_output: string } }).data.node_output).toBe(
       'the node output text'
     );
+    expect(
+      (completedEvent![0] as { data: { model_usage: { requested: string; resolved: string } } })
+        .data.model_usage
+    ).toEqual({ requested: 'requested-model', resolved: 'claude-opus-5' });
   });
 
   // ─── Background Agent Task Gating (#2083) ───────────────────────────────

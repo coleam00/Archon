@@ -179,6 +179,27 @@ describe('buildResultChunk', () => {
     }
   });
 
+  test('records responseModel rather than the requested model', () => {
+    const chunk = buildResultChunk([
+      {
+        role: 'assistant',
+        model: 'large',
+        responseModel: 'claude-opus-5',
+        usage,
+        stopReason: 'stop',
+        content: [],
+      },
+    ]);
+    expect(chunk).toMatchObject({ type: 'result', resolvedModel: { id: 'claude-opus-5' } });
+  });
+
+  test('omits resolvedModel when Pi does not report a responseModel', () => {
+    const chunk = buildResultChunk([
+      { role: 'assistant', model: 'large', usage, stopReason: 'stop', content: [] },
+    ]);
+    expect(chunk).not.toHaveProperty('resolvedModel');
+  });
+
   test('flags isError for stopReason=error and surfaces errorMessage', () => {
     const chunk = buildResultChunk([
       { role: 'assistant', usage, stopReason: 'error', errorMessage: 'auth', content: [] },

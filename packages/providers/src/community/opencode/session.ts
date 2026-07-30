@@ -266,19 +266,9 @@ export async function* streamOpencodeSession(
           ...(typeof latestAssistantInfo?.finish === 'string'
             ? { stopReason: latestAssistantInfo.finish }
             : {}),
-          ...(latestAssistantInfo
-            ? {
-                modelUsage: {
-                  providerID: latestAssistantInfo.providerID,
-                  modelID: latestAssistantInfo.modelID,
-                  reasoning: isRecord(latestAssistantInfo.tokens)
-                    ? latestAssistantInfo.tokens.reasoning
-                    : undefined,
-                  cache: isRecord(latestAssistantInfo.tokens)
-                    ? latestAssistantInfo.tokens.cache
-                    : undefined,
-                },
-              }
+          ...(typeof latestAssistantInfo?.modelID === 'string' &&
+          latestAssistantInfo.modelID.length > 0
+            ? { resolvedModel: { id: latestAssistantInfo.modelID } }
             : {}),
         };
         resultYielded = true;
