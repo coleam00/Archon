@@ -4721,7 +4721,12 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
 
     mockSendQueryDag.mockImplementation(function* () {
       yield { type: 'assistant', content: 'the node output text' };
-      yield { type: 'result', sessionId: 'sid', resolvedModel: { id: 'claude-opus-5' } };
+      yield {
+        type: 'result',
+        sessionId: 'sid',
+        resolvedModel: { id: 'claude-opus-5' },
+        tokens: { input: 100, output: 10 },
+      };
     });
 
     await executeDagWorkflow(
@@ -4757,6 +4762,9 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       (completedEvent![0] as { data: { model_usage: { requested: string; resolved: string } } })
         .data.model_usage
     ).toEqual({ requested: 'requested-model', resolved: 'claude-opus-5' });
+    expect(
+      (completedEvent![0] as { data: { tokens: { input: number; output: number } } }).data.tokens
+    ).toEqual({ input: 100, output: 10 });
   });
 
   // ─── Background Agent Task Gating (#2083) ───────────────────────────────
@@ -5079,6 +5087,7 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
           type: 'result',
           sessionId: 'loop-model-sid',
           resolvedModel: { id: 'claude-opus-5-20260501' },
+          tokens: { input: 100, output: 10 },
         };
       });
 
@@ -5143,6 +5152,7 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         requested: 'opus',
         resolved: 'claude-opus-5-20260501',
       });
+      expect(completedEvent?.[0].data?.tokens).toEqual({ input: 100, output: 10 });
     });
 
     it('omits model_usage on node_completed when the provider reports no resolved model (#2314)', async () => {
@@ -14430,7 +14440,8 @@ describe('executeDagWorkflow -- loop_group node', () => {
       };
     });
 
-    const mockDeps = createMockDeps();
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
     const platform = createMockPlatform();
     const workflowRun = makeWorkflowRun('lg-tokens');
 
@@ -14469,6 +14480,14 @@ describe('executeDagWorkflow -- loop_group node', () => {
     expect(mockCaptureWorkflowCompleted).toHaveBeenCalledWith(
       expect.objectContaining({ outcome: 'completed', tokensIn: 300, tokensOut: 30 })
     );
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls as Array<
+      [{ event_type: string; step_name: string; data?: Record<string, unknown> }]
+    >;
+    const completedEvent = eventCalls.find(
+      ([arg]) => arg.event_type === 'node_completed' && arg.step_name === 'paid'
+    );
+    expect(completedEvent).toBeDefined();
+    expect(completedEvent?.[0].data?.tokens).toEqual({ input: 300, output: 30 });
   });
 
   it('SESSION: fresh_context=false threads the body session between iterations', async () => {

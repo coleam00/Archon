@@ -2250,6 +2250,7 @@ async function executeNodeInternal(
         data: {
           duration_ms: duration,
           node_output: nodeOutputText,
+          ...(nodeTokens !== undefined ? { tokens: nodeTokens } : {}),
           ...(nodeCostUsd !== undefined ? { cost_usd: nodeCostUsd } : {}),
           ...(nodeStopReason ? { stop_reason: nodeStopReason } : {}),
           ...(nodeNumTurns !== undefined ? { num_turns: nodeNumTurns } : {}),
@@ -3505,6 +3506,7 @@ async function executeLoopGroupNode(
           data: {
             duration_ms: duration,
             node_output: lastIterationOutput,
+            ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
             ...(loopTotalCostUsd !== undefined ? { cost_usd: loopTotalCostUsd } : {}),
           },
         })
@@ -4650,6 +4652,7 @@ async function executeLoopNode(
           data: {
             duration_ms: Date.now() - iterationStart,
             node_output: lastIterationOutput,
+            ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
             ...(loopTotalCostUsd !== undefined ? { cost_usd: loopTotalCostUsd } : {}),
             ...(loopFinalStopReason ? { stop_reason: loopFinalStopReason } : {}),
             ...(loopTotalNumTurns !== undefined ? { num_turns: loopTotalNumTurns } : {}),
