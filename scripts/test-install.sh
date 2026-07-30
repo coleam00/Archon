@@ -143,8 +143,10 @@ esac
 # sources it, so none of them can catch this.
 #
 # Mocked curl + a scratch INSTALL_DIR keep this off the network and out of the real system.
+piped_status=0
 piped_stderr="$(PATH="$success_mock_dir:$PATH" INSTALL_DIR="$tmp_dir/piped-bin" \
-  SKIP_CHECKSUM=true bash <"$installer" 2>&1 >/dev/null || true)"
+  SKIP_CHECKSUM=true bash <"$installer" 2>&1 >/dev/null)" || piped_status=$?
+assert_equals "0" "$piped_status" "Piped installer exits successfully"
 case "$piped_stderr" in
   *"unbound variable"*)
     fail "installer aborts when piped to bash (BASH_SOURCE unbound under set -u)"
