@@ -374,8 +374,10 @@ describe('SqliteAdapter', () => {
      *
      * Better Auth's remote_agent_auth_* tables are intentionally Postgres-only
      * (web auth never runs on SQLite — see migrateColumns() and CLAUDE.md), so
-     * they are the one allowlisted exception. A genuinely new Postgres-only
-     * table must be added to this allowlist with a justifying comment.
+     * the table-parity check excludes that prefix. The separate, exact
+     * remote_agent_codebases.allow_env_keys column exception is tracked by
+     * #2318; keep it column-specific. A genuinely new Postgres-only table
+     * must be added to the table allowlist with a justifying comment.
      */
     const POSTGRES_ONLY_PREFIX = 'remote_agent_auth_';
     // #2318 owns this known dead Postgres-only residue. Keep the exception
@@ -443,12 +445,11 @@ describe('SqliteAdapter', () => {
       db = createTestDb();
       const postgresColumns = postgresArchonColumns();
       const codebaseColumns = postgresColumns.get('remote_agent_codebases');
-      const userAiPrefColumns = postgresColumns.get('remote_agent_user_ai_prefs');
+      const userColumns = postgresColumns.get('remote_agent_users');
 
-      // Anti-vacuity checks cover both a CREATE declaration and a column also
-      // present in an idempotent ALTER block.
+      // Anti-vacuity checks cover a CREATE declaration and an ALTER-only one.
       expect(codebaseColumns?.has('allow_env_keys')).toBe(true);
-      expect(userAiPrefColumns?.has('default_model')).toBe(true);
+      expect(userColumns?.has('role')).toBe(true);
 
       const missing: string[] = [];
       for (const [table, expectedColumns] of postgresColumns) {
