@@ -5088,6 +5088,69 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       expect(completedEvent?.[0].data).not.toHaveProperty('model_usage');
     });
 
+    it('clears a resolved model when a later result omits it, rather than reporting the stale one', async () => {
+      // Pi/Copilot reask loops emit several result chunks and Pi omits resolvedModel
+      // when its later assistant message carries no responseModel. A guarded
+      // assignment would leave the FIRST chunk's model recorded as the node's answer
+      // -- fabricated attribution, which is the defect #2314 exists to prevent.
+      // Two results in ONE iteration, via the background-task wait (same shape as the
+      // #2083 cost test): the first reports a model, the final one does not.
+      mockSendQueryDag.mockImplementation(function* () {
+        yield {
+          type: 'background_tasks',
+          tasks: [{ taskId: 't-1', taskType: 'local_agent', description: 'bg work' }],
+        };
+        yield { type: 'assistant', content: 'Done. <promise>COMPLETE</promise>' };
+        yield { type: 'result', sessionId: 'stale-sid', resolvedModel: { id: 'claude-haiku-4-5' } };
+        yield { type: 'background_tasks', tasks: [] };
+        // Final result reports NO model, so the node must record none -- not
+        // 'claude-haiku-4-5' retained from the earlier chunk.
+        yield { type: 'result', sessionId: 'stale-sid' };
+      });
+
+      const store = createMockStore();
+      const mockDeps = createMockDeps(store);
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun('loop-stale-model-run');
+
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-dag',
+        testDir,
+        {
+          name: 'dag-loop-stale-model',
+          nodes: [
+            {
+              id: 'my-loop',
+              loop: {
+                prompt: 'Do a task. When done, output <promise>COMPLETE</promise>.',
+                until: 'COMPLETE',
+                max_iterations: 5,
+              },
+            },
+          ],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls as Array<
+        [{ event_type: string; step_name: string; data?: Record<string, unknown> }]
+      >;
+      const completedEvent = eventCalls.find(
+        ([arg]) => arg.event_type === 'node_completed' && arg.step_name === 'my-loop'
+      );
+      expect(completedEvent).toBeDefined();
+      expect(completedEvent?.[0].data).not.toHaveProperty('model_usage');
+    });
+
     it('does not double-count cost when an iteration sees two results (background-task wait, #2083)', async () => {
       mockSendQueryDag.mockImplementation(function* () {
         yield {

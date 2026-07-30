@@ -1617,7 +1617,12 @@ async function executeNodeInternal(
         if (msg.cost !== undefined) nodeCostUsd = msg.cost;
         if (msg.stopReason !== undefined) nodeStopReason = msg.stopReason;
         if (msg.numTurns !== undefined) nodeNumTurns = msg.numTurns;
-        if (msg.resolvedModel) nodeResolvedModel = msg.resolvedModel;
+        // Assigned UNCONDITIONALLY. A guarded assignment cannot CLEAR a stale value:
+        // Pi/Copilot reask loops yield several result chunks, and Pi omits resolvedModel
+        // when its later assistant message has no responseModel — so an earlier attempt's
+        // model would be persisted as the final attempt's answer. Fabricated attribution
+        // is the exact defect #2314 exists to prevent; absence must stay absence.
+        nodeResolvedModel = msg.resolvedModel;
         if (msg.structuredOutput !== undefined) structuredOutput = msg.structuredOutput;
         // Fail the node if the SDK reports a cost cap exceeded error
         if (msg.isError && msg.errorSubtype === 'error_max_budget_usd') {
@@ -4178,7 +4183,10 @@ async function executeLoopNode(
           if (msg.numTurns !== undefined) {
             iterationNumTurns = msg.numTurns;
           }
-          if (msg.resolvedModel) loopResolvedModel = msg.resolvedModel;
+          // Unconditional, for the same reason as the AI-node path above: a later
+          // iteration or result chunk that reports no resolved model must clear the
+          // previous one rather than leave it to be recorded as this node's answer.
+          loopResolvedModel = msg.resolvedModel;
           if (msg.structuredOutput !== undefined) {
             lastIterationStructuredOutput = msg.structuredOutput;
           }
