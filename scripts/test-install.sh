@@ -51,20 +51,22 @@ detect_with_mocks() {
   PATH="$mock_dir:$PATH" bash -c 'source "$1"; detect_platform' _ "$installer"
 }
 
-rosetta_mocks="$(make_platform_mocks Darwin x86_64 1)"
-assert_equals "darwin-arm64" "$(detect_with_mocks "$rosetta_mocks")" "Rosetta platform"
+assert_platform() {
+  local os="$1"
+  local arch="$2"
+  local translated="$3"
+  local expected="$4"
+  local description="$5"
+  local mocks
+  mocks="$(make_platform_mocks "$os" "$arch" "$translated")"
+  assert_equals "$expected" "$(detect_with_mocks "$mocks")" "$description"
+}
 
-intel_mocks="$(make_platform_mocks Darwin x86_64 0)"
-assert_equals "darwin-x64" "$(detect_with_mocks "$intel_mocks")" "Native Intel platform"
-
-arm_mocks="$(make_platform_mocks Darwin arm64 1)"
-assert_equals "darwin-arm64" "$(detect_with_mocks "$arm_mocks")" "Native ARM platform"
-
-linux_mocks="$(make_platform_mocks Linux x86_64 1)"
-assert_equals "linux-x64" "$(detect_with_mocks "$linux_mocks")" "Linux x64 platform"
-
-missing_marker_mocks="$(make_platform_mocks Darwin x86_64 fail)"
-assert_equals "darwin-x64" "$(detect_with_mocks "$missing_marker_mocks")" "Native Intel platform without Rosetta marker"
+assert_platform Darwin x86_64 1 darwin-arm64 "Rosetta platform"
+assert_platform Darwin x86_64 0 darwin-x64 "Native Intel platform"
+assert_platform Darwin arm64 1 darwin-arm64 "Native ARM platform"
+assert_platform Linux x86_64 1 linux-x64 "Linux x64 platform"
+assert_platform Darwin x86_64 fail darwin-x64 "Native Intel platform without Rosetta marker"
 
 cmp -s "$installer" "$repo_root/packages/docs-web/public/install" \
   || fail "public installer mirror differs from scripts/install.sh"
