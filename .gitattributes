@@ -3,6 +3,11 @@
 
 # Force LF line endings for files that run inside Linux containers
 *.sh text eol=lf
+# The published installer mirrors scripts/install.sh byte-for-byte and a `cmp`
+# assertion enforces that. It has no extension, so `*.sh` misses it and it would
+# fall through to `* text=auto` -> CRLF on a Windows-default checkout, failing the
+# parity check on a clean tree.
+packages/docs-web/public/install text eol=lf
 docker-entrypoint.sh text eol=lf
 Caddyfile text eol=lf
 Caddyfile.example text eol=lf

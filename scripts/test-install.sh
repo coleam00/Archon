@@ -42,6 +42,20 @@ if [ "$translated" = "fail" ]; then
 fi
 echo "$translated"
 EOF
+  # detect_with_mocks SOURCES the installer, so it depends on the source-guard
+  # suppressing main(). If that guard ever regresses, main() runs and reaches the real
+  # release URL over curl -- and sudo mkdir/mv with a non-writable INSTALL_DIR -- during
+  # `bun run validate`. These stubs turn that latent network/privilege side effect into a
+  # deterministic local failure.
+  for forbidden in curl sudo; do
+    cat >"$mock_dir/$forbidden" <<EOF
+#!/usr/bin/env bash
+echo "TEST BUG: sourced installer invoked $forbidden — the source guard is not suppressing main()" >&2
+exit 99
+EOF
+    chmod +x "$mock_dir/$forbidden"
+  done
+
   chmod +x "$mock_dir/uname" "$mock_dir/sysctl"
   echo "$mock_dir"
 }
