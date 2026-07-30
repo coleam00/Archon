@@ -48,6 +48,11 @@ jobs:
         run: bun run format:check
 
       - name: Run installer tests
+        # POSIX-shell installer only. scripts/install.sh refuses MINGW/MSYS by design
+        # (Windows users are directed to WSL2), and test-install.sh runs the real
+        # installer with only curl mocked — so on windows-latest `uname -s` reports
+        # MINGW64_NT, the installer exits, and `set -euo pipefail` fails the job.
+        if: runner.os != 'Windows'
         run: bun run test:install
 
       - name: Run tests
