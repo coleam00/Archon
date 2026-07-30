@@ -64,6 +64,14 @@ detect_platform() {
       ;;
   esac
 
+  # Rosetta reports x86_64 even on Apple Silicon. Ask macOS for the physical
+  # architecture before selecting a release asset.
+  if [ "$os" = "darwin" ] \
+    && { [ "$arch" = "x86_64" ] || [ "$arch" = "amd64" ]; } \
+    && [ "$(sysctl -in sysctl.proc_translated 2>/dev/null || true)" = "1" ]; then
+    arch="arm64"
+  fi
+
   case "$arch" in
     x86_64|amd64)
       arch="x64"
@@ -202,6 +210,16 @@ main() {
   # Make executable
   chmod +x "$binary_path"
 
+  # Confirm the release can execute before replacing an existing installation.
+  info "Verifying downloaded binary..."
+  local version_output
+  if ! version_output=$("$binary_path" version 2>&1); then
+    error "Downloaded binary failed its version check:"
+    echo "$version_output" >&2
+    error "Existing installation was left unchanged."
+    exit 1
+  fi
+
   # Install
   info "Installing to $INSTALL_DIR/$BINARY_NAME..."
 
@@ -221,18 +239,8 @@ main() {
 
   success "Installed to $INSTALL_DIR/$BINARY_NAME"
 
-  # Verify installation
-  echo ""
-  info "Verifying installation..."
-  local version_output
-  if version_output=$("$INSTALL_DIR/$BINARY_NAME" version 2>&1); then
-    echo "$version_output"
-    success "Installation complete!"
-  else
-    warn "Binary installed but version check failed:"
-    echo "$version_output"
-    warn "The binary may not work correctly. Please verify manually with: $INSTALL_DIR/$BINARY_NAME version"
-  fi
+  echo "$version_output"
+  success "Installation complete!"
 
   # Check if in PATH
   if ! command -v "$BINARY_NAME" >/dev/null 2>&1; then
@@ -251,4 +259,6 @@ main() {
   echo ""
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi
