@@ -511,8 +511,27 @@ describe('SqliteAdapter', () => {
         }
       }
 
-      expect(compared).toBeGreaterThanOrEqual(MIN_NON_AUTH_COLUMNS);
+      // Drift FIRST. The vacuity floor below is a guard on this test's own
+      // reach, not a drift assertion -- and asserting it first lets it mask the
+      // thing you actually need to see: two legitimate column removals plus one
+      // real drift made the floor fire and the drift list never printed.
       expect(missing.sort()).toEqual([]);
+
+      // Anti-vacuity: if the parser silently loses columns again (it did -- an
+      // in-body `);` once cut workflow_events from 7 columns to 3 with the suite
+      // still green), `missing` stays empty because there is nothing left to
+      // compare. Thrown rather than expect()ed so the message explains itself:
+      // a bare `Expected: >= 136 / Received: 135` under this test's name reads
+      // as drift when it is either a parser regression or a legitimate removal.
+      if (compared < MIN_NON_AUTH_COLUMNS) {
+        throw new Error(
+          `Schema-parity coverage collapsed: compared ${compared} non-auth columns, ` +
+            `expected at least ${MIN_NON_AUTH_COLUMNS}. Either the migration parser has ` +
+            `silently lost columns (check the CREATE TABLE body extraction), or columns ` +
+            `were legitimately removed from migrations/000_combined.sql -- in which case ` +
+            `lower MIN_NON_AUTH_COLUMNS to the new count. No drift was detected either way.`
+        );
+      }
     });
 
     test('every SQLite column exists in the Postgres migration', async () => {
