@@ -239,7 +239,18 @@ main() {
 
   success "Installed to $INSTALL_DIR/$BINARY_NAME"
 
-  echo "$version_output"
+  # Re-run the version check against the INSTALLED path. The probe above ran on the
+  # temp download and its output was cached; printing that after `mv` would report
+  # success without ever executing the file the user will actually invoke — which is
+  # exactly the "installed fine but won't run" failure #2295 reported. See #2338.
+  local installed_output
+  if ! installed_output=$("$INSTALL_DIR/$BINARY_NAME" version 2>&1); then
+    error "Installed binary failed its version check at $INSTALL_DIR/$BINARY_NAME:"
+    echo "$installed_output" >&2
+    exit 1
+  fi
+
+  echo "$installed_output"
   success "Installation complete!"
 
   # Check if in PATH
@@ -259,6 +270,10 @@ main() {
   echo ""
 }
 
-if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+# `${BASH_SOURCE[0]:-$0}` — NOT bare `${BASH_SOURCE[0]}`. Under `curl … | bash` the
+# script arrives on stdin, where BASH_SOURCE[0] is unbound; with `set -u` (above)
+# a bare reference aborts before main() ever runs, so the documented install path
+# fails for every user on every platform. See #2338.
+if [ "${BASH_SOURCE[0]:-$0}" = "$0" ]; then
   main "$@"
 fi

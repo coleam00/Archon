@@ -188,7 +188,7 @@ function Confirm-Checksum {
 function Add-ToUserPath {
     param([string]$Dir)
     $currentPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-    $pathParts   = $currentPath -split ';' | Where-Object { $_ -ne '' }
+    $pathParts   = @($currentPath -split ';' | Where-Object { $_ -ne '' })
 
     if ($Dir -notin $pathParts) {
         $pathParts += $Dir

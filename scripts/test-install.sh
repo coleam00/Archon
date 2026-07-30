@@ -71,6 +71,12 @@ assert_platform Darwin x86_64 fail darwin-x64 "Native Intel platform without Ros
 cmp -s "$installer" "$repo_root/packages/docs-web/public/install" \
   || fail "public installer mirror differs from scripts/install.sh"
 
+# The PowerShell pair needs the same guard. It had ALREADY drifted: the public copy
+# was missing the @() array wrapper from 53cabd44 (#1000), so `irm … | iex` shipped a
+# PATH-corrupting installer to Windows users while the repo copy was fixed. #2339.
+cmp -s "$repo_root/scripts/install.ps1" "$repo_root/packages/docs-web/public/install.ps1" \
+  || fail "public install.ps1 mirror differs from scripts/install.ps1"
+
 mock_dir="$tmp_dir/install-mocks"
 install_dir="$tmp_dir/install-bin"
 mkdir -p "$mock_dir" "$install_dir"
@@ -129,5 +135,21 @@ case "$install_output" in
   *"archon 1.2.3"*) ;;
   *) fail "Installer prints verified version" ;;
 esac
+
+# Regression for #2338: the installer must survive being READ FROM STDIN, which is how
+# `curl -fsSL … | bash` delivers it. There BASH_SOURCE[0] is unbound, and with `set -u` a
+# bare reference aborted the script before main() ran — the documented install path failed
+# for every user on every platform. Every other case here invokes the installer by path or
+# sources it, so none of them can catch this.
+#
+# Mocked curl + a scratch INSTALL_DIR keep this off the network and out of the real system.
+piped_stderr="$(PATH="$success_mock_dir:$PATH" INSTALL_DIR="$tmp_dir/piped-bin" \
+  SKIP_CHECKSUM=true bash <"$installer" 2>&1 >/dev/null || true)"
+case "$piped_stderr" in
+  *"unbound variable"*)
+    fail "installer aborts when piped to bash (BASH_SOURCE unbound under set -u)"
+    ;;
+esac
+assert_equals "archon 1.2.3" "$("$tmp_dir/piped-bin/archon" version)" "Piped installer installs a working binary"
 
 echo "Installer tests passed"
