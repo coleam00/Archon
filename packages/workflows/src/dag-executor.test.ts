@@ -4767,6 +4767,41 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
     ).toEqual({ input: 100, output: 10 });
   });
 
+  it('omits tokens from a direct AI node_completed event when the provider reports no usage', async () => {
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'the node output text' };
+      yield { type: 'result', sessionId: 'no-usage-sid' };
+    });
+
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+
+    await executeDagWorkflow(
+      mockDeps,
+      createMockPlatform(),
+      'conv-no-usage',
+      testDir,
+      { name: 'no-usage', nodes: [{ id: 'step1', command: 'step1' }] },
+      makeWorkflowRun('no-usage-run'),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls as Array<
+      [{ event_type: string; step_name: string; data?: Record<string, unknown> }]
+    >;
+    const completedEvent = eventCalls.find(
+      ([event]) => event.event_type === 'node_completed' && event.step_name === 'step1'
+    );
+    expect(completedEvent).toBeDefined();
+    expect(completedEvent?.[0].data).not.toHaveProperty('tokens');
+  });
+
   // ─── Background Agent Task Gating (#2083) ───────────────────────────────
 
   describe('background task completion gating (#2083)', () => {
@@ -5204,6 +5239,7 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       );
       expect(completedEvent).toBeDefined();
       expect(completedEvent?.[0].data).not.toHaveProperty('model_usage');
+      expect(completedEvent?.[0].data).not.toHaveProperty('tokens');
     });
 
     it('clears a resolved model when a later result omits it, rather than reporting the stale one', async () => {
@@ -14488,6 +14524,53 @@ describe('executeDagWorkflow -- loop_group node', () => {
     );
     expect(completedEvent).toBeDefined();
     expect(completedEvent?.[0].data?.tokens).toEqual({ input: 300, output: 30 });
+  });
+
+  it('omits tokens from a loop_group node_completed event when providers report no usage', async () => {
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'done\nDONE' };
+      yield { type: 'result', sessionId: 'lg-no-usage-sid' };
+    });
+
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const nodes: DagNode[] = [
+      {
+        id: 'no-usage-group',
+        loop_group: {
+          until: 'DONE',
+          max_iterations: 3,
+          fresh_context: false,
+          nodes: [{ id: 'work', prompt: 'do work', depends_on: [] }],
+        },
+        depends_on: [],
+      },
+    ];
+
+    await executeDagWorkflow(
+      mockDeps,
+      createMockPlatform(),
+      'conv-lg-no-usage',
+      testDir,
+      { name: 'lg-no-usage', nodes },
+      makeWorkflowRun('lg-no-usage-run'),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls as Array<
+      [{ event_type: string; step_name: string; data?: Record<string, unknown> }]
+    >;
+    const completedEvent = eventCalls.find(
+      ([event]) => event.event_type === 'node_completed' && event.step_name === 'no-usage-group'
+    );
+    expect(completedEvent).toBeDefined();
+    expect(completedEvent?.[0].data).not.toHaveProperty('tokens');
   });
 
   it('SESSION: fresh_context=false threads the body session between iterations', async () => {
