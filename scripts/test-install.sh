@@ -160,12 +160,15 @@ esac
 piped_status=0
 piped_stderr="$(PATH="$success_mock_dir:$PATH" INSTALL_DIR="$tmp_dir/piped-bin" \
   SKIP_CHECKSUM=true bash <"$installer" 2>&1 >/dev/null)" || piped_status=$?
-assert_equals "0" "$piped_status" "Piped installer exits successfully"
+# Specific diagnosis FIRST, generic assertion second. With the order reversed the
+# assert_equals fired on any regression and this case block was dead code, so the
+# #2338 failure reported only "expected 0, got 1" with no hint at the cause.
 case "$piped_stderr" in
   *"unbound variable"*)
-    fail "installer aborts when piped to bash (BASH_SOURCE unbound under set -u)"
+    fail "installer aborts when piped to bash (BASH_SOURCE unbound under set -u) — see #2338"
     ;;
 esac
+assert_equals "0" "$piped_status" "Piped installer exits successfully"
 assert_equals "archon 1.2.3" "$("$tmp_dir/piped-bin/archon" version)" "Piped installer installs a working binary"
 
 echo "Installer tests passed"
