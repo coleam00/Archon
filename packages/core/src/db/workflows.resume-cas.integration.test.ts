@@ -88,15 +88,89 @@ describe('resumeWorkflowRun — real SQLite (CAS + orphan recovery)', () => {
     expect((await resumeWorkflowRun('failed')).status).toBe('running');
   });
 
-  test('clears a failed run error when resuming', async () => {
+  test('clears a failed run error when resuming, preserving it as an event', async () => {
+    // #2329: a run that failed, resumed and completed kept rendering its old
+    // error. #2348: for the motivating run the error lived ONLY in metadata —
+    // the CLI's SIGTERM handler calls failWorkflowRun and writes no event — so
+    // clearing it silently destroyed the only record that the run ever failed.
     await seed('failed-with-error', 'failed', "datetime('now')", {
       error: 'Process terminated (SIGTERM)',
+      unrelated: 'keep me',
     });
 
     const resumed = await resumeWorkflowRun('failed-with-error');
 
     expect(resumed.status).toBe('running');
-    expect((await getWorkflowRun('failed-with-error'))?.metadata.error ?? null).toBeNull();
+    const after = await getWorkflowRun('failed-with-error');
+    expect(after?.metadata.error ?? null).toBeNull();
+    // Merge, not replace: unrelated metadata survives the clear.
+    expect(after?.metadata.unrelated).toBe('keep me');
+
+    // ...and the cleared error is now recoverable from the audit trail.
+    const events = await db.query<{ data: string }>(
+      `SELECT data FROM remote_agent_workflow_events
+       WHERE workflow_run_id = $1 AND event_type = 'workflow_resumed'`,
+      ['failed-with-error']
+    );
+    expect(events.rows).toHaveLength(1);
+    expect(JSON.parse(events.rows[0]?.data ?? '{}')).toEqual({
+      error: 'Process terminated (SIGTERM)',
+    });
+  });
+
+  test('writes no event when the resumed run carried no error', async () => {
+    // A paused gate resumes with nothing to preserve — it must not gain a
+    // spurious "this run failed once" record.
+    await seed('paused-clean', 'paused', "datetime('now')");
+
+    expect((await resumeWorkflowRun('paused-clean')).status).toBe('running');
+
+    const events = await db.query<{ cnt: number }>(
+      `SELECT COUNT(*) AS cnt FROM remote_agent_workflow_events
+       WHERE workflow_run_id = $1 AND event_type = 'workflow_resumed'`,
+      ['paused-clean']
+    );
+    expect(Number(events.rows[0]?.cnt ?? -1)).toBe(0);
+  });
+
+  test('two concurrent resumes: exactly one wins and exactly one event lands', async () => {
+    // The loser read the same error but its CAS matched nothing — it must write
+    // nothing, or a lost race still emits an audit event for a clear it never did.
+    await seed('resume-race', 'failed', "datetime('now')", { error: 'boom' });
+
+    const outcomes = await Promise.allSettled([
+      resumeWorkflowRun('resume-race'),
+      resumeWorkflowRun('resume-race'),
+    ]);
+
+    expect(outcomes.filter(o => o.status === 'fulfilled')).toHaveLength(1);
+    const events = await db.query<{ cnt: number }>(
+      `SELECT COUNT(*) AS cnt FROM remote_agent_workflow_events
+       WHERE workflow_run_id = $1 AND event_type = 'workflow_resumed'`,
+      ['resume-race']
+    );
+    expect(Number(events.rows[0]?.cnt ?? -1)).toBe(1);
+  });
+
+  test('rolls back the clear when the audit-event write fails', async () => {
+    // The preservation is only worth anything if it cannot be skipped: a failed
+    // event INSERT must roll the clear back, leaving the run resumable with its
+    // error intact rather than erasing it with no record.
+    await seed('resume-atomic', 'failed', "datetime('now')", { error: 'boom' });
+
+    // Break the event INSERT by removing the table for the duration of the call.
+    await db.query('ALTER TABLE remote_agent_workflow_events RENAME TO events_stash', []);
+    try {
+      await expect(resumeWorkflowRun('resume-atomic')).rejects.toThrow(
+        /Failed to resume workflow run/
+      );
+    } finally {
+      await db.query('ALTER TABLE events_stash RENAME TO remote_agent_workflow_events', []);
+    }
+
+    const after = await getWorkflowRun('resume-atomic');
+    expect(after?.status).toBe('failed');
+    expect(after?.metadata.error).toBe('boom');
   });
 
   test('resumes a paused run', async () => {

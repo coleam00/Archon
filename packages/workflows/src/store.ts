@@ -26,6 +26,12 @@ export const WORKFLOW_EVENT_TYPES = [
   'workflow_started',
   'workflow_completed',
   'workflow_failed',
+  // #2348 — written by the resume CAS ONLY when it clears a non-empty
+  // `metadata.error`, carrying that error in `data.error`. It is the audit
+  // record for a failure that resume would otherwise erase (the CLI's SIGTERM
+  // handler records a failure in metadata and nowhere else), NOT a general
+  // "a resume happened" marker: its absence never means the run wasn't resumed.
+  'workflow_resumed',
   'node_started',
   'node_completed',
   'node_failed',

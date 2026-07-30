@@ -74,6 +74,41 @@ function resumableStatusClause(dialect: SqlDialect, dayParamIndex: number): stri
 }
 
 /**
+ * `FOR UPDATE` on Postgres, empty on SQLite (which has no such syntax and does
+ * not need it — the adapter serializes transactions on one connection, and a
+ * cross-process writer that commits between our read and our write makes the
+ * deferred BEGIN's read→write upgrade fail with SQLITE_BUSY rather than let a
+ * stale snapshot through). Used by resumeWorkflowRun to pin the row across its
+ * read-then-CAS pair so the value it reads is the value the CAS acts on.
+ * Dialect-branched here rather than in SqlDialect: this is the only caller, and
+ * the branch mirrors unresolvedGateClause's local getDatabaseType() check.
+ */
+function rowLockClause(): string {
+  return getDatabaseType() === 'postgresql' ? ' FOR UPDATE' : '';
+}
+
+/**
+ * Extract a non-empty `metadata.error` string from a raw column value, or null
+ * when there is nothing worth preserving. SQLite stores metadata as JSON TEXT
+ * and Postgres returns a parsed object (same split normalizeWorkflowRun handles),
+ * so both shapes are accepted; absent / null / non-string / empty / unparseable
+ * all collapse to null.
+ */
+function readMetadataError(raw: unknown): string | null {
+  let metadata: unknown = raw;
+  if (typeof metadata === 'string') {
+    try {
+      metadata = JSON.parse(metadata);
+    } catch {
+      return null;
+    }
+  }
+  if (typeof metadata !== 'object' || metadata === null) return null;
+  const error = (metadata as Record<string, unknown>).error;
+  return typeof error === 'string' && error !== '' ? error : null;
+}
+
+/**
  * SQL predicate matching a run whose approval gate is still OPEN: the row is
  * 'paused' AND metadata.approval.resolved is JSON null or absent. Dialect-aware
  * (Postgres `->>`, SQLite `json_extract`) and kept in ONE place so the two forms
@@ -674,7 +709,7 @@ export async function resumeWorkflowRun(id: string): Promise<WorkflowRun> {
   // Split into UPDATE + SELECT to support both PostgreSQL and SQLite
   // (SQLite does not support RETURNING on UPDATE statements)
   // Each phase has its own try/catch to avoid string-sniffing own errors in a shared catch.
-  let updateResult: Awaited<ReturnType<typeof pool.query>>;
+  let updateResult: { rowCount: number };
   try {
     // Refresh started_at to NOW so the resumed row competes fairly with
     // currently-active rows in getActiveWorkflowRunByPath's older-wins
@@ -696,16 +731,49 @@ export async function resumeWorkflowRun(id: string): Promise<WorkflowRun> {
     // Resume + a chat re-dispatch, or the lock-less CLI path) could both flip
     // the same run to 'running' and double-claim the worktree. The day param is
     // bound at $2 (ORPHAN_RESUME_STALE_DAYS), matching findResumableRun's bind.
-    updateResult = await pool.query(
-      `UPDATE remote_agent_workflow_runs
-       SET status = 'running',
-           completed_at = NULL,
-           started_at = ${dialect.now()},
-           last_activity_at = ${dialect.now()},
-           metadata = ${dialect.jsonMerge('metadata', 3)}
-       WHERE id = $1 AND ${resumableStatusClause(dialect, 2)}`,
-      [id, ORPHAN_RESUME_STALE_DAYS, JSON.stringify({ error: null })]
-    );
+    //
+    // The CAS also clears `metadata.error` so a run that fails, is resumed, and
+    // then completes doesn't keep rendering its old failure (#2329). Because
+    // metadata is the ONLY place some failures are recorded — the CLI's SIGTERM
+    // handler calls failWorkflowRun and writes no event (#2348) — the error being
+    // cleared is first preserved as a `workflow_resumed` event, in the SAME
+    // transaction as the clear, so the audit trail can never lose it. The read,
+    // the CAS and the event INSERT are one transaction (mirroring
+    // resolveApprovalGate, #2146): the row is pinned by rowLockClause() so the
+    // value read is the value cleared, and the event is written ONLY by the
+    // caller whose CAS matched — a losing concurrent resumer writes nothing.
+    // Read-then-UPDATE rather than UPDATE…RETURNING because the SQLite adapter
+    // rejects RETURNING on UPDATE and points at exactly this pattern.
+    updateResult = await getDatabase().withTransaction(async query => {
+      const priorRows = await query<{ metadata: unknown }>(
+        `SELECT metadata FROM remote_agent_workflow_runs WHERE id = $1${rowLockClause()}`,
+        [id]
+      );
+      const clearedError = readMetadataError(priorRows.rows[0]?.metadata);
+
+      const result = await query(
+        `UPDATE remote_agent_workflow_runs
+         SET status = 'running',
+             completed_at = NULL,
+             started_at = ${dialect.now()},
+             last_activity_at = ${dialect.now()},
+             metadata = ${dialect.jsonMerge('metadata', 3)}
+         WHERE id = $1 AND ${resumableStatusClause(dialect, 2)}`,
+        [id, ORPHAN_RESUME_STALE_DAYS, JSON.stringify({ error: null })]
+      );
+
+      const rowCount = result.rowCount;
+      if (rowCount > 0 && clearedError !== null) {
+        // Same `{ error }` payload shape workflow_failed uses, so every consumer
+        // that already reads an error off a workflow_* event keeps working.
+        await insertWorkflowEvent(query, {
+          workflow_run_id: id,
+          event_type: 'workflow_resumed',
+          data: { error: clearedError },
+        });
+      }
+      return { rowCount };
+    });
   } catch (error) {
     const err = error as Error;
     getLog().error({ err, workflowRunId: id }, 'db.workflow_run_resume_failed');
