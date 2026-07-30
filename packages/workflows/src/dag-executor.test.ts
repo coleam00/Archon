@@ -4961,6 +4961,133 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       });
     });
 
+    it('records requested model/tier on node_started and the resolved model on node_completed (#2314)', async () => {
+      // Loop nodes own their sendQuery loop, so they need their own half of the
+      // #2314 record: the requested alias on node_started, the concrete model
+      // the provider reported on node_completed.
+      mockSendQueryDag.mockImplementation(function* () {
+        yield { type: 'assistant', content: 'Did the task. <promise>COMPLETE</promise>' };
+        yield {
+          type: 'result',
+          sessionId: 'loop-model-sid',
+          resolvedModel: { id: 'claude-opus-5-20260501' },
+        };
+      });
+
+      const store = createMockStore();
+      const mockDeps = createMockDeps(store);
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun('loop-model-run');
+      const aiProfile = buildAiProfile('claude', {
+        repoTiers: { large: { provider: 'claude', model: 'opus' } },
+      });
+
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-dag',
+        testDir,
+        {
+          name: 'dag-loop-model-usage',
+          nodes: [
+            {
+              id: 'my-loop',
+              model: 'large',
+              loop: {
+                prompt: 'Do a task. When done, output <promise>COMPLETE</promise>.',
+                until: 'COMPLETE',
+                max_iterations: 5,
+              },
+            },
+          ],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        aiProfile
+      );
+
+      const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls as Array<
+        [{ event_type: string; step_name: string; data?: Record<string, unknown> }]
+      >;
+      const startedEvent = eventCalls.find(
+        ([arg]) => arg.event_type === 'node_started' && arg.step_name === 'my-loop'
+      );
+      expect(startedEvent).toBeDefined();
+      expect(startedEvent?.[0].data?.provider).toBe('claude');
+      expect(startedEvent?.[0].data?.model).toBe('opus');
+      expect(startedEvent?.[0].data?.tier).toBe('large');
+
+      const completedEvent = eventCalls.find(
+        ([arg]) => arg.event_type === 'node_completed' && arg.step_name === 'my-loop'
+      );
+      expect(completedEvent).toBeDefined();
+      expect(completedEvent?.[0].data?.model_usage).toEqual({
+        requested: 'opus',
+        resolved: 'claude-opus-5-20260501',
+      });
+    });
+
+    it('omits model_usage on node_completed when the provider reports no resolved model (#2314)', async () => {
+      // Codex cannot report a concrete model — absence must stay absent rather
+      // than being back-filled with the requested alias.
+      mockSendQueryDag.mockImplementation(function* () {
+        yield { type: 'assistant', content: 'Did the task. <promise>COMPLETE</promise>' };
+        yield { type: 'result', sessionId: 'loop-no-model-sid' };
+      });
+
+      const store = createMockStore();
+      const mockDeps = createMockDeps(store);
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun('loop-no-model-run');
+
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-dag',
+        testDir,
+        {
+          name: 'dag-loop-no-model-usage',
+          nodes: [
+            {
+              id: 'my-loop',
+              loop: {
+                prompt: 'Do a task. When done, output <promise>COMPLETE</promise>.',
+                until: 'COMPLETE',
+                max_iterations: 5,
+              },
+            },
+          ],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls as Array<
+        [{ event_type: string; step_name: string; data?: Record<string, unknown> }]
+      >;
+      const completedEvent = eventCalls.find(
+        ([arg]) => arg.event_type === 'node_completed' && arg.step_name === 'my-loop'
+      );
+      expect(completedEvent).toBeDefined();
+      expect(completedEvent?.[0].data).not.toHaveProperty('model_usage');
+    });
+
     it('does not double-count cost when an iteration sees two results (background-task wait, #2083)', async () => {
       mockSendQueryDag.mockImplementation(function* () {
         yield {

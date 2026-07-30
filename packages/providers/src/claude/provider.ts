@@ -35,6 +35,7 @@ import {
   type HookCallbackMatcher,
   type SDKAssistantMessageError,
   type SDKResultMessage,
+  type ModelUsage,
 } from '@anthropic-ai/claude-agent-sdk';
 import type {
   IAgentProvider,
@@ -86,6 +87,44 @@ function normalizeClaudeUsage(usage?: {
     output,
     ...(typeof total === 'number' ? { total } : {}),
   };
+}
+
+/**
+ * Pick the concrete model that did the bulk of a turn's work from the SDK's
+ * per-model usage record.
+ *
+ * More than one entry is reachable for a single turn: a subagent pinned to
+ * another model via `agents:`, or a `fallbackModel` takeover. Key insertion
+ * order happens to put the main model first today, but nothing in the SDK
+ * guarantees it — so select by greatest output-token count (the main model
+ * produces the bulk of the output) and WARN whenever the record is ambiguous,
+ * so a multi-model turn is visible instead of silently collapsed.
+ *
+ * `modelUsage` is non-optional in the SDK types but arrives over an IPC
+ * boundary, so the absent/empty cases stay guarded — absence yields undefined
+ * and the caller omits `resolvedModel` entirely rather than inventing a value.
+ * On a tie (or output counts the SDK didn't send) the first key wins, which is
+ * exactly the pre-#2314 behavior — safe, and the warning still fires.
+ */
+function selectResolvedModelId(
+  modelUsage: Record<string, ModelUsage> | undefined
+): string | undefined {
+  if (!modelUsage) return undefined;
+  const entries = Object.entries(modelUsage);
+  if (entries.length === 0) return undefined;
+  if (entries.length === 1) return entries[0][0];
+
+  const outputTokensOf = (usage: ModelUsage): number =>
+    Number.isFinite(usage.outputTokens) ? usage.outputTokens : 0;
+  let selected = entries[0];
+  for (const entry of entries.slice(1)) {
+    if (outputTokensOf(entry[1]) > outputTokensOf(selected[1])) selected = entry;
+  }
+  getLog().warn(
+    { models: entries.map(([id]) => id), selected: selected[0] },
+    'claude.resolved_model_ambiguous'
+  );
+  return selected[0];
 }
 
 /**
@@ -992,9 +1031,7 @@ async function* streamClaudeMessages(
       yield { type: 'rate_limit', rateLimitInfo: rateLimitMsg.rate_limit_info ?? {} };
     } else if (event.type === 'result') {
       const resultMsg = msg as SDKResultMessage;
-      const resolvedModelId = resultMsg.modelUsage
-        ? Object.keys(resultMsg.modelUsage)[0]
-        : undefined;
+      const resolvedModelId = selectResolvedModelId(resultMsg.modelUsage);
       // The terminal result resolves any recorded synthetic error message.
       const syntheticError = pendingSdkError;
       pendingSdkError = undefined;
