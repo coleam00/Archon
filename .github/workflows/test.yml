@@ -35,6 +35,15 @@ jobs:
       - name: Check bundled defaults
         run: bun run check:bundled
 
+      - name: Check bundled skill
+        run: bun run check:bundled-skill
+
+      - name: Check bundled schema
+        run: bun run check:bundled-schema
+
+      - name: Check Pi vendor map
+        run: bun run check:pi-vendor-map
+
       - name: Check provider capability matrix
         run: bun run check:capability-matrix
 
