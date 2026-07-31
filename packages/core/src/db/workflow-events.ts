@@ -213,23 +213,26 @@ export async function listWorkflowEventsSince(
 }
 
 /**
- * Return a map of nodeId → output for all node_completed events in a workflow run.
- * Used by the DAG executor to restore node outputs when resuming a failed run.
+ * Return completed node outputs and cumulative token usage for a workflow run.
+ * Used by the DAG executor to restore state when resuming a failed run.
  * Throws on DB error — caller owns the degradation policy.
  */
-export async function getCompletedDagNodeOutputs(
-  workflowRunId: string
-): Promise<Map<string, string>> {
+export async function getDagResumeSnapshot(workflowRunId: string): Promise<{
+  completedNodeOutputs: Map<string, string>;
+  tokens: { input: number; output: number };
+}> {
   const result = await pool.query<{
     step_name: string | null;
+    event_type: 'node_completed' | 'node_skipped_prior_success';
     data: string | Record<string, unknown>;
   }>(
-    `SELECT step_name, data FROM remote_agent_workflow_events
+    `SELECT step_name, event_type, data FROM remote_agent_workflow_events
      WHERE workflow_run_id = $1 AND event_type IN ('node_completed', 'node_skipped_prior_success')
      ORDER BY created_at ASC`,
     [workflowRunId]
   );
-  const outputs = new Map<string, string>();
+  const completedNodeOutputs = new Map<string, string>();
+  const tokens = { input: 0, output: 0 };
   for (const row of result.rows) {
     if (!row.step_name) continue;
     let data: Record<string, unknown>;
@@ -243,8 +246,29 @@ export async function getCompletedDagNodeOutputs(
       continue;
     }
     if (typeof data.node_output === 'string') {
-      outputs.set(row.step_name, data.node_output);
+      completedNodeOutputs.set(row.step_name, data.node_output);
+    }
+    if (row.event_type === 'node_completed') {
+      const eventTokens = data.tokens;
+      if (
+        typeof eventTokens === 'object' &&
+        eventTokens !== null &&
+        'input' in eventTokens &&
+        'output' in eventTokens &&
+        typeof eventTokens.input === 'number' &&
+        typeof eventTokens.output === 'number' &&
+        Number.isFinite(eventTokens.input) &&
+        Number.isFinite(eventTokens.output)
+      ) {
+        tokens.input += eventTokens.input;
+        tokens.output += eventTokens.output;
+      } else {
+        getLog().warn(
+          { runId: workflowRunId, stepName: row.step_name, tokens: eventTokens },
+          'db.workflow_dag_node_tokens_invalid_ignored'
+        );
+      }
     }
   }
-  return outputs;
+  return { completedNodeOutputs, tokens };
 }

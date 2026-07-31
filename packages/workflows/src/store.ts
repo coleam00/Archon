@@ -14,6 +14,14 @@ import type {
 
 export type { WorkflowNodeSession } from './schemas';
 
+export interface DagResumeSnapshot {
+  completedNodeOutputs: Map<string, string>;
+  tokens: {
+    input: number;
+    output: number;
+  };
+}
+
 /** Composite primary key identifying a single persisted node session row. */
 export interface WorkflowNodeSessionKey {
   workflow_name: string;
@@ -193,14 +201,13 @@ export interface IWorkflowStore extends IRunTreeStore {
   }): Promise<void>;
 
   /**
-   * Return a map of nodeId → output for all node_completed events
-   * from a prior DAG workflow run. Used for DAG resume: the executor
-   * pre-populates nodeOutputs so completed nodes are skipped on re-run.
+   * Return completed node outputs and cumulative token usage from a prior DAG
+   * workflow run. Used for resume hydration so completed nodes are skipped and
+   * the run-level token tally includes every execution of the run.
    *
-   * Returns an empty map when no completed nodes exist.
    * Throws on DB error — caller (executor.ts) owns the degradation policy.
    */
-  getCompletedDagNodeOutputs(workflowRunId: string): Promise<Map<string, string>>;
+  getDagResumeSnapshot(workflowRunId: string): Promise<DagResumeSnapshot>;
 
   // Per-codebase env vars for workflow node injection
   getCodebaseEnvVars(codebaseId: string): Promise<Record<string, string>>;

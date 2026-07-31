@@ -112,7 +112,10 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     getWorkflowRunStatus: mock(async () => 'completed' as const),
     createWorkflowEvent: mock(async () => {}),
     findResumableRun: mock(async () => null),
-    getCompletedDagNodeOutputs: mock(async () => new Map()),
+    getDagResumeSnapshot: mock(async () => ({
+      completedNodeOutputs: new Map(),
+      tokens: { input: 0, output: 0 },
+    })),
     resumeWorkflowRun: mock(async () => makeRun()),
     getCodebase: mock(async () => null),
     getCodebaseEnvVars: mock(async () => ({})),
@@ -231,12 +234,14 @@ describe('executeWorkflow', () => {
         {
           preCreatedRun,
           priorCompletedNodes: new Map([['node1', 'out']]),
+          priorTokenUsage: { input: 40, output: 4 },
           execContext: { kind: 'container', containerId: 'cid' },
           container: { envId: 'env-x', writeBack: 'approve', backend },
         }
       );
       // Guard passed → DAG entered (mocked no-op) → run completes.
       expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(1);
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[23]).toEqual({ input: 40, output: 4 });
       expect(result.success).toBe(true);
     });
   });
@@ -1618,7 +1623,10 @@ describe('hydrateResumableRun', () => {
     const resumed = makeRun({ id: 'prior-failed', status: 'running' });
     const priorNodes = new Map([['n1', 'out1']]);
     const store = makeStore({
-      getCompletedDagNodeOutputs: mock(async () => priorNodes),
+      getDagResumeSnapshot: mock(async () => ({
+        completedNodeOutputs: priorNodes,
+        tokens: { input: 40, output: 4 },
+      })),
       resumeWorkflowRun: mock(async () => resumed),
     });
     const deps = makeDeps(store);
@@ -1626,13 +1634,17 @@ describe('hydrateResumableRun', () => {
     expect(result).not.toBeNull();
     expect(result?.preCreatedRun).toBe(resumed);
     expect(result?.priorCompletedNodes).toBe(priorNodes);
+    expect(result?.priorTokenUsage).toEqual({ input: 40, output: 4 });
     expect(store.resumeWorkflowRun).toHaveBeenCalledWith('prior-failed');
   });
 
   it('returns null when candidate has no completed nodes and no interactive-loop state', async () => {
     const candidate = makeRun({ id: 'empty-prior', status: 'failed' });
     const store = makeStore({
-      getCompletedDagNodeOutputs: mock(async () => new Map()),
+      getDagResumeSnapshot: mock(async () => ({
+        completedNodeOutputs: new Map(),
+        tokens: { input: 0, output: 0 },
+      })),
     });
     const deps = makeDeps(store);
     const result = await hydrateResumableRun(deps, candidate);
@@ -1649,7 +1661,10 @@ describe('hydrateResumableRun', () => {
     });
     const resumed = makeRun({ id: 'paused-loop', status: 'running' });
     const store = makeStore({
-      getCompletedDagNodeOutputs: mock(async () => new Map()),
+      getDagResumeSnapshot: mock(async () => ({
+        completedNodeOutputs: new Map(),
+        tokens: { input: 0, output: 0 },
+      })),
       resumeWorkflowRun: mock(async () => resumed),
     });
     const deps = makeDeps(store);
@@ -1659,10 +1674,10 @@ describe('hydrateResumableRun', () => {
     expect(store.resumeWorkflowRun).toHaveBeenCalledWith('paused-loop');
   });
 
-  it('propagates DB errors from getCompletedDagNodeOutputs (no silent fallback)', async () => {
+  it('propagates DB errors from getDagResumeSnapshot (no silent fallback)', async () => {
     const candidate = makeRun({ id: 'prior-failed', status: 'failed' });
     const store = makeStore({
-      getCompletedDagNodeOutputs: mock(async () => {
+      getDagResumeSnapshot: mock(async () => {
         throw new Error('DB read failed');
       }),
     });
@@ -1673,7 +1688,10 @@ describe('hydrateResumableRun', () => {
   it('propagates DB errors from resumeWorkflowRun (no silent fallback)', async () => {
     const candidate = makeRun({ id: 'prior-failed', status: 'failed' });
     const store = makeStore({
-      getCompletedDagNodeOutputs: mock(async () => new Map([['n1', 'v1']])),
+      getDagResumeSnapshot: mock(async () => ({
+        completedNodeOutputs: new Map([['n1', 'v1']]),
+        tokens: { input: 0, output: 0 },
+      })),
       resumeWorkflowRun: mock(async () => {
         throw new Error('DB write failed');
       }),

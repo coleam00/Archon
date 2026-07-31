@@ -355,20 +355,28 @@ export function resolveScopeArtifactsDir(
 }
 
 /**
- * Resume payload. `priorCompletedNodes` may only appear together with
- * `preCreatedRun` — passing completed-node outputs without the resumed row
- * would silently inject node-skip state into a freshly-created run. Lock-token
- * rows (used by `dispatchBackgroundWorkflow`) supply `preCreatedRun` alone.
+ * Resume state may only appear together with `preCreatedRun` — passing prior
+ * outputs or usage without the resumed row would silently inject state into a
+ * freshly-created run. Lock-token rows (used by `dispatchBackgroundWorkflow`)
+ * supply `preCreatedRun` alone.
  */
 type ResumePayload =
-  | { preCreatedRun: WorkflowRun; priorCompletedNodes?: Map<string, string> }
-  | { preCreatedRun?: undefined; priorCompletedNodes?: undefined };
+  | {
+      preCreatedRun: WorkflowRun;
+      priorCompletedNodes?: Map<string, string>;
+      priorTokenUsage?: { input: number; output: number };
+    }
+  | {
+      preCreatedRun?: undefined;
+      priorCompletedNodes?: undefined;
+      priorTokenUsage?: undefined;
+    };
 
 /**
  * Optional parameters for {@link executeWorkflow}. All trailing args live here
  * so call sites stay readable as new options accrue.
  *
- * To resume a prior run, obtain `preCreatedRun` + `priorCompletedNodes` from
+ * To resume a prior run, obtain the run, prior outputs, and prior usage from
  * {@link hydrateResumableRun} (or look up via `findResumableRun` and hydrate)
  * and spread them in. The executor never queries the store for a prior run on
  * its own; that decision belongs at the call site.
@@ -447,8 +455,13 @@ export type ExecuteWorkflowOptions = ResumePayload & {
 export async function hydrateResumableRun(
   deps: WorkflowDeps,
   candidate: WorkflowRun
-): Promise<{ preCreatedRun: WorkflowRun; priorCompletedNodes: Map<string, string> } | null> {
-  const priorCompletedNodes = await deps.store.getCompletedDagNodeOutputs(candidate.id);
+): Promise<{
+  preCreatedRun: WorkflowRun;
+  priorCompletedNodes: Map<string, string>;
+  priorTokenUsage: { input: number; output: number };
+} | null> {
+  const snapshot = await deps.store.getDagResumeSnapshot(candidate.id);
+  const priorCompletedNodes = snapshot.completedNodeOutputs;
   // A gate whose node deliberately writes NO node_completed on pause must still be
   // resumable with zero completed nodes: interactive loops, and a `workflow:` node
   // blocked on a child (#2121 Phase 2) whose child is the very first node.
@@ -470,7 +483,7 @@ export async function hydrateResumableRun(
     { workflowRunId: preCreatedRun.id, priorCompletedCount: priorCompletedNodes.size },
     'workflow.dag_resuming'
   );
-  return { preCreatedRun, priorCompletedNodes };
+  return { preCreatedRun, priorCompletedNodes, priorTokenUsage: snapshot.tokens };
 }
 
 /** Depth cap on the `workflow:` sub-run tree (D9). A node nested deeper fails fast. */
@@ -871,6 +884,7 @@ export async function executeWorkflow(
     parentConversationId,
     preCreatedRun,
     priorCompletedNodes,
+    priorTokenUsage,
     userId,
     source,
     baseBranch: callerBaseBranch,
@@ -1067,6 +1081,7 @@ export async function executeWorkflow(
   // preCreatedRun (from hydrateResumableRun) + priorCompletedNodes via opts.
   // When both are absent the executor creates a fresh row below.
   const dagPriorCompletedNodes = priorCompletedNodes;
+  const dagPriorTokenUsage = priorTokenUsage;
   let workflowRun: WorkflowRun | undefined = preCreatedRun;
 
   if (preCreatedRun && priorCompletedNodes !== undefined) {
@@ -1493,7 +1508,8 @@ export async function executeWorkflow(
       // Sub-run closure (#2121 Phase 2): captures executeWorkflow (this module — no
       // import cycle) so a `workflow:` node can spawn a governed child run in-process.
       (childArgs: RunChildWorkflowArgs): Promise<ChildWorkflowOutcome> =>
-        runChildWorkflow(deps, platform, childArgs)
+        runChildWorkflow(deps, platform, childArgs),
+      dagPriorTokenUsage
     );
 
     // executeDagWorkflow throws on fatal errors; check DB status for result

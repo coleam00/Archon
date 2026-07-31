@@ -98,7 +98,12 @@ function createMockStore(): IWorkflowStore {
     pauseWorkflowRun: mock(() => Promise.resolve()),
     cancelWorkflowRun: mock(() => Promise.resolve()),
     createWorkflowEvent: mock(() => Promise.resolve()),
-    getCompletedDagNodeOutputs: mock(() => Promise.resolve(new Map<string, string>())),
+    getDagResumeSnapshot: mock(() =>
+      Promise.resolve({
+        completedNodeOutputs: new Map<string, string>(),
+        tokens: { input: 0, output: 0 },
+      })
+    ),
     getCodebase: mock(() => Promise.resolve(null)),
     getCodebaseEnvVars: mock(() => Promise.resolve({})),
   };

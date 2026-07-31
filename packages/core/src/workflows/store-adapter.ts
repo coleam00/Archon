@@ -74,7 +74,7 @@ export function createWorkflowStore(): IWorkflowStore {
         );
       }
     },
-    getCompletedDagNodeOutputs: workflowEventDb.getCompletedDagNodeOutputs,
+    getDagResumeSnapshot: workflowEventDb.getDagResumeSnapshot,
     getCodebase: codebaseDb.getCodebase,
     getCodebaseEnvVars: envVarDb.getCodebaseEnvVars,
     getWorkflowNodeSession: workflowNodeSessionDb.getWorkflowNodeSession,

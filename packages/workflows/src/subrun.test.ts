@@ -61,7 +61,7 @@ import type { WorkflowDefinition } from './schemas/workflow';
 // ---------------------------------------------------------------------------
 // Stateful in-memory store — implements just enough of IWorkflowStore to drive
 // the real run lifecycle (create / pause / resume / complete / fail / cancel),
-// event log (for getCompletedDagNodeOutputs), the run tree (findChildRuns /
+// event log (for DAG resume snapshots), the run tree (findChildRuns /
 // getRunAncestry), and the ancestor-aware path lock.
 // ---------------------------------------------------------------------------
 
@@ -215,18 +215,34 @@ class InMemoryStore implements IWorkflowStore {
     return Promise.resolve();
   };
 
-  getCompletedDagNodeOutputs = (workflowRunId: string): Promise<Map<string, string>> => {
-    const map = new Map<string, string>();
+  getDagResumeSnapshot: IWorkflowStore['getDagResumeSnapshot'] = workflowRunId => {
+    const completedNodeOutputs = new Map<string, string>();
+    const tokens = { input: 0, output: 0 };
     for (const e of this.events) {
       if (
         e.workflow_run_id === workflowRunId &&
         (e.event_type === 'node_completed' || e.event_type === 'node_skipped_prior_success') &&
         typeof e.step_name === 'string'
       ) {
-        map.set(e.step_name, String(e.data?.node_output ?? ''));
+        completedNodeOutputs.set(e.step_name, String(e.data?.node_output ?? ''));
+        const eventTokens = e.data?.tokens;
+        if (
+          e.event_type === 'node_completed' &&
+          typeof eventTokens === 'object' &&
+          eventTokens !== null &&
+          'input' in eventTokens &&
+          'output' in eventTokens &&
+          typeof eventTokens.input === 'number' &&
+          typeof eventTokens.output === 'number' &&
+          Number.isFinite(eventTokens.input) &&
+          Number.isFinite(eventTokens.output)
+        ) {
+          tokens.input += eventTokens.input;
+          tokens.output += eventTokens.output;
+        }
       }
     }
-    return Promise.resolve(map);
+    return Promise.resolve({ completedNodeOutputs, tokens });
   };
 
   getCodebase = (): Promise<null> => Promise.resolve(null);

@@ -4718,7 +4718,7 @@ async function executeLoopNode(
         `Loop node '${node.id}' completed after ${String(i)} iteration${i > 1 ? 's' : ''}`,
         msgContext
       );
-      // Write node_completed event so resume logic (getCompletedDagNodeOutputs) knows this
+      // Write node_completed event so resume hydration knows this
       // node is done. Without this, a resumed DAG would re-enter the loop node.
       deps.store
         .createWorkflowEvent({
@@ -5015,7 +5015,7 @@ async function executeApprovalNode(
 
     // Build a synthetic PromptNode to reuse executeNodeInternal.
     // Use a distinct ID so the node_completed event written by executeNodeInternal
-    // does not collide with the approval gate's own ID in getCompletedDagNodeOutputs.
+    // does not collide with the approval gate's own ID in the resume snapshot.
     // If we used node.id here, a resumed run would find the event and treat the
     // approval gate as already completed, bypassing the human gate entirely.
     //
@@ -5201,7 +5201,7 @@ async function executeWorkflowNode(
   // command/prompt/bash/script nodes (which write their own inside their executor)
   // and unlike approval nodes (written by the approve handler), the workflow node
   // writes node_completed HERE — and ONLY on true completion, never on the paused
-  // branch — so getCompletedDagNodeOutputs skips a truly-finished sub-run on resume
+  // branch — so the resume snapshot skips a truly-finished sub-run on resume
   // but re-runs one still blocked on its child.
   const asCompleted = (outcome: ChildWorkflowOutcome): NodeExecutionResult => {
     if (outcome.output === undefined) {
@@ -5265,7 +5265,7 @@ async function executeWorkflowNode(
 
   // Pause the PARENT "blocked on child" — mirrors executeApprovalNode's PAUSE
   // primitives: pause, emit, return {completed, ''} WITHOUT node_completed so the
-  // node re-runs on the parent's resume (getCompletedDagNodeOutputs reads only
+  // node re-runs on the parent's resume (the resume snapshot reads only
   // node_completed). The RESUME side deliberately differs: an approval gate is
   // resolved externally by the approve handler, while this node re-runs and
   // re-inspects its child. Also unlike the approval node, no approval_requested
@@ -6903,7 +6903,9 @@ export async function executeDagWorkflow(
    * Phase 2). executor.ts is the sole caller and passes it; other callers (unit
    * tests) may omit it, in which case a `workflow:` node fails fast.
    */
-  runChildWorkflow?: RunChildWorkflowFn
+  runChildWorkflow?: RunChildWorkflowFn,
+  /** Cumulative usage restored from prior node_completed events on resume. */
+  priorTokenUsage?: { input: number; output: number }
 ): Promise<string | undefined> {
   const dagStartTime = Date.now();
 
@@ -6997,7 +6999,7 @@ export async function executeDagWorkflow(
       if (node?.always_run) continue;
       // Re-derive the producer's declared field set from the loaded definition so the
       // strict `$node.output.field` contract (output-ref.ts) is invariant across fresh
-      // vs resumed runs. getCompletedDagNodeOutputs rehydrates text only, so without
+      // vs resumed runs. The resume snapshot rehydrates text only, so without
       // this a declared-optional-absent field would throw instead of resolving to ''
       // and an undeclared key would resolve instead of throwing (#2091). Mirrors the
       // fresh-completion capture above.
@@ -7073,8 +7075,8 @@ export async function executeDagWorkflow(
     priorCompletedNodes,
     lastSequentialSession: undefined,
     totalCostUsd: 0,
-    totalTokensIn: 0,
-    totalTokensOut: 0,
+    totalTokensIn: priorTokenUsage?.input ?? 0,
+    totalTokensOut: priorTokenUsage?.output ?? 0,
     totalLoopIterations: 0,
     stepNamePrefix: '',
   };
