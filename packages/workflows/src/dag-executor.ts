@@ -3041,21 +3041,19 @@ function readSignaledTokens(
   context: { workflowRunId: string; nodeId: string }
 ): TokenUsage | undefined {
   if (raw === undefined || raw === null) return undefined;
-  if (typeof raw !== 'object') {
-    getLog().warn({ ...context, tokens: raw }, 'dag_loop.signaled_tokens_invalid_ignored');
-    return undefined;
+  if (typeof raw === 'object') {
+    const { input, output } = raw as { input?: unknown; output?: unknown };
+    if (
+      typeof input === 'number' &&
+      typeof output === 'number' &&
+      Number.isFinite(input) &&
+      Number.isFinite(output)
+    ) {
+      return { input, output };
+    }
   }
-  const { input, output } = raw as { input?: unknown; output?: unknown };
-  if (
-    typeof input !== 'number' ||
-    typeof output !== 'number' ||
-    !Number.isFinite(input) ||
-    !Number.isFinite(output)
-  ) {
-    getLog().warn({ ...context, tokens: raw }, 'dag_loop.signaled_tokens_invalid_ignored');
-    return undefined;
-  }
-  return { input, output };
+  getLog().warn({ ...context, tokens: raw }, 'dag_loop.signaled_tokens_invalid_ignored');
+  return undefined;
 }
 
 /**
