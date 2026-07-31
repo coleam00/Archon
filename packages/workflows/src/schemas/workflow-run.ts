@@ -216,17 +216,24 @@ export interface ApprovalContext {
    */
   signaledOutput?: string | null;
   /**
-   * Interactive-loop only. Token usage accumulated by the invocation that produced the
-   * signal-bearing paused iteration, persisted so the finalize-on-approve path can write
-   * a node_completed carrying the usage it really consumed instead of a silent zero
-   * (#2333). Only set when completionSignaled is true; null otherwise.
+   * Interactive-loop only, and written by the single-node `loop` gate ONLY. Token usage
+   * accumulated by the invocation that produced the signal-bearing paused iteration,
+   * persisted so the finalize-on-approve path can write a node_completed carrying the
+   * usage it really consumed instead of a silent zero (#2333). Only set when
+   * completionSignaled is true; null otherwise. A `loop_group` gate deliberately does
+   * NOT write this: its body nodes persist their own `<groupId>.<nodeId>` rows (with
+   * tokens) before the pause, so a finalize row repeating the total would double-count.
    *
    * Scope note: this is the PAUSING invocation's total, matching what the normal
-   * (re-run) completion path reports — a loop that gated more than once attributes each
-   * invocation's usage to that invocation, and earlier ones are only visible in the
-   * run-level totals. The gate loses `cost_usd` and the resolved model the same way;
-   * those belong to the single "preserve terminal provider stats across a gate" fix
-   * tracked by #2345.
+   * (re-run) completion path reports — a loop that gates more than once attributes each
+   * invocation's usage to that invocation, and EARLIER invocations' usage is reported
+   * nowhere: a pausing invocation never reaches completeWorkflowRun (the status is
+   * `paused`, so the pre-complete status check bails), and `total_tokens_*` are written
+   * only there. So on a twice-gated loop the surviving node row and the run row both
+   * report only the final invocation. That under-report predates this field (before
+   * #2333 nothing was persisted at all) and belongs to the "preserve terminal provider
+   * stats across a gate" fix tracked by #2345, which also covers the `cost_usd` and
+   * resolved-model loss at the same gate.
    */
   signaledTokens?: { input: number; output: number } | null;
   /**

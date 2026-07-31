@@ -14213,6 +14213,10 @@ describe('executeDagWorkflow -- loop_group node', () => {
     });
     expect(String(pauseCalls[0][1].signaledOutput)).toContain('validation PASS');
     expect(String(pauseCalls[0][1].message)).toContain('Completion signal detected');
+    // No `signaledTokens` (unlike the plain-loop gate): the group's finalize path has
+    // no consumer for it, because the body's own rows already persisted this
+    // iteration's usage before the pause (#2333).
+    expect(pauseCalls[0][1]).not.toHaveProperty('signaledTokens');
   });
 
   it('INTERACTIVE: loop_group signal_completes completes on a first-iteration signal without gating (#2074 B)', async () => {
@@ -14704,6 +14708,111 @@ describe('executeDagWorkflow -- loop_group node', () => {
         { input: 0, output: 0 }
       );
     expect(naiveSum).toEqual({ input: 300, output: 30 });
+  });
+
+  it('COST: a loop_group gate → bare approve → finalize does not double-count body tokens (#2333)', async () => {
+    // Both phases write to ONE event store, the way a real database behaves. Per-test
+    // isolation would hide the defect entirely: the body's per-iteration rows are
+    // persisted BEFORE the pause and survive it, so a finalize row carrying the same
+    // usage doubles it in the single stream a consumer actually reads.
+    const store = createMockStore();
+    const nodes: DagNode[] = [
+      {
+        id: 'refine',
+        loop_group: {
+          until: 'APPROVED',
+          max_iterations: 5,
+          fresh_context: false,
+          interactive: true,
+          gate_message: 'Review the result.',
+          nodes: [{ id: 'work', prompt: 'validate', depends_on: [] }],
+        },
+        depends_on: [],
+      },
+    ];
+    const workflow = { name: 'lg-finalize-tokens', nodes };
+
+    // Phase 1 — iteration 1 signals but still gates (fresh interactive, no
+    // signal_completes). Its body row persists 100/10, the run's ONLY real usage.
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'validation PASS\nAPPROVED' };
+      yield { type: 'result', sessionId: 'lg-dbl-sess-1', tokens: { input: 100, output: 10 } };
+    });
+
+    await executeDagWorkflow(
+      createMockDeps(store),
+      createMockPlatform(),
+      'conv-lg',
+      testDir,
+      workflow,
+      makeWorkflowRun('lg-finalize-tokens-run'),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const pauseCalls = (
+      store.pauseWorkflowRun as Mock<(id: string, ctx: Record<string, unknown>) => Promise<void>>
+    ).mock.calls;
+    expect(pauseCalls.length).toBe(1);
+
+    // Phase 2 — bare approve. The resumed run carries EXACTLY the context the gate
+    // persisted, so what the pause writes is what the finalize reads.
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'should never run' };
+      yield { type: 'result', sessionId: 'never', tokens: { input: 999, output: 99 } };
+    });
+    const aiCallsBeforeResume = mockSendQueryDag.mock.calls.length;
+
+    await executeDagWorkflow(
+      createMockDeps(store),
+      createMockPlatform(),
+      'conv-lg',
+      testDir,
+      workflow,
+      makeWorkflowRun('lg-finalize-tokens-run', {
+        metadata: {
+          approval: pauseCalls[0][1],
+          loop_user_input: '',
+          loop_feedback_given: false,
+        },
+      }),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    // Finalized from the persisted output — no body iteration re-ran.
+    expect(mockSendQueryDag.mock.calls.length).toBe(aiCallsBeforeResume);
+
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls as Array<
+      [{ event_type: string; step_name: string; data?: Record<string, unknown> }]
+    >;
+    const completedRows = eventCalls.filter(([arg]) => arg.event_type === 'node_completed');
+    expect(completedRows.map(([arg]) => arg.step_name)).toEqual(['refine.work', 'refine']);
+    // The pre-pause body row is authoritative and still present after the resume.
+    expect(completedRows[0][0].data?.tokens).toEqual({ input: 100, output: 10 });
+    // The finalize row is an aggregate over body rows that already carry the usage —
+    // same reason the natural-completion group row omits `tokens`.
+    expect(completedRows[1][0].data).not.toHaveProperty('tokens');
+    // The property the persisted stream must hold across a gate: a naive consumer
+    // summing every node_completed row's tokens gets the run's real usage.
+    const naiveSum = completedRows.reduce(
+      (acc, [arg]) => {
+        const t = arg.data?.tokens as { input: number; output: number } | undefined;
+        return t ? { input: acc.input + t.input, output: acc.output + t.output } : acc;
+      },
+      { input: 0, output: 0 }
+    );
+    expect(naiveSum).toEqual({ input: 100, output: 10 });
   });
 
   it('omits tokens from loop_group body node_completed events when providers report no usage', async () => {

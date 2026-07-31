@@ -3054,9 +3054,13 @@ function readSignaledTokens(raw: unknown): TokenUsage | undefined {
  *
  * `finalizeTokens` is the usage the pausing invocation actually consumed, carried
  * across the gate in the approval context (#2333) — without it this path persists a
- * node_completed reporting no usage for iterations that really ran. `cost_usd` and
- * the resolved model are lost across the same gate for the same reason; both are
- * part of the single "preserve terminal provider stats across a gate" fix in #2345.
+ * node_completed reporting no usage for iterations that really ran. Passed by the
+ * single-node loop ONLY: its per-iteration rows carry no tokens, so this row is the
+ * only record. A loop_group omits it — its body nodes persisted their own namespaced
+ * rows (with tokens) before the pause, and those rows survive it, so repeating the
+ * total here would double-count in the one event stream. `cost_usd` and the resolved
+ * model are lost across the same gate; both are part of the single "preserve terminal
+ * provider stats across a gate" fix in #2345.
  */
 async function finalizeLoopFromSignal(
   deps: WorkflowDeps,
@@ -3203,8 +3207,15 @@ async function executeLoopGroupNode(
       node.id,
       stepName,
       'Loop-group node',
-      finalizeOutput,
-      readSignaledTokens(loopGateMeta.signaledTokens)
+      finalizeOutput
+      // NO finalizeTokens, deliberately — same double-count reasoning as the
+      // natural-completion group row below. A loop_group's body nodes wrote their own
+      // `<groupId>.<nodeId>` node_completed rows (with tokens) BEFORE the gate paused,
+      // and those rows survive the pause: they are already in the event stream this
+      // finalize row is appended to. Reporting the group total here would make a
+      // consumer summing `data.tokens` count the pausing iteration twice. The plain
+      // `loop` DOES pass it — its per-iteration rows carry no tokens, so its finalize
+      // row is the only record of the usage.
     );
     return { state: 'completed', output: finalizeOutput };
   }
@@ -3650,9 +3661,10 @@ async function executeLoopGroupNode(
         // for honesty; pauseWorkflowRun nulls both on every fresh pause.
         completionSignaled: completionDetected,
         signaledOutput: completionDetected ? lastIterationOutput : null,
-        // Usage consumed up to this gate, so a bare approve (finalize, no re-run)
-        // can persist it on node_completed instead of reporting nothing (#2333).
-        signaledTokens: completionDetected ? (loopTotalTokens ?? null) : null,
+        // NO `signaledTokens` — a loop_group gate has no consumer for it. The body's
+        // own `<groupId>.<nodeId>` rows already persisted this iteration's usage before
+        // the pause, so the finalize path deliberately writes no `tokens` (see the
+        // finalizeLoopFromSignal call above). Only the plain `loop` gate carries it.
       });
       return {
         state: 'completed',
