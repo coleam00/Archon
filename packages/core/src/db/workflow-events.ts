@@ -248,7 +248,7 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<{
     if (typeof data.node_output === 'string') {
       completedNodeOutputs.set(row.step_name, data.node_output);
     }
-    if (row.event_type === 'node_completed') {
+    if (row.event_type === 'node_completed' && data.tokens !== undefined) {
       const eventTokens = data.tokens;
       if (
         typeof eventTokens === 'object' &&

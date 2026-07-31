@@ -7113,6 +7113,77 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       expect(completed[0][0].data).not.toHaveProperty('tokens');
     });
 
+    it('warns and omits malformed persisted gate token usage on bare approval', async () => {
+      mockSendQueryDag.mockImplementation(function* () {
+        yield { type: 'assistant', content: 'should never run' };
+        yield { type: 'result', sessionId: 'never' };
+      });
+
+      const mockDeps = createMockDeps();
+      const workflowRun = makeWorkflowRun('finalize-invalid-tokens-run', {
+        metadata: {
+          approval: {
+            type: 'interactive_loop',
+            nodeId: 'refine',
+            iteration: 1,
+            sessionId: 'sig-session-1',
+            message: 'gate',
+            completionSignaled: true,
+            signaledOutput: 'REPORT',
+            signaledTokens: { input: Number.NaN, output: 4 },
+          },
+          loop_user_input: 'Approved',
+          loop_feedback_given: false,
+        },
+      });
+
+      await executeDagWorkflow(
+        mockDeps,
+        createMockPlatform(),
+        'conv-dag',
+        testDir,
+        {
+          name: 'finalize-invalid-tokens',
+          nodes: [
+            {
+              id: 'refine',
+              loop: {
+                prompt: 'Refine.',
+                until: 'APPROVED',
+                max_iterations: 10,
+                interactive: true,
+                gate_message: 'Review.',
+              },
+            },
+          ],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      const warnCalls = mockLogFn.mock.calls.filter(
+        (call: unknown[]) => call[1] === 'dag_loop.signaled_tokens_invalid_ignored'
+      );
+      expect(warnCalls).toHaveLength(1);
+      expect(warnCalls[0]?.[0]).toEqual(
+        expect.objectContaining({ workflowRunId: workflowRun.id, nodeId: 'refine' })
+      );
+      const completed = (mockDeps.store.createWorkflowEvent as Mock).mock.calls.find(
+        (call: unknown[]) =>
+          (call[0] as { event_type: string }).event_type === 'node_completed' &&
+          (call[0] as { step_name: string }).step_name === 'refine'
+      );
+      expect((completed?.[0] as { data: Record<string, unknown> }).data).not.toHaveProperty(
+        'tokens'
+      );
+    });
+
     it('iterates at resume when feedback was given, even on a signal-bearing gate (#2074 C)', async () => {
       mockSendQueryDag.mockImplementation(function* () {
         yield { type: 'assistant', content: 'Re-checked X. <promise>APPROVED</promise>' };

@@ -35,6 +35,7 @@ import {
 describe('workflow-events', () => {
   beforeEach(() => {
     mockQuery.mockClear();
+    mockLogger.warn.mockClear();
   });
 
   const mockEvent: WorkflowEventRow = {
@@ -353,6 +354,25 @@ describe('workflow-events', () => {
         ])
       );
       expect(result.tokens).toEqual({ input: 10, output: 1 });
+      expect(mockLogger.warn).toHaveBeenCalledTimes(2);
+    });
+
+    test('does not warn when completed events omit optional token usage', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          {
+            step_name: 'node-a',
+            event_type: 'node_completed',
+            data: { node_output: 'output without usage' },
+          },
+        ])
+      );
+
+      const result = await getDagResumeSnapshot('run-without-tokens');
+
+      expect(result.completedNodeOutputs).toEqual(new Map([['node-a', 'output without usage']]));
+      expect(result.tokens).toEqual({ input: 0, output: 0 });
+      expect(mockLogger.warn).not.toHaveBeenCalled();
     });
 
     test('skips corrupt JSON rows without losing other rows', async () => {

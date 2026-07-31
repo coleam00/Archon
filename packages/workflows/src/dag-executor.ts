@@ -3036,11 +3036,25 @@ function buildHonestGateMessage(
  * non-finite value must be dropped rather than persisted onward as a number a
  * consumer would believe.
  */
-function readSignaledTokens(raw: unknown): TokenUsage | undefined {
-  if (typeof raw !== 'object' || raw === null) return undefined;
+function readSignaledTokens(
+  raw: unknown,
+  context: { workflowRunId: string; nodeId: string }
+): TokenUsage | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== 'object') {
+    getLog().warn({ ...context, tokens: raw }, 'dag_loop.signaled_tokens_invalid_ignored');
+    return undefined;
+  }
   const { input, output } = raw as { input?: unknown; output?: unknown };
-  if (typeof input !== 'number' || typeof output !== 'number') return undefined;
-  if (!Number.isFinite(input) || !Number.isFinite(output)) return undefined;
+  if (
+    typeof input !== 'number' ||
+    typeof output !== 'number' ||
+    !Number.isFinite(input) ||
+    !Number.isFinite(output)
+  ) {
+    getLog().warn({ ...context, tokens: raw }, 'dag_loop.signaled_tokens_invalid_ignored');
+    return undefined;
+  }
   return { input, output };
 }
 
@@ -3975,7 +3989,10 @@ async function executeLoopNode(
       stepName,
       'Loop node',
       finalizeOutput,
-      readSignaledTokens(loopGateMeta.signaledTokens)
+      readSignaledTokens(loopGateMeta.signaledTokens, {
+        workflowRunId: workflowRun.id,
+        nodeId: node.id,
+      })
     );
     return { state: 'completed', output: finalizeOutput, sessionId: currentSessionId };
   }

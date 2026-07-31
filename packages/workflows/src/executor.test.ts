@@ -850,6 +850,38 @@ describe('executeWorkflow', () => {
       // No fresh row created when a preCreatedRun is supplied.
       expect(store.createWorkflowRun).not.toHaveBeenCalled();
     });
+
+    it('forwards a hydrated resume snapshot into resumed DAG execution', async () => {
+      const candidate = makeRun({ id: 'failed-run', status: 'failed' });
+      const resumed = makeRun({ id: 'resumed-run', status: 'running' });
+      const completedNodeOutputs = new Map([['node-a', 'first output']]);
+      const tokens = { input: 40, output: 4 };
+      const store = makeStore({
+        getDagResumeSnapshot: mock(async () => ({ completedNodeOutputs, tokens })),
+        resumeWorkflowRun: mock(async () => resumed),
+      });
+      const deps = makeDeps(store);
+
+      const hydrated = await hydrateResumableRun(deps, candidate);
+      expect(hydrated).not.toBeNull();
+      if (!hydrated) throw new Error('Expected resumable workflow to hydrate');
+
+      await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'test message',
+        'db-conv-1',
+        hydrated
+      );
+
+      const dagCall = mockExecuteDagWorkflow.mock.calls[0];
+      expect(dagCall?.[15]).toBe(completedNodeOutputs);
+      expect(dagCall?.[23]).toEqual(tokens);
+      expect(store.createWorkflowRun).not.toHaveBeenCalled();
+    });
   });
 
   // -------------------------------------------------------------------------
