@@ -128,6 +128,9 @@ Workflow runs now record what they actually resolved to — assistant, model, ef
 - **The PowerShell installer fails when its version check exits non-zero**, instead of reporting a successful install. (#2391)
 - **Incompatible x64 quick installs are rejected** rather than installing a binary that cannot run. (#2379)
 - **`archon doctor` honors the `claudeBinaryPath` config fallback.** (#2275, #2263)
+### Added
+
+- **Pi model-default fallback** — when no model is set on a workflow node or in `.archon/config.yaml`, the Pi provider now falls back to the operator's own Pi default (`defaultProvider`/`defaultModel` in `~/.pi/agent/settings.json`, as written by the `pi` CLI). This keeps Pi workflows model-agnostic — no vendor model hardcoded — so setups whose catalog drifts (e.g. a LiteLLM proxy) work without pinning a specific model, mirroring how the standalone `pi` CLI boots. Falls through to the existing explicit "requires a model" error when no default is configured.
 
 ## [0.7.0] - 2026-08-01
 
