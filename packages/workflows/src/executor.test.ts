@@ -711,6 +711,37 @@ describe('executeWorkflow', () => {
       expect(mockExecuteDagWorkflow.mock.calls[0]?.[10]).toBe('main');
     });
 
+    it('prefers baseOverride over repo config baseBranch', async () => {
+      // The per-dispatch `--base` override is the top precedence level. Without
+      // it ranked above config, a repo that sets `worktree.baseBranch` would cut
+      // its worktree from the override but report the CONFIGURED branch as
+      // $BASE_BRANCH — telling an AI node it works from a branch the worktree
+      // was never cut from, and targeting `gh pr create --base` at the wrong one.
+      const deps = makeDeps();
+      deps.loadConfig = mock(
+        async (): Promise<WorkflowConfig> => ({
+          assistant: 'claude' as const,
+          assistants: { claude: {}, codex: {} },
+          baseBranch: 'main',
+          commands: { folder: '' },
+        })
+      ) as unknown as WorkflowDeps['loadConfig'];
+
+      await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp/worktree',
+        makeWorkflow(),
+        'test message',
+        'db-conv-1',
+        { baseBranch: 'develop', baseOverride: 'epic/foo' }
+      );
+
+      expect(mockGetDefaultBranch).not.toHaveBeenCalled();
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[10]).toBe('epic/foo');
+    });
+
     it('falls back to git auto-detection when config and caller branch are unset', async () => {
       const deps = makeDeps();
 

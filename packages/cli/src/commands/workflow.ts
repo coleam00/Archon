@@ -386,12 +386,12 @@ function buildRegistrationFailureError(action: string, error: Error): Error {
   );
 }
 
-/** Error for --branch/--from used against a folder project (no worktree). */
+/** Error for --branch/--from/--base used against a folder project (no worktree). */
 function folderWorktreeOptionError(): Error {
   return new Error(
     'Worktree options require a git-repo project.\n' +
-      '  --branch/--from create an isolated git worktree, which folder projects do not use.\n' +
-      '  Drop --branch/--from — folder projects always run in place.'
+      '  --branch/--from/--base act on an isolated git worktree, which folder projects do not use.\n' +
+      '  Drop --branch/--from/--base — folder projects always run in place.'
   );
 }
 
@@ -420,15 +420,24 @@ function buildFolderRegistrationFailureError(error: Error): Error {
 }
 
 /**
- * Fail fast if `--branch`/`--from` (git-worktree-only options) are used against a
- * folder project. Called at three sites — flag-declared (pre-detach), the detach
- * fast-path, and post-lookup (authoritative) — so the check lives in one place.
+ * Fail fast if `--branch`/`--from`/`--base` (git-worktree-only options) are used
+ * against a folder project. Called at three sites — flag-declared (pre-detach), the
+ * detach fast-path, and post-lookup (authoritative) — so the check lives in one place.
+ *
+ * `--base` belongs here even though a folder run creates no worktree for it to
+ * redirect: it would still reach `$BASE_BRANCH`, giving the run a PR target with
+ * no worktree behind it.
  */
 function assertNoWorktreeOptionsForFolder(
   isFolderProject: boolean,
   options: WorkflowRunOptions
 ): void {
-  if (isFolderProject && (options.branchName !== undefined || options.fromBranch !== undefined)) {
+  if (
+    isFolderProject &&
+    (options.branchName !== undefined ||
+      options.fromBranch !== undefined ||
+      options.baseBranch !== undefined)
+  ) {
     throw folderWorktreeOptionError();
   }
 }
@@ -826,8 +835,12 @@ export async function workflowRunCommand(
   }
 
   // Per-dispatch --base override, normalized once. Wins over repo config + the
-  // codebase default for both the worktree cut-from (provider request below) and
-  // the PR target / $BASE_BRANCH (executeWorkflow opts).
+  // codebase default for both the worktree cut-from (the provider request's
+  // `baseOverride` below) and the PR target / $BASE_BRANCH (executeWorkflow's
+  // `baseOverride` opt). Both halves need their own channel: the `baseBranch`
+  // field on either side is the codebase-default FALLBACK and ranks below repo
+  // config, so routing the flag through it would silently lose to a repo that
+  // sets `worktree.baseBranch`.
   const flagBase = options.baseBranch?.trim() || undefined;
 
   // Reconcile workflow-level worktree policy with invocation flags.
@@ -848,6 +861,13 @@ export async function workflowRunCommand(
         `Workflow '${workflow.name}' sets worktree.enabled: false (runs in live checkout).\n` +
           '  --from/--from-branch only applies when a worktree is created.\n' +
           "  Drop --from or change the workflow's worktree.enabled."
+      );
+    }
+    if (options.baseBranch !== undefined) {
+      throw new Error(
+        `Workflow '${workflow.name}' sets worktree.enabled: false (runs in live checkout).\n` +
+          '  --base only applies when a worktree is created.\n' +
+          "  Drop --base or change the workflow's worktree.enabled."
       );
     }
     // --no-worktree is redundant but not contradictory — silently accept.
@@ -1324,13 +1344,32 @@ export async function workflowRunCommand(
             `--from ${options.fromBranch} was not applied (worktree already exists).`
         );
       }
+      if (flagBase) {
+        // Deliberately NOT the "was not applied" wording used for --from above:
+        // --base is only HALF ignored on reuse. The cut-from is already fixed,
+        // but the override still drives $BASE_BRANCH / the PR target.
+        getLog().warn(
+          { path: existingEnv.working_path, baseBranch: flagBase },
+          'worktree.reuse_base_override_partial'
+        );
+        console.warn(
+          `Warning: Reusing existing worktree at ${existingEnv.working_path}. ` +
+            `--base ${flagBase} did not change the cut-from (worktree already exists); ` +
+            'it still applies to the PR target.'
+        );
+      }
       // Validate base branch before reuse (warning-only — non-blocking)
       try {
         const repoConfig = await loadRepoConfig(codebase.default_cwd);
         const rawBase = repoConfig?.worktree?.baseBranch?.trim();
-        // Three-level fallback: repo config → codebase default → git auto-detect.
+        // Four-level fallback: --base override → repo config → codebase default →
+        // git auto-detect. Mirrors WorktreeProvider and executeWorkflow, so the
+        // reuse check validates against the base this dispatch actually asked
+        // for instead of reporting a mismatch nobody requested.
         let configuredBase: git.BranchName;
-        if (rawBase) {
+        if (flagBase) {
+          configuredBase = git.toBranchName(flagBase);
+        } else if (rawBase) {
           configuredBase = git.toBranchName(rawBase);
         } else if (codebaseDefaultBranch) {
           configuredBase = git.toBranchName(codebaseDefaultBranch);
@@ -1664,7 +1703,8 @@ export async function workflowRunCommand(
           codebaseId: codebase?.id,
           source: workflowSource,
           userId: cliUserId,
-          baseBranch: flagBase ?? codebaseDefaultBranch,
+          baseBranch: codebaseDefaultBranch,
+          baseOverride: flagBase,
           execContext,
           container: containerRunCtx,
           ...prepared,
@@ -1673,7 +1713,8 @@ export async function workflowRunCommand(
           codebaseId: codebase?.id,
           source: workflowSource,
           userId: cliUserId,
-          baseBranch: flagBase ?? codebaseDefaultBranch,
+          baseBranch: codebaseDefaultBranch,
+          baseOverride: flagBase,
           execContext,
           container: containerRunCtx,
         };

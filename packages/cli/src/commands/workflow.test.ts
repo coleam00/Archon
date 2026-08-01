@@ -1178,6 +1178,28 @@ describe('workflowRunCommand', () => {
     ).rejects.toThrow('Worktree options require a git-repo project');
   });
 
+  it('rejects --base against a registered folder project', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const codebaseDb = await import('@archon/core/db/codebases');
+
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
+      errors: [],
+    });
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-folder',
+      name: 'platform',
+      default_cwd: '/test/path',
+      kind: 'folder',
+    });
+
+    // A folder project creates no worktree, so --base cannot drive a cut-from —
+    // but it WOULD still reach $BASE_BRANCH. Half-applied is worse than rejected.
+    await expect(
+      workflowRunCommand('/test/path', 'assist', 'hello', { baseBranch: 'epic/foo' })
+    ).rejects.toThrow('Worktree options require a git-repo project');
+  });
+
   it('rejects --folder --branch synchronously (flag-based, before any DB/registration)', async () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
     const core = await import('@archon/core');
@@ -1511,6 +1533,28 @@ describe('workflowRunCommand', () => {
     ).rejects.toThrow(/worktree\.enabled: false/);
   });
 
+  it('throws when workflow pins worktree.enabled: false but caller passes --base', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [
+        makeTestWorkflowWithSource({
+          name: 'triage',
+          description: 'Read-only triage',
+          worktree: { enabled: false },
+        }),
+      ],
+      errors: [],
+    });
+
+    // A live-checkout run cuts no worktree, so --base can only half-apply:
+    // it would still move $BASE_BRANCH. Reject it like --from rather than
+    // silently retargeting the PR of a run that has no worktree.
+    await expect(
+      workflowRunCommand('/test/path', 'triage', 'go', { baseBranch: 'epic/foo' })
+    ).rejects.toThrow(/worktree\.enabled: false/);
+  });
+
   it('accepts worktree.enabled: false + --no-worktree as redundant (no error)', async () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
     const { executeWorkflow } = await import('@archon/workflows/executor');
@@ -1623,6 +1667,114 @@ describe('workflowRunCommand', () => {
     try {
       await workflowRunCommand('/test/path', 'assist', 'hello', { branchName: 'my-feature' });
       expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining("not based on 'dev'"));
+    } finally {
+      consoleWarnSpy.mockRestore();
+    }
+  });
+
+  it('warns that --base did not change the cut-from when reusing a worktree', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const conversationDb = await import('@archon/core/db/conversations');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const isolationDb = await import('@archon/core/db/isolation-environments');
+    const gitModule = await import('@archon/git');
+
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
+      errors: [],
+    });
+    (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'conv-123',
+    });
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-123',
+      default_cwd: '/test/path',
+    });
+    (isolationDb.findActiveByWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'env-1',
+      working_path: '/worktrees/feat',
+      branch_name: 'feature-old',
+      workflow_type: 'task',
+      workflow_id: 'my-feature',
+    });
+    // Base is valid, so the mismatch warning stays silent and this test asserts
+    // only the reuse notice.
+    (gitModule.isAncestorOf as ReturnType<typeof mock>).mockResolvedValueOnce(true);
+    (conversationDb.updateConversation as ReturnType<typeof mock>).mockResolvedValueOnce(undefined);
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      workflowRunId: 'run-123',
+    });
+
+    const consoleWarnSpy = spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await workflowRunCommand('/test/path', 'assist', 'hello', {
+        branchName: 'my-feature',
+        baseBranch: 'epic/foo',
+      });
+      // Unlike --from (which is fully ignored on reuse), --base is PARTIALLY
+      // applied: the cut-from is already fixed, but $BASE_BRANCH still moves.
+      // The wording has to say so, or it trades one silent surprise for another.
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('--base epic/foo did not change the cut-from')
+      );
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('it still applies to the PR target')
+      );
+    } finally {
+      consoleWarnSpy.mockRestore();
+    }
+  });
+
+  it('validates a reused worktree against --base rather than repo config', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const conversationDb = await import('@archon/core/db/conversations');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const isolationDb = await import('@archon/core/db/isolation-environments');
+    const gitModule = await import('@archon/git');
+
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
+      errors: [],
+    });
+    (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'conv-123',
+    });
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-123',
+      default_cwd: '/test/path',
+    });
+    (isolationDb.findActiveByWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'env-1',
+      working_path: '/worktrees/feat',
+      branch_name: 'feature-old',
+      workflow_type: 'task',
+      workflow_id: 'my-feature',
+    });
+    (gitModule.isAncestorOf as ReturnType<typeof mock>).mockResolvedValueOnce(false);
+    (conversationDb.updateConversation as ReturnType<typeof mock>).mockResolvedValueOnce(undefined);
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      workflowRunId: 'run-123',
+    });
+
+    const consoleWarnSpy = spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await workflowRunCommand('/test/path', 'assist', 'hello', {
+        branchName: 'my-feature',
+        baseBranch: 'epic/foo',
+      });
+      // Repo config says 'dev'; the dispatch said 'epic/foo'. Checking ancestry
+      // against 'dev' would report a mismatch nobody asked about.
+      expect(gitModule.isAncestorOf as ReturnType<typeof mock>).toHaveBeenCalledWith(
+        '/worktrees/feat',
+        'origin/epic/foo'
+      );
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("not based on 'epic/foo'")
+      );
     } finally {
       consoleWarnSpy.mockRestore();
     }
@@ -1822,11 +1974,73 @@ describe('workflowRunCommand', () => {
     expect(lastCreateCall.baseOverride).toBe('epic/foo');
     expect(lastCreateCall.baseBranch).toBe('develop');
 
-    // PR target / $BASE_BRANCH is overridden by the flag, not the codebase default
+    // PR target / $BASE_BRANCH: the flag rides its own `baseOverride` channel so
+    // it outranks `worktree.baseBranch` inside executeWorkflow. `baseBranch`
+    // keeps carrying the codebase default as the fallback — the same split the
+    // provider request uses above. Asserting the flag in `baseBranch` here would
+    // pass while $BASE_BRANCH still resolved to repo config (see the
+    // 'prefers baseOverride over repo config baseBranch' test in
+    // packages/workflows/src/executor.test.ts, which covers the resolution).
     const executeSpy = executeWorkflow as ReturnType<typeof mock>;
     const lastExecuteArgs = executeSpy.mock.calls.at(-1) as unknown[];
-    const opts = lastExecuteArgs[lastExecuteArgs.length - 1] as { baseBranch?: string };
-    expect(opts.baseBranch).toBe('epic/foo');
+    const opts = lastExecuteArgs[lastExecuteArgs.length - 1] as {
+      baseBranch?: string;
+      baseOverride?: string;
+    };
+    expect(opts.baseOverride).toBe('epic/foo');
+    expect(opts.baseBranch).toBe('develop');
+  });
+
+  it('lets --from win the cut-from while --base still drives the PR target', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const conversationDb = await import('@archon/core/db/conversations');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const isolation = await import('@archon/isolation');
+
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
+      errors: [],
+    });
+    (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'conv-123',
+    });
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-123',
+      default_cwd: '/test/path',
+      default_branch: 'develop',
+    });
+    (conversationDb.updateConversation as ReturnType<typeof mock>).mockResolvedValueOnce(undefined);
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      workflowRunId: 'run-123',
+    });
+
+    await workflowRunCommand('/test/path', 'assist', 'hello', {
+      fromBranch: 'origin/release/2.0',
+      baseBranch: 'dev',
+    });
+
+    // INTENTIONAL, not an oversight: --base sets both halves of "base" by
+    // default, and --from is the lever that decouples them. Combining them is
+    // how you express "branch from release/2.0, but open the PR against dev" —
+    // the one case a single flag cannot say. Making one flag win outright would
+    // delete that capability, so this pairing is deliberately left unguarded.
+    const getIsolationProviderMock = isolation.getIsolationProvider as ReturnType<typeof mock>;
+    const provider = getIsolationProviderMock.mock.results.at(-1)?.value as
+      | { create: ReturnType<typeof mock> }
+      | undefined;
+    const lastCreateCall = provider?.create.mock.calls.at(-1)?.[0] as {
+      fromBranch?: string;
+      baseOverride?: string;
+    };
+    expect(lastCreateCall.fromBranch).toBe('origin/release/2.0');
+    expect(lastCreateCall.baseOverride).toBe('dev');
+
+    const executeSpy = executeWorkflow as ReturnType<typeof mock>;
+    const lastExecuteArgs = executeSpy.mock.calls.at(-1) as unknown[];
+    const opts = lastExecuteArgs[lastExecuteArgs.length - 1] as { baseOverride?: string };
+    expect(opts.baseOverride).toBe('dev');
   });
 
   it('threads codebase name into provider.create so single-segment checkout paths resolve', async () => {

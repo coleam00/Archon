@@ -2399,6 +2399,7 @@ describe('WorktreeProvider', () => {
       // 'main' and the codebase-default request.baseBranch 'develop'.
       expect(syncWorkspaceSpy).toHaveBeenCalledWith('/workspace/owner/repo', 'epic/foo', {
         mode: 'fast-forward',
+        remote: 'origin',
       });
     });
 
