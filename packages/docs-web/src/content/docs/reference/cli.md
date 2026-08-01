@@ -206,9 +206,10 @@ Progress events (node start/complete/fail/skip, approval gates) are written to s
 |------|--------|
 | `--cwd <path>` | Target directory (required for most use cases) |
 | `--branch <name>` | Explicit branch name for the worktree |
-| `--from <branch>`, `--from-branch <branch>` | Override base branch (start-point for worktree) |
+| `--from <branch>`, `--from-branch <branch>` | Start-point for the new worktree only -- unlike `--base`, it does not change the PR target |
+| `--base <branch>` | Per-dispatch base override for a single run. Sets **both** the worktree cut-from **and** the PR target (`$BASE_BRANCH`), and outranks `worktree.baseBranch` in config plus the codebase default -- see [Base branch precedence](#base-branch-precedence) below. The branch **must already exist on the remote**; a missing one is a hard error, not a fallback. Combine with `--from` to drive the two separately. Rejected with `--no-worktree`, `--folder`, and workflows pinning `worktree.enabled: false`. |
 | `--no-worktree` | Opt out of isolation -- run directly in live checkout |
-| `--folder` | Register the current non-git directory as a folder project (first use) and run in place -- no worktree. Rejects `--branch`/`--from`. |
+| `--folder` | Register the current non-git directory as a folder project (first use) and run in place -- no worktree. Rejects `--branch`/`--from`/`--base`. |
 | `--container` | Run a **folder project** inside an overlay-isolated Docker container instead of in place (writes land in an overlay, not the live root, until an approval-gated write-back). Folder-only; a repo project errors. Requires the runner image (`bun run build:runner-image`). Pauses `docker stop` the container; `--resume`/`approve`/`reject` rediscover and restart it. See the [Container isolation guide](/guides/container-isolation/) and [configuration](/reference/configuration/#container-isolation-folder-projects). |
 | `--resume` | Resume from last failed run at the working path (skips completed nodes) |
 | `--quiet`, `-q` | Suppress all progress output to stderr |
@@ -225,7 +226,48 @@ Progress events (node start/complete/fail/skip, approval gates) are written to s
 
 **With `--no-worktree`:**
 - Runs in target directory directly (no isolation)
-- Mutually exclusive with `--branch` and `--from`
+- Mutually exclusive with `--branch`, `--from`, and `--base`
+
+#### Base branch precedence
+
+"Base branch" means two things, and by default one flag sets both: the **cut-from**
+(what `git worktree add` branches off) and the **PR target** (`$BASE_BRANCH`, which
+bash nodes pass to `gh pr create --base`). Four sources can supply it, highest first:
+
+| Precedence | Source | Scope |
+|------------|--------|-------|
+| 1 | `--base <branch>` | one dispatch |
+| 2 | `worktree.baseBranch` in `.archon/config.yaml` | the repo |
+| 3 | The registered codebase's stored default branch | the repo |
+| 4 | Git auto-detection (`origin/HEAD`, then `origin/main`) | the repo |
+
+Levels 2--4 are static per repo, so a run that needs a different base than its
+neighbours had to edit config -- global, and racy when several runs dispatch at
+once. `--base` is the per-dispatch level, which is what makes parallel multi-base
+dispatch (epic slices, A/B variants) config-free.
+
+**Driving cut-from and PR target separately.** `--from` overrides only the
+cut-from, so pairing the two flags splits them:
+
+```bash
+# Branch off release/2.0, but open the PR against dev
+archon workflow run implement --from origin/release/2.0 --base dev "Backport the fix"
+```
+
+`--from` is handed to `git worktree add` verbatim, so a remote ref such as
+`origin/release/2.0` works. Note the sync-before-create step refreshes the
+`--base` branch, not the `--from` start point -- pass a remote ref when the local
+copy of the start point may be stale.
+
+**Where `--base` is rejected** (rather than half-applied): with `--no-worktree`,
+against a [folder project](/getting-started/concepts/#folder-projects-non-git-workspaces),
+and against a workflow pinning `worktree.enabled: false`. None of these create a
+worktree, so the flag could only move the PR target -- which would report a base
+no worktree was ever cut from.
+
+**On worktree reuse** (`--branch` naming an existing healthy worktree) the
+cut-from is already fixed, so `--base` changes only the PR target. Archon warns
+when this happens.
 
 **Name Matching:**
 
