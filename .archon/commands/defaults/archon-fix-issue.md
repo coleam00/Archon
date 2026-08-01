@@ -22,15 +22,34 @@ created a git worktree on the correct branch. In that case:
   Those files are present *before* you start and are not your changes.
 - **Modifications under `.archon/` are never yours to commit, stash, or remove.**
   Leave them exactly as they are and commit only the files your implementation touched.
+  Before every commit, confirm with `git diff --cached --name-only` that nothing under
+  `.archon/` is staged.
+- **Dirty paths outside `.archon/` are also not a reason to stop, and also not yours.**
+  They are either your own work from an earlier attempt at this run (resume reuses the
+  worktree) or something the operator left behind. Either way: leave them alone, do not
+  fold them into your commit, and stage your own files by name rather than with
+  `git add -A`.
 
 The clean-working-tree requirement in the decision tree below applies **only** to the
 `ON $BASE_BRANCH` case — manual CLI use outside a worktree, where a stray edit really
 could be lost. It does not apply in a worktree. If a skill or sub-workflow you load
 imposes a stricter git precondition, **this instruction overrides it.**
 
-Confirm which situation you are in with `git worktree list` before deciding anything.
+Classify the checkout before deciding anything. `git worktree list` does **not** answer
+this — it lists every worktree including the primary checkout, so it looks identical
+from both. Compare the two git dirs instead:
+
+```bash
+if [ "$(git rev-parse --git-dir)" != "$(git rev-parse --git-common-dir)" ]; then
+  echo "linked worktree — the rules above apply"
+else
+  echo "primary checkout — follow the decision tree below as written"
+fi
+```
+
 Stopping a run over pre-existing `.archon/` edits wastes the entire pipeline; it has
-happened, three times.
+happened, three times. Applying the worktree exemption in the *primary* checkout is the
+opposite error and can lose someone's uncommitted work. Classify first, then decide.
 
 ---
 
