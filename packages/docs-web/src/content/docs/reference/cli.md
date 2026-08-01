@@ -265,9 +265,9 @@ and against a workflow pinning `worktree.enabled: false`. None of these create a
 worktree, so the flag could only move the PR target -- which would report a base
 no worktree was ever cut from.
 
-**On worktree reuse** (`--branch` naming an existing healthy worktree) the
-cut-from is already fixed, so `--base` changes only the PR target. Archon warns
-when this happens.
+**When an existing worktree is adopted** -- `--branch` naming a healthy worktree,
+or `--resume` continuing a prior run -- the cut-from is already fixed, so `--base`
+changes only the PR target. Archon warns in both cases.
 
 **Name Matching:**
 

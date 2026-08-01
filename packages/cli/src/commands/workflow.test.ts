@@ -154,6 +154,10 @@ mock.module('@archon/core/db/codebases', () => ({
 mock.module('@archon/core/db/isolation-environments', () => ({
   findActiveByWorkflow: mock(() => Promise.resolve(null)),
   create: mock(() => Promise.resolve({ id: 'iso-123' })),
+  // Reached only by the --resume path. mock.module() MERGES over the real
+  // module, so omitting this would leave the REAL implementation in place and
+  // open a live SQLite handle rather than failing loudly (#2240).
+  listByCodebase: mock(() => Promise.resolve([])),
 }));
 
 mock.module('@archon/core/db/messages', () => ({
@@ -1989,6 +1993,65 @@ describe('workflowRunCommand', () => {
     };
     expect(opts.baseOverride).toBe('epic/foo');
     expect(opts.baseBranch).toBe('develop');
+  });
+
+  it('warns that --base did not change the cut-from when resuming a run', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { executeWorkflow, hydrateResumableRun } = await import('@archon/workflows/executor');
+    const conversationDb = await import('@archon/core/db/conversations');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const workflowDb = await import('@archon/core/db/workflows');
+
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
+      errors: [],
+    });
+    // A null hydration aborts the resume before executeWorkflow, so the run must
+    // carry prior state for this path to reach the dispatch.
+    (hydrateResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      preCreatedRun: { id: 'run-prior', workflow_name: 'assist' },
+      priorCompletedNodes: new Map([['node-a', 'done']]),
+    });
+    (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'conv-123',
+    });
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-123',
+      default_cwd: '/test/path',
+      default_branch: 'develop',
+    });
+    // working_path null keeps the resume on the caller cwd, skipping the
+    // existsSync probe (fs is deliberately not mocked in this suite).
+    (workflowDb.findResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-prior',
+      working_path: null,
+      workflow_name: 'assist',
+    });
+    (conversationDb.updateConversation as ReturnType<typeof mock>).mockResolvedValueOnce(undefined);
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      workflowRunId: 'run-123',
+    });
+
+    const consoleWarnSpy = spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await workflowRunCommand('/test/path', 'assist', 'hello', {
+        resume: true,
+        baseBranch: 'epic/foo',
+      });
+      // --resume adopts the prior run's worktree, so its cut-from is as fixed as
+      // it is on --branch reuse -- but flagBase still reaches executeWorkflow as
+      // baseOverride and moves $BASE_BRANCH. Same half-applied shape, same
+      // warning.
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('--base epic/foo did not change the cut-from')
+      );
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('it still applies to the PR target')
+      );
+    } finally {
+      consoleWarnSpy.mockRestore();
+    }
   });
 
   it('lets --from win the cut-from while --base still drives the PR target', async () => {

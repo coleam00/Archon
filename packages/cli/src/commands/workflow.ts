@@ -395,6 +395,26 @@ function folderWorktreeOptionError(): Error {
   );
 }
 
+/**
+ * Warn that `--base` is only HALF applied when an existing worktree is adopted
+ * (`--branch` reuse or `--resume`): its cut-from is already fixed, but the
+ * override still reaches `$BASE_BRANCH` and retargets the PR.
+ *
+ * Deliberately not `--from`'s "was not applied" wording — that is accurate for
+ * `--from`, which is wholly inert on reuse, and would understate this case.
+ */
+function warnBaseOverrideOnReuse(workingPath: string, flagBase: string): void {
+  getLog().warn(
+    { path: workingPath, baseBranch: flagBase },
+    'worktree.reuse_base_override_partial'
+  );
+  console.warn(
+    `Warning: Reusing existing worktree at ${workingPath}. ` +
+      `--base ${flagBase} did not change the cut-from (worktree already exists); ` +
+      'it still applies to the PR target.'
+  );
+}
+
 /** Error for a worktree-pinned workflow run against a folder project. */
 function folderWorktreePolicyError(workflowName: string): Error {
   return new Error(
@@ -1181,6 +1201,13 @@ export async function workflowRunCommand(
     console.log(`Resuming workflow run: ${resumable.id}`);
     console.log(`Working path: ${workingCwd}`);
     console.log('');
+
+    // --resume adopts the prior run's worktree, so --base is half-applied here
+    // exactly as it is on --branch reuse above: the cut-from is already fixed,
+    // but flagBase still rides opts.baseOverride into $BASE_BRANCH.
+    if (flagBase) {
+      warnBaseOverrideOnReuse(workingCwd, flagBase);
+    }
   }
 
   const isFolderCodebase = codebase?.kind === 'folder';
@@ -1345,18 +1372,7 @@ export async function workflowRunCommand(
         );
       }
       if (flagBase) {
-        // Deliberately NOT the "was not applied" wording used for --from above:
-        // --base is only HALF ignored on reuse. The cut-from is already fixed,
-        // but the override still drives $BASE_BRANCH / the PR target.
-        getLog().warn(
-          { path: existingEnv.working_path, baseBranch: flagBase },
-          'worktree.reuse_base_override_partial'
-        );
-        console.warn(
-          `Warning: Reusing existing worktree at ${existingEnv.working_path}. ` +
-            `--base ${flagBase} did not change the cut-from (worktree already exists); ` +
-            'it still applies to the PR target.'
-        );
+        warnBaseOverrideOnReuse(existingEnv.working_path, flagBase);
       }
       // Validate base branch before reuse (warning-only — non-blocking)
       try {
