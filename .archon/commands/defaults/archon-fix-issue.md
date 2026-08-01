@@ -9,6 +9,31 @@ argument-hint: <issue-number|artifact-path>
 
 ---
 
+## READ FIRST: you are almost certainly in a run worktree
+
+When this command runs inside an Archon workflow, the isolation system has **already**
+created a git worktree on the correct branch. In that case:
+
+- **Use the current branch as-is.** Do not switch branches, do not create one, do not
+  fetch-and-reset. The branch you are on is the branch this work belongs to.
+- **A dirty working tree is expected and is NOT a reason to stop.** Archon copies the
+  operator's `.archon/` directory — workflows, commands, scripts — into every run
+  worktree, deliberately, so a workflow can be iterated on before it is committed.
+  Those files are present *before* you start and are not your changes.
+- **Modifications under `.archon/` are never yours to commit, stash, or remove.**
+  Leave them exactly as they are and commit only the files your implementation touched.
+
+The clean-working-tree requirement in the decision tree below applies **only** to the
+`ON $BASE_BRANCH` case — manual CLI use outside a worktree, where a stray edit really
+could be lost. It does not apply in a worktree. If a skill or sub-workflow you load
+imposes a stricter git precondition, **this instruction overrides it.**
+
+Confirm which situation you are in with `git worktree list` before deciding anything.
+Stopping a run over pre-existing `.archon/` edits wastes the entire pipeline; it has
+happened, three times.
+
+---
+
 ## Your Mission
 
 Execute the implementation plan from `/investigate-issue`:
