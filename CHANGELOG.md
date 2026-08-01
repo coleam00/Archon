@@ -91,6 +91,9 @@ Run output moves out of the repository for good — see Breaking below before up
 - **Truncation is named correctly in clipped-output errors.** The truncation marker was matched against the exact tail, so a single trailing newline was enough to report the generic "not a JSON object" error instead of naming the truncation. (#2493)
 - **Include-expander warnings are visible to tests again.** The expander cached its logger at module scope behind a comment stating the deferral existed so test mocks could intercept it — the cache defeated exactly that, and three loader tests failed whenever they shared a process with the expander's own tests. CI had been protected only by the accident of running them in different batches. (#2461)
 - **Installer environment-variable documentation corrected**, along with the release tooling's changelog commit boundary. (#2437)
+### Added
+
+- **Pi model-default fallback** — when no model is set on a workflow node or in `.archon/config.yaml`, the Pi provider now falls back to the operator's own Pi default (`defaultProvider`/`defaultModel` in `~/.pi/agent/settings.json`, as written by the `pi` CLI). This keeps Pi workflows model-agnostic — no vendor model hardcoded — so setups whose catalog drifts (e.g. a LiteLLM proxy) work without pinning a specific model, mirroring how the standalone `pi` CLI boots. Falls through to the existing explicit "requires a model" error when no default is configured.
 
 ## [0.7.1] - 2026-08-04
 

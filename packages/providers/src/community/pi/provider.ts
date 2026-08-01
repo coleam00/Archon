@@ -360,11 +360,34 @@ export class PiProvider implements IAgentProvider {
       }
     }
 
-    // 1. Resolve model ref: request (workflow node / chat) → config default
-    const modelRef = requestOptions?.model ?? piConfig.model;
+    // 1. Resolve model ref: request (workflow node / chat) → config default →
+    //    the operator's own Pi default (defaultProvider/defaultModel in
+    //    ~/.pi/agent/settings.json, as written by the `pi` CLI when a model is
+    //    selected). The settings fallback keeps Archon model-agnostic for Pi:
+    //    no vendor model is hardcoded anywhere, and litellm-only setups — whose
+    //    catalog drifts over time — work without pinning a specific model.
+    //    Mirrors how the standalone `pi` CLI boots with the user's default.
+    let modelRef = requestOptions?.model ?? piConfig.model;
+    if (!modelRef) {
+      try {
+        const settings = piCodingAgent.SettingsManager.create(cwd).getGlobalSettings();
+        const provider = settings.defaultProvider?.trim();
+        const modelId = settings.defaultModel?.trim();
+        if (provider && modelId) {
+          modelRef = `${provider}/${modelId}`;
+          getLog().info({ modelRef }, 'pi.model_defaulted_from_settings');
+        }
+      } catch (err) {
+        // Non-fatal: settings.json may be absent (user never ran `pi`) or
+        // unreadable. Fall through to the explicit "requires a model" error
+        // below rather than swallowing the missing-model condition.
+        getLog().debug({ err }, 'pi.settings_default_model_read_failed');
+      }
+    }
     if (!modelRef) {
       throw new Error(
-        'Pi provider requires a model. Set `model` on the workflow node or `assistants.pi.model` in .archon/config.yaml. ' +
+        'Pi provider requires a model. Set `model` on the workflow node or `assistants.pi.model` in .archon/config.yaml, ' +
+          'or select a default model in the `pi` CLI (writes defaultProvider/defaultModel to ~/.pi/agent/settings.json). ' +
           "Format: '<pi-provider-id>/<model-id>' (e.g. 'google/gemini-2.5-pro')."
       );
     }
