@@ -370,7 +370,17 @@ export class PiProvider implements IAgentProvider {
     let modelRef = requestOptions?.model ?? piConfig.model;
     if (!modelRef) {
       try {
-        const settings = piCodingAgent.SettingsManager.create(cwd).getGlobalSettings();
+        const settingsManager = piCodingAgent.SettingsManager.create(cwd);
+        const settings = settingsManager.getGlobalSettings();
+        // SettingsManager records malformed/unreadable settings via
+        // drainErrors() rather than throwing, so a broken settings.json yields
+        // default (empty) settings here. Drain + log them so that case is
+        // visible instead of being swallowed behind the "requires a model"
+        // error below (this branch may throw before the main settings load
+        // that would otherwise surface them).
+        for (const { scope, error: settingsErr } of settingsManager.drainErrors()) {
+          getLog().warn({ scope, err: settingsErr }, 'pi.settings_default_model_read_error');
+        }
         const provider = settings.defaultProvider?.trim();
         const modelId = settings.defaultModel?.trim();
         if (provider && modelId) {
