@@ -811,15 +811,26 @@ export class WorktreeProvider implements IIsolationProvider {
       return detected;
     }
 
-    // Ambiguous (multiple non-origin remotes) — list them for an actionable error
-    let remoteList = '<unknown>';
+    // Distinguish no remotes from multiple non-origin remotes for an actionable error.
+    let remoteNames: string[] | null = null;
     try {
       const { stdout } = await execFileAsync('git', ['-C', repoPath, 'remote'], { timeout: 10000 });
-      remoteList = stdout.trim().split(/\r?\n/).join(', ');
+      remoteNames = stdout
+        .split(/\r?\n/)
+        .map(remote => remote.trim())
+        .filter(remote => remote.length > 0);
     } catch {
       // Best-effort for error message only
     }
 
+    if (remoteNames?.length === 0) {
+      throw new Error(
+        `Cannot determine git remote for ${repoPath}: no git remote is configured. ` +
+          'Add one with `git remote add origin URL`, or use `--no-worktree` to run in the live checkout.'
+      );
+    }
+
+    const remoteList = remoteNames?.join(', ') ?? '<unknown>';
     throw new Error(
       `Cannot determine git remote for ${repoPath}: no 'origin' remote found and ` +
         `multiple remotes exist (${remoteList}). ` +
