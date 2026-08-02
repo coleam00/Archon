@@ -219,6 +219,14 @@ export async function getOrCreateReloadedExtensionLoader(
         // its own ModelRegistry and clears it. Defensive copy: bindCore()
         // reassigns the array, so the copy stays stable, but a copy also
         // guards against future in-place mutation upstream.
+        //
+        // NOTE: reload() does not reliably await an extension factory's ASYNC
+        // provider registration, so this snapshot can miss an extension (e.g.
+        // pi-provider-litellm) that registers a moment later — see KNOWN-ISSUES
+        // → PI-LITELLM-RACE. We deliberately do NOT block here waiting for it
+        // (that would penalize every extension-less first call); instead the
+        // provider resolves such misses deterministically from Pi's model-store
+        // cache (see `readExtensionModelFromStore` in provider.ts LOOKUP-2).
         const providerRegistrations: ExtensionProviderRegistration[] = [
           ...loader.getExtensions().runtime.pendingProviderRegistrations,
         ];
