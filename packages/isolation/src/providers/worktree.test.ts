@@ -3140,12 +3140,6 @@ describe('WorktreeProvider', () => {
 
     test('throws actionable error when no remote is configured', async () => {
       getDefaultRemoteSpy.mockResolvedValue(null);
-      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
-        if (args.includes('remote') && !args.includes('get-url')) {
-          return { stdout: '', stderr: '' };
-        }
-        return { stdout: '', stderr: '' };
-      });
 
       const localProvider = new WorktreeProvider(async () => ({ baseBranch: 'main' }));
       const creation = localProvider.create(baseRequest);
