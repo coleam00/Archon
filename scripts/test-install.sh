@@ -113,6 +113,22 @@ assert_equals "0" "$(check_cpu_with_mocks darwin-x64 AVX2)" "macOS x64 with AVX2
 assert_equals "1" "$(check_cpu_with_mocks darwin-x64 SSE4.2)" "macOS x64 without AVX2"
 assert_equals "0" "$(check_cpu_with_mocks linux-arm64 none)" "Linux ARM64 skips AVX2 check"
 
+missing_cpuinfo="$tmp_dir/missing-cpuinfo"
+missing_cpuinfo_status=0
+ARCHON_CPUINFO_PATH="$missing_cpuinfo" \
+  bash -c 'source "$1"; check_cpu_compatibility linux-x64' _ "$installer" \
+  || missing_cpuinfo_status=$?
+assert_equals "2" "$missing_cpuinfo_status" "Linux x64 with unavailable CPU features"
+
+no_features_cpuinfo="$tmp_dir/cpuinfo-no-features"
+printf '%s\n' 'processor : 0' >"$no_features_cpuinfo"
+no_features_status=0
+ARCHON_CPUINFO_PATH="$no_features_cpuinfo" \
+  bash -c 'source "$1"; check_cpu_compatibility linux-x64' _ "$installer" \
+  || no_features_status=$?
+assert_equals "2" "$no_features_status" "Linux x64 without a feature declaration"
+assert_equals "2" "$(check_cpu_with_mocks darwin-x64 fail)" "macOS x64 with unavailable CPU features"
+
 cmp -s "$installer" "$repo_root/packages/docs-web/public/install" \
   || fail "public installer mirror differs from scripts/install.sh"
 
@@ -187,6 +203,41 @@ esac
 [ ! -e "$curl_marker" ] || fail "installer downloaded a binary before rejecting a non-AVX2 CPU"
 assert_equals "working installation" "$(cat "$no_avx2_install_dir/archon")" \
   "Existing installation after non-AVX2 preflight"
+
+unknown_cpu_mock_dir="$tmp_dir/unknown-cpu-install-mocks"
+unknown_cpu_install_dir="$tmp_dir/unknown-cpu-install-bin"
+unknown_cpu_curl_marker="$tmp_dir/unknown-cpu-curl-called"
+unknown_cpuinfo="$tmp_dir/cpuinfo-unknown"
+mkdir -p "$unknown_cpu_mock_dir" "$unknown_cpu_install_dir"
+printf '%s\n' 'processor : 0' >"$unknown_cpuinfo"
+printf '%s\n' 'working installation' >"$unknown_cpu_install_dir/archon"
+cat >"$unknown_cpu_mock_dir/uname" <<'EOF'
+#!/usr/bin/env bash
+if [ "$1" = "-s" ]; then
+  echo Linux
+else
+  echo x86_64
+fi
+EOF
+cat >"$unknown_cpu_mock_dir/curl" <<EOF
+#!/usr/bin/env bash
+touch "$unknown_cpu_curl_marker"
+exit 99
+EOF
+chmod +x "$unknown_cpu_mock_dir/uname" "$unknown_cpu_mock_dir/curl"
+
+unknown_cpu_status=0
+unknown_cpu_output=$(PATH="$unknown_cpu_mock_dir:$PATH" ARCHON_CPUINFO_PATH="$unknown_cpuinfo" \
+  INSTALL_DIR="$unknown_cpu_install_dir" SKIP_CHECKSUM=true bash "$installer" 2>&1) \
+  || unknown_cpu_status=$?
+[ "$unknown_cpu_status" -ne 0 ] || fail "installer succeeded with undetectable Linux CPU features"
+case "$unknown_cpu_output" in
+  *"Could not determine whether this x64 CPU supports AVX2."*"#from-source"*) ;;
+  *) fail "unknown CPU-feature failure does not explain source installation" ;;
+esac
+[ ! -e "$unknown_cpu_curl_marker" ] || fail "installer downloaded a binary before rejecting unknown CPU features"
+assert_equals "working installation" "$(cat "$unknown_cpu_install_dir/archon")" \
+  "Existing installation after unknown CPU-feature preflight"
 
 success_mock_dir="$tmp_dir/success-install-mocks"
 success_install_dir="$tmp_dir/success-install-bin"

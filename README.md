@@ -161,6 +161,11 @@ Already have Claude Code set up? Install the standalone CLI binary and skip the 
 curl -fsSL https://archon.diy/install | bash
 ```
 
+> **x64 compatibility:** The macOS/Linux quick install requires AVX2 on x64
+> CPUs. Older Intel/AMD hardware and virtual machines that mask AVX2 should use
+> the [source installation guide](https://archon.diy/getting-started/installation/#from-source).
+> ARM64 quick installs are unaffected.
+
 **Windows (PowerShell)**
 ```powershell
 irm https://archon.diy/install.ps1 | iex

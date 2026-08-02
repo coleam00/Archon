@@ -100,7 +100,7 @@ check_cpu_compatibility() {
       if [ ! -r "$cpuinfo_path" ]; then
         return 2
       fi
-      cpu_features=$(<"$cpuinfo_path") || return 2
+      cpu_features=$(grep -Ei '^[[:space:]]*(flags|features)[[:space:]]*:' "$cpuinfo_path") || return 2
       ;;
     darwin-x64)
       cpu_features=$(sysctl -n machdep.cpu.leaf7_features 2>/dev/null) || return 2
