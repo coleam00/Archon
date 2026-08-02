@@ -1540,14 +1540,12 @@ async function executeNodeInternal(
           ? runningTools.get(lastAnonymousToolCallId)
           : undefined;
         if (previousTool && lastAnonymousToolCallId !== undefined) {
-          const previousToolCallId = lastAnonymousToolCallId;
-          const prevTool = previousTool;
           getWorkflowEventEmitter().emit({
             type: 'tool_completed',
             runId: workflowRun.id,
-            toolName: prevTool.toolName,
+            toolName: previousTool.toolName,
             stepName: node.id,
-            durationMs: now - prevTool.startedAt,
+            durationMs: now - previousTool.startedAt,
           });
           deps.store
             .createWorkflowEvent({
@@ -1555,8 +1553,8 @@ async function executeNodeInternal(
               event_type: 'tool_completed',
               step_name: stepName,
               data: {
-                tool_name: prevTool.toolName,
-                duration_ms: now - prevTool.startedAt,
+                tool_name: previousTool.toolName,
+                duration_ms: now - previousTool.startedAt,
               },
             })
             .catch((err: Error) => {
@@ -1565,7 +1563,7 @@ async function executeNodeInternal(
                 'workflow_event_persist_failed'
               );
             });
-          runningTools.delete(previousToolCallId);
+          runningTools.delete(lastAnonymousToolCallId);
         }
         runningTools.set(toolCallId, { toolName: msg.toolName, startedAt: now });
         if (!msg.toolCallId) lastAnonymousToolCallId = toolCallId;
@@ -4408,26 +4406,27 @@ async function executeLoopNode(
             ? runningTools.get(lastAnonymousToolCallId)
             : undefined;
           if (previousTool && lastAnonymousToolCallId !== undefined) {
-            const previousToolCallId = lastAnonymousToolCallId;
-            const prevTool = previousTool;
             getWorkflowEventEmitter().emit({
               type: 'tool_completed',
               runId: workflowRun.id,
-              toolName: prevTool.toolName,
+              toolName: previousTool.toolName,
               stepName: node.id,
-              durationMs: now - prevTool.startedAt,
+              durationMs: now - previousTool.startedAt,
             });
             deps.store
               .createWorkflowEvent({
                 workflow_run_id: workflowRun.id,
                 event_type: 'tool_completed',
                 step_name: stepName,
-                data: { tool_name: prevTool.toolName, duration_ms: now - prevTool.startedAt },
+                data: {
+                  tool_name: previousTool.toolName,
+                  duration_ms: now - previousTool.startedAt,
+                },
               })
               .catch((err: Error) => {
                 logEventStoreError(err, i);
               });
-            runningTools.delete(previousToolCallId);
+            runningTools.delete(lastAnonymousToolCallId);
           }
           runningTools.set(toolCallId, { toolName: msg.toolName, startedAt: now });
           if (!msg.toolCallId) lastAnonymousToolCallId = toolCallId;
