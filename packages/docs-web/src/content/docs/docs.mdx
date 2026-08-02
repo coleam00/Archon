@@ -33,11 +33,6 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
 curl -fsSL https://archon.diy/install | bash
 ```
 
-> **x64 compatibility:** The macOS/Linux quick install requires AVX2 on x64
-> CPUs. Older Intel/AMD hardware and virtual machines that mask AVX2 should use
-> [From Source](/getting-started/installation/#from-source). ARM64 quick installs
-> are unaffected.
-
 ```powershell [Windows]
 irm https://archon.diy/install.ps1 | iex
 ```
@@ -51,6 +46,11 @@ docker run --rm -v "$PWD:/workspace" ghcr.io/coleam00/archon:latest workflow lis
 ```
 
 :::
+
+> **x64 compatibility:** The macOS/Linux quick install requires AVX2 on x64
+> CPUs. Older Intel/AMD hardware and virtual machines that mask AVX2 should use
+> [From Source](/getting-started/installation/#from-source). ARM64 quick installs
+> are unaffected.
 
 ## What is Archon?
 
