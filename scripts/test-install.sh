@@ -24,6 +24,7 @@ make_platform_mocks() {
   local os="$1"
   local arch="$2"
   local translated="$3"
+  local cpu_features="${4:-AVX2}"
   local mock_dir="$tmp_dir/mocks-$os-$arch-$translated"
   mkdir -p "$mock_dir"
 
@@ -37,10 +38,19 @@ fi
 EOF
   cat >"$mock_dir/sysctl" <<EOF
 #!/usr/bin/env bash
-if [ "$translated" = "fail" ]; then
+if [ "\$1" = "-in" ] && [ "\$2" = "sysctl.proc_translated" ]; then
+  if [ "$translated" = "fail" ]; then
+    exit 1
+  fi
+  echo "$translated"
+elif [ "\$1" = "-n" ] && [ "\$2" = "machdep.cpu.leaf7_features" ]; then
+  if [ "$cpu_features" = "fail" ]; then
+    exit 1
+  fi
+  echo "$cpu_features"
+else
   exit 1
 fi
-echo "$translated"
 EOF
   # detect_with_mocks SOURCES the installer, so it depends on the source-guard
   # suppressing main(). If that guard ever regresses, main() runs and reaches the real
@@ -82,6 +92,27 @@ assert_platform Darwin arm64 1 darwin-arm64 "Native ARM platform"
 assert_platform Linux x86_64 1 linux-x64 "Linux x64 platform"
 assert_platform Darwin x86_64 fail darwin-x64 "Native Intel platform without Rosetta marker"
 
+check_cpu_with_mocks() {
+  local platform="$1"
+  local cpu_features="$2"
+  local mocks
+  local cpuinfo="$tmp_dir/cpuinfo-${platform}-${cpu_features// /-}"
+  local status=0
+
+  printf 'flags : fpu sse %s\n' "$cpu_features" >"$cpuinfo"
+  mocks="$(make_platform_mocks Darwin x86_64 0 "$cpu_features")"
+  PATH="$mocks:$PATH" ARCHON_CPUINFO_PATH="$cpuinfo" \
+    bash -c 'source "$1"; check_cpu_compatibility "$2"' _ "$installer" "$platform" \
+    || status=$?
+  echo "$status"
+}
+
+assert_equals "0" "$(check_cpu_with_mocks linux-x64 avx2)" "Linux x64 with AVX2"
+assert_equals "1" "$(check_cpu_with_mocks linux-x64 sse4_2)" "Linux x64 without AVX2"
+assert_equals "0" "$(check_cpu_with_mocks darwin-x64 AVX2)" "macOS x64 with AVX2"
+assert_equals "1" "$(check_cpu_with_mocks darwin-x64 SSE4.2)" "macOS x64 without AVX2"
+assert_equals "0" "$(check_cpu_with_mocks linux-arm64 none)" "Linux ARM64 skips AVX2 check"
+
 cmp -s "$installer" "$repo_root/packages/docs-web/public/install" \
   || fail "public installer mirror differs from scripts/install.sh"
 
@@ -94,6 +125,8 @@ cmp -s "$repo_root/scripts/install.ps1" "$repo_root/packages/docs-web/public/ins
 mock_dir="$tmp_dir/install-mocks"
 install_dir="$tmp_dir/install-bin"
 mkdir -p "$mock_dir" "$install_dir"
+avx2_cpuinfo="$tmp_dir/cpuinfo-avx2"
+printf '%s\n' 'flags : fpu sse avx2' >"$avx2_cpuinfo"
 printf '%s\n' 'working installation' >"$install_dir/archon"
 cat >"$mock_dir/curl" <<'EOF'
 #!/usr/bin/env bash
@@ -114,10 +147,46 @@ BINARY
 EOF
 chmod +x "$mock_dir/curl"
 
-if PATH="$mock_dir:$PATH" INSTALL_DIR="$install_dir" SKIP_CHECKSUM=true bash "$installer" >/dev/null 2>&1; then
+if PATH="$mock_dir:$PATH" ARCHON_CPUINFO_PATH="$avx2_cpuinfo" INSTALL_DIR="$install_dir" \
+  SKIP_CHECKSUM=true bash "$installer" >/dev/null 2>&1; then
   fail "installer succeeded when downloaded binary failed its version check"
 fi
 assert_equals "working installation" "$(cat "$install_dir/archon")" "Existing installation after failed probe"
+
+no_avx2_mock_dir="$tmp_dir/no-avx2-install-mocks"
+no_avx2_install_dir="$tmp_dir/no-avx2-install-bin"
+no_avx2_cpuinfo="$tmp_dir/cpuinfo-no-avx2"
+curl_marker="$tmp_dir/no-avx2-curl-called"
+mkdir -p "$no_avx2_mock_dir" "$no_avx2_install_dir"
+printf '%s\n' 'flags : fpu sse4_2' >"$no_avx2_cpuinfo"
+printf '%s\n' 'working installation' >"$no_avx2_install_dir/archon"
+cat >"$no_avx2_mock_dir/uname" <<'EOF'
+#!/usr/bin/env bash
+if [ "$1" = "-s" ]; then
+  echo Linux
+else
+  echo x86_64
+fi
+EOF
+cat >"$no_avx2_mock_dir/curl" <<EOF
+#!/usr/bin/env bash
+touch "$curl_marker"
+exit 99
+EOF
+chmod +x "$no_avx2_mock_dir/uname" "$no_avx2_mock_dir/curl"
+
+no_avx2_status=0
+no_avx2_output=$(PATH="$no_avx2_mock_dir:$PATH" ARCHON_CPUINFO_PATH="$no_avx2_cpuinfo" \
+  INSTALL_DIR="$no_avx2_install_dir" SKIP_CHECKSUM=true bash "$installer" 2>&1) \
+  || no_avx2_status=$?
+[ "$no_avx2_status" -ne 0 ] || fail "installer succeeded on Linux x64 without AVX2"
+case "$no_avx2_output" in
+  *"requires a CPU with AVX2 support"*"#from-source"*) ;;
+  *) fail "non-AVX2 failure does not explain AVX2 requirement and source installation" ;;
+esac
+[ ! -e "$curl_marker" ] || fail "installer downloaded a binary before rejecting a non-AVX2 CPU"
+assert_equals "working installation" "$(cat "$no_avx2_install_dir/archon")" \
+  "Existing installation after non-AVX2 preflight"
 
 success_mock_dir="$tmp_dir/success-install-mocks"
 success_install_dir="$tmp_dir/success-install-bin"
@@ -143,7 +212,8 @@ BINARY
 EOF
 chmod +x "$success_mock_dir/curl"
 
-install_output=$(PATH="$success_mock_dir:$PATH" INSTALL_DIR="$success_install_dir" SKIP_CHECKSUM=true bash "$installer")
+install_output=$(PATH="$success_mock_dir:$PATH" ARCHON_CPUINFO_PATH="$avx2_cpuinfo" \
+  INSTALL_DIR="$success_install_dir" SKIP_CHECKSUM=true bash "$installer")
 assert_equals "archon 1.2.3" "$("$success_install_dir/archon" version)" "Successful probe replaces installation"
 case "$install_output" in
   *"archon 1.2.3"*) ;;
@@ -158,7 +228,8 @@ esac
 #
 # Mocked curl + a scratch INSTALL_DIR keep this off the network and out of the real system.
 piped_status=0
-piped_stderr="$(PATH="$success_mock_dir:$PATH" INSTALL_DIR="$tmp_dir/piped-bin" \
+piped_stderr="$(PATH="$success_mock_dir:$PATH" ARCHON_CPUINFO_PATH="$avx2_cpuinfo" \
+  INSTALL_DIR="$tmp_dir/piped-bin" \
   SKIP_CHECKSUM=true bash <"$installer" 2>&1 >/dev/null)" || piped_status=$?
 # Specific diagnosis FIRST, generic assertion second. With the order reversed the
 # assert_equals fired on any regression and this case block was dead code, so the

@@ -88,6 +88,34 @@ detect_platform() {
   echo "${os}-${arch}"
 }
 
+# Verify that the host can run the compiled x64 release. Return 1 when AVX2 is
+# definitely absent and 2 when CPU features cannot be determined.
+check_cpu_compatibility() {
+  local platform="$1"
+  local cpu_features
+
+  case "$platform" in
+    linux-x64)
+      local cpuinfo_path="${ARCHON_CPUINFO_PATH:-/proc/cpuinfo}"
+      if [ ! -r "$cpuinfo_path" ]; then
+        return 2
+      fi
+      cpu_features=$(<"$cpuinfo_path") || return 2
+      ;;
+    darwin-x64)
+      cpu_features=$(sysctl -n machdep.cpu.leaf7_features 2>/dev/null) || return 2
+      if [ -z "$cpu_features" ]; then
+        return 2
+      fi
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+
+  printf '%s\n' "$cpu_features" | grep -Eiq '(^|[[:space:]])avx2([[:space:]]|$)'
+}
+
 # Get download URL for the binary
 get_download_url() {
   local platform="$1"
@@ -180,6 +208,20 @@ main() {
   local platform
   platform=$(detect_platform)
   success "Platform: $platform"
+
+  local cpu_compatibility_status=0
+  check_cpu_compatibility "$platform" || cpu_compatibility_status=$?
+  if [ "$cpu_compatibility_status" -eq 1 ]; then
+    error "The compiled Archon x64 binary requires a CPU with AVX2 support."
+    error "No binary was downloaded, installed, or replaced."
+    error "Install Archon from source instead: https://archon.diy/getting-started/installation/#from-source"
+    exit 1
+  elif [ "$cpu_compatibility_status" -ne 0 ]; then
+    error "Could not determine whether this x64 CPU supports AVX2."
+    error "No binary was downloaded, installed, or replaced."
+    error "Install Archon from source instead: https://archon.diy/getting-started/installation/#from-source"
+    exit 1
+  fi
 
   # Get download URL
   local download_url checksums_url

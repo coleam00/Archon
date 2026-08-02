@@ -15,6 +15,10 @@ sidebar:
 curl -fsSL https://archon.diy/install | bash
 ```
 
+> **x64 compatibility:** Compiled x64 binaries require AVX2. Older Intel/AMD
+> hardware and virtual machines that mask AVX2 cannot use the x64 quick install;
+> use [From Source](#from-source) instead. ARM64 quick installs are unaffected.
+
 ### Windows (PowerShell)
 
 ```powershell
