@@ -478,6 +478,22 @@ describe('PiProvider', () => {
     );
   });
 
+  test('drains and logs settings errors when falling through the missing-model path', async () => {
+    // A malformed/unreadable settings.json is recorded via drainErrors() (not
+    // thrown) and yields empty defaults. The error must be surfaced, not
+    // swallowed behind the "requires a model" throw below.
+    mockSettingsManagerGetGlobalSettings.mockImplementation(() => ({}));
+    mockSettingsManagerDrainErrors.mockImplementation(() => [
+      { scope: 'global', error: new Error('bad settings.json') },
+    ]);
+    const { error } = await consume(new PiProvider().sendQuery('hi', '/tmp'));
+    expect(error?.message).toContain('Pi provider requires a model');
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ scope: 'global' }),
+      'pi.settings_default_model_read_error'
+    );
+  });
+
   test('throws when model ref is malformed', async () => {
     const { error } = await consume(
       new PiProvider().sendQuery('hi', '/tmp', undefined, { model: 'sonnet' })
