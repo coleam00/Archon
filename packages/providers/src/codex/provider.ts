@@ -370,6 +370,15 @@ function buildEffectivePrompt(prompt: string, requestOptions?: SendQueryOptions)
 /** State maintained across Codex event stream normalization. */
 interface CodexStreamState {
   lastTodoListSignature?: string;
+  startedToolItemIds: Set<string>;
+  completedToolItemIds: Set<string>;
+}
+
+function getMcpToolName(item: Record<string, unknown>): string {
+  const server = item.server as string | undefined;
+  const tool = item.tool as string | undefined;
+  const toolInfo = server && tool ? `${server}/${tool}` : (tool ?? server ?? 'MCP tool');
+  return `🔌 MCP: ${toolInfo}`;
 }
 
 /**
@@ -383,7 +392,10 @@ async function* streamCodexEvents(
   abortSignal?: AbortSignal,
   surfaceMcpClientErrors = false
 ): AsyncGenerator<MessageChunk> {
-  const state: CodexStreamState = {};
+  const state: CodexStreamState = {
+    startedToolItemIds: new Set<string>(),
+    completedToolItemIds: new Set<string>(),
+  };
   let accumulatedText = '';
 
   // A new thread's id is assigned during the run via the `thread.started` event
@@ -432,11 +444,33 @@ async function* streamCodexEvents(
     }
 
     if (event.type === 'item.started') {
-      const item = event.item as { type: string; id: string };
-      getLog().debug(
-        { eventType: event.type, itemType: item.type, itemId: item.id },
-        'item_started'
-      );
+      const item = event.item as Record<string, unknown>;
+      const itemType = item.type as string;
+      const itemId = item.id as string;
+      getLog().debug({ eventType: event.type, itemType, itemId }, 'item_started');
+
+      let toolName: string | undefined;
+      if (itemType === 'command_execution') {
+        if (typeof item.command === 'string' && item.command.length > 0) {
+          toolName = item.command;
+        } else {
+          getLog().warn({ itemId }, 'command_execution_missing_command');
+        }
+      } else if (itemType === 'web_search') {
+        if (typeof item.query === 'string' && item.query.length > 0) {
+          toolName = `🔍 Searching: ${item.query}`;
+        } else {
+          getLog().debug({ itemId }, 'web_search_missing_query');
+        }
+      } else if (itemType === 'mcp_tool_call') {
+        toolName = getMcpToolName(item);
+      }
+
+      if (toolName && itemId && !state.startedToolItemIds.has(itemId)) {
+        state.startedToolItemIds.add(itemId);
+        yield { type: 'tool', toolName, toolCallId: itemId };
+      }
+      continue;
     }
 
     if (event.type === 'error') {
@@ -487,6 +521,22 @@ async function* streamCodexEvents(
       }
       getLog().debug(logContext, 'item_completed');
 
+      const itemId = item.id as string;
+      const isToolItem =
+        itemType === 'command_execution' ||
+        itemType === 'web_search' ||
+        itemType === 'mcp_tool_call';
+      if (isToolItem) {
+        if (state.completedToolItemIds.has(itemId)) {
+          getLog().warn({ itemId, itemType }, 'tool_item_duplicate_completion');
+          continue;
+        }
+        state.completedToolItemIds.add(itemId);
+        if (!state.startedToolItemIds.has(itemId)) {
+          getLog().warn({ itemId, itemType }, 'tool_item_completed_without_start');
+        }
+      }
+
       switch (itemType) {
         case 'agent_message':
           if (item.text) {
@@ -500,7 +550,6 @@ async function* streamCodexEvents(
         case 'command_execution':
           if (item.command) {
             const cmd = item.command as string;
-            yield { type: 'tool', toolName: cmd };
             const exitCode = item.exit_code as number | null | undefined;
             const exitSuffix =
               exitCode != null && exitCode !== 0 ? `\n[exit code: ${String(exitCode)}]` : '';
@@ -508,6 +557,7 @@ async function* streamCodexEvents(
               type: 'tool_result',
               toolName: cmd,
               toolOutput: ((item.aggregated_output as string) ?? '') + exitSuffix,
+              toolCallId: itemId,
             };
           } else {
             getLog().warn({ itemId: item.id }, 'command_execution_missing_command');
@@ -523,8 +573,12 @@ async function* streamCodexEvents(
         case 'web_search':
           if (item.query) {
             const searchToolName = `🔍 Searching: ${item.query as string}`;
-            yield { type: 'tool', toolName: searchToolName };
-            yield { type: 'tool_result', toolName: searchToolName, toolOutput: '' };
+            yield {
+              type: 'tool_result',
+              toolName: searchToolName,
+              toolOutput: '',
+              toolCallId: itemId,
+            };
           } else {
             getLog().debug({ itemId: item.id }, 'web_search_missing_query');
           }
@@ -595,10 +649,7 @@ async function* streamCodexEvents(
         case 'mcp_tool_call': {
           const server = item.server as string | undefined;
           const tool = item.tool as string | undefined;
-          const toolInfo = server && tool ? `${server}/${tool}` : (tool ?? server ?? 'MCP tool');
-          const mcpToolName = `🔌 MCP: ${toolInfo}`;
-
-          yield { type: 'tool', toolName: mcpToolName };
+          const mcpToolName = getMcpToolName(item);
 
           if ((item.status as string) === 'failed') {
             getLog().warn(
@@ -609,7 +660,12 @@ async function* streamCodexEvents(
             const errMsg = mcpError?.message
               ? `❌ Error: ${mcpError.message}`
               : '❌ Error: MCP tool failed';
-            yield { type: 'tool_result', toolName: mcpToolName, toolOutput: errMsg };
+            yield {
+              type: 'tool_result',
+              toolName: mcpToolName,
+              toolOutput: errMsg,
+              toolCallId: itemId,
+            };
           } else {
             let toolOutput = '';
             const mcpResult = item.result as { content?: unknown } | undefined;
@@ -628,7 +684,7 @@ async function* streamCodexEvents(
                 );
               }
             }
-            yield { type: 'tool_result', toolName: mcpToolName, toolOutput };
+            yield { type: 'tool_result', toolName: mcpToolName, toolOutput, toolCallId: itemId };
           }
           break;
         }

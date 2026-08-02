@@ -218,8 +218,13 @@ describe('CodexProvider', () => {
       mockRunStreamed.mockResolvedValue({
         events: (async function* () {
           yield {
+            type: 'item.started',
+            item: { id: 'cmd-1', type: 'command_execution', command: 'npm test' },
+          };
+          yield {
             type: 'item.completed',
             item: {
+              id: 'cmd-1',
               type: 'command_execution',
               command: 'npm test',
               aggregated_output: 'tests passed\n',
@@ -235,11 +240,12 @@ describe('CodexProvider', () => {
         chunks.push(chunk);
       }
 
-      expect(chunks[0]).toEqual({ type: 'tool', toolName: 'npm test' });
+      expect(chunks[0]).toEqual({ type: 'tool', toolName: 'npm test', toolCallId: 'cmd-1' });
       expect(chunks[1]).toEqual({
         type: 'tool_result',
         toolName: 'npm test',
         toolOutput: 'tests passed\n',
+        toolCallId: 'cmd-1',
       });
     });
 
@@ -247,8 +253,13 @@ describe('CodexProvider', () => {
       mockRunStreamed.mockResolvedValue({
         events: (async function* () {
           yield {
+            type: 'item.started',
+            item: { id: 'cmd-2', type: 'command_execution', command: 'npm test' },
+          };
+          yield {
             type: 'item.completed',
             item: {
+              id: 'cmd-2',
               type: 'command_execution',
               command: 'npm test',
               aggregated_output: 'failure\n',
@@ -268,6 +279,7 @@ describe('CodexProvider', () => {
         type: 'tool_result',
         toolName: 'npm test',
         toolOutput: 'failure\n\n[exit code: 1]',
+        toolCallId: 'cmd-2',
       });
     });
 
@@ -293,7 +305,14 @@ describe('CodexProvider', () => {
     test('yields tool events from web_search items', async () => {
       mockRunStreamed.mockResolvedValue({
         events: (async function* () {
-          yield { type: 'item.completed', item: { type: 'web_search', query: 'codex sdk' } };
+          yield {
+            type: 'item.started',
+            item: { id: 'search-1', type: 'web_search', query: 'codex sdk' },
+          };
+          yield {
+            type: 'item.completed',
+            item: { id: 'search-1', type: 'web_search', query: 'codex sdk' },
+          };
           yield { type: 'turn.completed', usage: defaultUsage };
         })(),
       });
@@ -303,11 +322,16 @@ describe('CodexProvider', () => {
         chunks.push(chunk);
       }
 
-      expect(chunks[0]).toEqual({ type: 'tool', toolName: '\u{1F50D} Searching: codex sdk' });
+      expect(chunks[0]).toEqual({
+        type: 'tool',
+        toolName: '\u{1F50D} Searching: codex sdk',
+        toolCallId: 'search-1',
+      });
       expect(chunks[1]).toEqual({
         type: 'tool_result',
         toolName: '\u{1F50D} Searching: codex sdk',
         toolOutput: '',
+        toolCallId: 'search-1',
       });
     });
 
@@ -493,12 +517,39 @@ describe('CodexProvider', () => {
       mockRunStreamed.mockResolvedValue({
         events: (async function* () {
           yield {
-            type: 'item.completed',
-            item: { type: 'mcp_tool_call', server: 'fs', tool: 'readFile', status: 'in_progress' },
+            type: 'item.started',
+            item: {
+              id: 'mcp-1',
+              type: 'mcp_tool_call',
+              server: 'fs',
+              tool: 'readFile',
+              status: 'in_progress',
+            },
           };
           yield {
             type: 'item.completed',
             item: {
+              id: 'mcp-1',
+              type: 'mcp_tool_call',
+              server: 'fs',
+              tool: 'readFile',
+              status: 'completed',
+            },
+          };
+          yield {
+            type: 'item.started',
+            item: {
+              id: 'mcp-2',
+              type: 'mcp_tool_call',
+              server: 'fs',
+              tool: 'readFile',
+              status: 'in_progress',
+            },
+          };
+          yield {
+            type: 'item.completed',
+            item: {
+              id: 'mcp-2',
               type: 'mcp_tool_call',
               server: 'fs',
               tool: 'readFile',
@@ -515,19 +566,27 @@ describe('CodexProvider', () => {
         chunks.push(chunk);
       }
 
-      // First mcp call (in_progress on item.completed): start + empty result
-      expect(chunks[0]).toEqual({ type: 'tool', toolName: '\u{1F50C} MCP: fs/readFile' });
+      expect(chunks[0]).toEqual({
+        type: 'tool',
+        toolName: '\u{1F50C} MCP: fs/readFile',
+        toolCallId: 'mcp-1',
+      });
       expect(chunks[1]).toEqual({
         type: 'tool_result',
         toolName: '\u{1F50C} MCP: fs/readFile',
         toolOutput: '',
+        toolCallId: 'mcp-1',
       });
-      // Second mcp call (failed): start + error result so the UI card closes
-      expect(chunks[2]).toEqual({ type: 'tool', toolName: '\u{1F50C} MCP: fs/readFile' });
+      expect(chunks[2]).toEqual({
+        type: 'tool',
+        toolName: '\u{1F50C} MCP: fs/readFile',
+        toolCallId: 'mcp-2',
+      });
       expect(chunks[3]).toEqual({
         type: 'tool_result',
         toolName: '\u{1F50C} MCP: fs/readFile',
         toolOutput: '\u274C Error: Permission denied',
+        toolCallId: 'mcp-2',
       });
       expect(mockLogger.warn).toHaveBeenCalledWith(
         expect.objectContaining({ server: 'fs', tool: 'readFile' }),
@@ -539,16 +598,28 @@ describe('CodexProvider', () => {
       mockRunStreamed.mockResolvedValue({
         events: (async function* () {
           yield {
-            type: 'item.completed',
-            item: { type: 'mcp_tool_call', tool: 'readFile', status: 'in_progress' },
+            type: 'item.started',
+            item: { id: 'mcp-tool', type: 'mcp_tool_call', tool: 'readFile' },
           };
           yield {
             type: 'item.completed',
-            item: { type: 'mcp_tool_call', server: 'fs', status: 'in_progress' },
+            item: { id: 'mcp-tool', type: 'mcp_tool_call', tool: 'readFile', status: 'completed' },
+          };
+          yield {
+            type: 'item.started',
+            item: { id: 'mcp-server', type: 'mcp_tool_call', server: 'fs' },
           };
           yield {
             type: 'item.completed',
-            item: { type: 'mcp_tool_call', status: 'in_progress' },
+            item: { id: 'mcp-server', type: 'mcp_tool_call', server: 'fs', status: 'completed' },
+          };
+          yield {
+            type: 'item.started',
+            item: { id: 'mcp-unknown', type: 'mcp_tool_call' },
+          };
+          yield {
+            type: 'item.completed',
+            item: { id: 'mcp-unknown', type: 'mcp_tool_call', status: 'completed' },
           };
           yield { type: 'turn.completed', usage: defaultUsage };
         })(),
@@ -559,23 +630,38 @@ describe('CodexProvider', () => {
         chunks.push(chunk);
       }
 
-      expect(chunks[0]).toEqual({ type: 'tool', toolName: '\u{1F50C} MCP: readFile' });
+      expect(chunks[0]).toEqual({
+        type: 'tool',
+        toolName: '\u{1F50C} MCP: readFile',
+        toolCallId: 'mcp-tool',
+      });
       expect(chunks[1]).toEqual({
         type: 'tool_result',
         toolName: '\u{1F50C} MCP: readFile',
         toolOutput: '',
+        toolCallId: 'mcp-tool',
       });
-      expect(chunks[2]).toEqual({ type: 'tool', toolName: '\u{1F50C} MCP: fs' });
+      expect(chunks[2]).toEqual({
+        type: 'tool',
+        toolName: '\u{1F50C} MCP: fs',
+        toolCallId: 'mcp-server',
+      });
       expect(chunks[3]).toEqual({
         type: 'tool_result',
         toolName: '\u{1F50C} MCP: fs',
         toolOutput: '',
+        toolCallId: 'mcp-server',
       });
-      expect(chunks[4]).toEqual({ type: 'tool', toolName: '\u{1F50C} MCP: MCP tool' });
+      expect(chunks[4]).toEqual({
+        type: 'tool',
+        toolName: '\u{1F50C} MCP: MCP tool',
+        toolCallId: 'mcp-unknown',
+      });
       expect(chunks[5]).toEqual({
         type: 'tool_result',
         toolName: '\u{1F50C} MCP: MCP tool',
         toolOutput: '',
+        toolCallId: 'mcp-unknown',
       });
     });
 
@@ -583,8 +669,18 @@ describe('CodexProvider', () => {
       mockRunStreamed.mockResolvedValue({
         events: (async function* () {
           yield {
+            type: 'item.started',
+            item: { id: 'mcp-failure', type: 'mcp_tool_call', server: 'db', tool: 'query' },
+          };
+          yield {
             type: 'item.completed',
-            item: { type: 'mcp_tool_call', server: 'db', tool: 'query', status: 'failed' },
+            item: {
+              id: 'mcp-failure',
+              type: 'mcp_tool_call',
+              server: 'db',
+              tool: 'query',
+              status: 'failed',
+            },
           };
           yield { type: 'turn.completed', usage: defaultUsage };
         })(),
@@ -595,11 +691,16 @@ describe('CodexProvider', () => {
         chunks.push(chunk);
       }
 
-      expect(chunks[0]).toEqual({ type: 'tool', toolName: '\u{1F50C} MCP: db/query' });
+      expect(chunks[0]).toEqual({
+        type: 'tool',
+        toolName: '\u{1F50C} MCP: db/query',
+        toolCallId: 'mcp-failure',
+      });
       expect(chunks[1]).toEqual({
         type: 'tool_result',
         toolName: '\u{1F50C} MCP: db/query',
         toolOutput: '\u274C Error: MCP tool failed',
+        toolCallId: 'mcp-failure',
       });
     });
 
@@ -607,8 +708,13 @@ describe('CodexProvider', () => {
       mockRunStreamed.mockResolvedValue({
         events: (async function* () {
           yield {
+            type: 'item.started',
+            item: { id: 'mcp-completed', type: 'mcp_tool_call', server: 'fs', tool: 'readFile' },
+          };
+          yield {
             type: 'item.completed',
             item: {
+              id: 'mcp-completed',
               type: 'mcp_tool_call',
               server: 'fs',
               tool: 'readFile',
@@ -626,11 +732,16 @@ describe('CodexProvider', () => {
       }
 
       expect(chunks).toHaveLength(3);
-      expect(chunks[0]).toEqual({ type: 'tool', toolName: '\u{1F50C} MCP: fs/readFile' });
+      expect(chunks[0]).toEqual({
+        type: 'tool',
+        toolName: '\u{1F50C} MCP: fs/readFile',
+        toolCallId: 'mcp-completed',
+      });
       expect(chunks[1]).toEqual({
         type: 'tool_result',
         toolName: '\u{1F50C} MCP: fs/readFile',
         toolOutput: JSON.stringify([{ type: 'text', text: 'file contents' }]),
+        toolCallId: 'mcp-completed',
       });
       expect(chunks[2]).toEqual({
         type: 'result',
@@ -1209,7 +1320,10 @@ describe('CodexProvider', () => {
     test('logs progress for item.started and item.completed events', async () => {
       mockRunStreamed.mockResolvedValue({
         events: (async function* () {
-          yield { type: 'item.started', item: { id: 'item-1', type: 'command_execution' } };
+          yield {
+            type: 'item.started',
+            item: { id: 'item-1', type: 'command_execution', command: 'npm test' },
+          };
           yield {
             type: 'item.completed',
             item: { id: 'item-1', type: 'command_execution', command: 'npm test' },
@@ -1236,6 +1350,90 @@ describe('CodexProvider', () => {
           command: 'npm test',
         },
         'item_completed'
+      );
+      expect(chunks[0]).toEqual({
+        type: 'tool',
+        toolName: 'npm test',
+        toolCallId: 'item-1',
+      });
+      expect(chunks[1]).toEqual({
+        type: 'tool_result',
+        toolName: 'npm test',
+        toolOutput: '',
+        toolCallId: 'item-1',
+      });
+    });
+
+    test('deduplicates repeated tool lifecycle events by item id', async () => {
+      const started = {
+        type: 'item.started',
+        item: { id: 'cmd-duplicate', type: 'command_execution', command: 'npm test' },
+      };
+      const completed = {
+        type: 'item.completed',
+        item: {
+          id: 'cmd-duplicate',
+          type: 'command_execution',
+          command: 'npm test',
+          aggregated_output: 'done',
+          exit_code: 0,
+        },
+      };
+      mockRunStreamed.mockResolvedValue({
+        events: (async function* () {
+          yield started;
+          yield started;
+          yield completed;
+          yield completed;
+          yield { type: 'turn.completed', usage: defaultUsage };
+        })(),
+      });
+
+      const chunks = [];
+      for await (const chunk of client.sendQuery('test', '/workspace')) {
+        chunks.push(chunk);
+      }
+
+      expect(chunks.filter(chunk => chunk.type === 'tool')).toHaveLength(1);
+      expect(chunks.filter(chunk => chunk.type === 'tool_result')).toHaveLength(1);
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        { itemId: 'cmd-duplicate', itemType: 'command_execution' },
+        'tool_item_duplicate_completion'
+      );
+    });
+
+    test('does not recreate a tool start when completion arrives alone', async () => {
+      mockRunStreamed.mockResolvedValue({
+        events: (async function* () {
+          yield {
+            type: 'item.completed',
+            item: {
+              id: 'cmd-completed-only',
+              type: 'command_execution',
+              command: 'npm test',
+              aggregated_output: 'done',
+              exit_code: 0,
+            },
+          };
+          yield { type: 'turn.completed', usage: defaultUsage };
+        })(),
+      });
+
+      const chunks = [];
+      for await (const chunk of client.sendQuery('test', '/workspace')) {
+        chunks.push(chunk);
+      }
+
+      expect(chunks.some(chunk => chunk.type === 'tool')).toBe(false);
+      expect(chunks[0]).toEqual({
+        type: 'tool_result',
+        toolName: 'npm test',
+        toolOutput: 'done',
+        toolCallId: 'cmd-completed-only',
+      });
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        { itemId: 'cmd-completed-only', itemType: 'command_execution' },
+        'tool_item_completed_without_start'
       );
     });
 
