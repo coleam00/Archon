@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -6,6 +6,7 @@ import { createLogger } from '@archon/paths';
 // Type-only import — erased by TS, so it does NOT trigger Pi's config.js
 // package.json read at module load (see the header note below). Used only to
 // annotate the per-call ResourceLoader local.
+import type { Api } from '@earendil-works/pi-ai';
 import type { DefaultResourceLoader } from '@earendil-works/pi-coding-agent';
 
 import type {
@@ -221,6 +222,75 @@ let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('provider.pi');
   return cachedLog;
+}
+
+/**
+ * One model as persisted in Pi's on-disk model store (`models-store.json`).
+ * A prior successful extension discovery writes these; we read them back to
+ * resolve a model deterministically when the extension's async registration
+ * races Pi's reload() (see `readExtensionModelFromStore` callsite + the
+ * `PI-LITELLM-RACE` note in KNOWN-ISSUES).
+ */
+interface StoredPiModel {
+  id: string;
+  name?: string;
+  reasoning?: boolean;
+  input?: ('text' | 'image')[];
+  cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
+  contextWindow: number;
+  maxTokens: number;
+  compat?: unknown;
+  api?: string;
+  baseUrl?: string;
+}
+
+/**
+ * Read a single model for `provider`/`modelId` from Pi's on-disk model-store
+ * cache. Returns undefined on any read/parse error or a cache miss — callers
+ * treat that as "not cached" and fall through to the normal not-found error.
+ */
+function readExtensionModelFromStore(
+  agentDir: string,
+  provider: string,
+  modelId: string
+): StoredPiModel | undefined {
+  try {
+    const raw = readFileSync(join(agentDir, 'models-store.json'), 'utf8');
+    const store = JSON.parse(raw) as Record<string, { models?: StoredPiModel[] } | undefined>;
+    return store[provider]?.models?.find(m => m.id === modelId);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Map a stored model into the `ProviderConfigInput.models[]` shape expected by
+ *  `ModelRegistry.registerProvider`. */
+function toProviderModelInput(m: StoredPiModel): {
+  id: string;
+  name: string;
+  reasoning: boolean;
+  input: ('text' | 'image')[];
+  cost: StoredPiModel['cost'];
+  contextWindow: number;
+  maxTokens: number;
+  api?: Api;
+  baseUrl?: string;
+  compat?: never;
+} {
+  return {
+    id: m.id,
+    name: m.name ?? m.id,
+    reasoning: m.reasoning ?? false,
+    input: m.input ?? ['text'],
+    cost: m.cost,
+    contextWindow: m.contextWindow,
+    maxTokens: m.maxTokens,
+    // `api` in the store is a plain string; the SDK's Api union covers the
+    // values it writes, so this narrowing is safe for a value it produced.
+    ...(m.api ? { api: m.api as Api } : {}),
+    ...(m.baseUrl ? { baseUrl: m.baseUrl } : {}),
+    ...(m.compat ? { compat: m.compat as never } : {}),
+  };
 }
 
 // Structured-output prompt augmentation is shared across providers. Import
@@ -829,15 +899,58 @@ export class PiProvider implements IAgentProvider {
     // 4g. [LOOKUP-2] Re-check the registry after bindExtensions() for extension-registered models.
     //     Safe to call session.setModel() here — no prompt has been sent yet.
     if (!model) {
-      // Extension providers register via ModelRuntime.registerProvider(), which
-      // ends with a FIRE-AND-FORGET `void this.refresh()` — the reload of the
-      // model store is not awaited by the SDK. ModelRegistry documents: "Reload
-      // models.json asynchronously. Await before making synchronous registry
-      // reads." find() below is synchronous, so without this await the extension
-      // provider's models (e.g. a litellm proxy catalog) may not be in the
-      // snapshot yet and resolution races to a spurious "model not found".
-      await modelRegistry.refresh();
+      // Extension providers (e.g. a litellm proxy) register during
+      // bindExtensions() and discover their MODELS asynchronously — the SDK
+      // does NOT await that discovery, so a plain find() races it. Give it one
+      // awaited, network-backed refresh (which runs the extension's own
+      // discovery via ModelRuntime) then re-find.
+      try {
+        await modelRuntime.refresh({ allowNetwork: true });
+        await modelRegistry.refresh();
+      } catch (err) {
+        getLog().debug({ err }, 'pi.model_discovery_refresh_failed');
+      }
       model = modelRegistry.find(parsed.provider, parsed.modelId);
+
+      // DETERMINISTIC FALLBACK for the extension registration/discovery race
+      // (KNOWN-ISSUES → PI-LITELLM-RACE; see also the resource-loader snapshot
+      // note). Pi's own on-disk model store reliably caches every model a prior
+      // discovery found, so when the timing-dependent extension path misses,
+      // register the provider directly from that cache. This removes the
+      // flakiness for any already-discovered model of ANY extension provider
+      // (litellm, kiro, …) — not just litellm — with no dependency on the
+      // extension's async timing.
+      if (!model) {
+        const stored = readExtensionModelFromStore(
+          piCodingAgent.getAgentDir(),
+          parsed.provider,
+          parsed.modelId
+        );
+        if (stored) {
+          try {
+            const apiKey = await modelRegistry.getApiKeyForProvider(parsed.provider);
+            modelRegistry.registerProvider(parsed.provider, {
+              ...(stored.baseUrl ? { baseUrl: stored.baseUrl } : {}),
+              ...(apiKey ? { apiKey } : {}),
+              ...(stored.api ? { api: stored.api as Api } : {}),
+              models: [toProviderModelInput(stored)],
+            });
+            await modelRegistry.refresh();
+            model = modelRegistry.find(parsed.provider, parsed.modelId);
+            if (model) {
+              getLog().info(
+                { piProvider: parsed.provider, modelId: parsed.modelId },
+                'pi.model_resolved_from_store_cache'
+              );
+            }
+          } catch (err) {
+            getLog().warn(
+              { err, piProvider: parsed.provider, modelId: parsed.modelId },
+              'pi.model_store_fallback_failed'
+            );
+          }
+        }
+      }
       if (!model) {
         session.dispose();
         throw new Error(
