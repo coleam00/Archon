@@ -131,6 +131,26 @@ function dagNodeTelemetryType(node: DagNode): WorkflowNodeType {
   return 'prompt';
 }
 
+interface RunningTool {
+  toolName: string;
+  startedAt: number;
+}
+
+function findRunningTool(
+  runningTools: Map<string, RunningTool>,
+  toolName: string,
+  toolCallId: string | undefined
+): [string, RunningTool] | undefined {
+  if (toolCallId) {
+    const tool = runningTools.get(toolCallId);
+    return tool ? [toolCallId, tool] : undefined;
+  }
+
+  return Array.from(runningTools.entries())
+    .reverse()
+    .find(([, tool]) => tool.toolName === toolName);
+}
+
 /**
  * Usage totals for the terminal telemetry event. Fields are omitted (not sent
  * as zero) when nothing was reported, so absence in PostHog means "providers
@@ -1400,7 +1420,9 @@ async function executeNodeInternal(
   };
   let nodeIdleTimedOut = false;
   const effectiveIdleTimeout = node.idle_timeout ?? STEP_IDLE_TIMEOUT_MS;
-  let lastToolStartedAt: { toolName: string; startedAt: number } | null = null;
+  const runningTools = new Map<string, RunningTool>();
+  let anonymousToolSequence = 0;
+  let lastAnonymousToolCallId: string | undefined;
   // Task ids still live when the stream ended abnormally (idle timeout /
   // subprocess death) — recorded on the node_completed event so an incomplete
   // node never masquerades as a clean success (#2083).
@@ -1510,10 +1532,16 @@ async function executeNodeInternal(
         await logAssistant(logDir, workflowRun.id, msg.content);
       } else if (msg.type === 'tool' && msg.toolName) {
         const now = Date.now();
+        const toolCallId = msg.toolCallId ?? `anonymous-${String(++anonymousToolSequence)}`;
 
-        // Emit tool_completed for the previous tool (fire-and-forget)
-        if (lastToolStartedAt) {
-          const prevTool = lastToolStartedAt;
+        // Providers without stable IDs report sequential tool calls. Preserve their
+        // legacy boundary while allowing identified calls to overlap.
+        const previousTool = lastAnonymousToolCallId
+          ? runningTools.get(lastAnonymousToolCallId)
+          : undefined;
+        if (previousTool && lastAnonymousToolCallId !== undefined) {
+          const previousToolCallId = lastAnonymousToolCallId;
+          const prevTool = previousTool;
           getWorkflowEventEmitter().emit({
             type: 'tool_completed',
             runId: workflowRun.id,
@@ -1537,8 +1565,10 @@ async function executeNodeInternal(
                 'workflow_event_persist_failed'
               );
             });
+          runningTools.delete(previousToolCallId);
         }
-        lastToolStartedAt = { toolName: msg.toolName, startedAt: now };
+        runningTools.set(toolCallId, { toolName: msg.toolName, startedAt: now });
+        if (!msg.toolCallId) lastAnonymousToolCallId = toolCallId;
 
         // Emit tool_started for the current tool (fire-and-forget)
         getWorkflowEventEmitter().emit({
@@ -1580,14 +1610,15 @@ async function executeNodeInternal(
           });
       } else if (msg.type === 'tool_result' && msg.toolName) {
         const now = Date.now();
-        if (lastToolStartedAt) {
-          const completedTool = lastToolStartedAt;
+        const completedTool = findRunningTool(runningTools, msg.toolName, msg.toolCallId);
+        if (completedTool) {
+          const [completedToolCallId, tool] = completedTool;
           getWorkflowEventEmitter().emit({
             type: 'tool_completed',
             runId: workflowRun.id,
-            toolName: completedTool.toolName,
+            toolName: tool.toolName,
             stepName: node.id,
-            durationMs: now - completedTool.startedAt,
+            durationMs: now - tool.startedAt,
           });
           deps.store
             .createWorkflowEvent({
@@ -1595,8 +1626,8 @@ async function executeNodeInternal(
               event_type: 'tool_completed',
               step_name: stepName,
               data: {
-                tool_name: completedTool.toolName,
-                duration_ms: now - completedTool.startedAt,
+                tool_name: tool.toolName,
+                duration_ms: now - tool.startedAt,
               },
             })
             .catch((err: Error) => {
@@ -1605,15 +1636,17 @@ async function executeNodeInternal(
                 'workflow_event_persist_failed'
               );
             });
-          lastToolStartedAt = null;
+          runningTools.delete(completedToolCallId);
+          if (completedToolCallId === lastAnonymousToolCallId) {
+            lastAnonymousToolCallId = undefined;
+          }
         }
         if (streamingMode === 'stream' && platform.sendStructuredEvent) {
           await platform.sendStructuredEvent(conversationId, msg);
         }
       } else if (msg.type === 'result') {
-        // Emit tool_completed for the last tool in the node
-        if (lastToolStartedAt) {
-          const prevTool = lastToolStartedAt;
+        // A terminal result closes every outstanding lifecycle.
+        for (const [toolCallId, prevTool] of runningTools) {
           getWorkflowEventEmitter().emit({
             type: 'tool_completed',
             runId: workflowRun.id,
@@ -1637,7 +1670,7 @@ async function executeNodeInternal(
                 'workflow_event_persist_failed'
               );
             });
-          lastToolStartedAt = null;
+          runningTools.delete(toolCallId);
         }
         if (msg.sessionId) newSessionId = msg.sessionId;
         if (msg.resumed !== undefined) nodeResumed = msg.resumed;
@@ -4202,7 +4235,9 @@ async function executeLoopNode(
       };
 
       const generator = aiClient.sendQuery(finalPrompt, cwd, resumeSessionId, iterationOptions);
-      let lastToolStartedAt: { toolName: string; startedAt: number } | null = null;
+      const runningTools = new Map<string, RunningTool>();
+      let anonymousToolSequence = 0;
+      let lastAnonymousToolCallId: string | undefined;
 
       const effectiveIdleTimeout = node.idle_timeout ?? STEP_IDLE_TIMEOUT_MS;
 
@@ -4257,9 +4292,8 @@ async function executeLoopNode(
           }
           await logAssistant(logDir, workflowRun.id, msg.content);
         } else if (msg.type === 'result') {
-          // Emit tool_completed for the last tool in the iteration
-          if (lastToolStartedAt) {
-            const prevTool = lastToolStartedAt;
+          // A terminal result closes every outstanding lifecycle.
+          for (const [toolCallId, prevTool] of runningTools) {
             getWorkflowEventEmitter().emit({
               type: 'tool_completed',
               runId: workflowRun.id,
@@ -4280,7 +4314,7 @@ async function executeLoopNode(
               .catch((err: Error) => {
                 logEventStoreError(err, i);
               });
-            lastToolStartedAt = null;
+            runningTools.delete(toolCallId);
           }
           if (msg.sessionId) currentSessionId = msg.sessionId;
           // Overwrite, don't accumulate — a later result in the same iteration
@@ -4366,10 +4400,16 @@ async function executeLoopNode(
           backgroundTasks.update(msg.tasks);
         } else if (msg.type === 'tool' && msg.toolName) {
           const now = Date.now();
+          const toolCallId = msg.toolCallId ?? `anonymous-${String(++anonymousToolSequence)}`;
 
-          // Emit tool_completed for the previous tool
-          if (lastToolStartedAt) {
-            const prevTool = lastToolStartedAt;
+          // Providers without stable IDs report sequential tool calls. Preserve their
+          // legacy boundary while allowing identified calls to overlap.
+          const previousTool = lastAnonymousToolCallId
+            ? runningTools.get(lastAnonymousToolCallId)
+            : undefined;
+          if (previousTool && lastAnonymousToolCallId !== undefined) {
+            const previousToolCallId = lastAnonymousToolCallId;
+            const prevTool = previousTool;
             getWorkflowEventEmitter().emit({
               type: 'tool_completed',
               runId: workflowRun.id,
@@ -4387,8 +4427,10 @@ async function executeLoopNode(
               .catch((err: Error) => {
                 logEventStoreError(err, i);
               });
+            runningTools.delete(previousToolCallId);
           }
-          lastToolStartedAt = { toolName: msg.toolName, startedAt: now };
+          runningTools.set(toolCallId, { toolName: msg.toolName, startedAt: now });
+          if (!msg.toolCallId) lastAnonymousToolCallId = toolCallId;
 
           // Emit tool_started for the current tool (fire-and-forget)
           getWorkflowEventEmitter().emit({
@@ -4432,14 +4474,15 @@ async function executeLoopNode(
             });
         } else if (msg.type === 'tool_result' && msg.toolName) {
           const now = Date.now();
-          if (lastToolStartedAt) {
-            const completedTool = lastToolStartedAt;
+          const completedTool = findRunningTool(runningTools, msg.toolName, msg.toolCallId);
+          if (completedTool) {
+            const [completedToolCallId, tool] = completedTool;
             getWorkflowEventEmitter().emit({
               type: 'tool_completed',
               runId: workflowRun.id,
-              toolName: completedTool.toolName,
+              toolName: tool.toolName,
               stepName: node.id,
-              durationMs: now - completedTool.startedAt,
+              durationMs: now - tool.startedAt,
             });
             deps.store
               .createWorkflowEvent({
@@ -4447,14 +4490,17 @@ async function executeLoopNode(
                 event_type: 'tool_completed',
                 step_name: stepName,
                 data: {
-                  tool_name: completedTool.toolName,
-                  duration_ms: now - completedTool.startedAt,
+                  tool_name: tool.toolName,
+                  duration_ms: now - tool.startedAt,
                 },
               })
               .catch((err: Error) => {
                 logEventStoreError(err, i);
               });
-            lastToolStartedAt = null;
+            runningTools.delete(completedToolCallId);
+            if (completedToolCallId === lastAnonymousToolCallId) {
+              lastAnonymousToolCallId = undefined;
+            }
           }
           if (platform.sendStructuredEvent) {
             await platform.sendStructuredEvent(conversationId, msg);

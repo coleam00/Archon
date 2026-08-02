@@ -3556,6 +3556,55 @@ describe('executeDagWorkflow -- tool_completed event emission', () => {
     });
   });
 
+  it('correlates interleaved DAG tool lifecycles by toolCallId', async () => {
+    const mockStore = createMockStore();
+    const mockDeps = createMockDeps(mockStore);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'tool', toolName: 'read_file', toolCallId: 'id-a' };
+      setSystemTime(new Date('2026-01-01T00:00:00.010Z'));
+      yield { type: 'tool', toolName: 'write_file', toolCallId: 'id-b' };
+      setSystemTime(new Date('2026-01-01T00:00:00.040Z'));
+      yield { type: 'tool_result', toolName: 'read_file', toolCallId: 'id-a' };
+      setSystemTime(new Date('2026-01-01T00:00:00.070Z'));
+      yield { type: 'tool_result', toolName: 'write_file', toolCallId: 'id-b' };
+      yield { type: 'result', sessionId: 'dag-sess-interleaved-tools' };
+    });
+
+    try {
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-dag-interleaved-tools',
+        testDir,
+        { name: 'dag-interleaved-tools', nodes: [node('my-cmd')] },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+    } finally {
+      setSystemTime();
+    }
+
+    const completedEvents = (mockStore.createWorkflowEvent as ReturnType<typeof mock>).mock.calls
+      .filter(([event]: [{ event_type: string }]) => event.event_type === 'tool_completed')
+      .map(([event]: [{ data: Record<string, unknown> }]) => event.data);
+    expect(completedEvents).toEqual(
+      expect.arrayContaining([
+        { tool_name: 'read_file', duration_ms: 40 },
+        { tool_name: 'write_file', duration_ms: 60 },
+      ])
+    );
+  });
+
   it('should not emit tool_completed when no tools were called in DAG node', async () => {
     const mockStore = createMockStore();
     const mockDeps = createMockDeps(mockStore);
@@ -5285,6 +5334,64 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         tool_name: 'read_file',
         duration_ms: 50,
       });
+    });
+
+    it('correlates interleaved loop tool lifecycles by toolCallId', async () => {
+      const store = createMockStore();
+      const mockDeps = createMockDeps(store);
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun('loop-interleaved-tools-run');
+
+      setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+      mockSendQueryDag.mockImplementation(function* () {
+        yield { type: 'tool', toolName: 'read_file', toolCallId: 'id-a' };
+        setSystemTime(new Date('2026-01-01T00:00:00.010Z'));
+        yield { type: 'tool', toolName: 'write_file', toolCallId: 'id-b' };
+        setSystemTime(new Date('2026-01-01T00:00:00.040Z'));
+        yield { type: 'tool_result', toolName: 'read_file', toolCallId: 'id-a' };
+        setSystemTime(new Date('2026-01-01T00:00:00.070Z'));
+        yield { type: 'tool_result', toolName: 'write_file', toolCallId: 'id-b' };
+        yield { type: 'assistant', content: 'Done. <promise>COMPLETE</promise>' };
+        yield { type: 'result', sessionId: 'loop-sess-interleaved-tools' };
+      });
+
+      try {
+        await executeDagWorkflow(
+          mockDeps,
+          platform,
+          'conv-loop-interleaved-tools',
+          testDir,
+          {
+            name: 'loop-interleaved-tools',
+            nodes: [
+              {
+                id: 'my-loop',
+                loop: { prompt: 'Complete the task.', until: 'COMPLETE', max_iterations: 1 },
+              },
+            ],
+          },
+          workflowRun,
+          'claude',
+          undefined,
+          join(testDir, 'artifacts'),
+          join(testDir, 'logs'),
+          'main',
+          'docs/',
+          minimalConfig
+        );
+      } finally {
+        setSystemTime();
+      }
+
+      const completedEvents = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls
+        .filter(([event]: [{ event_type: string }]) => event.event_type === 'tool_completed')
+        .map(([event]: [{ data: Record<string, unknown> }]) => event.data);
+      expect(completedEvents).toEqual(
+        expect.arrayContaining([
+          { tool_name: 'read_file', duration_ms: 40 },
+          { tool_name: 'write_file', duration_ms: 60 },
+        ])
+      );
     });
 
     it('completes on <promise>COMPLETE</promise> signal in first iteration', async () => {
