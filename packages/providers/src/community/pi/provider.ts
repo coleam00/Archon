@@ -931,6 +931,8 @@ export class PiProvider implements IAgentProvider {
       // waiting on it.
       const REFRESH_TIMEOUT_MS = 10_000;
       let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+      const refreshLogCtx = { piProvider: parsed.provider, modelId: parsed.modelId };
+      getLog().debug(refreshLogCtx, 'pi.model_discovery_refresh_started');
       try {
         await Promise.race([
           (async (): Promise<void> => {
@@ -943,8 +945,9 @@ export class PiProvider implements IAgentProvider {
             }, REFRESH_TIMEOUT_MS);
           }),
         ]);
+        getLog().debug(refreshLogCtx, 'pi.model_discovery_refresh_completed');
       } catch (err) {
-        getLog().debug({ err }, 'pi.model_discovery_refresh_failed');
+        getLog().debug({ ...refreshLogCtx, err }, 'pi.model_discovery_refresh_failed');
       } finally {
         if (refreshTimer) clearTimeout(refreshTimer);
       }
