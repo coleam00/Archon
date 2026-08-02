@@ -59,7 +59,10 @@ function disabledProvider(id: OAuthProviderId): OAuthProviderInterface {
     id,
     usesCallbackServer: false,
     login(): Promise<OAuthCredentials> {
-      throw new Error(DISABLED_MSG);
+      // Reject (not sync-throw) so callers that store session state before
+      // attaching `.catch()` to the returned promise still see the failure and
+      // transition to their error state, honoring the async contract.
+      return Promise.reject(new Error(DISABLED_MSG));
     },
   };
 }
@@ -88,5 +91,7 @@ export function getOAuthApiKey(
   _providerId: string,
   _credentials: Record<string, unknown>
 ): Promise<{ newCredentials: OAuthCredentials; apiKey: string } | null> {
-  throw new Error(DISABLED_MSG);
+  // Reject rather than sync-throw to honor the Promise return contract (see
+  // `disabledProvider.login`).
+  return Promise.reject(new Error(DISABLED_MSG));
 }
