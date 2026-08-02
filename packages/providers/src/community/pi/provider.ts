@@ -924,11 +924,29 @@ export class PiProvider implements IAgentProvider {
       // does NOT await that discovery, so a plain find() races it. Give it one
       // awaited, network-backed refresh (which runs the extension's own
       // discovery via ModelRuntime) then re-find.
+      // Bound the network-backed discovery: a slow or unreachable extension
+      // backend must not hang sendQuery. On timeout (or any error) we degrade
+      // directly to the deterministic store-cache fallback below. The refresh
+      // promise may keep running in the background harmlessly — we just stop
+      // waiting on it.
+      const REFRESH_TIMEOUT_MS = 10_000;
+      let refreshTimer: ReturnType<typeof setTimeout> | undefined;
       try {
-        await modelRuntime.refresh({ allowNetwork: true });
-        await modelRegistry.refresh();
+        await Promise.race([
+          (async (): Promise<void> => {
+            await modelRuntime.refresh({ allowNetwork: true });
+            await modelRegistry.refresh();
+          })(),
+          new Promise<never>((_, reject) => {
+            refreshTimer = setTimeout(() => {
+              reject(new Error(`Pi model discovery refresh exceeded ${REFRESH_TIMEOUT_MS}ms`));
+            }, REFRESH_TIMEOUT_MS);
+          }),
+        ]);
       } catch (err) {
         getLog().debug({ err }, 'pi.model_discovery_refresh_failed');
+      } finally {
+        if (refreshTimer) clearTimeout(refreshTimer);
       }
       model = modelRegistry.find(parsed.provider, parsed.modelId);
 
