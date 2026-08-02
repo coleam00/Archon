@@ -876,11 +876,31 @@ export class PiProvider implements IAgentProvider {
     //     below — extensions read flags inside their session_start handler.
     //     `extensionFlags` is the per-node resolved map (assistant-level flags
     //     shallow-merged with `nodes.<nodeId>.extensionFlags`, node wins).
-    if (enableExtensions && extensionFlags) {
+    if (enableExtensions) {
       const runner = session.extensionRunner;
       if (runner) {
-        for (const [name, value] of Object.entries(extensionFlags)) {
-          runner.setFlagValue(name, value);
+        // Pi 0.83 stale-ctx guard vs. our #1877 shared-loader reuse. On
+        // dispose(), AgentSession calls runner.invalidate(), which sets
+        // staleMessage on the SHARED ExtensionRuntime — the single object every
+        // extension's captured `pi` ctx delegates through
+        // (runner.invalidate -> runtime.invalidate). Because the #1877 workaround
+        // reuses ONE reloaded loader, and thus ONE runtime, across every session
+        // for a (cwd, systemPrompt, skillPaths) key (a 2nd reload() deadlocks),
+        // the first turn's dispose would poison that runtime and every later turn
+        // or DAG node would throw "This extension ctx is stale after session
+        // replacement or reload". The runner is per-session and discarded right
+        // after dispose; the shared runtime must stay live for the next session —
+        // so suppress this session's ctx invalidation. reload() still runs
+        // exactly once; only the invalidate propagation is neutered.
+        runner.invalidate = (): void => {
+          // no-op: suppress this session's ctx invalidation so dispose() cannot
+          // poison the shared runtime (see the note above).
+        };
+
+        if (extensionFlags) {
+          for (const [name, value] of Object.entries(extensionFlags)) {
+            runner.setFlagValue(name, value);
+          }
         }
       }
     }
