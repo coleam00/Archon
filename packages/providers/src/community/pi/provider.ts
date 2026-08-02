@@ -375,14 +375,14 @@ export class PiProvider implements IAgentProvider {
       );
     }
 
-    // 2. Build AuthStorage + ModelRegistry. Both read on every sendQuery —
+    // 2. Build ModelRuntime + ModelRegistry. Both read on every sendQuery —
     //    user edits to auth.json or models.json take effect without restart.
-    //    ModelRegistry.create() is mutable: extension providers can call registerProvider()
-    //    on it during bindExtensions() to add their models (phase 2 resolution).
+    //    ModelRegistry wraps the runtime and is mutable: extension providers can
+    //    call registerProvider() on it during bindExtensions() (phase 2 resolution).
     const envVarName = PI_PROVIDER_ENV_VARS[parsed.provider];
     const oauthVarName = PI_OAUTH_ENV_VARS[parsed.provider];
-    let authStorage: ReturnType<typeof piCodingAgent.AuthStorage.create>;
-    let modelRegistry: ReturnType<typeof piCodingAgent.ModelRegistry.create>;
+    let modelRuntime: Awaited<ReturnType<typeof piCodingAgent.ModelRuntime.create>>;
+    let modelRegistry: InstanceType<typeof piCodingAgent.ModelRegistry>;
     try {
       // Archon delivers per-user credentials (API keys + subscriptions) as a
       // per-run auth.json and points us at it via ARCHON_PI_AUTH_PATH — using an
@@ -394,16 +394,29 @@ export class PiProvider implements IAgentProvider {
       const archonAuthPath =
         (requestOptions?.env?.ARCHON_PI_AUTH_PATH ?? process.env.ARCHON_PI_AUTH_PATH)?.trim() ||
         undefined;
-      authStorage = piCodingAgent.AuthStorage.create(archonAuthPath);
+      // 0.83.0: ModelRuntime.create({ authPath }) replaces AuthStorage.create();
+      // ModelRegistry is now constructed from the runtime (was ModelRegistry.create(authStorage)).
+      modelRuntime = await piCodingAgent.ModelRuntime.create(
+        archonAuthPath ? { authPath: archonAuthPath } : undefined
+      );
+      // #2654 credential boundary (ported to the 0.83 seam): a custom provider
+      // (no Archon env-var shortcut) may resolve its models.json config
+      // (baseUrl/apiKey/headers) from request/project env, but must never read
+      // Archon-injected protected credentials. Pre-0.83 monkey-patched
+      // AuthStorage.getProviderEnv/hasAuth — objects the 0.83 migration deletes;
+      // instead we wrap ModelRuntime so getAuth({ env }) overlays the
+      // credential-filtered request env and hasConfiguredAuth reports it. The
+      // wrapped runtime feeds both the ModelRegistry and the agent session, so
+      // the boundary holds for status checks and the actual model request.
       if (!envVarName) {
-        authStorage = withCustomProviderRequestEnv(
-          authStorage,
+        modelRuntime = await withCustomProviderRequestEnv(
+          modelRuntime,
           parsed.provider,
           requestOptions?.env,
           requestOptions?.protectedEnvKeys
         );
       }
-      modelRegistry = piCodingAgent.ModelRegistry.create(authStorage);
+      modelRegistry = new piCodingAgent.ModelRegistry(modelRuntime);
     } catch (err) {
       const e = err as Error;
       getLog().error({ err: e, piProvider: parsed.provider }, 'pi.auth_storage_init_failed');
@@ -445,7 +458,8 @@ export class PiProvider implements IAgentProvider {
       name ? (requestOptions?.env?.[name] ?? process.env[name]) : undefined;
     const envOverride = readEnvOverride(oauthVarName) ?? readEnvOverride(envVarName);
     if (envOverride) {
-      authStorage.setRuntimeApiKey(parsed.provider, envOverride);
+      // 0.83.0: setRuntimeApiKey moved to ModelRuntime and is async.
+      await modelRuntime.setRuntimeApiKey(parsed.provider, envOverride);
     }
 
     // Auth validation deferred for extension providers — they manage credentials
@@ -455,14 +469,17 @@ export class PiProvider implements IAgentProvider {
     // detection in step 4c; for 'anthropic' we resolve even when the model is
     // deferred to extensions (AuthStorage reads are cheap and side-effect-free)
     // so a catalog miss can never skip the OAuth-safe default prompt.
-    let resolvedKey: Awaited<ReturnType<typeof authStorage.getApiKey>> | undefined;
+    let resolvedKey: Awaited<ReturnType<typeof modelRegistry.getApiKeyForProvider>> | undefined;
     let hasResolvedAuth = false;
     if (model && !envVarName) {
-      // This is deliberately status-only: Pi resolves models.json request auth
-      // when it sends, and command-backed values must execute only once there.
+      // Custom provider (#2654): status-only check via the request-env-bounded
+      // runtime. Pi resolves models.json request auth when it sends, and
+      // command-backed values must execute only once there.
       hasResolvedAuth = modelRegistry.hasConfiguredAuth(model);
     } else if (model || parsed.provider === 'anthropic') {
-      resolvedKey = await authStorage.getApiKey(parsed.provider);
+      // 0.83.0: AuthStorage.getApiKey → ModelRegistry.getApiKeyForProvider
+      // (same contract: resolves auth.json + runtime overrides to a bearer string).
+      resolvedKey = await modelRegistry.getApiKeyForProvider(parsed.provider);
       hasResolvedAuth = Boolean(resolvedKey);
     }
     if (model) {
@@ -758,8 +775,7 @@ export class PiProvider implements IAgentProvider {
       // createAgentSession accepts this — the model will be set via
       // session.setModel() after bindExtensions() resolves it (step 4g).
       ...(model ? { model } : {}),
-      authStorage,
-      modelRegistry,
+      modelRuntime,
       sessionManager,
       settingsManager,
       resourceLoader,
@@ -813,6 +829,14 @@ export class PiProvider implements IAgentProvider {
     // 4g. [LOOKUP-2] Re-check the registry after bindExtensions() for extension-registered models.
     //     Safe to call session.setModel() here — no prompt has been sent yet.
     if (!model) {
+      // Extension providers register via ModelRuntime.registerProvider(), which
+      // ends with a FIRE-AND-FORGET `void this.refresh()` — the reload of the
+      // model store is not awaited by the SDK. ModelRegistry documents: "Reload
+      // models.json asynchronously. Await before making synchronous registry
+      // reads." find() below is synchronous, so without this await the extension
+      // provider's models (e.g. a litellm proxy catalog) may not be in the
+      // snapshot yet and resolution races to a spurious "model not found".
+      await modelRegistry.refresh();
       model = modelRegistry.find(parsed.provider, parsed.modelId);
       if (!model) {
         session.dispose();

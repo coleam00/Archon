@@ -95,7 +95,7 @@ let fileCreds: Record<
 > = {};
 let runtimeOverrides: Record<string, string> = {};
 
-const mockSetRuntimeApiKey = mock((providerId: string, key: string) => {
+const mockSetRuntimeApiKey = mock(async (providerId: string, key: string) => {
   runtimeOverrides[providerId] = key;
 });
 const mockGetApiKey = mock(async (providerId: string): Promise<string | undefined> => {
@@ -108,18 +108,37 @@ const mockGetApiKey = mock(async (providerId: string): Promise<string | undefine
   if (cred?.type === 'oauth') return 'sk-ant-oat01-file-stub';
   return undefined;
 });
-const mockGetCredential = mock((providerId: string) => fileCreds[providerId]);
-const mockGetProviderEnv = mock((providerId: string) => fileCreds[providerId]?.env);
-const mockHasAuth = mock(
+// 0.83.0: the credential surface moved from AuthStorage to ModelRuntime.
+// hasConfiguredAuth/getAuth/listCredentials back the #2654 request-env boundary
+// (withCustomProviderRequestEnv wraps the runtime, not the auth store).
+const mockRuntimeHasConfiguredAuth = mock(
   (providerId: string) =>
     runtimeOverrides[providerId] !== undefined || fileCreds[providerId] !== undefined
 );
-const mockAuthCreate = mock(() => ({
+const mockRuntimeGetAuth = mock(
+  async (
+    providerOrModel: unknown,
+    overrides?: { apiKey?: string; env?: Record<string, string> }
+  ): Promise<{ auth: { apiKey?: string }; env?: Record<string, string> } | undefined> => {
+    const providerId =
+      typeof providerOrModel === 'string'
+        ? providerOrModel
+        : (providerOrModel as { provider?: string } | null)?.provider;
+    const apiKey = providerId ? await mockGetApiKey(providerId) : undefined;
+    if (apiKey === undefined && !overrides?.env) return undefined;
+    return { auth: { apiKey }, env: overrides?.env };
+  }
+);
+const mockListCredentials = mock(async () =>
+  Object.keys(fileCreds).map(providerId => ({ providerId }))
+);
+// 0.83.0: setRuntimeApiKey moved to ModelRuntime (was AuthStorage) and is async.
+const mockModelRuntimeCreate = mock(async (_options?: { authPath?: string }) => ({
   setRuntimeApiKey: mockSetRuntimeApiKey,
-  getApiKey: mockGetApiKey,
-  get: mockGetCredential,
-  getProviderEnv: mockGetProviderEnv,
-  hasAuth: mockHasAuth,
+  getApiKeyForProvider: mockGetApiKey,
+  hasConfiguredAuth: mockRuntimeHasConfiguredAuth,
+  getAuth: mockRuntimeGetAuth,
+  listCredentials: mockListCredentials,
 }));
 
 function createMockModel(provider: string, modelId: string): Model<Api> {
@@ -141,28 +160,33 @@ const mockModelRegistryFind = mock<ModelRegistry['find']>((provider, modelId) =>
   if (provider === 'nonexistent') return undefined;
   return createMockModel(provider, modelId);
 });
-type MockModelRegistry = Pick<ModelRegistry, 'find'> &
-  Partial<
-    Pick<
-      ModelRegistry,
-      'getApiKeyAndHeaders' | 'getError' | 'hasConfiguredAuth' | 'registerProvider'
-    >
-  >;
-type MockModelRegistryCreate = (
-  ...args: Parameters<typeof import('@earendil-works/pi-coding-agent').ModelRegistry.create>
-) => MockModelRegistry;
-const mockModelRegistryCreate = mock<MockModelRegistryCreate>(
-  (authStorage): MockModelRegistry => ({
+const mockModelRegistryRefresh = mock(async () => {});
+// 0.83.0: `new ModelRegistry(runtime)` (was ModelRegistry.create(authStorage));
+// getApiKeyForProvider replaces AuthStorage.getApiKey. The facade's
+// hasConfiguredAuth reads straight through the (possibly request-env-bounded)
+// runtime, so the mock delegates to it — mirroring the real ModelRegistry and
+// keeping the #2654 boundary observable end-to-end.
+const mockModelRegistryRegisterProvider = mock((_name: string, _config: unknown) => {});
+// Explicit loose return type (plain member signatures, `registerProvider`/`getError`
+// optional) so per-test `.mockImplementationOnce()` overrides supplying different
+// subsets type-check under the strict test type-check (#2605). The real
+// ModelRegistry export is swapped via mock.module below, so this shape only needs
+// to be internally consistent across the test's overrides.
+type MockRegistryImpl = {
+  find: (provider: string, modelId: string) => Model<Api> | undefined;
+  refresh: () => Promise<void>;
+  getApiKeyForProvider: (provider: string) => Promise<string | undefined>;
+  hasConfiguredAuth?: (model: Model<Api>) => boolean;
+  registerProvider?: (name: string, config: unknown) => void;
+  getError?: () => string;
+};
+const MockModelRegistry = mock(
+  (runtime: { hasConfiguredAuth: (providerId: string) => boolean }): MockRegistryImpl => ({
     find: mockModelRegistryFind,
-    hasConfiguredAuth: mock(model => authStorage.hasAuth(model.provider)),
-    getApiKeyAndHeaders: mock(async model => {
-      const apiKey = await authStorage.getApiKey(model.provider, { includeFallback: false });
-      return {
-        ok: true as const,
-        apiKey,
-        env: authStorage.getProviderEnv(model.provider),
-      };
-    }),
+    refresh: mockModelRegistryRefresh,
+    getApiKeyForProvider: mockGetApiKey,
+    hasConfiguredAuth: model => runtime.hasConfiguredAuth(model.provider),
+    registerProvider: mockModelRegistryRegisterProvider,
   })
 );
 
@@ -223,8 +247,8 @@ const mockCreateLsTool = mock((_cwd: string) => ({ __piTool: 'ls' }));
 
 mock.module('@earendil-works/pi-coding-agent', () => ({
   createAgentSession: mockCreateAgentSession,
-  AuthStorage: { create: mockAuthCreate },
-  ModelRegistry: { create: mockModelRegistryCreate },
+  ModelRuntime: { create: mockModelRuntimeCreate },
+  ModelRegistry: MockModelRegistry,
   SessionManager: {
     create: mockSessionCreate,
     open: mockSessionOpen,
@@ -307,13 +331,16 @@ describe('PiProvider', () => {
     mockGetExtensions.mockClear();
     mockLoaderRuntime.pendingProviderRegistrations = [];
     mockCreateAgentSession.mockClear();
-    mockAuthCreate.mockClear();
-    mockModelRegistryCreate.mockClear();
+    mockModelRuntimeCreate.mockClear();
+    MockModelRegistry.mockClear();
+    mockModelRegistryRefresh.mockClear();
+    mockModelRegistryRegisterProvider.mockClear();
     mockModelRegistryFind.mockClear();
     mockSetRuntimeApiKey.mockClear();
     mockGetApiKey.mockClear();
-    mockGetCredential.mockClear();
-    mockGetProviderEnv.mockClear();
+    mockRuntimeHasConfiguredAuth.mockClear();
+    mockRuntimeGetAuth.mockClear();
+    mockListCredentials.mockClear();
     MockDefaultResourceLoader.mockClear();
     mockCreateReadTool.mockClear();
     mockCreateBashTool.mockClear();
@@ -420,10 +447,10 @@ describe('PiProvider', () => {
     expect(mockCreateAgentSession).toHaveBeenCalledTimes(1);
   });
 
-  test('ModelRegistry.create receives the AuthStorage instance', async () => {
-    // ModelRegistry.create must receive the same AuthStorage instance
-    // returned by AuthStorage.create(), so extension providers can resolve
-    // credentials and register models during bindExtensions().
+  test('new ModelRegistry receives the ModelRuntime instance', async () => {
+    // 0.83.0: `new ModelRegistry(runtime)` must receive the same ModelRuntime
+    // instance returned by ModelRuntime.create(), so extension providers can
+    // resolve credentials and register models during bindExtensions().
     process.env.GEMINI_API_KEY = 'sk-test';
     resetScript(scriptedAgentEnd());
 
@@ -433,10 +460,10 @@ describe('PiProvider', () => {
       })
     );
 
-    expect(mockAuthCreate).toHaveBeenCalledTimes(1);
-    expect(mockModelRegistryCreate).toHaveBeenCalledTimes(1);
-    const authInstance = mockAuthCreate.mock.results[0]?.value;
-    expect(mockModelRegistryCreate).toHaveBeenCalledWith(authInstance);
+    expect(mockModelRuntimeCreate).toHaveBeenCalledTimes(1);
+    expect(MockModelRegistry).toHaveBeenCalledTimes(1);
+    const runtimeInstance = await mockModelRuntimeCreate.mock.results[0]?.value;
+    expect(MockModelRegistry).toHaveBeenCalledWith(runtimeInstance);
   });
 
   test('custom provider receives request env without acting-user provider credentials', async () => {
@@ -453,21 +480,29 @@ describe('PiProvider', () => {
       })
     );
 
-    const requestAuthStorage = mockModelRegistryCreate.mock.calls[0]?.[0];
-    const fileAuthStorage = mockAuthCreate.mock.results[0]?.value as typeof requestAuthStorage;
-    expect(requestAuthStorage).toBe(fileAuthStorage);
-    expect(requestAuthStorage?.getProviderEnv('mygw')).toEqual({
-      MYGW_API_KEY: 'request-secret',
-    });
-    expect(requestAuthStorage?.hasAuth('mygw')).toBe(true);
-    expect(requestAuthStorage?.getProviderEnv('anthropic')).toBeUndefined();
-    const requestRegistry = mockModelRegistryCreate.mock.results[0]?.value as
-      | MockModelRegistry
-      | undefined;
-    expect(requestRegistry?.getApiKeyAndHeaders).not.toHaveBeenCalled();
+    // 0.83.0: the credential boundary wraps the ModelRuntime (was a monkey-patch
+    // on AuthStorage). The ModelRegistry is constructed over the request-env-
+    // bounded runtime, not the raw one returned by ModelRuntime.create().
+    const rawRuntime = await mockModelRuntimeCreate.mock.results[0]?.value;
+    const boundedRuntime = MockModelRegistry.mock.calls[0]?.[0] as {
+      hasConfiguredAuth: (providerId: string) => boolean;
+      getAuth: (
+        providerOrModel: unknown,
+        overrides?: { env?: Record<string, string> }
+      ) => Promise<{ env?: Record<string, string> } | undefined>;
+    };
+    expect(boundedRuntime).not.toBe(rawRuntime);
+    // Request env marks the custom provider configured (old hasAuth narrowing)...
+    expect(boundedRuntime.hasConfiguredAuth('mygw')).toBe(true);
+    // ...and getAuth echoes ONLY the non-protected request env for mygw (old
+    // getProviderEnv echo); the acting-user's protected key is stripped.
+    const resolved = await boundedRuntime.getAuth({ provider: 'mygw' });
+    expect(resolved?.env).toEqual({ MYGW_API_KEY: 'request-secret' });
+    // The protected credential never leaks to another provider.
+    expect(boundedRuntime.hasConfiguredAuth('anthropic')).toBe(false);
   });
 
-  test('AuthStorage.create reads ARCHON_PI_AUTH_PATH from requestOptions.env (per-user channel)', async () => {
+  test('ModelRuntime.create reads ARCHON_PI_AUTH_PATH from requestOptions.env (per-user channel)', async () => {
     // The executor delivers per-user credentials — including the per-run
     // auth.json PATH — on the per-call requestOptions.env channel, which it
     // deliberately keeps OUT of process.env (subprocess-isolation). Pi runs
@@ -486,10 +521,10 @@ describe('PiProvider', () => {
       })
     );
 
-    expect(mockAuthCreate).toHaveBeenCalledWith(perRunAuthPath);
+    expect(mockModelRuntimeCreate).toHaveBeenCalledWith({ authPath: perRunAuthPath });
   });
 
-  test('AuthStorage.create falls back to process.env.ARCHON_PI_AUTH_PATH (shell override)', async () => {
+  test('ModelRuntime.create falls back to process.env.ARCHON_PI_AUTH_PATH (shell override)', async () => {
     // A shell-level ARCHON_PI_AUTH_PATH still applies when no per-call value is
     // present, preserving the local-dev / manual override path.
     fileCreds.anthropic = { type: 'oauth' };
@@ -502,15 +537,14 @@ describe('PiProvider', () => {
       })
     );
 
-    expect(mockAuthCreate).toHaveBeenCalledWith('/shell/override/auth.json');
+    expect(mockModelRuntimeCreate).toHaveBeenCalledWith({ authPath: '/shell/override/auth.json' });
   });
 
-  test('AuthStorage.create() throwing surfaces a contextualized error', async () => {
-    // Both AuthStorage.create() and ModelRegistry.create() read from disk
-    // and can throw on malformed JSON or filesystem errors. Wrap with
-    // try/catch and surface a Pi-framed error so operators see the cause
-    // rather than a raw SDK stack trace.
-    mockAuthCreate.mockImplementationOnce(() => {
+  test('ModelRuntime.create() throwing surfaces a contextualized error', async () => {
+    // 0.83.0: ModelRuntime.create() reads from disk and can throw on malformed
+    // JSON or filesystem errors. Wrap with try/catch and surface a Pi-framed
+    // error so operators see the cause rather than a raw SDK stack trace.
+    mockModelRuntimeCreate.mockImplementationOnce(() => {
       throw new Error('Unexpected token } in JSON at position 42');
     });
 
@@ -536,8 +570,10 @@ describe('PiProvider', () => {
     // resolves extension providers. Both must return undefined to trigger the error.
     mockModelRegistryFind.mockImplementationOnce(() => undefined);
     mockModelRegistryFind.mockImplementationOnce(() => undefined);
-    mockModelRegistryCreate.mockImplementationOnce(() => ({
+    MockModelRegistry.mockImplementationOnce(() => ({
       find: mockModelRegistryFind,
+      refresh: mockModelRegistryRefresh,
+      getApiKeyForProvider: mockGetApiKey,
       getError: () => 'Provider lm-studio: "baseUrl" is required when defining custom models.',
     }));
 
@@ -2588,40 +2624,33 @@ describe('PiProvider', () => {
      * registered into it — like the real one, whose static catalog does not
      * contain extension providers such as 'cursor'.
      */
-    type ExtensionProviderConfig = Parameters<ModelRegistry['registerProvider']>[1];
-
-    function fakeExtensionAwareRegistry(): MockModelRegistry & {
-      registered: Map<string, ExtensionProviderConfig>;
+    function fakeExtensionAwareRegistry(): {
+      registered: Map<string, unknown>;
+      find: (provider: string, modelId: string) => Model<Api> | undefined;
+      refresh: () => Promise<void>;
+      getApiKeyForProvider: (provider: string) => Promise<string | undefined>;
+      registerProvider: (name: string, config: unknown) => void;
     } {
-      const registered = new Map<string, ExtensionProviderConfig>();
+      const registered = new Map<string, unknown>();
       return {
         registered,
         find: (provider: string, modelId: string) =>
           registered.has(provider) ? createMockModel(provider, modelId) : undefined,
-        registerProvider: (name: string, config: ExtensionProviderConfig): void => {
+        // 0.83.0 LOOKUP-2 awaits refresh() before the synchronous find().
+        refresh: async () => {},
+        getApiKeyForProvider: mockGetApiKey,
+        registerProvider: (name: string, config: unknown) => {
           registered.set(name, config);
         },
       };
     }
 
-    /**
-     * Simulate the real SDK's bindCore() drain for one createAgentSession
-     * call: flush the shared runtime's pending queue into THIS session's
-     * registry, then clear it (the SDK reassigns to []).
-     */
-    function drainQueueOnceIntoSessionRegistry(): void {
-      mockCreateAgentSession.mockImplementationOnce(
-        async (options?: CreateAgentSessionOptions): Promise<CreateAgentSessionResult> => {
-          const modelRegistry = options?.modelRegistry;
-          if (!modelRegistry) throw new Error('Expected a model registry');
-          for (const { name, config } of mockLoaderRuntime.pendingProviderRegistrations) {
-            modelRegistry.registerProvider(name, config);
-          }
-          mockLoaderRuntime.pendingProviderRegistrations = [];
-          return createMockSessionResult();
-        }
-      );
-    }
+    // Note: pre-0.83.0 this block simulated the SDK's bindCore() draining the
+    // shared runtime's pending queue into the session's registry (via
+    // createAgentSession's `modelRegistry` option). On 0.83.0 the provider
+    // re-applies the loader-snapshot registrations onto its own ModelRegistry
+    // (provider.ts §"Re-apply the load-time extension provider registrations"),
+    // so no createAgentSession-drain simulation is needed.
 
     test('extension-registered model resolves on the 2nd+ sendQuery (the issue #2064 scenario)', async () => {
       // The extension factory queued its registration during the single reload().
@@ -2633,10 +2662,8 @@ describe('PiProvider', () => {
         registries.push(registry);
         return registry;
       };
-      mockModelRegistryCreate.mockImplementationOnce(nextRegistry);
-      mockModelRegistryCreate.mockImplementationOnce(nextRegistry);
-      drainQueueOnceIntoSessionRegistry();
-      drainQueueOnceIntoSessionRegistry();
+      MockModelRegistry.mockImplementationOnce(nextRegistry);
+      MockModelRegistry.mockImplementationOnce(nextRegistry);
 
       // Node 1: works with or without the fix (bindCore's drain registers cursor).
       resetScript(scriptedAgentEnd());
@@ -2686,8 +2713,10 @@ describe('PiProvider', () => {
       ];
       // Static-catalog model resolves via the default find(); registerProvider
       // rejects the broken extension config — mirroring a validation throw.
-      mockModelRegistryCreate.mockImplementationOnce(() => ({
+      MockModelRegistry.mockImplementationOnce(() => ({
         find: mockModelRegistryFind,
+        refresh: mockModelRegistryRefresh,
+        getApiKeyForProvider: mockGetApiKey,
         registerProvider: (): void => {
           throw new Error('Provider broken: "apiKey" or "oauth" is required when defining models.');
         },
