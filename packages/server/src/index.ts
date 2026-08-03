@@ -104,6 +104,7 @@ import {
 } from '@archon/core';
 import type { IPlatformAdapter } from '@archon/core';
 import type { IdentityPlatform } from '@archon/core';
+import { unlink, rm } from 'node:fs/promises';
 import * as userDb from '@archon/core/db/users';
 import {
   createLogger,
@@ -642,15 +643,50 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         // the adapter's users.info enrichment (cached per slackUserId).
         const userId = await resolveUserId('slack', event.user, event.displayName);
 
+        // Download any file attachments up front (network I/O; doesn't need the lock).
+        const { files: attachedFiles, uploadDir } = await slackAdapter.downloadAttachments(
+          event.files,
+          conversationId
+        );
+
         // Fire-and-forget: handler returns immediately, processing happens async
         lockManager
           .acquireLock(conversationId, async () => {
-            await handleMessage(slackAdapter, conversationId, content, {
-              threadContext,
-              parentConversationId,
-              isolationHints: { workflowType: 'thread', workflowId: conversationId },
-              userId,
-            });
+            try {
+              await handleMessage(slackAdapter, conversationId, content, {
+                threadContext,
+                parentConversationId,
+                isolationHints: { workflowType: 'thread', workflowId: conversationId },
+                userId,
+                ...(attachedFiles.length > 0 ? { attachedFiles } : {}),
+              });
+            } finally {
+              // Clean up downloaded attachments AFTER handleMessage completes so the
+              // AI subprocess has had a chance to read them (mirrors the Web upload
+              // endpoint's dispatchToOrchestrator cleanup).
+              if (attachedFiles.length > 0) {
+                for (const f of attachedFiles) {
+                  await unlink(f.path).catch((err: NodeJS.ErrnoException) => {
+                    if (err.code !== 'ENOENT') {
+                      getLog().warn(
+                        { err, filePath: f.path, conversationId },
+                        'slack.attachment_cleanup_failed'
+                      );
+                    }
+                  });
+                }
+                await rm(uploadDir, { recursive: true, force: true }).catch(
+                  (err: NodeJS.ErrnoException) => {
+                    if (err.code !== 'ENOENT') {
+                      getLog().warn(
+                        { err, uploadDir, conversationId },
+                        'slack.attachment_dir_cleanup_failed'
+                      );
+                    }
+                  }
+                );
+              }
+            }
           })
           .catch(createMessageErrorHandler('Slack', slackAdapter, conversationId));
       });

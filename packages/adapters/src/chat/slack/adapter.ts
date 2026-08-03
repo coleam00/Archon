@@ -2,8 +2,10 @@
  * Slack platform adapter using @slack/bolt with Socket Mode
  * Handles message sending with markdown block formatting for AI responses
  */
+import { mkdir, writeFile } from 'node:fs/promises';
+import { basename, join } from 'node:path';
 import { App, LogLevel, type SlashCommand } from '@slack/bolt';
-import type { IPlatformAdapter, MessageMetadata } from '@archon/core';
+import type { AttachedFile, IPlatformAdapter, MessageMetadata } from '@archon/core';
 import {
   isPerUserGitHubEnabled,
   connectGithubForUser,
@@ -12,12 +14,12 @@ import {
 } from '@archon/core';
 import * as userDb from '@archon/core/db/users';
 import type { TokenUsage } from '@archon/providers/types';
-import { createLogger } from '@archon/paths';
+import { createLogger, getArchonHome } from '@archon/paths';
 import { isSlackUserAuthorized } from './auth';
 import { parseAllowedUserIds } from './auth';
 import { splitIntoParagraphChunks } from '../../utils/message-splitting';
 import { formatCostFooter } from './blocks';
-import type { SlackMessageEvent } from './types';
+import type { SlackFileRef, SlackMessageEvent } from './types';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -27,6 +29,11 @@ function getLog(): ReturnType<typeof createLogger> {
 }
 
 const MAX_MARKDOWN_BLOCK_LENGTH = 12000; // Slack markdown block limit
+
+/** Maximum allowed download size per Slack file attachment (mirrors the Web upload cap). */
+const MAX_SLACK_FILE_BYTES = 10 * 1024 * 1024;
+/** Maximum number of file attachments downloaded per Slack message (mirrors the Web upload cap). */
+const MAX_SLACK_FILES_PER_MESSAGE = 5;
 
 /** Slack channel + message ts pair used for reactions and edits. */
 export interface SlackMessageRef {
@@ -39,6 +46,7 @@ const MAX_TRACKED_TRIGGERS = 1000;
 
 export class SlackAdapter implements IPlatformAdapter {
   private app: App;
+  private botToken: string;
   private streamingMode: 'stream' | 'batch';
   private messageHandler: ((event: SlackMessageEvent) => Promise<void>) | null = null;
   private allowedUserIds: string[];
@@ -66,6 +74,7 @@ export class SlackAdapter implements IPlatformAdapter {
       appToken: appToken,
       logLevel: LogLevel.INFO,
     });
+    this.botToken = botToken;
     this.streamingMode = mode;
 
     // Parse Slack user whitelist (optional - empty = open access)
@@ -329,6 +338,94 @@ export class SlackAdapter implements IPlatformAdapter {
   }
 
   /**
+   * Download Slack message file attachments to disk so they can be handed to
+   * the AI as `AttachedFile[]` (same shape the Web upload endpoint produces).
+   * Best-effort per file: an oversized or failed download is skipped with a
+   * WARN log rather than failing the whole message — Slack has no
+   * request/response cycle to surface a hard rejection to the user inline.
+   *
+   * Requires bot token scope `files:read`. Caller is responsible for deleting
+   * `uploadDir` after the AI has had a chance to read the files.
+   */
+  async downloadAttachments(
+    files: SlackFileRef[] | undefined,
+    conversationId: string
+  ): Promise<{ files: AttachedFile[]; uploadDir: string }> {
+    if (!files || files.length === 0) {
+      return { files: [], uploadDir: '' };
+    }
+
+    const toDownload = files.slice(0, MAX_SLACK_FILES_PER_MESSAGE);
+    if (files.length > MAX_SLACK_FILES_PER_MESSAGE) {
+      getLog().warn(
+        { conversationId, fileCount: files.length, limit: MAX_SLACK_FILES_PER_MESSAGE },
+        'slack.attachments_truncated'
+      );
+    }
+
+    // Slack conversation IDs are "channel:ts" — ':' is invalid in Windows
+    // directory names, so sanitize before using it as a path segment.
+    const safeConversationId = conversationId.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const uploadDir = join(getArchonHome(), 'artifacts', 'uploads', `slack-${safeConversationId}`);
+
+    const saved: AttachedFile[] = [];
+    for (const file of toDownload) {
+      if (!file.url_private_download) continue;
+      if (file.size !== undefined && file.size > MAX_SLACK_FILE_BYTES) {
+        getLog().warn(
+          { conversationId, fileId: file.id, size: file.size },
+          'slack.attachment_too_large'
+        );
+        continue;
+      }
+
+      try {
+        const response = await fetch(file.url_private_download, {
+          headers: { Authorization: `Bearer ${this.botToken}` },
+        });
+        if (!response.ok) {
+          getLog().warn(
+            { conversationId, fileId: file.id, status: response.status },
+            'slack.attachment_download_failed'
+          );
+          continue;
+        }
+
+        const buffer = Buffer.from(await response.arrayBuffer());
+        if (buffer.byteLength > MAX_SLACK_FILE_BYTES) {
+          getLog().warn(
+            { conversationId, fileId: file.id, size: buffer.byteLength },
+            'slack.attachment_too_large'
+          );
+          continue;
+        }
+
+        await mkdir(uploadDir, { recursive: true });
+        const safeName = basename(file.name ?? file.id).replace(/[^a-zA-Z0-9._-]/g, '_');
+        const filePath = join(uploadDir, `${file.id}_${safeName}`);
+        await writeFile(filePath, buffer);
+        saved.push({
+          path: filePath,
+          name: safeName || file.id,
+          mimeType: file.mimetype ?? 'application/octet-stream',
+          size: buffer.byteLength,
+        });
+      } catch (error) {
+        getLog().warn(
+          { err: error as Error, conversationId, fileId: file.id },
+          'slack.attachment_download_error'
+        );
+      }
+    }
+
+    getLog().info(
+      { conversationId, requested: files.length, saved: saved.length },
+      'slack.attachments_downloaded'
+    );
+    return { files: saved, uploadDir };
+  }
+
+  /**
    * Get conversation ID from Slack event
    * For threads: returns "channel:thread_ts" to maintain thread context
    * For non-threads: returns channel ID only
@@ -407,6 +504,7 @@ export class SlackAdapter implements IPlatformAdapter {
           ts: event.ts,
           thread_ts: event.thread_ts,
           displayName,
+          files: (event as { files?: SlackFileRef[] }).files,
         };
         this.trackTrigger(this.getConversationId(messageEvent), {
           channel: event.channel,
@@ -449,6 +547,7 @@ export class SlackAdapter implements IPlatformAdapter {
           ts: event.ts,
           thread_ts: 'thread_ts' in event ? event.thread_ts : undefined,
           displayName,
+          files: (event as { files?: SlackFileRef[] }).files,
         };
         this.trackTrigger(this.getConversationId(messageEvent), {
           channel: event.channel,

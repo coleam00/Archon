@@ -1,8 +1,10 @@
 /**
  * Unit tests for Slack adapter
  */
-import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test';
 import type { Mock } from 'bun:test';
+import { tmpdir } from 'node:os';
+import { readFile, rm } from 'node:fs/promises';
 
 // Mock logger to suppress noisy output during tests
 const mockLogger = {
@@ -22,6 +24,7 @@ const mockLogger = {
 mock.module('@archon/paths', () => ({
   captureApprovalResolved: () => undefined,
   createLogger: mock(() => mockLogger),
+  getArchonHome: mock(() => tmpdir()),
 }));
 
 // Create mock functions
@@ -615,6 +618,105 @@ describe('SlackAdapter', () => {
       const second = await adapter.fetchDisplayName('U_RETRY');
       expect(second).toBe('Eventually');
       expect(mockUsersInfo).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('downloadAttachments', () => {
+    let adapter: SlackAdapter;
+    const originalFetch = globalThis.fetch;
+    const uploadDirs: string[] = [];
+
+    beforeEach(() => {
+      adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
+    });
+
+    afterEach(async () => {
+      globalThis.fetch = originalFetch;
+      for (const dir of uploadDirs.splice(0)) {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    test('returns an empty result when there are no files', async () => {
+      const result = await adapter.downloadAttachments(undefined, 'C123:456.789');
+      expect(result.files).toEqual([]);
+      expect(result.uploadDir).toBe('');
+    });
+
+    test('downloads a file and saves it to disk as an AttachedFile', async () => {
+      const content = 'hello world';
+      globalThis.fetch = mock(() =>
+        Promise.resolve(new Response(content, { status: 200 }))
+      ) as unknown as typeof fetch;
+
+      const result = await adapter.downloadAttachments(
+        [
+          {
+            id: 'F1',
+            name: 'notes.txt',
+            mimetype: 'text/plain',
+            size: content.length,
+            url_private_download: 'https://files.slack.com/f1',
+          },
+        ],
+        'C123:456.789'
+      );
+      uploadDirs.push(result.uploadDir);
+
+      expect(result.files).toHaveLength(1);
+      expect(result.files[0]?.name).toBe('notes.txt');
+      expect(result.files[0]?.mimeType).toBe('text/plain');
+      expect(result.files[0]?.size).toBe(content.length);
+      const saved = await readFile(result.files[0]?.path ?? '', 'utf-8');
+      expect(saved).toBe(content);
+    });
+
+    test('skips a file over the size cap without failing the batch', async () => {
+      globalThis.fetch = mock(() =>
+        Promise.resolve(new Response('irrelevant', { status: 200 }))
+      ) as unknown as typeof fetch;
+
+      const result = await adapter.downloadAttachments(
+        [
+          {
+            id: 'F2',
+            name: 'huge.bin',
+            size: 11 * 1024 * 1024,
+            url_private_download: 'https://files.slack.com/f2',
+          },
+        ],
+        'C123:456.789'
+      );
+      expect(result.files).toEqual([]);
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+    });
+
+    test('skips a file when the download response is not ok', async () => {
+      globalThis.fetch = mock(() =>
+        Promise.resolve(new Response('', { status: 403 }))
+      ) as unknown as typeof fetch;
+
+      const result = await adapter.downloadAttachments(
+        [{ id: 'F3', name: 'blocked.txt', url_private_download: 'https://files.slack.com/f3' }],
+        'C123:456.789'
+      );
+      expect(result.files).toEqual([]);
+    });
+
+    test('truncates to the max files per message', async () => {
+      globalThis.fetch = mock(() =>
+        Promise.resolve(new Response('x', { status: 200 }))
+      ) as unknown as typeof fetch;
+
+      const files = Array.from({ length: 7 }, (_, i) => ({
+        id: `F${i.toString()}`,
+        name: `f${i.toString()}.txt`,
+        size: 1,
+        url_private_download: `https://files.slack.com/f${i.toString()}`,
+      }));
+      const result = await adapter.downloadAttachments(files, 'C123:456.789');
+      uploadDirs.push(result.uploadDir);
+      expect(result.files).toHaveLength(5);
     });
   });
 });
