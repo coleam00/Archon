@@ -274,24 +274,6 @@ function generateConversationId(): string {
 }
 
 /**
- * Re-invoke `archon workflow run` (minus --detach/--json) as a detached
- * background child so the caller's shell returns immediately. Reconstructs the
- * current argv, drops `--detach` (the child runs in the foreground) and `--json`
- * (the parent already emitted the ack; the child should log normally to its log
- * file, not run silent), pins `--cwd` (absolute) plus any caller-supplied extra
- * flags (a generated branch / conversation id), then detaches via `unref()`.
- *
- * `dispatchBackgroundWorkflow` is deliberately NOT reused here: it is web-
- * adapter-coupled and its fire-and-forget dies with the CLI process. The
- * re-invoke is the only mechanism that survives parent exit.
- *
- * Child stdout/stderr are redirected to a per-conversation log file under
- * ARCHON_HOME/logs so a child that fails BEFORE creating a run record (e.g. DB
- * unreachable, missing worktree) leaves a trail instead of failing silently.
- * Falls back to discarding output only if the log file cannot be opened.
- * Returns the log path (or null when discarded) so the caller can surface it.
- */
-/**
  * Build the argv for the detached re-invoke. Pure (no spawn / no process reads)
  * so both the dev (bun + entry script) and compiled-binary (execPath only)
  * branches are unit-testable — the binary branch is otherwise unreachable in
