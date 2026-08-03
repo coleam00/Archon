@@ -158,7 +158,7 @@ Options:
   --base <branch>            Per-dispatch base override for epic slices (worktree cut-from + PR target)
   --no-worktree              Run on branch directly without worktree isolation
   --folder                   Register the current non-git directory as a folder project and run in place
-  --resume                   Resume the most recent failed run of the workflow (mutually exclusive with --branch)
+  --resume                   Resume the most recent failed or paused run of the workflow (mutually exclusive with --branch)
   --spawn                    Open setup wizard in a new terminal window (for setup command)
   --quiet, -q                Reduce log verbosity to warnings and errors only
   --verbose, -v              Show debug-level output
