@@ -5435,6 +5435,29 @@ describe('workflowRunCommand — progress rendering', () => {
     expect(stderrSpy).toHaveBeenCalledWith('[classify] tool: Bash (42ms, call-1, error, exit 1)\n');
   });
 
+  it('should render a legacy tool completion without optional metadata', async () => {
+    setupWorkflowMocks();
+
+    const { executeWorkflow } = require('@archon/workflows/executor');
+    (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(async () => {
+      if (capturedSubscribeHandler) {
+        capturedSubscribeHandler({
+          type: 'tool_completed',
+          runId: 'run-1',
+          toolName: 'Bash',
+          stepName: 'classify',
+          durationMs: 42,
+          toolCallId: 'call-1',
+        });
+      }
+      return { success: true, workflowRunId: 'run-1' };
+    });
+
+    await workflowRunCommand('/test/path', 'plan', 'hello', { verbose: true });
+
+    expect(stderrSpy).toHaveBeenCalledWith('[classify] tool: Bash (42ms, call-1)\n');
+  });
+
   it('should call unsubscribe even when executeWorkflow throws', async () => {
     setupWorkflowMocks();
 

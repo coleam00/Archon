@@ -1150,6 +1150,7 @@ async function* streamClaudeMessages(
         toolName: tr.toolName,
         toolOutput: tr.toolOutput,
         ...(tr.toolCallId !== undefined ? { toolCallId: tr.toolCallId } : {}),
+        toolOutcome: tr.toolOutcome,
       };
     }
   }

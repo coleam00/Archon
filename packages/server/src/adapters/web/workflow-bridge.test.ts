@@ -56,6 +56,21 @@ describe('mapWorkflowEvent — tool activity correlation', () => {
       exitCode: 1,
     });
   });
+
+  test('omits optional completion metadata for legacy events', () => {
+    const completed: WorkflowEmitterEvent = {
+      type: 'tool_completed',
+      runId: 'run-1',
+      toolName: 'Bash',
+      stepName: 'implement',
+      durationMs: 42,
+      toolCallId: 'call-1',
+    };
+
+    const payload = JSON.parse(mapWorkflowEvent(completed) ?? '{}') as Record<string, unknown>;
+    expect(payload).not.toHaveProperty('toolOutcome');
+    expect(payload).not.toHaveProperty('exitCode');
+  });
 });
 
 describe('mapWorkflowEvent — task_activity (Phase 2 of #975)', () => {

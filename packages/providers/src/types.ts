@@ -234,7 +234,7 @@ export type MessageChunk =
       toolOutput: string;
       /** Matching ID for the originating `tool` chunk. See `tool` variant above. */
       toolCallId?: string;
-      /** Provider-reported completion status; never inferred from formatted output. */
+      /** Known statuses are provider-reported; `unknown` marks a synthetic closure with no provider result. Never inferred from formatted output. */
       toolOutcome?: 'success' | 'error' | 'interrupted' | 'unknown';
       /** Provider-reported process exit code, when the tool exposes one. */
       exitCode?: number;

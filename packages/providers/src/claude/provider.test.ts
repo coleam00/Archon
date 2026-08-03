@@ -1929,6 +1929,29 @@ describe('sendQuery decomposition behaviors', () => {
     ]);
   });
 
+  test('terminal tool result queue drain preserves hook outcome', async () => {
+    mockQuery.mockImplementation(async function* (args: {
+      options: {
+        hooks?: Record<string, Array<{ hooks: Array<(input: unknown) => Promise<unknown>> }>>;
+      };
+    }) {
+      yield { type: 'assistant', message: { content: [{ type: 'text', text: 'done' }] } };
+      const successHook = args.options.hooks?.PostToolUse?.[0]?.hooks?.[0];
+      await successHook?.({ tool_name: 'Read', tool_use_id: 'late-id', tool_response: 'ok' });
+    });
+
+    const chunks = [];
+    for await (const chunk of client.sendQuery('test', '/workspace')) chunks.push(chunk);
+
+    expect(chunks).toContainEqual({
+      type: 'tool_result',
+      toolName: 'Read',
+      toolOutput: 'ok',
+      toolCallId: 'late-id',
+      toolOutcome: 'success',
+    });
+  });
+
   test('PostToolUse hook handles circular reference without crashing', async () => {
     mockQuery.mockImplementation(async function* (args: {
       options: {

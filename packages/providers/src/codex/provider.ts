@@ -558,7 +558,7 @@ async function* streamCodexEvents(
               toolName: cmd,
               toolOutput: ((item.aggregated_output as string) ?? '') + exitSuffix,
               toolCallId: itemId,
-              toolOutcome: exitCode == null || exitCode === 0 ? 'success' : 'error',
+              toolOutcome: exitCode === 0 ? 'success' : exitCode == null ? 'unknown' : 'error',
               ...(exitCode != null ? { exitCode } : {}),
             };
           } else {
@@ -580,6 +580,7 @@ async function* streamCodexEvents(
               toolName: searchToolName,
               toolOutput: '',
               toolCallId: itemId,
+              toolOutcome: 'unknown',
             };
           } else {
             getLog().debug({ itemId: item.id }, 'web_search_missing_query');

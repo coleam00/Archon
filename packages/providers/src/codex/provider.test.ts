@@ -287,6 +287,37 @@ describe('CodexProvider', () => {
       });
     });
 
+    test('marks command execution with a missing exit code as unknown', async () => {
+      mockRunStreamed.mockResolvedValue({
+        events: (async function* () {
+          yield {
+            type: 'item.completed',
+            item: {
+              id: 'cmd-unknown',
+              type: 'command_execution',
+              command: 'npm test',
+              aggregated_output: 'partial output',
+              exit_code: null,
+            },
+          };
+          yield { type: 'turn.completed', usage: defaultUsage };
+        })(),
+      });
+
+      const chunks = [];
+      for await (const chunk of client.sendQuery('test prompt', '/workspace')) {
+        chunks.push(chunk);
+      }
+
+      expect(chunks[0]).toEqual({
+        type: 'tool_result',
+        toolName: 'npm test',
+        toolOutput: 'partial output',
+        toolCallId: 'cmd-unknown',
+        toolOutcome: 'unknown',
+      });
+    });
+
     test('yields thinking events from reasoning items', async () => {
       mockRunStreamed.mockResolvedValue({
         events: (async function* () {
@@ -336,6 +367,7 @@ describe('CodexProvider', () => {
         toolName: '\u{1F50D} Searching: codex sdk',
         toolOutput: '',
         toolCallId: 'search-1',
+        toolOutcome: 'unknown',
       });
     });
 
@@ -1372,7 +1404,7 @@ describe('CodexProvider', () => {
         toolName: 'npm test',
         toolOutput: '',
         toolCallId: 'item-1',
-        toolOutcome: 'success',
+        toolOutcome: 'unknown',
       });
     });
 
