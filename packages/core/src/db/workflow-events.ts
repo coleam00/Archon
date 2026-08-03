@@ -116,14 +116,14 @@ export async function createWorkflowEvent(data: WorkflowEventInput): Promise<voi
 }
 
 /**
- * List all events for a workflow run, ordered by creation time.
+ * List all events for a workflow run, ordered by creation time and then ID.
  */
 export async function listWorkflowEvents(workflowRunId: string): Promise<WorkflowEventRow[]> {
   try {
     const result = await pool.query<WorkflowEventRow>(
       `SELECT * FROM remote_agent_workflow_events
        WHERE workflow_run_id = $1
-       ORDER BY created_at ASC`,
+       ORDER BY created_at ASC, id ASC`,
       [workflowRunId]
     );
     return [...result.rows].map(row => ({

@@ -32,7 +32,8 @@ mock.module('./connection', () => ({
   getDatabaseType: () => 'sqlite',
 }));
 
-const { listWorkflowEventsSince, createWorkflowEvent } = await import('./workflow-events');
+const { listWorkflowEvents, listWorkflowEventsSince, createWorkflowEvent } =
+  await import('./workflow-events');
 
 // workflow_events.workflow_run_id has an enforced FK (PRAGMA foreign_keys = ON) — seed parents.
 await db.query(
@@ -50,6 +51,22 @@ await db.query(
 const minuteAgo = (): Date => new Date(Date.now() - 60_000);
 
 describe('listWorkflowEventsSince — real SQLite (catches the C1 datetime mismatch)', () => {
+  test('orders events with identical timestamps by ID', async () => {
+    const createdAt = '2025-01-01 00:00:00';
+    await db.query(
+      `INSERT INTO remote_agent_workflow_events (id, workflow_run_id, event_type, data, created_at)
+       VALUES
+         ('tied-event-b', 'run-1', 'node_started', '{}', $1),
+         ('tied-event-a', 'run-1', 'node_started', '{}', $1)`,
+      [createdAt]
+    );
+
+    const rows = await listWorkflowEvents('run-1');
+    const tiedRows = rows.filter(row => row.created_at === createdAt);
+
+    expect(tiedRows.map(row => row.id)).toEqual(['tied-event-a', 'tied-event-b']);
+  });
+
   test('returns an event stored via datetime() when queried with an ISO Date cursor', async () => {
     await createWorkflowEvent({
       workflow_run_id: 'run-1',
