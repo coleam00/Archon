@@ -7,7 +7,22 @@
 import { describe, it, expect } from 'bun:test';
 import { parseArgs } from 'util';
 import * as git from '@archon/git';
+import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+describe('CLI help output', () => {
+  it('lists the workflow resume command', () => {
+    const result = spawnSync(process.execPath, [join(import.meta.dir, 'cli.ts'), '--help'], {
+      encoding: 'utf8',
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(
+      'workflow resume <run-id>   Resume a failed or paused run from completed nodes'
+    );
+  });
+});
 
 // Test the argument parsing logic used in cli.ts
 describe('CLI argument parsing', () => {

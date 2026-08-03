@@ -45,9 +45,9 @@ archon workflow run archon-assist "Investigate the flaky test" --detach
 - `--resume` + `--branch`
 - `--branch`/`--from` on a folder project
 
-**Default behavior** (no flags): Auto-creates a worktree with branch name `{workflow-name}-{timestamp}`.
+**Default behavior** (no flags): Starts a fresh workflow run and auto-creates a worktree with branch name `{workflow-name}-{timestamp}`.
 
-**Auto-resume without `--resume`**: If a prior invocation of the same workflow at the same cwd failed, the next invocation automatically skips completed nodes. `--resume` is only needed when you want to force resume a specific failed run or to reuse the worktree from that run.
+**Explicit resume**: `archon workflow run <name> --resume` resumes the most recent failed or paused run for that workflow at the invocation cwd. To target a known run and reuse its recorded working path/worktree, use `archon workflow resume <run-id>`. A bare `archon workflow run <name>` never resumes a prior run.
 
 ### `archon workflow status`
 
@@ -126,7 +126,7 @@ archon workflow abandon abc123 --json   # { "ok": true, "runId": "abc123", "acti
 
 ### `archon workflow resume <run-id> [message] [--json]`
 
-Explicitly re-run a failed run. Most workflows auto-resume without this — use it when you want to force a specific run ID. (`--json` validates that the run is resumable and returns `executed: false` WITHOUT running — see the note under `approve`; to actually execute, use the blocking form as a background task.)
+Explicitly re-run a specific failed or paused run, reusing its recorded working path/worktree and skipping completed nodes. This differs from `workflow run <name> --resume`, which selects the most recent resumable run by workflow name and invocation cwd. (`--json` validates that the run is resumable and returns `executed: false` WITHOUT running — see the note under `approve`; to actually execute, use the blocking form as a background task.)
 
 ```bash
 archon workflow resume abc123

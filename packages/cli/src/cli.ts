@@ -121,6 +121,7 @@ Commands:
   workflow status            Show status of running/paused workflows
   workflow runs              List recent runs (all statuses) for this project
   workflow get <run-id>      Show detail for a single run (any status)
+  workflow resume <run-id>   Resume a failed or paused run from completed nodes
   workflow search [query]    Search the workflow marketplace
   workflow install <slug>    Install a workflow from the marketplace
   isolation list             List all active worktrees/environments
@@ -186,6 +187,7 @@ Examples:
   archon workflow run archon-assist --detach "Investigate the flaky test"
   archon workflow runs --json
   archon workflow get <run-id> --json
+  archon workflow resume <run-id>
   archon continue fix/issue-42 --workflow archon-smart-pr-review "Review the changes"
   archon skill install
   archon skill install /path/to/project

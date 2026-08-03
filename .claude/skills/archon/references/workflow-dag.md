@@ -421,12 +421,15 @@ nodes:
 
 ## Resume on Failure
 
-When a workflow fails, already-completed nodes are skipped on the next run:
+When a workflow fails, resume it explicitly to skip already-completed nodes:
 
 ```bash
 archon workflow run my-workflow --resume
+archon workflow resume <run-id>
 ```
 
+- `workflow run <name> --resume` selects the most recent resumable run for that workflow at the invocation cwd; `workflow resume <run-id>` targets a specific run and reuses its recorded working path/worktree
+- A bare `workflow run <name>` starts a fresh run
 - Nodes with `always_run: true` re-execute on resume anyway (use for fresh-state fetches)
 - **AI session context is NOT restored** — a resumed node that relied on in-session memory from a prior node starts fresh. Artifact-based handoff survives; in-context memory does not
 - Prior nodes' outputs (including structured-output field access) remain available to downstream nodes
@@ -703,8 +706,8 @@ Standard DAG fields (`id`, `depends_on`, `when`, `trigger_rule`, `idle_timeout`)
 
 ### When to use `cancel` vs failing a `bash:` check
 
-- **Use `cancel:`** when the precondition failure is **expected** (e.g., wrong branch, required file missing, feature flag disabled). The run shows as `cancelled`, which doesn't trigger the DAG auto-resume path.
-- **Use a `bash:` node that exits non-zero** when the check itself fails (e.g., network error, tool missing). The run shows as `failed`, which auto-resumes on the next invocation.
+- **Use `cancel:`** when the precondition failure is **expected** (e.g., wrong branch, required file missing, feature flag disabled). The run shows as `cancelled`, which isn't eligible for DAG resume.
+- **Use a `bash:` node that exits non-zero** when the check itself fails (e.g., network error, tool missing). The run shows as `failed` and remains available for explicit resume.
 
 ### Typical Patterns
 

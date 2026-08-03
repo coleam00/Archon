@@ -95,14 +95,15 @@ Three possibilities:
 
 ### Workflow fails mid-way; how do I resume?
 
-Auto-resume is default — just re-invoke the same workflow at the same cwd:
+Find the failed run, then resume it explicitly:
 
 ```bash
-archon workflow run my-workflow "original message"
-# → "Resuming workflow — skipping N already-completed node(s)"
+archon workflow runs
+archon workflow get <run-id>
+archon workflow resume <run-id>
 ```
 
-Use `--resume` only when you want to force-reuse the same worktree from a specific failed run. Use `archon workflow resume <run-id>` to force a specific run ID.
+`archon workflow resume <run-id>` targets that exact run and reuses its recorded working path/worktree. As a convenience, `archon workflow run my-workflow --resume` resumes the most recent resumable run for that workflow at the invocation cwd. A bare `archon workflow run my-workflow` starts a fresh run.
 
 **Caveat:** AI session context from prior nodes is NOT restored on resume. If a `context: shared` node depended on in-session memory, re-running it will have fresh context. Artifact-based handoff survives; in-context memory does not.
 
