@@ -1309,6 +1309,11 @@ describe('executeDagWorkflow -- tool restrictions', () => {
     const nodeConfig = optionsArg.nodeConfig as Record<string, unknown>;
     expect(assistantConfig.modelReasoningEffort).toBe('medium');
     expect(nodeConfig.effort).toBeUndefined();
+
+    const createEventCalls = (mockDeps.store.createWorkflowEvent as ReturnType<typeof mock>).mock
+      .calls as Array<[{ event_type: string; data?: Record<string, unknown> }]>;
+    const nodeStartedCall = createEventCalls.find(([arg]) => arg.event_type === 'node_started');
+    expect(nodeStartedCall?.[0].data?.effort).toBe('medium');
   });
 
   it('applies inherited workflow tier effort to nodes without model overrides', async () => {
@@ -1407,6 +1412,7 @@ describe('executeDagWorkflow -- tool restrictions', () => {
     expect(nodeStartedCall).toBeDefined();
     expect(nodeStartedCall?.[0].data?.tier).toBe('large');
     expect(nodeStartedCall?.[0].data?.model).toBe('opus');
+    expect(nodeStartedCall?.[0].data?.effort).toBe('max');
   });
 
   it('surfaces the workflow-level tier on nodes that inherit the workflow model', async () => {
@@ -5648,7 +5654,7 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       const platform = createMockPlatform();
       const workflowRun = makeWorkflowRun('loop-model-run');
       const aiProfile = buildAiProfile('claude', {
-        repoTiers: { large: { provider: 'claude', model: 'opus' } },
+        repoTiers: { large: { provider: 'claude', model: 'opus', effort: 'max' } },
       });
 
       await executeDagWorkflow(
@@ -5695,6 +5701,7 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       expect(startedEvent?.[0].data?.provider).toBe('claude');
       expect(startedEvent?.[0].data?.model).toBe('opus');
       expect(startedEvent?.[0].data?.tier).toBe('large');
+      expect(startedEvent?.[0].data?.effort).toBe('max');
 
       const completedEvent = eventCalls.find(
         ([arg]) => arg.event_type === 'node_completed' && arg.step_name === 'my-loop'

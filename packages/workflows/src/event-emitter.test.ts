@@ -661,11 +661,11 @@ describe('WorkflowEventEmitter', () => {
   });
 
   // -------------------------------------------------------------------------
-  // NodeStartedEvent optional model fields (provider/model/tier)
+  // NodeStartedEvent optional model fields (provider/model/tier/effort)
   // -------------------------------------------------------------------------
 
   describe('NodeStartedEvent — optional model fields', () => {
-    it('passes through an event with no provider/model/tier (bash/script-like)', () => {
+    it('passes through an event with no provider/model/tier/effort (bash/script-like)', () => {
       const emitter = getWorkflowEventEmitter();
       const received: WorkflowEmitterEvent[] = [];
       emitter.subscribe(e => received.push(e));
@@ -677,6 +677,7 @@ describe('WorkflowEventEmitter', () => {
       expect(evt.provider).toBeUndefined();
       expect(evt.model).toBeUndefined();
       expect(evt.tier).toBeUndefined();
+      expect(evt.effort).toBeUndefined();
     });
 
     it('passes through provider/model/tier for tier-resolved AI nodes', () => {
@@ -692,12 +693,14 @@ describe('WorkflowEventEmitter', () => {
         provider: 'claude',
         model: 'opus',
         tier: 'large',
+        effort: 'max',
       });
 
       const evt = received[0] as Extract<WorkflowEmitterEvent, { type: 'node_started' }>;
       expect(evt.provider).toBe('claude');
       expect(evt.model).toBe('opus');
       expect(evt.tier).toBe('large');
+      expect(evt.effort).toBe('max');
     });
 
     it('passes through provider/model without tier for literal-model AI nodes', () => {

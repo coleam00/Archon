@@ -938,6 +938,7 @@ async function resolveNodeProviderAndModel(
   model: string | undefined;
   options: SendQueryOptions | undefined;
   tier?: TierName;
+  effort?: string;
 }> {
   const configuredProvider: string = node.provider ?? workflowProvider;
   let provider: string = configuredProvider;
@@ -1128,6 +1129,9 @@ async function resolveNodeProviderAndModel(
     nodeConfig,
     assistantConfig
   );
+  const assistantEffort = assistantConfig.modelReasoningEffort;
+  const resolvedEffort: string | undefined =
+    nodeConfig.effort ?? (typeof assistantEffort === 'string' ? assistantEffort : undefined);
 
   const options: SendQueryOptions = {
     ...baseOptions,
@@ -1146,7 +1150,7 @@ async function resolveNodeProviderAndModel(
         ? workflowLevelOptions.workflowTier
         : undefined;
 
-  return { provider, model, options, tier };
+  return { provider, model, options, tier, effort: resolvedEffort };
 }
 
 /** Evaluate trigger rule for a node given its upstream states */
@@ -1257,6 +1261,7 @@ async function executeNodeInternal(
   issueContext?: string,
   resolvedModel?: string,
   resolvedTier?: TierName,
+  resolvedEffort?: string,
   stepNamePrefix = '',
   iteration?: number
 ): Promise<NodeExecutionResult> {
@@ -1285,6 +1290,7 @@ async function executeNodeInternal(
         provider,
         model: resolvedModel,
         tier: resolvedTier,
+        effort: resolvedEffort,
         ...iterationData,
       },
     })
@@ -1304,6 +1310,7 @@ async function executeNodeInternal(
     provider,
     model: resolvedModel,
     tier: resolvedTier,
+    effort: resolvedEffort,
   });
 
   // Load prompt
@@ -3941,7 +3948,8 @@ async function executeLoopNode(
   stepNamePrefix = '',
   execContext: ExecutionContext = { kind: 'host' },
   resolvedModel?: string,
-  resolvedTier?: TierName
+  resolvedTier?: TierName,
+  resolvedEffort?: string
 ): Promise<NodeExecutionResult> {
   const loop = node.loop;
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -3977,6 +3985,7 @@ async function executeLoopNode(
         provider: workflowProvider,
         model: resolvedModel,
         tier: resolvedTier,
+        effort: resolvedEffort,
       },
     })
     .catch((err: Error) => {
@@ -3994,6 +4003,7 @@ async function executeLoopNode(
     provider: workflowProvider,
     model: resolvedModel,
     tier: resolvedTier,
+    effort: resolvedEffort,
   });
 
   /**
@@ -5154,6 +5164,7 @@ async function executeApprovalNode(
       model: resolvedNodeModel,
       options: nodeOptions,
       tier: resolvedTier,
+      effort: resolvedEffort,
     } = await resolveNodeProviderAndModel(
       syntheticNode,
       workflowProvider,
@@ -5188,6 +5199,7 @@ async function executeApprovalNode(
       issueContext,
       resolvedNodeModel,
       resolvedTier,
+      resolvedEffort,
       stepNamePrefix,
       iteration
     );
@@ -5923,6 +5935,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               options: loopOptions,
               model: resolvedLoopModel,
               tier: resolvedLoopTier,
+              effort: resolvedLoopEffort,
             } = await resolveNodeProviderAndModel(
               node,
               workflowProvider,
@@ -5958,7 +5971,8 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               stepNamePrefix,
               execContext,
               resolvedLoopModel,
-              resolvedLoopTier
+              resolvedLoopTier,
+              resolvedLoopEffort
             );
             // Loop nodes run every iteration on the same resolved provider, so the
             // result session (if any) is attributable to loopProvider — tag it so a
@@ -6125,6 +6139,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
             model: resolvedNodeModel,
             options: nodeOptions,
             tier: resolvedTier,
+            effort: resolvedEffort,
           } = await resolveNodeProviderAndModel(
             node,
             workflowProvider,
@@ -6270,6 +6285,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                 issueContext,
                 resolvedNodeModel,
                 resolvedTier,
+                resolvedEffort,
                 stepNamePrefix,
                 iteration
               ),
