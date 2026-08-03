@@ -37,22 +37,28 @@ function makeDbWithoutEventOrder(): string {
     import.meta.dir,
     `.test-sqlite-legacy-${Date.now()}-${Math.random().toString(36).slice(2)}.db`
   );
-  new SqliteAdapter(path); // writes the current schema
+  const seed = new SqliteAdapter(path); // writes the current schema
+  void seed.close();
   const raw = new Database(path);
-  raw.run('DROP TRIGGER IF EXISTS remote_agent_workflow_events_assign_order');
-  raw.run('DROP INDEX IF EXISTS idx_workflow_events_run_order');
-  raw.run('ALTER TABLE remote_agent_workflow_events DROP COLUMN event_order');
-  raw.close();
+  try {
+    raw.run('DROP TRIGGER IF EXISTS remote_agent_workflow_events_assign_order');
+    raw.run('DROP INDEX IF EXISTS idx_workflow_events_run_order');
+    raw.run('ALTER TABLE remote_agent_workflow_events DROP COLUMN event_order');
+  } finally {
+    raw.close();
+  }
   return path;
 }
 
 function columnsOf(path: string, table: string): string[] {
   const raw = new Database(path);
-  const cols = (raw.prepare(`PRAGMA table_info('${table}')`).all() as { name: string }[]).map(
-    c => c.name
-  );
-  raw.close();
-  return cols;
+  try {
+    return (raw.prepare(`PRAGMA table_info('${table}')`).all() as { name: string }[]).map(
+      c => c.name
+    );
+  } finally {
+    raw.close();
+  }
 }
 
 describe('SqliteAdapter upgrade path', () => {
@@ -61,8 +67,11 @@ describe('SqliteAdapter upgrade path', () => {
     if (legacyPath) {
       try {
         unlinkSync(legacyPath);
-      } catch {
-        /* already gone */
+      } catch (e: unknown) {
+        // Only a genuinely-absent file is acceptable. Anything else — most
+        // plausibly an unreleased handle holding the file open on Windows —
+        // must surface rather than leave a leaked fixture behind.
+        if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
       }
       legacyPath = '';
     }
@@ -79,7 +88,8 @@ describe('SqliteAdapter upgrade path', () => {
     expect(columnsOf(legacyPath, 'remote_agent_workflow_events')).not.toContain('event_order');
 
     // Must not throw, and must converge.
-    new SqliteAdapter(legacyPath);
+    const upgraded = new SqliteAdapter(legacyPath);
+    void upgraded.close();
 
     expect(columnsOf(legacyPath, 'remote_agent_workflow_events')).toContain('event_order');
 
