@@ -2098,13 +2098,20 @@ describe('workflowRunCommand', () => {
 
 describe('workflowStatusCommand', () => {
   let consoleSpy: ReturnType<typeof spyOn>;
+  let stdoutSpy: ReturnType<typeof spyOn>;
 
   beforeEach(() => {
     consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    stdoutSpy = spyOn(process.stdout, 'write').mockImplementation((...args: unknown[]) => {
+      const callback = args.find(arg => typeof arg === 'function');
+      if (typeof callback === 'function') callback();
+      return true;
+    });
   });
 
   afterEach(() => {
     consoleSpy.mockRestore();
+    stdoutSpy.mockRestore();
   });
 
   it('should print message when no active runs', async () => {
@@ -2143,7 +2150,37 @@ describe('workflowStatusCommand', () => {
 
     await workflowStatusCommand(true);
 
-    expect(consoleSpy).toHaveBeenCalledWith(JSON.stringify({ runs: [] }, null, 2));
+    expect(stdoutSpy).toHaveBeenCalledWith(
+      `${JSON.stringify({ runs: [] }, null, 2)}\n`,
+      expect.any(Function)
+    );
+  });
+
+  it('waits for the stdout write callback before completing JSON output', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.listWorkflowRuns as ReturnType<typeof mock>).mockResolvedValueOnce([]);
+    let completeWrite: (() => void) | undefined;
+    let settled = false;
+
+    stdoutSpy.mockImplementation((...args: unknown[]) => {
+      const callback = args.find(arg => typeof arg === 'function');
+      if (typeof callback === 'function') completeWrite = callback;
+      return false;
+    });
+
+    const command = workflowStatusCommand(true).then(() => {
+      settled = true;
+    });
+    for (let attempt = 0; attempt < 10 && !completeWrite; attempt += 1) {
+      await Promise.resolve();
+    }
+
+    expect(settled).toBe(false);
+    expect(completeWrite).toBeDefined();
+
+    completeWrite?.();
+    await command;
+    expect(settled).toBe(true);
   });
 
   it('should show node summaries in verbose mode', async () => {
@@ -2284,7 +2321,7 @@ describe('workflowStatusCommand', () => {
 
     await workflowStatusCommand(true, true);
 
-    const jsonOutput = consoleSpy.mock.calls[0]?.[0] as string;
+    const jsonOutput = stdoutSpy.mock.calls[0]?.[0] as string;
     const parsed = JSON.parse(jsonOutput) as { runs: Array<{ events: unknown[] }> };
     expect(parsed.runs[0].events).toHaveLength(1);
   });
@@ -2302,13 +2339,20 @@ const EMPTY_COUNTS = {
 
 describe('workflowGetCommand', () => {
   let consoleSpy: ReturnType<typeof spyOn>;
+  let stdoutSpy: ReturnType<typeof spyOn>;
 
   beforeEach(() => {
     consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    stdoutSpy = spyOn(process.stdout, 'write').mockImplementation((...args: unknown[]) => {
+      const callback = args.find(arg => typeof arg === 'function');
+      if (typeof callback === 'function') callback();
+      return true;
+    });
   });
 
   afterEach(() => {
     consoleSpy.mockRestore();
+    stdoutSpy.mockRestore();
   });
 
   it('prints not-found (human) and exits non-zero for a missing run', async () => {
@@ -2477,7 +2521,7 @@ describe('workflowGetCommand', () => {
 
     await workflowGetCommand('run-v', true, true);
 
-    const parsed = JSON.parse(consoleSpy.mock.calls[0][0] as string) as { events: unknown[] };
+    const parsed = JSON.parse(stdoutSpy.mock.calls[0][0] as string) as { events: unknown[] };
     expect(Array.isArray(parsed.events)).toBe(true);
     expect(parsed.events).toHaveLength(1);
   });

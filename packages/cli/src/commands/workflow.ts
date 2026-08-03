@@ -82,6 +82,19 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
+/** Wait for large JSON payloads to reach stdout instead of relying on Bun's console buffer. */
+function writeJsonToStdout(value: unknown): Promise<void> {
+  return new Promise((resolve, reject) => {
+    process.stdout.write(`${JSON.stringify(value, null, 2)}\n`, error => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
 /**
  * Options for workflow run command
  *
@@ -1986,7 +1999,7 @@ export async function workflowStatusCommand(json?: boolean, verbose?: boolean): 
       );
       runsOutput = runs.map((run, i) => ({ ...run, events: eventsPerRun[i] }));
     }
-    console.log(JSON.stringify({ runs: runsOutput }, null, 2));
+    await writeJsonToStdout({ runs: runsOutput });
     return;
   }
 
@@ -2071,7 +2084,11 @@ export async function workflowGetCommand(
 
   if (json) {
     const output = verbose ? { ...run, events: events ?? [] } : run;
-    console.log(JSON.stringify(output, null, 2));
+    if (verbose) {
+      await writeJsonToStdout(output);
+    } else {
+      console.log(JSON.stringify(output, null, 2));
+    }
     return 0;
   }
 

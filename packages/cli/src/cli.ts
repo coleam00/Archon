@@ -1026,13 +1026,14 @@ async function main(): Promise<number> {
   }
 }
 
-// Run main and exit with the returned code
+// Set the result, then allow Bun to complete pending stdout work naturally.
+// Calling process.exit() can terminate an in-flight pipe write.
 main()
   .then(exitCode => {
-    process.exit(exitCode);
+    process.exitCode = exitCode;
   })
   .catch((error: unknown) => {
     const err = error as Error;
     console.error('Fatal error:', err.message);
-    process.exit(1);
+    process.exitCode = 1;
   });
