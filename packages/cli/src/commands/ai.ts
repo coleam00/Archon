@@ -27,6 +27,7 @@
  * identity so a connected key attaches to the same user across invocations.
  */
 import { password, text, isCancel, cancel } from '@clack/prompts';
+import { writeJsonLine } from '../utils/stdout';
 import { createLogger } from '@archon/paths';
 import {
   isPerUserProviderKeysEnabled,
@@ -481,17 +482,11 @@ export async function aiTierListCommand(json?: boolean): Promise<number> {
     });
 
     if (json) {
-      console.log(
-        JSON.stringify(
-          {
-            defaultAssistant: config.assistant,
-            userDefaultAssistant: userPrefs.defaultProvider ?? null,
-            tiers: rows,
-          },
-          null,
-          2
-        )
-      );
+      await writeJsonLine({
+        defaultAssistant: config.assistant,
+        userDefaultAssistant: userPrefs.defaultProvider ?? null,
+        tiers: rows,
+      });
       return 0;
     }
 
@@ -622,7 +617,7 @@ export async function aiAliasListCommand(json?: boolean): Promise<number> {
     }));
 
     if (json) {
-      console.log(JSON.stringify({ aliases: rows }, null, 2));
+      await writeJsonLine({ aliases: rows });
       return 0;
     }
 

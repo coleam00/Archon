@@ -1026,14 +1026,20 @@ async function main(): Promise<number> {
   }
 }
 
-// Set the result, then allow Bun to complete pending stdout work naturally.
-// Calling process.exit() can terminate an in-flight pipe write.
+// Exit explicitly so a lingering handle (DB pool, spawned child, timer) can
+// never leave the CLI hanging after its work is done.
+//
+// This is safe for piped output because every machine-readable payload is
+// emitted through `writeStdout()`/`writeJsonLine()` (src/utils/stdout.ts), which
+// resolves only once the bytes have reached the OS. The #2384 truncation
+// happened inside `console.log` at call time — not at exit — so deferring the
+// exit would not have recovered it.
 main()
   .then(exitCode => {
-    process.exitCode = exitCode;
+    process.exit(exitCode);
   })
   .catch((error: unknown) => {
     const err = error as Error;
     console.error('Fatal error:', err.message);
-    process.exitCode = 1;
+    process.exit(1);
   });

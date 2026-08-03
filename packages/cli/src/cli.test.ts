@@ -250,17 +250,6 @@ describe('CLI argument parsing', () => {
   });
 });
 
-describe('CLI process lifecycle', () => {
-  it('does not force-exit after emitting output so piped JSON can flush', async () => {
-    const source = await Bun.file(new URL('./cli.ts', import.meta.url)).text();
-
-    expect(source).toContain('process.exitCode = exitCode;');
-    expect(source).toContain('process.exitCode = 1;');
-    expect(source).not.toContain('process.exit(exitCode);');
-    expect(source).not.toContain('process.exit(1);');
-  });
-});
-
 describe('Conversation ID generation', () => {
   // Test the generateConversationId pattern
   const generateConversationId = (): string => {

@@ -73,6 +73,7 @@ import type { WorkflowEventRow } from '@archon/core/db/workflow-events';
 import * as userDb from '@archon/core/db/users';
 import * as git from '@archon/git';
 import { CLIAdapter } from '../adapters/cli-adapter';
+import { writeJsonLine, writeStdout } from '../utils/stdout';
 import { resolveCliUserId } from './auth';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -80,19 +81,6 @@ let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('cli.workflow');
   return cachedLog;
-}
-
-/** Wait for large JSON payloads to reach stdout instead of relying on Bun's console buffer. */
-function writeJsonToStdout(value: unknown): Promise<void> {
-  return new Promise((resolve, reject) => {
-    process.stdout.write(`${JSON.stringify(value, null, 2)}\n`, error => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve();
-    });
-  });
 }
 
 /**
@@ -714,7 +702,7 @@ export async function workflowListCommand(cwd: string, json?: boolean): Promise<
         errorType: e.errorType,
       })),
     };
-    console.log(JSON.stringify(output, null, 2));
+    await writeJsonLine(output);
     return;
   }
 
@@ -927,21 +915,15 @@ export async function workflowRunCommand(
     const logPath = spawnDetachedWorkflowRun(cwd, childConversationId, extraArgs);
 
     if (options.json) {
-      console.log(
-        JSON.stringify(
-          {
-            ok: true,
-            action: 'run',
-            detached: true,
-            workflow: workflow.name,
-            branch: pinnedBranch ?? options.branchName ?? null,
-            conversationId: childConversationId,
-            logPath,
-          },
-          null,
-          2
-        )
-      );
+      await writeJsonLine({
+        ok: true,
+        action: 'run',
+        detached: true,
+        workflow: workflow.name,
+        branch: pinnedBranch ?? options.branchName ?? null,
+        conversationId: childConversationId,
+        logPath,
+      });
     } else {
       console.log(`Started '${workflow.name}' in the background.`);
       console.log('Track it with: archon workflow runs');
@@ -1999,7 +1981,7 @@ export async function workflowStatusCommand(json?: boolean, verbose?: boolean): 
       );
       runsOutput = runs.map((run, i) => ({ ...run, events: eventsPerRun[i] }));
     }
-    await writeJsonToStdout({ runs: runsOutput });
+    await writeJsonLine({ runs: runsOutput });
     return;
   }
 
@@ -2055,7 +2037,7 @@ export async function workflowGetCommand(
     // In --json mode never throw — emit one parseable {ok:false} line (same
     // contract as the write commands) so a parsing agent always gets JSON.
     if (json) {
-      console.log(JSON.stringify({ ok: false, runId, error: err.message }, null, 2));
+      await writeJsonLine({ ok: false, runId, error: err.message });
       return 1;
     }
     throw new Error(`Failed to get workflow run: ${err.message}`);
@@ -2065,7 +2047,7 @@ export async function workflowGetCommand(
     // Not-found exits non-zero so `get <id> && ...` and CI checks see the
     // failure (the JSON envelope already carries ok:false for parsers).
     if (json) {
-      console.log(JSON.stringify({ ok: false, runId, error: 'not_found' }, null, 2));
+      await writeJsonLine({ ok: false, runId, error: 'not_found' });
     } else {
       console.log(`Workflow run not found: ${runId}`);
     }
@@ -2084,11 +2066,7 @@ export async function workflowGetCommand(
 
   if (json) {
     const output = verbose ? { ...run, events: events ?? [] } : run;
-    if (verbose) {
-      await writeJsonToStdout(output);
-    } else {
-      console.log(JSON.stringify(output, null, 2));
-    }
+    await writeJsonLine(output);
     return 0;
   }
 
@@ -2143,7 +2121,7 @@ export async function workflowRunsCommand(
       const msg = `Invalid --status '${opts.status}'. Valid: ${workflowRunStatusSchema.options.join(', ')}.`;
       // --json never throws — emit one parseable {ok:false} line (write-command contract).
       if (opts.json) {
-        console.log(JSON.stringify({ ok: false, error: msg }, null, 2));
+        await writeJsonLine({ ok: false, error: msg });
         return;
       }
       throw new Error(msg);
@@ -2178,7 +2156,7 @@ export async function workflowRunsCommand(
     const err = error as Error;
     getLog().error({ err, cwd }, 'cli.workflow_runs_failed');
     if (opts.json) {
-      console.log(JSON.stringify({ ok: false, error: err.message }, null, 2));
+      await writeJsonLine({ ok: false, error: err.message });
       return;
     }
     throw new Error(`Failed to list workflow runs: ${err.message}`);
@@ -2191,7 +2169,7 @@ export async function workflowRunsCommand(
   const scopeFallback = !opts.all && !codebase;
 
   if (opts.json) {
-    console.log(JSON.stringify({ ...result, scopeFallback }, null, 2));
+    await writeJsonLine({ ...result, scopeFallback });
     return;
   }
 
@@ -2222,10 +2200,8 @@ export async function workflowRunsCommand(
  * (approve/reject/abandon/resume). Centralizes the envelope so all four stay in
  * lockstep; never throws — in --json mode the JSON line IS the error surface.
  */
-function printJsonWriteError(runId: string, action: string, error: unknown): void {
-  console.log(
-    JSON.stringify({ ok: false, runId, action, error: (error as Error).message }, null, 2)
-  );
+function printJsonWriteError(runId: string, action: string, error: unknown): Promise<void> {
+  return writeJsonLine({ ok: false, runId, action, error: (error as Error).message });
 }
 
 /**
@@ -2317,23 +2293,17 @@ export async function workflowResumeCommand(
     try {
       const resolvedId = await resolveRunIdArg(runId, cwd);
       const run = await resumeWorkflowOp(resolvedId);
-      console.log(
-        JSON.stringify(
-          {
-            ok: true,
-            runId: resolvedId,
-            action: 'resume',
-            executed: false,
-            status: run.status,
-            workflowName: run.workflow_name,
-            workingPath: run.working_path,
-          },
-          null,
-          2
-        )
-      );
+      await writeJsonLine({
+        ok: true,
+        runId: resolvedId,
+        action: 'resume',
+        executed: false,
+        status: run.status,
+        workflowName: run.workflow_name,
+        workingPath: run.working_path,
+      });
     } catch (error) {
-      printJsonWriteError(runId, 'resume', error);
+      await printJsonWriteError(runId, 'resume', error);
     }
     return;
   }
@@ -2397,23 +2367,17 @@ export async function workflowAbandonCommand(
     try {
       const resolvedId = await resolveRunIdArg(runId, cwd);
       const { run, cascadeFailures, blockedParentRunId } = await abandonWorkflow(resolvedId);
-      console.log(
-        JSON.stringify(
-          {
-            ok: true,
-            runId: resolvedId,
-            action: 'abandon',
-            status: 'cancelled',
-            workflowName: run.workflow_name,
-            ...(cascadeFailures > 0 ? { cascadeFailures } : {}),
-            ...(blockedParentRunId ? { blockedParentRunId } : {}),
-          },
-          null,
-          2
-        )
-      );
+      await writeJsonLine({
+        ok: true,
+        runId: resolvedId,
+        action: 'abandon',
+        status: 'cancelled',
+        workflowName: run.workflow_name,
+        ...(cascadeFailures > 0 ? { cascadeFailures } : {}),
+        ...(blockedParentRunId ? { blockedParentRunId } : {}),
+      });
     } catch (error) {
-      printJsonWriteError(runId, 'abandon', error);
+      await printJsonWriteError(runId, 'abandon', error);
     }
     return;
   }
@@ -2463,22 +2427,16 @@ export async function workflowApproveCommand(
     try {
       const resolvedId = await resolveRunIdArg(runId, cwd);
       const result = await approveWorkflow(resolvedId, comment);
-      console.log(
-        JSON.stringify(
-          {
-            ok: true,
-            runId: resolvedId,
-            action: 'approve',
-            type: result.type,
-            workflowName: result.workflowName,
-            resumable: true,
-          },
-          null,
-          2
-        )
-      );
+      await writeJsonLine({
+        ok: true,
+        runId: resolvedId,
+        action: 'approve',
+        type: result.type,
+        workflowName: result.workflowName,
+        resumable: true,
+      });
     } catch (error) {
-      printJsonWriteError(runId, 'approve', error);
+      await printJsonWriteError(runId, 'approve', error);
     }
     return;
   }
@@ -2565,23 +2523,17 @@ export async function workflowRejectCommand(
     try {
       const resolvedId = await resolveRunIdArg(runId, cwd);
       const result = await rejectWorkflow(resolvedId, reason);
-      console.log(
-        JSON.stringify(
-          {
-            ok: true,
-            runId: resolvedId,
-            action: 'reject',
-            cancelled: result.cancelled,
-            maxAttemptsReached: result.maxAttemptsReached,
-            workflowName: result.workflowName,
-            resumable: !result.cancelled,
-          },
-          null,
-          2
-        )
-      );
+      await writeJsonLine({
+        ok: true,
+        runId: resolvedId,
+        action: 'reject',
+        cancelled: result.cancelled,
+        maxAttemptsReached: result.maxAttemptsReached,
+        workflowName: result.workflowName,
+        resumable: !result.cancelled,
+      });
     } catch (error) {
-      printJsonWriteError(runId, 'reject', error);
+      await printJsonWriteError(runId, 'reject', error);
     }
     return;
   }
@@ -2684,13 +2636,13 @@ export async function workflowResetSessionsCommand(
       node_id: options.node,
     });
     if (options.json) {
-      console.log(
-        JSON.stringify({
+      await writeStdout(
+        `${JSON.stringify({
           workflow: workflowName,
           deleted,
           scope: options.scope ?? null,
           node: options.node ?? null,
-        })
+        })}\n`
       );
     } else if (deleted === 0) {
       console.log(`No persisted sessions matched for workflow '${workflowName}'.`);
@@ -2812,7 +2764,7 @@ export async function workflowSearchCommand(query?: string, json?: boolean): Pro
     : entries;
 
   if (json) {
-    console.log(JSON.stringify(results, null, 2));
+    await writeJsonLine(results);
     return;
   }
 

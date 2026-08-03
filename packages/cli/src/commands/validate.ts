@@ -5,6 +5,7 @@
  */
 
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
+import { writeStdout } from '../utils/stdout';
 import {
   validateWorkflowResources,
   validateCommand,
@@ -133,12 +134,12 @@ export async function validateWorkflowsCommand(
       const allNames = results.map(r => r.workflowName);
       const similar = findSimilar(name, allNames);
       if (json) {
-        console.log(
-          JSON.stringify({
+        await writeStdout(
+          `${JSON.stringify({
             error: `Workflow '${name}' not found`,
             suggestions: similar,
             available: allNames,
-          })
+          })}\n`
         );
       } else {
         console.error(`Workflow '${name}' not found.`);
@@ -166,8 +167,8 @@ export async function validateWorkflowsCommand(
   ).length;
 
   if (json) {
-    console.log(
-      JSON.stringify({
+    await writeStdout(
+      `${JSON.stringify({
         results: filteredResults,
         summary: {
           total: filteredResults.length,
@@ -175,7 +176,7 @@ export async function validateWorkflowsCommand(
           errors: totalErrors,
           warnings: totalWarnings,
         },
-      })
+      })}\n`
     );
   } else {
     console.log(`\nValidating workflows in ${cwd}\n`);
@@ -215,7 +216,7 @@ export async function validateCommandsCommand(
     const result = await validateCommand(name, cwd, config);
 
     if (jsonOutput) {
-      console.log(JSON.stringify(result));
+      await writeStdout(`${JSON.stringify(result)}\n`);
     } else {
       const statusLabel = result.valid ? 'ok' : 'ERRORS';
       console.log(`\n  ${result.commandName.padEnd(40, ' ')} ${statusLabel}`);
@@ -242,8 +243,8 @@ export async function validateCommandsCommand(
   const totalErrors = totalCommandErrors + totalScriptErrors;
 
   if (jsonOutput) {
-    console.log(
-      JSON.stringify({
+    await writeStdout(
+      `${JSON.stringify({
         results: commandResults,
         scripts: scriptResults,
         summary: {
@@ -251,7 +252,7 @@ export async function validateCommandsCommand(
           valid: commandResults.length + scriptResults.length - totalErrors,
           errors: totalErrors,
         },
-      })
+      })}\n`
     );
   } else {
     if (commandResults.length === 0 && scriptResults.length === 0) {
