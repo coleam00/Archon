@@ -43,8 +43,8 @@ configured by the user (the quick-installer defaults are
 `%USERPROFILE%\\.archon\\bin\\archon.exe` on Windows). Do not invoke the
 Bun-linked/source CLI from these processes.
 
-The source-install and `bun link` workflow below is for terminal development and
-requires Bun to be discoverable on `PATH`.
+The source-install and `bun link` workflow is for terminal development and
+requires Bun on `PATH`.
 
 ## From Source
 

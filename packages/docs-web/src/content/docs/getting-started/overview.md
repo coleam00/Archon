@@ -235,9 +235,9 @@ The AI router automatically picks the right workflow based on your message.
 cd packages/cli && bun link && cd ../..
 ```
 
-This registers the Bun-based source `archon` command globally so you can run it
-from an interactive terminal in any repository. It requires Bun to be on `PATH`;
-the `~/.bun/bin` setup below applies only to shell-launched use.
+This makes the Bun-based source `archon` command available in interactive
+terminals. It requires Bun on `PATH`, and the `~/.bun/bin` setup below applies
+only to shell-launched use.
 
 For a GUI app, service, or other non-shell caller, install the native release
 executable and configure its absolute path instead. See [Using Archon from a GUI
