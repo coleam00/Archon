@@ -55,11 +55,15 @@ async function makeDbWithoutEventOrder(): Promise<string> {
 
 function columnsOf(path: string, table: string): string[] {
   const raw = new Database(path);
+  // Finalize the statement before closing. On Windows an un-finalized prepared
+  // statement keeps the file handle open past close(), so the afterEach unlink
+  // fails with EBUSY — which is what this test hit on windows-latest while
+  // passing on POSIX.
+  const stmt = raw.prepare(`PRAGMA table_info('${table}')`);
   try {
-    return (raw.prepare(`PRAGMA table_info('${table}')`).all() as { name: string }[]).map(
-      c => c.name
-    );
+    return (stmt.all() as { name: string }[]).map(c => c.name);
   } finally {
+    stmt.finalize();
     raw.close();
   }
 }
@@ -97,14 +101,18 @@ describe('SqliteAdapter upgrade path', () => {
     expect(columnsOf(legacyPath, 'remote_agent_workflow_events')).toContain('event_order');
 
     const raw = new Database(legacyPath);
-    const objects = (
-      raw
-        .prepare('SELECT name FROM sqlite_master WHERE name IN (?, ?)')
-        .all('idx_workflow_events_run_order', 'remote_agent_workflow_events_assign_order') as {
-        name: string;
-      }[]
-    ).map(o => o.name);
-    raw.close();
+    const stmt = raw.prepare('SELECT name FROM sqlite_master WHERE name IN (?, ?)');
+    let objects: string[];
+    try {
+      objects = (
+        stmt.all('idx_workflow_events_run_order', 'remote_agent_workflow_events_assign_order') as {
+          name: string;
+        }[]
+      ).map(o => o.name);
+    } finally {
+      stmt.finalize();
+      raw.close();
+    }
 
     expect(objects).toContain('idx_workflow_events_run_order');
     expect(objects).toContain('remote_agent_workflow_events_assign_order');
