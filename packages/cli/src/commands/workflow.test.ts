@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { WorkflowEmitterEvent } from '@archon/workflows/event-emitter';
 import { makeTestWorkflow, makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
+import type { WorkflowEventRow } from '@archon/core/schemas/workflow-event';
 import {
   workflowListCommand,
   workflowRunCommand,
@@ -23,6 +24,7 @@ import {
   maybePrintTierNotice,
   resolveContainerBackendConfig,
   hasUnresolvedWriteback,
+  buildNodeSummaries,
 } from './workflow';
 
 const mockLogger = {
@@ -2436,6 +2438,94 @@ describe('workflowRunCommand', () => {
   });
 });
 
+const VERBOSE_EVENTS_FIXTURE: WorkflowEventRow[] = [
+  {
+    id: 'event-without-node',
+    workflow_run_id: 'run-verbose-json',
+    event_type: 'tool_completed',
+    step_name: null,
+    step_index: null,
+    data: {},
+    created_at: '2026-08-03T10:00:00.000Z',
+  },
+  {
+    id: 'zeta-started',
+    workflow_run_id: 'run-verbose-json',
+    event_type: 'node_started',
+    step_name: 'zeta',
+    step_index: 0,
+    data: {},
+    created_at: '2026-08-03T10:00:01.000Z',
+  },
+  {
+    id: 'alpha-started',
+    workflow_run_id: 'run-verbose-json',
+    event_type: 'node_started',
+    step_name: 'alpha',
+    step_index: 1,
+    data: {},
+    created_at: '2026-08-03T10:00:02.000Z',
+  },
+  {
+    id: 'middle-skipped',
+    workflow_run_id: 'run-verbose-json',
+    event_type: 'node_skipped_prior_success',
+    step_name: 'middle',
+    step_index: 2,
+    data: {},
+    created_at: '2026-08-03T10:00:03.000Z',
+  },
+  {
+    id: 'zeta-completed',
+    workflow_run_id: 'run-verbose-json',
+    event_type: 'node_completed',
+    step_name: 'zeta',
+    step_index: 0,
+    data: { node_output: 'x'.repeat(200) },
+    created_at: '2026-08-03T10:00:04.000Z',
+  },
+  {
+    id: 'alpha-failed',
+    workflow_run_id: 'run-verbose-json',
+    event_type: 'node_failed',
+    step_name: 'alpha',
+    step_index: 1,
+    data: {},
+    created_at: '2026-08-03T10:00:07.000Z',
+  },
+  {
+    id: 'beta-started',
+    workflow_run_id: 'run-verbose-json',
+    event_type: 'node_started',
+    step_name: 'beta',
+    step_index: 3,
+    data: {},
+    created_at: '2026-08-03T10:00:08.000Z',
+  },
+  {
+    id: 'orphan-completed',
+    workflow_run_id: 'run-verbose-json',
+    event_type: 'node_completed',
+    step_name: 'orphan',
+    step_index: 4,
+    data: { node_output: 'y'.repeat(201) },
+    created_at: '2026-08-03T10:00:09.000Z',
+  },
+  {
+    id: 'plain-skipped',
+    workflow_run_id: 'run-verbose-json',
+    event_type: 'node_skipped',
+    step_name: 'skip-plain',
+    step_index: 5,
+    data: {},
+    created_at: '2026-08-03T10:00:10.000Z',
+  },
+];
+
+const EXPECTED_VERBOSE_NODES = JSON.parse(
+  JSON.stringify(buildNodeSummaries(VERBOSE_EVENTS_FIXTURE))
+) as Array<Record<string, unknown>>;
+
 describe('workflowStatusCommand', () => {
   let consoleSpy: ReturnType<typeof spyOn>;
 
@@ -2596,37 +2686,113 @@ describe('workflowStatusCommand', () => {
     expect(calls.some(c => c.includes('Nodes:'))).toBe(false);
   });
 
-  it('should include events in JSON verbose output', async () => {
+  it('emits the shared ordered node summaries in verbose JSON by default', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     const workflowEventsDb = await import('@archon/core/db/workflow-events');
 
     (workflowDb.listWorkflowRuns as ReturnType<typeof mock>).mockResolvedValueOnce([
       {
-        id: 'run-json',
+        id: 'run-verbose-json',
         workflow_name: 'implement',
         working_path: '/path/to/worktree',
         status: 'running',
         started_at: new Date(),
       },
     ]);
-    const fakeEvent = {
-      id: 'ev1',
-      workflow_run_id: 'run-json',
-      event_type: 'node_started',
-      step_name: 'plan',
-      step_index: null,
-      data: {},
-      created_at: new Date().toISOString(),
-    };
-    (workflowEventsDb.listWorkflowEvents as ReturnType<typeof mock>).mockResolvedValueOnce([
-      fakeEvent,
-    ]);
+    (workflowEventsDb.listWorkflowEvents as ReturnType<typeof mock>).mockResolvedValueOnce(
+      VERBOSE_EVENTS_FIXTURE
+    );
 
     await workflowStatusCommand(true, true);
 
     const jsonOutput = consoleSpy.mock.calls[0]?.[0] as string;
-    const parsed = JSON.parse(jsonOutput) as { runs: Array<{ events: unknown[] }> };
-    expect(parsed.runs[0].events).toHaveLength(1);
+    const parsed = JSON.parse(jsonOutput) as {
+      runs: Array<{ nodes: Array<Record<string, unknown>>; events?: unknown[] }>;
+    };
+    expect(parsed.runs[0]?.nodes).toEqual(EXPECTED_VERBOSE_NODES);
+    expect(parsed.runs[0]?.events).toBeUndefined();
+    expect(parsed.runs[0]?.nodes.map(node => node.nodeId)).toEqual([
+      'zeta',
+      'alpha',
+      'middle',
+      'beta',
+      'orphan',
+      'skip-plain',
+    ]);
+
+    const [zeta, alpha, middle, beta, orphan] = parsed.runs[0]?.nodes ?? [];
+    expect(zeta).toMatchObject({
+      state: 'completed',
+      startedAt: '2026-08-03T10:00:01.000Z',
+      durationMs: 3_000,
+      outputPreview: 'x'.repeat(200),
+    });
+    expect(alpha).toMatchObject({
+      state: 'failed',
+      startedAt: '2026-08-03T10:00:02.000Z',
+      durationMs: 5_000,
+      error: 'Unknown error',
+    });
+    expect(middle?.startedAt).toBeUndefined();
+    expect(middle?.durationMs).toBeUndefined();
+    expect(beta).toMatchObject({
+      state: 'running',
+      startedAt: '2026-08-03T10:00:08.000Z',
+    });
+    expect(beta?.durationMs).toBeUndefined();
+    expect(orphan?.startedAt).toBeUndefined();
+    expect(orphan?.durationMs).toBeUndefined();
+    expect(orphan?.outputPreview).toBe(`${'y'.repeat(200)}...`);
+    expect(String(orphan?.outputPreview)).not.toContain('…');
+  });
+
+  it('emits raw events in verbose JSON when events=true', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const workflowEventsDb = await import('@archon/core/db/workflow-events');
+    (workflowDb.listWorkflowRuns as ReturnType<typeof mock>).mockResolvedValueOnce([
+      {
+        id: 'run-verbose-json',
+        workflow_name: 'implement',
+        working_path: '/path/to/worktree',
+        status: 'running',
+        started_at: new Date(),
+      },
+    ]);
+    (workflowEventsDb.listWorkflowEvents as ReturnType<typeof mock>).mockResolvedValueOnce(
+      VERBOSE_EVENTS_FIXTURE
+    );
+
+    await workflowStatusCommand(true, true, true);
+
+    const parsed = JSON.parse(consoleSpy.mock.calls[0]?.[0] as string) as {
+      runs: Array<{ events: WorkflowEventRow[]; nodes?: unknown[] }>;
+    };
+    expect(parsed.runs[0]?.events).toEqual(VERBOSE_EVENTS_FIXTURE);
+    expect(parsed.runs[0]?.nodes).toBeUndefined();
+  });
+
+  it('degrades a verbose JSON event-query failure to an empty node payload', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const workflowEventsDb = await import('@archon/core/db/workflow-events');
+    (workflowDb.listWorkflowRuns as ReturnType<typeof mock>).mockResolvedValueOnce([
+      {
+        id: 'run-unavailable',
+        workflow_name: 'implement',
+        working_path: '/path/to/worktree',
+        status: 'running',
+        started_at: new Date(),
+      },
+    ]);
+    (workflowEventsDb.listWorkflowEvents as ReturnType<typeof mock>).mockRejectedValueOnce(
+      new Error('events unavailable')
+    );
+
+    await workflowStatusCommand(true, true);
+
+    const parsed = JSON.parse(consoleSpy.mock.calls[0]?.[0] as string) as {
+      runs: Array<{ nodes: unknown[] }>;
+    };
+    expect(parsed.runs[0]?.nodes).toEqual([]);
   });
 });
 
@@ -2795,7 +2961,7 @@ describe('workflowGetCommand', () => {
     );
   });
 
-  it('attaches events in verbose JSON mode', async () => {
+  it('emits the same shared node summaries in verbose JSON by default', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     const eventsDb = await import('@archon/core/db/workflow-events');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
@@ -2806,20 +2972,67 @@ describe('workflowGetCommand', () => {
       started_at: new Date(),
       metadata: {},
     });
-    (eventsDb.listWorkflowEvents as ReturnType<typeof mock>).mockResolvedValueOnce([
-      {
-        event_type: 'node_started',
-        step_name: 'plan',
-        created_at: new Date().toISOString(),
-        data: {},
-      },
-    ]);
+    (eventsDb.listWorkflowEvents as ReturnType<typeof mock>).mockResolvedValueOnce(
+      VERBOSE_EVENTS_FIXTURE
+    );
 
     await workflowGetCommand('run-v', true, true);
 
+    const parsed = JSON.parse(consoleSpy.mock.calls[0][0] as string) as {
+      nodes: Array<Record<string, unknown>>;
+      events?: unknown[];
+    };
+    expect(parsed.nodes).toEqual(EXPECTED_VERBOSE_NODES);
+    expect(parsed.nodes.map(node => node.state)).toEqual(
+      buildNodeSummaries(VERBOSE_EVENTS_FIXTURE).map(node => node.state)
+    );
+    expect(parsed.events).toBeUndefined();
+  });
+
+  it('emits raw events in verbose JSON when events=true', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const eventsDb = await import('@archon/core/db/workflow-events');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-v',
+      workflow_name: 'implement',
+      status: 'running',
+      working_path: '/tmp/wt',
+      started_at: new Date(),
+      metadata: {},
+    });
+    (eventsDb.listWorkflowEvents as ReturnType<typeof mock>).mockResolvedValueOnce(
+      VERBOSE_EVENTS_FIXTURE
+    );
+
+    await workflowGetCommand('run-v', true, true, undefined, true);
+
+    const parsed = JSON.parse(consoleSpy.mock.calls[0][0] as string) as {
+      events: WorkflowEventRow[];
+      nodes?: unknown[];
+    };
+    expect(parsed.events).toEqual(VERBOSE_EVENTS_FIXTURE);
+    expect(parsed.nodes).toBeUndefined();
+  });
+
+  it('degrades a raw verbose JSON event-query failure to an empty events payload', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const eventsDb = await import('@archon/core/db/workflow-events');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-v',
+      workflow_name: 'implement',
+      status: 'running',
+      working_path: '/tmp/wt',
+      started_at: new Date(),
+      metadata: {},
+    });
+    (eventsDb.listWorkflowEvents as ReturnType<typeof mock>).mockRejectedValueOnce(
+      new Error('events unavailable')
+    );
+
+    await workflowGetCommand('run-v', true, true, undefined, true);
+
     const parsed = JSON.parse(consoleSpy.mock.calls[0][0] as string) as { events: unknown[] };
-    expect(Array.isArray(parsed.events)).toBe(true);
-    expect(parsed.events).toHaveLength(1);
+    expect(parsed.events).toEqual([]);
   });
 });
 
