@@ -39,6 +39,46 @@ function Write-Warn    { param([string]$Msg) Write-Host "[WARN]  $Msg" -Foregrou
 function Write-Err     { param([string]$Msg) Write-Host "[ERROR] $Msg" -ForegroundColor Red }
 function Write-Ok      { param([string]$Msg) Write-Host "[OK]    $Msg" -ForegroundColor Green }
 
+function Write-InstallManifest {
+    param(
+        [string]$BinaryPath,
+        [string]$InstalledVersion
+    )
+
+    $tempPath = $null
+    try {
+        $archonHome = if ($env:ARCHON_HOME) { $env:ARCHON_HOME } else { Join-Path $env:USERPROFILE '.archon' }
+        if ($archonHome -eq '~') {
+            $archonHome = $env:USERPROFILE
+        } elseif ($archonHome.StartsWith('~/') -or $archonHome.StartsWith('~\')) {
+            $archonHome = Join-Path $env:USERPROFILE $archonHome.Substring(2)
+        }
+
+        New-Item -ItemType Directory -Path $archonHome -Force | Out-Null
+        $manifestPath = Join-Path $archonHome 'install.json'
+        $tempPath = "$manifestPath.tmp.$PID"
+        $manifest = [ordered]@{
+            binary = [IO.Path]::GetFullPath($BinaryPath)
+            version = $InstalledVersion
+            installedAt = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
+            method = 'powershell'
+        } | ConvertTo-Json
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [IO.File]::WriteAllText($tempPath, "$manifest`n", $utf8NoBom)
+
+        if ([IO.File]::Exists($manifestPath)) {
+            [IO.File]::Replace($tempPath, $manifestPath, $null)
+        } else {
+            [IO.File]::Move($tempPath, $manifestPath)
+        }
+    } catch {
+        if ($tempPath -and (Test-Path $tempPath)) {
+            Remove-Item $tempPath -Force -ErrorAction SilentlyContinue
+        }
+        Write-Warn "Archon installed, but install.json could not be updated: $($_.Exception.Message)"
+    }
+}
+
 # ---------------------------------------------------------------------------
 # Banner
 # ---------------------------------------------------------------------------
@@ -284,7 +324,15 @@ function Main {
         Write-Info "Verifying installation..."
         try {
             $versionOutput = & $destBinary version 2>&1
+            if ($LASTEXITCODE -ne 0) {
+                throw "Version command exited with code $LASTEXITCODE"
+            }
+            $versionMatch = [regex]::Match(($versionOutput -join "`n"), '(?m)^Archon CLI v([^\s]+)$')
+            if (-not $versionMatch.Success) {
+                throw 'Version command returned an unrecognized response'
+            }
             Write-Host $versionOutput
+            Write-InstallManifest -BinaryPath $destBinary -InstalledVersion $versionMatch.Groups[1].Value
             Write-Ok "Installation complete!"
         } catch {
             Write-Warn "Binary installed but version check failed: $($_.Exception.Message)"

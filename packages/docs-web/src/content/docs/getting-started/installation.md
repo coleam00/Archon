@@ -40,12 +40,40 @@ docker run --rm -v "$PWD:/workspace" ghcr.io/coleam00/archon:latest workflow lis
 ## Using Archon from a GUI or service
 
 The quick installer and Homebrew install a native, compiled `archon` executable;
-they do not require Bun at runtime. A GUI app, `launchd` job, or other process
-without your login-shell `PATH` should launch that executable by an absolute path,
-configured by the user (the quick-installer defaults are
-`/usr/local/bin/archon` on macOS/Linux and
-`%USERPROFILE%\\.archon\\bin\\archon.exe` on Windows). Do not invoke the
-Bun-linked/source CLI from these processes.
+they do not require Bun at runtime. A successful quick install records the final
+executable in `${ARCHON_HOME:-~/.archon}/install.json`. Every compiled CLI
+invocation refreshes the same record, so running a Homebrew-installed Archon once
+also makes its current executable discoverable. Homebrew itself does not write
+user-home state during formula installation.
+
+```json
+{
+  "binary": "/absolute/path/to/archon",
+  "version": "0.7.0",
+  "installedAt": "2026-08-03T12:34:56Z",
+  "method": "curl"
+}
+```
+
+`binary` is the canonical absolute executable path, `version` is the verified
+installed version, `installedAt` is a UTC ISO timestamp, and `method` is `curl`,
+`powershell`, or `manual`. Compiled startup uses `manual` because Archon cannot
+reliably infer whether an executable came from Homebrew or another installation
+tool.
+
+A GUI app, `launchd` job, or other process without your login-shell `PATH` should:
+
+1. Parse the manifest defensively as untrusted discovery metadata.
+2. Require `binary` to be an absolute path to an existing executable.
+3. Invoke that path directly, without a shell.
+4. If the record is absent or invalid, try only the documented quick-installer
+   default (`/usr/local/bin/archon` on macOS/Linux or
+   `%USERPROFILE%\\.archon\\bin\\archon.exe` on Windows), then show a clear path
+   configuration error.
+
+Do not source a shell profile, probe Homebrew prefixes, or invoke the
+Bun-linked/source CLI from these processes. Source execution deliberately does
+not update the manifest because Bun is not a portable GUI target.
 
 The source-install and `bun link` workflow is for terminal development and
 requires Bun on `PATH`.

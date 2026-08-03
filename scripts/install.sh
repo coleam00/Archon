@@ -40,6 +40,34 @@ warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 error() { echo -e "${RED}[ERROR]${NC} $1" >&2; }
 success() { echo -e "${GREEN}[OK]${NC} $1"; }
 
+write_install_manifest() {
+  local binary_path="$1"
+  local installed_version="$2"
+  local archon_home="${ARCHON_HOME:-$HOME/.archon}"
+  local manifest_path temp_path escaped_binary escaped_version installed_at
+
+  case "$archon_home" in
+    "~") archon_home="$HOME" ;;
+    "~/"*) archon_home="$HOME/${archon_home#\~/}" ;;
+  esac
+
+  manifest_path="$archon_home/install.json"
+  temp_path="$manifest_path.tmp.$$"
+  escaped_binary=${binary_path//\\/\\\\}
+  escaped_binary=${escaped_binary//\"/\\\"}
+  escaped_version=${installed_version//\\/\\\\}
+  escaped_version=${escaped_version//\"/\\\"}
+  installed_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+
+  if ! mkdir -p "$archon_home" 2>/dev/null \
+    || ! printf '{\n  "binary": "%s",\n  "version": "%s",\n  "installedAt": "%s",\n  "method": "curl"\n}\n' \
+      "$escaped_binary" "$escaped_version" "$installed_at" >"$temp_path" 2>/dev/null \
+    || ! mv "$temp_path" "$manifest_path" 2>/dev/null; then
+    rm -f "$temp_path" 2>/dev/null || true
+    warn "Archon installed, but $manifest_path could not be updated"
+  fi
+}
+
 # Detect OS and architecture
 detect_platform() {
   local os arch
@@ -298,12 +326,24 @@ main() {
   # temp download and its output was cached; printing that after `mv` would report
   # success without ever executing the file the user will actually invoke — which is
   # exactly the "installed fine but won't run" failure #2295 reported. See #2338.
-  local installed_output
-  if ! installed_output=$("$INSTALL_DIR/$BINARY_NAME" version 2>&1); then
-    error "Installed binary failed its version check at $INSTALL_DIR/$BINARY_NAME:"
+  local installed_binary installed_output installed_version
+  installed_binary="$(cd "$INSTALL_DIR" && pwd -P)/$BINARY_NAME"
+  if ! installed_output=$("$installed_binary" version 2>&1); then
+    error "Installed binary failed its version check at $installed_binary:"
     echo "$installed_output" >&2
     exit 1
   fi
+
+  installed_version=$(printf '%s\n' "$installed_output" \
+    | sed -n 's/^Archon CLI v\([^[:space:]]*\)$/\1/p' \
+    | head -n 1)
+  if [ -z "$installed_version" ]; then
+    error "Installed binary returned an unrecognized version response:"
+    echo "$installed_output" >&2
+    exit 1
+  fi
+
+  write_install_manifest "$installed_binary" "$installed_version"
 
   echo "$installed_output"
   success "Installation complete!"

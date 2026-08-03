@@ -32,6 +32,7 @@ Archon provides a unified directory and configuration system with:
 │           └── worktrees/    # Git worktrees for this project
 ├── worktrees/                # Legacy global worktrees (for repos not in workspaces/)
 ├── web-dist/<version>/       # Cached web UI dist (archon serve, binary only)
+├── install.json              # Last verified compiled CLI location
 ├── update-check.json         # Update check cache (binary builds only, 24h TTL)
 ├── tier-notice.json          # One-time tier-default notice state (CLI, per version)
 └── config.yaml               # Global user configuration
@@ -41,7 +42,31 @@ Archon provides a unified directory and configuration system with:
 - `workspaces/` - Repositories cloned via `/clone` command or GitHub adapter
 - `workspaces/owner/repo/worktrees/` - Git worktrees for this project (new registrations)
 - `worktrees/` - Legacy fallback for repos not registered under `workspaces/`
+- `install.json` - Discovery metadata for GUI and service consumers
 - `config.yaml` - Non-secret user preferences
+
+### Compiled CLI install manifest
+
+Quick installers write `${ARCHON_HOME:-~/.archon}/install.json` after the final
+installed executable passes its version check. Compiled CLI startup refreshes it
+from the canonical `process.execPath`; source/Bun startup never writes it. The
+Homebrew formula remains prefix-only, so the first invocation after a Homebrew
+install or upgrade creates or refreshes the record.
+
+```typescript
+interface InstallManifest {
+  binary: string;
+  version: string;
+  installedAt: string;
+  method: 'curl' | 'powershell' | 'manual';
+}
+```
+
+This file is a discovery hint, not an authorization boundary. Consumers should
+parse it defensively, require an absolute `binary`, confirm that the file exists
+and is executable, and invoke it directly without a shell. A missing, malformed,
+relative, or stale entry should fall back only to the documented platform default
+and otherwise produce a clear configuration error.
 
 ### Repo-Level: `.archon/`
 
@@ -92,6 +117,10 @@ getArchonWorktreesPath(): string
 // Get global config path
 getArchonConfigPath(): string
 // Returns: ${ARCHON_HOME}/config.yaml
+
+// Get compiled CLI install manifest path
+getInstallManifestPath(): string
+// Returns: ${ARCHON_HOME}/install.json
 
 // Get cached web UI distribution directory for a given version
 getWebDistDir(version: string): string

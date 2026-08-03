@@ -93,6 +93,7 @@ import {
   shutdownTelemetry,
   captureArchonStarted,
   isVerboseBoot,
+  refreshCompiledInstallManifest,
 } from '@archon/paths';
 import * as git from '@archon/git';
 
@@ -238,6 +239,8 @@ function isVersionRequest(args: string[]): boolean {
 
 async function main(): Promise<number> {
   const args = process.argv.slice(2);
+
+  refreshCompiledInstallManifest(BUNDLED_IS_BINARY, process.execPath, BUNDLED_VERSION);
 
   // Anonymous once-per-invocation startup event (self-gates on opt-out).
   // Emitted before any early return so EVERY invocation — including bare
