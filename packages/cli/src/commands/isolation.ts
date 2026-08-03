@@ -306,12 +306,16 @@ export async function isolationCompleteCommand(
           blockers.push(`${String(uniqueCommitCount)} commit(s) unique to this branch`);
         }
       } catch (error) {
-        getLog().warn(
-          { err: error as Error, branch },
-          'isolation.complete_unique_commit_check_failed'
-        );
-        console.warn(
-          '  Warning: could not check for unique commits — skipping unique commit check'
+        const err = error as Error;
+        getLog().warn({ err, branch }, 'isolation.complete_unique_commit_check_failed');
+        // Fail CLOSED. This check exists to stop a branch being deleted while it
+        // holds commits reachable from nowhere else; treating an unanswerable
+        // check as "no unique commits" would let exactly the loss it guards
+        // against proceed on any git failure — permissions, a corrupt ref, a
+        // timeout. An unnecessary blocker costs the operator one --force; a
+        // wrong skip costs them the commits.
+        blockers.push(
+          `could not determine unique commits (${err.message}) — refusing to delete unverified`
         );
       }
 
