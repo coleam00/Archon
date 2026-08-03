@@ -1925,7 +1925,7 @@ function formatDuration(ms: number): string {
   return `${mins}m${remSecs}s`;
 }
 
-interface NodeSummary {
+export interface NodeSummary {
   nodeId: string;
   state: 'running' | 'completed' | 'failed' | 'skipped';
   durationMs?: number;
@@ -1937,7 +1937,7 @@ interface NodeSummary {
  * Derive per-node summaries from a run's workflow events.
  * Processes node_started / node_completed / node_failed / node_skipped* events.
  */
-function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
+export function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
   const startTimes = new Map<string, number>();
   const summaries = new Map<string, NodeSummary>();
 
@@ -2060,7 +2060,11 @@ export async function workflowStatusCommand(json?: boolean, verbose?: boolean): 
           workflowEventsDb.listWorkflowEvents(run.id).catch(() => [] as WorkflowEventRow[])
         )
       );
-      runsOutput = runs.map((run, i) => ({ ...run, events: eventsPerRun[i] }));
+      runsOutput = runs.map((run, i) => ({
+        ...run,
+        events: eventsPerRun[i],
+        nodes: buildNodeSummaries(eventsPerRun[i]),
+      }));
     }
     console.log(JSON.stringify({ runs: runsOutput }, null, 2));
     return;
@@ -2098,7 +2102,7 @@ export async function workflowStatusCommand(json?: boolean, verbose?: boolean): 
  * Unlike `status` (active runs only), this resolves one run regardless of
  * status — so an agent can answer "did the review pass?" for a completed/failed
  * run. `--verbose` adds the per-node event summary; `--json` emits the raw run
- * (plus an `events` array when verbose).
+ * (plus `events` and `nodes` arrays when verbose).
  *
  * `runId` may be the short id printed by `workflow runs` (see resolveRunIdArg).
  */
@@ -2146,7 +2150,9 @@ export async function workflowGetCommand(
   }
 
   if (json) {
-    const output = verbose ? { ...run, events: events ?? [] } : run;
+    const output = verbose
+      ? { ...run, events: events ?? [], nodes: buildNodeSummaries(events ?? []) }
+      : run;
     console.log(JSON.stringify(output, null, 2));
     return 0;
   }
