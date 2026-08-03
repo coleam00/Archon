@@ -49,6 +49,32 @@ gh issue view {number} --json title,body,labels,comments,state,url,author
 - Parse as problem description
 - Note: No GitHub posting (artifact only)
 
+### 1.2a Comments outrank the body, and linked issues are part of the input
+
+An issue body describes a problem as first understood. Comments are where it gets
+**decided**. Treat them with that authority:
+
+- **Read every comment before planning anything.** A later maintainer comment
+  supersedes the body wherever the two disagree — the body is the opening
+  position, not the specification.
+- **A comment stating a decision IS the specification.** If one settles a shape,
+  a field list, an interface, or an explicit "do X, not Y", implement that. Do
+  not re-derive the choice from the body and do not average the two.
+- **Follow linked issues.** When the body or a comment points at another issue
+  (`#1234`, or a full URL) for a decision, design, or contract, fetch it and read
+  its comments too:
+  ```bash
+  gh issue view 1234 --json title,body,comments,state,url
+  ```
+  One level of following is enough — do not spider the whole graph.
+- **If the body and a decision conflict, say so in your investigation artifact**
+  and state which you followed. A silent choice is the failure mode here.
+
+This is not hypothetical. On 2026-08-03 a run implemented an issue's body while a
+maintainer comment on that same issue — fetched, present in the input, posted 16
+seconds before the run started — specified a different shape entirely. The PR was
+discarded. The data was there; nothing said it outranked the body.
+
 ### 1.3 Classify Issue Type
 
 | Type | Indicators |

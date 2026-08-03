@@ -39,10 +39,41 @@ description: |
   8. Simplifies changed code (implements fixes directly, not just reports)
   9. Reports results back to the GitHub issue with follow-up suggestions
 
-provider: claude
-model: sonnet
+# Provider-agnostic: no `provider:` here, so every node inherits the install
+# default (`defaultAssistant` / `assistants.*` in .archon/config.yaml). Models are
+# tier keywords, not literal ids, so the same DAG runs on whatever the install has
+# configured for small/medium/large.
+model: medium
 
 nodes:
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 0: PREP WORKTREE
+  # ═══════════════════════════════════════════════════════════════
+  # A fresh worktree has no installed dependencies, so type-check and tests
+  # fail before reaching project code. Root node with no depends_on, so it runs
+  # in parallel with the classify/plan phase and costs no wall-clock — only
+  # `implement` waits on it. Kept deliberately minimal; add context only if it
+  # actually fails on a real project.
+
+  - id: prep-worktree
+    prompt: |
+      Install this project's dependencies so builds, type-checks and tests can run
+      in this fresh worktree.
+
+      Follow this order:
+
+      1. Locate the package-manager markers actually present in the repo — lockfiles
+         and manifests. Decide from evidence, never from convention.
+      2. Read the manifest head to confirm the manager and any pinned version.
+      3. Verify that manager responds to a version check before relying on it.
+      4. Install using the manager's locked mode — the variant that reproduces the
+         lockfile exactly and fails rather than updating it. The install must not
+         modify the lockfile.
+      5. Report one line: the manager you detected, and whether the install succeeded.
+
+      Bound every read; never print a whole file.
+    model: small
+
   # ═══════════════════════════════════════════════════════════════
   # PHASE 1: FETCH & CLASSIFY
   # ═══════════════════════════════════════════════════════════════
@@ -58,6 +89,7 @@ nodes:
       - If the message is ambiguous (e.g., "fix the SQLite timestamp bug"), use `gh issue list` to search for matching issues and pick the best match.
 
       CRITICAL: Your final output must be ONLY the bare number with no quotes, no markdown, no explanation. Example correct output: 709
+    model: small
 
   - id: fetch-issue
     bash: |
@@ -78,6 +110,15 @@ nodes:
       ## Issue Content
 
       $fetch-issue.output
+
+      ## Operator Request
+
+      The message that started this run, verbatim. It is often just an issue reference,
+      but it may add constraints, corrections, or context the issue body lacks — e.g.
+      naming the real type, flagging that external research is needed, or narrowing
+      scope. Weigh it alongside the issue, and where the two conflict, prefer this.
+
+      $ARGUMENTS
 
       ## Type
 
@@ -112,8 +153,7 @@ nodes:
 
       Provide reasoning that covers all three decisions.
     depends_on: [fetch-issue]
-    model: haiku
-    allowed_tools: []
+    model: small
     output_format:
       type: object
       properties:
@@ -221,6 +261,7 @@ nodes:
 
   - id: investigate
     command: archon-investigate-issue
+    output_type: investigation
     depends_on: [classify, web-research]
     when: "$classify.output.issue_type == 'bug'"
     # Allow web-research to be skipped (needs_external_research == 'false') without blocking
@@ -229,6 +270,7 @@ nodes:
 
   - id: plan
     command: archon-create-plan
+    output_type: plan
     depends_on: [classify, web-research]
     when: "$classify.output.issue_type != 'bug'"
     # Allow web-research to be skipped (needs_external_research == 'false') without blocking
@@ -258,9 +300,50 @@ nodes:
 
   - id: implement
     command: archon-fix-issue
-    depends_on: [bridge-artifacts]
+    output_type: implementation
+    depends_on: [bridge-artifacts, prep-worktree]
     context: fresh
-    model: opus[1m]
+    model: large
+
+  # Hard stop when `implement` produced nothing.
+  #
+  # `implement` can decline to change anything — a blocked precondition, an unclear
+  # plan — and still report success, so the run continued through create-pr and the
+  # whole review fleet on an empty diff, then reported `completed`. Nine nodes ran
+  # after the work had already failed. This asks the only question that matters
+  # deterministically: is there a change to review?
+  #
+  # Exiting non-zero fails the node, and therefore the run, before any reviewer or
+  # PR node spends anything. A run with nothing to show should fail, not go green.
+  # `.archon/` is excluded deliberately. Archon copies the operator's workflow and
+  # command edits into every run worktree — that is the feature that lets a workflow
+  # be iterated on before it is committed — so those files are present BEFORE
+  # `implement` runs and are not its output. A first version of this guard counted
+  # them and passed three consecutive runs on an empty implementation, which is the
+  # exact failure it exists to catch.
+  #
+  # Only the working tree is inspected: `implement` leaves its changes uncommitted
+  # (committing is `create-pr`'s job). If that ever stops being true this guard fails
+  # a run that did have work — visible and annoying — rather than passing one that
+  # did not, which is silent. That is the safe direction for it to be wrong in.
+  - id: assert-implemented
+    bash: |
+      base=$BASE_BRANCH
+      tracked=$(git diff --name-only HEAD -- ':(exclude).archon' | head -1)
+      untracked=$(git ls-files --others --exclude-standard -- ':(exclude).archon' | head -1)
+      if commits=$(git rev-list --count "origin/$base..HEAD" 2>/dev/null); then :; else commits=unknown; fi
+
+      if [ -n "$tracked" ] || [ -n "$untracked" ]; then
+        git --no-pager diff --stat HEAD -- ':(exclude).archon' | tail -1
+      elif [ "$commits" = "unknown" ]; then
+        echo "WARNING: cannot compare against origin/$base — not failing on an unknown"
+      elif [ "$commits" != "0" ]; then
+        echo "$commits commit(s) ahead of origin/$base"
+      else
+        echo "implement produced neither a commit nor a working-tree change outside .archon/ — failing before the review phase" >&2
+        exit 1
+      fi
+    depends_on: [implement]
 
   # ═══════════════════════════════════════════════════════════════
   # PHASE 5: VALIDATE
@@ -268,7 +351,8 @@ nodes:
 
   - id: validate
     command: archon-validate
-    depends_on: [implement]
+    output_type: validation
+    depends_on: [assert-implemented]
     context: fresh
 
   # ═══════════════════════════════════════════════════════════════
@@ -322,9 +406,37 @@ nodes:
   # PHASE 7: REVIEW
   # ═══════════════════════════════════════════════════════════════
 
+  # Deterministic PR-number capture.
+  #
+  # create-pr asks the MODEL to run `gh pr view --json number` and echo the result
+  # into $ARTIFACTS_DIR/.pr-number. Being a prompt instruction, it is advisory: on
+  # 2026-08-03, across four parallel runs, it wrote the ISSUE number twice
+  # (c77ed1bc -> 2323, 500fa086 -> 2279), skipped the file entirely once
+  # (3b03cb58), and was correct once. review-scope then resolved a PR that does not
+  # exist, correctly refused to fabricate a scope.md, and review-classify declined
+  # every specialist for lack of evidence — while the run still reported success.
+  # Three of four PRs got one generalist reviewer instead of the intended set.
+  #
+  # This has no judgment content and its silent failure guts the entire review
+  # phase, so it belongs in a node that cannot decline to fire rather than in a
+  # prompt. Failing here stops the run instead of yielding a green under-reviewed
+  # pass. (Workflow constitution: the reliability carve-out, not a style rule.)
+  - id: capture-pr-number
+    bash: |
+      pr=$(gh pr view --json number --jq .number 2>/dev/null || true)
+      if ! printf '%s' "$pr" | grep -qE '^[0-9]+$'; then
+        echo "capture-pr-number: no PR resolves for the current branch." >&2
+        echo "The review phase would be scoped against nothing and would still report success." >&2
+        exit 1
+      fi
+      printf '%s' "$pr" > "$ARTIFACTS_DIR/.pr-number"
+      gh pr view --json url --jq .url > "$ARTIFACTS_DIR/.pr-url" 2>/dev/null || true
+      echo "{\"pr_number\":\"$pr\"}"
+    depends_on: [create-pr]
+
   - id: review-scope
     command: archon-pr-review-scope
-    depends_on: [create-pr]
+    depends_on: [capture-pr-number]
     context: fresh
 
   - id: review-classify
@@ -350,8 +462,7 @@ nodes:
 
       Provide your reasoning for each decision.
     depends_on: [review-scope]
-    model: haiku
-    allowed_tools: []
+    model: small
     context: fresh
     output_format:
       type: object
@@ -387,31 +498,62 @@ nodes:
     depends_on: [review-classify]
     context: fresh
 
-  # Reviewer gates: run when review-classify flags them AND the scope is non-small,
-  # OR when smoke-validate found the issue claims unreliable (fallback to full review).
-  # Expression form: A && B || A && C  (the condition evaluator has no parens; && binds tighter than ||)
+  # All four conditional reviewers share one extra-scrutiny term:
+  #   run_<agent> AND (scope is non-small OR the issue's claims did not hold up)
+  # `when:` has no parentheses by design, so expressing that inline forced
+  # `A && B || A && C` — four near-identical ~180-char conditions differing only in
+  # the agent flag. Computing the shared term ONCE here keeps it deterministic
+  # (script computes, YAML coordinates) and leaves each gate two short comparisons.
+  #
+  # Substitutions are injected already shell-quoted, so they are assigned unquoted
+  # and then quoted normally as locals.
+  - id: review-gate
+    bash: |
+      scope=$classify.output.scope
+      claims_blob=$smoke-validate.output
+      # Fail-safe: only SUPPRESS the extra reviewers when the scope is small AND
+      # the smoke validator positively confirmed the issue's claims. Anything else
+      # — non-small scope, claims refuted, or smoke-validate producing nothing at
+      # all (timeout, failure) — biases toward MORE review, never less.
+      #
+      # Reads the whole output and greps rather than `$smoke-validate.output.claims_accurate`:
+      # strict field access fails this node when the producer emitted no JSON, and a
+      # failed gate silently skips every conditional reviewer downstream. Observed on
+      # run 7f392748: smoke-validate timed out, this node failed, and the review phase
+      # quietly dropped from two specialists to one while still reporting success.
+      if [ "$scope" = "small" ] && printf '%s' "$claims_blob" | grep -q '"claims_accurate"[[:space:]]*:[[:space:]]*"\?true'; then
+        echo '{"extra_review":"false"}'
+      else
+        echo '{"extra_review":"true"}'
+      fi
+    depends_on: [review-classify, smoke-validate]
+    # Run even when smoke-validate failed — that case must reach the fail-safe
+    # branch above, not skip this node and take the reviewers down with it.
+    trigger_rule: all_done
+
+  # Reviewer gates: the agent's own flag AND the shared extra-scrutiny term.
   - id: error-handling
     command: archon-error-handling-agent
-    depends_on: [review-classify]
-    when: "$review-classify.output.run_error_handling == 'true' && $classify.output.scope != 'small' || $review-classify.output.run_error_handling == 'true' && $smoke-validate.output.claims_accurate == 'false'"
+    depends_on: [review-classify, review-gate]
+    when: "$review-classify.output.run_error_handling == 'true' && $review-gate.output.extra_review == 'true'"
     context: fresh
 
   - id: test-coverage
     command: archon-test-coverage-agent
-    depends_on: [review-classify]
-    when: "$review-classify.output.run_test_coverage == 'true' && $classify.output.scope != 'small' || $review-classify.output.run_test_coverage == 'true' && $smoke-validate.output.claims_accurate == 'false'"
+    depends_on: [review-classify, review-gate]
+    when: "$review-classify.output.run_test_coverage == 'true' && $review-gate.output.extra_review == 'true'"
     context: fresh
 
   - id: comment-quality
     command: archon-comment-quality-agent
-    depends_on: [review-classify]
-    when: "$review-classify.output.run_comment_quality == 'true' && $classify.output.scope != 'small' || $review-classify.output.run_comment_quality == 'true' && $smoke-validate.output.claims_accurate == 'false'"
+    depends_on: [review-classify, review-gate]
+    when: "$review-classify.output.run_comment_quality == 'true' && $review-gate.output.extra_review == 'true'"
     context: fresh
 
   - id: docs-impact
     command: archon-docs-impact-agent
-    depends_on: [review-classify]
-    when: "$review-classify.output.run_docs_impact == 'true' && $classify.output.scope != 'small' || $review-classify.output.run_docs_impact == 'true' && $smoke-validate.output.claims_accurate == 'false'"
+    depends_on: [review-classify, review-gate]
+    when: "$review-classify.output.run_docs_impact == 'true' && $review-gate.output.extra_review == 'true'"
     context: fresh
 
   # ═══════════════════════════════════════════════════════════════
@@ -420,8 +562,14 @@ nodes:
 
   - id: synthesize
     command: archon-synthesize-review
+    output_type: review-synthesis
     depends_on: [code-review, error-handling, test-coverage, comment-quality, docs-impact]
-    trigger_rule: one_success
+    # all_done, not one_success: synthesize only once EVERY reviewer is terminal.
+    # one_success would let a synthesis stand on a subset if the reviewers ever land
+    # in different layers, and it reports that partial view as if it were the whole
+    # review. all_done also still fires when reviewers were skipped by design (the
+    # common case — the classifier only asks for the relevant specialists).
+    trigger_rule: all_done
     context: fresh
 
   - id: self-fix
@@ -444,5 +592,6 @@ nodes:
 
   - id: report
     command: archon-issue-completion-report
+    output_type: completion-report
     depends_on: [simplify]
     context: fresh

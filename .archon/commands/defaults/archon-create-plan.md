@@ -36,6 +36,31 @@ Transform "$ARGUMENTS" into a battle-tested implementation plan through systemat
 | Free-form text | Description | Use directly as feature input |
 | Empty/blank | Error | STOP - require input |
 
+### 0.1a If the input is a GitHub issue: comments outrank the body
+
+Fetch the issue **with its comments**, and treat them as authoritative:
+
+```bash
+gh issue view {number} --json title,body,labels,comments,state,url,author
+```
+
+- **Read every comment before planning.** A later maintainer comment supersedes
+  the body wherever they disagree — the body is the opening position, not the
+  specification.
+- **A comment stating a decision IS the specification.** If one settles a shape,
+  a field list, an interface, or an explicit "do X, not Y", plan that. Do not
+  re-derive the choice from the body and do not compromise between them.
+- **Follow linked issues.** When the body or a comment points at another issue
+  (`#1234` or a URL) for a decision or contract, fetch that issue and its
+  comments too. One level of following is enough.
+- **If the body and a decision conflict, record which you followed** in the plan.
+  A silent choice is the failure mode here.
+
+On 2026-08-03 a run planned from an issue body while a maintainer comment on that
+same issue — already present in the fetched input — specified a different design.
+The resulting PR was discarded. The data was there; nothing said it outranked the
+body.
+
 ### 0.2 If PRD File Detected
 
 1. **Read the PRD file**
