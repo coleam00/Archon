@@ -2940,6 +2940,32 @@ describe('workflowGetCommand', () => {
     expect(parsed.events).toHaveLength(VERBOSE_NODE_EVENTS.length);
     expect(parsed.nodes.map(({ nodeId, state }) => ({ nodeId, state }))).toEqual(textStates);
   });
+
+  it('emits empty events and nodes when verbose JSON event retrieval fails', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const eventsDb = await import('@archon/core/db/workflow-events');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-events-unavailable',
+      workflow_name: 'implement',
+      status: 'running',
+      working_path: '/tmp/wt',
+      started_at: new Date(),
+      metadata: {},
+    });
+    (eventsDb.listWorkflowEvents as ReturnType<typeof mock>).mockRejectedValueOnce(
+      new Error('events unavailable')
+    );
+
+    await workflowGetCommand('run-events-unavailable', true, true);
+
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const parsed = JSON.parse(consoleSpy.mock.calls[0][0] as string) as {
+      events: unknown[];
+      nodes: NodeSummary[];
+    };
+    expect(parsed.events).toEqual([]);
+    expect(parsed.nodes).toEqual([]);
+  });
 });
 
 describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
