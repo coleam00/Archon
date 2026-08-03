@@ -553,12 +553,20 @@ async function* streamCodexEvents(
             const exitCode = item.exit_code as number | null | undefined;
             const exitSuffix =
               exitCode != null && exitCode !== 0 ? `\n[exit code: ${String(exitCode)}]` : '';
+            let toolOutcome: 'success' | 'error' | 'unknown';
+            if (exitCode === 0) {
+              toolOutcome = 'success';
+            } else if (exitCode == null) {
+              toolOutcome = 'unknown';
+            } else {
+              toolOutcome = 'error';
+            }
             yield {
               type: 'tool_result',
               toolName: cmd,
               toolOutput: ((item.aggregated_output as string) ?? '') + exitSuffix,
               toolCallId: itemId,
-              toolOutcome: exitCode === 0 ? 'success' : exitCode == null ? 'unknown' : 'error',
+              toolOutcome,
               ...(exitCode != null ? { exitCode } : {}),
             };
           } else {
