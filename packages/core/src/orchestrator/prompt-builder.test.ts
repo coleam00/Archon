@@ -4,6 +4,7 @@ import {
   formatWorkflowContextSection,
   buildOrchestratorSystemAppend,
   buildRunManagementSection,
+  buildMessageOriginSection,
 } from './prompt-builder';
 
 describe('buildRoutingRulesWithProject', () => {
@@ -165,5 +166,80 @@ describe('buildRunManagementSection', () => {
     }
     expect(section).toContain('--json');
     expect(section).toContain('--detach');
+  });
+});
+
+describe('buildMessageOriginSection', () => {
+  test('reports the channel ID and resolved name', () => {
+    const section = buildMessageOriginSection(
+      { channelId: 'C01ABC234DE', channelName: 'ai-web-project' },
+      'slack'
+    );
+
+    expect(section).toContain('## Message Origin');
+    expect(section).toContain('- Platform: slack');
+    expect(section).toContain('- Channel ID: C01ABC234DE');
+    expect(section).toContain('- Channel name: ai-web-project');
+    expect(section).not.toContain('N/A');
+  });
+
+  test('instructs the model to answer from the section instead of guessing', () => {
+    const section = buildMessageOriginSection({ channelId: 'C1' }, 'slack');
+
+    expect(section).toContain('do not guess');
+  });
+
+  test('renders N/A when name resolution is disabled, keeping the ID', () => {
+    const section = buildMessageOriginSection(
+      { channelId: 'C01ABC234DE', channelNameStatus: 'disabled' },
+      'slack'
+    );
+
+    expect(section).toContain('- Channel ID: C01ABC234DE');
+    expect(section).toContain('- Channel name: N/A');
+    expect(section).toContain('slack.useChannelName');
+  });
+
+  test('renders N/A plus a scope hint when resolution failed', () => {
+    const section = buildMessageOriginSection(
+      { channelId: 'C01ABC234DE', channelNameStatus: 'unavailable' },
+      'slack'
+    );
+
+    expect(section).toContain('- Channel name: N/A');
+    expect(section).toContain('channels:read');
+    expect(section).toContain('groups:read');
+  });
+
+  test('renders N/A and says direct message for a DM', () => {
+    const section = buildMessageOriginSection(
+      { channelId: 'D01ABC234DE', channelNameStatus: 'dm' },
+      'slack'
+    );
+
+    expect(section).toContain('- Channel name: N/A');
+    expect(section).toContain('direct message');
+  });
+
+  test('falls back to a bare N/A when no status is supplied', () => {
+    const section = buildMessageOriginSection({ channelId: 'C1' }, 'slack');
+
+    expect(section).toContain('- Channel name: N/A');
+  });
+
+  test('omits the Channel ID line entirely when there is no channel id', () => {
+    const section = buildMessageOriginSection({}, 'web');
+
+    expect(section).toContain('- Platform: web');
+    expect(section).not.toContain('Channel ID');
+    expect(section).toContain('- Channel name: N/A');
+  });
+
+  test('carries no per-message data, so it is safe in a cached system append', () => {
+    const section = buildMessageOriginSection({ channelId: 'C1', channelName: 'general' }, 'slack');
+
+    // Guards the caching contract: a message ts (e.g. 1712345678.001) here
+    // would bust Claude's prompt cache on every single turn.
+    expect(section).not.toMatch(/\d{10}\.\d+/);
   });
 });

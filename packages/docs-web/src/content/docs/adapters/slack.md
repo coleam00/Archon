@@ -166,6 +166,12 @@ This lives in **global** config (`~/.archon/config.yaml`) only: a channel routin
 table is a workspace-wide concern, and it is what *selects* the project, so it
 cannot be read from a project's own repo config.
 
+**Restart required.** Archon reads `~/.archon/config.yaml` once and caches it in
+memory for the life of the server process (true of all global config, not just
+this block). After hand-editing `slack:`, restart the Archon server for the
+change to take effect -- editing the file alone does not update a running
+instance.
+
 ```yaml
 slack:
   useChannelName: true # key channelProjects by name (default) or by channel ID
@@ -195,9 +201,45 @@ slack:
 - **Renaming a channel breaks its entry** while `useChannelName` is `true` --
   the mapping just stops resolving until you update it (logged, never blocking).
   Key by ID if you rename channels often.
+- **Config changes need a restart** -- see above. This is not specific to
+  `channelProjects`; it applies to every setting in global config.
 
 Finding a channel ID: in Slack, open the channel, click its name, and copy the
 ID at the bottom of the dialog (it looks like `C01ABC234DE`).
+
+## Channel Awareness
+
+Archon knows which channel it is being spoken to in, so you can just ask:
+
+```text
+@archon what Slack channel am I in?
+```
+
+It answers with the channel **ID** always, and the channel **name** when
+`slack.useChannelName` is `true` (the default). With `useChannelName: false`
+the name is reported as `N/A` -- Archon never looked it up, which is exactly
+what that setting asks for.
+
+This needs no configuration; it works out of the box on every Slack install.
+The only thing that changes it is the `slack.useChannelName` flag above.
+
+When a name cannot be produced, Archon says `N/A` and explains why, so a
+misconfiguration doesn't look like the feature is simply off:
+
+| Situation | What Archon reports |
+| --- | --- |
+| Name resolved | The channel name |
+| `useChannelName: false` | `N/A` (resolution disabled) |
+| Missing `channels:read` / `groups:read` | `N/A` (could not be resolved -- scope hint) |
+| Direct message | `N/A` (DMs have no channel name) |
+
+:::note
+With the default `useChannelName: true`, Archon calls `conversations.info` once
+per channel (cached for the life of the process). Without the `channels:read` /
+`groups:read` scopes this logs a single `slack.channel_info_missing_scope`
+warning and channel names read as `N/A` -- messages are unaffected. Set
+`useChannelName: false` to skip the lookup entirely.
+:::
 
 ## Usage
 

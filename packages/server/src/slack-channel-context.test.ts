@@ -175,6 +175,64 @@ describe('resolveSlackChannelContext', () => {
     });
   });
 
+  describe('channelNameStatus (why a name is missing)', () => {
+    test('is undefined when the name resolved', async () => {
+      const result = await resolveSlackChannelContext('C123', {}, makeDeps());
+
+      expect(result.channelName).toBe('ai-web-project');
+      expect(result.channelNameStatus).toBeUndefined();
+    });
+
+    test("is 'disabled' when useChannelName is off", async () => {
+      const result = await resolveSlackChannelContext(
+        'C123',
+        { useChannelName: false },
+        makeDeps()
+      );
+
+      expect(result.channelNameStatus).toBe('disabled');
+    });
+
+    test("is 'unavailable' when the lookup failed (e.g. missing scope)", async () => {
+      const result = await resolveSlackChannelContext(
+        'C123',
+        {},
+        makeDeps({ kind: 'unavailable' })
+      );
+
+      expect(result.channelNameStatus).toBe('unavailable');
+    });
+
+    test("is 'dm' for a direct message", async () => {
+      const result = await resolveSlackChannelContext('D123', {}, makeDeps({ kind: 'dm' }));
+
+      expect(result.channelNameStatus).toBe('dm');
+    });
+
+    test('survives autoSetProject: false — awareness is independent of binding', async () => {
+      const result = await resolveSlackChannelContext(
+        'C123',
+        { autoSetProject: false, useChannelName: false },
+        makeDeps()
+      );
+
+      expect(result.channelNameStatus).toBe('disabled');
+      expect(result.codebaseId).toBeUndefined();
+    });
+
+    test('survives an unresolved project mapping', async () => {
+      const deps = makeDeps({ kind: 'unavailable' }, []);
+      const result = await resolveSlackChannelContext(
+        'C123',
+        { useChannelName: false, channelProjects: { C123: 'typo-project' } },
+        deps
+      );
+
+      expect(result.unresolvedProject).toBe('typo-project');
+      expect(result.channelNameStatus).toBe('disabled');
+    });
+  });
+
   describe('malformed config (YAML is cast, never schema-validated)', () => {
     test('ignores a non-string mapping value', async () => {
       const deps = makeDeps();

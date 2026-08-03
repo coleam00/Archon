@@ -318,6 +318,7 @@ slack:
 - **Name keying needs scopes** — `channels:read` + `groups:read`, because Slack events carry only the channel ID. Missing scopes log `slack.channel_info_missing_scope` once and leave channels unmapped. Keying by ID (`useChannelName: false`) avoids both the scopes and the API call.
 - **Fails soft** — an unregistered project name logs `slack.channel_project_mapping_unresolved` and creates the conversation unbound; it never blocks a message.
 - **Matching** — channel names are matched case-insensitively, channel IDs exactly (Slack IDs are case-sensitive).
+- **Restart required** — like all global config, `~/.archon/config.yaml` is read once and cached for the life of the server process. Restart Archon after editing `slack:` for the change to take effect.
 
 See the [Slack adapter guide](/adapters/slack/#map-a-channel-to-a-project-optional) for setup and troubleshooting.
 

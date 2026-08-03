@@ -21,6 +21,12 @@ export interface SlackChannelContextDeps {
 export interface SlackChannelContextResult {
   /** Resolved channel name; undefined when disabled, a DM, or unresolvable. */
   readonly channelName?: string;
+  /**
+   * Why `channelName` is absent, so the assistant can explain rather than
+   * guess. Undefined whenever `channelName` is present. Mirrors
+   * `MessageOrigin.channelNameStatus` in @archon/core.
+   */
+  readonly channelNameStatus?: 'disabled' | 'unavailable' | 'dm';
   /** Project to bind a NEW conversation to; undefined when unmapped or disabled. */
   readonly codebaseId?: string;
   /**
@@ -81,22 +87,28 @@ export async function resolveSlackChannelContext(
   const autoSetProject = slack?.autoSetProject !== false;
 
   let channelName: string | undefined;
+  let channelNameStatus: SlackChannelContextResult['channelNameStatus'];
   if (useChannelName) {
     const resolved = await deps.resolveChannelName(channelId);
     if (resolved.kind === 'name') channelName = resolved.name;
+    else channelNameStatus = resolved.kind;
+  } else {
+    channelNameStatus = 'disabled';
   }
 
-  if (!autoSetProject) return { channelName };
+  if (!autoSetProject) return { channelName, channelNameStatus };
 
   const projectName = lookupProjectName(
     slack?.channelProjects,
     useChannelName ? channelName : channelId,
     useChannelName
   );
-  if (!projectName) return { channelName };
+  if (!projectName) return { channelName, channelNameStatus };
 
   const codebase = await deps.findCodebaseByName(projectName);
-  if (!codebase) return { channelName, unresolvedProject: projectName };
+  if (!codebase) {
+    return { channelName, channelNameStatus, unresolvedProject: projectName };
+  }
 
-  return { channelName, codebaseId: codebase.id };
+  return { channelName, channelNameStatus, codebaseId: codebase.id };
 }

@@ -3,7 +3,7 @@
  * Constructs the system prompt for the orchestrator agent with all
  * registered projects and available workflows.
  */
-import type { Codebase, Conversation } from '../types';
+import type { Codebase, Conversation, MessageOrigin } from '../types';
 import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
 
 /**
@@ -241,6 +241,50 @@ Run these from within the project's git repo (any subdirectory works — they re
 - \`archon workflow abandon <run-id> [--json]\` — cancel a non-terminal run
 
 When the user asks what's running, whether a run passed/failed, or to approve / reject / resume / cancel a run, use these commands directly instead of invoking a workflow. The \`manage-run\` skill has the full reference if it is loaded.`;
+}
+
+/**
+ * Render the channel-name line, explaining WHY a name is missing rather than
+ * leaving the model to guess. `N/A` is always the leading token so the answer
+ * stays predictable however the name became unavailable.
+ */
+function formatChannelNameLine(origin: MessageOrigin): string {
+  if (origin.channelName) return `- Channel name: ${origin.channelName}`;
+
+  switch (origin.channelNameStatus) {
+    case 'disabled':
+      return '- Channel name: N/A (channel-name resolution is disabled via slack.useChannelName)';
+    case 'dm':
+      return '- Channel name: N/A (direct message — DMs have no channel name)';
+    case 'unavailable':
+      return '- Channel name: N/A (could not be resolved — the bot may be missing the channels:read / groups:read scope)';
+    default:
+      return '- Channel name: N/A';
+  }
+}
+
+/**
+ * Build the message-origin section of the orchestrator prompt.
+ *
+ * Makes the assistant aware of where it is being spoken to, so "what channel am
+ * I in?" is answerable. Nothing else in the prompt carries platform context —
+ * the AI otherwise has no idea it is on Slack rather than the web UI.
+ *
+ * Appended for every provider (unlike the run-management section, this needs no
+ * tooling). Safe to include in the cacheable Claude system append: every field
+ * is stable for the lifetime of a conversation, so it must never be given
+ * per-message data such as a message timestamp.
+ */
+export function buildMessageOriginSection(origin: MessageOrigin, platformType: string): string {
+  const lines = [`- Platform: ${platformType}`];
+  if (origin.channelId) lines.push(`- Channel ID: ${origin.channelId}`);
+  lines.push(formatChannelNameLine(origin));
+
+  return `## Message Origin
+
+Where this conversation is happening. Answer from these values when the user asks which channel, chat, or platform they are in — do not guess or say you have no way to know.
+
+${lines.join('\n')}`;
 }
 
 /**

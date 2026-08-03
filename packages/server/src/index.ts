@@ -672,6 +672,11 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
               isolationHints: { workflowType: 'thread', workflowId: conversationId },
               userId,
               codebaseId: channelContext.codebaseId,
+              origin: {
+                channelId: event.channel,
+                channelName: channelContext.channelName,
+                channelNameStatus: channelContext.channelNameStatus,
+              },
             });
           })
           .catch(createMessageErrorHandler('Slack', slackAdapter, conversationId));

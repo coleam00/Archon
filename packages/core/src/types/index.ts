@@ -41,6 +41,29 @@ export interface AttachedFile {
   size: number;
 }
 
+/**
+ * Where an inbound message came from, as far as the platform can describe it.
+ * Surfaced to the AI so it can answer "what channel am I in?".
+ *
+ * Platform-agnostic on purpose: adapters fill in what they have, and every
+ * field is optional so no surface is obliged to know any of it. Today only the
+ * Slack adapter populates it.
+ */
+export interface MessageOrigin {
+  /** Platform-native channel/chat identifier (a Slack channel ID, e.g. C01ABC234DE). */
+  readonly channelId?: string;
+  /** Human-readable channel name, when it could be resolved. */
+  readonly channelName?: string;
+  /**
+   * Why `channelName` is absent, so surfaces can explain instead of guessing.
+   * Undefined whenever `channelName` is present.
+   * - `disabled`    — name resolution is turned off (Slack: `slack.useChannelName: false`)
+   * - `unavailable` — resolution was attempted and failed (missing scope / API error)
+   * - `dm`          — a direct message, which has no channel name at all
+   */
+  readonly channelNameStatus?: 'disabled' | 'unavailable' | 'dm';
+}
+
 export interface HandleMessageContext {
   readonly issueContext?: string;
   readonly threadContext?: string;
@@ -61,6 +84,12 @@ export interface HandleMessageContext {
    * later in the same thread still wins.
    */
   readonly codebaseId?: string;
+  /**
+   * Where this message came from (channel id / name), as described by the
+   * adapter. Passed through to the system prompt so the AI can answer
+   * questions about its own location.
+   */
+  readonly origin?: MessageOrigin;
 }
 
 export interface CommandResult {
