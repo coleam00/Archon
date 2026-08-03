@@ -2451,6 +2451,13 @@ const NODE_OUTPUT_FILE_THRESHOLD = 32_768;
 /** Maximum UTF-8 bytes retained for successful bash stdout in workflow events. */
 const PERSISTED_BASH_OUTPUT_MAX_BYTES = 32 * 1024;
 
+function utf8SequenceLength(leadByte: number): number {
+  if (leadByte < 0x80) return 1;
+  if (leadByte < 0xe0) return 2;
+  if (leadByte < 0xf0) return 3;
+  return 4;
+}
+
 function formatPersistedBashOutput(output: string): {
   nodeOutput: string;
   truncated: boolean;
@@ -2473,7 +2480,7 @@ function formatPersistedBashOutput(output: string): {
   }
   if (sequenceStart >= 0) {
     const leadByte = outputBytes[sequenceStart];
-    const expectedLength = leadByte < 0x80 ? 1 : leadByte < 0xe0 ? 2 : leadByte < 0xf0 ? 3 : 4;
+    const expectedLength = utf8SequenceLength(leadByte);
     if (headEnd - sequenceStart < expectedLength) headEnd = sequenceStart;
   }
 
