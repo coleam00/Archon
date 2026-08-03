@@ -234,7 +234,16 @@ export type MessageChunk =
       toolOutput: string;
       /** Matching ID for the originating `tool` chunk. See `tool` variant above. */
       toolCallId?: string;
-      /** Known statuses are provider-reported; `unknown` marks a synthetic closure with no provider result. Never inferred from formatted output. */
+      /**
+       * Known statuses are provider-reported. `unknown` covers two distinct
+       * cases that share one property — no authoritative status exists:
+       *   1. the provider completed the tool but reports no status (e.g. Codex
+       *      web_search, provider.ts:591), and
+       *   2. a synthetic closure emitted with no provider result at all.
+       * Never inferred from formatted output: a tool whose text merely looks
+       * like an error is still `unknown`, because guessing here would put a
+       * fabricated status next to reported ones and make neither trustworthy.
+       */
       toolOutcome?: 'success' | 'error' | 'interrupted' | 'unknown';
       /** Provider-reported process exit code, when the tool exposes one. */
       exitCode?: number;
