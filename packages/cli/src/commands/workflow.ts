@@ -1978,9 +1978,10 @@ function formatDuration(ms: number): string {
   return `${mins}m${remSecs}s`;
 }
 
-interface NodeSummary {
+export interface NodeSummary {
   nodeId: string;
   state: 'running' | 'completed' | 'failed' | 'skipped';
+  startedAt?: string;
   durationMs?: number;
   outputPreview?: string;
   error?: string;
@@ -1990,7 +1991,7 @@ interface NodeSummary {
  * Derive per-node summaries from a run's workflow events.
  * Processes node_started / node_completed / node_failed / node_skipped* events.
  */
-function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
+export function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
   const startTimes = new Map<string, number>();
   const summaries = new Map<string, NodeSummary>();
 
@@ -2001,8 +2002,11 @@ function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
     switch (event.event_type) {
       case 'node_started': {
         startTimes.set(nodeId, new Date(event.created_at).getTime());
-        if (!summaries.has(nodeId)) {
-          summaries.set(nodeId, { nodeId, state: 'running' });
+        const existing = summaries.get(nodeId);
+        if (existing) {
+          existing.startedAt = event.created_at;
+        } else {
+          summaries.set(nodeId, { nodeId, state: 'running', startedAt: event.created_at });
         }
         break;
       }
@@ -2014,6 +2018,7 @@ function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
         summaries.set(nodeId, {
           nodeId,
           state: 'completed',
+          startedAt: summaries.get(nodeId)?.startedAt,
           durationMs: started !== undefined ? endTime - started : undefined,
           outputPreview:
             output !== undefined
@@ -2028,6 +2033,7 @@ function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
         summaries.set(nodeId, {
           nodeId,
           state: 'failed',
+          startedAt: summaries.get(nodeId)?.startedAt,
           durationMs: started !== undefined ? endTime - started : undefined,
           error: typeof event.data.error === 'string' ? event.data.error : 'Unknown error',
         });
@@ -2049,7 +2055,7 @@ function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
  * abort the command (the run summary itself is still useful), but it must NOT be
  * indistinguishable from "this run has no events" — so log a warn and flag the
  * failure to the caller, which prints a visible note. (In `--json` mode logs are
- * silenced; the empty `events` array is the documented signal there.)
+ * silenced; an empty derived/raw payload is the documented signal there.)
  */
 async function fetchVerboseEvents(
   runId: string
@@ -2094,7 +2100,11 @@ function printVerboseNodes(events: WorkflowEventRow[]): void {
 /**
  * Show status of all running workflow runs.
  */
-export async function workflowStatusCommand(json?: boolean, verbose?: boolean): Promise<void> {
+export async function workflowStatusCommand(
+  json?: boolean,
+  verbose?: boolean,
+  events?: boolean
+): Promise<void> {
   let runs: WorkflowRun[];
   try {
     const result = await getWorkflowStatus();
@@ -2108,12 +2118,13 @@ export async function workflowStatusCommand(json?: boolean, verbose?: boolean): 
   if (json) {
     let runsOutput: unknown[] = runs;
     if (verbose) {
-      const eventsPerRun = await Promise.all(
-        runs.map(run =>
-          workflowEventsDb.listWorkflowEvents(run.id).catch(() => [] as WorkflowEventRow[])
-        )
-      );
-      runsOutput = runs.map((run, i) => ({ ...run, events: eventsPerRun[i] }));
+      const fetchedPerRun = await Promise.all(runs.map(run => fetchVerboseEvents(run.id)));
+      runsOutput = runs.map((run, i) => {
+        const runEvents = fetchedPerRun[i]?.events ?? [];
+        return events
+          ? { ...run, events: runEvents }
+          : { ...run, nodes: buildNodeSummaries(runEvents) };
+      });
     }
     await writeJsonLine({ runs: runsOutput });
     return;
@@ -2150,8 +2161,8 @@ export async function workflowStatusCommand(json?: boolean, verbose?: boolean): 
  *
  * Unlike `status` (active runs only), this resolves one run regardless of
  * status — so an agent can answer "did the review pass?" for a completed/failed
- * run. `--verbose` adds the per-node event summary; `--json` emits the raw run
- * (plus an `events` array when verbose).
+ * run. `--verbose` adds the per-node summary; `--json` emits the raw run plus a
+ * `nodes` array when verbose (`--events` selects raw event rows instead).
  *
  * `runId` may be the short id printed by `workflow runs` (see resolveRunIdArg).
  */
@@ -2159,7 +2170,8 @@ export async function workflowGetCommand(
   runId: string,
   json?: boolean,
   verbose?: boolean,
-  cwd?: string
+  cwd?: string,
+  rawEvents?: boolean
 ): Promise<number> {
   let run: WorkflowRun | null;
   try {
@@ -2199,7 +2211,15 @@ export async function workflowGetCommand(
   }
 
   if (json) {
-    const output = verbose ? { ...run, events: events ?? [] } : run;
+    const verboseEvents = events ?? [];
+    let output: unknown;
+    if (!verbose) {
+      output = run;
+    } else if (rawEvents) {
+      output = { ...run, events: verboseEvents };
+    } else {
+      output = { ...run, nodes: buildNodeSummaries(verboseEvents) };
+    }
     await writeJsonLine(output);
     return 0;
   }

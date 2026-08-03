@@ -162,6 +162,7 @@ Options:
   --quiet, -q                Reduce log verbosity to warnings and errors only
   --verbose, -v              Show debug-level output
   --json                     Output machine-readable JSON (list/status/get/runs/approve/reject/abandon/resume)
+  --events                   For verbose JSON status/get: output raw event rows instead of node summaries
   --detach                   Run 'workflow run' in a detached background child (returns immediately)
   --all                      For 'workflow runs': list across all projects (ignore cwd scope)
   --status <status>          For 'workflow runs': filter to one status (running, completed, failed, ...)
@@ -286,6 +287,7 @@ async function main(): Promise<number> {
         quiet: { type: 'boolean', short: 'q' },
         verbose: { type: 'boolean', short: 'v' },
         json: { type: 'boolean' },
+        events: { type: 'boolean' },
         'run-id': { type: 'string' },
         type: { type: 'string' },
         data: { type: 'string' },
@@ -585,13 +587,17 @@ async function main(): Promise<number> {
           }
 
           case 'status':
-            await workflowStatusCommand(jsonFlag, values.verbose as boolean | undefined);
+            await workflowStatusCommand(
+              jsonFlag,
+              values.verbose as boolean | undefined,
+              values.events as boolean | undefined
+            );
             break;
 
           case 'get': {
             const getRunId = positionals[2];
             if (!getRunId) {
-              console.error('Usage: archon workflow get <run-id> [--json] [--verbose]');
+              console.error('Usage: archon workflow get <run-id> [--json] [--verbose] [--events]');
               return 1;
             }
             // Propagate the command's exit code so `get <id> && ...` and CI
@@ -600,7 +606,8 @@ async function main(): Promise<number> {
               getRunId,
               jsonFlag,
               values.verbose as boolean | undefined,
-              effectiveCwd
+              effectiveCwd,
+              values.events as boolean | undefined
             );
           }
 

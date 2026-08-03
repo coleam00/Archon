@@ -50,6 +50,25 @@ await db.query(
 const minuteAgo = (): Date => new Date(Date.now() - 60_000);
 
 describe('listWorkflowEventsSince — real SQLite (catches the C1 datetime mismatch)', () => {
+  test('orders tied timestamps by ID consistently while preserving chronology', async () => {
+    await db.query(
+      `INSERT INTO remote_agent_workflow_events (id, workflow_run_id, event_type, data, created_at)
+       VALUES
+         ('ordering-tie-b', 'run-1', 'node_started', '{}', '2026-01-01 00:00:01'),
+         ('ordering-later', 'run-1', 'node_started', '{}', '2026-01-01 00:00:02'),
+         ('ordering-tie-a', 'run-1', 'node_started', '{}', '2026-01-01 00:00:01')`,
+      []
+    );
+
+    const first = await listWorkflowEventsSince(new Date('2026-01-01T00:00:00.000Z'), 100);
+    const second = await listWorkflowEventsSince(new Date('2026-01-01T00:00:00.000Z'), 100);
+    const orderingIds = (rows: typeof first): string[] =>
+      rows.filter(row => row.id.startsWith('ordering-')).map(row => row.id);
+
+    expect(orderingIds(first)).toEqual(['ordering-tie-a', 'ordering-tie-b', 'ordering-later']);
+    expect(orderingIds(second)).toEqual(orderingIds(first));
+  });
+
   test('returns an event stored via datetime() when queried with an ISO Date cursor', async () => {
     await createWorkflowEvent({
       workflow_run_id: 'run-1',

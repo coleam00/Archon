@@ -292,6 +292,7 @@ Show **active** workflow runs (running and paused) across all worktrees. For ful
 archon workflow status
 archon workflow status --json
 archon workflow status --verbose   # add a per-node summary for each run
+archon workflow status --json --verbose
 ```
 
 ### `workflow runs`
@@ -317,8 +318,20 @@ Show detail for a single run by ID, regardless of status (unlike `status`, which
 ```bash
 archon workflow get <run-id>
 archon workflow get <run-id> --json
-archon workflow get <run-id> --verbose   # add the per-node event summary
+archon workflow get <run-id> --verbose   # add the per-node summary
+archon workflow get <run-id> --json --verbose
 ```
+
+For both commands, `--json --verbose` adds a `nodes` array. Nodes are ordered by the
+first appearance of each node in the deterministically ordered event stream. Every
+entry includes `nodeId` and `state`; nodes with a start event include the original ISO
+`startedAt`, and terminal nodes with both start and end events include `durationMs`.
+Completed nodes may include an `outputPreview`, truncated after 200 characters with
+ASCII `...`, while failed nodes include `error` (or `Unknown error` when none was
+recorded).
+
+Add `--events` to `--json --verbose` to return raw `events` rows instead of `nodes` for
+debugging. Raw events are not the recommended integration surface.
 
 ### `workflow resume`
 
@@ -556,6 +569,7 @@ archon version
 | `--quiet`, `-q` | Reduce log verbosity to warnings and errors only |
 | `--verbose`, `-v` | Show debug-level output |
 | `--json` | Output machine-readable JSON (workflow `list`, `status`, `runs`, `get`, and the write commands `approve`/`reject`/`abandon`/`resume`). Implies log suppression so stdout is exactly the JSON payload. |
+| `--events` | With verbose JSON workflow `status`/`get`, return raw event rows instead of ordered node summaries. |
 | `--help`, `-h` | Show help message |
 
 ## Working Directory

@@ -117,7 +117,7 @@ describe('workflow-events', () => {
       expect(mockQuery).toHaveBeenCalledWith(
         `SELECT * FROM remote_agent_workflow_events
        WHERE workflow_run_id = $1
-       ORDER BY created_at ASC`,
+       ORDER BY created_at ASC, id ASC`,
         ['run-456']
       );
     });
@@ -151,7 +151,7 @@ describe('workflow-events', () => {
       expect(mockQuery).toHaveBeenCalledWith(
         `SELECT * FROM remote_agent_workflow_events
          WHERE workflow_run_id = $1 AND created_at > $2
-         ORDER BY created_at ASC`,
+         ORDER BY created_at ASC, id ASC`,
         ['run-456', since.toISOString()]
       );
     });
@@ -167,7 +167,7 @@ describe('workflow-events', () => {
       expect(mockQuery).toHaveBeenCalledWith(
         `SELECT * FROM remote_agent_workflow_events
        WHERE workflow_run_id = $1
-       ORDER BY created_at ASC`,
+       ORDER BY created_at ASC, id ASC`,
         ['run-456']
       );
     });
