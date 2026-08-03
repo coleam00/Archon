@@ -1400,7 +1400,22 @@ export async function executeWorkflow(
       .createWorkflowEvent({
         workflow_run_id: workflowRun.id,
         event_type: 'workflow_started',
-        data: { workflowName: workflow.name },
+        data: {
+          workflowName: workflow.name,
+          defaultAssistant: userAiPrefs.defaultProvider ?? config.assistant,
+          provider: resolvedProvider,
+          model: resolvedModel ?? null,
+          isolationMode:
+            execContext.kind === 'container'
+              ? 'container'
+              : isolationContext
+                ? 'worktree'
+                : 'in-place',
+          baseBranch,
+          userId: workflowRun.user_id ?? null,
+          userMessage: workflowRun.user_message,
+          origin: workflowRun.parent_run_id ? 'workflow' : platform.getPlatformType(),
+        },
       })
       .catch((err: Error) => {
         getLog().error(

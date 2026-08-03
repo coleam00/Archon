@@ -609,6 +609,171 @@ describe('executeWorkflow', () => {
   });
 
   // -------------------------------------------------------------------------
+  // Durable workflow_started configuration snapshot
+  // -------------------------------------------------------------------------
+
+  describe('workflow_started configuration snapshot', () => {
+    it('persists the resolved configuration and top-level platform origin', async () => {
+      const createEventSpy = mock(async () => {});
+      const store = makeStore({
+        createWorkflowRun: mock(async () =>
+          makeRun({
+            user_message: 'persisted input',
+            user_id: 'user-1',
+            parent_run_id: null,
+          })
+        ),
+        createWorkflowEvent: createEventSpy,
+      });
+      const deps = {
+        ...makeDeps(store),
+        loadConfig: mock(
+          async (): Promise<WorkflowConfig> => ({
+            assistant: 'claude',
+            assistants: { claude: {}, codex: {} },
+            baseBranch: 'config-base',
+            commands: { folder: '' },
+            tiers: {
+              large: { provider: 'codex', model: 'gpt-5.5', effort: 'high' },
+            },
+          })
+        ),
+        getUserAiPrefs: mock(async () => ({ defaultProvider: 'codex' })),
+      } as WorkflowDeps;
+      const platform = {
+        sendMessage: mock(async () => {}),
+        getPlatformType: mock(() => 'web'),
+      } as unknown as IWorkflowPlatform;
+
+      await executeWorkflow(
+        deps,
+        platform,
+        'conv-1',
+        '/tmp/worktree',
+        makeWorkflow({ model: 'large' }),
+        'caller input',
+        'db-conv-1',
+        {
+          userId: 'user-1',
+          baseBranch: 'caller-base',
+          baseOverride: 'override-base',
+          isolationContext: { branchName: 'feature/snapshot' },
+        }
+      );
+
+      const startedEvent = createEventSpy.mock.calls
+        .map(call => call[0])
+        .find(event => event.event_type === 'workflow_started');
+      expect(startedEvent?.data).toEqual({
+        workflowName: 'test-workflow',
+        defaultAssistant: 'codex',
+        provider: 'codex',
+        model: 'gpt-5.5',
+        isolationMode: 'worktree',
+        baseBranch: 'override-base',
+        userId: 'user-1',
+        userMessage: 'persisted input',
+        origin: 'web',
+      });
+    });
+
+    it('persists explicit nulls for an in-place run without a model or user', async () => {
+      const createEventSpy = mock(async () => {});
+      const store = makeStore({
+        createWorkflowRun: mock(async () =>
+          makeRun({ user_message: 'folder input', user_id: null, parent_run_id: null })
+        ),
+        createWorkflowEvent: createEventSpy,
+      });
+
+      await executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv-1',
+        '/tmp/folder',
+        makeWorkflow(),
+        'folder input',
+        'db-conv-1'
+      );
+
+      const startedEvent = createEventSpy.mock.calls
+        .map(call => call[0])
+        .find(event => event.event_type === 'workflow_started');
+      expect(startedEvent?.data).toMatchObject({
+        workflowName: 'test-workflow',
+        model: null,
+        isolationMode: 'in-place',
+        userId: null,
+        origin: 'test',
+      });
+      expect(startedEvent?.data).toHaveProperty('model');
+      expect(startedEvent?.data).toHaveProperty('userId');
+    });
+
+    it('classifies a container execution ahead of a worktree context', async () => {
+      const createEventSpy = mock(async () => {});
+      const store = makeStore({
+        createWorkflowRun: mock(async () =>
+          makeRun({ user_message: 'container input', user_id: null, parent_run_id: null })
+        ),
+        createWorkflowEvent: createEventSpy,
+      });
+
+      await executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv-1',
+        '/tmp/container',
+        makeWorkflow(),
+        'container input',
+        'db-conv-1',
+        {
+          execContext: { kind: 'container', containerId: 'container-1' },
+          isolationContext: { branchName: 'feature/snapshot' },
+        }
+      );
+
+      const startedEvent = createEventSpy.mock.calls
+        .map(call => call[0])
+        .find(event => event.event_type === 'workflow_started');
+      expect(startedEvent?.data?.isolationMode).toBe('container');
+      expect(startedEvent?.data?.origin).toBe('test');
+    });
+
+    it('uses persisted child-run attribution and input instead of caller values', async () => {
+      const createEventSpy = mock(async () => {});
+      const preCreatedRun = makeRun({
+        id: 'child-run',
+        user_message: 'persisted child input',
+        user_id: null,
+        parent_run_id: 'parent-run',
+      });
+      const store = makeStore({ createWorkflowEvent: createEventSpy });
+
+      await executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv-1',
+        '/tmp/shared-worktree',
+        makeWorkflow(),
+        'transient caller input',
+        'db-conv-1',
+        { preCreatedRun, userId: 'transient-user' }
+      );
+
+      const startedEvent = createEventSpy.mock.calls
+        .map(call => call[0])
+        .find(event => event.event_type === 'workflow_started');
+      expect(startedEvent?.data).toMatchObject({
+        workflowName: 'test-workflow',
+        userId: null,
+        userMessage: 'persisted child input',
+        origin: 'workflow',
+      });
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // $DOCS_DIR default resolution
   // -------------------------------------------------------------------------
 
