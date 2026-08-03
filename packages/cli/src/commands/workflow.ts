@@ -97,6 +97,16 @@ function readDetachedLogTail(path: string): string | null {
   }
 }
 
+function closeLogFile(logFd: number | undefined): void {
+  if (logFd === undefined) return;
+
+  try {
+    closeSync(logFd);
+  } catch {
+    /* fd already closed/invalid — nothing to clean up */
+  }
+}
+
 function detachedStartupExitError(
   code: number | null,
   signal: NodeJS.Signals | null,
@@ -337,13 +347,7 @@ async function spawnDetachedWorkflowRun(
       `\n--- detached workflow invocation: ${conversationId} at ${new Date().toISOString()} ---\n`
     );
   } catch (error) {
-    if (logFd !== undefined) {
-      try {
-        closeSync(logFd);
-      } catch {
-        /* fd already closed/invalid — nothing to clean up */
-      }
-    }
+    closeLogFile(logFd);
     getLog().warn({ err: error as Error }, 'cli.detached_run_log_open_failed');
     logPath = null;
     logFd = undefined;
@@ -382,13 +386,7 @@ async function spawnDetachedWorkflowRun(
   } finally {
     // The child inherits its own dup of the log fd; close the parent's copy so a
     // synchronous spawn failure (bad execPath, invalid cwd) doesn't leak it.
-    if (logFd !== undefined) {
-      try {
-        closeSync(logFd);
-      } catch {
-        /* fd already closed/invalid — nothing to clean up */
-      }
-    }
+    closeLogFile(logFd);
   }
   return logPath;
 }
