@@ -38,9 +38,10 @@ docker run --rm -v "$PWD:/workspace" ghcr.io/coleam00/archon:latest workflow lis
 The quick installer and Homebrew install a native, compiled `archon` executable;
 they do not require Bun at runtime. A GUI app, `launchd` job, or other process
 without your login-shell `PATH` should launch that executable by an absolute path,
-configured by the user (for the quick installer, the default is
-`/usr/local/bin/archon`). Do not invoke the Bun-linked/source CLI from these
-processes.
+configured by the user (the quick-installer defaults are
+`/usr/local/bin/archon` on macOS/Linux and
+`%USERPROFILE%\\.archon\\bin\\archon.exe` on Windows). Do not invoke the
+Bun-linked/source CLI from these processes.
 
 The source-install and `bun link` workflow below is for terminal development and
 requires Bun to be discoverable on `PATH`.
