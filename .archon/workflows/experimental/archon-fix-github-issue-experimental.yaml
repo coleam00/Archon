@@ -98,11 +98,18 @@ nodes:
         echo "type-check and test failures would be blamed on the implementation." >&2
         exit 1
       fi
-      # Independent of the model's own report: if a manifest exists, its install
-      # target must exist too. Catches the case where the model narrated success
-      # after a failure and never wrote the marker.
-      if [ -f package.json ] && [ ! -d node_modules ]; then
-        echo "package.json is present but node_modules is missing — dependencies did not install." >&2
+      # Independent of the model's own report, for the one ecosystem we can check
+      # cheaply and unambiguously. Catches a model that narrated success after a
+      # failed install and never wrote the marker.
+      #
+      # Deliberately narrow. Yarn PnP resolves from .pnp.cjs and has NO node_modules
+      # by design, so an unconditional check here would exit 1 on every run in such
+      # a repo — a bundled default must not block a legitimate project. Non-JS
+      # projects have no package.json and are not checked at all; the marker file
+      # above is the only signal there.
+      if [ -f package.json ] && [ ! -e .pnp.cjs ] && [ ! -e .pnp.data.json ] && [ ! -d node_modules ]; then
+        echo "package.json is present, this is not a Yarn PnP project, and node_modules is missing." >&2
+        echo "Dependencies did not install — refusing to implement against a broken tree." >&2
         exit 1
       fi
       echo '{"deps":"ok"}'

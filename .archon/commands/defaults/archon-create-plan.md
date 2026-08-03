@@ -36,7 +36,7 @@ Match top to bottom and take the **first** row that applies.
 | Ends with `.md` and contains "Implementation Phases" | PRD file | Parse PRD, select next phase |
 | File path that exists | Document | Read and extract feature description |
 | A bare number (`1234`, `#1234`) | **GitHub issue** | **Go to 0.1a** |
-| A GitHub issue or PR URL | **GitHub issue** | **Go to 0.1a** |
+| A GitHub issue URL | **GitHub issue** | **Go to 0.1a** |
 | Free-form text | Description | Use directly as feature input |
 | Empty/blank | Error | STOP - require input |
 
