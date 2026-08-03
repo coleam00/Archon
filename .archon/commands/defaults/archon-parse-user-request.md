@@ -33,6 +33,20 @@ Set it to `""` when the message names no issue. A message can legitimately be a
 bug report, a pasted stack trace, a file path, or a plain instruction — `""` is
 a correct answer, not a failure. Do not search for or invent a number.
 
+## `repo` — best effort, verbatim
+
+The `owner/repo` **copied character for character out of the input**, when the
+message names a repository in shorthand form (`owner/repo#123`).
+
+- **Never construct or infer one.** Not from a URL, not from context, not from
+  the checkout you are running in.
+- `""` when the message used no shorthand — including when it used a full URL,
+  which belongs in `repo_url` instead.
+
+A number alone is ambiguous across repositories, and `owner/repo#123` states the
+repository explicitly. Dropping it would send that number to whatever checkout
+the run happens to be in.
+
 ## `repo_url` — best effort, verbatim
 
 The GitHub URL **copied character for character out of the input**, when the
@@ -58,10 +72,10 @@ of the structured output and the last character is its end.
 
 ## Examples
 
-| input | user_request | issue_number | repo_url |
-| --- | --- | --- | --- |
-| `123` | `123` | `123` | `""` |
-| `fix #2412 but only the bash node` | `fix #2412 but only the bash node` | `2412` | `""` |
-| `https://github.com/o/r/issues/456` | `https://github.com/o/r/issues/456` | `456` | `https://github.com/o/r/issues/456` |
-| `owner/repo#88` | `owner/repo#88` | `88` | `""` |
-| `the SQLite timestamps tie, see log` | `the SQLite timestamps tie, see log` | `""` | `""` |
+| input | user_request | issue_number | repo | repo_url |
+| --- | --- | --- | --- | --- |
+| `123` | `123` | `123` | `""` | `""` |
+| `fix #2412 but only the bash node` | `fix #2412 but only the bash node` | `2412` | `""` | `""` |
+| `https://github.com/o/r/issues/456` | `https://github.com/o/r/issues/456` | `456` | `""` | `https://github.com/o/r/issues/456` |
+| `owner/repo#88` | `owner/repo#88` | `88` | `owner/repo` | `""` |
+| `the SQLite timestamps tie, see log` | `the SQLite timestamps tie, see log` | `""` | `""` | `""` |
