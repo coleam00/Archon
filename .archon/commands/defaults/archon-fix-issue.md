@@ -42,13 +42,25 @@ created a git worktree on the correct branch. In that case:
   `.archon/` file, record its baseline:
 
   ```bash
-  git diff -- <the-planned-file> > /tmp/archon-baseline.diff   # empty if clean
+  # HEAD, not the index: `git diff -- <file>` compares the worktree against the
+  # INDEX, so pre-existing changes that are already STAGED do not appear — and
+  # `git add -p` will neither show nor remove them, so they ride into your commit
+  # invisibly. Diffing against HEAD captures staged and unstaged alike.
+  git diff HEAD -- <the-planned-file> > /tmp/archon-baseline.diff   # empty if clean
   ```
 
-  After editing, stage **only your own hunks** — `git add -p <file>` — and reject any
-  hunk that also appears in the baseline. If the two are entangled such that you cannot
-  separate them, stop and say so rather than committing someone else's work under your
-  change. That is the same call the 2026-08-03 run made, and it was the right one.
+  Then, before staging anything of your own, clear that file out of the index so the
+  only thing you can stage is what you deliberately pick:
+
+  ```bash
+  git restore --staged <the-planned-file>   # no-op if nothing was staged
+  git add -p <the-planned-file>             # stage ONLY your own hunks
+  ```
+
+  Reject any hunk that also appears in the baseline. If yours and theirs are entangled
+  such that you cannot separate them, stop and say so rather than committing someone
+  else's work under your change. That is the same call the 2026-08-03 run made, and it
+  was the right one.
 - **Dirty paths outside `.archon/` are also not a reason to stop, and also not yours.**
   They are either your own work from an earlier attempt at this run (resume reuses the
   worktree) or something the operator left behind. Either way: leave them alone, do not
