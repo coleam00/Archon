@@ -36,8 +36,8 @@ import {
   markTierNoticeShown,
 } from '@archon/paths';
 import { join } from 'node:path';
-import { mkdirSync, openSync, closeSync } from 'node:fs';
-import { spawn } from 'node:child_process';
+import { mkdirSync, openSync, closeSync, readFileSync, writeSync } from 'node:fs';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { createWorkflowDeps } from '@archon/core/workflows/store-adapter';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { resolveWorkflowName } from '@archon/workflows/router';
@@ -80,6 +80,71 @@ let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('cli.workflow');
   return cachedLog;
+}
+
+const DETACHED_STARTUP_WINDOW_MS = 500;
+const DETACHED_LOG_TAIL_MAX_CHARS = 4_000;
+const DETACHED_LOG_TAIL_MAX_LINES = 40;
+
+function readDetachedLogTail(path: string): string | null {
+  try {
+    const content = readFileSync(path, 'utf8');
+    const lines = content.slice(-DETACHED_LOG_TAIL_MAX_CHARS).split('\n');
+    const tail = lines.slice(-DETACHED_LOG_TAIL_MAX_LINES).join('\n').trim();
+    return tail.length > 0 ? tail : null;
+  } catch {
+    return null;
+  }
+}
+
+function detachedStartupExitError(
+  code: number | null,
+  signal: NodeJS.Signals | null,
+  logPath: string | null
+): Error {
+  const reason = code === null ? `signal ${signal ?? 'unknown'}` : `exit code ${String(code)}`;
+  const tail = logPath ? readDetachedLogTail(logPath) : null;
+  const diagnostic = tail ? `\n\nChild output (${logPath}):\n${tail}` : '';
+  return new Error(`Detached workflow child exited during startup with ${reason}.${diagnostic}`);
+}
+
+async function waitForDetachedStartup(
+  child: ChildProcess,
+  logPath: string | null,
+  execPath: string,
+  conversationId: string
+): Promise<void> {
+  const outcome = await new Promise<'completed' | 'survived'>((resolve, reject) => {
+    const cleanup = (): void => {
+      clearTimeout(timer);
+      child.off('exit', onExit);
+      child.off('error', onStartupError);
+    };
+    const settle = (result: 'completed' | 'survived' | Error): void => {
+      cleanup();
+      if (result instanceof Error) reject(result);
+      else resolve(result);
+    };
+    const onExit = (code: number | null, signal: NodeJS.Signals | null): void => {
+      if (code === 0) settle('completed');
+      else settle(detachedStartupExitError(code, signal, logPath));
+    };
+    const onStartupError = (error: Error): void => {
+      settle(error);
+    };
+    const timer = setTimeout(() => {
+      settle('survived');
+    }, DETACHED_STARTUP_WINDOW_MS);
+
+    child.once('exit', onExit);
+    child.once('error', onStartupError);
+  });
+
+  if (outcome === 'survived') child.unref();
+  getLog().debug(
+    { execPath, conversationId, outcome, startupWindowMs: DETACHED_STARTUP_WINDOW_MS },
+    'cli.detached_run_startup_acknowledged'
+  );
 }
 
 /**
@@ -257,11 +322,11 @@ export function buildDetachedRunCmd(
   return [...baseCmd, ...userArgs, '--cwd', cwd, ...extraArgs];
 }
 
-function spawnDetachedWorkflowRun(
+async function spawnDetachedWorkflowRun(
   cwd: string,
   conversationId: string,
   extraArgs: string[]
-): string | null {
+): Promise<string | null> {
   const cmd = buildDetachedRunCmd(
     BUNDLED_IS_BINARY,
     process.execPath,
@@ -277,7 +342,18 @@ function spawnDetachedWorkflowRun(
     mkdirSync(logDir, { recursive: true });
     logPath = join(logDir, `detached-run-${conversationId}.log`);
     logFd = openSync(logPath, 'a');
+    writeSync(
+      logFd,
+      `\n--- detached workflow invocation: ${conversationId} at ${new Date().toISOString()} ---\n`
+    );
   } catch (error) {
+    if (logFd !== undefined) {
+      try {
+        closeSync(logFd);
+      } catch {
+        /* fd already closed/invalid — nothing to clean up */
+      }
+    }
     getLog().warn({ err: error as Error }, 'cli.detached_run_log_open_failed');
     logPath = null;
     logFd = undefined;
@@ -312,7 +388,7 @@ function spawnDetachedWorkflowRun(
     if (child.pid === undefined) {
       throw new Error(`Failed to start detached workflow child (executable: ${cmd[0]})`);
     }
-    child.unref();
+    await waitForDetachedStartup(child, logPath, cmd[0], conversationId);
   } finally {
     // The child inherits its own dup of the log fd; close the parent's copy so a
     // synchronous spawn failure (bad execPath, invalid cwd) doesn't leak it.
@@ -911,7 +987,7 @@ export async function workflowRunCommand(
       extraArgs.push('--conversation-id', childConversationId);
     }
 
-    const logPath = spawnDetachedWorkflowRun(cwd, childConversationId, extraArgs);
+    const logPath = await spawnDetachedWorkflowRun(cwd, childConversationId, extraArgs);
 
     if (options.json) {
       console.log(
