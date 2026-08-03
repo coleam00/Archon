@@ -2100,7 +2100,7 @@ function printVerboseNodes(events: WorkflowEventRow[]): void {
 export async function workflowStatusCommand(
   json?: boolean,
   verbose?: boolean,
-  events?: boolean
+  rawEvents?: boolean
 ): Promise<void> {
   let runs: WorkflowRun[];
   try {
@@ -2113,16 +2113,18 @@ export async function workflowStatusCommand(
   }
 
   if (json) {
-    let runsOutput: unknown[] = runs;
-    if (verbose) {
-      const fetchedPerRun = await Promise.all(runs.map(run => fetchVerboseEvents(run.id)));
-      runsOutput = runs.map((run, i) => {
-        const runEvents = fetchedPerRun[i]?.events ?? [];
-        return events
-          ? { ...run, events: runEvents }
-          : { ...run, nodes: buildNodeSummaries(runEvents) };
-      });
+    if (!verbose) {
+      await writeJsonLine({ runs });
+      return;
     }
+
+    const fetchedPerRun = await Promise.all(runs.map(run => fetchVerboseEvents(run.id)));
+    const runsOutput = runs.map((run, i) => {
+      const runEvents = fetchedPerRun[i]?.events ?? [];
+      return rawEvents
+        ? { ...run, events: runEvents }
+        : { ...run, nodes: buildNodeSummaries(runEvents) };
+    });
     await writeJsonLine({ runs: runsOutput });
     return;
   }
@@ -2208,15 +2210,15 @@ export async function workflowGetCommand(
   }
 
   if (json) {
-    const verboseEvents = events ?? [];
-    let output: unknown;
     if (!verbose) {
-      output = run;
-    } else if (rawEvents) {
-      output = { ...run, events: verboseEvents };
-    } else {
-      output = { ...run, nodes: buildNodeSummaries(verboseEvents) };
+      await writeJsonLine(run);
+      return 0;
     }
+
+    const verboseEvents = events ?? [];
+    const output = rawEvents
+      ? { ...run, events: verboseEvents }
+      : { ...run, nodes: buildNodeSummaries(verboseEvents) };
     await writeJsonLine(output);
     return 0;
   }
