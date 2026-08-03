@@ -335,7 +335,7 @@ debugging. Raw events are not the recommended integration surface.
 
 ### `workflow resume`
 
-Resume a failed workflow run. Re-executes the workflow, automatically skipping nodes that completed in the prior run.
+Resume a failed or paused workflow run. Re-executes the workflow, automatically skipping nodes that completed in the prior run.
 
 ```bash
 archon workflow resume <run-id>

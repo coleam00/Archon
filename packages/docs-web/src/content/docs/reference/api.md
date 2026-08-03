@@ -265,7 +265,7 @@ Only user-defined workflows can be deleted. Bundled defaults cannot be removed.
 | GET | `/api/runs/{runId}/artifacts` | List artifact files produced by a run |
 | GET | `/api/workflows/runs/by-worker/{platformId}` | Look up a run by worker conversation ID |
 | POST | `/api/workflows/runs/{runId}/cancel` | Cancel a running workflow |
-| POST | `/api/workflows/runs/{runId}/resume` | Resume a failed workflow |
+| POST | `/api/workflows/runs/{runId}/resume` | Resume a failed or paused workflow |
 | POST | `/api/workflows/runs/{runId}/abandon` | Abandon a run (running, paused, or failed); cascade-cancels non-terminal `workflow:` sub-run descendants |
 | POST | `/api/workflows/runs/{runId}/approve` | Approve a paused workflow (400 if paused blocked on a `workflow:` child — approve the child) |
 | POST | `/api/workflows/runs/{runId}/reject` | Reject a paused workflow (400 if paused blocked on a `workflow:` child — reject the child) |
@@ -295,7 +295,7 @@ curl http://localhost:3090/api/runs/{runId}/artifacts
 
 Walks the run's on-disk artifact directory (dotfiles skipped) and returns `{ files: [{ path, size, modifiedAt }] }`. Used by the console UI's Artifacts tab. Returns `{ files: [] }` when the run has no codebase or the codebase name is not in `owner/repo` form; 400 on invalid run id or path-escape attempt, 404 if the run does not exist.
 
-#### Resume a Failed Run
+#### Resume a Failed or Paused Run
 
 ```bash
 curl -X POST http://localhost:3090/api/workflows/runs/{runId}/resume

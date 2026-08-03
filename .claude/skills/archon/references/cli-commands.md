@@ -33,7 +33,7 @@ archon workflow run archon-assist "Investigate the flaky test" --detach
 | `--branch <name>` / `-b` | Branch name for worktree. Reuses existing worktree if healthy |
 | `--from <name>` / `--from-branch <name>` | Start-point branch for new worktree (default: repo default branch) |
 | `--no-worktree` | Skip isolation — run in the live checkout |
-| `--resume` | Resume the last failed run of this workflow at this cwd (skips completed nodes) |
+| `--resume` | Resume the most recent failed or paused run of this workflow at this cwd (skips completed nodes) |
 | `--detach` | Run in a detached background child and return immediately (find the run via `workflow runs`). Pair with `--json` for a structured ack. Child output goes to `~/.archon/logs/`. In the web console the run appears in the Workflow dock (listed by project) but may not update **live** until a refetch — it runs out-of-process and doesn't stream to the console's live event feed. |
 | `--folder` | Register the current NON-git directory as a **folder project** and run in place (no worktree). For multi-repo roots and plain ops folders. Incompatible with `--branch`/`--from`; workflows pinned `worktree.enabled: true` are rejected on folder projects |
 | `--cwd <path>` | Working directory override |
@@ -124,13 +124,12 @@ archon workflow abandon abc123 --json   # { "ok": true, "runId": "abc123", "acti
 
 > **There is no `archon workflow cancel` CLI subcommand.** To actively cancel a running workflow (terminate its subprocess), use the chat slash command `/workflow cancel <run-id>` on the platform that started it (Web UI, Slack, Telegram, etc.), or the Cancel button on the Web UI dashboard. The CLI only offers `abandon`, which is the right tool for orphan cleanup but does not interrupt a live subprocess.
 
-### `archon workflow resume <run-id> [message] [--json]`
+### `archon workflow resume <run-id> [--json]`
 
 Explicitly re-run a specific failed or paused run, reusing its recorded working path/worktree and skipping completed nodes. This differs from `workflow run <name> --resume`, which selects the most recent resumable run by workflow name and invocation cwd. (`--json` validates that the run is resumable and returns `executed: false` WITHOUT running — see the note under `approve`; to actually execute, use the blocking form as a background task.)
 
 ```bash
 archon workflow resume abc123
-archon workflow resume abc123 "continue with the plan"
 ```
 
 ### `archon workflow cleanup [days]`

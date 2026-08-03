@@ -249,7 +249,7 @@ bun run cli workflow runs --all                  # across all projects
 bun run cli workflow get <run-id>
 bun run cli workflow get <run-id> --json
 
-# Resume a failed workflow (re-runs, skipping completed nodes)
+# Resume a failed or paused workflow (re-runs, skipping completed nodes)
 bun run cli workflow resume <run-id>
 
 # Discard a non-terminal run
@@ -848,7 +848,7 @@ async function createSession(conversationId: string, codebaseId: string) {
    - Model and options can be set per workflow or inherited from config defaults
    - `interactive: true` at the workflow level forces foreground execution on web (required for approval-gate workflows in the web UI)
    - Model validation ensures provider/model compatibility at load time
-   - Commands: `/workflow list`, `/workflow reload`, `/workflow status`, `/workflow cancel`, `/workflow resume <id>` (re-runs failed workflow, skipping completed nodes), `/workflow abandon <id>`, `/workflow cleanup [days]` (CLI only — deletes old run records), `/workflow reset-sessions <name> [<node-id>]` (clears persisted `persist_session` memory; chat auto-scopes to the current conversation, CLI adds `--scope`/`--yes` for cross-scope control)
+   - Commands: `/workflow list`, `/workflow reload`, `/workflow status`, `/workflow cancel`, `/workflow resume <id>` (re-runs a failed or paused workflow, skipping completed nodes), `/workflow abandon <id>`, `/workflow cleanup [days]` (CLI only — deletes old run records), `/workflow reset-sessions <name> [<node-id>]` (clears persisted `persist_session` memory; chat auto-scopes to the current conversation, CLI adds `--scope`/`--yes` for cross-scope control)
    - Resilient loading: One broken YAML doesn't abort discovery; errors shown in `/workflow list`
    - `resolveWorkflowName()` (in `router.ts`) resolves workflow names via a 4-tier fallback — exact, case-insensitive, suffix (`-name`), substring — with ambiguity detection; used by both the CLI and all chat platforms
    - Router fallback: if no `/invoke-workflow` is produced, falls back to `archon-assist` (with "Routing unclear" notice); raw AI response returned only when `archon-assist` is unavailable
@@ -923,7 +923,7 @@ Pattern: Use `classifyIsolationError()` (from `@archon/isolation`) to map git er
 - `DELETE /api/workflows/:name/node-sessions` - Reset persisted per-node provider sessions; optional `?scope=` and `?node=` narrow the deletion; omitting `?scope=` is a cross-scope wipe and requires `?confirm=all-scopes`; returns `{ success, deleted }`
 
 **Workflow Run Lifecycle:**
-- `POST /api/workflows/runs/{runId}/resume` - Resume a failed run from where it left off (skips already-completed DAG nodes; AI session context is not restored).
+- `POST /api/workflows/runs/{runId}/resume` - Resume a failed or paused run from where it left off (skips already-completed DAG nodes; AI session context is not restored).
 - `POST /api/workflows/runs/{runId}/abandon` - Abandon a non-terminal run (marks as cancelled); cascade-cancels non-terminal `workflow:` sub-run descendants (#2121 Phase 2) and reports `cascadeFailures`/`blockedParentRunId`
 - `DELETE /api/workflows/runs/{runId}` - Delete a terminal workflow run and its events
 

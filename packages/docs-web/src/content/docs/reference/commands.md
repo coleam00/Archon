@@ -34,7 +34,7 @@ These commands are handled deterministically by the orchestrator — they always
 | `/workflow reload` | Reload workflow definitions |
 | `/workflow status` | Show active workflows |
 | `/workflow cancel` | Cancel running workflow |
-| `/workflow resume <id>` | Resume a failed run (re-runs, skipping completed nodes) |
+| `/workflow resume <id>` | Resume a failed or paused run (re-runs, skipping completed nodes) |
 | `/workflow abandon <id>` | Discard a run (running, paused, or failed) |
 | `/workflow approve <id> [comment]` | Approve a paused workflow run at an approval gate (interactive-loop gates: no comment on a signal-bearing gate = accept & complete; a comment runs another iteration) |
 | `/workflow reject <id> [reason]` | Reject a paused workflow run at an approval gate |
