@@ -84,6 +84,58 @@ export async function getDefaultBranch(repoPath: RepoPath, remote = 'origin'): P
 }
 
 /**
+ * Count commits that would become unreachable if a local branch and its remote
+ * counterpart were deleted.
+ *
+ * Every other local branch, remote branch, and tag is treated as a surviving
+ * ref that can keep the candidate branch's commits reachable.
+ */
+export async function getUniqueCommitCount(
+  repoPath: RepoPath,
+  branchName: BranchName,
+  remote = 'origin'
+): Promise<number> {
+  try {
+    const { stdout: refsOutput } = await execFileAsync(
+      'git',
+      [
+        '-C',
+        repoPath,
+        'for-each-ref',
+        '--format=%(refname)',
+        'refs/heads',
+        'refs/remotes',
+        'refs/tags',
+      ],
+      { timeout: 10000 }
+    );
+    const deletedRefs = new Set([
+      `refs/heads/${branchName}`,
+      `refs/remotes/${remote}/${branchName}`,
+    ]);
+    const survivingRefs = refsOutput
+      .split('\n')
+      .map(ref => ref.trim())
+      .filter(ref => ref.length > 0 && !deletedRefs.has(ref));
+
+    const { stdout: commitsOutput } = await execFileAsync(
+      'git',
+      ['-C', repoPath, 'rev-list', branchName, '--not', ...survivingRefs],
+      { timeout: 15000 }
+    );
+
+    return commitsOutput.split('\n').filter(line => line.trim().length > 0).length;
+  } catch (error) {
+    const err = error as Error & { stderr?: string };
+    getLog().error(
+      { repoPath, branchName, remote, err, stderr: err.stderr },
+      'unique_commit_count_failed'
+    );
+    throw new Error(`Failed to count unique commits for ${branchName}: ${err.message}`);
+  }
+}
+
+/**
  * Checkout a branch (creating it if it doesn't exist)
  */
 export async function checkout(repoPath: RepoPath, branchName: BranchName): Promise<void> {

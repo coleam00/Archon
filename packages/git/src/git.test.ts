@@ -959,6 +959,125 @@ branch refs/heads/feature/auth
     });
   });
 
+  describe('getUniqueCommitCount', () => {
+    let execSpy: Mock<typeof git.execFileAsync>;
+
+    beforeEach(() => {
+      execSpy = spyOn(git, 'execFileAsync');
+    });
+
+    afterEach(() => {
+      execSpy.mockRestore();
+    });
+
+    test('returns zero when all tip commits are reachable from surviving refs', async () => {
+      execSpy
+        .mockResolvedValueOnce({
+          stdout:
+            'refs/heads/feature/auth\nrefs/heads/dev\nrefs/remotes/origin/feature/auth\nrefs/remotes/origin/dev\nrefs/tags/v1.0.0\n',
+          stderr: '',
+        })
+        .mockResolvedValueOnce({ stdout: '', stderr: '' });
+
+      const result = await git.getUniqueCommitCount('/workspace/repo', 'feature/auth');
+
+      expect(result).toBe(0);
+      expect(execSpy).toHaveBeenNthCalledWith(
+        1,
+        'git',
+        [
+          '-C',
+          '/workspace/repo',
+          'for-each-ref',
+          '--format=%(refname)',
+          'refs/heads',
+          'refs/remotes',
+          'refs/tags',
+        ],
+        expect.any(Object)
+      );
+      expect(execSpy).toHaveBeenNthCalledWith(
+        2,
+        'git',
+        [
+          '-C',
+          '/workspace/repo',
+          'rev-list',
+          'feature/auth',
+          '--not',
+          'refs/heads/dev',
+          'refs/remotes/origin/dev',
+          'refs/tags/v1.0.0',
+        ],
+        expect.any(Object)
+      );
+    });
+
+    test('counts commits reachable only from the candidate branch', async () => {
+      execSpy
+        .mockResolvedValueOnce({ stdout: 'refs/heads/feature/auth\nrefs/heads/dev\n', stderr: '' })
+        .mockResolvedValueOnce({ stdout: 'abc123\ndef456\n\n', stderr: '' });
+
+      const result = await git.getUniqueCommitCount('/workspace/repo', 'feature/auth');
+
+      expect(result).toBe(2);
+    });
+
+    test('excludes the configured remote counterpart but retains other remotes and tags', async () => {
+      execSpy
+        .mockResolvedValueOnce({
+          stdout:
+            'refs/heads/feature/auth\nrefs/remotes/upstream/feature/auth\nrefs/remotes/origin/feature/auth\nrefs/tags/reviewed\n',
+          stderr: '',
+        })
+        .mockResolvedValueOnce({ stdout: 'abc123\n', stderr: '' });
+
+      await git.getUniqueCommitCount('/workspace/repo', 'feature/auth', 'upstream');
+
+      expect(execSpy).toHaveBeenNthCalledWith(
+        2,
+        'git',
+        [
+          '-C',
+          '/workspace/repo',
+          'rev-list',
+          'feature/auth',
+          '--not',
+          'refs/remotes/origin/feature/auth',
+          'refs/tags/reviewed',
+        ],
+        expect.any(Object)
+      );
+    });
+
+    test('checks the full candidate history when no refs survive deletion', async () => {
+      execSpy
+        .mockResolvedValueOnce({
+          stdout: 'refs/heads/feature/auth\nrefs/remotes/origin/feature/auth\n',
+          stderr: '',
+        })
+        .mockResolvedValueOnce({ stdout: 'abc123\ndef456\n', stderr: '' });
+
+      const result = await git.getUniqueCommitCount('/workspace/repo', 'feature/auth');
+
+      expect(result).toBe(2);
+      expect(execSpy).toHaveBeenNthCalledWith(
+        2,
+        'git',
+        ['-C', '/workspace/repo', 'rev-list', 'feature/auth', '--not'],
+        expect.any(Object)
+      );
+    });
+
+    test('rejects when Git cannot enumerate refs', async () => {
+      execSpy.mockRejectedValueOnce(new Error('fatal: not a git repository'));
+
+      await expect(git.getUniqueCommitCount('/workspace/repo', 'feature/auth')).rejects.toThrow(
+        'Failed to count unique commits for feature/auth: fatal: not a git repository'
+      );
+    });
+  });
+
   describe('commitAllChanges', () => {
     let execSpy: Mock<typeof git.execFileAsync>;
 

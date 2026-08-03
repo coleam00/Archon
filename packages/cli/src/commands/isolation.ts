@@ -3,6 +3,7 @@
  */
 import * as isolationDb from '@archon/core/db/isolation-environments';
 import * as workflowDb from '@archon/core/db/workflows';
+import { loadRepoConfig } from '@archon/core';
 import { createLogger } from '@archon/paths';
 import {
   toRepoPath,
@@ -10,7 +11,7 @@ import {
   execFileAsync,
   hasUncommittedChanges,
   toWorktreePath,
-  getDefaultBranch,
+  getUniqueCommitCount,
 } from '@archon/git';
 import { getIsolationProvider } from '@archon/isolation';
 import {
@@ -291,21 +292,26 @@ export async function isolationCompleteCommand(
         getLog().warn({ err, branch }, 'isolation.complete_pr_check_failed');
       }
 
-      // Check 4: unmerged commits (not yet in default branch)
+      // Check 4: commits that would become unreachable after branch deletion
       try {
-        const defaultBranch = await getDefaultBranch(toRepoPath(env.codebase_default_cwd));
-        const unmergedResult = await execFileAsync(
-          'git',
-          ['-C', env.codebase_default_cwd, 'log', `${defaultBranch}..${branch}`, '--oneline'],
-          { timeout: 15000 }
+        const repoConfig = await loadRepoConfig(env.codebase_default_cwd);
+        const remote = repoConfig.worktree?.remote?.trim() || 'origin';
+        const uniqueCommitCount = await getUniqueCommitCount(
+          toRepoPath(env.codebase_default_cwd),
+          toBranchName(branch),
+          remote
         );
-        const unmergedLines = unmergedResult.stdout.trim().split('\n').filter(Boolean);
-        if (unmergedLines.length > 0) {
-          blockers.push(`${unmergedLines.length} commit(s) not merged into ${defaultBranch}`);
+        if (uniqueCommitCount > 0) {
+          blockers.push(`${String(uniqueCommitCount)} commit(s) unique to this branch`);
         }
       } catch (error) {
-        getLog().warn({ err: error as Error, branch }, 'isolation.complete_unmerged_check_failed');
-        console.warn('  Warning: could not check for unmerged commits — skipping unmerged check');
+        getLog().warn(
+          { err: error as Error, branch },
+          'isolation.complete_unique_commit_check_failed'
+        );
+        console.warn(
+          '  Warning: could not check for unique commits — skipping unique commit check'
+        );
       }
 
       // Check 5: unpushed commits (not yet on remote)

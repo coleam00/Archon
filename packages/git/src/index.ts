@@ -32,6 +32,7 @@ export type { WorktreeLayout, WorktreeBaseOverride } from './worktree';
 // Branch operations
 export {
   getDefaultBranch,
+  getUniqueCommitCount,
   getCurrentBranch,
   countCommitsAhead,
   checkout,
