@@ -337,6 +337,7 @@ describe('mapPiEvent', () => {
         toolName: 'read',
         toolOutput: 'file contents',
         toolCallId: 'call-123',
+        toolOutcome: 'success',
       },
     ]);
   });
@@ -351,7 +352,7 @@ describe('mapPiEvent', () => {
     });
     expect(chunks).toHaveLength(2);
     expect(chunks[0].type).toBe('system');
-    expect(chunks[1].type).toBe('tool_result');
+    expect(chunks[1]).toMatchObject({ type: 'tool_result', toolOutcome: 'error' });
   });
 
   test('auto_retry_start → system chunk', () => {

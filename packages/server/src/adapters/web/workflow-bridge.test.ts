@@ -23,6 +23,41 @@ mock.module('@archon/paths', () => ({
 import { mapWorkflowEvent } from './workflow-bridge';
 import type { WorkflowEmitterEvent } from '@archon/workflows/event-emitter';
 
+describe('mapWorkflowEvent — tool activity correlation', () => {
+  test('forwards tool call IDs and completion metadata', () => {
+    const started: WorkflowEmitterEvent = {
+      type: 'tool_started',
+      runId: 'run-1',
+      toolName: 'Bash',
+      stepName: 'implement',
+      toolCallId: 'call-1',
+    };
+    const completed: WorkflowEmitterEvent = {
+      type: 'tool_completed',
+      runId: 'run-1',
+      toolName: 'Bash',
+      stepName: 'implement',
+      durationMs: 42,
+      toolCallId: 'call-1',
+      toolOutcome: 'error',
+      exitCode: 1,
+    };
+
+    expect(JSON.parse(mapWorkflowEvent(started) ?? '{}')).toMatchObject({
+      type: 'workflow_tool_activity',
+      status: 'started',
+      toolCallId: 'call-1',
+    });
+    expect(JSON.parse(mapWorkflowEvent(completed) ?? '{}')).toMatchObject({
+      type: 'workflow_tool_activity',
+      status: 'completed',
+      toolCallId: 'call-1',
+      toolOutcome: 'error',
+      exitCode: 1,
+    });
+  });
+});
+
 describe('mapWorkflowEvent — task_activity (Phase 2 of #975)', () => {
   beforeEach(() => {
     mockLogger.warn.mockClear();

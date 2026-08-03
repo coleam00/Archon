@@ -246,6 +246,8 @@ describe('CodexProvider', () => {
         toolName: 'npm test',
         toolOutput: 'tests passed\n',
         toolCallId: 'cmd-1',
+        toolOutcome: 'success',
+        exitCode: 0,
       });
     });
 
@@ -280,6 +282,8 @@ describe('CodexProvider', () => {
         toolName: 'npm test',
         toolOutput: 'failure\n\n[exit code: 1]',
         toolCallId: 'cmd-2',
+        toolOutcome: 'error',
+        exitCode: 1,
       });
     });
 
@@ -576,6 +580,7 @@ describe('CodexProvider', () => {
         toolName: '\u{1F50C} MCP: fs/readFile',
         toolOutput: '',
         toolCallId: 'mcp-1',
+        toolOutcome: 'success',
       });
       expect(chunks[2]).toEqual({
         type: 'tool',
@@ -587,6 +592,7 @@ describe('CodexProvider', () => {
         toolName: '\u{1F50C} MCP: fs/readFile',
         toolOutput: '\u274C Error: Permission denied',
         toolCallId: 'mcp-2',
+        toolOutcome: 'error',
       });
       expect(mockLogger.warn).toHaveBeenCalledWith(
         expect.objectContaining({ server: 'fs', tool: 'readFile' }),
@@ -640,6 +646,7 @@ describe('CodexProvider', () => {
         toolName: '\u{1F50C} MCP: readFile',
         toolOutput: '',
         toolCallId: 'mcp-tool',
+        toolOutcome: 'success',
       });
       expect(chunks[2]).toEqual({
         type: 'tool',
@@ -651,6 +658,7 @@ describe('CodexProvider', () => {
         toolName: '\u{1F50C} MCP: fs',
         toolOutput: '',
         toolCallId: 'mcp-server',
+        toolOutcome: 'success',
       });
       expect(chunks[4]).toEqual({
         type: 'tool',
@@ -662,6 +670,7 @@ describe('CodexProvider', () => {
         toolName: '\u{1F50C} MCP: MCP tool',
         toolOutput: '',
         toolCallId: 'mcp-unknown',
+        toolOutcome: 'success',
       });
     });
 
@@ -701,6 +710,7 @@ describe('CodexProvider', () => {
         toolName: '\u{1F50C} MCP: db/query',
         toolOutput: '\u274C Error: MCP tool failed',
         toolCallId: 'mcp-failure',
+        toolOutcome: 'error',
       });
     });
 
@@ -742,6 +752,7 @@ describe('CodexProvider', () => {
         toolName: '\u{1F50C} MCP: fs/readFile',
         toolOutput: JSON.stringify([{ type: 'text', text: 'file contents' }]),
         toolCallId: 'mcp-completed',
+        toolOutcome: 'success',
       });
       expect(chunks[2]).toEqual({
         type: 'result',
@@ -1361,6 +1372,7 @@ describe('CodexProvider', () => {
         toolName: 'npm test',
         toolOutput: '',
         toolCallId: 'item-1',
+        toolOutcome: 'success',
       });
     });
 
@@ -1430,6 +1442,8 @@ describe('CodexProvider', () => {
         toolName: 'npm test',
         toolOutput: 'done',
         toolCallId: 'cmd-completed-only',
+        toolOutcome: 'success',
+        exitCode: 0,
       });
       expect(mockLogger.warn).toHaveBeenCalledWith(
         { itemId: 'cmd-completed-only', itemType: 'command_execution' },

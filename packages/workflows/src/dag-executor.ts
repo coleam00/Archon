@@ -1563,6 +1563,8 @@ async function executeNodeInternal(
             toolName: previousTool.toolName,
             stepName: node.id,
             durationMs: now - previousTool.startedAt,
+            toolCallId: lastAnonymousToolCallId,
+            toolOutcome: 'unknown',
           });
           deps.store
             .createWorkflowEvent({
@@ -1572,6 +1574,8 @@ async function executeNodeInternal(
               data: {
                 tool_name: previousTool.toolName,
                 duration_ms: now - previousTool.startedAt,
+                tool_call_id: lastAnonymousToolCallId,
+                tool_outcome: 'unknown',
               },
             })
             .catch((err: Error) => {
@@ -1591,6 +1595,7 @@ async function executeNodeInternal(
           runId: workflowRun.id,
           toolName: msg.toolName,
           stepName: node.id,
+          toolCallId,
         });
 
         if (streamingMode === 'stream') {
@@ -1615,6 +1620,7 @@ async function executeNodeInternal(
             data: {
               tool_name: msg.toolName,
               tool_input: msg.toolInput ?? {},
+              tool_call_id: toolCallId,
             },
           })
           .catch((err: Error) => {
@@ -1634,6 +1640,9 @@ async function executeNodeInternal(
             toolName: tool.toolName,
             stepName: node.id,
             durationMs: now - tool.startedAt,
+            toolCallId: completedToolCallId,
+            ...(msg.toolOutcome !== undefined ? { toolOutcome: msg.toolOutcome } : {}),
+            ...(msg.exitCode !== undefined ? { exitCode: msg.exitCode } : {}),
           });
           deps.store
             .createWorkflowEvent({
@@ -1643,6 +1652,9 @@ async function executeNodeInternal(
               data: {
                 tool_name: tool.toolName,
                 duration_ms: now - tool.startedAt,
+                tool_call_id: completedToolCallId,
+                ...(msg.toolOutcome !== undefined ? { tool_outcome: msg.toolOutcome } : {}),
+                ...(msg.exitCode !== undefined ? { exit_code: msg.exitCode } : {}),
               },
             })
             .catch((err: Error) => {
@@ -1668,6 +1680,8 @@ async function executeNodeInternal(
             toolName: prevTool.toolName,
             stepName: node.id,
             durationMs: Date.now() - prevTool.startedAt,
+            toolCallId,
+            toolOutcome: 'unknown',
           });
           deps.store
             .createWorkflowEvent({
@@ -1677,6 +1691,8 @@ async function executeNodeInternal(
               data: {
                 tool_name: prevTool.toolName,
                 duration_ms: Date.now() - prevTool.startedAt,
+                tool_call_id: toolCallId,
+                tool_outcome: 'unknown',
               },
             })
             .catch((err: Error) => {
@@ -4374,6 +4390,8 @@ async function executeLoopNode(
               toolName: prevTool.toolName,
               stepName: node.id,
               durationMs: Date.now() - prevTool.startedAt,
+              toolCallId,
+              toolOutcome: 'unknown',
             });
             deps.store
               .createWorkflowEvent({
@@ -4383,6 +4401,8 @@ async function executeLoopNode(
                 data: {
                   tool_name: prevTool.toolName,
                   duration_ms: Date.now() - prevTool.startedAt,
+                  tool_call_id: toolCallId,
+                  tool_outcome: 'unknown',
                 },
               })
               .catch((err: Error) => {
@@ -4488,6 +4508,8 @@ async function executeLoopNode(
               toolName: previousTool.toolName,
               stepName: node.id,
               durationMs: now - previousTool.startedAt,
+              toolCallId: lastAnonymousToolCallId,
+              toolOutcome: 'unknown',
             });
             deps.store
               .createWorkflowEvent({
@@ -4497,6 +4519,8 @@ async function executeLoopNode(
                 data: {
                   tool_name: previousTool.toolName,
                   duration_ms: now - previousTool.startedAt,
+                  tool_call_id: lastAnonymousToolCallId,
+                  tool_outcome: 'unknown',
                 },
               })
               .catch((err: Error) => {
@@ -4513,6 +4537,7 @@ async function executeLoopNode(
             runId: workflowRun.id,
             toolName: msg.toolName,
             stepName: node.id,
+            toolCallId,
           });
 
           if (platform.getStreamingMode() === 'stream') {
@@ -4542,7 +4567,11 @@ async function executeLoopNode(
               workflow_run_id: workflowRun.id,
               event_type: 'tool_called',
               step_name: stepName,
-              data: { tool_name: msg.toolName, tool_input: toolInput },
+              data: {
+                tool_name: msg.toolName,
+                tool_input: toolInput,
+                tool_call_id: toolCallId,
+              },
             })
             .catch((err: Error) => {
               logEventStoreError(err, i);
@@ -4558,6 +4587,9 @@ async function executeLoopNode(
               toolName: tool.toolName,
               stepName: node.id,
               durationMs: now - tool.startedAt,
+              toolCallId: completedToolCallId,
+              ...(msg.toolOutcome !== undefined ? { toolOutcome: msg.toolOutcome } : {}),
+              ...(msg.exitCode !== undefined ? { exitCode: msg.exitCode } : {}),
             });
             deps.store
               .createWorkflowEvent({
@@ -4567,6 +4599,9 @@ async function executeLoopNode(
                 data: {
                   tool_name: tool.toolName,
                   duration_ms: now - tool.startedAt,
+                  tool_call_id: completedToolCallId,
+                  ...(msg.toolOutcome !== undefined ? { tool_outcome: msg.toolOutcome } : {}),
+                  ...(msg.exitCode !== undefined ? { exit_code: msg.exitCode } : {}),
                 },
               })
               .catch((err: Error) => {

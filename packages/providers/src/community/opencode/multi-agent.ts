@@ -277,6 +277,7 @@ export async function* streamMultiAgentOpencodeSession(
                 toolName,
                 toolOutput: typeof stateRecord?.output === 'string' ? stateRecord.output : '',
                 toolCallId: scopedCallId,
+                toolOutcome: 'success',
               });
             } else if (status === 'error') {
               completedToolCalls.add(scopedCallId);
@@ -286,6 +287,7 @@ export async function* streamMultiAgentOpencodeSession(
                 toolOutput:
                   typeof stateRecord?.error === 'string' ? stateRecord.error : 'Tool failed',
                 toolCallId: scopedCallId,
+                toolOutcome: 'error',
               });
             }
           }

@@ -1877,6 +1877,58 @@ describe('sendQuery decomposition behaviors', () => {
     expect(err.message).toContain('diagnostic: something broke');
   }, 5_000);
 
+  test('PostToolUse hooks preserve success, failure, and interruption outcomes', async () => {
+    mockQuery.mockImplementation(async function* (args: {
+      options: {
+        hooks?: Record<string, Array<{ hooks: Array<(input: unknown) => Promise<unknown>> }>>;
+      };
+    }) {
+      const successHook = args.options.hooks?.PostToolUse?.[0]?.hooks?.[0];
+      const failureHook = args.options.hooks?.PostToolUseFailure?.[0]?.hooks?.[0];
+      await successHook?.({ tool_name: 'Read', tool_use_id: 'success-id', tool_response: 'ok' });
+      await failureHook?.({
+        tool_name: 'Bash',
+        tool_use_id: 'error-id',
+        error: 'exit 1',
+        is_interrupt: false,
+      });
+      await failureHook?.({
+        tool_name: 'Task',
+        tool_use_id: 'interrupt-id',
+        error: 'stopped',
+        is_interrupt: true,
+      });
+      yield { type: 'assistant', message: { content: [{ type: 'text', text: 'done' }] } };
+    });
+
+    const chunks = [];
+    for await (const chunk of client.sendQuery('test', '/workspace')) chunks.push(chunk);
+
+    expect(chunks.slice(0, 3)).toEqual([
+      {
+        type: 'tool_result',
+        toolName: 'Read',
+        toolOutput: 'ok',
+        toolCallId: 'success-id',
+        toolOutcome: 'success',
+      },
+      {
+        type: 'tool_result',
+        toolName: 'Bash',
+        toolOutput: '❌ Error: exit 1',
+        toolCallId: 'error-id',
+        toolOutcome: 'error',
+      },
+      {
+        type: 'tool_result',
+        toolName: 'Task',
+        toolOutput: '⚠️ Interrupted: stopped',
+        toolCallId: 'interrupt-id',
+        toolOutcome: 'interrupted',
+      },
+    ]);
+  });
+
   test('PostToolUse hook handles circular reference without crashing', async () => {
     mockQuery.mockImplementation(async function* (args: {
       options: {

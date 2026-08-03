@@ -218,6 +218,7 @@ export async function* streamOpencodeSession(
                 toolName,
                 toolOutput: typeof state?.output === 'string' ? state.output : '',
                 ...(callId ? { toolCallId: callId } : {}),
+                toolOutcome: 'success',
               };
             } else if (status === 'error') {
               completedToolCalls.add(callId);
@@ -226,6 +227,7 @@ export async function* streamOpencodeSession(
                 toolName,
                 toolOutput: typeof state?.error === 'string' ? state.error : 'Tool failed',
                 ...(callId ? { toolCallId: callId } : {}),
+                toolOutcome: 'error',
               };
             }
           }

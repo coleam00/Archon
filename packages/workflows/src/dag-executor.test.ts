@@ -3372,6 +3372,7 @@ describe('executeDagWorkflow -- tool_called event persistence', () => {
     expect((eventData.data as Record<string, unknown>).tool_input).toEqual({
       path: '/tmp/test.ts',
     });
+    expect((eventData.data as Record<string, unknown>).tool_call_id).toBe('anonymous-1');
   });
 
   it('calls sendStructuredEvent for tool messages in streaming mode during DAG', async () => {
@@ -3476,6 +3477,10 @@ describe('executeDagWorkflow -- tool_completed event emission', () => {
     expect(readFileComplete).toBeDefined();
     expect(typeof readFileComplete?.[0].data?.duration_ms).toBe('number');
     expect((readFileComplete?.[0].data?.duration_ms as number) >= 0).toBe(true);
+    expect(readFileComplete?.[0].data).toMatchObject({
+      tool_call_id: 'anonymous-1',
+      tool_outcome: 'unknown',
+    });
   });
 
   it('should emit tool_completed for last tool on result in DAG node', async () => {
@@ -3512,6 +3517,10 @@ describe('executeDagWorkflow -- tool_completed event emission', () => {
     expect(completedEvents.length).toBe(1);
     expect(completedEvents[0][0].data?.tool_name).toBe('read_file');
     expect(typeof completedEvents[0][0].data?.duration_ms).toBe('number');
+    expect(completedEvents[0][0].data).toMatchObject({
+      tool_call_id: 'anonymous-1',
+      tool_outcome: 'unknown',
+    });
   });
 
   it('emits a DAG tool_completed duration at tool_result, excluding later assistant time', async () => {
@@ -3524,7 +3533,13 @@ describe('executeDagWorkflow -- tool_completed event emission', () => {
     mockSendQueryDag.mockImplementation(function* () {
       yield { type: 'tool', toolName: 'read_file', toolInput: { path: '/a' } };
       setSystemTime(new Date('2026-01-01T00:00:00.050Z'));
-      yield { type: 'tool_result', toolName: 'read_file', toolOutput: 'contents' };
+      yield {
+        type: 'tool_result',
+        toolName: 'read_file',
+        toolOutput: 'contents',
+        toolOutcome: 'error',
+        exitCode: 1,
+      };
       setSystemTime(new Date('2026-01-01T00:01:00.050Z'));
       yield { type: 'assistant', content: 'post-tool reasoning' };
       yield { type: 'result', sessionId: 'dag-sess-tool-result' };
@@ -3559,6 +3574,9 @@ describe('executeDagWorkflow -- tool_completed event emission', () => {
     expect(completedEvents[0][0].data).toMatchObject({
       tool_name: 'read_file',
       duration_ms: 50,
+      tool_call_id: 'anonymous-1',
+      tool_outcome: 'error',
+      exit_code: 1,
     });
   });
 
@@ -3574,9 +3592,20 @@ describe('executeDagWorkflow -- tool_completed event emission', () => {
       setSystemTime(new Date('2026-01-01T00:00:00.010Z'));
       yield { type: 'tool', toolName: 'write_file', toolCallId: 'id-b' };
       setSystemTime(new Date('2026-01-01T00:00:00.040Z'));
-      yield { type: 'tool_result', toolName: 'read_file', toolCallId: 'id-a' };
+      yield {
+        type: 'tool_result',
+        toolName: 'read_file',
+        toolCallId: 'id-a',
+        toolOutcome: 'success',
+      };
       setSystemTime(new Date('2026-01-01T00:00:00.070Z'));
-      yield { type: 'tool_result', toolName: 'write_file', toolCallId: 'id-b' };
+      yield {
+        type: 'tool_result',
+        toolName: 'write_file',
+        toolCallId: 'id-b',
+        toolOutcome: 'error',
+        exitCode: 2,
+      };
       yield { type: 'result', sessionId: 'dag-sess-interleaved-tools' };
     });
 
@@ -3605,8 +3634,19 @@ describe('executeDagWorkflow -- tool_completed event emission', () => {
       .map(([event]: [{ data: Record<string, unknown> }]) => event.data);
     expect(completedEvents).toEqual(
       expect.arrayContaining([
-        { tool_name: 'read_file', duration_ms: 40 },
-        { tool_name: 'write_file', duration_ms: 60 },
+        {
+          tool_name: 'read_file',
+          duration_ms: 40,
+          tool_call_id: 'id-a',
+          tool_outcome: 'success',
+        },
+        {
+          tool_name: 'write_file',
+          duration_ms: 60,
+          tool_call_id: 'id-b',
+          tool_outcome: 'error',
+          exit_code: 2,
+        },
       ])
     );
   });
@@ -5475,7 +5515,12 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       mockSendQueryDag.mockImplementation(function* () {
         yield { type: 'tool', toolName: 'read_file', toolInput: { path: '/a' } };
         setSystemTime(new Date('2026-01-01T00:00:00.050Z'));
-        yield { type: 'tool_result', toolName: 'read_file', toolOutput: 'contents' };
+        yield {
+          type: 'tool_result',
+          toolName: 'read_file',
+          toolOutput: 'contents',
+          toolOutcome: 'success',
+        };
         setSystemTime(new Date('2026-01-01T00:01:00.050Z'));
         yield { type: 'assistant', content: 'Done. <promise>COMPLETE</promise>' };
         yield { type: 'result', sessionId: 'loop-sess-tool-result' };
@@ -5522,6 +5567,8 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       expect(completedEvents[0][0].data).toMatchObject({
         tool_name: 'read_file',
         duration_ms: 50,
+        tool_call_id: 'anonymous-1',
+        tool_outcome: 'success',
       });
     });
 
@@ -5537,9 +5584,19 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         setSystemTime(new Date('2026-01-01T00:00:00.010Z'));
         yield { type: 'tool', toolName: 'write_file', toolCallId: 'id-b' };
         setSystemTime(new Date('2026-01-01T00:00:00.040Z'));
-        yield { type: 'tool_result', toolName: 'read_file', toolCallId: 'id-a' };
+        yield {
+          type: 'tool_result',
+          toolName: 'read_file',
+          toolCallId: 'id-a',
+          toolOutcome: 'success',
+        };
         setSystemTime(new Date('2026-01-01T00:00:00.070Z'));
-        yield { type: 'tool_result', toolName: 'write_file', toolCallId: 'id-b' };
+        yield {
+          type: 'tool_result',
+          toolName: 'write_file',
+          toolCallId: 'id-b',
+          toolOutcome: 'error',
+        };
         yield { type: 'assistant', content: 'Done. <promise>COMPLETE</promise>' };
         yield { type: 'result', sessionId: 'loop-sess-interleaved-tools' };
       });
@@ -5577,8 +5634,18 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         .map(([event]: [{ data: Record<string, unknown> }]) => event.data);
       expect(completedEvents).toEqual(
         expect.arrayContaining([
-          { tool_name: 'read_file', duration_ms: 40 },
-          { tool_name: 'write_file', duration_ms: 60 },
+          {
+            tool_name: 'read_file',
+            duration_ms: 40,
+            tool_call_id: 'id-a',
+            tool_outcome: 'success',
+          },
+          {
+            tool_name: 'write_file',
+            duration_ms: 60,
+            tool_call_id: 'id-b',
+            tool_outcome: 'error',
+          },
         ])
       );
     });

@@ -264,9 +264,51 @@ describe('OpencodeProvider', () => {
         toolName: 'read',
         toolOutput: 'file contents',
         toolCallId: 'tool-1',
+        toolOutcome: 'success',
       },
       { type: 'result', sessionId: 'session-1' },
     ]);
+  });
+
+  test('tool errors preserve a structured error outcome', async () => {
+    scriptedEvents = [
+      {
+        type: 'message.part.updated',
+        properties: {
+          part: {
+            sessionID: 'session-1',
+            type: 'tool',
+            tool: 'bash',
+            callID: 'tool-error',
+            state: { status: 'pending', input: { command: 'false' } },
+          },
+        },
+      },
+      {
+        type: 'message.part.updated',
+        properties: {
+          part: {
+            sessionID: 'session-1',
+            type: 'tool',
+            tool: 'bash',
+            callID: 'tool-error',
+            state: { status: 'error', error: 'command failed' },
+          },
+        },
+      },
+      { type: 'session.idle', properties: { sessionID: 'session-1' } },
+    ];
+
+    const { chunks, error } = await consume(
+      new OpencodeProvider().sendQuery('hi', '/tmp', undefined, { assistantConfig: TEST_MODEL })
+    );
+
+    expect(error).toBeUndefined();
+    expect(chunks[1]).toMatchObject({
+      type: 'tool_result',
+      toolCallId: 'tool-error',
+      toolOutcome: 'error',
+    });
   });
 
   test('terminal result chunk includes sessionId and normalized tokens', async () => {

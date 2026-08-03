@@ -558,6 +558,8 @@ async function* streamCodexEvents(
               toolName: cmd,
               toolOutput: ((item.aggregated_output as string) ?? '') + exitSuffix,
               toolCallId: itemId,
+              toolOutcome: exitCode == null || exitCode === 0 ? 'success' : 'error',
+              ...(exitCode != null ? { exitCode } : {}),
             };
           } else {
             getLog().warn({ itemId: item.id }, 'command_execution_missing_command');
@@ -665,6 +667,7 @@ async function* streamCodexEvents(
               toolName: mcpToolName,
               toolOutput: errMsg,
               toolCallId: itemId,
+              toolOutcome: 'error',
             };
           } else {
             let toolOutput = '';
@@ -684,7 +687,13 @@ async function* streamCodexEvents(
                 );
               }
             }
-            yield { type: 'tool_result', toolName: mcpToolName, toolOutput, toolCallId: itemId };
+            yield {
+              type: 'tool_result',
+              toolName: mcpToolName,
+              toolOutput,
+              toolCallId: itemId,
+              toolOutcome: 'success',
+            };
           }
           break;
         }

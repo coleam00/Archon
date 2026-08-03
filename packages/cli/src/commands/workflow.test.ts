@@ -5391,6 +5391,7 @@ describe('workflowRunCommand — progress rendering', () => {
           runId: 'run-1',
           toolName: 'Bash',
           stepName: 'classify',
+          toolCallId: 'call-1',
         });
       }
       return { success: true, workflowRunId: 'run-1' };
@@ -5412,6 +5413,7 @@ describe('workflowRunCommand — progress rendering', () => {
           runId: 'run-1',
           toolName: 'Bash',
           stepName: 'classify',
+          toolCallId: 'call-1',
         });
         capturedSubscribeHandler({
           type: 'tool_completed',
@@ -5419,6 +5421,9 @@ describe('workflowRunCommand — progress rendering', () => {
           toolName: 'Bash',
           stepName: 'classify',
           durationMs: 42,
+          toolCallId: 'call-1',
+          toolOutcome: 'error',
+          exitCode: 1,
         });
       }
       return { success: true, workflowRunId: 'run-1' };
@@ -5426,8 +5431,8 @@ describe('workflowRunCommand — progress rendering', () => {
 
     await workflowRunCommand('/test/path', 'plan', 'hello', { verbose: true });
 
-    expect(stderrSpy).toHaveBeenCalledWith('[classify] tool: Bash (started)\n');
-    expect(stderrSpy).toHaveBeenCalledWith('[classify] tool: Bash (42ms)\n');
+    expect(stderrSpy).toHaveBeenCalledWith('[classify] tool: Bash (started, call-1)\n');
+    expect(stderrSpy).toHaveBeenCalledWith('[classify] tool: Bash (42ms, call-1, error, exit 1)\n');
   });
 
   it('should call unsubscribe even when executeWorkflow throws', async () => {

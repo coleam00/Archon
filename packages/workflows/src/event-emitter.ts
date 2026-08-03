@@ -122,6 +122,7 @@ interface ToolStartedEvent {
   runId: string;
   toolName: string;
   stepName: string;
+  toolCallId: string;
 }
 
 interface ToolCompletedEvent {
@@ -130,6 +131,9 @@ interface ToolCompletedEvent {
   toolName: string;
   stepName: string;
   durationMs: number;
+  toolCallId: string;
+  toolOutcome?: 'success' | 'error' | 'interrupted' | 'unknown';
+  exitCode?: number;
 }
 
 interface ApprovalPendingEvent {

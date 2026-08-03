@@ -216,6 +216,7 @@ describe('mapCopilotEvent', () => {
         toolName: 'bash',
         toolOutput: 'full diff output',
         toolCallId: 'c1',
+        toolOutcome: 'success',
       },
     ]);
   });
@@ -252,6 +253,7 @@ describe('mapCopilotEvent', () => {
         toolName: 'bash',
         toolOutput: '❌ permission denied',
         toolCallId: 'c1',
+        toolOutcome: 'error',
       },
     ]);
   });

@@ -234,6 +234,10 @@ export type MessageChunk =
       toolOutput: string;
       /** Matching ID for the originating `tool` chunk. See `tool` variant above. */
       toolCallId?: string;
+      /** Provider-reported completion status; never inferred from formatted output. */
+      toolOutcome?: 'success' | 'error' | 'interrupted' | 'unknown';
+      /** Provider-reported process exit code, when the tool exposes one. */
+      exitCode?: number;
     }
   // ─── Subagent Task Lifecycle (Claude SDK `system` subtypes) ────────────
   // Forwarded by the Claude provider from SDKTaskStartedMessage /

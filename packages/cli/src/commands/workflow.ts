@@ -717,13 +717,17 @@ function renderWorkflowEvent(event: WorkflowEmitterEvent, verbose: boolean): voi
     }
     case 'tool_started':
       if (verbose) {
-        process.stderr.write(`[${event.stepName}] tool: ${event.toolName} (started)\n`);
+        process.stderr.write(
+          `[${event.stepName}] tool: ${event.toolName} (started, ${event.toolCallId})\n`
+        );
       }
       break;
     case 'tool_completed':
       if (verbose) {
+        const outcome = event.toolOutcome ? `, ${event.toolOutcome}` : '';
+        const exitCode = event.exitCode !== undefined ? `, exit ${String(event.exitCode)}` : '';
         process.stderr.write(
-          `[${event.stepName}] tool: ${event.toolName} (${String(event.durationMs)}ms)\n`
+          `[${event.stepName}] tool: ${event.toolName} (${String(event.durationMs)}ms, ${event.toolCallId}${outcome}${exitCode})\n`
         );
       }
       break;

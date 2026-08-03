@@ -202,6 +202,7 @@ export function mapCopilotEvent(event: SessionEvent, ctx: EventMapperContext): M
         toolName,
         toolOutput: success ? rawOutput : `❌ ${rawOutput}`,
         toolCallId,
+        toolOutcome: success ? 'success' : 'error',
       });
       return chunks;
     }
