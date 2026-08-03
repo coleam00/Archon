@@ -32,13 +32,16 @@ async function insertCodebase(db: SqliteAdapter, id: string): Promise<void> {
  * the fixture realistic — the upgrade path that broke was an otherwise-current
  * database missing exactly this one column.
  */
-function makeDbWithoutEventOrder(): string {
+async function makeDbWithoutEventOrder(): Promise<string> {
   const path = join(
     import.meta.dir,
     `.test-sqlite-legacy-${Date.now()}-${Math.random().toString(36).slice(2)}.db`
   );
   const seed = new SqliteAdapter(path); // writes the current schema
-  void seed.close();
+  // MUST await: close() is async, and on Windows an unreleased SQLite handle
+  // locks the file, so the Database opened below fails. Harmless on POSIX,
+  // which is why the first version of this test passed locally and failed CI.
+  await seed.close();
   const raw = new Database(path);
   try {
     raw.run('DROP TRIGGER IF EXISTS remote_agent_workflow_events_assign_order');
@@ -83,13 +86,13 @@ describe('SqliteAdapter upgrade path', () => {
   // exec block — so createSchema() threw and migrateColumns(), which adds the
   // column, never ran. Every existing SQLite install was bricked on upgrade,
   // and the migration that would fix it could never execute.
-  test('converges a database that predates event_order', () => {
-    legacyPath = makeDbWithoutEventOrder();
+  test('converges a database that predates event_order', async () => {
+    legacyPath = await makeDbWithoutEventOrder();
     expect(columnsOf(legacyPath, 'remote_agent_workflow_events')).not.toContain('event_order');
 
     // Must not throw, and must converge.
     const upgraded = new SqliteAdapter(legacyPath);
-    void upgraded.close();
+    await upgraded.close();
 
     expect(columnsOf(legacyPath, 'remote_agent_workflow_events')).toContain('event_order');
 
