@@ -242,7 +242,7 @@ describe('isolationCompleteCommand', () => {
     expect(mockRemoveEnvironment).toHaveBeenCalled();
   });
 
-  it('forwards the configured remote to the unique commit check', async () => {
+  it('uses the configured remote for the completion commit checks', async () => {
     mockFindActiveByBranchName.mockResolvedValueOnce(mockEnv);
     mockRemoveEnvironment.mockResolvedValueOnce({
       worktreeRemoved: true,
@@ -250,6 +250,15 @@ describe('isolationCompleteCommand', () => {
       warnings: [],
     });
     mockLoadRepoConfig.mockResolvedValueOnce({ worktree: { remote: 'upstream' } });
+    mockExecFileAsync.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === 'gh') {
+        return Promise.resolve({ stdout: '[]', stderr: '' });
+      }
+      if (cmd === 'git' && args.includes('upstream/feature-branch..feature-branch')) {
+        return Promise.resolve({ stdout: '', stderr: '' });
+      }
+      return Promise.reject(new Error('fatal: unknown revision origin/feature-branch'));
+    });
 
     await isolationCompleteCommand(['feature-branch'], { force: false, deleteRemote: true });
 
@@ -258,6 +267,12 @@ describe('isolationCompleteCommand', () => {
       'feature-branch',
       'upstream'
     );
+    expect(mockExecFileAsync).toHaveBeenCalledWith(
+      'git',
+      ['-C', '/test/repo', 'log', 'upstream/feature-branch..feature-branch', '--oneline'],
+      { timeout: 15000 }
+    );
+    expect(mockRemoveEnvironment).toHaveBeenCalled();
   });
 
   it('blocks when commits are unique to the branch', async () => {

@@ -293,9 +293,10 @@ export async function isolationCompleteCommand(
       }
 
       // Check 4: commits that would become unreachable after branch deletion
+      let remote = 'origin';
       try {
         const repoConfig = await loadRepoConfig(env.codebase_default_cwd);
-        const remote = repoConfig.worktree?.remote?.trim() || 'origin';
+        remote = repoConfig.worktree?.remote?.trim() || remote;
         const uniqueCommitCount = await getUniqueCommitCount(
           toRepoPath(env.codebase_default_cwd),
           toBranchName(branch),
@@ -318,7 +319,7 @@ export async function isolationCompleteCommand(
       try {
         const unpushedResult = await execFileAsync(
           'git',
-          ['-C', env.codebase_default_cwd, 'log', `origin/${branch}..${branch}`, '--oneline'],
+          ['-C', env.codebase_default_cwd, 'log', `${remote}/${branch}..${branch}`, '--oneline'],
           { timeout: 15000 }
         );
         const unpushedLines = unpushedResult.stdout.trim().split('\n').filter(Boolean);
