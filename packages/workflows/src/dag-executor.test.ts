@@ -4862,6 +4862,189 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
     );
   });
 
+  it('persists bash output at or below the byte cap unchanged without truncation metadata', async () => {
+    for (const [nodeId, byteCount] of [
+      ['below-cap', 32_767],
+      ['exact-cap', 32_768],
+    ] as const) {
+      const store = createMockStore();
+      const mockDeps = createMockDeps(store);
+      const workflowRun = makeWorkflowRun(`bash-output-${nodeId}`);
+
+      await executeDagWorkflow(
+        mockDeps,
+        createMockPlatform(),
+        `conv-${nodeId}`,
+        testDir,
+        {
+          name: `bash-output-${nodeId}`,
+          nodes: [{ id: nodeId, bash: `printf '%${String(byteCount)}s' '' | tr ' ' x` }],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+      const completedEvent = eventCalls.find(
+        (call: unknown[]) =>
+          (call[0] as { event_type: string }).event_type === 'node_completed' &&
+          (call[0] as { step_name: string }).step_name === nodeId
+      );
+      const data = (
+        completedEvent![0] as {
+          data: Record<string, unknown> & { node_output: string };
+        }
+      ).data;
+      expect(data.node_output).toBe('x'.repeat(byteCount));
+      expect(data.node_output_truncated).toBeUndefined();
+      expect(data.node_output_original_bytes).toBeUndefined();
+    }
+  });
+
+  it('caps over-limit persisted bash output with a marker and byte metadata', async () => {
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const workflowRun = makeWorkflowRun('bash-output-over-cap');
+
+    await executeDagWorkflow(
+      mockDeps,
+      createMockPlatform(),
+      'conv-over-cap',
+      testDir,
+      {
+        name: 'bash-output-over-cap',
+        nodes: [{ id: 'over-cap', bash: "printf '%32769s' '' | tr ' ' x" }],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    const completedEvent = eventCalls.find(
+      (call: unknown[]) =>
+        (call[0] as { event_type: string }).event_type === 'node_completed' &&
+        (call[0] as { step_name: string }).step_name === 'over-cap'
+    );
+    const data = (
+      completedEvent![0] as {
+        data: {
+          node_output: string;
+          node_output_truncated: boolean;
+          node_output_original_bytes: number;
+        };
+      }
+    ).data;
+    expect(Buffer.byteLength(data.node_output, 'utf8')).toBeLessThanOrEqual(32_768);
+    expect(data.node_output).toEndWith('\n\n… [truncated; original output was 32769 bytes]');
+    expect(data.node_output_truncated).toBe(true);
+    expect(data.node_output_original_bytes).toBe(32_769);
+    // Resume deliberately rehydrates this bounded node_output preview; preserving
+    // complete cross-process output requires a separately managed artifact.
+  });
+
+  it('keeps a persisted UTF-8 preview valid when the byte cap splits a code point', async () => {
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const workflowRun = makeWorkflowRun('bash-output-utf8-cap');
+
+    await executeDagWorkflow(
+      mockDeps,
+      createMockPlatform(),
+      'conv-utf8-cap',
+      testDir,
+      {
+        name: 'bash-output-utf8-cap',
+        nodes: [{ id: 'utf8-cap', bash: `bun -e "process.stdout.write('🙂'.repeat(8193))"` }],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    const completedEvent = eventCalls.find(
+      (call: unknown[]) =>
+        (call[0] as { event_type: string }).event_type === 'node_completed' &&
+        (call[0] as { step_name: string }).step_name === 'utf8-cap'
+    );
+    const data = (completedEvent![0] as { data: { node_output: string } }).data;
+    expect(Buffer.byteLength(data.node_output, 'utf8')).toBeLessThanOrEqual(32_768);
+    expect(data.node_output).not.toContain('\ufffd');
+    expect(data.node_output).toEndWith('\n\n… [truncated; original output was 32772 bytes]');
+  });
+
+  it('uses full bash output for same-run when and downstream substitution despite persistence cap', async () => {
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const workflowRun = makeWorkflowRun('bash-output-live-full');
+    const paddingBytes = 33_000;
+
+    await executeDagWorkflow(
+      mockDeps,
+      createMockPlatform(),
+      'conv-live-full',
+      testDir,
+      {
+        name: 'bash-output-live-full',
+        nodes: [
+          {
+            id: 'producer',
+            bash: `printf '{"status":"PASS","padding":"'; printf '%${String(paddingBytes)}s' '' | tr ' ' x; printf '"}'`,
+          },
+          {
+            id: 'consumer',
+            bash: 'value=$producer.output; printf %s "${#value}"',
+            depends_on: ['producer'],
+            when: "$producer.output.status == 'PASS'",
+          },
+        ],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    const producerEvent = eventCalls.find(
+      (call: unknown[]) =>
+        (call[0] as { event_type: string }).event_type === 'node_completed' &&
+        (call[0] as { step_name: string }).step_name === 'producer'
+    );
+    const consumerEvent = eventCalls.find(
+      (call: unknown[]) =>
+        (call[0] as { event_type: string }).event_type === 'node_completed' &&
+        (call[0] as { step_name: string }).step_name === 'consumer'
+    );
+    expect(
+      (producerEvent![0] as { data: { node_output_truncated: boolean } }).data.node_output_truncated
+    ).toBe(true);
+    expect((consumerEvent![0] as { data: { node_output: string } }).data.node_output).toBe(
+      String(paddingBytes + 30)
+    );
+  });
+
   it('stores node_output in node_completed event data for AI nodes', async () => {
     const store = createMockStore();
     const mockDeps = createMockDeps(store);

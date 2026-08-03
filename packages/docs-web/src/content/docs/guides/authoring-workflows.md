@@ -186,7 +186,7 @@ nodes:
 |-------|------|-------------|
 | `command` | string | Command name to load from `.archon/commands/` |
 | `prompt` | string | Inline prompt string |
-| `bash` | string | Shell script (no AI). Stdout captured as `$nodeId.output`. Optional `timeout` (ms, default 120000) |
+| `bash` | string | Shell script (no AI). Stdout captured as `$nodeId.output`; successful stdout is also stored in `node_completed.data.node_output` as an audit preview capped at 32 KiB (UTF-8 bytes). Optional `timeout` (ms, default 120000) |
 | `script` | string | TypeScript/JavaScript (via `bun`) or Python (via `uv`) — inline code or named reference to `.archon/scripts/`. Stdout captured as `$nodeId.output`. Requires `runtime: bun` or `runtime: uv`. Optional `deps` (uv only) and `timeout` (ms, default 120000). See [Script Nodes](/guides/script-nodes/) |
 | `loop` | object | Iterative AI prompt until completion signal. See [Loop Nodes](/guides/loop-nodes/) |
 | `loop_group` | object | Multi-node sub-DAG body repeated per iteration until a completion signal. See [Cross-Node Loops](/guides/loop-nodes/#cross-node-loops-with-loop_group) |
@@ -798,6 +798,8 @@ When a node sets `output_type`, the executor writes a typed sidecar after the no
 - `$ARTIFACTS_DIR/nodes/<id>.meta.json` — metadata (`outputType`, `runId`, `producedAt`, `size`, and `sessionId` when available)
 
 This works on **every** node type (`bash`/`script` produce typed outputs too, just without a `sessionId`). The write is **best-effort** — if it fails, the node still succeeds and a warning is logged; the typed sidecar may simply be absent. `output_type` is an open set of labels (`plan`, `findings`, `code`, `summary`, …) — pick a convention and keep casing consistent, since lookup is case-sensitive.
+
+Successful bash stdout is retained by default on the completed run as a bounded audit preview in `node_completed.data.node_output`. Output over 32 KiB (32,768 UTF-8 bytes) ends with a truncation marker, and the event also includes `node_output_truncated: true` plus `node_output_original_bytes`. Because stdout is persisted, never print secrets or credentials from bash nodes. This preview is separate from `output_type`: declaring `output_type` opts into a best-effort file sidecar that may contain the full output and is not required for ordinary bash audit retention.
 
 ---
 

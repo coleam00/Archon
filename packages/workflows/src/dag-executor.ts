@@ -2448,6 +2448,42 @@ async function runSubprocess(
  *  instead of inlined as bash -c arguments, to avoid silent data corruption. */
 const NODE_OUTPUT_FILE_THRESHOLD = 32_768;
 
+/** Maximum UTF-8 bytes retained for successful bash stdout in workflow events. */
+const PERSISTED_BASH_OUTPUT_MAX_BYTES = 32 * 1024;
+
+function formatPersistedBashOutput(output: string): {
+  nodeOutput: string;
+  truncated: boolean;
+  originalBytes?: number;
+} {
+  const outputBytes = Buffer.from(output, 'utf8');
+  if (outputBytes.byteLength <= PERSISTED_BASH_OUTPUT_MAX_BYTES) {
+    return { nodeOutput: output, truncated: false };
+  }
+
+  const marker = `\n\n… [truncated; original output was ${String(outputBytes.byteLength)} bytes]`;
+  const markerBytes = Buffer.byteLength(marker, 'utf8');
+  let headEnd = PERSISTED_BASH_OUTPUT_MAX_BYTES - markerBytes;
+
+  // The byte cap can land inside a multi-byte code point. Inspect the final
+  // sequence in the prefix and drop it when it is incomplete before decoding.
+  let sequenceStart = headEnd - 1;
+  while (sequenceStart >= 0 && (outputBytes[sequenceStart] & 0xc0) === 0x80) {
+    sequenceStart--;
+  }
+  if (sequenceStart >= 0) {
+    const leadByte = outputBytes[sequenceStart];
+    const expectedLength = leadByte < 0x80 ? 1 : leadByte < 0xe0 ? 2 : leadByte < 0xf0 ? 3 : 4;
+    if (headEnd - sequenceStart < expectedLength) headEnd = sequenceStart;
+  }
+
+  return {
+    nodeOutput: outputBytes.subarray(0, headEnd).toString('utf8') + marker,
+    truncated: true,
+    originalBytes: outputBytes.byteLength,
+  };
+}
+
 /**
  * Execute a bash (shell script) DAG node.
  * Runs the script via `bash -c`, captures stdout as node output.
@@ -2567,12 +2603,25 @@ async function executeBashNode(
     getLog().info({ nodeId: node.id, durationMs: duration }, 'dag_node_completed');
     await logNodeComplete(logDir, workflowRun.id, node.id, '<bash>', { durationMs: duration });
 
+    const persistedOutput = formatPersistedBashOutput(output);
+
     deps.store
       .createWorkflowEvent({
         workflow_run_id: workflowRun.id,
         event_type: 'node_completed',
         step_name: stepName,
-        data: { duration_ms: duration, type: 'bash', node_output: output, ...iterationData },
+        data: {
+          duration_ms: duration,
+          type: 'bash',
+          node_output: persistedOutput.nodeOutput,
+          ...(persistedOutput.truncated
+            ? {
+                node_output_truncated: true,
+                node_output_original_bytes: persistedOutput.originalBytes,
+              }
+            : {}),
+          ...iterationData,
+        },
       })
       .catch((err: Error) => {
         getLog().error(

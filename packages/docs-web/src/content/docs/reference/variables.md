@@ -64,6 +64,8 @@ In DAG workflows, nodes can reference the output of any completed upstream node.
 | `$nodeId.output` | Full output string of the referenced node | The node must be a declared dependency (in `depends_on`) |
 | `$nodeId.output.field` | A specific JSON field from the node's output | Requires the upstream node to use `output_format` for structured JSON |
 
+During the current run, downstream interpolation and `when:` conditions see the full returned node output. Successful bash events retain only a 32 KiB UTF-8 audit preview, so after a process boundary a resumed run rehydrates that persisted preview rather than the full output. If a large gate verdict must survive a restart intact, store it through a deliberately managed artifact contract instead of relying on the event preview.
+
 ### Shell Quoting in `bash:` vs `script:`
 
 `$nodeId.output` values are **auto shell-quoted** when substituted into `bash:` scripts, so the value is always safe to embed in a shell command. For small outputs, values are single-quoted inline. For outputs exceeding 32 KB, Archon spills to a temp file and substitutes `$(cat '/tmp/path')` instead — the unquoted assignment form is correct in both cases. They are **not** shell-quoted when substituted into `script:` bodies — the raw value is embedded as-is. For script nodes, treat substituted values as untrusted input and parse them with language features (e.g. `JSON.parse`), not by interpolating into shell syntax.
