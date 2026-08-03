@@ -105,6 +105,48 @@ export interface ContainerConfig {
   enabled?: boolean;
 }
 
+/**
+ * Slack workspace-wide settings. Global config ONLY (`~/.archon/config.yaml`) —
+ * a channel routing table is a workspace concern, and resolving it is what
+ * SELECTS the project, so it cannot be read from per-project repo config.
+ * Defaults are applied at the consumption site (`!== false`), not here.
+ */
+export interface SlackConfig {
+  /**
+   * Key `channelProjects` by channel NAME (readable) instead of channel ID.
+   *
+   * Slack events carry only the channel ID, so a name lookup costs one cached
+   * `conversations.info` call per channel and needs the `channels:read` +
+   * `groups:read` bot scopes. This flag also gates whether the channel name is
+   * surfaced to the AI at all — with it off, Archon reports the ID and `N/A`.
+   * @default true
+   */
+  useChannelName?: boolean;
+
+  /**
+   * Auto-bind a brand-new thread in a mapped channel to its mapped project.
+   * Turn off to keep the mapping table for reference without it changing which
+   * project a conversation starts on. Independent of `useChannelName`.
+   * @default true
+   */
+  autoSetProject?: boolean;
+
+  /**
+   * Maps a Slack channel to a registered project name (the same name used with
+   * `/register-project <name> <path>` / `/setproject <name>`).
+   *
+   * Keyed by channel NAME (no leading `#`, e.g. `ai-web-project`) when
+   * `useChannelName` is true, otherwise by channel ID (e.g. `C01ABC234DE`).
+   * Only applies when a conversation is CREATED — an explicit `/setproject`
+   * later in the same thread still overrides it.
+   *
+   * WARNING: when keyed by name, renaming a Slack channel stops the mapping
+   * from resolving until this map is updated. It fails soft — the conversation
+   * is created unbound and a warning is logged; it never blocks the message.
+   */
+  channelProjects?: Record<string, string>;
+}
+
 export interface GlobalConfig {
   /**
    * Bot display name (shown in messages)
@@ -178,6 +220,12 @@ export interface GlobalConfig {
    * overrides these per-field.
    */
   container?: ContainerConfig;
+
+  /**
+   * Slack channel routing + awareness. Global-only — see `SlackConfig`.
+   * (Distinct from `streaming.slack`, which only picks stream vs batch.)
+   */
+  slack?: SlackConfig;
 }
 
 /**
@@ -419,6 +467,13 @@ export interface MergedConfig {
    * config is consumed (CLI folder branch). Undefined when nothing is configured.
    */
   container?: ContainerConfig;
+  /**
+   * Slack channel routing + awareness, passed through from global config.
+   * Raw optional fields — defaults are applied where it is consumed (the Slack
+   * intake path). Undefined when nothing is configured. Global-only by design,
+   * so there is no repo-level merge for it.
+   */
+  slack?: SlackConfig;
 }
 
 /**

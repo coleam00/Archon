@@ -54,6 +54,13 @@ export interface HandleMessageContext {
    * own auth flows are wired.
    */
   readonly userId?: string;
+  /**
+   * Codebase to bind a BRAND-NEW conversation to, resolved by the adapter
+   * before calling handleMessage (e.g. the Slack channel → project mapping).
+   * Ignored when the conversation already exists, so an explicit `/setproject`
+   * later in the same thread still wins.
+   */
+  readonly codebaseId?: string;
 }
 
 export interface CommandResult {

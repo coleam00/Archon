@@ -36,6 +36,15 @@ const mockUsersInfo = mock(() =>
     },
   })
 );
+const mockConversationsInfo = mock(() =>
+  Promise.resolve({
+    channel: { id: 'C456', name: 'ai-web-project' } as {
+      id: string;
+      name?: string;
+      is_im?: boolean;
+    },
+  })
+);
 const mockEvent = mock(() => {});
 const mockStart = mock(() => Promise.resolve(undefined));
 const mockStop = mock(() => Promise.resolve(undefined));
@@ -49,6 +58,7 @@ const mockApp = {
     },
     conversations: {
       replies: mockReplies,
+      info: mockConversationsInfo,
     },
     users: {
       info: mockUsersInfo,
@@ -615,6 +625,84 @@ describe('SlackAdapter', () => {
       const second = await adapter.fetchDisplayName('U_RETRY');
       expect(second).toBe('Eventually');
       expect(mockUsersInfo).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('resolveChannelName', () => {
+    beforeEach(() => {
+      mockConversationsInfo.mockClear();
+      mockLogger.warn.mockClear();
+    });
+
+    test('resolves a public channel to its name', async () => {
+      const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
+      const result = await adapter.resolveChannelName('C456');
+
+      expect(result).toEqual({ kind: 'name', name: 'ai-web-project' });
+    });
+
+    test('caches the resolved name (one API call for repeat lookups)', async () => {
+      const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
+      await adapter.resolveChannelName('C_CACHED');
+      await adapter.resolveChannelName('C_CACHED');
+
+      expect(mockConversationsInfo).toHaveBeenCalledTimes(1);
+    });
+
+    test('reports a DM as dm rather than a failed lookup', async () => {
+      const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
+      mockConversationsInfo.mockResolvedValueOnce({ channel: { id: 'D1', is_im: true } });
+
+      expect(await adapter.resolveChannelName('D1')).toEqual({ kind: 'dm' });
+    });
+
+    test('caches a DM result too (it is a stable fact about the channel)', async () => {
+      const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
+      mockConversationsInfo.mockResolvedValueOnce({ channel: { id: 'D2', is_im: true } });
+      await adapter.resolveChannelName('D2');
+      await adapter.resolveChannelName('D2');
+
+      expect(mockConversationsInfo).toHaveBeenCalledTimes(1);
+    });
+
+    test('returns unavailable and warns once on missing_scope', async () => {
+      const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
+      const scopeError = Object.assign(new Error('missing_scope'), {
+        data: { error: 'missing_scope' },
+      });
+      mockConversationsInfo.mockRejectedValueOnce(scopeError);
+      expect(await adapter.resolveChannelName('C_NOSCOPE')).toEqual({ kind: 'unavailable' });
+
+      mockConversationsInfo.mockRejectedValueOnce(scopeError);
+      await adapter.resolveChannelName('C_NOSCOPE2');
+
+      // Permanent misconfiguration: log once per adapter, not once per channel.
+      const scopeWarns = (mockLogger.warn as unknown as Mock<() => void>).mock.calls.filter(
+        c => c[1] === 'slack.channel_info_missing_scope'
+      );
+      expect(scopeWarns).toHaveLength(1);
+    });
+
+    test('does not cache unavailable — a scope added mid-flight recovers', async () => {
+      const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
+      mockConversationsInfo.mockRejectedValueOnce(new Error('rate_limited'));
+      expect(await adapter.resolveChannelName('C_RETRY')).toEqual({ kind: 'unavailable' });
+
+      mockConversationsInfo.mockResolvedValueOnce({
+        channel: { id: 'C_RETRY', name: 'now-visible' },
+      });
+      expect(await adapter.resolveChannelName('C_RETRY')).toEqual({
+        kind: 'name',
+        name: 'now-visible',
+      });
+      expect(mockConversationsInfo).toHaveBeenCalledTimes(2);
+    });
+
+    test('returns unavailable for an empty channel id without calling the API', async () => {
+      const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
+
+      expect(await adapter.resolveChannelName('')).toEqual({ kind: 'unavailable' });
+      expect(mockConversationsInfo).not.toHaveBeenCalled();
     });
   });
 });

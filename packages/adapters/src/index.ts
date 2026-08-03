@@ -1,6 +1,7 @@
 // Chat adapters
 export { TelegramAdapter } from './chat/telegram';
 export { SlackAdapter, SlackWorkflowBridge } from './chat/slack';
+export type { SlackChannelNameResult } from './chat/slack';
 
 // Forge adapters
 export { GitHubAdapter } from './forge/github';

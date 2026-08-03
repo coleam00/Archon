@@ -96,6 +96,13 @@ paths:
 concurrency:
   maxConversations: 10
 
+# Slack channel routing (global only) — see "Slack channel mapping" below
+slack:
+  useChannelName: true # key channelProjects by name (default) or by channel ID
+  autoSetProject: true # auto-bind new threads in a mapped channel (default)
+  channelProjects:
+    ai-web-project: web # <channel name or ID>: <registered project name>
+
 # Model tiers — optional cross-provider presets used by bundled workflows,
 # custom workflows, direct chat (`large`), and title generation (`small`).
 tiers:
@@ -290,6 +297,29 @@ container:
 ```
 
 **Selection precedence:** `--container` flag > workflow `container.enabled` > config `container.enabled` > `false`. (A workflow `enabled: false` hard-disables relative to config, but the flag still wins.)
+
+### Slack channel mapping (`slack`)
+
+Binds a Slack channel to a registered project, so every **new thread** in that channel starts on the right project without anyone typing `/setproject`. Valid on **global** `~/.archon/config.yaml` only — a channel routing table is workspace-wide, and resolving it is what *selects* the project, so it cannot come from a project's own repo config:
+
+```yaml
+slack:
+  useChannelName: true # key channelProjects by name (default); false = key by channel ID
+  autoSetProject: true # auto-bind new threads in a mapped channel (default)
+  channelProjects:
+    ai-web-project: web # <channel name or ID>: <registered project name>
+    C01ABC234DE: biz # IDs work too (required when useChannelName is false)
+```
+
+**Semantics:**
+
+- **Creation only** — a mapping is the *default* for a brand-new thread. An explicit `/setproject` later in the same thread overrides it, and pre-existing threads are unaffected.
+- **The two flags are independent** — `autoSetProject: false` keeps the table without binding anything; `useChannelName` only decides how the map is keyed (and whether channel names get resolved at all).
+- **Name keying needs scopes** — `channels:read` + `groups:read`, because Slack events carry only the channel ID. Missing scopes log `slack.channel_info_missing_scope` once and leave channels unmapped. Keying by ID (`useChannelName: false`) avoids both the scopes and the API call.
+- **Fails soft** — an unregistered project name logs `slack.channel_project_mapping_unresolved` and creates the conversation unbound; it never blocks a message.
+- **Matching** — channel names are matched case-insensitively, channel IDs exactly (Slack IDs are case-sensitive).
+
+See the [Slack adapter guide](/adapters/slack/#map-a-channel-to-a-project-optional) for setup and troubleshooting.
 
 **Write-back mode** is a per-workflow policy (not a config key). After a container run finishes, its overlay diff is reviewed before touching the live root:
 

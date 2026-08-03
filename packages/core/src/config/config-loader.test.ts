@@ -775,6 +775,71 @@ assistants:
     });
   });
 
+  describe('slack config', () => {
+    test('propagates the slack block from global config', async () => {
+      mockFsReadFile.mockResolvedValue(`
+slack:
+  useChannelName: false
+  autoSetProject: false
+  channelProjects:
+    ai-web-project: web
+    C01ABC234DE: biz
+`);
+      const config = await loadConfig();
+      expect(config.slack).toEqual({
+        useChannelName: false,
+        autoSetProject: false,
+        channelProjects: { 'ai-web-project': 'web', C01ABC234DE: 'biz' },
+      });
+    });
+
+    test('config.slack is undefined when not configured', async () => {
+      const error = new Error('ENOENT') as NodeJS.ErrnoException;
+      error.code = 'ENOENT';
+      mockFsReadFile.mockRejectedValue(error);
+
+      const config = await loadConfig();
+      expect(config.slack).toBeUndefined();
+    });
+
+    test('flags are left raw so consumers can apply the default-true rule', async () => {
+      mockFsReadFile.mockResolvedValue(`
+slack:
+  channelProjects:
+    ai-web-project: web
+`);
+      const config = await loadConfig();
+      // Absent means "not set", NOT false — the Slack intake path applies the
+      // `!== false` default. Defaulting here would erase that distinction.
+      expect(config.slack?.useChannelName).toBeUndefined();
+      expect(config.slack?.autoSetProject).toBeUndefined();
+    });
+
+    test('repo config cannot set slack (channel routing is global-only)', async () => {
+      const pathMatches = (path: string, pattern: string): boolean => {
+        const normalizedPath = path.replace(/\\/g, '/');
+        return normalizedPath.includes(pattern);
+      };
+
+      let globalConfigRead = false;
+      mockFsReadFile.mockImplementation(async (path: string) => {
+        if (pathMatches(path, '/repo/.archon/config.yaml')) {
+          return `slack:\n  channelProjects:\n    hijacked: other-project\n`;
+        }
+        if (pathMatches(path, '.archon/config.yaml') && !globalConfigRead) {
+          globalConfigRead = true;
+          return `slack:\n  channelProjects:\n    ai-web-project: web\n`;
+        }
+        const error = new Error('ENOENT') as NodeJS.ErrnoException;
+        error.code = 'ENOENT';
+        throw error;
+      });
+
+      const config = await loadConfig('/test/repo');
+      expect(config.slack?.channelProjects).toEqual({ 'ai-web-project': 'web' });
+    });
+  });
+
   describe('updateGlobalConfig', () => {
     test('merges assistant config into existing file', async () => {
       mockFsReadFile.mockResolvedValue(`

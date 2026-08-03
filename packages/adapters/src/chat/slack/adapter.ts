@@ -17,7 +17,7 @@ import { isSlackUserAuthorized } from './auth';
 import { parseAllowedUserIds } from './auth';
 import { splitIntoParagraphChunks } from '../../utils/message-splitting';
 import { formatCostFooter } from './blocks';
-import type { SlackMessageEvent } from './types';
+import type { SlackChannelNameResult, SlackMessageEvent } from './types';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -58,6 +58,20 @@ export class SlackAdapter implements IPlatformAdapter {
    * `missing_scope` is a permanent misconfiguration, not a per-user incident.
    */
   private missingScopeLogged = false;
+  /**
+   * Cache of channelId → resolved name outcome, for the channel → project map
+   * and channel awareness. Only STABLE outcomes are stored ('name' and 'dm');
+   * 'unavailable' is never cached so a scope added mid-flight recovers on the
+   * next message — same contract as displayNameCache above.
+   */
+  private channelNameCache = new Map<string, SlackChannelNameResult>();
+  /**
+   * Tripped the first time conversations.info returns `missing_scope`. Like
+   * missingScopeLogged, the API call is still attempted on later messages (the
+   * operator may reinstall with the scope), but the WARN fires only once —
+   * a missing scope is a permanent misconfiguration, not a per-channel event.
+   */
+  private channelInfoMissingScopeLogged = false;
 
   constructor(botToken: string, appToken: string, mode: 'stream' | 'batch' = 'batch') {
     this.app = new App({
@@ -325,6 +339,61 @@ export class SlackAdapter implements IPlatformAdapter {
         getLog().warn({ errMessage, slackUserId, slackErrorCode }, 'slack.users_info_failed');
       }
       return undefined;
+    }
+  }
+
+  /**
+   * Resolve a Slack channel id to its human-readable name via
+   * `conversations.info`. Slack events carry only the channel id, so this is
+   * the only way to key the channel → project map by name, and the only source
+   * of the channel name for chat-facing channel awareness.
+   *
+   * Cached in-memory per adapter lifetime. Requires bot token scope
+   * `channels:read` (public) / `groups:read` (private). Never throws — a
+   * missing scope or API error resolves to `unavailable` so message handling
+   * continues unbound rather than failing.
+   *
+   * DMs (`is_im`) legitimately have no name and resolve to `dm`; that is a
+   * stable fact about the channel, so it is cached like a successful name.
+   */
+  async resolveChannelName(channelId: string): Promise<SlackChannelNameResult> {
+    if (!channelId) return { kind: 'unavailable' };
+    const cached = this.channelNameCache.get(channelId);
+    if (cached) return cached;
+
+    try {
+      const result = await this.app.client.conversations.info({ channel: channelId });
+      const channel = result.channel;
+      const name = channel?.name;
+      const resolved: SlackChannelNameResult = name
+        ? { kind: 'name', name }
+        : channel?.is_im === true
+          ? { kind: 'dm' }
+          : { kind: 'unavailable' };
+
+      // Only cache stable outcomes — see channelNameCache.
+      if (resolved.kind !== 'unavailable') {
+        this.channelNameCache.set(channelId, resolved);
+      }
+      return resolved;
+    } catch (error) {
+      const err = error as Error & { data?: { error?: string } };
+      const slackErrorCode = err.data?.error;
+      // Strip err.data from the log — Slack SDK error bodies can include API
+      // response metadata that's not relevant for ops (mirrors fetchDisplayName).
+      const errMessage = err.message;
+      if (slackErrorCode === 'missing_scope') {
+        if (!this.channelInfoMissingScopeLogged) {
+          this.channelInfoMissingScopeLogged = true;
+          getLog().warn(
+            { scopes: 'channels:read, groups:read' },
+            'slack.channel_info_missing_scope'
+          );
+        }
+      } else {
+        getLog().warn({ errMessage, channelId, slackErrorCode }, 'slack.channel_info_failed');
+      }
+      return { kind: 'unavailable' };
     }
   }
 

@@ -105,6 +105,7 @@ import {
 import type { IPlatformAdapter } from '@archon/core';
 import type { IdentityPlatform } from '@archon/core';
 import * as userDb from '@archon/core/db/users';
+import * as codebaseDb from '@archon/core/db/codebases';
 import {
   createLogger,
   logArchonPaths,
@@ -115,6 +116,7 @@ import {
 } from '@archon/paths';
 import { selectGitHubAuthMode, parseGitCredentialPath } from './github-auth-bootstrap';
 import { isDiscordMentionRequired } from './discord-mention';
+import { resolveSlackChannelContext } from './slack-channel-context';
 import {
   getAuth,
   closeAuth,
@@ -642,6 +644,25 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         // the adapter's users.info enrichment (cached per slackUserId).
         const userId = await resolveUserId('slack', event.user, event.displayName);
 
+        // Resolve the channel → project mapping (global config). Best-effort:
+        // codebaseId is only a DEFAULT for a brand-new conversation, so an
+        // unmapped or unresolvable channel simply starts unbound, as before.
+        const slackConfig = (await loadConfig()).slack;
+        const channelContext = await resolveSlackChannelContext(event.channel, slackConfig, {
+          resolveChannelName: id => slackAdapter.resolveChannelName(id),
+          findCodebaseByName: name => codebaseDb.findCodebaseByName(name),
+        });
+        if (channelContext.unresolvedProject) {
+          getLog().warn(
+            {
+              channel: event.channel,
+              channelName: channelContext.channelName,
+              projectName: channelContext.unresolvedProject,
+            },
+            'slack.channel_project_mapping_unresolved'
+          );
+        }
+
         // Fire-and-forget: handler returns immediately, processing happens async
         lockManager
           .acquireLock(conversationId, async () => {
@@ -650,6 +671,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
               parentConversationId,
               isolationHints: { workflowType: 'thread', workflowId: conversationId },
               userId,
+              codebaseId: channelContext.codebaseId,
             });
           })
           .catch(createMessageErrorHandler('Slack', slackAdapter, conversationId));

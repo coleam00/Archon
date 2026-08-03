@@ -1195,6 +1195,7 @@ export async function handleMessage(
     isolationHints,
     attachedFiles,
     userId,
+    codebaseId,
   } = context ?? {};
   try {
     getLog().debug({ conversationId, userId }, 'orchestrator_message_received');
@@ -1205,10 +1206,13 @@ export async function handleMessage(
     // execution identity; each turn's prefs/credentials resolve from the
     // SENDER when the adapter supplied one (see executionUserId below).
     // Per-message attribution happens on workflow_runs.
+    // codebaseId is likewise a CREATION-ONLY default (e.g. resolved from the
+    // Slack channel → project map): getOrCreateConversation returns an existing
+    // row untouched, so `/setproject` later in the thread still overrides it.
     let conversation = await db.getOrCreateConversation(
       platform.getPlatformType(),
       conversationId,
-      undefined,
+      codebaseId,
       parentConversationId,
       userId
     );

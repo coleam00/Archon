@@ -222,6 +222,14 @@ const DEFAULT_CONFIG_CONTENT = `# Archon Global Configuration
 # Concurrency settings
 # concurrency:
 #   maxConversations: 10
+
+# Slack channel routing + awareness (global only)
+# Requires the channels:read + groups:read bot scopes to resolve channel names.
+# slack:
+#   useChannelName: true    # key channelProjects by name; false = key by channel ID
+#   autoSetProject: true    # auto-bind new threads in a mapped channel to its project
+#   channelProjects:
+#     ai-web-project: web   # <slack channel name or ID>: <registered project name>
 `;
 
 /**
@@ -513,6 +521,12 @@ function mergeGlobalConfig(defaults: MergedConfig, global: GlobalConfig): Merged
   // Container backend defaults (folder projects)
   if (global.container) {
     result.container = { ...global.container };
+  }
+
+  // Slack channel routing + awareness. Global-only by design (see SlackConfig),
+  // so there is no matching branch in mergeRepoConfig.
+  if (global.slack) {
+    result.slack = { ...global.slack };
   }
 
   return result;
