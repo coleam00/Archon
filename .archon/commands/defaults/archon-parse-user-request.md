@@ -9,7 +9,7 @@ argument-hint: <the raw user message>
 
 ---
 
-Return three fields describing the message above. Nothing else.
+Return four fields describing the message above. Nothing else.
 
 ## `user_request` — required, verbatim
 
