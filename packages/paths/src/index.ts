@@ -9,6 +9,7 @@ export {
   ensureArchonWorkspacesPath,
   getArchonWorktreesPath,
   getArchonConfigPath,
+  getInstallManifestPath,
   getCredentialKeyPath,
   getArchonEnvPath,
   getRepoArchonEnvPath,
@@ -61,6 +62,14 @@ export {
   BUNDLED_GIT_COMMIT,
   BUNDLED_WEB_DIST_SHA256,
 } from './bundled-build';
+
+// Compiled CLI install discovery manifest
+export { writeInstallManifest, refreshCompiledInstallManifest } from './install-manifest';
+export type {
+  InstallManifest,
+  InstallMethod,
+  WriteInstallManifestOptions,
+} from './install-manifest';
 
 // Update check
 export {

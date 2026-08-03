@@ -148,6 +148,11 @@ export function getArchonConfigPath(): string {
   return join(getArchonHome(), 'config.yaml');
 }
 
+/** Path to the compiled CLI install manifest (`~/.archon/install.json`). */
+export function getInstallManifestPath(): string {
+  return join(getArchonHome(), 'install.json');
+}
+
 /** Path where the auto-provisioned encryption key is stored (~/.archon/credential-key). */
 export function getCredentialKeyPath(): string {
   return join(getArchonHome(), 'credential-key');

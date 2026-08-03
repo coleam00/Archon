@@ -20,6 +20,24 @@ assert_equals() {
   [ "$expected" = "$actual" ] || fail "$description: expected $expected, got $actual"
 }
 
+assert_manifest() {
+  local manifest_path="$1"
+  local expected_binary="$2"
+  local expected_version="$3"
+  local expected_method="$4"
+
+  bun -e '
+    import { readFileSync } from "fs";
+    import { isAbsolute } from "path";
+    const [manifestPath, expectedBinary, expectedVersion, expectedMethod] = process.argv.slice(1);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    if (manifest.binary !== expectedBinary || !isAbsolute(manifest.binary)) process.exit(1);
+    if (manifest.version !== expectedVersion || manifest.method !== expectedMethod) process.exit(1);
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(manifest.installedAt)) process.exit(1);
+  ' "$manifest_path" "$expected_binary" "$expected_version" "$expected_method" \
+    || fail "Invalid install manifest at $manifest_path"
+}
+
 make_platform_mocks() {
   local os="$1"
   local arch="$2"
@@ -140,7 +158,9 @@ cmp -s "$repo_root/scripts/install.ps1" "$repo_root/packages/docs-web/public/ins
 
 mock_dir="$tmp_dir/install-mocks"
 install_dir="$tmp_dir/install-bin"
-mkdir -p "$mock_dir" "$install_dir"
+failed_manifest_home="$tmp_dir/failed-manifest-home"
+mkdir -p "$mock_dir" "$install_dir" "$failed_manifest_home"
+printf '%s\n' '{"preserved":true}' >"$failed_manifest_home/install.json"
 avx2_cpuinfo="$tmp_dir/cpuinfo-avx2"
 printf '%s\n' 'flags : fpu sse avx2' >"$avx2_cpuinfo"
 printf '%s\n' 'working installation' >"$install_dir/archon"
@@ -164,10 +184,13 @@ EOF
 chmod +x "$mock_dir/curl"
 
 if PATH="$mock_dir:$PATH" ARCHON_CPUINFO_PATH="$avx2_cpuinfo" INSTALL_DIR="$install_dir" \
+  ARCHON_HOME="$failed_manifest_home" \
   SKIP_CHECKSUM=true bash "$installer" >/dev/null 2>&1; then
   fail "installer succeeded when downloaded binary failed its version check"
 fi
 assert_equals "working installation" "$(cat "$install_dir/archon")" "Existing installation after failed probe"
+assert_equals '{"preserved":true}' "$(cat "$failed_manifest_home/install.json")" \
+  "Manifest after failed probe"
 
 no_avx2_mock_dir="$tmp_dir/no-avx2-install-mocks"
 no_avx2_install_dir="$tmp_dir/no-avx2-install-bin"
@@ -241,6 +264,7 @@ assert_equals "working installation" "$(cat "$unknown_cpu_install_dir/archon")" 
 
 success_mock_dir="$tmp_dir/success-install-mocks"
 success_install_dir="$tmp_dir/success-install-bin"
+success_archon_home="$tmp_dir/success-archon-home"
 mkdir -p "$success_mock_dir" "$success_install_dir"
 printf '%s\n' 'old installation' >"$success_install_dir/archon"
 cat >"$success_mock_dir/curl" <<'EOF'
@@ -257,19 +281,23 @@ done
 cat >"$output" <<'BINARY'
 #!/usr/bin/env bash
 if [ "$1" = "version" ]; then
-  echo "archon 1.2.3"
+  echo "Archon CLI v1.2.3"
 fi
 BINARY
 EOF
 chmod +x "$success_mock_dir/curl"
 
 install_output=$(PATH="$success_mock_dir:$PATH" ARCHON_CPUINFO_PATH="$avx2_cpuinfo" \
-  INSTALL_DIR="$success_install_dir" SKIP_CHECKSUM=true bash "$installer")
-assert_equals "archon 1.2.3" "$("$success_install_dir/archon" version)" "Successful probe replaces installation"
+  INSTALL_DIR="$success_install_dir" ARCHON_HOME="$success_archon_home" \
+  SKIP_CHECKSUM=true bash "$installer")
+assert_equals "Archon CLI v1.2.3" "$("$success_install_dir/archon" version)" \
+  "Successful probe replaces installation"
 case "$install_output" in
-  *"archon 1.2.3"*) ;;
+  *"Archon CLI v1.2.3"*) ;;
   *) fail "Installer prints verified version" ;;
 esac
+assert_manifest "$success_archon_home/install.json" \
+  "$(cd "$success_install_dir" && pwd -P)/archon" "1.2.3" "curl"
 
 # Regression for #2338: the installer must survive being READ FROM STDIN, which is how
 # `curl -fsSL … | bash` delivers it. There BASH_SOURCE[0] is unbound, and with `set -u` a
@@ -279,8 +307,10 @@ esac
 #
 # Mocked curl + a scratch INSTALL_DIR keep this off the network and out of the real system.
 piped_status=0
+piped_archon_home="$tmp_dir/piped-archon-home"
 piped_stderr="$(PATH="$success_mock_dir:$PATH" ARCHON_CPUINFO_PATH="$avx2_cpuinfo" \
   INSTALL_DIR="$tmp_dir/piped-bin" \
+  ARCHON_HOME="$piped_archon_home" \
   SKIP_CHECKSUM=true bash <"$installer" 2>&1 >/dev/null)" || piped_status=$?
 # Specific diagnosis FIRST, generic assertion second. With the order reversed the
 # assert_equals fired on any regression and this case block was dead code, so the
@@ -291,6 +321,9 @@ case "$piped_stderr" in
     ;;
 esac
 assert_equals "0" "$piped_status" "Piped installer exits successfully"
-assert_equals "archon 1.2.3" "$("$tmp_dir/piped-bin/archon" version)" "Piped installer installs a working binary"
+assert_equals "Archon CLI v1.2.3" "$("$tmp_dir/piped-bin/archon" version)" \
+  "Piped installer installs a working binary"
+assert_manifest "$piped_archon_home/install.json" \
+  "$(cd "$tmp_dir/piped-bin" && pwd -P)/archon" "1.2.3" "curl"
 
 echo "Installer tests passed"
