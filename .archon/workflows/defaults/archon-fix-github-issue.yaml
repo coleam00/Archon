@@ -31,16 +31,27 @@ nodes:
 
       Request: $ARGUMENTS
 
-      Rules:
-      - If the message contains an explicit issue number (e.g., "#709", "issue 709", "709"), use that number.
-      - If the message contains a GitHub issue URL, take the number from it AND record its
-        `owner/repo` — a URL may point at a DIFFERENT repository than the checkout.
-      - If the message names a repo explicitly ("owner/repo#709"), record that too.
-      - If the message is ambiguous (e.g., "fix the SQLite timestamp bug"), use `gh issue list`
-        to search the CURRENT repo and pick the best match; leave `repo` empty.
+      A reference is an ATOMIC pair: a number, and the repo it belongs to. Never take the
+      number from one reference and the repo from another — that combination fetches an
+      issue nobody asked for.
 
-      Set `repo` to "" whenever the request did not name a repository. An empty `repo` means
-      "the current checkout", which is the common case. Never guess a repo.
+      Recognised reference forms, each yielding one complete pair:
+      - `#709`, `issue 709`, `709`            -> {issue_number: "709", repo: ""}
+      - `owner/repo#709`                      -> {issue_number: "709", repo: "owner/repo"}
+      - `https://github.com/owner/repo/issues/709`
+                                              -> {issue_number: "709", repo: "owner/repo"}
+
+      An empty `repo` means "the current checkout" — the common case. NEVER guess a repo.
+
+      Then:
+      - Exactly one reference -> use it.
+      - Several references, all resolving to the SAME pair -> use it.
+      - Several DIFFERENT references (e.g. a bare number and a cross-repo URL) -> the
+        request is ambiguous. Do NOT pick one. Fail with a message naming every pair you
+        found and asking which was meant. Guessing here silently investigates the wrong
+        issue, which is worse than stopping.
+      - No reference at all (e.g. "fix the SQLite timestamp bug") -> search the CURRENT
+        repo with `gh issue list`, pick the best match, and leave `repo` empty.
     output_format:
       type: object
       properties:

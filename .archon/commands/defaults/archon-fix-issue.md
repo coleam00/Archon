@@ -35,6 +35,20 @@ created a git worktree on the correct branch. In that case:
   correctly reporting "contradictory instructions" because the issue required editing a
   workflow YAML while this section forbade touching anything under `.archon/`. It was
   right to refuse rather than guess — and the rule was wrong to be absolute.
+
+  **A named file is not a blank cheque for that file.** It may already carry copied-in
+  edits from before you started, and staging it whole would commit those too — the
+  path-level check above cannot see inside a file. So before you touch a planned
+  `.archon/` file, record its baseline:
+
+  ```bash
+  git diff -- <the-planned-file> > /tmp/archon-baseline.diff   # empty if clean
+  ```
+
+  After editing, stage **only your own hunks** — `git add -p <file>` — and reject any
+  hunk that also appears in the baseline. If the two are entangled such that you cannot
+  separate them, stop and say so rather than committing someone else's work under your
+  change. That is the same call the 2026-08-03 run made, and it was the right one.
 - **Dirty paths outside `.archon/` are also not a reason to stop, and also not yours.**
   They are either your own work from an earlier attempt at this run (resume reuses the
   worktree) or something the operator left behind. Either way: leave them alone, do not
