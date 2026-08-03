@@ -25,6 +25,79 @@ async function insertCodebase(db: SqliteAdapter, id: string): Promise<void> {
   ]);
 }
 
+/**
+ * Produce a database in the state it had BEFORE event_order existed: current
+ * schema in every other respect, with the column, its index and its trigger
+ * removed. Building it this way (rather than hand-writing an old schema) keeps
+ * the fixture realistic — the upgrade path that broke was an otherwise-current
+ * database missing exactly this one column.
+ */
+function makeDbWithoutEventOrder(): string {
+  const path = join(
+    import.meta.dir,
+    `.test-sqlite-legacy-${Date.now()}-${Math.random().toString(36).slice(2)}.db`
+  );
+  new SqliteAdapter(path); // writes the current schema
+  const raw = new Database(path);
+  raw.run('DROP TRIGGER IF EXISTS remote_agent_workflow_events_assign_order');
+  raw.run('DROP INDEX IF EXISTS idx_workflow_events_run_order');
+  raw.run('ALTER TABLE remote_agent_workflow_events DROP COLUMN event_order');
+  raw.close();
+  return path;
+}
+
+function columnsOf(path: string, table: string): string[] {
+  const raw = new Database(path);
+  const cols = (raw.prepare(`PRAGMA table_info('${table}')`).all() as { name: string }[]).map(
+    c => c.name
+  );
+  raw.close();
+  return cols;
+}
+
+describe('SqliteAdapter upgrade path', () => {
+  let legacyPath = '';
+  afterEach(() => {
+    if (legacyPath) {
+      try {
+        unlinkSync(legacyPath);
+      } catch {
+        /* already gone */
+      }
+      legacyPath = '';
+    }
+  });
+
+  // Regression: the event_order index and trigger were briefly created inside
+  // createSchema(). Both reference a column absent from any database predating
+  // it, and CREATE INDEX on a missing column aborts the entire createSchema()
+  // exec block — so createSchema() threw and migrateColumns(), which adds the
+  // column, never ran. Every existing SQLite install was bricked on upgrade,
+  // and the migration that would fix it could never execute.
+  test('converges a database that predates event_order', () => {
+    legacyPath = makeDbWithoutEventOrder();
+    expect(columnsOf(legacyPath, 'remote_agent_workflow_events')).not.toContain('event_order');
+
+    // Must not throw, and must converge.
+    new SqliteAdapter(legacyPath);
+
+    expect(columnsOf(legacyPath, 'remote_agent_workflow_events')).toContain('event_order');
+
+    const raw = new Database(legacyPath);
+    const objects = (
+      raw
+        .prepare('SELECT name FROM sqlite_master WHERE name IN (?, ?)')
+        .all('idx_workflow_events_run_order', 'remote_agent_workflow_events_assign_order') as {
+        name: string;
+      }[]
+    ).map(o => o.name);
+    raw.close();
+
+    expect(objects).toContain('idx_workflow_events_run_order');
+    expect(objects).toContain('remote_agent_workflow_events_assign_order');
+  });
+});
+
 describe('SqliteAdapter', () => {
   let db: SqliteAdapter;
 
