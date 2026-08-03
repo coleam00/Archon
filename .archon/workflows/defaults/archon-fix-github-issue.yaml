@@ -25,62 +25,57 @@ nodes:
   # PHASE 1: FETCH & CLASSIFY
   # ═══════════════════════════════════════════════════════════════
 
-  - id: extract-issue-number
-    prompt: |
-      Find the GitHub issue number for this request.
-
-      Request: $ARGUMENTS
-
-      A reference is an ATOMIC pair: a number, and the repo it belongs to. Never take the
-      number from one reference and the repo from another — that combination fetches an
-      issue nobody asked for.
-
-      Recognised reference forms, each yielding one complete pair:
-      - `#709`, `issue 709`, `709`            -> {issue_number: "709", repo: ""}
-      - `owner/repo#709`                      -> {issue_number: "709", repo: "owner/repo"}
-      - `https://github.com/owner/repo/issues/709`
-                                              -> {issue_number: "709", repo: "owner/repo"}
-
-      An empty `repo` means "the current checkout" — the common case. NEVER guess a repo.
-
-      Then:
-      - Exactly one reference -> use it.
-      - Several references, all resolving to the SAME pair -> use it.
-      - Several DIFFERENT references (e.g. a bare number and a cross-repo URL) -> the
-        request is ambiguous. Do NOT pick one. Fail with a message naming every pair you
-        found and asking which was meant. Guessing here silently investigates the wrong
-        issue, which is worse than stopping.
-      - No reference at all (e.g. "fix the SQLite timestamp bug") -> search the CURRENT
-        repo with `gh issue list`, pick the best match, and leave `repo` empty.
+  - id: parse-request
+    command: archon-parse-user-request
+    model: small
     output_format:
       type: object
       properties:
+        user_request:
+          type: string
         issue_number:
           type: string
-        repo:
+        repo_url:
           type: string
       required:
+        - user_request
         - issue_number
-        - repo
+        - repo_url
 
   - id: fetch-issue
     bash: |
       # Substitutions are injected already shell-quoted by Archon — assign them
       # unquoted, then quote normally as locals (see #1884).
-      num=$extract-issue-number.output.issue_number
-      repo=$extract-issue-number.output.repo
-      if ! printf '%s' "$num" | grep -qE '^[0-9]+$'; then
-        echo "extract-issue-number did not yield a numeric issue id: $num" >&2
+      req=$parse-request.output.user_request
+      num=$parse-request.output.issue_number
+      url=$parse-request.output.repo_url
+
+      # user_request is the ONE guaranteed field: verbatim input, never empty for
+      # a non-empty message. Empty here means the parse step failed to return what
+      # it was given — a real defect, and a countable one, rather than an unusual
+      # input. issue_number and repo_url are best-effort by contract.
+      if [ -z "$req" ]; then
+        echo "parse-request returned an empty user_request — the parse step failed." >&2
+        echo "This is a parser defect, not a bad request. Consider raising its model tier." >&2
         exit 1
       fi
-      # An explicit owner/repo must be preserved: `gh issue view <n>` resolves against
-      # the CURRENT checkout, so a cross-repo URL would silently read this repo's #<n>.
-      if [ -n "$repo" ]; then
-        gh issue view "$num" --repo "$repo" --json title,body,labels,comments,state,url,author
+
+      if ! printf '%s' "$num" | grep -qE '^[0-9]+$'; then
+        echo "No GitHub issue number found in: $req" >&2
+        echo "This workflow fixes a GitHub issue; give it an issue number or URL." >&2
+        exit 1
+      fi
+
+      # A URL carries its repository with it. `gh issue view <n>` resolves against
+      # the CURRENT checkout, so a number lifted out of another repo's URL would
+      # silently fetch this repo's issue of the same number. Passing the URL whole
+      # keeps number and repository together — no reassembly step to get wrong.
+      if [ -n "$url" ]; then
+        gh issue view "$url" --json title,body,labels,comments,state,url,author
       else
         gh issue view "$num" --json title,body,labels,comments,state,url,author
       fi
-    depends_on: [extract-issue-number]
+    depends_on: [parse-request]
 
   - id: classify
     prompt: |
