@@ -227,15 +227,21 @@ The AI router automatically picks the right workflow based on your message.
 
 ---
 
-### Path B: CLI (No Server)
+### Path B: CLI from source (No Server)
 
-**Step 4: Install the CLI globally**
+**Step 4: Link the source CLI for terminal development**
 
 ```bash
 cd packages/cli && bun link && cd ../..
 ```
 
-This registers the `archon` command globally so you can run it from any repository.
+This registers the Bun-based source `archon` command globally so you can run it
+from an interactive terminal in any repository. It requires Bun to be on `PATH`;
+the `~/.bun/bin` setup below applies only to shell-launched use.
+
+For a GUI app, service, or other non-shell caller, install the native release
+executable and configure its absolute path instead. See [Using Archon from a GUI
+or service](/getting-started/installation/#using-archon-from-a-gui-or-service).
 
 You'll see output like `Success! Registered "@archon/cli"` followed by a message about `bun link @archon/cli` — **ignore that second part**, it's for adding Archon as a dependency in another project.
 
