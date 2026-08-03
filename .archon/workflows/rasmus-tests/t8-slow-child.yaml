@@ -1,0 +1,14 @@
+name: t8-slow-child
+description: |
+  ENGINE-PRIMITIVE TEST — a child that takes long enough to interrupt. One bash node
+  that sleeps, so cascade-cancel can be observed without spending a model call.
+mutates_checkout: false
+
+nodes:
+  - id: wait
+    depends_on: []
+    timeout: 120000
+    bash: |
+      echo "child starting: $ARGUMENTS"
+      sleep 60
+      echo "child finished: $ARGUMENTS"

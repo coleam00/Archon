@@ -1,0 +1,249 @@
+import { describe, it, expect } from 'bun:test';
+import { existsSync, readFileSync, readdirSync } from 'fs';
+import { join } from 'path';
+import {
+  isBinaryBuild,
+  BUNDLED_COMMANDS,
+  BUNDLED_SCRIPTS,
+  BUNDLED_WORKFLOWS,
+  BUNDLED_WORKFLOW_OWNERS,
+} from './bundled-defaults';
+import {
+  formatPackagedResourceReference,
+  parsePackagedResourceReference,
+} from '../packaged-workflow';
+
+// Resolve the on-disk defaults directories relative to this test file so the
+// tests work regardless of cwd. From packages/workflows/src/defaults go up
+// four levels to the repo root, then into .archon/.
+const REPO_ROOT = join(import.meta.dir, '..', '..', '..', '..');
+const COMMANDS_DIR = join(REPO_ROOT, '.archon/commands/defaults');
+const WORKFLOWS_DIR = join(REPO_ROOT, '.archon/workflows/defaults');
+
+function findPackagedScriptPath(scriptDir: string, name: string, extension: string): string {
+  const filename = `${name}${extension}`;
+  const direct = join(scriptDir, filename);
+  if (existsSync(direct)) return direct;
+  const matches = readdirSync(scriptDir, { withFileTypes: true })
+    .filter(entry => entry.isDirectory())
+    .map(entry => join(scriptDir, entry.name, filename))
+    .filter(path => existsSync(path));
+  if (matches.length !== 1) {
+    throw new Error(
+      `Expected exactly one packaged script named ${filename} under ${scriptDir}, found ${matches.length}`
+    );
+  }
+  return matches[0];
+}
+
+describe('bundled-defaults', () => {
+  describe('isBinaryBuild', () => {
+    it('should return false in dev/test mode', () => {
+      // `isBinaryBuild()` reads the build-time constant `BUNDLED_IS_BINARY` from
+      // `@archon/paths`. In dev/test mode it is `false`. It is only rewritten to
+      // `true` by `scripts/build-binaries.sh` before `bun build --compile`.
+      // Coverage of the `true` branch is via local binary smoke testing (see #979).
+      expect(isBinaryBuild()).toBe(false);
+    });
+  });
+
+  describe('bundle completeness', () => {
+    // These assertions are the canary for bundle drift: if someone adds a
+    // default file without regenerating bundled-defaults.generated.ts, the
+    // bundle would be missing in compiled binaries (see #979 context). The
+    // generator is `scripts/generate-bundled-defaults.ts`, and
+    // `bun run check:bundled` verifies the generated file is up to date.
+
+    it('BUNDLED_COMMANDS contains every .md file in .archon/commands/defaults/', () => {
+      const onDisk = readdirSync(COMMANDS_DIR)
+        .filter(f => f.endsWith('.md'))
+        .map(f => f.slice(0, -'.md'.length))
+        .sort();
+      expect(
+        Object.keys(BUNDLED_COMMANDS)
+          .filter(name => parsePackagedResourceReference(name) === null)
+          .sort()
+      ).toEqual(onDisk);
+    });
+
+    it('BUNDLED_WORKFLOWS contains every .yaml/.yml file in .archon/workflows/defaults/', () => {
+      const onDisk = readdirSync(WORKFLOWS_DIR)
+        .filter(f => f.endsWith('.yaml') || f.endsWith('.yml'))
+        .map(f => f.replace(/\.ya?ml$/, ''))
+        .sort();
+      expect(
+        Object.keys(BUNDLED_WORKFLOWS)
+          .filter(name => BUNDLED_WORKFLOW_OWNERS[name] === undefined)
+          .sort()
+      ).toEqual(onDisk);
+    });
+
+    it('bundled content matches on-disk file content (defense against generator corruption)', () => {
+      // Bundled content is LF-normalized by the generator so it stays identical
+      // regardless of the checkout's line-ending policy. Match that here.
+      const readLF = (path: string): string => readFileSync(path, 'utf-8').replace(/\r\n/g, '\n');
+
+      for (const [name, content] of Object.entries(BUNDLED_COMMANDS)) {
+        const diskContent = readLF(join(COMMANDS_DIR, `${name}.md`));
+        expect(content).toBe(diskContent);
+      }
+      for (const [name, content] of Object.entries(BUNDLED_WORKFLOWS)) {
+        // Workflows may be .yaml or .yml — prefer .yaml, fall back.
+        let diskContent: string;
+        try {
+          diskContent = readLF(join(WORKFLOWS_DIR, `${name}.yaml`));
+        } catch {
+          diskContent = readLF(join(WORKFLOWS_DIR, `${name}.yml`));
+        }
+        expect(content).toBe(diskContent);
+      }
+    });
+
+    it('packaged bundle metadata is internally consistent', () => {
+      for (const [workflow, owner] of Object.entries(BUNDLED_WORKFLOW_OWNERS)) {
+        expect(BUNDLED_WORKFLOWS[workflow]).toBeDefined();
+        expect(owner.pack.length).toBeGreaterThan(0);
+        expect(owner.workflow.length).toBeGreaterThan(0);
+        const workflowDir = join(REPO_ROOT, '.archon', 'workflows', owner.pack, owner.workflow);
+        const yaml = readdirSync(workflowDir).find(entry => /\.ya?ml$/.test(entry));
+        expect(yaml).toBeDefined();
+        expect(BUNDLED_WORKFLOWS[workflow]).toBe(
+          readFileSync(join(workflowDir, yaml!), 'utf-8').replace(/\r\n/g, '\n')
+        );
+
+        const commandDir = join(workflowDir, 'commands');
+        if (existsSync(commandDir)) {
+          for (const entry of readdirSync(commandDir).filter(entry => entry.endsWith('.md'))) {
+            const localName = entry.slice(0, -'.md'.length);
+            const key = formatPackagedResourceReference({ source: 'bundled', ...owner }, localName);
+            expect(BUNDLED_COMMANDS[key]).toBe(
+              readFileSync(join(commandDir, entry), 'utf-8').replace(/\r\n/g, '\n')
+            );
+          }
+        }
+      }
+      for (const [name, script] of Object.entries(BUNDLED_SCRIPTS)) {
+        expect(name.startsWith('__archon_pack__bundled:')).toBe(true);
+        expect(['.ts', '.js', '.py']).toContain(script.extension);
+        expect(['bun', 'uv']).toContain(script.runtime);
+        expect(script.content.length).toBeGreaterThan(0);
+        const packaged = parsePackagedResourceReference(name);
+        expect(packaged).not.toBeNull();
+        const scriptDir = join(
+          REPO_ROOT,
+          '.archon',
+          'workflows',
+          packaged!.owner.pack,
+          packaged!.owner.workflow,
+          'scripts'
+        );
+        const diskPath = findPackagedScriptPath(scriptDir, packaged!.name, script.extension);
+        expect(script.content).toBe(readFileSync(diskPath, 'utf-8').replace(/\r\n/g, '\n'));
+      }
+    });
+  });
+
+  describe('BUNDLED_COMMANDS', () => {
+    it('every command has meaningful content (>50 chars)', () => {
+      for (const content of Object.values(BUNDLED_COMMANDS)) {
+        expect(content.length).toBeGreaterThan(50);
+      }
+    });
+
+    it('archon-pr-review-scope should read .pr-number before other discovery', () => {
+      const content = BUNDLED_COMMANDS['archon-pr-review-scope'];
+      expect(content).toContain('$ARTIFACTS_DIR/.pr-number');
+      expect(content).toContain('PR_NUMBER=$(cat $ARTIFACTS_DIR/.pr-number');
+    });
+
+    it('archon-create-pr should write .pr-number to artifacts', () => {
+      const content = BUNDLED_COMMANDS['archon-create-pr'];
+      expect(content).toContain('echo "$PR_NUMBER" > "$ARTIFACTS_DIR/.pr-number"');
+    });
+  });
+
+  describe('BUNDLED_WORKFLOWS', () => {
+    it('every workflow has meaningful content (>50 chars)', () => {
+      for (const content of Object.values(BUNDLED_WORKFLOWS)) {
+        expect(content.length).toBeGreaterThan(50);
+      }
+    });
+
+    it('archon-workflow-builder should have validate-before-save node ordering and key constraints', () => {
+      const content = BUNDLED_WORKFLOWS['archon-workflow-builder'];
+      expect(content).toContain('id: validate-yaml');
+      expect(content).toContain('depends_on: [validate-yaml]');
+      expect(content).toContain('denied_tools: [Edit, Bash]');
+      expect(content).toContain('output_format:');
+      expect(content).toContain('workflow_name');
+    });
+
+    it('archon-adversarial-dev init-workspace should avoid non-portable sed -i', () => {
+      const content = BUNDLED_WORKFLOWS['archon-adversarial-dev'];
+      expect(content).toContain('STATE_TMP="$ARTIFACTS/state.json.tmp"');
+      expect(content).toContain(
+        'sed "s/SPRINT_COUNT_PLACEHOLDER/$SPRINT_COUNT/" "$ARTIFACTS/state.json" > "$STATE_TMP"'
+      );
+      expect(content).not.toContain('sed -i "s/SPRINT_COUNT_PLACEHOLDER/$SPRINT_COUNT/"');
+    });
+
+    it('should have valid YAML structure', () => {
+      for (const content of Object.values(BUNDLED_WORKFLOWS)) {
+        expect(content).toContain('name:');
+        expect(content).toContain('description:');
+        expect(content.includes('nodes:')).toBe(true);
+      }
+    });
+  });
+
+  describe('fork-safe PR creation (#2226)', () => {
+    // In a clone of a fork, gh commands without an explicit --repo resolve the
+    // base repo to the fork's UPSTREAM parent, publishing the user's diff
+    // against the upstream repo (accidental upstream PRs #1543/#1416). Every
+    // `gh pr create` invocation in the bundled defaults must pin `--repo` —
+    // and so must the create-flow-adjacent `gh pr list/edit/ready` calls that
+    // discover or mutate the just-created PR (an empty/unset --repo value does
+    // NOT fail: gh silently falls back to its default resolution, verified).
+    // `gh pr view` is intentionally NOT guarded here: review-path commands
+    // (archon-pr-review-scope etc.) view explicit PR numbers supplied as
+    // workflow input — pinning those is a separate concern.
+
+    // Join backslash-continued shell lines so multi-line `gh pr create \`
+    // blocks are checked as a single command.
+    const mergeContinuations = (content: string): string[] => {
+      const merged: string[] = [];
+      let current = '';
+      for (const line of content.split('\n')) {
+        if (line.trimEnd().endsWith('\\')) {
+          current += line.trimEnd().slice(0, -1) + ' ';
+        } else {
+          merged.push(current + line);
+          current = '';
+        }
+      }
+      if (current) merged.push(current);
+      return merged;
+    };
+
+    const GUARDED = /gh pr (create|list|edit|ready)\b/;
+
+    const assertPinned = (bundle: Record<string, string>): void => {
+      for (const [name, content] of Object.entries(bundle)) {
+        for (const line of mergeContinuations(content)) {
+          if (!GUARDED.test(line)) continue;
+          // Prose references to a failed command (hook texts) are not invocations.
+          if (line.includes('gh pr create failed')) continue;
+          expect(`${name}: ${line.trim()}`).toContain('--repo');
+        }
+      }
+    };
+
+    it('every gh pr create/list/edit/ready in bundled commands pins --repo', () => {
+      assertPinned(BUNDLED_COMMANDS);
+    });
+
+    it('every gh pr create/list/edit/ready in bundled workflows pins --repo', () => {
+      assertPinned(BUNDLED_WORKFLOWS);
+    });
+  });
+});

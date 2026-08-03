@@ -1,0 +1,29 @@
+# E2E smoke (NEGATIVE) — no-silent-drop fail-fast (PR 1, Task 9)
+# Expected outcome: the `bad-ref` node FAILS with an OutputRefError because it
+# references a field that is NOT declared in `classify`'s output_format schema.
+# Before this change it silently resolved to '' (poisoning downstream). Run this
+# and confirm the run fails with a "not declared in ... output_format schema" error.
+name: e2e-structured-output-failfast
+description: 'NEGATIVE smoke: $node.output ref to a field not in the schema must fail the node, not resolve to empty.'
+provider: claude
+model: haiku
+
+nodes:
+  - id: classify
+    idle_timeout: 60000
+    allowed_tools: []
+    prompt: |
+      Classify this text into a single category: "hello world".
+    output_format:
+      type: object
+      properties:
+        category:
+          type: string
+      required: [category]
+
+  # `nonexistent_field` is NOT in classify's schema (only `category` is). Strict
+  # resolution throws (not-in-schema) when building this node's script → node FAILS.
+  - id: bad-ref
+    depends_on: [classify]
+    bash: |
+      echo "this line should never print: $classify.output.nonexistent_field"

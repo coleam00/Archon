@@ -1,0 +1,4605 @@
+/**
+ * REST API routes for the Archon Web UI.
+ * Provides conversation, codebase, and SSE streaming endpoints.
+ */
+import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
+import { streamSSE } from 'hono/streaming';
+import { cors } from 'hono/cors';
+import type { WebAdapter } from '../adapters/web';
+import { boundMetadataToolOutputs } from '../adapters/web/truncate';
+import { rm, readFile, writeFile, unlink, mkdir, readdir, stat } from 'fs/promises';
+import { existsSync, readFileSync } from 'fs';
+import { normalize, join, sep, basename, dirname, resolve } from 'path';
+import { randomUUID } from 'crypto';
+import type { Context } from 'hono';
+import type {
+  ConversationLockManager,
+  AttachedFile,
+  HandleMessageContext,
+  GlobalConfig,
+  TiersPatch,
+  UserRole,
+  SchemaVersionInfo,
+} from '@archon/core';
+import {
+  handleMessage,
+  getDatabaseType,
+  getSchemaVersion,
+  loadConfig,
+  loadRepoConfig,
+  toSafeConfig,
+  updateGlobalConfig,
+  cloneRepository,
+  registerRepository,
+  registerFolder,
+  ConversationNotFoundError,
+  generateAndSetTitle,
+  resolveTitleRequest,
+  isPerUserGitHubEnabled,
+  loadDeviceFlowConfig,
+  startDeviceFlow,
+  pollDeviceFlowOnce,
+  persistGithubConnection,
+  DeviceFlowError,
+  GithubIdentityConflictError,
+  getUserGithubTokenRecord,
+  deleteUserGithubToken,
+  isPerUserProviderKeysEnabled,
+  persistProviderApiKey,
+  InvalidProviderKeyError,
+  listUserProviderKeys,
+  deleteUserProviderKey,
+  listConnectableVendors,
+  buildAgentCredentialMatrix,
+  normalizeCredentialVendor,
+  SUBSCRIPTION_PROVIDERS,
+  startOAuth,
+  pollOAuth,
+  OAuthCallbackPortBusyError,
+  getUserAiPrefs,
+  setUserTiers,
+  setUserAliases,
+  setUserDefault,
+} from '@archon/core';
+import type { UserTiersPatch, UserAliasesPatch, AliasesPatch } from '@archon/core';
+import { findRepoRoot, removeWorktree, toRepoPath, toWorktreePath } from '@archon/git';
+import {
+  createLogger,
+  getWorkflowFolderSearchPaths,
+  getCommandFolderSearchPaths,
+  getDefaultCommandsPath,
+  getDefaultWorkflowsPath,
+  getArchonWorkspacesPath,
+  getHomeCommandsPath,
+  getHomeWorkflowsPath,
+  resolveProjectStorageKey,
+  getRunArtifactsDirForKey,
+  getRunArtifactsDirForRoot,
+  isInsideArchonHome,
+  getArchonHome,
+  isDocker,
+  isWSL,
+  getWSLDistroName,
+  checkForUpdate,
+  BUNDLED_IS_BINARY,
+  BUNDLED_VERSION,
+} from '@archon/paths';
+import {
+  discoverWorkflowsWithConfig,
+  isValidWorkflowFolderSegment,
+} from '@archon/workflows/workflow-discovery';
+import { parseWorkflow } from '@archon/workflows/loader';
+import { isValidCommandName, isValidWorkflowName } from '@archon/workflows/command-validation';
+import { BUNDLED_WORKFLOWS, BUNDLED_COMMANDS, isBinaryBuild } from '@archon/workflows/defaults';
+import {
+  RESUMABLE_WORKFLOW_STATUSES,
+  TERMINAL_WORKFLOW_STATUSES,
+  isApprovalContext,
+  isGateResolved,
+} from '@archon/workflows/schemas/workflow-run';
+import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import type { MessageRow } from '@archon/core/schemas/message';
+import type { DashboardWorkflowRun } from '@archon/core/schemas/workflow-run';
+import { findMarkdownFilesRecursive } from '@archon/core/utils/commands';
+
+/** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
+let cachedLog: ReturnType<typeof createLogger> | undefined;
+function getLog(): ReturnType<typeof createLogger> {
+  if (!cachedLog) cachedLog = createLogger('api');
+  return cachedLog;
+}
+
+interface RawWorkflowFile {
+  absolutePath: string;
+  filename: string;
+  packaged: boolean;
+  parsed: ReturnType<typeof parseWorkflow>;
+}
+
+async function tryReadWorkflowAt(dir: string, name: string): Promise<RawWorkflowFile | null> {
+  const acceptedNames = new Set(name.includes('/') ? [name, basename(name)] : [name]);
+  for (const ext of ['yaml', 'yml']) {
+    const filename = `${name}.${ext}`;
+    const absolutePath = join(dir, filename);
+    try {
+      const content = await readFile(absolutePath, 'utf-8');
+      const parsed = parseWorkflow(content, filename);
+      if (parsed.workflow !== null && !acceptedNames.has(parsed.workflow.name)) continue;
+      return { absolutePath, filename, packaged: false, parsed };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  }
+  return null;
+}
+
+async function findPackagedWorkflowAt(
+  workflowsRoot: string,
+  name: string
+): Promise<RawWorkflowFile | null> {
+  let packs: string[];
+  try {
+    packs = await readdir(workflowsRoot);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
+
+  let match: RawWorkflowFile | null = null;
+  for (const pack of packs.sort((a, b) => a.localeCompare(b))) {
+    if (!isValidWorkflowFolderSegment(pack)) continue;
+    const packPath = join(workflowsRoot, pack);
+    try {
+      if (!(await stat(packPath)).isDirectory()) continue;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      throw error;
+    }
+
+    let workflowFolders: string[];
+    try {
+      workflowFolders = await readdir(packPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      throw error;
+    }
+    for (const workflowFolder of workflowFolders.sort((a, b) => a.localeCompare(b))) {
+      if (!isValidWorkflowFolderSegment(workflowFolder)) continue;
+      const workflowPath = join(packPath, workflowFolder);
+      try {
+        if (!(await stat(workflowPath)).isDirectory()) continue;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        throw error;
+      }
+
+      let workflowEntries: string[];
+      try {
+        workflowEntries = await readdir(workflowPath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        throw error;
+      }
+      const yamlFiles = workflowEntries
+        .filter(entry => entry.endsWith('.yaml') || entry.endsWith('.yml'))
+        .sort((a, b) => a.localeCompare(b));
+      if (yamlFiles.length !== 1) continue;
+
+      const yamlFilename = yamlFiles[0];
+      const absolutePath = join(workflowPath, yamlFilename);
+      let content: string;
+      try {
+        content = await readFile(absolutePath, 'utf-8');
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        throw error;
+      }
+      const parsed = parseWorkflow(content, yamlFilename);
+      const yamlStem = yamlFilename.replace(/\.ya?ml$/, '');
+      const isMalformedTarget =
+        parsed.workflow === null && (yamlStem === name || workflowFolder === name);
+      if (parsed.workflow?.name !== name && !isMalformedTarget) continue;
+      if (match !== null) {
+        throw new Error(`Multiple packaged workflows declare the name '${name}'`);
+      }
+      match = {
+        absolutePath,
+        filename: `${pack}/${workflowFolder}/${yamlFilename}`,
+        packaged: true,
+        parsed,
+      };
+    }
+  }
+  return match;
+}
+
+async function findWorkflowAt(
+  workflowsRoot: string,
+  name: string
+): Promise<RawWorkflowFile | null> {
+  return (
+    (await tryReadWorkflowAt(workflowsRoot, name)) ??
+    (await findPackagedWorkflowAt(workflowsRoot, name))
+  );
+}
+
+function isBundledWorkflowsRoot(workflowsRoot: string): boolean {
+  return resolve(workflowsRoot) === resolve(dirname(getDefaultWorkflowsPath()));
+}
+
+function findBundledWorkflow(
+  name: string
+): { filename: string; parsed: ReturnType<typeof parseWorkflow> } | null {
+  const direct = BUNDLED_WORKFLOWS[name];
+  if (direct !== undefined) {
+    const filename = `${name}.yaml`;
+    const parsed = parseWorkflow(direct, filename);
+    if (parsed.error !== null || parsed.workflow?.name === name) {
+      return { filename, parsed };
+    }
+  }
+
+  let match: {
+    filename: string;
+    parsed: ReturnType<typeof parseWorkflow>;
+  } | null = null;
+  for (const [filenameStem, content] of Object.entries(BUNDLED_WORKFLOWS)) {
+    if (filenameStem === name) continue;
+    const filename = `${filenameStem}.yaml`;
+    const parsed = parseWorkflow(content, filename);
+    if (parsed.workflow?.name !== name) continue;
+    if (match !== null) throw new Error(`Multiple bundled workflows declare the name '${name}'`);
+    match = { filename, parsed };
+  }
+  return match;
+}
+import * as conversationDb from '@archon/core/db/conversations';
+import * as codebaseDb from '@archon/core/db/codebases';
+import * as envVarDb from '@archon/core/db/env-vars';
+import * as isolationEnvDb from '@archon/core/db/isolation-environments';
+import * as workflowDb from '@archon/core/db/workflows';
+import * as workflowEventDb from '@archon/core/db/workflow-events';
+import * as messageDb from '@archon/core/db/messages';
+import * as userDb from '@archon/core/db/users';
+import {
+  abandonWorkflow,
+  approveWorkflow,
+  rejectWorkflow,
+  resetWorkflowNodeSessions,
+} from '@archon/core/operations/workflow-operations';
+import { getAuth, isWebAuthEnabled, getSignupMode, isApiGateEnabled } from '../auth';
+import { errorSchema } from './schemas/common.schemas';
+import { updateCheckResponseSchema } from './schemas/system.schemas';
+import {
+  workflowListResponseSchema,
+  validateWorkflowBodySchema,
+  validateWorkflowResponseSchema,
+  getWorkflowResponseSchema,
+  saveWorkflowBodySchema,
+  deleteWorkflowResponseSchema,
+  commandListResponseSchema,
+  workflowRunListResponseSchema,
+  workflowRunDetailSchema,
+  workflowRunByWorkerResponseSchema,
+  cancelWorkflowRunResponseSchema,
+  workflowRunActionResponseSchema,
+  dashboardRunsResponseSchema,
+  dashboardRunsQuerySchema,
+  workflowRunsQuerySchema,
+  approveWorkflowRunBodySchema,
+  rejectWorkflowRunBodySchema,
+  resetWorkflowNodeSessionsParamsSchema,
+  resetWorkflowNodeSessionsQuerySchema,
+  resetWorkflowNodeSessionsResponseSchema,
+  listArtifactsResponseSchema,
+} from './schemas/workflow.schemas';
+import {
+  conversationListResponseSchema,
+  listConversationsQuerySchema,
+  conversationIdParamsSchema,
+  conversationSchema,
+  createConversationBodySchema,
+  createConversationResponseSchema,
+  updateConversationBodySchema,
+  successResponseSchema,
+  messageListResponseSchema,
+  listMessagesQuerySchema,
+  dispatchResponseSchema,
+} from './schemas/conversation.schemas';
+import {
+  codebaseListResponseSchema,
+  codebaseSchema,
+  codebaseIdParamsSchema,
+  addCodebaseBodySchema,
+  deleteCodebaseResponseSchema,
+  codebaseEnvVarsResponseSchema,
+  setEnvVarBodySchema,
+  codebaseEnvVarParamsSchema,
+  envVarMutationResponseSchema,
+} from './schemas/codebase.schemas';
+import {
+  updateAssistantConfigBodySchema,
+  updateAssistantConfigResponseSchema,
+  configResponseSchema,
+  updateTiersBodySchema,
+  updateAliasesBodySchema,
+  codebaseEnvironmentsResponseSchema,
+} from './schemas/config.schemas';
+import {
+  TIER_NAMES,
+  isEffortValidForProvider,
+  validEffortsForProvider,
+} from '@archon/workflows/model-validation';
+import {
+  providerListResponseSchema,
+  piModelListResponseSchema,
+  opencodeCredentialListResponseSchema,
+} from './schemas/provider.schemas';
+import {
+  authStatusResponseSchema,
+  deviceStartResponseSchema,
+  devicePollBodySchema,
+  devicePollResponseSchema,
+  githubConnectionStatusSchema,
+  githubDisconnectResponseSchema,
+} from './schemas/auth.schemas';
+import {
+  providerKeyListResponseSchema,
+  providerKeyParamsSchema,
+  providerKeySetBodySchema,
+  providerKeySetResponseSchema,
+  providerKeyDeleteResponseSchema,
+  providerOAuthStartResponseSchema,
+  providerOAuthPollBodySchema,
+  providerOAuthPollResponseSchema,
+} from './schemas/provider-key.schemas';
+import {
+  userAiPrefsResponseSchema,
+  updateUserTiersBodySchema,
+  updateUserAliasesBodySchema,
+  updateUserDefaultBodySchema,
+} from './schemas/user-ai-prefs.schemas';
+import { mapDeviceFlowErrorToPollStatus } from './auth-poll-status';
+import {
+  getProviderInfoList,
+  isRegisteredProvider,
+  listPiModels,
+  introspectOpencodeCredentials,
+} from '@archon/providers';
+import { messageSchema } from './schemas/conversation.schemas';
+import {
+  workflowRunSchema,
+  dashboardWorkflowRunSchema,
+  workflowRunStatusSchema,
+} from './schemas/workflow.schemas';
+
+// Read app version: use build-time constant in binary, package.json in dev
+let appVersion = 'unknown';
+if (BUNDLED_IS_BINARY) {
+  appVersion = BUNDLED_VERSION;
+} else {
+  try {
+    const pkgContent = readFileSync(join(import.meta.dir, '../../../../package.json'), 'utf-8');
+    const pkg = JSON.parse(pkgContent) as { version?: string };
+    appVersion = pkg.version ?? 'unknown';
+  } catch (err) {
+    getLog().debug(
+      { err, path: join(import.meta.dir, '../../../../package.json') },
+      'api.version_read_failed'
+    );
+  }
+}
+
+type WorkflowSource = 'project' | 'bundled' | 'global';
+
+/**
+ * Resolve the on-disk artifact directory for a run, for EVERY project kind
+ * (#2200).
+ *
+ * Both artifact routes previously did `parseOwnerRepo(codebase.name)` alone,
+ * which returns null for a folder project (display name, no slash) and for a
+ * no-remote local repo (bare basename) — so artifact browsing was silently dead
+ * for two of the three project kinds Archon can register.
+ *
+ * Order mirrors the executor: a persisted `output_root` wins outright (a
+ * codebase renamed since the run must not orphan its artifacts, #1192);
+ * otherwise the shared `resolveProjectStorageKey` derives the key. Returns null
+ * only when there is no codebase row to derive from at all — callers surface
+ * that as an explicit 404 rather than an empty success.
+ *
+ * The `cwd` argument is `codebase.default_cwd` here, while the executor passes
+ * the RUN's cwd (which inside a worktree is the worktree path). That only
+ * differs for the `{ kind: 'cwd' }` fallback, and every run since #2200
+ * persists `output_root`, so this path never re-derives for a modern run.
+ */
+function resolveRunArtifactDir(
+  run: { output_root?: string | null },
+  codebase: { kind?: string | null; name: string; default_cwd: string } | null,
+  runId: string
+): string | null {
+  // The containment check belongs INSIDE this branch, not after it. A persisted
+  // root is a cache of where the run wrote, not an authority: move ARCHON_HOME
+  // (machine migration, restored backup, the documented ARCHON_DATA split) and
+  // every stamped root is suddenly out-of-tree. Guarding after the fact would
+  // hard-400 every historical run even when its artifacts sit re-derivable and
+  // physically present under the new home — and `output_root` is write-once via
+  // COALESCE, so the app could never clear the column to recover. Falling
+  // through to re-derivation keeps the tree relocatable, which is how it behaved
+  // before the column existed. Matches `continue.ts`.
+  if (run.output_root && isInsideArchonHome(run.output_root)) {
+    return getRunArtifactsDirForRoot(run.output_root, runId);
+  }
+  if (!codebase?.name) return null;
+  return getRunArtifactsDirForKey(resolveProjectStorageKey(codebase, codebase.default_cwd), runId);
+}
+
+// =========================================================================
+// OpenAPI route configs (module-scope — pure config, no runtime dependencies)
+// =========================================================================
+
+/** Helper to build a JSON error response entry for createRoute configs. */
+function jsonError(description: string): {
+  content: { 'application/json': { schema: typeof errorSchema } };
+  description: string;
+} {
+  return { content: { 'application/json': { schema: errorSchema } }, description };
+}
+
+const cwdQuerySchema = z.object({ cwd: z.string().optional() });
+const workflowTargetQuerySchema = cwdQuerySchema.extend({
+  source: z.enum(['project', 'global']).optional(),
+});
+
+const getWorkflowsRoute = createRoute({
+  method: 'get',
+  path: '/api/workflows',
+  tags: ['Workflows'],
+  summary: 'List available workflows',
+  request: { query: cwdQuerySchema },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: workflowListResponseSchema } },
+      description: 'OK',
+    },
+    400: jsonError('Bad request'),
+    500: jsonError('Server error'),
+  },
+});
+
+const validateWorkflowRoute = createRoute({
+  method: 'post',
+  path: '/api/workflows/validate',
+  tags: ['Workflows'],
+  summary: 'Validate a workflow definition without saving',
+  request: {
+    body: {
+      content: { 'application/json': { schema: validateWorkflowBodySchema } },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: validateWorkflowResponseSchema } },
+      description: 'Validation result',
+    },
+    400: jsonError('Bad request'),
+    500: jsonError('Server error'),
+  },
+});
+
+const getWorkflowRoute = createRoute({
+  method: 'get',
+  path: '/api/workflows/{name}',
+  tags: ['Workflows'],
+  summary: 'Fetch a single workflow definition',
+  request: {
+    params: z.object({ name: z.string() }),
+    query: cwdQuerySchema,
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: getWorkflowResponseSchema } },
+      description: 'Workflow definition',
+    },
+    400: jsonError('Bad request'),
+    404: jsonError('Not found'),
+    500: jsonError('Server error'),
+  },
+});
+
+const saveWorkflowRoute = createRoute({
+  method: 'put',
+  path: '/api/workflows/{name}',
+  tags: ['Workflows'],
+  summary: 'Save (create or update) a workflow',
+  request: {
+    params: z.object({ name: z.string() }),
+    query: workflowTargetQuerySchema,
+    body: { content: { 'application/json': { schema: saveWorkflowBodySchema } }, required: true },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: getWorkflowResponseSchema } },
+      description: 'Saved workflow',
+    },
+    400: jsonError('Bad request'),
+    500: jsonError('Server error'),
+  },
+});
+
+const deleteWorkflowRoute = createRoute({
+  method: 'delete',
+  path: '/api/workflows/{name}',
+  tags: ['Workflows'],
+  summary: 'Delete a user-defined workflow',
+  request: {
+    params: z.object({ name: z.string() }),
+    query: workflowTargetQuerySchema,
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: deleteWorkflowResponseSchema } },
+      description: 'Deleted',
+    },
+    400: jsonError('Bad request'),
+    404: jsonError('Not found'),
+    500: jsonError('Server error'),
+  },
+});
+
+const getCommandsRoute = createRoute({
+  method: 'get',
+  path: '/api/commands',
+  tags: ['Commands'],
+  summary: 'List available command names for the workflow node palette',
+  request: { query: cwdQuerySchema },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: commandListResponseSchema } },
+      description: 'OK',
+    },
+    400: jsonError('Bad request'),
+    500: jsonError('Server error'),
+  },
+});
+
+// =========================================================================
+// Conversation route configs
+// =========================================================================
+
+const getConversationsRoute = createRoute({
+  method: 'get',
+  path: '/api/conversations',
+  tags: ['Conversations'],
+  summary: 'List conversations',
+  request: { query: listConversationsQuerySchema },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: conversationListResponseSchema } },
+      description: 'OK',
+    },
+    500: jsonError('Server error'),
+  },
+});
+
+const getConversationRoute = createRoute({
+  method: 'get',
+  path: '/api/conversations/{id}',
+  tags: ['Conversations'],
+  summary: 'Get a conversation by platform conversation ID',
+  request: { params: conversationIdParamsSchema },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: conversationSchema } },
+      description: 'Conversation',
+    },
+    404: jsonError('Not found'),
+    500: jsonError('Server error'),
+  },
+});
+
+const createConversationRoute = createRoute({
+  method: 'post',
+  path: '/api/conversations',
+  tags: ['Conversations'],
+  summary: 'Create a new conversation',
+  request: {
+    body: {
+      content: { 'application/json': { schema: createConversationBodySchema } },
+      required: false,
+    },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: createConversationResponseSchema } },
+      description: 'Created conversation',
+    },
+    400: jsonError('Bad request'),
+    500: jsonError('Server error'),
+  },
+});
+
+const updateConversationRoute = createRoute({
+  method: 'patch',
+  path: '/api/conversations/{id}',
+  tags: ['Conversations'],
+  summary: 'Update a conversation (title)',
+  request: {
+    params: conversationIdParamsSchema,
+    body: {
+      content: { 'application/json': { schema: updateConversationBodySchema } },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: successResponseSchema } },
+      description: 'Updated',
+    },
+    400: jsonError('Bad request'),
+    404: jsonError('Not found'),
+    500: jsonError('Server error'),
+  },
+});
+
+const deleteConversationRoute = createRoute({
+  method: 'delete',
+  path: '/api/conversations/{id}',
+  tags: ['Conversations'],
+  summary: 'Soft-delete a conversation',
+  request: { params: conversationIdParamsSchema },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: successResponseSchema } },
+      description: 'Deleted',
+    },
+    404: jsonError('Not found'),
+    500: jsonError('Server error'),
+  },
+});
+
+const listMessagesRoute = createRoute({
+  method: 'get',
+  path: '/api/conversations/{id}/messages',
+  tags: ['Conversations'],
+  summary: 'List message history for a conversation',
+  request: {
+    params: conversationIdParamsSchema,
+    query: listMessagesQuerySchema,
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: messageListResponseSchema } },
+      description: 'Message list',
+    },
+    404: jsonError('Not found'),
+    500: jsonError('Server error'),
+  },
+});
+
+// Body validation is handled manually in the handler (multipart vs JSON branching).
+// Declaring both content types in the OpenAPI route causes @hono/zod-openapi to
+// validate JSON bodies against the multipart schema. We keep `request.body` empty
+// and document the schemas via the OpenAPI spec comments instead.
+const sendMessageRoute = createRoute({
+  method: 'post',
+  path: '/api/conversations/{id}/message',
+  tags: ['Conversations'],
+  summary: 'Send a message (JSON or multipart with file uploads)',
+  description:
+    'Accepts `application/json` with `{ message: string }` or `multipart/form-data` ' +
+    'with a `message` field and optional file attachments (max 5 files, 10 MB each).',
+  request: {
+    params: conversationIdParamsSchema,
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: dispatchResponseSchema } },
+      description: 'Accepted',
+    },
+    400: jsonError('Bad request'),
+    500: jsonError('Server error'),
+  },
+});
+
+// =========================================================================
+// Codebase route configs
+// =========================================================================
+
+const listCodebasesRoute = createRoute({
+  method: 'get',
+  path: '/api/codebases',
+  tags: ['Codebases'],
+  summary: 'List registered codebases',
+  responses: {
+    200: {
+      content: { 'application/json': { schema: codebaseListResponseSchema } },
+      description: 'OK',
+    },
+    500: jsonError('Server error'),
+  },
+});
+
+const getCodebaseRoute = createRoute({
+  method: 'get',
+  path: '/api/codebases/{id}',
+  tags: ['Codebases'],
+  summary: 'Get a codebase by ID',
+  request: { params: codebaseIdParamsSchema },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: codebaseSchema } },
+      description: 'Codebase',
+    },
+    404: jsonError('Not found'),
+    500: jsonError('Server error'),
+  },
+});
+
+const addCodebaseRoute = createRoute({
+  method: 'post',
+  path: '/api/codebases',
+  tags: ['Codebases'],
+  summary: 'Register a codebase (clone from URL or register local path)',
+  request: {
+    body: {
+      content: { 'application/json': { schema: addCodebaseBodySchema } },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: codebaseSchema } },
+      description: 'Codebase already existed',
+    },
+    201: {
+      content: { 'application/json': { schema: codebaseSchema } },
+      description: 'Codebase created',
+    },
+    400: jsonError('Bad request'),
+    500: jsonError('Server error'),
+  },
+});
+
+const deleteCodebaseRoute = createRoute({
+  method: 'delete',
+  path: '/api/codebases/{id}',
+  tags: ['Codebases'],
+  summary: 'Delete a codebase and clean up associated resources',
+  request: { params: codebaseIdParamsSchema },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: deleteCodebaseResponseSchema } },
+      description: 'Deleted',
+    },
+    404: jsonError('Not found'),
+    500: jsonError('Server error'),
+  },
+});
+
+// =========================================================================
+// Codebase env var route configs
+// =========================================================================
+
+const listEnvVarsRoute = createRoute({
+  method: 'get',
+  path: '/api/codebases/{id}/env',
+  tags: ['Codebases'],
+  summary: 'List env vars for a codebase',
+  request: { params: codebaseIdParamsSchema },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: codebaseEnvVarsResponseSchema } },
+      description: 'Env vars for codebase',
+    },
+    404: jsonError('Codebase not found'),
+  },
+});
+
+const setEnvVarRoute = createRoute({
+  method: 'put',
+  path: '/api/codebases/{id}/env',
+  tags: ['Codebases'],
+  summary: 'Set (upsert) an env var for a codebase',
+  request: {
+    params: codebaseIdParamsSchema,
+    body: { content: { 'application/json': { schema: setEnvVarBodySchema } } },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: envVarMutationResponseSchema } },
+      description: 'Env var set',
+    },
+    404: jsonError('Codebase not found'),
+  },
+});
+
+const deleteEnvVarRoute = createRoute({
+  method: 'delete',
+  path: '/api/codebases/{id}/env/{key}',
+  tags: ['Codebases'],
+  summary: 'Delete an env var from a codebase',
+  request: { params: codebaseEnvVarParamsSchema },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: envVarMutationResponseSchema } },
+      description: 'Env var deleted',
+    },
+    404: jsonError('Codebase not found'),
+  },
+});
+
+// =========================================================================
+// Workflow run route configs
+// =========================================================================
+
+// Body validation is handled manually in the handler (multipart vs JSON
+// branching), mirroring sendMessageRoute. The OpenAPI spec describes the
+// shapes via the description; declaring `request.body` would force JSON
+// validation to run on multipart payloads and reject them.
+const runWorkflowRoute = createRoute({
+  method: 'post',
+  path: '/api/workflows/{name}/run',
+  tags: ['Workflows'],
+  summary: 'Run a workflow via the orchestrator (JSON or multipart with file uploads)',
+  description:
+    'Accepts `application/json` with `{ conversationId, message }` or ' +
+    '`multipart/form-data` with `conversationId`, `message`, and optional file ' +
+    'attachments (max 5 files, 10 MB each).',
+  request: {
+    params: z.object({ name: z.string() }),
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: dispatchResponseSchema } },
+      description: 'Accepted',
+    },
+    400: jsonError('Bad request'),
+    500: jsonError('Server error'),
+  },
+});
+
+const listRunArtifactsRoute = createRoute({
+  method: 'get',
+  path: '/api/runs/{runId}/artifacts',
+  tags: ['Workflows'],
+  summary: "List a run's artifact files",
+  description:
+    "Walks the run's artifact directory and returns relative file paths with size + " +
+    'mtime. Drives the console Artifacts tab. Resolves for every project kind — ' +
+    "`owner/repo`, `_local/<basename>`, and `_folder/<slug>` — preferring the run's " +
+    'persisted `output_root` and re-deriving from the codebase when it is absent or ' +
+    'no longer inside ARCHON_HOME. Returns `{ files: [] }` only when the location ' +
+    'resolved and the run genuinely wrote nothing; returns 404 when the output ' +
+    'location cannot be resolved at all.',
+  request: {
+    params: z.object({ runId: z.string() }),
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: listArtifactsResponseSchema } },
+      description: 'OK',
+    },
+    400: jsonError('Bad request'),
+    404: jsonError('Not found'),
+    500: jsonError('Server error'),
+  },
+});
+
+const getDashboardRunsRoute = createRoute({
+  method: 'get',
+  path: '/api/dashboard/runs',
+  tags: ['Workflows'],
+  summary: 'List enriched workflow runs for the Command Center dashboard',
+  request: { query: dashboardRunsQuerySchema },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: dashboardRunsResponseSchema } },
+      description: 'OK',
+    },
+    500: jsonError('Server error'),
+  },
+});
+
+const getWorkflowRunByWorkerRoute = createRoute({
+  method: 'get',
+  path: '/api/workflows/runs/by-worker/{platformId}',
+  tags: ['Workflows'],
+  summary: 'Look up a workflow run by its worker conversation platform ID',
+  request: { params: z.object({ platformId: z.string() }) },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: workflowRunByWorkerResponseSchema } },
+      description: 'Workflow run',
+    },
+    404: jsonError('Not found'),
+    500: jsonError('Server error'),
+  },
+});
+
+const listWorkflowRunsRoute = createRoute({
+  method: 'get',
+  path: '/api/workflows/runs',
+  tags: ['Workflows'],
+  summary: 'List workflow runs',
+  request: { query: workflowRunsQuerySchema },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: workflowRunListResponseSchema } },
+      description: 'OK',
+    },
+    500: jsonError('Server error'),
+  },
+});
+
+const cancelWorkflowRunRoute = createRoute({
+  method: 'post',
+  path: '/api/workflows/runs/{runId}/cancel',
+  tags: ['Workflows'],
+  summary: 'Cancel a workflow run',
+  request: { params: z.object({ runId: z.string() }) },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: cancelWorkflowRunResponseSchema } },
+      description: 'Cancelled',
+    },
+    400: jsonError('Bad request'),
+    404: jsonError('Not found'),
+    500: jsonError('Server error'),
+  },
+});
+
+const resumeWorkflowRunRoute = createRoute({
+  method: 'post',
+  path: '/api/workflows/runs/{runId}/resume',
+  tags: ['Workflows'],
+  summary: 'Resume a failed workflow run (dispatches resume on the parent web conversation)',
+  request: { params: z.object({ runId: z.string() }) },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: workflowRunActionResponseSchema } },
+      description: 'Resumed',
+    },
+    400: jsonError('Bad request'),
+    404: jsonError('Not found'),
+    500: jsonError('Server error'),
+  },
+});
+
+const abandonWorkflowRunRoute = createRoute({
+  method: 'post',
+  path: '/api/workflows/runs/{runId}/abandon',
+  tags: ['Workflows'],
+  summary: 'Abandon a workflow run (mark as cancelled)',
+  request: { params: z.object({ runId: z.string() }) },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: workflowRunActionResponseSchema } },
+      description: 'Abandoned',
+    },
+    400: jsonError('Bad request'),
+    404: jsonError('Not found'),
+    500: jsonError('Server error'),
+  },
+});
+
+const approveWorkflowRunRoute = createRoute({
+  method: 'post',
+  path: '/api/workflows/runs/{runId}/approve',
+  tags: ['Workflows'],
+  summary: 'Approve a paused workflow run',
+  request: {
+    params: z.object({ runId: z.string() }),
+    body: { content: { 'application/json': { schema: approveWorkflowRunBodySchema } } },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: workflowRunActionResponseSchema } },
+      description: 'Approved',
+    },
+    400: jsonError('Bad request'),
+    404: jsonError('Not found'),
+    500: jsonError('Server error'),
+  },
+});
+
+const rejectWorkflowRunRoute = createRoute({
+  method: 'post',
+  path: '/api/workflows/runs/{runId}/reject',
+  tags: ['Workflows'],
+  summary: 'Reject a paused workflow run',
+  request: {
+    params: z.object({ runId: z.string() }),
+    body: { content: { 'application/json': { schema: rejectWorkflowRunBodySchema } } },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: workflowRunActionResponseSchema } },
+      description: 'Rejected',
+    },
+    400: jsonError('Bad request'),
+    404: jsonError('Not found'),
+    500: jsonError('Server error'),
+  },
+});
+
+const deleteWorkflowRunRoute = createRoute({
+  method: 'delete',
+  path: '/api/workflows/runs/{runId}',
+  tags: ['Workflows'],
+  summary: 'Delete a workflow run and its events',
+  request: { params: z.object({ runId: z.string() }) },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: workflowRunActionResponseSchema } },
+      description: 'Deleted',
+    },
+    400: jsonError('Bad request'),
+    404: jsonError('Not found'),
+    500: jsonError('Server error'),
+  },
+});
+
+const resetWorkflowNodeSessionsRoute = createRoute({
+  method: 'delete',
+  path: '/api/workflows/{name}/node-sessions',
+  tags: ['Workflows'],
+  summary:
+    'Reset persisted per-node provider sessions for a workflow. Optional scope and node filters narrow the deletion.',
+  request: {
+    params: resetWorkflowNodeSessionsParamsSchema,
+    query: resetWorkflowNodeSessionsQuerySchema,
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: resetWorkflowNodeSessionsResponseSchema } },
+      description: 'Sessions deleted (deleted count may be 0)',
+    },
+    400: jsonError('Bad request'),
+    500: jsonError('Server error'),
+  },
+});
+
+const getWorkflowRunRoute = createRoute({
+  method: 'get',
+  path: '/api/workflows/runs/{runId}',
+  tags: ['Workflows'],
+  summary: 'Get workflow run details with events',
+  request: { params: z.object({ runId: z.string() }) },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: workflowRunDetailSchema } },
+      description: 'Workflow run detail',
+    },
+    404: jsonError('Not found'),
+    500: jsonError('Server error'),
+  },
+});
+
+// =========================================================================
+// Config / health route configs
+// =========================================================================
+
+const getConfigRoute = createRoute({
+  method: 'get',
+  path: '/api/config',
+  tags: ['System'],
+  summary: 'Get read-only configuration (safe subset)',
+  responses: {
+    200: {
+      content: {
+        'application/json': {
+          schema: configResponseSchema,
+        },
+      },
+      description: 'Configuration',
+    },
+    500: jsonError('Server error'),
+  },
+});
+
+const patchAssistantConfigRoute = createRoute({
+  method: 'patch',
+  path: '/api/config/assistants',
+  tags: ['System'],
+  summary: 'Update assistant configuration',
+  request: {
+    body: {
+      content: { 'application/json': { schema: updateAssistantConfigBodySchema } },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: updateAssistantConfigResponseSchema } },
+      description: 'Updated configuration',
+    },
+    400: jsonError('Invalid request body'),
+    500: jsonError('Server error'),
+  },
+});
+
+const patchTiersConfigRoute = createRoute({
+  method: 'patch',
+  path: '/api/config/tiers',
+  tags: ['System'],
+  summary: 'Update model-tier presets (small/medium/large)',
+  description:
+    'Writes the `tiers:` config to ~/.archon/config.yaml. Ungated (works on solo ' +
+    'installs). Per-tier merge; a `null` tier value unsets it.',
+  request: {
+    body: {
+      content: { 'application/json': { schema: updateTiersBodySchema } },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: configResponseSchema } },
+      description: 'Updated configuration',
+    },
+    400: jsonError('Invalid request body'),
+    500: jsonError('Server error'),
+  },
+});
+
+const patchAliasesConfigRoute = createRoute({
+  method: 'patch',
+  path: '/api/config/aliases',
+  tags: ['System'],
+  summary: 'Update @custom model aliases',
+  description:
+    'Writes the `aliases:` config to ~/.archon/config.yaml. Ungated (works on solo ' +
+    'installs). Per-alias merge; a `null` alias value unsets it.',
+  request: {
+    body: {
+      content: { 'application/json': { schema: updateAliasesBodySchema } },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: configResponseSchema } },
+      description: 'Updated configuration',
+    },
+    400: jsonError('Invalid alias name, unknown provider, or invalid effort'),
+    500: jsonError('Server error'),
+  },
+});
+
+const getPiModelsRoute = createRoute({
+  method: 'get',
+  path: '/api/providers/pi/models',
+  tags: ['System'],
+  summary: "List Pi's model catalog (cost/reasoning metadata for the tier picker)",
+  description:
+    'Best-effort hint surface: returns `{ models: [] }` when the Pi catalog ' +
+    'cannot be loaded, never an error — tier/alias saves must not depend on it.',
+  responses: {
+    200: {
+      content: { 'application/json': { schema: piModelListResponseSchema } },
+      description: 'Pi model catalog (metadata only)',
+    },
+  },
+});
+
+const getProvidersRoute = createRoute({
+  method: 'get',
+  path: '/api/providers',
+  tags: ['System'],
+  summary: 'List registered AI providers',
+  responses: {
+    200: {
+      content: { 'application/json': { schema: providerListResponseSchema } },
+      description: 'List of registered providers',
+    },
+  },
+});
+
+const getOpencodeCredentialsRoute = createRoute({
+  method: 'get',
+  path: '/api/providers/opencode/credentials',
+  tags: ['System'],
+  summary: "Introspect OpenCode's backend providers and auth state",
+  description:
+    "Proxies the embedded OpenCode server's provider introspection (catalog, " +
+    'env var names, install-wide connected state). Heavyweight: starts the ' +
+    'embedded server when not already running — call on demand from the ' +
+    'settings card, never on passive page load (#1955).',
+  responses: {
+    200: {
+      content: { 'application/json': { schema: opencodeCredentialListResponseSchema } },
+      description: 'OpenCode backend providers (metadata only, no secrets)',
+    },
+    503: jsonError('Embedded OpenCode runtime unavailable'),
+  },
+});
+
+const authStatusRoute = createRoute({
+  method: 'get',
+  path: '/api/auth/status',
+  tags: ['Auth'],
+  summary: 'Web auth availability + signup posture (no auth required)',
+  responses: {
+    200: {
+      content: { 'application/json': { schema: authStatusResponseSchema } },
+      description: 'Auth status',
+    },
+  },
+});
+
+const githubDeviceStartRoute = createRoute({
+  method: 'post',
+  path: '/api/auth/github/device/start',
+  tags: ['Auth'],
+  summary: 'Start the GitHub device flow for the current web user',
+  responses: {
+    200: {
+      content: { 'application/json': { schema: deviceStartResponseSchema } },
+      description: 'Device + user codes',
+    },
+    401: jsonError('Web auth required (X-Archon-User header missing)'),
+    500: jsonError('Device flow not configured or failed'),
+  },
+});
+
+const githubDevicePollRoute = createRoute({
+  method: 'post',
+  path: '/api/auth/github/device/poll',
+  tags: ['Auth'],
+  summary: 'Poll the GitHub device flow once for the current web user',
+  request: {
+    body: { content: { 'application/json': { schema: devicePollBodySchema } } },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: devicePollResponseSchema } },
+      description: 'Poll status',
+    },
+    401: jsonError('Web auth required (X-Archon-User header missing)'),
+    500: jsonError('Device flow not configured or failed'),
+  },
+});
+
+const githubConnectionStatusRoute = createRoute({
+  method: 'get',
+  path: '/api/auth/github',
+  tags: ['Auth'],
+  summary: 'GitHub connection status for the current web user',
+  responses: {
+    200: {
+      content: { 'application/json': { schema: githubConnectionStatusSchema } },
+      description: 'Connection status',
+    },
+    401: jsonError('Web auth required (X-Archon-User header missing)'),
+  },
+});
+
+const githubDisconnectRoute = createRoute({
+  method: 'delete',
+  path: '/api/auth/github',
+  tags: ['Auth'],
+  summary: 'Disconnect the current web user’s GitHub identity',
+  responses: {
+    200: {
+      content: { 'application/json': { schema: githubDisconnectResponseSchema } },
+      description: 'Disconnected',
+    },
+    401: jsonError('Web auth required (X-Archon-User header missing)'),
+  },
+});
+
+// ---- Per-user AI-provider credential (API-key) connect endpoints ----
+const providerKeyListRoute = createRoute({
+  method: 'get',
+  path: '/api/auth/providers',
+  tags: ['Auth'],
+  summary: 'List the current web user’s connected AI-provider keys',
+  responses: {
+    200: {
+      content: { 'application/json': { schema: providerKeyListResponseSchema } },
+      description: 'Connections (metadata only) + connectable provider catalog',
+    },
+    401: jsonError('Web auth required (X-Archon-User header missing)'),
+  },
+});
+
+const providerKeySetRoute = createRoute({
+  method: 'put',
+  path: '/api/auth/providers/{provider}',
+  tags: ['Auth'],
+  summary: 'Connect (upsert) an API key for a provider for the current web user',
+  request: {
+    params: providerKeyParamsSchema,
+    body: { content: { 'application/json': { schema: providerKeySetBodySchema } } },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: providerKeySetResponseSchema } },
+      description: 'Key stored (encrypted); response carries no secret value',
+    },
+    400: jsonError('Unknown provider or empty key'),
+    401: jsonError('Web auth required (X-Archon-User header missing)'),
+    404: jsonError('Per-user provider keys not enabled on this install'),
+  },
+});
+
+const providerKeyDeleteRoute = createRoute({
+  method: 'delete',
+  path: '/api/auth/providers/{provider}',
+  tags: ['Auth'],
+  summary: 'Disconnect the current web user’s key for a provider',
+  request: { params: providerKeyParamsSchema },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: providerKeyDeleteResponseSchema } },
+      description: 'Disconnected (idempotent)',
+    },
+    401: jsonError('Web auth required (X-Archon-User header missing)'),
+    404: jsonError('Per-user provider keys not enabled on this install'),
+  },
+});
+
+const providerOAuthStartRoute = createRoute({
+  method: 'post',
+  path: '/api/auth/providers/{provider}/oauth/start',
+  tags: ['Auth'],
+  summary: 'Begin a subscription (OAuth) login for the current web user',
+  request: { params: providerKeyParamsSchema },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: providerOAuthStartResponseSchema } },
+      description: 'Login session started (mode + URL/user-code)',
+    },
+    400: jsonError('Provider does not support subscription login'),
+    401: jsonError('Web auth required (X-Archon-User header missing)'),
+    404: jsonError('Per-user provider keys not enabled on this install'),
+    503: jsonError('OAuth callback port still held by a previous login attempt — retry shortly'),
+  },
+});
+
+const providerOAuthPollRoute = createRoute({
+  method: 'post',
+  path: '/api/auth/providers/{provider}/oauth/poll',
+  tags: ['Auth'],
+  summary: 'Poll a subscription login session (submit pasted code for manual flows)',
+  request: {
+    params: providerKeyParamsSchema,
+    body: { content: { 'application/json': { schema: providerOAuthPollBodySchema } } },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: providerOAuthPollResponseSchema } },
+      description: 'Poll status',
+    },
+    401: jsonError('Web auth required (X-Archon-User header missing)'),
+    404: jsonError('Per-user provider keys not enabled on this install'),
+  },
+});
+
+const userAiPrefsGetRoute = createRoute({
+  method: 'get',
+  path: '/api/auth/me/ai-prefs',
+  tags: ['Auth'],
+  summary: 'Get the current web user’s AI preferences (tiers/aliases/default assistant)',
+  responses: {
+    200: {
+      content: { 'application/json': { schema: userAiPrefsResponseSchema } },
+      description: 'The user’s stored prefs (raw per-user layer, not merged with config)',
+    },
+    401: jsonError('Web auth required'),
+    500: jsonError('Server error'),
+  },
+});
+
+const userAiPrefsTiersRoute = createRoute({
+  method: 'patch',
+  path: '/api/auth/me/ai-prefs/tiers',
+  tags: ['Auth'],
+  summary: 'Update the current web user’s model-tier presets (per-key merge; null unsets)',
+  request: {
+    body: {
+      content: { 'application/json': { schema: updateUserTiersBodySchema } },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: userAiPrefsResponseSchema } },
+      description: 'Updated prefs',
+    },
+    400: jsonError('Unknown provider or invalid effort'),
+    401: jsonError('Web auth required'),
+    500: jsonError('Server error'),
+  },
+});
+
+const userAiPrefsAliasesRoute = createRoute({
+  method: 'patch',
+  path: '/api/auth/me/ai-prefs/aliases',
+  tags: ['Auth'],
+  summary: 'Update the current web user’s @custom aliases (per-key merge; null unsets)',
+  request: {
+    body: {
+      content: { 'application/json': { schema: updateUserAliasesBodySchema } },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: userAiPrefsResponseSchema } },
+      description: 'Updated prefs',
+    },
+    400: jsonError('Invalid alias name, unknown provider, or invalid effort'),
+    401: jsonError('Web auth required'),
+    500: jsonError('Server error'),
+  },
+});
+
+const userAiPrefsDefaultRoute = createRoute({
+  method: 'patch',
+  path: '/api/auth/me/ai-prefs/default',
+  tags: ['Auth'],
+  summary:
+    'Set (or clear with null) the current web user’s default assistant + default chat model (written atomically; omitted model clears any pin)',
+  request: {
+    body: {
+      content: { 'application/json': { schema: updateUserDefaultBodySchema } },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: userAiPrefsResponseSchema } },
+      description: 'Updated prefs',
+    },
+    400: jsonError('Unknown provider'),
+    401: jsonError('Web auth required'),
+    500: jsonError('Server error'),
+  },
+});
+
+const getCodebaseEnvironmentsRoute = createRoute({
+  method: 'get',
+  path: '/api/codebases/{id}/environments',
+  tags: ['Codebases'],
+  summary: 'List isolation environments for a codebase',
+  request: { params: codebaseIdParamsSchema },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: codebaseEnvironmentsResponseSchema } },
+      description: 'List of isolation environments',
+    },
+    404: jsonError('Codebase not found'),
+    500: jsonError('Server error'),
+  },
+});
+
+const getHealthRoute = createRoute({
+  method: 'get',
+  path: '/api/health',
+  tags: ['System'],
+  summary: 'Health check',
+  responses: {
+    200: {
+      content: {
+        'application/json': {
+          schema: z
+            .object({
+              status: z.string(),
+              adapter: z.string(),
+              concurrency: z.record(z.string(), z.unknown()),
+              runningWorkflows: z.number(),
+              version: z.string().optional(),
+              is_docker: z.boolean(),
+              is_wsl: z.boolean(),
+              wsl_distro: z.string().optional(),
+              activePlatforms: z.array(z.string()).optional(),
+              // Schema vintage (#2316) so a bug report can state which Archon build
+              // created this database and which last applied schema to it. Omitted
+              // when unrecorded or unreadable — health must answer regardless.
+              schema: z
+                .object({
+                  createdAppVersion: z.string().nullable(),
+                  appVersion: z.string(),
+                  appliedAt: z.string().nullable(),
+                })
+                .optional(),
+            })
+            .openapi('HealthResponse'),
+        },
+      },
+      description: 'Health status',
+    },
+  },
+});
+
+const getUpdateCheckRoute = createRoute({
+  method: 'get',
+  path: '/api/update-check',
+  tags: ['System'],
+  summary: 'Check for available updates',
+  responses: {
+    200: {
+      content: {
+        'application/json': {
+          schema: updateCheckResponseSchema,
+        },
+      },
+      description: 'Update check result',
+    },
+  },
+});
+
+/**
+ * Register all /api/* routes on the Hono app.
+ */
+export function registerApiRoutes(
+  app: OpenAPIHono,
+  webAdapter: WebAdapter,
+  lockManager: ConversationLockManager,
+  activePlatforms?: readonly string[]
+): void {
+  function apiError(
+    c: Context,
+    status: 400 | 401 | 404 | 422 | 500 | 503,
+    message: string,
+    detail?: string
+  ): Response {
+    return c.json({ error: message, ...(detail ? { detail } : {}) }, status);
+  }
+
+  /**
+   * Validate that a caller-supplied `cwd` is rooted at a registered codebase path.
+   * This prevents path traversal — callers cannot read/write outside known project roots.
+   */
+  async function validateCwd(cwd: string): Promise<boolean> {
+    const codebases = await codebaseDb.listCodebases();
+    const normalizedCwd = normalize(cwd);
+    return codebases.some(cb => {
+      const base = normalize(cb.default_cwd);
+      return normalizedCwd === base || normalizedCwd.startsWith(base + sep);
+    });
+  }
+
+  // CORS for Web UI — allow-all is fine for a single-developer tool.
+  // Override with WEB_UI_ORIGIN env var to restrict if exposing publicly.
+  app.use('/api/*', cors({ origin: process.env.WEB_UI_ORIGIN || '*' }));
+
+  // Server-side access gate: when web auth is enabled (and not opted out via
+  // ARCHON_WEB_AUTH_REQUIRED=false), every /api/* request must resolve to an
+  // identity or get 401 — this is what makes Better Auth the real access
+  // boundary so a reverse-proxy auth sidecar can retire. Public exceptions:
+  //   - /api/auth/* — the login/status/device-flow surface (can't gate login)
+  //   - /api/health* — the Docker/uptime healthcheck MUST stay reachable
+  // /webhooks/* (HMAC-verified) and /internal/* (loopback-guarded) are outside
+  // /api/* and untouched. No-op when web auth is disabled (solo/local unchanged).
+  // `resolveAuthContext`/`apiError` are function declarations below → hoisted.
+  //
+  // SECURITY: resolveAuthContext also accepts the trusted reverse-proxy header
+  // (ARCHON_WEB_AUTH_HEADER, default `X-Archon-User`) as an identity. That header
+  // is only safe to trust when the app is reachable solely through a proxy that
+  // STRIPS it from inbound requests (or the app binds 127.0.0.1). If you retire
+  // the proxy auth sidecar, the proxy MUST still strip that header — otherwise a
+  // client can forge it and walk straight through this gate.
+  const PUBLIC_API_GATE_PREFIXES = ['/api/auth/', '/api/health'];
+  app.use('/api/*', async (c, next) => {
+    if (!isApiGateEnabled()) return next();
+    const path = c.req.path;
+    if (PUBLIC_API_GATE_PREFIXES.some(p => path === p || path.startsWith(p))) return next();
+    const ctx = await resolveAuthContext(c);
+    if (!ctx) return apiError(c, 401, 'Authentication required');
+    return next();
+  });
+
+  /**
+   * Resolve the per-request auth context: `{ userId, role }`, or undefined when
+   * no identity is present. This is the single chokepoint generalised from the
+   * old header-only seam. Resolution order:
+   *   1. Better Auth session (when web auth is enabled) → canonical
+   *      remote_agent_users row via the 'web' platform identity.
+   *   2. Trusted reverse-proxy header (ARCHON_WEB_AUTH_HEADER, default
+   *      `X-Archon-User`) — kept for proxy deploys and the auth-service sidecar.
+   *   3. undefined → NULL attribution, never elevated.
+   *
+   * `role` rides along on the canonical user row (defaults 'admin'); it is the
+   * durable seam future per-resource scoping hooks into. Visibility stays open.
+   *
+   * SECURITY: header trust is only safe when Archon is reachable solely through
+   * a reverse proxy (bind 127.0.0.1). The server logs a startup warning otherwise.
+   */
+  async function resolveAuthContext(
+    c: Context
+  ): Promise<{ userId: string; role: UserRole } | undefined> {
+    // 1. Better Auth session first (no-op when web auth is disabled).
+    const auth = getAuth();
+    if (auth) {
+      try {
+        const session = await auth.api.getSession({ headers: c.req.raw.headers });
+        if (session?.user) {
+          const user = await userDb.findOrCreateUserByPlatformIdentity(
+            'web',
+            session.user.id,
+            session.user.name ?? session.user.email ?? undefined
+          );
+          return { userId: user.id, role: user.role };
+        }
+      } catch (err) {
+        // Session lookup failed (e.g. DB outage). Fall through to the header so a
+        // proxy-authenticated deploy still resolves; absent that → undefined
+        // (NULL attribution). warn (not error): this is the soft attribution seam
+        // — it returns undefined rather than throwing. The /api/* gate maps that
+        // undefined to a 401 (fail-closed); requireWebUser is the strict variant
+        // that distinguishes a backend 503 from a missing identity.
+        getLog().warn({ err: err as Error, path: c.req.path }, 'web.session_resolve_failed');
+      }
+    }
+
+    // 2. Trusted reverse-proxy header.
+    const headerName = process.env.ARCHON_WEB_AUTH_HEADER || 'X-Archon-User';
+    const headerVal = c.req.header(headerName)?.trim();
+    if (!headerVal) return undefined;
+    try {
+      const user = await userDb.findOrCreateUserByPlatformIdentity('web', headerVal, headerVal);
+      return { userId: user.id, role: user.role };
+    } catch (err) {
+      // Best-effort attribution: the header WAS present, but identity resolution
+      // failed (e.g. DB outage). Fall back to NULL attribution rather than
+      // failing the request. headerPresent distinguishes this from "no header".
+      getLog().warn(
+        { err: err as Error, headerPresent: true, path: c.req.path },
+        'web.user_resolve_failed'
+      );
+      return undefined;
+    }
+  }
+
+  /** Soft attribution: call sites that only need the user id, not the role. */
+  async function resolveWebUserId(c: Context): Promise<string | undefined> {
+    return (await resolveAuthContext(c))?.userId;
+  }
+
+  /**
+   * Strict variant for endpoints that REQUIRE a web identity (connect/disconnect).
+   * Session-first then header, mirroring resolveAuthContext, but distinguishing a
+   * missing identity (401) from a backend failure resolving it (503) — a DB
+   * outage must not masquerade as "authentication required". Returns the resolved
+   * context, or the HTTP error Response the caller should return verbatim.
+   */
+  async function requireWebUser(
+    c: Context,
+    failMessage = 'Web authentication required'
+  ): Promise<{ userId: string; role: UserRole } | { error: Response }> {
+    // 1. Better Auth session.
+    const auth = getAuth();
+    if (auth) {
+      let session: Awaited<ReturnType<typeof auth.api.getSession>> | undefined;
+      try {
+        session = await auth.api.getSession({ headers: c.req.raw.headers });
+      } catch (err) {
+        getLog().error({ err: err as Error }, 'web.session_resolve_failed');
+        return { error: apiError(c, 503, 'Could not verify session — backend unavailable') };
+      }
+      if (session?.user) {
+        try {
+          const user = await userDb.findOrCreateUserByPlatformIdentity(
+            'web',
+            session.user.id,
+            session.user.name ?? session.user.email ?? undefined
+          );
+          return { userId: user.id, role: user.role };
+        } catch (err) {
+          getLog().error({ err: err as Error }, 'web.user_resolve_failed');
+          return { error: apiError(c, 503, 'Could not verify web identity — backend unavailable') };
+        }
+      }
+    }
+
+    // 2. Trusted reverse-proxy header.
+    const headerName = process.env.ARCHON_WEB_AUTH_HEADER || 'X-Archon-User';
+    const headerVal = c.req.header(headerName)?.trim();
+    if (!headerVal) return { error: apiError(c, 401, failMessage) };
+    try {
+      const user = await userDb.findOrCreateUserByPlatformIdentity('web', headerVal, headerVal);
+      return { userId: user.id, role: user.role };
+    } catch (err) {
+      getLog().error({ err: err as Error, headerPresent: true }, 'web.user_resolve_failed');
+      return { error: apiError(c, 503, 'Could not verify web identity — backend unavailable') };
+    }
+  }
+
+  // GET /api/auth/status - web auth availability + signup posture.
+  // Public (no identity required): the web UI calls this before login to decide
+  // whether to render the login gate at all. When web auth is enabled the
+  // /api/auth/* mount explicitly next()s Archon-owned paths (this one included)
+  // before Better Auth's handler runs, so the request reaches here untouched
+  // (see isArchonOwnedAuthPath in index.ts).
+  registerOpenApiRoute(authStatusRoute, c => {
+    return c.json({ enabled: isWebAuthEnabled(), signup: getSignupMode() });
+  });
+
+  // ---- GitHub device-flow connect endpoints ----
+  registerOpenApiRoute(githubDeviceStartRoute, async c => {
+    const web = await requireWebUser(c, 'Web authentication required to connect GitHub');
+    if ('error' in web) return web.error;
+    if (!isPerUserGitHubEnabled()) {
+      return apiError(c, 500, 'Per-user GitHub is not enabled on this install');
+    }
+    try {
+      const { clientId } = loadDeviceFlowConfig();
+      const device = await startDeviceFlow(clientId);
+      return c.json({
+        device_code: device.device_code,
+        user_code: device.user_code,
+        verification_uri: device.verification_uri,
+        interval: device.interval,
+        expires_in: device.expires_in,
+      });
+    } catch (err) {
+      getLog().error({ err: err as Error }, 'auth.github_device_start_failed');
+      return apiError(c, 500, 'Failed to start GitHub device flow');
+    }
+  });
+
+  registerOpenApiRoute(githubDevicePollRoute, async c => {
+    const web = await requireWebUser(c, 'Web authentication required to connect GitHub');
+    if ('error' in web) return web.error;
+    if (!isPerUserGitHubEnabled()) {
+      return apiError(c, 500, 'Per-user GitHub is not enabled on this install');
+    }
+    const { device_code: deviceCode } = getValidatedBody(c, devicePollBodySchema);
+    try {
+      const { clientId } = loadDeviceFlowConfig();
+      const result = await pollDeviceFlowOnce(clientId, deviceCode);
+      if (result.status === 'pending' || result.status === 'slow_down') {
+        return c.json({ status: 'pending' as const });
+      }
+      if (result.status === 'error') {
+        // Terminal device-flow codes → client-visible status (testable helper).
+        return c.json({ status: mapDeviceFlowErrorToPollStatus(result.code), detail: result.code });
+      }
+      // authorized
+      const { githubLogin } = await persistGithubConnection(web.userId, result.token);
+      return c.json({ status: 'connected' as const, githubLogin });
+    } catch (err) {
+      if (err instanceof GithubIdentityConflictError) {
+        return c.json({ status: 'error' as const, detail: err.message });
+      }
+      if (err instanceof DeviceFlowError) {
+        return c.json({ status: 'error' as const, detail: err.code });
+      }
+      getLog().error({ err: err as Error }, 'auth.github_device_poll_failed');
+      return apiError(c, 500, 'Failed to poll GitHub device flow');
+    }
+  });
+
+  registerOpenApiRoute(githubConnectionStatusRoute, async c => {
+    const web = await requireWebUser(c);
+    if ('error' in web) return web.error;
+    try {
+      const record = await getUserGithubTokenRecord(web.userId);
+      return c.json({ connected: record !== null, githubLogin: record?.github_login ?? null });
+    } catch (err) {
+      getLog().error({ err: err as Error, userId: web.userId }, 'auth.github_status_failed');
+      return apiError(c, 500, 'Failed to read GitHub connection status');
+    }
+  });
+
+  registerOpenApiRoute(githubDisconnectRoute, async c => {
+    const web = await requireWebUser(c);
+    if ('error' in web) return web.error;
+    try {
+      await deleteUserGithubToken(web.userId);
+      return c.json({ success: true });
+    } catch (err) {
+      getLog().error({ err: err as Error, userId: web.userId }, 'auth.github_disconnect_failed');
+      return apiError(c, 500, 'Failed to disconnect GitHub');
+    }
+  });
+
+  // ---- Per-user AI-provider credential (API-key) connect endpoints ----
+  // Gated on isPerUserProviderKeysEnabled() (TOKEN_ENCRYPTION_KEY). No response
+  // carries a secret value: list/set return provider/kind/label only, delete
+  // returns { success }.
+  registerOpenApiRoute(providerKeyListRoute, async c => {
+    const web = await requireWebUser(c, 'Web authentication required to manage provider keys');
+    if ('error' in web) return web.error;
+    const available = listConnectableVendors();
+    const subscriptionAvailable = [...SUBSCRIPTION_PROVIDERS].sort();
+    if (!isPerUserProviderKeysEnabled()) {
+      // Gate off: the console hides connect affordances on `enabled:false`;
+      // the agents matrix still reports install-env/ambient readiness.
+      return c.json({
+        enabled: false,
+        connections: [],
+        available,
+        subscriptionAvailable,
+        agents: buildAgentCredentialMatrix([]),
+      });
+    }
+    try {
+      const connections = await listUserProviderKeys(web.userId);
+      return c.json({
+        enabled: true,
+        connections,
+        available,
+        subscriptionAvailable,
+        agents: buildAgentCredentialMatrix(connections),
+      });
+    } catch (err) {
+      getLog().error({ err: err as Error, userId: web.userId }, 'auth.provider_keys_list_failed');
+      return apiError(c, 500, 'Failed to list provider keys');
+    }
+  });
+
+  registerOpenApiRoute(providerKeySetRoute, async c => {
+    const web = await requireWebUser(c, 'Web authentication required to manage provider keys');
+    if ('error' in web) return web.error;
+    if (!isPerUserProviderKeysEnabled()) {
+      return apiError(c, 404, 'Per-user provider keys are not enabled on this install');
+    }
+    const provider = c.req.param('provider') ?? '';
+    const { apiKey, label } = getValidatedBody(c, providerKeySetBodySchema);
+    try {
+      const result = await persistProviderApiKey(web.userId, provider, apiKey, label);
+      return c.json({ success: true, ...result });
+    } catch (err) {
+      if (err instanceof InvalidProviderKeyError) {
+        // Caller error (unknown provider / blank key) — the validation message is
+        // safe to surface and carries no secret.
+        return apiError(c, 400, err.message);
+      }
+      // Encryption / DB failure — opaque 500, never echo the internal message.
+      getLog().error(
+        { err: err as Error, userId: web.userId, provider },
+        'auth.provider_key_set_failed'
+      );
+      return apiError(c, 500, 'Failed to store provider key');
+    }
+  });
+
+  registerOpenApiRoute(providerKeyDeleteRoute, async c => {
+    const web = await requireWebUser(c, 'Web authentication required to manage provider keys');
+    if ('error' in web) return web.error;
+    if (!isPerUserProviderKeysEnabled()) {
+      return apiError(c, 404, 'Per-user provider keys are not enabled on this install');
+    }
+    const provider = normalizeCredentialVendor(c.req.param('provider') ?? '');
+    // No catalog check here (unlike PUT): delete is an idempotent no-op, so an
+    // unknown/misspelled vendor id simply removes nothing and returns ok.
+    // Legacy agent-keyed ids normalize so `DELETE .../claude` removes the
+    // migrated `anthropic` row.
+    try {
+      await deleteUserProviderKey(web.userId, provider);
+      return c.json({ success: true });
+    } catch (err) {
+      getLog().error(
+        { err: err as Error, userId: web.userId, provider },
+        'auth.provider_key_delete_failed'
+      );
+      return apiError(c, 500, 'Failed to disconnect provider key');
+    }
+  });
+
+  // ---- Subscription (OAuth) connect: start + poll ----
+  // The bridge holds Pi's in-flight login() server-side; start returns the URL/
+  // user-code, poll(code?) feeds a pasted code (manual flows) and reports status.
+  // No response carries a secret. Paths are under /api/auth/providers/ so they're
+  // already exempt from the Better Auth catch-all (isArchonOwnedAuthPath).
+  registerOpenApiRoute(providerOAuthStartRoute, async c => {
+    const web = await requireWebUser(c, 'Web authentication required to connect a subscription');
+    if ('error' in web) return web.error;
+    if (!isPerUserProviderKeysEnabled()) {
+      return apiError(c, 404, 'Per-user provider keys are not enabled on this install');
+    }
+    // Normalize legacy agent-keyed ids ('claude' → 'anthropic') like every
+    // other credential entry point — SUBSCRIPTION_PROVIDERS is vendor-keyed.
+    const provider = normalizeCredentialVendor(c.req.param('provider') ?? '');
+    if (!SUBSCRIPTION_PROVIDERS.has(provider)) {
+      return apiError(
+        c,
+        400,
+        `Provider '${provider}' does not support subscription login. ` +
+          `Subscription providers: ${[...SUBSCRIPTION_PROVIDERS].sort().join(', ')}.`
+      );
+    }
+    try {
+      const start = await startOAuth(web.userId, provider);
+      return c.json(start);
+    } catch (err) {
+      // A leaked callback port from a previous attempt is an expected,
+      // retryable condition — log it at warn under its own event (an
+      // error-level `…_failed` would pollute error dashboards on multi-user
+      // installs) and surface the actionable message as a 503 instead of an
+      // opaque 500 (#1963).
+      if (err instanceof OAuthCallbackPortBusyError) {
+        getLog().warn({ userId: web.userId, provider }, 'auth.provider_oauth_start_port_busy');
+        return apiError(c, 503, err.message);
+      }
+      getLog().error(
+        { err: err as Error, userId: web.userId, provider },
+        'auth.provider_oauth_start_failed'
+      );
+      return apiError(c, 500, 'Failed to start subscription login');
+    }
+  });
+
+  registerOpenApiRoute(providerOAuthPollRoute, async c => {
+    const web = await requireWebUser(c, 'Web authentication required to connect a subscription');
+    if ('error' in web) return web.error;
+    if (!isPerUserProviderKeysEnabled()) {
+      return apiError(c, 404, 'Per-user provider keys are not enabled on this install');
+    }
+    // The `:provider` path segment only keeps the OAuth routes under one prefix
+    // (so they're exempt from the Better Auth catch-all); poll itself keys off
+    // sessionId + userId.
+    const { sessionId, code } = getValidatedBody(c, providerOAuthPollBodySchema);
+    // pollOAuth is bound to the session's userId, so a stranger's sessionId resolves
+    // to an error status rather than another user's login.
+    const result = pollOAuth(sessionId, web.userId, code);
+    return c.json(result);
+  });
+
+  // ---- Per-user AI preferences (Phase 3) ----
+  // Identity-gated (requireWebUser) but NOT gated on TOKEN_ENCRYPTION_KEY —
+  // prefs are model names, not secrets. Highest-precedence resolver layer.
+
+  /** Validate a tier/alias entry's provider + effort. Returns an error message or null. */
+  function validatePresetEntry(
+    label: string,
+    entry: { provider: string; model: string; effort?: string }
+  ): string | null {
+    if (!isRegisteredProvider(entry.provider)) {
+      return `Unknown provider '${entry.provider}' for ${label}. Available: ${getProviderInfoList()
+        .map(p => p.id)
+        .join(', ')}`;
+    }
+    if (entry.effort !== undefined && !isEffortValidForProvider(entry.provider, entry.effort)) {
+      return (
+        `Invalid effort '${entry.effort}' for provider '${entry.provider}' (${label}). ` +
+        `Valid: ${validEffortsForProvider(entry.provider)?.join(', ') ?? '(none)'}`
+      );
+    }
+    return null;
+  }
+
+  /** Validate a custom alias name: must start with '@' and not shadow a tier keyword. */
+  function validateAliasName(name: string): string | null {
+    if ((TIER_NAMES as readonly string[]).includes(name)) {
+      return `Alias name '${name}' is reserved (small/medium/large are tier keywords). Use a different name.`;
+    }
+    if (!name.startsWith('@')) {
+      return `Alias name '${name}' must start with '@' (e.g. '@${name}').`;
+    }
+    return null;
+  }
+
+  /** Clean a validated entry — drop `thinking` (no UI/CLI surface), keep effort. */
+  function toCleanEntry(entry: { provider: string; model: string; effort?: string }): {
+    provider: string;
+    model: string;
+    effort?: string;
+  } {
+    return {
+      provider: entry.provider,
+      model: entry.model,
+      ...(entry.effort !== undefined ? { effort: entry.effort } : {}),
+    };
+  }
+
+  registerOpenApiRoute(userAiPrefsGetRoute, async c => {
+    const web = await requireWebUser(c, 'Web authentication required to read AI preferences');
+    if ('error' in web) return web.error;
+    try {
+      return c.json(await getUserAiPrefs(web.userId));
+    } catch (err) {
+      getLog().error({ err: err as Error, userId: web.userId }, 'auth.user_ai_prefs_get_failed');
+      return apiError(c, 500, 'Failed to read AI preferences');
+    }
+  });
+
+  registerOpenApiRoute(userAiPrefsTiersRoute, async c => {
+    const web = await requireWebUser(c, 'Web authentication required to update AI preferences');
+    if ('error' in web) return web.error;
+    const body = getValidatedBody(c, updateUserTiersBodySchema);
+    const patch: UserTiersPatch = {};
+    for (const tier of TIER_NAMES) {
+      const entry = body.tiers[tier];
+      if (entry === undefined) continue;
+      if (entry === null) {
+        patch[tier] = null;
+        continue;
+      }
+      const errMsg = validatePresetEntry(`tier '${tier}'`, entry);
+      if (errMsg) return apiError(c, 400, errMsg);
+      patch[tier] = toCleanEntry(entry);
+    }
+    try {
+      await setUserTiers(web.userId, patch);
+      return c.json(await getUserAiPrefs(web.userId));
+    } catch (err) {
+      getLog().error({ err: err as Error, userId: web.userId }, 'auth.user_ai_prefs_tiers_failed');
+      return apiError(c, 500, 'Failed to update AI tier preferences');
+    }
+  });
+
+  registerOpenApiRoute(userAiPrefsAliasesRoute, async c => {
+    const web = await requireWebUser(c, 'Web authentication required to update AI preferences');
+    if ('error' in web) return web.error;
+    const body = getValidatedBody(c, updateUserAliasesBodySchema);
+    const patch: UserAliasesPatch = {};
+    for (const [name, entry] of Object.entries(body.aliases)) {
+      const nameErr = validateAliasName(name);
+      if (nameErr) return apiError(c, 400, nameErr);
+      if (entry === null) {
+        patch[name] = null;
+        continue;
+      }
+      const errMsg = validatePresetEntry(`alias '${name}'`, entry);
+      if (errMsg) return apiError(c, 400, errMsg);
+      patch[name] = toCleanEntry(entry);
+    }
+    try {
+      await setUserAliases(web.userId, patch);
+      return c.json(await getUserAiPrefs(web.userId));
+    } catch (err) {
+      getLog().error(
+        { err: err as Error, userId: web.userId },
+        'auth.user_ai_prefs_aliases_failed'
+      );
+      return apiError(c, 500, 'Failed to update AI alias preferences');
+    }
+  });
+
+  registerOpenApiRoute(userAiPrefsDefaultRoute, async c => {
+    const web = await requireWebUser(c, 'Web authentication required to update AI preferences');
+    if ('error' in web) return web.error;
+    const { provider, model } = getValidatedBody(c, updateUserDefaultBodySchema);
+    if (provider !== null && !isRegisteredProvider(provider)) {
+      return apiError(
+        c,
+        400,
+        `Unknown provider '${provider}'. Available: ${getProviderInfoList()
+          .map(p => p.id)
+          .join(', ')}`
+      );
+    }
+    if (provider === null && typeof model === 'string') {
+      return apiError(c, 400, 'Cannot set a default model without a default provider');
+    }
+    try {
+      // Atomic write: provider + model always land together — an omitted
+      // model clears any previous pin so it can't ride a provider switch.
+      await setUserDefault(web.userId, provider, model ?? null);
+      return c.json(await getUserAiPrefs(web.userId));
+    } catch (err) {
+      getLog().error(
+        { err: err as Error, userId: web.userId },
+        'auth.user_ai_prefs_default_failed'
+      );
+      return apiError(c, 500, 'Failed to update default assistant preference');
+    }
+  });
+
+  // Shared lock/dispatch/error handling for message and workflow endpoints
+  /** Maximum allowed upload size per file (10 MB) */
+  const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
+  /** Maximum number of files per message (enforced server-side) */
+  const MAX_FILES_PER_MESSAGE = 5;
+  /**
+   * Binary (non-text) MIME types explicitly allowed for upload.
+   * All text/* types are accepted separately via isAllowedUploadType().
+   */
+  const ALLOWED_UPLOAD_BINARY_MIME_TYPES = new Set([
+    'image/png',
+    'image/jpeg',
+    'image/gif',
+    'image/webp',
+    'application/pdf',
+    // application/json is a structured text type browsers may report for .json files
+    'application/json',
+  ]);
+
+  /** Extensions accepted when browser reports an empty MIME type (code/config files). */
+  const ALLOWED_UPLOAD_EXTENSIONS = new Set([
+    '.md',
+    '.txt',
+    '.csv',
+    '.xml',
+    '.html',
+    '.htm',
+    '.json',
+    '.yaml',
+    '.yml',
+    '.toml',
+    '.ini',
+    '.cfg',
+    '.conf',
+    '.env',
+    '.log',
+    '.css',
+    '.js',
+    '.jsx',
+    '.ts',
+    '.tsx',
+    '.mjs',
+    '.cjs',
+    '.py',
+    '.rb',
+    '.go',
+    '.java',
+    '.c',
+    '.cpp',
+    '.cc',
+    '.cxx',
+    '.h',
+    '.hpp',
+    '.cs',
+    '.php',
+    '.sh',
+    '.bash',
+    '.zsh',
+    '.fish',
+    '.rs',
+    '.swift',
+    '.kt',
+    '.scala',
+    '.r',
+    '.sql',
+  ]);
+
+  /** Returns true if the MIME type is allowed for upload. */
+  function isAllowedUploadType(mimeType: string, fileName: string): boolean {
+    // All text/* types are acceptable (covers .md, .py, .rs, .go, .sh, .yaml, etc.)
+    if (mimeType.startsWith('text/')) return true;
+    if (ALLOWED_UPLOAD_BINARY_MIME_TYPES.has(mimeType)) return true;
+    // Browsers assign empty MIME types to many code/config extensions — fall back to extension
+    if (!mimeType) {
+      const dotIndex = fileName.lastIndexOf('.');
+      if (dotIndex !== -1) {
+        return ALLOWED_UPLOAD_EXTENSIONS.has(fileName.slice(dotIndex).toLowerCase());
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Persist multipart-uploaded files to the conversation's upload directory.
+   * Called from /api/workflows/:name/run; /api/conversations/:id/message still
+   * inlines the same validate-write-rollback logic and could migrate to this
+   * helper as a separate hygiene pass.
+   *
+   * Returns either { ok: true, savedFiles, uploadDir } or a structured error
+   * the caller forwards via apiError; on the success path the caller passes
+   * savedFiles + uploadDir to dispatchToOrchestrator so cleanup happens
+   * inside the lock handler.
+   */
+  async function persistUploadedFiles(
+    conversationId: string,
+    fileEntries: File[]
+  ): Promise<
+    | { ok: true; savedFiles: AttachedFile[]; uploadDir: string }
+    | { ok: false; status: 400 | 500; error: string }
+  > {
+    if (fileEntries.length > MAX_FILES_PER_MESSAGE) {
+      return {
+        ok: false,
+        status: 400,
+        error: `Maximum ${MAX_FILES_PER_MESSAGE.toString()} files per message`,
+      };
+    }
+
+    const archonHome = getArchonHome();
+    const uploadDir = join(archonHome, 'artifacts', 'uploads', conversationId);
+    if (!uploadDir.startsWith(archonHome + sep)) {
+      return { ok: false, status: 400, error: 'Invalid conversation ID' };
+    }
+
+    // Validate all files before writing any to disk.
+    for (const entry of fileEntries) {
+      const displayName = basename(entry.name).replace(/[^a-zA-Z0-9._-]/g, '_');
+      if (!isAllowedUploadType(entry.type, entry.name)) {
+        return {
+          ok: false,
+          status: 400,
+          error: `File "${displayName}" has an unsupported type: ${entry.type}`,
+        };
+      }
+      if (entry.size > MAX_UPLOAD_BYTES) {
+        return {
+          ok: false,
+          status: 400,
+          error: `File "${displayName}" exceeds the 10 MB size limit`,
+        };
+      }
+    }
+
+    const savedFiles: AttachedFile[] = [];
+    try {
+      await mkdir(uploadDir, { recursive: true });
+      for (const entry of fileEntries) {
+        const fileId = randomUUID();
+        const safeName = basename(entry.name).replace(/[^a-zA-Z0-9._-]/g, '_');
+        const filePath = join(uploadDir, `${fileId}_${safeName}`);
+        await writeFile(filePath, Buffer.from(await entry.arrayBuffer()));
+        const normalizedMime =
+          entry.type.split(';')[0].trim().toLowerCase() || 'application/octet-stream';
+        savedFiles.push({
+          path: filePath,
+          name: safeName || fileId,
+          mimeType: normalizedMime,
+          size: entry.size,
+        });
+      }
+    } catch (writeErr: unknown) {
+      for (const f of savedFiles) {
+        await unlink(f.path).catch((err: NodeJS.ErrnoException) => {
+          if (err.code !== 'ENOENT') {
+            getLog().warn({ err, filePath: f.path, conversationId }, 'upload.rollback_failed');
+          }
+        });
+      }
+      getLog().error({ err: writeErr, conversationId }, 'upload.write_failed');
+      return {
+        ok: false,
+        status: 500,
+        error: 'Failed to save uploaded file. Check available disk space.',
+      };
+    }
+
+    return { ok: true, savedFiles, uploadDir };
+  }
+
+  async function dispatchToOrchestrator(
+    conversationId: string,
+    message: string,
+    extraContext?: Omit<HandleMessageContext, 'isolationHints'>,
+    filesToCleanup?: { files: AttachedFile[]; uploadDir: string }
+  ): Promise<{ accepted: boolean; status: string }> {
+    const result = await lockManager.acquireLock(conversationId, async () => {
+      // Emit lock:true at handler start so the UI knows processing has begun.
+      // Fire-and-forget — if no SSE stream is connected yet, the event is buffered.
+      webAdapter.emitLockEvent(conversationId, true);
+      try {
+        await handleMessage(webAdapter, conversationId, message, {
+          isolationHints: { workflowType: 'thread', workflowId: conversationId },
+          ...extraContext,
+        });
+      } catch (error) {
+        getLog().error({ err: error, conversationId }, 'handle_message_failed');
+        try {
+          await webAdapter.emitSSE(
+            conversationId,
+            JSON.stringify({
+              type: 'error',
+              message: `Failed to process message: ${(error as Error).message ?? 'unknown error'}. Try /reset if the problem persists.`,
+              classification: 'transient',
+              timestamp: Date.now(),
+            })
+          );
+        } catch (sseError) {
+          getLog().error({ err: sseError, conversationId }, 'sse_error_emit_failed');
+        }
+      } finally {
+        await webAdapter.emitLockEvent(conversationId, false);
+        // Clean up uploaded files AFTER handleMessage completes so the AI subprocess
+        // has had a chance to read them. Doing this in the HTTP handler's finally block
+        // would delete files while the fire-and-forget lock handler is still running.
+        if (filesToCleanup) {
+          for (const f of filesToCleanup.files) {
+            await unlink(f.path).catch((err: NodeJS.ErrnoException) => {
+              if (err.code !== 'ENOENT') {
+                getLog().warn({ err, filePath: f.path, conversationId }, 'upload.cleanup_failed');
+              }
+            });
+          }
+          // Remove the now-empty upload directory for this conversation.
+          await rm(filesToCleanup.uploadDir, { recursive: true, force: true }).catch(
+            (err: NodeJS.ErrnoException) => {
+              if (err.code !== 'ENOENT') {
+                getLog().warn(
+                  { err, uploadDir: filesToCleanup.uploadDir, conversationId },
+                  'upload.dir_cleanup_failed'
+                );
+              }
+            }
+          );
+        }
+      }
+    });
+
+    if (result.status === 'queued-conversation' || result.status === 'queued-capacity') {
+      // Intentionally fire-and-forget: the lock-acquire signal (locked: true) is sent
+      // optimistically so the UI shows a queued state immediately. It is not awaited
+      // because we want the HTTP response to return before the SSE write completes.
+      // The lock-release signal (locked: false) IS awaited inside the task callback
+      // above to guarantee ordering — all tool results and flush must precede the
+      // release event on the SSE stream.
+      webAdapter.emitLockEvent(conversationId, true);
+    }
+
+    return { accepted: true, status: result.status };
+  }
+
+  /**
+   * Re-enter the orchestrator after a paused approval gate is resolved, so a
+   * web-dispatched workflow continues (approve) or runs its on_reject prompt
+   * (reject) without the user having to re-run the workflow command. The CLI's
+   * `workflowApproveCommand` / `workflowRejectCommand` already auto-resume via
+   * `workflowRunCommand({ resume: true })`; this is the web-side equivalent.
+   *
+   * Returns `true` when a resume dispatch was initiated, `false` otherwise (no
+   * parent conversation on the run, parent conversation deleted, parent was on
+   * a non-web platform, or dispatch threw). Failures are non-fatal: the gate
+   * decision is recorded regardless; when this returns `false` the response
+   * text instructs the user to re-run the workflow command.
+   *
+   * **Cross-adapter guard**: only web-sourced parents qualify.
+   * `dispatchToOrchestrator` is wired to the web adapter + its lock manager,
+   * so a Slack / Telegram / GitHub / Discord run being approved from the
+   * dashboard must not route through it — the Slack thread would never see
+   * the resumed output. Non-web parents skip auto-resume and the originating
+   * platform's own re-run flow applies.
+   */
+  async function tryAutoResumeAfterGate(
+    run: WorkflowRun,
+    action: 'approve' | 'reject',
+    // Identity of the user who approved/rejected the gate. The resumed chat
+    // turn executes as THIS user (sender-first, #1976/#1982) — without it the
+    // dispatch would fall back to the conversation creator's prefs/credentials.
+    // Undefined on solo installs (no web identity) → creator fallback applies.
+    gateActorUserId?: string
+  ): Promise<boolean> {
+    if (!run.parent_conversation_id) return false;
+    // Literal event names per action — greppable for ops tooling. Keeping the
+    // branch explicit rather than templating avoids the earlier 3-segment
+    // `api.workflow_*.dispatched` shape that broke `{domain}.{action}_{state}`.
+    const events =
+      action === 'approve'
+        ? {
+            dispatched: 'api.workflow_approve_auto_resume_dispatched' as const,
+            skippedNoPlatformConv:
+              'api.workflow_approve_auto_resume_skipped_no_platform_conv' as const,
+            skippedNonWebParent: 'api.workflow_approve_auto_resume_skipped_non_web_parent' as const,
+            failed: 'api.workflow_approve_auto_resume_failed' as const,
+          }
+        : {
+            dispatched: 'api.workflow_reject_auto_resume_dispatched' as const,
+            skippedNoPlatformConv:
+              'api.workflow_reject_auto_resume_skipped_no_platform_conv' as const,
+            skippedNonWebParent: 'api.workflow_reject_auto_resume_skipped_non_web_parent' as const,
+            failed: 'api.workflow_reject_auto_resume_failed' as const,
+          };
+    try {
+      const parentConv = await conversationDb.getConversationById(run.parent_conversation_id);
+      const platformConvId = parentConv?.platform_conversation_id;
+      if (!platformConvId) {
+        // parentConv === null is a data-integrity signal (the parent
+        // conversation was deleted while the run was paused) — worth
+        // surfacing at info level so operators notice. Missing
+        // platform_conversation_id on an existing row shouldn't happen and
+        // stays at debug.
+        const logFn =
+          parentConv === null ? getLog().info.bind(getLog()) : getLog().debug.bind(getLog());
+        logFn(
+          {
+            runId: run.id,
+            parentConversationId: run.parent_conversation_id,
+            parentDeleted: parentConv === null,
+          },
+          events.skippedNoPlatformConv
+        );
+        return false;
+      }
+      if (parentConv.platform_type !== 'web') {
+        getLog().debug(
+          {
+            runId: run.id,
+            parentConversationId: run.parent_conversation_id,
+            platformType: parentConv.platform_type,
+          },
+          events.skippedNonWebParent
+        );
+        return false;
+      }
+      // Explicit resume targeting: `/workflow resume <id>` routes through the
+      // command handler's resume path, which validates the run and hands the
+      // orchestrator an explicit resumeRun. A bare `/workflow run <name>` would
+      // instead rely on implicit resume detection and collide with the
+      // ambiguity guard for any non-paused resumable state (#2075).
+      const resumeMessage = `/workflow resume ${run.id}`;
+      await dispatchToOrchestrator(platformConvId, resumeMessage, { userId: gateActorUserId });
+      getLog().info(
+        { runId: run.id, workflowName: run.workflow_name, platformConvId },
+        events.dispatched
+      );
+      return true;
+    } catch (err) {
+      getLog().warn({ err: err as Error, runId: run.id }, events.failed);
+      return false;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // API transform helpers (Date → ISO string for wire shape)
+  // ---------------------------------------------------------------------------
+
+  type ApiConversation = z.infer<typeof conversationSchema>;
+  type ApiCodebase = z.infer<typeof codebaseSchema>;
+  type ApiMessage = z.infer<typeof messageSchema>;
+  type ApiWorkflowRun = z.infer<typeof workflowRunSchema>;
+  type ApiDashboardWorkflowRun = z.infer<typeof dashboardWorkflowRunSchema>;
+
+  function toISOString(val: Date | string): string;
+  function toISOString(val: Date | string | null | undefined): string | null;
+  function toISOString(val: Date | string | null | undefined): string | null {
+    if (val === null || val === undefined) return null;
+    if (typeof val === 'string') return val;
+    try {
+      return val.toISOString();
+    } catch (e) {
+      getLog().error({ err: e as Error, invalidDate: val }, 'api.invalid_date_transform');
+      return null;
+    }
+  }
+
+  function toApiConversation(row: import('@archon/core').Conversation): ApiConversation {
+    return {
+      ...row,
+      created_at: toISOString(row.created_at),
+      updated_at: toISOString(row.updated_at),
+      deleted_at: toISOString(row.deleted_at),
+      last_activity_at: toISOString(row.last_activity_at),
+    };
+  }
+
+  function toApiCodebase(row: import('@archon/core').Codebase): ApiCodebase {
+    let commands = row.commands;
+    if (typeof commands === 'string') {
+      try {
+        commands = JSON.parse(commands) as Record<string, { path: string; description: string }>;
+      } catch (parseErr) {
+        getLog().error({ err: parseErr as Error, codebaseId: row.id }, 'corrupted_commands_json');
+        // Fallback: empty map keeps the API response valid and prevents the endpoint
+        // from crashing. The corruption is already logged above for operator attention.
+        commands = {};
+      }
+    }
+    return {
+      ...row,
+      commands,
+      created_at: toISOString(row.created_at),
+      updated_at: toISOString(row.updated_at),
+    };
+  }
+
+  function toApiMessage(row: MessageRow): ApiMessage {
+    let metadata = row.metadata;
+    if (typeof metadata !== 'string') {
+      try {
+        metadata = JSON.stringify(metadata);
+      } catch (e) {
+        getLog().error(
+          { err: e as Error, messageId: row.id },
+          'api.message_metadata_serialize_failed'
+        );
+        metadata = '{}';
+      }
+    }
+    // Bound tool_result outputs in hydration responses — the DB keeps the full
+    // value; only the browser-bound payload is capped (see #2236).
+    return { ...row, metadata: boundMetadataToolOutputs(metadata) };
+  }
+
+  function toApiWorkflowRun(row: WorkflowRun): ApiWorkflowRun {
+    return {
+      ...row,
+      started_at: toISOString(row.started_at),
+      completed_at: toISOString(row.completed_at),
+      last_activity_at: toISOString(row.last_activity_at),
+    };
+  }
+
+  function toApiDashboardWorkflowRun(row: DashboardWorkflowRun): ApiDashboardWorkflowRun {
+    return {
+      ...row,
+      started_at: toISOString(row.started_at),
+      completed_at: toISOString(row.completed_at),
+      last_activity_at: toISOString(row.last_activity_at),
+    };
+  }
+
+  // GET /api/conversations - List conversations
+  registerOpenApiRoute(getConversationsRoute, async c => {
+    try {
+      const platformType = c.req.query('platform') ?? undefined;
+      const codebaseId = c.req.query('codebaseId') ?? undefined;
+      // Non-enforcing "mine" filter: only narrows when an identity resolves.
+      // Default visibility stays open (everyone sees everyone's conversations).
+      const mine = c.req.query('mine') === 'true';
+      const userId = mine ? (await resolveAuthContext(c))?.userId : undefined;
+      if (mine && !userId && getAuth()) {
+        // Narrowing was requested but no identity resolved on an install with
+        // web auth configured — the list silently degrades to ALL conversations
+        // (documented non-enforcing posture). Without web auth (solo installs,
+        // where the console always sends mine=true) this is the normal path
+        // and stays silent.
+        getLog().warn({ route: 'GET /api/conversations' }, 'api.mine_filter_identity_unresolved');
+      }
+      const conversations = await conversationDb.listConversations(
+        50,
+        platformType,
+        codebaseId,
+        true,
+        userId
+      );
+      return c.json(conversations.map(toApiConversation));
+    } catch (error) {
+      getLog().error({ err: error }, 'list_conversations_failed');
+      return apiError(c, 500, 'Failed to list conversations');
+    }
+  });
+
+  // GET /api/conversations/:id - Get single conversation by platform conversation ID
+  registerOpenApiRoute(getConversationRoute, async c => {
+    const platformId = c.req.param('id') ?? '';
+    try {
+      const conv = await conversationDb.findConversationByPlatformId(platformId);
+      if (!conv) {
+        return apiError(c, 404, 'Conversation not found');
+      }
+      return c.json(toApiConversation(conv));
+    } catch (error) {
+      getLog().error({ err: error, platformId }, 'get_conversation_failed');
+      return apiError(c, 500, 'Failed to get conversation');
+    }
+  });
+
+  // POST /api/conversations - Create new conversation
+  // Accepts optional `message` field for atomic create+send (avoids ghost "Untitled" entries)
+  registerOpenApiRoute(createConversationRoute, async c => {
+    try {
+      const { codebaseId, message } = getValidatedBody(c, createConversationBodySchema);
+      const userId = await resolveWebUserId(c);
+
+      // Validate codebase exists if provided
+      if (codebaseId) {
+        const codebase = await codebaseDb.getCodebase(codebaseId);
+        if (!codebase) {
+          return apiError(c, 400, 'Codebase not found', `No codebase with id "${codebaseId}"`);
+        }
+      }
+
+      const conversationId = `web-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+      const conversation = await conversationDb.getOrCreateConversation(
+        'web',
+        conversationId,
+        codebaseId,
+        undefined,
+        userId
+      );
+      webAdapter.setConversationDbId(conversation.platform_conversation_id, conversation.id);
+
+      // If message provided, dispatch it atomically (avoids ghost "Untitled" conversations)
+      if (message) {
+        try {
+          await messageDb.addMessage(conversation.id, 'user', message, undefined, userId);
+        } catch (e: unknown) {
+          // Log only (no SSE warning) — the SSE stream isn't connected yet for new conversations.
+          // The existing /message endpoint emits a warning because the stream is guaranteed to be active.
+          getLog().error({ err: e, conversationId: conversation.id }, 'message_persistence_failed');
+        }
+
+        // Set placeholder title immediately so the sidebar never shows "Untitled conversation"
+        const placeholderTitle = message.length > 60 ? message.slice(0, 60) + '...' : message;
+        await conversationDb.updateConversationTitle(conversation.id, placeholderTitle);
+
+        // Generate proper AI title for non-command messages (fire-and-forget, overwrites placeholder).
+        // Resolve the `small` tier (config tiers + per-user prefs) instead of the raw
+        // assistant default — the config-default Codex model may not be usable on the
+        // active account (e.g. ChatGPT-plan accounts, #1855). Both calls never throw.
+        if (!message.startsWith('/')) {
+          void resolveTitleRequest(conversation.ai_assistant_type, userId).then(titleRequest =>
+            generateAndSetTitle(
+              conversation.id,
+              message,
+              titleRequest.provider,
+              getArchonWorkspacesPath(),
+              undefined,
+              titleRequest.options.assistantConfig,
+              titleRequest.options
+            )
+          );
+        }
+
+        const result = await dispatchToOrchestrator(
+          conversation.platform_conversation_id,
+          message,
+          { userId }
+        );
+
+        return c.json({
+          conversationId: conversation.platform_conversation_id,
+          id: conversation.id,
+          dispatched: true,
+          ...result,
+        });
+      }
+
+      return c.json({ conversationId: conversation.platform_conversation_id, id: conversation.id });
+    } catch (error) {
+      getLog().error({ err: error }, 'create_conversation_failed');
+      return apiError(c, 500, 'Failed to create conversation');
+    }
+  });
+
+  // PATCH /api/conversations/:id - Update conversation (title)
+  registerOpenApiRoute(updateConversationRoute, async c => {
+    const platformId = c.req.param('id') ?? '';
+    const { title } = getValidatedBody(c, updateConversationBodySchema);
+    try {
+      const conv = await conversationDb.findConversationByPlatformId(platformId);
+      if (!conv) {
+        return apiError(c, 404, 'Conversation not found');
+      }
+      if (title !== undefined) {
+        await conversationDb.updateConversationTitle(conv.id, title.slice(0, 255));
+      }
+      return c.json({ success: true });
+    } catch (error) {
+      if (error instanceof ConversationNotFoundError) {
+        return apiError(c, 404, 'Conversation not found');
+      }
+      getLog().error({ err: error }, 'update_conversation_failed');
+      return apiError(c, 500, 'Failed to update conversation');
+    }
+  });
+
+  // DELETE /api/conversations/:id - Soft delete
+  registerOpenApiRoute(deleteConversationRoute, async c => {
+    const platformId = c.req.param('id') ?? '';
+    try {
+      const conv = await conversationDb.findConversationByPlatformId(platformId);
+      if (!conv) {
+        return apiError(c, 404, 'Conversation not found');
+      }
+      await conversationDb.softDeleteConversation(conv.id);
+      return c.json({ success: true });
+    } catch (error) {
+      if (error instanceof ConversationNotFoundError) {
+        return apiError(c, 404, 'Conversation not found');
+      }
+      getLog().error({ err: error }, 'delete_conversation_failed');
+      return apiError(c, 500, 'Failed to delete conversation');
+    }
+  });
+
+  // GET /api/conversations/:id/messages - Message history
+  registerOpenApiRoute(listMessagesRoute, async c => {
+    const platformConversationId = c.req.param('id') ?? '';
+    const limit = Math.min(Number(c.req.query('limit') ?? '200'), 500);
+    try {
+      const conv = await conversationDb.findConversationByPlatformId(platformConversationId);
+      if (!conv) {
+        return apiError(c, 404, 'Conversation not found');
+      }
+      const messages = await messageDb.listMessages(conv.id, limit);
+      return c.json(messages.map(toApiMessage));
+    } catch (error) {
+      getLog().error({ err: error }, 'list_messages_failed');
+      return apiError(c, 500, 'Failed to list messages');
+    }
+  });
+
+  // POST /api/conversations/:id/message - Send message
+  // Manual body parsing: multipart uses parseBody(), JSON uses req.json().
+  registerOpenApiRoute(sendMessageRoute, async c => {
+    const conversationId = c.req.param('id') ?? '';
+    const userId = await resolveWebUserId(c);
+
+    // Reject conversation IDs that could be used for path traversal when building
+    // the upload directory. Web conversation IDs are alphanumeric with hyphens only.
+    if (!/^[\w-]+$/.test(conversationId)) {
+      return c.json({ error: 'Invalid conversation ID' }, 400);
+    }
+
+    let message: string;
+    let savedFiles: AttachedFile[] = [];
+    let uploadDir = '';
+
+    const contentType = c.req.header('content-type') ?? '';
+
+    if (contentType.includes('multipart/form-data')) {
+      let body: Record<string, string | File | (string | File)[]>;
+      try {
+        body = await c.req.parseBody({ all: true });
+      } catch (parseErr: unknown) {
+        getLog().warn({ err: parseErr, conversationId }, 'upload.parse_failed');
+        return c.json({ error: 'Invalid multipart form data' }, 400);
+      }
+
+      const rawMessage = body.message;
+      if (typeof rawMessage !== 'string' || !rawMessage) {
+        return c.json({ error: 'message must be a non-empty string' }, 400);
+      }
+      message = rawMessage;
+
+      const rawFiles = body.files;
+      let fileList: (string | File)[];
+      if (Array.isArray(rawFiles)) {
+        fileList = rawFiles;
+      } else if (rawFiles !== undefined) {
+        fileList = [rawFiles];
+      } else {
+        fileList = [];
+      }
+
+      const fileEntries = fileList.filter((e): e is File => e instanceof File);
+      if (fileEntries.length > 0) {
+        const result = await persistUploadedFiles(conversationId, fileEntries);
+        if (!result.ok) {
+          return c.json({ error: result.error }, result.status);
+        }
+        savedFiles = result.savedFiles;
+        uploadDir = result.uploadDir;
+        getLog().info({ conversationId, fileCount: savedFiles.length }, 'message.files_uploaded');
+      }
+    } else {
+      let body: { message?: unknown };
+      try {
+        body = await c.req.json();
+      } catch (parseErr: unknown) {
+        getLog().warn({ err: parseErr, conversationId }, 'message.json_parse_failed');
+        return c.json({ error: 'Invalid JSON in request body' }, 400);
+      }
+
+      if (typeof body.message !== 'string' || !body.message) {
+        return c.json({ error: 'message must be a non-empty string' }, 400);
+      }
+      message = body.message;
+    }
+
+    // Look up conversation for message persistence
+    let conv: Awaited<ReturnType<typeof conversationDb.findConversationByPlatformId>> = null;
+    try {
+      conv = await conversationDb.findConversationByPlatformId(conversationId);
+    } catch (e: unknown) {
+      getLog().error({ err: e, conversationId }, 'conversation_lookup_failed');
+    }
+
+    // Persist user message and pass DB ID to adapter for assistant message persistence
+    if (conv) {
+      // Omit path from persisted metadata — the on-disk file is ephemeral and will be
+      // deleted after the AI processes it; storing stale paths would confuse future readers.
+      const meta =
+        savedFiles.length > 0
+          ? { files: savedFiles.map(f => ({ name: f.name, mimeType: f.mimeType, size: f.size })) }
+          : undefined;
+      try {
+        await messageDb.addMessage(conv.id, 'user', message, meta, userId);
+      } catch (e: unknown) {
+        getLog().error({ err: e, conversationId: conv.id }, 'message_persistence_failed');
+        try {
+          await webAdapter.emitSSE(
+            conversationId,
+            JSON.stringify({
+              type: 'warning',
+              message: 'Message could not be saved to history',
+              timestamp: Date.now(),
+            })
+          );
+        } catch (sseErr: unknown) {
+          getLog().error({ err: sseErr, conversationId: conv?.id }, 'sse_warning_double_failure');
+        }
+      }
+      webAdapter.setConversationDbId(conversationId, conv.id);
+    }
+
+    // Pass savedFiles to dispatchToOrchestrator so cleanup happens inside the lock handler,
+    // AFTER handleMessage completes — not in the HTTP handler's finally block where the
+    // fire-and-forget lock callback may still be running and the AI has not yet read the files.
+    const extraContext: Omit<HandleMessageContext, 'isolationHints'> =
+      savedFiles.length > 0 ? { userId, attachedFiles: savedFiles } : { userId };
+    let filesToCleanup: { files: AttachedFile[]; uploadDir: string } | undefined;
+    if (savedFiles.length > 0) {
+      filesToCleanup = { files: savedFiles, uploadDir };
+    }
+    const result = await dispatchToOrchestrator(
+      conversationId,
+      message,
+      extraContext,
+      filesToCleanup
+    );
+    return c.json(result);
+  });
+
+  // GET /api/stream/__dashboard__ — multiplexed dashboard SSE (all workflow events)
+  // IMPORTANT: Must be registered before /api/stream/:conversationId to avoid param capture.
+  app.get('/api/stream/__dashboard__', async c => {
+    return streamSSE(c, async stream => {
+      await stream.writeSSE({
+        data: JSON.stringify({ type: 'heartbeat', timestamp: Date.now() }),
+      });
+
+      webAdapter.registerStream('__dashboard__', stream);
+      getLog().debug({ streamId: '__dashboard__' }, 'dashboard_sse_opened');
+
+      stream.onAbort(() => {
+        getLog().debug({ streamId: '__dashboard__' }, 'dashboard_sse_disconnected');
+        webAdapter.removeStream('__dashboard__', stream);
+      });
+
+      try {
+        while (true) {
+          await stream.sleep(30000);
+          if (!stream.closed) {
+            await stream.writeSSE({
+              data: JSON.stringify({ type: 'heartbeat', timestamp: Date.now() }),
+            });
+          }
+        }
+      } catch (e: unknown) {
+        const msg = (e as Error).message ?? '';
+        if (!msg.includes('aborted') && !msg.includes('closed') && !msg.includes('cancel')) {
+          getLog().warn({ err: e as Error }, 'dashboard_sse_heartbeat_error');
+        }
+      } finally {
+        webAdapter.removeStream('__dashboard__', stream);
+        getLog().debug({ streamId: '__dashboard__' }, 'dashboard_sse_closed');
+      }
+    });
+  });
+
+  // GET /api/stream/:conversationId - SSE streaming
+  app.get('/api/stream/:conversationId', async c => {
+    const conversationId = c.req.param('conversationId');
+
+    return streamSSE(c, async stream => {
+      // Send initial heartbeat immediately to flush HTTP headers.
+      // Without this, EventSource stays in CONNECTING state until the first write.
+      await stream.writeSSE({
+        data: JSON.stringify({ type: 'heartbeat', timestamp: Date.now() }),
+      });
+
+      webAdapter.registerStream(conversationId, stream);
+      getLog().debug({ conversationId }, 'sse_stream_opened');
+
+      stream.onAbort(() => {
+        getLog().debug({ conversationId }, 'sse_client_disconnected');
+        webAdapter.removeStream(conversationId, stream);
+      });
+
+      try {
+        while (true) {
+          await stream.sleep(30000);
+          if (!stream.closed) {
+            await stream.writeSSE({
+              data: JSON.stringify({ type: 'heartbeat', timestamp: Date.now() }),
+            });
+          }
+        }
+      } catch (e: unknown) {
+        // stream.sleep() throws when client disconnects — expected behavior.
+        // Log unexpected errors for debugging.
+        const msg = (e as Error).message ?? '';
+        if (!msg.includes('aborted') && !msg.includes('closed') && !msg.includes('cancel')) {
+          getLog().warn({ err: e as Error, conversationId }, 'sse_heartbeat_error');
+        }
+      } finally {
+        webAdapter.removeStream(conversationId, stream);
+        getLog().debug({ conversationId }, 'sse_stream_closed');
+      }
+    });
+  });
+
+  // GET /api/codebases - List codebases
+  registerOpenApiRoute(listCodebasesRoute, async c => {
+    try {
+      const codebases = await codebaseDb.listCodebases();
+
+      // Deduplicate by repository_url (keep most recently updated)
+      const normalizeUrl = (url: string): string => url.replace(/\.git$/, '');
+      const seen = new Map<string, (typeof codebases)[number]>();
+      const deduped: (typeof codebases)[number][] = [];
+      for (const cb of codebases) {
+        if (!cb.repository_url) {
+          deduped.push(cb);
+          continue;
+        }
+        const key = normalizeUrl(cb.repository_url);
+        const existing = seen.get(key);
+        if (!existing || cb.updated_at > existing.updated_at) {
+          seen.set(key, cb);
+        }
+      }
+      deduped.push(...seen.values());
+      deduped.sort((a, b) => a.name.localeCompare(b.name));
+
+      return c.json(deduped.map(toApiCodebase));
+    } catch (error) {
+      getLog().error({ err: error }, 'list_codebases_failed');
+      return apiError(c, 500, 'Failed to list codebases');
+    }
+  });
+
+  // GET /api/codebases/:id - Codebase detail
+  registerOpenApiRoute(getCodebaseRoute, async c => {
+    try {
+      const codebase = await codebaseDb.getCodebase(c.req.param('id') ?? '');
+      if (!codebase) {
+        return apiError(c, 404, 'Codebase not found');
+      }
+      return c.json(toApiCodebase(codebase));
+    } catch (error) {
+      getLog().error({ err: error }, 'get_codebase_failed');
+      return apiError(c, 500, 'Failed to get codebase');
+    }
+  });
+
+  // POST /api/codebases - Add a project (clone from URL or register local path)
+  registerOpenApiRoute(addCodebaseRoute, async c => {
+    const body = getValidatedBody(c, addCodebaseBodySchema);
+
+    try {
+      // .refine() guarantees exactly one of url/path is present.
+      // For a local path, detect git-ness: a non-git directory registers as a
+      // folder project (kind: 'folder') instead of being rejected. Folder-ness
+      // is detected here, not declared in the request body, so the web form
+      // needs no new field.
+      let result;
+      if (body.url) {
+        result = await cloneRepository(body.url);
+      } else {
+        const localPath = body.path ?? '';
+        // Detect git-ness. A resolvable repo root → register as a repo project;
+        // a definitive null ("not a git repository") → folder project. A THROW
+        // is ambiguous: findRepoRoot throws both for a nonexistent path (benign
+        // — fall through so registerFolder's own existence check produces the
+        // clean error) and for a genuine git failure (git missing, timeout,
+        // permission) on a path that DOES exist. The latter must NOT register:
+        // it would permanently misclassify a real repo as kind:'folder'.
+        let repoRoot: string | null = null;
+        try {
+          repoRoot = await findRepoRoot(localPath);
+        } catch (err) {
+          getLog().warn({ err, path: localPath }, 'api.add_codebase_repo_detect_failed');
+          if (existsSync(localPath)) {
+            return apiError(
+              c,
+              500,
+              'Could not determine whether the path is a git repository (git failed — is git installed and the path readable?). Nothing was registered; retry once the underlying issue is resolved.'
+            );
+          }
+        }
+        result = repoRoot ? await registerRepository(localPath) : await registerFolder(localPath);
+      }
+
+      // Fetch the full codebase record for a consistent response
+      const codebase = await codebaseDb.getCodebase(result.codebaseId);
+      if (!codebase) {
+        return apiError(c, 500, 'Codebase created but not found');
+      }
+
+      return c.json(toApiCodebase(codebase), result.alreadyExisted ? 200 : 201);
+    } catch (error) {
+      getLog().error({ err: error }, 'add_codebase_failed');
+      return apiError(
+        c,
+        500,
+        `Failed to add codebase: ${(error as Error).message ?? 'unknown error'}`
+      );
+    }
+  });
+
+  // DELETE /api/codebases/:id - Delete a project and clean up
+  registerOpenApiRoute(deleteCodebaseRoute, async c => {
+    const id = c.req.param('id') ?? '';
+    try {
+      const codebase = await codebaseDb.getCodebase(id);
+      if (!codebase) {
+        return apiError(c, 404, 'Codebase not found');
+      }
+
+      // Clean up isolation environments (worktrees)
+      const environments = await isolationEnvDb.listByCodebase(id);
+      for (const env of environments) {
+        try {
+          await removeWorktree(toRepoPath(codebase.default_cwd), toWorktreePath(env.working_path));
+          getLog().info({ path: env.working_path }, 'worktree_removed');
+        } catch (wtErr) {
+          // Worktree may already be gone — log but continue
+          getLog().warn({ err: wtErr, path: env.working_path }, 'worktree_remove_failed');
+        }
+        await isolationEnvDb.updateStatus(env.id, 'destroyed');
+      }
+
+      // Delete from database (unlinks conversations and sessions)
+      await codebaseDb.deleteCodebase(id);
+
+      // Remove workspace directory from disk — only for Archon-managed repos
+      const workspacesRoot = normalize(getArchonWorkspacesPath());
+      const normalizedCwd = normalize(codebase.default_cwd);
+      if (
+        normalizedCwd.startsWith(workspacesRoot + '/') ||
+        normalizedCwd.startsWith(workspacesRoot + '\\')
+      ) {
+        try {
+          await rm(normalizedCwd, { recursive: true, force: true });
+          getLog().info({ path: normalizedCwd }, 'workspace_removed');
+        } catch (rmErr) {
+          // Directory may not exist — log but don't fail
+          getLog().warn({ err: rmErr, path: codebase.default_cwd }, 'workspace_remove_failed');
+        }
+      } else {
+        getLog().info({ path: codebase.default_cwd }, 'external_repo_skip_deletion');
+      }
+
+      return c.json({ success: true });
+    } catch (error) {
+      getLog().error({ err: error }, 'delete_codebase_failed');
+      return apiError(c, 500, 'Failed to delete codebase');
+    }
+  });
+
+  // GET /api/codebases/:id/env - List env var keys for a codebase (values never returned)
+  registerOpenApiRoute(listEnvVarsRoute, async c => {
+    const id = c.req.param('id') ?? '';
+    try {
+      const codebase = await codebaseDb.getCodebase(id);
+      if (!codebase) return apiError(c, 404, 'Codebase not found');
+      const envVars = await envVarDb.getCodebaseEnvVars(id);
+      return c.json({ keys: Object.keys(envVars) });
+    } catch (error) {
+      getLog().error({ err: error, codebaseId: id }, 'list_env_vars_failed');
+      return apiError(c, 500, 'Failed to list env vars');
+    }
+  });
+
+  // PUT /api/codebases/:id/env - Set (upsert) an env var
+  registerOpenApiRoute(setEnvVarRoute, async c => {
+    const id = c.req.param('id') ?? '';
+    try {
+      const body = getValidatedBody(c, setEnvVarBodySchema);
+      const codebase = await codebaseDb.getCodebase(id);
+      if (!codebase) return apiError(c, 404, 'Codebase not found');
+      await envVarDb.setCodebaseEnvVar(id, body.key, body.value);
+      return c.json({ success: true });
+    } catch (error) {
+      getLog().error({ err: error, codebaseId: id }, 'set_env_var_failed');
+      return apiError(c, 500, 'Failed to set env var');
+    }
+  });
+
+  // DELETE /api/codebases/:id/env/:key - Delete an env var
+  registerOpenApiRoute(deleteEnvVarRoute, async c => {
+    const id = c.req.param('id') ?? '';
+    const key = c.req.param('key') ?? '';
+    try {
+      const codebase = await codebaseDb.getCodebase(id);
+      if (!codebase) return apiError(c, 404, 'Codebase not found');
+      await envVarDb.deleteCodebaseEnvVar(id, key);
+      return c.json({ success: true });
+    } catch (error) {
+      getLog().error({ err: error, codebaseId: id, key }, 'delete_env_var_failed');
+      return apiError(c, 500, 'Failed to delete env var');
+    }
+  });
+
+  /**
+   * Register a route with OpenAPI spec generation and input validation.
+   * Zod validates inputs (query, params, body) at runtime via defaultHook.
+   * Response schemas are used for OpenAPI spec generation only — output is not
+   * validated at runtime. The `as never` cast bypasses TypedResponse constraints.
+   */
+  function registerOpenApiRoute(
+    route: ReturnType<typeof createRoute>,
+    handler: (c: Context) => Response | Promise<Response>
+  ): void {
+    app.openapi(route, handler as never);
+  }
+
+  /** Access Zod-validated body from a handler registered via registerOpenApiRoute. */
+  function getValidatedBody<T>(c: Context, _schema: z.ZodType<T>): T {
+    return (c.req as unknown as { valid(k: 'json'): T }).valid('json');
+  }
+
+  // Serve OpenAPI spec
+  app.doc('/api/openapi.json', {
+    openapi: '3.0.0',
+    info: { title: 'Archon API', version: '1.0.0' },
+  });
+
+  // =========================================================================
+  // Workflow endpoints
+  // =========================================================================
+
+  // GET /api/workflows - Discover available workflows
+  registerOpenApiRoute(getWorkflowsRoute, async c => {
+    try {
+      const cwd = c.req.query('cwd');
+      let workingDir: string | undefined = cwd;
+
+      // Validate caller-supplied cwd against registered codebase paths
+      if (cwd) {
+        if (!(await validateCwd(cwd))) {
+          return apiError(c, 400, 'Invalid cwd: must match a registered codebase path');
+        }
+      } else {
+        // Fallback to first codebase's default_cwd
+        const codebases = await codebaseDb.listCodebases();
+        if (codebases.length > 0) {
+          workingDir = codebases[0].default_cwd;
+        }
+      }
+
+      // No project context (no cwd query param and no registered codebases) —
+      // pass null to discovery so it returns bundled + home-scoped workflows.
+      // This avoids a misleading empty state on first run, before any project
+      // is registered, when bundled defaults are present
+      const result = await discoverWorkflowsWithConfig(workingDir ?? null, loadConfig);
+
+      // Resolve repo-owner-curated recommended list (per-project only).
+      // Filter to names present in the discovered set; preserve declared order.
+      // Stale names are silently ignored (advisory).
+      const recommended: string[] = [];
+      if (workingDir) {
+        const repoConfig = await loadRepoConfig(workingDir);
+        const declared = repoConfig.recommendedWorkflows ?? [];
+        if (declared.length > 0) {
+          const discoveredNames = new Set(result.workflows.map(ws => ws.workflow.name));
+          const seen = new Set<string>();
+          for (const name of declared) {
+            if (discoveredNames.has(name) && !seen.has(name)) {
+              recommended.push(name);
+              seen.add(name);
+            } else if (!discoveredNames.has(name)) {
+              getLog().debug({ workingDir, name }, 'workflows.recommended_workflow_not_found');
+            }
+          }
+        }
+      }
+
+      return c.json({
+        workflows: result.workflows.map(ws => ({
+          workflow: ws.workflow,
+          source: ws.source,
+          // Keys the engine dropped from this YAML (#2213) — the console is the
+          // surface most authors edit workflows on, so it has to carry them.
+          ...(ws.parseWarnings && ws.parseWarnings.length > 0
+            ? { parseWarnings: [...ws.parseWarnings] }
+            : {}),
+        })),
+        recommended,
+        errors: result.errors.length > 0 ? result.errors : undefined,
+      });
+    } catch (error) {
+      // Workflow discovery can fail if cwd is stale or deleted — return empty with warning
+      const err = error instanceof Error ? error : new Error(String(error));
+      getLog().error({ err }, 'workflow_discovery_failed');
+      return apiError(c, 500, `Workflow discovery failed: ${err.message}`);
+    }
+  });
+
+  // POST /api/workflows/:name/run - Run a workflow via the orchestrator
+  //
+  // Accepts either:
+  //   - application/json: { conversationId, message }
+  //   - multipart/form-data: conversationId + message + files[] (≤5, ≤10MB each)
+  //
+  // Multipart matches /api/conversations/:id/message so the console's draft
+  // run input can attach screenshots / stack traces / paste-blobs the same
+  // way a freeform chat message can.
+  registerOpenApiRoute(runWorkflowRoute, async c => {
+    const workflowName = c.req.param('name') ?? '';
+    const userId = await resolveWebUserId(c);
+    if (!isValidWorkflowName(workflowName)) {
+      return apiError(c, 400, 'Invalid workflow name');
+    }
+
+    let message: string;
+    let conversationId: string;
+    let savedFiles: AttachedFile[] = [];
+    let uploadDir = '';
+
+    const contentType = c.req.header('content-type') ?? '';
+
+    if (contentType.includes('multipart/form-data')) {
+      let body: Record<string, string | File | (string | File)[]>;
+      try {
+        body = await c.req.parseBody({ all: true });
+      } catch (parseErr: unknown) {
+        getLog().warn({ err: parseErr }, 'run_workflow.multipart_parse_failed');
+        return apiError(c, 400, 'Invalid multipart form data');
+      }
+
+      const rawMessage = body.message;
+      const rawConv = body.conversationId;
+      if (typeof rawMessage !== 'string' || !rawMessage) {
+        return apiError(c, 400, 'message must be a non-empty string');
+      }
+      if (typeof rawConv !== 'string' || !rawConv || !/^[\w-]+$/.test(rawConv)) {
+        return apiError(c, 400, 'conversationId must be a non-empty alphanumeric string');
+      }
+      message = rawMessage;
+      conversationId = rawConv;
+
+      const rawFiles = body.files;
+      const fileList: (string | File)[] = Array.isArray(rawFiles)
+        ? rawFiles
+        : rawFiles !== undefined
+          ? [rawFiles]
+          : [];
+      const fileEntries = fileList.filter((e): e is File => e instanceof File);
+
+      if (fileEntries.length > 0) {
+        const result = await persistUploadedFiles(conversationId, fileEntries);
+        if (!result.ok) {
+          return apiError(c, result.status, result.error);
+        }
+        savedFiles = result.savedFiles;
+        uploadDir = result.uploadDir;
+        getLog().info(
+          { conversationId, fileCount: savedFiles.length, workflowName },
+          'run_workflow.files_uploaded'
+        );
+      }
+    } else {
+      let body: { conversationId?: unknown; message?: unknown };
+      try {
+        body = await c.req.json();
+      } catch (parseErr: unknown) {
+        getLog().warn({ err: parseErr }, 'run_workflow.json_parse_failed');
+        return apiError(c, 400, 'Invalid JSON in request body');
+      }
+      if (typeof body.conversationId !== 'string' || !body.conversationId) {
+        return apiError(c, 400, 'conversationId must be a non-empty string');
+      }
+      if (typeof body.message !== 'string' || !body.message) {
+        return apiError(c, 400, 'message must be a non-empty string');
+      }
+      conversationId = body.conversationId;
+      message = body.message;
+    }
+
+    try {
+      // Persist user message and register DB ID (same as message endpoint).
+      // File metadata (name/mime/size — no path, since the on-disk file is
+      // ephemeral) goes into message metadata when present.
+      let conv: Awaited<ReturnType<typeof conversationDb.findConversationByPlatformId>> = null;
+      try {
+        conv = await conversationDb.findConversationByPlatformId(conversationId);
+      } catch (e: unknown) {
+        getLog().error({ err: e, conversationId }, 'conversation_lookup_failed');
+      }
+      if (conv) {
+        try {
+          const meta =
+            savedFiles.length > 0
+              ? {
+                  files: savedFiles.map(f => ({
+                    name: f.name,
+                    mimeType: f.mimeType,
+                    size: f.size,
+                  })),
+                }
+              : undefined;
+          await messageDb.addMessage(conv.id, 'user', message, meta, userId);
+        } catch (e: unknown) {
+          getLog().error({ err: e, conversationId: conv.id }, 'message_persistence_failed');
+        }
+        webAdapter.setConversationDbId(conversationId, conv.id);
+        if (!conv.title) {
+          // Resolve the `small` tier (config tiers + per-user prefs) instead of the raw
+          // assistant default (#1855). Both calls never throw.
+          void resolveTitleRequest(conv.ai_assistant_type, userId).then(titleRequest =>
+            generateAndSetTitle(
+              conv.id,
+              message,
+              titleRequest.provider,
+              getArchonWorkspacesPath(),
+              workflowName,
+              titleRequest.options.assistantConfig,
+              titleRequest.options
+            )
+          );
+        }
+      }
+
+      const fullMessage = `/workflow run ${workflowName} ${message}`;
+      const extraContext: Omit<HandleMessageContext, 'isolationHints'> =
+        savedFiles.length > 0 ? { userId, attachedFiles: savedFiles } : { userId };
+      const filesToCleanup = savedFiles.length > 0 ? { files: savedFiles, uploadDir } : undefined;
+      const result = await dispatchToOrchestrator(
+        conversationId,
+        fullMessage,
+        extraContext,
+        filesToCleanup
+      );
+      return c.json(result);
+    } catch (error) {
+      getLog().error({ err: error }, 'run_workflow_failed');
+      return apiError(c, 500, 'Failed to run workflow');
+    }
+  });
+
+  // GET /api/dashboard/runs - Enriched workflow runs for Command Center
+  // Supports server-side search, status/date filtering, and offset pagination.
+  registerOpenApiRoute(getDashboardRunsRoute, async c => {
+    try {
+      const rawStatus = c.req.query('status');
+      const validStatuses = workflowRunStatusSchema.options;
+      type DashboardRunStatus = (typeof validStatuses)[number];
+      const status: DashboardRunStatus | undefined =
+        rawStatus && (validStatuses as readonly string[]).includes(rawStatus)
+          ? (rawStatus as DashboardRunStatus)
+          : undefined;
+      const codebaseId = c.req.query('codebaseId') ?? undefined;
+      const search = c.req.query('search')?.trim() || undefined;
+      const after = c.req.query('after') ?? undefined;
+      const before = c.req.query('before') ?? undefined;
+      const limitRaw = Number(c.req.query('limit'));
+      const limit = Number.isNaN(limitRaw) ? 50 : Math.min(Math.max(1, limitRaw), 200);
+      const offsetRaw = Number(c.req.query('offset'));
+      const offset = Number.isNaN(offsetRaw) ? 0 : Math.max(0, offsetRaw);
+
+      const result = await workflowDb.listDashboardRuns({
+        status,
+        codebaseId,
+        search,
+        after,
+        before,
+        limit,
+        offset,
+      });
+      return c.json({
+        ...result,
+        runs: result.runs.map(toApiDashboardWorkflowRun),
+      });
+    } catch (error) {
+      getLog().error({ err: error }, 'list_dashboard_runs_failed');
+      return apiError(c, 500, 'Failed to list dashboard runs');
+    }
+  });
+
+  // POST /api/workflows/runs/:runId/cancel - Cancel a workflow run
+  registerOpenApiRoute(cancelWorkflowRunRoute, async c => {
+    try {
+      const runId = c.req.param('runId') ?? '';
+      const run = await workflowDb.getWorkflowRun(runId);
+      if (!run) {
+        return apiError(c, 404, 'Workflow run not found');
+      }
+      if (run.status !== 'running' && run.status !== 'pending' && run.status !== 'paused') {
+        return apiError(c, 400, `Cannot cancel workflow in '${run.status}' status`);
+      }
+      const { cancelled } = await workflowDb.cancelWorkflowRun(runId);
+      return c.json({
+        success: true,
+        message: cancelled
+          ? `Cancelled workflow: ${run.workflow_name}`
+          : `Workflow ${run.workflow_name} already finished — nothing to cancel.`,
+      });
+    } catch (error) {
+      getLog().error({ err: error }, 'cancel_workflow_run_api_failed');
+      return apiError(c, 500, 'Failed to cancel workflow run');
+    }
+  });
+
+  // POST /api/workflows/runs/:runId/resume - Resume a workflow run
+  registerOpenApiRoute(resumeWorkflowRunRoute, async c => {
+    const runId = c.req.param('runId') ?? '';
+    try {
+      const run = await workflowDb.getWorkflowRun(runId);
+      if (!run) {
+        return apiError(c, 404, 'Workflow run not found');
+      }
+      if (!RESUMABLE_WORKFLOW_STATUSES.includes(run.status)) {
+        return apiError(c, 400, `Cannot resume workflow in '${run.status}' status`);
+      }
+      // Dispatch resume by sending `/workflow resume <id>` to the parent web
+      // conversation; the command handler validates the run and hands the
+      // orchestrator an explicit resumeRun to hydrate. Explicit targeting (not
+      // a bare `/workflow run <name>`) so a genuinely-failed run resumes
+      // directly instead of hitting the disambiguation prompt (#2075).
+      // Mirrors the approve/reject auto-resume path.
+      if (!run.parent_conversation_id) {
+        return apiError(
+          c,
+          400,
+          `This run was created outside the web UI. Use \`archon workflow resume ${runId}\` from the CLI to resume it.`
+        );
+      }
+      const parentConv = await conversationDb.getConversationById(run.parent_conversation_id);
+      if (!parentConv?.platform_conversation_id || parentConv.platform_type !== 'web') {
+        return apiError(
+          c,
+          400,
+          `Cannot resume from web UI: the run's parent conversation is not a web conversation. Use \`archon workflow resume ${runId}\` from the CLI.`
+        );
+      }
+      const resumeMessage = `/workflow resume ${run.id}`;
+      // Resume executes as the user who clicked resume (sender-first, #1982),
+      // not the conversation creator. Undefined on solo installs → fallback.
+      await dispatchToOrchestrator(parentConv.platform_conversation_id, resumeMessage, {
+        userId: await resolveWebUserId(c),
+      });
+      getLog().info(
+        {
+          runId,
+          workflowName: run.workflow_name,
+          platformConvId: parentConv.platform_conversation_id,
+        },
+        'api.workflow_run_resume_dispatched'
+      );
+      return c.json({
+        success: true,
+        message: `Resuming workflow: ${run.workflow_name}`,
+      });
+    } catch (error) {
+      getLog().error({ err: error, runId }, 'api.workflow_run_resume_failed');
+      return apiError(c, 500, 'Failed to resume workflow run');
+    }
+  });
+
+  // POST /api/workflows/runs/:runId/abandon - Abandon a workflow run
+  registerOpenApiRoute(abandonWorkflowRunRoute, async c => {
+    const runId = c.req.param('runId') ?? '';
+    try {
+      const run = await workflowDb.getWorkflowRun(runId);
+      if (!run) {
+        return apiError(c, 404, 'Workflow run not found');
+      }
+      // A `failed` run is terminal per TERMINAL_WORKFLOW_STATUSES but remains
+      // resumable, so the user must be able to discard it — only the two
+      // non-resumable terminal states are blocked (the 400 mapping lives here;
+      // abandonWorkflow re-validates).
+      if (run.status === 'completed' || run.status === 'cancelled') {
+        return apiError(
+          c,
+          400,
+          `Cannot abandon run with status '${run.status}'. Only running, paused, or failed runs can be abandoned.`
+        );
+      }
+      // Delegate to the SHARED op — a raw cancelWorkflowRun here previously skipped
+      // the sub-run cascade cancel AND the container reclaim (M2), so a web abandon
+      // orphaned children that CLI/chat abandons cleaned up.
+      const { cascadeFailures, blockedParentRunId } = await abandonWorkflow(runId);
+      let message = `Abandoned workflow: ${run.workflow_name}`;
+      if (cascadeFailures > 0) {
+        message += ` — warning: ${String(cascadeFailures)} sub-run(s) could not be cancelled and may still be running`;
+      }
+      if (blockedParentRunId) {
+        message += ` — parent run ${blockedParentRunId} was blocked on this sub-run and stays paused; resume it to fail the node cleanly or abandon it too`;
+      }
+      return c.json({ success: true, message });
+    } catch (error) {
+      getLog().error({ err: error, runId }, 'api.workflow_run_abandon_failed');
+      return apiError(c, 500, 'Failed to abandon workflow run');
+    }
+  });
+
+  // POST /api/workflows/runs/:runId/approve - Approve a paused workflow run
+  registerOpenApiRoute(approveWorkflowRunRoute, async c => {
+    const runId = c.req.param('runId') ?? '';
+    try {
+      const run = await workflowDb.getWorkflowRun(runId);
+      if (!run) {
+        return apiError(c, 404, 'Workflow run not found');
+      }
+      if (run.status !== 'paused') {
+        return apiError(c, 400, `Cannot approve workflow in '${run.status}' status`);
+      }
+      const approvalRaw = run.metadata.approval;
+      const approval = isApprovalContext(approvalRaw) ? approvalRaw : undefined;
+      if (!approval?.nodeId) {
+        return apiError(c, 400, 'Workflow run is paused but missing approval context');
+      }
+      if (approval.type === 'child_workflow') {
+        // Not an approvable gate — the parent resumes automatically when the child
+        // completes. approveWorkflow throws the same redirect; map it to a 400
+        // here so the console gets the message instead of an opaque 500.
+        return apiError(
+          c,
+          400,
+          `Run is paused waiting on sub-run ${approval.childRunId ?? '<unknown>'}. Approve or reject the child run instead.`
+        );
+      }
+      if (isGateResolved(approval)) {
+        // Post-#2075 the run stays 'paused' after approval, so status alone no
+        // longer distinguishes "awaiting the human" from "awaiting resume".
+        return apiError(
+          c,
+          400,
+          `Workflow run was already ${String(approval.resolved)} — resume in progress`
+        );
+      }
+      // Distinguish "no body sent" (legitimate bare approve) from "body sent but
+      // unparseable" (client bug). Since #2074 a bare approve FINALIZES a
+      // signal-bearing loop gate, so silently coercing a malformed body to {}
+      // would discard intended feedback and finalize undiagnosed — reject it.
+      const rawBody = await c.req.text();
+      let body: { comment?: string } = {};
+      if (rawBody.trim().length > 0) {
+        try {
+          body = JSON.parse(rawBody) as { comment?: string };
+        } catch (parseError) {
+          getLog().warn({ err: parseError, runId }, 'api.approve_body_parse_failed');
+          return apiError(
+            c,
+            400,
+            'Request body is not valid JSON — send {"comment": "..."} or no body'
+          );
+        }
+      }
+      // Shared gate logic (events, telemetry, metadata staging) — the run stays
+      // 'paused' with metadata.approval.resolved = 'approved' (#2075). The
+      // pre-checks above map the common error cases to 400s; approveWorkflow
+      // re-validates and anything it throws past them is a 500.
+      // The raw (possibly undefined) comment is passed through — approveWorkflow
+      // defaults the recorded comment internally, but "no feedback" must survive
+      // so a signal-bearing interactive-loop gate finalizes instead of re-running
+      // (#2074, loop_feedback_given).
+      await approveWorkflow(runId, body.comment);
+
+      // Auto-resume: dispatch to the orchestrator so the workflow continues
+      // without requiring the user to re-run the workflow command. Mirrors
+      // what `workflowApproveCommand` does in the CLI. Requires
+      // `parent_conversation_id` on the run (set by orchestrator-agent for any
+      // web-dispatched workflow — foreground, interactive, and background via
+      // the pre-created run) and a web-platform parent (guarded in the helper).
+      const autoResumed = await tryAutoResumeAfterGate(run, 'approve', await resolveWebUserId(c));
+
+      return c.json({
+        success: true,
+        message: autoResumed
+          ? `Workflow approved: ${run.workflow_name}. Resuming workflow.`
+          : `Workflow approved: ${run.workflow_name}. Run \`archon workflow resume ${runId}\` from the CLI to continue, or send a new message in the originating conversation.`,
+      });
+    } catch (error) {
+      getLog().error({ err: error, runId }, 'api.workflow_run_approve_failed');
+      return apiError(c, 500, 'Failed to approve workflow run');
+    }
+  });
+
+  // POST /api/workflows/runs/:runId/reject - Reject a paused workflow run
+  registerOpenApiRoute(rejectWorkflowRunRoute, async c => {
+    const runId = c.req.param('runId') ?? '';
+    try {
+      const run = await workflowDb.getWorkflowRun(runId);
+      if (!run) {
+        return apiError(c, 404, 'Workflow run not found');
+      }
+      if (run.status !== 'paused') {
+        return apiError(c, 400, `Cannot reject workflow in '${run.status}' status`);
+      }
+      const approvalRaw = run.metadata.approval;
+      const approval = isApprovalContext(approvalRaw) ? approvalRaw : undefined;
+      if (approval?.type === 'child_workflow') {
+        // Mirror of the approve route's guard — rejectWorkflow throws the same
+        // redirect; map it to a 400 with the child pointer.
+        return apiError(
+          c,
+          400,
+          `Run is paused waiting on sub-run ${approval.childRunId ?? '<unknown>'}. Reject the child run instead, or abandon this run to discard the whole tree.`
+        );
+      }
+      if (approval && isGateResolved(approval)) {
+        return apiError(
+          c,
+          400,
+          `Workflow run was already ${String(approval.resolved)} — resume in progress`
+        );
+      }
+      // Mirror of the approve route's malformed-body guard: a swallowed parse
+      // failure would silently drop the reviewer's reason.
+      const rawBody = await c.req.text();
+      let body: { reason?: string } = {};
+      if (rawBody.trim().length > 0) {
+        try {
+          body = JSON.parse(rawBody) as { reason?: string };
+        } catch (parseError) {
+          getLog().warn({ err: parseError, runId }, 'api.reject_body_parse_failed');
+          return apiError(
+            c,
+            400,
+            'Request body is not valid JSON — send {"reason": "..."} or no body'
+          );
+        }
+      }
+      const reason = body.reason ?? 'Rejected';
+      // Shared gate logic (events, telemetry, staging/cancel decision). When an
+      // on_reject rework is staged the run stays 'paused' with
+      // metadata.approval.resolved = 'rejected' (#2075).
+      const result = await rejectWorkflow(runId, reason);
+
+      if (result.cancelled) {
+        return c.json({
+          success: true,
+          message: result.maxAttemptsReached
+            ? `Workflow rejected and cancelled (max attempts reached): ${run.workflow_name}`
+            : `Workflow rejected: ${run.workflow_name}`,
+        });
+      }
+
+      // Auto-resume: dispatch to the orchestrator so the on_reject prompt runs
+      // without requiring the user to re-run the workflow command. Mirrors
+      // what `workflowRejectCommand` does in the CLI. Same cross-adapter
+      // guard as approve — only web parents auto-resume.
+      const autoResumed = await tryAutoResumeAfterGate(run, 'reject', await resolveWebUserId(c));
+
+      return c.json({
+        success: true,
+        message: autoResumed
+          ? `Workflow rejected: ${run.workflow_name}. Running on-reject prompt.`
+          : `Workflow rejected: ${run.workflow_name}. On-reject prompt will run when the run resumes — run \`archon workflow resume ${runId}\` from the CLI to trigger it.`,
+      });
+    } catch (error) {
+      getLog().error({ err: error, runId }, 'api.workflow_run_reject_failed');
+      return apiError(c, 500, 'Failed to reject workflow run');
+    }
+  });
+
+  // DELETE /api/workflows/runs/:runId - Delete a workflow run
+  registerOpenApiRoute(deleteWorkflowRunRoute, async c => {
+    const runId = c.req.param('runId') ?? '';
+    try {
+      const run = await workflowDb.getWorkflowRun(runId);
+      if (!run) {
+        return apiError(c, 404, 'Workflow run not found');
+      }
+      if (!TERMINAL_WORKFLOW_STATUSES.includes(run.status)) {
+        return apiError(
+          c,
+          400,
+          `Cannot delete workflow in '${run.status}' status — cancel it first`
+        );
+      }
+      await workflowDb.deleteWorkflowRun(runId);
+      return c.json({ success: true, message: `Deleted workflow run: ${run.workflow_name}` });
+    } catch (error) {
+      getLog().error({ err: error, runId }, 'api.workflow_run_delete_failed');
+      return apiError(c, 500, 'Failed to delete workflow run');
+    }
+  });
+
+  // DELETE /api/workflows/:name/node-sessions - Reset persisted per-node provider sessions
+  registerOpenApiRoute(resetWorkflowNodeSessionsRoute, async c => {
+    const workflowName = c.req.param('name') ?? '';
+    if (!workflowName) {
+      return apiError(c, 400, 'Workflow name is required');
+    }
+    const scope = c.req.query('scope') ?? undefined;
+    const node = c.req.query('node') ?? undefined;
+    const confirm = c.req.query('confirm') ?? undefined;
+    // Cross-scope reset (no scope) is destructive — require explicit confirmation so a
+    // dropped `scope` param can't silently wipe every conversation's sessions. Mirrors
+    // the CLI `--yes` guard.
+    if (scope === undefined && confirm !== 'all-scopes') {
+      return apiError(
+        c,
+        400,
+        'Refusing to reset sessions across all scopes without confirmation. Pass ?scope=<key> to narrow, or ?confirm=all-scopes to confirm.'
+      );
+    }
+    try {
+      const { deleted } = await resetWorkflowNodeSessions({
+        workflow_name: workflowName,
+        scope_key: scope,
+        node_id: node,
+      });
+      return c.json({ success: true, deleted });
+    } catch (error) {
+      getLog().error(
+        { err: error, workflowName, scope, node },
+        'api.workflow_reset_node_sessions_failed'
+      );
+      return apiError(c, 500, 'Failed to reset workflow node sessions');
+    }
+  });
+
+  // GET /api/workflows/runs - List workflow runs
+  registerOpenApiRoute(listWorkflowRunsRoute, async c => {
+    try {
+      const conversationId = c.req.query('conversationId') ?? undefined;
+      const rawStatus = c.req.query('status');
+      const validStatuses = workflowRunStatusSchema.options;
+      type WorkflowRunStatus = (typeof validStatuses)[number];
+      const status: WorkflowRunStatus | undefined =
+        rawStatus && (validStatuses as readonly string[]).includes(rawStatus)
+          ? (rawStatus as WorkflowRunStatus)
+          : undefined;
+      const codebaseId = c.req.query('codebaseId') ?? undefined;
+      const limitRaw = Number(c.req.query('limit'));
+      const limit = Number.isNaN(limitRaw) ? 50 : Math.min(Math.max(1, limitRaw), 200);
+      // Non-enforcing "mine" filter: only narrows when an identity resolves.
+      // Default visibility stays open (everyone sees everyone's runs).
+      const mine = c.req.query('mine') === 'true';
+      const userId = mine ? (await resolveAuthContext(c))?.userId : undefined;
+
+      const runs = await workflowDb.listWorkflowRuns({
+        conversationId,
+        status,
+        limit,
+        codebaseId,
+        userId,
+      });
+      return c.json({ runs: runs.map(toApiWorkflowRun) });
+    } catch (error) {
+      getLog().error({ err: error }, 'list_workflow_runs_failed');
+      return apiError(c, 500, 'Failed to list workflow runs');
+    }
+  });
+
+  // GET /api/workflows/runs/by-worker/:platformId - Look up run by worker conversation
+  // Must be registered before :runId to avoid "by-worker" matching as a runId
+  registerOpenApiRoute(getWorkflowRunByWorkerRoute, async c => {
+    try {
+      const platformId = c.req.param('platformId') ?? '';
+      const run = await workflowDb.getWorkflowRunByWorkerPlatformId(platformId);
+      if (!run) {
+        return apiError(c, 404, 'No workflow run found for this worker');
+      }
+      return c.json({ run: toApiWorkflowRun(run) });
+    } catch (error) {
+      getLog().error({ err: error }, 'workflow_run_by_worker_lookup_failed');
+      return apiError(c, 500, 'Failed to look up workflow run');
+    }
+  });
+
+  // GET /api/workflows/runs/:runId - Get run details with events
+  registerOpenApiRoute(getWorkflowRunRoute, async c => {
+    try {
+      const runId = c.req.param('runId') ?? '';
+      const run = await workflowDb.getWorkflowRun(runId);
+      if (!run) {
+        return apiError(c, 404, 'Workflow run not found');
+      }
+      const events = await workflowEventDb.listWorkflowEvents(runId);
+
+      // Look up the run's conversation platform ID.
+      // For web runs (parent_conversation_id set): conversation_id is the worker conversation → set worker_platform_id
+      // For CLI runs (no parent): conversation_id is the single conversation → set conversation_platform_id only
+      let workerPlatformId: string | undefined;
+      let conversationPlatformId: string | undefined;
+      if (run.conversation_id) {
+        const conv = await conversationDb.getConversationById(run.conversation_id);
+        if (run.parent_conversation_id) {
+          // Web run: conversation_id points to the worker conversation
+          workerPlatformId = conv?.platform_conversation_id;
+        } else {
+          // CLI run: conversation_id is the only conversation (no worker/parent split)
+          conversationPlatformId = conv?.platform_conversation_id;
+        }
+      }
+
+      // Look up parent conversation to get its platform_conversation_id for navigation
+      let parentPlatformId: string | undefined;
+      if (run.parent_conversation_id) {
+        const parentConv = await conversationDb.getConversationById(run.parent_conversation_id);
+        parentPlatformId = parentConv?.platform_conversation_id;
+      }
+
+      return c.json({
+        run: {
+          ...toApiWorkflowRun(run),
+          worker_platform_id: workerPlatformId,
+          parent_platform_id: parentPlatformId,
+          conversation_platform_id: conversationPlatformId ?? null,
+        },
+        events,
+      });
+    } catch (error) {
+      getLog().error({ err: error }, 'get_workflow_run_failed');
+      return apiError(c, 500, 'Failed to get workflow run');
+    }
+  });
+
+  // POST /api/workflows/validate - Validate a workflow definition without saving
+  // MUST be registered before GET /api/workflows/:name so "validate" is not treated as :name
+  registerOpenApiRoute(validateWorkflowRoute, async c => {
+    const { definition } = getValidatedBody(c, validateWorkflowBodySchema);
+
+    let yamlContent: string;
+    try {
+      yamlContent = Bun.YAML.stringify(definition);
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      getLog().error({ err }, 'workflow.serialize_failed');
+      return apiError(c, 400, 'Failed to serialize workflow definition');
+    }
+
+    try {
+      const result = parseWorkflow(yamlContent, 'validate-input.yaml');
+
+      if (result.error) {
+        return c.json({ valid: false, errors: [result.error.error] });
+      }
+      return c.json({ valid: true });
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      getLog().error({ err }, 'workflow.validate_failed');
+      return apiError(c, 500, 'Failed to validate workflow');
+    }
+  });
+
+  // GET /api/workflows/:name - Fetch a single workflow definition
+  registerOpenApiRoute(getWorkflowRoute, async c => {
+    const name = c.req.param('name') ?? '';
+    if (!isValidWorkflowName(name)) {
+      return apiError(c, 400, 'Invalid workflow name');
+    }
+
+    try {
+      const cwd = c.req.query('cwd');
+      let workingDir = cwd;
+      if (cwd) {
+        if (!(await validateCwd(cwd))) {
+          return apiError(c, 400, 'Invalid cwd: must match a registered codebase path');
+        }
+      } else {
+        const codebases = await codebaseDb.listCodebases();
+        if (codebases.length > 0) workingDir = codebases[0].default_cwd;
+      }
+
+      // 1. Try user-defined workflow in cwd.
+      if (workingDir) {
+        const [workflowFolder] = getWorkflowFolderSearchPaths();
+        const projectWorkflowsRoot = join(workingDir, workflowFolder);
+        try {
+          const hit = await findWorkflowAt(projectWorkflowsRoot, name);
+          const isSourceBundledPackage =
+            hit?.packaged === true && isBundledWorkflowsRoot(projectWorkflowsRoot);
+          if (hit && !isSourceBundledPackage) {
+            const result = hit.parsed;
+            if (result.error) {
+              return apiError(c, 500, `Workflow file is invalid: ${result.error.error}`);
+            }
+            return c.json({
+              workflow: result.workflow,
+              filename: hit.filename,
+              source: 'project' as WorkflowSource,
+            });
+          }
+        } catch (err) {
+          getLog().error({ err, name }, 'workflow.fetch_failed');
+          return apiError(c, 500, 'Failed to read workflow');
+        }
+      }
+
+      // 2. Fall back to home-scoped workflow (`~/.archon/workflows/`).
+      // Mirrors the discovery order in `discoverWorkflowsWithConfig`.
+      try {
+        const hit = await findWorkflowAt(getHomeWorkflowsPath(), name);
+        if (hit) {
+          const result = hit.parsed;
+          if (result.error) {
+            return apiError(c, 500, `Home workflow file is invalid: ${result.error.error}`);
+          }
+          return c.json({
+            workflow: result.workflow,
+            filename: hit.filename,
+            source: 'global' as WorkflowSource,
+          });
+        }
+      } catch (err) {
+        getLog().error({ err, name }, 'workflow.fetch_home_failed');
+        return apiError(c, 500, 'Failed to read home-scoped workflow');
+      }
+
+      // 3. Fall back to bundled defaults.
+      const bundled = findBundledWorkflow(name);
+      if (bundled !== null) {
+        const result = bundled.parsed;
+        if (result.error) {
+          return apiError(c, 500, `Bundled workflow is invalid: ${result.error.error}`);
+        }
+        return c.json({
+          workflow: result.workflow,
+          filename: bundled.filename,
+          source: 'bundled' as WorkflowSource,
+        });
+      }
+
+      if (!isBinaryBuild()) {
+        try {
+          const hit =
+            (await tryReadWorkflowAt(getDefaultWorkflowsPath(), name)) ??
+            (await findPackagedWorkflowAt(dirname(getDefaultWorkflowsPath()), name));
+          if (hit) {
+            const result = hit.parsed;
+            if (result.error) {
+              return apiError(c, 500, `Default workflow is invalid: ${result.error.error}`);
+            }
+            return c.json({
+              workflow: result.workflow,
+              filename: hit.filename,
+              source: 'bundled' as WorkflowSource,
+            });
+          }
+        } catch (err) {
+          getLog().error({ err, name }, 'workflow.fetch_default_failed');
+          return apiError(c, 500, 'Failed to read default workflow');
+        }
+      }
+
+      return apiError(c, 404, `Workflow not found: ${name}`);
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      getLog().error({ err, name }, 'workflow.get_failed');
+      return apiError(c, 500, 'Failed to get workflow');
+    }
+  });
+
+  // PUT /api/workflows/:name - Save (create or update) a workflow
+  registerOpenApiRoute(saveWorkflowRoute, async c => {
+    const name = c.req.param('name') ?? '';
+    if (!isValidCommandName(name)) {
+      return apiError(c, 400, 'Invalid workflow name');
+    }
+
+    const targetSource = c.req.query('source');
+    if (targetSource && targetSource !== 'project' && targetSource !== 'global') {
+      return apiError(c, 400, 'Invalid workflow source');
+    }
+
+    const cwd = c.req.query('cwd');
+    let workingDir = cwd;
+    if (targetSource === 'global') {
+      workingDir = undefined;
+    } else if (cwd) {
+      if (!(await validateCwd(cwd))) {
+        return apiError(c, 400, 'Invalid cwd: must match a registered codebase path');
+      }
+    } else {
+      const codebases = await codebaseDb.listCodebases();
+      if (codebases.length > 0) workingDir = codebases[0].default_cwd;
+    }
+    if (!workingDir) {
+      workingDir = getArchonHome();
+    }
+
+    const { definition } = getValidatedBody(c, saveWorkflowBodySchema);
+
+    // Serialize and validate before writing
+    let yamlContent: string;
+    try {
+      yamlContent = Bun.YAML.stringify(definition);
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      getLog().error({ err, name }, 'workflow.serialize_failed');
+      return apiError(c, 400, 'Failed to serialize workflow definition');
+    }
+
+    const parsed = parseWorkflow(yamlContent, `${name}.yaml`);
+    if (parsed.error) {
+      return apiError(c, 400, 'Workflow definition is invalid', parsed.error.error);
+    }
+
+    try {
+      const source: WorkflowSource = targetSource === 'global' ? 'global' : 'project';
+      const dirPath =
+        source === 'global'
+          ? getHomeWorkflowsPath()
+          : join(workingDir, getWorkflowFolderSearchPaths()[0]);
+      await mkdir(dirPath, { recursive: true });
+      const existing = await findWorkflowAt(dirPath, name);
+      if (existing?.packaged === true && isBundledWorkflowsRoot(dirPath)) {
+        return apiError(c, 400, `Cannot overwrite bundled default workflow: ${name}`);
+      }
+      const filePath = existing?.absolutePath ?? join(dirPath, `${name}.yaml`);
+      const filename = existing?.filename ?? `${name}.yaml`;
+      await writeFile(filePath, yamlContent, 'utf-8');
+      return c.json({
+        workflow: parsed.workflow,
+        filename,
+        source,
+      });
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      getLog().error({ err, name }, 'workflow.save_failed');
+      return apiError(c, 500, 'Failed to save workflow');
+    }
+  });
+
+  // DELETE /api/workflows/:name - Delete a user-defined workflow
+  registerOpenApiRoute(deleteWorkflowRoute, async c => {
+    const name = c.req.param('name') ?? '';
+    if (!isValidCommandName(name)) {
+      return apiError(c, 400, 'Invalid workflow name');
+    }
+
+    const targetSource = c.req.query('source');
+    if (targetSource && targetSource !== 'project' && targetSource !== 'global') {
+      return apiError(c, 400, 'Invalid workflow source');
+    }
+
+    const cwd = c.req.query('cwd');
+    let workingDir = cwd;
+    if (targetSource === 'global') {
+      workingDir = undefined;
+    } else if (cwd) {
+      if (!(await validateCwd(cwd))) {
+        return apiError(c, 400, 'Invalid cwd: must match a registered codebase path');
+      }
+    } else {
+      const codebases = await codebaseDb.listCodebases();
+      if (codebases.length > 0) workingDir = codebases[0].default_cwd;
+    }
+    if (!workingDir) {
+      workingDir = getArchonHome();
+    }
+
+    const dir =
+      targetSource === 'global'
+        ? getHomeWorkflowsPath()
+        : join(workingDir, getWorkflowFolderSearchPaths()[0]);
+
+    try {
+      const packaged = await findPackagedWorkflowAt(dir, name);
+      if (packaged !== null) {
+        if (isBundledWorkflowsRoot(dir)) {
+          return apiError(c, 400, `Cannot delete bundled default workflow: ${name}`);
+        }
+        await rm(dirname(packaged.absolutePath), { recursive: true });
+        return c.json({ deleted: true, name });
+      }
+    } catch (err) {
+      getLog().error({ err, name }, 'workflow.delete_failed');
+      return apiError(c, 500, 'Failed to delete workflow');
+    }
+
+    // Remove both `.yaml` and `.yml` variants (discovery accepts either), so a
+    // twin file can't stay active after a reported deletion.
+    let deleted = false;
+    for (const ext of ['yaml', 'yml']) {
+      const filePath = join(dir, `${name}.${ext}`);
+      try {
+        await unlink(filePath);
+        deleted = true;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        getLog().error({ err, name }, 'workflow.delete_failed');
+        return apiError(c, 500, 'Failed to delete workflow');
+      }
+    }
+    if (deleted) {
+      return c.json({ deleted: true, name });
+    }
+    if (targetSource !== 'global') {
+      try {
+        if (findBundledWorkflow(name) !== null) {
+          return apiError(c, 400, `Cannot delete bundled default workflow: ${name}`);
+        }
+      } catch (err) {
+        getLog().error({ err, name }, 'workflow.delete_failed');
+        return apiError(c, 500, 'Failed to delete workflow');
+      }
+    }
+    return apiError(c, 404, `Workflow not found: ${name}`);
+  });
+
+  // GET /api/commands - List available command names for the workflow node palette
+  registerOpenApiRoute(getCommandsRoute, async c => {
+    try {
+      const cwd = c.req.query('cwd');
+      let workingDir = cwd;
+      if (cwd) {
+        if (!(await validateCwd(cwd))) {
+          return apiError(c, 400, 'Invalid cwd: must match a registered codebase path');
+        }
+      } else {
+        const codebases = await codebaseDb.listCodebases();
+        if (codebases.length > 0) workingDir = codebases[0].default_cwd;
+      }
+
+      // Collect commands: precedence bundled < global < project (repo-defined wins).
+      const commandMap = new Map<string, WorkflowSource>();
+
+      // 1. Seed with bundled defaults
+      for (const name of Object.keys(BUNDLED_COMMANDS)) {
+        commandMap.set(name, 'bundled');
+      }
+
+      // maxDepth: 1 matches the executor's resolver (resolveCommand /
+      // loadCommandPrompt) — without this cap, the UI palette would surface
+      // commands buried in deep subfolders that the executor silently can't
+      // resolve at runtime.
+      const COMMAND_LIST_DEPTH = { maxDepth: 1 };
+
+      // 2. If not binary build, also check filesystem defaults
+      if (!isBinaryBuild()) {
+        try {
+          const defaultsPath = getDefaultCommandsPath();
+          const files = await findMarkdownFilesRecursive(defaultsPath, '', COMMAND_LIST_DEPTH);
+          for (const { commandName } of files) {
+            commandMap.set(commandName, 'bundled');
+          }
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+            getLog().error({ err }, 'commands.list_defaults_failed');
+          }
+          // ENOENT: defaults path missing — not an error
+        }
+      }
+
+      // 3. Home-scoped commands (~/.archon/commands/) override bundled
+      try {
+        const homeCommandsPath = getHomeCommandsPath();
+        const files = await findMarkdownFilesRecursive(homeCommandsPath, '', COMMAND_LIST_DEPTH);
+        for (const { commandName } of files) {
+          commandMap.set(commandName, 'global');
+        }
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+          getLog().error({ err }, 'commands.list_home_failed');
+        }
+        // ENOENT: home commands dir not created yet — not an error
+      }
+
+      // 4. Project-defined commands override bundled AND global
+      if (workingDir) {
+        const searchPaths = getCommandFolderSearchPaths();
+        for (const folder of searchPaths) {
+          const dirPath = join(workingDir, folder);
+          try {
+            const files = await findMarkdownFilesRecursive(dirPath, '', COMMAND_LIST_DEPTH);
+            for (const { commandName } of files) {
+              commandMap.set(commandName, 'project');
+            }
+          } catch (err) {
+            if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+              getLog().error({ err, dirPath }, 'commands.list_project_failed');
+            }
+            // ENOENT: folder doesn't exist — skip
+          }
+        }
+      }
+
+      const commands = Array.from(commandMap.entries()).map(([name, source]) => ({ name, source }));
+      return c.json({ commands });
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      getLog().error({ err }, 'commands.list_failed');
+      return apiError(c, 500, 'Failed to list commands');
+    }
+  });
+
+  // GET /api/runs/:runId/artifacts - List artifact files for a run.
+  // Walks the run's artifact directory and returns relative file paths with
+  // size + mtime. Used by the console's Artifacts tab; the existing
+  // `workflow_artifact` event stream is too sparse (bash/script nodes write
+  // straight to $ARTIFACTS_DIR without emitting an event) to drive a file
+  // browser on its own.
+  registerOpenApiRoute(listRunArtifactsRoute, async c => {
+    const runId = c.req.param('runId') ?? '';
+    if (!/^[A-Za-z0-9_-]+$/.test(runId)) {
+      return apiError(c, 400, 'Invalid run id');
+    }
+
+    let run: Awaited<ReturnType<typeof workflowDb.getWorkflowRun>>;
+    try {
+      run = await workflowDb.getWorkflowRun(runId);
+    } catch (error) {
+      getLog().error({ err: error, runId }, 'artifacts.run_lookup_failed');
+      return apiError(c, 500, 'Failed to look up workflow run');
+    }
+    if (!run) return apiError(c, 404, 'Workflow run not found');
+
+    let codebase: Awaited<ReturnType<typeof codebaseDb.getCodebase>> | null = null;
+    if (run.codebase_id) {
+      try {
+        codebase = await codebaseDb.getCodebase(run.codebase_id);
+      } catch (error) {
+        getLog().error(
+          { err: error, runId, codebaseId: run.codebase_id },
+          'artifacts.codebase_lookup_failed'
+        );
+        return apiError(c, 500, 'Failed to look up codebase');
+      }
+    }
+    // An empty 200 here is indistinguishable from "the run produced nothing",
+    // so an unresolvable output location is an explicit 404 (Fail Fast).
+    const artifactDir = resolveRunArtifactDir(run, codebase, runId);
+    if (!artifactDir) {
+      getLog().warn({ runId, codebaseId: run.codebase_id }, 'artifacts.output_location_unresolved');
+      return apiError(
+        c,
+        404,
+        'Artifacts not available: could not resolve this run’s output location'
+      );
+    }
+    if (!isInsideArchonHome(artifactDir)) {
+      getLog().warn(
+        { runId, artifactDir, archonHome: getArchonHome() },
+        'artifacts.path_escape_blocked'
+      );
+      return apiError(c, 400, 'Invalid artifact path');
+    }
+
+    interface FileEntry {
+      path: string;
+      size: number;
+      modifiedAt: string;
+    }
+    const files: FileEntry[] = [];
+
+    async function walk(dir: string, rel: string): Promise<void> {
+      let entries: { name: string; isDirectory: () => boolean; isFile: () => boolean }[];
+      try {
+        entries = await readdir(dir, { withFileTypes: true });
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+        throw err;
+      }
+      for (const entry of entries) {
+        // Skip dotfiles — they're workflow-internal scratch (.pr-number, etc.)
+        if (entry.name.startsWith('.')) continue;
+        const child = join(dir, entry.name);
+        const childRel = rel === '' ? entry.name : `${rel}/${entry.name}`;
+        if (entry.isDirectory()) {
+          await walk(child, childRel);
+        } else if (entry.isFile()) {
+          try {
+            const s = await stat(child);
+            files.push({
+              path: childRel,
+              size: s.size,
+              modifiedAt: s.mtime.toISOString(),
+            });
+          } catch (err) {
+            // Race with deletion / permission flips: skip ENOENT / EACCES
+            // silently, surface anything else so we don't return a half-list
+            // with no diagnostic.
+            const code = (err as NodeJS.ErrnoException).code;
+            if (code === 'ENOENT' || code === 'EACCES') continue;
+            throw err;
+          }
+        }
+      }
+    }
+
+    try {
+      await walk(artifactDir, '');
+    } catch (error) {
+      getLog().error({ err: error, runId, artifactDir }, 'artifacts.walk_failed');
+      return apiError(c, 500, 'Failed to list artifacts');
+    }
+
+    files.sort((a, b) => a.path.localeCompare(b.path));
+    return c.json({ files });
+  });
+
+  // GET /api/artifacts/:runId/* - Serve workflow artifact file contents
+  // The wildcard captures the filename (e.g. "plan.md", "subdir/report.md").
+  // Path traversal is blocked: any segment containing ".." is rejected.
+  // NOTE: Uses app.get() instead of registerOpenApiRoute because:
+  //  1. Wildcard path params (*) are not representable in OpenAPI 3.0
+  //  2. Response is raw text/markdown, not JSON
+  app.get('/api/artifacts/:runId/*', async c => {
+    const runId = c.req.param('runId');
+    // Hono wildcards match but don't capture — extract filename from the URL path.
+    // c.req.path is NOT percent-decoded, so we decode it manually.
+    const prefix = `/api/artifacts/${runId}/`;
+    const rawEncoded = c.req.path.startsWith(prefix) ? c.req.path.slice(prefix.length) : '';
+    let rawFilename: string;
+    try {
+      rawFilename = decodeURIComponent(rawEncoded);
+    } catch {
+      return apiError(c, 400, 'Invalid filename');
+    }
+
+    // Block path traversal: reject if any segment is ".." or contains null bytes
+    if (
+      !rawFilename ||
+      rawFilename.includes('\0') ||
+      rawFilename.split('/').some(s => s === '..')
+    ) {
+      return apiError(c, 400, 'Invalid filename');
+    }
+
+    // Normalize and ensure relative (no leading slash)
+    const filename = normalize(rawFilename).replace(/^[/\\]+/, '');
+    if (!filename) {
+      return apiError(c, 400, 'Invalid filename');
+    }
+
+    let run: Awaited<ReturnType<typeof workflowDb.getWorkflowRun>>;
+    try {
+      run = await workflowDb.getWorkflowRun(runId);
+    } catch (error) {
+      getLog().error({ err: error, runId }, 'artifacts.run_lookup_failed');
+      return apiError(c, 500, 'Failed to look up workflow run');
+    }
+
+    if (!run) {
+      return apiError(c, 404, 'Workflow run not found');
+    }
+
+    // Resolve the run's output tree for every project kind — a persisted
+    // output_root first, else the shared identity→paths resolver (#2200).
+    const codebase = run.codebase_id ? await codebaseDb.getCodebase(run.codebase_id) : null;
+    const artifactDir = resolveRunArtifactDir(run, codebase, runId);
+    if (!artifactDir) {
+      getLog().error(
+        { runId, codebaseId: run.codebase_id },
+        'artifacts.output_location_unresolved'
+      );
+      return apiError(
+        c,
+        404,
+        'Artifact not available: could not resolve this run’s output location'
+      );
+    }
+    if (!isInsideArchonHome(artifactDir)) {
+      getLog().warn(
+        { runId, artifactDir, archonHome: getArchonHome() },
+        'artifacts.path_escape_blocked'
+      );
+      return apiError(c, 400, 'Invalid artifact path');
+    }
+    const filePath = join(artifactDir, filename);
+
+    // Final safety check: ensure resolved path stays within artifact directory
+    if (
+      !normalize(filePath).startsWith(normalize(artifactDir) + sep) &&
+      normalize(filePath) !== normalize(artifactDir)
+    ) {
+      getLog().warn({ runId, filename, filePath, artifactDir }, 'artifacts.path_escape_blocked');
+      return apiError(c, 400, 'Invalid filename');
+    }
+
+    let content: string;
+    try {
+      content = await readFile(filePath, 'utf-8');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        return apiError(c, 404, 'Artifact file not found');
+      }
+      getLog().error({ err, runId, filename }, 'artifacts.read_failed');
+      return apiError(c, 500, 'Failed to read artifact file');
+    }
+
+    const contentType = filename.endsWith('.md')
+      ? 'text/markdown; charset=utf-8'
+      : 'text/plain; charset=utf-8';
+    return new Response(content, {
+      status: 200,
+      headers: { 'Content-Type': contentType },
+    });
+  });
+
+  // GET /api/config - Read-only configuration (safe subset only — no filesystem paths)
+  registerOpenApiRoute(getConfigRoute, async c => {
+    try {
+      const config = await loadConfig();
+      return c.json({
+        config: toSafeConfig(config),
+        database: getDatabaseType(),
+      });
+    } catch (error) {
+      getLog().error({ err: error }, 'get_config_failed');
+      return apiError(c, 500, 'Failed to get config');
+    }
+  });
+
+  // PATCH /api/config/assistants - Update assistant configuration
+  registerOpenApiRoute(patchAssistantConfigRoute, async c => {
+    try {
+      const body = getValidatedBody(c, updateAssistantConfigBodySchema);
+
+      const updates: Partial<GlobalConfig> = {};
+      if (body.assistant !== undefined) {
+        if (!isRegisteredProvider(body.assistant)) {
+          return apiError(
+            c,
+            400,
+            `Unknown provider '${body.assistant}'. Available: ${getProviderInfoList()
+              .map(p => p.id)
+              .join(', ')}`
+          );
+        }
+        updates.defaultAssistant = body.assistant;
+      }
+      if (body.assistants !== undefined) {
+        const unknownProviders = Object.keys(body.assistants).filter(
+          id => !isRegisteredProvider(id)
+        );
+        if (unknownProviders.length > 0) {
+          return apiError(
+            c,
+            400,
+            `Unknown provider(s) in assistants: ${unknownProviders.join(', ')}. Available: ${getProviderInfoList()
+              .map(p => p.id)
+              .join(', ')}`
+          );
+        }
+        updates.assistants = body.assistants;
+      }
+
+      await updateGlobalConfig(updates);
+
+      const config = await loadConfig();
+      return c.json({
+        config: toSafeConfig(config),
+        database: getDatabaseType(),
+      });
+    } catch (error) {
+      getLog().error({ err: error }, 'config.assistants_update_failed');
+      return apiError(c, 500, 'Failed to update assistant configuration');
+    }
+  });
+
+  // PATCH /api/config/tiers - Update model-tier presets (ungated — solo-OK, like /assistants)
+  registerOpenApiRoute(patchTiersConfigRoute, async c => {
+    try {
+      const body = getValidatedBody(c, updateTiersBodySchema);
+
+      // Validate the provider of each tier we're SETTING (null = unset, skip).
+      const tiers: TiersPatch = {};
+      for (const tier of TIER_NAMES) {
+        const entry = body.tiers[tier];
+        if (entry === undefined) continue;
+        if (entry === null) {
+          tiers[tier] = null;
+          continue;
+        }
+        const errMsg = validatePresetEntry(`tier '${tier}'`, entry);
+        if (errMsg) return apiError(c, 400, errMsg);
+        // Clean RawAliasEntry — drops `thinking` (no UI/CLI surface yet).
+        tiers[tier] = toCleanEntry(entry);
+      }
+
+      await updateGlobalConfig({ tiers });
+
+      const config = await loadConfig();
+      return c.json({
+        config: toSafeConfig(config),
+        database: getDatabaseType(),
+      });
+    } catch (error) {
+      getLog().error({ err: error }, 'config.tiers_update_failed');
+      return apiError(c, 500, 'Failed to update tier configuration');
+    }
+  });
+
+  // PATCH /api/config/aliases - Update @custom aliases (ungated — solo-OK, like /tiers)
+  registerOpenApiRoute(patchAliasesConfigRoute, async c => {
+    try {
+      const body = getValidatedBody(c, updateAliasesBodySchema);
+      const aliases: AliasesPatch = {};
+      for (const [name, entry] of Object.entries(body.aliases)) {
+        const nameErr = validateAliasName(name);
+        if (nameErr) return apiError(c, 400, nameErr);
+        if (entry === null) {
+          aliases[name] = null;
+          continue;
+        }
+        const errMsg = validatePresetEntry(`alias '${name}'`, entry);
+        if (errMsg) return apiError(c, 400, errMsg);
+        aliases[name] = toCleanEntry(entry);
+      }
+
+      await updateGlobalConfig({ aliases });
+
+      const config = await loadConfig();
+      return c.json({
+        config: toSafeConfig(config),
+        database: getDatabaseType(),
+      });
+    } catch (error) {
+      getLog().error({ err: error }, 'config.aliases_update_failed');
+      return apiError(c, 500, 'Failed to update alias configuration');
+    }
+  });
+
+  // GET /api/providers - List registered AI providers
+  registerOpenApiRoute(getProvidersRoute, c => {
+    return c.json({ providers: getProviderInfoList() });
+  });
+
+  // GET /api/providers/pi/models - Pi model catalog (best-effort hint; [] on failure)
+  registerOpenApiRoute(getPiModelsRoute, async c => {
+    try {
+      return c.json({ models: await listPiModels() });
+    } catch (error) {
+      // listPiModels already degrades internally; this belt-and-suspenders
+      // keeps the documented "never errors" contract at the route boundary.
+      getLog().warn({ err: error }, 'providers.pi_models_list_failed');
+      return c.json({ models: [] });
+    }
+  });
+
+  // GET /api/providers/opencode/credentials - OpenCode backend introspection
+  // (on-demand; starts the embedded runtime). 503 on failure — never a silent [].
+  registerOpenApiRoute(getOpencodeCredentialsRoute, async c => {
+    try {
+      const result = await introspectOpencodeCredentials();
+      return c.json(result);
+    } catch (error) {
+      getLog().error({ err: error }, 'providers.opencode_credentials_introspect_failed');
+      return apiError(c, 503, 'Embedded OpenCode runtime unavailable');
+    }
+  });
+
+  // GET /api/codebases/:id/environments - List isolation environments for a codebase
+  registerOpenApiRoute(getCodebaseEnvironmentsRoute, async c => {
+    try {
+      const { id } = c.req.param();
+      const codebase = await codebaseDb.getCodebase(id);
+      if (!codebase) {
+        return apiError(c, 404, 'Codebase not found');
+      }
+
+      const environments = await isolationEnvDb.listByCodebaseWithAge(id);
+      return c.json({ environments });
+    } catch (error) {
+      getLog().error({ err: error }, 'codebases.environments_list_failed');
+      return apiError(c, 500, 'Failed to list environments');
+    }
+  });
+
+  // GET /api/health - Health check with web adapter info
+  registerOpenApiRoute(getHealthRoute, async c => {
+    const stats = lockManager.getStats();
+    const runningWorkflowRows = await workflowDb.getRunningWorkflows();
+
+    // Merge lock-based and DB-based active tracking.
+    // Background workflows bypass the lock manager, so we combine both sources.
+    const lockActiveSet = new Set(stats.activeConversationIds);
+    const backgroundConversationIds = runningWorkflowRows
+      .map(r => r.conversation_id)
+      .filter(id => !lockActiveSet.has(id));
+    const allActiveIds = [...stats.activeConversationIds, ...backgroundConversationIds];
+    const wslDistro = getWSLDistroName();
+
+    // Health is public (PUBLIC_API_GATE_PREFIXES) and must stay answerable when the
+    // database is degraded, so a failed vintage read is logged and the key omitted
+    // rather than turning the healthcheck into a 500. `createdAt` is deliberately not
+    // exposed — the two version strings plus applied_at are what a bug report needs.
+    let schema:
+      | Pick<SchemaVersionInfo, 'createdAppVersion' | 'appVersion' | 'appliedAt'>
+      | undefined;
+    try {
+      const info = await getSchemaVersion();
+      if (info) {
+        schema = {
+          createdAppVersion: info.createdAppVersion,
+          appVersion: info.appVersion,
+          appliedAt: info.appliedAt,
+        };
+      }
+    } catch (err) {
+      getLog().warn({ err }, 'api.schema_version_read_failed');
+    }
+
+    return c.json({
+      status: 'ok',
+      adapter: 'web',
+      concurrency: {
+        ...stats,
+        active: allActiveIds.length,
+        activeConversationIds: allActiveIds,
+      },
+      runningWorkflows: runningWorkflowRows.length,
+      version: appVersion,
+      is_docker: isDocker(),
+      is_wsl: isWSL(),
+      ...(wslDistro ? { wsl_distro: wslDistro } : {}),
+      activePlatforms: activePlatforms ? [...activePlatforms] : ['Web'],
+      ...(schema ? { schema } : {}),
+    });
+  });
+
+  registerOpenApiRoute(getUpdateCheckRoute, async c => {
+    const noUpdate = {
+      updateAvailable: false,
+      currentVersion: appVersion,
+      latestVersion: appVersion,
+      releaseUrl: '',
+    };
+    if (!BUNDLED_IS_BINARY) return c.json(noUpdate);
+    const result = await checkForUpdate(appVersion);
+    return c.json(result ?? noUpdate);
+  });
+}

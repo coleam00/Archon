@@ -1,0 +1,46 @@
+export interface WebhookEvent {
+  action: 'opened' | 'closed' | 'created' | 'edited' | 'reopened' | 'labeled' | (string & {});
+  issue?: {
+    number: number;
+    title: string;
+    body: string | null;
+    user: { login: string };
+    labels: { name: string }[];
+    state: 'open' | 'closed';
+    pull_request?: { url: string }; // Present if the issue is actually a PR
+  };
+  pull_request?: {
+    number: number;
+    title: string;
+    body: string | null;
+    user: { login: string };
+    state: 'open' | 'closed';
+    merged?: boolean;
+    changed_files?: number;
+    additions?: number;
+    deletions?: number;
+  };
+  comment?: {
+    /** GitHub's numeric comment id */
+    id?: number;
+    body: string;
+    user: { login: string };
+    /** ISO timestamp of the comment's last update; GitHub bumps it on edit */
+    updated_at?: string;
+  };
+  repository: {
+    owner: { login: string };
+    name: string;
+    full_name: string;
+    html_url: string;
+    default_branch: string;
+  };
+  sender: { login: string };
+  /**
+   * GitHub App webhook deliveries include the installation id on every event.
+   * Used to short-circuit the per-(owner, repo) installation lookup in App
+   * mode — saves one HTTP round trip per inbound event. Absent on PAT-mode
+   * "manual webhook" deliveries; the adapter falls back to the lookup path.
+   */
+  installation?: { id: number };
+}

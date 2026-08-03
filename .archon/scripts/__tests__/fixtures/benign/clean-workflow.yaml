@@ -1,0 +1,11 @@
+name: example-workflow
+description: A clean example workflow for testing.
+provider: claude
+model: haiku
+nodes:
+  - id: gather
+    bash: |
+      echo "hello world"
+  - id: synthesize
+    prompt: Summarize the output of gather.
+    depends_on: [gather]

@@ -1,0 +1,655 @@
+---
+// Archon — marketing landing page.
+//
+// Lives ABOVE the docs site: this is `/`, the docs home moved to `/docs/`.
+// Self-contained on purpose (like roadmap.astro) so the marketing surface can
+// evolve independently of Starlight. Styled with the canonical Archon brand
+// tokens (see packages/docs-web/public/brand/app.css and the experiments
+// console theme) — Geist + Geist Mono, cool-charcoal surfaces, and the duotone
+// magenta → violet → teal gradient drawn from the shield logo.
+const GITHUB = 'https://github.com/coleam00/Archon';
+
+const features = [
+  {
+    label: 'Parallel by default',
+    title: 'Run a fleet, not a task.',
+    body: 'Every run gets its own git worktree. Point ten agents at ten problems at once — no collisions, no stepping on each other, no merge mess to untangle.',
+  },
+  {
+    label: 'Anywhere',
+    title: 'Ship from your phone.',
+    body: 'Dispatch work from your terminal, Slack, Telegram, a GitHub comment, or the web. Kick it off, walk away, come back to finished pull requests.',
+  },
+  {
+    label: 'Workflows as code',
+    title: 'Your best patterns, packaged.',
+    body: 'Capture review, planning, fixes, and feature work as YAML workflows — multi-step DAGs with loops, gates, and conditions. Write the play once. Run it forever.',
+  },
+  {
+    label: 'Your agent',
+    title: 'Bring your own model.',
+    body: 'Claude Code, Codex, and more behind one command layer. Switch providers per workflow or per node. Archon orchestrates — you stay in control.',
+  },
+];
+
+const steps = [
+  { n: '01', title: 'Define', body: 'Write the workflow once in YAML — or use the bundled defaults.' },
+  { n: '02', title: 'Dispatch', body: 'Fire it from anywhere. Each run spins up its own isolated worktree.' },
+  { n: '03', title: 'Ship', body: 'Agents do the work in parallel. You review the pull requests.' },
+];
+---
+
+<!doctype html>
+<html lang="en" data-theme="dark" data-accent="magenta">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Archon — The command layer for your AI coding agents</title>
+  <meta
+    name="description"
+    content="You were the bottleneck. Archon is the command layer for your AI coding agents — one developer, a fleet of work, dispatched from your terminal, Slack, or a GitHub comment."
+  />
+  <link rel="icon" href="/favicon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Geist:wght@300..700&family=Geist+Mono:wght@400..600&display=swap"
+    rel="stylesheet"
+  />
+  <meta property="og:title" content="Archon — The command layer for your AI coding agents" />
+  <meta
+    property="og:description"
+    content="You were the bottleneck. Not anymore. One developer, a fleet of agents — dispatched from anywhere."
+  />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://archon.diy/" />
+  <meta property="og:image" content="https://archon.diy/brand/assets/archon-logo.png" />
+  <script is:inline>
+    if (!localStorage.getItem('archon-theme-init')) {
+      localStorage.setItem('archon-theme-init', '1');
+      localStorage.setItem('starlight-theme', 'dark');
+      document.documentElement.dataset.theme = 'dark';
+    }
+  </script>
+</head>
+<body>
+  <!-- NAV -->
+  <nav class="nav">
+    <div class="nav-inner">
+      <a href="/" class="nav-logo" aria-label="Archon home">
+        <svg class="nav-mark" viewBox="0 0 360 480" width="22" height="29" aria-hidden="true">
+          <defs>
+            <linearGradient id="navg" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stop-color="#ED10EC" />
+              <stop offset="50%" stop-color="#8E40C8" />
+              <stop offset="100%" stop-color="#06CE94" />
+            </linearGradient>
+          </defs>
+          <g
+            fill="none"
+            stroke="url(#navg)"
+            stroke-width="22"
+            stroke-linejoin="round"
+            stroke-linecap="round"
+          >
+            <path d="M180 8 C108 8 30 22 8 36 L8 220 C8 340 78 432 180 470 C282 432 352 340 352 220 L352 36 C330 22 252 8 180 8 Z" />
+            <path d="M180 92 L210 122 L180 152 L150 122 Z" />
+            <path d="M180 152 L180 218" />
+            <path d="M124 226 C124 270 148 290 180 290 C212 290 236 270 236 226" />
+            <circle cx="180" cy="294" r="12" fill="url(#navg)" stroke="none" />
+            <path d="M180 308 L180 410" />
+          </g>
+        </svg>
+        <span>Archon</span>
+      </a>
+      <div class="nav-links">
+        <a href="/docs/">Docs</a>
+        <a href="/workflows/">Marketplace</a>
+        <a href="/roadmap/">Roadmap</a>
+        <a href={GITHUB} target="_blank" rel="noopener" class="nav-github">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" />
+          </svg>
+          <span>GitHub</span>
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <main>
+    <!-- HERO -->
+    <section class="hero">
+      <div class="hero-glow" aria-hidden="true"></div>
+      <div class="hero-inner">
+        <svg class="hero-mark" viewBox="0 0 360 480" aria-hidden="true">
+          <defs>
+            <linearGradient id="herog" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stop-color="#ED10EC" />
+              <stop offset="50%" stop-color="#8E40C8" />
+              <stop offset="100%" stop-color="#06CE94" />
+            </linearGradient>
+          </defs>
+          <g
+            fill="none"
+            stroke="url(#herog)"
+            stroke-width="22"
+            stroke-linejoin="round"
+            stroke-linecap="round"
+          >
+            <path d="M180 8 C108 8 30 22 8 36 L8 220 C8 340 78 432 180 470 C282 432 352 340 352 220 L352 36 C330 22 252 8 180 8 Z" />
+            <path d="M180 92 L210 122 L180 152 L150 122 Z" />
+            <path d="M180 152 L180 218" />
+            <path d="M124 226 C124 270 148 290 180 290 C212 290 236 270 236 226" />
+            <circle cx="180" cy="294" r="12" fill="url(#herog)" stroke="none" />
+            <path d="M180 308 L180 410" />
+          </g>
+        </svg>
+
+        <p class="eyebrow">The command layer for your AI coding agents</p>
+        <h1 class="hero-title">
+          You were the <span class="brand-text">bottleneck</span>.
+        </h1>
+        <p class="hero-sub">
+          One developer. A fleet of agents. Define your coding workflows once, then
+          dispatch them from your terminal, Slack, or a GitHub comment — each running
+          isolated, in parallel. The work scales without you at the desk.
+        </p>
+
+        <div class="cta-row">
+          <a href="/getting-started/installation/" class="btn btn-primary">
+            Get started
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
+              <path d="M5 12h14M13 6l6 6-6 6" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </a>
+          <a href="/docs/" class="btn btn-secondary">Read the docs</a>
+        </div>
+
+        <div class="install">
+          <span class="install-prompt">$</span>
+          <code>curl -fsSL https://archon.diy/install | bash</code>
+        </div>
+      </div>
+    </section>
+
+    <!-- MANIFESTO STRIP -->
+    <section class="manifesto">
+      <p>
+        The keyboard was never the job. <strong>Shipping</strong> was.
+        Stop being the one hand on one task — <span class="brand-text">direct the work, and step up a level.</span>
+      </p>
+    </section>
+
+    <!-- FEATURES -->
+    <section class="features">
+      {features.map((f) => (
+        <article class="feature-card">
+          <span class="feature-label">{f.label}</span>
+          <h3 class="feature-title">{f.title}</h3>
+          <p class="feature-body">{f.body}</p>
+        </article>
+      ))}
+    </section>
+
+    <!-- HOW IT WORKS -->
+    <section class="how">
+      <header class="section-head">
+        <span class="section-kicker">How it works</span>
+        <h2 class="section-title">Define. Dispatch. Ship.</h2>
+      </header>
+      <div class="steps">
+        {steps.map((s) => (
+          <div class="step">
+            <span class="step-n brand-text">{s.n}</span>
+            <h3 class="step-title">{s.title}</h3>
+            <p class="step-body">{s.body}</p>
+          </div>
+        ))}
+      </div>
+    </section>
+
+    <!-- AWE BAND -->
+    <section class="awe">
+      <div class="awe-inner">
+        <span class="section-kicker">A day with Archon</span>
+        <p class="awe-line">
+          Fire three agents from Slack on your phone. Walk the dog.
+          <br />
+          Come back to <span class="brand-text">three pull requests</span>.
+        </p>
+        <p class="awe-sub">
+          Isolated worktrees mean they never collide. Multi-platform means you're never
+          chained to the desk. That's the trade you always wanted.
+        </p>
+      </div>
+    </section>
+
+    <!-- FINAL CTA -->
+    <section class="final">
+      <h2 class="final-title">Put the keyboard down.</h2>
+      <p class="final-sub">Free, open source, and running on your machine in under a minute.</p>
+      <div class="cta-row">
+        <a href="/getting-started/installation/" class="btn btn-primary">
+          Get started
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
+            <path d="M5 12h14M13 6l6 6-6 6" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </a>
+        <a href={GITHUB} target="_blank" rel="noopener" class="btn btn-secondary">Star on GitHub</a>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="footer-inner">
+      <div class="footer-brand">
+        <span class="brand-text footer-word">Archon</span>
+        <span class="footer-tag">The command layer for your AI coding agents.</span>
+      </div>
+      <nav class="footer-links" aria-label="Footer">
+        <a href="/docs/">Docs</a>
+        <a href="/getting-started/installation/">Install</a>
+        <a href="/workflows/">Marketplace</a>
+        <a href="/roadmap/">Roadmap</a>
+        <a href="/brand/">Brand</a>
+        <a href={GITHUB} target="_blank" rel="noopener">GitHub</a>
+      </nav>
+    </div>
+  </footer>
+
+  <style>
+    /* ---- Archon brand tokens (dark) — subset of public/brand/app.css (the source of truth) ---- */
+    :root {
+      --bg: oklch(0.145 0.006 265);
+      --surface: oklch(0.175 0.007 265);
+      --surface-2: oklch(0.205 0.009 265);
+      --border: oklch(0.275 0.012 265);
+      --border-strong: oklch(0.355 0.016 265);
+      --text: oklch(0.975 0.004 265);
+      --text-secondary: oklch(0.745 0.014 265);
+      --text-tertiary: oklch(0.56 0.017 265);
+      --brand-magenta: oklch(0.64 0.295 330);
+      --brand-violet: oklch(0.56 0.215 305);
+      --brand-teal: oklch(0.755 0.165 168);
+      --brand-gradient: linear-gradient(135deg, var(--brand-magenta) 0%, var(--brand-violet) 50%, var(--brand-teal) 100%);
+      --accent-ring: oklch(0.64 0.295 330 / 0.3);
+      --shadow-brand: 0 8px 32px -8px oklch(0.64 0.295 330 / 0.3);
+      --font-mono: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html { scroll-behavior: smooth; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Geist', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+      font-feature-settings: 'ss01', 'cv11';
+      letter-spacing: -0.005em;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    ::selection { background: var(--accent-ring); color: var(--text); }
+
+    .brand-text {
+      background: var(--brand-gradient);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+      -webkit-text-fill-color: transparent;
+    }
+
+    /* ---- NAV ---- */
+    .nav {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: oklch(0.145 0.006 265 / 0.82);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      border-bottom: 1px solid var(--border);
+    }
+    .nav-inner {
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 0 1.5rem;
+      height: 60px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .nav-logo {
+      display: flex;
+      align-items: center;
+      gap: 0.55rem;
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: var(--text);
+      text-decoration: none;
+      letter-spacing: -0.02em;
+    }
+    .nav-mark { display: block; }
+    .nav-links { display: flex; align-items: center; gap: 0.15rem; }
+    .nav-links a {
+      color: var(--text-secondary);
+      text-decoration: none;
+      font-size: 0.9rem;
+      font-weight: 500;
+      padding: 0.4rem 0.8rem;
+      border-radius: 8px;
+      transition: color 0.15s, background 0.15s;
+    }
+    .nav-links a:hover { color: var(--text); background: oklch(1 0 0 / 0.05); }
+    .nav-github { display: flex; align-items: center; gap: 0.4rem; margin-left: 0.35rem; }
+
+    /* ---- HERO ---- */
+    .hero {
+      position: relative;
+      text-align: center;
+      padding: 6rem 1.5rem 4.5rem;
+      overflow: hidden;
+    }
+    .hero-glow {
+      position: absolute;
+      top: -22%;
+      left: 50%;
+      transform: translateX(-50%);
+      width: min(900px, 120vw);
+      height: 620px;
+      background: radial-gradient(
+        ellipse at center,
+        oklch(0.64 0.295 330 / 0.16) 0%,
+        oklch(0.56 0.215 305 / 0.1) 38%,
+        oklch(0.755 0.165 168 / 0.06) 62%,
+        transparent 72%
+      );
+      filter: blur(20px);
+      pointer-events: none;
+      z-index: 0;
+    }
+    .hero-inner { position: relative; z-index: 1; max-width: 760px; margin: 0 auto; }
+    .hero-mark {
+      width: 76px;
+      height: auto;
+      margin: 0 auto 2rem;
+      display: block;
+      filter: drop-shadow(0 6px 24px oklch(0.64 0.295 330 / 0.35));
+      animation: floaty 6s ease-in-out infinite;
+    }
+    @keyframes floaty {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-7px); }
+    }
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.78rem;
+      font-weight: 500;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--text-tertiary);
+      margin-bottom: 1.25rem;
+    }
+    .hero-title {
+      font-size: clamp(2.8rem, 8vw, 5rem);
+      font-weight: 700;
+      letter-spacing: -0.04em;
+      line-height: 1.02;
+      color: var(--text);
+      margin-bottom: 1.5rem;
+    }
+    .hero-sub {
+      font-size: clamp(1.05rem, 2.2vw, 1.28rem);
+      color: var(--text-secondary);
+      max-width: 600px;
+      margin: 0 auto 2.4rem;
+      line-height: 1.6;
+    }
+
+    /* ---- BUTTONS ---- */
+    .cta-row {
+      display: flex;
+      gap: 0.85rem;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.98rem;
+      font-weight: 600;
+      padding: 0.8rem 1.5rem;
+      border-radius: 10px;
+      text-decoration: none;
+      transition: transform 0.15s ease, box-shadow 0.2s ease, background 0.15s, border-color 0.15s;
+      border: 1px solid transparent;
+    }
+    .btn-primary {
+      background: var(--brand-gradient);
+      color: oklch(0.99 0 0);
+      box-shadow: var(--shadow-brand);
+    }
+    .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 14px 40px -10px oklch(0.64 0.295 330 / 0.5); }
+    .btn-primary svg { transition: transform 0.15s ease; }
+    .btn-primary:hover svg { transform: translateX(3px); }
+    .btn-secondary {
+      background: var(--surface);
+      color: var(--text);
+      border-color: var(--border-strong);
+    }
+    .btn-secondary:hover { background: var(--surface-2); border-color: var(--text-tertiary); transform: translateY(-2px); }
+
+    /* ---- INSTALL ---- */
+    .install {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.7rem;
+      margin-top: 2rem;
+      padding: 0.7rem 1.1rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      font-family: var(--font-mono);
+      font-size: 0.88rem;
+    }
+    .install-prompt { color: var(--brand-teal); font-weight: 600; }
+    .install code { color: var(--text-secondary); background: none; }
+
+    /* ---- MANIFESTO ---- */
+    .manifesto {
+      max-width: 860px;
+      margin: 1rem auto;
+      padding: 3.5rem 1.5rem;
+      text-align: center;
+    }
+    .manifesto p {
+      font-size: clamp(1.4rem, 3.4vw, 2.1rem);
+      font-weight: 600;
+      letter-spacing: -0.03em;
+      line-height: 1.35;
+      color: var(--text-tertiary);
+    }
+    .manifesto strong { color: var(--text); font-weight: 600; }
+
+    /* ---- SECTION HEADERS ---- */
+    .section-head { text-align: center; margin-bottom: 2.75rem; }
+    .section-kicker {
+      display: block;
+      font-family: var(--font-mono);
+      font-size: 0.76rem;
+      font-weight: 500;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--text-tertiary);
+      margin-bottom: 0.7rem;
+    }
+    .section-title {
+      font-size: clamp(1.8rem, 4vw, 2.6rem);
+      font-weight: 700;
+      letter-spacing: -0.035em;
+      color: var(--text);
+    }
+
+    /* ---- FEATURES ---- */
+    .features {
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 1rem 1.5rem 2rem;
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 1.1rem;
+    }
+    .feature-card {
+      position: relative;
+      padding: 1.9rem 1.9rem 2rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+      overflow: hidden;
+    }
+    .feature-card::before {
+      content: '';
+      position: absolute;
+      inset: 0 0 auto 0;
+      height: 2px;
+      background: var(--brand-gradient);
+      opacity: 0;
+      transition: opacity 0.2s ease;
+    }
+    .feature-card:hover {
+      transform: translateY(-3px);
+      border-color: var(--border-strong);
+      box-shadow: 0 16px 40px -18px oklch(0 0 0 / 0.6);
+    }
+    .feature-card:hover::before { opacity: 1; }
+    .feature-label {
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      font-weight: 500;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+      color: var(--brand-teal);
+    }
+    .feature-title {
+      font-size: 1.35rem;
+      font-weight: 700;
+      letter-spacing: -0.025em;
+      color: var(--text);
+      margin: 0.7rem 0 0.6rem;
+    }
+    .feature-body { font-size: 0.96rem; color: var(--text-secondary); line-height: 1.62; }
+
+    /* ---- HOW ---- */
+    .how { max-width: 1080px; margin: 0 auto; padding: 4rem 1.5rem; }
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1.5rem;
+    }
+    .step {
+      padding: 1.75rem;
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      background: linear-gradient(180deg, var(--surface) 0%, oklch(0.145 0.006 265 / 0) 140%);
+    }
+    .step-n {
+      font-family: var(--font-mono);
+      font-size: 1.6rem;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+    }
+    .step-title {
+      font-size: 1.2rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: var(--text);
+      margin: 0.6rem 0 0.45rem;
+    }
+    .step-body { font-size: 0.94rem; color: var(--text-secondary); line-height: 1.6; }
+
+    /* ---- AWE ---- */
+    .awe {
+      position: relative;
+      margin: 1rem 1.5rem;
+      padding: 5rem 1.5rem;
+      border-radius: 24px;
+      background:
+        radial-gradient(ellipse at 50% 0%, oklch(0.64 0.295 330 / 0.1), transparent 60%),
+        var(--surface);
+      border: 1px solid var(--border);
+      text-align: center;
+      overflow: hidden;
+    }
+    .awe-inner { max-width: 720px; margin: 0 auto; position: relative; z-index: 1; }
+    .awe-line {
+      font-size: clamp(1.6rem, 4vw, 2.5rem);
+      font-weight: 700;
+      letter-spacing: -0.035em;
+      line-height: 1.3;
+      color: var(--text);
+      margin: 0.8rem 0 1.3rem;
+    }
+    .awe-sub { font-size: 1.05rem; color: var(--text-secondary); max-width: 540px; margin: 0 auto; line-height: 1.6; }
+
+    /* ---- FINAL ---- */
+    .final { text-align: center; padding: 5.5rem 1.5rem 4rem; }
+    .final-title {
+      font-size: clamp(2rem, 5vw, 3rem);
+      font-weight: 700;
+      letter-spacing: -0.04em;
+      color: var(--text);
+      margin-bottom: 0.9rem;
+    }
+    .final-sub { font-size: 1.08rem; color: var(--text-secondary); margin-bottom: 2.1rem; }
+
+    /* ---- FOOTER ---- */
+    .footer { border-top: 1px solid var(--border); }
+    .footer-inner {
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 2.5rem 1.5rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 1.5rem;
+    }
+    .footer-brand { display: flex; flex-direction: column; gap: 0.3rem; }
+    .footer-word { font-size: 1.15rem; font-weight: 700; letter-spacing: -0.02em; }
+    .footer-tag { font-size: 0.85rem; color: var(--text-tertiary); }
+    .footer-links { display: flex; flex-wrap: wrap; gap: 0.4rem 1.3rem; }
+    .footer-links a {
+      color: var(--text-secondary);
+      text-decoration: none;
+      font-size: 0.9rem;
+      transition: color 0.15s;
+    }
+    .footer-links a:hover { color: var(--text); }
+
+    /* ---- FOCUS ---- */
+    :focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 3px; border-radius: 8px; }
+
+    /* ---- RESPONSIVE ---- */
+    @media (max-width: 820px) {
+      .features { grid-template-columns: 1fr; }
+      .steps { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 640px) {
+      .nav-links a:not(.nav-github) { padding: 0.4rem 0.5rem; font-size: 0.82rem; }
+      .nav-links .nav-github span { display: none; }
+      .hero { padding: 4rem 1.25rem 3.5rem; }
+      .install { width: 100%; justify-content: flex-start; overflow-x: auto; }
+      .footer-inner { flex-direction: column; align-items: flex-start; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .hero-mark { animation: none; }
+      .btn, .feature-card { transition: none; }
+    }
+  </style>
+</body>
+</html>

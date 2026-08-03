@@ -1,0 +1,138 @@
+---
+title: Core Concepts
+description: Key concepts in Archon — workflows, nodes, commands, and isolation.
+category: getting-started
+audience: [user]
+sidebar:
+  order: 1
+---
+
+Archon orchestrates AI coding agents through four core concepts. Understanding these will make everything else click.
+
+## Workflows
+
+A **workflow** is a YAML file that defines a multi-step AI coding task as a directed acyclic graph (DAG). Each workflow lives in `.archon/workflows/` and has a name, description, and a set of nodes with declared dependencies.
+
+```yaml
+name: fix-issue
+description: Investigate and fix a GitHub issue
+
+nodes:
+  - id: investigate
+    command: investigate-issue
+
+  - id: implement
+    command: implement-issue
+    depends_on: [investigate]
+    context: fresh
+```
+
+Nodes without dependencies run immediately. Nodes in the same dependency layer run in parallel. This means a workflow with three independent review nodes will fan out and run all three concurrently, then converge at a downstream node that depends on all of them.
+
+Archon ships with bundled default workflows. Run `archon workflow list` to see what's available, or browse `.archon/workflows/defaults/` for real examples.
+
+## Nodes
+
+Nodes are the building blocks of workflows. Each node does exactly one thing, and every node must specify exactly one of six types:
+
+| Type | What it does |
+|------|-------------|
+| `command:` | Loads a package-local command (packaged workflow) or shared command (legacy workflow) and sends it to an AI agent |
+| `prompt:` | Sends an inline prompt string to an AI agent |
+| `bash:` | Runs a shell script (no AI). Stdout is captured as `$nodeId.output` |
+| `loop:` | Runs an AI prompt repeatedly until a completion signal is detected |
+| `approval:` | Pauses the workflow for human review (approve or reject) |
+| `cancel:` | Terminates the workflow early with a reason string |
+
+Nodes connect through `depends_on` to form a DAG. You can add conditional branching with `when:` expressions, control join behavior with `trigger_rule`, and override the AI provider or model per node.
+
+```yaml
+nodes:
+  - id: classify
+    command: classify-issue
+    output_format:
+      type: object
+      properties:
+        type: { type: string, enum: [BUG, FEATURE] }
+      required: [type]
+
+  - id: fix-bug
+    command: fix-bug
+    depends_on: [classify]
+    when: "$classify.output.type == 'BUG'"
+
+  - id: build-feature
+    command: build-feature
+    depends_on: [classify]
+    when: "$classify.output.type == 'FEATURE'"
+```
+
+## Commands
+
+A **command** is a markdown prompt template. Packaged workflows load it only from their owning `commands/` directory; legacy workflows search shared repo, home, then bundled commands. Archon substitutes variables and sends the result to the AI.
+
+Commands support variable substitution. The most commonly used variables:
+
+| Variable | Resolves to |
+|----------|-------------|
+| `$ARGUMENTS` | The user's input message |
+| `$ARTIFACTS_DIR` | Pre-created directory for workflow artifacts |
+| `$BASE_BRANCH` | The base branch (auto-detected or configured) |
+| `$DOCS_DIR` | Documentation directory path (default: `docs/`) |
+| `$WORKFLOW_ID` | Unique ID for the current workflow run |
+
+See the [Variable Reference](/reference/variables/) for the complete list.
+
+Archon ships with bundled default commands for common operations like investigation, implementation, and code review. Repo-level commands in `.archon/commands/` override bundled defaults with the same name.
+
+## Isolation (Worktrees)
+
+Every workflow run gets its own **git worktree** by default -- an isolated copy of your repository. This gives you three things:
+
+1. **Your working branch stays clean.** Workflow changes happen in a separate directory.
+2. **Multiple workflows run in parallel** without conflicting with each other.
+3. **Failed runs don't leave a mess.** Clean up with `archon isolation cleanup`.
+
+Worktrees live at `~/.archon/workspaces/<owner>/<repo>/worktrees/`. Each worktree gets its own branch, so you can inspect the work, create a PR from it, or discard it.
+
+To opt out of isolation (run directly in your checkout), pass `--no-worktree`:
+
+```bash
+archon workflow run quick-fix --no-worktree "Fix the typo in README"
+```
+
+When you're done with a worktree's branch, clean up everything (worktree + local and remote branches) with:
+
+```bash
+archon complete <branch-name>
+```
+
+## Folder Projects (non-git workspaces)
+
+A **project** doesn't have to be a git repository. A **folder project** is any directory — a **multi-repo root** holding many service repos, or a plain **business-ops folder** with no git at all — registered as a first-class Archon project. It gets identity, per-project env vars, run history, and named artifact/log storage, just like a repo project.
+
+Register and run one with `--folder`:
+
+```bash
+# From a multi-repo root (not itself a git repo)
+cd ~/platform          # contains auth-service/, billing-service/, ...
+archon workflow run assist --folder "List every service and its current branch"
+```
+
+Folder projects differ from repo projects in a few honest ways:
+
+- **They run in place by default — no worktree isolation.** The agent's working directory is the folder root, so it sees *every* child folder and repo. Per-service git (branch, commit, PR) is the agent's job via `bash`/`gh`, not Archon's. Pass `--container` (or set `container.enabled` in config) to instead run inside an overlay-isolated Docker container so writes don't touch the live root mid-run — see [configuration](/reference/configuration/#container-isolation-folder-projects).
+- `--branch` / `--from` are rejected (there's no worktree to create), and `/worktree` reports "not applicable".
+- Artifacts and logs live under `~/.archon/workspaces/_folder/<slug>/` instead of `<owner>/<repo>/`.
+- Registration is explicit — via `--folder` on the CLI, the `path` field when adding a project in the web console, or `/register-project` in chat (a non-git path is auto-detected as a folder).
+
+Once registered, you can run workflows and chat against the folder from anywhere under its root — no `--folder` flag needed after the first time.
+
+---
+
+## Next Steps
+
+- [Quick Start](/getting-started/quick-start/) -- Run your first workflow
+- [Authoring Workflows](/guides/authoring-workflows/) -- Create your own multi-step workflows
+- [Authoring Commands](/guides/authoring-commands/) -- Write effective prompt templates
+- [Variable Reference](/reference/variables/) -- All supported variables

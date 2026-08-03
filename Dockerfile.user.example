@@ -1,0 +1,37 @@
+# User-extensible Dockerfile for Archon (development / local Docker).
+# Copy this file to Dockerfile.user — do NOT modify Dockerfile.user.example.
+# Dockerfile.user is gitignored so your customizations stay local.
+#
+# Build the base image first, then start the stack:
+#   docker compose build           # builds the base archon image
+#   docker compose up -d           # auto-merges docker-compose.override.yml
+#
+# This file extends the locally-built dev image. Add any tools you need below.
+
+FROM archon
+
+# Install additional system packages
+USER root
+
+# --- Uncomment and extend as needed ---
+
+# Example: install extra apt packages
+# RUN apt-get update && apt-get install -y --no-install-recommends \
+#     ripgrep \
+#     fd-find \
+#     jq \
+#  && rm -rf /var/lib/apt/lists/*
+
+# Example: install GitHub CLI extensions
+# RUN gh extension install github/gh-copilot
+
+# Example: install global npm packages
+# RUN npm install -g tsx prettier
+
+# Example: copy a custom binary into PATH
+# COPY --chown=appuser:appuser ./my-tool /usr/local/bin/my-tool
+
+# Example: install Python packages
+# RUN pip install --no-cache-dir httpie
+
+USER appuser

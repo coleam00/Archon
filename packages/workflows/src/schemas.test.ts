@@ -1,0 +1,1081 @@
+import { describe, test, expect } from 'bun:test';
+import {
+  isBashNode,
+  isCancelNode,
+  isScriptNode,
+  isLoopNode,
+  isLoopGroupNode,
+  isIncludeNode,
+  isTriggerRule,
+  TRIGGER_RULES,
+  SCRIPT_NODE_AI_FIELDS,
+  LOOP_NODE_AI_FIELDS,
+  LOOP_GROUP_NODE_AI_FIELDS,
+  INCLUDE_NODE_IGNORED_FIELDS,
+  BASH_NODE_AI_FIELDS,
+  approvalOnRejectSchema,
+  dagNodeSchema,
+  inputEnvKey,
+  readSubrunMetadata,
+} from './schemas';
+import type {
+  WorkflowDefinition,
+  DagNode,
+  CommandNode,
+  PromptNode,
+  BashNode,
+  CancelNode,
+  ScriptNode,
+  IncludeNode,
+  TriggerRule,
+} from './schemas';
+
+// ---------------------------------------------------------------------------
+// Fixtures
+// ---------------------------------------------------------------------------
+
+const commandNode: CommandNode = { id: 'n1', command: 'build' };
+const promptNode: PromptNode = { id: 'n2', prompt: 'Do this inline.' };
+const bashNode: BashNode = { id: 'n3', bash: 'echo hello' };
+const cancelNode: CancelNode = { id: 'n5', cancel: 'Precondition failed' };
+
+const dagWorkflow: WorkflowDefinition = {
+  name: 'dag-workflow',
+  description: 'DAG execution',
+  nodes: [commandNode, promptNode, bashNode],
+};
+
+// ---------------------------------------------------------------------------
+// isBashNode
+// ---------------------------------------------------------------------------
+
+describe('isBashNode', () => {
+  test('returns true for a BashNode', () => {
+    expect(isBashNode(bashNode)).toBe(true);
+  });
+
+  test('returns true for a BashNode with timeout', () => {
+    const withTimeout: BashNode = { id: 'b', bash: 'npm test', timeout: 60000 };
+    expect(isBashNode(withTimeout)).toBe(true);
+  });
+
+  test('returns true for a BashNode with depends_on', () => {
+    const withDeps: BashNode = { id: 'b', bash: 'echo done', depends_on: ['n1'] };
+    expect(isBashNode(withDeps)).toBe(true);
+  });
+
+  test('returns false for a CommandNode', () => {
+    expect(isBashNode(commandNode)).toBe(false);
+  });
+
+  test('returns false for a PromptNode', () => {
+    expect(isBashNode(promptNode)).toBe(false);
+  });
+
+  test('returns false when bash field is missing', () => {
+    const noCmd = { id: 'x', command: 'build' } as DagNode;
+    expect(isBashNode(noCmd)).toBe(false);
+  });
+
+  test('returns false when bash is not a string (malformed node)', () => {
+    // Deliberately violate the type to ensure the runtime check catches it
+    const malformed = { id: 'x', bash: 42 } as unknown as DagNode;
+    expect(isBashNode(malformed)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isCancelNode
+// ---------------------------------------------------------------------------
+
+describe('isCancelNode', () => {
+  test('returns true for a CancelNode', () => {
+    expect(isCancelNode(cancelNode)).toBe(true);
+  });
+
+  test('returns false for a CommandNode', () => {
+    expect(isCancelNode(commandNode)).toBe(false);
+  });
+
+  test('returns false for a PromptNode', () => {
+    expect(isCancelNode(promptNode)).toBe(false);
+  });
+
+  test('returns false for a BashNode', () => {
+    expect(isCancelNode(bashNode)).toBe(false);
+  });
+
+  test('returns false when cancel is not a string (malformed node)', () => {
+    const malformed = { id: 'x', cancel: 42 } as unknown as DagNode;
+    expect(isCancelNode(malformed)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isTriggerRule
+// ---------------------------------------------------------------------------
+
+describe('isTriggerRule', () => {
+  test('returns true for all canonical trigger rules', () => {
+    const rules: string[] = [...TRIGGER_RULES];
+    for (const rule of rules) {
+      expect(isTriggerRule(rule)).toBe(true);
+    }
+  });
+
+  test('returns true for "all_success"', () => {
+    expect(isTriggerRule('all_success')).toBe(true);
+  });
+
+  test('returns true for "one_success"', () => {
+    expect(isTriggerRule('one_success')).toBe(true);
+  });
+
+  test('returns true for "none_failed_min_one_success"', () => {
+    expect(isTriggerRule('none_failed_min_one_success')).toBe(true);
+  });
+
+  test('returns true for "all_done"', () => {
+    expect(isTriggerRule('all_done')).toBe(true);
+  });
+
+  test('returns false for an unknown string', () => {
+    expect(isTriggerRule('any_success')).toBe(false);
+  });
+
+  test('returns false for an empty string', () => {
+    expect(isTriggerRule('')).toBe(false);
+  });
+
+  test('returns false for a number', () => {
+    expect(isTriggerRule(1)).toBe(false);
+  });
+
+  test('returns false for null', () => {
+    expect(isTriggerRule(null)).toBe(false);
+  });
+
+  test('returns false for undefined', () => {
+    expect(isTriggerRule(undefined)).toBe(false);
+  });
+
+  test('returns false for an object', () => {
+    expect(isTriggerRule({})).toBe(false);
+  });
+
+  test('is used as a TriggerRule type after guard (compile-time verification)', () => {
+    const value: unknown = 'all_success';
+    if (isTriggerRule(value)) {
+      // TypeScript should narrow value to TriggerRule here
+      const rule: TriggerRule = value;
+      expect(rule).toBe('all_success');
+    } else {
+      // Should not reach here
+      expect(true).toBe(false);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TRIGGER_RULES constant
+// ---------------------------------------------------------------------------
+
+describe('TRIGGER_RULES', () => {
+  test('contains exactly four entries', () => {
+    expect(TRIGGER_RULES).toHaveLength(4);
+  });
+
+  test('all entries are strings', () => {
+    for (const rule of TRIGGER_RULES) {
+      expect(typeof rule).toBe('string');
+    }
+  });
+
+  test('is readonly (does not expose mutation methods at runtime)', () => {
+    // The readonly modifier is enforced at compile time; at runtime it's a plain array.
+    // Verify the values are stable and match expectations.
+    expect(TRIGGER_RULES).toContain('all_success');
+    expect(TRIGGER_RULES).toContain('one_success');
+    expect(TRIGGER_RULES).toContain('none_failed_min_one_success');
+    expect(TRIGGER_RULES).toContain('all_done');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// approvalOnRejectSchema
+// ---------------------------------------------------------------------------
+
+describe('approvalOnRejectSchema', () => {
+  test('accepts valid on_reject config', () => {
+    const result = approvalOnRejectSchema.safeParse({
+      prompt: 'Fix: $REJECTION_REASON',
+      max_attempts: 3,
+    });
+    expect(result.success).toBe(true);
+  });
+
+  test('accepts on_reject without max_attempts (uses default)', () => {
+    const result = approvalOnRejectSchema.safeParse({ prompt: 'Please revise' });
+    expect(result.success).toBe(true);
+  });
+
+  test('rejects empty prompt', () => {
+    const result = approvalOnRejectSchema.safeParse({ prompt: '' });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0].message).toContain('on_reject.prompt');
+  });
+
+  test('rejects max_attempts: 0', () => {
+    const result = approvalOnRejectSchema.safeParse({ prompt: 'Fix it', max_attempts: 0 });
+    expect(result.success).toBe(false);
+  });
+
+  test('rejects max_attempts: 11', () => {
+    const result = approvalOnRejectSchema.safeParse({ prompt: 'Fix it', max_attempts: 11 });
+    expect(result.success).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// dagNodeSchema — empty bash/prompt validation
+// ---------------------------------------------------------------------------
+
+describe('dagNodeSchema — empty bash/prompt', () => {
+  test('emits "bash script cannot be empty" for bash: ""', () => {
+    const result = dagNodeSchema.safeParse({ id: 'n1', bash: '' });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0].message).toBe('bash script cannot be empty');
+    }
+  });
+
+  test('emits "bash script cannot be empty" for whitespace-only bash', () => {
+    const result = dagNodeSchema.safeParse({ id: 'n1', bash: '   ' });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0].message).toBe('bash script cannot be empty');
+    }
+  });
+
+  test('emits "prompt cannot be empty" for prompt: ""', () => {
+    const result = dagNodeSchema.safeParse({ id: 'n1', prompt: '' });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0].message).toBe('prompt cannot be empty');
+    }
+  });
+
+  test('emits "prompt cannot be empty" for whitespace-only prompt', () => {
+    const result = dagNodeSchema.safeParse({ id: 'n1', prompt: '   ' });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0].message).toBe('prompt cannot be empty');
+    }
+  });
+
+  test('passes for bash: "echo hello"', () => {
+    const result = dagNodeSchema.safeParse({ id: 'n1', bash: 'echo hello' });
+    expect(result.success).toBe(true);
+  });
+
+  test('still emits generic error when no mode field is present', () => {
+    const result = dagNodeSchema.safeParse({ id: 'n1' });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0].message).toContain('must have either');
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// dagNodeSchema — Claude SDK options
+// ---------------------------------------------------------------------------
+
+describe('dagNodeSchema — new Claude SDK options', () => {
+  test('parses effort enum on prompt node', () => {
+    const result = dagNodeSchema.safeParse({ id: 'n', prompt: 'do it', effort: 'high' });
+    expect(result.success).toBe(true);
+    if (result.success) expect((result.data as PromptNode).effort).toBe('high');
+  });
+
+  test('rejects invalid effort value', () => {
+    const result = dagNodeSchema.safeParse({ id: 'n', prompt: 'do it', effort: 'ultra' });
+    expect(result.success).toBe(false);
+  });
+
+  test('parses thinking string shorthand: adaptive', () => {
+    const result = dagNodeSchema.safeParse({ id: 'n', prompt: 'do it', thinking: 'adaptive' });
+    expect(result.success).toBe(true);
+    if (result.success) expect((result.data as PromptNode).thinking).toEqual({ type: 'adaptive' });
+  });
+
+  test('parses thinking string shorthand: disabled', () => {
+    const result = dagNodeSchema.safeParse({ id: 'n', prompt: 'do it', thinking: 'disabled' });
+    expect(result.success).toBe(true);
+    if (result.success) expect((result.data as PromptNode).thinking).toEqual({ type: 'disabled' });
+  });
+
+  test('parses thinking object form with budgetTokens', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'n',
+      prompt: 'do it',
+      thinking: { type: 'enabled', budgetTokens: 8000 },
+    });
+    expect(result.success).toBe(true);
+    if (result.success)
+      expect((result.data as PromptNode).thinking).toEqual({
+        type: 'enabled',
+        budgetTokens: 8000,
+      });
+  });
+
+  test('rejects invalid thinking value', () => {
+    const result = dagNodeSchema.safeParse({ id: 'n', prompt: 'do it', thinking: 'quantum' });
+    expect(result.success).toBe(false);
+  });
+
+  test('parses maxBudgetUsd as positive number', () => {
+    const result = dagNodeSchema.safeParse({ id: 'n', prompt: 'do it', maxBudgetUsd: 2.5 });
+    expect(result.success).toBe(true);
+    if (result.success) expect((result.data as PromptNode).maxBudgetUsd).toBe(2.5);
+  });
+
+  test('rejects negative maxBudgetUsd', () => {
+    const result = dagNodeSchema.safeParse({ id: 'n', prompt: 'do it', maxBudgetUsd: -1 });
+    expect(result.success).toBe(false);
+  });
+
+  test('rejects zero maxBudgetUsd', () => {
+    const result = dagNodeSchema.safeParse({ id: 'n', prompt: 'do it', maxBudgetUsd: 0 });
+    expect(result.success).toBe(false);
+  });
+
+  test('parses betas array', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'n',
+      prompt: 'do it',
+      betas: ['context-1m-2025-08-07'],
+    });
+    expect(result.success).toBe(true);
+    if (result.success)
+      expect((result.data as PromptNode).betas).toEqual(['context-1m-2025-08-07']);
+  });
+
+  test('rejects empty betas array', () => {
+    const result = dagNodeSchema.safeParse({ id: 'n', prompt: 'do it', betas: [] });
+    expect(result.success).toBe(false);
+  });
+
+  test('parses sandbox object', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'n',
+      prompt: 'do it',
+      sandbox: { enabled: true, filesystem: { allowWrite: ['src/'] } },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect((result.data as PromptNode).sandbox?.enabled).toBe(true);
+    }
+  });
+
+  test('parses systemPrompt string', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'n',
+      prompt: 'do it',
+      systemPrompt: 'You are a security reviewer',
+    });
+    expect(result.success).toBe(true);
+    if (result.success)
+      expect((result.data as PromptNode).systemPrompt).toBe('You are a security reviewer');
+  });
+
+  test('rejects empty systemPrompt string', () => {
+    const result = dagNodeSchema.safeParse({ id: 'n', prompt: 'do it', systemPrompt: '' });
+    expect(result.success).toBe(false);
+  });
+
+  test('parses fallbackModel string', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'n',
+      prompt: 'do it',
+      fallbackModel: 'claude-haiku-4-5-20251001',
+    });
+    expect(result.success).toBe(true);
+    if (result.success)
+      expect((result.data as PromptNode).fallbackModel).toBe('claude-haiku-4-5-20251001');
+  });
+
+  test('parses settingSources array of valid sources', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'n',
+      prompt: 'do it',
+      settingSources: ['project'],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) expect((result.data as PromptNode).settingSources).toEqual(['project']);
+  });
+
+  test('rejects settingSources with invalid source value', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'n',
+      prompt: 'do it',
+      settingSources: ['project', 'global'],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  test('rejects non-array settingSources', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'n',
+      prompt: 'do it',
+      settingSources: 'project',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  test('strips settingSources from bash nodes', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'b',
+      bash: 'echo hi',
+      settingSources: ['project'],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) expect('settingSources' in result.data).toBe(false);
+  });
+
+  test('strips AI-only fields from bash nodes', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'b',
+      bash: 'echo hi',
+      effort: 'high',
+      thinking: 'adaptive',
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      // bash nodes don't get AI-only fields in the transform
+      expect('effort' in result.data).toBe(false);
+      expect('thinking' in result.data).toBe(false);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// dagNodeSchema — per-node Pi extension posture (`pi:`, #2133)
+// ---------------------------------------------------------------------------
+
+describe('dagNodeSchema — per-node Pi posture (pi:)', () => {
+  test('accepts and preserves a pi: block on a prompt node', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'plan',
+      prompt: 'plan it',
+      pi: { interactive: true, extensionFlags: { plan: true, 'plan-file': 'PLAN.md' } },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect((result.data as PromptNode).pi).toEqual({
+        interactive: true,
+        extensionFlags: { plan: true, 'plan-file': 'PLAN.md' },
+      });
+    }
+  });
+
+  test('preserves a pi: block on a loop node (the plannotator leak seam, #2073)', () => {
+    // Loops drop model/provider in the transform, but pi MUST survive — the loop
+    // is exactly where the implement node needs its posture scoped down.
+    const result = dagNodeSchema.safeParse({
+      id: 'implement',
+      loop: { prompt: 'do work', until: 'DONE', max_iterations: 5 },
+      pi: { interactive: false, extensionFlags: { plan: false } },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(isLoopNode(result.data)).toBe(true);
+      expect((result.data as DagNode & { pi?: unknown }).pi).toEqual({
+        interactive: false,
+        extensionFlags: { plan: false },
+      });
+    }
+  });
+
+  test('drops pi: from a bash node in the transform', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'sh',
+      bash: 'echo hi',
+      pi: { interactive: false },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect('pi' in result.data).toBe(false);
+    }
+  });
+
+  test('rejects a non-boolean/string extensionFlags value', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'plan',
+      prompt: 'plan it',
+      pi: { extensionFlags: { plan: 42 } },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  test('pi is warned-ignored on non-AI + loop_group nodes but supported on loop', () => {
+    // loop uses its per-iteration sendQuery, so pi must NOT be in its ignore list;
+    // loop_group never sendQuerys (body nodes carry their own pi), so it warns.
+    expect(LOOP_NODE_AI_FIELDS).not.toContain('pi');
+    expect(LOOP_GROUP_NODE_AI_FIELDS).toContain('pi');
+    expect(SCRIPT_NODE_AI_FIELDS).toContain('pi');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isScriptNode
+// ---------------------------------------------------------------------------
+
+describe('isScriptNode', () => {
+  const scriptNode: ScriptNode = { id: 's1', script: 'console.log("hi")', runtime: 'bun' };
+  const commandNode: CommandNode = { id: 'n1', command: 'build' };
+  const promptNode: PromptNode = { id: 'n2', prompt: 'Do this inline.' };
+  const bashNode: BashNode = { id: 'n3', bash: 'echo hello' };
+
+  test('returns true for a ScriptNode', () => {
+    expect(isScriptNode(scriptNode)).toBe(true);
+  });
+
+  test('returns true for a ScriptNode with deps', () => {
+    const withDeps: ScriptNode = {
+      id: 's',
+      script: 'import zod from "zod"',
+      runtime: 'bun',
+      deps: ['zod'],
+    };
+    expect(isScriptNode(withDeps)).toBe(true);
+  });
+
+  test('returns false for a CommandNode', () => {
+    expect(isScriptNode(commandNode)).toBe(false);
+  });
+
+  test('returns false for a PromptNode', () => {
+    expect(isScriptNode(promptNode)).toBe(false);
+  });
+
+  test('returns false for a BashNode', () => {
+    expect(isScriptNode(bashNode)).toBe(false);
+  });
+
+  test('returns false when script is not a string (malformed node)', () => {
+    const malformed = { id: 'x', script: 42 } as unknown as DagNode;
+    expect(isScriptNode(malformed)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// dagNodeSchema — ScriptNode parsing and validation
+// ---------------------------------------------------------------------------
+
+describe('dagNodeSchema — ScriptNode', () => {
+  test('parses a bun script node with inline script', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'fetch',
+      script: 'console.log("hello")',
+      runtime: 'bun',
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(isScriptNode(result.data)).toBe(true);
+      const node = result.data as ScriptNode;
+      expect(node.script).toBe('console.log("hello")');
+      expect(node.runtime).toBe('bun');
+    }
+  });
+
+  test('parses a uv script node with inline script', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'py',
+      script: 'print("hello")',
+      runtime: 'uv',
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(isScriptNode(result.data)).toBe(true);
+      const node = result.data as ScriptNode;
+      expect(node.runtime).toBe('uv');
+    }
+  });
+
+  test('parses a script node with deps', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 's',
+      script: 'import httpx',
+      runtime: 'uv',
+      deps: ['httpx', 'beautifulsoup4'],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const node = result.data as ScriptNode;
+      expect(node.deps).toEqual(['httpx', 'beautifulsoup4']);
+    }
+  });
+
+  test('parses a script node with timeout', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 's',
+      script: 'console.log("hi")',
+      runtime: 'bun',
+      timeout: 30000,
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const node = result.data as ScriptNode;
+      expect(node.timeout).toBe(30000);
+    }
+  });
+
+  test('parses a script node with depends_on', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 's',
+      script: 'console.log("hi")',
+      runtime: 'bun',
+      depends_on: ['prev'],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const node = result.data as ScriptNode;
+      expect(node.depends_on).toEqual(['prev']);
+    }
+  });
+
+  test('rejects script node without runtime', () => {
+    const result = dagNodeSchema.safeParse({ id: 's', script: 'console.log("hi")' });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0].message).toContain('runtime');
+    }
+  });
+
+  test('rejects invalid runtime value', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 's',
+      script: 'console.log("hi")',
+      runtime: 'node',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  test('rejects empty script string', () => {
+    const result = dagNodeSchema.safeParse({ id: 's', script: '', runtime: 'bun' });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0].message).toBe('script cannot be empty');
+    }
+  });
+
+  test('rejects whitespace-only script', () => {
+    const result = dagNodeSchema.safeParse({ id: 's', script: '   ', runtime: 'bun' });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0].message).toBe('script cannot be empty');
+    }
+  });
+
+  test('rejects negative timeout on script node', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 's',
+      script: 'console.log("hi")',
+      runtime: 'bun',
+      timeout: -1,
+    });
+    expect(result.success).toBe(false);
+  });
+
+  test('rejects script + bash (mutually exclusive)', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 's',
+      script: 'console.log("hi")',
+      bash: 'echo hi',
+      runtime: 'bun',
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0].message).toContain('mutually exclusive');
+    }
+  });
+
+  test('rejects script + prompt (mutually exclusive)', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 's',
+      script: 'console.log("hi")',
+      prompt: 'Do something',
+      runtime: 'bun',
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0].message).toContain('mutually exclusive');
+    }
+  });
+
+  test('rejects script + command (mutually exclusive)', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 's',
+      script: 'console.log("hi")',
+      command: 'some-command',
+      runtime: 'bun',
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0].message).toContain('mutually exclusive');
+    }
+  });
+
+  test('strips AI-only fields from script nodes', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 's',
+      script: 'console.log("hi")',
+      runtime: 'bun',
+      effort: 'high',
+      thinking: 'adaptive',
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect('effort' in result.data).toBe(false);
+      expect('thinking' in result.data).toBe(false);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SCRIPT_NODE_AI_FIELDS constant
+// ---------------------------------------------------------------------------
+
+describe('SCRIPT_NODE_AI_FIELDS', () => {
+  test('contains provider and model fields', () => {
+    expect(SCRIPT_NODE_AI_FIELDS).toContain('provider');
+    expect(SCRIPT_NODE_AI_FIELDS).toContain('model');
+  });
+
+  test('contains all AI-specific fields', () => {
+    const expectedFields = [
+      'provider',
+      'model',
+      'context',
+      'output_format',
+      'allowed_tools',
+      'denied_tools',
+      'hooks',
+      'mcp',
+      'skills',
+      'effort',
+      'thinking',
+      'maxBudgetUsd',
+      'systemPrompt',
+      'fallbackModel',
+      'betas',
+      'sandbox',
+    ];
+    for (const field of expectedFields) {
+      expect(SCRIPT_NODE_AI_FIELDS).toContain(field);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// LOOP_NODE_AI_FIELDS constant
+// ---------------------------------------------------------------------------
+
+describe('LOOP_NODE_AI_FIELDS', () => {
+  test('excludes model and provider (loop nodes support them)', () => {
+    expect(LOOP_NODE_AI_FIELDS).not.toContain('model');
+    expect(LOOP_NODE_AI_FIELDS).not.toContain('provider');
+  });
+
+  test('contains all other AI-specific fields from BASH_NODE_AI_FIELDS', () => {
+    const expectedFields = [
+      'context',
+      'output_format',
+      'allowed_tools',
+      'denied_tools',
+      'hooks',
+      'mcp',
+      'skills',
+      'effort',
+      'thinking',
+      'maxBudgetUsd',
+      'systemPrompt',
+      'fallbackModel',
+      'betas',
+      'sandbox',
+    ];
+    for (const field of expectedFields) {
+      expect(LOOP_NODE_AI_FIELDS).toContain(field);
+    }
+  });
+});
+
+describe('dagNodeSchema — loop_group', () => {
+  test('parses a valid loop_group node with a recursive body', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'grp',
+      loop_group: {
+        until: 'DONE',
+        max_iterations: 5,
+        fresh_context: false,
+        nodes: [
+          { id: 'a', prompt: 'do a', depends_on: [] },
+          { id: 'b', bash: 'echo hi', depends_on: ['a'] },
+        ],
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(isLoopGroupNode(result.data)).toBe(true);
+      const grp = result.data as { loop_group?: { nodes: unknown[] } };
+      expect(grp.loop_group?.nodes).toHaveLength(2);
+    }
+  });
+
+  test('loop_group + prompt are mutually exclusive', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'grp',
+      prompt: 'inline',
+      loop_group: { until: 'DONE', max_iterations: 3, nodes: [{ id: 'x', prompt: 'x' }] },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0].message).toContain('mutually exclusive');
+      expect(result.error.issues[0].message).toContain('loop_group');
+    }
+  });
+
+  test('loop_group + loop are mutually exclusive', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'grp',
+      loop: { prompt: 'p', until: 'DONE', max_iterations: 3 },
+      loop_group: { until: 'DONE', max_iterations: 3, nodes: [{ id: 'x', prompt: 'x' }] },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  test('loop_group rejects retry (loop manages its own iteration)', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'grp',
+      retry: { max_attempts: 2, delay_ms: 1000 },
+      loop_group: { until: 'DONE', max_iterations: 3, nodes: [{ id: 'x', prompt: 'x' }] },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const retryIssue = result.error.issues.find(i => i.message.includes('retry'));
+      expect(retryIssue).toBeDefined();
+      expect(retryIssue?.message).toContain('loop_group');
+    }
+  });
+
+  test('loop_group requires at least one body node', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'grp',
+      loop_group: { until: 'DONE', max_iterations: 3, nodes: [] },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some(i => i.message.includes('at least one node'))).toBe(true);
+    }
+  });
+
+  test('loop_group requires until (completion signal)', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'grp',
+      loop_group: { max_iterations: 3, nodes: [{ id: 'x', prompt: 'x' }] },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  test('nested loop_group body parses (loop_group inside loop_group)', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'outer',
+      loop_group: {
+        until: 'OUTER_DONE',
+        max_iterations: 3,
+        nodes: [
+          {
+            id: 'inner',
+            loop_group: {
+              until: 'INNER_DONE',
+              max_iterations: 2,
+              nodes: [{ id: 'inner-work', prompt: 'work', depends_on: [] }],
+            },
+            depends_on: [],
+          },
+        ],
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const outer = result.data as {
+        loop_group?: { nodes: Array<{ loop_group?: { nodes: unknown[] } }> };
+      };
+      const inner = outer.loop_group?.nodes[0];
+      expect(isLoopGroupNode(inner as never)).toBe(true);
+      expect(inner?.loop_group?.nodes).toHaveLength(1);
+    }
+  });
+});
+
+describe('LOOP_GROUP_NODE_AI_FIELDS', () => {
+  test('excludes model/provider (forwarded to body AI nodes)', () => {
+    expect(LOOP_GROUP_NODE_AI_FIELDS).not.toContain('model');
+    expect(LOOP_GROUP_NODE_AI_FIELDS).not.toContain('provider');
+  });
+
+  test('differs from LOOP_NODE_AI_FIELDS only on pi (#2133)', () => {
+    // A plain loop: node calls sendQuery itself, so pi IS honored there (not warned).
+    // A loop_group node never calls sendQuery — body nodes carry their own pi — so
+    // pi is warned-ignored on the group. That single-key difference is intentional.
+    expect(LOOP_NODE_AI_FIELDS).not.toContain('pi');
+    expect(LOOP_GROUP_NODE_AI_FIELDS).toContain('pi');
+    expect(LOOP_GROUP_NODE_AI_FIELDS.filter(f => f !== 'pi')).toEqual([...LOOP_NODE_AI_FIELDS]);
+  });
+});
+
+describe('dagNodeSchema — include', () => {
+  test('parses a valid include node (only structural fields survive)', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'review',
+      include: 'archon-review-block',
+      depends_on: ['finalize-pr'],
+      when: 'always',
+      trigger_rule: 'all_success',
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(isIncludeNode(result.data)).toBe(true);
+      const node = result.data as IncludeNode;
+      expect(node.include).toBe('archon-review-block');
+      expect(node.depends_on).toEqual(['finalize-pr']);
+      expect(node.when).toBe('always');
+      expect(node.trigger_rule).toBe('all_success');
+    }
+  });
+
+  test('trims surrounding whitespace on the target name', () => {
+    const result = dagNodeSchema.safeParse({ id: 'r', include: '  archon-review-block  ' });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect((result.data as IncludeNode).include).toBe('archon-review-block');
+    }
+  });
+
+  test('include + command are mutually exclusive', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'r',
+      command: 'build',
+      include: 'archon-review-block',
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0].message).toContain('mutually exclusive');
+      expect(result.error.issues[0].message).toContain('include');
+    }
+  });
+
+  test('empty include is rejected', () => {
+    const result = dagNodeSchema.safeParse({ id: 'r', include: '' });
+    expect(result.success).toBe(false);
+  });
+
+  test("include accepts and retains a string-valued 'with:' mapping", () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'r',
+      include: 'archon-review-block',
+      with: { pr: '$create.output', base_branch: 'main', empty: '' },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect((result.data as IncludeNode).with).toEqual({
+        pr: '$create.output',
+        base_branch: 'main',
+        empty: '',
+      });
+    }
+  });
+
+  test.each([
+    ['null', null],
+    ['an array', ['main']],
+    ['a non-string value', { branch: 42 }],
+    ['an invalid key', { 'bad.key': 'main' }],
+  ])("include rejects 'with:' when it is %s", (_description, withValue) => {
+    const result = dagNodeSchema.safeParse({
+      id: 'r',
+      include: 'archon-review-block',
+      with: withValue,
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some(issue => issue.path[0] === 'with')).toBe(true);
+    }
+  });
+
+  test("rejects the reserved node id 'INPUTS'", () => {
+    const result = dagNodeSchema.safeParse({ id: 'INPUTS', prompt: 'work' });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const idIssue = result.error.issues.find(issue => issue.path[0] === 'id');
+      expect(idIssue?.message).toContain('$INPUTS.<name>');
+    }
+  });
+
+  test('include node drops AI/exec fields (they are ignored)', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'r',
+      include: 'archon-review-block',
+      model: 'opus',
+      always_run: true,
+      output_type: 'code',
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const node = result.data as Record<string, unknown>;
+      expect(node.model).toBeUndefined();
+      expect(node.always_run).toBeUndefined();
+      expect(node.output_type).toBeUndefined();
+    }
+  });
+});
+
+describe('INCLUDE_NODE_IGNORED_FIELDS', () => {
+  test('is a superset of BASH_NODE_AI_FIELDS plus exec-only fields', () => {
+    for (const f of BASH_NODE_AI_FIELDS) {
+      expect(INCLUDE_NODE_IGNORED_FIELDS).toContain(f);
+    }
+    for (const f of ['retry', 'output_type', 'always_run', 'idle_timeout', 'timeout']) {
+      expect(INCLUDE_NODE_IGNORED_FIELDS).toContain(f);
+    }
+    // Structural fields the include node legitimately carries are NOT ignored.
+    for (const f of ['id', 'depends_on', 'when', 'trigger_rule', 'include', 'description']) {
+      expect(INCLUDE_NODE_IGNORED_FIELDS).not.toContain(f);
+    }
+  });
+});
+
+describe('inputEnvKey (#2470)', () => {
+  test('mangles an input name to INPUTS_<UPPER_SNAKE>', () => {
+    expect(inputEnvKey('plan')).toBe('INPUTS_PLAN');
+    expect(inputEnvKey('base-branch')).toBe('INPUTS_BASE_BRANCH');
+    expect(inputEnvKey('foo_bar')).toBe('INPUTS_FOO_BAR');
+    // hyphen and underscore fold to the same key — the loader rejects such a pair.
+    expect(inputEnvKey('foo-bar')).toBe(inputEnvKey('foo_bar'));
+  });
+});
+
+describe('readSubrunMetadata — inputs (#2470)', () => {
+  test('reads a well-formed inputs map', () => {
+    const md = readSubrunMetadata({ inputs: { plan: 'do it', mode: 'fast' } });
+    expect(md.inputs).toEqual({ plan: 'do it', mode: 'fast' });
+  });
+
+  test('treats a non-string-valued or non-object inputs as unset', () => {
+    expect(readSubrunMetadata({ inputs: { plan: 5 } }).inputs).toBeUndefined();
+    expect(readSubrunMetadata({ inputs: ['a'] }).inputs).toBeUndefined();
+    expect(readSubrunMetadata({}).inputs).toBeUndefined();
+    expect(readSubrunMetadata(undefined).inputs).toBeUndefined();
+  });
+});

@@ -1,0 +1,535 @@
+/**
+ * Isolation Provider Abstraction Types
+ *
+ * Platform-agnostic interfaces for workflow isolation mechanisms.
+ * Git worktrees are the default implementation, but the abstraction
+ * enables future strategies (containers, VMs).
+ */
+
+import type { RepoPath, BranchName } from '@archon/git';
+import type {
+  ExecutionContext,
+  WriteBackFinalizeResult,
+  WriteBackApplySummary,
+} from '@archon/providers/types';
+
+// Re-exported so isolation consumers can source the execution-context contract
+// (and the write-back result shapes) from `@archon/isolation` alongside the
+// backend types that produce them, without reaching into
+// `@archon/providers/types` directly.
+export type { ExecutionContext, WriteBackFinalizeResult, WriteBackApplySummary };
+
+// --- Provider Types ---
+
+export type IsolationProviderType = 'worktree' | 'container' | 'vm' | 'remote';
+
+export type IsolationWorkflowType = 'issue' | 'pr' | 'review' | 'thread' | 'task';
+
+export type EnvironmentStatus = 'active' | 'destroyed';
+
+// --- Isolation Request Types (Discriminated Union) ---
+
+interface IsolationRequestBase {
+  /** Database ID for the codebase */
+  codebaseId: string;
+
+  /**
+   * Codebase name in "owner/repo" format.
+   * When present, used to resolve the project-scoped worktree path directly,
+   * even for locally-registered repos whose path doesn't start with workspacesPath.
+   */
+  codebaseName?: string;
+
+  /**
+   * Absolute, resolved filesystem path to the main repository checkout.
+   *
+   * "Canonical" means the real path with symlinks resolved and `~` expanded
+   * (e.g., `/home/user/.archon/workspaces/owner/repo/source`). This must
+   * point to the primary git checkout, not a worktree, because git worktree
+   * operations (add, remove, list) must be executed from the main repo.
+   *
+   * Use `getCanonicalRepoPath()` to resolve any path (including worktree
+   * paths) back to the canonical repo path.
+   */
+  canonicalRepoPath: RepoPath;
+
+  /**
+   * Preferred base branch for new worktrees when repo config does not override
+   * it (`worktree.baseBranch` still wins).
+   *
+   * Populated from the registered codebase's stored `default_branch` so
+   * locally-registered repos with non-main defaults do not depend on
+   * `origin/HEAD` being set for auto-detection.
+   */
+  baseBranch?: BranchName;
+
+  /**
+   * Per-dispatch base-branch override (from the CLI `--base <branch>` flag).
+   *
+   * The top precedence level for base resolution: it wins over both repo config
+   * (`worktree.baseBranch`) and the codebase-default `baseBranch` above, so
+   * parallel epic slices can each cut from — and target a PR at — a different
+   * base. Absent for ordinary dispatches (base then falls back to config →
+   * codebase default → git auto-detect).
+   */
+  baseOverride?: BranchName;
+
+  description?: string;
+
+  /**
+   * Optional git author identity to stamp on the new worktree (`git config
+   * user.email`/`user.name`). Populated from the originating user's connected
+   * GitHub no-reply email so workflow commits attribute to the human. Absent in
+   * solo installs and for unconnected users — the worktree then inherits the
+   * ambient git identity (unchanged behavior).
+   */
+  gitIdentity?: { email: string; name?: string };
+}
+
+export interface IssueIsolationRequest extends IsolationRequestBase {
+  workflowType: 'issue';
+  identifier: string;
+}
+
+export interface PRIsolationRequest extends IsolationRequestBase {
+  workflowType: 'pr';
+  identifier: string;
+  /** The actual branch name of the PR (required for PR workflows) */
+  prBranch: BranchName;
+  /** Head commit SHA for reproducible reviews */
+  prSha?: string;
+  /** True if PR is from a fork (affects branch strategy) */
+  isForkPR: boolean;
+}
+
+export interface ReviewIsolationRequest extends IsolationRequestBase {
+  workflowType: 'review';
+  identifier: string;
+}
+
+export interface ThreadIsolationRequest extends IsolationRequestBase {
+  workflowType: 'thread';
+  /** Thread ID (will be hashed for branch name) */
+  identifier: string;
+}
+
+export interface TaskIsolationRequest extends IsolationRequestBase {
+  workflowType: 'task';
+  /** Task identifier (will be slugified for branch name, max 50 chars) */
+  identifier: string;
+  /** Optional branch to use as start point for new task branch creation */
+  fromBranch?: BranchName;
+}
+
+export type IsolationRequest =
+  | IssueIsolationRequest
+  | PRIsolationRequest
+  | ReviewIsolationRequest
+  | ThreadIsolationRequest
+  | TaskIsolationRequest;
+
+// --- Isolated Environment Types ---
+
+export interface AdoptedWorktreeMetadata {
+  adopted: true;
+  adoptedFrom?: 'path' | 'branch';
+  request?: IsolationRequest;
+}
+
+export interface CreatedWorktreeMetadata {
+  adopted: false;
+  request?: IsolationRequest;
+}
+
+export type WorktreeMetadata = AdoptedWorktreeMetadata | CreatedWorktreeMetadata;
+
+interface IsolatedEnvironmentBase {
+  /** For worktrees, this is the filesystem path */
+  id: string;
+  workingPath: string;
+  status: EnvironmentStatus;
+  /**
+   * For worktrees, set to current time since git doesn't store creation timestamps.
+   * For accurate timestamps, store in database.
+   */
+  createdAt: Date;
+  /** Non-fatal warnings to surface to the user after successful creation */
+  warnings?: string[];
+}
+
+export interface WorktreeEnvironment extends IsolatedEnvironmentBase {
+  provider: 'worktree';
+  branchName: BranchName;
+  metadata: WorktreeMetadata;
+}
+
+export type IsolatedEnvironment = WorktreeEnvironment;
+
+// --- Provider Interface ---
+
+export interface DestroyOptions {
+  force?: boolean;
+}
+
+export interface WorktreeDestroyOptions extends DestroyOptions {
+  branchName?: BranchName;
+  /** Required for branch cleanup if worktree path doesn't exist */
+  canonicalRepoPath?: RepoPath;
+  /** Delete the remote branch (best-effort, e.g., after PR merge) */
+  deleteRemoteBranch?: boolean;
+  /** Git remote name for remote branch deletion (default: 'origin') */
+  remote?: string;
+}
+
+/**
+ * Communicates partial failures from best-effort cleanup operations.
+ * All fields reflect what actually happened during destruction.
+ */
+export interface DestroyResult {
+  worktreeRemoved: boolean;
+  /** null = no branch specified */
+  branchDeleted: boolean | null;
+  /** null = not requested */
+  remoteBranchDeleted: boolean | null;
+  directoryClean: boolean;
+  warnings: string[];
+}
+
+/**
+ * Provider interface for isolation strategies.
+ *
+ * Manages the lifecycle of isolated development environments:
+ * create -> use -> destroy. Git worktrees are the default (and currently
+ * only) implementation.
+ *
+ * Error contract:
+ * - `create` throws on failure (caller should surface to user)
+ * - `destroy` returns a `DestroyResult` with partial-failure details
+ * - `get` returns null if not found, throws on unexpected I/O errors
+ * - `healthCheck` returns false if missing, throws on permission errors
+ */
+export interface IIsolationProvider {
+  readonly providerType: IsolationProviderType;
+
+  create(request: IsolationRequest): Promise<IsolatedEnvironment>;
+
+  /**
+   * Best-effort cleanup. Throws only for unexpected errors (permissions, git failures).
+   */
+  destroy(envId: string, options?: DestroyOptions | WorktreeDestroyOptions): Promise<DestroyResult>;
+
+  get(envId: string): Promise<IsolatedEnvironment | null>;
+
+  /** For worktrees, codebaseId is the canonical repo path */
+  list(codebaseId: string): Promise<IsolatedEnvironment[]>;
+
+  /** Take ownership of externally-created environments (optional, for skill-app symbiosis) */
+  adopt?(path: string): Promise<IsolatedEnvironment | null>;
+
+  healthCheck(envId: string): Promise<boolean>;
+}
+
+// --- Type Guards ---
+
+export function isPRIsolationRequest(request: IsolationRequest): request is PRIsolationRequest {
+  return request.workflowType === 'pr';
+}
+
+// --- Isolation Hints & Block Reasons ---
+
+export interface IsolationHints {
+  workflowType?: IsolationWorkflowType;
+  workflowId?: string;
+
+  // PR-specific
+  prBranch?: BranchName;
+  prSha?: string;
+  isForkPR?: boolean;
+  prFetchFailed?: boolean;
+
+  // Task-specific
+  /** Start-point branch for new task worktree creation. Only consumed when workflowType === 'task'. */
+  fromBranch?: BranchName;
+
+  /** Expected base branch for this workflow. When set, reused worktrees are validated with merge-base. */
+  baseBranch?: BranchName;
+
+  // Cross-reference hints
+  linkedIssues?: number[];
+  linkedPRs?: number[];
+
+  // Adoption hints
+  suggestedBranch?: string;
+}
+
+export type IsolationBlockReason = 'creation_failed';
+
+// --- Database Types ---
+
+export interface IsolationEnvironmentRow {
+  id: string;
+  codebase_id: string;
+  workflow_type: IsolationWorkflowType;
+  workflow_id: string;
+  provider: IsolationProviderType;
+  working_path: string;
+  branch_name: string;
+  status: EnvironmentStatus;
+  created_at: Date;
+  created_by_platform: string | null;
+  /** FK to remote_agent_users.id; populated by chat/forge adapters via the resolver. */
+  created_by_user_id: string | null;
+  metadata: Record<string, unknown>;
+}
+
+// --- Config Injection ---
+
+export interface WorktreeCreateConfig {
+  baseBranch?: string;
+  copyFiles?: string[];
+  /**
+   * Initialize git submodules in the worktree. Defaults to enabled — a worktree
+   * with uninitialized submodules is a silent broken state for monorepos.
+   * Set to `false` to opt out. No-op when `.gitmodules` is absent.
+   */
+  initSubmodules?: boolean;
+  /**
+   * Per-project relative path (from repo root) where worktrees should be created.
+   * When set, worktrees live at `<repoRoot>/<path>/<branch>` with `repo-local` layout.
+   * Highest priority in path resolution — overrides project-scoped and global defaults.
+   *
+   * Must be a safe relative path: no leading `/`, no `..` segments, non-empty after trim.
+   * Validation is enforced in `WorktreeProvider.getWorktreePath()` (fails fast with a
+   * clear error rather than silently falling back).
+   *
+   * Sourced from `.archon/config.yaml > worktree.path` in the repo.
+   * @example '.worktrees'
+   */
+  path?: string;
+  /**
+   * Git remote name to use for fetch/push operations.
+   *
+   * When set, all git operations (fetch, push, branch tracking) use this
+   * remote instead of 'origin'. Useful for repos with multiple remotes or
+   * non-standard naming conventions.
+   *
+   * When omitted, auto-detected via `getDefaultRemote()`:
+   *   1. 'origin' if it exists
+   *   2. The sole remote if only one is configured
+   *   3. null when ambiguous — worktree creation then fails with an
+   *      actionable error listing the available remotes
+   *
+   * Sourced from `.archon/config.yaml > worktree.remote` in the repo.
+   * @example 'upstream'
+   */
+  remote?: string;
+}
+
+export type RepoConfigLoader = (repoPath: string) => Promise<WorktreeCreateConfig | null>;
+
+// --- Worktree Status Breakdown ---
+
+/**
+ * Detailed worktree status breakdown for a codebase.
+ * Used for status display and cleanup messaging.
+ */
+export interface WorktreeStatusBreakdown {
+  total: number;
+  merged: number;
+  stale: number;
+  active: number;
+  mergedEnvs: { id: string; branchName: string }[];
+  staleEnvs: { id: string; branchName: string; daysInactive: number }[];
+  activeEnvs: { id: string; branchName: string }[];
+}
+
+// --- Store Types ---
+
+export interface CreateEnvironmentParams {
+  codebase_id: string;
+  workflow_type: IsolationWorkflowType;
+  workflow_id: string;
+  provider?: IsolationProviderType;
+  working_path: string;
+  branch_name: BranchName;
+  created_by_platform?: string;
+  /** FK to remote_agent_users.id; threaded from ResolveRequest.userId. */
+  created_by_user_id?: string;
+  metadata?: Record<string, unknown>;
+}
+
+// --- Resolver Types ---
+
+export interface ResolveRequest {
+  existingEnvId: string | null;
+  codebase: {
+    id: string;
+    defaultCwd: string;
+    name: string;
+    /**
+     * The codebase's stored default branch (from registration). Threaded into
+     * the provider's `IsolationRequest.baseBranch` as the fallback base for new
+     * worktrees when repo config sets no `worktree.baseBranch`.
+     */
+    defaultBranch?: BranchName | null;
+    /**
+     * Project kind. `'folder'` projects run in place at `defaultCwd` with no
+     * worktree isolation; the resolver short-circuits to `{ status: 'none' }`.
+     * Optional/absent is treated as `'repo'` (unchanged worktree behavior).
+     */
+    kind?: 'repo' | 'folder';
+  } | null;
+  hints?: IsolationHints;
+  platformType: string;
+  /** Archon user UUID; populated by chat/forge adapter handlers. */
+  userId?: string;
+  /**
+   * Git author identity to stamp on a newly-created worktree (no-reply email of
+   * the originating user's connected GitHub account). Forwarded into the
+   * IsolationRequest passed to the provider. Absent → ambient git identity.
+   */
+  gitIdentity?: { email: string; name?: string };
+}
+
+export type ResolutionMethod =
+  | { type: 'existing' }
+  | { type: 'workflow_reuse' }
+  | { type: 'linked_issue_reuse'; issueNumber: number }
+  | { type: 'branch_adoption'; branch: string }
+  | { type: 'created'; autoCleanedCount?: number };
+
+export type IsolationResolution =
+  | {
+      status: 'resolved';
+      env: IsolationEnvironmentRow;
+      cwd: string;
+      method: ResolutionMethod;
+      warnings?: string[];
+    }
+  | { status: 'stale_cleaned'; previousEnvId: string }
+  | { status: 'none'; cwd: string }
+  | { status: 'blocked'; reason: IsolationBlockReason; userMessage: string };
+
+// --- Isolation Backend Seam (folder projects only) ---
+//
+// Repo-kind projects keep the worktree path (IIsolationProvider above) untouched.
+// Folder-kind projects route through a pluggable backend selected by
+// `resolveFolderBackend()`. v1 backends: `in-place` (default, today's behavior)
+// and `container` (Phase B). Worktrees are deliberately NOT a backend — the two
+// lifecycles don't share an interface (user decision 2026-07-13).
+
+/**
+ * Minimal identity of a codebase a backend needs to prepare an environment.
+ * Container-specific inputs (image, network, run id) are added by Phase B — kept
+ * out of the Phase A contract to avoid speculative surface (YAGNI).
+ */
+export interface BackendPrepareRequest {
+  codebase: {
+    id: string;
+    /** Absolute path to the folder-project root. */
+    defaultCwd: string;
+    name: string;
+    kind: 'repo' | 'folder';
+  };
+}
+
+/**
+ * Result of a backend `prepare()`: the working directory the run should use and
+ * the execution context (host vs container) threaded through the engine to every
+ * provider turn and deterministic subprocess. `envId` references the tracked
+ * `isolation_environments` row when the backend created one (container backend,
+ * Phase B); in-place runs create no row and leave it undefined.
+ */
+export interface PreparedEnv {
+  cwd: string;
+  execContext: ExecutionContext;
+  envId?: string;
+  /**
+   * Overlay mount mode that actually took effect (container backend). `native`
+   * grants CAP_SYS_ADMIN, which lets in-container root remount the read-only lower
+   * read-write — i.e. the agent could bypass the write-back gate. The engine warns
+   * loudly at run start when this is `native` (see SECURITY.md). Absent for in-place.
+   */
+  overlayMode?: 'fuse' | 'native';
+}
+
+/**
+ * Isolation backend for FOLDER-kind projects. Every backend implements the core
+ * lifecycle (`prepare`/`destroy`); the pause/resume + write-back methods below
+ * are OPTIONAL because only the container backend (Phase C) needs them — the
+ * in-place backend has no container to stop, no overlay to diff, and never sets
+ * a `PreparedEnv.envId`, so the engine never calls them for it. The container
+ * backend implements all of them (required on its concrete type), so the CLI can
+ * pass it where the engine's non-optional write-back port is expected.
+ */
+export interface IIsolationBackend {
+  readonly id: 'in-place' | 'container';
+  prepare(req: BackendPrepareRequest): Promise<PreparedEnv>;
+  /** Tear down a prepared environment. No-op for in-place (nothing was created). */
+  destroy(envId: string): Promise<void>;
+
+  /**
+   * Suspend a running environment on pause (`docker stop`) so a multi-day wait at
+   * an approval / write-back gate costs ~0 resources. The upper volume persists;
+   * `resumeEnv` restarts it. Container-only.
+   */
+  suspend?(envId: string): Promise<void>;
+
+  /**
+   * Rediscover and restart a suspended environment for resume, returning a fresh
+   * {@link PreparedEnv} (the container id changes across a stop/recreate). Fails
+   * loudly when the un-applied work is gone (volume deleted) rather than silently
+   * restarting from an empty overlay. Container-only.
+   */
+  resumeEnv?(envId: string): Promise<PreparedEnv>;
+
+  /**
+   * Inspect the finished run's overlay diff and report whether a write-back
+   * approval gate is warranted (non-empty diff) plus the change summary to show
+   * the reviewer. Container-only; reads the volume via a helper (no running
+   * container required).
+   */
+  finalize?(envId: string): Promise<WriteBackFinalizeResult>;
+
+  /**
+   * Apply the overlay diff to the live project root (the ONE moment the live root
+   * is written): adds/modifies copy in, whiteouts delete. Container-only.
+   */
+  applyChanges?(envId: string): Promise<WriteBackApplySummary>;
+
+  /**
+   * Discard the overlay diff without touching the live root (write-back rejected).
+   * The volume is reclaimed by `destroy`. Container-only.
+   */
+  discardChanges?(envId: string): Promise<void>;
+}
+
+/**
+ * Resolved container-backend configuration. Sourced from the merged
+ * `.archon/config.yaml > container` section (repo over global) by the caller
+ * and handed to the container backend at construction. Kept in the isolation
+ * contract so both the CLI (which builds it from config) and the backend (which
+ * consumes it) share one shape.
+ */
+export interface ContainerBackendConfig {
+  /** Runner image tag, e.g. `archon-runner:0.5.0`. */
+  image: string;
+  /** Container network mode. `none` for no egress; `bridge` for default NAT. */
+  network: 'bridge' | 'none';
+  /** Hard memory cap in MiB (`docker run --memory <n>m`). */
+  memoryMb: number;
+  /** Process cap (`docker run --pids-limit <n>`), a fork-bomb guard. */
+  pidsLimit: number;
+}
+
+/**
+ * Docker label keys stamped on every Archon-managed container and volume, so
+ * `isolation list/cleanup` and Phase C resume can find them without guessing
+ * names. `managed` scopes ALL pruning (never a bare `docker prune`); `env-id`
+ * is the stable per-run handle used for name construction and rediscovery.
+ */
+export const CONTAINER_LABELS = {
+  managed: 'diy.archon.managed',
+  codebaseId: 'diy.archon.codebase-id',
+  envId: 'diy.archon.env-id',
+} as const;

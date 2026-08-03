@@ -1,0 +1,1044 @@
+/**
+ * Codex SDK wrapper
+ * Provides async generator interface for streaming Codex responses
+ */
+import {
+  Codex,
+  type CodexOptions,
+  type ThreadOptions,
+  type TurnOptions,
+  type TurnCompletedEvent,
+  type ThreadStartedEvent,
+} from '@openai/codex-sdk';
+import type {
+  IAgentProvider,
+  SendQueryOptions,
+  MessageChunk,
+  TokenUsage,
+  ProviderCapabilities,
+} from '../types';
+import { parseCodexConfig } from './config';
+import { CODEX_CAPABILITIES } from './capabilities';
+import { resolveCodexBinaryPath } from './binary-resolver';
+import { createLogger } from '@archon/paths';
+import { loadMcpConfig } from '../mcp/config';
+import {
+  hasOpenAdditionalProperties,
+  normalizeJsonSchemaForOpenAiStrict,
+} from '../shared/structured-output';
+import { withResumedOutcome, resumedOutcome } from '../shared/resumed';
+
+/** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
+let cachedLog: ReturnType<typeof createLogger> | undefined;
+function getLog(): ReturnType<typeof createLogger> {
+  if (!cachedLog) cachedLog = createLogger('provider.codex');
+  return cachedLog;
+}
+
+type CodexConfigOverrides = NonNullable<CodexOptions['config']>;
+type CodexConfigValue = CodexConfigOverrides[string];
+
+interface ProviderWarning {
+  code: string;
+  message: string;
+}
+
+// Singleton Codex instance (async because binary path resolution is async)
+let codexInstance: Codex | null = null;
+let codexInitPromise: Promise<Codex> | null = null;
+
+/** Reset singleton state. Exported for tests only. */
+export function resetCodexSingleton(): void {
+  codexInstance = null;
+  codexInitPromise = null;
+}
+
+/**
+ * Get or create Codex SDK instance.
+ */
+async function getCodex(configCodexBinaryPath?: string): Promise<Codex> {
+  if (codexInstance) return codexInstance;
+
+  if (!codexInitPromise) {
+    codexInitPromise = (async (): Promise<Codex> => {
+      const codexPathOverride = await resolveCodexBinaryPath(configCodexBinaryPath);
+      const instance = new Codex({ codexPathOverride });
+      codexInstance = instance;
+      return instance;
+    })().catch(err => {
+      codexInitPromise = null;
+      throw err;
+    });
+  }
+  return codexInitPromise;
+}
+
+/**
+ * Build thread options for Codex SDK
+ */
+function buildThreadOptions(
+  cwd: string,
+  model?: string,
+  assistantConfig?: Record<string, unknown>
+): ThreadOptions {
+  const config = parseCodexConfig(assistantConfig ?? {});
+  return {
+    workingDirectory: cwd,
+    skipGitRepoCheck: true,
+    sandboxMode: 'danger-full-access',
+    networkAccessEnabled: true,
+    approvalPolicy: 'never',
+    model: model ?? config.model,
+    modelReasoningEffort: config.modelReasoningEffort,
+    webSearchMode: config.webSearchMode,
+    additionalDirectories: config.additionalDirectories,
+  };
+}
+
+function buildCodexEnv(requestEnv: Record<string, string>): Record<string, string> {
+  const baseEnv = Object.fromEntries(
+    Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)
+  );
+  // Managed project env intentionally overrides inherited process env for project-scoped execution.
+  return { ...baseEnv, ...requestEnv };
+}
+
+function buildMcpEnvSource(
+  requestEnv?: Record<string, string>
+): Record<string, string | undefined> {
+  return requestEnv ? { ...process.env, ...requestEnv } : process.env;
+}
+
+const CODEX_MCP_PASSTHROUGH_KEYS = [
+  'command',
+  'args',
+  'env',
+  'url',
+  'enabled',
+  'required',
+  'startup_timeout_sec',
+  'startup_timeout_ms',
+  'tool_timeout_sec',
+  'enabled_tools',
+  'disabled_tools',
+  'supports_parallel_tool_calls',
+  'cwd',
+  'env_vars',
+  'experimental_environment',
+  'http_headers',
+  'env_http_headers',
+  'oauth_resource',
+  'scopes',
+  'bearer_token_env_var',
+  'default_tools_approval_mode',
+  'tools',
+] as const;
+
+function toCodexConfigValue(value: unknown): CodexConfigValue | undefined {
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    const result: CodexConfigValue[] = [];
+    for (const item of value) {
+      const converted = toCodexConfigValue(item);
+      if (converted !== undefined) result.push(converted);
+    }
+    return result;
+  }
+
+  if (typeof value === 'object' && value !== null) {
+    const result: CodexConfigOverrides = {};
+    for (const [key, nestedValue] of Object.entries(value)) {
+      const converted = toCodexConfigValue(nestedValue);
+      if (converted !== undefined) result[key] = converted;
+    }
+    return result;
+  }
+
+  return undefined;
+}
+
+function setCodexConfigValue(target: CodexConfigOverrides, key: string, value: unknown): void {
+  const converted = toCodexConfigValue(value);
+  if (converted !== undefined) {
+    target[key] = converted;
+  }
+}
+
+function convertMcpServerConfigForCodex(
+  serverConfig: Record<string, unknown>
+): CodexConfigOverrides {
+  const result: CodexConfigOverrides = {};
+
+  for (const key of CODEX_MCP_PASSTHROUGH_KEYS) {
+    if (key in serverConfig) {
+      setCodexConfigValue(result, key, serverConfig[key]);
+    }
+  }
+
+  // Archon's MCP JSON format uses `headers`; Codex config uses `http_headers`.
+  if ('headers' in serverConfig && !('http_headers' in result)) {
+    setCodexConfigValue(result, 'http_headers', serverConfig.headers);
+  }
+
+  return result;
+}
+
+function buildCodexMcpConfigOverrides(
+  servers: Record<string, unknown>
+): CodexConfigOverrides | undefined {
+  const mcpServers: CodexConfigOverrides = {};
+
+  for (const [serverName, serverConfig] of Object.entries(servers)) {
+    if (typeof serverConfig !== 'object' || serverConfig === null || Array.isArray(serverConfig)) {
+      getLog().warn(
+        { serverName, valueType: typeof serverConfig },
+        'codex.mcp_server_config_not_object'
+      );
+      continue;
+    }
+
+    const converted = convertMcpServerConfigForCodex(serverConfig as Record<string, unknown>);
+    if (Object.keys(converted).length > 0) {
+      mcpServers[serverName] = converted;
+    }
+  }
+
+  if (Object.keys(mcpServers).length === 0) return undefined;
+  return { mcp_servers: mcpServers };
+}
+
+// Maps slugs that ChatGPT-plan accounts now reject (previously shipped as Archon
+// suggestions/defaults) to a current, plan-accepted slug to suggest instead.
+const CODEX_MODEL_FALLBACKS: Record<string, string> = {
+  'gpt-5.3-codex': 'gpt-5.6-sol',
+  'gpt-5.2-codex': 'gpt-5.6-sol',
+  'gpt-5.2': 'gpt-5.6-sol',
+};
+
+function isModelAccessError(errorMessage: string): boolean {
+  const m = errorMessage.toLowerCase();
+  const hasModel = m.includes('model');
+  const hasAvailabilitySignal =
+    m.includes('not available') || m.includes('not found') || m.includes('access denied');
+  return hasModel && hasAvailabilitySignal;
+}
+
+function buildModelAccessMessage(model?: string): string {
+  const normalizedModel = model?.trim();
+  const selectedModel = normalizedModel || 'the configured model';
+  const suggested = normalizedModel ? CODEX_MODEL_FALLBACKS[normalizedModel] : undefined;
+
+  const fixLine = suggested
+    ? `To fix: update your model in ~/.archon/config.yaml:\n  assistants:\n    codex:\n      model: ${suggested}`
+    : 'To fix: update your model in ~/.archon/config.yaml to one your account can access.';
+
+  const workflowLine = suggested
+    ? `Or set it per-workflow with \`model: ${suggested}\` in workflow YAML.`
+    : 'Or set it per-workflow with a valid `model:` in workflow YAML.';
+
+  return `❌ Model "${selectedModel}" is not available for your account.\n\n${fixLine}\n\n${workflowLine}`;
+}
+
+const MAX_SUBPROCESS_RETRIES = 3;
+const RETRY_BASE_DELAY_MS = 2000;
+const RATE_LIMIT_PATTERNS = ['rate limit', 'too many requests', '429', 'overloaded'];
+const AUTH_PATTERNS = [
+  'credit balance',
+  'unauthorized',
+  'authentication',
+  'invalid token',
+  '401',
+  '403',
+];
+const SUBPROCESS_CRASH_PATTERNS = ['exited with code', 'killed', 'signal', 'codex exec'];
+
+function classifyCodexError(
+  errorMessage: string
+): 'rate_limit' | 'auth' | 'crash' | 'model_access' | 'unknown' {
+  if (isModelAccessError(errorMessage)) return 'model_access';
+  const m = errorMessage.toLowerCase();
+  if (RATE_LIMIT_PATTERNS.some(p => m.includes(p))) return 'rate_limit';
+  if (AUTH_PATTERNS.some(p => m.includes(p))) return 'auth';
+  if (SUBPROCESS_CRASH_PATTERNS.some(p => m.includes(p))) return 'crash';
+  return 'unknown';
+}
+
+function extractUsageFromCodexEvent(event: TurnCompletedEvent): TokenUsage {
+  if (!event.usage) {
+    getLog().warn({ eventType: event.type }, 'codex.usage_null_on_turn_completed');
+    return { input: 0, output: 0 };
+  }
+  return {
+    input: event.usage.input_tokens,
+    output: event.usage.output_tokens,
+  };
+}
+
+// ─── Turn Options Builder ────────────────────────────────────────────────
+
+/**
+ * Build turn options for a single Codex turn.
+ * Handles output schema from both requestOptions and nodeConfig (workflow path).
+ */
+function buildTurnOptions(requestOptions?: SendQueryOptions): {
+  turnOptions: TurnOptions;
+  hasOutputFormat: boolean;
+} {
+  const turnOptions: TurnOptions = {};
+  // Preserve the original precedence: an explicit `outputFormat` wins over
+  // `nodeConfig.output_format` even when its `.schema` is undefined. Note the
+  // resulting asymmetry: if `outputFormat` is set but `.schema` is undefined,
+  // `rawSchema` is undefined (no schema sent) yet `hasOutputFormat` is still
+  // true — the stream accumulator runs and JSON.parses the response text.
+  const rawSchema =
+    requestOptions?.outputFormat !== undefined
+      ? requestOptions.outputFormat.schema
+      : requestOptions?.nodeConfig?.output_format;
+  const hasOutputFormat = !!(
+    requestOptions?.outputFormat ?? requestOptions?.nodeConfig?.output_format
+  );
+  if (rawSchema !== undefined) {
+    // OpenAI Structured Outputs strict-mode requires additionalProperties:false
+    // on every object schema (HTTP 400 invalid_json_schema otherwise). Workflow
+    // authors write portable output_format schemas, so normalize here before
+    // handing the schema to the Codex SDK. See issue #1843.
+    if (hasOpenAdditionalProperties(rawSchema)) {
+      // The normalizer is about to rewrite an open-record `additionalProperties`
+      // (e.g. `{ type: 'string' }` or `true`) to `false`. OpenAI would 400 the
+      // open form anyway, but the author never declared a closed object — warn
+      // so the silent narrowing is visible rather than a surprise at runtime.
+      getLog().warn({ schema: rawSchema }, 'codex.output_format_open_record_closed');
+    }
+    turnOptions.outputSchema = normalizeJsonSchemaForOpenAiStrict(rawSchema);
+  }
+  // Signal assignment is intentionally per-attempt (in sendQuery's retry
+  // loop), not here. Reusing a single AbortSignal across retries can poison
+  // later attempts once any earlier attempt's subprocess is SIGTERM'd.
+  // See issue #1266.
+  return { turnOptions, hasOutputFormat };
+}
+
+// ─── Effective Prompt Builder ────────────────────────────────────────────
+
+/**
+ * Fold the request/node-level systemPrompt into the user prompt.
+ *
+ * The Codex SDK (verified at @openai/codex-sdk 0.144.5) exposes NO
+ * instructions/system-prompt channel on ThreadOptions or TurnOptions, so the
+ * only delivery mechanism is prepending to the prompt string, separated by
+ * the same `---` delimiter augmentPromptForJsonSchema uses. See issue #1837.
+ *
+ * Precedence mirrors the Pi provider: request-level systemPrompt wins over
+ * node-level. Only string / string[] are supported; SystemPromptPreset
+ * objects are Claude-specific and dropped with a WARN (the orchestrator
+ * already sends non-Claude providers a plain string).
+ *
+ * The prepend intentionally repeats on EVERY turn, including resumed
+ * threads: the provider cannot know whether a resumed session's earlier
+ * turns carried the instructions (the session may predate this fix), and
+ * both the resume-failure fallback and cold retry attempts start fresh
+ * threads where first-turn-only logic would drop the instructions exactly
+ * when they are most needed. This matches Claude, which receives the
+ * systemPrompt on every query.
+ */
+function buildEffectivePrompt(prompt: string, requestOptions?: SendQueryOptions): string {
+  const raw = requestOptions?.systemPrompt ?? requestOptions?.nodeConfig?.systemPrompt;
+  if (raw === undefined) {
+    return prompt;
+  }
+  let systemText: string | undefined;
+  if (typeof raw === 'string') {
+    systemText = raw;
+  } else if (Array.isArray(raw)) {
+    systemText = raw.join('\n\n');
+  }
+  if (systemText === undefined) {
+    getLog().warn({ systemPromptType: typeof raw }, 'codex.system_prompt_dropped_preset');
+    return prompt;
+  }
+  if (systemText.trim() === '') {
+    return prompt;
+  }
+  return `${systemText}\n\n---\n\n${prompt}`;
+}
+
+// ─── Stream Normalizer ───────────────────────────────────────────────────
+
+/** State maintained across Codex event stream normalization. */
+interface CodexStreamState {
+  lastTodoListSignature?: string;
+  startedToolItemIds: Set<string>;
+  completedToolItemIds: Set<string>;
+}
+
+function getMcpToolName(item: Record<string, unknown>): string {
+  const server = item.server as string | undefined;
+  const tool = item.tool as string | undefined;
+  const toolInfo = server && tool ? `${server}/${tool}` : (tool ?? server ?? 'MCP tool');
+  return `🔌 MCP: ${toolInfo}`;
+}
+
+/**
+ * Normalize raw Codex SDK events into Archon MessageChunks.
+ * Handles structured output normalization (Codex returns JSON inline in text).
+ */
+async function* streamCodexEvents(
+  events: AsyncIterable<Record<string, unknown>>,
+  hasOutputFormat: boolean,
+  threadId: string | null | undefined,
+  abortSignal?: AbortSignal,
+  surfaceMcpClientErrors = false
+): AsyncGenerator<MessageChunk> {
+  const state: CodexStreamState = {
+    startedToolItemIds: new Set<string>(),
+    completedToolItemIds: new Set<string>(),
+  };
+  let accumulatedText = '';
+
+  // A new thread's id is assigned during the run via the `thread.started` event
+  // (the SDK emits it only for new threads), not synchronously on startThread().
+  // Capture it so the terminal result chunk surfaces a resumable sessionId —
+  // persist_session and suspend/resume depend on it. A resumed thread keeps the
+  // snapshot id (no thread.started fires), so the seeded value stays correct.
+  let resolvedThreadId: string | null | undefined = threadId;
+
+  if (abortSignal?.aborted) {
+    getLog().info('query_aborted_before_stream');
+    throw new Error('Query aborted');
+  }
+
+  // If the iterator closes without a terminal event (e.g. the model was
+  // rejected before the turn even started), we synthesize a fail-stop result
+  // after the loop so the dag-executor's `msg.isError` branch catches it
+  // — matching Claude's contract. Both terminal branches below `return`,
+  // so reaching the post-loop block can only mean no terminal fired.
+  let lastNonMcpError: string | undefined;
+
+  for await (const event of events) {
+    if (abortSignal?.aborted) {
+      getLog().info('query_aborted_between_events');
+      throw new Error('Query aborted');
+    }
+
+    if (event.type === 'thread.started') {
+      // Capture the new thread's id. Its SDK doc comment reads: "The identifier
+      // of the new thread. Can be used to resume the thread later." This is the
+      // only place a new thread's id surfaces. `continue` — the event carries no
+      // user-facing content, only this metadata.
+      const startedThreadId = (event as ThreadStartedEvent).thread_id;
+      if (startedThreadId) {
+        resolvedThreadId = startedThreadId;
+        getLog().info({ threadId: startedThreadId }, 'codex.thread_started');
+      } else {
+        // The SDK types thread_id as a non-empty string, so this should never
+        // fire. If it does, a new thread would surface sessionId: undefined and
+        // the dag-executor would treat the run as session-less — silently
+        // dropping any persist_session continuity. Warn rather than degrade
+        // quietly (CLAUDE.md: Fail Fast + Explicit Errors).
+        getLog().warn({ snapshotThreadId: resolvedThreadId }, 'codex.thread_started_missing_id');
+      }
+      continue;
+    }
+
+    if (event.type === 'item.started') {
+      const item = event.item as Record<string, unknown>;
+      const itemType = item.type as string;
+      const itemId = item.id as string;
+      getLog().debug({ eventType: event.type, itemType, itemId }, 'item_started');
+
+      let toolName: string | undefined;
+      if (itemType === 'command_execution') {
+        if (typeof item.command === 'string' && item.command.length > 0) {
+          toolName = item.command;
+        } else {
+          getLog().warn({ itemId }, 'command_execution_missing_command');
+        }
+      } else if (itemType === 'web_search') {
+        if (typeof item.query === 'string' && item.query.length > 0) {
+          toolName = `🔍 Searching: ${item.query}`;
+        } else {
+          getLog().debug({ itemId }, 'web_search_missing_query');
+        }
+      } else if (itemType === 'mcp_tool_call') {
+        toolName = getMcpToolName(item);
+      }
+
+      if (toolName && itemId && !state.startedToolItemIds.has(itemId)) {
+        state.startedToolItemIds.add(itemId);
+        yield { type: 'tool', toolName, toolCallId: itemId };
+      }
+      continue;
+    }
+
+    if (event.type === 'error') {
+      const errorEvent = event as { message: string };
+      getLog().error({ message: errorEvent.message }, 'stream_error');
+      // MCP client errors are non-fatal — Codex retries internally and may
+      // still reach turn.completed. Other errors are captured; whether they
+      // are fatal is decided when the stream terminates: turn.completed
+      // means the SDK recovered, so the captured error is dropped; loop
+      // closure without a terminal means the captured error caused the
+      // stream to abort and is surfaced as the failure cause.
+      const isMcpClientError = errorEvent.message.toLowerCase().includes('mcp client');
+      if (!isMcpClientError) {
+        lastNonMcpError = errorEvent.message;
+      } else if (surfaceMcpClientErrors) {
+        // MCP was explicitly configured for this node — surface MCP client
+        // errors as system warnings so the workflow author can diagnose.
+        yield { type: 'system', content: `⚠️ ${errorEvent.message}` };
+      }
+      continue;
+    }
+
+    if (event.type === 'turn.failed') {
+      const errorObj = (event as { error?: { message?: string } }).error;
+      const errorMessage = errorObj?.message ?? 'Unknown error';
+      getLog().error({ errorMessage }, 'turn_failed');
+      yield {
+        type: 'result',
+        sessionId: resolvedThreadId ?? undefined,
+        isError: true,
+        errorSubtype: 'codex_turn_failed',
+        errors: [errorMessage],
+      };
+      return;
+    }
+
+    if (event.type === 'item.completed') {
+      const item = event.item as Record<string, unknown>;
+      const itemType = item.type as string;
+
+      const logContext: Record<string, unknown> = {
+        eventType: event.type,
+        itemType,
+        itemId: item.id,
+      };
+      if (itemType === 'command_execution' && item.command) {
+        logContext.command = item.command;
+      }
+      getLog().debug(logContext, 'item_completed');
+
+      const itemId = item.id as string;
+      const isToolItem =
+        itemType === 'command_execution' ||
+        itemType === 'web_search' ||
+        itemType === 'mcp_tool_call';
+      if (isToolItem) {
+        if (state.completedToolItemIds.has(itemId)) {
+          getLog().warn({ itemId, itemType }, 'tool_item_duplicate_completion');
+          continue;
+        }
+        state.completedToolItemIds.add(itemId);
+        if (!state.startedToolItemIds.has(itemId)) {
+          getLog().warn({ itemId, itemType }, 'tool_item_completed_without_start');
+        }
+      }
+
+      switch (itemType) {
+        case 'agent_message':
+          if (item.text) {
+            // Multiple agent_message items can arrive in one turn (preamble + answer);
+            // keep only the last — it's the authoritative structured-output candidate.
+            if (hasOutputFormat) accumulatedText = item.text as string;
+            yield { type: 'assistant', content: item.text as string };
+          }
+          break;
+
+        case 'command_execution':
+          if (item.command) {
+            const cmd = item.command as string;
+            const exitCode = item.exit_code as number | null | undefined;
+            const exitSuffix =
+              exitCode != null && exitCode !== 0 ? `\n[exit code: ${String(exitCode)}]` : '';
+            let toolOutcome: 'success' | 'error' | 'unknown';
+            if (exitCode === 0) {
+              toolOutcome = 'success';
+            } else if (exitCode == null) {
+              toolOutcome = 'unknown';
+            } else {
+              toolOutcome = 'error';
+            }
+            yield {
+              type: 'tool_result',
+              toolName: cmd,
+              toolOutput: ((item.aggregated_output as string) ?? '') + exitSuffix,
+              toolCallId: itemId,
+              toolOutcome,
+              ...(exitCode != null ? { exitCode } : {}),
+            };
+          } else {
+            getLog().warn({ itemId: item.id }, 'command_execution_missing_command');
+          }
+          break;
+
+        case 'reasoning':
+          if (item.text) {
+            yield { type: 'thinking', content: item.text as string };
+          }
+          break;
+
+        case 'web_search':
+          if (item.query) {
+            const searchToolName = `🔍 Searching: ${item.query as string}`;
+            yield {
+              type: 'tool_result',
+              toolName: searchToolName,
+              toolOutput: '',
+              toolCallId: itemId,
+              toolOutcome: 'unknown',
+            };
+          } else {
+            getLog().debug({ itemId: item.id }, 'web_search_missing_query');
+          }
+          break;
+
+        case 'todo_list': {
+          const items = item.items as { text?: string; completed?: boolean }[] | undefined;
+          if (Array.isArray(items) && items.length > 0) {
+            const normalizedItems = items.map(t => ({
+              text: typeof t.text === 'string' ? t.text : '(unnamed task)',
+              completed: t.completed ?? false,
+            }));
+            const signature = JSON.stringify(normalizedItems);
+            if (signature !== state.lastTodoListSignature) {
+              state.lastTodoListSignature = signature;
+              const taskList = normalizedItems
+                .map(t => `${t.completed ? '✅' : '⬜'} ${t.text}`)
+                .join('\n');
+              yield { type: 'system', content: `📋 Tasks:\n${taskList}` };
+            }
+          } else {
+            getLog().debug({ itemId: item.id }, 'todo_list_empty_or_invalid');
+          }
+          break;
+        }
+
+        case 'file_change': {
+          const statusIcon = (item.status as string) === 'failed' ? '❌' : '✅';
+          const rawError = 'error' in item ? (item as { error?: unknown }).error : undefined;
+          const fileErrorMessage =
+            typeof rawError === 'string'
+              ? rawError
+              : typeof rawError === 'object' && rawError !== null && 'message' in rawError
+                ? String((rawError as { message: unknown }).message)
+                : undefined;
+
+          const changes = item.changes as { kind: string; path?: string }[] | undefined;
+          if (Array.isArray(changes) && changes.length > 0) {
+            const changeList = changes
+              .map(c => {
+                const icon = c.kind === 'add' ? '➕' : c.kind === 'delete' ? '➖' : '📝';
+                return `${icon} ${c.path ?? '(unknown file)'}`;
+              })
+              .join('\n');
+            const errorSuffix =
+              (item.status as string) === 'failed' && fileErrorMessage
+                ? `\n${fileErrorMessage}`
+                : '';
+            yield {
+              type: 'system',
+              content: `${statusIcon} File changes:\n${changeList}${errorSuffix}`,
+            };
+          } else if ((item.status as string) === 'failed') {
+            getLog().warn(
+              { itemId: item.id, status: item.status },
+              'file_change_failed_no_changes'
+            );
+            const failMsg = fileErrorMessage
+              ? `❌ File change failed: ${fileErrorMessage}`
+              : '❌ File change failed';
+            yield { type: 'system', content: failMsg };
+          } else {
+            getLog().debug({ itemId: item.id, status: item.status }, 'file_change_no_changes');
+          }
+          break;
+        }
+
+        case 'mcp_tool_call': {
+          const server = item.server as string | undefined;
+          const tool = item.tool as string | undefined;
+          const mcpToolName = getMcpToolName(item);
+
+          if ((item.status as string) === 'failed') {
+            getLog().warn(
+              { server, tool, error: item.error, itemId: item.id },
+              'mcp_tool_call_failed'
+            );
+            const mcpError = item.error as { message?: string } | undefined;
+            const errMsg = mcpError?.message
+              ? `❌ Error: ${mcpError.message}`
+              : '❌ Error: MCP tool failed';
+            yield {
+              type: 'tool_result',
+              toolName: mcpToolName,
+              toolOutput: errMsg,
+              toolCallId: itemId,
+              toolOutcome: 'error',
+            };
+          } else {
+            let toolOutput = '';
+            const mcpResult = item.result as { content?: unknown } | undefined;
+            if (mcpResult?.content) {
+              if (Array.isArray(mcpResult.content)) {
+                toolOutput = JSON.stringify(mcpResult.content);
+              } else {
+                getLog().warn(
+                  {
+                    itemId: item.id,
+                    server,
+                    tool,
+                    resultType: typeof mcpResult.content,
+                  },
+                  'mcp_tool_call_unexpected_result_shape'
+                );
+              }
+            }
+            yield {
+              type: 'tool_result',
+              toolName: mcpToolName,
+              toolOutput,
+              toolCallId: itemId,
+              toolOutcome: 'success',
+            };
+          }
+          break;
+        }
+      }
+    }
+
+    if (event.type === 'turn.completed') {
+      getLog().debug('turn_completed');
+      const usage = extractUsageFromCodexEvent(event as TurnCompletedEvent);
+
+      // Codex returns structured output inline in agent_message text.
+      // Normalize: parse as JSON and put on structuredOutput so the
+      // dag-executor can handle all providers uniformly.
+      let structuredOutput: unknown;
+      if (hasOutputFormat && accumulatedText) {
+        try {
+          structuredOutput = JSON.parse(accumulatedText);
+          getLog().debug('codex.structured_output_parsed');
+        } catch {
+          getLog().warn(
+            { outputPreview: accumulatedText.slice(0, 200) },
+            'codex.structured_output_not_json'
+          );
+          yield {
+            type: 'system',
+            content:
+              '⚠️ Structured output requested but Codex returned non-JSON text. ' +
+              'Downstream $nodeId.output.field references may not evaluate correctly.',
+          };
+        }
+      }
+
+      yield {
+        type: 'result',
+        sessionId: resolvedThreadId ?? undefined,
+        tokens: usage,
+        ...(structuredOutput !== undefined ? { structuredOutput } : {}),
+      };
+      return;
+    }
+  }
+
+  // Reaching here means the iterator closed without yielding turn.completed
+  // or turn.failed (both branches `return` immediately). Common cause: model
+  // rejected by the API (model not supported, auth refused) before the turn
+  // started. Surface as a fail-stop. The dag-executor's `msg.isError` branch
+  // (dag-executor.ts: throws `Node '<id>' failed: SDK returned <subtype>`)
+  // turns this into a thrown node failure — distinct from the empty-output
+  // guard further down, which returns `{ state: 'failed' }` for AI nodes
+  // that streamed nothing but never raised an isError.
+  const message = lastNonMcpError ?? 'Codex stream closed without turn.completed or turn.failed';
+  getLog().error({ message }, 'stream_incomplete');
+  yield {
+    type: 'result',
+    sessionId: resolvedThreadId ?? undefined,
+    isError: true,
+    errorSubtype: 'codex_stream_incomplete',
+    errors: [message],
+  };
+}
+
+// ─── Error Classification & Retry ────────────────────────────────────────
+
+/**
+ * Classify a Codex error and determine retry eligibility.
+ */
+function classifyAndEnrichCodexError(
+  error: Error,
+  model?: string
+): { enrichedError: Error; errorClass: string; shouldRetry: boolean } {
+  const errorClass = classifyCodexError(error.message);
+
+  if (errorClass === 'model_access') {
+    return {
+      enrichedError: new Error(buildModelAccessMessage(model)),
+      errorClass,
+      shouldRetry: false,
+    };
+  }
+
+  if (errorClass === 'auth') {
+    const enrichedError = new Error(`Codex auth error: ${error.message}`);
+    enrichedError.cause = error;
+    return { enrichedError, errorClass, shouldRetry: false };
+  }
+
+  const enrichedError = new Error(`Codex ${errorClass}: ${error.message}`);
+  enrichedError.cause = error;
+  const shouldRetry = errorClass === 'rate_limit' || errorClass === 'crash';
+  return { enrichedError, errorClass, shouldRetry };
+}
+
+// ─── Codex Provider ──────────────────────────────────────────────────────
+
+/**
+ * Codex AI agent provider.
+ * Implements IAgentProvider with Codex SDK integration.
+ *
+ * sendQuery orchestrates the following internal helpers:
+ * - buildThreadOptions: SDK thread configuration
+ * - buildTurnOptions: per-turn configuration (output schema, abort signal)
+ * - buildEffectivePrompt: systemPrompt delivery via prompt prepend (no SDK channel)
+ * - streamCodexEvents: raw SDK event normalization into MessageChunks
+ * - classifyAndEnrichCodexError: error classification for retry decisions
+ */
+export class CodexProvider implements IAgentProvider {
+  private readonly retryBaseDelayMs: number;
+
+  constructor(options?: { retryBaseDelayMs?: number }) {
+    this.retryBaseDelayMs = options?.retryBaseDelayMs ?? RETRY_BASE_DELAY_MS;
+  }
+
+  private async createCodexClient(
+    configCodexBinaryPath: string | undefined,
+    requestEnv?: Record<string, string>,
+    codexConfigOverrides?: CodexConfigOverrides
+  ): Promise<Codex> {
+    if ((!requestEnv || Object.keys(requestEnv).length === 0) && !codexConfigOverrides) {
+      return getCodex(configCodexBinaryPath);
+    }
+
+    try {
+      const codexOptions: CodexOptions = {
+        codexPathOverride: await resolveCodexBinaryPath(configCodexBinaryPath),
+        ...(requestEnv && Object.keys(requestEnv).length > 0
+          ? { env: buildCodexEnv(requestEnv) }
+          : {}),
+        ...(codexConfigOverrides ? { config: codexConfigOverrides } : {}),
+      };
+      return new Codex(codexOptions);
+    } catch (error) {
+      const err = error as Error;
+      if (isModelAccessError(err.message)) {
+        throw new Error(buildModelAccessMessage());
+      }
+      throw new Error(`Codex query failed: ${err.message}`);
+    }
+  }
+
+  getCapabilities(): ProviderCapabilities {
+    return CODEX_CAPABILITIES;
+  }
+
+  async *sendQuery(
+    prompt: string,
+    cwd: string,
+    resumeSessionId?: string,
+    requestOptions?: SendQueryOptions
+  ): AsyncGenerator<MessageChunk> {
+    const assistantConfig = requestOptions?.assistantConfig ?? {};
+    const codexConfig = parseCodexConfig(assistantConfig);
+    const providerWarnings: ProviderWarning[] = [];
+    let codexConfigOverrides: CodexConfigOverrides | undefined;
+
+    if (requestOptions?.nodeConfig?.mcp) {
+      const mcpPath = requestOptions.nodeConfig.mcp;
+      const { servers, serverNames, missingVars } = await loadMcpConfig(
+        mcpPath,
+        cwd,
+        buildMcpEnvSource(requestOptions.env)
+      );
+      codexConfigOverrides = buildCodexMcpConfigOverrides(servers);
+      getLog().info({ serverNames, mcpPath }, 'codex.mcp_config_loaded');
+      if (missingVars.length > 0) {
+        const uniqueVars = [...new Set(missingVars)];
+        getLog().warn({ missingVars: uniqueVars }, 'codex.mcp_env_vars_missing');
+        providerWarnings.push({
+          code: 'mcp_env_vars_missing',
+          message: `MCP config references undefined env vars: ${uniqueVars.join(', ')}. These will be empty strings - MCP servers may fail to authenticate.`,
+        });
+      }
+    }
+
+    for (const warning of providerWarnings) {
+      yield { type: 'system', content: `⚠️ ${warning.message}` };
+    }
+
+    // 1. Initialize SDK and build thread options
+    const codex = await this.createCodexClient(
+      codexConfig.codexBinaryPath,
+      requestOptions?.env,
+      codexConfigOverrides
+    );
+    const threadOptions = buildThreadOptions(cwd, requestOptions?.model, assistantConfig);
+
+    if (requestOptions?.abortSignal?.aborted) {
+      throw new Error('Query aborted');
+    }
+
+    // 2. Create or resume thread
+    let sessionResumeFailed = false;
+    let thread;
+    if (resumeSessionId) {
+      getLog().debug({ sessionId: resumeSessionId }, 'resuming_thread');
+      try {
+        thread = codex.resumeThread(resumeSessionId, threadOptions);
+      } catch (error) {
+        getLog().error({ err: error, sessionId: resumeSessionId }, 'resume_thread_failed');
+        try {
+          thread = codex.startThread(threadOptions);
+        } catch (startError) {
+          const err = startError as Error;
+          if (isModelAccessError(err.message)) {
+            throw new Error(buildModelAccessMessage(requestOptions?.model));
+          }
+          throw new Error(`Codex query failed: ${err.message}`);
+        }
+        sessionResumeFailed = true;
+      }
+    } else {
+      getLog().debug({ cwd }, 'starting_new_thread');
+      try {
+        thread = codex.startThread(threadOptions);
+      } catch (error) {
+        const err = error as Error;
+        if (isModelAccessError(err.message)) {
+          throw new Error(buildModelAccessMessage(requestOptions?.model));
+        }
+        throw new Error(`Codex query failed: ${err.message}`);
+      }
+    }
+
+    if (sessionResumeFailed) {
+      yield {
+        type: 'system',
+        content: '⚠️ Could not resume previous session. Starting fresh conversation.',
+      };
+    }
+
+    // 3. Build turn options and the effective prompt (systemPrompt prepend).
+    // Computed once before the retry loop so cold retry attempts, which start
+    // fresh threads, also carry the system instructions.
+    const { turnOptions, hasOutputFormat } = buildTurnOptions(requestOptions);
+    const effectivePrompt = buildEffectivePrompt(prompt, requestOptions);
+    let lastError: Error | undefined;
+
+    for (let attempt = 0; attempt <= MAX_SUBPROCESS_RETRIES; attempt++) {
+      if (requestOptions?.abortSignal?.aborted) {
+        throw new Error('Query aborted');
+      }
+
+      // Fresh AbortController per attempt. Caller's abortSignal, if any, is
+      // chained in via a once-listener so cancellation still propagates.
+      // Without this, a signal aborted during attempt N (e.g. when the
+      // Codex subprocess crashes and Node.js reacts to the `spawn({ signal })`
+      // linkage) would wire an already-aborted signal into attempt N+1's
+      // `spawn`, SIGTERMing the freshly spawned child before it reads any
+      // input. The "Reading prompt from stdin..." in the resulting error is
+      // Codex CLI's startup banner, not an indicator of crash location.
+      // See issue #1266.
+      const attemptController = new AbortController();
+      const onCallerAbort = (): void => {
+        attemptController.abort();
+      };
+      if (requestOptions?.abortSignal) {
+        requestOptions.abortSignal.addEventListener('abort', onCallerAbort, { once: true });
+      }
+      turnOptions.signal = attemptController.signal;
+
+      try {
+        if (attempt > 0) {
+          getLog().debug({ cwd, attempt }, 'starting_new_thread');
+          try {
+            thread = codex.startThread(threadOptions);
+          } catch (startError) {
+            const err = startError as Error;
+            if (isModelAccessError(err.message)) {
+              getLog().debug({ attempt, errorClass: 'model_access' }, 'query_error_pre_retry');
+              throw new Error(buildModelAccessMessage(requestOptions?.model));
+            }
+            throw new Error(`Codex query failed: ${err.message}`);
+          }
+        }
+
+        try {
+          // 4. Run streamed turn
+          const result = await thread.runStreamed(effectivePrompt, turnOptions);
+
+          // 5. Stream normalized events (fresh state per attempt to avoid dedup leaks)
+          yield* withResumedOutcome(
+            streamCodexEvents(
+              result.events as AsyncIterable<Record<string, unknown>>,
+              hasOutputFormat,
+              thread.id,
+              attemptController.signal,
+              Boolean(requestOptions?.nodeConfig?.mcp)
+            ),
+            // Stamp from the attempt that produced the result: any retry
+            // (attempt > 0) re-runs on a fresh startThread (cold), so the prior
+            // session context is lost even when the initial resumeThread succeeded.
+            resumedOutcome(resumeSessionId, !sessionResumeFailed && attempt === 0)
+          );
+          return;
+        } catch (error) {
+          const err = error as Error;
+
+          if (requestOptions?.abortSignal?.aborted) {
+            throw new Error('Query aborted');
+          }
+
+          const { enrichedError, errorClass, shouldRetry } = classifyAndEnrichCodexError(
+            err,
+            requestOptions?.model
+          );
+
+          getLog().error(
+            { err, errorClass, attempt, maxRetries: MAX_SUBPROCESS_RETRIES },
+            'query_error'
+          );
+
+          if (!shouldRetry || attempt >= MAX_SUBPROCESS_RETRIES) {
+            throw enrichedError;
+          }
+
+          const delayMs = this.retryBaseDelayMs * Math.pow(2, attempt);
+          getLog().info({ attempt, delayMs, errorClass }, 'retrying_query');
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+          lastError = enrichedError;
+        }
+      } finally {
+        if (requestOptions?.abortSignal) {
+          requestOptions.abortSignal.removeEventListener('abort', onCallerAbort);
+        }
+        // The per-attempt AbortController is short-lived and goes out of
+        // scope at iteration end — no explicit abort() cleanup needed.
+        // Calling abort() here would race with the codex-sdk's own finally
+        // (which calls child.removeAllListeners() + child.kill()), firing
+        // Node's internal spawn-signal abort listener on a listenerless
+        // child and surfacing an uncaught AbortError.  See #1735.
+      }
+    }
+
+    throw lastError ?? new Error('Codex query failed after retries');
+  }
+
+  getType(): string {
+    return 'codex';
+  }
+}

@@ -1,0 +1,1053 @@
+/**
+ * Tests for setup command utility functions
+ */
+import { describe, it, expect, beforeEach, afterEach, spyOn, mock } from 'bun:test';
+import { existsSync, readFileSync, mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'fs';
+import { join } from 'path';
+import { tmpdir } from 'os';
+import {
+  bootstrapProjectConfig,
+  checkExistingConfig,
+  checkPiModule,
+  generateEnvContent,
+  generateWebhookSecret,
+  spawnTerminalWithSetup,
+  detectClaudeExecutablePath,
+  writeScopedEnv,
+  serializeEnv,
+  resolveScopedEnvPath,
+  writeHomePiModelConfig,
+  buildDefaultModelChoices,
+  readInstallDefaultModel,
+  writeInstallDefaults,
+} from './setup';
+import * as setupModule from './setup';
+import { copyArchonSkill } from './skill';
+import { parse as parseDotenv } from 'dotenv';
+
+// Test directory for file operations
+const TEST_DIR = join(tmpdir(), 'archon-setup-test-' + Date.now());
+
+describe('setup command', () => {
+  beforeEach(() => {
+    // Create test directory
+    mkdirSync(TEST_DIR, { recursive: true });
+  });
+
+  afterEach(() => {
+    // Clean up test directory
+    try {
+      rmSync(TEST_DIR, { recursive: true, force: true });
+    } catch {
+      // Ignore cleanup errors
+    }
+  });
+
+  describe('generateWebhookSecret', () => {
+    it('should generate a 64-character hex string', () => {
+      const secret = generateWebhookSecret();
+
+      expect(secret).toHaveLength(64);
+      expect(/^[0-9a-f]+$/.test(secret)).toBe(true);
+    });
+
+    it('should generate unique secrets each time', () => {
+      const secret1 = generateWebhookSecret();
+      const secret2 = generateWebhookSecret();
+
+      expect(secret1).not.toBe(secret2);
+    });
+  });
+
+  describe('checkExistingConfig', () => {
+    it('should return null when no .env file exists', () => {
+      // Mock ARCHON_HOME to point to non-existent directory
+      const originalHome = process.env.ARCHON_HOME;
+      process.env.ARCHON_HOME = join(TEST_DIR, 'nonexistent');
+
+      const result = checkExistingConfig();
+
+      expect(result).toBeNull();
+
+      if (originalHome === undefined) {
+        delete process.env.ARCHON_HOME;
+      } else {
+        process.env.ARCHON_HOME = originalHome;
+      }
+    });
+
+    it('should detect existing configuration values', () => {
+      const envDir = join(TEST_DIR, '.archon');
+      mkdirSync(envDir, { recursive: true });
+      const envPath = join(envDir, '.env');
+
+      // Write a test .env file
+      writeFileSync(
+        envPath,
+        `
+CLAUDE_USE_GLOBAL_AUTH=true
+TELEGRAM_BOT_TOKEN=123:ABC
+CODEX_ID_TOKEN=token1
+CODEX_ACCESS_TOKEN=token2
+CODEX_REFRESH_TOKEN=token3
+CODEX_ACCOUNT_ID=account1
+`.trim()
+      );
+
+      const originalHome = process.env.ARCHON_HOME;
+      process.env.ARCHON_HOME = envDir;
+
+      const result = checkExistingConfig();
+
+      expect(result).not.toBeNull();
+      expect(result?.hasClaude).toBe(true);
+      expect(result?.hasCodex).toBe(true);
+      expect(result?.platforms.telegram).toBe(true);
+      expect(result?.platforms.github).toBe(false);
+      expect(result?.platforms.slack).toBe(false);
+
+      if (originalHome === undefined) {
+        delete process.env.ARCHON_HOME;
+      } else {
+        process.env.ARCHON_HOME = originalHome;
+      }
+    });
+
+    it('detects existing Pi configuration from a Pi API key env var', () => {
+      const envDir = join(TEST_DIR, '.archon-pi');
+      mkdirSync(envDir, { recursive: true });
+      const envPath = join(envDir, '.env');
+
+      writeFileSync(envPath, 'ANTHROPIC_API_KEY=sk-ant-test\nDEFAULT_AI_ASSISTANT=pi\n');
+
+      const result = checkExistingConfig(envPath);
+
+      expect(result).not.toBeNull();
+      expect(result?.hasPi).toBe(true);
+      expect(result?.hasClaude).toBe(false);
+      expect(result?.hasCodex).toBe(false);
+    });
+  });
+
+  describe('generateEnvContent', () => {
+    it('should generate valid .env content for SQLite configuration', () => {
+      const content = generateEnvContent({
+        ai: {
+          claude: true,
+          claudeAuthType: 'global',
+          codex: false,
+          pi: false,
+          defaultAssistant: 'claude',
+        },
+        platforms: {
+          github: false,
+          telegram: false,
+          slack: false,
+        },
+        botDisplayName: 'Archon',
+      });
+
+      expect(content).toContain('# Using SQLite (default)');
+      expect(content).toContain('CLAUDE_USE_GLOBAL_AUTH=true');
+      expect(content).toContain('DEFAULT_AI_ASSISTANT=claude');
+      // PORT is intentionally commented out — server and Vite both default to 3090 when unset (#1152).
+      expect(content).toContain('# PORT=3090');
+      expect(content).not.toMatch(/^PORT=/m);
+      // Sanity: never emit an active DATABASE_URL line. The "# Set DATABASE_URL=..."
+      // hint is a comment and is fine — only an unprefixed assignment would be wrong.
+      expect(content).not.toMatch(/^DATABASE_URL=/m);
+    });
+
+    it('emits CLAUDE_BIN_PATH when claudeBinaryPath is configured', () => {
+      const content = generateEnvContent({
+        ai: {
+          claude: true,
+          claudeAuthType: 'global',
+          claudeBinaryPath: '/usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js',
+          codex: false,
+          pi: false,
+          defaultAssistant: 'claude',
+        },
+        platforms: { github: false, telegram: false, slack: false },
+        botDisplayName: 'Archon',
+      });
+
+      expect(content).toContain(
+        'CLAUDE_BIN_PATH=/usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js'
+      );
+    });
+
+    it('omits CLAUDE_BIN_PATH when not configured', () => {
+      const content = generateEnvContent({
+        ai: {
+          claude: true,
+          claudeAuthType: 'global',
+          codex: false,
+          pi: false,
+          defaultAssistant: 'claude',
+        },
+        platforms: { github: false, telegram: false, slack: false },
+        botDisplayName: 'Archon',
+      });
+
+      expect(content).not.toContain('CLAUDE_BIN_PATH=');
+    });
+
+    it('should include platform configurations', () => {
+      const content = generateEnvContent({
+        ai: {
+          claude: true,
+          claudeAuthType: 'global',
+          codex: false,
+          pi: false,
+          defaultAssistant: 'claude',
+        },
+        platforms: {
+          github: true,
+          telegram: true,
+          slack: false,
+        },
+        github: {
+          token: 'ghp_testtoken',
+          webhookSecret: 'testsecret123',
+          allowedUsers: 'user1,user2',
+          botMention: 'mybot',
+        },
+        telegram: {
+          botToken: '123:ABC',
+          allowedUserIds: '111,222',
+        },
+        botDisplayName: 'Archon',
+      });
+
+      expect(content).toContain('GH_TOKEN=ghp_testtoken');
+      expect(content).toContain('GITHUB_TOKEN=ghp_testtoken');
+      expect(content).toContain('WEBHOOK_SECRET=testsecret123');
+      expect(content).toContain('GITHUB_ALLOWED_USERS=user1,user2');
+      expect(content).toContain('GITHUB_BOT_MENTION=mybot');
+      expect(content).toContain('TELEGRAM_BOT_TOKEN=123:ABC');
+      expect(content).toContain('TELEGRAM_ALLOWED_USER_IDS=111,222');
+      expect(content).toContain('TELEGRAM_STREAMING_MODE=stream');
+    });
+
+    it('should include Codex tokens when configured', () => {
+      const content = generateEnvContent({
+        ai: {
+          claude: false,
+          codex: true,
+          pi: false,
+          codexTokens: {
+            idToken: 'id-token',
+            accessToken: 'access-token',
+            refreshToken: 'refresh-token',
+            accountId: 'account-id',
+          },
+          defaultAssistant: 'codex',
+        },
+        platforms: {
+          github: false,
+          telegram: false,
+          slack: false,
+        },
+        botDisplayName: 'Archon',
+      });
+
+      expect(content).toContain('CODEX_ID_TOKEN=id-token');
+      expect(content).toContain('CODEX_ACCESS_TOKEN=access-token');
+      expect(content).toContain('CODEX_REFRESH_TOKEN=refresh-token');
+      expect(content).toContain('CODEX_ACCOUNT_ID=account-id');
+      expect(content).toContain('DEFAULT_AI_ASSISTANT=codex');
+    });
+
+    it('should include custom bot display name', () => {
+      const content = generateEnvContent({
+        ai: {
+          claude: true,
+          claudeAuthType: 'global',
+          codex: false,
+          pi: false,
+          defaultAssistant: 'claude',
+        },
+        platforms: {
+          github: false,
+          telegram: false,
+          slack: false,
+        },
+        botDisplayName: 'MyCustomBot',
+      });
+
+      expect(content).toContain('BOT_DISPLAY_NAME=MyCustomBot');
+    });
+
+    it('should not include bot display name when default', () => {
+      const content = generateEnvContent({
+        ai: {
+          claude: true,
+          claudeAuthType: 'global',
+          codex: false,
+          pi: false,
+          defaultAssistant: 'claude',
+        },
+        platforms: {
+          github: false,
+          telegram: false,
+          slack: false,
+        },
+        botDisplayName: 'Archon',
+      });
+
+      expect(content).not.toContain('BOT_DISPLAY_NAME=');
+    });
+
+    it('should include Slack configuration', () => {
+      const content = generateEnvContent({
+        ai: {
+          claude: true,
+          claudeAuthType: 'global',
+          codex: false,
+          pi: false,
+          defaultAssistant: 'claude',
+        },
+        platforms: {
+          github: false,
+          telegram: false,
+          slack: true,
+        },
+        slack: {
+          botToken: 'xoxb-test',
+          appToken: 'xapp-test',
+          allowedUserIds: 'U123',
+        },
+        botDisplayName: 'Archon',
+      });
+
+      expect(content).toContain('SLACK_BOT_TOKEN=xoxb-test');
+      expect(content).toContain('SLACK_APP_TOKEN=xapp-test');
+      expect(content).toContain('SLACK_ALLOWED_USER_IDS=U123');
+      expect(content).toContain('SLACK_STREAMING_MODE=batch');
+    });
+
+    it('emits Pi API key when Pi is configured with API key', () => {
+      const content = generateEnvContent({
+        ai: {
+          claude: false,
+          codex: false,
+          pi: true,
+          piApiKey: 'sk-ant-test',
+          piApiKeyEnvVar: 'ANTHROPIC_API_KEY',
+          defaultAssistant: 'pi',
+        },
+        platforms: { github: false, telegram: false, slack: false },
+        botDisplayName: 'Archon',
+      });
+
+      expect(content).toContain('ANTHROPIC_API_KEY=sk-ant-test');
+      expect(content).toContain('DEFAULT_AI_ASSISTANT=pi');
+      expect(content).not.toContain('# Pi not configured');
+    });
+
+    it('emits Pi placeholder comment when Pi is configured without API key', () => {
+      const content = generateEnvContent({
+        ai: { claude: false, codex: false, pi: true, defaultAssistant: 'pi' },
+        platforms: { github: false, telegram: false, slack: false },
+        botDisplayName: 'Archon',
+      });
+
+      expect(content).toContain('# Pi configured');
+      // No active ANTHROPIC_API_KEY assignment — the example appears only in a
+      // commented-out hint.
+      expect(content).not.toMatch(/^ANTHROPIC_API_KEY=/m);
+      expect(content).toContain('DEFAULT_AI_ASSISTANT=pi');
+    });
+
+    it('emits "Pi not configured" comment when Pi is false', () => {
+      const content = generateEnvContent({
+        ai: {
+          claude: true,
+          claudeAuthType: 'global',
+          codex: false,
+          pi: false,
+          defaultAssistant: 'claude',
+        },
+        platforms: { github: false, telegram: false, slack: false },
+        botDisplayName: 'Archon',
+      });
+
+      expect(content).toContain('# Pi not configured');
+      expect(content).not.toMatch(/^ANTHROPIC_API_KEY=/m);
+    });
+
+    it('generates valid content for mixed Claude+Pi setup', () => {
+      const content = generateEnvContent({
+        ai: {
+          claude: true,
+          claudeAuthType: 'global',
+          codex: false,
+          pi: true,
+          piApiKey: 'or-key',
+          piApiKeyEnvVar: 'OPENROUTER_API_KEY',
+          defaultAssistant: 'claude',
+        },
+        platforms: { github: false, telegram: false, slack: false },
+        botDisplayName: 'Archon',
+      });
+
+      expect(content).toContain('CLAUDE_USE_GLOBAL_AUTH=true');
+      expect(content).toContain('OPENROUTER_API_KEY=or-key');
+      expect(content).toContain('DEFAULT_AI_ASSISTANT=claude');
+      expect(content).toContain('# Pi Authentication');
+    });
+  });
+
+  describe('spawnTerminalWithSetup', () => {
+    // Skip this test because it requires a terminal emulator to be present
+    // and spawn() throws synchronously when executable is not found in PATH
+    // The actual functionality is manually tested
+    it.skip('should return a SpawnResult object (requires terminal emulator)', () => {
+      const result = spawnTerminalWithSetup(TEST_DIR);
+
+      expect(result).toHaveProperty('success');
+      expect(typeof result.success).toBe('boolean');
+      if (!result.success) {
+        expect(result).toHaveProperty('error');
+      }
+    });
+
+    it('should export spawnTerminalWithSetup function', () => {
+      // Just verify the function is exported and callable
+      expect(typeof spawnTerminalWithSetup).toBe('function');
+    });
+  });
+
+  describe('copyArchonSkill', () => {
+    it('should create skill files in target directory', async () => {
+      const target = join(TEST_DIR, 'skill-target');
+      mkdirSync(target, { recursive: true });
+
+      await copyArchonSkill(target);
+
+      expect(existsSync(join(target, '.claude', 'skills', 'archon', 'SKILL.md'))).toBe(true);
+      expect(existsSync(join(target, '.claude', 'skills', 'archon', 'guides', 'setup.md'))).toBe(
+        true
+      );
+      expect(
+        existsSync(join(target, '.claude', 'skills', 'archon', 'references', 'workflow-dag.md'))
+      ).toBe(true);
+      expect(
+        existsSync(join(target, '.claude', 'skills', 'archon', 'examples', 'dag-workflow.yaml'))
+      ).toBe(true);
+      // Codex path is also populated
+      expect(existsSync(join(target, '.agents', 'skills', 'archon', 'SKILL.md'))).toBe(true);
+      expect(existsSync(join(target, '.agents', 'skills', 'manage-run', 'SKILL.md'))).toBe(true);
+    });
+
+    it('should write non-empty content to skill files', async () => {
+      const target = join(TEST_DIR, 'skill-target-content');
+      mkdirSync(target, { recursive: true });
+
+      await copyArchonSkill(target);
+
+      const content = readFileSync(
+        join(target, '.claude', 'skills', 'archon', 'SKILL.md'),
+        'utf-8'
+      );
+      expect(content.length).toBeGreaterThan(0);
+      expect(content).toContain('archon');
+      // Codex SKILL.md mirrors the Claude one
+      const codexContent = readFileSync(
+        join(target, '.agents', 'skills', 'archon', 'SKILL.md'),
+        'utf-8'
+      );
+      expect(codexContent).toBe(content);
+    });
+
+    it('should overwrite existing skill files', async () => {
+      const target = join(TEST_DIR, 'skill-target-overwrite');
+      const skillDir = join(target, '.claude', 'skills', 'archon');
+      const codexSkillDir = join(target, '.agents', 'skills', 'archon');
+      mkdirSync(skillDir, { recursive: true });
+      mkdirSync(codexSkillDir, { recursive: true });
+      writeFileSync(join(skillDir, 'SKILL.md'), 'old content');
+      writeFileSync(join(codexSkillDir, 'SKILL.md'), 'old codex content');
+
+      await copyArchonSkill(target);
+
+      const content = readFileSync(join(skillDir, 'SKILL.md'), 'utf-8');
+      expect(content).not.toBe('old content');
+      const codexContent = readFileSync(join(codexSkillDir, 'SKILL.md'), 'utf-8');
+      expect(codexContent).not.toBe('old codex content');
+    });
+
+    it('should create skill files even when target directory does not exist', async () => {
+      const target = join(TEST_DIR, 'non-existent-parent', 'skill-target-new');
+      // Do NOT pre-create target — copyArchonSkill must handle it
+
+      await copyArchonSkill(target);
+
+      expect(existsSync(join(target, '.claude', 'skills', 'archon', 'SKILL.md'))).toBe(true);
+      expect(existsSync(join(target, '.agents', 'skills', 'archon', 'SKILL.md'))).toBe(true);
+    });
+  });
+
+  describe('bootstrapProjectConfig', () => {
+    it('creates .archon/config.yaml when it does not exist', () => {
+      const target = join(TEST_DIR, 'bootstrap-target');
+      mkdirSync(target, { recursive: true });
+
+      const result = bootstrapProjectConfig(target);
+
+      expect(result.state).toBe('created');
+      expect(result.path).toBe(join(target, '.archon', 'config.yaml'));
+      expect(existsSync(result.path)).toBe(true);
+      const content = readFileSync(result.path, 'utf-8');
+      // Must be valid YAML — comment lines only — so loaders treat it as empty.
+      expect(content.split('\n').every(line => line === '' || line.startsWith('#'))).toBe(true);
+      expect(content).toContain('Project-scoped Archon config');
+      expect(content).toContain('archon.diy/reference/configuration');
+    });
+
+    it('creates the .archon directory if missing (idempotent on parent)', () => {
+      const target = join(TEST_DIR, 'bootstrap-no-archon-dir');
+      mkdirSync(target, { recursive: true });
+      // Do NOT pre-create .archon — bootstrap must create it
+
+      const result = bootstrapProjectConfig(target);
+
+      expect(result.state).toBe('created');
+      expect(existsSync(join(target, '.archon'))).toBe(true);
+    });
+
+    it('is idempotent — leaves an existing config untouched', () => {
+      const target = join(TEST_DIR, 'bootstrap-existing');
+      const archonDir = join(target, '.archon');
+      mkdirSync(archonDir, { recursive: true });
+      const userContent = '# my custom config\nassistants:\n  claude:\n    model: opus\n';
+      writeFileSync(join(archonDir, 'config.yaml'), userContent);
+
+      const result = bootstrapProjectConfig(target);
+
+      expect(result.state).toBe('existed');
+      const after = readFileSync(join(archonDir, 'config.yaml'), 'utf-8');
+      expect(after).toBe(userContent);
+    });
+
+    it('returns failed state without throwing when the target path is unwritable', () => {
+      // Pointing at a path inside a non-existent parent that mkdirSync can
+      // create succeeds. Use a deeply-nested path inside a regular file
+      // (which fs cannot mkdir into) to force a real failure.
+      const blocker = join(TEST_DIR, 'blocker-file');
+      writeFileSync(blocker, 'not a directory');
+      // mkdir under a file path fails with ENOTDIR — that's the failure mode
+      // we want to model (read-only FS, permission denied, etc.).
+      const result = bootstrapProjectConfig(blocker);
+
+      expect(result.state).toBe('failed');
+      if (result.state === 'failed') {
+        expect(result.error.length).toBeGreaterThan(0);
+      }
+    });
+  });
+});
+
+describe('detectClaudeExecutablePath probe order', () => {
+  // Use spies on the exported probe wrappers so each tier can be controlled
+  // independently without touching the real filesystem or shell.
+  let fileExistsSpy: ReturnType<typeof spyOn>;
+  let npmRootSpy: ReturnType<typeof spyOn>;
+  let whichSpy: ReturnType<typeof spyOn>;
+
+  beforeEach(() => {
+    fileExistsSpy = spyOn(setupModule, 'probeFileExists').mockReturnValue(false);
+    npmRootSpy = spyOn(setupModule, 'probeNpmRoot').mockReturnValue(null);
+    whichSpy = spyOn(setupModule, 'probeWhichClaude').mockReturnValue(null);
+  });
+
+  afterEach(() => {
+    fileExistsSpy.mockRestore();
+    npmRootSpy.mockRestore();
+    whichSpy.mockRestore();
+  });
+
+  it('returns the native installer path when present (tier 1 wins)', () => {
+    // Native path exists; subsequent probes must not be called.
+    fileExistsSpy.mockImplementation(
+      (p: string) => p.includes('.local/bin/claude') || p.includes('.local\\bin\\claude')
+    );
+    const result = detectClaudeExecutablePath();
+    expect(result).toBeTruthy();
+    expect(result).toMatch(/\.local[\\/]bin[\\/]claude/);
+    // Tier 2 / 3 must not have been consulted.
+    expect(npmRootSpy).not.toHaveBeenCalled();
+    expect(whichSpy).not.toHaveBeenCalled();
+  });
+
+  it('falls through to npm cli.js when native is missing (tier 2 wins)', () => {
+    // Use path.join so the expected result matches whatever separator the
+    // production code produces on the current platform (backslash on Windows,
+    // forward slash elsewhere).
+    const npmRoot = join('fake', 'npm', 'root');
+    const expectedCliJs = join(npmRoot, '@anthropic-ai', 'claude-code', 'cli.js');
+    npmRootSpy.mockReturnValue(npmRoot);
+    fileExistsSpy.mockImplementation((p: string) => p === expectedCliJs);
+    const result = detectClaudeExecutablePath();
+    expect(result).toBe(expectedCliJs);
+    // Tier 3 must not have been consulted.
+    expect(whichSpy).not.toHaveBeenCalled();
+  });
+
+  it('falls through to which/where when native and npm probes both miss (tier 3 wins)', () => {
+    npmRootSpy.mockReturnValue('/fake/npm/root');
+    // Native miss, npm cli.js miss, but `which claude` returns a path that exists.
+    whichSpy.mockReturnValue('/opt/homebrew/bin/claude');
+    fileExistsSpy.mockImplementation((p: string) => p === '/opt/homebrew/bin/claude');
+    const result = detectClaudeExecutablePath();
+    expect(result).toBe('/opt/homebrew/bin/claude');
+  });
+
+  it('returns null when every probe misses', () => {
+    // All defaults already return false/null; nothing to override.
+    expect(detectClaudeExecutablePath()).toBeNull();
+  });
+
+  it('does not return a which-resolved path that fails the existsSync check', () => {
+    // `which` returns a path string but the file is not actually present
+    // (stale PATH entry, dangling symlink, etc.) — must not be returned.
+    npmRootSpy.mockReturnValue('/fake/npm/root');
+    whichSpy.mockReturnValue('/stale/path/claude');
+    fileExistsSpy.mockReturnValue(false);
+    expect(detectClaudeExecutablePath()).toBeNull();
+  });
+
+  it('skips npm tier when probeNpmRoot returns null (e.g. npm not installed)', () => {
+    // npm probe fails; tier 3 must still run.
+    whichSpy.mockReturnValue('/usr/local/bin/claude');
+    fileExistsSpy.mockImplementation((p: string) => p === '/usr/local/bin/claude');
+    const result = detectClaudeExecutablePath();
+    expect(result).toBe('/usr/local/bin/claude');
+    expect(npmRootSpy).toHaveBeenCalled();
+  });
+});
+
+/**
+ * Tests for the three-path env write model (#1303).
+ *
+ * Invariants:
+ *   - <repo>/.env is NEVER written.
+ *   - Default write targets ~/.archon/.env (home scope) with merge preserving
+ *     existing non-empty values.
+ *   - --scope project writes to <repo>/.archon/.env.
+ *   - --force overwrites the target wholesale, still writes a backup.
+ *   - Merge preserves user-added keys not in the proposed content.
+ */
+describe('writeScopedEnv (#1303)', () => {
+  const ROOT = join(tmpdir(), 'archon-write-scoped-env-test-' + Date.now());
+  const HOME_DIR = join(ROOT, 'archon-home');
+  const REPO_DIR = join(ROOT, 'repo');
+  let originalArchonHome: string | undefined;
+
+  beforeEach(() => {
+    mkdirSync(HOME_DIR, { recursive: true });
+    mkdirSync(REPO_DIR, { recursive: true });
+    originalArchonHome = process.env.ARCHON_HOME;
+    process.env.ARCHON_HOME = HOME_DIR;
+  });
+
+  afterEach(() => {
+    if (originalArchonHome === undefined) delete process.env.ARCHON_HOME;
+    else process.env.ARCHON_HOME = originalArchonHome;
+    rmSync(ROOT, { recursive: true, force: true });
+  });
+
+  it('fresh home scope writes content with no backup', () => {
+    const result = writeScopedEnv('DATABASE_URL=sqlite:local\nPORT=3090\n', {
+      scope: 'home',
+      repoPath: REPO_DIR,
+      force: false,
+    });
+    expect(result.targetPath).toBe(join(HOME_DIR, '.env'));
+    expect(result.backupPath).toBeNull();
+    expect(result.preservedKeys).toEqual([]);
+    expect(readFileSync(result.targetPath, 'utf-8')).toContain('DATABASE_URL=sqlite:local');
+  });
+
+  it('merge preserves user-added custom keys across re-runs', () => {
+    // First write
+    writeScopedEnv('DATABASE_URL=sqlite:local\n', {
+      scope: 'home',
+      repoPath: REPO_DIR,
+      force: false,
+    });
+    // User adds a custom var
+    const envPath = join(HOME_DIR, '.env');
+    writeFileSync(envPath, readFileSync(envPath, 'utf-8') + 'MY_CUSTOM_SECRET=preserve-me\n');
+    // Second setup run (proposes a different-shape config)
+    const result = writeScopedEnv('DATABASE_URL=sqlite:local\nPORT=3090\n', {
+      scope: 'home',
+      repoPath: REPO_DIR,
+      force: false,
+    });
+    const merged = parseDotenv(readFileSync(result.targetPath, 'utf-8'));
+    expect(merged.MY_CUSTOM_SECRET).toBe('preserve-me');
+    expect(merged.PORT).toBe('3090');
+    expect(result.backupPath).not.toBeNull();
+  });
+
+  it('merge preserves existing PostgreSQL DATABASE_URL when proposed is SQLite', () => {
+    const envPath = join(HOME_DIR, '.env');
+    writeFileSync(envPath, 'DATABASE_URL=postgresql://localhost:5432/mydb\n');
+    const result = writeScopedEnv(
+      '# Using SQLite (default) - no DATABASE_URL needed\nDATABASE_URL=\n',
+      { scope: 'home', repoPath: REPO_DIR, force: false }
+    );
+    const merged = parseDotenv(readFileSync(result.targetPath, 'utf-8'));
+    expect(merged.DATABASE_URL).toBe('postgresql://localhost:5432/mydb');
+    expect(result.preservedKeys).toContain('DATABASE_URL');
+  });
+
+  it('merge preserves existing bot tokens', () => {
+    const envPath = join(HOME_DIR, '.env');
+    writeFileSync(
+      envPath,
+      'SLACK_BOT_TOKEN=xoxb-existing\nCLAUDE_CODE_OAUTH_TOKEN=sk-ant-existing\n'
+    );
+    // Proposed content has these keys with different/empty values
+    writeScopedEnv('SLACK_BOT_TOKEN=xoxb-new-placeholder\nCLAUDE_CODE_OAUTH_TOKEN=\n', {
+      scope: 'home',
+      repoPath: REPO_DIR,
+      force: false,
+    });
+    const merged = parseDotenv(readFileSync(join(HOME_DIR, '.env'), 'utf-8'));
+    expect(merged.SLACK_BOT_TOKEN).toBe('xoxb-existing');
+    expect(merged.CLAUDE_CODE_OAUTH_TOKEN).toBe('sk-ant-existing');
+  });
+
+  it('--force overwrites wholesale but writes a timestamped backup', () => {
+    const envPath = join(HOME_DIR, '.env');
+    writeFileSync(envPath, 'OLD_KEY=old\nDATABASE_URL=postgresql://legacy\n');
+    const result = writeScopedEnv('DATABASE_URL=sqlite:local\nNEW_KEY=new\n', {
+      scope: 'home',
+      repoPath: REPO_DIR,
+      force: true,
+    });
+    expect(result.forced).toBe(true);
+    expect(result.backupPath).not.toBeNull();
+    expect(result.backupPath).toMatch(/\.archon-backup-\d{4}-\d{2}-\d{2}T/);
+    // Backup has the old content
+    expect(readFileSync(result.backupPath as string, 'utf-8')).toContain('OLD_KEY=old');
+    // Target has the new content only — OLD_KEY is gone
+    const newContent = readFileSync(result.targetPath, 'utf-8');
+    expect(newContent).toContain('DATABASE_URL=sqlite:local');
+    expect(newContent).toContain('NEW_KEY=new');
+    expect(newContent).not.toContain('OLD_KEY');
+  });
+
+  it('--force on a non-existent target writes cleanly with no backup', () => {
+    const result = writeScopedEnv('PORT=3090\n', {
+      scope: 'home',
+      repoPath: REPO_DIR,
+      force: true,
+    });
+    expect(result.backupPath).toBeNull();
+    expect(result.forced).toBe(false); // no existing file means force was effectively a no-op
+  });
+
+  it('--scope project writes to <repo>/.archon/.env, creating the directory', () => {
+    expect(existsSync(join(REPO_DIR, '.archon'))).toBe(false);
+    const result = writeScopedEnv('FOO=bar\n', {
+      scope: 'project',
+      repoPath: REPO_DIR,
+      force: false,
+    });
+    expect(result.targetPath).toBe(join(REPO_DIR, '.archon', '.env'));
+    expect(existsSync(result.targetPath)).toBe(true);
+    expect(existsSync(join(HOME_DIR, '.env'))).toBe(false);
+  });
+
+  it('<repo>/.env is never touched by writeScopedEnv in any scope/mode', () => {
+    const repoEnvPath = join(REPO_DIR, '.env');
+    const sentinel = 'USER_SECRET=do-not-touch\n';
+    writeFileSync(repoEnvPath, sentinel);
+    // Home scope, merge
+    writeScopedEnv('FOO=bar\n', { scope: 'home', repoPath: REPO_DIR, force: false });
+    // Home scope, force
+    writeScopedEnv('FOO=baz\n', { scope: 'home', repoPath: REPO_DIR, force: true });
+    // Project scope, merge
+    writeScopedEnv('FOO=qux\n', { scope: 'project', repoPath: REPO_DIR, force: false });
+    // Project scope, force
+    writeScopedEnv('FOO=xyz\n', { scope: 'project', repoPath: REPO_DIR, force: true });
+    expect(readFileSync(repoEnvPath, 'utf-8')).toBe(sentinel);
+  });
+
+  it('resolveScopedEnvPath returns the archon-owned path for each scope', () => {
+    expect(resolveScopedEnvPath('home', REPO_DIR)).toBe(join(HOME_DIR, '.env'));
+    expect(resolveScopedEnvPath('project', REPO_DIR)).toBe(join(REPO_DIR, '.archon', '.env'));
+  });
+
+  it('serializeEnv round-trips through dotenv.parse', () => {
+    const entries = {
+      SIMPLE: 'value',
+      WITH_SPACE: 'hello world',
+      WITH_HASH: 'value#not-a-comment',
+      EMPTY: '',
+    };
+    const serialized = serializeEnv(entries);
+    const parsed = parseDotenv(serialized);
+    expect(parsed.SIMPLE).toBe('value');
+    expect(parsed.WITH_SPACE).toBe('hello world');
+    expect(parsed.WITH_HASH).toBe('value#not-a-comment');
+    expect(parsed.EMPTY).toBe('');
+  });
+
+  it('serializeEnv escapes \\r so bare CRs survive round-trip', () => {
+    const entries = { WITH_CR: 'line1\rline2', WITH_CRLF: 'a\r\nb' };
+    const serialized = serializeEnv(entries);
+    const parsed = parseDotenv(serialized);
+    expect(parsed.WITH_CR).toBe('line1\rline2');
+    expect(parsed.WITH_CRLF).toBe('a\r\nb');
+  });
+
+  it('merge treats whitespace-only existing values as empty (replaces them)', () => {
+    const envPath = join(HOME_DIR, '.env');
+    writeFileSync(envPath, 'API_KEY=   \nNORMAL=keep-me\n');
+    const result = writeScopedEnv('API_KEY=real-token\nNORMAL=from-wizard\n', {
+      scope: 'home',
+      repoPath: REPO_DIR,
+      force: false,
+    });
+    const merged = parseDotenv(readFileSync(result.targetPath, 'utf-8'));
+    // Whitespace-only API_KEY was replaced by the proposed value.
+    expect(merged.API_KEY).toBe('real-token');
+    // Non-empty NORMAL was preserved and reported.
+    expect(merged.NORMAL).toBe('keep-me');
+    expect(result.preservedKeys).toContain('NORMAL');
+    expect(result.preservedKeys).not.toContain('API_KEY');
+  });
+});
+
+describe('writeHomePiModelConfig', () => {
+  let tmpDir: string;
+  let originalHome: string | undefined;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'archon-pi-config-'));
+    originalHome = process.env.ARCHON_HOME;
+    process.env.ARCHON_HOME = tmpDir;
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+    if (originalHome !== undefined) {
+      process.env.ARCHON_HOME = originalHome;
+    } else {
+      delete process.env.ARCHON_HOME;
+    }
+  });
+
+  it('writes fresh assistants.pi.model block when config is empty', () => {
+    writeHomePiModelConfig('anthropic/claude-haiku-4-5');
+    const content = readFileSync(join(tmpDir, 'config.yaml'), 'utf-8');
+    expect(content).toContain('assistants:');
+    expect(content).toContain('pi:');
+    expect(content).toContain('model: "anthropic/claude-haiku-4-5"');
+  });
+
+  it('writes fresh block when config does not exist yet', () => {
+    // No config.yaml pre-created — function must create it.
+    writeHomePiModelConfig('openai/gpt-4o');
+    expect(existsSync(join(tmpDir, 'config.yaml'))).toBe(true);
+    const content = readFileSync(join(tmpDir, 'config.yaml'), 'utf-8');
+    expect(content).toContain('pi:');
+    expect(content).toContain('model: "openai/gpt-4o"');
+  });
+
+  it('skips write when existing config already contains pi: (idempotent)', () => {
+    writeFileSync(join(tmpDir, 'config.yaml'), 'assistants:\n  pi:\n    model: "old"\n');
+    writeHomePiModelConfig('anthropic/claude-haiku-4-5');
+    const content = readFileSync(join(tmpDir, 'config.yaml'), 'utf-8');
+    expect(content).toContain('model: "old"');
+    expect(content).not.toContain('claude-haiku-4-5');
+  });
+
+  it('does not write pi: block when config has assistants: but no pi: (shows note instead)', () => {
+    writeFileSync(join(tmpDir, 'config.yaml'), 'assistants:\n  claude:\n    model: sonnet\n');
+    writeHomePiModelConfig('openai/gpt-4o');
+    const content = readFileSync(join(tmpDir, 'config.yaml'), 'utf-8');
+    // Should NOT have injected a pi: key — only a note() was shown.
+    expect(content).not.toContain('pi:');
+  });
+
+  it('escapes double quotes in the model name', () => {
+    writeHomePiModelConfig('vendor/"weird-model"');
+    const content = readFileSync(join(tmpDir, 'config.yaml'), 'utf-8');
+    expect(content).toContain('\\"weird-model\\"');
+  });
+
+  it('does not false-positive on api: substring (regex guard for includes bug)', () => {
+    // A config with `api:` but no `pi:` should fall through to the append branch,
+    // not the idempotent-skip branch.
+    writeFileSync(join(tmpDir, 'config.yaml'), '# config\napi:\n  key: abc\n');
+    writeHomePiModelConfig('openai/gpt-4o');
+    const content = readFileSync(join(tmpDir, 'config.yaml'), 'utf-8');
+    expect(content).toContain('pi:');
+  });
+});
+
+describe('checkPiModule', () => {
+  it('returns ok:true when loader resolves', async () => {
+    const result = await checkPiModule(async () => ({}));
+    expect(result.ok).toBe(true);
+  });
+
+  it('returns ok:false when loader throws (Pi binary missing)', async () => {
+    const result = await checkPiModule(async () => {
+      throw new Error('Cannot find module @earendil-works/pi-coding-agent');
+    });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('pi-coding-agent');
+  });
+});
+
+describe('buildDefaultModelChoices (#1999)', () => {
+  it('leads with "Keep SDK default" when no current model and ends with the free-text escape', () => {
+    const choices = buildDefaultModelChoices('claude', undefined);
+    expect(choices[0].value).toBe('__keep__');
+    expect(choices[0].label).toBe('Keep SDK default');
+    expect(choices[choices.length - 1].value).toBe('__custom__');
+  });
+
+  it('surfaces the current model in the keep option label on re-run', () => {
+    const choices = buildDefaultModelChoices('claude', 'opus');
+    expect(choices[0].label).toBe('Keep current (opus)');
+  });
+
+  it('includes the curated claude shortlist between keep and custom', () => {
+    const values = buildDefaultModelChoices('claude', undefined).map(c => c.value);
+    expect(values).toEqual(['__keep__', 'sonnet', 'opus', 'haiku', '__custom__']);
+  });
+
+  it('includes the curated codex shortlist', () => {
+    const values = buildDefaultModelChoices('codex', undefined).map(c => c.value);
+    expect(values).toEqual([
+      '__keep__',
+      'gpt-5.6-sol',
+      'gpt-5.6-terra',
+      'gpt-5.6-luna',
+      '__custom__',
+    ]);
+  });
+
+  it('falls back to keep + custom only for providers without a curated list', () => {
+    const values = buildDefaultModelChoices('some-future-provider', undefined).map(c => c.value);
+    expect(values).toEqual(['__keep__', '__custom__']);
+  });
+});
+
+describe('writeInstallDefaults (#1999)', () => {
+  const baseAi = {
+    claude: true,
+    codex: false,
+    pi: false,
+    defaultAssistant: 'claude',
+  };
+
+  it('writes provider + model together when a chat model was chosen', async () => {
+    const calls: [string, string | undefined][] = [];
+    const written = await writeInstallDefaults(
+      { ...baseAi, defaultAssistantSelected: true, defaultModel: 'opus' },
+      async (provider, model) => {
+        calls.push([provider, model]);
+      }
+    );
+    expect(written).toBe(true);
+    expect(calls).toEqual([['claude', 'opus']]);
+  });
+
+  it('writes defaultAssistant alone when the model was skipped (stale-config guard)', async () => {
+    // The .env DEFAULT_AI_ASSISTANT is fallback-only, so skipping the model
+    // must still record the wizard's fresh selection in config.yaml.
+    const calls: [string, string | undefined][] = [];
+    const written = await writeInstallDefaults(
+      { ...baseAi, defaultAssistantSelected: true },
+      async (provider, model) => {
+        calls.push([provider, model]);
+      }
+    );
+    expect(written).toBe(true);
+    expect(calls).toEqual([['claude', undefined]]);
+  });
+
+  it('does not write when the default was a registry fallback, not a selection', async () => {
+    // 'add' mode and the no-assistant early return leave
+    // defaultAssistantSelected unset — the fallback value must never clobber
+    // an existing config.yaml defaultAssistant.
+    const calls: unknown[] = [];
+    const written = await writeInstallDefaults({ ...baseAi }, async (...args) => {
+      calls.push(args);
+    });
+    expect(written).toBe(false);
+    expect(calls).toEqual([]);
+  });
+
+  it('is non-fatal when the write fails (env write already succeeded)', async () => {
+    const written = await writeInstallDefaults(
+      { ...baseAi, defaultAssistantSelected: true, defaultModel: 'opus' },
+      async () => {
+        throw Object.assign(new Error('read-only fs'), { code: 'EROFS' });
+      }
+    );
+    expect(written).toBe(false);
+  });
+});
+
+describe('readInstallDefaultModel (#1999)', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'archon-default-model-'));
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  const configAt = (content: string): string => {
+    const path = join(tmpDir, 'config.yaml');
+    writeFileSync(path, content);
+    return path;
+  };
+
+  it('returns the configured model from assistants.<provider>.model', () => {
+    const path = configAt(
+      'assistants:\n  claude:\n    model: opus\n  codex:\n    model: gpt-5.5\n'
+    );
+    expect(readInstallDefaultModel('claude', path)).toBe('opus');
+    expect(readInstallDefaultModel('codex', path)).toBe('gpt-5.5');
+  });
+
+  it('returns undefined when the config file does not exist', () => {
+    expect(readInstallDefaultModel('claude', join(tmpDir, 'missing.yaml'))).toBeUndefined();
+  });
+
+  it('returns undefined when the provider has no model entry', () => {
+    const path = configAt('assistants:\n  claude:\n    settingSources:\n      - project\n');
+    expect(readInstallDefaultModel('claude', path)).toBeUndefined();
+    expect(readInstallDefaultModel('codex', path)).toBeUndefined();
+  });
+
+  it('treats inherit / empty / non-string models as unset', () => {
+    expect(
+      readInstallDefaultModel('claude', configAt('assistants:\n  claude:\n    model: inherit\n'))
+    ).toBeUndefined();
+    expect(
+      readInstallDefaultModel('claude', configAt('assistants:\n  claude:\n    model: ""\n'))
+    ).toBeUndefined();
+    expect(
+      readInstallDefaultModel('claude', configAt('assistants:\n  claude:\n    model: 42\n'))
+    ).toBeUndefined();
+  });
+
+  it('returns undefined (not a throw) on malformed YAML', () => {
+    // Best-effort hint read: a hand-edited broken config must not break setup.
+    expect(readInstallDefaultModel('claude', configAt(':: not yaml ::\n\t{ nope'))).toBeUndefined();
+  });
+});

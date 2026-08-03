@@ -1,0 +1,388 @@
+---
+title: Quick Reference
+description: Every CLI command, variable, and YAML option in one scannable page.
+category: book
+part: advanced
+audience: [user]
+sidebar:
+  order: 10
+---
+
+This chapter collects every CLI command, variable, and YAML option in one place. No explanations — just the facts. Use it when you know what you need and just need the syntax.
+
+---
+
+## CLI Commands
+
+### `archon workflow`
+
+| Command | Description |
+|---------|-------------|
+| `archon workflow list` | List all available workflows |
+| `archon workflow list --json` | Machine-readable JSON output |
+| `archon workflow run <name> "<prompt>"` | Run a workflow |
+| `archon workflow run <name> --branch <name> "<prompt>"` | Run with an explicit branch |
+| `archon workflow run <name> --no-worktree "<prompt>"` | Run in the live checkout (no isolation) |
+| `archon workflow run <name> --cwd /path "<prompt>"` | Run against a specific directory |
+| `archon workflow status` | Show status of active workflow runs |
+| `archon workflow resume <run-id>` | Resume a failed or paused workflow run |
+| `archon workflow abandon <run-id>` | Abandon a workflow run (running, paused, or failed) |
+| `archon workflow cleanup [days]` | Delete old workflow run records (default: 7 days) |
+
+### `archon isolation`
+
+| Command | Description |
+|---------|-------------|
+| `archon isolation list` | List all active worktrees |
+| `archon isolation cleanup` | Remove stale worktrees (older than 7 days) |
+| `archon isolation cleanup <days>` | Remove stale worktrees older than N days |
+| `archon isolation cleanup --merged` | Remove worktrees whose branches merged into main |
+| `archon isolation cleanup --merged --include-closed` | Also remove worktrees with closed (abandoned) PRs |
+
+### `archon complete`
+
+| Command | Description |
+|---------|-------------|
+| `archon complete <branch>` | Remove worktree, local branch, and remote branch |
+| `archon complete <branch> --force` | Skip uncommitted-changes check |
+
+### `archon validate`
+
+| Command | Description |
+|---------|-------------|
+| `archon validate workflows` | Validate all workflow definitions |
+| `archon validate workflows <name>` | Validate a single workflow |
+| `archon validate workflows <name> --json` | Machine-readable validation output |
+| `archon validate commands` | Validate all command files |
+| `archon validate commands <name>` | Validate a single command |
+
+### `archon version`
+
+```bash
+archon version
+```
+
+---
+
+## Variables
+
+Variables are substituted at runtime in command bodies and workflow `prompt:` fields.
+
+| Variable | Available In | Contains |
+|----------|-------------|----------|
+| `$ARGUMENTS` / `$USER_MESSAGE` | Commands, prompts | The user's whole trigger message (positional `$1`/`$2`/`$3` are not supported) |
+| `$ARTIFACTS_DIR` | Commands, prompts | Absolute path to the workflow run's artifact directory |
+| `$WORKFLOW_ID` | Commands, prompts | The current workflow run ID |
+| `$BASE_BRANCH` | Commands, prompts | Base git branch -- `--base <branch>` (per dispatch), else `worktree.baseBranch`, else the codebase default, else auto-detected ([precedence](/reference/cli/#base-branch-precedence)) |
+| `$DOCS_DIR` | Commands, prompts | Documentation directory path (default: `docs/`) |
+| `$<nodeId>.output` | DAG `when:` conditions, downstream `prompt:` fields | The text output from a completed node |
+
+**Examples:**
+
+```bash
+# Pass a module name to a command
+archon workflow run my-workflow "auth"
+# $ARGUMENTS = "auth", $1 = "auth"
+
+# Multi-argument
+archon workflow run my-workflow "auth refresh-tokens"
+# $ARGUMENTS = "auth refresh-tokens", $1 = "auth", $2 = "refresh-tokens"
+```
+
+```yaml
+# Reference a node's output in a condition
+- id: implement
+  command: implement-changes
+  when: "$classify.output.type == 'BUG'"
+```
+
+---
+
+## Workflow YAML Schema
+
+### Top-Level Options
+
+| Field | Required | Type | Description |
+|-------|----------|------|-------------|
+| `name` | Yes | string | Identifies the workflow in `archon workflow list` |
+| `description` | Yes | string | Shown in listings and used by the router |
+| `nodes` | Yes | array | DAG nodes (see Node Options below) |
+| `provider` | No | string | Registered provider identifier (e.g. `claude`, `codex`). Default: `claude` |
+| `model` | No | string | Model for all nodes (`sonnet`, `opus`, `haiku`, or full model ID) |
+| `modelReasoningEffort` | No | string | Codex only: `minimal` \| `low` \| `medium` \| `high` \| `xhigh` |
+| `webSearchMode` | No | string | Codex only: `disabled` \| `cached` \| `live` |
+
+### Node Options (DAG)
+
+All nodes share these base fields:
+
+| Field | Required | Type | Description |
+|-------|----------|------|-------------|
+| `id` | Yes | string | Unique node identifier; used in `depends_on` and `$nodeId.output` |
+| `command` | One of | string | Package-local command name (packaged workflow) or shared command name (legacy workflow) |
+| `prompt` | One of | string | Inline AI instructions |
+| `bash` | One of | string | Shell script (runs without AI; stdout captured as `$nodeId.output`) |
+| `script` | One of | string | TypeScript/JavaScript (bun) or Python (uv) — inline or named package-local/shared reference. Requires `runtime`. See [Script Nodes](/guides/script-nodes/) |
+| `loop` | One of | object | Loop configuration (see Loop Options below) |
+| `loop_group` | One of | object | Multi-node sub-DAG repeated per iteration (see Loop Group Options below) |
+| `approval` | One of | object | Pause for human review; see [Approval Nodes](/guides/approval-nodes/) |
+| `cancel` | One of | string | Reason string; terminates the run with `cancelled` status (not `failed`). Usually gated with `when:` |
+| `include` | One of | string | Name of another workflow whose nodes are inlined at discovery as a namespaced sub-DAG; see [Reusing a Shared Sub-DAG](/guides/authoring-workflows/#reusing-a-shared-sub-dag-with-include) |
+| `workflow` | One of | string | Name of another workflow run at execution time as a separate governed CHILD run (own run record, gates, artifacts, cost); see [Composing a Governed Sub-Run](/guides/authoring-workflows/#composing-a-governed-sub-run-with-workflow) |
+| `depends_on` | No | string[] | Node IDs that must complete before this node runs |
+| `when` | No | string | Condition expression; node is skipped if false |
+| `trigger_rule` | No | string | Join semantics when multiple upstreams exist (see Trigger Rules) |
+| `provider` | No | string | Per-node provider override (any registered provider) |
+| `model` | No | string | Per-node model override |
+| `context` | No | `fresh` \| `shared` | Session context — `fresh` starts a new conversation, `shared` inherits from prior node |
+| `output_format` | No | JSON Schema | Enforce structured JSON output from this node |
+| `allowed_tools` | No | string[] | Restrict available tools to this list (Claude only) |
+| `denied_tools` | No | string[] | Remove specific tools from this node's context (Claude only) |
+| `idle_timeout` | No | number | Per-node idle timeout in milliseconds (default: 5 minutes) |
+| `retry` | No | object | Retry configuration for transient failures (see Retry Options). **Hard error on loop nodes** |
+| `hooks` | No | object | SDK hook callbacks (Claude only; see Hook Schema) |
+| `mcp` | No | string | Path to MCP server config JSON file (Claude only) |
+| `skills` | No | string[] | Skill names to preload into this node's context (Claude only) |
+| `agents` | No | object | Inline sub-agent definitions keyed by kebab-case ID. Claude only |
+
+**Script-specific fields** (required when `script:` is set):
+
+| Field | Required | Type | Description |
+|-------|----------|------|-------------|
+| `runtime` | Yes | `'bun'` \| `'uv'` | Which runtime executes the script. Must match file extension for named scripts (`.ts`/`.js` → bun, `.py` → uv) |
+| `deps` | No | string[] | Python dependencies for `uv run --with`. Ignored for bun (bun auto-installs) |
+| `timeout` | No | number | Hard kill in ms. Default: 120000 (2 min). Same semantics as `bash` timeout |
+
+**Workflow (sub-run)-specific fields** (when `workflow:` is set):
+
+| Field | Required | Type | Description |
+|-------|----------|------|-------------|
+| `input` | No | string | Data string forwarded as the child's `$ARGUMENTS`. Substituted like a `prompt:` body (`$nodeId.output`, workflow variables) |
+| `isolation` | No | `'inherit' \| 'worktree'` | Which checkout the child runs in. Default (and `'inherit'`) shares the parent's. `'worktree'` gives the child its own worktree + branch — opt-in only, never inferred, and it fails the node rather than falling back to the shared checkout when a worktree can't be created (folder projects, surfaces with no resolver) |
+| `fan_out` | No | object | Run one child per item of a runtime list: `items` (a `$node.output` ref or literal JSON array), `max_parallel` (default `5`, bounds concurrency not total), `join` (default `all_done`), `as` (reserved, rejected at load). Every child runs to its own terminal state; none cancels another |
+
+`retry` is rejected on `workflow:` nodes, and `workflow:` is rejected inside a `loop_group` body. The child's terminal output threads back as `$nodeId.output`; a child approval gate pauses the whole tree — approve the **child** by run id and the parent auto-resumes. A child gate is the exception: it works for a 1:1 sub-run, but a child that pauses inside a `fan_out:` expansion **fails the node** instead — a parent has one approval slot and cannot hand it to N children, so gate before or after the fan-out node rather than inside a child of it.
+
+**Approval-specific fields** (required when `approval:` is set):
+
+| Field | Required | Type | Description |
+|-------|----------|------|-------------|
+| `approval.message` | Yes | string | The message shown to the user when the workflow pauses |
+| `approval.capture_response` | No | boolean | `true` = user's comment becomes `$<node-id>.output`. Default: `false` |
+| `approval.on_reject.prompt` | No | string | AI rework prompt when the user rejects. `$REJECTION_REASON` substituted |
+| `approval.on_reject.max_attempts` | No | number | Max rework iterations before cancel. Range 1-10, default 3 |
+
+> **bash and script node timeout**: The `timeout` field is in **milliseconds** (default: 120000). This differs from hook `timeout`, which is in seconds.
+
+### Trigger Rules
+
+| Value | Behavior |
+|-------|----------|
+| `all_success` | Run only if all upstream nodes succeeded (default) |
+| `one_success` | Run if at least one upstream node succeeded |
+| `none_failed_min_one_success` | Run if no upstream failed and at least one succeeded |
+| `all_done` | Run after all upstream nodes complete, regardless of result |
+
+### Loop Node Options
+
+Defined under `loop:` inside a node:
+
+| Field | Required | Type | Description |
+|-------|----------|------|-------------|
+| `prompt` | One of `prompt`/`command` | string | Inline AI instructions executed each iteration |
+| `command` | One of `prompt`/`command` | string | Package-local or shared command whose body is the iteration prompt — exactly one of `prompt` or `command` |
+| `until` | Yes | string | Completion signal string — loop ends when AI output contains this |
+| `max_iterations` | Yes | number | Maximum iterations before the node fails |
+| `fresh_context` | No | boolean | Start a new session each iteration (default: false) |
+| `until_bash` | No | string | Shell script run after each iteration; exit 0 signals completion |
+| `interactive` | No | boolean | Pause at a human gate after each iteration for input via `/workflow approve` |
+| `gate_message` | No | string | Message shown at the interactive gate (required when `interactive: true`) |
+| `signal_completes` | No | boolean | Interactive loops only: a detected completion signal completes the node immediately (even on iteration 1) instead of gating (default: false) |
+
+**Example:**
+
+```yaml
+- id: refine
+  loop:
+    prompt: "Review the current draft and improve it. Output COMPLETE when done."
+    until: "COMPLETE"
+    max_iterations: 5
+```
+
+### Loop Group Options
+
+Defined under `loop_group:` inside a node — repeats a sealed multi-node sub-DAG
+per iteration (see [Cross-Node Loops](/guides/loop-nodes/#cross-node-loops-with-loop_group)):
+
+| Field | Required | Type | Description |
+|-------|----------|------|-------------|
+| `nodes` | Yes | node[] | Sub-DAG body re-run in full each iteration. Any node type, including nested `loop_group`. `depends_on` is body-scoped; body ids must not shadow outer ids |
+| `until` | Yes | string | Completion signal — checked in the body's terminal-node output |
+| `max_iterations` | Yes | number | Maximum iterations before the node fails |
+| `fresh_context` | No | boolean | `true` starts fresh body AI sessions each iteration (default: false — sessions continue) |
+| `until_bash` | No | string | Shell script run after each iteration; exit 0 signals completion |
+| `interactive` | No | boolean | Pause at a human gate after each non-completing iteration |
+| `gate_message` | No | string | Message shown at the interactive gate |
+| `signal_completes` | No | boolean | Interactive loops only: a detected completion signal completes the group immediately (even on iteration 1) instead of gating (default: false) |
+
+Body nodes can reference the previous iteration via
+`$LOOP_PREV.<nodeId>.output`, and outer-DAG outputs via plain `$nodeId.output`.
+`retry` is rejected on `loop_group` nodes; `model`/`provider` set on the group
+become defaults for body AI nodes.
+
+**Example:**
+
+```yaml
+- id: fix-loop
+  loop_group:
+    until: TESTS_PASS
+    max_iterations: 5
+    nodes:
+      - id: implement
+        prompt: "Fix the failing tests. Previous run: $LOOP_PREV.test.output"
+      - id: test
+        bash: bun test
+        depends_on: [implement]
+```
+
+### Retry Options
+
+Defined under `retry:` inside a node:
+
+| Field | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `max_attempts` | Yes | — | Retry attempts after the initial failure (max: 5) |
+| `delay_ms` | No | 3000 | Initial delay in milliseconds; doubles each attempt (1000-60000) |
+| `on_error` | No | `transient` | `transient` retries rate limits/network errors; `all` retries everything except fatal errors |
+
+> **Fatal errors are never retried**: auth failures, permission errors, and exhausted credit balances fail immediately regardless of retry config.
+
+---
+
+## Hook Schema
+
+Hooks are defined per-node under `hooks:`. See [Chapter 9](/book/hooks-and-quality/) for full examples.
+
+```yaml
+hooks:
+  PreToolUse:
+    - matcher: "Write|Edit"    # Regex against tool name. Omit to match all.
+      timeout: 60              # Seconds. Default: 60.
+      response:
+        hookSpecificOutput:
+          hookEventName: PreToolUse
+          additionalContext: "Verify the file before writing"
+          permissionDecision: deny    # allow | deny | ask
+          permissionDecisionReason: "Not allowed in this node"
+          updatedInput:               # Override tool arguments
+            file_path: "/sandbox/out.ts"
+  PostToolUse:
+    - matcher: "Read"
+      response:
+        hookSpecificOutput:
+          hookEventName: PostToolUse
+          additionalContext: "This file is read-only. Do not modify it."
+```
+
+| Hook Event | When it fires |
+|------------|--------------|
+| `PreToolUse` | Before a tool executes |
+| `PostToolUse` | After a tool completes successfully |
+| `PostToolUseFailure` | After a tool fails |
+| `SessionStart` / `SessionEnd` | On session lifecycle events |
+| `Stop` | When the agent stops |
+
+---
+
+## Directory Structure
+
+### `~/.archon/` (user-level)
+
+```
+~/.archon/
+├── config.yaml                        # Global configuration (non-secrets)
+├── archon.db                          # SQLite database (default; no DATABASE_URL needed)
+└── workspaces/
+    └── <owner>/
+        └── <repo>/
+            ├── source/                # Git clone or symlink to local path
+            ├── worktrees/             # Per-task git worktrees
+            ├── artifacts/             # Workflow artifacts (never committed)
+            └── logs/                  # Workflow execution logs (JSONL)
+```
+
+### `.archon/` (repo-level)
+
+```
+.archon/
+├── config.yaml                        # Repo-specific configuration
+├── commands/                          # Custom command files (*.md)
+│   └── my-command.md
+└── workflows/                         # Custom workflow files (*.yaml)
+    └── my-workflow.yaml
+```
+
+**Bundled defaults** — built-in commands and workflows ship with Archon and load automatically. Repo-level files with the same name override the bundled version. To disable defaults entirely:
+
+```yaml
+# .archon/config.yaml
+defaults:
+  loadDefaultCommands: false
+  loadDefaultWorkflows: false
+```
+
+---
+
+## Troubleshooting
+
+### Common Errors
+
+| Error | Likely Cause | Fix |
+|-------|-------------|-----|
+| `Workflow "X" not found` | YAML file not discovered | Check file is in `.archon/workflows/` and `archon workflow list` shows it |
+| `Command "X" not found` | Command file missing | For a packaged workflow, check its own `commands/X.md` and run `archon validate workflows <name>`; otherwise check the shared command path and run `archon validate commands X` |
+| `Routing unclear — falling back to archon-assist` | No workflow matched the input | Use an explicit workflow name: `archon workflow run my-workflow "..."` |
+| `Worktree already exists for branch X` | Prior run left a worktree | Run `archon complete X` or `archon isolation cleanup` |
+| `Not a git repository` | Running outside a repo | `cd` into a git repo first — workflow and isolation commands require one |
+| `Unknown provider 'X'. Registered: claude, codex, pi` | Typo in `provider:` (workflow root or node-level) | Set `provider:` to one of the registered ids. Model strings themselves are not validated at load time — the SDK rejects unknown models at request time. |
+| `$BASE_BRANCH referenced but could not be detected` | No base branch set and auto-detection failed | Set `worktree.baseBranch` in `.archon/config.yaml` or ensure `main`/`master` exists |
+| Node fails with "timed out with no output" | `idle_timeout` fired before the provider emitted anything (time-to-first-token exceeded the window) | Increase `idle_timeout` on the node or reduce prompt size |
+
+### Debug Techniques
+
+**See what Archon found:**
+```bash
+archon workflow list          # Are your workflows loaded?
+archon validate workflows     # Any YAML errors?
+archon isolation list         # Any stale worktrees?
+```
+
+**Enable verbose logging:**
+```bash
+archon --verbose workflow run my-workflow "..."
+```
+
+**Check execution logs** — each run writes a JSONL log:
+```
+~/.archon/workspaces/<owner>/<repo>/logs/
+```
+
+**Run without isolation** to simplify debugging:
+```bash
+archon workflow run my-workflow --no-worktree "..."
+```
+
+**Test a command directly** before embedding it in a workflow:
+```bash
+archon workflow run archon-assist "/command-invoke my-command some-arg"
+```
+
+### Getting Help
+
+- **Validate your YAML**: `archon validate workflows my-workflow`
+- **Check the logs**: `~/.archon/workspaces/<owner>/<repo>/logs/`
+- **Report issues**: [github.com/anthropics/claude-code/issues](https://github.com/anthropics/claude-code/issues)
+
+---
+
+You've covered the full guide — from mental model to hooks to this reference. When you need to look something up quickly, this is the page to come back to.

@@ -1,0 +1,14 @@
+# E2E manual abort test — GitHub Copilot community provider
+# Verifies: Ctrl-C propagates through the bridge to session.abort() and
+#   sendAndWait unwinds cleanly without dangling listeners.
+# Manual: start, wait for streaming to begin, press Ctrl-C. Not for CI.
+name: e2e-copilot-abort
+description: 'Manual test: start, then Ctrl-C. Verifies abort wiring.'
+provider: copilot
+model: gpt-5-mini
+
+nodes:
+  - id: long
+    prompt: 'Count slowly from 1 to 200, one number per line, with a brief phrase after each number explaining its mathematical significance. Do not skip any numbers.'
+    effort: low
+    idle_timeout: 120000

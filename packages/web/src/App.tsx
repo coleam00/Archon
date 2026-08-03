@@ -1,0 +1,125 @@
+import { Component } from 'react';
+import type { ReactNode, ErrorInfo } from 'react';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { Layout } from '@/components/layout/Layout';
+import { ProjectProvider } from '@/contexts/ProjectContext';
+import { queryClient } from '@/lib/query-client';
+import { DashboardPage } from '@/routes/DashboardPage';
+import { ChatPage } from '@/routes/ChatPage';
+import { WorkflowsPage } from '@/routes/WorkflowsPage';
+import { WorkflowExecutionPage } from '@/routes/WorkflowExecutionPage';
+import { WorkflowBuilderPage } from '@/routes/WorkflowBuilderPage';
+import { SettingsPage } from '@/routes/SettingsPage';
+import { LoginPage } from '@/routes/LoginPage';
+import { ConsoleApp } from '@/experiments/console/ConsoleApp';
+import { SessionGate } from '@/components/auth/SessionGate';
+
+interface ErrorBoundaryState {
+  hasError: boolean;
+  error: Error | null;
+}
+
+class ErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryState> {
+  constructor(props: { children: ReactNode }) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo): void {
+    console.error('[ErrorBoundary] Uncaught rendering error', {
+      error: error.message,
+      stack: error.stack,
+      componentStack: info.componentStack,
+    });
+  }
+
+  render(): ReactNode {
+    if (this.state.hasError) {
+      return (
+        <div className="flex h-screen items-center justify-center bg-zinc-950 p-8">
+          <div className="max-w-md text-center">
+            <h1 className="mb-2 text-xl font-semibold text-zinc-100">Something went wrong</h1>
+            <p className="mb-4 text-sm text-zinc-400">
+              {this.state.error?.message ?? 'An unexpected error occurred.'}
+            </p>
+            <button
+              onClick={(): void => {
+                window.location.reload();
+              }}
+              className="rounded-md bg-zinc-800 px-4 py-2 text-sm text-zinc-200 hover:bg-zinc-700"
+            >
+              Reload page
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+export function App(): React.ReactElement {
+  return (
+    <ErrorBoundary>
+      <QueryClientProvider client={queryClient}>
+        <ProjectProvider>
+          <BrowserRouter>
+            <Routes>
+              {/* Login mounts OUTSIDE the SessionGate so it is always reachable. */}
+              <Route path="/login" element={<LoginPage />} />
+              {/* The console is now the default UI. */}
+              <Route path="/" element={<Navigate to="/console" replace />} />
+              {/*
+                Console mounts OUTSIDE Layout (so it does not inherit TopNav) but
+                still INSIDE SessionGate — otherwise /console would bypass web auth
+                that every other app route enforces. When web auth is disabled (the
+                solo default) SessionGate passes children through unchanged after a
+                brief auth-status check (cached for the session) — no login required.
+              */}
+              <Route
+                path="/console/*"
+                element={
+                  <SessionGate>
+                    <ConsoleApp />
+                  </SessionGate>
+                }
+              />
+              {/*
+                Classic UI, re-rooted under /legacy for the deprecation window.
+                The console links here via "Old UI"; /legacy lands on chat. Removed
+                from the codebase once the console has proven itself.
+              */}
+              <Route
+                path="/legacy"
+                element={
+                  <SessionGate>
+                    <Layout />
+                  </SessionGate>
+                }
+              >
+                {/* Land on /legacy/chat (not /legacy) so the TopNav Chat tab highlights. */}
+                <Route index element={<Navigate to="chat" replace />} />
+                <Route path="chat" element={<ChatPage />} />
+                <Route path="chat/*" element={<ChatPage />} />
+                <Route path="dashboard" element={<DashboardPage />} />
+                <Route path="workflows" element={<WorkflowsPage />} />
+                <Route path="workflows/builder" element={<WorkflowBuilderPage />} />
+                <Route path="workflows/runs/:runId" element={<WorkflowExecutionPage />} />
+                <Route
+                  path="workflows/runs"
+                  element={<Navigate to="/legacy/workflows" replace />}
+                />
+                <Route path="settings" element={<SettingsPage />} />
+              </Route>
+            </Routes>
+          </BrowserRouter>
+        </ProjectProvider>
+      </QueryClientProvider>
+    </ErrorBoundary>
+  );
+}

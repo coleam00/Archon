@@ -1,0 +1,34 @@
+# User-extensible Dockerfile for Archon (server / deploy).
+# Copy this file to Dockerfile.user — do NOT modify Dockerfile.user.example.
+# Dockerfile.user is gitignored so your customizations stay local.
+#
+# This file extends the published GHCR image — no local build step needed.
+# The image is pulled automatically when you run docker compose up -d.
+
+FROM ghcr.io/coleam00/archon:latest
+
+# Install additional system packages
+USER root
+
+# --- Uncomment and extend as needed ---
+
+# Example: install extra apt packages
+# RUN apt-get update && apt-get install -y --no-install-recommends \
+#     ripgrep \
+#     fd-find \
+#     jq \
+#  && rm -rf /var/lib/apt/lists/*
+
+# Example: install GitHub CLI extensions
+# RUN gh extension install github/gh-copilot
+
+# Example: install global npm packages
+# RUN npm install -g tsx prettier
+
+# Example: copy a custom binary into PATH
+# COPY --chown=appuser:appuser ./my-tool /usr/local/bin/my-tool
+
+# Example: install Python packages
+# RUN pip install --no-cache-dir httpie
+
+USER appuser

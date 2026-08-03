@@ -1,0 +1,22 @@
+{
+  "name": "@archon/isolation",
+  "version": "0.8.0",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "bun test src/resolver.test.ts && bun test src/providers/ && bun test src/errors.test.ts src/factory.test.ts src/worktree-copy.test.ts && bun test src/pr-state.test.ts && bun test src/backend-router.test.ts src/backends/in-place.test.ts src/backends/container.test.ts src/container/docker-exec.test.ts src/container/overlay.test.ts src/container/overlay-scripts.test.ts",
+    "type-check": "bun x tsc --noEmit"
+  },
+  "dependencies": {
+    "@archon/git": "workspace:*",
+    "@archon/paths": "workspace:*",
+    "@archon/providers": "workspace:*"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  }
+}

@@ -1,0 +1,237 @@
+/* Archon — design tokens
+ *
+ * Brand thread: a magenta → teal gradient drawn from the shield logo.
+ *   magenta  oklch(0.625 0.330 328)  #ED10EC
+ *   teal     oklch(0.736 0.175 168)  #06CE94
+ *
+ * The duotone IS the brand. Use the gradient for hero moments (logo, hero
+ * heading, primary CTA hover, focus rings on key actions). Use the magenta
+ * or teal solid as the working accent depending on context — magenta for
+ * presence/identity, teal for "go / approve / completed".
+ *
+ * Surfaces are cool charcoals with the faintest blue cast — neutral enough
+ * that the saturated brand thread carries the whole identity without
+ * competition.
+ */
+
+:root,
+[data-theme="dark"] {
+  /* Surfaces — cool charcoal */
+  --bg:              oklch(0.145 0.006 265);
+  --surface:         oklch(0.175 0.007 265);
+  --surface-2:       oklch(0.205 0.009 265);
+  --surface-3:       oklch(0.235 0.011 265);
+  --surface-hover:   oklch(0.225 0.010 265);
+
+  /* Borders */
+  --border:          oklch(0.275 0.012 265);
+  --border-strong:   oklch(0.355 0.016 265);
+  --divider:         oklch(0.230 0.010 265);
+
+  /* Text */
+  --text:            oklch(0.975 0.004 265);
+  --text-secondary:  oklch(0.745 0.014 265);
+  --text-tertiary:   oklch(0.560 0.017 265);
+  --text-quaternary: oklch(0.430 0.017 265);
+
+  /* Brand identity — the duotone */
+  --brand-magenta:   oklch(0.640 0.295 330);
+  --brand-magenta-2: oklch(0.720 0.260 335);   /* lighter, used near purple transition */
+  --brand-violet:    oklch(0.560 0.215 305);   /* the midpoint */
+  --brand-teal:      oklch(0.755 0.165 168);
+  --brand-teal-2:    oklch(0.700 0.150 175);   /* darker teal */
+  --brand-gradient:  linear-gradient(135deg, var(--brand-magenta) 0%, var(--brand-violet) 50%, var(--brand-teal) 100%);
+  --brand-gradient-soft: linear-gradient(135deg,
+                          oklch(0.640 0.295 330 / 0.18) 0%,
+                          oklch(0.560 0.215 305 / 0.12) 50%,
+                          oklch(0.755 0.165 168 / 0.18) 100%);
+
+  /* Accent — defaults to brand magenta. The dataset attr swaps it. */
+  --accent:          var(--brand-magenta);
+  --accent-hover:    oklch(0.700 0.280 330);
+  --accent-soft:     oklch(0.640 0.295 330 / 0.14);
+  --accent-ring:     oklch(0.640 0.295 330 / 0.30);
+  --on-accent:       oklch(0.985 0 0);
+
+  /* Status — separate from accent so brand swaps don't break meaning.
+     - success uses the brand teal (intentional — affirmative IS brand)
+     - running is a calm electric blue, distinct from brand magenta
+     - warning is amber, error is hot red. */
+  --running:         oklch(0.720 0.155 245);
+  --running-soft:    oklch(0.720 0.155 245 / 0.14);
+  --success:         var(--brand-teal);
+  --success-soft:    oklch(0.755 0.165 168 / 0.14);
+  --warning:         oklch(0.800 0.140 85);
+  --warning-soft:    oklch(0.800 0.140 85 / 0.14);
+  --error:           oklch(0.680 0.215 18);
+  --error-soft:      oklch(0.680 0.215 18 / 0.14);
+
+  /* Shadows */
+  --shadow-sm:       0 1px 2px 0 oklch(0 0 0 / 0.4);
+  --shadow-md:       0 4px 12px -2px oklch(0 0 0 / 0.45);
+  --shadow-lg:       0 20px 40px -12px oklch(0 0 0 / 0.55);
+  --shadow-brand:    0 8px 32px -8px oklch(0.640 0.295 330 / 0.30);
+}
+
+[data-theme="light"] {
+  --bg:              oklch(0.985 0.003 265);
+  --surface:         oklch(1.000 0 0);
+  --surface-2:       oklch(0.975 0.004 265);
+  --surface-3:       oklch(0.955 0.006 265);
+  --surface-hover:   oklch(0.965 0.005 265);
+
+  --border:          oklch(0.910 0.007 265);
+  --border-strong:   oklch(0.855 0.010 265);
+  --divider:         oklch(0.940 0.005 265);
+
+  --text:            oklch(0.180 0.010 265);
+  --text-secondary:  oklch(0.420 0.014 265);
+  --text-tertiary:   oklch(0.560 0.015 265);
+  --text-quaternary: oklch(0.680 0.014 265);
+
+  --brand-magenta:   oklch(0.555 0.310 328);
+  --brand-magenta-2: oklch(0.620 0.270 335);
+  --brand-violet:    oklch(0.480 0.230 305);
+  --brand-teal:      oklch(0.620 0.165 168);
+  --brand-teal-2:    oklch(0.560 0.150 175);
+  --brand-gradient:  linear-gradient(135deg, var(--brand-magenta) 0%, var(--brand-violet) 50%, var(--brand-teal) 100%);
+  --brand-gradient-soft: linear-gradient(135deg,
+                          oklch(0.555 0.310 328 / 0.12) 0%,
+                          oklch(0.480 0.230 305 / 0.08) 50%,
+                          oklch(0.620 0.165 168 / 0.12) 100%);
+
+  --accent:          var(--brand-magenta);
+  --accent-hover:    oklch(0.500 0.310 328);
+  --accent-soft:     oklch(0.555 0.310 328 / 0.10);
+  --accent-ring:     oklch(0.555 0.310 328 / 0.26);
+  --on-accent:       oklch(1 0 0);
+
+  --running:         oklch(0.520 0.185 245);
+  --running-soft:    oklch(0.520 0.185 245 / 0.10);
+  --success:         var(--brand-teal);
+  --success-soft:    oklch(0.620 0.165 168 / 0.10);
+  --warning:         oklch(0.650 0.155 75);
+  --warning-soft:    oklch(0.650 0.155 75 / 0.10);
+  --error:           oklch(0.570 0.220 22);
+  --error-soft:      oklch(0.570 0.220 22 / 0.10);
+
+  --shadow-sm:       0 1px 2px 0 oklch(0.2 0.01 265 / 0.06);
+  --shadow-md:       0 4px 12px -2px oklch(0.2 0.01 265 / 0.10);
+  --shadow-lg:       0 20px 40px -12px oklch(0.2 0.01 265 / 0.18);
+  --shadow-brand:    0 8px 32px -8px oklch(0.555 0.310 328 / 0.25);
+}
+
+/* Accent variants — driven by tweaks. "brand" is the default; user can
+   commit to the magenta or teal solid for a single-color treatment. */
+[data-accent="teal"] {
+  --accent:       var(--brand-teal);
+  --accent-hover: oklch(0.810 0.165 168);
+  --accent-soft:  oklch(0.755 0.165 168 / 0.14);
+  --accent-ring:  oklch(0.755 0.165 168 / 0.30);
+  --on-accent:    oklch(0.180 0.040 168);
+}
+[data-accent="violet"] {
+  --accent:       var(--brand-violet);
+  --accent-hover: oklch(0.620 0.220 305);
+  --accent-soft:  oklch(0.560 0.215 305 / 0.14);
+  --accent-ring:  oklch(0.560 0.215 305 / 0.30);
+  --on-accent:    oklch(0.985 0 0);
+}
+[data-accent="mono"] {
+  --accent:       oklch(0.945 0.005 265);
+  --accent-hover: oklch(1 0 0);
+  --accent-soft:  oklch(0.945 0.005 265 / 0.10);
+  --accent-ring:  oklch(0.945 0.005 265 / 0.25);
+  --on-accent:    oklch(0.145 0.006 265);
+}
+[data-theme="light"][data-accent="teal"] {
+  --accent:       var(--brand-teal);
+  --accent-hover: oklch(0.560 0.165 168);
+  --on-accent:    oklch(0.985 0 0);
+}
+[data-theme="light"][data-accent="violet"] {
+  --accent:       var(--brand-violet);
+  --accent-hover: oklch(0.430 0.230 305);
+  --on-accent:    oklch(0.985 0 0);
+}
+[data-theme="light"][data-accent="mono"] {
+  --accent:       oklch(0.180 0.010 265);
+  --accent-hover: oklch(0.080 0.010 265);
+  --accent-soft:  oklch(0.180 0.010 265 / 0.08);
+  --on-accent:    oklch(0.985 0 0);
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+
+body {
+  font-family: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.5;
+  font-feature-settings: "ss01", "cv11";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  letter-spacing: -0.005em;
+}
+
+.mono { font-family: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace; font-feature-settings: "ss01", "ss02"; }
+
+button { font-family: inherit; cursor: pointer; }
+input, textarea { font-family: inherit; }
+
+::selection { background: var(--accent-ring); color: var(--text); }
+
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover { background: var(--border-strong); background-clip: padding-box; border: 2px solid transparent; }
+
+:focus-visible {
+  outline: 2px solid var(--accent-ring);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* Brand utility — apply gradient as text/fill */
+.brand-text {
+  background: var(--brand-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+}
+
+.brand-bar {
+  background: var(--brand-gradient);
+}
+
+/* Animations */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.6; transform: scale(0.85); }
+}
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 0 0 var(--accent-ring); }
+  50%      { box-shadow: 0 0 0 6px transparent; }
+}
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes scale-in {
+  from { opacity: 0; transform: scale(0.96); }
+  to   { opacity: 1; transform: scale(1); }
+}
+@keyframes shimmer {
+  0%   { background-position: 0% 50%; }
+  50%  { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}

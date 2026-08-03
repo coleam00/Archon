@@ -1,0 +1,21 @@
+# Docker Compose override for user-extended builds (development / local Docker).
+# Copy this file to docker-compose.override.yml — do NOT modify docker-compose.override.example.yml.
+# docker-compose.override.yml is gitignored so your customizations stay local.
+#
+# Docker Compose automatically merges docker-compose.override.yml with docker-compose.yml
+# when both files are present — no extra flags needed:
+#   docker compose up -d
+#
+# NOTE: The base docker-compose.yml uses `build: .` (Dockerfile by default). This override
+# switches it to Dockerfile.user so Compose builds your custom image instead.
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.user
+
+# /home/appuser (Claude/Codex/Pi config, gitconfig, shell history) is already
+# persisted by default via the archon_user_home named volume in the base compose.
+# To bind-mount a host path instead, set ARCHON_USER_HOME=/your/host/path in .env
+# (the host path must be writable by UID 1001). No override-file edit needed.

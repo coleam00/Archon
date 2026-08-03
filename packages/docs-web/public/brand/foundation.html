@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en" data-theme="dark" data-accent="magenta">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Archon · Brand Foundation</title>
+
+  <meta name="ext-resource-dependency" content="assets/archon-logo.png" data-resource-id="archonLogo"/>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300..700&family=Geist+Mono:wght@400..600&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="app.css"/>
+
+  <!-- Docs-site overrides for the standalone brand sheet. The Tweaks toggle is a Penpot
+       host artifact — useful for designers iterating in the editor, noise on archon.diy. -->
+  <style>
+    button[aria-label="Open tweaks"] { display: none !important; }
+  </style>
+
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+  <template id="__bundler_thumbnail" data-bg-color="#0F1115">
+    <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="#ED10EC"/>
+          <stop offset="50%" stop-color="#8E40C8"/>
+          <stop offset="100%" stop-color="#06CE94"/>
+        </linearGradient>
+      </defs>
+      <g transform="translate(600 400)">
+        <g transform="translate(-180 -240)" fill="none" stroke="url(#g)" stroke-width="22" stroke-linejoin="round" stroke-linecap="round">
+          <path d="M180 8 C108 8 30 22 8 36 L8 220 C8 340 78 432 180 470 C282 432 352 340 352 220 L352 36 C330 22 252 8 180 8 Z"/>
+          <path d="M180 92 L210 122 L180 152 L150 122 Z"/>
+          <path d="M180 152 L180 218"/>
+          <path d="M124 226 C124 270 148 290 180 290 C212 290 236 270 236 226"/>
+          <circle cx="180" cy="294" r="12" fill="url(#g)" stroke="none"/>
+          <path d="M180 308 L180 410"/>
+        </g>
+      </g>
+    </svg>
+  </template>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel" src="logo.jsx"></script>
+  <script type="text/babel" src="tweaks-panel.jsx"></script>
+  <script type="text/babel" src="standalone-tweaks-toggle.jsx"></script>
+  <script type="text/babel" src="brand-app.jsx"></script>
+</body>
+</html>

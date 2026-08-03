@@ -1,0 +1,635 @@
+import { describe, test, expect, mock, beforeEach } from 'bun:test';
+
+// ---- pg mock setup --------------------------------------------------------
+// Must be declared before importing the module under test so that the mock
+// is in place when PostgresAdapter's constructor calls `new Pool(...)`.
+
+type MockQueryFn = (
+  sql: string,
+  params?: unknown[]
+) => Promise<{ rows: unknown[]; rowCount: number }>;
+
+interface MockClient {
+  query: MockQueryFn;
+  release: () => void;
+}
+
+// Mutable state shared between the mock factory and individual tests
+let mockPoolQuery: MockQueryFn = async () => ({ rows: [], rowCount: 0 });
+let mockClient: MockClient = {
+  query: async () => ({ rows: [], rowCount: 0 }),
+  release: () => {},
+};
+let poolErrorHandler: ((err: Error) => void) | undefined;
+
+const MockPool = mock(function MockPool(_config: unknown) {
+  return {
+    query: (sql: string, params?: unknown[]) => mockPoolQuery(sql, params),
+    connect: async () => mockClient,
+    on: (event: string, handler: (err: Error) => void) => {
+      if (event === 'error') {
+        poolErrorHandler = handler;
+      }
+    },
+    end: async () => {},
+  };
+});
+
+mock.module('pg', () => ({
+  Pool: MockPool,
+}));
+
+// ---- also mock @archon/paths so logger calls don't blow up ----------------
+mock.module('@archon/paths', () => ({
+  createLogger: () => ({
+    info: () => {},
+    warn: () => {},
+    error: () => {},
+    fatal: () => {},
+    debug: () => {},
+    trace: () => {},
+  }),
+}));
+
+// ---- mock bundled-schema so initSchema() runs known SQL without disk I/O --
+// Tests that exercise initSchema() override this via the `mockSchemaSQL`
+// variable; the default keeps construction cheap for other tests.
+let mockSchemaSQL = '-- noop schema';
+
+mock.module('../bundled-schema', () => ({
+  getSchemaSQL: () => mockSchemaSQL,
+}));
+
+// ---- import after mocks are registered ------------------------------------
+import { PostgresAdapter, postgresDialect } from './postgres';
+// Assert against the same constant the adapter writes, so the vintage tests stay
+// correct in both source builds ('dev') and compiled binaries (the real semver).
+import { APP_VERSION } from '../schema-version';
+
+// ---------------------------------------------------------------------------
+
+describe('PostgresAdapter', () => {
+  let adapter: PostgresAdapter;
+
+  beforeEach(() => {
+    // Reset shared mock state before each test
+    mockPoolQuery = async () => ({ rows: [], rowCount: 0 });
+    mockClient = {
+      query: async () => ({ rows: [], rowCount: 0 }),
+      release: () => {},
+    };
+    mockSchemaSQL = '-- noop schema';
+    poolErrorHandler = undefined;
+
+    adapter = new PostgresAdapter('postgresql://localhost:5432/testdb');
+  });
+
+  // -------------------------------------------------------------------------
+  // Static properties
+  // -------------------------------------------------------------------------
+
+  describe('properties', () => {
+    test('dialect is "postgres"', () => {
+      expect(adapter.dialect).toBe('postgres');
+    });
+
+    test('sql dialect is postgresDialect', () => {
+      expect(adapter.sql).toBe(postgresDialect);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // query()
+  // -------------------------------------------------------------------------
+
+  describe('query()', () => {
+    test('delegates to pool.query and returns rows and rowCount', async () => {
+      const fakeRows = [
+        { id: 1, name: 'Alice' },
+        { id: 2, name: 'Bob' },
+      ];
+      mockPoolQuery = async () => ({ rows: fakeRows, rowCount: 2 });
+
+      const result = await adapter.query<{ id: number; name: string }>('SELECT * FROM users');
+      expect(result.rows).toEqual(fakeRows);
+      expect(result.rowCount).toBe(2);
+    });
+
+    test('forwards sql and params to pool.query', async () => {
+      let capturedSql = '';
+      let capturedParams: unknown[] | undefined;
+
+      mockPoolQuery = async (sql, params) => {
+        capturedSql = sql;
+        capturedParams = params;
+        return { rows: [], rowCount: 0 };
+      };
+
+      await adapter.query('SELECT * FROM users WHERE id = $1', [42]);
+      expect(capturedSql).toBe('SELECT * FROM users WHERE id = $1');
+      expect(capturedParams).toEqual([42]);
+    });
+
+    test('returns rowCount 0 when pool returns null rowCount', async () => {
+      // pg can return rowCount: null for some query types
+      mockPoolQuery = async () => ({ rows: [], rowCount: null as unknown as number });
+
+      const result = await adapter.query('SELECT 1');
+      expect(result.rowCount).toBe(0);
+    });
+
+    test('returns empty rows array when pool returns no rows', async () => {
+      mockPoolQuery = async () => ({ rows: [], rowCount: 0 });
+
+      const result = await adapter.query('DELETE FROM users WHERE id = $1', [99]);
+      expect(result.rows).toHaveLength(0);
+      expect(result.rowCount).toBe(0);
+    });
+
+    test('propagates errors thrown by pool.query', async () => {
+      mockPoolQuery = async () => {
+        throw new Error('connection lost');
+      };
+
+      await expect(adapter.query('SELECT 1')).rejects.toThrow('connection lost');
+    });
+
+    test('query without params passes undefined to pool', async () => {
+      let capturedParams: unknown[] | undefined = ['sentinel'];
+
+      mockPoolQuery = async (_sql, params) => {
+        capturedParams = params;
+        return { rows: [], rowCount: 0 };
+      };
+
+      await adapter.query('SELECT NOW()');
+      expect(capturedParams).toBeUndefined();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // withTransaction()
+  // -------------------------------------------------------------------------
+
+  describe('withTransaction()', () => {
+    test('issues BEGIN and COMMIT on success', async () => {
+      const issued: string[] = [];
+      mockClient = {
+        query: async sql => {
+          issued.push(sql);
+          return { rows: [], rowCount: 0 };
+        },
+        release: () => {},
+      };
+
+      await adapter.withTransaction(async () => 'ok');
+
+      expect(issued[0]).toBe('BEGIN');
+      expect(issued[issued.length - 1]).toBe('COMMIT');
+      expect(issued).not.toContain('ROLLBACK');
+    });
+
+    test('issues BEGIN and ROLLBACK on error, then re-throws', async () => {
+      const issued: string[] = [];
+      mockClient = {
+        query: async sql => {
+          issued.push(sql);
+          return { rows: [], rowCount: 0 };
+        },
+        release: () => {},
+      };
+
+      const boom = new Error('query failed inside tx');
+      await expect(
+        adapter.withTransaction(async () => {
+          throw boom;
+        })
+      ).rejects.toThrow('query failed inside tx');
+
+      expect(issued[0]).toBe('BEGIN');
+      expect(issued).toContain('ROLLBACK');
+      expect(issued).not.toContain('COMMIT');
+    });
+
+    test('always releases client on success', async () => {
+      let released = false;
+      mockClient = {
+        query: async () => ({ rows: [], rowCount: 0 }),
+        release: () => {
+          released = true;
+        },
+      };
+
+      await adapter.withTransaction(async () => 'done');
+      expect(released).toBe(true);
+    });
+
+    test('always releases client on error', async () => {
+      let released = false;
+      mockClient = {
+        query: async () => ({ rows: [], rowCount: 0 }),
+        release: () => {
+          released = true;
+        },
+      };
+
+      await expect(
+        adapter.withTransaction(async () => {
+          throw new Error('tx error');
+        })
+      ).rejects.toThrow('tx error');
+
+      expect(released).toBe(true);
+    });
+
+    test('txQuery returns rows and rowCount from client', async () => {
+      const fakeRows = [{ x: 42 }];
+      mockClient = {
+        query: async (sql: string) => {
+          if (sql === 'BEGIN' || sql === 'COMMIT') return { rows: [], rowCount: 0 };
+          return { rows: fakeRows, rowCount: 1 };
+        },
+        release: () => {},
+      };
+
+      const result = await adapter.withTransaction(async txQuery => {
+        return txQuery<{ x: number }>('SELECT 42 AS x');
+      });
+
+      expect(result.rows).toEqual(fakeRows);
+      expect(result.rowCount).toBe(1);
+    });
+
+    test('txQuery forwards sql and params to client.query', async () => {
+      let capturedSql = '';
+      let capturedParams: unknown[] | undefined;
+
+      mockClient = {
+        query: async (sql: string, params?: unknown[]) => {
+          if (sql !== 'BEGIN' && sql !== 'COMMIT') {
+            capturedSql = sql;
+            capturedParams = params;
+          }
+          return { rows: [], rowCount: 0 };
+        },
+        release: () => {},
+      };
+
+      await adapter.withTransaction(async txQuery => {
+        await txQuery('UPDATE users SET name = $1 WHERE id = $2', ['Bob', 7]);
+        return undefined;
+      });
+
+      expect(capturedSql).toBe('UPDATE users SET name = $1 WHERE id = $2');
+      expect(capturedParams).toEqual(['Bob', 7]);
+    });
+
+    test('txQuery rowCount defaults to 0 when client returns null rowCount', async () => {
+      mockClient = {
+        query: async (sql: string) => {
+          if (sql === 'BEGIN' || sql === 'COMMIT') return { rows: [], rowCount: 0 };
+          return { rows: [], rowCount: null as unknown as number };
+        },
+        release: () => {},
+      };
+
+      const result = await adapter.withTransaction(async txQuery => {
+        return txQuery('DELETE FROM users WHERE 1=0');
+      });
+
+      expect(result.rowCount).toBe(0);
+    });
+
+    test('returns value from callback on success', async () => {
+      mockClient = {
+        query: async () => ({ rows: [], rowCount: 0 }),
+        release: () => {},
+      };
+
+      const value = await adapter.withTransaction(async () => 'transaction-result');
+      expect(value).toBe('transaction-result');
+    });
+
+    test('still releases client when ROLLBACK itself throws', async () => {
+      let released = false;
+      let callCount = 0;
+
+      mockClient = {
+        query: async (sql: string) => {
+          callCount++;
+          if (sql === 'ROLLBACK') throw new Error('rollback failed');
+          return { rows: [], rowCount: 0 };
+        },
+        release: () => {
+          released = true;
+        },
+      };
+
+      await expect(
+        adapter.withTransaction(async () => {
+          throw new Error('original error');
+        })
+      ).rejects.toThrow('original error');
+
+      expect(released).toBe(true);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // close()
+  // -------------------------------------------------------------------------
+
+  describe('close()', () => {
+    test('calls pool.end() without throwing', async () => {
+      await expect(adapter.close()).resolves.toBeUndefined();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Pool error handler
+  // -------------------------------------------------------------------------
+
+  describe('pool error event', () => {
+    test('registers an error event handler on the pool', () => {
+      // poolErrorHandler is captured by MockPool.on() during constructor
+      expect(typeof poolErrorHandler).toBe('function');
+    });
+
+    test('error handler does not throw when called', () => {
+      // The handler should log, not rethrow (event handlers cannot throw usefully)
+      expect(() => {
+        if (poolErrorHandler) poolErrorHandler(new Error('pool went away'));
+      }).not.toThrow();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // initSchema() — auto-converging Postgres schema on startup
+  // -------------------------------------------------------------------------
+
+  describe('initSchema()', () => {
+    test('runs schema SQL inside an advisory-lock transaction on construction', async () => {
+      const issued: string[] = [];
+      mockClient = {
+        query: async (sql: string) => {
+          issued.push(sql);
+          return { rows: [], rowCount: 0 };
+        },
+        release: () => {},
+      };
+      mockSchemaSQL = '-- schema sql';
+
+      const a = new PostgresAdapter('postgresql://localhost:5432/testdb');
+      // Triggers schema init as a side-effect — callers don't call initSchema() directly
+      await a.query('SELECT 1');
+
+      // Init issues BEGIN, advisory lock, schema SQL, COMMIT — then SELECT 1
+      // goes through pool.query (not client.query) so it's NOT in `issued`.
+      expect(issued[0]).toBe('BEGIN');
+      expect(issued).toContain('SELECT pg_advisory_xact_lock(1796)');
+      expect(issued).toContain('-- schema sql');
+      expect(issued[issued.length - 1]).toBe('COMMIT');
+    });
+
+    /**
+     * Schema vintage (#2316). The upsert must live inside the same advisory-locked
+     * transaction as the schema SQL — outside it, two concurrent boots could
+     * interleave and record a vintage that doesn't match the schema they applied.
+     */
+    test('records the schema vintage inside the schema transaction', async () => {
+      const issued: { sql: string; params?: unknown[] }[] = [];
+      mockClient = {
+        query: async (sql: string, params?: unknown[]) => {
+          issued.push({ sql, params });
+          // Fresh database: the pre-existence probe finds no codebases table.
+          if (sql.includes('to_regclass')) return { rows: [{ exists: false }], rowCount: 1 };
+          return { rows: [], rowCount: 0 };
+        },
+        release: () => {},
+      };
+      mockSchemaSQL = '-- schema sql';
+
+      const a = new PostgresAdapter('postgresql://localhost:5432/testdb');
+      await a.query('SELECT 1');
+
+      const probeIdx = issued.findIndex(q => q.sql.includes('to_regclass'));
+      const schemaIdx = issued.findIndex(q => q.sql === '-- schema sql');
+      const versionIdx = issued.findIndex(q => q.sql.includes('remote_agent_schema_version'));
+      const commitIdx = issued.findIndex(q => q.sql === 'COMMIT');
+
+      // Probe must precede the schema SQL — afterwards a pre-existing database is
+      // indistinguishable from a fresh one.
+      expect(probeIdx).toBeGreaterThan(0);
+      expect(probeIdx).toBeLessThan(schemaIdx);
+      expect(versionIdx).toBeGreaterThan(schemaIdx);
+      expect(versionIdx).toBeLessThan(commitIdx);
+      // Fresh database: creation vintage recorded, not left unknown.
+      expect(issued[versionIdx]?.params).toEqual([APP_VERSION, APP_VERSION]);
+    });
+
+    /**
+     * The vintage row is diagnostic metadata. A failure to write it must roll back
+     * only that statement — if it aborted initSchema, schemaInitPromise would reject
+     * and every later query would too, bricking the adapter over a row nothing gates on.
+     */
+    test('a failed vintage write rolls back to the savepoint and still commits', async () => {
+      const issued: string[] = [];
+      mockClient = {
+        query: async (sql: string) => {
+          issued.push(sql);
+          if (sql.includes('to_regclass')) return { rows: [{ exists: false }], rowCount: 1 };
+          if (sql.includes('INSERT INTO remote_agent_schema_version')) {
+            throw new Error('permission denied for table remote_agent_schema_version');
+          }
+          return { rows: [], rowCount: 0 };
+        },
+        release: () => {},
+      };
+      mockSchemaSQL = '-- schema sql';
+
+      const a = new PostgresAdapter('postgresql://localhost:5432/testdb');
+
+      // The adapter must remain usable — this is the whole point of the savepoint.
+      await expect(a.query('SELECT 1')).resolves.toBeDefined();
+
+      expect(issued).toContain('SAVEPOINT schema_version');
+      expect(issued).toContain('ROLLBACK TO SAVEPOINT schema_version');
+      expect(issued).toContain('COMMIT');
+      expect(issued).not.toContain('ROLLBACK');
+    });
+
+    test('leaves the creation vintage unknown for a pre-existing database', async () => {
+      const issued: { sql: string; params?: unknown[] }[] = [];
+      mockClient = {
+        query: async (sql: string, params?: unknown[]) => {
+          issued.push({ sql, params });
+          if (sql.includes('to_regclass')) return { rows: [{ exists: true }], rowCount: 1 };
+          return { rows: [], rowCount: 0 };
+        },
+        release: () => {},
+      };
+      mockSchemaSQL = '-- schema sql';
+
+      const a = new PostgresAdapter('postgresql://localhost:5432/testdb');
+      await a.query('SELECT 1');
+
+      const version = issued.find(q => q.sql.includes('remote_agent_schema_version'));
+      // NULL, never a guess: this database existed before vintage tracking.
+      expect(version?.params).toEqual([null, APP_VERSION]);
+    });
+
+    test('schema SQL runs exactly once across multiple queries', async () => {
+      let schemaSqlCallCount = 0;
+      mockClient = {
+        query: async (sql: string) => {
+          if (sql === '-- schema sql') schemaSqlCallCount++;
+          return { rows: [], rowCount: 0 };
+        },
+        release: () => {},
+      };
+      mockSchemaSQL = '-- schema sql';
+
+      const a = new PostgresAdapter('postgresql://localhost:5432/testdb');
+      await a.query('SELECT 1');
+      await a.query('SELECT 2');
+      await a.withTransaction(async () => undefined);
+
+      expect(schemaSqlCallCount).toBe(1);
+    });
+
+    test('DDL failure: rolls back and causes all subsequent queries to reject', async () => {
+      const boom = new Error('column already exists');
+      const issued: string[] = [];
+      let released = false;
+
+      mockClient = {
+        query: async (sql: string) => {
+          issued.push(sql);
+          if (sql === '-- bad sql') throw boom;
+          return { rows: [], rowCount: 0 };
+        },
+        release: () => {
+          released = true;
+        },
+      };
+      mockSchemaSQL = '-- bad sql';
+
+      const a = new PostgresAdapter('postgresql://localhost:5432/testdb');
+
+      // First query rejects because initSchema threw
+      await expect(a.query('SELECT 1')).rejects.toThrow('column already exists');
+      // Second query rejects with the same settled-rejected promise
+      await expect(a.query('SELECT 2')).rejects.toThrow('column already exists');
+      // withTransaction also gated by the same promise
+      await expect(a.withTransaction(async () => 'ok')).rejects.toThrow('column already exists');
+
+      // ROLLBACK was issued after the failure
+      expect(issued).toContain('ROLLBACK');
+      // client.release() must be called in the finally block to avoid connection leaks
+      expect(released).toBe(true);
+    });
+
+    test('withTransaction() awaits schema init before opening a tx', async () => {
+      const issued: string[] = [];
+      mockClient = {
+        query: async (sql: string) => {
+          issued.push(sql);
+          return { rows: [], rowCount: 0 };
+        },
+        release: () => {},
+      };
+      mockSchemaSQL = '-- schema sql';
+
+      const a = new PostgresAdapter('postgresql://localhost:5432/testdb');
+      await a.withTransaction(async () => 'ok');
+
+      // Init's BEGIN must come before the tx's BEGIN — same client mock is
+      // reused, so all queries land in `issued` in execution order.
+      const firstBegin = issued.indexOf('BEGIN');
+      const schemaIdx = issued.indexOf('-- schema sql');
+      expect(firstBegin).toBe(0);
+      expect(schemaIdx).toBeGreaterThan(firstBegin);
+      expect(schemaIdx).toBeLessThan(issued.lastIndexOf('COMMIT'));
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe('postgresDialect', () => {
+  describe('generateUuid()', () => {
+    test('returns a valid UUID v4 string', () => {
+      const uuid = postgresDialect.generateUuid();
+      // UUID v4 pattern: xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx
+      expect(uuid).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+      );
+    });
+
+    test('generates unique UUIDs on successive calls', () => {
+      const a = postgresDialect.generateUuid();
+      const b = postgresDialect.generateUuid();
+      expect(a).not.toBe(b);
+    });
+  });
+
+  describe('now()', () => {
+    test('returns "NOW()"', () => {
+      expect(postgresDialect.now()).toBe('NOW()');
+    });
+  });
+
+  describe('jsonMerge()', () => {
+    test('returns correct merge expression', () => {
+      expect(postgresDialect.jsonMerge('metadata', 1)).toBe('metadata || $1::jsonb');
+    });
+
+    test('uses provided param index', () => {
+      expect(postgresDialect.jsonMerge('data', 3)).toBe('data || $3::jsonb');
+    });
+
+    test('uses provided column name', () => {
+      expect(postgresDialect.jsonMerge('extra_fields', 2)).toBe('extra_fields || $2::jsonb');
+    });
+  });
+
+  describe('jsonArrayContains()', () => {
+    test('returns correct containment expression', () => {
+      expect(postgresDialect.jsonArrayContains('tags', 'labels', 1)).toBe("tags->'labels' ? $1");
+    });
+
+    test('uses provided param index', () => {
+      expect(postgresDialect.jsonArrayContains('data', 'ids', 5)).toBe("data->'ids' ? $5");
+    });
+
+    test('uses provided column and path', () => {
+      expect(postgresDialect.jsonArrayContains('meta', 'related_issues', 2)).toBe(
+        "meta->'related_issues' ? $2"
+      );
+    });
+  });
+
+  describe('nowMinusDays()', () => {
+    test('returns correct interval expression', () => {
+      expect(postgresDialect.nowMinusDays(1)).toBe("NOW() - ($1 || ' days')::INTERVAL");
+    });
+
+    test('uses provided param index', () => {
+      expect(postgresDialect.nowMinusDays(4)).toBe("NOW() - ($4 || ' days')::INTERVAL");
+    });
+  });
+
+  describe('daysSince()', () => {
+    test('returns correct epoch extraction expression', () => {
+      expect(postgresDialect.daysSince('created_at')).toBe(
+        'EXTRACT(EPOCH FROM (NOW() - created_at)) / 86400'
+      );
+    });
+
+    test('uses provided column name', () => {
+      expect(postgresDialect.daysSince('updated_at')).toBe(
+        'EXTRACT(EPOCH FROM (NOW() - updated_at)) / 86400'
+      );
+    });
+  });
+});

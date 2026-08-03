@@ -1,0 +1,55 @@
+name: maintainer-standup-minimax
+description: |
+  Minimax variant of maintainer-standup. Identical workflow shape — same
+  gather scripts, same synthesizer command, same persist node — but the
+  synthesize node runs on Pi/Minimax M2.7 instead of Claude Sonnet.
+  Use when: nested-Claude-Code session hangs (#1067) block the Claude variant,
+            or when you'd rather not spend Claude tokens on the daily brief.
+  Triggers: "morning standup minimax", "standup minimax", "daily brief minimax".
+  NOT for: First-time setup — run the Claude variant first to validate state.
+
+provider: pi
+model: minimax/MiniMax-M2.7
+
+worktree:
+  enabled: false   # Live checkout — needs to git pull and read .archon/maintainer-standup/
+
+nodes:
+  # ── Layer 0: gather facts in parallel ──
+
+  - id: git-status
+    script: maintainer-standup-git-status
+    runtime: bun
+    timeout: 60000
+
+  - id: gh-data
+    script: maintainer-standup-gh-data
+    runtime: bun
+    timeout: 180000
+
+  - id: read-context
+    script: maintainer-standup-read-context
+    runtime: bun
+    timeout: 10000
+
+  # ── Layer 1: synthesize the brief (plain text + delimited state block) ──
+
+  - id: synthesize
+    command: maintainer-standup
+    depends_on: [git-status, gh-data, read-context]
+
+  # ── Layer 2: persist state and dated brief ──
+  #
+  # Bash node so the framework shell-quotes $synthesize.output (raw text
+  # containing markdown code fences and prose isn't a valid JS expression
+  # if substituted into a bun script body). The bash node pipes the synth
+  # output into the persist script, which handles both the preferred
+  # delimiter format and the fallback JSON-wrapper format Pi/Minimax emits.
+
+  - id: persist
+    depends_on: [synthesize]
+    timeout: 30000
+    bash: |
+      set -uo pipefail
+      RAW=$synthesize.output
+      printf '%s' "$RAW" | bun .archon/scripts/maintainer-standup-persist.ts

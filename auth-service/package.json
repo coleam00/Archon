@@ -1,0 +1,14 @@
+{
+  "name": "auth-service",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Cookie-based auth sidecar for Caddy forward_auth",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3"
+  }
+}

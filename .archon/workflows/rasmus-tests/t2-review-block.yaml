@@ -1,0 +1,26 @@
+name: t2-review-block
+description: |
+  ENGINE-PRIMITIVE TEST — a shared building block, not a standalone workflow.
+  Authored once, pulled into any workflow that needs a review pass via `include:`.
+
+  Takes two load-time inputs: `$INPUTS.base` (branch to diff against) and
+  `$INPUTS.focus` (what the reviewer should care about). Both are substituted at
+  DISCOVERY time, before anything executes — a missing one fails the load.
+model: '@mini'
+
+nodes:
+  - id: gather
+    depends_on: []
+    bash: |
+      set -euo pipefail
+      git diff "$INPUTS.base"...HEAD --stat
+      echo '---'
+      git diff "$INPUTS.base"...HEAD | head -400
+
+  - id: critique
+    depends_on: [gather]
+    prompt: |
+      $gather.output
+
+      Review this diff. Focus on: $INPUTS.focus
+      Reply with your findings in one short paragraph, or "no findings".

@@ -1,0 +1,125 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+*.egg-info/
+
+# Node.js
+node_modules/
+dist/
+coverage/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# This project uses Bun (bun.lock); npm/yarn lockfiles must not be committed.
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# ESLint cache
+.eslintcache
+
+# Environment files
+.env
+.env.local
+
+# Per-user MCP server configs (may contain secrets/topics)
+.archon/mcp/
+
+# Caddy configuration (keep Caddyfile.example)
+Caddyfile
+
+# User Docker customization (local only, never commit)
+Dockerfile.user
+docker-compose.override.yml
+
+# Session files
+sessions/
+api_sessions/
+e2e-screenshots/
+
+# Archon logs and artifacts (generated at runtime)
+.archon/logs/
+.archon/artifacts/
+
+# Cross-run workflow state (e.g. issue-triage memory)
+.archon/state/
+
+# Maintainer standup — per-maintainer state and briefs (direction.md is committed)
+.archon/maintainer-standup/profile.md
+.archon/maintainer-standup/state.json
+.archon/maintainer-standup/briefs/
+.archon/maintainer-standup/reviewed-prs.json
+
+# Agent artifacts (generated, local only)
+.agents/
+.agents/rca-reports/
+.agents/plans/
+.agents/pr-reviews
+.claude/PRPs/
+.claude/archon/
+.claude/mockups/
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+e2e-testing-findings-session2.md
+
+# Local workspace
+workspace/
+workspace
+
+# IDE
+.vscode/
+.zed/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Integration testing
+.test-repo-name
+.test-repo-url
+.test-issue-number
+
+# Test SQLite databases and WAL/journal files
+*.test*.db
+.test-*.db
+*.db-shm
+*.db-wal
+*.db-journal
+
+# Defensive: literal 'undefined' directories from env var bugs
+undefined/
+
+coverage
+
+worktrees
+screenshots/
+test-screenshots/
+.claude/worktree-registry.json
+
+.agents/PRDs
+.agents/context
+.agents/posts
+.agents/PRODUCT.md
+packages/server/.env
+
+# Playwright
+.playwright/
+.playwright-cli/
+skills-lock.json
+test-results/
+.archon/ralph/
+
+# Stray run logs from a mis-threaded logDir argument (see #2299) — never committed.
+main/

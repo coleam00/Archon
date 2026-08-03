@@ -1,0 +1,76 @@
+{
+  "name": "archon",
+  "version": "0.8.0",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "type": "module",
+  "scripts": {
+    "cli": "bun --cwd packages/cli src/cli.ts",
+    "dev": "bun --filter '*' dev",
+    "dev:server": "bun --filter @archon/server dev",
+    "start": "bun --filter @archon/server start",
+    "build": "bun --filter '*' build",
+    "build:binaries": "bash scripts/build-binaries.sh",
+    "build:runner-image": "bash scripts/build-runner-image.sh",
+    "build:checksums": "bash scripts/checksums.sh",
+    "generate:bundled": "bun run scripts/generate-bundled-defaults.ts",
+    "check:bundled": "bun run scripts/generate-bundled-defaults.ts --check",
+    "check:bundled-skill": "bun run scripts/check-bundled-skill.ts --check",
+    "generate:bundled-schema": "bun run scripts/generate-bundled-schema.ts",
+    "check:bundled-schema": "bun run scripts/generate-bundled-schema.ts --check",
+    "generate:pi-vendor-map": "bun run scripts/generate-pi-vendor-map.ts",
+    "check:pi-vendor-map": "bun run scripts/generate-pi-vendor-map.ts --check",
+    "generate:capability-matrix": "bun run scripts/generate-capability-matrix.ts",
+    "check:capability-matrix": "bun run scripts/generate-capability-matrix.ts --check",
+    "test:install": "bash scripts/test-install.sh",
+    "test": "bun --filter '*' --parallel test && bun test ./scripts/",
+    "test:watch": "bun --filter @archon/server test:watch",
+    "type-check": "bun --filter '*' type-check && bun x tsc --noEmit -p scripts/tsconfig.json",
+    "lint": "bun x eslint . --cache",
+    "lint:fix": "bun x eslint . --cache --fix",
+    "format": "bun x prettier --write .",
+    "format:check": "bun x prettier --check .",
+    "dev:web": "bun --filter @archon/web dev",
+    "build:web": "bun --filter @archon/web build",
+    "dev:docs": "bun --filter @archon/docs-web dev",
+    "build:docs": "bun --filter @archon/docs-web build",
+    "validate": "bun run check:bundled && bun run check:bundled-skill && bun run check:bundled-schema && bun run check:pi-vendor-map && bun run check:capability-matrix && bun run type-check && bun run lint --max-warnings 0 && bun run format:check && bun run test:install && bun run test",
+    "prepare": "husky",
+    "setup-auth": "bun --filter @archon/server setup-auth"
+  },
+  "devDependencies": {
+    "@archon/core": "workspace:*",
+    "@archon/git": "workspace:*",
+    "@archon/paths": "workspace:*",
+    "@archon/providers": "workspace:*",
+    "@eslint/js": "^9.39.1",
+    "@types/bun": "latest",
+    "bun-types": "^1.3.5",
+    "eslint": "^9.39.1",
+    "eslint-config-prettier": "10.1.8",
+    "husky": "^9.1.7",
+    "lint-staged": "^15.2.0",
+    "prettier": "^3.7.4",
+    "typescript": "^5.3.0",
+    "pino-pretty": "^13",
+    "typescript-eslint": "^8.48.0"
+  },
+  "engines": {
+    "bun": "^1.3.0"
+  },
+  "overrides": {
+    "test-exclude": "^7.0.1",
+    "axios": "^1.15.0",
+    "follow-redirects": "^1.16.0",
+    "path-to-regexp": "^8.4.2",
+    "qs": "^6.15.1",
+    "flatted": "^3.4.2",
+    "@hono/node-server": "^1.19.13"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.209",
+    "@opencode-ai/sdk": "^1.17.3"
+  }
+}

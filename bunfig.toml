@@ -1,0 +1,10 @@
+# Bun configuration for Remote Agentic Coding Platform
+
+[test]
+# Only discover tests in packages/ - prevents finding duplicates in workspace/worktrees
+root = "./packages"
+# Run preload script before tests (now in @archon/core)
+preload = ["./packages/core/src/test/setup.ts"]
+# Coverage output
+coverage = true
+coverageDir = "coverage"

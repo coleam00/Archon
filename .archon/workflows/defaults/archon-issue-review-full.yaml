@@ -1,0 +1,49 @@
+name: archon-issue-review-full
+description: |
+  Use when: User wants a FULL, COMPREHENSIVE fix + review pipeline for a GitHub issue.
+  Triggers: "full review", "comprehensive fix", "fix with full review", "deep review", "issue review full".
+  NOT for: Simple issue fixes (use archon-fix-github-issue instead),
+           questions about issues, CI failures, PR reviews, general exploration.
+
+  Full workflow:
+  1. Investigate issue -> root cause analysis, implementation plan
+  2. Implement fix -> code changes, tests, PR creation
+  3. Comprehensive review -> 5 parallel agents with scope awareness
+  4. Fix review issues -> address CRITICAL/HIGH findings
+  5. Final summary -> decision matrix, follow-up recommendations
+
+nodes:
+  # ═══════════════════════════════════════════════════════════════════
+  # PHASE 1: INVESTIGATE
+  # ═══════════════════════════════════════════════════════════════════
+
+  - id: investigate
+    command: archon-investigate-issue
+
+  # ═══════════════════════════════════════════════════════════════════
+  # PHASE 2: IMPLEMENT
+  # ═══════════════════════════════════════════════════════════════════
+
+  - id: implement
+    command: archon-implement-issue
+    depends_on: [investigate]
+    context: fresh
+
+  # ═══════════════════════════════════════════════════════════════════
+  # PHASE 3-4: CODE REVIEW + FIX (shared building block)
+  # Inlines archon-review-block: verify-pr-base -> review-scope -> sync ->
+  # 5 parallel review agents -> synthesize -> implement-fixes.
+  # ═══════════════════════════════════════════════════════════════════
+
+  - id: review
+    include: archon-review-block
+    depends_on: [implement]
+
+  # ═══════════════════════════════════════════════════════════════════
+  # PHASE 5: FINAL SUMMARY
+  # ═══════════════════════════════════════════════════════════════════
+
+  - id: summary
+    command: archon-workflow-summary
+    depends_on: [review]
+    context: fresh

@@ -1,0 +1,77 @@
+name: archon-review-block
+description: |
+  Building block — included by other workflows via `include: archon-review-block`;
+  not intended for standalone runs. Provides the shared 9-node PR review sub-DAG:
+  verify PR base -> scope -> sync -> 5 parallel review agents -> synthesize -> implement fixes.
+
+  Included by archon-idea-to-pr, archon-plan-to-pr, and archon-issue-review-full so the
+  review flow lives in exactly one file. The including workflow supplies the upstream
+  dependency (the node the review should run after); `$review.output` on the parent
+  resolves to this block's terminal node (implement-fixes).
+
+nodes:
+  - id: verify-pr-base
+    bash: |
+      set -euo pipefail
+      # Pin to the origin remote — in a fork clone, gh otherwise queries the upstream parent
+      ORIGIN_REPO=$(git remote get-url origin | sed -E 's#^.*[:/]([^/]+/[^/]+)$#\1#; s#\.git$##')
+      HEAD_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+      PR_NUMBER=$(gh pr list --repo "$ORIGIN_REPO" --head "$HEAD_BRANCH" --state open --json number -q '.[0].number')
+      if [ -z "$PR_NUMBER" ]; then
+        echo "No open PR found for branch $HEAD_BRANCH" >&2
+        exit 1
+      fi
+      EXPECTED="$BASE_BRANCH"
+      ACTUAL=$(gh pr view "$PR_NUMBER" --repo "$ORIGIN_REPO" --json baseRefName -q '.baseRefName')
+      if [ "$ACTUAL" != "$EXPECTED" ]; then
+        echo "Base mismatch on PR #$PR_NUMBER: expected=$EXPECTED actual=$ACTUAL — re-targeting" >&2
+        gh pr edit "$PR_NUMBER" --repo "$ORIGIN_REPO" --base "$EXPECTED"
+      else
+        echo "PR base verified: $EXPECTED"
+      fi
+
+  - id: review-scope
+    command: archon-pr-review-scope
+    depends_on: [verify-pr-base]
+    context: fresh
+
+  - id: sync
+    command: archon-sync-pr-with-main
+    depends_on: [review-scope]
+    context: fresh
+
+  - id: code-review
+    command: archon-code-review-agent
+    depends_on: [sync]
+    context: fresh
+
+  - id: error-handling
+    command: archon-error-handling-agent
+    depends_on: [sync]
+    context: fresh
+
+  - id: test-coverage
+    command: archon-test-coverage-agent
+    depends_on: [sync]
+    context: fresh
+
+  - id: comment-quality
+    command: archon-comment-quality-agent
+    depends_on: [sync]
+    context: fresh
+
+  - id: docs-impact
+    command: archon-docs-impact-agent
+    depends_on: [sync]
+    context: fresh
+
+  - id: synthesize
+    command: archon-synthesize-review
+    depends_on: [code-review, error-handling, test-coverage, comment-quality, docs-impact]
+    trigger_rule: one_success
+    context: fresh
+
+  - id: implement-fixes
+    command: archon-implement-review-fixes
+    depends_on: [synthesize]
+    context: fresh

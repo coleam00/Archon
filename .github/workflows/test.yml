@@ -1,0 +1,114 @@
+name: Test Suite
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    strategy:
+      # Both legs must always report. With the default fail-fast, an ubuntu
+      # failure cancels windows, so a windows-only break stays invisible until
+      # the next round — and a cancelled leg blocks a merge once it is a
+      # required check.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Check bundled defaults
+        run: bun run check:bundled
+
+      - name: Check bundled skill
+        run: bun run check:bundled-skill
+
+      - name: Check bundled schema
+        run: bun run check:bundled-schema
+
+      - name: Check Pi vendor map
+        run: bun run check:pi-vendor-map
+
+      - name: Check provider capability matrix
+        run: bun run check:capability-matrix
+
+      - name: Type check
+        run: bun run type-check
+
+      - name: Lint
+        run: bun run lint --max-warnings 0
+
+      - name: Check formatting
+        run: bun run format:check
+
+      - name: Run installer tests
+        # POSIX-shell installer only. scripts/install.sh refuses MINGW/MSYS by design
+        # (Windows users are directed to WSL2), and test-install.sh runs the real
+        # installer with only curl mocked — so on windows-latest `uname -s` reports
+        # MINGW64_NT, the installer exits, and `set -euo pipefail` fails the job.
+        if: runner.os != 'Windows'
+        run: bun run test:install
+
+      - name: Run tests
+        run: bun run test
+
+  docker-build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # The image build needs ~14GB more scratch space than a stock runner has
+      # free once the provider SDKs' multi-platform vendor binaries are in
+      # node_modules. Cached-layer builds squeak by; any PR that invalidates an
+      # early Dockerfile layer (apt block, base image) rebuilds everything and
+      # hits "no space left on device". Reclaim the big unused toolchains first.
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+          df -h /
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: archon-ci:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test — container starts and serves /api/health
+        run: |
+          docker run -d --name archon-smoke -e PORT=3000 -e CLAUDE_USE_GLOBAL_AUTH=true -p 3000:3000 archon-ci:test
+          sleep 5
+          curl --fail --retry 10 --retry-delay 3 --retry-all-errors http://localhost:3000/api/health
+
+      - name: Dump container logs on failure
+        if: failure()
+        run: docker logs archon-smoke 2>&1 || true
+
+      - name: Cleanup smoke test container
+        if: always()
+        run: docker rm -f archon-smoke || true

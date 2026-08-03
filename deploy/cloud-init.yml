@@ -1,0 +1,145 @@
+#cloud-config
+
+# =============================================================================
+# Archon — Cloud-Init Auto-Setup
+# =============================================================================
+#
+# Paste this into your VPS provider's "User Data" field when creating a server.
+# Tested on: Ubuntu 22.04+, Debian 12+
+# Works with any cloud-init compatible provider (DigitalOcean, Hetzner, Linode,
+# Vultr, AWS EC2, Hostinger, etc.)
+#
+# What this does:
+#   1. Installs Docker + Docker Compose plugin
+#   2. Opens firewall ports (SSH, HTTP, HTTPS)
+#   3. Creates a 2GB swapfile (helps small VPS builds avoid OOM)
+#   4. Clones the repo to /opt/archon
+#   5. Prepares .env and Caddyfile from examples
+#   6. Creates a dedicated 'archon' user (docker group only, no sudo)
+#   7. Builds the Docker image (~5 min) as the archon user
+#
+# Note: On VPS with <2GB RAM, the docker build step can OOM without swap.
+# Note: The 'archon' user has docker access but NOT sudo. For administrative
+#       tasks (updates, reboots), use the default cloud user or root.
+#
+# After the server boots (~5-8 min), SSH in as the archon user:
+#   ssh archon@your-server-ip
+#   1. Edit /opt/archon/.env — set your AI credentials, DOMAIN, DATABASE_URL
+#   2. cd /opt/archon && docker compose --profile with-db --profile cloud up -d
+#   3. Open https://your-domain.com
+#
+# IMPORTANT: Before starting, point your domain's DNS A record to this server's IP.
+#           SSH keys from the default cloud user are copied to 'archon'.
+#
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - curl
+  - git
+  - ufw
+
+users:
+  - default
+  - name: archon
+    gecos: Archon Service User
+    shell: /bin/bash
+    lock_passwd: true
+
+runcmd:
+  # --- Swap (helps small VPS avoid OOM during docker build) ---
+  - |
+    if [ ! -f /swapfile ]; then
+      fallocate -l 2G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=2048
+      chmod 600 /swapfile
+      mkswap /swapfile
+      swapon /swapfile
+      echo '/swapfile none swap sw 0 0' >> /etc/fstab
+    fi
+
+  # --- Docker ---
+  - curl -fsSL https://get.docker.com | sh
+  - usermod -aG docker archon
+
+  # --- Copy SSH keys from default user to archon (so login works immediately) ---
+  - |
+    DEFAULT_USER=$(getent passwd 1000 | cut -d: -f1)
+    if [ -n "$DEFAULT_USER" ] && [ -f /home/$DEFAULT_USER/.ssh/authorized_keys ]; then
+      mkdir -p /home/archon/.ssh
+      cp /home/$DEFAULT_USER/.ssh/authorized_keys /home/archon/.ssh/authorized_keys
+      chmod 700 /home/archon/.ssh
+      chmod 600 /home/archon/.ssh/authorized_keys
+      chown -R archon:archon /home/archon/.ssh
+    elif [ -f /root/.ssh/authorized_keys ]; then
+      mkdir -p /home/archon/.ssh
+      cp /root/.ssh/authorized_keys /home/archon/.ssh/authorized_keys
+      chmod 700 /home/archon/.ssh
+      chmod 600 /home/archon/.ssh/authorized_keys
+      chown -R archon:archon /home/archon/.ssh
+    fi
+
+  # --- Firewall (443/udp needed for HTTP/3 QUIC via Caddy) ---
+  - ufw allow 22/tcp
+  - ufw allow 80/tcp
+  - ufw allow 443/tcp
+  - ufw allow 443/udp
+  - ufw --force enable
+
+  # --- Clone and configure (fail fast — single shell so set -e applies) ---
+  - |
+    set -e
+    git clone https://github.com/coleam00/Archon.git /opt/archon
+    cp /opt/archon/.env.example /opt/archon/.env
+    cp /opt/archon/Caddyfile.example /opt/archon/Caddyfile
+    chown -R archon:archon /opt/archon
+
+  # --- Pre-pull external images (as archon, via docker group) ---
+  - sudo -u archon docker pull postgres:17-alpine
+  - sudo -u archon docker pull caddy:2-alpine
+
+  # --- Build the app image as archon ---
+  - sudo -u archon -H bash -c 'cd /opt/archon && docker compose build'
+
+  # --- Signal completion ---
+  - |
+    cat > /opt/archon/SETUP_COMPLETE << 'DONE'
+    ============================================
+    Archon server setup complete!
+    ============================================
+
+    Log in as the 'archon' user (not root):
+      ssh archon@<server-ip>
+
+    Note: the 'archon' user has docker access but no sudo. For system
+    maintenance (apt upgrade, reboots), log in as the default cloud user
+    or root.
+
+    Next steps:
+
+      1. Edit credentials and domain:
+         nano /opt/archon/.env
+
+         Required:
+           CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...  (or CLAUDE_API_KEY)
+           DOMAIN=archon.example.com
+           DATABASE_URL=postgresql://postgres:postgres@postgres:5432/remote_coding_agent
+
+      2. (Optional) Set up basic auth to protect the Web UI:
+         docker run caddy caddy hash-password --plaintext 'YOUR_PASSWORD'
+         # Add to .env (use $$ to escape $ in hashes):
+           CADDY_BASIC_AUTH=basicauth @protected { admin $$2a$$14$$<hash> }
+         # Skip if using IP-based firewall rules instead.
+
+      3. Start all services:
+         cd /opt/archon
+         docker compose --profile with-db --profile cloud up -d
+
+      4. Open https://your-domain.com
+
+    Logs:     docker compose logs -f
+    Health:   curl https://your-domain.com/api/health
+    Docs:     https://archon.diy/deployment/docker/
+    ============================================
+    DONE
+  - echo "[archon] Setup complete. Edit /opt/archon/.env and run docker compose up."

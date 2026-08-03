@@ -1,0 +1,22 @@
+name: e2e-echo-child
+description: |
+  ENGINE-PRIMITIVE TEST — the cheapest possible fan-out child. One bash node.
+  Echoes its `$ARGUMENTS` so the parent can prove output threading per index.
+
+  Exists so fan-out mechanics (spawn, concurrency, join, parent linkage) can be
+  exercised for effectively zero cost. `rasmus-tests/t3-triage-fanout` does the
+  same with real AI probes and takes minutes; this takes seconds.
+
+  `fail-<n>` as the argument makes it exit non-zero, which is how `e2e-fanout-alldone`
+  and `e2e-fanout-allsuccess` drive the join difference between them.
+mutates_checkout: false
+
+nodes:
+  - id: echo
+    depends_on: []
+    bash: |
+      set -euo pipefail
+      case "$ARGUMENTS" in
+        fail-*) echo "child failing deliberately for: $ARGUMENTS"; exit 1 ;;
+        *)      echo "child-ok: $ARGUMENTS" ;;
+      esac

@@ -1,0 +1,17 @@
+# Docker Compose override for user-extended builds (server / deploy).
+# Copy this file to docker-compose.override.yml — do NOT modify docker-compose.override.example.yml.
+# docker-compose.override.yml is gitignored so your customizations stay local.
+#
+# Docker Compose automatically merges docker-compose.override.yml with docker-compose.yml
+# when both files are present — no extra flags needed:
+#   docker compose up -d
+#
+# NOTE: The base docker-compose.yml uses `image:` (no build section). This override
+# adds a full `build:` section so Compose builds from Dockerfile.user instead of
+# pulling the pre-built image.
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.user

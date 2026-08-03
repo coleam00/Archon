@@ -1,0 +1,40 @@
+name: e2e-fanout-alldone
+description: |
+  ENGINE-PRIMITIVE TEST — the `all_done` vs `all_success` difference, with ZERO AI.
+  Children are e2e-echo-child (one bash node), so a full fan-out costs seconds.
+
+  One item in the list is `fail-3`, which makes that child exit non-zero. Under
+  `join: all_done` the node still aggregates and the run continues — a failed child
+  becomes `{error, status}` in the output rather than killing the node. That is the
+  half `rasmus-tests/t3-triage-fanout` cannot show, because all its children succeed.
+
+  `items` is a LITERAL JSON array here rather than a `$node.output` ref, which also
+  covers the literal-list form of `fan_out.items`.
+
+  Usage: archon workflow run e2e-fanout-alldone ""
+mutates_checkout: false
+
+nodes:
+  - id: spread
+    depends_on: []
+    workflow: e2e-echo-child
+    fan_out:
+      items: '["one", "two", "fail-3"]'
+      max_parallel: 2
+      join: all_done
+
+  - id: verify
+    depends_on: [spread]
+    bash: |
+      set -euo pipefail
+      # Unquoted: Archon injects the substitution ALREADY shell-quoted.
+      out=$spread.output
+      echo "$out"
+      # all_done must aggregate every terminal outcome — successes AND the failure.
+      echo "$out" | grep -q 'child-ok: one'  || { echo 'missing child one'; exit 1; }
+      echo "$out" | grep -q 'child-ok: two'  || { echo 'missing child two'; exit 1; }
+      case "$out" in
+        *fail-3*|*error*|*failed*) : ;;
+        *) echo 'the failed child left no trace in the aggregate'; exit 1 ;;
+      esac
+      echo 'ALL_DONE AGGREGATED A FAILED CHILD OK'

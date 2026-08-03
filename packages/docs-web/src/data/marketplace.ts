@@ -1,0 +1,230 @@
+export interface MarketplaceEntry {
+  slug: string;
+  name: string;
+  author: string;
+  description: string;
+  sourceUrl: string; // GitHub blob/tree URL — file (.yaml) or directory containing workflow + commands/scripts
+  sha: string; // Commit SHA pin
+  tags: string[];
+  archonVersionCompat: string;
+  featured?: boolean;
+}
+
+export const tagConfig: Record<
+  string,
+  { label: string; color: string; bg: string; border: string }
+> = {
+  development: {
+    label: 'Development',
+    color: '#3b82f6',
+    bg: 'rgba(59,130,246,0.08)',
+    border: 'rgba(59,130,246,0.25)',
+  },
+  review: {
+    label: 'Review',
+    color: '#22c55e',
+    bg: 'rgba(34,197,94,0.08)',
+    border: 'rgba(34,197,94,0.25)',
+  },
+  automation: {
+    label: 'Automation',
+    color: '#f59e0b',
+    bg: 'rgba(245,158,11,0.08)',
+    border: 'rgba(245,158,11,0.25)',
+  },
+  planning: {
+    label: 'Planning',
+    color: '#a855f7',
+    bg: 'rgba(168,85,247,0.08)',
+    border: 'rgba(168,85,247,0.25)',
+  },
+};
+
+export const VALID_HOSTS = ['github.com'] as const;
+
+const SHA = '69b2c8978b589a30e2b01ee77897a770d714d630';
+const BASE = 'https://github.com/coleam00/Archon/blob/main';
+const BASE_PATH = '.archon/workflows/defaults';
+
+export const marketplaceEntries: MarketplaceEntry[] = [
+  {
+    slug: 'archon-piv-loop',
+    name: 'Archon PIV Loop',
+    author: 'coleam00',
+    description:
+      'Guided Plan-Implement-Validate development with human-in-the-loop checkpoints. Plan your feature, implement with AI, then validate before committing.',
+    sourceUrl: `${BASE}/${BASE_PATH}/archon-piv-loop.yaml`,
+    sha: SHA,
+    tags: ['development', 'planning'],
+    archonVersionCompat: '>=0.3.0',
+    featured: true,
+  },
+  {
+    slug: 'archon-fix-github-issue',
+    name: 'Fix GitHub Issue',
+    author: 'coleam00',
+    description:
+      'Automatically fix, resolve, or implement a solution for a GitHub issue. Syncs the issue, plans the fix, implements it, and opens a PR.',
+    sourceUrl: `${BASE}/${BASE_PATH}/archon-fix-github-issue.yaml`,
+    sha: SHA,
+    tags: ['development', 'automation'],
+    archonVersionCompat: '>=0.3.0',
+    featured: true,
+  },
+  {
+    slug: 'archon-comprehensive-pr-review',
+    name: 'Comprehensive PR Review',
+    author: 'coleam00',
+    description:
+      'Full code review of a pull request with automatic fixes. Runs 5 specialized review agents in parallel, synthesizes findings, and auto-fixes critical issues.',
+    sourceUrl: `${BASE}/${BASE_PATH}/archon-comprehensive-pr-review.yaml`,
+    sha: SHA,
+    tags: ['review', 'automation'],
+    archonVersionCompat: '>=0.3.0',
+    featured: true,
+  },
+  {
+    slug: 'archon-ralph-dag',
+    name: 'Ralph DAG Loop',
+    author: 'coleam00',
+    description:
+      'Ralph implementation loop — generate or load a PRD, break it into stories, then run Ralph iteratively until all stories are complete.',
+    sourceUrl: `${BASE}/${BASE_PATH}/archon-ralph-dag.yaml`,
+    sha: SHA,
+    tags: ['development', 'planning'],
+    archonVersionCompat: '>=0.3.0',
+    featured: true,
+  },
+  {
+    slug: 'video-generic',
+    name: 'Video Generic',
+    author: 'coleam00',
+    description:
+      'Turn a freeform prompt (URL, GitHub repo, release notes, topic) into a voiced + animated Remotion video. Three approval gates let you steer the spec, script, and live preview before render. Requires an ElevenLabs API key.',
+    sourceUrl:
+      'https://github.com/leex279/remotion-video-test/tree/4dac83c28d2e4a745b81520343101c402539b84f/.archon',
+    sha: '4dac83c28d2e4a745b81520343101c402539b84f',
+    tags: ['automation'],
+    archonVersionCompat: '>=0.3.0',
+  },
+  {
+    slug: 'archon-idea-to-wo',
+    name: 'Idea to Work Orders',
+    author: 'lamachine',
+    description:
+      'Interactive 8-node workflow that turns a raw idea into BKM-format Work Orders through four AI phases with approval gates between each: understand the idea, scope and approach, risk and decomposition, generate WOs. Output is a directory of self-contained WO files ready to hand to archon-piv-loop.',
+    sourceUrl:
+      'https://github.com/coleam00/archon-idea-to-wo/tree/3b0d5d828a4cb375d50bb1252f5e016c44242d01/.archon',
+    sha: '3b0d5d828a4cb375d50bb1252f5e016c44242d01',
+    tags: ['planning', 'development'],
+    archonVersionCompat: '>=0.3.0',
+  },
+  {
+    slug: 'archon-smart-mr-review',
+    name: 'Smart GitLab MR Review',
+    author: 'lraphael',
+    description:
+      'GitLab counterpart to archon-smart-pr-review. Adaptive code review of a GitLab MR — Haiku classifies which review agents are relevant, runs them in parallel, posts resolvable Discussion threads, and auto-approves on 0 critical findings.',
+    sourceUrl:
+      'https://github.com/lraphael/archon-gitlab-workflows/tree/55ca73498f0ead87d86c22ef0efa67482b311700/archon-smart-mr-review',
+    sha: '55ca73498f0ead87d86c22ef0efa67482b311700',
+    tags: ['review', 'automation'],
+    archonVersionCompat: '>=0.3.0',
+  },
+  {
+    slug: 'archon-resolve-mr-conflicts',
+    name: 'Resolve GitLab MR Conflicts',
+    author: 'lraphael',
+    description:
+      'GitLab counterpart to archon-resolve-conflicts. Rebases an MR onto its target branch, auto-resolves simple conflicts (additions, imports, formatting, dependency-list merges), presents options for complex conflicts, validates the resolution (ruff/pytest/tsc/go), and force-pushes with --force-with-lease.',
+    sourceUrl:
+      'https://github.com/lraphael/archon-gitlab-workflows/tree/6e39b359e1b02329ebf63f7d1699e6bbc8cb001f/archon-resolve-mr-conflicts',
+    sha: '6e39b359e1b02329ebf63f7d1699e6bbc8cb001f',
+    tags: ['automation'],
+    archonVersionCompat: '>=0.3.0',
+  },
+  {
+    slug: 'archon-comprehensive-mr-review',
+    name: 'Comprehensive GitLab MR Review',
+    author: 'lraphael',
+    description:
+      'GitLab counterpart to archon-comprehensive-pr-review. Full code review of a GitLab MR — all 5 review agents (code-review, error-handling, test-coverage, comment-quality, docs-impact) run in parallel, posts resolvable Discussion threads, auto-approves on 0 critical findings.',
+    sourceUrl:
+      'https://github.com/lraphael/archon-gitlab-workflows/tree/6e39b359e1b02329ebf63f7d1699e6bbc8cb001f/archon-comprehensive-mr-review',
+    sha: '6e39b359e1b02329ebf63f7d1699e6bbc8cb001f',
+    tags: ['review', 'automation'],
+    archonVersionCompat: '>=0.3.0',
+  },
+  {
+    slug: 'piv-system-evolution',
+    name: 'PIV Loop + System Evolution',
+    author: 'coleam00',
+    description:
+      "Runs the PIV loop (Plan-Implement-Validate) on a feature or bug behind four human-in-the-loop gates, then evolves the codebase's own AI Layer from what the run learned. Eight phases are adapted from the agentic-coding-course AI Layer. Ends in a draft PR.",
+    sourceUrl:
+      'https://github.com/coleam00/piv-system-evolution/tree/de8a0e94f9bab1a81a152c62d5d5e4a2023874b3/.archon',
+    sha: 'de8a0e94f9bab1a81a152c62d5d5e4a2023874b3',
+    tags: ['development', 'planning', 'review'],
+    archonVersionCompat: '>=0.3.0',
+  },
+  {
+    slug: 'harness-score',
+    name: 'Harness Score',
+    author: 'seanrobertwright',
+    description:
+      'Audit a repository for AI-agent readiness. A deterministic script runs 10 checks (agent instructions, README, build/test commands, CI, tests, lint/typecheck, .archon workflows, security scanning, sensitive paths) and computes a score out of 100; Claude then narrates the pre-computed results into a markdown report with a rating and the top 3 fixes ranked by score gain.',
+    sourceUrl:
+      'https://github.com/seanrobertwright/archon-harness-score/blob/main/harness-score.yaml',
+    sha: '0a5b1406d9869e29507aed005df9456a2ea686e6',
+    tags: ['review', 'automation'],
+    archonVersionCompat: '>=0.3.0',
+  },
+  {
+    slug: 'pocock-skills-workflow-family',
+    name: 'Matt Pocock Skills Workflow Family',
+    author: 'seanrobertwright',
+    description:
+      "Matt Pocock's 'Skills for Real Engineers' (v1.1.0) as six workflows that mount the real SKILL.md files into nodes: spec-to-ship (tracer-bullet tickets -> TDD frontier loop -> two-axis Standards|Spec review -> PR), conservative AFK triage, a diagnosing-bugs pipeline that refuses to theorize without a red feedback loop, an AFK wayfinder frontier, architecture health scans, and repo init. Interactive grilling stays human — the spec issue is the handoff artifact into the AFK back half.",
+    sourceUrl:
+      'https://github.com/seanrobertwright/archon-pocock-workflow/tree/629e57716ea72bb8cf2f77fc7728d3845aa2cf92/.archon',
+    sha: '629e57716ea72bb8cf2f77fc7728d3845aa2cf92',
+    tags: ['development', 'planning', 'review', 'automation'],
+    archonVersionCompat: '>=0.5.0',
+  },
+  {
+    slug: 'token-max-site-factory',
+    name: 'Token-Max Site Factory',
+    author: 'TheSmokeDev',
+    description:
+      'Point-and-shoot programmatic SEO/GEO page factory. Scan any website, then expand it into hundreds of validated 2,800+ word answer-first pages with hard uniqueness gates and packet-only facts. Never deploys - generation ends at a validation report.',
+    sourceUrl:
+      'https://github.com/TheSmokeDev/token-max-site-factory/tree/d01735a1e731ff00400621d0110d112488eaa68d/marketplace/token-max-site-factory',
+    sha: 'd01735a1e731ff00400621d0110d112488eaa68d',
+    tags: ['automation', 'development'],
+    archonVersionCompat: '>=0.5.0',
+  },
+  {
+    slug: 'image-node-factory',
+    name: 'Image Node Factory',
+    author: 'TheSmokeDev',
+    description:
+      'One visual brief in, a grounded image prompt pack out (optional Codex-rendered bitmaps). Template selection cites a pinned, checksum-verified 511-case style corpus; a deterministic validator fails the run on any citation that does not resolve. Renders are opt-in and every concept ships baked and overlay variants.',
+    sourceUrl:
+      'https://github.com/TheSmokeDev/image-node-factory/tree/da7af16e3a3ba6fca7b58dd7a596dad24689a3f6/marketplace/image-node-factory',
+    sha: 'da7af16e3a3ba6fca7b58dd7a596dad24689a3f6',
+    tags: ['automation', 'development'],
+    archonVersionCompat: '>=0.5.0',
+  },
+  {
+    slug: 'archon-self-upgrade',
+    name: 'Archon Self-Upgrade',
+    author: 'k4n4lm00n',
+    description:
+      'Hot-upgrade a live, long-running server (e.g. an Archon messenger-integrated bot) to newer code from your fork WITHOUT dropping its active communication link. Ensures the `upstream` and `myfork` remotes (forks `upstream` to create `myfork` if missing), snapshots the live instance as a rollback anchor, stages the target ref in an isolated worktree, installs/type-checks/builds/tests, smoke-boots in isolation, then performs a detached, self-healing cutover that keeps every active integration or rolls back.',
+    sourceUrl:
+      'https://github.com/k4n4lm00n/archon-self-upgrade/blob/46cc9c61f6a6eaaeaa3b9ef9046c8930f5001432/archon-self-upgrade.yaml',
+    sha: '46cc9c61f6a6eaaeaa3b9ef9046c8930f5001432',
+    tags: ['automation', 'development'],
+    archonVersionCompat: '>=0.5.0',
+  },
+];

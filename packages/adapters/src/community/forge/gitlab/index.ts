@@ -1,0 +1,1 @@
+export { GitLabAdapter } from './adapter';

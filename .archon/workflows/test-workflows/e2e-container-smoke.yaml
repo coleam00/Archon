@@ -1,0 +1,60 @@
+# E2E smoke test — container isolation for folder projects (Phase B, #2153)
+# Bash-node-only, NO AI credential. Runs against a folder project with --container:
+#   bun run cli workflow run e2e-container-smoke --folder --container --cwd <dir> "smoke"
+# Proves the deterministic nodes exec INSIDE the managed runner container over an
+# overlay of the folder root, and that an overlay write is visible in the merged
+# view across separate exec calls within the run.
+#
+# The HOST-folder-unchanged and clean-teardown assertions live in the CI job
+# (.github/workflows/e2e-smoke.yml): they can only be observed from the host after
+# the container is gone, because Phase B discards the overlay on teardown.
+name: e2e-container-smoke
+description: "Container-isolation smoke. Asserts bash nodes run in-container (hostname == container id, overlay mounts present) and an overlay write is visible in the merged view. Host-unchanged + teardown are asserted by the CI job."
+
+nodes:
+  # Prove the deterministic node executed INSIDE the runner container, not on the host.
+  - id: assert-in-container
+    bash: |
+      # Docker sets an unset --hostname to the 12-char short container id and writes
+      # it to /etc/hostname (the `hostname` binary is absent from the slim base).
+      # On the host (CI runner / dev machine) the hostname never matches this shape,
+      # so a 12-hex value is positive proof the node exec'd inside the container.
+      hn="$(cat /etc/hostname 2>/dev/null || hostname)"
+      echo "hostname=$hn"
+      if ! printf '%s' "$hn" | grep -Eq '^[0-9a-f]{12}$'; then
+        echo "FAIL: hostname '$hn' is not a container short-id — node did not run in the container"
+        exit 1
+      fi
+      # The overlay mount points only exist inside the archon-runner container.
+      if [ ! -d /mnt/lower ] || [ ! -d /mnt/upper ]; then
+        echo "FAIL: overlay mount points /mnt/lower + /mnt/upper missing — not the overlay container"
+        exit 1
+      fi
+      echo "PASS: bash node ran inside the managed container (hostname == container id)"
+
+  # Write a file into the workspace (folder root == overlay merged mount).
+  - id: overlay-write
+    bash: |
+      marker="container-smoke-overlay-marker.txt"
+      printf 'archon-overlay-smoke\n' > "$marker"
+      echo "wrote $(pwd)/$marker"
+    depends_on: [assert-in-container]
+    trigger_rule: all_success
+
+  # A SEPARATE docker exec must see the write through the same overlay (merged view).
+  - id: overlay-read
+    bash: |
+      marker="container-smoke-overlay-marker.txt"
+      if [ ! -f "$marker" ]; then
+        echo "FAIL: $marker not visible in merged overlay view from a later node"
+        exit 1
+      fi
+      content="$(cat "$marker")"
+      echo "merged-view content: $content"
+      if [ "$content" != "archon-overlay-smoke" ]; then
+        echo "FAIL: unexpected marker content '$content'"
+        exit 1
+      fi
+      echo "PASS: overlay write visible in merged view across exec calls"
+    depends_on: [overlay-write]
+    trigger_rule: all_success

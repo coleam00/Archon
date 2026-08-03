@@ -1,0 +1,53 @@
+# Version control
+.git
+.gitignore
+
+# Dependencies (installed in container)
+# Must match root AND per-package node_modules — workspace symlinks from the
+# host are broken inside Linux containers and would shadow the production install.
+node_modules
+**/node_modules
+
+# Legacy workspace directory (not part of the app)
+workspace
+
+# Build artifacts
+dist
+packages/web/dist
+
+# Development files
+.env
+.env.*
+!.env.example
+*.log
+
+# IDE / editor
+.vscode
+.idea
+*.swp
+*.swo
+
+# Docker files (avoid recursive context)
+docker/
+Dockerfile.user
+
+# Documentation site (not needed in production)
+docs/
+
+# Claude Code skills, rules, and commands (not needed in production)
+.claude/
+
+# Analysis and POC directories
+.codebase-analysis/
+ui-poc/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test artifacts
+coverage/
+*.test.ts
+*.test.tsx
+**/*.test.ts
+**/*.test.tsx

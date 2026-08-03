@@ -1,0 +1,52 @@
+name: archon-test-loop-dag
+description: |
+  Use when: User explicitly says "test-loop-dag" or "run test-loop-dag".
+  IMPORTANT: This is a DAG workflow with a loop node that iterates until completion.
+  NOT for: General testing questions or debugging.
+  Does: Initializes a counter, iterates until it reaches 3, then reports completion.
+
+nodes:
+  - id: setup
+    bash: |
+      echo "0" > .archon/test-loop-dag-counter.txt
+      echo "Counter initialized to 0"
+
+  - id: loop-counter
+    depends_on: [setup]
+    loop:
+      prompt: |
+        You are testing the loop node functionality within a DAG workflow.
+
+        ## Your Task
+
+        1. Read the file `.archon/test-loop-dag-counter.txt`
+        2. Parse the current counter value
+        3. Increment it by 1
+        4. Write the new value back to the file
+        5. Report the current iteration
+
+        ## User Intent
+
+        $USER_MESSAGE
+
+        ## Completion Criteria
+
+        - If the counter reaches 3 or higher, output: <promise>COMPLETE</promise>
+        - Otherwise, just report your progress and end normally
+
+        ## Important
+
+        Be concise. Just do the task and report the counter value.
+      until: COMPLETE
+      max_iterations: 5
+      fresh_context: false
+
+  - id: report
+    depends_on: [loop-counter]
+    prompt: |
+      The loop counter test has completed. The loop node output was:
+
+      $loop-counter.output
+
+      Read `.archon/test-loop-dag-counter.txt` and confirm the final counter value.
+      Report: "Test loop DAG completed successfully. Final counter: {value}"

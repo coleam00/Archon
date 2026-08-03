@@ -1,0 +1,33 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "paths": {
+      "@archon/adapters": ["../adapters/src"],
+      "@archon/adapters/*": ["../adapters/src/*"],
+      "@archon/core": ["../core/src"],
+      "@archon/core/*": ["../core/src/*"],
+      "@archon/server": ["../server/src"],
+      "@archon/server/*": ["../server/src/*"],
+      "@archon/workflows": ["../workflows/src"],
+      "@archon/workflows/*": ["../workflows/src/*"],
+      "@archon/paths": ["../paths/src"],
+      "@archon/git": ["../git/src"]
+    }
+  },
+  "include": [
+    "src/**/*",
+    "../core/src/**/*.ts",
+    "../server/src/**/*.ts",
+    "../adapters/src/**/*.ts",
+    "../workflows/src/defaults/text-imports.d.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "**/*.test.ts",
+    "../core/src/**/*.test.ts",
+    "../server/src/**/*.test.ts",
+    "../adapters/src/**/*.test.ts"
+  ]
+}
