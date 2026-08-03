@@ -2,6 +2,7 @@
  * Slack platform adapter using @slack/bolt with Socket Mode
  * Handles message sending with markdown block formatting for AI responses
  */
+import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { App, LogLevel, type SlashCommand } from '@slack/bolt';
@@ -34,6 +35,13 @@ const MAX_MARKDOWN_BLOCK_LENGTH = 12000; // Slack markdown block limit
 const MAX_SLACK_FILE_BYTES = 10 * 1024 * 1024;
 /** Maximum number of file attachments downloaded per Slack message (mirrors the Web upload cap). */
 const MAX_SLACK_FILES_PER_MESSAGE = 5;
+/**
+ * Per-attachment download deadline. Slack's file CDN has no guaranteed response
+ * time and `fetch` has no default timeout, so a stalled connection would hang
+ * this message forever. Generous enough for a 10 MB file on a slow link, short
+ * enough that a dead endpoint doesn't strand the user waiting on a reply.
+ */
+const SLACK_ATTACHMENT_TIMEOUT_MS = 30_000;
 
 /** Slack channel + message ts pair used for reactions and edits. */
 export interface SlackMessageRef {
@@ -365,8 +373,19 @@ export class SlackAdapter implements IPlatformAdapter {
 
     // Slack conversation IDs are "channel:ts" — ':' is invalid in Windows
     // directory names, so sanitize before using it as a path segment.
+    //
+    // The random suffix makes the directory unique PER CALL, not per
+    // conversation. Every message in a Slack thread shares one conversation id,
+    // downloads run outside the per-conversation lock, and the caller cleans up
+    // with a recursive delete — so a shared directory would let one message's
+    // cleanup wipe a concurrently-arriving sibling's still-unread attachments.
     const safeConversationId = conversationId.replace(/[^a-zA-Z0-9_-]/g, '_');
-    const uploadDir = join(getArchonHome(), 'artifacts', 'uploads', `slack-${safeConversationId}`);
+    const uploadDir = join(
+      getArchonHome(),
+      'artifacts',
+      'uploads',
+      `slack-${safeConversationId}-${randomUUID()}`
+    );
 
     const saved: AttachedFile[] = [];
     for (const file of toDownload) {
@@ -379,14 +398,35 @@ export class SlackAdapter implements IPlatformAdapter {
         continue;
       }
 
+      // Held across the body read as well as the request: a response that
+      // starts and then stalls mid-body must abort too, not hang forever.
+      const controller = new AbortController();
+      const timeout = setTimeout(() => {
+        controller.abort();
+      }, SLACK_ATTACHMENT_TIMEOUT_MS);
       try {
         const response = await fetch(file.url_private_download, {
           headers: { Authorization: `Bearer ${this.botToken}` },
+          signal: controller.signal,
         });
         if (!response.ok) {
           getLog().warn(
             { conversationId, fileId: file.id, status: response.status },
             'slack.attachment_download_failed'
+          );
+          continue;
+        }
+
+        // Reject oversized files BEFORE buffering them. `file.size` is optional
+        // on the event payload, so without this an attachment of any size gets
+        // pulled fully into memory just to be discarded — which would defeat
+        // the cap as a memory guard. The post-read check below still stands as
+        // a backstop for a missing or understated Content-Length.
+        const declaredLength = Number(response.headers.get('content-length'));
+        if (Number.isFinite(declaredLength) && declaredLength > MAX_SLACK_FILE_BYTES) {
+          getLog().warn(
+            { conversationId, fileId: file.id, size: declaredLength },
+            'slack.attachment_too_large'
           );
           continue;
         }
@@ -411,10 +451,20 @@ export class SlackAdapter implements IPlatformAdapter {
           size: buffer.byteLength,
         });
       } catch (error) {
+        // An abort here is our own deadline firing, not a Slack fault — log it
+        // distinctly so a slow CDN is not mistaken for a broken attachment.
+        const timedOut = (error as Error).name === 'AbortError';
         getLog().warn(
-          { err: error as Error, conversationId, fileId: file.id },
-          'slack.attachment_download_error'
+          {
+            err: error as Error,
+            conversationId,
+            fileId: file.id,
+            ...(timedOut ? { timeoutMs: SLACK_ATTACHMENT_TIMEOUT_MS } : {}),
+          },
+          timedOut ? 'slack.attachment_download_timeout' : 'slack.attachment_download_error'
         );
+      } finally {
+        clearTimeout(timeout);
       }
     }
 

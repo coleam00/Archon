@@ -703,6 +703,105 @@ describe('SlackAdapter', () => {
       expect(result.files).toEqual([]);
     });
 
+    test('uses a unique upload dir per call so concurrent thread messages cannot collide', async () => {
+      globalThis.fetch = mock(() =>
+        Promise.resolve(new Response('x', { status: 200 }))
+      ) as unknown as typeof fetch;
+
+      const file = {
+        id: 'F1',
+        name: 'a.txt',
+        size: 1,
+        url_private_download: 'https://files.slack.com/f1',
+      };
+      // Same conversation id — every message in a Slack thread shares one.
+      const first = await adapter.downloadAttachments([file], 'C123:456.789');
+      const second = await adapter.downloadAttachments([file], 'C123:456.789');
+      uploadDirs.push(first.uploadDir, second.uploadDir);
+
+      // Cleanup rm -rf's the whole dir, so sharing one would delete the other's
+      // still-unread files (the downloads happen outside the conversation lock).
+      expect(first.uploadDir).not.toBe(second.uploadDir);
+      expect(first.files[0]?.path).not.toBe(second.files[0]?.path);
+    });
+
+    test('skips an oversized file by Content-Length, without buffering the body', async () => {
+      let bodyRead = false;
+      globalThis.fetch = mock(() => {
+        const response = new Response('irrelevant', {
+          status: 200,
+          headers: { 'content-length': String(11 * 1024 * 1024) },
+        });
+        // Prove the body is never pulled into memory when the header alone
+        // already tells us the file is too big.
+        Object.defineProperty(response, 'arrayBuffer', {
+          value: () => {
+            bodyRead = true;
+            return Promise.resolve(new ArrayBuffer(0));
+          },
+        });
+        return Promise.resolve(response);
+      }) as unknown as typeof fetch;
+
+      // No `size` on the ref — the pre-flight metadata check cannot catch this.
+      const result = await adapter.downloadAttachments(
+        [{ id: 'F_BIG', name: 'big.bin', url_private_download: 'https://files.slack.com/big' }],
+        'C123:456.789'
+      );
+
+      expect(result.files).toEqual([]);
+      expect(bodyRead).toBe(false);
+    });
+
+    test('still catches an oversized file when Content-Length is absent', async () => {
+      globalThis.fetch = mock(() =>
+        Promise.resolve(new Response('x'.repeat(11 * 1024 * 1024), { status: 200 }))
+      ) as unknown as typeof fetch;
+
+      const result = await adapter.downloadAttachments(
+        [{ id: 'F_NOLEN', name: 'big.bin', url_private_download: 'https://files.slack.com/nolen' }],
+        'C123:456.789'
+      );
+
+      expect(result.files).toEqual([]);
+    });
+
+    test('passes an abort signal so a stalled download cannot hang the message', async () => {
+      let sawSignal = false;
+      globalThis.fetch = mock((_url: string, init?: RequestInit) => {
+        sawSignal = init?.signal instanceof AbortSignal;
+        return Promise.resolve(new Response('x', { status: 200 }));
+      }) as unknown as typeof fetch;
+
+      const result = await adapter.downloadAttachments(
+        [
+          {
+            id: 'F1',
+            name: 'a.txt',
+            size: 1,
+            url_private_download: 'https://files.slack.com/f1',
+          },
+        ],
+        'C123:456.789'
+      );
+      uploadDirs.push(result.uploadDir);
+
+      expect(sawSignal).toBe(true);
+    });
+
+    test('skips an aborted download without failing the batch', async () => {
+      globalThis.fetch = mock(() =>
+        Promise.reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))
+      ) as unknown as typeof fetch;
+
+      const result = await adapter.downloadAttachments(
+        [{ id: 'F_SLOW', name: 'slow.txt', url_private_download: 'https://files.slack.com/slow' }],
+        'C123:456.789'
+      );
+
+      expect(result.files).toEqual([]);
+    });
+
     test('truncates to the max files per message', async () => {
       globalThis.fetch = mock(() =>
         Promise.resolve(new Response('x', { status: 200 }))
