@@ -1129,6 +1129,16 @@ async function resolveNodeProviderAndModel(
     nodeConfig,
     assistantConfig
   );
+  // Read POST-routing values only. applyPresetOptions -> routePresetEffort has
+  // already placed effort where the provider actually consumes it — nodeConfig
+  // for providers taking a node-level `effort:`, assistantConfig for Codex's
+  // modelReasoningEffort — and warned + dropped it where unsupported. So both
+  // reads below hold effort that will genuinely be applied.
+  //
+  // Do NOT gate this on caps.effortControl: that flag means "accepts the
+  // node-level effort: field", not "can apply reasoning effort". Codex is
+  // effortControl:false yet applies effort via modelReasoningEffort, so gating
+  // on it would drop a real, applied value from node_started.
   const assistantEffort = assistantConfig.modelReasoningEffort;
   const resolvedEffort: string | undefined =
     nodeConfig.effort ?? (typeof assistantEffort === 'string' ? assistantEffort : undefined);
@@ -1290,7 +1300,7 @@ async function executeNodeInternal(
         provider,
         model: resolvedModel,
         tier: resolvedTier,
-        effort: resolvedEffort,
+        ...(resolvedEffort !== undefined ? { effort: resolvedEffort } : {}),
         ...iterationData,
       },
     })
@@ -1310,7 +1320,7 @@ async function executeNodeInternal(
     provider,
     model: resolvedModel,
     tier: resolvedTier,
-    effort: resolvedEffort,
+    ...(resolvedEffort !== undefined ? { effort: resolvedEffort } : {}),
   });
 
   // Load prompt
@@ -3985,7 +3995,7 @@ async function executeLoopNode(
         provider: workflowProvider,
         model: resolvedModel,
         tier: resolvedTier,
-        effort: resolvedEffort,
+        ...(resolvedEffort !== undefined ? { effort: resolvedEffort } : {}),
       },
     })
     .catch((err: Error) => {
@@ -4003,7 +4013,7 @@ async function executeLoopNode(
     provider: workflowProvider,
     model: resolvedModel,
     tier: resolvedTier,
-    effort: resolvedEffort,
+    ...(resolvedEffort !== undefined ? { effort: resolvedEffort } : {}),
   });
 
   /**
