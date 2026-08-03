@@ -70,9 +70,43 @@ nodes:
          lockfile exactly and fails rather than updating it. The install must not
          modify the lockfile.
       5. Report one line: the manager you detected, and whether the install succeeded.
+      6. If the install failed, write the marker file and say so — do NOT continue as
+         though it worked:
+         ```bash
+         echo "install failed" > "$ARTIFACTS_DIR/.prep-failed"
+         ```
 
       Bound every read; never print a whole file.
     model: small
+
+  # Deterministic gate on prep-worktree's outcome.
+  #
+  # prep-worktree only ASKS the model to report whether the install succeeded.
+  # That report is advisory: the model's turn can complete normally after a
+  # non-zero install, the node still records success, and `implement` then runs
+  # against a broken dependency tree — where the resulting build/type-check/test
+  # failures get misattributed to the implementation instead of the environment.
+  #
+  # Same class as capture-pr-number and assert-implemented in this file: a check
+  # with no judgment content whose silent failure corrupts everything downstream
+  # belongs in a node that cannot decline to fire.
+  - id: assert-deps-installed
+    bash: |
+      if [ -f "$ARTIFACTS_DIR/.prep-failed" ]; then
+        echo "prep-worktree reported a failed dependency install." >&2
+        echo "Refusing to implement against a broken dependency tree — later build," >&2
+        echo "type-check and test failures would be blamed on the implementation." >&2
+        exit 1
+      fi
+      # Independent of the model's own report: if a manifest exists, its install
+      # target must exist too. Catches the case where the model narrated success
+      # after a failure and never wrote the marker.
+      if [ -f package.json ] && [ ! -d node_modules ]; then
+        echo "package.json is present but node_modules is missing — dependencies did not install." >&2
+        exit 1
+      fi
+      echo '{"deps":"ok"}'
+    depends_on: [prep-worktree]
 
   # ═══════════════════════════════════════════════════════════════
   # PHASE 1: FETCH & CLASSIFY
@@ -301,7 +335,7 @@ nodes:
   - id: implement
     command: archon-fix-issue
     output_type: implementation
-    depends_on: [bridge-artifacts, prep-worktree]
+    depends_on: [bridge-artifacts, assert-deps-installed]
     context: fresh
     model: large
 
@@ -322,10 +356,19 @@ nodes:
   # them and passed three consecutive runs on an empty implementation, which is the
   # exact failure it exists to catch.
   #
-  # Only the working tree is inspected: `implement` leaves its changes uncommitted
-  # (committing is `create-pr`'s job). If that ever stops being true this guard fails
-  # a run that did have work — visible and annoying — rather than passing one that
-  # did not, which is silent. That is the safe direction for it to be wrong in.
+  # BOTH the working tree and the commit count are inspected, and both branches are
+  # load-bearing. The original version checked only the working tree, on the
+  # assumption that `implement` leaves its changes uncommitted (committing being
+  # `create-pr`'s job). That assumption is false often enough to matter: three
+  # consecutive runs DID commit their work, so the tree was clean and the guard
+  # failed runs that had genuinely implemented the fix. Hence the
+  # `git rev-list --count origin/$base..HEAD` branch — do not remove it believing
+  # it is dead weight, or those failures come back.
+  #
+  # When the commit count cannot be determined (no origin, detached base) the guard
+  # WARNS rather than failing. Failing on an unknown would block runs on local-only
+  # repos; passing on an unknown is the lesser evil because the working-tree check
+  # above still had its chance.
   - id: assert-implemented
     bash: |
       base=$BASE_BRANCH
