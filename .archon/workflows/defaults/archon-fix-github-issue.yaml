@@ -32,21 +32,43 @@ nodes:
       Request: $ARGUMENTS
 
       Rules:
-      - If the message contains an explicit issue number (e.g., "#709", "issue 709", "709"), extract that number.
-      - If the message is ambiguous (e.g., "fix the SQLite timestamp bug"), use `gh issue list` to search for matching issues and pick the best match.
+      - If the message contains an explicit issue number (e.g., "#709", "issue 709", "709"), use that number.
+      - If the message contains a GitHub issue URL, take the number from it AND record its
+        `owner/repo` — a URL may point at a DIFFERENT repository than the checkout.
+      - If the message names a repo explicitly ("owner/repo#709"), record that too.
+      - If the message is ambiguous (e.g., "fix the SQLite timestamp bug"), use `gh issue list`
+        to search the CURRENT repo and pick the best match; leave `repo` empty.
 
-      CRITICAL: Your final output must be ONLY the bare number with no quotes, no markdown, no explanation. Example correct output: 709
+      Set `repo` to "" whenever the request did not name a repository. An empty `repo` means
+      "the current checkout", which is the common case. Never guess a repo.
+    output_format:
+      type: object
+      properties:
+        issue_number:
+          type: string
+        repo:
+          type: string
+      required:
+        - issue_number
+        - repo
 
   - id: fetch-issue
     bash: |
-      # $extract-issue-number.output is injected pre-quoted by Archon — do NOT
-      # wrap it in double quotes (that corrupts the value; see issue #1884).
-      ISSUE_NUM=$(echo $extract-issue-number.output | grep -oE '[0-9]+' | head -1)
-      if [ -z "$ISSUE_NUM" ]; then
-        echo "Failed to extract issue number from:" $extract-issue-number.output >&2
+      # Substitutions are injected already shell-quoted by Archon — assign them
+      # unquoted, then quote normally as locals (see #1884).
+      num=$extract-issue-number.output.issue_number
+      repo=$extract-issue-number.output.repo
+      if ! printf '%s' "$num" | grep -qE '^[0-9]+$'; then
+        echo "extract-issue-number did not yield a numeric issue id: $num" >&2
         exit 1
       fi
-      gh issue view "$ISSUE_NUM" --json title,body,labels,comments,state,url,author
+      # An explicit owner/repo must be preserved: `gh issue view <n>` resolves against
+      # the CURRENT checkout, so a cross-repo URL would silently read this repo's #<n>.
+      if [ -n "$repo" ]; then
+        gh issue view "$num" --repo "$repo" --json title,body,labels,comments,state,url,author
+      else
+        gh issue view "$num" --json title,body,labels,comments,state,url,author
+      fi
     depends_on: [extract-issue-number]
 
   - id: classify

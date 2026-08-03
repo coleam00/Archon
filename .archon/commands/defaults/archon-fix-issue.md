@@ -20,10 +20,21 @@ created a git worktree on the correct branch. In that case:
   operator's `.archon/` directory — workflows, commands, scripts — into every run
   worktree, deliberately, so a workflow can be iterated on before it is committed.
   Those files are present *before* you start and are not your changes.
-- **Modifications under `.archon/` are never yours to commit, stash, or remove.**
-  Leave them exactly as they are and commit only the files your implementation touched.
-  Before every commit, confirm with `git diff --cached --name-only` that nothing under
-  `.archon/` is staged.
+- **Pre-existing modifications under `.archon/` are never yours to commit, stash, or
+  remove.** Leave them exactly as they are and commit only the files your implementation
+  touched. Before every commit, confirm with `git diff --cached --name-only` that no
+  `.archon/` file you did not deliberately change is staged.
+- **The exception: when the issue's fix genuinely lives under `.archon/`.** Workflows,
+  commands and scripts are source too, and an issue can legitimately target one. If your
+  plan says to edit a specific `.archon/` file, edit and commit **that file** — the rule
+  above exists to stop you sweeping up the operator's unrelated copied-in edits, not to
+  make a whole directory unfixable.
+
+  Distinguish the two by intent, not by path: a file your plan names is your work; every
+  other dirty `.archon/` file is not. On 2026-08-03 a run blocked outright on this,
+  correctly reporting "contradictory instructions" because the issue required editing a
+  workflow YAML while this section forbade touching anything under `.archon/`. It was
+  right to refuse rather than guess — and the rule was wrong to be absolute.
 - **Dirty paths outside `.archon/` are also not a reason to stop, and also not yours.**
   They are either your own work from an earlier attempt at this run (resume reuses the
   worktree) or something the operator left behind. Either way: leave them alone, do not
