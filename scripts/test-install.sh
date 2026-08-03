@@ -20,6 +20,24 @@ assert_equals() {
   [ "$expected" = "$actual" ] || fail "$description: expected $expected, got $actual"
 }
 
+assert_powershell_version_guard() {
+  local powershell_installer="$1"
+
+  awk '
+    /# --- Verify installation ---/ { in_verification = 1; next }
+    /# --- Getting started ---/ { exit }
+    !in_verification { next }
+    /\$versionOutput = & \$destBinary version 2>&1/ { invoked = 1; next }
+    invoked && /if \(\$LASTEXITCODE -ne 0\)/ { guarded = 1; next }
+    guarded && /exit 1/ { exits_on_failure = 1; next }
+    exits_on_failure && /Write-Ok "Installation complete!"/ { reports_success = 1 }
+    END {
+      exit !(invoked && guarded && exits_on_failure && reports_success)
+    }
+  ' "$powershell_installer" \
+    || fail "PowerShell installer must fail a non-zero version check before reporting success"
+}
+
 make_platform_mocks() {
   local os="$1"
   local arch="$2"
@@ -90,6 +108,7 @@ cmp -s "$installer" "$repo_root/packages/docs-web/public/install" \
 # PATH-corrupting installer to Windows users while the repo copy was fixed. #2339.
 cmp -s "$repo_root/scripts/install.ps1" "$repo_root/packages/docs-web/public/install.ps1" \
   || fail "public install.ps1 mirror differs from scripts/install.ps1"
+assert_powershell_version_guard "$repo_root/scripts/install.ps1"
 
 mock_dir="$tmp_dir/install-mocks"
 install_dir="$tmp_dir/install-bin"
