@@ -377,7 +377,10 @@ interface CodexStreamState {
 function getMcpToolName(item: Record<string, unknown>): string {
   const server = item.server as string | undefined;
   const tool = item.tool as string | undefined;
-  const toolInfo = server && tool ? `${server}/${tool}` : (tool ?? server ?? 'MCP tool');
+  let toolInfo = 'MCP tool';
+  if (server && tool) toolInfo = `${server}/${tool}`;
+  else if (tool !== undefined) toolInfo = tool;
+  else if (server !== undefined) toolInfo = server;
   return `🔌 MCP: ${toolInfo}`;
 }
 
