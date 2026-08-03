@@ -1396,6 +1396,14 @@ export async function executeWorkflow(
       usedIsolation: isolationContext !== undefined,
       isResume: dagPriorCompletedNodes !== undefined,
     });
+
+    let isolationMode: 'container' | 'worktree' | 'in-place' = 'in-place';
+    if (execContext.kind === 'container') {
+      isolationMode = 'container';
+    } else if (isolationContext) {
+      isolationMode = 'worktree';
+    }
+
     deps.store
       .createWorkflowEvent({
         workflow_run_id: workflowRun.id,
@@ -1405,12 +1413,7 @@ export async function executeWorkflow(
           defaultAssistant: userAiPrefs.defaultProvider ?? config.assistant,
           provider: resolvedProvider,
           model: resolvedModel ?? null,
-          isolationMode:
-            execContext.kind === 'container'
-              ? 'container'
-              : isolationContext
-                ? 'worktree'
-                : 'in-place',
+          isolationMode,
           baseBranch,
           userId: workflowRun.user_id ?? null,
           userMessage: workflowRun.user_message,
