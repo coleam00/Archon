@@ -302,7 +302,7 @@ describe('executeWorkflow', () => {
       );
       // Guard passed → DAG entered (mocked no-op) → run completes.
       expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(1);
-      expect(mockExecuteDagWorkflow.mock.calls[0]?.[23]).toEqual({ input: 40, output: 4 });
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[24]).toEqual({ input: 40, output: 4 });
       expect(result.success).toBe(true);
     });
   });
@@ -970,7 +970,7 @@ describe('executeWorkflow', () => {
       );
 
       expect(mockGetDefaultBranch).not.toHaveBeenCalled();
-      expect(mockExecuteDagWorkflow.mock.calls[0]?.[10]).toBe('epic/foo');
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[11]).toBe('epic/foo');
     });
 
     it('falls back to git auto-detection when config and caller branch are unset', async () => {
@@ -1135,8 +1135,8 @@ describe('executeWorkflow', () => {
       );
 
       const dagCall = mockExecuteDagWorkflow.mock.calls[0];
-      expect(dagCall?.[15]).toBe(completedNodeOutputs);
-      expect(dagCall?.[23]).toEqual(tokens);
+      expect(dagCall?.[16]).toBe(completedNodeOutputs);
+      expect(dagCall?.[24]).toEqual(tokens);
       expect(store.createWorkflowRun).not.toHaveBeenCalled();
     });
   });
