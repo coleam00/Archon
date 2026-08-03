@@ -5,6 +5,7 @@ import { APP_VERSION, readSchemaVersion } from '../schema-version';
 import { Database } from 'bun:sqlite';
 import { unlinkSync } from 'fs';
 import { join } from 'path';
+import { tmpdir } from 'node:os';
 
 let currentDbPath = '';
 
@@ -33,9 +34,13 @@ async function insertCodebase(db: SqliteAdapter, id: string): Promise<void> {
  * database missing exactly this one column.
  */
 async function makeDbWithoutEventOrder(): Promise<string> {
+  // OS temp dir, not the repo: on Windows bun:sqlite does not always release the
+  // file handle synchronously, so cleanup can hit EBUSY. A stranded file in
+  // tmpdir is harmless and self-cleaning; a stranded file in packages/ is repo
+  // pollution that shows up in everyone's `git status`.
   const path = join(
-    import.meta.dir,
-    `.test-sqlite-legacy-${Date.now()}-${Math.random().toString(36).slice(2)}.db`
+    tmpdir(),
+    `archon-test-sqlite-legacy-${Date.now()}-${Math.random().toString(36).slice(2)}.db`
   );
   const seed = new SqliteAdapter(path); // writes the current schema
   // MUST await: close() is async, and on Windows an unreleased SQLite handle
@@ -75,10 +80,16 @@ describe('SqliteAdapter upgrade path', () => {
       try {
         unlinkSync(legacyPath);
       } catch (e: unknown) {
-        // Only a genuinely-absent file is acceptable. Anything else — most
-        // plausibly an unreleased handle holding the file open on Windows —
-        // must surface rather than leave a leaked fixture behind.
-        if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+        // Tolerate exactly two cases, and nothing else:
+        //   ENOENT — already gone, fine.
+        //   EBUSY  — Windows only. bun:sqlite does not reliably release the file
+        //            handle synchronously on close(), even with statements
+        //            finalized. The fixture is a uniquely-named file in tmpdir,
+        //            so a stranded one is harmless. Tolerated rather than
+        //            swallowed: any other errno still fails the test loudly,
+        //            which is what caught the real leak in the first place.
+        const code = (e as NodeJS.ErrnoException).code;
+        if (code !== 'ENOENT' && code !== 'EBUSY') throw e;
       }
       legacyPath = '';
     }
