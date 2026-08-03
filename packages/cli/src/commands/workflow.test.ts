@@ -2555,6 +2555,47 @@ const EXPECTED_VERBOSE_NODES = JSON.parse(
   JSON.stringify(buildNodeSummaries(VERBOSE_EVENTS_FIXTURE))
 ) as Array<Record<string, unknown>>;
 
+describe('buildNodeSummaries', () => {
+  it('resets a retried node to its current running attempt', () => {
+    const summaries = buildNodeSummaries([
+      {
+        id: 'retry-start-1',
+        workflow_run_id: 'run-retry',
+        event_type: 'node_started',
+        step_index: 0,
+        step_name: 'build',
+        data: {},
+        created_at: '2026-08-03T10:00:00.000Z',
+        event_order: 1,
+      },
+      {
+        id: 'retry-failed',
+        workflow_run_id: 'run-retry',
+        event_type: 'node_failed',
+        step_index: 0,
+        step_name: 'build',
+        data: { error: 'temporary failure' },
+        created_at: '2026-08-03T10:00:01.000Z',
+        event_order: 2,
+      },
+      {
+        id: 'retry-start-2',
+        workflow_run_id: 'run-retry',
+        event_type: 'node_started',
+        step_index: 0,
+        step_name: 'build',
+        data: {},
+        created_at: '2026-08-03T10:00:02.000Z',
+        event_order: 3,
+      },
+    ]);
+
+    expect(summaries).toEqual([
+      { nodeId: 'build', state: 'running', startedAt: '2026-08-03T10:00:02.000Z' },
+    ]);
+  });
+});
+
 describe('workflowStatusCommand', () => {
   let consoleSpy: ReturnType<typeof spyOn>;
   let stdoutSpy: ReturnType<typeof spyOn>;

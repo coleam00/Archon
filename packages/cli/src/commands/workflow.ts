@@ -2002,12 +2002,9 @@ export function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
     switch (event.event_type) {
       case 'node_started': {
         startTimes.set(nodeId, new Date(event.created_at).getTime());
-        const existing = summaries.get(nodeId);
-        if (existing) {
-          existing.startedAt = event.created_at;
-        } else {
-          summaries.set(nodeId, { nodeId, state: 'running', startedAt: event.created_at });
-        }
+        // A retry is a new active attempt, so stale terminal details must not
+        // leak into the compact current-state summary.
+        summaries.set(nodeId, { nodeId, state: 'running', startedAt: event.created_at });
         break;
       }
       case 'node_completed': {

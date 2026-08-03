@@ -32,7 +32,8 @@ mock.module('./connection', () => ({
   getDatabaseType: () => 'sqlite',
 }));
 
-const { listWorkflowEventsSince, createWorkflowEvent } = await import('./workflow-events');
+const { listWorkflowEventsSince, createWorkflowEvent, listWorkflowEvents } =
+  await import('./workflow-events');
 
 // workflow_events.workflow_run_id has an enforced FK (PRAGMA foreign_keys = ON) — seed parents.
 await db.query(
@@ -50,23 +51,34 @@ await db.query(
 const minuteAgo = (): Date => new Date(Date.now() - 60_000);
 
 describe('listWorkflowEventsSince — real SQLite (catches the C1 datetime mismatch)', () => {
-  test('orders tied timestamps by ID consistently while preserving chronology', async () => {
+  test('preserves insertion chronology for lifecycle events sharing a timestamp', async () => {
+    await createWorkflowEvent({
+      workflow_run_id: 'run-1',
+      event_type: 'node_started',
+      step_name: 'build',
+    });
+    await createWorkflowEvent({
+      workflow_run_id: 'run-1',
+      event_type: 'node_completed',
+      step_name: 'build',
+    });
     await db.query(
-      `INSERT INTO remote_agent_workflow_events (id, workflow_run_id, event_type, data, created_at)
-       VALUES
-         ('ordering-tie-b', 'run-1', 'node_started', '{}', '2026-01-01 00:00:01'),
-         ('ordering-later', 'run-1', 'node_started', '{}', '2026-01-01 00:00:02'),
-         ('ordering-tie-a', 'run-1', 'node_started', '{}', '2026-01-01 00:00:01')`,
+      `UPDATE remote_agent_workflow_events
+       SET created_at = '2026-01-01 00:00:01'
+       WHERE workflow_run_id = 'run-1' AND step_name = 'build'`,
       []
     );
 
     const first = await listWorkflowEventsSince(new Date('2026-01-01T00:00:00.000Z'), 100);
     const second = await listWorkflowEventsSince(new Date('2026-01-01T00:00:00.000Z'), 100);
-    const orderingIds = (rows: typeof first): string[] =>
-      rows.filter(row => row.id.startsWith('ordering-')).map(row => row.id);
+    const lifecycleTypes = (rows: typeof first): string[] =>
+      rows.filter(row => row.step_name === 'build').map(row => row.event_type);
 
-    expect(orderingIds(first)).toEqual(['ordering-tie-a', 'ordering-tie-b', 'ordering-later']);
-    expect(orderingIds(second)).toEqual(orderingIds(first));
+    expect(lifecycleTypes(first)).toEqual(['node_started', 'node_completed']);
+    expect(lifecycleTypes(second)).toEqual(lifecycleTypes(first));
+
+    const stored = await listWorkflowEvents('run-1');
+    expect(lifecycleTypes(stored)).toEqual(['node_started', 'node_completed']);
   });
 
   test('returns an event stored via datetime() when queried with an ISO Date cursor', async () => {

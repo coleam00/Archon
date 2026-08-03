@@ -15,6 +15,8 @@ export const workflowEventRowSchema = z.object({
   step_name: z.string().nullable(),
   data: z.record(z.string(), z.unknown()),
   created_at: z.string(),
+  // Null for lifecycle rows written before event ordering was introduced.
+  event_order: z.number().int().nullable().optional(),
 });
 
 export type WorkflowEventRow = z.infer<typeof workflowEventRowSchema>;

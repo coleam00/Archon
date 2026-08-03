@@ -116,14 +116,15 @@ export async function createWorkflowEvent(data: WorkflowEventInput): Promise<voi
 }
 
 /**
- * List all events for a workflow run, ordered by creation time and then ID.
+ * List all events for a workflow run in lifecycle order. `event_order` is
+ * allocated by the database, so it preserves insertion order when timestamps tie.
  */
 export async function listWorkflowEvents(workflowRunId: string): Promise<WorkflowEventRow[]> {
   try {
     const result = await pool.query<WorkflowEventRow>(
       `SELECT * FROM remote_agent_workflow_events
        WHERE workflow_run_id = $1
-       ORDER BY created_at ASC, id ASC`,
+       ORDER BY created_at ASC, COALESCE(event_order, 0) ASC, id ASC`,
       [workflowRunId]
     );
     return [...result.rows].map(row => ({
@@ -148,7 +149,7 @@ export async function listRecentEvents(
       const result = await pool.query<WorkflowEventRow>(
         `SELECT * FROM remote_agent_workflow_events
          WHERE workflow_run_id = $1 AND created_at > $2
-         ORDER BY created_at ASC, id ASC`,
+         ORDER BY created_at ASC, COALESCE(event_order, 0) ASC, id ASC`,
         [workflowRunId, since.toISOString()]
       );
       return [...result.rows].map(row => ({
@@ -199,7 +200,7 @@ export async function listWorkflowEventsSince(
     const result = await pool.query<WorkflowEventRow>(
       `SELECT * FROM remote_agent_workflow_events
        WHERE created_at >= $1${typeClause}
-       ORDER BY created_at ASC, id ASC
+       ORDER BY created_at ASC, COALESCE(event_order, 0) ASC, id ASC
        LIMIT ${limitParam}`,
       params
     );
@@ -228,7 +229,7 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<{
   }>(
     `SELECT step_name, event_type, data FROM remote_agent_workflow_events
      WHERE workflow_run_id = $1 AND event_type IN ('node_completed', 'node_skipped_prior_success')
-     ORDER BY created_at ASC, id ASC`,
+     ORDER BY created_at ASC, COALESCE(event_order, 0) ASC, id ASC`,
     [workflowRunId]
   );
   const completedNodeOutputs = new Map<string, string>();
