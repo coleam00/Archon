@@ -745,20 +745,13 @@ export class SqliteAdapter implements IDatabase {
       CREATE INDEX IF NOT EXISTS idx_workflow_events_run_id ON remote_agent_workflow_events(workflow_run_id);
       CREATE INDEX IF NOT EXISTS idx_workflow_events_type ON remote_agent_workflow_events(event_type);
       CREATE INDEX IF NOT EXISTS idx_workflow_events_created_at ON remote_agent_workflow_events(created_at);
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_events_run_order
-        ON remote_agent_workflow_events(workflow_run_id, event_order)
-        WHERE event_order IS NOT NULL;
-      CREATE TRIGGER IF NOT EXISTS remote_agent_workflow_events_assign_order
-        AFTER INSERT ON remote_agent_workflow_events
-        WHEN NEW.event_order IS NULL
-        BEGIN
-          UPDATE remote_agent_workflow_events
-          SET event_order = (
-            SELECT COALESCE(MAX(event_order), 0) + 1
-            FROM remote_agent_workflow_events
-          )
-          WHERE rowid = NEW.rowid;
-        END;
+      -- NOTE: the idx_workflow_events_run_order index and the assign_order trigger
+      -- are deliberately NOT created here. Both reference event_order, which does
+      -- not exist on databases created before it was introduced — and CREATE INDEX
+      -- (or a TRIGGER body) referencing a missing column aborts this entire exec
+      -- block, so createSchema() throws before migrateColumns() can ever add the
+      -- column. That is exactly the failure the user_id index comment above warns
+      -- about. migrateColumns() creates both, after its ALTER TABLE, idempotently.
       CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON remote_agent_messages(conversation_id, created_at ASC);
       CREATE INDEX IF NOT EXISTS idx_workflow_node_sessions_scope ON remote_agent_workflow_node_sessions(scope_key);
       CREATE INDEX IF NOT EXISTS idx_workflow_node_sessions_workflow ON remote_agent_workflow_node_sessions(workflow_name);
