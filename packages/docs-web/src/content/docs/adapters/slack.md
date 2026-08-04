@@ -189,13 +189,14 @@ You can also DM the bot directly -- no @mention needed:
 
 Drop a file into the message and Archon can read it:
 
-```
+```text
 @your-bot summarise the attached spec
 ```
 
 Requires the `files:read` bot scope (Step 3). Archon downloads each
 attachment with the bot token, hands the file to the AI for that message,
-and deletes it once the reply is finished -- attachments are never retained.
+and deletes it once the reply is finished on a best-effort basis --
+attachments are not intentionally retained.
 
 Limits, matching the Web UI's upload caps:
 

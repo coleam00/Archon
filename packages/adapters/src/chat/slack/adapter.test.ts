@@ -695,6 +695,29 @@ describe('SlackAdapter', () => {
       expect(globalThis.fetch).not.toHaveBeenCalled();
     });
 
+    test('skips a file exceeding the cap when size is unknown and Content-Length is absent', async () => {
+      // No `file.size` and a streamed (not buffered) response body: Content-Length
+      // is never set, so neither pre-fetch check applies. This exercises the
+      // post-download `buffer.byteLength` check that exists precisely as the
+      // backstop for a missing or understated size.
+      const oversized = new Uint8Array(10 * 1024 * 1024 + 1);
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(oversized);
+          controller.close();
+        },
+      });
+      globalThis.fetch = mock(() =>
+        Promise.resolve(new Response(stream, { status: 200 }))
+      ) as unknown as typeof fetch;
+
+      const result = await adapter.downloadAttachments(
+        [{ id: 'F5', name: 'huge-stream.bin', url_private_download: 'https://files.slack.com/f5' }],
+        'C123:456.789'
+      );
+      expect(result.files).toEqual([]);
+    });
+
     test('skips a file when the download response is not ok', async () => {
       globalThis.fetch = mock(() =>
         Promise.resolve(new Response('', { status: 403 }))
@@ -830,6 +853,50 @@ describe('SlackAdapter', () => {
       expect(saved).not.toContain('..');
       // Nothing may remain that could climb out of the per-call directory.
       expect(basename(saved)).toBe(saved.slice(result.uploadDir.length + 1));
+    });
+
+    test('refuses to send the bot token to a download URL that is not a slack.com host', async () => {
+      globalThis.fetch = mock(() =>
+        Promise.resolve(new Response('x', { status: 200 }))
+      ) as unknown as typeof fetch;
+
+      const result = await adapter.downloadAttachments(
+        [
+          {
+            id: 'F_EVIL',
+            name: 'a.txt',
+            size: 1,
+            // Not a Slack-controlled host — must be rejected before the bot
+            // token is ever attached to a request.
+            url_private_download: 'https://evil.example.com/f1',
+          },
+        ],
+        'C123:456.789'
+      );
+
+      expect(result.files).toEqual([]);
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+    });
+
+    test('refuses a non-HTTPS download URL even on a slack.com host', async () => {
+      globalThis.fetch = mock(() =>
+        Promise.resolve(new Response('x', { status: 200 }))
+      ) as unknown as typeof fetch;
+
+      const result = await adapter.downloadAttachments(
+        [
+          {
+            id: 'F_HTTP',
+            name: 'a.txt',
+            size: 1,
+            url_private_download: 'http://files.slack.com/f1',
+          },
+        ],
+        'C123:456.789'
+      );
+
+      expect(result.files).toEqual([]);
+      expect(globalThis.fetch).not.toHaveBeenCalled();
     });
 
     test('sanitizes the conversation id used as the directory segment', async () => {

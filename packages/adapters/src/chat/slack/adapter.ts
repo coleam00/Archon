@@ -3,7 +3,7 @@
  * Handles message sending with markdown block formatting for AI responses
  */
 import { randomUUID } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, rmdir, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { App, LogLevel, type SlashCommand } from '@slack/bolt';
 import type { AttachedFile, IPlatformAdapter, MessageMetadata } from '@archon/core';
@@ -42,6 +42,25 @@ const MAX_SLACK_FILES_PER_MESSAGE = 5;
  * enough that a dead endpoint doesn't strand the user waiting on a reply.
  */
 const SLACK_ATTACHMENT_TIMEOUT_MS = 30_000;
+
+/**
+ * Guards the bot token: `url_private_download` comes from the Slack event
+ * payload, not a fixed Archon-owned constant, so it must be proven to point at
+ * Slack's own file host before the Authorization header is attached to a
+ * request built from it. Requires HTTPS and a `slack.com` (or subdomain) host.
+ */
+function isTrustedSlackDownloadUrl(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  return (
+    parsed.protocol === 'https:' &&
+    (parsed.hostname === 'slack.com' || parsed.hostname.endsWith('.slack.com'))
+  );
+}
 
 /** Slack channel + message ts pair used for reactions and edits. */
 export interface SlackMessageRef {
@@ -409,10 +428,20 @@ export class SlackAdapter implements IPlatformAdapter {
     );
 
     const saved: AttachedFile[] = [];
+    /** Set once `mkdir` has actually run, so a directory that ends up empty (every write below it failed) can be removed instead of left orphaned on disk. */
+    let dirCreated = false;
     for (const file of toDownload) {
       if (!file.url_private_download) {
         // No download URL at all — nothing to fetch, and nothing the user can
         // act on beyond knowing the file did not arrive.
+        skipped.push({ name: displayName(file), reason: 'download_failed' });
+        continue;
+      }
+      if (!isTrustedSlackDownloadUrl(file.url_private_download)) {
+        getLog().warn(
+          { conversationId, fileId: file.id },
+          'slack.attachment_untrusted_download_url'
+        );
         skipped.push({ name: displayName(file), reason: 'download_failed' });
         continue;
       }
@@ -435,6 +464,10 @@ export class SlackAdapter implements IPlatformAdapter {
         const response = await fetch(file.url_private_download, {
           headers: { Authorization: `Bearer ${this.botToken}` },
           signal: controller.signal,
+          // A redirect target is unverified — never let the token silently
+          // follow one. `response.ok` is false for a manual redirect status,
+          // so it falls through to the ordinary download-failed path below.
+          redirect: 'manual',
         });
         if (!response.ok) {
           // A 401/403 on an *authenticated* download is an auth problem rather
@@ -487,6 +520,7 @@ export class SlackAdapter implements IPlatformAdapter {
         }
 
         await mkdir(uploadDir, { recursive: true });
+        dirCreated = true;
         // BOTH path components are untrusted: they come from the Slack event
         // payload. `basename` drops any directory part of the name, then the
         // character classes leave nothing that can traverse. The id is stripped
@@ -524,6 +558,20 @@ export class SlackAdapter implements IPlatformAdapter {
       } finally {
         clearTimeout(timeout);
       }
+    }
+
+    if (dirCreated && saved.length === 0) {
+      // mkdir ran but every write after it failed (disk error, etc.) — the
+      // directory is empty, so remove it rather than leaving it orphaned.
+      // This is the ONLY cleanup for that case: the caller only deletes
+      // uploadDir when `files` comes back non-empty (server/index.ts guards
+      // its cleanup on `attachedFiles.length > 0`), so an empty result here
+      // would otherwise never get swept.
+      await rmdir(uploadDir).catch((err: NodeJS.ErrnoException) => {
+        if (err.code !== 'ENOENT' && err.code !== 'ENOTEMPTY') {
+          getLog().warn({ err, uploadDir, conversationId }, 'slack.attachment_dir_cleanup_failed');
+        }
+      });
     }
 
     getLog().info(
