@@ -1,0 +1,16 @@
+[Unit]
+Description=Archon Jira Poller — watches for Archon-labeled tickets
+After=network.target
+
+[Service]
+Type=simple
+User=jbain
+WorkingDirectory=/home/jbain/apps/archon
+ExecStart=/home/jbain/apps/archon/scripts/jira-poller.sh --watch
+Restart=on-failure
+RestartSec=30
+StandardOutput=append:/home/jbain/apps/archon/logs/jira-poller.log
+StandardError=append:/home/jbain/apps/archon/logs/jira-poller.log
+
+[Install]
+WantedBy=multi-user.target

@@ -1,22 +1,26 @@
 name: manhattan-orchestrator
 description: |
-  Use when: User wants rigorous structured problem solving with isolated subagents and independent
-            cross-verification. Enforces the full Manhattan Orchestrator 5-phase methodology,
-            grounded in Agentic Engineering principles (Kaggle "New SDLC with Vibe Coding").
-  Triggers: "use manhattan orchestrator", "manhattan", "solve rigorously", "orchestrate",
-            "use the orchestrator", "solve this with orchestration", "/manhattan-orchestrator".
-  Does: Six-phase methodology —
-        (1) Audit: relentless clarifying Q&A → formal audit template,
-        (2) Decompose: dependency tree + risk matrix (U×I scoring),
-        (2.5) Specify: context engineering — acceptance criteria, definition of done,
-              static/dynamic context brief per task (Agentic Engineering principle),
-        (3) Delegate: isolated Implementer subagents with Interface/Depth/Seam briefs
-              + context engineering brief,
-        (4) Verify: independent Verifier checks against acceptance criteria (never the implementer),
-            Devil's Advocate self-evaluation,
-        (5) Deliver: inverted pyramid, confidence levels, fact calibration table,
-            5-question checklist, architecture acceptance checklist.
-  NOT for: Simple single-step tasks, quick one-file fixes, or tasks where speed > rigor.
+  Use when: A Jira ticket tagged with the "Archon" label needs to be autonomously
+            implemented end-to-end, using the Manhattan Orchestrator 5-phase methodology.
+  Triggers: Jira poller (every 15 min) passes ticket key as ARGUMENTS.
+            Also: "use manhattan orchestrator", "manhattan", "solve rigorously",
+            "/manhattan-orchestrator", "orchestrate this".
+  Does: Full agentic engineering pipeline grounded in "The New SDLC with Vibe Coding":
+        (1) Audit:    Interactive Q&A → formal audit template → Jira comment
+        (2) Decompose: Dependency tree + risk matrix (U×I) → Jira comment
+        (3) Specify:  Create Jira subtasks (vertical slices, to-tickets pattern),
+                      context engineering brief + acceptance criteria per subtask → Jira comment
+        (4) Implement: Loop — pick next open subtask → run full mini-pipeline
+                       (implement → verify → remediate) → post Jira progress comment
+        (5) Verify:   Independent verifier checks all subtasks against spec acceptance criteria
+        (6) Deliver:  Inverted pyramid delivery → final Jira comment + transition ticket to Done
+  NOT for: Simple single-step tasks or quick fixes where speed > rigor.
+
+  Environment variables required:
+    JIRA_BASE_URL     e.g. https://yourorg.atlassian.net
+    JIRA_EMAIL        e.g. dev@yourorg.com
+    JIRA_API_TOKEN    Jira API token (https://id.atlassian.com/manage-profile/security/api-tokens)
+    JIRA_PROJECT_KEY  e.g. PROJ
 
 provider: pi
 model: openai/gpt-4o
@@ -25,7 +29,8 @@ nodes:
 
   # ═══════════════════════════════════════════════════════════════════════════
   # PHASE 1 — Request Audit (Interactive)
-  # Goal: Ask relentless clarifying questions, then produce the [Audit] template.
+  # Reads the Jira ticket body as the request. Asks clarifying questions if
+  # needed, then produces the formal [Audit] template.
   # ═══════════════════════════════════════════════════════════════════════════
   - id: audit
     loop:
@@ -34,15 +39,23 @@ nodes:
 
         ## Phase 1 — Request Audit
 
-        User request: $ARGUMENTS
+        Jira Ticket Key: $ARGUMENTS
 
-        Read `$ARTIFACTS_DIR/audit-state.json` if it exists to track progress:
-        - `"step": "questioning"` → you are still gathering information
+        Step 1: Fetch the Jira ticket to read the full description and any comments.
+        Use bash:
+          curl -s -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            "$JIRA_BASE_URL/rest/api/3/issue/$ARGUMENTS" \
+            -o $ARTIFACTS_DIR/jira-ticket.json
+
+        Read `$ARTIFACTS_DIR/jira-ticket.json` to understand the ticket.
+        Read `$ARTIFACTS_DIR/audit-state.json` if it exists to track Q&A progress:
+        - `"step": "questioning"` → still gathering information
         - `"step": "complete"`    → audit template is finalized
 
         ### If step == "questioning" (or file does not exist):
 
-        Identify ALL ambiguities in the request. Ask ONE focused clarifying question at a time.
+        Identify ALL ambiguities in the ticket. Ask ONE focused clarifying question at a time.
         Wait for the user to answer before asking the next.
 
         Common areas to probe:
@@ -52,36 +65,42 @@ nodes:
         - Architecture concerns (what existing seams must be preserved?)
         - Risk tolerance (how much change is acceptable?)
 
-        After receiving enough answers, produce the full audit template below.
-
-        ### Audit Template (produce when ready):
+        ### When ready — produce the full Audit Template:
 
         ```markdown
         ### [Audit] <Task Name>
         - **Restatement:** <One-sentence restatement in your own words>
-        - **Literal Ask:** <Exact wording of what the user asked>
+        - **Literal Ask:** <Exact wording of what the ticket asked>
         - **Underlying Goal:** <The actual target the user is trying to accomplish>
         - **Explicit Constraints:** <Bulleted checklist of stated constraints>
         - **Implicit Constraints:** <Bulleted checklist of assumptions that must hold>
-        - **Architecture Guardrails:** <How this solution will enforce thin interfaces,
-          deep modules, and explicit seams>
+        - **Architecture Guardrails:** <How this enforces thin interfaces, deep modules, explicit seams>
         - **Material Ambiguities & Resolutions:** <List each ambiguity and its resolution>
         - **Deliverable Definition:** <Exact definition of the final deliverable>
         ```
 
-        Write the completed audit to `$ARTIFACTS_DIR/audit.md`.
+        Write the audit to `$ARTIFACTS_DIR/audit.md`.
         Write `{"step": "complete"}` to `$ARTIFACTS_DIR/audit-state.json`.
+
+        Post a Jira comment summarizing the audit:
+          BODY=$(jq -n --rawfile audit $ARTIFACTS_DIR/audit.md \
+            '{body:{type:"doc",version:1,content:[{type:"paragraph",content:[{type:"text",text:("🔍 *Archon — Phase 1 Audit Complete*\n" + $audit)}]}]}}')
+          curl -s -X POST \
+            -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            "$JIRA_BASE_URL/rest/api/3/issue/$ARGUMENTS/comment" \
+            -d "$BODY"
+
         Then output exactly: <promise>AUDIT_COMPLETE</promise>
 
       until: AUDIT_COMPLETE
       interactive: true
-      gate_message: "Please answer the clarifying question above, or type 'proceed' when you have answered enough questions to finalize the audit."
+      gate_message: "Please answer the clarifying question above, or type 'proceed' to finalize the audit with the information gathered so far."
       max_iterations: 15
-    allowed_tools: [Read, Write]
+    allowed_tools: [Read, Write, Bash]
 
   # ═══════════════════════════════════════════════════════════════════════════
   # PHASE 2 — Decompose & Risk Matrix
-  # Goal: Dependency tree + risk scoring (Uncertainty × Impact).
   # ═══════════════════════════════════════════════════════════════════════════
   - id: decompose
     depends_on: [audit]
@@ -92,15 +111,15 @@ nodes:
       ## Phase 2 — Decompose & Risk Matrix
 
       Break the request into a dependency-ordered list of sub-tasks.
-      Score each task on Uncertainty (1-3) × Impact (1-3) = Risk Score.
+      Score each: Uncertainty (1-3) × Impact (1-3) = Risk Score.
 
       Rules:
       - High-Risk (6-9): requires independent validation + strict test coverage.
-      - Low-Risk (1-3): can be verified with sanity checks.
-      - Architecture Risk Trigger: any change that widens interfaces, weakens seams, or disperses
-        core logic across call sites is automatically High-Risk (score = 9).
+      - Low-Risk (1-3): sanity checks sufficient.
+      - Architecture Risk Trigger: any change that widens interfaces, weakens seams,
+        or disperses core logic is automatically High-Risk (score = 9).
 
-      Produce the risk matrix:
+      Produce:
 
       ### [Decompose & Risk Matrix]
       | Task / Piece | Verification Method | Uncertainty (1-3) | Impact (1-3) | Risk Score |
@@ -108,7 +127,7 @@ nodes:
 
       Write the table to `$ARTIFACTS_DIR/decompose.md`.
 
-      Also write a structured task list to `$ARTIFACTS_DIR/tasks.json`:
+      Write `$ARTIFACTS_DIR/tasks.json`:
       ```json
       {
         "tasks": [
@@ -127,157 +146,242 @@ nodes:
       }
       ```
 
-      Available specialists (choose the narrowest fit):
-      Software Architect, Backend Architect, Frontend Developer, AI Engineer,
-      DevOps Automator, SRE, Code Reviewer, Database Optimizer, Mobile App Builder,
-      Rapid Prototyper, Senior Developer, Git Workflow Master, Technical Writer,
-      Minimal Change Engineer, Data Engineer, Embedded Firmware Engineer.
-    allowed_tools: [Read, Write]
+      Post a Jira comment:
+        BODY=$(jq -n --rawfile decompose $ARTIFACTS_DIR/decompose.md \
+          '{body:{type:"doc",version:1,content:[{type:"paragraph",content:[{type:"text",text:("📊 *Archon — Phase 2 Decompose Complete*\n" + $decompose)}]}]}}')
+        curl -s -X POST \
+          -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          "$JIRA_BASE_URL/rest/api/3/issue/$ARGUMENTS/comment" \
+          -d "$BODY"
+    allowed_tools: [Read, Write, Bash]
 
   # ═══════════════════════════════════════════════════════════════════════════
-  # PHASE 2.5 — Specify & Context Engineering
-  # Goal: Produce formal acceptance criteria + context brief before any agent
-  #       writes a single line of code. Directly applies the "Context Engineering"
-  #       principle from "The New SDLC with Vibe Coding": give agents the same
-  #       context a skilled human teammate would need — no more, no less.
+  # PHASE 2.5 — Specify & Context Engineering → Create Jira Subtasks
+  # Applies "Context Engineering" from The New SDLC with Vibe Coding:
+  # give agents exactly what a skilled human teammate needs — no more, no less.
+  # Creates one Jira subtask per vertical slice. Each subtask is implementation-ready
+  # for a coding agent (Sapphire ticket pattern).
   # ═══════════════════════════════════════════════════════════════════════════
   - id: specify
     depends_on: [decompose]
     context: fresh
     prompt: |
-      You are the Manhattan Orchestrator — Phase 2.5: Specification & Context Engineering.
+      You are the Manhattan Orchestrator — Phase 2.5: Specify & Context Engineering.
 
       Read:
-      - `$ARTIFACTS_DIR/audit.md` — intent, constraints, deliverable definition
-      - `$ARTIFACTS_DIR/decompose.md` — risk matrix
-      - `$ARTIFACTS_DIR/tasks.json` — structured task list
+      - `$ARTIFACTS_DIR/audit.md`
+      - `$ARTIFACTS_DIR/decompose.md`
+      - `$ARTIFACTS_DIR/tasks.json`
 
-      ## Your Output: `$ARTIFACTS_DIR/spec.md`
+      ## Step 1 — Break into Vertical Slice Subtasks
 
-      Produce a specification document with three sections:
+      Using the to-tickets (tracer bullet) pattern:
+      - Each subtask is a COMPLETE vertical slice (schema → API → UI → tests), not a layer
+      - Each subtask is demoable/verifiable on its own when complete
+      - Each subtask fits in a single fresh context window for an AI agent
+      - Any prefactoring tasks come first (expand-contract for wide refactors)
 
-      ---
-
-      ### 1. Acceptance Criteria (per task)
-
-      For every task in tasks.json, write:
-      ```
-      #### Task: <task-id>
-      **Definition of Done:**
-      - [ ] <Concrete, observable, binary criterion 1>
-      - [ ] <Concrete, observable, binary criterion 2>
-      - [ ] <Concrete, observable, binary criterion N>
-
-      **Evaluation Method:** <Exactly how an independent verifier will check each criterion
-        without relying on the implementer's own description>
-
-      **Failure Signals:** <Observable evidence that this task has NOT been completed correctly>
-      ```
-
-      Rules for acceptance criteria:
-      - Binary only (pass/fail — no "mostly done" or "looks good")
-      - Observable without trusting the implementer (a stranger could check it)
-      - Tied to the original audit deliverable definition
-
-      ---
-
-      ### 2. Context Engineering Brief (per task)
-
-      For every task, specify exactly what context an Implementer subagent needs:
+      For each subtask, write an implementation-ready ticket (for a coding agent, not a human):
 
       ```
-      #### Task: <task-id>
-      **Static Context (always available):**
-      - Coding standards / patterns to follow: <e.g., "use existing error handling pattern in X">
-      - Constraints that must never be violated: <from audit.md>
-      - Architecture rules: <interface budget, depth goal, seam contract from tasks.json>
-
-      **Dynamic Context (load only when needed):**
-      - Files to read before starting: <specific paths relevant to this task>
-      - Prior task outputs this task depends on: <file paths, not full content>
-      - External references: <docs, APIs, schemas>
-
-      **Context to EXCLUDE (need-to-know isolation):**
-      - Other tasks' implementation details
-      - Full project history or unrelated modules
+      Title: <short descriptive name>
+      Problem: <what is broken or missing right now>
+      Expected Behavior: <what it should do when done>
+      Implementation Requirements:
+        - <concrete step 1>
+        - <concrete step 2>
+      Acceptance Criteria:
+        - [ ] <binary, observable criterion 1>
+        - [ ] <binary, observable criterion 2>
+      Blocked By: <other subtask titles, or "None">
+      Context Brief:
+        Static Context: <coding standards, constraints, architecture rules>
+        Dynamic Context: <files to read, prior outputs to load>
+        Exclude: <context NOT to pass — need-to-know isolation>
+      Evaluation Method: <how an independent verifier checks this without trusting the implementer>
+      Failure Signals: <observable evidence this subtask is NOT done correctly>
+      Specialist: <Software Architect|Backend Architect|Frontend Developer|...>
+      Risk Score: <from tasks.json>
       ```
 
-      ---
+      ## Step 2 — Create Jira Subtasks
 
-      ### 3. Evaluation Harness
+      For each subtask, create a Jira sub-task under ticket $ARGUMENTS:
 
-      Describe the overall test/verification strategy:
-      - What automated checks can verify correctness? (tests, linting, type checks, curl calls)
-      - What human-in-the-loop checks are needed and at which stage?
-      - What is the exit criterion for the entire workflow to be "done"?
+        SUBTASK_BODY=$(jq -n \
+          --arg summary "<subtask title>" \
+          --arg description "<full ticket body as text>" \
+          --arg parent "$ARGUMENTS" \
+          --arg project "$JIRA_PROJECT_KEY" \
+          '{
+            fields: {
+              project: {key: $project},
+              parent: {key: $parent},
+              summary: $summary,
+              description: {type:"doc",version:1,content:[{type:"paragraph",content:[{type:"text",text:$description}]}]},
+              issuetype: {name:"Sub-task"}
+            }
+          }')
+        RESPONSE=$(curl -s -X POST \
+          -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          "$JIRA_BASE_URL/rest/api/3/issue" \
+          -d "$SUBTASK_BODY")
+        echo $RESPONSE
 
-      Write this to `$ARTIFACTS_DIR/spec.md`.
-    allowed_tools: [Read, Write]
+      Record all created subtask keys in `$ARTIFACTS_DIR/subtasks.json`:
+      ```json
+      {
+        "parent_key": "$ARGUMENTS",
+        "subtasks": [
+          {
+            "jira_key": "PROJ-124",
+            "title": "subtask title",
+            "task_id": "kebab-task-id from tasks.json",
+            "risk_score": 6,
+            "blocked_by": [],
+            "status": "open"
+          }
+        ]
+      }
+      ```
+
+      ## Step 3 — Produce spec.md (Context Engineering Brief)
+
+      Write `$ARTIFACTS_DIR/spec.md` with:
+
+      ### Acceptance Criteria (per subtask)
+      For every subtask: binary pass/fail criteria, evaluation method, failure signals.
+
+      ### Context Engineering Brief (per subtask)
+      Static context, dynamic context (file paths only), and context to EXCLUDE.
+
+      ### Evaluation Harness
+      Automated checks, human-in-the-loop gates, exit criterion for the full workflow.
+
+      ## Step 4 — Post Jira Comment
+
+        SUBTASK_LIST=$(jq -r '.subtasks[] | "• " + .jira_key + ": " + .title' $ARTIFACTS_DIR/subtasks.json)
+        BODY=$(jq -n --arg text "📋 *Archon — Phase 2.5 Specify Complete*\n\nSubtasks created:\n$SUBTASK_LIST\n\nEach subtask will be implemented and verified independently through all Manhattan Orchestrator gates." \
+          '{body:{type:"doc",version:1,content:[{type:"paragraph",content:[{type:"text",text:$text}]}]}}')
+        curl -s -X POST \
+          -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          "$JIRA_BASE_URL/rest/api/3/issue/$ARGUMENTS/comment" \
+          -d "$BODY"
+    allowed_tools: [Read, Write, Bash]
 
   # ═══════════════════════════════════════════════════════════════════════════
-  # PHASE 3 — Delegate & Implement
-  # Goal: Spawn isolated Implementer subagents per task (fresh context, need-to-know).
+  # PHASE 3 — Implement (per subtask)
+  # Loop: pick next open subtask → run full mini-pipeline → post progress to Jira
+  # Each subtask goes through: implement → verify → remediate (if needed)
   # ═══════════════════════════════════════════════════════════════════════════
   - id: implement
     depends_on: [specify]
     model: large
     loop:
       prompt: |
-        You are the Manhattan Orchestrator — Phase 3: Delegation.
-
-        ## Core Principle
-        You COORDINATE. You do NOT write implementation code directly.
-        Spawn an Implementer subagent for each task. Give it ONLY what it needs (need-to-know).
+        You are the Manhattan Orchestrator — Phase 3: Per-Subtask Implementation.
 
         ## Read State
-        1. `$ARTIFACTS_DIR/audit.md` — request constraints and deliverable definition
-        2. `$ARTIFACTS_DIR/tasks.json` — structured task list with risk scores and seam contracts
-        3. `$ARTIFACTS_DIR/spec.md` — acceptance criteria + context engineering brief per task
-        4. `$ARTIFACTS_DIR/impl-progress.json` (if exists) — which tasks are done
+        1. `$ARTIFACTS_DIR/subtasks.json` — subtask list with statuses
+        2. `$ARTIFACTS_DIR/spec.md` — acceptance criteria + context engineering brief per subtask
+        3. `$ARTIFACTS_DIR/audit.md` — overall constraints and deliverable definition
+        4. `$ARTIFACTS_DIR/tasks.json` — interface/depth/seam contracts
 
-        ## For Each Pending Task (in dependency order)
+        ## Pick the Next Open Subtask
 
-        Spawn an Implementer subagent. Give it ONLY:
-        - The specific task description from tasks.json
-        - Its `interface_budget`, `depth_goal`, `seam_contract`
-        - Its **Static Context** and **Dynamic Context** from spec.md (task's context brief)
-        - Its **Acceptance Criteria** from spec.md (so it knows what "done" looks like)
-        - Any prior output it depends on (file paths, not entire context)
-        - The target directory/file to write output to
-        - DO NOT pass the full spec.md or audit.md — extract only the relevant task section
+        Read `subtasks.json`. Find the first subtask where:
+        - `status == "open"`
+        - All `blocked_by` subtasks have `status == "complete"`
 
-        The Interface/Depth/Seam Brief for every implementation delegation:
-        ```
-        Public Interface Budget: <from tasks.json>
-        Depth Goal: <from tasks.json>
-        Seam Contract: <from tasks.json>
-        ```
-
-        Tag ALL incoming reports using State Tags:
-        - `[State Tag] <Claim>: [Verified Fact]` — confirmed by running code or tests
-        - `[State Tag] <Claim>: [Reported Fact]` — subagent claims this but unverified
-        - `[State Tag] <Claim>: [Assumption]` — inferred, not confirmed
-        - `[State Tag] <Claim>: [Hypothesis]` — proposed, requires testing
-
-        Update `$ARTIFACTS_DIR/impl-progress.json` after each task completes:
-        ```json
-        {
-          "completed": ["task-id-1", "task-id-2"],
-          "pending": ["task-id-3"],
-          "failed": []
-        }
-        ```
-
-        When ALL tasks in tasks.json are in `completed` or `failed`:
+        If no such subtask exists and all subtasks are "complete" or "failed":
         Output: <promise>IMPLEMENTATION_COMPLETE</promise>
+
+        ## For the Selected Subtask
+
+        Fetch its full description from Jira:
+          curl -s -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            "$JIRA_BASE_URL/rest/api/3/issue/<subtask_jira_key>" \
+            -o $ARTIFACTS_DIR/subtask-<subtask_jira_key>.json
+
+        Post a Jira comment on the SUBTASK (not the parent):
+          BODY=$(jq -n --arg text "🚀 *Archon — Starting implementation*\nRunning through Manhattan Orchestrator gates..." \
+            '{body:{type:"doc",version:1,content:[{type:"paragraph",content:[{type:"text",text:$text}]}]}}')
+          curl -s -X POST \
+            -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            "$JIRA_BASE_URL/rest/api/3/issue/<subtask_jira_key>/comment" \
+            -d "$BODY"
+
+        ## Spawn an Implementer Subagent (need-to-know isolation)
+
+        Give the Implementer ONLY:
+        - The subtask's title, problem, implementation requirements, acceptance criteria
+        - Its context brief (static context, dynamic context, exclude list) from spec.md
+        - Its interface_budget, depth_goal, seam_contract from tasks.json
+        - File paths to prior outputs it depends on (not full content)
+        - Target directory to write output
+
+        DO NOT pass: full audit, full spec, other subtasks' details, project history.
+
+        Tag the implementer's response:
+        - `[State Tag] <Claim>: [Verified Fact / Reported Fact / Assumption / Hypothesis]`
+
+        ## After Implementer Completes — Run Independent Verification
+
+        Spawn a Verifier subagent (different from the Implementer) with:
+        - The subtask's acceptance criteria from spec.md
+        - The evaluation method and failure signals from spec.md
+        - File paths to the implementer's output
+        - The seam contract to check architecture compliance
+
+        The Verifier checks each criterion independently (binary PASS/FAIL).
+        Write results to `$ARTIFACTS_DIR/verify-<subtask_jira_key>.md`.
+
+        ## If Verification Fails
+
+        Spawn a NEW Implementer (not the original) with:
+        - The failure evidence from the Verifier
+        - The acceptance criteria that failed
+        - The seam contract constraints
+
+        Retry up to 2 times. If still failing, mark subtask as "failed".
+
+        ## Update Status and Post Comment
+
+        Update `subtasks.json` — set subtask status to "complete" or "failed".
+
+        Post comment on the SUBTASK:
+          STATUS="✅ Complete" or "❌ Failed after 2 remediation attempts"
+          VERIFY_SUMMARY=$(cat $ARTIFACTS_DIR/verify-<subtask_jira_key>.md | head -30)
+          BODY=$(jq -n --arg text "🔍 *Archon — Verification $STATUS*\n\n$VERIFY_SUMMARY" \
+            '{body:{type:"doc",version:1,content:[{type:"paragraph",content:[{type:"text",text:$text}]}]}}')
+          curl -s -X POST \
+            -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            "$JIRA_BASE_URL/rest/api/3/issue/<subtask_jira_key>/comment" \
+            -d "$BODY"
+
+        Post progress comment on PARENT ticket $ARGUMENTS:
+          DONE=$(jq '[.subtasks[] | select(.status=="complete")] | length' $ARTIFACTS_DIR/subtasks.json)
+          TOTAL=$(jq '.subtasks | length' $ARTIFACTS_DIR/subtasks.json)
+          BODY=$(jq -n --arg text "⚙️ *Archon — Progress: $DONE/$TOTAL subtasks complete*\nLatest: <subtask_jira_key> $STATUS" \
+            '{body:{type:"doc",version:1,content:[{type:"paragraph",content:[{type:"text",text:$text}]}]}}')
+          curl -s -X POST \
+            -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            "$JIRA_BASE_URL/rest/api/3/issue/$ARGUMENTS/comment" \
+            -d "$BODY"
 
       until: IMPLEMENTATION_COMPLETE
       fresh_context: true
-      max_iterations: 30
+      max_iterations: 50
 
   # ═══════════════════════════════════════════════════════════════════════════
-  # PHASE 4 — Independent Verification
-  # Rule: The agent that writes code NEVER verifies it.
+  # PHASE 4 — Final Independent Verification (across all subtasks)
   # ═══════════════════════════════════════════════════════════════════════════
   - id: verify
     depends_on: [implement]
@@ -285,59 +389,44 @@ nodes:
     model: large
     loop:
       prompt: |
-        You are an independent Verifier/Auditor. You did NOT implement this code.
-        Your mandate is to independently find failures BEFORE delivery.
+        You are an independent Verifier/Auditor. You did NOT implement this work.
 
         ## Read
         1. `$ARTIFACTS_DIR/audit.md` — original specification and deliverable definition
-        2. `$ARTIFACTS_DIR/tasks.json` — what each task required (interface budget, depth goal, seam)
-        3. `$ARTIFACTS_DIR/spec.md` — **acceptance criteria and evaluation method per task** (primary source of truth for PASS/FAIL)
-        4. `$ARTIFACTS_DIR/impl-progress.json` — what was reportedly implemented
-        5. All implementation output files referenced in the tasks
+        2. `$ARTIFACTS_DIR/spec.md` — acceptance criteria and evaluation harness (primary truth)
+        3. `$ARTIFACTS_DIR/subtasks.json` — all subtask statuses
+        4. All `$ARTIFACTS_DIR/verify-<subtask_jira_key>.md` files — per-subtask verification
+        5. All implementation output files
 
-        ## Step 1 — Output the Verification Plan
+        ## Output the Verification Plan
 
         ### [Verification Plan]
-        - **Claim to Verify:** <The implementation claim>
-        - **Claim Type:** Computation | Empirical Fact | Prediction | Judgment
-        - **Method of Verification:** <Must use an INDEPENDENT path — not the same approach as implementation>
-        - **Architecture Checks:**
-          - Interface thinness: does the public API stay within budget?
-          - Module depth: did complexity go behind boundaries or leak to call sites?
-          - Seam clarity: can tests isolate behavior without fragile setup?
+        - **Claim to Verify:** The full implementation satisfies the original Jira ticket
+        - **Claim Type:** Empirical Fact
+        - **Method of Verification:** Check each subtask's acceptance criteria independently
+          using spec.md's Evaluation Methods (not the implementer's approach)
+        - **Architecture Checks:** Interface thinness, module depth, seam clarity across all tasks
 
-        ## Step 2 — Verify Each Completed Task Against Acceptance Criteria
+        ## Verify the Whole
 
-        For each task in `impl-progress.json → completed`:
-        - Read implementation artifacts
-        - Check each acceptance criterion from `spec.md` — binary PASS/FAIL only
-        - Use the **Evaluation Method** from spec.md (independent path, not implementer's approach)
-        - Check **Failure Signals** from spec.md
-        - Check architecture constraints (interface width, module depth, seam clarity)
+        Check that completed subtasks integrate correctly end-to-end:
+        - Do the vertical slices compose into the full deliverable?
+        - Are there gaps between subtasks?
+        - Does the combined result satisfy the audit's Deliverable Definition?
 
-        Write results to `$ARTIFACTS_DIR/verification-{task-id}.md`.
+        Write `$ARTIFACTS_DIR/final-verification.md`.
 
-        ## Step 3 — Write Failures File
-
-        If ANY high-risk task (risk_score >= 6) FAILS:
+        If any HIGH-RISK subtask (risk_score >= 6) failed or has integration gaps:
         Write `$ARTIFACTS_DIR/verification-failures.json`:
         ```json
-        {
-          "failed_tasks": [
-            {
-              "task_id": "...",
-              "reason": "...",
-              "evidence": "..."
-            }
-          ]
-        }
+        {"failed_tasks": [{"task_id": "...", "reason": "...", "evidence": "..."}]}
         ```
 
         Output: <promise>VERIFICATION_DONE</promise>
 
       until: VERIFICATION_DONE
       fresh_context: true
-      max_iterations: 15
+      max_iterations: 10
 
   # ─── Check for verification failures ─────────────────────────────────────
   - id: check-failures
@@ -350,29 +439,29 @@ nodes:
         printf 'ALL_CLEAR'
       fi
 
-  # ─── Remediate (only runs if verification found failures) ─────────────────
+  # ─── Remediate (only if verification found failures) ──────────────────────
   - id: remediate
     depends_on: [check-failures]
     when: "$check-failures.output == 'FAILURES_FOUND'"
     context: fresh
     model: large
     prompt: |
-      You are a NEW Implementer subagent — NOT the one who wrote the original code.
-      The original implementation failed independent verification.
+      You are a NEW Implementer — NOT the one who wrote the original code.
+      The original implementation failed final independent verification.
 
       ## Your Inputs
       - `$ARTIFACTS_DIR/audit.md` — original spec and constraints
       - `$ARTIFACTS_DIR/tasks.json` — interface/depth/seam contracts for failed tasks
-      - `$ARTIFACTS_DIR/spec.md` — acceptance criteria the failed tasks must now satisfy
+      - `$ARTIFACTS_DIR/spec.md` — acceptance criteria the failed tasks must satisfy
       - `$ARTIFACTS_DIR/verification-failures.json` — what failed and why
-      - All `$ARTIFACTS_DIR/verification-{task-id}.md` files — detailed evidence
+      - All `$ARTIFACTS_DIR/verify-*.md` files — detailed evidence
 
       ## Rules
       - Fix ONLY the failed tasks. Do not touch passing code.
-      - Zero interface expansion: Public Interface Budget = no new public symbols.
+      - Zero interface expansion: no new public symbols.
       - Push all fixes deeper into modules, not outward to call sites.
       - Maintain all existing seam contracts.
-      - Write `$ARTIFACTS_DIR/remediation.md` documenting every fix with before/after evidence.
+      - Write `$ARTIFACTS_DIR/remediation.md` with before/after evidence per fix.
     allowed_tools: [Read, Write, Bash, Edit, Glob, Grep]
 
   # ═══════════════════════════════════════════════════════════════════════════
@@ -393,53 +482,46 @@ nodes:
       ## Produce the Devil's Advocate Analysis
 
       ### [Devil's Advocate Analysis]
-      - **Opposing Hypothesis:** <The strongest case that the solution is actually wrong or incomplete>
-      - **Case for Opposing Hypothesis:** <Arguments a motivated reviewer would make against this design>
-      - **Disconfirmation Check:** "If I were wrong, <behavior/evidence X> would occur.
-        I checked X, and found: ..."
-      - **Architecture Counter-Case:** <How this might secretly be a shallow module with a wide
-        interface or fuzzy seams — even if it looks clean>
+      - **Opposing Hypothesis:** <Strongest case that the solution is wrong or incomplete>
+      - **Case for Opposing Hypothesis:** <Arguments a motivated reviewer would make>
+      - **Disconfirmation Check:** "If I were wrong, <X> would occur. I checked X and found..."
+      - **Architecture Counter-Case:** <How this might secretly be a shallow module / wide interface>
       - **Analytical Mistakes Audit:**
-        - *Precision Theater Check:* [Pass / Fail] — are rounded/calibrated ranges used instead
-          of false precision?
-        - *Correlation vs. Mechanism:* [Pass / Fail] — do causal claims have confounders checked?
-        - *Authority/System Substitution:* [Pass / Fail] — was output tested, not just accepted
-          because "the subagent said so"?
+        - *Precision Theater Check:* [Pass / Fail]
+        - *Correlation vs. Mechanism:* [Pass / Fail]
+        - *Authority/System Substitution:* [Pass / Fail]
 
-      ## Architecture Acceptance Checklist (mandatory for all code changes)
+      ## Architecture Acceptance Checklist
       1. [ ] Is the public interface as small as possible for this change?
       2. [ ] Did core complexity move into a deep module rather than into call sites?
       3. [ ] Are seams explicit enough that tests can isolate behavior without fragile setup?
       4. [ ] Did any module boundary become ambiguous? If so, was it corrected?
 
-      Write full analysis to `$ARTIFACTS_DIR/devils-advocate.md`.
+      Write to `$ARTIFACTS_DIR/devils-advocate.md`.
     allowed_tools: [Read, Write, Glob, Grep, Bash]
 
   # ═══════════════════════════════════════════════════════════════════════════
-  # PHASE 5 — Deliver (Inverted Pyramid)
+  # PHASE 5 — Deliver + Close Jira Ticket
   # ═══════════════════════════════════════════════════════════════════════════
   - id: deliver
     depends_on: [devils-advocate]
     context: fresh
     prompt: |
-      You are the Manhattan Orchestrator delivering the final result to the user.
+      You are the Manhattan Orchestrator delivering the final result.
 
       ## Read All Artifacts
       Use Glob to list and read every file in `$ARTIFACTS_DIR/`.
 
-      ## Delivery Rules — Inverted Pyramid
+      ## Delivery — Inverted Pyramid
 
       ### 1. Key Answer First
-      The very FIRST sentence must directly answer the user's primary request.
-      No preamble, no "I'll now summarize", no setup sentences.
+      First sentence directly answers the Jira ticket's request. No preamble.
 
-      ### 2. Confidence & Caveats (immediately after the answer)
-      State: Confidence level (High / Medium / Low) and the primary assumption/caveat.
+      ### 2. Confidence & Caveats
+      Confidence level (High / Medium / Low) + primary assumption/caveat.
 
       ### 3. Fact Calibration Table
-
       | Category | Items |
-      | :--- | :--- |
       | ✅ Verified Facts | (confirmed by independent check) |
       | 📋 Reported Facts | (claimed by implementer, not independently confirmed) |
       | 💭 Assumptions | (inferred, not confirmed) |
@@ -448,18 +530,47 @@ nodes:
       ### 4. Five-Question Quality Checklist
       - [ ] Did we answer the actual question within constraints?
       - [ ] Can we point to the independent check for each load-bearing claim?
-      - [ ] Are assumptions and reported facts clearly labeled with their if-wrong consequences?
+      - [ ] Are assumptions and reported facts clearly labeled with if-wrong consequences?
       - [ ] Did we actively try to disconfirm/prove the solution wrong?
-      - [ ] If the user reads only the first paragraph, is the understanding correct and calibrated?
+      - [ ] If the user reads only the first paragraph, is the understanding correct?
 
-      ### 5. Architecture Acceptance Checklist (if code was changed)
-      - [ ] Is the public interface as small as possible?
-      - [ ] Did core complexity move into a deep module rather than into call sites?
-      - [ ] Are seams explicit enough that tests can isolate behavior without fragile setup?
-      - [ ] Did any module boundary become ambiguous, and if so, was it corrected?
+      ### 5. Architecture Acceptance Checklist
+      - [ ] Public interface as small as possible?
+      - [ ] Core complexity in deep modules, not call sites?
+      - [ ] Seams explicit enough for test isolation?
+      - [ ] No ambiguous module boundaries?
 
-      ### 6. Supporting Evidence
-      Attach or reference key artifacts: verification reports, risk matrix, audit, remediation notes.
+      Write to `$ARTIFACTS_DIR/delivery.md`.
 
-      Output the full delivery to the user AND write it to `$ARTIFACTS_DIR/delivery.md`.
-    allowed_tools: [Read, Write, Glob, Grep]
+      ## Post Final Jira Comment and Transition to Done
+
+      Post final delivery comment on parent ticket $ARGUMENTS:
+        DELIVERY=$(cat $ARTIFACTS_DIR/delivery.md)
+        BODY=$(jq -n --arg text "✅ *Archon — Implementation Complete*\n\n$DELIVERY" \
+          '{body:{type:"doc",version:1,content:[{type:"paragraph",content:[{type:"text",text:$text}]}]}}')
+        curl -s -X POST \
+          -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          "$JIRA_BASE_URL/rest/api/3/issue/$ARGUMENTS/comment" \
+          -d "$BODY"
+
+      Transition the parent ticket to Done:
+        TRANSITIONS=$(curl -s \
+          -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+          "$JIRA_BASE_URL/rest/api/3/issue/$ARGUMENTS/transitions")
+        DONE_ID=$(echo $TRANSITIONS | jq -r '.transitions[] | select(.name=="Done" or .name=="Closed") | .id' | head -1)
+        if [ -n "$DONE_ID" ]; then
+          curl -s -X POST \
+            -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            "$JIRA_BASE_URL/rest/api/3/issue/$ARGUMENTS/transitions" \
+            -d "{\"transition\":{\"id\":\"$DONE_ID\"}}"
+        fi
+
+      Remove the "Archon" label from the ticket (so the poller ignores it on next scan):
+        curl -s -X PUT \
+          -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          "$JIRA_BASE_URL/rest/api/3/issue/$ARGUMENTS" \
+          -d '{"update":{"labels":[{"remove":"Archon"}]}}'
+    allowed_tools: [Read, Write, Glob, Grep, Bash]
