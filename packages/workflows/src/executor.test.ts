@@ -2018,6 +2018,55 @@ describe('resolveProjectPaths', () => {
     expect(paths.outputRoot).toBe(wsPath('_folder', 'My Platform'));
   });
 
+  // #2304: a transient lookup fault used to drop the run onto `_cwd/<basename>` and,
+  // because `output_root` is write-once, pin it there for the run's whole life —
+  // including its `$STATE_DIR`, so a stateful workflow silently read an empty state
+  // directory. Asserting the RESOLVED PATH rather than the call count: the failure is
+  // success-shaped (a valid location, no error), so only the destination proves it.
+  it('retries a transient getCodebase fault instead of pinning the cwd fallback (#2304)', async () => {
+    let calls = 0;
+    const store = makeStore({
+      getCodebase: mock(async () => {
+        calls++;
+        if (calls === 1) throw new Error('connection reset by peer');
+        return {
+          id: 'cb-repo',
+          name: 'acme/widget',
+          repository_url: 'https://github.com/acme/widget',
+          default_cwd: '/repos/widget',
+          kind: 'repo' as const,
+        };
+      }),
+    });
+    const deps = makeDeps(store);
+
+    const result = await resolveProjectPaths(deps, '/repos/widget', RUN_ID, 'cb-repo');
+
+    expect(calls).toBe(2);
+    expect(result.artifactsDir).toBe(wsPath('acme', 'widget', 'artifacts', 'runs', 'run-xyz'));
+    expect(result.stateDir).toBe(wsPath('acme', 'widget', 'state'));
+    expect(result.outputRoot).toBe(wsPath('acme', 'widget'));
+  });
+
+  // The retry addresses the TRANSIENT case only. A sustained fault must still reach the
+  // fallback rather than throwing — the fallback exists precisely so a registry outage
+  // does not kill a run, and that trade was settled before #2304.
+  it('still falls back to cwd storage when the fault persists across the retry', async () => {
+    let calls = 0;
+    const store = makeStore({
+      getCodebase: mock(async () => {
+        calls++;
+        throw new Error('connection reset by peer');
+      }),
+    });
+    const deps = makeDeps(store);
+
+    const result = await resolveProjectPaths(deps, '/repos/widget', RUN_ID, 'cb-repo');
+
+    expect(calls).toBe(2);
+    expect(result.artifactsDir).toBe(wsPath('_cwd', 'widget', 'artifacts', 'runs', 'run-xyz'));
+  });
+
   it('routes repo projects to owner/repo/ storage (unchanged)', async () => {
     const store = makeStore({
       getCodebase: mock(async () => ({

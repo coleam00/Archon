@@ -29,7 +29,7 @@ import {
 import { executeDagWorkflow, childOutcomeFromRun } from './dag-executor';
 import type { RunChildWorkflowArgs, ChildWorkflowOutcome } from './dag-executor';
 import { discoverWorkflowsWithConfig } from './workflow-discovery';
-import { maybeWarnLegacyStatePath } from './state-migration';
+import { maybeWarnLegacyStatePath, maybeWarnLegacyArtifactsPath } from './state-migration';
 import { resolveWorkflowName } from './router';
 import { logWorkflowStart, logWorkflowError } from './logger';
 import { formatDuration, parseDbTimestamp } from './utils/duration';
@@ -330,25 +330,44 @@ export async function resolveProjectPaths(
 
   let key: archonPaths.ProjectStorageKey | undefined;
   if (codebaseId) {
-    try {
-      const codebase = await deps.store.getCodebase(codebaseId);
-      if (codebase) {
-        key = archonPaths.resolveProjectStorageKey(codebase, cwd);
-        if (key.kind === 'cwd') {
-          // The codebase exists but neither an owner/repo nor a _local identity
-          // could be derived from it — the run still gets external storage, but
-          // keyed on the working directory rather than the project.
-          getLog().warn(
-            { codebaseName: codebase.name, cwd: codebase.default_cwd },
-            'codebase_project_identity_unresolved'
-          );
+    // Retried once (#2304). A failing lookup drops the run onto the `_cwd/<basename>`
+    // pseudo-project, and because `output_root` is write-once that location is then
+    // pinned for the run's whole life — including its `$STATE_DIR`, so a stateful
+    // workflow silently reads an empty state directory. The ONLY thing that produces
+    // this is a transient fault (a sustained outage fails the run long before here),
+    // so retrying the cause is strictly better than compensating downstream. Failing
+    // the run instead was considered and rejected: the fallback exists precisely
+    // because a registry blip must not kill a run. The deeper question — whether an
+    // unresolved identity should be recorded on the row — stays open in #2304.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const codebase = await deps.store.getCodebase(codebaseId);
+        if (codebase) {
+          key = archonPaths.resolveProjectStorageKey(codebase, cwd);
+          if (key.kind === 'cwd') {
+            // The codebase exists but neither an owner/repo nor a _local identity
+            // could be derived from it — the run still gets external storage, but
+            // keyed on the working directory rather than the project.
+            getLog().warn(
+              { codebaseName: codebase.name, cwd: codebase.default_cwd },
+              'codebase_project_identity_unresolved'
+            );
+          }
         }
+        break;
+      } catch (error) {
+        if (attempt === 0) {
+          getLog().warn(
+            { err: error as Error, codebaseId, cwd },
+            'workflow.project_paths_lookup_retrying'
+          );
+          continue;
+        }
+        getLog().error(
+          { err: error as Error, codebaseId, cwd },
+          'project_paths_resolve_failed_using_fallback'
+        );
       }
-    } catch (error) {
-      getLog().error(
-        { err: error as Error, codebaseId, cwd },
-        'project_paths_resolve_failed_using_fallback'
-      );
     }
   }
 
@@ -1483,8 +1502,12 @@ export async function executeWorkflow(
       });
   }
 
-  // Detect (never move) a legacy repo-local `.archon/state/` directory.
-  await maybeWarnLegacyStatePath(cwd, stateDir, workflow.worktree?.enabled !== false);
+  // Detect (never move) legacy repo-local `.archon/` output directories. State was a
+  // prompt convention; artifacts/logs the engine wrote itself on the unregistered-cwd
+  // fallback (#2311) — the case Archon caused must not be the quieter of the two.
+  const isolated = workflow.worktree?.enabled !== false;
+  await maybeWarnLegacyStatePath(cwd, stateDir, isolated);
+  await maybeWarnLegacyArtifactsPath(cwd, artifactsRoot, isolated);
 
   // Stable cross-invocation artifact scope (#1846): only for persist_session
   // workflows with a conversation scope. Undefined otherwise — zero new dirs.

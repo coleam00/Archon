@@ -1,0 +1,2 @@
+{"type":"node_skipped","step":"consumer","content":"trigger_rule","workflow_id":"bash-output-live-full","ts":"2026-08-04T14:47:22.353Z"}
+{"type":"workflow_error","error":"DAG workflow 'bash-output-live-full' failed: node producer failed. 1 downstream node was skipped.","workflow_id":"bash-output-live-full","ts":"2026-08-04T14:47:22.353Z"}

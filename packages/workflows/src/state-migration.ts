@@ -86,6 +86,88 @@ export async function maybeWarnLegacyStatePath(
   return probe;
 }
 
+/**
+ * Warn once per working directory if a legacy `<cwd>/.archon/artifacts/` or
+ * `<cwd>/.archon/logs/` directory is present (#2311).
+ *
+ * The asymmetry this closes: `.archon/state/` was a prompt convention the engine
+ * never created, and it got a detector. These two the ENGINE itself created, on
+ * the unregistered-cwd fallback — and they got nothing, so the relocation of the
+ * case Archon actually caused was the silent one.
+ *
+ * Deliberately a WARN and not a migration. For an isolated run `cwd` IS the
+ * worktree, so those artifacts already died at teardown and there is nothing to
+ * move. The persistent case is a run executed in place, and there the files are
+ * sitting in the user's own repository — unlinked from the console, not deleted.
+ * That does not justify a migration tool; it justifies saying so once.
+ *
+ * Latched separately from the state probe: a repo can have one and not the other,
+ * and a shared latch would let whichever fired first hide the other forever.
+ *
+ * Never moves, creates, or deletes anything.
+ */
+export async function maybeWarnLegacyArtifactsPath(
+  cwd: string,
+  artifactsRoot: string,
+  isolated: boolean
+): Promise<void> {
+  const latchKey = `artifacts:${cwd}`;
+  if (warnedCwds.has(latchKey)) return;
+
+  const existing = inFlightProbes.get(latchKey);
+  if (existing) return existing;
+
+  const probe = probeLegacyArtifactsPath(cwd, artifactsRoot, isolated, latchKey).finally(() => {
+    inFlightProbes.delete(latchKey);
+  });
+  inFlightProbes.set(latchKey, probe);
+  return probe;
+}
+
+async function probeLegacyArtifactsPath(
+  cwd: string,
+  artifactsRoot: string,
+  isolated: boolean,
+  latchKey: string
+): Promise<void> {
+  const legacyArtifacts = join(cwd, '.archon', 'artifacts');
+  const legacyLogs = join(cwd, '.archon', 'logs');
+
+  const found: string[] = [];
+  for (const path of [legacyArtifacts, legacyLogs]) {
+    try {
+      await access(path);
+      found.push(path);
+    } catch (error) {
+      const err = error as NodeJS.ErrnoException;
+      if (err.code === 'ENOENT') continue; // happy path — legacy location not in use
+      // Exists but unreadable. Surface rather than swallow, and latch so an
+      // unreadable directory does not re-probe on every run of this cwd.
+      warnedCwds.add(latchKey);
+      getLog().warn({ err, legacyPath: path }, 'workflow.legacy_artifacts_path_probe_error');
+      return;
+    }
+  }
+  if (found.length === 0) return;
+
+  warnedCwds.add(latchKey);
+
+  // No `mv` offered. Unlike the state case there is no single correct destination:
+  // artifacts are keyed per RUN under the new tree, so a bulk move would flatten
+  // runs together. Point at the directory and let the operator decide.
+  const message = isolated
+    ? 'Legacy .archon/artifacts|logs found inside an ISOLATED checkout. These predate the external output ' +
+      'tree and are deleted with the worktree, so nothing is lost by the relocation — new runs write under ' +
+      '~/.archon and are browsable in the console.'
+    : 'Legacy .archon/artifacts|logs found in the repository. New runs write under ~/.archon instead, so ' +
+      'output from runs that predate the upgrade is still on disk here but no longer listed in the console. ' +
+      'Nothing was moved or deleted.';
+  getLog().warn(
+    { legacyPaths: found, newPath: artifactsRoot, isolated, message },
+    'workflow.legacy_artifacts_path_detected'
+  );
+}
+
 async function probeLegacyStatePath(
   cwd: string,
   stateDir: string,

@@ -29,7 +29,11 @@ mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
 }));
 
-import { maybeWarnLegacyStatePath, resetLegacyStateWarningForTests } from './state-migration';
+import {
+  maybeWarnLegacyStatePath,
+  maybeWarnLegacyArtifactsPath,
+  resetLegacyStateWarningForTests,
+} from './state-migration';
 
 let dir: string;
 
@@ -141,5 +145,70 @@ describe('maybeWarnLegacyStatePath', () => {
     expect(await readdir(legacy)).toEqual(['old.json']);
     // The destination is NOT created as a side effect of the probe.
     await expect(readdir(stateDir)).rejects.toThrow();
+  });
+});
+
+// #2311: the state relocation Archon never caused got a detector; the artifacts/logs
+// relocation the ENGINE caused on the unregistered-cwd fallback got nothing. These
+// cover the detector that closes that asymmetry.
+describe('maybeWarnLegacyArtifactsPath', () => {
+  it('is silent when no legacy .archon/artifacts or logs exists', async () => {
+    await maybeWarnLegacyArtifactsPath(dir, '/out/root/artifacts', false);
+    expect(warnCalls).toHaveLength(0);
+  });
+
+  it('warns once, naming both legacy directories when both are present', async () => {
+    await mkdir(join(dir, '.archon', 'artifacts'), { recursive: true });
+    await mkdir(join(dir, '.archon', 'logs'), { recursive: true });
+
+    await maybeWarnLegacyArtifactsPath(dir, '/out/root/artifacts', false);
+    await maybeWarnLegacyArtifactsPath(dir, '/out/root/artifacts', false);
+
+    expect(warnCalls).toHaveLength(1);
+    expect(warnCalls[0].event).toBe('workflow.legacy_artifacts_path_detected');
+    expect(warnCalls[0].payload.legacyPaths).toEqual([
+      join(dir, '.archon', 'artifacts'),
+      join(dir, '.archon', 'logs'),
+    ]);
+  });
+
+  it('fires when only logs is present (artifacts alone is not the trigger)', async () => {
+    await mkdir(join(dir, '.archon', 'logs'), { recursive: true });
+
+    await maybeWarnLegacyArtifactsPath(dir, '/out/root/artifacts', false);
+
+    expect(warnCalls).toHaveLength(1);
+    expect(warnCalls[0].payload.legacyPaths).toEqual([join(dir, '.archon', 'logs')]);
+  });
+
+  // An isolated run's cwd IS the worktree, so those files were already dying at
+  // teardown — nothing is lost. In place they survive in the user's own repo and are
+  // merely unlisted. Same detection, materially different news.
+  it('tells an isolated run nothing is lost, and an in-place run the files remain', async () => {
+    await mkdir(join(dir, '.archon', 'artifacts'), { recursive: true });
+
+    await maybeWarnLegacyArtifactsPath(dir, '/out/root/artifacts', true);
+    expect(String(warnCalls[0].payload.message)).toContain('nothing is lost');
+
+    resetLegacyStateWarningForTests();
+    warnCalls.length = 0;
+
+    await maybeWarnLegacyArtifactsPath(dir, '/out/root/artifacts', false);
+    expect(String(warnCalls[0].payload.message)).toContain('still on disk');
+  });
+
+  // A repo can have one legacy directory and not the other. A shared latch would let
+  // whichever probe ran first permanently suppress the other.
+  it('latches independently of the state probe', async () => {
+    await mkdir(join(dir, '.archon', 'state'), { recursive: true });
+    await mkdir(join(dir, '.archon', 'artifacts'), { recursive: true });
+
+    await maybeWarnLegacyStatePath(dir, '/out/root/state', false);
+    await maybeWarnLegacyArtifactsPath(dir, '/out/root/artifacts', false);
+
+    expect(warnCalls.map(c => c.event)).toEqual([
+      'workflow.legacy_state_path_detected',
+      'workflow.legacy_artifacts_path_detected',
+    ]);
   });
 });
