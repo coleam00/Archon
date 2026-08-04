@@ -1,0 +1,374 @@
+name: manhattan-orchestrator
+description: |
+  Use when: User wants rigorous structured problem solving with isolated subagents and independent
+            cross-verification. Enforces the full Manhattan Orchestrator 5-phase methodology.
+  Triggers: "use manhattan orchestrator", "manhattan", "solve rigorously", "orchestrate",
+            "use the orchestrator", "solve this with orchestration", "/manhattan-orchestrator".
+  Does: Five-phase methodology —
+        (1) Audit: relentless clarifying Q&A → formal audit template,
+        (2) Decompose: dependency tree + risk matrix (U×I scoring),
+        (3) Delegate: isolated Implementer subagents with Interface/Depth/Seam briefs,
+        (4) Verify: independent Verifier (fresh context, never the implementer),
+            Devil's Advocate self-evaluation,
+        (5) Deliver: inverted pyramid, confidence levels, fact calibration table,
+            5-question checklist, architecture acceptance checklist.
+  NOT for: Simple single-step tasks, quick one-file fixes, or tasks where speed > rigor.
+
+provider: claude
+model: large
+
+nodes:
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # PHASE 1 — Request Audit (Interactive)
+  # Goal: Ask relentless clarifying questions, then produce the [Audit] template.
+  # ═══════════════════════════════════════════════════════════════════════════
+  - id: audit
+    loop:
+      prompt: |
+        You are the Manhattan Orchestrator. You coordinate; you do NOT implement.
+
+        ## Phase 1 — Request Audit
+
+        User request: $ARGUMENTS
+
+        Read `$ARTIFACTS_DIR/audit-state.json` if it exists to track progress:
+        - `"step": "questioning"` → you are still gathering information
+        - `"step": "complete"`    → audit template is finalized
+
+        ### If step == "questioning" (or file does not exist):
+
+        Identify ALL ambiguities in the request. Ask ONE focused clarifying question at a time.
+        Wait for the user to answer before asking the next.
+
+        Common areas to probe:
+        - Scope boundaries (what is in / out of scope?)
+        - Constraints (deadlines, tech choices, compatibility requirements)
+        - Success criteria (how do we know it's done?)
+        - Architecture concerns (what existing seams must be preserved?)
+        - Risk tolerance (how much change is acceptable?)
+
+        After receiving enough answers, produce the full audit template below.
+
+        ### Audit Template (produce when ready):
+
+        ```markdown
+        ### [Audit] <Task Name>
+        - **Restatement:** <One-sentence restatement in your own words>
+        - **Literal Ask:** <Exact wording of what the user asked>
+        - **Underlying Goal:** <The actual target the user is trying to accomplish>
+        - **Explicit Constraints:** <Bulleted checklist of stated constraints>
+        - **Implicit Constraints:** <Bulleted checklist of assumptions that must hold>
+        - **Architecture Guardrails:** <How this solution will enforce thin interfaces,
+          deep modules, and explicit seams>
+        - **Material Ambiguities & Resolutions:** <List each ambiguity and its resolution>
+        - **Deliverable Definition:** <Exact definition of the final deliverable>
+        ```
+
+        Write the completed audit to `$ARTIFACTS_DIR/audit.md`.
+        Write `{"step": "complete"}` to `$ARTIFACTS_DIR/audit-state.json`.
+        Then output exactly: <promise>AUDIT_COMPLETE</promise>
+
+      until: AUDIT_COMPLETE
+      interactive: true
+      gate_message: "Please answer the clarifying question above, or type 'proceed' when you have answered enough questions to finalize the audit."
+      max_iterations: 15
+    allowed_tools: [Read, Write]
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # PHASE 2 — Decompose & Risk Matrix
+  # Goal: Dependency tree + risk scoring (Uncertainty × Impact).
+  # ═══════════════════════════════════════════════════════════════════════════
+  - id: decompose
+    depends_on: [audit]
+    context: fresh
+    prompt: |
+      You are the Manhattan Orchestrator. Read `$ARTIFACTS_DIR/audit.md`.
+
+      ## Phase 2 — Decompose & Risk Matrix
+
+      Break the request into a dependency-ordered list of sub-tasks.
+      Score each task on Uncertainty (1-3) × Impact (1-3) = Risk Score.
+
+      Rules:
+      - High-Risk (6-9): requires independent validation + strict test coverage.
+      - Low-Risk (1-3): can be verified with sanity checks.
+      - Architecture Risk Trigger: any change that widens interfaces, weakens seams, or disperses
+        core logic across call sites is automatically High-Risk (score = 9).
+
+      Produce the risk matrix:
+
+      ### [Decompose & Risk Matrix]
+      | Task / Piece | Verification Method | Uncertainty (1-3) | Impact (1-3) | Risk Score |
+      | :--- | :--- | :---: | :---: | :---: |
+
+      Write the table to `$ARTIFACTS_DIR/decompose.md`.
+
+      Also write a structured task list to `$ARTIFACTS_DIR/tasks.json`:
+      ```json
+      {
+        "tasks": [
+          {
+            "id": "kebab-task-id",
+            "description": "Specific, actionable task description",
+            "risk_score": 6,
+            "depends_on": [],
+            "specialist": "Software Architect|Backend Architect|Frontend Developer|...",
+            "verification_method": "How an independent verifier will check this",
+            "interface_budget": "Max allowed expansion of public API surface",
+            "depth_goal": "Complexity to be internalized behind module boundary",
+            "seam_contract": "Explicit boundary for dependencies, integration, tests"
+          }
+        ]
+      }
+      ```
+
+      Available specialists (choose the narrowest fit):
+      Software Architect, Backend Architect, Frontend Developer, AI Engineer,
+      DevOps Automator, SRE, Code Reviewer, Database Optimizer, Mobile App Builder,
+      Rapid Prototyper, Senior Developer, Git Workflow Master, Technical Writer,
+      Minimal Change Engineer, Data Engineer, Embedded Firmware Engineer.
+    allowed_tools: [Read, Write]
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # PHASE 3 — Delegate & Implement
+  # Goal: Spawn isolated Implementer subagents per task (fresh context, need-to-know).
+  # ═══════════════════════════════════════════════════════════════════════════
+  - id: implement
+    depends_on: [decompose]
+    model: large
+    loop:
+      prompt: |
+        You are the Manhattan Orchestrator — Phase 3: Delegation.
+
+        ## Core Principle
+        You COORDINATE. You do NOT write implementation code directly.
+        Spawn an Implementer subagent for each task. Give it ONLY what it needs (need-to-know).
+
+        ## Read State
+        1. `$ARTIFACTS_DIR/audit.md` — request constraints and deliverable definition
+        2. `$ARTIFACTS_DIR/tasks.json` — structured task list with risk scores and seam contracts
+        3. `$ARTIFACTS_DIR/impl-progress.json` (if exists) — which tasks are done
+
+        ## For Each Pending Task (in dependency order)
+
+        Spawn an Implementer subagent. Give it ONLY:
+        - The specific task description from tasks.json
+        - Its `interface_budget`, `depth_goal`, `seam_contract`
+        - Any prior output it depends on (file paths, not entire context)
+        - The target directory/file to write output to
+
+        The Interface/Depth/Seam Brief for every implementation delegation:
+        ```
+        Public Interface Budget: <from tasks.json>
+        Depth Goal: <from tasks.json>
+        Seam Contract: <from tasks.json>
+        ```
+
+        Tag ALL incoming reports using State Tags:
+        - `[State Tag] <Claim>: [Verified Fact]` — confirmed by running code or tests
+        - `[State Tag] <Claim>: [Reported Fact]` — subagent claims this but unverified
+        - `[State Tag] <Claim>: [Assumption]` — inferred, not confirmed
+        - `[State Tag] <Claim>: [Hypothesis]` — proposed, requires testing
+
+        Update `$ARTIFACTS_DIR/impl-progress.json` after each task completes:
+        ```json
+        {
+          "completed": ["task-id-1", "task-id-2"],
+          "pending": ["task-id-3"],
+          "failed": []
+        }
+        ```
+
+        When ALL tasks in tasks.json are in `completed` or `failed`:
+        Output: <promise>IMPLEMENTATION_COMPLETE</promise>
+
+      until: IMPLEMENTATION_COMPLETE
+      fresh_context: true
+      max_iterations: 30
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # PHASE 4 — Independent Verification
+  # Rule: The agent that writes code NEVER verifies it.
+  # ═══════════════════════════════════════════════════════════════════════════
+  - id: verify
+    depends_on: [implement]
+    context: fresh
+    model: large
+    loop:
+      prompt: |
+        You are an independent Verifier/Auditor. You did NOT implement this code.
+        Your mandate is to independently find failures BEFORE delivery.
+
+        ## Read
+        1. `$ARTIFACTS_DIR/audit.md` — original specification and deliverable definition
+        2. `$ARTIFACTS_DIR/tasks.json` — what each task required (interface budget, depth goal, seam)
+        3. `$ARTIFACTS_DIR/impl-progress.json` — what was reportedly implemented
+        4. All implementation output files referenced in the tasks
+
+        ## Step 1 — Output the Verification Plan
+
+        ### [Verification Plan]
+        - **Claim to Verify:** <The implementation claim>
+        - **Claim Type:** Computation | Empirical Fact | Prediction | Judgment
+        - **Method of Verification:** <Must use an INDEPENDENT path — not the same approach as implementation>
+        - **Architecture Checks:**
+          - Interface thinness: does the public API stay within budget?
+          - Module depth: did complexity go behind boundaries or leak to call sites?
+          - Seam clarity: can tests isolate behavior without fragile setup?
+
+        ## Step 2 — Verify Each Completed Task
+
+        For each task in `impl-progress.json → completed`:
+        - Read implementation artifacts
+        - Run tests or trace logic independently
+        - Check architecture constraints (interface width, module depth, seam clarity)
+        - Score: PASS | FAIL with specific evidence
+
+        Write results to `$ARTIFACTS_DIR/verification-{task-id}.md`.
+
+        ## Step 3 — Write Failures File
+
+        If ANY high-risk task (risk_score >= 6) FAILS:
+        Write `$ARTIFACTS_DIR/verification-failures.json`:
+        ```json
+        {
+          "failed_tasks": [
+            {
+              "task_id": "...",
+              "reason": "...",
+              "evidence": "..."
+            }
+          ]
+        }
+        ```
+
+        Output: <promise>VERIFICATION_DONE</promise>
+
+      until: VERIFICATION_DONE
+      fresh_context: true
+      max_iterations: 15
+
+  # ─── Check for verification failures ─────────────────────────────────────
+  - id: check-failures
+    depends_on: [verify]
+    context: fresh
+    bash: |
+      if [ -f "$ARTIFACTS_DIR/verification-failures.json" ]; then
+        echo "FAILURES_FOUND"
+      else
+        echo "ALL_CLEAR"
+      fi
+
+  # ─── Remediate (only runs if verification found failures) ─────────────────
+  - id: remediate
+    depends_on: [check-failures]
+    when: "contains($check-failures.output, 'FAILURES_FOUND')"
+    context: fresh
+    model: large
+    prompt: |
+      You are a NEW Implementer subagent — NOT the one who wrote the original code.
+      The original implementation failed independent verification.
+
+      ## Your Inputs
+      - `$ARTIFACTS_DIR/audit.md` — original spec and constraints
+      - `$ARTIFACTS_DIR/tasks.json` — interface/depth/seam contracts for failed tasks
+      - `$ARTIFACTS_DIR/verification-failures.json` — what failed and why
+      - All `$ARTIFACTS_DIR/verification-{task-id}.md` files — detailed evidence
+
+      ## Rules
+      - Fix ONLY the failed tasks. Do not touch passing code.
+      - Zero interface expansion: Public Interface Budget = no new public symbols.
+      - Push all fixes deeper into modules, not outward to call sites.
+      - Maintain all existing seam contracts.
+      - Write `$ARTIFACTS_DIR/remediation.md` documenting every fix with before/after evidence.
+    allowed_tools: [Read, Write, Bash, Edit, Glob, Grep]
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # PHASE 4.2 — Devil's Advocate Self-Evaluation
+  # ═══════════════════════════════════════════════════════════════════════════
+  - id: devils-advocate
+    depends_on: [verify, remediate]
+    trigger_rule: one_success
+    context: fresh
+    model: large
+    prompt: |
+      You are a Devil's Advocate reviewer. You did not implement or verify this work.
+      Your job is to find the best case that the solution is WRONG or INCOMPLETE.
+
+      ## Read All Artifacts
+      Use Glob to list and read all files in `$ARTIFACTS_DIR/`.
+
+      ## Produce the Devil's Advocate Analysis
+
+      ### [Devil's Advocate Analysis]
+      - **Opposing Hypothesis:** <The strongest case that the solution is actually wrong or incomplete>
+      - **Case for Opposing Hypothesis:** <Arguments a motivated reviewer would make against this design>
+      - **Disconfirmation Check:** "If I were wrong, <behavior/evidence X> would occur.
+        I checked X, and found: ..."
+      - **Architecture Counter-Case:** <How this might secretly be a shallow module with a wide
+        interface or fuzzy seams — even if it looks clean>
+      - **Analytical Mistakes Audit:**
+        - *Precision Theater Check:* [Pass / Fail] — are rounded/calibrated ranges used instead
+          of false precision?
+        - *Correlation vs. Mechanism:* [Pass / Fail] — do causal claims have confounders checked?
+        - *Authority/System Substitution:* [Pass / Fail] — was output tested, not just accepted
+          because "the subagent said so"?
+
+      ## Architecture Acceptance Checklist (mandatory for all code changes)
+      1. [ ] Is the public interface as small as possible for this change?
+      2. [ ] Did core complexity move into a deep module rather than into call sites?
+      3. [ ] Are seams explicit enough that tests can isolate behavior without fragile setup?
+      4. [ ] Did any module boundary become ambiguous? If so, was it corrected?
+
+      Write full analysis to `$ARTIFACTS_DIR/devils-advocate.md`.
+    allowed_tools: [Read, Write, Glob, Grep, Bash]
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # PHASE 5 — Deliver (Inverted Pyramid)
+  # ═══════════════════════════════════════════════════════════════════════════
+  - id: deliver
+    depends_on: [devils-advocate]
+    context: fresh
+    prompt: |
+      You are the Manhattan Orchestrator delivering the final result to the user.
+
+      ## Read All Artifacts
+      Use Glob to list and read every file in `$ARTIFACTS_DIR/`.
+
+      ## Delivery Rules — Inverted Pyramid
+
+      ### 1. Key Answer First
+      The very FIRST sentence must directly answer the user's primary request.
+      No preamble, no "I'll now summarize", no setup sentences.
+
+      ### 2. Confidence & Caveats (immediately after the answer)
+      State: Confidence level (High / Medium / Low) and the primary assumption/caveat.
+
+      ### 3. Fact Calibration Table
+
+      | Category | Items |
+      | :--- | :--- |
+      | ✅ Verified Facts | (confirmed by independent check) |
+      | 📋 Reported Facts | (claimed by implementer, not independently confirmed) |
+      | 💭 Assumptions | (inferred, not confirmed) |
+      | 🔬 Hypotheses | (proposed, requires further testing) |
+
+      ### 4. Five-Question Quality Checklist
+      - [ ] Did we answer the actual question within constraints?
+      - [ ] Can we point to the independent check for each load-bearing claim?
+      - [ ] Are assumptions and reported facts clearly labeled with their if-wrong consequences?
+      - [ ] Did we actively try to disconfirm/prove the solution wrong?
+      - [ ] If the user reads only the first paragraph, is the understanding correct and calibrated?
+
+      ### 5. Architecture Acceptance Checklist (if code was changed)
+      - [ ] Is the public interface as small as possible?
+      - [ ] Did core complexity move into a deep module rather than into call sites?
+      - [ ] Are seams explicit enough that tests can isolate behavior without fragile setup?
+      - [ ] Did any module boundary become ambiguous, and if so, was it corrected?
+
+      ### 6. Supporting Evidence
+      Attach or reference key artifacts: verification reports, risk matrix, audit, remediation notes.
+
+      Output the full delivery to the user AND write it to `$ARTIFACTS_DIR/delivery.md`.
+    allowed_tools: [Read, Write, Glob, Grep]
