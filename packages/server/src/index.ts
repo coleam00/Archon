@@ -68,6 +68,7 @@ import {
   DiscordAdapter,
   SlackAdapter,
   SlackWorkflowBridge,
+  formatSkippedAttachmentsNotice,
 } from '@archon/adapters';
 import { GiteaAdapter } from '@archon/adapters/community/forge/gitea';
 import { GitLabAdapter } from '@archon/adapters/community/forge/gitlab';
@@ -644,10 +645,24 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         const userId = await resolveUserId('slack', event.user, event.displayName);
 
         // Download any file attachments up front (network I/O; doesn't need the lock).
-        const { files: attachedFiles, uploadDir } = await slackAdapter.downloadAttachments(
-          event.files,
-          conversationId
-        );
+        const {
+          files: attachedFiles,
+          uploadDir,
+          skipped: skippedAttachments,
+        } = await slackAdapter.downloadAttachments(event.files, conversationId);
+
+        // Tell the user about anything that did not make it through, BEFORE the
+        // reply lands, so a dropped file reads as a known limit rather than
+        // Archon ignoring the attachment. Never block the message on this.
+        const skipNotice = formatSkippedAttachmentsNotice(skippedAttachments);
+        if (skipNotice) {
+          await slackAdapter.sendMessage(conversationId, skipNotice).catch((err: unknown) => {
+            getLog().warn(
+              { err, conversationId, skipped: skippedAttachments.length },
+              'slack.attachment_skip_notice_failed'
+            );
+          });
+        }
 
         // Fire-and-forget: handler returns immediately, processing happens async
         lockManager

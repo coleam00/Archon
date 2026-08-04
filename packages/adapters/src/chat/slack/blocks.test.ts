@@ -3,6 +3,7 @@ import {
   buildApprovalResolutionBlocks,
   buildStatusBlocks,
   formatCostFooter,
+  formatSkippedAttachmentsNotice,
   REACTION_FAILURE,
   REACTION_RUNNING,
   REACTION_SUCCESS,
@@ -227,5 +228,51 @@ describe('reaction name constants', () => {
     expect(REACTION_RUNNING).toBe('arrows_counterclockwise');
     expect(REACTION_SUCCESS).toBe('white_check_mark');
     expect(REACTION_FAILURE).toBe('x');
+  });
+});
+
+describe('formatSkippedAttachmentsNotice', () => {
+  test('returns empty string when nothing was skipped', () => {
+    // Caller posts unconditionally, so "" is the no-op signal.
+    expect(formatSkippedAttachmentsNotice([])).toBe('');
+  });
+
+  test('names the file and the reason for a single skip', () => {
+    const notice = formatSkippedAttachmentsNotice([{ name: 'dump.sql', reason: 'too_large' }]);
+
+    expect(notice).toContain('dump.sql');
+    expect(notice).toContain('10 MB');
+    expect(notice).toContain('attachment:');
+  });
+
+  test('consolidates several skips into ONE message', () => {
+    const notice = formatSkippedAttachmentsNotice([
+      { name: 'dump.sql', reason: 'too_large' },
+      { name: 'slow.pdf', reason: 'timeout' },
+    ]);
+
+    // A six-file drop must not produce six notices.
+    expect(notice.split('\n')).toHaveLength(1);
+    expect(notice).toContain('2 attachments');
+    expect(notice).toContain('dump.sql');
+    expect(notice).toContain('slow.pdf');
+    expect(notice).toContain('timed out');
+  });
+
+  test('renders every skip reason', () => {
+    for (const reason of ['too_large', 'too_many', 'timeout', 'download_failed'] as const) {
+      const notice = formatSkippedAttachmentsNotice([{ name: 'f.txt', reason }]);
+      expect(notice).toContain('f.txt');
+      // Each reason must produce prose, never a leaked enum value.
+      expect(notice).not.toContain(reason);
+    }
+  });
+
+  test('keeps operator-only detail out of the channel', () => {
+    const notice = formatSkippedAttachmentsNotice([{ name: 'a.txt', reason: 'download_failed' }]);
+
+    // A missing scope is an operator concern; the log carries it, not the user.
+    expect(notice).not.toContain('files:read');
+    expect(notice).not.toContain('scope');
   });
 });

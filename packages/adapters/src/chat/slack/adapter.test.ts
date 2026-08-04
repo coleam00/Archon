@@ -886,6 +886,82 @@ describe('SlackAdapter', () => {
       expect(scopeWarns).toHaveLength(0);
     });
 
+    test('reports why each attachment was dropped', async () => {
+      globalThis.fetch = mock(() =>
+        Promise.resolve(new Response('', { status: 403 }))
+      ) as unknown as typeof fetch;
+
+      const result = await adapter.downloadAttachments(
+        [
+          {
+            id: 'F_BIG',
+            name: 'dump.sql',
+            size: 11 * 1024 * 1024,
+            url_private_download: 'https://files.slack.com/big',
+          },
+          { id: 'F_403', name: 'blocked.txt', url_private_download: 'https://files.slack.com/f' },
+          { id: 'F_NOURL', name: 'nourl.txt' },
+        ],
+        'C123:456.789'
+      );
+
+      expect(result.files).toEqual([]);
+      // Every drop must be attributable — that is what the user gets told.
+      expect(result.skipped).toEqual([
+        { name: 'dump.sql', reason: 'too_large' },
+        { name: 'blocked.txt', reason: 'download_failed' },
+        { name: 'nourl.txt', reason: 'download_failed' },
+      ]);
+    });
+
+    test('reports files dropped by the per-message cap as too_many', async () => {
+      globalThis.fetch = mock(() =>
+        Promise.resolve(new Response('x', { status: 200 }))
+      ) as unknown as typeof fetch;
+
+      const files = Array.from({ length: 7 }, (_, i) => ({
+        id: `F${i.toString()}`,
+        name: `f${i.toString()}.txt`,
+        size: 1,
+        url_private_download: `https://files.slack.com/f${i.toString()}`,
+      }));
+      const result = await adapter.downloadAttachments(files, 'C123:456.789');
+      uploadDirs.push(result.uploadDir);
+
+      expect(result.files).toHaveLength(5);
+      expect(result.skipped).toEqual([
+        { name: 'f5.txt', reason: 'too_many' },
+        { name: 'f6.txt', reason: 'too_many' },
+      ]);
+    });
+
+    test('reports an aborted download as a timeout', async () => {
+      globalThis.fetch = mock(() =>
+        Promise.reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))
+      ) as unknown as typeof fetch;
+
+      const result = await adapter.downloadAttachments(
+        [{ id: 'F_SLOW', name: 'slow.pdf', url_private_download: 'https://files.slack.com/slow' }],
+        'C123:456.789'
+      );
+
+      expect(result.skipped).toEqual([{ name: 'slow.pdf', reason: 'timeout' }]);
+    });
+
+    test('reports nothing skipped on a clean download', async () => {
+      globalThis.fetch = mock(() =>
+        Promise.resolve(new Response('x', { status: 200 }))
+      ) as unknown as typeof fetch;
+
+      const result = await adapter.downloadAttachments(
+        [{ id: 'F1', name: 'a.txt', size: 1, url_private_download: 'https://files.slack.com/f1' }],
+        'C123:456.789'
+      );
+      uploadDirs.push(result.uploadDir);
+
+      expect(result.skipped).toEqual([]);
+    });
+
     test('truncates to the max files per message', async () => {
       globalThis.fetch = mock(() =>
         Promise.resolve(new Response('x', { status: 200 }))

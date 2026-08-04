@@ -205,10 +205,18 @@ Limits, matching the Web UI's upload caps:
 | Files per message | 5 | Extra files are ignored (oldest 5 kept) |
 | Download time per file | 30 s | That file is skipped |
 
-Skipped attachments are logged (`slack.attachment_too_large`,
-`slack.attachment_download_failed`, `slack.attachment_download_timeout`) but
-never fail the message -- Slack has no request/response cycle in which to
-surface a hard rejection, so Archon answers with whatever it could read.
+A skipped attachment never fails the message. Archon posts one short notice
+in the thread naming the files it could not read and why, then answers with
+the rest:
+
+> :warning: I couldn't read 2 attachments: `dump.sql` (over the 10 MB
+> limit), `slow.pdf` (download timed out). Answering with the rest of your
+> message.
+
+One notice per message, however many files were dropped. The matching
+server-log events (`slack.attachment_too_large`,
+`slack.attachment_download_failed`, `slack.attachment_download_timeout`,
+`slack.attachments_truncated`) carry the operator-level detail.
 
 :::caution
 Unlike the Web UI, the Slack path does not restrict attachments by file
@@ -269,7 +277,9 @@ Ensure these scopes are added:
 
 ### Archon Ignores an Attached File
 
-Archon replies as if no file were attached:
+If a limit was hit, Archon says so in the thread (see [File
+Attachments](#file-attachments)) -- start there. If it replies as though no
+file were attached at all, with no notice:
 
 1. **Check the `files:read` scope** (Step 3), then reinstall the app so
    Slack issues a token that carries it. A
@@ -279,9 +289,9 @@ Archon replies as if no file were attached:
    one message, or slower than 30 s to download are skipped. Each logs its
    own reason (`slack.attachment_too_large`,
    `slack.attachments_truncated`, `slack.attachment_download_timeout`).
-3. **Check `slack.attachments_downloaded`** -- it logs `requested` vs
-   `saved` per message, which tells you immediately whether Archon saw the
-   file at all versus failed to fetch it.
+3. **Check `slack.attachments_downloaded`** -- it logs `requested`, `saved`
+   and `skipped` per message, which tells you immediately whether Archon saw
+   the file at all versus failed to fetch it.
 
 ## Security Recommendations
 

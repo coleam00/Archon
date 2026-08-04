@@ -20,7 +20,7 @@ import { isSlackUserAuthorized } from './auth';
 import { parseAllowedUserIds } from './auth';
 import { splitIntoParagraphChunks } from '../../utils/message-splitting';
 import { formatCostFooter } from './blocks';
-import type { SlackFileRef, SlackMessageEvent } from './types';
+import type { SkippedSlackAttachment, SlackFileRef, SlackMessageEvent } from './types';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -355,9 +355,12 @@ export class SlackAdapter implements IPlatformAdapter {
   /**
    * Download Slack message file attachments to disk so they can be handed to
    * the AI as `AttachedFile[]` (same shape the Web upload endpoint produces).
-   * Best-effort per file: an oversized or failed download is skipped with a
-   * WARN log rather than failing the whole message — Slack has no
-   * request/response cycle to surface a hard rejection to the user inline.
+   *
+   * Best-effort per file: one oversized or failed download never fails the
+   * whole message. Unlike the Web endpoint there is no response in which to
+   * reject the request, so every drop is instead reported back in `skipped`
+   * for the caller to relay in-thread — a silently missing file is exactly the
+   * failure this feature exists to remove.
    *
    * Requires bot token scope `files:read`. Caller is responsible for deleting
    * `uploadDir` after the AI has had a chance to read the files.
@@ -365,10 +368,18 @@ export class SlackAdapter implements IPlatformAdapter {
   async downloadAttachments(
     files: SlackFileRef[] | undefined,
     conversationId: string
-  ): Promise<{ files: AttachedFile[]; uploadDir: string }> {
+  ): Promise<{
+    files: AttachedFile[];
+    uploadDir: string;
+    skipped: SkippedSlackAttachment[];
+  }> {
     if (!files || files.length === 0) {
-      return { files: [], uploadDir: '' };
+      return { files: [], uploadDir: '', skipped: [] };
     }
+
+    const skipped: SkippedSlackAttachment[] = [];
+    /** Display name for user-facing notices; the id is a last resort. */
+    const displayName = (file: SlackFileRef): string => file.name ?? file.id;
 
     const toDownload = files.slice(0, MAX_SLACK_FILES_PER_MESSAGE);
     if (files.length > MAX_SLACK_FILES_PER_MESSAGE) {
@@ -376,6 +387,9 @@ export class SlackAdapter implements IPlatformAdapter {
         { conversationId, fileCount: files.length, limit: MAX_SLACK_FILES_PER_MESSAGE },
         'slack.attachments_truncated'
       );
+      for (const dropped of files.slice(MAX_SLACK_FILES_PER_MESSAGE)) {
+        skipped.push({ name: displayName(dropped), reason: 'too_many' });
+      }
     }
 
     // Slack conversation IDs are "channel:ts" — ':' is invalid in Windows
@@ -396,12 +410,18 @@ export class SlackAdapter implements IPlatformAdapter {
 
     const saved: AttachedFile[] = [];
     for (const file of toDownload) {
-      if (!file.url_private_download) continue;
+      if (!file.url_private_download) {
+        // No download URL at all — nothing to fetch, and nothing the user can
+        // act on beyond knowing the file did not arrive.
+        skipped.push({ name: displayName(file), reason: 'download_failed' });
+        continue;
+      }
       if (file.size !== undefined && file.size > MAX_SLACK_FILE_BYTES) {
         getLog().warn(
           { conversationId, fileId: file.id, size: file.size },
           'slack.attachment_too_large'
         );
+        skipped.push({ name: displayName(file), reason: 'too_large' });
         continue;
       }
 
@@ -437,6 +457,7 @@ export class SlackAdapter implements IPlatformAdapter {
             { conversationId, fileId: file.id, status: response.status },
             'slack.attachment_download_failed'
           );
+          skipped.push({ name: displayName(file), reason: 'download_failed' });
           continue;
         }
 
@@ -451,6 +472,7 @@ export class SlackAdapter implements IPlatformAdapter {
             { conversationId, fileId: file.id, size: declaredLength },
             'slack.attachment_too_large'
           );
+          skipped.push({ name: displayName(file), reason: 'too_large' });
           continue;
         }
 
@@ -460,6 +482,7 @@ export class SlackAdapter implements IPlatformAdapter {
             { conversationId, fileId: file.id, size: buffer.byteLength },
             'slack.attachment_too_large'
           );
+          skipped.push({ name: displayName(file), reason: 'too_large' });
           continue;
         }
 
@@ -494,16 +517,20 @@ export class SlackAdapter implements IPlatformAdapter {
           },
           timedOut ? 'slack.attachment_download_timeout' : 'slack.attachment_download_error'
         );
+        skipped.push({
+          name: displayName(file),
+          reason: timedOut ? 'timeout' : 'download_failed',
+        });
       } finally {
         clearTimeout(timeout);
       }
     }
 
     getLog().info(
-      { conversationId, requested: files.length, saved: saved.length },
+      { conversationId, requested: files.length, saved: saved.length, skipped: skipped.length },
       'slack.attachments_downloaded'
     );
-    return { files: saved, uploadDir };
+    return { files: saved, uploadDir, skipped };
   }
 
   /**

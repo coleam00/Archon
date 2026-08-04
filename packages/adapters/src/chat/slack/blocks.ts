@@ -6,6 +6,7 @@
  */
 import type { types } from '@slack/bolt';
 import type { TokenUsage } from '@archon/providers/types';
+import type { SkippedSlackAttachment, SlackAttachmentSkipReason } from './types';
 
 type KnownBlock = types.KnownBlock;
 
@@ -67,6 +68,36 @@ function formatElapsed(ms: number): string {
  * Format a small italic cost footer line.
  * Returns null when there's nothing meaningful to display (no cost AND no tokens).
  */
+/** How each skip reason reads to the person who sent the file. */
+const SKIP_REASON_TEXT: Record<SlackAttachmentSkipReason, string> = {
+  too_large: 'over the 10 MB limit',
+  too_many: 'only the first 5 attachments are read',
+  timeout: 'download timed out',
+  download_failed: "couldn't be downloaded",
+};
+
+/**
+ * One consolidated in-thread notice for attachments that never reached the AI.
+ *
+ * Deliberately one message per inbound message rather than one per file: a
+ * six-file drop should not produce six notices. Returns '' when nothing was
+ * skipped, so the caller can post unconditionally.
+ *
+ * Reasons stay user-actionable (shrink it, send fewer, retry) — operator-level
+ * detail such as a missing `files:read` scope belongs in the server log, not
+ * in a channel.
+ */
+export function formatSkippedAttachmentsNotice(skipped: readonly SkippedSlackAttachment[]): string {
+  if (skipped.length === 0) return '';
+
+  const details = skipped
+    .map(item => `\`${item.name}\` (${SKIP_REASON_TEXT[item.reason]})`)
+    .join(', ');
+  const subject = skipped.length === 1 ? 'attachment' : `${String(skipped.length)} attachments`;
+
+  return `:warning: I couldn't read ${subject}: ${details}. Answering with the rest of your message.`;
+}
+
 export function formatCostFooter(input: {
   cost?: number;
   tokens?: TokenUsage;
