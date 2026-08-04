@@ -14,8 +14,8 @@ description: |
             5-question checklist, architecture acceptance checklist.
   NOT for: Simple single-step tasks, quick one-file fixes, or tasks where speed > rigor.
 
-provider: claude
-model: large
+provider: pi
+model: openai/gpt-4o
 
 nodes:
 
