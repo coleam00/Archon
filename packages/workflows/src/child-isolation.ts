@@ -48,7 +48,7 @@ export interface ChildIsolationResult {
   cwd: string;
   /** The registered isolation-environment row id (so the child appears in `isolation list`). */
   envId: string;
-  /** The branch created for the child (e.g. `archon/task-<parent>-child-0`). */
+  /** The branch created for the child (e.g. `archon/task-<parent>-<node>-<hash>-child-0`). */
   branchName: string;
 }
 

@@ -445,9 +445,10 @@ archon isolation list
 Groups by codebase, shows branch, workflow type, platform, and days since activity.
 
 Includes worktrees created for `workflow:` sub-run children that declared `isolation: worktree`
-(branch `archon/task-<parentRunId8>-child-0`) — they are tracked and cleaned up exactly like
-top-level run worktrees. Avoid `cleanup`/`complete` on one while its run tree is still
-resumable: a resume reuses the child's recorded worktree and fails if it has been removed.
+(branch `archon/task-<parentRunId8>-<nodeId>-<hash>-child-<n>`) — they are tracked and cleaned
+up exactly like top-level run worktrees. Avoid `cleanup`/`complete` on one while its run tree
+is still resumable: a resume reuses the child's recorded worktree and fails if it has been
+removed.
 
 ### `isolation cleanup [days]`
 
