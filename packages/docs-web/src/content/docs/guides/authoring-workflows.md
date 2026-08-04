@@ -1134,7 +1134,7 @@ can line results up against the input list positionally.
 
 | Field | Default | What it does |
 |-------|---------|--------------|
-| `items` | required | A `$node.output` (or `$node.output.field`) reference that must resolve to a **JSON array** at run time. Anything else — an object, a bare string, malformed JSON, a dangling ref — fails the node before any child is created. It never fans out over the characters of a string, and never silently degrades to zero items. An empty array is legal: the node completes immediately with `[]`. |
+| `items` | required | Usually a `$node.output` (or `$node.output.field`) reference; a literal JSON array (`'["a","b"]'`) also works when the set is fixed. Either way it must resolve to a **JSON array** at run time. Anything else — an object, a bare string, malformed JSON, a dangling ref — fails the node before any child is created. It never fans out over the characters of a string, and never silently degrades to zero items. An empty array is legal: the node completes immediately with `[]`. |
 | `as` | — | Reserved for a future `$INPUTS.<as>` channel ([#2214](https://github.com/coleam00/Archon/issues/2214)) and **rejected at load** until then, rather than accepted and ignored — writing `as: task` and then `$INPUTS.task` in the child would otherwise deliver the literal string to the model. The item reaches the child as `$ARGUMENTS`. |
 | `max_parallel` | `5` | How many children may be **in flight at once**. |
 | `join` | `all_success` | How N child outcomes reduce to one node outcome (below). |
@@ -1162,7 +1162,7 @@ consequences worth planning for:
 |--------|------------------------|----------------|
 | `all_success` (default) | every child completed | JSON array of child outputs, in item order |
 | `all_done` | every child reached a terminal state | same array, with each failed/cancelled child represented as `{ error, status }` in its slot |
-| `first_success` | — | Reserved for racing ([#1764](https://github.com/coleam00/Archon/issues/1764)); **rejected at load** today rather than silently treated as `all_success` |
+| `first_success` | the first child produces a **schema-valid** success | that winner's output as a **single string**, not an array — see [Racing](#racing-with-join-first_success) |
 
 Under `all_success`, the first child to fail seals the node's fate: remaining items are
 never spawned, and siblings still in flight are cooperatively cancelled so their spend
@@ -1172,6 +1172,114 @@ Those cancelled siblings and skipped items are casualties, not causes, and they 
 lower indices than the child that actually failed. The node's failure message always names
 the **causal** child — so `child 4 (run a1b2c3d4) failed: …` is the one to go read, even
 when children 0–3 show as cancelled in `archon workflow runs`.
+
+#### Racing with `join: first_success`
+
+`first_success` runs the children concurrently and keeps the **first one that produces a
+usable answer**. Everything else is stopped.
+
+```yaml
+  - id: attempt
+    workflow: implement-block
+    fan_out:
+      items: '["use the existing helper", "write it from scratch", "port the pattern from parser.ts"]'
+      join: first_success
+      max_parallel: 3
+    output_format:
+      type: object
+      required: [patch]
+      properties:
+        patch: { type: string }
+```
+
+**`$attempt.output` is a single string — the winner's output — not the JSON array the
+`all_*` joins produce.** The shape of a fan-out node's output changes with its join, so a
+downstream node written against `all_success` will not work unchanged against
+`first_success`. With `output_format` declared, the winner's output is field-accessible the
+same way a 1:1 sub-run's is (`$attempt.output.patch`).
+
+##### What "winner" means
+
+Winning is **not** finishing first. A child wins when it is the first to reach a terminal
+success *whose output validates against the node's `output_format`*:
+
+- **With `output_format`** — a child that completes but returns malformed JSON, or JSON that
+  misses a required field, does not win. The race carries on without it. This is the useful
+  case: the schema is what turns "fastest" into "fastest *acceptable*".
+- **Without `output_format`** — any completed child wins, so the race is purely about speed.
+- **If the schema will not compile**, validation is skipped and the child wins anyway
+  (logged as `workflow.fan_out_race_schema_uncompilable`). Fail-safe on purpose: a typo in
+  your schema should not silently discard every good racer.
+
+So a child can finish first and still lose, and a race can fail with every child completed —
+the node fails only when *no* child produced a schema-valid success, and the message lists
+each child's status.
+
+##### What happens to the losers
+
+Once a winner is sealed, every other racer is stopped two ways:
+
+1. **Hard abort.** Each racer runs with its own abort signal wired into the provider call,
+   so a loser stops mid-turn rather than running to completion. A loser burns at most one
+   in-flight turn plus the provider's grace period.
+2. **Cancelled and tagged** `fan_out_race_loser`, by run id.
+
+That tag is deliberately **excluded** from the set of cancels a resume re-drives. A resumed
+parent must not restart losers when the race already has a winner — the result is decided,
+and re-running them would spend money to change nothing. The exclusion is only lifted in the
+one case where it is safe: if no winner survives, a `fan_out_race_loser` child becomes
+eligible again, because then the race genuinely has to be re-run.
+
+##### Resume
+
+If a pass found a winner but the parent died before recording the node as complete, the
+resumed node **short-circuits**: it scans the existing children, and if any of them still
+qualifies as a winner, it completes from that child without re-driving anyone. Lowest
+`child_index` wins for determinism. This is what makes a resumed race free rather than a
+second race.
+
+##### Cost
+
+**You pay for every racer, not just the winner** — the node's cost is the sum across all
+children. Racing three children for one answer costs roughly three attempts. The abort keeps
+that from being three *full* attempts, but the floor is still N partial runs. Racing buys
+latency and better odds of a valid answer, and it pays for them in tokens.
+
+##### Isolation bites harder here
+
+Racing is inherently concurrent — `max_parallel: 1` would defeat the point — so of the
+[three ways](#isolation-the-same-explicit-rule-and-one-sharp-edge) out of the shared-checkout
+collision, only two are real options for a race: declare `mutates_checkout: false` on the
+child, or give each racer `isolation: worktree`. A race whose children write to the repo
+needs worktrees, and N racing worktrees are created, branched, and left behind for you to
+clean up — for N−1 results you threw away.
+
+##### When racing is actually worth it
+
+Be clear-eyed about what this buys, because the feature looks broader than it is.
+
+**Every child of a fan-out node runs the same workflow.** There is no per-child model,
+provider, prompt, or tool configuration — the only thing that differs between racers is the
+item string that arrives as the child's `$ARGUMENTS`. So racing N children over near-identical
+input is not "try three strategies in parallel". It is running the same strategy three times
+and keeping whichever sample lands first.
+
+That is worth doing in two situations:
+
+- **The child is unreliable in a way a schema can detect.** With `output_format`, racing is a
+  parallel retry: instead of one attempt, a validation failure, and a re-run, you start three
+  and take the first that validates. You trade tokens for wall-clock and for a much lower
+  chance of ending with nothing.
+- **The item list encodes genuinely different approaches.** `["use the existing helper",
+  "write it from scratch", "port the pattern from parser.ts"]` is real diversity, because the
+  difference travels in `$ARGUMENTS` and reaches the child's prompt. This is the case racing
+  is *for*, and it is worth writing the items deliberately rather than fanning out over
+  whatever list a previous node happened to produce.
+
+It is **not** worth reaching for when the racers differ only incidentally, when the child is
+already reliable (you are paying N× for a result you would have got anyway), or when you want
+different models to compete — that last one is a real thing to want and fan-out cannot express
+it today.
 
 #### Isolation: the same explicit rule, and one sharp edge
 
@@ -1236,7 +1344,9 @@ what makes a parent resume cheap and predictable:
 - Failed children are re-driven in place, in the same row.
 - Children Archon itself cancelled (a gate rejection, a fail-fast sibling cancel) are tagged
   and re-driven too, so *"remove the gate and resume"* actually completes the node. A child
-  **you** cancelled out of band stays cancelled and is never resurrected.
+  **you** cancelled out of band stays cancelled and is never resurrected. The one deliberate
+  exception is a [race loser](#racing-with-join-first_success): it is tagged but **not**
+  re-driven while a winner survives, because the outcome is already decided.
 - A child left `running` or `pending` by an interrupted process is **not** auto-cancelled —
   Archon can't tell a crash orphan from a live run elsewhere. The node fails with the child's
   run id and tells you to wait or abandon it.
@@ -1259,7 +1369,6 @@ re-deriving it.
 
 - **No `with:` named-parameter mapping** — use `input:` (a single data string). A
   `workflow:` node with a `with:` key is rejected with a clear error.
-- **No racing** (`join: first_success`) — reserved for a later slice, rejected at load.
 - **Not inside a `loop_group` body** — a `workflow:` node, fanned out or not, is rejected
   there at load time ([#2439](https://github.com/coleam00/Archon/issues/2439)).
 - **Static target only.** `workflow:` takes a literal workflow name — no
