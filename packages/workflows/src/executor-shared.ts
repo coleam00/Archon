@@ -40,11 +40,13 @@ export const FATAL_PATTERNS = [
   '401',
   '403',
   'credit balance',
-  'auth error',
   'session limit', // Claude subscription 5h window — covers every detectCreditExhaustion session variant
   'usage limit reached', // Claude CLI quota string, e.g. "Claude AI usage limit reached|<ts>"
   'credit exhaustion', // synthesized "Credit exhaustion detected — resume when credits reset"
 ];
+
+/** Ambiguous fatal patterns that yield to concrete transient evidence. */
+const FALLBACK_FATAL_PATTERNS = ['auth error'];
 
 /** Transient error patterns - temporary issues that may resolve with retry */
 export const TRANSIENT_PATTERNS = [
@@ -59,6 +61,7 @@ export const TRANSIENT_PATTERNS = [
   '502',
   '529', // Anthropic HTTP 529 = service overloaded
   'overloaded', // Anthropic/Minimax overload message text
+  'at capacity', // Codex/OpenAI model-level saturation
   'network error',
   'socket hang up',
   'exited with code',
@@ -74,8 +77,10 @@ export function matchesPattern(message: string, patterns: string[]): boolean {
 
 /**
  * Classify an error to determine if it's transient (can retry) or fatal (should fail).
- * FATAL patterns take priority over TRANSIENT patterns to prevent an error message
+ * Decisive FATAL patterns take priority over TRANSIENT patterns to prevent an error
  * containing both (e.g. "unauthorized: process exited with code 1") from being retried.
+ * Ambiguous provider wrapper text such as "auth error" is fatal only when no concrete
+ * transient signal matches.
  */
 export function classifyError(error: Error): ErrorType {
   const message = error.message.toLowerCase();
@@ -85,6 +90,9 @@ export function classifyError(error: Error): ErrorType {
   }
   if (matchesPattern(message, TRANSIENT_PATTERNS)) {
     return 'TRANSIENT';
+  }
+  if (matchesPattern(message, FALLBACK_FATAL_PATTERNS)) {
+    return 'FATAL';
   }
   return 'UNKNOWN';
 }

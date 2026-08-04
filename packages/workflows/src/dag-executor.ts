@@ -548,10 +548,9 @@ function getEffectiveNodeRetryConfig(node: DagNode): {
 
 /**
  * Check if a NodeOutput failure is transient by delegating to classifyError.
- * FATAL patterns (auth, permission, credits) take priority over TRANSIENT patterns,
- * matching the same precedence rules as classifyError(). This prevents an error
- * message that contains both a FATAL substring and a TRANSIENT substring (e.g.
- * "unauthorized: process exited with code 1") from being silently retried.
+ * Decisive FATAL patterns (credentials, authorization, quota/limit windows) take
+ * priority over TRANSIENT patterns, while generic "auth error" wrapper text is
+ * fatal only when no transient signal matches. This mirrors classifyError().
  */
 function isTransientNodeError(errorMessage: string): boolean {
   return classifyError(new Error(errorMessage)) === 'TRANSIENT';
@@ -577,10 +576,10 @@ function getExplicitNodeRetryConfig(
  * Decide whether a failed node output warrants another retry attempt.
  *
  * Shared by {@link runNodeRetryLoop} for every node type so the retry decision
- * cannot drift. FATAL errors (auth, permissions, credit balance) are never
- * retried, even when `on_error: all` — matching {@link classifyError}'s
- * FATAL-over-TRANSIENT precedence. Also returns `isTransient` so callers can
- * label the notification.
+ * cannot drift. Decisive FATAL errors (credentials, authorization, quota/limit
+ * windows) are never retried, even when `on_error: all`; generic "auth error"
+ * text is fatal only when no transient signal matches. Also returns `isTransient`
+ * so callers can label the notification.
  */
 function shouldRetryNodeFailure(
   output: NodeOutput,
