@@ -491,7 +491,10 @@ export type IncludeNode = z.infer<typeof includeNodeSchema> & {
  *   - `all_success`: all must complete; `$<id>.output` = JSON array of child outputs in
  *      item order; any child failing/cancelled fails the node. For the genuinely dependent
  *      case, where the author says so.
- *   - `first_success`: reserved for PR-D (racing) — rejected fail-fast at load today.
+ *   - `first_success`: racing — REJECTED, not deferred. A winner aborting and cancelling
+ *      the losers couples children's fates, which the constitution's independence rule
+ *      forbids, and racing cannot be reshaped without it. The enum value is retained only
+ *      so existing YAML gets a message explaining the rejection.
  *
  * `as` is a forward seam reserved for PR-B (#2214, `with:`/`$INPUTS`): it will name the
  * per-item value as `$INPUTS.<as>` inside the child. The key is accepted here so PR-B
@@ -802,15 +805,24 @@ export const dagNodeSchema = dagNodeBaseSchema
         path: ['fan_out'],
       });
     }
-    // `first_success` racing is staged for PR-D. Accept the enum value (so PR-D only
-    // has to lift this guard) but reject it fail-fast now — silently degrading it to
-    // `all_success` would surprise an author who wanted racing (mirrors how slice 1
-    // staged `isolation: 'worktree'`).
+    // `first_success` racing is REJECTED, not deferred — the earlier deferral is dead. A
+    // winner aborting and cancelling its losers is one child's outcome ending its siblings',
+    // which the independence rule forbids, and racing without terminating the losers is not
+    // racing. So there is no PR to wait for and the message must not imply one.
+    //
+    // The enum value stays even though its original "so the eventual PR only lifts a guard"
+    // justification is gone. A better one replaces it: an author whose YAML already says
+    // `first_success` gets a message naming the rejection and the shape that serves the want,
+    // instead of an opaque unrecognised-enum-value error. Do not remove it as dead weight.
     if (hasWorkflow && data.fan_out?.join === 'first_success') {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message:
-          "'fan_out.join: first_success' (racing) is not yet supported (PR-D). Use 'all_success' or 'all_done'.",
+          "'fan_out.join: first_success' (racing) is rejected, not deferred: a winner cancels " +
+          "the losers, which couples children that are meant to be independent. Use 'all_done' " +
+          '(the default). For several genuinely different attempts, write them as separate ' +
+          'nodes with their own models feeding one collector node — every attempt is kept and ' +
+          'nothing is cancelled.',
         path: ['fan_out', 'join'],
       });
     }

@@ -207,7 +207,7 @@ nodes:
 | `id` | string | required | Unique node identifier. Used in `depends_on`, `when:`, and `$id.output` substitution |
 | `depends_on` | string[] | `[]` | Node IDs that must complete before this node runs |
 | `when` | string | — | Condition expression. Node is skipped if false. See [Condition Syntax](#when-condition-syntax) |
-| `trigger_rule` | string | `all_success` | Join semantics when multiple upstreams exist |
+| `trigger_rule` | string | `all_success` | Join semantics when multiple upstreams exist. Distinct from a fan-out node's [`fan_out.join`](#the-four-fields), which reduces one node's N children and defaults to `all_done` |
 | `context` | `'fresh'` \| `'shared'` | — | `fresh` = new session; `shared` = inherit from prior node. Defaults to `fresh` for parallel layers, inherited for sequential |
 | `idle_timeout` | number | — | Kill node if idle for this many milliseconds |
 | `retry` | object | — | Per-node retry configuration. See [Retry Configuration](#retry-configuration) |
@@ -347,6 +347,19 @@ nodes:
 | `one_success` | Run if at least one upstream dep completed successfully |
 | `none_failed_min_one_success` | Run if no deps failed AND at least one succeeded (skipped deps are ok) |
 | `all_done` | Run when all deps are in a terminal state (completed, failed, or skipped) |
+
+:::note[`trigger_rule` is not `fan_out.join`]
+They share value names and have **different defaults**, so it is worth keeping straight:
+
+- **`trigger_rule`** (any node) decides whether *this* node runs, given the states of the
+  nodes it `depends_on`. Default `all_success` — don't run if an upstream failed.
+- **[`fan_out.join`](#the-four-fields)** (fan-out nodes only) reduces the outcomes of one
+  node's N children into that node's single outcome. Default `all_done` — children are
+  independent, so one failing still yields the others.
+
+Upstream dependencies are steps you chose to sequence; fan-out children are N instances of
+one step. Hence the different defaults.
+:::
 
 ### `when:` Condition Syntax
 
@@ -1169,7 +1182,7 @@ consequences worth planning for:
 |--------|------------------------|----------------|
 | `all_done` (default) | every child reached a terminal state | JSON array in item order, with each failed/cancelled child represented as `{ error, status }` in its slot |
 | `all_success` | every child completed | same array; any failed or cancelled child fails the node instead |
-| `first_success` | — | Reserved for racing ([#1764](https://github.com/coleam00/Archon/issues/1764)); **rejected at load** today rather than silently treated as `all_success` |
+| `first_success` | — | Racing: **rejected**, not deferred — see below. Rejected at load rather than silently treated as another join |
 
 **Every child runs to its own terminal state before the join reduces, under both joins.** A
 child that fails does not stop its siblings, does not stop later items from being spawned,
@@ -1220,6 +1233,39 @@ comes next.
 Use `all_success` when the children genuinely are one job — when a gap makes the aggregate
 meaningless rather than smaller. That is the uncommon case, which is exactly why it is the
 one you have to ask for.
+
+##### Why there is no racing join
+
+`join: first_success` — run N children, keep whichever finishes first, drop the rest — is
+**rejected**, not postponed. Writing it fails at load with a message saying so.
+
+Racing only works by ending the losers: the moment a winner appears, the others are aborted
+and cancelled. That is one child's outcome deciding its siblings', which is precisely the
+coupling the independence rule forbids — and it cannot be reshaped, because a race that
+lets the losers finish is not a race.
+
+The want underneath it is real: *several genuinely different attempts, best result forward.*
+That is served without any mutual cancellation — write the attempts as **separate nodes**,
+each with its own model or prompt, all feeding one collector node that picks:
+
+```yaml
+  - id: attempt-a
+    prompt: "Solve $ARGUMENTS using the existing helper."
+    model: large
+  - id: attempt-b
+    prompt: "Solve $ARGUMENTS from scratch."
+    model: medium
+
+  - id: pick
+    prompt: "Two attempts. Choose the better and explain why.\n\nA:\n$attempt-a.output\n\nB:\n$attempt-b.output"
+    depends_on: [attempt-a, attempt-b]
+    trigger_rule: none_failed_min_one_success
+```
+
+This is strictly better than racing at what racing was wanted for: the attempts can differ
+by **model**, which a fan-out cannot express, every output is preserved for the collector to
+weigh instead of thrown away, and selection is a judgement made by a node that can read the
+work rather than a stopwatch.
 
 This is a deliberate trade, and the cost is yours to plan for: **a fan-out whose first child
 fails still runs every remaining child.** Worst-case spend is `items.length` attempts, not
@@ -1324,7 +1370,7 @@ re-deriving it.
 
 - **No `with:` named-parameter mapping** — use `input:` (a single data string). A
   `workflow:` node with a `with:` key is rejected with a clear error.
-- **No racing** (`join: first_success`) — reserved for a later slice, rejected at load.
+- **No racing** (`join: first_success`) — rejected outright, not deferred (see [Why there is no racing join](#why-there-is-no-racing-join)).
 - **Not inside a `loop_group` body** — a `workflow:` node, fanned out or not, is rejected
   there at load time ([#2439](https://github.com/coleam00/Archon/issues/2439)).
 - **Static target only.** `workflow:` takes a literal workflow name — no

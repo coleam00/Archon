@@ -3535,7 +3535,7 @@ nodes:
       expect(err?.error).toContain("'fan_out' is only supported on workflow");
     });
 
-    it("rejects 'fan_out.join: first_success' (racing staged for PR-D)", async () => {
+    it("rejects 'fan_out.join: first_success' as REJECTED, not deferred", async () => {
       const result = await loadOne(
         'fan-race',
         `
@@ -3555,7 +3555,13 @@ nodes:
       const err = result.errors.find(e => e.filename === 'fan-race.yaml');
       expect(err).toBeDefined();
       expect(err?.error).toContain('first_success');
-      expect(err?.error).toContain('PR-D');
+      // The message must not promise a future that no longer exists — racing is rejected
+      // outright, so "not yet supported" / a PR to wait for would be acted on wrongly.
+      expect(err?.error).toContain('rejected, not deferred');
+      expect(err?.error).not.toContain('not yet supported');
+      expect(err?.error).not.toContain('PR-D');
+      // …and it names the shape that actually serves the want.
+      expect(err?.error).toContain('collector');
     });
 
     it("rejects 'fan_out.as' ($INPUTS channel staged for PR-B) instead of ignoring it", async () => {
