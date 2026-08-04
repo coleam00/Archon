@@ -488,9 +488,10 @@ export type IncludeNode = z.infer<typeof includeNodeSchema> & {
  *   - `first_success`: reserved for PR-D (racing) — rejected fail-fast at load today.
  *
  * `as` is a forward seam reserved for PR-B (#2214, `with:`/`$INPUTS`): it will name the
- * per-item value as `$INPUTS.<as>` inside the child. Until PR-B lands the item is only
- * delivered via the child's `$ARGUMENTS` (slice-1 channel) and `as` has no runtime
- * effect — accepted here so PR-B needs no schema migration.
+ * per-item value as `$INPUTS.<as>` inside the child. The key is accepted here so PR-B
+ * needs no schema migration, but until PR-B lands the superRefine REJECTS it at load —
+ * it has no runtime effect, and silently ignoring it would deliver a literal
+ * `$INPUTS.<as>` to the model. The item travels as the child's `$ARGUMENTS` today.
  */
 export const fanOutConfigSchema = z.object({
   items: z
@@ -805,6 +806,21 @@ export const dagNodeSchema = dagNodeBaseSchema
         message:
           "'fan_out.join: first_success' (racing) is not yet supported (PR-D). Use 'all_success' or 'all_done'.",
         path: ['fan_out', 'join'],
+      });
+    }
+    // `as` names the per-item value for the `$INPUTS.<as>` channel that PR-B (#2214) will
+    // add. Accept the key in the schema (so PR-B lifts a guard rather than migrating YAML)
+    // but reject it fail-fast now, exactly as `first_success` above. `$INPUTS` exists
+    // nowhere in the engine today, so an author writing `as: task` and `$INPUTS.task` in
+    // the child gets the literal string delivered to the model — silently wrong output
+    // with no error. A field that quietly does nothing reads as a working feature.
+    if (hasWorkflow && data.fan_out?.as !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "'fan_out.as' (the $INPUTS channel) is not yet supported (PR-B, #2214). Remove it — " +
+          "each item is delivered to the child as $ARGUMENTS, which the child's prompts can use today.",
+        path: ['fan_out', 'as'],
       });
     }
 
