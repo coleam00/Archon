@@ -125,8 +125,6 @@ CREATE TABLE IF NOT EXISTS remote_agent_conversations (
 
 CREATE INDEX IF NOT EXISTS idx_remote_agent_conversations_codebase
   ON remote_agent_conversations(codebase_id);
-CREATE INDEX IF NOT EXISTS idx_conversations_hidden
-  ON remote_agent_conversations(hidden);
 CREATE INDEX IF NOT EXISTS idx_conversations_codebase
   ON remote_agent_conversations(codebase_id) WHERE deleted_at IS NULL;
 
@@ -156,8 +154,6 @@ CREATE INDEX IF NOT EXISTS idx_remote_agent_sessions_conversation
   ON remote_agent_sessions(conversation_id, active);
 CREATE INDEX IF NOT EXISTS idx_remote_agent_sessions_codebase
   ON remote_agent_sessions(codebase_id);
-CREATE INDEX IF NOT EXISTS idx_sessions_parent
-  ON remote_agent_sessions(parent_session_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_conversation_started
   ON remote_agent_sessions(conversation_id, started_at DESC);
 
@@ -365,6 +361,10 @@ ALTER TABLE remote_agent_workflow_runs
 -- From migration 010: parent_session_id + transition_reason on sessions
 ALTER TABLE remote_agent_sessions
   ADD COLUMN IF NOT EXISTS parent_session_id UUID REFERENCES remote_agent_sessions(id);
+-- Index must follow the ADD COLUMN so it works on pre-existing Postgres DBs
+-- (CREATE TABLE IF NOT EXISTS is a no-op there, so the column only exists after this ALTER).
+CREATE INDEX IF NOT EXISTS idx_sessions_parent
+  ON remote_agent_sessions(parent_session_id);
 ALTER TABLE remote_agent_sessions
   ADD COLUMN IF NOT EXISTS transition_reason TEXT;
 
@@ -380,6 +380,9 @@ ALTER TABLE remote_agent_workflow_runs
     REFERENCES remote_agent_conversations(id) ON DELETE SET NULL;
 ALTER TABLE remote_agent_conversations
   ADD COLUMN IF NOT EXISTS hidden BOOLEAN DEFAULT FALSE;
+-- Index must follow the ADD COLUMN so it works on pre-existing Postgres DBs.
+CREATE INDEX IF NOT EXISTS idx_conversations_hidden
+  ON remote_agent_conversations(hidden);
 
 -- From migration 016: ended_reason on sessions
 ALTER TABLE remote_agent_sessions
