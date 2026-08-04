@@ -333,12 +333,24 @@ export async function resolveProjectPaths(
     // Retried once (#2304). A failing lookup drops the run onto the `_cwd/<basename>`
     // pseudo-project, and because `output_root` is write-once that location is then
     // pinned for the run's whole life — including its `$STATE_DIR`, so a stateful
-    // workflow silently reads an empty state directory. The ONLY thing that produces
-    // this is a transient fault (a sustained outage fails the run long before here),
-    // so retrying the cause is strictly better than compensating downstream. Failing
-    // the run instead was considered and rejected: the fallback exists precisely
-    // because a registry blip must not kill a run. The deeper question — whether an
-    // unresolved identity should be recorded on the row — stays open in #2304.
+    // workflow silently reads an empty state directory. Failing the run instead was
+    // considered and rejected: the fallback exists precisely because a registry blip
+    // must not kill a run.
+    //
+    // What the retry is worth, honestly, differs by dialect:
+    //   • Postgres — it earns its place. A stale or broken pooled connection is exactly
+    //     the fault an immediate retry clears by drawing a fresh one, and this is the
+    //     only app-level DB retry in the tree. Zero delay is CORRECT here; backoff would
+    //     add latency for nothing.
+    //   • SQLite (the default install) — weak. `PRAGMA busy_timeout = 5000` means
+    //     SQLITE_BUSY cannot surface as a throw until five seconds of sustained
+    //     contention have already elapsed, so what reaches us is by construction not
+    //     transient, and retrying at that instant retries the moment least likely to
+    //     have cleared. Kept because it costs one attempt and cannot make things worse.
+    //
+    // The deeper question — whether an unresolved identity should be recorded on the
+    // row so "unregistered" and "we could not tell" are distinguishable — stays open
+    // in #2304.
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const codebase = await deps.store.getCodebase(codebaseId);
@@ -1505,7 +1517,15 @@ export async function executeWorkflow(
   // Detect (never move) legacy repo-local `.archon/` output directories. State was a
   // prompt convention; artifacts/logs the engine wrote itself on the unregistered-cwd
   // fallback (#2311) — the case Archon caused must not be the quieter of the two.
-  const isolated = workflow.worktree?.enabled !== false;
+  // The run's ACTUAL posture, not the workflow's declared policy. `worktree.enabled`
+  // is only one input to the real decision (`pinnedEnabled ?? (!resume && !noWorktree)`,
+  // resolved in the CLI), so a workflow that leaves `worktree` unset and is run with
+  // `--no-worktree` executes IN PLACE while the declared policy still reads as isolated.
+  // That is the one case where this warning is actionable — the legacy files are sitting
+  // in the user's real repository — and it is exactly the case the declared policy gets
+  // backwards. A managed worktree always lives under ARCHON_HOME; an in-place checkout
+  // never does, so the cwd answers the question the policy cannot.
+  const isolated = archonPaths.isInsideArchonHome(cwd);
   await maybeWarnLegacyStatePath(cwd, stateDir, isolated);
   await maybeWarnLegacyArtifactsPath(cwd, artifactsRoot, isolated);
 
