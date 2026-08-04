@@ -41,6 +41,26 @@ A proposed workflow-YAML feature (new field, new node type, new expression capab
 
 If a feature computes rather than coordinates, it is rejected — with the pointer to the escape hatch that already covers it.
 
+## The independence rule
+
+A second rule, narrower than the first and about a different axis. Where "YAML coordinates, code computes" governs *what may enter the surface*, this one governs *what the engine may do to work already running*:
+
+> **Parallel children are independent by default. Anything that couples their fates is opt-in, and must come from the author's declaration rather than be inferred.**
+
+This is the same instinct as the isolation rule — the engine never guesses what the author must have meant — applied to lifecycle instead of storage.
+
+It exists because a single wrong assumption can generate a whole family of wrong features. Treating a fan-out as *one job split N ways that jointly succeeds or fails* makes four decisions look obviously correct: default the join to all-or-nothing; cancel the siblings once the outcome is sealed, to stop burning tokens on a doomed join; let a winner abort the losers; infer isolation because N concurrent children must surely collide.
+
+Under the real model — **N independent workers with different scopes, producing different outputs that aggregate** — all four are wrong, and not subtly. They destroy the thing the feature exists for. Two planners with different scopes, or ten issue-triage children over ten issues, do not depend on each other. One failing is ordinary, and its siblings' output is still the point.
+
+Applying the rule to a proposed behaviour:
+
+- Does it end, abort, or discard work a **sibling** produced? Then it couples them, and it needs the author to have asked for it.
+- Does it configure children without linking their fates — a model, a concurrency bound, a per-item input? Then it is fine.
+- Is it inferred from an unrelated property — how many children there are, what join was chosen? Then it is inference, and the answer is no.
+
+The corollary for joins: the engine's job is to report *all terminal outcomes*, with failures represented as data. Deciding **how many successes are enough** is judgement, and belongs in a downstream script or prompt node reading the aggregate — not in a YAML enum. That is what stops a join rule growing into a policy language.
+
 ### Case law
 
 | Feature | Verdict | Why |
@@ -48,10 +68,13 @@ If a feature computes rather than coordinates, it is rejected — with the point
 | `approval:` nodes, `trigger_rule`, `retry:` | ✅ admitted | Pure governance — the engine must see them to pause, join, and re-run |
 | `loop:` / `loop_group:` | ✅ admitted | Iteration structure the engine must own for events, gates, and cost accounting |
 | `include:` (load-time inlining, [#2121](https://github.com/coleam00/Archon/issues/2121)) | ✅ admitted | Textual composition, zero new runtime semantics — the engine sees a flat DAG |
-| `first_success` racing join (proposed, [#1764](https://github.com/coleam00/Archon/issues/1764)) | ✅ admissible | A join rule — coordination |
-| Runtime sub-runs (`workflow:`, #2121 Phase 2) | ✅ shipped | A sub-run is a governance object (own run record, own gates, own audit trail). Slice 1: shared checkout, `input:` string, gate-aware pause/resume. Slice 2 adds opt-in per-child isolation (`isolation: worktree`) and data-driven fan-out (`fan_out:`); racing and `with:` remain deferred |
+| ~~`first_success` racing join~~ ([#1764](https://github.com/coleam00/Archon/issues/1764), implemented in [#2250](https://github.com/coleam00/Archon/pull/2250)) | ❌ **rejected 2026-08-04** — reverses an earlier ✅ | Admitted originally as "a join rule — coordination", which is true of its *shape* and misses what it does: the winner aborts and cancels the losers, so one child's outcome ends its siblings'. That is the coupling [the independence rule](#the-independence-rule) forbids, and it cannot be reshaped — racing without terminating the losers is not racing. The want underneath it (several genuinely different attempts, best result forward) is real and is served by N distinct nodes with their own models converging on a collector node, which needs no mutual cancellation |
+| Runtime sub-runs (`workflow:`, #2121 Phase 2) | ✅ shipped | A sub-run is a governance object (own run record, own gates, own audit trail). Slice 1: shared checkout, `input:` string, gate-aware pause/resume. Slice 2 adds opt-in per-child isolation (`isolation: worktree`) and data-driven fan-out (`fan_out:`); `with:` remains deferred and racing is rejected outright (row above) |
 | Data-driven fan-out (`fan_out:`, [#2224](https://github.com/coleam00/Archon/pull/2224)) | ✅ shipped | The expansion is *data*, not structure: the target is a static workflow name and only the child COUNT comes from a runtime array, so the parent DAG the executor runs stays flat and static. Each child is a real run record with its own gates, artifacts and cost — the sub-run escape this page already names for runtime-resolved structure (see [Composition metastasis](#2-composition-metastasis-structure-features-become-functions)). `max_parallel` and `join` are coordination (concurrency bound, join rule); nothing in the block computes |
 | Per-node isolation **inferred** from another field (auto-`worktree` because a node fans out, or has a concurrent sibling) | ❌ rejected | The engine never infers isolation. How many children a node spawns says nothing about whether they write — N review or research children over a shared checkout is the common case. The engine's job is to make the author's declaration hold, not to guess what they must have meant; `isolation: worktree` and `mutates_checkout: false` are where those two claims get made. (Run-level worktree-by-default is a different thing and stands: a whole run against a repo has an owner and a lifecycle.) |
+| Fail-fast sibling cancellation on a failing join | ❌ rejected | One child's failure cancelled its in-flight siblings mid-run so a doomed join stopped burning tokens. Defensible under "one job split N ways"; wrong under [independence](#the-independence-rule) — the siblings' output is exactly what a partial failure is supposed to preserve. Every index now spawns and every child reaches its own terminal state before the join reduces. The trade is explicit: worst-case spend is `items.length`, not "until the first failure", which is what makes a run-tree budget ceiling ([#1961](https://github.com/coleam00/Archon/issues/1961)) load-bearing rather than theoretical |
+| `join: all_success` as the **default** | ❌ rejected as a default (retained as an option) | Defaulting to all-or-nothing assumes children's fates are linked, which is the uncommon case — two researchers with different scopes, or ten triage children over ten issues, do not depend on each other. A failed child would discard its siblings' output at the join even after they ran to completion. `all_done` is the default: every terminal outcome aggregates, failures represented as data, and the downstream node decides what is enough. `all_success` stays for the genuinely dependent case, where the author says so |
+| A threshold join (`succeed if ≥ K children completed`) | ❌ rejected | Judgement wearing a join rule's clothes. How many results are enough is a decision about the work, and it belongs in a script or prompt node reading the `all_done` aggregate, with `when:` gating what follows. Admitting it starts a policy language inside an enum |
 | `evidence_policy` terminal-success gate ([#2230](https://github.com/coleam00/Archon/issues/2230)) | ✅ admitted (thin slice) | A run-status transition (sibling of `approval:`) — the engine gates on `evidence.json` PRESENCE only; computing/validating the evidence stays in the workflow's script/bash nodes. The full typed-schema + reality-verification surface of PR #1601 was rejected as computation |
 | Arithmetic / string functions / regex in `when:` | ❌ rejected | Computation. A script node computes the decision; `when:` gates on its output |
 | Parentheses & nested boolean grouping in `when:` | ❌ rejected (see policy below) | The first step of home-growing an expression language |
