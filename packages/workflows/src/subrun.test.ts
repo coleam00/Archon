@@ -2071,8 +2071,24 @@ nodes:
       printf 'ok:%s' "$ARGUMENTS"
 `;
 
-  it('all_success fail-fast (serial): a failed child fails the node and later items are not spawned', async () => {
-    await writeWorkflow('fan-child-cond', fanChildCond);
+  it('all_success runs EVERY child to terminal after one fails, then fails the node', async () => {
+    // The survivors SLEEP, so when the first child fails they are genuinely mid-flight —
+    // the window the old fail-fast cancelled them in. With instant children the test would
+    // pass either way: they would finish before any cancel could reach them.
+    await writeWorkflow(
+      'fan-child-slow-cond',
+      `
+name: fan-child-slow-cond
+description: instant fail on "boom"; a slow success otherwise
+mutates_checkout: false
+nodes:
+  - id: run
+    bash: |
+      if [ "$ARGUMENTS" = "boom" ]; then exit 3; fi
+      sleep 0.25
+      printf 'ok:%s' "$ARGUMENTS"
+`
+    );
     await writeWorkflow(
       'fan-failfast',
       `
@@ -2081,13 +2097,13 @@ description: one child fails under all_success
 nodes:
   - id: plan
     bash: |
-      printf '%s' '["a","boom","c"]'
+      printf '%s' '["boom","b","c"]'
   - id: work
-    workflow: fan-child-cond
+    workflow: fan-child-slow-cond
     depends_on: [plan]
     fan_out:
       items: "$plan.output"
-      max_parallel: 1
+      max_parallel: 3
       join: all_success
 `
     );
@@ -2105,28 +2121,33 @@ nodes:
       'conv-db'
     );
 
+    // The failing item is FIRST, so under the old fail-fast nothing after it would have
+    // spawned. No child's outcome ends another's now: all three exist, each reached its own
+    // terminal state, and only then did the join fail the node.
     expect(result.success).toBe(false);
     const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'fan-failfast');
     expect(parentRun?.status).toBe('failed');
 
-    // Serial (max_parallel: 1): index 0 completed, index 1 failed → fail-fast → index 2
-    // was NEVER spawned (no child row).
-    const children = [...store.runs.values()].filter(r => r.workflow_name === 'fan-child-cond');
-    const indexes = children
-      .map(c => (c.metadata as Record<string, unknown>).child_index as number)
-      .sort((a, b) => a - b);
-    expect(indexes).toEqual([0, 1]);
+    const children = [...store.runs.values()].filter(
+      r => r.workflow_name === 'fan-child-slow-cond'
+    );
     const byIndex = new Map(
       children.map(c => [(c.metadata as Record<string, unknown>).child_index as number, c])
     );
-    expect(byIndex.get(0)?.status).toBe('completed');
-    expect(byIndex.get(1)?.status).toBe('failed');
+    expect([...byIndex.keys()].sort((a, b) => a - b)).toEqual([0, 1, 2]);
+    expect(byIndex.get(0)?.status).toBe('failed');
+    // The survivors ran to completion — not cancelled, not skipped, not left non-terminal.
+    expect(byIndex.get(1)?.status).toBe('completed');
+    expect(byIndex.get(2)?.status).toBe('completed');
+    for (const c of children) {
+      expect((c.metadata as Record<string, unknown>).cancelled_reason).toBeUndefined();
+    }
 
     const nodeFailed = store.events.find(
       e => e.event_type === 'node_failed' && e.step_name === 'work'
     );
     expect(String(nodeFailed?.data?.error)).toContain('all_success');
-    expect(String(nodeFailed?.data?.error)).toContain('child 1');
+    expect(String(nodeFailed?.data?.error)).toContain('child 0');
   });
 
   it('all_done: a partial failure still completes the node; the failed entry is represented', async () => {
@@ -2315,10 +2336,9 @@ nodes:
       fi
 `
     );
-    // Serial on purpose. Under concurrency the fail-fast trip cooperatively cancels
-    // whichever siblings are still in flight (I1), so which of the three is 'completed'
-    // after run 1 is a race — and a COMPLETED sibling is exactly what this test is about.
-    // max_parallel: 1 pins run 1 to: index 0 completes, index 1 fails, index 2 never runs.
+    // Concurrent, and deterministic without any choreography: with no fail-fast, nothing
+    // cancels a sibling, so run 1 always ends index 0 and 2 completed and index 1 failed.
+    // (This test used to be pinned to max_parallel: 1 purely to dodge that race.)
     await writeWorkflow(
       'fan-resume',
       `
@@ -2334,7 +2354,7 @@ nodes:
     isolation: worktree
     fan_out:
       items: "$plan.output"
-      max_parallel: 1
+      max_parallel: 3
 `
     );
 
@@ -2343,8 +2363,8 @@ nodes:
     const parent = await discover('fan-resume');
     const { resolver } = makeFanResolver(cwd);
 
-    // First drive: index 0 completes, the flaky child (index 1) fails → node fails under
-    // all_success → index 2 is never spawned.
+    // First drive: the flaky child (index 1) fails; indexes 0 and 2 run to completion
+    // regardless, and the node fails afterwards under all_success.
     const r1 = await executeWorkflow(
       deps,
       makePlatform(),
@@ -2358,18 +2378,17 @@ nodes:
     expect(r1.success).toBe(false);
     const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'fan-resume');
     const children1 = [...store.runs.values()].filter(r => r.workflow_name === 'fan-child-flaky');
-    expect(children1).toHaveLength(2);
+    expect(children1).toHaveLength(3);
     const byIndex1 = new Map(
       children1.map(c => [(c.metadata as Record<string, unknown>).child_index as number, c])
     );
     expect(byIndex1.get(0)?.status).toBe('completed');
     expect(byIndex1.get(1)?.status).toBe('failed');
-    expect(byIndex1.get(2)).toBeUndefined();
+    expect(byIndex1.get(2)?.status).toBe('completed');
     const completedAtBefore = byIndex1.get(0)!.completed_at;
 
-    // Resume the PARENT: the failed index-1 child is re-driven (marker now present →
-    // recovered), index 2 is spawned for the first time, and the COMPLETED index-0 child is
-    // threaded from its row rather than re-executed.
+    // Resume the PARENT: only the failed index-1 child is re-driven (marker now present →
+    // recovered); the two COMPLETED siblings are threaded from their rows, not re-executed.
     const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(parentRun!.id))!);
     const resumeOpts = hydrated ?? {
       preCreatedRun: await store.resumeWorkflowRun(parentRun!.id),
@@ -2739,7 +2758,7 @@ nodes:
     isolation: worktree
     fan_out:
       items: "$plan.output"
-      max_parallel: 1
+      max_parallel: 3
 `
     );
 
@@ -2748,13 +2767,13 @@ nodes:
     const parent = await discover('fan-c2-usercancel');
     const { resolver } = makeFanResolver(cwd);
 
-    // Serial on purpose. Concurrently, whichever child loses the fail-fast race is
-    // cooperatively cancelled and tagged `fan_out_sibling` — which IS recoverable — so a
-    // "user cancel" landing on top of that tag gets resurrected on resume and the test
-    // asserts the opposite of its own subject. max_parallel: 1 makes index 0 the child that
-    // genuinely failed, so the cancel below is unambiguously untagged.
+    // Concurrent, and deterministic without pinning: nothing cancels a sibling any more, so
+    // both children fail their own first pass and index 0 is unambiguously a plain 'failed'
+    // child for the user-cancel below. (Pinned to max_parallel: 1 while the fail-fast could
+    // tag whichever child lost the race as `fan_out_sibling`, which IS recoverable — the
+    // test would then have asserted the opposite of its own subject.)
     //
-    // Run 1: index 0 fails its first pass → fail-fast → index 1 is never spawned.
+    // Run 1: both children fail their first pass → the node fails.
     const r1 = await executeWorkflow(
       deps,
       makePlatform(),
@@ -2810,9 +2829,10 @@ nodes:
     ).toHaveLength(1);
   });
 
-  it('fail-fast cooperatively cancels an in-flight sibling (tagged fan_out_sibling) (I1)', async () => {
-    // "fail" exits instantly; the others sleep — so when "fail" trips fail-fast, the
-    // sleeping siblings are genuinely in flight and get cooperatively cancelled.
+  it('a failed child does NOT cancel its in-flight siblings', async () => {
+    // The inverse of the fail-fast this replaced. "fail" exits instantly while the others
+    // sleep, so at the moment the failure lands its siblings are genuinely mid-flight —
+    // exactly the window the old cooperative cancel fired in.
     await writeWorkflow(
       'fan-child-slowfail',
       `
@@ -2831,7 +2851,7 @@ nodes:
       'fan-i1',
       `
 name: fan-i1
-description: an early failure cancels the in-flight siblings
+description: an early failure leaves its siblings alone
 nodes:
   - id: plan
     bash: |
@@ -2859,51 +2879,29 @@ nodes:
       'conv-db'
     );
 
+    // The node still fails under all_success — the outcome is unchanged, only the means.
     expect(result.success).toBe(false);
     const children = [...store.runs.values()].filter(r => r.workflow_name === 'fan-child-slowfail');
-    const siblings = children.filter(
-      c => (c.metadata as Record<string, unknown>).child_index !== 0
+    expect(children).toHaveLength(3);
+    const byIndex = new Map(
+      children.map(c => [(c.metadata as Record<string, unknown>).child_index as number, c])
     );
-    expect(siblings.length).toBeGreaterThanOrEqual(1);
-    // The in-flight siblings were cooperatively cancelled + tagged (recoverable on resume).
-    for (const s of siblings) {
-      expect(s.status).toBe('cancelled');
-      expect((s.metadata as Record<string, unknown>).cancelled_reason).toBe('fan_out_sibling');
+    expect(byIndex.get(0)?.status).toBe('failed');
+    // The siblings finished their own sleep and completed. Nothing cancelled them, and no
+    // `fan_out_sibling` tag is written any more.
+    for (const i of [1, 2]) {
+      expect(byIndex.get(i)?.status).toBe('completed');
+      expect(
+        (byIndex.get(i)?.metadata as Record<string, unknown>).cancelled_reason
+      ).toBeUndefined();
     }
   });
 
-  it('the all_success failure names the CAUSAL child, not a sibling its fail-fast cancelled', async () => {
-    // The failing item is LAST, so the fail-fast's own casualties occupy every index below
-    // it — which is the case that made the old "lowest-index bad outcome" message report a
-    // cancelled victim with no error text while the real failure stayed invisible.
-    //
-    // Ordering is enforced by a shared marker file rather than by sleeps: the waiters block
-    // until the failing child has created it, so the failure always lands first. The item
-    // carries the absolute marker path (produced by the parent's `plan` node, which runs in
-    // the parent checkout) so the children find it wherever they run.
-    await writeWorkflow(
-      'fan-child-order',
-      `
-name: fan-child-order
-description: waits for the sync marker; the "fail:" item creates it and exits non-zero
-mutates_checkout: false
-nodes:
-  - id: run
-    bash: |
-      arg="$ARGUMENTS"
-      mode="\${arg%%:*}"
-      marker="\${arg#*:}"
-      if [ "$mode" = "fail" ]; then
-        touch "$marker"
-        echo "the real cause" >&2
-        exit 7
-      fi
-      i=0
-      while [ ! -f "$marker" ] && [ "$i" -lt 200 ]; do sleep 0.02; i=$((i+1)); done
-      sleep 0.4
-      printf 'ok'
-`
-    );
+  it('the all_success failure names the failing child when it is not the first item', async () => {
+    // Successor to a test that needed marker-file choreography to put fail-fast casualties
+    // BELOW the real failure. With no fail-fast there are no casualties, so the scenario
+    // needs no ordering at all: children 0 and 1 simply succeed and child 2 fails.
+    await writeWorkflow('fan-child-cond', fanChildCond);
     await writeWorkflow(
       'fan-causal',
       `
@@ -2912,9 +2910,9 @@ description: the failing child sits at the highest index
 nodes:
   - id: plan
     bash: |
-      printf '["wait:%s","wait:%s","fail:%s"]' "$PWD/sync-marker" "$PWD/sync-marker" "$PWD/sync-marker"
+      printf '%s' '["a","b","boom"]'
   - id: work
-    workflow: fan-child-order
+    workflow: fan-child-cond
     depends_on: [plan]
     fan_out:
       items: "$plan.output"
@@ -2937,29 +2935,22 @@ nodes:
     );
 
     expect(result.success).toBe(false);
-    const children = [...store.runs.values()].filter(r => r.workflow_name === 'fan-child-order');
+    const children = [...store.runs.values()].filter(r => r.workflow_name === 'fan-child-cond');
     const byIndex = new Map(
       children.map(c => [(c.metadata as Record<string, unknown>).child_index as number, c])
     );
-    // Precondition — the scenario this test needs actually got built: index 2 failed on its
-    // own, and at least one lower index is a fail-fast casualty. Asserted separately so a
-    // construction that didn't materialise fails HERE rather than silently weakening the
-    // assertion below into one the old code would also pass.
+    expect(byIndex.get(0)?.status).toBe('completed');
+    expect(byIndex.get(1)?.status).toBe('completed');
     expect(byIndex.get(2)?.status).toBe('failed');
-    const casualties = [0, 1].filter(
-      i =>
-        byIndex.get(i)?.status === 'cancelled' &&
-        (byIndex.get(i)?.metadata as Record<string, unknown>).cancelled_reason === 'fan_out_sibling'
-    );
-    expect(casualties.length).toBeGreaterThanOrEqual(1);
 
     const nodeFailed = store.events.find(
       e => e.event_type === 'node_failed' && e.step_name === 'work'
     );
     const error = String(nodeFailed?.data?.error);
-    // Names the child that failed, carries its error, and never points at a casualty.
+    // The only non-completed outcome is the real failure, so the lowest-index bad one IS
+    // the causal one — which is why the causal-selection helper could be deleted.
     expect(error).toContain('child 2');
-    expect(error).toContain('failed');
-    for (const i of casualties) expect(error).not.toContain(`child ${String(i)} `);
+    expect(error).not.toContain('child 0');
+    expect(error).not.toContain('child 1');
   });
 });

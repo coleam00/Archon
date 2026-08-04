@@ -1171,14 +1171,19 @@ consequences worth planning for:
 | `all_done` | every child reached a terminal state | same array, with each failed/cancelled child represented as `{ error, status }` in its slot |
 | `first_success` | — | Reserved for racing ([#1764](https://github.com/coleam00/Archon/issues/1764)); **rejected at load** today rather than silently treated as `all_success` |
 
-Under `all_success`, the first child to fail seals the node's fate: remaining items are
-never spawned, and siblings still in flight are cooperatively cancelled so their spend
-stops. Under `all_done` every child runs to completion regardless.
+**Every child runs to its own terminal state before the join reduces, under both joins.** A
+child that fails does not stop its siblings, does not stop later items from being spawned,
+and does not change any other child's outcome. `all_success` still fails the node if any
+child failed — it just reaches that verdict after everyone has finished rather than by
+ending the others early. The failure message names the child that failed.
 
-Those cancelled siblings and skipped items are casualties, not causes, and they can sit at
-lower indices than the child that actually failed. The node's failure message always names
-the **causal** child — so `child 4 (run a1b2c3d4) failed: …` is the one to go read, even
-when children 0–3 show as cancelled in `archon workflow runs`.
+This is a deliberate trade, and the cost is yours to plan for: **a fan-out whose first child
+fails still runs every remaining child.** Worst-case spend is `items.length` attempts, not
+"until the first failure". `max_parallel` caps how many run at once, never how many run in
+total, so a 200-item fan-out over a child that fails on item 1 still costs 200 children.
+Bound the list in the producer node if that matters, and treat the abandon-cascade note
+above as a real limit rather than a footnote — this is what makes
+[#1961](https://github.com/coleam00/Archon/issues/1961)'s budget ceiling load-bearing.
 
 #### Isolation: the same explicit rule, and one sharp edge
 
@@ -1234,6 +1239,15 @@ The one asymmetry to know about: the *same* child workflow pauses correctly when
 1:1 and hard-fails when fanned out. If you wrap an existing gated workflow in `fan_out:`,
 move the gate into the parent DAG around the node.
 
+A paused child is the single case where a fan-out cancels a run it did not have to. A pause
+is not a terminal state and the parent cannot hand its one approval slot to N children, so
+the child would wait for something it can never be given — cancelling it (tagged
+`fan_out_gate`, so removing the gate and resuming re-drives it) is what makes it terminal.
+It happens as soon as the pause is seen rather than at the end, because a non-terminal run
+still holds its working path: left paused, it would take the path lock out from under the
+next sibling on a shared checkout. Its siblings are unaffected either way — they run to
+their own terminal states, and the node fails afterwards.
+
 #### Resume, and what `child_index` keys
 
 Children are keyed by their position in the item list (`metadata.child_index`), which is
@@ -1241,8 +1255,8 @@ what makes a parent resume cheap and predictable:
 
 - Completed children are threaded from their existing rows — never re-run, never re-billed.
 - Failed children are re-driven in place, in the same row.
-- Children Archon itself cancelled (a gate rejection, a fail-fast sibling cancel) are tagged
-  and re-driven too, so *"remove the gate and resume"* actually completes the node. A child
+- Children Archon itself cancelled — in practice a gate rejection (below) — are tagged and
+  re-driven too, so *"remove the gate and resume"* actually completes the node. A child
   **you** cancelled out of band stays cancelled and is never resurrected.
 - A child left `running` or `pending` by an interrupted process is **not** auto-cancelled —
   Archon can't tell a crash orphan from a live run elsewhere. The node fails with the child's

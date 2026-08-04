@@ -5581,9 +5581,16 @@ async function executeWorkflowNode(
 /**
  * `metadata.cancelled_reason` values the fan-out path stamps on children it cancels
  * ITSELF (so the cancel is attributable and — unlike a user's out-of-band cancel —
- * recoverable on resume). `fan_out_gate`: a child paused at a gate (#2180). `fan_out_sibling`:
- * an in-flight sibling cooperatively cancelled once the node's fate was sealed.
+ * recoverable on resume). `fan_out_gate`: a child paused at a gate (#2180).
  * `fan_out_orphan`: a child whose `child_index` fell out of range when the item list shrank.
+ *
+ * `fan_out_sibling` is READ-ONLY legacy. It marked an in-flight sibling cancelled once an
+ * earlier revision's fail-fast sealed the node's fate; nothing writes it any more, because a
+ * fan-out no longer ends one child's run on account of another's. It stays in the type and
+ * in the recoverable set on purpose: a run that was in flight across the upgrade has rows
+ * carrying it, and dropping it would make those children read as user-cancelled — terminal,
+ * never re-driven, so the parent would fail every resume with no way back. Delete it only
+ * once no resumable run can predate the change.
  */
 type FanOutCancelReason = 'fan_out_gate' | 'fan_out_sibling' | 'fan_out_orphan';
 const FAN_OUT_RECOVERABLE_CANCEL_REASONS: ReadonlySet<string> = new Set<FanOutCancelReason>([
@@ -5722,42 +5729,6 @@ async function resolveFanOutChildDefinition(
 }
 
 /**
- * Synthetic outcome error for an index the fail-fast never spawned. Named so the join's
- * causal-child selection can recognise it structurally rather than by matching prose.
- */
-const FAN_OUT_SKIPPED_BY_FAIL_FAST = 'skipped by fan-out fail-fast';
-
-/**
- * Pick the outcome that actually FAILED the `all_success` join, for the node's message.
- *
- * Taking the lowest-index non-completed outcome names the wrong child under
- * `max_parallel > 1`: sealing the node's fate cancels every sibling still in flight and
- * skips every index not yet spawned, and those casualties can sit at LOWER indices than
- * the child whose failure caused them. The operator then reads `child 0 cancelled` with no
- * error text while the real failure is invisible.
- *
- * Casualties are excluded by identity, not by heuristic: a sibling this node cancelled is
- * in `failFastVictims`, and an index it never spawned carries the synthetic skip error. So
- * the choice does not depend on which child won the race — whichever sibling loses is
- * excluded either way, and a sibling that genuinely failed on its own is still eligible.
- * The lowest-index genuine failure wins, which is stable across runs.
- *
- * Falls back to the lowest-index bad outcome if every bad outcome is a casualty — a state
- * the seal logic shouldn't produce (something has to cause the seal), but a join that
- * failed must always name a child rather than report nothing.
- */
-function pickCausalOutcomeIndex(
-  outcomes: readonly ChildWorkflowOutcome[],
-  failFastVictims: ReadonlySet<string>
-): number {
-  const isCasualty = (o: ChildWorkflowOutcome): boolean =>
-    o.status === 'cancelled' &&
-    (o.error === FAN_OUT_SKIPPED_BY_FAIL_FAST || failFastVictims.has(o.childRunId));
-  const causal = outcomes.findIndex(o => o.status !== 'completed' && !isCasualty(o));
-  return causal !== -1 ? causal : outcomes.findIndex(o => o.status !== 'completed');
-}
-
-/**
  * Σ of defined child `costUsd`. Returns undefined when NO child reported cost so the
  * node's own `costUsd` stays absent (a misleading `0` would look like a free run) —
  * matching the run-level aggregation's "only write when > 0" posture.
@@ -5809,9 +5780,10 @@ function sumFanOutTokens(outcomes: readonly ChildWorkflowOutcome[]): TokenUsage 
  *     `fan_out_gate` (removing the gate + resuming re-drives it). A `running`/`pending`
  *     child found on resume is ambiguous → the node fails WITHOUT auto-cancel (CLAUDE.md
  *     lifecycle rule), surfacing a staleness-keyed wait/abandon action;
- *   - join: `all_success` (any fail → node fails; remaining spawns skipped + in-flight
- *     siblings cooperatively cancelled) / `all_done` (aggregate all terminal; failed/
- *     cancelled entries represented);
+ *   - EVERY index is spawned and every child runs to its own terminal state — no child's
+ *     outcome ends another's — and only then does the join reduce: `all_success` (any
+ *     failed/cancelled child fails the node) / `all_done` (aggregate all terminal;
+ *     failed/cancelled entries represented);
  *   - aggregate `$<id>.output` = JSON array in item order; cost/tokens = Σ children.
  *
  * Never throws — every failure returns a failed NodeExecutionResult so a child-store
@@ -5906,18 +5878,12 @@ async function executeFanOutWorkflowNode(
     await safeSendMessage(platform, conversationId, text, msgContext);
   };
 
-  // Run ids this node cancelled ITSELF to stop waste once the outcome was already
-  // decided — fail-fast sibling cancels. They are casualties of another child's failure,
-  // never a cause, so the join's failure message must not name one (see pickCausalOutcome).
-  const failFastVictims = new Set<string>();
-
   // Cancel a child the fan-out path OWNS, stamping WHY (C2/I4) so the cancel is
   // attributable AND — unlike a user's out-of-band cancel — recoverable on resume. The
   // reason is written first (a best-effort metadata merge), then the status is flipped;
   // both are best-effort so a store hiccup can't unwind the node.
   const cancelChild = async (childId: string, reason: FanOutCancelReason): Promise<void> => {
     if (!childId) return;
-    if (reason === 'fan_out_sibling') failFastVictims.add(childId);
     await deps.store
       .updateWorkflowRun(childId, { metadata: { cancelled_reason: reason } })
       .catch((err: unknown) => {
@@ -6106,38 +6072,23 @@ async function executeFanOutWorkflowNode(
     }
   }
 
-  // 6. Execute the incomplete indices through a bounded sliding window. Classification per
-  //    index: an existing completed child threads its recorded outcome (resume skip); an
-  //    existing failed OR fan-out-cancelled (recoverable) child is re-driven; a
-  //    user-cancelled child stays terminal; a missing index spawns fresh. Fail-fast: once a
-  //    stopping condition trips (any pause, or an all_success failure) later indices are
-  //    SKIPPED and any still-in-flight siblings are cooperatively cancelled (I1) — the
-  //    node's fate is sealed, so their remaining spend is waste.
-  let stopSpawning = false;
-  let fateSealed = false;
-
-  // I1: cooperatively cancel every sibling still in flight once the node's fate is sealed.
-  // runChild is synchronous (its child run id isn't in hand until it returns), so the live
-  // siblings are re-queried; their between-layer cancel poll aborts them (bounded by
-  // CANCEL_CHECK_INTERVAL_MS) while mapWithLimit still awaits all. Runs once; tagged
-  // `fan_out_sibling` so a later resume re-drives them (they didn't themselves fail).
-  const sealFateCancelSiblings = async (): Promise<void> => {
-    if (fateSealed) return;
-    fateSealed = true;
-    try {
-      const live = (await deps.store.findChildRuns(parentRun.id)).filter(c => {
-        const m = c.metadata as Record<string, unknown> | undefined;
-        return m?.parent_node_id === node.id && (c.status === 'running' || c.status === 'pending');
-      });
-      for (const s of live) await cancelChild(s.id, 'fan_out_sibling');
-    } catch (err) {
-      getLog().warn(
-        { err: err as Error, parentRunId: parentRun.id, nodeId: node.id },
-        'workflow.fan_out_sibling_cancel_failed'
-      );
-    }
-  };
-
+  // 6. Execute EVERY index through a bounded sliding window. Classification per index: an
+  //    existing completed child threads its recorded outcome (resume skip); an existing
+  //    failed OR fan-out-cancelled (recoverable) child is re-driven; a user-cancelled child
+  //    stays terminal; a missing index spawns fresh.
+  //
+  //    No child's outcome terminates another's. Every index is spawned and every child runs
+  //    to its OWN terminal state before the join reduces — a fan-out is N independent
+  //    governed runs that happen to be siblings, not a competition. An earlier revision
+  //    fail-fasted here: the first failure under all_success skipped the remaining spawns
+  //    and cancelled in-flight siblings. That saved spend by deciding one child's fate from
+  //    another's, which is not the engine's call to make, and it made the outcome of an
+  //    interrupted sibling depend on which child happened to finish first.
+  //
+  //    The cost is real and belongs to the author: a wide fan-out whose first child fails
+  //    now runs every remaining child, so worst-case spend is items.length rather than
+  //    "until the first failure". `max_parallel` bounds concurrency, not total spend —
+  //    a run-tree budget ceiling is #1961.
   const settled = await mapWithLimit(
     items,
     fanOut.max_parallel,
@@ -6150,16 +6101,6 @@ async function executeFanOutWorkflowNode(
       // falls through to re-drive.
       if (existing?.status === 'cancelled' && !isFanOutRecoverableCancel(existing)) {
         return childOutcomeFromRun(existing);
-      }
-      // Fail-fast: a stopping condition already tripped → do not spawn this child. The
-      // synthetic 'cancelled' outcome only feeds the current (already-failing) join; an
-      // existing failed/tagged-cancelled row is left for a later resume to re-drive.
-      if (stopSpawning) {
-        return {
-          childRunId: existing?.id ?? '',
-          status: 'cancelled',
-          error: FAN_OUT_SKIPPED_BY_FAIL_FAST,
-        };
       }
       const input = itemToInput(item);
       // A fan-out-recoverable-cancelled child (gate/sibling) can't be resumed while
@@ -6178,6 +6119,8 @@ async function executeFanOutWorkflowNode(
           });
         resumeChild = { ...existing, status: 'failed' };
       }
+      // Whatever this child returns — completed, failed, cancelled, or paused — it is this
+      // child's outcome alone. The join reads them all once every one has settled.
       const outcome = await runChild({
         parentRun,
         nodeId: node.id,
@@ -6193,17 +6136,19 @@ async function executeFanOutWorkflowNode(
         itemHash: hashFanOutItem(input),
         ...(resumeChild ? { resumeFailedChild: resumeChild } : {}),
       });
-      // Seal the node's fate on a terminal-bad outcome. A paused child stops the whole
-      // fan-out for BOTH joins (#2180); a failed/cancelled child stops only under
-      // all_success. Sealing skips later spawns AND cancels in-flight siblings (I1).
-      if (
-        outcome.status === 'paused' ||
-        ((outcome.status === 'failed' || outcome.status === 'cancelled') &&
-          fanOut.join === 'all_success')
-      ) {
-        stopSpawning = true;
-        await sealFateCancelSiblings();
-      }
+      // A paused child is cancelled HERE rather than at the join, and the timing is
+      // load-bearing rather than tidiness. A pause is not terminal, and a non-terminal run
+      // keeps holding its working path: `getActiveWorkflowRunByPath` counts `paused` as
+      // active. On a shared checkout the very next sibling then loses the path lock and
+      // self-cancels — with NO reason tag, so it reads as a user cancel, is never re-driven,
+      // and the parent fails identically on every resume. Removing the fail-fast is what
+      // exposed this: before, a pause sealed the node and no later sibling ever spawned.
+      //
+      // This is not one child's outcome ending another's — the cancel is decided by the
+      // paused child's own state, it is the same cancel the gate path (#2180/#2438) applies
+      // at the join a moment later, and every sibling still runs to its own terminal state.
+      // All it changes is that the lock is released before the next child starts.
+      if (outcome.status === 'paused') await cancelChild(outcome.childRunId, 'fan_out_gate');
       return outcome;
     }
   );
@@ -6238,7 +6183,16 @@ async function executeFanOutWorkflowNode(
 
   // 7. #2180 (first-run path): a freshly-spawned child that paused at a gate fails the
   //    node. Cancel the paused child(ren) tagged `fan_out_gate` (recoverable once the gate
-  //    is removed) and name the offending child (I4). Siblings were already sealed above.
+  //    is removed) and name the offending child (I4).
+  //
+  //    This is the ONE place a fan-out still cancels a child it did not have to, and it
+  //    survives the no-mutual-termination rule deliberately. A pause is not a terminal
+  //    state, so "every child runs to its own terminal state" has no answer for it: the
+  //    parent has a single approval slot and cannot hand it to N children, so the child
+  //    would wait forever for a gate it can never be given. Cancelling is what makes it
+  //    terminal, and it happens only AFTER every sibling has settled — a paused child no
+  //    longer stops anyone else. This is an error path (#2438), not a race: the node is
+  //    failing either way, and the cancel just stops the run dangling.
   const pausedIdx = outcomes.findIndex(o => o.status === 'paused');
   if (pausedIdx !== -1) {
     for (const o of outcomes)
@@ -6250,9 +6204,9 @@ async function executeFanOutWorkflowNode(
 
   // 8. Join.
   if (fanOut.join === 'all_success') {
-    // The CAUSAL child, not the lowest-index bad one — the fail-fast's own casualties can
-    // sit below it and would otherwise be reported as the failure.
-    const firstBad = pickCausalOutcomeIndex(outcomes, failFastVictims);
+    // Every child ran to its own terminal state, so the lowest-index non-completed outcome
+    // IS the causal one — nothing here is a casualty of another child's failure.
+    const firstBad = outcomes.findIndex(o => o.status !== 'completed');
     if (firstBad !== -1) {
       const bad = outcomes[firstBad];
       const ref = bad.childRunId ? ` (run ${bad.childRunId.slice(0, 8)})` : '';
