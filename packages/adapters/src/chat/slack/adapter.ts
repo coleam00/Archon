@@ -84,6 +84,13 @@ export class SlackAdapter implements IPlatformAdapter {
    */
   private channelNameFailureUntil = new Map<string, number>();
   /**
+   * channelId → the in-progress lookup Promise, so concurrent callers for the
+   * SAME channel (e.g. two messages arriving close together, before the first
+   * lookup settles) await one `conversations.info` call instead of each firing
+   * their own. Removed once the lookup settles, success or failure.
+   */
+  private channelNameInFlight = new Map<string, Promise<SlackChannelNameResult>>();
+  /**
    * Tripped the first time conversations.info returns `missing_scope`. Like
    * missingScopeLogged, the API call is still attempted after each backoff
    * window elapses (the operator may reinstall with the scope), but the WARN
@@ -376,6 +383,13 @@ export class SlackAdapter implements IPlatformAdapter {
    *
    * DMs (`is_im`) legitimately have no name and resolve to `dm`; that is a
    * stable fact about the channel, so it is cached like a successful name.
+   *
+   * Concurrent callers for the SAME channel id (two messages arriving before
+   * the first lookup settles) share one in-flight lookup rather than each
+   * firing their own `conversations.info` call. This coordination layer is
+   * plain synchronous Map bookkeeping plus a `.finally()` — it adds no new
+   * throw path, so the "never throws" guarantee above still holds; the actual
+   * try/catch lives in the private lookupChannelName below.
    */
   async resolveChannelName(channelId: string): Promise<SlackChannelNameResult> {
     if (!channelId) return { kind: 'unavailable' };
@@ -387,6 +401,26 @@ export class SlackAdapter implements IPlatformAdapter {
       return { kind: 'unavailable' };
     }
 
+    const inFlight = this.channelNameInFlight.get(channelId);
+    if (inFlight) return inFlight;
+
+    // Record the in-flight promise BEFORE the first await below, so a
+    // concurrent call landing before this synchronous stretch yields sees it.
+    const lookup = this.lookupChannelName(channelId).finally(() => {
+      this.channelNameInFlight.delete(channelId);
+    });
+    this.channelNameInFlight.set(channelId, lookup);
+    return lookup;
+  }
+
+  /**
+   * The actual `conversations.info` call + caching/backoff bookkeeping,
+   * factored out of resolveChannelName so it can be shared via
+   * channelNameInFlight. Upholds resolveChannelName's "never throws"
+   * guarantee itself — every path below resolves, none rejects — since it's
+   * the only place that promise is ever awaited by callers coalescing onto it.
+   */
+  private async lookupChannelName(channelId: string): Promise<SlackChannelNameResult> {
     try {
       const result = await this.app.client.conversations.info({ channel: channelId });
       const channel = result.channel;

@@ -649,6 +649,32 @@ describe('SlackAdapter', () => {
       expect(mockConversationsInfo).toHaveBeenCalledTimes(1);
     });
 
+    test('coalesces concurrent lookups for the same channel into one API call', async () => {
+      const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
+
+      let resolveApiCall!: (value: { channel: { id: string; name: string } }) => void;
+      mockConversationsInfo.mockImplementationOnce(
+        () =>
+          new Promise(resolve => {
+            resolveApiCall = resolve;
+          })
+      );
+
+      // Start two lookups for the same channel BEFORE the mocked API call
+      // ever resolves — the second must reuse the first's in-flight promise
+      // rather than firing its own conversations.info request.
+      const first = adapter.resolveChannelName('C_CONCURRENT');
+      const second = adapter.resolveChannelName('C_CONCURRENT');
+
+      resolveApiCall({ channel: { id: 'C_CONCURRENT', name: 'concurrent-channel' } });
+
+      const [firstResult, secondResult] = await Promise.all([first, second]);
+
+      expect(firstResult).toEqual({ kind: 'name', name: 'concurrent-channel' });
+      expect(secondResult).toEqual({ kind: 'name', name: 'concurrent-channel' });
+      expect(mockConversationsInfo).toHaveBeenCalledTimes(1);
+    });
+
     test('reports a DM as dm rather than a failed lookup', async () => {
       const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
       mockConversationsInfo.mockResolvedValueOnce({ channel: { id: 'D1', is_im: true } });
