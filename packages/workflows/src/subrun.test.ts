@@ -2071,6 +2071,61 @@ nodes:
       printf 'ok:%s' "$ARGUMENTS"
 `;
 
+  it('the DEFAULT join succeeds with a failed child, aggregating all three outcomes', async () => {
+    // Independence: children are separate jobs, so one failing must not discard the other
+    // two. The default has to carry that — an author who writes no `join:` gets it.
+    await writeWorkflow('fan-child-cond', fanChildCond);
+    await writeWorkflow(
+      'fan-default-join',
+      `
+name: fan-default-join
+description: no join declared — takes the default
+nodes:
+  - id: plan
+    bash: |
+      printf '%s' '["a","boom","c"]'
+  - id: work
+    workflow: fan-child-cond
+    depends_on: [plan]
+    fan_out:
+      items: "$plan.output"
+      max_parallel: 3
+`
+    );
+
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    const parent = await discover('fan-default-join');
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parent,
+      'goal',
+      'conv-db'
+    );
+
+    // The node — and the run — SUCCEED despite the middle child failing.
+    expect(result.success).toBe(true);
+    const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'fan-default-join');
+    expect(parentRun?.status).toBe('completed');
+
+    const children = [...store.runs.values()].filter(r => r.workflow_name === 'fan-child-cond');
+    expect(children).toHaveLength(3);
+
+    // All three outcomes reach the aggregate, in item order, with the failure as DATA in
+    // its own slot rather than as an absence.
+    const workCompleted = store.events.find(
+      e => e.event_type === 'node_completed' && e.step_name === 'work'
+    );
+    const aggregate = JSON.parse(String(workCompleted?.data?.node_output)) as unknown[];
+    expect(aggregate).toHaveLength(3);
+    expect(aggregate[0]).toBe('ok:a');
+    expect(aggregate[2]).toBe('ok:c');
+    expect(aggregate[1]).toMatchObject({ status: 'failed' });
+  });
+
   it('all_success runs EVERY child to terminal after one fails, then fails the node', async () => {
     // The survivors SLEEP, so when the first child fails they are genuinely mid-flight —
     // the window the old fail-fast cancelled them in. With instant children the test would
@@ -2355,6 +2410,7 @@ nodes:
     fan_out:
       items: "$plan.output"
       max_parallel: 3
+      join: all_success
 `
     );
 
@@ -2759,6 +2815,7 @@ nodes:
     fan_out:
       items: "$plan.output"
       max_parallel: 3
+      join: all_success
 `
     );
 

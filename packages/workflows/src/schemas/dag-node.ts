@@ -481,10 +481,16 @@ export type IncludeNode = z.infer<typeof includeNodeSchema> & {
  * leave some children uncancelled when the parent is abandoned; a run-tree-wide count/
  * budget ceiling is deferred to #1961. `join` reduces the
  * N child outcomes into the node's single outcome + `$<id>.output` aggregate:
- *   - `all_success` (default): all must complete; `$<id>.output` = JSON array of child
- *      outputs in item order; any child failing/cancelled fails the node.
- *   - `all_done`: node succeeds once all children are terminal; failed/cancelled
- *      entries are represented as `{ error, status }` objects in the array.
+ *   - `all_done` (DEFAULT): the node succeeds once every child is terminal; failed and
+ *      cancelled entries are represented as `{ error, status }` objects in the array.
+ *      Default because fan-out children are independent by default (see the constitution's
+ *      independence rule) — two researchers with different scopes, or ten triage children
+ *      over ten issues, do not depend on each other, so one failing must not discard the
+ *      others' output. Failure is DATA here; deciding how many successes are enough is
+ *      judgement and belongs in a downstream node reading the aggregate, never in this enum.
+ *   - `all_success`: all must complete; `$<id>.output` = JSON array of child outputs in
+ *      item order; any child failing/cancelled fails the node. For the genuinely dependent
+ *      case, where the author says so.
  *   - `first_success`: reserved for PR-D (racing) — rejected fail-fast at load today.
  *
  * `as` is a forward seam reserved for PR-B (#2214, `with:`/`$INPUTS`): it will name the
@@ -499,7 +505,7 @@ export const fanOutConfigSchema = z.object({
     .min(1, "'fan_out.items' must reference a node output that produces a JSON array"),
   as: z.string().optional(),
   max_parallel: z.number().int().min(1, "'fan_out.max_parallel' must be >= 1").default(5),
-  join: z.enum(['all_success', 'all_done', 'first_success']).default('all_success'),
+  join: z.enum(['all_success', 'all_done', 'first_success']).default('all_done'),
 });
 
 /** Dynamic fan-out configuration for a `workflow:` sub-run node (#2121 slice 2, PR-C). */

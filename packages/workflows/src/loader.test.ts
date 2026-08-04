@@ -3422,7 +3422,7 @@ nodes:
 
     // --- slice 2, PR-C: dynamic fan-out ------------------------------------------
 
-    it('accepts a valid fan_out node and defaults max_parallel=5, join=all_success', async () => {
+    it('accepts a valid fan_out node and defaults max_parallel=5, join=all_done', async () => {
       const result = await loadOne(
         'fan-ok',
         `
@@ -3447,7 +3447,9 @@ nodes:
       expect(fanOut?.items).toBe('$plan.output.tasks');
       // Defaults applied by the schema.
       expect(fanOut?.max_parallel).toBe(5);
-      expect(fanOut?.join).toBe('all_success');
+      // Independent children by default: a failed child must not discard its siblings'
+      // output at the join. all_success is the opt-in for the genuinely dependent case.
+      expect(fanOut?.join).toBe('all_done');
       // The explicit isolation the author wrote survives the transform.
       expect(work && 'isolation' in work ? work.isolation : undefined).toBe('worktree');
     });

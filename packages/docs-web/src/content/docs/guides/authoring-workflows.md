@@ -1126,7 +1126,7 @@ nodes:
     fan_out:
       items: "$pick-files.output"    # must resolve to a JSON array
       max_parallel: 3
-      join: all_success
+      # join defaults to all_done: one file failing to review still yields the rest
 
   - id: summarize
     prompt: "Summarize these per-file reviews:\n\n$review-each.output"
@@ -1144,7 +1144,7 @@ can line results up against the input list positionally.
 | `items` | required | A `$node.output` (or `$node.output.field`) reference that must resolve to a **JSON array** at run time. Anything else — an object, a bare string, malformed JSON, a dangling ref — fails the node before any child is created. It never fans out over the characters of a string, and never silently degrades to zero items. An empty array is legal: the node completes immediately with `[]`. |
 | `as` | — | Reserved for a future `$INPUTS.<as>` channel ([#2214](https://github.com/coleam00/Archon/issues/2214)) and **rejected at load** until then, rather than accepted and ignored — writing `as: task` and then `$INPUTS.task` in the child would otherwise deliver the literal string to the model. The item reaches the child as `$ARGUMENTS`. |
 | `max_parallel` | `5` | How many children may be **in flight at once**. |
-| `join` | `all_success` | How N child outcomes reduce to one node outcome (below). |
+| `join` | `all_done` | How N child outcomes reduce to one node outcome (below). |
 
 The `items` producer must be an upstream dependency — the loader rejects a reference to a
 node this one doesn't transitively depend on, so the array can never be read before it is
@@ -1167,8 +1167,8 @@ consequences worth planning for:
 
 | `join` | The node succeeds when… | `$<id>.output` |
 |--------|------------------------|----------------|
-| `all_success` (default) | every child completed | JSON array of child outputs, in item order |
-| `all_done` | every child reached a terminal state | same array, with each failed/cancelled child represented as `{ error, status }` in its slot |
+| `all_done` (default) | every child reached a terminal state | JSON array in item order, with each failed/cancelled child represented as `{ error, status }` in its slot |
+| `all_success` | every child completed | same array; any failed or cancelled child fails the node instead |
 | `first_success` | — | Reserved for racing ([#1764](https://github.com/coleam00/Archon/issues/1764)); **rejected at load** today rather than silently treated as `all_success` |
 
 **Every child runs to its own terminal state before the join reduces, under both joins.** A
@@ -1176,6 +1176,50 @@ child that fails does not stop its siblings, does not stop later items from bein
 and does not change any other child's outcome. `all_success` still fails the node if any
 child failed — it just reaches that verdict after everyone has finished rather than by
 ending the others early. The failure message names the child that failed.
+
+##### Why `all_done` is the default
+
+Because fan-out children are **independent**. Two research children with different scopes,
+or ten triage children over ten issues, are not one job split ten ways — they are ten jobs
+that happen to run together, and one of them failing says nothing about the other nine. If
+the default were all-or-nothing, a single failed child would discard nine good results at
+the join, after you had already paid for them.
+
+So the default treats **failure as data**. Every terminal outcome reaches the aggregate,
+failed ones as `{ error, status }` in their slot, and the node succeeds. What to do about
+the gaps is then an ordinary decision made by an ordinary node:
+
+```yaml
+  - id: triage-each
+    workflow: triage-one-issue
+    depends_on: [list-issues]
+    fan_out:
+      items: "$list-issues.output"      # join: all_done — the default
+
+  - id: check
+    script: |
+      const results = $triage-each.output;
+      const ok = results.filter(r => typeof r === 'string');
+      console.log(JSON.stringify({ ok: ok.length, total: results.length }));
+    runtime: bun
+    depends_on: [triage-each]
+
+  - id: report
+    prompt: "Summarize the $check.output.ok successful triages:\n\n$triage-each.output"
+    depends_on: [check]
+    when: "$check.output.ok != '0'"
+```
+
+That shape is deliberate, and it is why there is no `join` value meaning *"succeed if at
+least K children completed"*. **How many results are enough is judgement about your work,
+not a join rule** — it depends on which children failed and why, and it changes between
+runs. A script or prompt node reading the aggregate can weigh that; an enum cannot, and
+adding a threshold would start a policy language inside a YAML field. `when:` gates whatever
+comes next.
+
+Use `all_success` when the children genuinely are one job — when a gap makes the aggregate
+meaningless rather than smaller. That is the uncommon case, which is exactly why it is the
+one you have to ask for.
 
 This is a deliberate trade, and the cost is yours to plan for: **a fan-out whose first child
 fails still runs every remaining child.** Worst-case spend is `items.length` attempts, not
