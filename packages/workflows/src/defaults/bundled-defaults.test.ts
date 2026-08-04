@@ -101,6 +101,20 @@ describe('bundled-defaults', () => {
       expect(content).toContain('workflow_name');
     });
 
+    it('archon-fix-github-issue should re-validate after the code-changing nodes', () => {
+      // self-fix and simplify both edit code AFTER the `validate` gate, so
+      // `report` must hang off a second validation pass rather than off
+      // `simplify` — otherwise the only green the run produces describes a tree
+      // that was edited twice after it was produced (#2427).
+      const content = BUNDLED_WORKFLOWS['archon-fix-github-issue'];
+      expect(content).toMatch(
+        /id: revalidate\n\s+command: archon-validate\n\s+depends_on: \[simplify\]/
+      );
+      expect(content).toMatch(
+        /id: report\n\s+command: archon-issue-completion-report\n\s+depends_on: \[revalidate\]/
+      );
+    });
+
     it('archon-adversarial-dev init-workspace should avoid non-portable sed -i', () => {
       const content = BUNDLED_WORKFLOWS['archon-adversarial-dev'];
       expect(content).toContain('STATE_TMP="$ARTIFACTS/state.json.tmp"');
