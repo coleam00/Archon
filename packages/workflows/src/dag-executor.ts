@@ -5630,18 +5630,38 @@ function fanOutAmbiguousChildMessage(
  * lock (`executor.ts`, guarded by `mutates_checkout !== false`): siblings are deliberately
  * NOT excluded from it, so all but one self-cancel — and a lock-cancelled child is threaded
  * as terminal on re-entry, which makes the failure permanent (#2180 Defect A). The engine
- * cannot infer which way out the author wants, so it names all three and refuses to spend
+ * cannot infer which way out the author wants, so it names the options and refuses to spend
  * the money finding out.
+ *
+ * The options are join-dependent. Serialising is a real fix for `all_success`/`all_done`,
+ * where the children are independent work items — but for `join: first_success` it silently
+ * destroys the feature: a race with a window of one runs ONE child and accepts it if it
+ * validates, which is not a race at all. Since this message is the whole diagnosis an author
+ * gets (the guard fires before any child spawns), it must not offer an option that would
+ * leave them green and degraded. It says so explicitly rather than quietly omitting it —
+ * an author shouldn't have to already know that racing implies concurrency to work out why
+ * the third option vanished.
  */
-function fanOutSharedCheckoutMessage(node: WorkflowNode, concurrency: number): string {
+function fanOutSharedCheckoutMessage(
+  node: WorkflowNode,
+  concurrency: number,
+  join: FanOutConfig['join']
+): string {
+  const racing = join === 'first_success';
+  const tail = racing
+    ? `or set \`isolation: worktree\` on '${node.id}' if the children write to it. ` +
+      '`fan_out.max_parallel: 1` is NOT a fix for a race — a window of one runs a single ' +
+      'child and accepts it, turning the race into a plain sub-run without saying so.'
+    : `set \`isolation: worktree\` on '${node.id}' if the children write to it; ` +
+      'or set `fan_out.max_parallel: 1` to run them one at a time.';
   return (
     `fan_out node '${node.id}': up to ${String(concurrency)} children of '${node.workflow}' ` +
     'would run at once in the parent checkout, and that workflow does not declare ' +
     '`mutates_checkout: false`. Concurrent runs on one checkout take a path-exclusive lock, ' +
     'so all but the first would cancel themselves — and a lock-cancelled child is not ' +
     'recoverable by resume (#2180). Choose one: add `mutates_checkout: false` to ' +
-    `'${node.workflow}' if it only reads the repo; set \`isolation: worktree\` on '${node.id}' ` +
-    'if the children write to it; or set `fan_out.max_parallel: 1` to run them one at a time.'
+    `'${node.workflow}' if it only reads the repo; ` +
+    tail
   );
 }
 
@@ -6078,7 +6098,7 @@ async function executeFanOutWorkflowNode(
   if (node.isolation !== 'worktree' && plannedConcurrency > 1) {
     const childDefinition = await resolveFanOutChildDefinition(deps, cwd, node.workflow);
     if (childDefinition && childDefinition.mutates_checkout !== false) {
-      const msg = fanOutSharedCheckoutMessage(node, plannedConcurrency);
+      const msg = fanOutSharedCheckoutMessage(node, plannedConcurrency, fanOut.join);
       getLog().warn(
         {
           parentRunId: parentRun.id,

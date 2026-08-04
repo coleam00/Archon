@@ -1254,6 +1254,10 @@ child, or give each racer `isolation: worktree`. A race whose children write to 
 needs worktrees, and N racing worktrees are created, branched, and left behind for you to
 clean up — for N−1 results you threw away.
 
+You do not have to remember this at the moment it matters. The collision guard reads the
+node's join, and on a race it drops the serialise option and says why, rather than offering
+advice that would quietly turn your race into a single sub-run.
+
 ##### When racing is actually worth it
 
 Be clear-eyed about what this buys, because the feature looks broader than it is.
@@ -1309,7 +1313,12 @@ Three ways out, and which one is right is a statement about the children:
 |---------------|---------|
 | only read the repo (review, research, summarize) | `mutates_checkout: false` on the **child workflow** |
 | write to the repo | `isolation: worktree` on the **fan-out node** — every child gets its own worktree and branch, at the [cost described above](#what-isolation-worktree-gives-you-and-what-it-costs), multiplied by N |
-| write, but can be serialized | `fan_out.max_parallel: 1` — one child at a time in the parent checkout, so no two ever contend |
+| write, but can be serialized | `fan_out.max_parallel: 1` — one child at a time in the parent checkout, so no two ever contend. **Not available on a race** (below) |
+
+On a [`join: first_success`](#racing-with-join-first_success) node only the first two apply,
+and the guard message says so rather than offering the third: serialising a race runs a
+single child and accepts it, which is not a race. Archon will not hand you an option that
+leaves the run green and the feature silently switched off.
 
 The check runs at **spawn** time, not load time: the child target resolves when the node
 executes (that is deliberate — it's what lets a workflow generate another workflow and then

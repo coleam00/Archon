@@ -1798,8 +1798,71 @@ nodes:
     // The message names all three ways out — the author picks, the engine never guesses.
     expect(error).toContain('mutates_checkout: false');
     expect(error).toContain('isolation: worktree');
-    expect(error).toContain('max_parallel: 1');
     expect(error).toContain('fan-child');
+    // On a non-racing join, serialising IS a real fix and is offered as one.
+    expect(error).toContain('or set `fan_out.max_parallel: 1` to run them one at a time');
+    expect(error).not.toContain('NOT a fix for a race');
+  });
+
+  it('the shared-checkout guard does NOT offer max_parallel: 1 on a racing node', async () => {
+    // `max_parallel: 1` is a real fix for all_success/all_done, but for first_success it
+    // destroys the feature: a window of one runs ONE child and accepts it. The guard fires
+    // before any child spawns, so this message is the author's entire diagnosis — offering
+    // an option that leaves them green and silently degraded is the same defect class as
+    // inferring isolation.
+    // Deliberately does NOT declare `mutates_checkout: false` — that is what trips the guard.
+    await writeWorkflow(
+      'race-child-writes',
+      `
+name: race-child-writes
+description: a racer that may write to the checkout
+nodes:
+  - id: attempt
+    prompt: "attempt $ARGUMENTS"
+`
+    );
+    await writeWorkflow(
+      'race-collide',
+      `
+name: race-collide
+description: a race whose child does not declare itself read-only
+nodes:
+  - id: work
+    workflow: race-child-writes
+    fan_out:
+      items: '["a","b","c"]'
+      join: first_success
+      max_parallel: 3
+`
+    );
+
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    const parent = await discover('race-collide');
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parent,
+      'goal',
+      'conv-db'
+    );
+
+    expect(result.success).toBe(false);
+    expect([...store.runs.values()].filter(r => r.workflow_name === 'race-child-writes')).toEqual(
+      []
+    );
+    const nodeFailed = store.events.find(
+      e => e.event_type === 'node_failed' && e.step_name === 'work'
+    );
+    const error = String(nodeFailed?.data?.error);
+    // Both real outs are still offered…
+    expect(error).toContain('mutates_checkout: false');
+    expect(error).toContain('isolation: worktree');
+    // …and serialising is neither offered nor left for the author to rule out themselves.
+    expect(error).not.toContain('or set `fan_out.max_parallel: 1` to run them one at a time');
+    expect(error).toContain('NOT a fix for a race');
   });
 
   it('max_parallel: 1 is a valid serial-in-place fan-out over a repo-writing child', async () => {
