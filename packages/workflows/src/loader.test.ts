@@ -3448,6 +3448,32 @@ nodes:
       // Defaults applied by the schema.
       expect(fanOut?.max_parallel).toBe(5);
       expect(fanOut?.join).toBe('all_success');
+      // The explicit isolation the author wrote survives the transform.
+      expect(work && 'isolation' in work ? work.isolation : undefined).toBe('worktree');
+    });
+
+    it('does NOT infer isolation from fan_out — an omitted isolation stays omitted', async () => {
+      const result = await loadOne(
+        'fan-no-iso',
+        `
+name: fan-no-iso
+description: fan out with no isolation declared
+nodes:
+  - id: plan
+    prompt: "emit tasks"
+  - id: work
+    workflow: child-wf
+    depends_on: [plan]
+    fan_out:
+      items: "$plan.output.tasks"
+`
+      );
+      expect(result.errors.filter(e => e.filename === 'fan-no-iso.yaml')).toHaveLength(0);
+      const wf = result.workflows.find(w => w.workflow.name === 'fan-no-iso');
+      const work = wf!.workflow.nodes.find(n => n.id === 'work');
+      // A child gets a worktree ONLY when the author writes `isolation: worktree`.
+      // Fanning out is not a write operation, so it never implies one.
+      expect(work && 'isolation' in work ? work.isolation : undefined).toBeUndefined();
     });
 
     it('catches a fan_out.items ref to an unknown node (dangling ref)', async () => {

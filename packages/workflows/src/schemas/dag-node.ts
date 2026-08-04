@@ -473,7 +473,9 @@ export type IncludeNode = z.infer<typeof includeNodeSchema> & {
  * §load-time-composition — the child target stays a static name; only the item
  * COUNT is runtime). Each item becomes a child's `input`/`$ARGUMENTS`. `max_parallel`
  * bounds a sliding-window concurrency pool (default 5 — documented + defeatable, so
- * an author can't trivially create a runaway N-wide layer, #1961). `max_parallel` caps
+ * an author can't trivially create a runaway N-wide layer, #1961). It is also the serial
+ * escape from the shared-checkout collision: `max_parallel: 1` runs the children one at a
+ * time, so no two of them contend for the parent checkout's path lock. `max_parallel` caps
  * *concurrency*, NOT the total child count — `items.length` is unbounded here, so a very
  * large list (≳ the abandon-time cascade bound `MAX_CASCADE_RUNS`, currently 500) can
  * leave some children uncancelled when the parent is abandoned; a run-tree-wide count/
@@ -512,9 +514,10 @@ export type FanOutConfig = z.infer<typeof fanOutConfigSchema>;
  * substituted) forwarded as the child's user message. `isolation` selects the
  * child's checkout: `'inherit'` (default) shares the parent's checkout; `'worktree'`
  * (slice 2, PR-A) runs the child in its own git worktree via an injected
- * child-isolation resolver. `fan_out` (slice 2, PR-C) expands the node into N child
- * runs over a data-driven item list — and DEFAULTS `isolation` to `'worktree'` (its N
- * children would otherwise collide on the shared parent checkout). `output_format`/`output_type` from the base stay
+ * child-isolation resolver — never inferred, including from `fan_out`. `fan_out` (slice 2,
+ * PR-C) expands the node into N child runs over a data-driven item list; concurrent
+ * children sharing the parent checkout are the author's call to make, declared by
+ * `mutates_checkout: false` on the child workflow. `output_format`/`output_type` from the base stay
  * meaningful (the child's terminal output threads back as `$<id>.output`,
  * field-accessible when a schema is declared and the child emits JSON).
  */
@@ -1015,16 +1018,12 @@ export const dagNodeSchema = dagNodeBaseSchema
         ...(data.output_format !== undefined ? { output_format: data.output_format } : {}),
         workflow: data.workflow.trim(),
         ...(data.input !== undefined ? { input: data.input } : {}),
-        // Isolation. A fan-out node DEFAULTS to per-child `worktree` isolation (slice 2,
-        // PR-C): its N children would otherwise share the parent checkout and collide on
-        // the run-in-progress path lock — the exact collision worktree isolation exists to
-        // prevent. Explicit `isolation:` (including `inherit`) always wins, so a serial /
-        // read-only author can opt back into the shared checkout knowingly.
-        ...(data.isolation !== undefined
-          ? { isolation: data.isolation }
-          : data.fan_out !== undefined
-            ? { isolation: 'worktree' as const }
-            : {}),
+        // Isolation is EXPLICIT-ONLY — never inferred, including from `fan_out`. How many
+        // children a node spawns says nothing about whether they write; N review or
+        // research children over the shared checkout is the common case. A shared-checkout
+        // fan-out whose children would collide is caught at spawn time instead
+        // (executeFanOutWorkflowNode), where the child's `mutates_checkout` is knowable.
+        ...(data.isolation !== undefined ? { isolation: data.isolation } : {}),
         ...(data.fan_out !== undefined ? { fan_out: data.fan_out } : {}),
       } as WorkflowNode;
     }
