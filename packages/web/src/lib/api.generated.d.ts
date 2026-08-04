@@ -3349,6 +3349,9 @@ export interface components {
         /** @enum {string} */
         write_back?: 'approve' | 'auto';
       };
+      evidence_policy?: {
+        required: boolean;
+      };
       mutates_checkout?: boolean;
       persist_sessions?: boolean;
       tags?: string[];
@@ -3566,6 +3569,7 @@ export interface components {
       maxBudgetUsd?: number;
       systemPrompt?: string;
       fallbackModel?: string;
+      settingSources?: ('project' | 'user')[];
       betas?: string[];
       sandbox?: {
         enabled?: boolean;
@@ -3641,6 +3645,17 @@ export interface components {
       input?: string;
       /** @enum {string} */
       isolation?: 'inherit' | 'worktree';
+      fan_out?: {
+        items: string;
+        as?: string;
+        /** @default 5 */
+        max_parallel: number;
+        /**
+         * @default all_success
+         * @enum {string}
+         */
+        join: 'all_success' | 'all_done' | 'first_success';
+      };
       with?: unknown;
       script?: string;
       /** @enum {string} */
@@ -3936,6 +3951,11 @@ export interface components {
       is_wsl: boolean;
       wsl_distro?: string;
       activePlatforms?: string[];
+      schema?: {
+        createdAppVersion: string | null;
+        appVersion: string;
+        appliedAt: string | null;
+      };
     };
     UpdateCheckResponse: {
       updateAvailable: boolean;
