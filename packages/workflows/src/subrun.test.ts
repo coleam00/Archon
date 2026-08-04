@@ -2674,4 +2674,95 @@ nodes:
       expect((s.metadata as Record<string, unknown>).cancelled_reason).toBe('fan_out_sibling');
     }
   });
+
+  it('the all_success failure names the CAUSAL child, not a sibling its fail-fast cancelled', async () => {
+    // The failing item is LAST, so the fail-fast's own casualties occupy every index below
+    // it — which is the case that made the old "lowest-index bad outcome" message report a
+    // cancelled victim with no error text while the real failure stayed invisible.
+    //
+    // Ordering is enforced by a shared marker file rather than by sleeps: the waiters block
+    // until the failing child has created it, so the failure always lands first. The item
+    // carries the absolute marker path (produced by the parent's `plan` node, which runs in
+    // the parent checkout) so the children find it wherever they run.
+    await writeWorkflow(
+      'fan-child-order',
+      `
+name: fan-child-order
+description: waits for the sync marker; the "fail:" item creates it and exits non-zero
+mutates_checkout: false
+nodes:
+  - id: run
+    bash: |
+      arg="$ARGUMENTS"
+      mode="\${arg%%:*}"
+      marker="\${arg#*:}"
+      if [ "$mode" = "fail" ]; then
+        touch "$marker"
+        echo "the real cause" >&2
+        exit 7
+      fi
+      i=0
+      while [ ! -f "$marker" ] && [ "$i" -lt 200 ]; do sleep 0.02; i=$((i+1)); done
+      sleep 0.4
+      printf 'ok'
+`
+    );
+    await writeWorkflow(
+      'fan-causal',
+      `
+name: fan-causal
+description: the failing child sits at the highest index
+nodes:
+  - id: plan
+    bash: |
+      printf '["wait:%s","wait:%s","fail:%s"]' "$PWD/sync-marker" "$PWD/sync-marker" "$PWD/sync-marker"
+  - id: work
+    workflow: fan-child-order
+    depends_on: [plan]
+    fan_out:
+      items: "$plan.output"
+      max_parallel: 3
+      join: all_success
+`
+    );
+
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    const parent = await discover('fan-causal');
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parent,
+      'goal',
+      'conv-db'
+    );
+
+    expect(result.success).toBe(false);
+    const children = [...store.runs.values()].filter(r => r.workflow_name === 'fan-child-order');
+    const byIndex = new Map(
+      children.map(c => [(c.metadata as Record<string, unknown>).child_index as number, c])
+    );
+    // Precondition — the scenario this test needs actually got built: index 2 failed on its
+    // own, and at least one lower index is a fail-fast casualty. Asserted separately so a
+    // construction that didn't materialise fails HERE rather than silently weakening the
+    // assertion below into one the old code would also pass.
+    expect(byIndex.get(2)?.status).toBe('failed');
+    const casualties = [0, 1].filter(
+      i =>
+        byIndex.get(i)?.status === 'cancelled' &&
+        (byIndex.get(i)?.metadata as Record<string, unknown>).cancelled_reason === 'fan_out_sibling'
+    );
+    expect(casualties.length).toBeGreaterThanOrEqual(1);
+
+    const nodeFailed = store.events.find(
+      e => e.event_type === 'node_failed' && e.step_name === 'work'
+    );
+    const error = String(nodeFailed?.data?.error);
+    // Names the child that failed, carries its error, and never points at a casualty.
+    expect(error).toContain('child 2');
+    expect(error).toContain('failed');
+    for (const i of casualties) expect(error).not.toContain(`child ${String(i)} `);
+  });
 });
