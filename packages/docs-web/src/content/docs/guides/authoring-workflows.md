@@ -135,6 +135,11 @@ worktree:                        # Optional: pin isolation behavior regardless o
                                  #           like triage/reporting. true = must use a worktree;
                                  #           CLI --no-worktree hard-errors. Omit to let the
                                  #           caller decide (current default = worktree).
+mutates_checkout: false          # Optional: assert this workflow does not write to its checkout,
+                                 #   so the engine skips the path-exclusive lock and N runs of it
+                                 #   can share one working directory. Defaults to true (take the
+                                 #   lock, serialize runs on the same path). See
+                                 #   [Running sub-runs side by side](#running-sub-runs-side-by-side).
 tags: [GitLab, Review]           # Optional: explicit Web UI filter tags. Overrides the
                                  #   keyword-based tag inference. An empty list (`tags: []`)
                                  #   suppresses inference and shows no tags. Omit to fall
@@ -193,7 +198,7 @@ nodes:
 | `approval` | object | Pauses workflow for human review. See [Approval Nodes](/guides/approval-nodes/) |
 | `cancel` | string | Terminates the workflow run with a reason string. Uses existing cancellation plumbing — in-flight parallel nodes are stopped |
 | `include` | string | Name of another workflow whose nodes are inlined into this DAG at load time as a namespaced sub-DAG. See [Reusing a Shared Sub-DAG](#reusing-a-shared-sub-dag-with-include) |
-| `workflow` | string | Name of another workflow to run as a governed **child sub-run** at execution time — its own run record, gates, artifacts, and cost. Optional `input` (data string). See [Composing a Governed Sub-Run](#composing-a-governed-sub-run-with-workflow) |
+| `workflow` | string | Name of another workflow to run as a governed **child sub-run** at execution time — its own run record, gates, artifacts, and cost. Optional `input` (data string) and `isolation` (`'inherit'` \| `'worktree'`). See [Composing a Governed Sub-Run](#composing-a-governed-sub-run-with-workflow) |
 
 **Common fields** — apply to all node types:
 
@@ -921,13 +926,8 @@ Both reuse another workflow. They differ in **governance**, not syntax:
 Rule of thumb: **`include:` for reuse, `workflow:` for a governed, separately-auditable
 sub-pipeline.**
 
-### Shared checkout, gates, and resume
+### Gates, failure, and cost
 
-- **Shared checkout.** In this first slice the child runs in the **parent's checkout**
-  (`isolation: inherit`, the only accepted value — `isolation: worktree` is reserved and
-  rejected at load time). This is correct for sequential composition (plan → implement →
-  QA in one working tree). Per-child worktrees, parallel fan-out, and racing are a later
-  slice.
 - **Gates pause the whole tree.** When the child hits an approval gate, the child run
   pauses **and** the parent pauses "blocked on child". A reviewer approves the **child** by
   its own run id (`/workflow approve <childRunId>` — shown in the pause message). When the
@@ -946,20 +946,164 @@ sub-pipeline.**
   the parent's aggregate, and `parent_run_id` on the child row makes the run tree visible
   in `archon workflow runs` and the console.
 
+### Choosing the child's checkout with `isolation:`
+
+`isolation:` decides which working directory the child run executes in. It is valid **only**
+on a `workflow:` node — on any other node type it is rejected at load time, since only a
+sub-run has a checkout of its own to choose.
+
+| Value | The child runs in |
+|-------|-------------------|
+| omitted (the default) | the parent's checkout — same files, same branch |
+| `inherit` | identical to omitting it; write it when you want the sharing to be deliberate rather than incidental |
+| `worktree` | its own git worktree, on its own branch |
+
+**Archon never infers this.** Nothing about a node — what workflow it names, how many
+children it spawns, whether they run concurrently — makes a worktree appear. A child gets
+one when, and only when, you write `isolation: worktree`. Whether a step needs its own
+checkout is a judgement about what that step *does*, and the author is the one who knows.
+
+Most sub-runs don't need one. A review, a research pass, or a summarizer that writes only to
+`$ARTIFACTS_DIR` is better off in the parent's checkout: it sees the parent's uncommitted
+work, and there is nothing to create or clean up afterwards.
+
+#### What `isolation: worktree` gives you, and what it costs
+
+```yaml
+  - id: refactor-module
+    workflow: refactor-block
+    input: "$plan.output"
+    isolation: worktree        # its own checkout, its own branch
+    depends_on: [plan]
+```
+
+The child gets a fresh worktree under `~/.archon/workspaces/<owner>/<repo>/worktrees/`, on a
+new branch named `archon/task-<parentRunId8>-child-0`. Four consequences are worth knowing
+before you reach for it:
+
+- **The branch starts from the repo's base branch, not the parent's.** The worktree is cut
+  from `origin/<baseBranch>` in the canonical checkout — `worktree.baseBranch` in
+  `.archon/config.yaml`, else the codebase's default branch. (The per-dispatch `--base` /
+  `--from` overrides in the [base-branch precedence
+  table](/reference/cli/#base-branch-precedence) apply to the run they were passed to; they
+  do **not** reach its sub-run children.) An isolated child therefore **does not see the
+  parent's uncommitted edits**, and does not see commits the parent made on its own branch.
+  Everything the child needs has to arrive through `input:`, artifacts, or the repo's base
+  branch.
+- **Nothing merges it back.** The child's commits stay on the child's branch. Landing them
+  is the workflow's job — the child pushes and opens a PR, or a later parent node does. What
+  returns automatically is only the child's terminal output, as `$<nodeId>.output`.
+- **It becomes a tracked environment with a lifecycle.** Each child worktree registers an
+  isolation environment, so it appears in `archon isolation list` next to top-level run
+  worktrees and is governed by the same `archon isolation cleanup [--merged]` and
+  `archon complete <branch>`. It is **not** removed when the child finishes — the branch
+  deliberately outlives the run so you can inspect or land it. Isolate many children and you
+  accumulate many worktrees and branches to clean up.
+- **Resume reuses it, and fails if it is gone.** Resuming the parent never re-creates a
+  child's worktree; the child reuses the path recorded on its own run row. If that path was
+  cleaned up between the failure and the resume, the node fails with *"its working path no
+  longer exists … start a fresh run"* rather than dying on a deep `ENOENT` mid-run. Don't
+  run `isolation cleanup` while a sub-run tree is still resumable.
+
+Nesting works: a grandchild `workflow:` node can request its own worktree too, up to the
+sub-run depth cap.
+
+#### When a worktree can't be created
+
+Creating one needs a git repository and a surface that can make worktrees in it. When the run
+has neither, the node **fails fast** — it never quietly falls back to the shared checkout,
+because a silent fallback would produce exactly the concurrent-write collision the isolation
+was asked for:
+
+```text
+isolation: 'worktree' on sub-run '<name>' requires an injected child-isolation resolver
+(available for git-repo codebases run via the CLI or orchestrator). Remove the isolation
+or use 'inherit' (shared checkout).
+```
+
+You get this when:
+
+- the project is a **folder project** — a non-git workspace registered with `--folder`
+  ([Multi-Repo Projects](/guides/multi-repo-projects/)). There is no repository to make a
+  worktree in. Use `inherit`, or split the work so the writing step targets a real repo.
+- the run resolved no codebase at all (for example a background dispatch with no project
+  bound, or a database lookup that failed at run start).
+
+Whether the **parent** is isolated makes no difference. A parent started with
+`--no-worktree`, running in your live checkout, can still hand an isolated child its own
+worktree — which is a reasonable shape when the parent only reads and one step writes.
+
+`archon validate workflows` **cannot** catch this. Whether a worktree can be created is a
+property of the run, not of the file, so a workflow using `isolation: worktree` validates
+cleanly everywhere and then fails at the node when it is run somewhere it can't be honored.
+If a workflow only makes sense against a git repo, say so in its `description:`.
+
+A worktree that fails for an ordinary git reason — no disk space, a permission problem, a
+branch that already exists — fails the node the same way, with the underlying git error
+classified into a readable message.
+
+### Running sub-runs side by side
+
+Two `workflow:` nodes in the same DAG layer start their children at the same time. What
+happens next depends on whether those children share a checkout.
+
+Children **in their own worktrees** (`isolation: worktree`) never interact — separate
+directories, separate branches.
+
+Children **sharing the parent's checkout** meet the engine's path-exclusive lock. Every run
+takes a lock on its working path at start, and a run that finds the path already held by
+another active run **cancels itself**. The lock excludes a run's own ancestors and
+descendants — a child never blocks against its own parent — but **siblings are not
+excluded**. Two sub-run children in one layer over one checkout are therefore a collision:
+the older run keeps the path, the younger one cancels itself, and the parent run fails.
+
+> **Resume does not recover from this.** A parent's resume re-drives a *failed* child, but a
+> *cancelled* one is threaded straight through as it stands — so a parent that failed this
+> way fails again identically on every resume. The only way out is a fresh run. Avoid the
+> collision; don't plan to recover from it.
+
+The way to avoid it is to declare what the child does, on the child workflow itself:
+
+```yaml
+# review-block.yaml — reads the repo, writes only to $ARTIFACTS_DIR
+name: review-block
+description: Reviews the diff and writes findings. Building block — not for standalone runs.
+mutates_checkout: false      # skips the path lock: N of these coexist in one checkout
+nodes:
+  - id: review
+    command: review-diff
+```
+
+`mutates_checkout: false` is a **workflow-level** field asserting that the run does not write
+to its checkout, so the engine skips the path lock for it. It defaults to `true` (take the
+lock, serialize runs on the same path). It is author-declared on purpose — the author of a
+review or research workflow is the one who knows it only reads. Every child sharing the
+checkout has to declare it: a sibling that doesn't still runs the lock query, finds the
+others on the path, and cancels itself.
+
+So there are three ways to make concurrent sub-runs work, and picking between them is a
+statement about the children:
+
+| The children… | Do this |
+|---------------|---------|
+| only read the repo (review, research, summarize) | `mutates_checkout: false` on the **child workflow** |
+| write to the repo | `isolation: worktree` on each **`workflow:` node** |
+| must not overlap at all | sequence them with `depends_on` |
+
+One constraint applies however the checkouts are arranged: **one blocking child gate at a
+time.** Two children in the same layer that both pause for approval contend for the parent
+run's single approval slot — the second pause fails its node. Sequence gated sub-runs with
+`depends_on` until a later slice adds real concurrent gating.
+
 ### Non-goals (this slice)
 
 - **No `with:` named-parameter mapping** — use `input:` (a single data string). A
   `workflow:` node with a `with:` key is rejected with a clear error.
-- **No dynamic fan-out / variable N**, **no `isolation: worktree`**, and **no racing** —
-  all reserved for a later slice.
+- **No dynamic fan-out / variable N** and **no racing** — both reserved for a later slice.
 - **Not inside a `loop_group` body** — rejected at load time.
 - **Static target only.** `workflow:` takes a literal workflow name — no
   `workflow: $something`. Self-reference and ancestor cycles (`A` → `B` → `A`) are rejected
   at run time, and the sub-run tree is depth-capped.
-- **One blocking child gate at a time.** Two `workflow:` nodes in the same DAG layer
-  whose children both pause contend for the parent run's single approval slot — the
-  second pause fails its node. Sequence gated sub-runs with `depends_on` until a later
-  slice adds real concurrent gating.
 
 ---
 
