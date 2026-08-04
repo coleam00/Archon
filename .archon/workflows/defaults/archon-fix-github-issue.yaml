@@ -379,10 +379,24 @@ nodes:
     context: fresh
 
   # ═══════════════════════════════════════════════════════════════
-  # PHASE 10: REPORT
+  # PHASE 10: RE-VALIDATE
+  # ═══════════════════════════════════════════════════════════════
+
+  # self-fix applies review findings and simplify removes code, both AFTER the
+  # `validate` gate above. Without a second pass the run's only green describes
+  # a tree that no longer exists, and `report` publishes it as if it did.
+  # simplify runs type-check and lint on what it edits; neither node runs the
+  # full suite over the final tree.
+  - id: revalidate
+    command: archon-validate
+    depends_on: [simplify]
+    context: fresh
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 11: REPORT
   # ═══════════════════════════════════════════════════════════════
 
   - id: report
     command: archon-issue-completion-report
-    depends_on: [simplify]
+    depends_on: [revalidate]
     context: fresh
