@@ -151,8 +151,40 @@ export function createChildWorktreeResolver(
           branch_name: isolatedEnv.branchName,
           created_by_platform: config.createdByPlatform,
           ...(config.createdByUserId ? { created_by_user_id: config.createdByUserId } : {}),
-          metadata: { parent_run_id: req.parentRun.id, child_index: childIndex },
+          // `adopted` records whether this row describes a worktree Archon created or
+          // one that was already on disk — see the note below on why re-use is allowed.
+          // Durable on purpose: a log line is gone by the time anyone asks why two runs
+          // touched one checkout.
+          metadata: {
+            parent_run_id: req.parentRun.id,
+            child_index: childIndex,
+            adopted: isolatedEnv.metadata.adopted,
+          },
         });
+
+        // `WorktreeProvider.create()` ADOPTS a worktree already sitting at the computed
+        // path instead of failing. That is what made the pre-fix identifier collision
+        // silent, so it must never be quiet on this path again.
+        //
+        // Adoption stays allowed rather than rejected, because with a per-(parent, node,
+        // index) identifier the only worktree that can be there is THIS child slot's own
+        // from an earlier attempt — a spawn that created the worktree and then failed
+        // before its run row was written leaves exactly that, and re-using it is how the
+        // parent's resume recovers. Rejecting would wedge that resume permanently.
+        // A sibling's checkout is no longer reachable here; if this ever fires for one,
+        // the identifier has regressed and this line is the evidence.
+        if (isolatedEnv.metadata.adopted) {
+          getLog().warn(
+            {
+              parentRunId: req.parentRun.id,
+              nodeId: req.nodeId,
+              childIndex,
+              branch: isolatedEnv.branchName,
+              workingPath: isolatedEnv.workingPath,
+            },
+            'workflow.child_worktree_adopted'
+          );
+        }
 
         getLog().info(
           {
@@ -161,6 +193,7 @@ export function createChildWorktreeResolver(
             childIndex,
             branch: isolatedEnv.branchName,
             envId: envRecord.id,
+            adopted: isolatedEnv.metadata.adopted,
           },
           'workflow.child_worktree_created'
         );

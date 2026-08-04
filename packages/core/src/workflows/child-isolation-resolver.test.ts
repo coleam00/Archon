@@ -9,6 +9,9 @@
  */
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
 
+/** Flipped per-test to simulate the provider adopting an existing worktree. */
+let nextCreateAdopts = false;
+
 const mockProviderCreate = mock((_req: { identifier: string }) =>
   Promise.resolve({
     id: '/wt/path',
@@ -17,7 +20,7 @@ const mockProviderCreate = mock((_req: { identifier: string }) =>
     branchName: 'archon/task-stub',
     status: 'active' as const,
     createdAt: new Date(),
-    metadata: {},
+    metadata: { adopted: nextCreateAdopts },
   })
 );
 
@@ -26,7 +29,9 @@ mock.module('@archon/isolation', () => ({
   classifyIsolationError: (err: Error) => err.message,
 }));
 
-const mockIsolationDbCreate = mock(() => Promise.resolve({ id: 'env-1' }));
+const mockIsolationDbCreate = mock((_env: { metadata: Record<string, unknown> }) =>
+  Promise.resolve({ id: 'env-1' })
+);
 
 mock.module('../db/isolation-environments', () => ({
   create: mockIsolationDbCreate,
@@ -143,6 +148,7 @@ describe('createChildWorktreeResolver', () => {
   });
 
   beforeEach(() => {
+    nextCreateAdopts = false;
     mockProviderCreate.mockClear();
     mockIsolationDbCreate.mockClear();
   });
@@ -156,5 +162,23 @@ describe('createChildWorktreeResolver', () => {
     // Before the fix both were `<parent8>-child-0`, so the second create() adopted
     // the first child's worktree and the two children shared one checkout.
     expect(first).not.toBe(second);
+  });
+
+  test('a re-used worktree is recorded as adopted on the environment row', async () => {
+    // Adoption is legitimate here — it is how a parent's resume recovers a worktree
+    // whose child row never got written — but it must never pass unremarked, because
+    // silence is exactly what made the identifier collision invisible. The row is the
+    // durable half of that signal (a WARN is emitted alongside it).
+    nextCreateAdopts = true;
+
+    await resolver.resolve({ parentRun, nodeId: 'refactor-auth', codebaseId: 'cb-1' });
+
+    expect(mockIsolationDbCreate.mock.calls[0][0].metadata.adopted).toBe(true);
+  });
+
+  test('a freshly created worktree is not recorded as adopted', async () => {
+    await resolver.resolve({ parentRun, nodeId: 'refactor-auth', codebaseId: 'cb-1' });
+
+    expect(mockIsolationDbCreate.mock.calls[0][0].metadata.adopted).toBe(false);
   });
 });
