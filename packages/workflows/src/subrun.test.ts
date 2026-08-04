@@ -1532,10 +1532,23 @@ nodes:
   // --- slice 2, PR-C: dynamic fan-out -------------------------------------------
 
   /** Child that echoes its per-item $ARGUMENTS, so fan-out aggregate ordering + the
-   *  item→$ARGUMENTS channel are both observable. */
+   *  item→$ARGUMENTS channel are both observable. Declares no `mutates_checkout`, so it
+   *  is treated as a repo-writing child (the default posture). */
   const fanChildEcho = `
 name: fan-child
 description: echoes its per-item argument
+nodes:
+  - id: echo
+    bash: |
+      printf 'did:%s' "$ARGUMENTS"
+`;
+
+  /** The same child, declared read-only — the supported way for N concurrent children to
+   *  share the parent's checkout (`mutates_checkout: false` skips the path lock). */
+  const fanChildEchoReadOnly = `
+name: fan-child-ro
+description: echoes its per-item argument; reads only
+mutates_checkout: false
 nodes:
   - id: echo
     bash: |
@@ -1556,6 +1569,7 @@ nodes:
   - id: work
     workflow: fan-child
     depends_on: [plan]
+    isolation: worktree
     fan_out:
       items: "$plan.output"
       max_parallel: 2
@@ -1581,8 +1595,8 @@ nodes:
     const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'fan-parent');
     expect(parentRun?.status).toBe('completed');
 
-    // Fan-out defaults to per-child worktree isolation: the resolver was called once per
-    // item, with distinct child indexes.
+    // `isolation: worktree` on the fan-out node isolates every child: the resolver was
+    // called once per item, with distinct child indexes.
     expect(calls).toHaveLength(3);
     expect([...calls.map(c => c.childIndex ?? 0)].sort((a, b) => a - b)).toEqual([0, 1, 2]);
 
@@ -1612,6 +1626,155 @@ nodes:
       'did:beta',
       'did:gamma',
     ]);
+  });
+
+  it('read-only children (mutates_checkout: false) fan out IN the parent checkout, no worktrees', async () => {
+    await writeWorkflow('fan-child-ro', fanChildEchoReadOnly);
+    await writeWorkflow(
+      'fan-shared',
+      `
+name: fan-shared
+description: N read-only children over one checkout — the common fan-out shape
+nodes:
+  - id: plan
+    bash: |
+      printf '%s' '["alpha","beta","gamma"]'
+  - id: work
+    workflow: fan-child-ro
+    depends_on: [plan]
+    fan_out:
+      items: "$plan.output"
+      max_parallel: 3
+`
+    );
+
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    const parent = await discover('fan-shared');
+    const { resolver, calls } = makeFanResolver(cwd);
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parent,
+      'goal',
+      'conv-db',
+      { resolveChildIsolation: resolver }
+    );
+
+    expect(result.success).toBe(true);
+    // No `isolation:` on the node → no worktree is created, even with a resolver on hand.
+    // Nothing about fanning out implies isolation.
+    expect(calls).toHaveLength(0);
+    const children = [...store.runs.values()].filter(r => r.workflow_name === 'fan-child-ro');
+    expect(children).toHaveLength(3);
+    for (const c of children) {
+      expect(c.status).toBe('completed');
+      expect(c.working_path).toBe(cwd);
+    }
+    const workCompleted = store.events.find(
+      e => e.event_type === 'node_completed' && e.step_name === 'work'
+    );
+    expect(JSON.parse(String(workCompleted?.data?.node_output))).toEqual([
+      'did:alpha',
+      'did:beta',
+      'did:gamma',
+    ]);
+  });
+
+  it('blocks a shared-checkout fan-out over a repo-writing child BEFORE any child is spawned', async () => {
+    await writeWorkflow('fan-child', fanChildEcho);
+    await writeWorkflow(
+      'fan-collide',
+      `
+name: fan-collide
+description: concurrent children over the parent checkout, child does not declare read-only
+nodes:
+  - id: plan
+    bash: |
+      printf '%s' '["alpha","beta","gamma"]'
+  - id: work
+    workflow: fan-child
+    depends_on: [plan]
+    fan_out:
+      items: "$plan.output"
+      max_parallel: 2
+`
+    );
+
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    const parent = await discover('fan-collide');
+    const { resolver, calls } = makeFanResolver(cwd);
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parent,
+      'goal',
+      'conv-db',
+      { resolveChildIsolation: resolver }
+    );
+
+    expect(result.success).toBe(false);
+    // Nothing was spawned and nothing was isolated — the cost of finding out at runtime
+    // (N-1 self-cancelled siblings, unrecoverable by resume) is never paid.
+    expect([...store.runs.values()].filter(r => r.workflow_name === 'fan-child')).toHaveLength(0);
+    expect(calls).toHaveLength(0);
+
+    const nodeFailed = store.events.find(
+      e => e.event_type === 'node_failed' && e.step_name === 'work'
+    );
+    const error = String(nodeFailed?.data?.error);
+    // The message names all three ways out — the author picks, the engine never guesses.
+    expect(error).toContain('mutates_checkout: false');
+    expect(error).toContain('isolation: worktree');
+    expect(error).toContain('max_parallel: 1');
+    expect(error).toContain('fan-child');
+  });
+
+  it('max_parallel: 1 is a valid serial-in-place fan-out over a repo-writing child', async () => {
+    await writeWorkflow('fan-child', fanChildEcho);
+    await writeWorkflow(
+      'fan-serial',
+      `
+name: fan-serial
+description: children run one at a time in the parent checkout — no lock contention
+nodes:
+  - id: plan
+    bash: |
+      printf '%s' '["alpha","beta","gamma"]'
+  - id: work
+    workflow: fan-child
+    depends_on: [plan]
+    fan_out:
+      items: "$plan.output"
+      max_parallel: 1
+`
+    );
+
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    const parent = await discover('fan-serial');
+    const { resolver, calls } = makeFanResolver(cwd);
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parent,
+      'goal',
+      'conv-db',
+      { resolveChildIsolation: resolver }
+    );
+
+    expect(result.success).toBe(true);
+    expect(calls).toHaveLength(0);
+    const children = [...store.runs.values()].filter(r => r.workflow_name === 'fan-child');
+    expect(children).toHaveLength(3);
+    for (const c of children) expect(c.working_path).toBe(cwd);
   });
 
   it('an empty items array is a valid zero-width expansion (node completes with [])', async () => {
@@ -1698,10 +1861,12 @@ nodes:
     expect(String(nodeFailed?.data?.error)).toContain('not a JSON array');
   });
 
-  /** Child that succeeds echoing its arg, but fails (exit 3) on the item "boom". */
+  /** Child that succeeds echoing its arg, but fails (exit 3) on the item "boom". Read-only,
+   *  so N of these share the parent checkout without contending for the path lock. */
   const fanChildCond = `
 name: fan-child-cond
 description: fails on the item "boom", echoes otherwise
+mutates_checkout: false
 nodes:
   - id: run
     bash: |
@@ -1733,7 +1898,6 @@ nodes:
     const store = new InMemoryStore();
     const deps = makeDeps(store);
     const parent = await discover('fan-failfast');
-    const { resolver, calls } = makeFanResolver(cwd);
     const result = await executeWorkflow(
       deps,
       makePlatform(),
@@ -1741,8 +1905,7 @@ nodes:
       cwd,
       parent,
       'goal',
-      'conv-db',
-      { resolveChildIsolation: resolver }
+      'conv-db'
     );
 
     expect(result.success).toBe(false);
@@ -1750,13 +1913,12 @@ nodes:
     expect(parentRun?.status).toBe('failed');
 
     // Serial (max_parallel: 1): index 0 completed, index 1 failed → fail-fast → index 2
-    // was NEVER spawned (no child row, resolver never called for it).
+    // was NEVER spawned (no child row).
     const children = [...store.runs.values()].filter(r => r.workflow_name === 'fan-child-cond');
     const indexes = children
       .map(c => (c.metadata as Record<string, unknown>).child_index as number)
       .sort((a, b) => a - b);
     expect(indexes).toEqual([0, 1]);
-    expect(calls.map(c => c.childIndex ?? 0).sort((a, b) => a - b)).toEqual([0, 1]);
     const byIndex = new Map(
       children.map(c => [(c.metadata as Record<string, unknown>).child_index as number, c])
     );
@@ -1794,7 +1956,6 @@ nodes:
     const store = new InMemoryStore();
     const deps = makeDeps(store);
     const parent = await discover('fan-alldone');
-    const { resolver } = makeFanResolver(cwd);
     const result = await executeWorkflow(
       deps,
       makePlatform(),
@@ -1802,8 +1963,7 @@ nodes:
       cwd,
       parent,
       'goal',
-      'conv-db',
-      { resolveChildIsolation: resolver }
+      'conv-db'
     );
 
     // all_done never fails on a partial failure.
@@ -1831,6 +1991,7 @@ nodes:
       `
 name: fan-child-slow
 description: one AI turn per child (concurrency observable via the provider)
+mutates_checkout: false
 nodes:
   - id: think
     prompt: "work on $ARGUMENTS"
@@ -1874,7 +2035,6 @@ nodes:
       getAgentProvider: mock(() => slowProvider) as unknown as WorkflowDeps['getAgentProvider'],
     };
     const parent = await discover('fan-window');
-    const { resolver } = makeFanResolver(cwd);
     const result = await executeWorkflow(
       deps,
       makePlatform(),
@@ -1882,8 +2042,7 @@ nodes:
       cwd,
       parent,
       'goal',
-      'conv-db',
-      { resolveChildIsolation: resolver }
+      'conv-db'
     );
 
     expect(result.success).toBe(true);
@@ -1901,6 +2060,7 @@ nodes:
       `
 name: fan-child-cost
 description: one AI turn (canned cost 0.01) per child
+mutates_checkout: false
 nodes:
   - id: think
     prompt: "work on $ARGUMENTS"
@@ -1926,7 +2086,6 @@ nodes:
     const store = new InMemoryStore();
     const deps = makeDeps(store);
     const parent = await discover('fan-cost');
-    const { resolver } = makeFanResolver(cwd);
     const result = await executeWorkflow(
       deps,
       makePlatform(),
@@ -1934,8 +2093,7 @@ nodes:
       cwd,
       parent,
       'goal',
-      'conv-db',
-      { resolveChildIsolation: resolver }
+      'conv-db'
     );
 
     expect(result.success).toBe(true);
@@ -1949,7 +2107,7 @@ nodes:
       'fan-child-flaky',
       `
 name: fan-child-flaky
-description: the "flaky" item fails once then recovers; others always succeed
+description: the "flaky" item fails once then recovers; others always succeed (writes a marker file)
 nodes:
   - id: run
     bash: |
@@ -1972,6 +2130,7 @@ nodes:
   - id: work
     workflow: fan-child-flaky
     depends_on: [plan]
+    isolation: worktree
     fan_out:
       items: "$plan.output"
       max_parallel: 3
@@ -2045,6 +2204,7 @@ nodes:
 name: fan-child-gated
 description: a fan-out child with an approval gate (illegal — fan-out is autonomous)
 interactive: true
+mutates_checkout: false
 nodes:
   - id: impl
     prompt: "implement $ARGUMENTS"
@@ -2076,7 +2236,6 @@ nodes:
     const store = new InMemoryStore();
     const deps = makeDeps(store);
     const parent = await discover('fan-gated-parent');
-    const { resolver } = makeFanResolver(cwd);
     const result = await executeWorkflow(
       deps,
       makePlatform(),
@@ -2084,8 +2243,7 @@ nodes:
       cwd,
       parent,
       'goal',
-      'conv-db',
-      { resolveChildIsolation: resolver }
+      'conv-db'
     );
 
     expect(result.success).toBe(false);
@@ -2368,6 +2526,7 @@ nodes:
   - id: work
     workflow: fan-child-flaky2
     depends_on: [plan]
+    isolation: worktree
     fan_out:
       items: "$plan.output"
       max_parallel: 3
@@ -2439,6 +2598,7 @@ nodes:
       `
 name: fan-child-slowfail
 description: instant fail on "fail"; a slow success otherwise
+mutates_checkout: false
 nodes:
   - id: run
     bash: |
@@ -2469,7 +2629,6 @@ nodes:
     const store = new InMemoryStore();
     const deps = makeDeps(store);
     const parent = await discover('fan-i1');
-    const { resolver } = makeFanResolver(cwd);
     const result = await executeWorkflow(
       deps,
       makePlatform(),
@@ -2477,8 +2636,7 @@ nodes:
       cwd,
       parent,
       'goal',
-      'conv-db',
-      { resolveChildIsolation: resolver }
+      'conv-db'
     );
 
     expect(result.success).toBe(false);

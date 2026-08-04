@@ -10,6 +10,8 @@ import { readFile } from 'fs/promises';
 import { isAbsolute, join as joinPath, resolve as resolvePath } from 'path';
 import { execFileAsync, resolveBashPath } from '@archon/git';
 import { discoverScriptsForCwd } from './script-discovery';
+import { discoverWorkflowsWithConfig } from './workflow-discovery';
+import { resolveWorkflowName } from './router';
 import type {
   IWorkflowPlatform,
   WorkflowMessageMetadata,
@@ -52,6 +54,7 @@ import type {
   ThinkingConfig,
   SandboxSettings,
   WorkflowSource,
+  WorkflowDefinition,
   LoopGateRunMetadata,
   ApprovalContext,
   WorkflowEvidencePolicy,
@@ -5564,6 +5567,57 @@ function fanOutAmbiguousChildMessage(
 }
 
 /**
+ * Concurrent fan-out children sharing the parent checkout collide on the path-exclusive
+ * lock (`executor.ts`, guarded by `mutates_checkout !== false`): siblings are deliberately
+ * NOT excluded from it, so all but one self-cancel — and a lock-cancelled child is threaded
+ * as terminal on re-entry, which makes the failure permanent (#2180 Defect A). The engine
+ * cannot infer which way out the author wants, so it names all three and refuses to spend
+ * the money finding out.
+ */
+function fanOutSharedCheckoutMessage(node: WorkflowNode, concurrency: number): string {
+  return (
+    `fan_out node '${node.id}': up to ${String(concurrency)} children of '${node.workflow}' ` +
+    'would run at once in the parent checkout, and that workflow does not declare ' +
+    '`mutates_checkout: false`. Concurrent runs on one checkout take a path-exclusive lock, ' +
+    'so all but the first would cancel themselves — and a lock-cancelled child is not ' +
+    'recoverable by resume (#2180). Choose one: add `mutates_checkout: false` to ' +
+    `'${node.workflow}' if it only reads the repo; set \`isolation: worktree\` on '${node.id}' ` +
+    'if the children write to it; or set `fan_out.max_parallel: 1` to run them one at a time.'
+  );
+}
+
+/**
+ * Resolve the fan-out target's definition for the shared-checkout preflight, using the
+ * same discovery + name resolution `runChildWorkflow` performs at spawn — sub-run targets
+ * resolve at spawn time by design (#2200), so this reads the definition the children will
+ * actually get rather than one captured at load.
+ *
+ * Returns undefined when the target can't be resolved (unknown name, ambiguous name,
+ * discovery failure). That is deliberately NOT this check's problem: every child would fail
+ * at `runChildWorkflow` with a message about the real cause, and reporting a collision the
+ * author cannot act on would send them to the wrong file.
+ */
+async function resolveFanOutChildDefinition(
+  deps: WorkflowDeps,
+  cwd: string,
+  targetName: string
+): Promise<WorkflowDefinition | undefined> {
+  try {
+    const { workflows } = await discoverWorkflowsWithConfig(cwd, deps.loadConfig);
+    return resolveWorkflowName(
+      targetName,
+      workflows.map(w => w.workflow)
+    );
+  } catch (err) {
+    getLog().debug(
+      { err: err as Error, targetName, cwd },
+      'workflow.fan_out_preflight_resolve_skipped'
+    );
+    return undefined;
+  }
+}
+
+/**
  * Σ of defined child `costUsd`. Returns undefined when NO child reported cost so the
  * node's own `costUsd` stays absent (a misleading `0` would look like a free run) —
  * matching the run-level aggregation's "only write when > 0" posture.
@@ -5607,6 +5661,9 @@ function sumFanOutTokens(outcomes: readonly ChildWorkflowOutcome[]): TokenUsage 
  *   - spawn/re-drive the incomplete indices through mapWithLimit(max_parallel); a
  *     fan-out-cancelled (gate/sibling) child is recoverable → re-driven, a user-cancelled
  *     one stays terminal;
+ *   - #2180 (Defect A): before ANY child is created, refuse a shared-checkout expansion
+ *     that would run >1 child at once over a target not declaring `mutates_checkout: false`
+ *     — those siblings would self-cancel on the path lock, unrecoverably;
  *   - #2180 (D5): a fan-out child that PAUSES at a gate FAILS the node (autonomous fan-out
  *     — the single parent gate slot can't hold N children) and is cancelled tagged
  *     `fan_out_gate` (removing the gate + resuming re-drives it). A `running`/`pending`
@@ -5867,7 +5924,43 @@ async function executeFanOutWorkflowNode(
     return failResult(msg);
   }
 
-  // 5. Execute the incomplete indices through a bounded sliding window. Classification per
+  // 5. Shared-checkout preflight (#2180 Defect A). Isolation is explicit-only, so a
+  //    fan-out with no `isolation: worktree` puts N children in the parent's checkout,
+  //    where the path lock cancels every sibling but one — permanently, since resume
+  //    threads a cancelled child as terminal. Caught HERE, before a single child row
+  //    exists: the child target (and therefore its `mutates_checkout`) only resolves at
+  //    spawn time by design (#2200), so load time cannot see it.
+  //
+  //    Counted over the indices this attempt will actually DRIVE, not over items.length —
+  //    a resume with one instance left to re-drive has no concurrency and must not be
+  //    blocked from recovering. `max_parallel: 1` is likewise not a collision: the window
+  //    awaits each child, so the previous one's lock is released before the next starts.
+  const pendingCount = items.reduce<number>((n, _item, i) => {
+    const existing = existingByIndex.get(i);
+    if (existing?.status === 'completed') return n;
+    if (existing?.status === 'cancelled' && !isFanOutRecoverableCancel(existing)) return n;
+    return n + 1;
+  }, 0);
+  const plannedConcurrency = Math.min(fanOut.max_parallel, pendingCount);
+  if (node.isolation !== 'worktree' && plannedConcurrency > 1) {
+    const childDefinition = await resolveFanOutChildDefinition(deps, cwd, node.workflow);
+    if (childDefinition && childDefinition.mutates_checkout !== false) {
+      const msg = fanOutSharedCheckoutMessage(node, plannedConcurrency);
+      getLog().warn(
+        {
+          parentRunId: parentRun.id,
+          nodeId: node.id,
+          childWorkflow: node.workflow,
+          plannedConcurrency,
+        },
+        'workflow.fan_out_shared_checkout_collision'
+      );
+      await notify(`❌ **Fan-out blocked** (node \`${node.id}\`): ${msg}`);
+      return failResult(msg);
+    }
+  }
+
+  // 6. Execute the incomplete indices through a bounded sliding window. Classification per
   //    index: an existing completed child threads its recorded outcome (resume skip); an
   //    existing failed OR fan-out-cancelled (recoverable) child is re-driven; a
   //    user-cancelled child stays terminal; a missing index spawns fresh. Fail-fast: once a
@@ -5997,7 +6090,7 @@ async function executeFanOutWorkflowNode(
     return o.output ?? '';
   };
 
-  // 6. #2180 (first-run path): a freshly-spawned child that paused at a gate fails the
+  // 7. #2180 (first-run path): a freshly-spawned child that paused at a gate fails the
   //    node. Cancel the paused child(ren) tagged `fan_out_gate` (recoverable once the gate
   //    is removed) and name the offending child (I4). Siblings were already sealed above.
   const pausedIdx = outcomes.findIndex(o => o.status === 'paused');
@@ -6009,7 +6102,7 @@ async function executeFanOutWorkflowNode(
     return failResult(msg, totalCostUsd, totalTokens);
   }
 
-  // 7. Join.
+  // 8. Join.
   if (fanOut.join === 'all_success') {
     const firstBad = outcomes.findIndex(o => o.status !== 'completed');
     if (firstBad !== -1) {
