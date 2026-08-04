@@ -28,6 +28,16 @@ function getLog(): ReturnType<typeof createLogger> {
 
 const MAX_MARKDOWN_BLOCK_LENGTH = 12000; // Slack markdown block limit
 
+/**
+ * Bounded backoff before retrying a channel-name lookup that just failed
+ * (missing scope, rate limit, API error, or an unrecognized channel shape).
+ * `unavailable` is never cached as a stable outcome — a scope added mid-flight
+ * must still recover — but retrying on EVERY message in a broken channel would
+ * hammer `conversations.info` and Slack's own rate limits. Overridden by
+ * Slack's own retry-after hint when a rate-limit error supplies one.
+ */
+const CHANNEL_NAME_FAILURE_BACKOFF_MS = 60_000;
+
 /** Slack channel + message ts pair used for reactions and edits. */
 export interface SlackMessageRef {
   channel: string;
@@ -61,15 +71,24 @@ export class SlackAdapter implements IPlatformAdapter {
   /**
    * Cache of channelId → resolved name outcome, for the channel → project map
    * and channel awareness. Only STABLE outcomes are stored ('name' and 'dm');
-   * 'unavailable' is never cached so a scope added mid-flight recovers on the
-   * next message — same contract as displayNameCache above.
+   * 'unavailable' is never cached here — see channelNameFailureUntil below,
+   * which bounds the retry rate instead of caching the failure forever.
    */
   private channelNameCache = new Map<string, SlackChannelNameResult>();
   /**
+   * channelId → timestamp (ms) before which resolveChannelName skips the API
+   * call and returns 'unavailable' immediately. Bounds retries for a channel
+   * stuck failing (missing scope, rate limit) without permanently caching the
+   * failure — once the backoff elapses, the next message tries again, so a
+   * scope added mid-flight still recovers within one backoff window.
+   */
+  private channelNameFailureUntil = new Map<string, number>();
+  /**
    * Tripped the first time conversations.info returns `missing_scope`. Like
-   * missingScopeLogged, the API call is still attempted on later messages (the
-   * operator may reinstall with the scope), but the WARN fires only once —
-   * a missing scope is a permanent misconfiguration, not a per-channel event.
+   * missingScopeLogged, the API call is still attempted after each backoff
+   * window elapses (the operator may reinstall with the scope), but the WARN
+   * fires only once — a missing scope is a permanent misconfiguration, not a
+   * per-channel event.
    */
   private channelInfoMissingScopeLogged = false;
 
@@ -351,7 +370,9 @@ export class SlackAdapter implements IPlatformAdapter {
    * Cached in-memory per adapter lifetime. Requires bot token scope
    * `channels:read` (public) / `groups:read` (private). Never throws — a
    * missing scope or API error resolves to `unavailable` so message handling
-   * continues unbound rather than failing.
+   * continues unbound rather than failing. A failed lookup is retried at most
+   * once per `CHANNEL_NAME_FAILURE_BACKOFF_MS` (or Slack's own retry-after
+   * hint on a rate limit) rather than on every message.
    *
    * DMs (`is_im`) legitimately have no name and resolve to `dm`; that is a
    * stable fact about the channel, so it is cached like a successful name.
@@ -360,6 +381,11 @@ export class SlackAdapter implements IPlatformAdapter {
     if (!channelId) return { kind: 'unavailable' };
     const cached = this.channelNameCache.get(channelId);
     if (cached) return cached;
+
+    const backoffUntil = this.channelNameFailureUntil.get(channelId);
+    if (backoffUntil !== undefined && Date.now() < backoffUntil) {
+      return { kind: 'unavailable' };
+    }
 
     try {
       const result = await this.app.client.conversations.info({ channel: channelId });
@@ -371,13 +397,21 @@ export class SlackAdapter implements IPlatformAdapter {
           ? { kind: 'dm' }
           : { kind: 'unavailable' };
 
-      // Only cache stable outcomes — see channelNameCache.
-      if (resolved.kind !== 'unavailable') {
+      if (resolved.kind === 'unavailable') {
+        // conversations.info succeeded but returned a shape we don't
+        // recognize (no name, not a DM) — back off like any other failure.
+        this.channelNameFailureUntil.set(channelId, Date.now() + CHANNEL_NAME_FAILURE_BACKOFF_MS);
+      } else {
+        // Only cache stable outcomes — see channelNameCache.
         this.channelNameCache.set(channelId, resolved);
+        this.channelNameFailureUntil.delete(channelId);
       }
       return resolved;
     } catch (error) {
-      const err = error as Error & { data?: { error?: string } };
+      const err = error as Error & {
+        data?: { error?: string; retry_after?: number };
+        retryAfter?: number;
+      };
       const slackErrorCode = err.data?.error;
       // Strip err.data from the log — Slack SDK error bodies can include API
       // response metadata that's not relevant for ops (mirrors fetchDisplayName).
@@ -393,6 +427,16 @@ export class SlackAdapter implements IPlatformAdapter {
       } else {
         getLog().warn({ errMessage, channelId, slackErrorCode }, 'slack.channel_info_failed');
       }
+
+      // Honor Slack's own retry-after hint on a rate limit; otherwise fall
+      // back to the default backoff.
+      const retryAfterSeconds = err.retryAfter ?? err.data?.retry_after;
+      const backoffMs =
+        typeof retryAfterSeconds === 'number' && retryAfterSeconds > 0
+          ? retryAfterSeconds * 1000
+          : CHANNEL_NAME_FAILURE_BACKOFF_MS;
+      this.channelNameFailureUntil.set(channelId, Date.now() + backoffMs);
+
       return { kind: 'unavailable' };
     }
   }

@@ -198,9 +198,12 @@ slack:
   the message.
 - **Name keys are matched case-insensitively;** channel IDs are matched exactly,
   because Slack IDs are case-sensitive.
-- **Renaming a channel breaks its entry** while `useChannelName` is `true` --
-  the mapping just stops resolving until you update it (logged, never blocking).
-  Key by ID if you rename channels often.
+- **Renamed channels keep their cached name until Archon restarts.** With
+  `useChannelName: true`, a channel's resolved name is cached for the process
+  lifetime -- if it's renamed after that first lookup, Archon keeps matching
+  the *old* name against `channelProjects` (never blocking, but not what you'd
+  expect from just updating the map). Restart Archon after a rename, or key by
+  ID if you rename channels often.
 - **Config changes need a restart** -- see above. This is not specific to
   `channelProjects`; it applies to every setting in global config.
 

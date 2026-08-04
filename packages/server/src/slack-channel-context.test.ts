@@ -269,4 +269,21 @@ describe('resolveSlackChannelContext', () => {
       expect(deps.findCodebaseByName).toHaveBeenCalledWith('web');
     });
   });
+
+  describe('dependency failures (documented contract, not caught here)', () => {
+    test('propagates a findCodebaseByName rejection to the caller', async () => {
+      const deps: MockedDeps = {
+        resolveChannelName: mock(() => Promise.resolve({ kind: 'name', name: 'ai-web-project' })),
+        findCodebaseByName: mock(() => Promise.reject(new Error('db unavailable'))),
+      };
+
+      // This function does not wrap dependency calls in try/catch — an
+      // infrastructure failure (e.g. the DB) must propagate so the CALLER
+      // (server/src/index.ts) can catch and log it, matching the guard added
+      // around the resolveSlackChannelContext call site there.
+      await expect(
+        resolveSlackChannelContext('C123', { channelProjects: { 'ai-web-project': 'web' } }, deps)
+      ).rejects.toThrow('db unavailable');
+    });
+  });
 });

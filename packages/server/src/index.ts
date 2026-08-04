@@ -647,11 +647,24 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         // Resolve the channel → project mapping (global config). Best-effort:
         // codebaseId is only a DEFAULT for a brand-new conversation, so an
         // unmapped or unresolvable channel simply starts unbound, as before.
-        const slackConfig = (await loadConfig()).slack;
-        const channelContext = await resolveSlackChannelContext(event.channel, slackConfig, {
-          resolveChannelName: id => slackAdapter.resolveChannelName(id),
-          findCodebaseByName: name => codebaseDb.findCodebaseByName(name),
-        });
+        // Guarded: resolveSlackChannelContext awaits an injected DB call
+        // (findCodebaseByName) that is NOT wrapped internally (see its own
+        // doc comment) — an uncaught rejection here would escape this
+        // detached async callback entirely, bypassing both the lockManager's
+        // .catch() below and createMessageErrorHandler.
+        let channelContext: Awaited<ReturnType<typeof resolveSlackChannelContext>> = {};
+        try {
+          const slackConfig = (await loadConfig()).slack;
+          channelContext = await resolveSlackChannelContext(event.channel, slackConfig, {
+            resolveChannelName: id => slackAdapter.resolveChannelName(id),
+            findCodebaseByName: name => codebaseDb.findCodebaseByName(name),
+          });
+        } catch (error) {
+          getLog().warn(
+            { err: error as Error, channel: event.channel },
+            'slack.channel_context_failed'
+          );
+        }
         if (channelContext.unresolvedProject) {
           getLog().warn(
             {

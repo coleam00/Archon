@@ -75,8 +75,12 @@ function lookupProjectName(
  * - `autoSetProject` (default true) decides only whether a mapping BINDS a new
  *   conversation, so awareness keeps working with binding turned off.
  *
- * Never throws: a failed name lookup or an unregistered project degrades to "no
- * binding" so the message still flows.
+ * A failed name lookup or an unregistered project degrades to "no binding" so
+ * the message still flows — but that's this function's OWN logic, not a
+ * blanket guarantee. Dependency calls are awaited un-wrapped: `resolveChannelName`
+ * is documented never to throw, but `findCodebaseByName` is a raw DB call and
+ * its rejection propagates uncaught. The caller is responsible for catching
+ * infrastructure failures from the injected dependencies.
  */
 export async function resolveSlackChannelContext(
   channelId: string,

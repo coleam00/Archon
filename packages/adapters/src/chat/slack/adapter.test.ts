@@ -1,7 +1,7 @@
 /**
  * Unit tests for Slack adapter
  */
-import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { describe, test, expect, mock, beforeEach, spyOn } from 'bun:test';
 import type { Mock } from 'bun:test';
 
 // Mock logger to suppress noisy output during tests
@@ -683,19 +683,77 @@ describe('SlackAdapter', () => {
       expect(scopeWarns).toHaveLength(1);
     });
 
-    test('does not cache unavailable — a scope added mid-flight recovers', async () => {
+    test('does not retry a failed lookup within the backoff window', async () => {
       const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
       mockConversationsInfo.mockRejectedValueOnce(new Error('rate_limited'));
       expect(await adapter.resolveChannelName('C_RETRY')).toEqual({ kind: 'unavailable' });
 
-      mockConversationsInfo.mockResolvedValueOnce({
-        channel: { id: 'C_RETRY', name: 'now-visible' },
-      });
-      expect(await adapter.resolveChannelName('C_RETRY')).toEqual({
-        kind: 'name',
-        name: 'now-visible',
-      });
-      expect(mockConversationsInfo).toHaveBeenCalledTimes(2);
+      // A second lookup immediately after must NOT call the API again — the
+      // whole point of bounding the retry rate. (No mock queued here: if the
+      // implementation regresses and calls the API anyway, it falls through
+      // to the describe block's default resolved mock, which the call-count
+      // assertion below still catches.)
+      expect(await adapter.resolveChannelName('C_RETRY')).toEqual({ kind: 'unavailable' });
+      expect(mockConversationsInfo).toHaveBeenCalledTimes(1);
+    });
+
+    test('retries after the backoff window elapses — a scope added mid-flight recovers', async () => {
+      const baseTime = 1_700_000_000_000;
+      let mockedNow = baseTime;
+      const nowSpy = spyOn(Date, 'now').mockImplementation(() => mockedNow);
+
+      try {
+        const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
+        mockConversationsInfo.mockRejectedValueOnce(new Error('rate_limited'));
+        expect(await adapter.resolveChannelName('C_RETRY2')).toEqual({ kind: 'unavailable' });
+
+        // Still within the backoff window: no retry.
+        mockedNow = baseTime + 59_000;
+        expect(await adapter.resolveChannelName('C_RETRY2')).toEqual({ kind: 'unavailable' });
+        expect(mockConversationsInfo).toHaveBeenCalledTimes(1);
+
+        // Past the backoff window: retries, and recovers.
+        mockedNow = baseTime + 60_001;
+        mockConversationsInfo.mockResolvedValueOnce({
+          channel: { id: 'C_RETRY2', name: 'now-visible' },
+        });
+        expect(await adapter.resolveChannelName('C_RETRY2')).toEqual({
+          kind: 'name',
+          name: 'now-visible',
+        });
+        expect(mockConversationsInfo).toHaveBeenCalledTimes(2);
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
+    test('honors a rate-limit retry_after hint instead of the default backoff', async () => {
+      const baseTime = 1_700_000_000_000;
+      let mockedNow = baseTime;
+      const nowSpy = spyOn(Date, 'now').mockImplementation(() => mockedNow);
+
+      try {
+        const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
+        const rateLimitError = Object.assign(new Error('rate_limited'), {
+          data: { error: 'ratelimited', retry_after: 5 },
+        });
+        mockConversationsInfo.mockRejectedValueOnce(rateLimitError);
+        expect(await adapter.resolveChannelName('C_RATELIMIT')).toEqual({ kind: 'unavailable' });
+
+        // Default backoff (60s) would still be blocking here, but the 5s
+        // retry_after hint should already have expired.
+        mockedNow = baseTime + 5_001;
+        mockConversationsInfo.mockResolvedValueOnce({
+          channel: { id: 'C_RATELIMIT', name: 'now-visible' },
+        });
+        expect(await adapter.resolveChannelName('C_RATELIMIT')).toEqual({
+          kind: 'name',
+          name: 'now-visible',
+        });
+        expect(mockConversationsInfo).toHaveBeenCalledTimes(2);
+      } finally {
+        nowSpy.mockRestore();
+      }
     });
 
     test('returns unavailable for an empty channel id without calling the API', async () => {
