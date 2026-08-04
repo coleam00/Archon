@@ -4,6 +4,7 @@
 import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test';
 import type { Mock } from 'bun:test';
 import { tmpdir } from 'node:os';
+import { basename, sep } from 'node:path';
 import { readFile, rm } from 'node:fs/promises';
 
 // Mock logger to suppress noisy output during tests
@@ -800,6 +801,49 @@ describe('SlackAdapter', () => {
       );
 
       expect(result.files).toEqual([]);
+    });
+
+    test('keeps a traversal-laden file id and name inside the upload dir', async () => {
+      globalThis.fetch = mock(() =>
+        Promise.resolve(new Response('x', { status: 200 }))
+      ) as unknown as typeof fetch;
+
+      // Both components come from the Slack payload and are untrusted.
+      const result = await adapter.downloadAttachments(
+        [
+          {
+            id: '../../../etc',
+            name: '../../../etc/passwd',
+            size: 1,
+            url_private_download: 'https://files.slack.com/evil',
+          },
+        ],
+        'C123:456.789'
+      );
+      uploadDirs.push(result.uploadDir);
+
+      const saved = result.files[0]?.path ?? '';
+      expect(saved.startsWith(result.uploadDir + sep)).toBe(true);
+      expect(saved).not.toContain('..');
+      // Nothing may remain that could climb out of the per-call directory.
+      expect(basename(saved)).toBe(saved.slice(result.uploadDir.length + 1));
+    });
+
+    test('sanitizes the conversation id used as the directory segment', async () => {
+      globalThis.fetch = mock(() =>
+        Promise.resolve(new Response('x', { status: 200 }))
+      ) as unknown as typeof fetch;
+
+      const result = await adapter.downloadAttachments(
+        [{ id: 'F1', name: 'a.txt', size: 1, url_private_download: 'https://files.slack.com/f1' }],
+        '../../escape:99.9'
+      );
+      uploadDirs.push(result.uploadDir);
+
+      // ':' is also invalid in Windows paths, so it must not survive either.
+      expect(basename(result.uploadDir)).not.toContain('..');
+      expect(basename(result.uploadDir)).not.toContain(':');
+      expect(result.uploadDir).toContain('uploads');
     });
 
     test('truncates to the max files per message', async () => {

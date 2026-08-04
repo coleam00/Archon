@@ -441,12 +441,20 @@ export class SlackAdapter implements IPlatformAdapter {
         }
 
         await mkdir(uploadDir, { recursive: true });
+        // BOTH path components are untrusted: they come from the Slack event
+        // payload. `basename` drops any directory part of the name, then the
+        // character classes leave nothing that can traverse. The id is stripped
+        // of dots as well — real Slack ids never contain one, and that removes
+        // any chance of a `..` segment. Without this, an id carrying separators
+        // would let writeFile escape uploadDir entirely. (The Web upload path
+        // sidesteps this by prefixing with a server-generated UUID instead.)
         const safeName = basename(file.name ?? file.id).replace(/[^a-zA-Z0-9._-]/g, '_');
-        const filePath = join(uploadDir, `${file.id}_${safeName}`);
+        const safeFileId = file.id.replace(/[^a-zA-Z0-9_-]/g, '_');
+        const filePath = join(uploadDir, `${safeFileId}_${safeName}`);
         await writeFile(filePath, buffer);
         saved.push({
           path: filePath,
-          name: safeName || file.id,
+          name: safeName || safeFileId,
           mimeType: file.mimetype ?? 'application/octet-stream',
           size: buffer.byteLength,
         });
