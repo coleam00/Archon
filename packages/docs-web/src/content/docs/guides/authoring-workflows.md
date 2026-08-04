@@ -1142,7 +1142,7 @@ can line results up against the input list positionally.
 | Field | Default | What it does |
 |-------|---------|--------------|
 | `items` | required | A `$node.output` (or `$node.output.field`) reference that must resolve to a **JSON array** at run time. Anything else — an object, a bare string, malformed JSON, a dangling ref — fails the node before any child is created. It never fans out over the characters of a string, and never silently degrades to zero items. An empty array is legal: the node completes immediately with `[]`. |
-| `as` | — | Reserved for a future `$INPUTS.<as>` channel ([#2214](https://github.com/coleam00/Archon/issues/2214)). **It has no effect today** — the item reaches the child only as `$ARGUMENTS`. Don't write it yet. |
+| `as` | — | Reserved for a future `$INPUTS.<as>` channel ([#2214](https://github.com/coleam00/Archon/issues/2214)) and **rejected at load** until then, rather than accepted and ignored — writing `as: task` and then `$INPUTS.task` in the child would otherwise deliver the literal string to the model. The item reaches the child as `$ARGUMENTS`. |
 | `max_parallel` | `5` | How many children may be **in flight at once**. |
 | `join` | `all_success` | How N child outcomes reduce to one node outcome (below). |
 
@@ -1174,6 +1174,11 @@ consequences worth planning for:
 Under `all_success`, the first child to fail seals the node's fate: remaining items are
 never spawned, and siblings still in flight are cooperatively cancelled so their spend
 stops. Under `all_done` every child runs to completion regardless.
+
+Those cancelled siblings and skipped items are casualties, not causes, and they can sit at
+lower indices than the child that actually failed. The node's failure message always names
+the **causal** child — so `child 4 (run a1b2c3d4) failed: …` is the one to go read, even
+when children 0–3 show as cancelled in `archon workflow runs`.
 
 #### Isolation: the same explicit rule, and one sharp edge
 
