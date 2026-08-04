@@ -145,9 +145,20 @@ Install to a dedicated tmp directory so the dev `bun link` binary stays on PATH 
 ```bash
 INSTALL_DIR=/tmp/archon-test-release-$(date +%s)
 mkdir -p "$INSTALL_DIR"
-INSTALL_DIR="$INSTALL_DIR" curl -fsSL https://raw.githubusercontent.com/coleam00/Archon/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/coleam00/Archon/main/scripts/install.sh | INSTALL_DIR="$INSTALL_DIR" bash
 BINARY="$INSTALL_DIR/archon"
 ```
+
+> **The env var must prefix `bash`, not `curl`.** In `VAR=x cmd1 | cmd2` the
+> assignment applies only to `cmd1`, so `INSTALL_DIR=… curl … | bash` sets it for
+> the *download* and leaves the *installer* on its `/usr/local/bin` default. The
+> failure is confusing rather than obvious: the script downloads and verifies the
+> checksum, then demands sudo and dies with
+> `sudo: a terminal is required to read the password`. Observed on the 0.7.1 test.
+>
+> `scripts/install.sh` carries the same broken form in its own header example
+> (`INSTALL_DIR=~/.local/bin curl -fsSL ... | bash`), so users copying it hit this
+> too. Fix both together; see issue #2436.
 
 Verify `$BINARY` exists and is executable. Capture the install directory for cleanup.
 
@@ -304,17 +315,36 @@ printf 'ANTHROPIC_API_KEY=sk-ant-test-fake\n' > .env
 "$BINARY" workflow run assist "hello" 2>&1 | tee /tmp/archon-test-leak.log
 ```
 
-**Pass criteria:**
+**Pass criteria** (current behaviour — the guard **strips**, it does not refuse):
 
-- The command exits with a non-zero code, OR produces an error message containing `Cannot add codebase` or `Cannot run workflow`
-- The error mentions the dangerous key name (`ANTHROPIC_API_KEY`)
-- No Claude subprocess was actually spawned (the gate short-circuited)
+- Output contains a strip line naming the repo and the source file, of the form:
+  `[archon] stripped N keys from <repo> (.env) to prevent target repo env from leaking into Archon processes`
+- `N` equals the number of keys planted (1 for the `.env` above) — a count of `0`
+  means the file was not read at all, which is a real regression
+- The workflow is then allowed to proceed and complete normally
+
+Assert on the strip line, not on an exit code:
+
+```bash
+grep -qE '^\[archon\] stripped [1-9][0-9]* keys .*\.env' /tmp/archon-test-leak.log \
+  && echo "PASS: env-leak guard active" \
+  || echo "FAIL: no strip line — guard inactive"
+```
+
+> **History — do not re-assert the old criteria.** This test previously expected a
+> *refusal* (`Cannot add codebase` / `Cannot run workflow`, non-zero exit), which
+> was the #1036/#1038/#983 behaviour. The current design is the two-layer strip
+> guard: the target repo's `.env` is read, dangerous keys are removed from the
+> environment handed to Archon subprocesses, and the run continues. On the 0.7.1
+> test the old assertions reported FAIL against a binary whose guard was working
+> correctly — it stripped exactly the 1 planted key. Verify the security property
+> (the key never reaches the subprocess), not the obsolete remediation text.
 
 **Common failures:**
 
-- Command proceeds normally → the env-leak gate is not active (regression of #1036)
-- Error is generic or unclear → the context-aware error message from #983 has regressed
-- Gate blocks but with wrong remediation text → `formatLeakError` context detection is broken
+- No strip line at all → the guard is not active; the `.env` is reaching subprocesses
+- `stripped 0 keys` → the file was located but not parsed
+- Strip line names the wrong file or repo → path resolution regression
 
 Clean up the leak test repo:
 

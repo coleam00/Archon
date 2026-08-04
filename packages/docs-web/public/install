@@ -15,10 +15,14 @@
 #   curl -fsSL https://raw.githubusercontent.com/coleam00/Archon/main/scripts/install.sh | bash
 #
 #   # Install specific version
-#   VERSION=v0.2.0 curl -fsSL ... | bash
+#   curl -fsSL ... | VERSION=v0.2.0 bash
 #
 #   # Install to custom directory
-#   INSTALL_DIR=~/.local/bin curl -fsSL ... | bash
+#   curl -fsSL ... | INSTALL_DIR=~/.local/bin bash
+#
+# NOTE: the variable must prefix `bash`, not `curl`. In `VAR=x cmd1 | cmd2` the
+# assignment applies only to cmd1, so `VERSION=... curl ... | bash` sets it on the
+# download and the installer never sees it — it silently uses the defaults below.
 
 set -euo pipefail
 
