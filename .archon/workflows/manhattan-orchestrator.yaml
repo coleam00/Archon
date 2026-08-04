@@ -6,14 +6,17 @@ description: |
             Also: "use manhattan orchestrator", "manhattan", "solve rigorously",
             "/manhattan-orchestrator", "orchestrate this".
   Does: Full agentic engineering pipeline grounded in "The New SDLC with Vibe Coding":
-        (1) Audit:    Interactive Q&A → formal audit template → Jira comment
-        (2) Decompose: Dependency tree + risk matrix (U×I) → Jira comment
-        (3) Specify:  Create Jira subtasks (vertical slices, to-tickets pattern),
-                      context engineering brief + acceptance criteria per subtask → Jira comment
-        (4) Implement: Loop — pick next open subtask → run full mini-pipeline
-                       (implement → verify → remediate) → post Jira progress comment
-        (5) Verify:   Independent verifier checks all subtasks against spec acceptance criteria
-        (6) Deliver:  Inverted pyramid delivery → final Jira comment + transition ticket to Done
+        (1) Audit:      Interactive Q&A → formal audit template → Jira comment
+        (2) Decompose:  Dependency tree + risk matrix (U×I) → Jira comment
+        (3) Specify:    Create Jira subtasks (vertical slices, to-tickets pattern),
+                        context engineering brief + acceptance criteria per subtask → Jira comment
+        (4) Implement:  Loop — pick next open subtask → implement → make test (Athena)
+                        → independent verify → remediate if needed → Jira progress comment
+        (5) Run Tests:  Final full-suite `make test` (Athena) across all changes
+        (6) Visual QA:  Headless browser opens changed UI pages, agent visually validates
+                        nothing broke and changes match acceptance criteria → Jira comment
+        (7) Verify:     Independent verifier integrates test results + visual QA findings
+        (8) Deliver:    Inverted pyramid → final Jira comment + transition ticket to Done
   NOT for: Simple single-step tasks or quick fixes where speed > rigor.
 
   Environment variables required:
@@ -21,6 +24,8 @@ description: |
     JIRA_EMAIL        e.g. dev@yourorg.com
     JIRA_API_TOKEN    Jira API token (https://id.atlassian.com/manage-profile/security/api-tokens)
     JIRA_PROJECT_KEY  e.g. PROJ
+    APP_URL           Running app URL for visual QA, e.g. http://localhost:3000
+                      (set as codebase env var in Archon UI)
 
 provider: pi
 model: openai/gpt-4o
@@ -330,7 +335,27 @@ nodes:
         Tag the implementer's response:
         - `[State Tag] <Claim>: [Verified Fact / Reported Fact / Assumption / Hypothesis]`
 
-        ## After Implementer Completes — Run Independent Verification
+        ## After Implementer Completes — Run make test (Athena)
+
+        Run the Athena test suite to catch regressions immediately:
+          cd . && make test > $ARTIFACTS_DIR/test-output-<subtask_jira_key>.txt 2>&1
+          TEST_EXIT=$?
+          if [ $TEST_EXIT -ne 0 ]; then
+            echo "TESTS_FAILED" > $ARTIFACTS_DIR/test-status-<subtask_jira_key>.txt
+          else
+            echo "TESTS_PASSED" > $ARTIFACTS_DIR/test-status-<subtask_jira_key>.txt
+          fi
+
+        If tests FAILED:
+        - Read `$ARTIFACTS_DIR/test-output-<subtask_jira_key>.txt` to identify failing tests
+        - Route back to a NEW Implementer with: the failing test output + the acceptance criteria
+        - Retry make test after remediation (up to 2 times)
+        - If still failing after 2 retries, mark subtask as "failed" and continue
+
+        Tag test result:
+        - `[State Tag] make test result: [Verified Fact]` — from actual test run output
+
+        ## After Tests Pass — Run Independent Verification
 
         Spawn a Verifier subagent (different from the Implementer) with:
         - The subtask's acceptance criteria from spec.md
@@ -368,7 +393,8 @@ nodes:
         Post progress comment on PARENT ticket $ARGUMENTS:
           DONE=$(jq '[.subtasks[] | select(.status=="complete")] | length' $ARTIFACTS_DIR/subtasks.json)
           TOTAL=$(jq '.subtasks | length' $ARTIFACTS_DIR/subtasks.json)
-          BODY=$(jq -n --arg text "⚙️ *Archon — Progress: $DONE/$TOTAL subtasks complete*\nLatest: <subtask_jira_key> $STATUS" \
+          TEST_STATUS=$(cat $ARTIFACTS_DIR/test-status-<subtask_jira_key>.txt 2>/dev/null || echo "unknown")
+          BODY=$(jq -n --arg text "⚙️ *Archon — Progress: $DONE/$TOTAL subtasks complete*\nLatest: <subtask_jira_key> $STATUS | Tests: $TEST_STATUS" \
             '{body:{type:"doc",version:1,content:[{type:"paragraph",content:[{type:"text",text:$text}]}]}}')
           curl -s -X POST \
             -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
@@ -381,10 +407,222 @@ nodes:
       max_iterations: 50
 
   # ═══════════════════════════════════════════════════════════════════════════
-  # PHASE 4 — Final Independent Verification (across all subtasks)
+  # PHASE 5 — Run Full Athena Test Suite (make test)
+  # Runs after ALL subtasks complete. Catches cross-subtask regressions that
+  # per-subtask tests might miss. Athena is a deterministic baseline runner —
+  # tests diff stdout against committed .baseline files.
+  # ═══════════════════════════════════════════════════════════════════════════
+  - id: run-tests
+    depends_on: [implement]
+    bash: |
+      echo "═══════════════════════════════════════════════"
+      echo "Running Athena test suite: make test"
+      echo "CWD: $(pwd)"
+      echo "═══════════════════════════════════════════════"
+
+      make test > "$ARTIFACTS_DIR/athena-test-output.txt" 2>&1
+      TEST_EXIT=$?
+
+      # Capture summary line (last non-empty line of test output)
+      SUMMARY=$(grep -E "passed|failed|error|PASS|FAIL|OK" "$ARTIFACTS_DIR/athena-test-output.txt" | tail -5)
+
+      if [ $TEST_EXIT -eq 0 ]; then
+        printf 'TESTS_PASSED' > "$ARTIFACTS_DIR/athena-test-status.txt"
+        echo "✅ All Athena tests passed"
+        echo "$SUMMARY"
+      else
+        printf 'TESTS_FAILED' > "$ARTIFACTS_DIR/athena-test-status.txt"
+        echo "❌ Athena tests FAILED (exit $TEST_EXIT)"
+        echo "$SUMMARY"
+        # Write failures file so check-failures picks this up
+        jq -n \
+          --arg summary "$SUMMARY" \
+          --arg output "$(tail -50 $ARTIFACTS_DIR/athena-test-output.txt)" \
+          '{failed_tasks:[{task_id:"athena-test-suite",reason:"make test failed"
+            ,evidence:$output}]}' \
+          > "$ARTIFACTS_DIR/verification-failures.json"
+      fi
+
+      # Post Jira comment with test results
+      STATUS_EMOJI=$([ $TEST_EXIT -eq 0 ] && echo "✅" || echo "❌")
+      STATUS_TEXT=$([ $TEST_EXIT -eq 0 ] && echo "All tests passed" || echo "Tests FAILED — see artifacts")
+      BODY=$(jq -n \
+        --arg text "$STATUS_EMOJI *Archon — Phase 5: Athena Test Suite*\n$STATUS_TEXT\n\n$(cat $ARTIFACTS_DIR/athena-test-output.txt | tail -20)" \
+        '{body:{type:"doc",version:1,content:[{type:"paragraph",content:[{type:"text",text:$text}]}]}}')
+      curl -s -X POST \
+        -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+        -H "Content-Type: application/json" \
+        "$JIRA_BASE_URL/rest/api/3/issue/$ARGUMENTS/comment" \
+        -d "$BODY" > /dev/null
+
+      # Exit 0 always — check-failures gate handles the stop/continue decision
+      exit 0
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # PHASE 6 — Visual QA
+  # Agent opens the changed UI pages in a headless browser, takes screenshots,
+  # and visually validates:
+  #   (a) Nothing visually broke (no blank pages, no layout explosions)
+  #   (b) The change does what the Jira ticket asked for
+  # Uses playwright CLI (install: npm install -g playwright, npx playwright install chromium)
+  # APP_URL must be set as a codebase env var in Archon UI (e.g. http://localhost:3000)
+  # ═══════════════════════════════════════════════════════════════════════════
+  - id: visual-qa
+    depends_on: [run-tests]
+    model: large
+    prompt: |
+      You are the Visual QA Agent. You did NOT implement this code.
+      Your job: open the changed UI in a headless browser, take screenshots,
+      and validate that (a) nothing broke visually and (b) the change matches
+      the Jira ticket's acceptance criteria.
+
+      ## Read First
+      - `$ARTIFACTS_DIR/spec.md` — acceptance criteria and list of changed UI pages/components
+      - `$ARTIFACTS_DIR/audit.md` — original Jira ticket requirement
+      - `$ARTIFACTS_DIR/subtasks.json` — which subtasks were completed
+
+      ## Step 1 — Identify Changed UI Pages
+
+      From spec.md, extract the list of UI routes/pages that were changed.
+      If spec.md doesn't list them explicitly, infer from the subtask descriptions.
+      Write the list to `$ARTIFACTS_DIR/visual-qa-pages.txt` (one URL path per line).
+
+      ## Step 2 — Check Playwright Availability
+
+      Run:
+        which playwright 2>/dev/null || npx playwright --version 2>/dev/null || echo "NOT_AVAILABLE"
+
+      If playwright is NOT available, try puppeteer or chromium CLI:
+        which chromium-browser 2>/dev/null || which google-chrome 2>/dev/null || echo "NO_BROWSER"
+
+      ## Step 3 — Take Screenshots of Each Changed Page
+
+      For each URL path from Step 1:
+
+      With playwright:
+        npx playwright screenshot \
+          --browser chromium \
+          --full-page \
+          "${APP_URL}${path}" \
+          "$ARTIFACTS_DIR/screenshot-$(echo $path | tr '/' '_').png"
+
+      With puppeteer (fallback):
+        node -e "
+          const pup = require('puppeteer');
+          (async () => {
+            const browser = await pup.launch({args:['--no-sandbox']});
+            const page = await browser.newPage();
+            await page.setViewport({width:1280,height:900});
+            await page.goto('${APP_URL}${path}', {waitUntil:'networkidle2'});
+            await page.screenshot({path:'$ARTIFACTS_DIR/screenshot-$(echo $path | tr / _).png',fullPage:true});
+            await browser.close();
+          })();
+        "
+
+      Also capture the page BEFORE the change if a baseline exists (from git stash or the main branch):
+        git stash 2>/dev/null && \
+        npx playwright screenshot --browser chromium --full-page "${APP_URL}${path}" \
+          "$ARTIFACTS_DIR/screenshot-baseline-$(echo $path | tr '/' '_').png" 2>/dev/null; \
+        git stash pop 2>/dev/null
+
+      ## Step 4 — Visually Inspect Screenshots
+
+      Read each screenshot file and perform visual validation:
+
+      For each changed page, check:
+
+      ### A. Nothing Broke (Regression Check)
+      - [ ] Page renders — no blank screen, no error message
+      - [ ] No layout explosions (elements outside viewport, overlapping content)
+      - [ ] Navigation is intact (header, sidebar, menu visible and correct)
+      - [ ] No console errors visible in screenshots
+      - [ ] Text is readable (no invisible white-on-white text, no truncation)
+      - [ ] Interactive elements visible (buttons, inputs, links all present)
+
+      ### B. Change Validates (Feature Check)
+      For each acceptance criterion from spec.md:
+      - [ ] Is the criterion visually confirmed in the screenshot?
+      - [ ] Does the UI change match what the Jira ticket described?
+      - [ ] Are any new UI elements styled consistently with the existing design system?
+
+      ## Step 5 — Write Visual QA Report
+
+      Write `$ARTIFACTS_DIR/visual-qa.md`:
+
+      ```markdown
+      # Visual QA Report — $ARGUMENTS
+
+      **Date**: <timestamp>
+      **App URL**: $APP_URL
+      **Pages Tested**: <count>
+
+      ## Summary
+      **Overall**: PASS | FAIL | PARTIAL
+      **Regression Risk**: Low | Medium | High
+
+      ## Page Results
+
+      ### <page path>
+      **Screenshot**: $ARTIFACTS_DIR/screenshot-<slug>.png
+      **Regression Check**: PASS | FAIL
+      **Feature Check**: PASS | FAIL
+
+      #### Findings:
+      - [PASS] <what looks correct>
+      - [FAIL] <what looks broken — describe exactly what is wrong>
+
+      #### Acceptance Criteria Visual Confirmation:
+      - [✅ Confirmed] <criterion 1>
+      - [❌ Not visible] <criterion 2 — describe what was expected vs seen>
+
+      ## Overall Verdict
+      <1-2 sentences: does the UI change do what the ticket asked, and did anything break?>
+      ```
+
+      If playwright/puppeteer is unavailable:
+      Write `$ARTIFACTS_DIR/visual-qa.md` with:
+      ```
+      # Visual QA Report — MANUAL REQUIRED
+      **Status**: BLOCKED — no headless browser available
+      **Action Required**: Install playwright (`npm install -g playwright && npx playwright install chromium`)
+        or set APP_URL env var in Archon codebase settings, then re-run visual QA manually.
+      **Pages to check manually**:
+      <list from visual-qa-pages.txt>
+      **Acceptance criteria to validate visually**:
+      <list from spec.md>
+      ```
+
+      ## Step 6 — Post Jira Comment
+
+      VERDICT=$(grep "Overall.*:" $ARTIFACTS_DIR/visual-qa.md | head -1)
+      STATUS_EMOJI=$(echo "$VERDICT" | grep -q "PASS" && echo "👁️ ✅" || echo "👁️ ❌")
+      BODY=$(jq -n \
+        --arg text "$STATUS_EMOJI *Archon — Phase 6: Visual QA*\n$VERDICT\n\nFull report in workflow artifacts." \
+        '{body:{type:"doc",version:1,content:[{type:"paragraph",content:[{type:"text",text:$text}]}]}}')
+      curl -s -X POST \
+        -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+        -H "Content-Type: application/json" \
+        "$JIRA_BASE_URL/rest/api/3/issue/$ARGUMENTS/comment" \
+        -d "$BODY" > /dev/null
+
+      ## Step 7 — Signal Failures
+
+      If Visual QA FAILED (regressions found or acceptance criteria not met visually):
+      Append to `$ARTIFACTS_DIR/verification-failures.json` (or create if not exists):
+        EXISTING=$(cat $ARTIFACTS_DIR/verification-failures.json 2>/dev/null || echo '{"failed_tasks":[]}')
+        VQA_FAILURES=$(grep "FAIL" $ARTIFACTS_DIR/visual-qa.md | head -5 | tr '\n' '; ')
+        echo $EXISTING | jq \
+          --arg reason "Visual QA failed: $VQA_FAILURES" \
+          '.failed_tasks += [{"task_id":"visual-qa","reason":$reason,"evidence":"See $ARTIFACTS_DIR/visual-qa.md"}]' \
+          > $ARTIFACTS_DIR/verification-failures.json
+    allowed_tools: [Read, Write, Bash, Glob]
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # PHASE 7 — Final Independent Verification (across all subtasks)
+  # Integrates: per-subtask verifications + Athena test results + Visual QA findings
   # ═══════════════════════════════════════════════════════════════════════════
   - id: verify
-    depends_on: [implement]
+    depends_on: [visual-qa]
     context: fresh
     model: large
     loop:
@@ -396,7 +634,10 @@ nodes:
         2. `$ARTIFACTS_DIR/spec.md` — acceptance criteria and evaluation harness (primary truth)
         3. `$ARTIFACTS_DIR/subtasks.json` — all subtask statuses
         4. All `$ARTIFACTS_DIR/verify-<subtask_jira_key>.md` files — per-subtask verification
-        5. All implementation output files
+        5. `$ARTIFACTS_DIR/athena-test-output.txt` — full Athena test suite output
+        6. `$ARTIFACTS_DIR/athena-test-status.txt` — TESTS_PASSED or TESTS_FAILED
+        7. `$ARTIFACTS_DIR/visual-qa.md` — visual QA findings for all changed pages
+        8. All implementation output files
 
         ## Output the Verification Plan
 
@@ -413,6 +654,8 @@ nodes:
         - Do the vertical slices compose into the full deliverable?
         - Are there gaps between subtasks?
         - Does the combined result satisfy the audit's Deliverable Definition?
+        - Did Athena tests PASS? (read athena-test-status.txt — TESTS_FAILED = automatic FAIL)
+        - Did Visual QA PASS? (read visual-qa.md Overall verdict — FAIL = must be escalated)
 
         Write `$ARTIFACTS_DIR/final-verification.md`.
 
@@ -428,12 +671,40 @@ nodes:
       fresh_context: true
       max_iterations: 10
 
-  # ─── Check for verification failures ─────────────────────────────────────
+  # ─── Check for verification failures (includes test failures + visual QA) ──
   - id: check-failures
     depends_on: [verify]
     context: fresh
     bash: |
+      FAILED=0
+      REASONS=""
+
+      # Check verification failures file (written by verify, run-tests, or visual-qa)
       if [ -f "$ARTIFACTS_DIR/verification-failures.json" ]; then
+        COUNT=$(jq '.failed_tasks | length' "$ARTIFACTS_DIR/verification-failures.json" 2>/dev/null || echo 0)
+        if [ "$COUNT" -gt 0 ]; then
+          FAILED=1
+          REASONS="${REASONS}verification_failures($COUNT) "
+        fi
+      fi
+
+      # Explicit Athena test failure check
+      if [ -f "$ARTIFACTS_DIR/athena-test-status.txt" ]; then
+        if grep -q "TESTS_FAILED" "$ARTIFACTS_DIR/athena-test-status.txt"; then
+          FAILED=1
+          REASONS="${REASONS}athena_tests_failed "
+        fi
+      fi
+
+      # Visual QA failure check
+      if [ -f "$ARTIFACTS_DIR/visual-qa.md" ]; then
+        if grep -qE "Overall.*FAIL|BLOCKED" "$ARTIFACTS_DIR/visual-qa.md"; then
+          FAILED=1
+          REASONS="${REASONS}visual_qa_failed "
+        fi
+      fi
+
+      if [ "$FAILED" -eq 1 ]; then
         printf 'FAILURES_FOUND'
       else
         printf 'ALL_CLEAR'
@@ -454,7 +725,9 @@ nodes:
       - `$ARTIFACTS_DIR/tasks.json` — interface/depth/seam contracts for failed tasks
       - `$ARTIFACTS_DIR/spec.md` — acceptance criteria the failed tasks must satisfy
       - `$ARTIFACTS_DIR/verification-failures.json` — what failed and why
-      - All `$ARTIFACTS_DIR/verify-*.md` files — detailed evidence
+      - All `$ARTIFACTS_DIR/verify-*.md` files — per-subtask verification evidence
+      - `$ARTIFACTS_DIR/athena-test-output.txt` — full Athena test output (if tests failed)
+      - `$ARTIFACTS_DIR/visual-qa.md` — visual QA findings (if UI regressions found)
 
       ## Rules
       - Fix ONLY the failed tasks. Do not touch passing code.
