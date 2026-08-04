@@ -323,13 +323,35 @@ printf 'ANTHROPIC_API_KEY=sk-ant-test-fake\n' > .env
   means the file was not read at all, which is a real regression
 - The workflow is then allowed to proceed and complete normally
 
-Assert on the strip line, not on an exit code:
+Assert on the strip line — pinned to **this** repo and **this** key count, so a
+strip from some other directory cannot produce a false pass. Capture the exit
+status too: under the strip design the workflow is expected to succeed, so a
+non-zero exit is its own failure.
 
 ```bash
-grep -qE '^\[archon\] stripped [1-9][0-9]* keys .*\.env' /tmp/archon-test-leak.log \
-  && echo "PASS: env-leak guard active" \
-  || echo "FAIL: no strip line — guard inactive"
+"$BINARY" workflow run assist "hello" > /tmp/archon-test-leak.log 2>&1
+leak_exit=$?
+
+# $LEAKREPO may be a symlinked path (/tmp -> /private/tmp on macOS); the binary
+# logs the resolved form, so compare against that.
+resolved_repo=$(cd "$LEAKREPO" && pwd -P)
+expected="[archon] stripped 1 keys from ${resolved_repo} (.env) to prevent target repo env from leaking into Archon processes"
+
+if [ "$leak_exit" -ne 0 ]; then
+  echo "FAIL: workflow exited $leak_exit — the guard strips and proceeds, it should not abort"
+elif grep -qxF "$expected" /tmp/archon-test-leak.log; then
+  echo "PASS: env-leak guard stripped exactly the planted key from this repo"
+else
+  echo "FAIL: expected strip line absent. Got:"
+  grep -F '[archon] stripped' /tmp/archon-test-leak.log || echo "  (no strip line at all — guard inactive)"
+fi
 ```
+
+An exact-match assertion is deliberate here. A looser pattern such as
+`stripped [1-9][0-9]* keys .*\.env` passes on **any** positive count from **any**
+path, so a strip belonging to a different repository — or a count inflated by an
+unrelated `.env` — reads as success while the regression it is meant to catch
+goes unnoticed.
 
 > **History — do not re-assert the old criteria.** This test previously expected a
 > *refusal* (`Cannot add codebase` / `Cannot run workflow`, non-zero exit), which

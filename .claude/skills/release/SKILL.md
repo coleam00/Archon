@@ -160,30 +160,65 @@ Read the current version from the detected file.
 The real boundary is dev's own last `Release x.y.z` commit:
 
 ```bash
-# The previous release commit ON DEV (not the squashed one on main)
-LAST_RELEASE=$(git log origin/dev --grep='^Release [0-9]' --format='%H' -n 1)
+# The previous release commit ON DEV (not the squashed one on main).
+#
+# The `$` anchor is load-bearing. Both commits exist on dev after Step 9's sync:
+#   6c6945ce  Release 0.7.1           <- dev's own version-bump commit  (WANT)
+#   c71f7f52  Release 0.7.1 (#2435)   <- main's squash, pulled back     (WRONG)
+# Picking the squash commit is catastrophic: its ancestry does not include dev's
+# individual history, so the range balloons to the whole repo (383 commits when
+# tested). Match the bare subject only.
+LAST_RELEASE=$(git log origin/dev \
+  --grep='^Release [0-9]+\.[0-9]+\.[0-9]+$' --extended-regexp \
+  --format='%H' -n 1)
+
+# First-ever release: fall back to the root commit. Without this the range
+# becomes `..origin/dev`, which git resolves against HEAD and which returns
+# ZERO commits — the skill would report "nothing to release" and stop.
+if [ -z "$LAST_RELEASE" ]; then
+  LAST_RELEASE=$(git rev-list --max-parents=0 origin/dev | tail -n 1)
+fi
 echo "Previous release commit: $(git log -1 --oneline "$LAST_RELEASE")"
 
-# Everything after it is genuinely new
-git log "$LAST_RELEASE"..origin/dev --oneline --no-merges
+# Everything after it is genuinely new, minus the release-plumbing commits
+# described below.
+git log "$LAST_RELEASE"..origin/dev --oneline --no-merges \
+  --grep='^Release [0-9]+\.[0-9]+\.[0-9]+' \
+  --grep='^chore: update Homebrew formula for v' \
+  --grep='^chore\(homebrew\):' \
+  --extended-regexp --invert-grep
 ```
 
-If `LAST_RELEASE` is empty (first-ever release), fall back to the root commit.
+> The backslashes in `^chore\(homebrew\):` are required. Under `--extended-regexp`
+> bare `(` and `)` are grouping operators, so the unescaped form matches the
+> literal text `chorehomebrew:` and silently fails to filter anything.
 
-Two commit kinds in that range are **release plumbing, not changelog material** —
-exclude them:
+Two commit kinds in that range are **release plumbing, not changelog material**,
+and the `--invert-grep` above drops them:
 
 - `Release x.y.z (#NNNN)` — main's squash commit, pulled back by Step 9's sync
 - `chore: update Homebrew formula for vx.y.z` / `chore(homebrew): …` — the CI job
   and the Step 10 commit; note these appear as *two different SHAs* with the same
   content, one per branch
 
+> The `Release` pattern is anchored to a full `x.y.z` version deliberately. A bare
+> `^Release ` would also swallow a legitimate feature commit whose subject starts
+> with that word. If a real commit is ever dropped, widen the range by hand rather
+> than loosening the pattern.
+
 **Sanity-check the boundary before drafting.** Cross-reference against what the
-previous version already documented — any overlap means the range is wrong:
+previous version already documented — any overlap means the range is wrong.
+Derive both headings from the current version so this does not rot:
 
 ```bash
-# PR numbers already recorded under the previous version's heading
-awk '/^## \[0\.7\.0\]/,/^## \[0\.6/' CHANGELOG.md | grep -oE '#[0-9]{3,5}' | sort -u
+# CURRENT_VERSION is the value read in Step 2, before the bump (e.g. 0.7.1)
+PREV_MAJOR_MINOR_PATCH="$CURRENT_VERSION"
+# The heading immediately above the one we are about to write:
+awk -v prev="## [$PREV_MAJOR_MINOR_PATCH]" '
+  index($0, prev) == 1 { on = 1; next }
+  on && /^## \[/       { exit }
+  on                   { print }
+' CHANGELOG.md | grep -oE '#[0-9]{3,5}' | sort -u
 ```
 
 If a PR number in your commit range appears in that list, stop and re-derive the
@@ -315,11 +350,17 @@ git checkout dev
 git pull origin main --no-rebase
 git push origin dev
 
-# Verify the sync actually converged — do not assume it did
+# Verify the sync actually converged — do not assume it did. FAIL CLOSED:
+# continuing past a failed sync publishes a formula and tap from a tree that
+# does not match what was released.
 git fetch origin
-git merge-base --is-ancestor origin/main origin/dev \
-  && echo "dev contains main — OK" \
-  || { echo "STILL DIVERGED"; git log origin/dev..origin/main --oneline; }
+if git merge-base --is-ancestor origin/main origin/dev; then
+  echo "dev contains main — OK"
+else
+  echo "STILL DIVERGED — stranded on main:"
+  git log origin/dev..origin/main --oneline
+  exit 1
+fi
 ```
 
 > **`--no-rebase` is required, not optional.** Without it, git aborts with
@@ -538,23 +579,63 @@ the published checksums before pushing — this is the one file where a wrong va
 breaks every user's install:
 
 ```bash
-gh release download "vx.y.z" --repo coleam00/Archon --pattern checksums.txt --dir /tmp/rel
+VERSION=x.y.z   # without the leading v
+gh release download "v$VERSION" --repo coleam00/Archon --pattern checksums.txt --dir /tmp/rel
+
+fail=0
+
+# Assert the formula version matches the release. A stale version points every
+# URL at the wrong release while carrying the new digests.
+formula_version=$(awk -F'"' '/^[[:space:]]*version "/ {print $2; exit}' homebrew/archon.rb)
+if [ "$formula_version" != "$VERSION" ]; then
+  echo "  BAD version: formula says '$formula_version', release is '$VERSION'"
+  fail=1
+fi
+
+# Compare each digest against the sha256 that FOLLOWS ITS OWN url line. A naive
+# `grep -q "$digest" formula` only asks whether the value appears anywhere, so
+# two platforms with swapped hashes both pass — and an empty digest degenerates
+# to `grep -q ""`, which matches every file.
 for p in archon-darwin-arm64 archon-darwin-x64 archon-linux-arm64 archon-linux-x64; do
-  real=$(awk -v p="$p" '$2 ~ p"$" {print $1}' /tmp/rel/checksums.txt | head -1)
-  grep -q "$real" homebrew/archon.rb && echo "  OK  $p" || echo "  BAD $p ($real missing)"
+  real=$(awk -v p="$p" '$2 ~ "(^|/)" p "$" {print $1}' /tmp/rel/checksums.txt | head -1)
+  if ! printf '%s' "$real" | grep -qE '^[0-9a-f]{64}$'; then
+    echo "  BAD $p: no 64-char digest in checksums.txt (got '$real')"
+    fail=1
+    continue
+  fi
+  in_formula=$(awk -v p="$p" '
+    index($0, "/" p "\"") { seen = 1; next }
+    seen && /sha256 "/    { gsub(/.*sha256 "|".*/, ""); print; exit }
+  ' homebrew/archon.rb)
+  if [ "$in_formula" = "$real" ]; then
+    echo "  OK   $p"
+  else
+    echo "  BAD  $p: formula has '$in_formula', release has '$real'"
+    fail=1
+  fi
 done
-grep -E '^\s+version "' homebrew/archon.rb
+
+[ "$fail" -eq 0 ] || { echo "formula verification FAILED — do not push"; exit 1; }
+echo "formula verified against v$VERSION checksums"
 ```
 
-All four must print `OK` and the version must match the release. If any print
-`BAD`, regenerate the formula from the Step 10 template rather than hand-editing.
+Every line must print `OK` and the version must match. On any `BAD`, regenerate
+the formula from the Step 10 template rather than hand-editing — a hand edit is
+how a digest ends up under the wrong platform in the first place.
 
-Finally, confirm convergence:
+Finally, confirm convergence. **Fail closed** — Step 11 publishes to the tap that
+users install from, so do not proceed on an unconverged tree:
 
 ```bash
 git fetch origin
-git merge-base --is-ancestor origin/main origin/dev && echo "dev contains main — OK"
-test "$(git log origin/dev..origin/main --oneline | wc -l)" -eq 0 && echo "no stranded commits — OK"
+converged=1
+git merge-base --is-ancestor origin/main origin/dev \
+  || { echo "DIVERGED: dev does not contain main"; converged=0; }
+stranded=$(git log origin/dev..origin/main --oneline | wc -l | tr -d ' ')
+[ "$stranded" -eq 0 ] || { echo "STRANDED: $stranded commit(s) on main not on dev:"; \
+  git log origin/dev..origin/main --oneline; converged=0; }
+[ "$converged" -eq 1 ] || { echo "sync incomplete — resolve before Step 11"; exit 1; }
+echo "branches converged — OK"
 ```
 
 ### Step 11: Sync the Homebrew Tap Repo
