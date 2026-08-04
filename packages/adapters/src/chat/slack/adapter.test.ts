@@ -629,6 +629,9 @@ describe('SlackAdapter', () => {
 
     beforeEach(() => {
       adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
+      // Warn counts are asserted below, and the shared mock accumulates across
+      // tests — an earlier 403 case would otherwise leak into those totals.
+      mockLogger.warn.mockClear();
     });
 
     afterEach(async () => {
@@ -844,6 +847,43 @@ describe('SlackAdapter', () => {
       expect(basename(result.uploadDir)).not.toContain('..');
       expect(basename(result.uploadDir)).not.toContain(':');
       expect(result.uploadDir).toContain('uploads');
+    });
+
+    test('warns once about files:read when downloads are rejected with 403', async () => {
+      globalThis.fetch = mock(() =>
+        Promise.resolve(new Response('', { status: 403 }))
+      ) as unknown as typeof fetch;
+
+      await adapter.downloadAttachments(
+        [{ id: 'F1', name: 'a.txt', url_private_download: 'https://files.slack.com/f1' }],
+        'C123:456.789'
+      );
+      await adapter.downloadAttachments(
+        [{ id: 'F2', name: 'b.txt', url_private_download: 'https://files.slack.com/f2' }],
+        'C123:456.789'
+      );
+
+      // A standing misconfiguration: once per adapter, not once per file.
+      const scopeWarns = (mockLogger.warn as unknown as Mock<() => void>).mock.calls.filter(
+        c => c[1] === 'slack.files_read_missing_scope'
+      );
+      expect(scopeWarns).toHaveLength(1);
+    });
+
+    test('does not blame the scope for a non-auth failure', async () => {
+      globalThis.fetch = mock(() =>
+        Promise.resolve(new Response('', { status: 500 }))
+      ) as unknown as typeof fetch;
+
+      await adapter.downloadAttachments(
+        [{ id: 'F1', name: 'a.txt', url_private_download: 'https://files.slack.com/f1' }],
+        'C123:456.789'
+      );
+
+      const scopeWarns = (mockLogger.warn as unknown as Mock<() => void>).mock.calls.filter(
+        c => c[1] === 'slack.files_read_missing_scope'
+      );
+      expect(scopeWarns).toHaveLength(0);
     });
 
     test('truncates to the max files per message', async () => {

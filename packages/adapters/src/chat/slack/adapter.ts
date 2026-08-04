@@ -74,6 +74,13 @@ export class SlackAdapter implements IPlatformAdapter {
    * `missing_scope` is a permanent misconfiguration, not a per-user incident.
    */
   private missingScopeLogged = false;
+  /**
+   * Tripped the first time an attachment download is rejected with 401/403.
+   * Downloads are still attempted afterwards (the operator may reinstall with
+   * the scope), but the WARN fires once — a missing `files:read` is a standing
+   * misconfiguration, not a per-file incident.
+   */
+  private filesReadMissingScopeLogged = false;
 
   constructor(botToken: string, appToken: string, mode: 'stream' | 'batch' = 'batch') {
     this.app = new App({
@@ -410,6 +417,22 @@ export class SlackAdapter implements IPlatformAdapter {
           signal: controller.signal,
         });
         if (!response.ok) {
+          // A 401/403 on an *authenticated* download is an auth problem rather
+          // than a bad file — in practice, a bot token without `files:read`.
+          // Call that out once, so the operator isn't left reading a generic
+          // per-file failure and assuming the attachment itself is broken.
+          // Only these two statuses are unambiguous; other auth failure modes
+          // still surface as an ordinary download failure below.
+          if (
+            (response.status === 401 || response.status === 403) &&
+            !this.filesReadMissingScopeLogged
+          ) {
+            this.filesReadMissingScopeLogged = true;
+            getLog().warn(
+              { scope: 'files:read', status: response.status },
+              'slack.files_read_missing_scope'
+            );
+          }
           getLog().warn(
             { conversationId, fileId: file.id, status: response.status },
             'slack.attachment_download_failed'

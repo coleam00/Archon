@@ -66,6 +66,7 @@ Archon uses **Socket Mode** for Slack integration, which means:
    - `reactions:write` -- Add lifecycle reactions (🔄 / ✅ / ❌) to the triggering message
    - `commands` -- Required for the `/archon` and `/archon-workflow` slash commands
    - `users:read` -- Look up real names via `users.info` for user attribution. The adapter degrades gracefully if this scope is missing (real names won't appear in the Archon DB, but messages still flow); a one-time `slack.users_info_missing_scope` warning surfaces the misconfiguration in the server log.
+   - `files:read` -- **Required to read file attachments.** Without it Archon cannot download files dropped in a message, and it answers as though no file were attached. Failed downloads log a one-time `slack.files_read_missing_scope` warning plus a per-file `slack.attachment_download_failed`; messages themselves are unaffected. See [File Attachments](#file-attachments).
 
 ## Step 4: Subscribe to Events
 
@@ -184,6 +185,36 @@ You can also DM the bot directly -- no @mention needed:
 /help
 ```
 
+### File Attachments
+
+Drop a file into the message and Archon can read it:
+
+```
+@your-bot summarise the attached spec
+```
+
+Requires the `files:read` bot scope (Step 3). Archon downloads each
+attachment with the bot token, hands the file to the AI for that message,
+and deletes it once the reply is finished -- attachments are never retained.
+
+Limits, matching the Web UI's upload caps:
+
+| Limit | Value | Behaviour when exceeded |
+| --- | --- | --- |
+| Size per file | 10 MB | That file is skipped, the rest of the message proceeds |
+| Files per message | 5 | Extra files are ignored (oldest 5 kept) |
+| Download time per file | 30 s | That file is skipped |
+
+Skipped attachments are logged (`slack.attachment_too_large`,
+`slack.attachment_download_failed`, `slack.attachment_download_timeout`) but
+never fail the message -- Slack has no request/response cycle in which to
+surface a hard rejection, so Archon answers with whatever it could read.
+
+:::caution
+Unlike the Web UI, the Slack path does not restrict attachments by file
+type; only the size, count, and time limits above apply.
+:::
+
 ## In-Thread UX
 
 When a workflow runs in a Slack thread, Archon now:
@@ -235,6 +266,22 @@ Ensure these scopes are added:
 
 - `channels:history` (public channels)
 - `groups:history` (private channels)
+
+### Archon Ignores an Attached File
+
+Archon replies as if no file were attached:
+
+1. **Check the `files:read` scope** (Step 3), then reinstall the app so
+   Slack issues a token that carries it. A
+   `slack.files_read_missing_scope` warning in the server log confirms this
+   is the cause.
+2. **Check the limits** -- files over 10 MB, beyond the fifth attachment in
+   one message, or slower than 30 s to download are skipped. Each logs its
+   own reason (`slack.attachment_too_large`,
+   `slack.attachments_truncated`, `slack.attachment_download_timeout`).
+3. **Check `slack.attachments_downloaded`** -- it logs `requested` vs
+   `saved` per message, which tells you immediately whether Archon saw the
+   file at all versus failed to fetch it.
 
 ## Security Recommendations
 
