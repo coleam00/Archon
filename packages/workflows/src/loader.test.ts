@@ -3553,6 +3553,32 @@ nodes:
       expect(err?.error).toContain('PR-D');
     });
 
+    it("rejects 'fan_out.as' ($INPUTS channel staged for PR-B) instead of ignoring it", async () => {
+      const result = await loadOne(
+        'fan-as',
+        `
+name: fan-as
+description: as names an $INPUTS channel that does not exist yet
+nodes:
+  - id: plan
+    prompt: "emit tasks"
+  - id: work
+    workflow: child-wf
+    depends_on: [plan]
+    fan_out:
+      items: "$plan.output.tasks"
+      as: task
+`
+      );
+      // Accepting it silently would deliver a literal '$INPUTS.task' to the model — the
+      // field reads as a working feature while doing nothing.
+      const err = result.errors.find(e => e.filename === 'fan-as.yaml');
+      expect(err).toBeDefined();
+      expect(err?.error).toContain('fan_out.as');
+      expect(err?.error).toContain('#2214');
+      expect(err?.error).toContain('$ARGUMENTS');
+    });
+
     it("rejects 'max_parallel: 0' (must be >= 1)", async () => {
       const result = await loadOne(
         'fan-zero',
