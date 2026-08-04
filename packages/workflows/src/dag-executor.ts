@@ -5722,6 +5722,42 @@ async function resolveFanOutChildDefinition(
 }
 
 /**
+ * Synthetic outcome error for an index the fail-fast never spawned. Named so the join's
+ * causal-child selection can recognise it structurally rather than by matching prose.
+ */
+const FAN_OUT_SKIPPED_BY_FAIL_FAST = 'skipped by fan-out fail-fast';
+
+/**
+ * Pick the outcome that actually FAILED the `all_success` join, for the node's message.
+ *
+ * Taking the lowest-index non-completed outcome names the wrong child under
+ * `max_parallel > 1`: sealing the node's fate cancels every sibling still in flight and
+ * skips every index not yet spawned, and those casualties can sit at LOWER indices than
+ * the child whose failure caused them. The operator then reads `child 0 cancelled` with no
+ * error text while the real failure is invisible.
+ *
+ * Casualties are excluded by identity, not by heuristic: a sibling this node cancelled is
+ * in `failFastVictims`, and an index it never spawned carries the synthetic skip error. So
+ * the choice does not depend on which child won the race — whichever sibling loses is
+ * excluded either way, and a sibling that genuinely failed on its own is still eligible.
+ * The lowest-index genuine failure wins, which is stable across runs.
+ *
+ * Falls back to the lowest-index bad outcome if every bad outcome is a casualty — a state
+ * the seal logic shouldn't produce (something has to cause the seal), but a join that
+ * failed must always name a child rather than report nothing.
+ */
+function pickCausalOutcomeIndex(
+  outcomes: readonly ChildWorkflowOutcome[],
+  failFastVictims: ReadonlySet<string>
+): number {
+  const isCasualty = (o: ChildWorkflowOutcome): boolean =>
+    o.status === 'cancelled' &&
+    (o.error === FAN_OUT_SKIPPED_BY_FAIL_FAST || failFastVictims.has(o.childRunId));
+  const causal = outcomes.findIndex(o => o.status !== 'completed' && !isCasualty(o));
+  return causal !== -1 ? causal : outcomes.findIndex(o => o.status !== 'completed');
+}
+
+/**
  * Σ of defined child `costUsd`. Returns undefined when NO child reported cost so the
  * node's own `costUsd` stays absent (a misleading `0` would look like a free run) —
  * matching the run-level aggregation's "only write when > 0" posture.
@@ -5870,12 +5906,18 @@ async function executeFanOutWorkflowNode(
     await safeSendMessage(platform, conversationId, text, msgContext);
   };
 
+  // Run ids this node cancelled ITSELF to stop waste once the outcome was already
+  // decided — fail-fast sibling cancels. They are casualties of another child's failure,
+  // never a cause, so the join's failure message must not name one (see pickCausalOutcome).
+  const failFastVictims = new Set<string>();
+
   // Cancel a child the fan-out path OWNS, stamping WHY (C2/I4) so the cancel is
   // attributable AND — unlike a user's out-of-band cancel — recoverable on resume. The
   // reason is written first (a best-effort metadata merge), then the status is flipped;
   // both are best-effort so a store hiccup can't unwind the node.
   const cancelChild = async (childId: string, reason: FanOutCancelReason): Promise<void> => {
     if (!childId) return;
+    if (reason === 'fan_out_sibling') failFastVictims.add(childId);
     await deps.store
       .updateWorkflowRun(childId, { metadata: { cancelled_reason: reason } })
       .catch((err: unknown) => {
@@ -6116,7 +6158,7 @@ async function executeFanOutWorkflowNode(
         return {
           childRunId: existing?.id ?? '',
           status: 'cancelled',
-          error: 'skipped by fan-out fail-fast',
+          error: FAN_OUT_SKIPPED_BY_FAIL_FAST,
         };
       }
       const input = itemToInput(item);
@@ -6208,7 +6250,9 @@ async function executeFanOutWorkflowNode(
 
   // 8. Join.
   if (fanOut.join === 'all_success') {
-    const firstBad = outcomes.findIndex(o => o.status !== 'completed');
+    // The CAUSAL child, not the lowest-index bad one — the fail-fast's own casualties can
+    // sit below it and would otherwise be reported as the failure.
+    const firstBad = pickCausalOutcomeIndex(outcomes, failFastVictims);
     if (firstBad !== -1) {
       const bad = outcomes[firstBad];
       const ref = bad.childRunId ? ` (run ${bad.childRunId.slice(0, 8)})` : '';
