@@ -1,14 +1,18 @@
 name: manhattan-orchestrator
 description: |
   Use when: User wants rigorous structured problem solving with isolated subagents and independent
-            cross-verification. Enforces the full Manhattan Orchestrator 5-phase methodology.
+            cross-verification. Enforces the full Manhattan Orchestrator 5-phase methodology,
+            grounded in Agentic Engineering principles (Kaggle "New SDLC with Vibe Coding").
   Triggers: "use manhattan orchestrator", "manhattan", "solve rigorously", "orchestrate",
             "use the orchestrator", "solve this with orchestration", "/manhattan-orchestrator".
-  Does: Five-phase methodology —
+  Does: Six-phase methodology —
         (1) Audit: relentless clarifying Q&A → formal audit template,
         (2) Decompose: dependency tree + risk matrix (U×I scoring),
-        (3) Delegate: isolated Implementer subagents with Interface/Depth/Seam briefs,
-        (4) Verify: independent Verifier (fresh context, never the implementer),
+        (2.5) Specify: context engineering — acceptance criteria, definition of done,
+              static/dynamic context brief per task (Agentic Engineering principle),
+        (3) Delegate: isolated Implementer subagents with Interface/Depth/Seam briefs
+              + context engineering brief,
+        (4) Verify: independent Verifier checks against acceptance criteria (never the implementer),
             Devil's Advocate self-evaluation,
         (5) Deliver: inverted pyramid, confidence levels, fact calibration table,
             5-question checklist, architecture acceptance checklist.
@@ -131,11 +135,91 @@ nodes:
     allowed_tools: [Read, Write]
 
   # ═══════════════════════════════════════════════════════════════════════════
+  # PHASE 2.5 — Specify & Context Engineering
+  # Goal: Produce formal acceptance criteria + context brief before any agent
+  #       writes a single line of code. Directly applies the "Context Engineering"
+  #       principle from "The New SDLC with Vibe Coding": give agents the same
+  #       context a skilled human teammate would need — no more, no less.
+  # ═══════════════════════════════════════════════════════════════════════════
+  - id: specify
+    depends_on: [decompose]
+    context: fresh
+    prompt: |
+      You are the Manhattan Orchestrator — Phase 2.5: Specification & Context Engineering.
+
+      Read:
+      - `$ARTIFACTS_DIR/audit.md` — intent, constraints, deliverable definition
+      - `$ARTIFACTS_DIR/decompose.md` — risk matrix
+      - `$ARTIFACTS_DIR/tasks.json` — structured task list
+
+      ## Your Output: `$ARTIFACTS_DIR/spec.md`
+
+      Produce a specification document with three sections:
+
+      ---
+
+      ### 1. Acceptance Criteria (per task)
+
+      For every task in tasks.json, write:
+      ```
+      #### Task: <task-id>
+      **Definition of Done:**
+      - [ ] <Concrete, observable, binary criterion 1>
+      - [ ] <Concrete, observable, binary criterion 2>
+      - [ ] <Concrete, observable, binary criterion N>
+
+      **Evaluation Method:** <Exactly how an independent verifier will check each criterion
+        without relying on the implementer's own description>
+
+      **Failure Signals:** <Observable evidence that this task has NOT been completed correctly>
+      ```
+
+      Rules for acceptance criteria:
+      - Binary only (pass/fail — no "mostly done" or "looks good")
+      - Observable without trusting the implementer (a stranger could check it)
+      - Tied to the original audit deliverable definition
+
+      ---
+
+      ### 2. Context Engineering Brief (per task)
+
+      For every task, specify exactly what context an Implementer subagent needs:
+
+      ```
+      #### Task: <task-id>
+      **Static Context (always available):**
+      - Coding standards / patterns to follow: <e.g., "use existing error handling pattern in X">
+      - Constraints that must never be violated: <from audit.md>
+      - Architecture rules: <interface budget, depth goal, seam contract from tasks.json>
+
+      **Dynamic Context (load only when needed):**
+      - Files to read before starting: <specific paths relevant to this task>
+      - Prior task outputs this task depends on: <file paths, not full content>
+      - External references: <docs, APIs, schemas>
+
+      **Context to EXCLUDE (need-to-know isolation):**
+      - Other tasks' implementation details
+      - Full project history or unrelated modules
+      ```
+
+      ---
+
+      ### 3. Evaluation Harness
+
+      Describe the overall test/verification strategy:
+      - What automated checks can verify correctness? (tests, linting, type checks, curl calls)
+      - What human-in-the-loop checks are needed and at which stage?
+      - What is the exit criterion for the entire workflow to be "done"?
+
+      Write this to `$ARTIFACTS_DIR/spec.md`.
+    allowed_tools: [Read, Write]
+
+  # ═══════════════════════════════════════════════════════════════════════════
   # PHASE 3 — Delegate & Implement
   # Goal: Spawn isolated Implementer subagents per task (fresh context, need-to-know).
   # ═══════════════════════════════════════════════════════════════════════════
   - id: implement
-    depends_on: [decompose]
+    depends_on: [specify]
     model: large
     loop:
       prompt: |
@@ -148,15 +232,19 @@ nodes:
         ## Read State
         1. `$ARTIFACTS_DIR/audit.md` — request constraints and deliverable definition
         2. `$ARTIFACTS_DIR/tasks.json` — structured task list with risk scores and seam contracts
-        3. `$ARTIFACTS_DIR/impl-progress.json` (if exists) — which tasks are done
+        3. `$ARTIFACTS_DIR/spec.md` — acceptance criteria + context engineering brief per task
+        4. `$ARTIFACTS_DIR/impl-progress.json` (if exists) — which tasks are done
 
         ## For Each Pending Task (in dependency order)
 
         Spawn an Implementer subagent. Give it ONLY:
         - The specific task description from tasks.json
         - Its `interface_budget`, `depth_goal`, `seam_contract`
+        - Its **Static Context** and **Dynamic Context** from spec.md (task's context brief)
+        - Its **Acceptance Criteria** from spec.md (so it knows what "done" looks like)
         - Any prior output it depends on (file paths, not entire context)
         - The target directory/file to write output to
+        - DO NOT pass the full spec.md or audit.md — extract only the relevant task section
 
         The Interface/Depth/Seam Brief for every implementation delegation:
         ```
@@ -203,8 +291,9 @@ nodes:
         ## Read
         1. `$ARTIFACTS_DIR/audit.md` — original specification and deliverable definition
         2. `$ARTIFACTS_DIR/tasks.json` — what each task required (interface budget, depth goal, seam)
-        3. `$ARTIFACTS_DIR/impl-progress.json` — what was reportedly implemented
-        4. All implementation output files referenced in the tasks
+        3. `$ARTIFACTS_DIR/spec.md` — **acceptance criteria and evaluation method per task** (primary source of truth for PASS/FAIL)
+        4. `$ARTIFACTS_DIR/impl-progress.json` — what was reportedly implemented
+        5. All implementation output files referenced in the tasks
 
         ## Step 1 — Output the Verification Plan
 
@@ -217,13 +306,14 @@ nodes:
           - Module depth: did complexity go behind boundaries or leak to call sites?
           - Seam clarity: can tests isolate behavior without fragile setup?
 
-        ## Step 2 — Verify Each Completed Task
+        ## Step 2 — Verify Each Completed Task Against Acceptance Criteria
 
         For each task in `impl-progress.json → completed`:
         - Read implementation artifacts
-        - Run tests or trace logic independently
+        - Check each acceptance criterion from `spec.md` — binary PASS/FAIL only
+        - Use the **Evaluation Method** from spec.md (independent path, not implementer's approach)
+        - Check **Failure Signals** from spec.md
         - Check architecture constraints (interface width, module depth, seam clarity)
-        - Score: PASS | FAIL with specific evidence
 
         Write results to `$ARTIFACTS_DIR/verification-{task-id}.md`.
 
@@ -255,15 +345,15 @@ nodes:
     context: fresh
     bash: |
       if [ -f "$ARTIFACTS_DIR/verification-failures.json" ]; then
-        echo "FAILURES_FOUND"
+        printf 'FAILURES_FOUND'
       else
-        echo "ALL_CLEAR"
+        printf 'ALL_CLEAR'
       fi
 
   # ─── Remediate (only runs if verification found failures) ─────────────────
   - id: remediate
     depends_on: [check-failures]
-    when: "contains($check-failures.output, 'FAILURES_FOUND')"
+    when: "$check-failures.output == 'FAILURES_FOUND'"
     context: fresh
     model: large
     prompt: |
@@ -273,6 +363,7 @@ nodes:
       ## Your Inputs
       - `$ARTIFACTS_DIR/audit.md` — original spec and constraints
       - `$ARTIFACTS_DIR/tasks.json` — interface/depth/seam contracts for failed tasks
+      - `$ARTIFACTS_DIR/spec.md` — acceptance criteria the failed tasks must now satisfy
       - `$ARTIFACTS_DIR/verification-failures.json` — what failed and why
       - All `$ARTIFACTS_DIR/verification-{task-id}.md` files — detailed evidence
 
