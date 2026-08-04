@@ -978,8 +978,11 @@ work, and there is nothing to create or clean up afterwards.
 ```
 
 The child gets a fresh worktree under `~/.archon/workspaces/<owner>/<repo>/worktrees/`, on a
-new branch named `archon/task-<parentRunId8>-child-0`. Four consequences are worth knowing
-before you reach for it:
+new branch named `archon/task-<parentRunId8>-<nodeId>-<hash>-child-<n>` — for the node above,
+`archon/task-3f9a1c2b-refactor-module-6fd3f873-child-0`. The node id is what keeps two
+isolated sub-run nodes in one parent from landing in the same worktree; the hash covers node
+ids too long to fit in a branch name. Four consequences are worth knowing before you reach
+for it:
 
 - **The branch starts from the repo's base branch, not the parent's.** The worktree is cut
   from `origin/<baseBranch>` in the canonical checkout — `worktree.baseBranch` in
