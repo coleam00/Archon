@@ -2315,6 +2315,10 @@ nodes:
       fi
 `
     );
+    // Serial on purpose. Under concurrency the fail-fast trip cooperatively cancels
+    // whichever siblings are still in flight (I1), so which of the three is 'completed'
+    // after run 1 is a race — and a COMPLETED sibling is exactly what this test is about.
+    // max_parallel: 1 pins run 1 to: index 0 completes, index 1 fails, index 2 never runs.
     await writeWorkflow(
       'fan-resume',
       `
@@ -2330,7 +2334,7 @@ nodes:
     isolation: worktree
     fan_out:
       items: "$plan.output"
-      max_parallel: 3
+      max_parallel: 1
 `
     );
 
@@ -2339,7 +2343,8 @@ nodes:
     const parent = await discover('fan-resume');
     const { resolver } = makeFanResolver(cwd);
 
-    // First drive: the flaky child (index 1) fails → node fails under all_success.
+    // First drive: index 0 completes, the flaky child (index 1) fails → node fails under
+    // all_success → index 2 is never spawned.
     const r1 = await executeWorkflow(
       deps,
       makePlatform(),
@@ -2353,16 +2358,18 @@ nodes:
     expect(r1.success).toBe(false);
     const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'fan-resume');
     const children1 = [...store.runs.values()].filter(r => r.workflow_name === 'fan-child-flaky');
-    expect(children1).toHaveLength(3);
+    expect(children1).toHaveLength(2);
     const byIndex1 = new Map(
       children1.map(c => [(c.metadata as Record<string, unknown>).child_index as number, c])
     );
     expect(byIndex1.get(0)?.status).toBe('completed');
     expect(byIndex1.get(1)?.status).toBe('failed');
-    expect(byIndex1.get(2)?.status).toBe('completed');
+    expect(byIndex1.get(2)).toBeUndefined();
+    const completedAtBefore = byIndex1.get(0)!.completed_at;
 
-    // Resume the PARENT: only the failed index-1 child is re-driven (marker now present →
-    // recovered); the two completed siblings are threaded from their rows, NOT re-run.
+    // Resume the PARENT: the failed index-1 child is re-driven (marker now present →
+    // recovered), index 2 is spawned for the first time, and the COMPLETED index-0 child is
+    // threaded from its row rather than re-executed.
     const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(parentRun!.id))!);
     const resumeOpts = hydrated ?? {
       preCreatedRun: await store.resumeWorkflowRun(parentRun!.id),
@@ -2380,10 +2387,16 @@ nodes:
 
     expect(r2.success).toBe(true);
     expect((await store.getWorkflowRun(parentRun!.id))?.status).toBe('completed');
-    // Still exactly 3 child rows — the failed one was re-driven in place, not duplicated.
+    // Exactly 3 child rows — one per index; the failed one was re-driven in its own row.
     expect(
       [...store.runs.values()].filter(r => r.workflow_name === 'fan-child-flaky')
     ).toHaveLength(3);
+    // The completed child was threaded from its row, not re-executed. Row count can't show
+    // this (a re-drive reuses the row) but completed_at can — re-driving it would stamp a
+    // new one, even though its own DAG node would be skipped by the child's resume.
+    expect((await store.getWorkflowRun(byIndex1.get(0)!.id))?.completed_at).toEqual(
+      completedAtBefore
+    );
     const workCompleted = store.events.find(
       e => e.event_type === 'node_completed' && e.step_name === 'work'
     );
@@ -2726,7 +2739,7 @@ nodes:
     isolation: worktree
     fan_out:
       items: "$plan.output"
-      max_parallel: 3
+      max_parallel: 1
 `
     );
 
@@ -2735,7 +2748,13 @@ nodes:
     const parent = await discover('fan-c2-usercancel');
     const { resolver } = makeFanResolver(cwd);
 
-    // Run 1: both children fail their first pass → node fails.
+    // Serial on purpose. Concurrently, whichever child loses the fail-fast race is
+    // cooperatively cancelled and tagged `fan_out_sibling` — which IS recoverable — so a
+    // "user cancel" landing on top of that tag gets resurrected on resume and the test
+    // asserts the opposite of its own subject. max_parallel: 1 makes index 0 the child that
+    // genuinely failed, so the cancel below is unambiguously untagged.
+    //
+    // Run 1: index 0 fails its first pass → fail-fast → index 1 is never spawned.
     const r1 = await executeWorkflow(
       deps,
       makePlatform(),
@@ -2753,6 +2772,10 @@ nodes:
         r.workflow_name === 'fan-child-flaky2' &&
         (r.metadata as Record<string, unknown>).child_index === 0
     );
+    // Precondition, asserted so a regression can't silently change the subject: index 0
+    // failed on its own and carries no fan-out cancel tag.
+    expect(childA?.status).toBe('failed');
+    expect((childA?.metadata as Record<string, unknown>).cancelled_reason).toBeUndefined();
     // User cancels child A out-of-band (a failed child → cancellable; no fan-out tag).
     await store.cancelWorkflowRun(childA!.id);
     expect((await store.getWorkflowRun(childA!.id))?.status).toBe('cancelled');
