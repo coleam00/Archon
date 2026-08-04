@@ -1,1 +1,0 @@
-{"type":"workflow_error","error":"DAG workflow 'bash-output-utf8-cap' failed: node utf8-cap failed. 0 downstream nodes were skipped.","workflow_id":"bash-output-utf8-cap","ts":"2026-08-04T14:47:58.500Z"}

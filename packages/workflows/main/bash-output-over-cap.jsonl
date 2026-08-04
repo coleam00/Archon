@@ -1,1 +1,0 @@
-{"type":"workflow_error","error":"DAG workflow 'bash-output-over-cap' failed: node over-cap failed. 0 downstream nodes were skipped.","workflow_id":"bash-output-over-cap","ts":"2026-08-04T14:47:22.348Z"}
