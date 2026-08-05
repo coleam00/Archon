@@ -51,6 +51,7 @@ export type OutputRefErrorReason =
   | 'not-in-schema'
   | 'unparseable'
   | 'truncated'
+  | 'array-aggregate'
   | 'missing-key'
   | 'producer-not-run'
   | 'unknown-node';
@@ -79,6 +80,8 @@ export class OutputRefError extends Error {
         return `'${ref}' references field '${field}', which is not declared in node '${nodeId}'s output_format schema. Add '${field}' to the schema (and mark it optional if it can be absent), or fix the reference.`;
       case 'unparseable':
         return `'${ref}' references field '${field}', but node '${nodeId}'s output is not a JSON object, so the field cannot be read. Emit JSON containing '${field}', or reference '$${nodeId}.output' (whole text) instead.`;
+      case 'array-aggregate':
+        return `'${ref}' references field '${field}', but node '${nodeId}' is a fan-out and its output is a JSON ARRAY of per-child results, not an object — there is no '${field}' on it and no producer prompt to change, because the array shape is fixed by the engine. Reference '$${nodeId}.output' (the whole array) and read it in a script node, which is also where a failed child's { error, status } entry can be handled. See the fan_out docs.`;
       case 'truncated':
         return `'${ref}' references field '${field}', but node '${nodeId}'s persisted output was clipped at the event size cap and no longer parses as JSON. The node very likely emitted '${field}' correctly — this surfaces on a resumed run, which reads the clipped copy rather than the original. Write the payload to a file under $ARTIFACTS_DIR and read it downstream, or shrink the node's output.`;
       case 'missing-key':
@@ -131,7 +134,18 @@ export function declaredFieldsFromSchema(
  * a resumed run is reading a clipped copy.
  */
 function unparseableReason(output: string): OutputRefErrorReason {
-  return hasTruncationMarker(output) ? 'truncated' : 'unparseable';
+  if (hasTruncationMarker(output)) return 'truncated';
+  // A fan-out aggregate parses fine — it is simply an array, which `asPlainObject` rejects.
+  // Reporting that as 'unparseable' told the author to "emit JSON containing 'x'" from a
+  // producer they cannot change, since the engine fixes the array shape. Failing loudly
+  // here is correct (a { error, status } entry must never be consumed as data); only the
+  // advice was wrong.
+  try {
+    if (Array.isArray(JSON.parse(output) as unknown)) return 'array-aggregate';
+  } catch {
+    // fall through — genuinely unparseable
+  }
+  return 'unparseable';
 }
 
 export type FieldResolution = { kind: 'value'; value: unknown } | { kind: 'empty' };

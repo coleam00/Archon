@@ -133,6 +133,42 @@ export const workflowRunSchema = z.object({
 
 export type WorkflowRun = z.infer<typeof workflowRunSchema>;
 
+/**
+ * Keys the sub-run machinery writes into a child run's untyped `metadata` JSONB, and the
+ * shape of each value. `metadata` is `Record<string, unknown>`, so a typo in a string
+ * literal at either end silently no-ops — the write lands under a key nobody reads, or the
+ * read returns undefined and the child looks like it was never stamped. Naming them once
+ * gives the compiler the only handle it can have on an untyped column: writer and reader
+ * now share a symbol instead of agreeing by luck.
+ *
+ * `parent_node_id` — which node of the parent spawned this child (both 1:1 and fan-out).
+ * `child_index`    — the fan-out instance's position in the item list; ABSENT on a 1:1
+ *                    child, which is what distinguishes the two on re-entry.
+ * `fan_out_item_hash` — hash of the item the child was spawned with, so a resume can warn
+ *                    when a non-deterministic producer changed it under the same index.
+ */
+export const SUBRUN_METADATA_KEYS = {
+  parentNodeId: 'parent_node_id',
+  childIndex: 'child_index',
+  fanOutItemHash: 'fan_out_item_hash',
+} as const;
+
+/** Typed view of the sub-run keys on a run's metadata; each is undefined when unset. */
+export function readSubrunMetadata(metadata: Record<string, unknown> | undefined): {
+  parentNodeId: string | undefined;
+  childIndex: number | undefined;
+  fanOutItemHash: string | undefined;
+} {
+  const parentNodeId = metadata?.[SUBRUN_METADATA_KEYS.parentNodeId];
+  const childIndex = metadata?.[SUBRUN_METADATA_KEYS.childIndex];
+  const fanOutItemHash = metadata?.[SUBRUN_METADATA_KEYS.fanOutItemHash];
+  return {
+    parentNodeId: typeof parentNodeId === 'string' ? parentNodeId : undefined,
+    childIndex: typeof childIndex === 'number' ? childIndex : undefined,
+    fanOutItemHash: typeof fanOutItemHash === 'string' ? fanOutItemHash : undefined,
+  };
+}
+
 /** Approval context stored in workflow run metadata when paused for human review. */
 export interface ApprovalContext {
   nodeId: string;

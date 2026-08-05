@@ -3651,7 +3651,7 @@ export interface components {
         /** @default 5 */
         max_parallel: number;
         /**
-         * @default all_success
+         * @default all_done
          * @enum {string}
          */
         join: 'all_success' | 'all_done' | 'first_success';
@@ -3776,6 +3776,7 @@ export interface components {
       };
       /** Format: date-time */
       created_at: string;
+      event_order?: number | null;
     };
     ValidateWorkflowResponse: {
       valid: boolean;

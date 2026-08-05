@@ -69,6 +69,7 @@ import {
   isIncludeNode,
   isWorkflowNode,
   isPersistableNode,
+  readSubrunMetadata,
   isApprovalContext,
 } from './schemas';
 import { formatToolCall } from './utils/tool-formatter';
@@ -5529,7 +5530,9 @@ async function executeWorkflowNode(
   let existing: WorkflowRun | undefined;
   try {
     const children = (await deps.store.findChildRuns(parentRun.id)).filter(
-      c => (c.metadata as Record<string, unknown> | undefined)?.parent_node_id === node.id
+      c =>
+        readSubrunMetadata(c.metadata as Record<string, unknown> | undefined).parentNodeId ===
+        node.id
     );
     existing = children.length > 0 ? children[children.length - 1] : undefined;
   } catch (err) {
@@ -5596,6 +5599,11 @@ type FanOutCancelReason = 'fan_out_gate' | 'fan_out_sibling' | 'fan_out_orphan';
 const FAN_OUT_RECOVERABLE_CANCEL_REASONS: ReadonlySet<string> = new Set<FanOutCancelReason>([
   'fan_out_gate',
   'fan_out_sibling',
+  // Every reason above is engine-owned, so every one belongs here — `fan_out_orphan` was
+  // missing, which read an orphan the engine cancelled as a USER cancel. Items shrinking
+  // and then growing back left those slots permanently cancelled: dead under all_done, and
+  // an unrecoverable node failure on every resume under all_success.
+  'fan_out_orphan',
 ]);
 
 /**
@@ -5703,28 +5711,35 @@ function fanOutSharedCheckoutMessage(node: WorkflowNode, concurrency: number): s
  * resolve at spawn time by design (#2200), so this reads the definition the children will
  * actually get rather than one captured at load.
  *
- * Returns undefined when the target can't be resolved (unknown name, ambiguous name,
- * discovery failure). That is deliberately NOT this check's problem: every child would fail
- * at `runChildWorkflow` with a message about the real cause, and reporting a collision the
- * author cannot act on would send them to the wrong file.
+ * Reports WHY it could not resolve rather than collapsing every cause to `undefined`. The
+ * preflight it feeds is the only thing standing between a shared-checkout fan-out and a
+ * path-lock cascade the engine cannot recover from, so "we could not check" must not read
+ * the same as "we checked and it is fine" — that is the silent fallback the engineering
+ * principles forbid. An unknown or ambiguous name reaches here without any exception being
+ * thrown, so this is not a rare path.
+ *
+ * The caller still must not report a COLLISION on this branch: the author's actual problem
+ * is the unresolvable target, and pointing them at `mutates_checkout` would send them to
+ * the wrong file. It fails closed with a message about the resolution instead.
  */
 async function resolveFanOutChildDefinition(
   deps: WorkflowDeps,
   cwd: string,
   targetName: string
-): Promise<WorkflowDefinition | undefined> {
+): Promise<{ definition: WorkflowDefinition } | { unresolved: string }> {
   try {
     const { workflows } = await discoverWorkflowsWithConfig(cwd, deps.loadConfig);
-    return resolveWorkflowName(
+    const definition = resolveWorkflowName(
       targetName,
       workflows.map(w => w.workflow)
     );
+    // resolveWorkflowName returns undefined for an unknown name and THROWS only on
+    // ambiguity, so the undefined branch is ordinary rather than exceptional.
+    return definition
+      ? { definition }
+      : { unresolved: `no workflow named '${targetName}' was found` };
   } catch (err) {
-    getLog().debug(
-      { err: err as Error, targetName, cwd },
-      'workflow.fan_out_preflight_resolve_skipped'
-    );
-    return undefined;
+    return { unresolved: (err as Error).message };
   }
 }
 
@@ -5732,6 +5747,16 @@ async function resolveFanOutChildDefinition(
  * Σ of defined child `costUsd`. Returns undefined when NO child reported cost so the
  * node's own `costUsd` stays absent (a misleading `0` would look like a free run) —
  * matching the run-level aggregation's "only write when > 0" posture.
+ *
+ * UNDER-REPORTS: this is Σ of *completed* children, not Σ of children. Usage metadata is
+ * persisted in exactly one place — inside `completeWorkflowRun` — so a child that burned
+ * tokens and then failed or was cancelled records no spend, and `childOutcomeFromRun`
+ * returns undefined for it. A 10-item fan-out where 3 children burn tokens and fail reports
+ * the spend of 7. Inherited from the 1:1 sub-run path, but fan-out is what makes it
+ * material, and `all_done` being the default makes a partly-failed run the ordinary case
+ * rather than the exceptional one. The real fix is upstream: `failWorkflowRun` would have
+ * to persist usage the way `completeWorkflowRun` does. Tracked with the run-tree budget
+ * work (#1961).
  */
 function sumFanOutCost(outcomes: readonly ChildWorkflowOutcome[]): number | undefined {
   let sum = 0;
@@ -5745,7 +5770,11 @@ function sumFanOutCost(outcomes: readonly ChildWorkflowOutcome[]): number | unde
   return any ? sum : undefined;
 }
 
-/** Σ of defined child token usage; undefined when no child reported tokens. */
+/**
+ * Σ of defined child token usage; undefined when no child reported tokens. Carries the same
+ * completed-only caveat as {@link sumFanOutCost} — a child that burned tokens and then
+ * failed contributes nothing.
+ */
 function sumFanOutTokens(outcomes: readonly ChildWorkflowOutcome[]): TokenUsage | undefined {
   let input = 0;
   let output = 0;
@@ -5840,7 +5869,7 @@ async function executeFanOutWorkflowNode(
   // node_completed writer (mirrors executeWorkflowNode.asCompleted) — written ONLY when
   // the join is satisfied, so getCompletedDagNodeOutputs skips a finished fan-out node
   // on resume but re-runs an unfinished one (which re-inspects children by child_index).
-  const writeCompleted = (output: string, costUsd?: number): void => {
+  const writeCompleted = (output: string, costUsd?: number, tokens?: TokenUsage): void => {
     deps.store
       .createWorkflowEvent({
         workflow_run_id: parentRun.id,
@@ -5851,6 +5880,12 @@ async function executeFanOutWorkflowNode(
           type: 'workflow',
           fan_out: true,
           ...(costUsd !== undefined ? { cost_usd: costUsd } : {}),
+          // Tokens are the axis that survives resume: getDagResumeSnapshot rebuilds
+          // cumulative usage by summing `data.tokens` and never reads `cost_usd`, so
+          // dropping them here made every resumed run under-report by exactly the
+          // children's tokens — silently, since an absent key is skipped without warning.
+          // On Codex the loss is total, because that provider reports no cost either.
+          ...(tokens !== undefined ? { tokens } : {}),
         },
       })
       .catch((err: Error) => {
@@ -5871,9 +5906,10 @@ async function executeFanOutWorkflowNode(
     });
   };
 
-  // Notify the platform immediately of a fan-out failure (S3) — the join-failure path
-  // already did; the #2180 and items-resolution paths did not, leaving those failures to
-  // the end-of-run digest only. safeSendMessage never throws.
+  // Notify the platform immediately of a fan-out failure (S3). Every early-failure branch
+  // uses this — items resolution, both gate paths, the child-lookup error, the collision
+  // preflight and the join — so a fan-out failure never reaches the user through the
+  // end-of-run digest alone. safeSendMessage never throws.
   const notify = async (text: string): Promise<void> => {
     await safeSendMessage(platform, conversationId, text, msgContext);
   };
@@ -5946,12 +5982,32 @@ async function executeFanOutWorkflowNode(
   const existingByIndex = new Map<number, WorkflowRun>();
   try {
     const children = (await deps.store.findChildRuns(parentRun.id)).filter(
-      c => (c.metadata as Record<string, unknown> | undefined)?.parent_node_id === node.id
+      c =>
+        readSubrunMetadata(c.metadata as Record<string, unknown> | undefined).parentNodeId ===
+        node.id
     );
     for (const child of children) {
-      const meta = child.metadata as Record<string, unknown> | undefined;
-      const idx = meta?.child_index;
-      if (typeof idx !== 'number') continue; // not a fan-out instance of this node
+      const meta = readSubrunMetadata(child.metadata as Record<string, unknown> | undefined);
+      const idx = meta.childIndex;
+      // A child of THIS node with no `child_index`: it was spawned when the node was a 1:1
+      // sub-run (that path stamps `parent_node_id` and no index), and the node has since
+      // grown a `fan_out:`. Dropping it silently left a live, billing, untracked child that
+      // nothing would ever cancel — so it gets the same treatment as an out-of-range index.
+      if (idx === undefined) {
+        getLog().warn(
+          {
+            parentRunId: parentRun.id,
+            nodeId: node.id,
+            childRunId: child.id,
+            status: child.status,
+          },
+          'workflow.fan_out_child_missing_index'
+        );
+        if (child.status === 'running' || child.status === 'pending' || child.status === 'paused') {
+          await cancelChild(child.id, 'fan_out_orphan');
+        }
+        continue;
+      }
       // I2: a child_index beyond the (now-shorter) item list — the items producer shrank
       // between attempts. Never silently dropped: WARN for visibility, and cancel a
       // still-live orphan (tagged) so it stops billing (a terminal one no-ops).
@@ -5982,8 +6038,8 @@ async function executeFanOutWorkflowNode(
       // S2: a non-deterministic items producer may have changed the item at this index
       // between attempts. Resume still re-keys by index (safe under the cached-output
       // invariant), but WARN so the content drift is visible.
-      const priorHash = meta?.fan_out_item_hash;
-      if (typeof priorHash === 'string' && priorHash !== hashFanOutItem(itemToInput(items[idx]))) {
+      const priorHash = meta.fanOutItemHash;
+      if (priorHash !== undefined && priorHash !== hashFanOutItem(itemToInput(items[idx]))) {
         getLog().warn(
           { parentRunId: parentRun.id, nodeId: node.id, childIndex: idx, childRunId: child.id },
           'workflow.fan_out_item_content_changed'
@@ -5992,9 +6048,12 @@ async function executeFanOutWorkflowNode(
       existingByIndex.set(idx, child);
     }
   } catch (err) {
-    return failResult(
-      `Failed to look up fan-out child runs for node '${node.id}': ${(err as Error).message}`
-    );
+    // Notify like every other early-failure branch — this one was the odd one out, so a
+    // store error was the single fan-out failure that reached the user only via the
+    // end-of-run digest.
+    const msg = `Failed to look up fan-out child runs for node '${node.id}': ${(err as Error).message}`;
+    await notify(`❌ **Fan-out failed** (node \`${node.id}\`): ${msg}`);
+    return failResult(msg);
   }
 
   // 4. #2180 (D5): a fan-out child cannot hold the single parent gate slot. Split the
@@ -6055,8 +6114,33 @@ async function executeFanOutWorkflowNode(
   }, 0);
   const plannedConcurrency = Math.min(fanOut.max_parallel, pendingCount);
   if (node.isolation !== 'worktree' && plannedConcurrency > 1) {
-    const childDefinition = await resolveFanOutChildDefinition(deps, cwd, node.workflow);
-    if (childDefinition && childDefinition.mutates_checkout !== false) {
+    const resolved = await resolveFanOutChildDefinition(deps, cwd, node.workflow);
+    if ('unresolved' in resolved) {
+      // Fail CLOSED. Skipping the check here would let the path-lock cascade through
+      // unguarded on the strength of a lookup that did not happen, and the spawn is about
+      // to fail on this same unresolvable target anyway — so the only thing failing open
+      // buys is a worse message. Names the resolution problem, not a collision the author
+      // cannot yet act on.
+      const msg =
+        `fan_out node '${node.id}': cannot verify that ${String(plannedConcurrency)} concurrent ` +
+        `children are safe to share the parent checkout, because '${node.workflow}' could not ` +
+        `be resolved — ${resolved.unresolved}. Fix the target name; if the children really do ` +
+        'run side by side in one checkout, the workflow must also declare ' +
+        '`mutates_checkout: false`.';
+      getLog().warn(
+        {
+          parentRunId: parentRun.id,
+          nodeId: node.id,
+          childWorkflow: node.workflow,
+          plannedConcurrency,
+          reason: resolved.unresolved,
+        },
+        'workflow.fan_out_preflight_unresolved'
+      );
+      await notify(`❌ **Fan-out blocked** (node \`${node.id}\`): ${msg}`);
+      return failResult(msg);
+    }
+    if (resolved.definition.mutates_checkout !== false) {
       const msg = fanOutSharedCheckoutMessage(node, plannedConcurrency);
       getLog().warn(
         {
@@ -6189,10 +6273,15 @@ async function executeFanOutWorkflowNode(
   //    survives the no-mutual-termination rule deliberately. A pause is not a terminal
   //    state, so "every child runs to its own terminal state" has no answer for it: the
   //    parent has a single approval slot and cannot hand it to N children, so the child
-  //    would wait forever for a gate it can never be given. Cancelling is what makes it
-  //    terminal, and it happens only AFTER every sibling has settled — a paused child no
-  //    longer stops anyone else. This is an error path (#2438), not a race: the node is
-  //    failing either way, and the cancel just stops the run dangling.
+  //    would wait forever for a gate it can never be given. This is an error path (#2438),
+  //    not a race: the node is failing either way, and the cancel just stops the run
+  //    dangling. A paused child never stops a sibling — everyone still runs to their own
+  //    terminal state.
+  //
+  //    The cancel that actually frees the path lock already fired mid-flight, the moment
+  //    the pause was observed. This pass is the idempotent backstop: it covers a paused
+  //    outcome that did not come from this attempt's spawn loop (a synthetic outcome from a
+  //    rejected slot), and re-cancelling an already-cancelled row is a no-op.
   const pausedIdx = outcomes.findIndex(o => o.status === 'paused');
   if (pausedIdx !== -1) {
     for (const o of outcomes)
@@ -6223,7 +6312,7 @@ async function executeFanOutWorkflowNode(
     }
     // All completed → aggregate the child outputs in item order (JSON array string).
     const aggregate = JSON.stringify(outcomes.map((o, i) => childOutput(o, i)));
-    writeCompleted(aggregate, totalCostUsd);
+    writeCompleted(aggregate, totalCostUsd, totalTokens);
     return {
       state: 'completed',
       output: aggregate,
@@ -6242,7 +6331,7 @@ async function executeFanOutWorkflowNode(
         : { error: o.error ?? `child ${o.status}`, status: o.status }
     )
   );
-  writeCompleted(aggregate, totalCostUsd);
+  writeCompleted(aggregate, totalCostUsd, totalTokens);
   return {
     state: 'completed',
     output: aggregate,

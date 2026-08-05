@@ -120,6 +120,8 @@ export {
   RESUMABLE_WORKFLOW_STATUSES,
   isApprovalContext,
   isRunBlockedOnChild,
+  SUBRUN_METADATA_KEYS,
+  readSubrunMetadata,
 } from './workflow-run';
 export type {
   WorkflowRunStatus,

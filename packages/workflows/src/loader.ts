@@ -98,6 +98,16 @@ function formatNodeIssue(id: string, issue: z.ZodIssue): string {
  * Replaces the former parseDagNode + parseRetryConfig + parseToolList +
  * parseNodeHooks + parseIdleTimeout functions.
  */
+/**
+ * The one shape of a `$nodeId.output` reference. Both scanners below build their own
+ * RegExp from it — a `g`-flagged one for the multi-match dangling-ref sweep and a plain one
+ * for `fan_out.items` — because a `g` regex carries mutable `lastIndex` and sharing a single
+ * instance across call sites is how that turns into skipped matches. Sharing the SOURCE is
+ * the part that matters: a second hand-written copy inside a function that already warns
+ * "KEEP IN SYNC" is exactly the drift that warning is about.
+ */
+const OUTPUT_REF_SOURCE = String.raw`\$([a-zA-Z_][a-zA-Z0-9_-]*)\.output`;
+
 function parseDagNode(raw: unknown, index: number, errors: string[]): DagNode | null {
   // Extract id early for error messages (may be empty/invalid — schema will catch it)
   const rawId =
@@ -236,7 +246,7 @@ export function validateDagStructure(
   // inside a script-node example); strip those before scanning so they don't false-match.
   // The code/expression fields (bash / script / until_bash / cancel) and when: clauses
   // carry live refs (not documentation), so they are scanned verbatim.
-  const outputRefPattern = /\$([a-zA-Z_][a-zA-Z0-9_-]*)\.output/g;
+  const outputRefPattern = new RegExp(OUTPUT_REF_SOURCE, 'g');
   const stripMarkdownCode = (s: string): string =>
     s.replace(/```[\s\S]*?```/g, '').replace(/`[^`\n]*`/g, '');
   for (const node of nodes) {
@@ -304,7 +314,7 @@ export function validateDagStructure(
   };
   for (const node of nodes) {
     if (!isWorkflowNode(node) || !node.fan_out) continue;
-    const refMatch = /\$([a-zA-Z_][a-zA-Z0-9_-]*)\.output/.exec(node.fan_out.items);
+    const refMatch = new RegExp(OUTPUT_REF_SOURCE).exec(node.fan_out.items);
     const producerId = refMatch?.[1];
     if (producerId === undefined) continue; // no ref surface — runtime fail-closed owns it
     if (!transitiveDepsOf(node.id).has(producerId)) {

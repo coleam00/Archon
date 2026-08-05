@@ -1932,6 +1932,239 @@ nodes:
     expect(error).toContain('fan-child');
   });
 
+  it('an orphan-cancelled index is re-driven on resume, not left permanently cancelled', async () => {
+    // `fan_out_orphan` is stamped by the ENGINE when the item list shrinks under a child.
+    // If it is not in the recoverable set it reads as a user cancel: items shrinking and
+    // then growing back leaves those slots dead under all_done, and fails the node on every
+    // resume under all_success with no way back.
+    await writeWorkflow('fan-child', fanChildEcho);
+    await writeWorkflow(
+      'fan-orphan-recover',
+      `
+name: fan-orphan-recover
+description: an index cancelled as an orphan must come back when the item returns
+nodes:
+  - id: plan
+    bash: |
+      printf '%s' '["a","b"]'
+  - id: work
+    workflow: fan-child
+    depends_on: [plan]
+    isolation: worktree
+    fan_out:
+      items: "$plan.output"
+      max_parallel: 2
+      join: all_success
+`
+    );
+
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    const parent = await discover('fan-orphan-recover');
+    const { resolver } = makeFanResolver(cwd);
+
+    const parentRun = await store.createWorkflowRun({
+      workflow_name: 'fan-orphan-recover',
+      conversation_id: 'conv-db',
+      user_message: 'goal',
+      working_path: cwd,
+    });
+    store.events.push({
+      workflow_run_id: parentRun.id,
+      event_type: 'node_completed',
+      step_name: 'plan',
+      data: { node_output: '["a","b"]' },
+    });
+    // Index 1 was cancelled as an orphan on an earlier attempt (the list was shorter then);
+    // the item is back now.
+    const orphan = await store.createWorkflowRun({
+      workflow_name: 'fan-child',
+      conversation_id: 'conv-db',
+      user_message: 'b',
+      parent_run_id: parentRun.id,
+      working_path: cwd,
+      metadata: { parent_node_id: 'work', child_index: 1, cancelled_reason: 'fan_out_orphan' },
+    });
+    await store.updateWorkflowRun(orphan.id, { status: 'cancelled' });
+
+    const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(parentRun.id))!);
+    const r = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parent,
+      'goal',
+      'conv-db',
+      {
+        ...(hydrated ?? { preCreatedRun: await store.resumeWorkflowRun(parentRun.id) }),
+        resolveChildIsolation: resolver,
+      }
+    );
+
+    // The orphan was re-driven in place and the node completed.
+    expect(r.success).toBe(true);
+    expect((await store.getWorkflowRun(orphan.id))?.status).toBe('completed');
+  });
+
+  it('a child of this node with NO child_index is warned about and cancelled if live', async () => {
+    // Converting a node from a 1:1 sub-run to `fan_out:` between attempts leaves a child
+    // stamped with parent_node_id and no index. Dropping it silently left it live, billing
+    // and untracked — findChildRuns filters on parent_node_id only, so nothing else would
+    // ever find it.
+    await writeWorkflow('fan-child', fanChildEcho);
+    await writeWorkflow(
+      'fan-noindex',
+      `
+name: fan-noindex
+description: a leftover 1:1 child meets a node that now fans out
+nodes:
+  - id: plan
+    bash: |
+      printf '%s' '["a"]'
+  - id: work
+    workflow: fan-child
+    depends_on: [plan]
+    isolation: inherit
+    fan_out:
+      items: "$plan.output"
+      max_parallel: 1
+`
+    );
+
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    const parent = await discover('fan-noindex');
+
+    const parentRun = await store.createWorkflowRun({
+      workflow_name: 'fan-noindex',
+      conversation_id: 'conv-db',
+      user_message: 'goal',
+      working_path: cwd,
+    });
+    store.events.push({
+      workflow_run_id: parentRun.id,
+      event_type: 'node_completed',
+      step_name: 'plan',
+      data: { node_output: '["a"]' },
+    });
+    const legacy = await store.createWorkflowRun({
+      workflow_name: 'fan-child',
+      conversation_id: 'conv-db',
+      user_message: 'from the 1:1 era',
+      parent_run_id: parentRun.id,
+      working_path: join(cwd, 'legacy'),
+      metadata: { parent_node_id: 'work' }, // no child_index
+    });
+    await store.updateWorkflowRun(legacy.id, { status: 'running' });
+
+    const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(parentRun.id))!);
+    const r = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parent,
+      'goal',
+      'conv-db',
+      { ...(hydrated ?? { preCreatedRun: await store.resumeWorkflowRun(parentRun.id) }) }
+    );
+
+    // Index 0 ran and the node completed; the untracked leftover was cancelled, not left
+    // running forever.
+    expect(r.success).toBe(true);
+    const after = await store.getWorkflowRun(legacy.id);
+    expect(after?.status).toBe('cancelled');
+    expect((after?.metadata as Record<string, unknown>).cancelled_reason).toBe('fan_out_orphan');
+  });
+
+  it('a resume with ONE instance left is not blocked by the shared-checkout preflight', async () => {
+    // The preflight counts the indices this attempt will actually DRIVE, not items.length.
+    // Counting items.length instead would block every resume of a wide shared-checkout
+    // fan-out — including one with a single failed instance left, where there is no
+    // concurrency at all. That inversion (blocking recovery from an unrelated failure) is
+    // the bug this branch already fixed once, and nothing pinned it until now.
+    await writeWorkflow('fan-child', fanChildEcho);
+    await writeWorkflow(
+      'fan-resume-preflight',
+      `
+name: fan-resume-preflight
+description: wide fan-out over a repo-writing child, resumed with one instance left
+nodes:
+  - id: plan
+    bash: |
+      printf '%s' '["a","b","c"]'
+  - id: work
+    workflow: fan-child
+    depends_on: [plan]
+    fan_out:
+      items: "$plan.output"
+      max_parallel: 3
+      join: all_success
+`
+    );
+
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    const parent = await discover('fan-resume-preflight');
+
+    // Seed a partly-completed attempt: indices 0 and 2 completed, index 1 failed. The child
+    // declares no `mutates_checkout: false`, so a preflight counting items.length would see
+    // 3 and refuse; counting drivable indices sees 1 and proceeds.
+    const parentRun = await store.createWorkflowRun({
+      workflow_name: 'fan-resume-preflight',
+      conversation_id: 'conv-db',
+      user_message: 'goal',
+      working_path: cwd,
+    });
+    store.events.push({
+      workflow_run_id: parentRun.id,
+      event_type: 'node_completed',
+      step_name: 'plan',
+      data: { node_output: '["a","b","c"]' },
+    });
+    const seed = async (idx: number, status: WorkflowRun['status']): Promise<void> => {
+      const child = await store.createWorkflowRun({
+        workflow_name: 'fan-child',
+        conversation_id: 'conv-db',
+        user_message: ['a', 'b', 'c'][idx],
+        parent_run_id: parentRun.id,
+        working_path: cwd,
+        metadata: { parent_node_id: 'work', child_index: idx },
+      });
+      await store.updateWorkflowRun(child.id, { status });
+      if (status === 'completed') {
+        await store.updateWorkflowRun(child.id, {
+          metadata: { summary: `did:${['a', 'b', 'c'][idx]}` },
+        });
+      }
+    };
+    await seed(0, 'completed');
+    await seed(1, 'failed');
+    await seed(2, 'completed');
+
+    const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(parentRun.id))!);
+    const r = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parent,
+      'goal',
+      'conv-db',
+      { ...(hydrated ?? { preCreatedRun: await store.resumeWorkflowRun(parentRun.id) }) }
+    );
+
+    // The resume completed: the one failed instance was re-driven, and the preflight did
+    // not fire on a `max_parallel: 3` node whose remaining work is a single child.
+    expect(r.success).toBe(true);
+    const nodeFailed = store.events.find(
+      e => e.event_type === 'node_failed' && e.step_name === 'work'
+    );
+    expect(String(nodeFailed?.data?.error ?? '')).not.toContain('mutates_checkout');
+    expect([...store.runs.values()].filter(c => c.workflow_name === 'fan-child')).toHaveLength(3);
+  });
+
   it('max_parallel: 1 is a valid serial-in-place fan-out over a repo-writing child', async () => {
     await writeWorkflow('fan-child', fanChildEcho);
     await writeWorkflow(
@@ -2373,6 +2606,16 @@ nodes:
     const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'fan-cost');
     // 3 children × 0.01 each = 0.03 rolled up to the parent (plan is bash → 0 cost).
     expect((parentRun?.metadata as Record<string, unknown>).total_cost_usd).toBeCloseTo(0.03, 5);
+
+    // Tokens must be PERSISTED on the node_completed event, not merely computed. This is
+    // the axis getDagResumeSnapshot sums to rebuild usage across resume passes — it never
+    // reads cost_usd — so dropping it here under-reports every resumed run by exactly the
+    // children's tokens, silently, and on Codex (which reports no cost) loses everything.
+    const workCompleted = store.events.find(
+      e => e.event_type === 'node_completed' && e.step_name === 'work'
+    );
+    expect(workCompleted?.data?.cost_usd).toBeCloseTo(0.03, 5);
+    expect(workCompleted?.data?.tokens).toBeDefined();
   });
 
   it('parent resume re-drives only the failed instance, skipping completed ones (1:N re-entry)', async () => {
