@@ -719,7 +719,9 @@ describe('workflowRunCommand', () => {
   });
 
   // #2213 — `--json` silences Pino entirely (cli.ts sets the level to 'silent'),
-  // so stderr is the only channel left. stdout must stay exactly the payload.
+  // so stderr is the only channel left. Note this asserts only the CHANNEL
+  // (console.warn, not console.log); the JSON payload itself goes through
+  // `writeJsonLine` on the `--detach` branch, covered in the detach describe.
   it('warns on stderr about keys the engine drops, even in json mode', async () => {
     const warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
     try {
@@ -3858,6 +3860,67 @@ describe('workflowRunCommand — detach', () => {
     expect(execAfter).toBe(execBefore);
     expect(child.unref).toHaveBeenCalledTimes(1);
     expect(consoleSpy).toHaveBeenCalledWith("Started 'assist' in the background.");
+  });
+
+  // #2213 — the headline `--json` claim. `writeJsonLine` (not console.log) is
+  // what emits the payload, and it is only reached on this `--detach` branch,
+  // so this is the only place the "stdout stays exactly the payload" guarantee
+  // can actually be observed. Asserts the captured stdout still JSON.parse()s
+  // while the warning went to stderr.
+  it('keeps stdout a parseable JSON payload while warning on stderr', async () => {
+    const warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const paths = await import('@archon/paths');
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [
+        makeTestWorkflowWithSource({ name: 'assist', description: 'Help' }, 'project', [
+          "Node 'plan': unknown key 'interactive' will be ignored.",
+        ]),
+      ],
+      errors: [],
+    });
+    (paths.getArchonHome as ReturnType<typeof mock>).mockImplementationOnce(() => {
+      throw new Error('no home in test');
+    });
+
+    const child = createDetachedChildFixture();
+    const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue(child.child);
+    const savedArgv = process.argv;
+    process.argv = [
+      'bun',
+      '/abs/cli.ts',
+      'workflow',
+      'run',
+      'assist',
+      'hello',
+      '--detach',
+      '--json',
+    ];
+
+    try {
+      const commandPromise = workflowRunCommand('/test/path', 'assist', 'hello', {
+        detach: true,
+        json: true,
+      });
+      await finishStartupWindow(commandPromise, spawnSpy);
+    } finally {
+      process.argv = savedArgv;
+      spawnSpy.mockRestore();
+    }
+
+    // stdout: exactly one line, and it parses.
+    const payload = JSON.parse(firstJsonPayload(stdoutSpy)) as {
+      ok: boolean;
+      action: string;
+      workflow: string;
+    };
+    expect(payload.ok).toBe(true);
+    expect(payload.action).toBe('run');
+    expect(payload.workflow).toBe('assist');
+    // The warning reached the user — on stderr, not in the payload.
+    expect(warnSpy).toHaveBeenCalledWith("Warning: 'assist' declares keys the engine ignores:");
+    expect(JSON.stringify(payload)).not.toContain('unknown key');
+    warnSpy.mockRestore();
   });
 
   it('does NOT pin a --branch on the detached child for a registered folder project', async () => {

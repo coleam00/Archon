@@ -1509,12 +1509,36 @@ WARNING [unknown_key] Node 'plan': unknown key 'interactive' will be ignored.
   Nothing on this node gates. For a human gate, use an 'approval:' node; to gate
   each iteration of a loop, set BOTH 'loop.interactive: true' and
   'loop.gate_message' ('gate_message' on its own does not gate). Workflow-level
-  'interactive:' is a different setting — it forces foreground execution.
+  'interactive:' is a different setting, and only on the web UI — it keeps the
+  run in the foreground there; chat platforms already run in the foreground, so
+  it does nothing for them.
 ```
 
-Detection covers the workflow root, every node, the nested config blocks (`approval:`, `approval.on_reject:`, `retry:`, `loop:`, `loop_group:`, `pi:`, each `agents:` entry, `worktree:`, `container:`, `evidence_policy:`), and every node inside a `loop_group` body. Free-form blocks are exempt because nothing is dropped from them: `output_format:` accepts any JSON Schema, `sandbox:` preserves unknown keys, and `hooks:` rejects them outright as an error.
+(The `WARNING [unknown_key]` prefix is `archon validate workflows` formatting; the other surfaces below render the same message text differently.)
 
-The warnings appear in `archon validate workflows`, `archon workflow list` (and its `--json` `parseWarnings` field), before an `archon workflow run` starts (on stderr, so `--json` stdout stays parseable), in `/workflow list` in chat, and on the workflow picker in the console.
+**What is checked.** The workflow root, every node, the nested config blocks (`approval:`, `approval.on_reject:`, `retry:`, `loop:`, `loop_group:`, `pi:`, each `agents:` entry, `worktree:`, `container:`, `evidence_policy:`), and every node inside a `loop_group` body.
+
+**What is exempt**, because nothing is dropped from these — a key you write is a key that survives:
+
+| Block | Why exempt |
+|---|---|
+| `output_format:` | Free-form JSON Schema; every key is accepted |
+| `sandbox:` | Passthrough — unknown keys are preserved, not stripped |
+| `thinking:` | A preprocessed union, not an object shape |
+| `hooks:` | Strict — an unknown key is already a hard **error**, not a warning |
+
+**Where the warnings appear.**
+
+| Surface | Where |
+|---|---|
+| `archon validate workflows` | A `WARNING [unknown_key]` issue (also in `--json`) |
+| `archon workflow list` | Inline under the workflow; `parseWarnings` on each `--json` entry |
+| `archon workflow run` | On **stderr** before the run starts, so `--json` stdout stays parseable |
+| Chat (`/workflow list`) | Inline with the workflow that raised it |
+| Chat / console (starting a run) | Posted to the conversation before the run begins |
+| Console workflow picker | A ⚠ marker on the row; full text in the tooltip |
+
+**Known gap — `include:`.** Warnings belong to the file that declared the key. If workflow A `include:`s workflow B and B has an unknown key, the warning is reported against **B**, not against A. Running A surfaces nothing. Check the included block directly (`archon validate workflows <block-name>`) when auditing a composed workflow.
 
 ### Example: Config Defaults + Workflow Override
 
