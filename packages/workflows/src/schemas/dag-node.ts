@@ -678,6 +678,10 @@ export const dagNodeFlatSchema = dagNodeBaseSchema.extend({
   // `'worktree'` (slice 2, PR-A) runs the child in its own git worktree via an
   // injected child-isolation resolver.
   isolation: z.enum(['inherit', 'worktree']).optional(),
+  // Dynamic fan-out (slice 2, PR-C) — expand the workflow node into N child runs
+  // over a data-driven item list. Only meaningful on a `workflow:` node (guarded in
+  // superRefine).
+  fan_out: fanOutConfigSchema.optional(),
   // Reserved for Phase 1b input mapping. Present only so the superRefine below can
   // fail fast when it appears on an include or workflow node ("not yet supported").
   with: z.unknown().optional(),
@@ -1245,6 +1249,7 @@ export const KNOWN_NODE_NESTED_KEYS: ReadonlyMap<string, NestedKeySpec> = new Ma
   ['loop', { kind: 'object', keys: new Set(Object.keys(loopNodeConfigSchema.shape)) }],
   ['loop_group', { kind: 'object', keys: new Set(Object.keys(loopGroupShape)) }],
   ['pi', { kind: 'object', keys: new Set(Object.keys(piNodeConfigSchema.shape)) }],
+  ['fan_out', { kind: 'object', keys: new Set(Object.keys(fanOutConfigSchema.shape)) }],
   // `agents` keys are author-chosen agent ids; each VALUE is an agentDefinition,
   // where a camelCase slip (`disallowed_tools`) silently drops a tool restriction.
   [
