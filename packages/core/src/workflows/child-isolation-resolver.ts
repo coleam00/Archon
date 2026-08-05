@@ -174,13 +174,26 @@ export function createChildWorktreeResolver(
         // path instead of failing. That is what made the pre-fix identifier collision
         // silent, so it must never be quiet on this path again.
         //
-        // Adoption stays allowed rather than rejected, because with a per-(parent, node,
-        // index) identifier the only worktree that can be there is THIS child slot's own
-        // from an earlier attempt — a spawn that created the worktree and then failed
-        // before its run row was written leaves exactly that, and re-using it is how the
-        // parent's resume recovers. Rejecting would wedge that resume permanently.
-        // A sibling's checkout is no longer reachable here; if this ever fires for one,
-        // the identifier has regressed and this line is the evidence.
+        // Adoption stays ALLOWED rather than rejected. The reason is NOT that resume
+        // can't reach this code — it can. The parent's re-entry finds its child by
+        // (parent_run_id, parent_node_id); when that row was never written, or was
+        // deleted, the node takes the fresh-spawn path and calls `resolve()` again.
+        // Two properties are what make that safe, and both are load-bearing:
+        //
+        //  1. `buildChildIdentifier` is deterministic in (parentRunId, nodeId,
+        //     childIndex), so re-spawning the SAME slot recomputes the SAME path.
+        //     Nothing else computes this identifier, so whatever is sitting there is
+        //     this slot's own from an earlier attempt — never a sibling's live checkout.
+        //  2. `isolationDb.create()` is an UPSERT (`ON CONFLICT (codebase_id,
+        //     workflow_type, workflow_id) WHERE status = 'active' DO UPDATE`, see
+        //     `db/isolation-environments.ts`), so the re-spawn refreshes the existing
+        //     env row rather than failing on the unique index. "Simplifying" that to a
+        //     plain INSERT breaks exactly the recovery this comment is describing.
+        //
+        // Rejecting adoption would turn a spawn that died between `provider.create()`
+        // and `createWorkflowRun` from "recovers on the next resume" into "wedged
+        // permanently". If this WARN ever fires for a SIBLING's checkout, the
+        // identifier has regressed and this line is the evidence.
         if (isolatedEnv.metadata.adopted) {
           getLog().warn(
             {
