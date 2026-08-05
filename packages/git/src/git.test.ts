@@ -833,23 +833,38 @@ branch refs/heads/feature/auth
       );
     });
 
-    test('falls back to <remote>/main and names the remote in the failure error', async () => {
+    test('errors instead of guessing main when symbolic-ref fails and origin/main exists (#2471)', async () => {
+      // Regression: previously the function probed <remote>/main and returned
+      // 'main' whenever it existed. That is wrong for repos where 'main' is a
+      // release branch and the actual default is something else (e.g. 'dev').
+      // Must now throw, even though origin/main exists.
+      mockLogger.warn.mockClear();
       execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
         if (args.includes('symbolic-ref')) {
-          throw new Error('fatal: ref refs/remotes/mar/HEAD is not a symbolic ref');
+          throw new Error('fatal: ref refs/remotes/origin/HEAD is not a symbolic ref');
         }
-        throw new Error('fatal: Needed a single revision');
+        // origin/main exists — this is what made the old guess "look right".
+        return { stdout: 'abc123\n', stderr: '' };
       });
 
-      await expect(git.getDefaultBranch('/workspace/repo', 'mar')).rejects.toThrow(
-        'neither mar/HEAD nor mar/main exist'
+      await expect(git.getDefaultBranch('/workspace/repo')).rejects.toThrow(
+        'Cannot detect default branch for /workspace/repo: origin/HEAD is not set'
       );
-      // Verify the fallback probed mar/main, not origin/main
-      expect(execSpy).toHaveBeenCalledWith(
-        'git',
-        ['-C', '/workspace/repo', 'rev-parse', '--verify', 'mar/main'],
-        expect.any(Object)
+      // The error must name all three configuration surfaces so the reader
+      // sees the cheapest fix for their situation.
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        { repoPath: '/workspace/repo', remote: 'origin' },
+        'default_branch_detection_failed'
       );
+      // Verify rev-parse is NOT called — the <remote>/main guess is gone.
+      const revParseCalls = execSpy.mock.calls.filter(
+        ([, args]) => Array.isArray(args) && args.includes('rev-parse')
+      );
+      expect(revParseCalls).toHaveLength(0);
+      // Error must surface all three configuration surfaces.
+      const expectedMessage =
+        'Pass --base, set worktree.baseBranch in .archon/config.yaml, or set the codebase default_branch field.';
+      await expect(git.getDefaultBranch('/workspace/repo')).rejects.toThrow(expectedMessage);
     });
 
     test('returns non-standard branch from symbolic-ref (origin/develop)', async () => {
@@ -868,38 +883,23 @@ branch refs/heads/feature/auth
       expect(result).toBe('trunk');
     });
 
-    test('falls back to main if symbolic-ref fails and origin/main exists', async () => {
+    test('throws when symbolic-ref fails and names the remote in the error', async () => {
       execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
         if (args.includes('symbolic-ref')) {
-          throw new Error('fatal: ref refs/remotes/origin/HEAD is not a symbolic ref');
+          throw new Error('fatal: ref refs/remotes/mar/HEAD is not a symbolic ref');
         }
-        if (args.includes('rev-parse') && args.includes('origin/main')) {
-          return { stdout: 'abc123\n', stderr: '' };
-        }
-        return { stdout: '', stderr: '' };
+        throw new Error('fatal: Needed a single revision');
       });
 
-      const result = await git.getDefaultBranch('/workspace/repo');
-
-      expect(result).toBe('main');
-    });
-
-    test('throws when symbolic-ref fails and origin/main does not exist', async () => {
-      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
-        if (args.includes('symbolic-ref')) {
-          throw new Error('fatal: ref refs/remotes/origin/HEAD is not a symbolic ref');
-        }
-        if (args.includes('rev-parse') && args.includes('origin/main')) {
-          throw new Error('fatal: Not a valid object name');
-        }
-        return { stdout: '', stderr: '' };
-      });
-
-      await expect(git.getDefaultBranch('/workspace/repo')).rejects.toThrow(
-        'Cannot detect default branch for /workspace/repo'
+      await expect(git.getDefaultBranch('/workspace/repo', 'mar')).rejects.toThrow(
+        'mar/HEAD is not set'
       );
-      // Verify the error includes actionable config hint
-      await expect(git.getDefaultBranch('/workspace/repo')).rejects.toThrow('config.yaml');
+      // Verify NO rev-parse fallback is attempted — the <remote>/main guess is
+      // gone. Without this guard a future regression could re-introduce it.
+      const revParseCalls = execSpy.mock.calls.filter(
+        ([, args]) => Array.isArray(args) && args.includes('rev-parse')
+      );
+      expect(revParseCalls).toHaveLength(0);
     });
 
     test('throws for unexpected symbolic-ref errors (permission denied)', async () => {
@@ -917,45 +917,19 @@ branch refs/heads/feature/auth
       );
     });
 
-    test('throws for unexpected rev-parse errors (permission denied)', async () => {
-      mockLogger.error.mockClear();
+    test('error message names all three configuration surfaces (#2471)', async () => {
+      // Acceptance criterion: the reader should see the cheapest fix for their
+      // situation — CLI flag, repo config, and codebase DB field.
       execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
         if (args.includes('symbolic-ref')) {
           throw new Error('fatal: ref refs/remotes/origin/HEAD is not a symbolic ref');
         }
-        if (args.includes('rev-parse')) {
-          throw new Error('fatal: permission denied');
-        }
         return { stdout: '', stderr: '' };
       });
 
-      await expect(git.getDefaultBranch('/workspace/repo')).rejects.toThrow(
-        'Failed to get default branch for /workspace/repo: fatal: permission denied'
-      );
-      expect(mockLogger.error).toHaveBeenCalledWith(
-        expect.objectContaining({
-          repoPath: '/workspace/repo',
-        }),
-        'verify_origin_main_failed'
-      );
-    });
-
-    test('throws for "unknown revision" error when origin/main missing', async () => {
-      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
-        if (args.includes('symbolic-ref')) {
-          throw new Error('fatal: ref refs/remotes/origin/HEAD is not a symbolic ref');
-        }
-        if (args.includes('rev-parse') && args.includes('origin/main')) {
-          throw new Error("fatal: unknown revision or path 'origin/main'");
-        }
-        return { stdout: '', stderr: '' };
-      });
-
-      await expect(git.getDefaultBranch('/workspace/repo')).rejects.toThrow(
-        'Cannot detect default branch for /workspace/repo'
-      );
-      // Verify the error includes actionable config hint
-      await expect(git.getDefaultBranch('/workspace/repo')).rejects.toThrow('config.yaml');
+      await expect(git.getDefaultBranch('/workspace/repo')).rejects.toThrow('--base');
+      await expect(git.getDefaultBranch('/workspace/repo')).rejects.toThrow('worktree.baseBranch');
+      await expect(git.getDefaultBranch('/workspace/repo')).rejects.toThrow('default_branch');
     });
   });
 

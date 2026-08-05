@@ -12,20 +12,28 @@ function getLog(): ReturnType<typeof createLogger> {
 
 /**
  * Get the default branch name for a repository
- * Uses git symbolic-ref to get the remote HEAD reference
+ * Uses git symbolic-ref to read refs/remotes/<remote>/HEAD, which is git's own
+ * record of the remote's default branch.
  *
- * Fallback chain: symbolic-ref -> <remote>/main -> throw
- * Note: Throws if neither <remote>/HEAD nor <remote>/main can be resolved.
- * Callers can set worktree.baseBranch in .archon/config.yaml as a manual override.
+ * Throws if <remote>/HEAD is not a symbolic ref (fresh clone without
+ * `git remote set-head`) — callers must resolve the base branch through
+ * configuration instead:
+ *   - the `--base` CLI flag
+ *   - `worktree.baseBranch` in `.archon/config.yaml`
+ *   - the `default_branch` field on the codebase record
  *
- * Only falls back for expected git errors (ref not found, branch not found).
- * Throws for unexpected errors (permission denied, git corruption, etc.)
+ * Never guesses a branch name. Treating "<remote>/main exists" as the default
+ * is wrong for repos where `main` is a release branch and the actual default
+ * is something else (e.g. `dev`); silently targeting the wrong base produces
+ * misrouted PRs with no error.
+ *
+ * Only swallows expected git errors (ref not set). Throws for unexpected errors
+ * (permission denied, git corruption, etc.).
  *
  * @param repoPath - Path to the git repository
  * @param remote - Remote name to check (default: 'origin')
  */
 export async function getDefaultBranch(repoPath: RepoPath, remote = 'origin'): Promise<BranchName> {
-  // Try to get from remote HEAD
   try {
     const { stdout } = await execFileAsync(
       'git',
@@ -38,47 +46,26 @@ export async function getDefaultBranch(repoPath: RepoPath, remote = 'origin'): P
     const err = error as Error & { stderr?: string };
     const errorText = `${err.message} ${err.stderr ?? ''}`;
 
-    // Expected: symbolic-ref not set (common for fresh clones)
+    // Expected: symbolic-ref not set (fresh clone without `git remote set-head`).
+    // Cannot detect the default branch — surface a config-driven fix instead of
+    // guessing. See #2471.
     if (
       errorText.includes('not a symbolic ref') ||
       errorText.includes('No such file or directory')
     ) {
-      getLog().debug({ repoPath, remote, err }, 'symbolic_ref_fallback');
-    } else {
-      // Unexpected error (permission denied, git corruption, etc.) - surface it
-      getLog().error(
-        { repoPath, remote, err, stderr: err.stderr },
-        'default_branch_symbolic_ref_failed'
-      );
-      throw new Error(`Failed to get default branch for ${repoPath}: ${err.message}`);
-    }
-  }
-
-  // Fallback: check if <remote>/main exists, otherwise throw
-  try {
-    await execFileAsync('git', ['-C', repoPath, 'rev-parse', '--verify', `${remote}/main`], {
-      timeout: 10000,
-    });
-    return toBranchName('main');
-  } catch (error) {
-    const err = error as Error & { stderr?: string };
-    const errorText = `${err.message} ${err.stderr ?? ''}`;
-
-    // Expected: <remote>/main doesn't exist — no safe default, fail fast
-    if (
-      errorText.includes('Not a valid object name') ||
-      errorText.includes('Needed a single revision') ||
-      errorText.includes('unknown revision')
-    ) {
       getLog().warn({ repoPath, remote }, 'default_branch_detection_failed');
       throw new Error(
-        `Cannot detect default branch for ${repoPath}: neither ${remote}/HEAD nor ${remote}/main exist. ` +
-          'Set worktree.baseBranch in .archon/config.yaml to specify the branch explicitly.'
+        `Cannot detect default branch for ${repoPath}: ${remote}/HEAD is not set. ` +
+          'Pass --base, set worktree.baseBranch in .archon/config.yaml, ' +
+          'or set the codebase default_branch field.'
       );
     }
 
-    // Unexpected error - surface it
-    getLog().error({ repoPath, remote, err, stderr: err.stderr }, 'verify_origin_main_failed');
+    // Unexpected error (permission denied, git corruption, etc.) - surface it
+    getLog().error(
+      { repoPath, remote, err, stderr: err.stderr },
+      'default_branch_symbolic_ref_failed'
+    );
     throw new Error(`Failed to get default branch for ${repoPath}: ${err.message}`);
   }
 }
