@@ -95,7 +95,19 @@ export interface ChildWorktreeResolverConfig {
   codebaseName: string;
   /** Canonical checkout path of the main repo (the codebase's `default_cwd`). */
   canonicalRepoPath: string;
-  /** Base-branch fallback for new child worktrees (the codebase's `default_branch`). */
+  /**
+   * Base-branch fallback for new child worktrees (the codebase's `default_branch`).
+   *
+   * This is the ONLY base input a child worktree gets. The per-dispatch `--base` /
+   * `--from` overrides (#2203) are deliberately NOT threaded here: unlike the
+   * top-level CLI path, `resolve()` passes no `baseOverride`/`fromBranch` to the
+   * provider, so a child is cut from `origin/<worktree.baseBranch ?? this ?? auto>`
+   * of the canonical repo no matter what the parent run was dispatched with. Which
+   * also means a child sees neither the parent's uncommitted work nor its commits —
+   * what reaches a child travels through `input:` and `$ARTIFACTS_DIR`, not the tree.
+   * Threading `--base` down is a real design question (stacked-from-parent vs
+   * cut-from-base) rather than an oversight; documented in the authoring guide.
+   */
   baseBranch?: string;
   /** Platform recorded on the `isolation_environments` row (e.g. `'cli'`, `'web'`). */
   createdByPlatform: string;

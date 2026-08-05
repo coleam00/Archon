@@ -987,12 +987,15 @@ ids too long to fit in a branch name. Four consequences are worth knowing before
 for it:
 
 - **The branch starts from the repo's base branch, not the parent's.** The worktree is cut
-  from `origin/<baseBranch>` in the canonical checkout — `worktree.baseBranch` in
-  `.archon/config.yaml`, else the codebase's default branch. (The per-dispatch `--base` /
-  `--from` overrides in the [base-branch precedence
-  table](/reference/cli/#base-branch-precedence) apply to the run they were passed to; they
-  do **not** reach its sub-run children.) An isolated child therefore **does not see the
-  parent's uncommitted edits**, and does not see commits the parent made on its own branch.
+  from `origin/<baseBranch>` **in the canonical checkout**, not from the parent's working
+  tree. The base is levels 2–4 of the [base-branch precedence
+  table](/reference/cli/#base-branch-precedence): `worktree.baseBranch` in
+  `.archon/config.yaml`, else the codebase's stored default branch, else git
+  auto-detection. Level 1 is missing on purpose — **the per-dispatch `--base` / `--from`
+  overrides apply only to the run they were passed to and do not reach its sub-run
+  children**, so `archon workflow run parent --base release/2.0` still cuts every isolated
+  child from the repo's configured base. An isolated child therefore sees neither the
+  parent's uncommitted edits **nor the commits the parent made on its own branch**.
   Everything the child needs has to arrive through `input:`, artifacts, or the repo's base
   branch.
 - **Nothing merges it back.** The child's commits stay on the child's branch. Landing them
@@ -1004,11 +1007,13 @@ for it:
   `archon complete <branch>`. It is **not** removed when the child finishes — the branch
   deliberately outlives the run so you can inspect or land it. Isolate many children and you
   accumulate many worktrees and branches to clean up.
-- **Resume reuses it, and fails if it is gone.** Resuming the parent never re-creates a
-  child's worktree; the child reuses the path recorded on its own run row. If that path was
-  cleaned up between the failure and the resume, the node fails with *"its working path no
-  longer exists … start a fresh run"* rather than dying on a deep `ENOENT` mid-run. Don't
-  run `isolation cleanup` while a sub-run tree is still resumable.
+- **Resume reuses it, and fails if it is gone.** As long as the child's run row exists, a
+  resume reuses the path recorded on it rather than making a second worktree. If that path
+  was cleaned up in between, the node fails with *"its working path no longer exists …
+  start a fresh run"* rather than dying on a deep `ENOENT` mid-run. Don't run
+  `isolation cleanup` while a sub-run tree is still resumable. (Only if the child's run row
+  itself is gone does the node spawn fresh — and it lands on the same branch name, since
+  the name is derived from the parent run and the node id.)
 
 Nesting works: a grandchild `workflow:` node can request its own worktree too, up to the
 sub-run depth cap.
