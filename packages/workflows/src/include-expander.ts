@@ -88,6 +88,9 @@ const OUTPUT_REF_PATTERN = /\$([a-zA-Z_][a-zA-Z0-9_-]*)\.output/g;
  */
 const WHEN_REF_PATTERN = /\$([a-zA-Z_][a-zA-Z0-9_-]*)(?=\.[a-zA-Z_])/g;
 
+/** Load-time include parameter references. */
+const INPUTS_REF = /\$INPUTS\.([a-zA-Z_][a-zA-Z0-9_-]*)/g;
+
 /** Fenced (``` ```) and inline (` `` `) markdown code spans — documentation, not live refs. */
 const CODE_SPAN_PATTERN = /```[\s\S]*?```|`[^`\n]*`/g;
 
@@ -189,6 +192,51 @@ function rewriteNodeOutputRefs(node: DagNode, rename: (id: string) => string): v
   }
 }
 
+/**
+ * Apply an include node's input mapping to every inline text surface in the cloned node.
+ * Unlike output-ref rewriting, substitutions also apply inside Markdown code spans because
+ * `$INPUTS` has no documentation-only meaning. An inserted value may itself be a
+ * `$node.output` reference; it deliberately remains unresolved for the executor's existing
+ * runtime substitution pass.
+ */
+function applyInputsMacro(node: DagNode, args: Record<string, string>, missing: Set<string>): void {
+  const substitute = (text: string): string =>
+    text.replace(INPUTS_REF, (match, name: string) => {
+      const value = args[name];
+      if (value === undefined) {
+        missing.add(name);
+        return match;
+      }
+      return value;
+    });
+
+  if (node.when !== undefined) node.when = substitute(node.when);
+
+  if (isLoopNode(node)) {
+    if (node.loop.prompt !== undefined) node.loop.prompt = substitute(node.loop.prompt);
+    if (node.loop.until_bash !== undefined) {
+      node.loop.until_bash = substitute(node.loop.until_bash);
+    }
+  } else if (isLoopGroupNode(node)) {
+    if (node.loop_group.until_bash !== undefined) {
+      node.loop_group.until_bash = substitute(node.loop_group.until_bash);
+    }
+    for (const body of node.loop_group.nodes) applyInputsMacro(body, args, missing);
+  } else if (isApprovalNode(node)) {
+    node.approval.message = substitute(node.approval.message);
+  } else if (isBashNode(node)) {
+    node.bash = substitute(node.bash);
+  } else if (isScriptNode(node)) {
+    node.script = substitute(node.script);
+  } else if (isWorkflowNode(node)) {
+    if (node.input !== undefined) node.input = substitute(node.input);
+  } else if (isCancelNode(node)) {
+    node.cancel = substitute(node.cancel);
+  } else if ('prompt' in node && typeof node.prompt === 'string') {
+    node.prompt = substitute(node.prompt);
+  }
+}
+
 interface ExpandedInclude {
   /** The child's nodes, deep-cloned, id-namespaced, edges + refs rewired. */
   namespaced: DagNode[];
@@ -213,13 +261,17 @@ function inlineInclude(includeNode: IncludeNode, childNodes: DagNode[]): Expande
   const sinkOriginalIds = childNodes.filter(n => !childDeps.has(n.id)).map(n => n.id);
 
   const parentDeps = includeNode.depends_on ?? [];
+  const missingInputs = new Set<string>();
 
   const namespaced = childNodes.map(cn => {
     const clone = structuredClone(cn);
     const wasEntry = (cn.depends_on ?? []).length === 0;
 
-    // Rewrite internal $id.output refs (child-top-level ids → namespaced) BEFORE renaming ids.
+    // Rewrite child-internal refs before inserting caller values. This ordering is
+    // load-bearing: a caller ref such as `$gather.output` must remain parent-scoped even
+    // when the included block also has a node named `gather`.
     rewriteNodeOutputRefs(clone, rename);
+    applyInputsMacro(clone, includeNode.with ?? {}, missingInputs);
     clone.id = prefix + cn.id;
 
     if (wasEntry) {
@@ -256,6 +308,13 @@ function inlineInclude(includeNode: IncludeNode, childNodes: DagNode[]): Expande
 
     return clone;
   });
+
+  if (missingInputs.size > 0) {
+    const names = [...missingInputs].sort().map(name => `$INPUTS.${name}`);
+    throw new IncludeExpansionError(
+      `Node '${includeNode.id}': included block '${includeNode.include}' references missing input${names.length === 1 ? '' : 's'} ${names.join(', ')}. Pass ${names.length === 1 ? 'it' : 'them'} through 'with:'.`
+    );
+  }
 
   return {
     namespaced,
@@ -355,6 +414,16 @@ function scanBlockCommandRefs(
           `Node '${includeNode.id}': command file '${cn.command}.md' in included block '${child.name}' references sibling node '$${id}', which include namespacing renames to '${includeNode.id}__${id}'. Command-file contents are read at execution time and cannot be rewritten — inline the prompt, or restructure so the command has no cross-node reference.`
         );
       }
+    }
+    // Best effort by construction: discovery only supplies content it can resolve.
+    // Keep unresolved commands on the existing warning path above.
+    INPUTS_REF.lastIndex = 0;
+    const inputMatch = INPUTS_REF.exec(stripped);
+    INPUTS_REF.lastIndex = 0;
+    if (inputMatch?.[1] !== undefined) {
+      throw new IncludeExpansionError(
+        `Node '${includeNode.id}': command file '${cn.command}.md' in included block '${child.name}' references parameter '$INPUTS.${inputMatch[1]}'. Command-file contents are read at execution time and cannot apply include inputs — inline the prompt instead.`
+      );
     }
   }
 }

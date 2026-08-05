@@ -954,12 +954,48 @@ written the nodes by hand. There is no separate child run.
 - **Output.** `$<includeId>.output` in another node resolves to the block's primary sink.
   In the example, `$review.output` is the output of the block's `implement-fixes` node.
 
+### Passing values into an included block
+
+An include can pass an identifier-keyed string map through `with:`. The included block uses
+those values through `$INPUTS.<name>` in its inline text:
+
+```yaml
+# parent workflow
+nodes:
+  - id: plan
+    prompt: Plan the requested change.
+
+  - id: review
+    include: reusable-review
+    depends_on: [plan]
+    with:
+      plan: $plan.output
+      base_branch: main
+```
+
+```yaml
+# reusable-review workflow
+nodes:
+  - id: inspect
+    prompt: Review $INPUTS.plan against $INPUTS.base_branch.
+```
+
+Input names must start with a letter or underscore and may then contain letters, numbers,
+underscores, or hyphens. Values are string literals or `$node.output` references, never
+expressions. Expansion replaces `$INPUTS.<name>` at load time. An inserted output reference
+remains a reference and resolves through the normal runtime output substitution. A missing
+input is a load error; extra caller keys are ignored until workflow input declarations ship.
+
+#### Command bodies cannot use include inputs
+
+Phase 1 cannot parameterize a `command:` file used by an included block. Command bodies are
+read at execution time, after load-time include expansion has finished. If a resolved command
+body contains `$INPUTS.<name>`, workflow loading fails with a message directing you to inline
+the prompt text. Use an inline `prompt:` when the block needs include inputs. This restriction
+applies to `include:`; named `with:` mappings for `workflow:` sub-runs have not shipped.
+
 ### Non-goals (Phase 1)
 
-- **No `with:` input mapping yet.** Passing values into an included block is not supported;
-  an include node with a `with:` key is rejected with a clear error. A block reaches parent
-  context only through workflow variables (`$BASE_BRANCH`, `$ARTIFACTS_DIR`, …) and command
-  files, which is enough for the shared-review-block use case.
 - **No deep access.** A parent can read `$includeId.output` (the terminal) but not the
   output of an individual node inside the block. The block's internal node names are an
   implementation detail.

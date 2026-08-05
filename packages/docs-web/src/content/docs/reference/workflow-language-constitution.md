@@ -89,7 +89,7 @@ The test the rule actually applies is *"does one child's outcome end another's?"
 | Parentheses & nested boolean grouping in `when:` | ❌ rejected (see policy below) | The first step of home-growing an expression language |
 | Templating (Jinja-style interpolation, computed node ids) | ❌ rejected | Evaluation inside declaration — the Helm road |
 | Dynamic include targets (`include: $x.output`) | ❌ rejected | Turns structure into a runtime value; the engine can no longer statically validate the graph |
-| `with:` include parameters carrying expressions | ⚠️ constrained | Admissible only as **data-only** mapping (values or `$node.output` refs) — the moment values can be computed inline, it is function application |
+| `with:` include parameters | ✅ shipped (data-only) | Identifier-keyed string literals or `$node.output` refs are substituted during load-time expansion. Expressions remain rejected because inline computation would be function application; `workflow.with` is not yet shipped |
 
 ## The five smells — and the management lever for each
 
@@ -107,7 +107,7 @@ These are the specific mechanisms by which workflow languages rot. Each is liste
 
 **Mechanism.** Reuse primitives are the most dangerous axis because they converge on function application: includes become calls, parameters become arguments, loop-carried state becomes variables — and suddenly the config format has scoping rules, evaluation order, and abstraction. This is how Helm charts became programs.
 
-**Archon today.** `loop_group` already carries loop-state (`$LOOP_PREV`); `include:` Phase 1 adds textual reuse. Both were held on the declarative side deliberately: `include` is load-time expansion with zero runtime semantics, `with:` was **deferred and rejects fail-fast**, deep output access across the include boundary is unsupported, and dynamic targets are out of scope.
+**Archon today.** `loop_group` already carries loop-state (`$LOOP_PREV`); `include:` adds textual reuse. Both are held on the declarative side deliberately: `include` is load-time expansion with zero new runtime semantics, and its shipped `with:` surface is a data-only string mapping resolved during expansion. Expressions, deep output access across the include boundary, `workflow.with`, and dynamic targets remain unsupported.
 
 **Lever — composition must be resolvable at load time.** Any reuse feature must fully resolve before execution begins (the engine executes a flat, static DAG). Parameterization, if ever added, is data-only mapping. Anything requiring runtime resolution of *structure* is Phase-2 sub-run territory — where it becomes a governance object with its own run record, not a language feature.
 

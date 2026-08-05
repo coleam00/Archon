@@ -3932,6 +3932,48 @@ nodes:
       expect(err?.error).toContain("sibling node '$sib'");
     });
 
+    it('should fail expansion when a resolved block command file references an include input', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      const commandsDir = join(testDir, '.archon', 'commands');
+      await mkdir(workflowDir, { recursive: true });
+      await mkdir(commandsDir, { recursive: true });
+
+      await writeFile(join(commandsDir, 'parameterized-runner.md'), 'Review $INPUTS.scope.');
+      await writeFile(
+        join(workflowDir, 'parameterized-block.yaml'),
+        `
+name: parameterized-block
+description: Block whose command references an include input
+nodes:
+  - id: runner
+    command: parameterized-runner
+`
+      );
+      await writeFile(
+        join(workflowDir, 'parameterized-parent.yaml'),
+        `
+name: parameterized-parent
+description: Includes the parameterized command block
+nodes:
+  - id: review
+    include: parameterized-block
+    with:
+      scope: main
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.workflows.some(w => w.workflow.name === 'parameterized-parent')).toBe(false);
+      const message = result.errors.find(
+        error => error.filename === 'parameterized-parent.yaml'
+      )?.error;
+      expect(message).toContain("Node 'review'");
+      expect(message).toContain("included block 'parameterized-block'");
+      expect(message).toContain("command file 'parameterized-runner.md'");
+      expect(message).toContain("parameter '$INPUTS.scope'");
+      expect(message).toContain('inline the prompt');
+    });
+
     it('should scan block command files in a configured custom command folder (config parity)', async () => {
       const workflowDir = join(testDir, '.archon', 'workflows');
       const customCmds = join(testDir, 'my-cmds');
