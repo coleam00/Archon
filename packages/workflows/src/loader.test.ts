@@ -4089,7 +4089,7 @@ nodes:
  * parses, the workflow loads, and the feature is simply inert.
  *
  * That is not hypothetical. `requires:` was added to `workflowBaseSchema` in ab81248d
- * (2026-06-01) without touching the loader, and the assembly block only landed in
+ * (2026-06-01) without touching the loader, and was not added to that literal until
  * 2d7bf587 (2026-07-16) — six weeks in which the GitHub capability gate could never
  * fire for any discovered workflow, fixed incidentally inside an unrelated PR.
  *
@@ -4098,10 +4098,13 @@ nodes:
  * "the derived check fails until the new thing is registered" ratchet used by
  * `check:capability-matrix` and the schema-parity test in `sqlite.test.ts`.
  *
- * Deliberately NOT solved by deriving the assembly itself (`schema.parse(raw)`): the
- * hand assembly exists BECAUSE of warn-and-drop — a present-but-invalid field is logged
- * and dropped rather than aborting the whole discovery pass — and `.parse()` rejects
- * instead. See #2457.
+ * Deliberately NOT solved by deriving the assembly itself (`schema.parse(raw)`): most
+ * fields warn-and-drop, logging a present-but-invalid value and continuing rather than
+ * aborting the whole discovery pass, and `.parse()` would reject the workflow instead.
+ * That is not universal — a few fields deliberately hard-reject and a few coerce
+ * silently — but one warn-and-drop field is enough to make a blanket `.parse()` wrong.
+ * `loader.ts` is the authority on which field does what; do not restate it here.
+ * See #2457.
  */
 describe('workflow-level field parity (#2457)', () => {
   /**
@@ -4117,7 +4120,7 @@ describe('workflow-level field parity (#2457)', () => {
   > = {
     name: { yaml: '', present: w => w.name === 'parity' },
     description: { yaml: '', present: w => w.description === 'parity fixture' },
-    nodes: { yaml: '', present: w => w.nodes.length === 1 },
+    nodes: { yaml: '', present: w => w.nodes?.length === 1 },
     provider: { yaml: 'provider: claude', present: w => w.provider === 'claude' },
     model: { yaml: 'model: sonnet', present: w => w.model === 'sonnet' },
     modelReasoningEffort: {
@@ -4126,14 +4129,14 @@ describe('workflow-level field parity (#2457)', () => {
     },
     webSearchMode: { yaml: 'webSearchMode: live', present: w => w.webSearchMode === 'live' },
     interactive: { yaml: 'interactive: true', present: w => w.interactive === true },
-    effort: { yaml: 'effort: high', present: w => w.effort !== undefined },
-    thinking: { yaml: 'thinking: adaptive', present: w => w.thinking !== undefined },
+    effort: { yaml: 'effort: high', present: w => w.effort === 'high' },
+    thinking: { yaml: 'thinking: adaptive', present: w => w.thinking?.type === 'adaptive' },
     fallbackModel: {
       yaml: 'fallbackModel: haiku',
       present: w => w.fallbackModel === 'haiku',
     },
     betas: { yaml: 'betas:\n  - some-beta', present: w => w.betas?.includes('some-beta') === true },
-    sandbox: { yaml: 'sandbox:\n  enabled: true', present: w => w.sandbox !== undefined },
+    sandbox: { yaml: 'sandbox:\n  enabled: true', present: w => w.sandbox?.enabled === true },
     worktree: { yaml: 'worktree:\n  enabled: false', present: w => w.worktree?.enabled === false },
     container: {
       yaml: 'container:\n  enabled: true',
@@ -4192,9 +4195,11 @@ describe('workflow-level field parity (#2457)', () => {
         .filter(line => line !== '')
         .join('\n');
 
-      // Warn-and-drop means an INVALID fixture value is dropped by design. Clearing the
-      // logger first lets the assertion below tell the two causes apart: a warn means the
-      // fixture is wrong, silence means the loader dropped a valid field (the #2457 bug).
+      // An INVALID fixture value is dropped by design, which looks identical to the bug
+      // this test hunts. Clearing the logger first lets the failure message rank the two
+      // causes: a warning is strong evidence the fixture is at fault. Silence is NOT
+      // proof of the opposite — a few fields coerce an invalid value away with no log at
+      // all — so the silent branch names both causes rather than rendering a verdict.
       mockLogger.warn.mockClear();
 
       const result = parseWorkflow(yaml, `parity-${key}.yaml`);
@@ -4204,17 +4209,17 @@ describe('workflow-level field parity (#2457)', () => {
       ).toBeNull();
 
       const warned = mockLogger.warn.mock.calls.length > 0;
-      expect(
-        fixture.present(result.workflow as WorkflowDefinition),
-        warned
-          ? `Field '${key}' did not survive parseWorkflow, but a warning fired — the FIXTURE ` +
-              'value above is almost certainly invalid for this field, which warn-and-drop ' +
-              'discards by design. Fix the fixture, not the loader.'
-          : `Field '${key}' is declared on workflowDefinitionSchema, was accepted without a ` +
-              'warning, and still did NOT survive parseWorkflow — so it is missing from the ' +
-              'object literal parseWorkflow returns. That is the #2457 bug: add the field to ' +
-              'that literal.'
-      ).toBe(true);
+      const message = warned
+        ? `Field '${key}' did not survive parseWorkflow, and a warning fired — the FIXTURE ` +
+          'value above is almost certainly invalid for this field, which warn-and-drop ' +
+          'discards by design. Fix the fixture, not the loader.'
+        : `Field '${key}' is declared on workflowDefinitionSchema and did NOT survive ` +
+          'parseWorkflow, with no warning logged. Two possible causes, likeliest first: ' +
+          "(1) the field is missing from the object literal parseWorkflow returns — that's " +
+          'the #2457 bug, add it there; or (2) the fixture value is invalid for a field ' +
+          'that coerces silently without logging, in which case fix the fixture. Check the ' +
+          'fixture value against the schema first — it is the cheaper of the two to rule out.';
+      expect(fixture.present(result.workflow as WorkflowDefinition), message).toBe(true);
     });
   }
 });
