@@ -208,7 +208,9 @@ describe('resolveNodeOutputField — output clipped before persistence', () => {
   });
 
   it('marker round-trips through build/detect', () => {
-    expect(hasTruncationMarker(`head${buildTruncationMarker(1234)}`)).toBe(true);
+    const output = `head${buildTruncationMarker(1234)}`;
+    expect(hasTruncationMarker(output)).toBe(true);
+    expect(hasTruncationMarker(`${output}\n \t`)).toBe(true);
     expect(hasTruncationMarker('no marker here')).toBe(false);
   });
 });

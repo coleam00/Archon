@@ -29,5 +29,5 @@ const TRUNCATION_MARKER_PATTERN = /\n\n… \[truncated; original output was \d+ 
 
 /** Whether `output` ends with the persistence truncation marker. */
 export function hasTruncationMarker(output: string): boolean {
-  return TRUNCATION_MARKER_PATTERN.test(output);
+  return TRUNCATION_MARKER_PATTERN.test(output.trimEnd());
 }
