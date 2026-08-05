@@ -127,9 +127,31 @@ describe('buildChildIdentifier', () => {
       'abcdefghijklmno-p',
       'Review_Diff Node',
       'implement-the-authentication-subsystem-part-one',
+      // Node ids whose readable slug is EMPTY. `id: z.string()` carries no pattern,
+      // so all four load today, and each used to leave a doubled separator
+      // ('3f9a1c2b--56dc6d47-child-0') for the provider's slugify to collapse.
+      '###',
+      '___',
+      '日本語',
+      '🚀',
     ]) {
       const identifier = buildChildIdentifier(PARENT_RUN_ID, nodeId, 0);
       expect(slugify(identifier)).toBe(identifier);
+    }
+  });
+
+  test('node ids that slugify to nothing stay unique and slug-shaped', () => {
+    // Dropping the empty readable segment must not collapse these onto one branch —
+    // the hash of the full node id is what keeps them apart.
+    const identifiers = ['###', '___', '日本語', '🚀'].map(nodeId =>
+      buildChildIdentifier(PARENT_RUN_ID, nodeId, 0)
+    );
+
+    expect(new Set(identifiers).size).toBe(identifiers.length);
+    for (const identifier of identifiers) {
+      expect(identifier).not.toContain('--');
+      expect(identifier.startsWith(`${PARENT_RUN_ID.slice(0, 8)}-`)).toBe(true);
+      expect(identifier.endsWith('-child-0')).toBe(true);
     }
   });
 });

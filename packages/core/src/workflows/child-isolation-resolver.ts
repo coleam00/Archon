@@ -75,8 +75,16 @@ export function buildChildIdentifier(
     // workflow_id differ from the branch. Trim it here so the two stay identical.
     .replace(/-+$/, '');
   const nodeHash = createHash('sha256').update(nodeId).digest('hex').slice(0, NODE_HASH_LEN);
-  // 8-char parent prefix stays unique per parent run without eating the budget.
-  return `${parentRunId.slice(0, 8)}-${nodeSlug}-${nodeHash}-child-${String(childIndex)}`;
+  // Empty segments are dropped rather than joined. A node id can slugify to nothing
+  // — `###`, `___`, `日本語`, `🚀` are all valid ids today (`id: z.string()` carries no
+  // pattern) — and an empty readable part would leave a doubled separator that the
+  // provider's own slugify collapses, so the stored workflow_id would no longer be
+  // byte-identical to the branch derived from it. The hash carries the full node id,
+  // so dropping the readable part costs legibility, never uniqueness.
+  // The 8-char parent prefix stays unique per parent run without eating the budget.
+  return [parentRunId.slice(0, 8), nodeSlug, nodeHash, 'child', String(childIndex)]
+    .filter(segment => segment !== '')
+    .join('-');
 }
 
 /** Codebase-scoped context captured when the caller builds the resolver. */
