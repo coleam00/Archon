@@ -12,7 +12,6 @@ Create the following in your repository root:
 ├── workflows/        # Workflow definitions (.yaml)
 ├── scripts/          # Named scripts for script: nodes (.ts/.js for bun, .py for uv) — optional
 ├── mcp/              # MCP server config files (.json) — optional
-├── state/            # Cross-run workflow state — gitignored, never committed
 ├── config.yaml       # Repo-specific configuration — optional
 └── .env              # Repo-scoped Archon env (optional; do NOT commit)
 ```
@@ -27,9 +26,18 @@ mkdir -p .archon/commands .archon/workflows .archon/scripts
 - `workflows/` — YAML workflow definitions. Committed to git.
 - `scripts/` — Named TypeScript/JavaScript (bun) or Python (uv) scripts referenced by `script:` nodes. Extension determines runtime: `.ts`/`.js` → bun, `.py` → uv. Committed to git.
 - `mcp/` — MCP server JSON configs. Usually checked in with `$ENV_VAR` references; avoid hardcoding secrets. Some teams gitignore this and rely entirely on env expansion.
-- `state/` — Workflow-written cross-run state (e.g. the `repo-triage` dedup log). **Always gitignore** — these are runtime artifacts, not source.
 - `config.yaml` — Repo-specific defaults (assistant, worktree settings, etc.). Committed to git.
 - `.env` — Repo-scoped Archon env (loaded with `override: true` at boot). **Do NOT commit.** This is different from the target repo's top-level `.env` — that file belongs to the target project, and Archon strips its auto-loaded keys from subprocess env before spawning AI to prevent leakage. See **Three-Path Env Model** below.
+
+**Note — `.archon/` holds SOURCE only.** Nothing a run *produces* belongs here. Cross-run
+state (a dedup ledger, a "last processed" cursor) goes to `$STATE_DIR`
+(`~/.archon/workspaces/<project>/state/`), which the engine pre-creates and which survives
+worktree teardown. The older `.archon/state/` convention had no engine support at all — it
+was `mkdir -p .archon/state` inside prompts, resolved relative to cwd, so inside an isolated
+run it wrote to the *worktree* and was deleted at cleanup, and in a repository it was
+stageable. If you have a legacy directory, migrate it with
+`bun run scripts/migrate-state-dir.ts --apply` (dry run without the flag). See
+[Variable Reference](https://archon.diy/reference/variables/) for `$STATE_DIR`.
 
 ## Minimal config.yaml
 
@@ -66,8 +74,11 @@ Add to your `.gitignore`:
 
 ```gitignore
 # Archon runtime artifacts — NEVER commit
-.archon/state/        # Cross-run workflow state, runtime-only
 .archon/.env          # Repo-scoped Archon env (secrets)
+
+# Legacy only — cross-run state now lives in $STATE_DIR, outside the repo.
+# Keep this line if you have not migrated yet (scripts/migrate-state-dir.ts).
+.archon/state/
 
 # Optional — gitignore if your MCP configs hardcode secrets
 .archon/mcp/

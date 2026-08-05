@@ -325,6 +325,25 @@ export function toRunEvent(raw: RawWorkflowEvent): RunEvent {
     };
   }
 
+  // Keys the engine dropped from this run's YAML (#2213). Mapped explicitly —
+  // the fallback below would render the raw `{"warnings":[…]}` payload. Rendered
+  // as `text`, NOT `system`: system rows sit behind the System toggle (off by
+  // default), and a silently dropped `interactive:` gate is exactly what the
+  // author needs to see without opting in.
+  if (et === 'workflow_parse_warnings') {
+    const warnings = Array.isArray(data.warnings)
+      ? data.warnings.filter((w): w is string => typeof w === 'string')
+      : [];
+    return {
+      ...base,
+      kind: 'text',
+      content:
+        warnings.length > 0
+          ? `⚠️ This workflow declares keys the engine ignores:\n${warnings.map(w => `- ${w}`).join('\n')}`
+          : '⚠️ This workflow declares keys the engine ignores.',
+    };
+  }
+
   // Fallback: render anything else as a text event with the payload summary.
   return {
     ...base,

@@ -187,6 +187,7 @@ git status --porcelain  # verify nothing scratch/review/PR-body is staged
 - `.pr-body.md`, `pr-body.md`, `*.scratch.md`, `*.tmp.md`
 - `review/`, `*-report.md` at the repo root
 - Anything under `$ARTIFACTS_DIR` (review artifacts live here, not in the worktree)
+- Repo-local Archon telemetry: `.archon/artifacts/`, `.archon/logs/`, `.archon/state/` (local-only — never in git)
 
 ### 4.2 Commit
 

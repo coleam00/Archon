@@ -637,9 +637,16 @@ async function handleWorkflowCommand(
 
       if (workflowEntries.length > 0) {
         msg += 'Available Workflows:\n\n';
-        for (const { workflow: w } of workflowEntries) {
+        for (const { workflow: w, parseWarnings } of workflowEntries) {
           const modeInfo = `DAG: ${String(w.nodes.length)} nodes`;
-          msg += `**\`${w.name}\`**\n  ${w.description}\n  ${modeInfo}\n\n`;
+          msg += `**\`${w.name}\`**\n  ${w.description}\n  ${modeInfo}\n`;
+          // Keys the engine silently drops (#2213). Rendered inline with the
+          // workflow rather than in a trailer so the author sees which of their
+          // workflows is affected without cross-referencing.
+          for (const warning of parseWarnings ?? []) {
+            msg += `  ⚠️ ${warning}\n`;
+          }
+          msg += '\n';
         }
       }
 
@@ -992,6 +999,11 @@ async function handleWorkflowCommand(
 
       getLog().info({ workflow: workflow.name, args: workflowArgs }, 'cmd.workflow_starting');
 
+      // Recover the discovery entry the `.map()` above dropped, so the keys the
+      // engine ignores reach the conversation when the run STARTS — not only
+      // when the author happens to browse `/workflow list` (#2213).
+      const resolvedEntry = workflowEntries.find(ws => ws.workflow === workflow);
+
       // Return special result that triggers workflow execution in orchestrator
       return {
         success: true,
@@ -1000,6 +1012,9 @@ async function handleWorkflowCommand(
           definition: workflow,
           args: workflowArgs,
           force: force ? true : undefined,
+          ...(resolvedEntry?.parseWarnings && resolvedEntry.parseWarnings.length > 0
+            ? { parseWarnings: resolvedEntry.parseWarnings }
+            : {}),
         },
       };
     }

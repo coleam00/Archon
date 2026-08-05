@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, spyOn, mock, type Mock } from 'bun:test';
-import { mkdir, writeFile, rm } from 'fs/promises';
-import { join } from 'path';
+import { mkdir, writeFile, rm, readdir, readFile } from 'fs/promises';
+import { join, basename } from 'path';
 import { tmpdir } from 'os';
 
 const isWindows = process.platform === 'win32';
@@ -35,6 +35,9 @@ registerBuiltinProviders();
 
 import { discoverWorkflows, discoverWorkflowsWithConfig } from './workflow-discovery';
 import { isBashNode, isCancelNode, isLoopNode } from './schemas';
+import { parseWorkflow } from './loader';
+import { workflowDefinitionSchema } from './schemas/workflow';
+import type { WorkflowDefinition } from './schemas/workflow';
 import * as bundledDefaults from './defaults/bundled-defaults';
 
 describe('Workflow Loader', () => {
@@ -3329,21 +3332,20 @@ nodes:
       expect(err?.error).toContain("'retry' is not supported on workflow nodes");
     });
 
-    it("rejects isolation: 'worktree' on a workflow node (reserved for slice 2)", async () => {
+    it("accepts isolation: 'worktree' on a workflow node (slice 2, PR-A)", async () => {
       const result = await loadOne(
-        'iso-reject',
+        'iso-worktree',
         `
-name: iso-reject
-description: isolation worktree on a workflow node
+name: iso-worktree
+description: per-child worktree isolation on a workflow node
 nodes:
   - id: sub
     workflow: child-wf
     isolation: worktree
 `
       );
-      const err = result.errors.find(e => e.filename === 'iso-reject.yaml');
-      expect(err).toBeDefined();
-      expect(err?.error).toContain('worktree');
+      const errs = result.errors.filter(e => e.filename === 'iso-worktree.yaml');
+      expect(errs).toHaveLength(0);
     });
 
     it("accepts isolation: 'inherit' on a workflow node", async () => {
@@ -3360,6 +3362,23 @@ nodes:
       );
       const errs = result.errors.filter(e => e.filename === 'iso-ok.yaml');
       expect(errs).toHaveLength(0);
+    });
+
+    it("rejects 'isolation:' on a non-workflow node (S1)", async () => {
+      const result = await loadOne(
+        'iso-wrong-node',
+        `
+name: iso-wrong-node
+description: isolation on a prompt node is meaningless
+nodes:
+  - id: think
+    prompt: "do a thing"
+    isolation: worktree
+`
+      );
+      const err = result.errors.find(e => e.filename === 'iso-wrong-node.yaml');
+      expect(err).toBeDefined();
+      expect(err?.error).toContain('only supported on workflow');
     });
 
     it('rejects a workflow node inside a loop_group body', async () => {
@@ -3399,6 +3418,222 @@ nodes:
       const err = result.errors.find(e => e.filename === 'both.yaml');
       expect(err).toBeDefined();
       expect(err?.error).toMatch(/mutually exclusive/i);
+    });
+
+    // --- slice 2, PR-C: dynamic fan-out ------------------------------------------
+
+    it('accepts a valid fan_out node and defaults max_parallel=5, join=all_done', async () => {
+      const result = await loadOne(
+        'fan-ok',
+        `
+name: fan-ok
+description: fan out over a produced item list
+nodes:
+  - id: plan
+    prompt: "emit tasks"
+  - id: work
+    workflow: child-wf
+    isolation: worktree
+    depends_on: [plan]
+    fan_out:
+      items: "$plan.output.tasks"
+`
+      );
+      const errs = result.errors.filter(e => e.filename === 'fan-ok.yaml');
+      expect(errs).toHaveLength(0);
+      const wf = result.workflows.find(w => w.workflow.name === 'fan-ok');
+      const work = wf!.workflow.nodes.find(n => n.id === 'work');
+      const fanOut = work && 'fan_out' in work ? work.fan_out : undefined;
+      expect(fanOut?.items).toBe('$plan.output.tasks');
+      // Defaults applied by the schema.
+      expect(fanOut?.max_parallel).toBe(5);
+      // Independent children by default: a failed child must not discard its siblings'
+      // output at the join. all_success is the opt-in for the genuinely dependent case.
+      expect(fanOut?.join).toBe('all_done');
+      // The explicit isolation the author wrote survives the transform.
+      expect(work && 'isolation' in work ? work.isolation : undefined).toBe('worktree');
+    });
+
+    it('does NOT infer isolation from fan_out — an omitted isolation stays omitted', async () => {
+      const result = await loadOne(
+        'fan-no-iso',
+        `
+name: fan-no-iso
+description: fan out with no isolation declared
+nodes:
+  - id: plan
+    prompt: "emit tasks"
+  - id: work
+    workflow: child-wf
+    depends_on: [plan]
+    fan_out:
+      items: "$plan.output.tasks"
+`
+      );
+      expect(result.errors.filter(e => e.filename === 'fan-no-iso.yaml')).toHaveLength(0);
+      const wf = result.workflows.find(w => w.workflow.name === 'fan-no-iso');
+      const work = wf!.workflow.nodes.find(n => n.id === 'work');
+      // A child gets a worktree ONLY when the author writes `isolation: worktree`.
+      // Fanning out is not a write operation, so it never implies one.
+      expect(work && 'isolation' in work ? work.isolation : undefined).toBeUndefined();
+    });
+
+    it('catches a fan_out.items ref to an unknown node (dangling ref)', async () => {
+      const result = await loadOne(
+        'fan-dangling',
+        `
+name: fan-dangling
+description: fan_out.items references a node that does not exist
+nodes:
+  - id: work
+    workflow: child-wf
+    fan_out:
+      items: "$ghost.output.tasks"
+`
+      );
+      const err = result.errors.find(e => e.filename === 'fan-dangling.yaml');
+      expect(err).toBeDefined();
+      expect(err?.error).toContain("references unknown node '$ghost.output'");
+    });
+
+    it('rejects fan_out.items referencing a non-dependency producer', async () => {
+      const result = await loadOne(
+        'fan-not-dep',
+        `
+name: fan-not-dep
+description: items producer is real but not an upstream dependency (would race)
+nodes:
+  - id: plan
+    prompt: "emit tasks"
+  - id: work
+    workflow: child-wf
+    fan_out:
+      items: "$plan.output.tasks"
+`
+      );
+      const err = result.errors.find(e => e.filename === 'fan-not-dep.yaml');
+      expect(err).toBeDefined();
+      expect(err?.error).toContain('not an upstream dependency');
+      expect(err?.error).toContain('depends_on');
+    });
+
+    it("rejects 'fan_out' on a non-workflow node", async () => {
+      const result = await loadOne(
+        'fan-wrong-node',
+        `
+name: fan-wrong-node
+description: fan_out on a prompt node is meaningless
+nodes:
+  - id: think
+    prompt: "do a thing"
+    fan_out:
+      items: "$think.output"
+`
+      );
+      const err = result.errors.find(e => e.filename === 'fan-wrong-node.yaml');
+      expect(err).toBeDefined();
+      expect(err?.error).toContain("'fan_out' is only supported on workflow");
+    });
+
+    it("rejects 'fan_out.join: first_success' as REJECTED, not deferred", async () => {
+      const result = await loadOne(
+        'fan-race',
+        `
+name: fan-race
+description: first_success join is not supported yet
+nodes:
+  - id: plan
+    prompt: "emit tasks"
+  - id: work
+    workflow: child-wf
+    depends_on: [plan]
+    fan_out:
+      items: "$plan.output.tasks"
+      join: first_success
+`
+      );
+      const err = result.errors.find(e => e.filename === 'fan-race.yaml');
+      expect(err).toBeDefined();
+      expect(err?.error).toContain('first_success');
+      // The message must not promise a future that no longer exists — racing is rejected
+      // outright, so "not yet supported" / a PR to wait for would be acted on wrongly.
+      expect(err?.error).toContain('rejected, not deferred');
+      expect(err?.error).not.toContain('not yet supported');
+      expect(err?.error).not.toContain('PR-D');
+      // …and it names the shape that actually serves the want.
+      expect(err?.error).toContain('collector');
+    });
+
+    it("rejects 'fan_out.as' ($INPUTS channel staged for PR-B) instead of ignoring it", async () => {
+      const result = await loadOne(
+        'fan-as',
+        `
+name: fan-as
+description: as names an $INPUTS channel that does not exist yet
+nodes:
+  - id: plan
+    prompt: "emit tasks"
+  - id: work
+    workflow: child-wf
+    depends_on: [plan]
+    fan_out:
+      items: "$plan.output.tasks"
+      as: task
+`
+      );
+      // Accepting it silently would deliver a literal '$INPUTS.task' to the model — the
+      // field reads as a working feature while doing nothing.
+      const err = result.errors.find(e => e.filename === 'fan-as.yaml');
+      expect(err).toBeDefined();
+      expect(err?.error).toContain('fan_out.as');
+      expect(err?.error).toContain('#2214');
+      expect(err?.error).toContain('$ARGUMENTS');
+    });
+
+    it("rejects 'max_parallel: 0' (must be >= 1)", async () => {
+      const result = await loadOne(
+        'fan-zero',
+        `
+name: fan-zero
+description: max_parallel must be at least 1
+nodes:
+  - id: plan
+    prompt: "emit tasks"
+  - id: work
+    workflow: child-wf
+    depends_on: [plan]
+    fan_out:
+      items: "$plan.output.tasks"
+      max_parallel: 0
+`
+      );
+      const err = result.errors.find(e => e.filename === 'fan-zero.yaml');
+      expect(err).toBeDefined();
+      expect(err?.error).toMatch(/max_parallel/);
+    });
+
+    it('rejects a fan_out workflow node inside a loop_group body', async () => {
+      const result = await loadOne(
+        'fan-in-loop-group',
+        `
+name: fan-in-loop-group
+description: fan-out sub-run nested in a loop_group body (rejected — it is a workflow node)
+nodes:
+  - id: grp
+    loop_group:
+      until: DONE
+      max_iterations: 3
+      nodes:
+        - id: bad
+          workflow: child-wf
+          fan_out:
+            items: "$grp.output"
+`
+      );
+      const err = result.errors.find(e => e.filename === 'fan-in-loop-group.yaml');
+      expect(err).toBeDefined();
+      expect(err?.error).toContain('loop_group');
+      expect(err?.error).toContain("'workflow' (sub-run) is not supported");
     });
   });
 
@@ -3697,6 +3932,48 @@ nodes:
       expect(err?.error).toContain("sibling node '$sib'");
     });
 
+    it('should fail expansion when a resolved block command file references an include input', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      const commandsDir = join(testDir, '.archon', 'commands');
+      await mkdir(workflowDir, { recursive: true });
+      await mkdir(commandsDir, { recursive: true });
+
+      await writeFile(join(commandsDir, 'parameterized-runner.md'), 'Review $INPUTS.scope.');
+      await writeFile(
+        join(workflowDir, 'parameterized-block.yaml'),
+        `
+name: parameterized-block
+description: Block whose command references an include input
+nodes:
+  - id: runner
+    command: parameterized-runner
+`
+      );
+      await writeFile(
+        join(workflowDir, 'parameterized-parent.yaml'),
+        `
+name: parameterized-parent
+description: Includes the parameterized command block
+nodes:
+  - id: review
+    include: parameterized-block
+    with:
+      scope: main
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.workflows.some(w => w.workflow.name === 'parameterized-parent')).toBe(false);
+      const message = result.errors.find(
+        error => error.filename === 'parameterized-parent.yaml'
+      )?.error;
+      expect(message).toContain("Node 'review'");
+      expect(message).toContain("included block 'parameterized-block'");
+      expect(message).toContain("command file 'parameterized-runner.md'");
+      expect(message).toContain("parameter '$INPUTS.scope'");
+      expect(message).toContain('inline the prompt');
+    });
+
     it('should scan block command files in a configured custom command folder (config parity)', async () => {
       const workflowDir = join(testDir, '.archon', 'workflows');
       const customCmds = join(testDir, 'my-cmds');
@@ -3771,13 +4048,54 @@ nodes:
       );
 
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      // Unresolvable command → WARN, never a hard expansion error.
+      // Unresolvable command → WARN, never a hard expansion error. The scan is
+      // best-effort by construction; a file it cannot read is unverified, not unsafe,
+      // and dropping the workflow would break includes that never used this feature.
       const parentErrors = result.errors.filter(e => e.filename === 'ghost-parent.yaml');
       expect(parentErrors).toHaveLength(0);
       expect(result.workflows.some(w => w.workflow.name === 'ghost-parent')).toBe(true);
       expect(mockLogger.warn).toHaveBeenCalledWith(
         expect.objectContaining({ include: 'g', command: 'ghost-cmd-does-not-exist-xyz' }),
         'include.command_file_unresolved_for_ref_scan'
+      );
+    });
+
+    it('should scan an included loop.command file for include inputs', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      const commandDir = join(testDir, '.archon', 'commands');
+      await mkdir(workflowDir, { recursive: true });
+      await mkdir(commandDir, { recursive: true });
+      await writeFile(join(commandDir, 'loop-review.md'), 'Review $INPUTS.scope.');
+      await writeFile(
+        join(workflowDir, 'loop-block.yaml'),
+        `
+name: loop-block
+description: Block with a deferred loop prompt
+nodes:
+  - id: repeat
+    loop:
+      command: loop-review
+      until: DONE
+      max_iterations: 1
+`
+      );
+      await writeFile(
+        join(workflowDir, 'loop-parent.yaml'),
+        `
+name: loop-parent
+description: Includes the loop block
+nodes:
+  - id: review
+    include: loop-block
+    with:
+      scope: production
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.workflows.some(w => w.workflow.name === 'loop-parent')).toBe(false);
+      expect(result.errors.find(error => error.filename === 'loop-parent.yaml')?.error).toContain(
+        "command file 'loop-review.md'"
       );
     });
   });
@@ -4073,4 +4391,651 @@ nodes:
       }
     });
   });
+
+  describe('unknown key warnings (#2213)', () => {
+    it('should warn when a node has an unknown key', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      const yaml = [
+        'name: test',
+        'description: test',
+        'nodes:',
+        '  - id: plan',
+        '    command: my-command',
+        '    unknown_field: true',
+      ].join('\n');
+      await writeFile(join(workflowDir, 'test.yaml'), yaml);
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.workflows.length).toBe(1);
+      const pw = result.workflows[0].parseWarnings ?? [];
+      expect(pw.length).toBe(1);
+      expect(pw[0]).toContain("unknown key 'unknown_field'");
+      expect(pw[0]).toContain('will be ignored');
+    });
+
+    it('should hint when a workflow-level key is misplaced on a node', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      // 'interactive' is valid at workflow level but not on individual nodes
+      const yaml = [
+        'name: test',
+        'description: test',
+        'nodes:',
+        '  - id: plan',
+        '    command: my-command',
+        '    interactive: true',
+      ].join('\n');
+      await writeFile(join(workflowDir, 'test.yaml'), yaml);
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.workflows.length).toBe(1);
+      const pw = result.workflows[0].parseWarnings ?? [];
+      expect(pw.length).toBe(1);
+      expect(pw[0]).toContain("'interactive'");
+      // The hint must name BOTH loop fields: the executor gates on
+      // `loop.interactive && loop.gate_message`, so an author who follows a
+      // gate_message-only hint gets a loop with a message and no gate.
+      expect(pw[0]).toContain('loop.interactive: true');
+      expect(pw[0]).toContain('gate_message');
+      expect(pw[0]).toContain('approval:');
+    });
+
+    it('should warn when the workflow itself has an unknown key', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      const yaml = [
+        'name: test',
+        'description: test',
+        'max_retries: 3',
+        'nodes:',
+        '  - id: n',
+        '    prompt: p',
+      ].join('\n');
+      await writeFile(join(workflowDir, 'test.yaml'), yaml);
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.workflows.length).toBe(1);
+      const pw = result.workflows[0].parseWarnings ?? [];
+      expect(pw.length).toBe(1);
+      expect(pw[0]).toContain("unknown key 'max_retries'");
+    });
+
+    it('should not warn for valid node keys', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      const yaml = [
+        'name: test',
+        'description: test',
+        'nodes:',
+        '  - id: n',
+        '    prompt: hello',
+        '    model: some-model',
+        '    context: fresh',
+      ].join('\n');
+      await writeFile(join(workflowDir, 'test.yaml'), yaml);
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.workflows.length).toBe(1);
+      const pw = result.workflows[0].parseWarnings ?? [];
+      expect(pw.length).toBe(0);
+    });
+
+    it('should collect warnings from multiple nodes', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      const yaml = [
+        'name: test',
+        'description: test',
+        'nodes:',
+        '  - id: a',
+        '    prompt: hello',
+        '    typo_key: 1',
+        '  - id: b',
+        '    bash: echo hi',
+        '    another_typo: 2',
+      ].join('\n');
+      await writeFile(join(workflowDir, 'test.yaml'), yaml);
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.workflows.length).toBe(1);
+      const pw = result.workflows[0].parseWarnings ?? [];
+      expect(pw.length).toBe(2);
+      expect(pw[0]).toContain("Node 'a'");
+      expect(pw[1]).toContain("Node 'b'");
+    });
+
+    it('should hint when a node-only key is misplaced at workflow level', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      // 'command' is valid on nodes but not at workflow level
+      const yaml = [
+        'name: test',
+        'description: test',
+        'command: my-command',
+        'nodes:',
+        '  - id: n',
+        '    prompt: p',
+      ].join('\n');
+      await writeFile(join(workflowDir, 'test.yaml'), yaml);
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.workflows.length).toBe(1);
+      const pw = result.workflows[0].parseWarnings ?? [];
+      expect(pw.length).toBe(1);
+      expect(pw[0]).toContain("'command'");
+      expect(pw[0]).toContain('valid on individual nodes');
+    });
+  });
+
+  describe('unknown key warnings — nested (#2213)', () => {
+    /** Write a single workflow and return its parse warnings. */
+    const warningsFor = async (lines: string[]): Promise<string[]> => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      await writeFile(join(workflowDir, 'test.yaml'), lines.join('\n'));
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.workflows.length).toBe(1);
+      return [...(result.workflows[0].parseWarnings ?? [])];
+    };
+
+    it('should warn on an unknown key inside approval:', async () => {
+      const pw = await warningsFor([
+        'name: test',
+        'description: test',
+        'nodes:',
+        '  - id: gate',
+        '    approval:',
+        '      message: ok?',
+        '      capture_reponse: true', // typo for capture_response
+      ]);
+      expect(pw.length).toBe(1);
+      expect(pw[0]).toContain("Node 'gate'");
+      expect(pw[0]).toContain("unknown key 'approval.capture_reponse'");
+    });
+
+    it('should warn on an unknown key inside approval.on_reject (two levels down)', async () => {
+      const pw = await warningsFor([
+        'name: test',
+        'description: test',
+        'nodes:',
+        '  - id: gate',
+        '    approval:',
+        '      message: ok?',
+        '      on_reject:',
+        '        prompt: try again',
+        '        max_retries: 2', // real field is max_attempts
+      ]);
+      expect(pw.length).toBe(1);
+      expect(pw[0]).toContain("unknown key 'approval.on_reject.max_retries'");
+    });
+
+    it('should warn on an unknown key inside retry:', async () => {
+      const pw = await warningsFor([
+        'name: test',
+        'description: test',
+        'nodes:',
+        '  - id: n',
+        '    prompt: hello',
+        '    retry:',
+        '      max_attempts: 2',
+        '      backoff_ms: 5000', // real field is delay_ms
+      ]);
+      expect(pw.length).toBe(1);
+      expect(pw[0]).toContain("unknown key 'retry.backoff_ms'");
+    });
+
+    it('should warn on an unknown key inside an agents entry', async () => {
+      const pw = await warningsFor([
+        'name: test',
+        'description: test',
+        'nodes:',
+        '  - id: n',
+        '    prompt: hello',
+        '    agents:',
+        '      my-agent:',
+        '        description: does things',
+        '        prompt: do it',
+        '        disallowed_tools: [Bash]', // real field is disallowedTools
+      ]);
+      expect(pw.length).toBe(1);
+      // The agent id is author-chosen, so it must appear in the path verbatim
+      // rather than being reported as an unknown key itself.
+      expect(pw[0]).toContain("unknown key 'agents.my-agent.disallowed_tools'");
+    });
+
+    it('should warn on an unknown key on a loop_group body node', async () => {
+      const pw = await warningsFor([
+        'name: test',
+        'description: test',
+        'nodes:',
+        '  - id: refine',
+        '    loop_group:',
+        '      until: DONE',
+        '      max_iterations: 3',
+        '      nodes:',
+        '        - id: check',
+        '          prompt: check it',
+        '          interactive: true',
+      ]);
+      expect(pw.length).toBe(1);
+      expect(pw[0]).toContain("Node 'refine' → loop_group node 'check'");
+      expect(pw[0]).toContain("unknown key 'interactive'");
+      // The body node gets the same actionable guidance as a top-level node.
+      expect(pw[0]).toContain('loop.interactive: true');
+    });
+
+    it('should warn on an unknown key inside the loop_group control block', async () => {
+      const pw = await warningsFor([
+        'name: test',
+        'description: test',
+        'nodes:',
+        '  - id: refine',
+        '    loop_group:',
+        '      until: DONE',
+        '      max_iterations: 3',
+        '      max_attempts: 4', // not a loop control field
+        '      nodes:',
+        '        - id: check',
+        '          prompt: check it',
+      ]);
+      expect(pw.length).toBe(1);
+      expect(pw[0]).toContain("unknown key 'loop_group.max_attempts'");
+    });
+
+    it('should warn on an unknown key inside a workflow-level worktree block', async () => {
+      const pw = await warningsFor([
+        'name: test',
+        'description: test',
+        'worktree:',
+        '  enabled: true',
+        '  base_branch: main', // worktree policy has only `enabled`
+        'nodes:',
+        '  - id: n',
+        '    prompt: p',
+      ]);
+      expect(pw.length).toBe(1);
+      expect(pw[0]).toContain("Workflow 'test'");
+      expect(pw[0]).toContain("unknown key 'worktree.base_branch'");
+    });
+
+    it('should not warn on valid nested keys, including a clean loop_group body', async () => {
+      const pw = await warningsFor([
+        'name: test',
+        'description: test',
+        'worktree:',
+        '  enabled: true',
+        'nodes:',
+        '  - id: refine',
+        '    loop_group:',
+        '      until: DONE',
+        '      max_iterations: 3',
+        '      interactive: true',
+        '      gate_message: continue?',
+        '      nodes:',
+        '        - id: check',
+        '          prompt: check it',
+        '          retry:',
+        '            max_attempts: 2',
+        '            delay_ms: 1000',
+        '  - id: gate',
+        '    depends_on: [refine]',
+        '    approval:',
+        '      message: ok?',
+        '      capture_response: true',
+        '      on_reject:',
+        '        prompt: again',
+        '        max_attempts: 2',
+      ]);
+      expect(pw).toEqual([]);
+    });
+
+    it('should not treat free-form output_format keys as unknown', async () => {
+      const pw = await warningsFor([
+        'name: test',
+        'description: test',
+        'nodes:',
+        '  - id: n',
+        '    prompt: hello',
+        '    output_format:',
+        '      type: object',
+        '      properties:',
+        '        anything_at_all:',
+        '          type: string',
+      ]);
+      expect(pw).toEqual([]);
+    });
+
+    it('should not treat a thinking: config as an unknown-key surface', async () => {
+      // `thinking` is a z.preprocess over a union, not an object shape — there
+      // is nothing to compare keys against, so it must stay exempt rather than
+      // warning on its own legitimate fields.
+      const pw = await warningsFor([
+        'name: test',
+        'description: test',
+        'nodes:',
+        '  - id: n',
+        '    prompt: hello',
+        '    thinking:',
+        '      type: enabled',
+        '      budgetTokens: 4096',
+      ]);
+      expect(pw).toEqual([]);
+    });
+  });
+
+  describe('include: warnings stay with the file that declared the key (#2213)', () => {
+    // Pins CURRENT behaviour, which is a known gap documented in the authoring
+    // guide: warnings are keyed by the file they were parsed from, so an
+    // included block's unknown key is reported against the BLOCK, never against
+    // the workflow that includes it. Propagating across the include boundary is
+    // a deliberate follow-up — this test exists so that change is a visible,
+    // intentional edit rather than a silent behaviour shift.
+    it('reports on the included block, not the includer', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      await writeFile(
+        join(workflowDir, 'block.yaml'),
+        [
+          'name: block',
+          'description: shared block',
+          'nodes:',
+          '  - id: work',
+          '    prompt: do it',
+          '    interactive: true', // dropped, warned — on THIS file
+        ].join('\n')
+      );
+      await writeFile(
+        join(workflowDir, 'parent.yaml'),
+        [
+          'name: parent',
+          'description: includes the block',
+          'nodes:',
+          '  - id: blk',
+          '    include: block',
+        ].join('\n')
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      const byName = new Map(result.workflows.map(w => [w.workflow.name, w]));
+
+      const block = byName.get('block');
+      expect((block?.parseWarnings ?? []).length).toBe(1);
+      expect(block?.parseWarnings?.[0]).toContain("unknown key 'interactive'");
+
+      // The includer inlines the block's NODES but not its warnings.
+      const parent = byName.get('parent');
+      expect(parent).toBeDefined();
+      expect(parent?.parseWarnings ?? []).toEqual([]);
+    });
+  });
+
+  describe('parse warnings survive a filename collision (#2213)', () => {
+    // Discovery keys files by BARE filename, so `foo.yaml` at the root and
+    // `foo.yaml` in a 1-level subfolder (a supported layout) collide, and the
+    // loser is dropped. `readdir()` order decides which one wins, so these
+    // assert the ORDER-INDEPENDENT invariant instead of a fixed winner: the
+    // warnings that survive must describe the workflow that survived. Before
+    // the single-entry refactor the definition and the warnings came from two
+    // parallel maps, and a clean file could inherit the dropped file's warning.
+    //
+    // READ THIS BEFORE TRUSTING THE PAIR: only ONE of these two is a live
+    // regression test on any given platform, and which one depends on the
+    // filesystem. The bug was that warnings were sticky — set, never cleared —
+    // so it is only observable when the CLEAN file wins: post-fix its warnings
+    // are empty, pre-fix it inherited the dirty file's. When the DIRTY file
+    // wins, pre-fix and post-fix produce the same correct warning, so that
+    // direction cannot distinguish them and passes either way. There is no
+    // assertion that fixes this; it is inherent to the bug's shape.
+    //
+    // Forcing both orderings would need a test seam in `loadWorkflowsFromDir`
+    // or a `mock.module('fs/promises')` that would break the real-I/O tests
+    // throughout this file. Judged not worth it (#2455 review S5) — but do not
+    // read this as two regression tests, because it is one plus a companion.
+    const CLEAN = (name: string): string =>
+      ['name: ' + name, 'description: test', 'nodes:', '  - id: a', '    prompt: hi'].join('\n');
+    const DIRTY = (name: string): string =>
+      [
+        'name: ' + name,
+        'description: test',
+        'nodes:',
+        '  - id: a',
+        '    prompt: hi',
+        '    interactive: true',
+      ].join('\n');
+
+    /** Write root/sub `foo.yaml`, discover, and return the single survivor. */
+    const discoverColliding = async (
+      rootYaml: string,
+      subYaml: string
+    ): Promise<{ name: string; warnings: string[] }> => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(join(workflowDir, 'zsub'), { recursive: true });
+      await writeFile(join(workflowDir, 'foo.yaml'), rootYaml);
+      await writeFile(join(workflowDir, 'zsub', 'foo.yaml'), subYaml);
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      // One filename → one surviving entry, whichever side won.
+      expect(result.workflows.length).toBe(1);
+      return {
+        name: result.workflows[0].workflow.name,
+        warnings: [...(result.workflows[0].parseWarnings ?? [])],
+      };
+    };
+
+    it('does not attach the dropped file’s warning to a clean survivor', async () => {
+      const { name, warnings } = await discoverColliding(CLEAN('foo-root'), DIRTY('foo-sub'));
+      if (name === 'foo-root') {
+        expect(warnings).toEqual([]); // the clean file won — it declares no unknown key
+      } else {
+        expect(warnings.length).toBe(1);
+        expect(warnings[0]).toContain("unknown key 'interactive'");
+      }
+    });
+
+    it('does not drop a dirty survivor’s warning when a clean file collides', async () => {
+      const { name, warnings } = await discoverColliding(DIRTY('foo-root'), CLEAN('foo-sub'));
+      if (name === 'foo-root') {
+        expect(warnings.length).toBe(1);
+        expect(warnings[0]).toContain("unknown key 'interactive'");
+      } else {
+        expect(warnings).toEqual([]);
+      }
+    });
+  });
+
+  describe('no false positives on the real workflow corpus (#2213)', () => {
+    /**
+     * The unknown-key check is only useful if a legitimate key never trips it.
+     * Detection reaches into nested config blocks and `loop_group` bodies, so a
+     * schema field that drifts out of a derived key set would start warning on
+     * valid YAML — and a warning nobody can act on is worse than none.
+     *
+     * Runs over Archon's own `.archon/workflows/` — its largest real corpus —
+     * and asserts nothing OUTSIDE a known-bad allowlist warns. Deliberately
+     * one-directional: the allowlist may shrink freely (fixing
+     * `e2e-opencode-smoke.yaml` must not break this), but a new name appearing
+     * is a false positive and fails.
+     *
+     * Calls `parseWorkflow` per file rather than `discoverWorkflows`. Parsing is
+     * the only thing under test — running full discovery would additionally do
+     * include expansion, command-file resolution and config loading, which is
+     * both a looser unit and heavy enough to starve the other package test
+     * processes running in parallel (`bun --filter '*' --parallel test`). It
+     * measurably did: on a 2-core Windows CI runner it pushed an unrelated
+     * SQLite test from 250 ms past Bun's 5000 ms per-test timeout.
+     */
+    const KNOWN_BAD = new Set([
+      // `agent:` at workflow and node level — a real bug, silently dropped since
+      // April. Remove from this list when the file is fixed.
+      'e2e-opencode-smoke',
+    ]);
+
+    it('warns only on workflows already known to carry unknown keys', async () => {
+      // packages/workflows/src/ → repo root
+      const corpusDir = join(import.meta.dir, '..', '..', '..', '.archon', 'workflows');
+
+      // Discovery descends one level; mirror that without invoking it.
+      const files: string[] = [];
+      for (const entry of await readdir(corpusDir, { withFileTypes: true })) {
+        const full = join(corpusDir, entry.name);
+        if (entry.isDirectory()) {
+          for (const sub of await readdir(full)) {
+            if (sub.endsWith('.yaml') || sub.endsWith('.yml')) files.push(join(full, sub));
+          }
+        } else if (entry.name.endsWith('.yaml') || entry.name.endsWith('.yml')) {
+          files.push(full);
+        }
+      }
+      // Guard against silently testing nothing if the corpus moves.
+      expect(files.length).toBeGreaterThan(20);
+
+      const unexpected: string[] = [];
+      for (const file of files) {
+        const result = parseWorkflow(await readFile(file, 'utf-8'), basename(file));
+        if (!result.workflow || result.warnings.length === 0) continue;
+        if (!KNOWN_BAD.has(result.workflow.name)) unexpected.push(result.workflow.name);
+      }
+      expect(unexpected).toEqual([]);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Workflow-level field parity (#2457)
+// ---------------------------------------------------------------------------
+
+/**
+ * `parseWorkflow` does not derive its result from `workflowDefinitionSchema` — it
+ * hand-assembles a WorkflowDefinition field by field into an object literal. A field
+ * added to the schema but not added to that literal is SILENTLY DISCARDED: the YAML
+ * parses, the workflow loads, and the feature is simply inert.
+ *
+ * That is not hypothetical. `requires:` was added to `workflowBaseSchema` in ab81248d
+ * (2026-06-01) without touching the loader, and was not added to that literal until
+ * 2d7bf587 (2026-07-16) — six weeks in which the GitHub capability gate could never
+ * fire for any discovered workflow, fixed incidentally inside an unrelated PR.
+ *
+ * This is the guard. The field list is DERIVED from `workflowDefinitionSchema.shape`,
+ * so a new schema field fails the test until it is given a fixture here — the same
+ * "the derived check fails until the new thing is registered" ratchet used by
+ * `check:capability-matrix` and the schema-parity test in `sqlite.test.ts`.
+ *
+ * Deliberately NOT solved by deriving the assembly itself (`schema.parse(raw)`): most
+ * fields warn-and-drop, logging a present-but-invalid value and continuing rather than
+ * aborting the whole discovery pass, and `.parse()` would reject the workflow instead.
+ * That is not universal — a few fields deliberately hard-reject and a few coerce
+ * silently — but one warn-and-drop field is enough to make a blanket `.parse()` wrong.
+ * `loader.ts` is the authority on which field does what; do not restate it here.
+ * See #2457.
+ */
+describe('workflow-level field parity (#2457)', () => {
+  /**
+   * One fixture per workflow-level schema key: a YAML fragment setting the field, and a
+   * predicate proving it survived `parseWorkflow`. `present` is deliberately a survival
+   * check rather than deep equality — several fields are normalised on the way through
+   * (tags deduped, betas trimmed, thinking preprocessed), and this guard is about the
+   * field reaching the result at all, not about how it is parsed.
+   */
+  const FIELD_FIXTURES: Record<
+    string,
+    { yaml: string; present: (w: WorkflowDefinition) => boolean }
+  > = {
+    name: { yaml: '', present: w => w.name === 'parity' },
+    description: { yaml: '', present: w => w.description === 'parity fixture' },
+    nodes: { yaml: '', present: w => w.nodes?.length === 1 },
+    provider: { yaml: 'provider: claude', present: w => w.provider === 'claude' },
+    model: { yaml: 'model: sonnet', present: w => w.model === 'sonnet' },
+    modelReasoningEffort: {
+      yaml: 'modelReasoningEffort: high',
+      present: w => w.modelReasoningEffort === 'high',
+    },
+    webSearchMode: { yaml: 'webSearchMode: live', present: w => w.webSearchMode === 'live' },
+    interactive: { yaml: 'interactive: true', present: w => w.interactive === true },
+    effort: { yaml: 'effort: high', present: w => w.effort === 'high' },
+    thinking: { yaml: 'thinking: adaptive', present: w => w.thinking?.type === 'adaptive' },
+    fallbackModel: {
+      yaml: 'fallbackModel: haiku',
+      present: w => w.fallbackModel === 'haiku',
+    },
+    betas: { yaml: 'betas:\n  - some-beta', present: w => w.betas?.includes('some-beta') === true },
+    sandbox: { yaml: 'sandbox:\n  enabled: true', present: w => w.sandbox?.enabled === true },
+    worktree: { yaml: 'worktree:\n  enabled: false', present: w => w.worktree?.enabled === false },
+    container: {
+      yaml: 'container:\n  enabled: true',
+      present: w => w.container?.enabled === true,
+    },
+    evidence_policy: {
+      yaml: 'evidence_policy:\n  required: true',
+      present: w => w.evidence_policy?.required === true,
+    },
+    mutates_checkout: {
+      yaml: 'mutates_checkout: false',
+      present: w => w.mutates_checkout === false,
+    },
+    persist_sessions: {
+      yaml: 'persist_sessions: true',
+      present: w => w.persist_sessions === true,
+    },
+    tags: { yaml: 'tags:\n  - alpha', present: w => w.tags?.includes('alpha') === true },
+    requires: {
+      yaml: 'requires:\n  - github',
+      present: w => w.requires?.includes('github') === true,
+    },
+  };
+
+  const schemaKeys = Object.keys(workflowDefinitionSchema.shape);
+
+  it('has a fixture for every workflow-level schema key (the ratchet)', () => {
+    const missing = schemaKeys.filter(k => !(k in FIELD_FIXTURES));
+    expect(
+      missing,
+      `Workflow-level schema keys with no parity fixture: ${missing.join(', ')}. ` +
+        'Add a fixture in FIELD_FIXTURES AND make sure parseWorkflow actually carries the ' +
+        'field into its returned object literal — a schema field missing from that literal ' +
+        'is silently discarded at parse (see #2457).'
+    ).toEqual([]);
+  });
+
+  it('has no fixture for a key that is not in the schema', () => {
+    const stale = Object.keys(FIELD_FIXTURES).filter(k => !schemaKeys.includes(k));
+    expect(stale, `Parity fixtures for keys no longer in the schema: ${stale.join(', ')}`).toEqual(
+      []
+    );
+  });
+
+  for (const key of Object.keys(FIELD_FIXTURES)) {
+    it(`round-trips '${key}' through parseWorkflow`, () => {
+      const fixture = FIELD_FIXTURES[key];
+      const yaml = [
+        'name: parity',
+        'description: parity fixture',
+        fixture.yaml,
+        'nodes:',
+        '  - id: only',
+        '    prompt: hello',
+      ]
+        .filter(line => line !== '')
+        .join('\n');
+
+      // An INVALID fixture value is dropped by design, which looks identical to the bug
+      // this test hunts. Clearing the logger first lets the failure message rank the two
+      // causes: a warning is strong evidence the fixture is at fault. Silence is NOT
+      // proof of the opposite — a few fields coerce an invalid value away with no log at
+      // all — so the silent branch names both causes rather than rendering a verdict.
+      mockLogger.warn.mockClear();
+
+      const result = parseWorkflow(yaml, `parity-${key}.yaml`);
+      expect(
+        result.error,
+        `parseWorkflow rejected the '${key}' fixture: ${result.error?.error}`
+      ).toBeNull();
+
+      const warned = mockLogger.warn.mock.calls.length > 0;
+      const message = warned
+        ? `Field '${key}' did not survive parseWorkflow, and a warning fired — the FIXTURE ` +
+          'value above is almost certainly invalid for this field, which warn-and-drop ' +
+          'discards by design. Fix the fixture, not the loader.'
+        : `Field '${key}' is declared on workflowDefinitionSchema and did NOT survive ` +
+          'parseWorkflow, with no warning logged. Two possible causes, likeliest first: ' +
+          "(1) the field is missing from the object literal parseWorkflow returns — that's " +
+          'the #2457 bug, add it there; or (2) the fixture value is invalid for a field ' +
+          'that coerces silently without logging, in which case fix the fixture. Check the ' +
+          'fixture value against the schema first — it is the cheaper of the two to rule out.';
+      expect(fixture.present(result.workflow as WorkflowDefinition), message).toBe(true);
+    });
+  }
 });

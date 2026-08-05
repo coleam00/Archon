@@ -184,7 +184,7 @@ Discovers workflows from `.archon/workflows/` (recursive), `~/.archon/workflows/
 | `--cwd <path>` | Target directory (required for most use cases) |
 | `--json` | Output machine-readable JSON instead of formatted text |
 
-With `--json`, outputs `{ "workflows": [...], "errors": [...] }`. Optional fields (`provider`, `model`, `modelReasoningEffort`, `webSearchMode`) are omitted when not set on a workflow.
+With `--json`, outputs `{ "workflows": [...], "errors": [...] }`. Optional fields (`provider`, `model`, `modelReasoningEffort`, `webSearchMode`, `parseWarnings`) are omitted when not set on a workflow. Each `parseWarnings` entry is a full warning message naming a key the engine dropped, the node it was found on, and what to write instead — see [Unknown keys](/guides/authoring-workflows/#unknown-keys-are-reported-not-rejected).
 
 ### `workflow run <name> [message]`
 
@@ -199,6 +199,10 @@ archon workflow run plan --cwd /path/to/repo --branch feature-x "Add caching"
 ```
 
 Progress events (node start/complete/fail/skip, approval gates) are written to stderr during execution.
+
+If the workflow's YAML declares keys the engine ignores, a warning naming each one is written to **stderr before the run starts**. This matters to `--detach --json` callers: `--json` silences all logging, so stderr is the only channel left, and it keeps stdout to exactly the JSON payload.
+
+Note that `run` emits a JSON payload **only** under `--detach`. Without it, `--json` suppresses logs but the command still prints human progress to stdout (`Running workflow: …`), so do not pipe plain `run --json` into a parser. See [Unknown keys](/guides/authoring-workflows/#unknown-keys-are-reported-not-rejected).
 
 **Flags:**
 
@@ -245,6 +249,13 @@ Levels 2--4 are static per repo, so a run that needs a different base than its
 neighbours had to edit config -- global, and racy when several runs dispatch at
 once. `--base` is the per-dispatch level, which is what makes parallel multi-base
 dispatch (epic slices, A/B variants) config-free.
+
+**Scope: the dispatched run only.** A `workflow:` node with `isolation: worktree`
+creates a worktree for its child run, and that worktree is cut using levels 2--4
+only -- `--base` and `--from` do **not** propagate to sub-run children. A parent
+dispatched with `--base release/2.0` still branches its isolated children off the
+repo's configured base. See [Choosing the child's
+checkout](/guides/authoring-workflows/#choosing-the-childs-checkout-with-isolation).
 
 **Driving cut-from and PR target separately.** `--from` overrides only the
 cut-from, so pairing the two flags splits them:
@@ -359,7 +370,7 @@ archon workflow abandon <run-id> --json
 
 Approve a paused workflow run at an interactive approval gate. Optionally provide a comment that is available to the workflow via `$LOOP_USER_INPUT`.
 
-**Sub-run child gates (#2121 Phase 2):** when a `workflow:` sub-run pauses at its own gate, the parent run pauses "blocked on child". Approve (or reject) the **child** by its own run id — the id shown in the parent's block message — not the parent's; the parent auto-resumes when the child completes. `approve`/`reject` against the parent's id while it's blocked on a child are refused with a redirect to the child id.
+**Sub-run child gates (#2121 Phase 2):** when a `workflow:` sub-run pauses at its own gate, the parent run pauses "blocked on child". Approve (or reject) the **child** by its own run id — the id shown in the parent's block message — not the parent's; the parent auto-resumes when the child completes. A child gate is the exception: it works for a 1:1 sub-run, but a child that pauses inside a `fan_out:` expansion **fails the node** instead — a parent has one approval slot and cannot hand it to N children, so gate before or after the fan-out node rather than inside a child of it. `approve`/`reject` against the parent's id while it's blocked on a child are refused with a redirect to the child id.
 
 **Interactive-loop gates — finalize vs iterate:** when the gate paused on an iteration that emitted the loop's completion signal (`workflow get <run-id> --json` → `.metadata.approval.completionSignaled` is `true`), approving with **no comment** accepts the completion — the node finalizes from the already-computed output on resume, with no re-run. Approving **with** a comment runs another iteration using it as `$LOOP_USER_INPUT`. On a non-signaled gate, both forms run another iteration.
 
@@ -443,6 +454,12 @@ archon isolation list
 ```
 
 Groups by codebase, shows branch, workflow type, platform, and days since activity.
+
+Includes worktrees created for `workflow:` sub-run children that declared `isolation: worktree`
+(branch `archon/task-<parentRunId8>-<nodeId>-<hash>-child-<n>`) — they are tracked and cleaned
+up exactly like top-level run worktrees. Avoid `cleanup`/`complete` on one while its run tree
+is still resumable: a resume reuses the child's recorded worktree and fails if it has been
+removed.
 
 ### `isolation cleanup [days]`
 

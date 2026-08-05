@@ -399,15 +399,21 @@ export const approvalOnRejectSchema = z.object({
 export type ApprovalOnReject = z.infer<typeof approvalOnRejectSchema>;
 
 /**
+ * Schema for the `approval:` config object. Named (rather than inlined at both
+ * use sites) so its shape is reachable for the unknown-key check in the loader.
+ */
+export const approvalConfigSchema = z.object({
+  message: z.string().min(1, "'approval.message' must not be empty"),
+  capture_response: z.boolean().optional(),
+  on_reject: approvalOnRejectSchema.optional(),
+});
+
+/**
  * Approval node schema — pauses the workflow for human review.
  * Extends full base for type compatibility; AI-specific fields are ignored at runtime.
  */
 export const approvalNodeSchema = dagNodeBaseSchema.extend({
-  approval: z.object({
-    message: z.string().min(1, "'approval.message' must not be empty"),
-    capture_response: z.boolean().optional(),
-    on_reject: approvalOnRejectSchema.optional(),
-  }),
+  approval: approvalConfigSchema,
 });
 
 /** DAG node that pauses workflow execution for human approval */
@@ -441,16 +447,32 @@ export type CancelNode = z.infer<typeof cancelNodeSchema> & {
 };
 
 /**
+ * Identifier grammar for an include input name.
+ *
+ * Shared deliberately with the `$INPUTS.<name>` reference pattern in include-expander.ts,
+ * which builds its regex from this source. The two encode the identical concept and the
+ * drift between them is one-directional and silent: loosening this validator alone would
+ * let `with: {my.key: v}` pass while `$INPUTS.my.key` matches only `$INPUTS.my`, leaving
+ * `.key` as trailing literal text in the prompt. (The reverse drift fails loudly at load,
+ * because the matching `with:` key would be rejected here.) Sharing one source removes the
+ * dangerous direction. This is scoped to that pair only — the similar-looking node-id
+ * grammar elsewhere in the tree encodes a different concept and stays separate.
+ */
+export const INPUT_NAME_SOURCE = String.raw`[a-zA-Z_][a-zA-Z0-9_-]*`;
+const INPUT_NAME_PATTERN = new RegExp(`^${INPUT_NAME_SOURCE}$`);
+
+/**
  * Include node schema — a load-time directive that inlines another workflow's
  * nodes into this DAG at discovery time (see include-expander.ts). It carries no
- * execution surface of its own: `include` is the target workflow name, and only
- * the structural graph fields (id / depends_on / when / trigger_rule) are read by
- * the expander. By the time a WorkflowDefinition reaches the executor, every
- * include node has been replaced by its flattened, namespaced sub-DAG — the
- * executor never sees one.
+ * execution surface of its own: `include` is the target workflow name, `with` is
+ * its load-time input mapping, and the structural graph fields (id / depends_on /
+ * when / trigger_rule) attach the expanded sub-DAG. By the time a
+ * WorkflowDefinition reaches the executor, every include node has been replaced
+ * by its flattened, namespaced sub-DAG — the executor never sees one.
  */
 export const includeNodeSchema = dagNodeBaseSchema.extend({
   include: z.string().min(1, "'include' must be a non-empty workflow name"),
+  with: z.record(z.string(), z.string()).optional(),
 });
 
 /** DAG node that inlines another workflow's nodes at discovery time (load-time expansion) */
@@ -466,22 +488,76 @@ export type IncludeNode = z.infer<typeof includeNodeSchema> & {
 };
 
 /**
+ * Dynamic fan-out config for a `workflow:` node (#2121 slice 2, PR-C). Expands the
+ * node into N governed child runs — one per element of a runtime-length item list —
+ * joined into a single node outcome. `items` is a `$node.output[.field]` ref that
+ * MUST resolve to a JSON array at run time (DATA, per the constitution's
+ * §load-time-composition — the child target stays a static name; only the item
+ * COUNT is runtime). Each item becomes a child's `input`/`$ARGUMENTS`. `max_parallel`
+ * bounds a sliding-window concurrency pool (default 5 — documented + defeatable, so
+ * an author can't trivially create a runaway N-wide layer, #1961). It is also the serial
+ * escape from the shared-checkout collision: `max_parallel: 1` runs the children one at a
+ * time, so no two of them contend for the parent checkout's path lock. `max_parallel` caps
+ * *concurrency*, NOT the total child count — `items.length` is unbounded here, so a very
+ * large list (≳ the abandon-time cascade bound `MAX_CASCADE_RUNS`, currently 500) can
+ * leave some children uncancelled when the parent is abandoned; a run-tree-wide count/
+ * budget ceiling is deferred to #1961. `join` reduces the
+ * N child outcomes into the node's single outcome + `$<id>.output` aggregate:
+ *   - `all_done` (DEFAULT): the node succeeds once every child is terminal; failed and
+ *      cancelled entries are represented as `{ error, status }` objects in the array.
+ *      Default because fan-out children are independent by default (see the constitution's
+ *      independence rule) — two researchers with different scopes, or ten triage children
+ *      over ten issues, do not depend on each other, so one failing must not discard the
+ *      others' output. Failure is DATA here; deciding how many successes are enough is
+ *      judgement and belongs in a downstream node reading the aggregate, never in this enum.
+ *   - `all_success`: all must complete; `$<id>.output` = JSON array of child outputs in
+ *      item order; any child failing/cancelled fails the node. For the genuinely dependent
+ *      case, where the author says so.
+ *   - `first_success`: racing — REJECTED, not deferred. A winner aborting and cancelling
+ *      the losers couples children's fates, which the constitution's independence rule
+ *      forbids, and racing cannot be reshaped without it. The enum value is retained only
+ *      so existing YAML gets a message explaining the rejection.
+ *
+ * `as` is a forward seam reserved for PR-B (#2214, `with:`/`$INPUTS`): it will name the
+ * per-item value as `$INPUTS.<as>` inside the child. The key is accepted here so PR-B
+ * needs no schema migration, but until PR-B lands the superRefine REJECTS it at load —
+ * it has no runtime effect, and silently ignoring it would deliver a literal
+ * `$INPUTS.<as>` to the model. The item travels as the child's `$ARGUMENTS` today.
+ */
+export const fanOutConfigSchema = z.object({
+  items: z
+    .string()
+    .min(1, "'fan_out.items' must reference a node output that produces a JSON array"),
+  as: z.string().optional(),
+  max_parallel: z.number().int().min(1, "'fan_out.max_parallel' must be >= 1").default(5),
+  join: z.enum(['all_success', 'all_done', 'first_success']).default('all_done'),
+});
+
+/** Dynamic fan-out configuration for a `workflow:` sub-run node (#2121 slice 2, PR-C). */
+export type FanOutConfig = z.infer<typeof fanOutConfigSchema>;
+
+/**
  * Workflow (sub-run) node schema — starts another workflow as a CHILD RUN of the
  * current run at execution time (see executeWorkflowNode in dag-executor.ts). Unlike
  * `include:` (which flattens another workflow's nodes into ONE run at load time), a
  * `workflow:` node spawns a genuinely separate `workflow_runs` row with its own
  * artifacts, gates, cost line, and audit trail (#2121 Phase 2). `workflow` is the
  * static target name; `input` is a data string (workflow-vars + `$node.output`
- * substituted) forwarded as the child's user message. `isolation` is reserved for
- * slice 2 (per-child worktree) — only `'inherit'` (the shared-checkout default) is
- * accepted today. `output_format`/`output_type` from the base stay meaningful (the
- * child's terminal output threads back as `$<id>.output`, field-accessible when a
- * schema is declared and the child emits JSON).
+ * substituted) forwarded as the child's user message. `isolation` selects the
+ * child's checkout: `'inherit'` (default) shares the parent's checkout; `'worktree'`
+ * (slice 2, PR-A) runs the child in its own git worktree via an injected
+ * child-isolation resolver — never inferred, including from `fan_out`. `fan_out` (slice 2,
+ * PR-C) expands the node into N child runs over a data-driven item list; concurrent
+ * children sharing the parent checkout are the author's call to make, declared by
+ * `mutates_checkout: false` on the child workflow. `output_format`/`output_type` from the base stay
+ * meaningful (the child's terminal output threads back as `$<id>.output`,
+ * field-accessible when a schema is declared and the child emits JSON).
  */
 export const workflowNodeSchema = dagNodeBaseSchema.extend({
   workflow: z.string().min(1, "'workflow' must be a non-empty workflow name"),
   input: z.string().optional(),
-  isolation: z.literal('inherit').optional(),
+  isolation: z.enum(['inherit', 'worktree']).optional(),
+  fan_out: fanOutConfigSchema.optional(),
 });
 
 /** DAG node that runs another workflow as a governed child sub-run at execution time */
@@ -593,6 +669,67 @@ export const WORKFLOW_NODE_IGNORED_FIELDS: readonly string[] = BASH_NODE_AI_FIEL
   f => f !== 'output_format'
 );
 
+/**
+ * Flat schema with all DAG node fields (base + mode + mode-specific) before
+ * superRefine/transform. Exported so KNOWN_DAG_NODE_KEYS can be derived from
+ * its shape, and for any future use that needs the pre-validation object type.
+ */
+export const dagNodeFlatSchema = dagNodeBaseSchema.extend({
+  // Mode fields (exactly one required)
+  command: z.string().optional(),
+  prompt: z.string().optional(),
+  bash: z.string().optional(),
+  loop: loopNodeConfigSchema.optional(),
+  loop_group: loopGroupNodeConfigSchema.optional(),
+  approval: approvalConfigSchema.optional(),
+  cancel: z.string().optional(),
+  // Load-time inlining directive — the target workflow name.
+  include: z.string().min(1, "'include' must be a non-empty workflow name").optional(),
+  // Runtime sub-run directive (#2121 Phase 2) — the child workflow name.
+  workflow: z.string().min(1, "'workflow' must be a non-empty workflow name").optional(),
+  // Sub-run input data string (workflow-var + $node.output substituted) forwarded
+  // as the child's user_message.
+  input: z.string().optional(),
+  // Per-child isolation. `'inherit'` (shared parent checkout) is the default;
+  // `'worktree'` (slice 2, PR-A) runs the child in its own git worktree via an
+  // injected child-isolation resolver.
+  isolation: z.enum(['inherit', 'worktree']).optional(),
+  // Dynamic fan-out (slice 2, PR-C) — expand the workflow node into N child runs
+  // over a data-driven item list. Only meaningful on a `workflow:` node (guarded in
+  // superRefine).
+  fan_out: fanOutConfigSchema.optional(),
+  // Raw (not `z.record(z.string(), z.string())`) because the shape is only settled for
+  // ONE of the two modes that care. Include mode validates it in superRefine below and
+  // retains it on the parsed node; workflow mode rejects it outright as unsupported
+  // (phase 2, #2470) and never retains it in any form. Typing the shared flat field to
+  // the include shape now would commit `workflow.with` to a mapping whose phase-2 shape
+  // is still undecided, making a later widening a breaking change. (Note this is NOT the
+  // same situation as `isolation`/`fan_out`, which are typed at the flat level and
+  // rejected per-mode — their shape is settled.) Other node modes strip it with the rest
+  // of their unsupported surface.
+  with: z.unknown().optional(),
+  // Script-only
+  script: z.string().optional(),
+  runtime: z.enum(['bun', 'uv']).optional(),
+  deps: z.array(z.string().min(1, 'each dep must be a non-empty string')).optional(),
+  // Bash/Script shared
+  timeout: z.number().optional(),
+});
+
+// ---------------------------------------------------------------------------
+// Known node keys — used by the loader to detect unknown/misplaced keys
+// ---------------------------------------------------------------------------
+
+/**
+ * All keys accepted by the flat dagNodeSchema (base + mode-specific + mode-only).
+ * Derived from the dagNodeFlatSchema shape — no hand-maintained list needed.
+ * Used by parseDagNode to warn on unknown keys that Zod's default strip would
+ * silently drop (#2213).
+ */
+export const KNOWN_DAG_NODE_KEYS: ReadonlySet<string> = new Set(
+  Object.keys(dagNodeFlatSchema.shape)
+);
+
 // ---------------------------------------------------------------------------
 // dagNodeSchema — flat validation schema with transform to DagNode
 // ---------------------------------------------------------------------------
@@ -612,42 +749,7 @@ export const WORKFLOW_NODE_IGNORED_FIELDS: readonly string[] = BASH_NODE_AI_FIEL
  * dag-executor.ts (node-level). Model strings are passed through to the SDK
  * unchanged — the SDK is the source of truth for what model names exist.
  */
-export const dagNodeSchema = dagNodeBaseSchema
-  .extend({
-    // Mode fields (exactly one required)
-    command: z.string().optional(),
-    prompt: z.string().optional(),
-    bash: z.string().optional(),
-    loop: loopNodeConfigSchema.optional(),
-    loop_group: loopGroupNodeConfigSchema.optional(),
-    approval: z
-      .object({
-        message: z.string().min(1, "'approval.message' must not be empty"),
-        capture_response: z.boolean().optional(),
-        on_reject: approvalOnRejectSchema.optional(),
-      })
-      .optional(),
-    cancel: z.string().optional(),
-    // Load-time inlining directive — the target workflow name.
-    include: z.string().min(1, "'include' must be a non-empty workflow name").optional(),
-    // Runtime sub-run directive (#2121 Phase 2) — the child workflow name.
-    workflow: z.string().min(1, "'workflow' must be a non-empty workflow name").optional(),
-    // Sub-run input data string (workflow-var + $node.output substituted) forwarded
-    // as the child's user_message.
-    input: z.string().optional(),
-    // Per-child isolation. `'inherit'` (shared parent checkout) is the only value in
-    // slice 1; `'worktree'` is validated + rejected in superRefine (reserved slice 2).
-    isolation: z.enum(['inherit', 'worktree']).optional(),
-    // Reserved for Phase 1b input mapping. Present only so the superRefine below can
-    // fail fast when it appears on an include or workflow node ("not yet supported").
-    with: z.unknown().optional(),
-    // Script-only
-    script: z.string().optional(),
-    runtime: z.enum(['bun', 'uv']).optional(),
-    deps: z.array(z.string().min(1, 'each dep must be a non-empty string')).optional(),
-    // Bash/Script shared
-    timeout: z.number().optional(),
-  })
+export const dagNodeSchema = dagNodeFlatSchema
   .superRefine((data, ctx) => {
     const id = data.id.trim();
 
@@ -659,6 +761,13 @@ export const dagNodeSchema = dagNodeBaseSchema
         path: ['id'],
       });
       return z.NEVER;
+    }
+    if (id === 'INPUTS') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "node id 'INPUTS' is reserved for the $INPUTS.<name> parameter surface",
+        path: ['id'],
+      });
     }
 
     const hasCommand = typeof data.command === 'string' && data.command.trim().length > 0;
@@ -694,17 +803,42 @@ export const dagNodeSchema = dagNodeBaseSchema
       return z.NEVER;
     }
 
-    // 'with:' input mapping is deferred (Phase 1b for include; slice 2 for workflow)
-    // — reject it now with a clear message rather than silently dropping it
-    // (fail-fast). Only meaningful on include/workflow nodes; elsewhere 'with' is an
-    // unknown field and is stripped.
+    // `include.with` is a load-time, identifier-keyed string map. Keep the flat
+    // field raw so other node variants can still strip it contextually.
     if (hasInclude && data.with !== undefined) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message:
-          "'with:' input mapping is not yet supported on include nodes (Phase 1). Remove it.",
-        path: ['with'],
-      });
+      const prototype =
+        typeof data.with === 'object' && data.with !== null
+          ? Object.getPrototypeOf(data.with)
+          : undefined;
+      if (
+        typeof data.with !== 'object' ||
+        data.with === null ||
+        Array.isArray(data.with) ||
+        (prototype !== Object.prototype && prototype !== null)
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "'with' on include nodes must be an object mapping input names to strings",
+          path: ['with'],
+        });
+      } else {
+        for (const [key, value] of Object.entries(data.with)) {
+          if (!INPUT_NAME_PATTERN.test(key)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: `invalid include input name '${key}'; use letters, numbers, underscores, or hyphens and start with a letter or underscore`,
+              path: ['with'],
+            });
+          }
+          if (typeof value !== 'string') {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: `include input '${key}' must be a string`,
+              path: ['with'],
+            });
+          }
+        }
+      }
     }
     if (hasWorkflow && data.with !== undefined) {
       ctx.addIssue({
@@ -724,14 +858,62 @@ export const dagNodeSchema = dagNodeBaseSchema
         path: ['retry'],
       });
     }
-    // Per-child worktree isolation is a slice-2 capability (needs an injected
-    // isolation resolver). Reserve the field but reject 'worktree' now.
-    if (hasWorkflow && data.isolation === 'worktree') {
+    // Per-child worktree isolation (slice 2, PR-A) is accepted on workflow nodes.
+    // The engine fails the node fast at runtime if no child-isolation resolver is
+    // injected — never a silent shared-checkout fallback. On every OTHER node type
+    // `isolation:` is meaningless (only a `workflow:` node spawns a child run) and
+    // would be silently dropped — reject it fail-fast, mirroring the `with:` guard.
+    if (!hasWorkflow && data.isolation !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "'isolation' is only supported on workflow (sub-run) nodes.",
+        path: ['isolation'],
+      });
+    }
+    // Dynamic fan-out (slice 2, PR-C) is meaningful ONLY on a `workflow:` node — it
+    // multiplies a child sub-run. On any other node type it would be silently dropped,
+    // so reject it fail-fast (mirrors the `isolation` guard above).
+    if (!hasWorkflow && data.fan_out !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "'fan_out' is only supported on workflow (sub-run) nodes.",
+        path: ['fan_out'],
+      });
+    }
+    // `first_success` racing is REJECTED, not deferred — the earlier deferral is dead. A
+    // winner aborting and cancelling its losers is one child's outcome ending its siblings',
+    // which the independence rule forbids, and racing without terminating the losers is not
+    // racing. So there is no PR to wait for and the message must not imply one.
+    //
+    // The enum value stays even though its original "so the eventual PR only lifts a guard"
+    // justification is gone. A better one replaces it: an author whose YAML already says
+    // `first_success` gets a message naming the rejection and the shape that serves the want,
+    // instead of an opaque unrecognised-enum-value error. Do not remove it as dead weight.
+    if (hasWorkflow && data.fan_out?.join === 'first_success') {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message:
-          "isolation: 'worktree' is not yet supported on workflow nodes (slice 2). The child shares the parent's checkout ('inherit').",
-        path: ['isolation'],
+          "'fan_out.join: first_success' (racing) is rejected, not deferred: a winner cancels " +
+          "the losers, which couples children that are meant to be independent. Use 'all_done' " +
+          '(the default). For several genuinely different attempts, write them as separate ' +
+          'nodes with their own models feeding one collector node — every attempt is kept and ' +
+          'nothing is cancelled.',
+        path: ['fan_out', 'join'],
+      });
+    }
+    // `as` names the per-item value for the `$INPUTS.<as>` channel that PR-B (#2214) will
+    // add. Accept the key in the schema (so PR-B lifts a guard rather than migrating YAML)
+    // but reject it fail-fast now, exactly as `first_success` above. `$INPUTS` exists
+    // nowhere in the engine today, so an author writing `as: task` and `$INPUTS.task` in
+    // the child gets the literal string delivered to the model — silently wrong output
+    // with no error. A field that quietly does nothing reads as a working feature.
+    if (hasWorkflow && data.fan_out?.as !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "'fan_out.as' (the $INPUTS channel) is not yet supported (PR-B, #2214). Remove it — " +
+          "each item is delivered to the child as $ARGUMENTS, which the child's prompts can use today.",
+        path: ['fan_out', 'as'],
       });
     }
 
@@ -924,13 +1106,17 @@ export const dagNodeSchema = dagNodeBaseSchema
       return { ...base, ...shared, cancel: data.cancel.trim() } as CancelNode;
     }
     if (data.include !== undefined && data.include.trim().length > 0) {
-      // An include node is a load-time directive, not an executable node. It carries ONLY
-      // the structural graph fields (shared with `base` via `structuralBase`) plus the
-      // target name — the expander reads id / depends_on / when / trigger_rule to attach
-      // the sub-DAG (description just rides along). aiOnly / shared (retry) and the exec-only
-      // base fields (always_run / output_type / idle_timeout) are intentionally dropped;
-      // the loader warns about them via INCLUDE_NODE_IGNORED_FIELDS.
-      return { ...structuralBase, include: data.include.trim() } as IncludeNode;
+      // An include node is a load-time directive, not an executable node. It carries the
+      // structural graph fields, target name, and optional load-time input mapping. The
+      // expander reads those fields to attach and parameterize the sub-DAG (description just
+      // rides along). aiOnly / shared (retry) and the exec-only base fields (always_run /
+      // output_type / idle_timeout) are intentionally dropped; the loader warns about them
+      // via INCLUDE_NODE_IGNORED_FIELDS.
+      return {
+        ...structuralBase,
+        include: data.include.trim(),
+        ...(data.with !== undefined ? { with: data.with as Record<string, string> } : {}),
+      } as IncludeNode;
     }
     if (data.workflow !== undefined && data.workflow.trim().length > 0) {
       // A workflow (sub-run) node makes no direct provider call, so it carries only
@@ -945,7 +1131,13 @@ export const dagNodeSchema = dagNodeBaseSchema
         ...(data.output_format !== undefined ? { output_format: data.output_format } : {}),
         workflow: data.workflow.trim(),
         ...(data.input !== undefined ? { input: data.input } : {}),
+        // Isolation is EXPLICIT-ONLY — never inferred, including from `fan_out`. How many
+        // children a node spawns says nothing about whether they write; N review or
+        // research children over the shared checkout is the common case. A shared-checkout
+        // fan-out whose children would collide is caught at spawn time instead
+        // (executeFanOutWorkflowNode), where the child's `mutates_checkout` is knowable.
         ...(data.isolation !== undefined ? { isolation: data.isolation } : {}),
+        ...(data.fan_out !== undefined ? { fan_out: data.fan_out } : {}),
       } as WorkflowNode;
     }
     // loop_group — guaranteed by superRefine to be defined at this point.
@@ -975,6 +1167,11 @@ export const dagNodeSchema = dagNodeBaseSchema
 // ---------------------------------------------------------------------------
 // Type guards (preserved from original types.ts)
 // ---------------------------------------------------------------------------
+
+/** Type guard: check if a DAG node is a command (named command file) node */
+export function isCommandNode(node: DagNode): node is CommandNode {
+  return 'command' in node && typeof node.command === 'string';
+}
 
 /** Type guard: check if a DAG node is a bash (shell script) node */
 export function isBashNode(node: DagNode): node is BashNode {
@@ -1041,3 +1238,107 @@ export function isPersistableNode(node: DagNode): boolean {
     !isWorkflowNode(node)
   );
 }
+
+// ---------------------------------------------------------------------------
+// Nested known-key registry — declared AFTER dagNodeSchema on purpose
+// ---------------------------------------------------------------------------
+//
+// Reading `loopGroupNodeConfigSchema.shape` fires its `nodes` getter, which
+// builds `z.array(dagNodeSchema)`. Placed above `dagNodeSchema` this throws
+// `ReferenceError: Cannot access 'dagNodeSchema' before initialization` at
+// import time — a temporal dead zone tsc does not catch. Keep this block below
+// `dagNodeSchema`; see the note on `loopGroupShape` for the full mechanism.
+/**
+ * Known-key description for a nested config object, one level at a time.
+ *
+ * `object` — a fixed shape; `keys` are the accepted keys and `children`
+ *            describes object-valued keys inside it (e.g. `approval.on_reject`).
+ * `record` — author-chosen keys (e.g. `agents`, whose keys are agent ids); only
+ *            the VALUES have a fixed shape, described by `entry`.
+ */
+export type NestedKeySpec =
+  | {
+      readonly kind: 'object';
+      readonly keys: ReadonlySet<string>;
+      readonly children?: ReadonlyMap<string, NestedKeySpec>;
+    }
+  | { readonly kind: 'record'; readonly entry: NestedKeySpec };
+
+/**
+ * `loopGroupNodeConfigSchema` carries a `z.ZodType<…>` annotation to break the
+ * recursion cycle, which hides `.shape` at the TYPE level only — the runtime
+ * value is still the `ZodObject` that `loopControlSchema.extend()` produced.
+ * Casting back recovers the real shape, so the key set stays derived instead of
+ * being a hand-written `[...loopControl, 'nodes']` that a future body field
+ * would silently fall out of.
+ *
+ * DO NOT MOVE THIS ABOVE `dagNodeSchema`. This line is evaluated at module load,
+ * and reading that `.shape` fires the schema's `nodes` getter, which builds
+ * `z.array(dagNodeSchema)`. Above `dagNodeSchema`'s declaration that is a
+ * temporal dead zone: the module throws
+ * `ReferenceError: Cannot access 'dagNodeSchema' before initialization` on
+ * import, so every test that imports this file dies at load rather than failing
+ * an assertion.
+ *
+ * tsc does NOT catch it — the cast type-checks cleanly either way, which is why
+ * moving this registry up beside the `NestedKeySpec` type it belongs with (the
+ * natural tidy) is a silent break. The constraint is ordering, not position:
+ * this block and `KNOWN_NODE_NESTED_KEYS` below it must be declared AFTER
+ * `dagNodeSchema`. They sit at the end of the file only because nothing else
+ * needs to follow them — new code may be appended below without moving them.
+ */
+const loopGroupShape = (loopGroupNodeConfigSchema as unknown as z.ZodObject<z.ZodRawShape>).shape;
+
+/**
+ * Known keys for the nested config objects a node can carry, keyed by the node
+ * field that holds them. Derived from each sub-schema's shape so a new field
+ * cannot drift out of the set.
+ *
+ * Absent on purpose — these node fields do not silently strip, so there is
+ * nothing to warn about:
+ *   `output_format` — free-form JSON Schema (`z.record`); every key is accepted
+ *   `sandbox`       — `.passthrough()`; unknown keys are preserved, not dropped
+ *   `hooks`         — `.strict()`; unknown keys already hard-error at parse time
+ *   `thinking`      — `z.preprocess` over a union; no object shape to compare
+ *
+ * `loop_group.nodes` is deliberately not modelled here: its entries are full DAG
+ * nodes, so the loader recurses into them with KNOWN_DAG_NODE_KEYS instead.
+ *
+ * Constructed with `keyof typeof dagNodeFlatSchema.shape` as the key type, not
+ * `string`: a typo'd registration (`'aproval'`) would otherwise compile and
+ * silently disable that nested check forever, indistinguishable from "this
+ * field needs no spec". The exported type widens the key back to `string` so
+ * callers can look up an arbitrary YAML key without a cast — the constraint is
+ * on what can be REGISTERED, which is where drift would come from.
+ */
+export const KNOWN_NODE_NESTED_KEYS: ReadonlyMap<string, NestedKeySpec> = new Map<
+  keyof typeof dagNodeFlatSchema.shape,
+  NestedKeySpec
+>([
+  [
+    'approval',
+    {
+      kind: 'object',
+      keys: new Set(Object.keys(approvalConfigSchema.shape)),
+      // Same typo protection one level down: keyed by the parent's shape, so
+      // `'on_rejct'` is a compile error rather than a silently disabled check.
+      children: new Map<keyof typeof approvalConfigSchema.shape, NestedKeySpec>([
+        ['on_reject', { kind: 'object', keys: new Set(Object.keys(approvalOnRejectSchema.shape)) }],
+      ]),
+    },
+  ],
+  ['retry', { kind: 'object', keys: new Set(Object.keys(stepRetryConfigSchema.shape)) }],
+  ['loop', { kind: 'object', keys: new Set(Object.keys(loopNodeConfigSchema.shape)) }],
+  ['loop_group', { kind: 'object', keys: new Set(Object.keys(loopGroupShape)) }],
+  ['pi', { kind: 'object', keys: new Set(Object.keys(piNodeConfigSchema.shape)) }],
+  ['fan_out', { kind: 'object', keys: new Set(Object.keys(fanOutConfigSchema.shape)) }],
+  // `agents` keys are author-chosen agent ids; each VALUE is an agentDefinition,
+  // where a camelCase slip (`disallowed_tools`) silently drops a tool restriction.
+  [
+    'agents',
+    {
+      kind: 'record',
+      entry: { kind: 'object', keys: new Set(Object.keys(agentDefinitionSchema.shape)) },
+    },
+  ],
+]);

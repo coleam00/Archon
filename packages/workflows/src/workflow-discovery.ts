@@ -23,6 +23,7 @@ import type {
   WorkflowLoadError,
   WorkflowLoadResult,
   WorkflowWithSource,
+  WorkflowSource,
 } from './schemas';
 import { isIncludeNode } from './schemas';
 import * as archonPaths from '@archon/paths';
@@ -31,6 +32,7 @@ import { createLogger } from '@archon/paths';
 import { isValidCommandName, MAX_DISCOVERY_DEPTH } from './command-validation';
 import { parseWorkflow } from './loader';
 import { expandWorkflowIncludes } from './include-expander';
+import { getFileBackedCommandName } from './command-file';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -76,8 +78,26 @@ async function maybeWarnLegacyHomePath(): Promise<void> {
   getLog().warn({ legacyPath, newPath, moveCommand }, 'workflow.legacy_home_path_detected');
 }
 
+/**
+ * One parsed workflow file: its definition plus the non-fatal warnings raised
+ * parsing it (unknown keys — #2213).
+ *
+ * The warnings live ON the entry rather than in a map beside it deliberately.
+ * Overrides here are last-writer-wins by bare filename, and a filename can
+ * legitimately appear twice (root and a 1-level subfolder). With two parallel
+ * maps the winner's definition and the loser's warnings could survive together,
+ * telling an author a clean workflow declares a key it does not contain. One
+ * value means a single `Map.set()` replaces both halves atomically, so they
+ * cannot disagree.
+ */
+interface ParsedWorkflowFile {
+  workflow: WorkflowDefinition;
+  /** Empty for a clean file. */
+  parseWarnings: readonly string[];
+}
+
 interface DirLoadResult {
-  workflows: Map<string, WorkflowDefinition>;
+  workflows: Map<string, ParsedWorkflowFile>;
   errors: WorkflowLoadError[];
 }
 
@@ -94,7 +114,7 @@ interface DirLoadResult {
  * Failures are per-file: one broken file does not abort loading the rest.
  */
 async function loadWorkflowsFromDir(dirPath: string, depth = 0): Promise<DirLoadResult> {
-  const workflows = new Map<string, WorkflowDefinition>();
+  const workflows = new Map<string, ParsedWorkflowFile>();
   const errors: WorkflowLoadError[] = [];
 
   try {
@@ -112,8 +132,8 @@ async function loadWorkflowsFromDir(dirPath: string, depth = 0): Promise<DirLoad
           // `findMarkdownFilesRecursive` depth cap).
           if (depth >= MAX_DISCOVERY_DEPTH) continue;
           const subResult = await loadWorkflowsFromDir(entryPath, depth + 1);
-          for (const [filename, workflow] of subResult.workflows) {
-            workflows.set(filename, workflow);
+          for (const [filename, parsed] of subResult.workflows) {
+            workflows.set(filename, parsed);
           }
           errors.push(...subResult.errors);
         } else if (entry.endsWith('.yaml') || entry.endsWith('.yml')) {
@@ -121,7 +141,7 @@ async function loadWorkflowsFromDir(dirPath: string, depth = 0): Promise<DirLoad
           const result = parseWorkflow(content, entry);
 
           if (result.workflow) {
-            workflows.set(entry, result.workflow);
+            workflows.set(entry, { workflow: result.workflow, parseWarnings: result.warnings });
             getLog().debug({ workflowName: result.workflow.name, dirPath }, 'workflow_loaded');
           } else {
             errors.push(result.error);
@@ -162,14 +182,14 @@ async function loadWorkflowsFromDir(dirPath: string, depth = 0): Promise<DirLoad
  * Parse failures indicate a build-time corruption and are logged as errors.
  */
 function loadBundledWorkflows(): DirLoadResult {
-  const workflows = new Map<string, WorkflowDefinition>();
+  const workflows = new Map<string, ParsedWorkflowFile>();
   const errors: WorkflowLoadError[] = [];
 
   for (const [name, content] of Object.entries(BUNDLED_WORKFLOWS)) {
     const filename = `${name}.yaml`;
     const result = parseWorkflow(content, filename);
     if (result.workflow) {
-      workflows.set(filename, result.workflow);
+      workflows.set(filename, { workflow: result.workflow, parseWarnings: result.warnings });
       getLog().debug({ workflowName: result.workflow.name }, 'bundled_workflow_loaded');
     } else {
       // Bundled workflows should ALWAYS be valid - this indicates a build-time error
@@ -250,10 +270,10 @@ async function resolveCommandContentForScan(
 }
 
 /**
- * Pre-resolve command-file contents for every `command:` node that lives in a workflow
- * reachable as an `include:` target (transitively). The include expander uses these to
- * detect a block command file referencing a sibling id that namespacing renames. Touches
- * disk only when includes exist; returns an empty map otherwise.
+ * Pre-resolve command-file contents for every file-backed command node (including
+ * `loop.command`) that lives in a workflow reachable as an `include:` target
+ * (transitively). The include expander uses these to validate deferred prompt bodies.
+ * Touches disk only when includes exist; returns an empty map otherwise.
  */
 async function resolveIncludeBlockCommandContents(
   cwd: string | null,
@@ -278,8 +298,9 @@ async function resolveIncludeBlockCommandContents(
     const workflow = byName.get(name);
     if (!workflow) continue;
     for (const node of workflow.nodes) {
-      if ('command' in node && typeof node.command === 'string' && !contents.has(node.command)) {
-        contents.set(node.command, await resolveCommandContentForScan(cwd, node.command, config));
+      const commandName = getFileBackedCommandName(node);
+      if (commandName !== undefined && !contents.has(commandName)) {
+        contents.set(commandName, await resolveCommandContentForScan(cwd, commandName, config));
       }
     }
   }
@@ -308,8 +329,10 @@ export async function discoverWorkflows(
   cwd: string | null,
   options?: { loadDefaults?: boolean; commandFolder?: string; loadDefaultCommands?: boolean }
 ): Promise<WorkflowLoadResult> {
-  // Map of filename -> workflow+source for deduplication
-  const workflowsByFile = new Map<string, WorkflowWithSource>();
+  // Map of filename -> workflow + source + parse warnings, for deduplication.
+  // A later scope's `set()` replaces all three together, so a clean project file
+  // can never inherit the bundled file's warnings (see ParsedWorkflowFile).
+  const workflowsByFile = new Map<string, ParsedWorkflowFile & { source: WorkflowSource }>();
   const allErrors: WorkflowLoadError[] = [];
 
   /**
@@ -381,11 +404,17 @@ export async function discoverWorkflows(
     );
 
     const result: WorkflowWithSource[] = [];
-    for (const { workflow, source } of workflowsByFile.values()) {
+    for (const { workflow, source, parseWarnings } of workflowsByFile.values()) {
       if (duplicateNames.has(workflow.name)) continue; // dropped as a duplicate-name collision
       const expanded = expandedByName.get(workflow.name);
       if (!expanded) continue; // expansion failed for this workflow — drop it
-      result.push({ workflow: expanded, source });
+      result.push({
+        workflow: expanded,
+        source,
+        // Omitted rather than empty, matching the `errors` field on the same
+        // surfaces: presence alone is the signal.
+        ...(parseWarnings && parseWarnings.length > 0 ? { parseWarnings } : {}),
+      });
     }
     return result;
   };
@@ -397,8 +426,8 @@ export async function discoverWorkflows(
       // Binary: load from embedded bundled content
       getLog().debug('loading_bundled_default_workflows');
       const bundledResult = loadBundledWorkflows();
-      for (const [filename, workflow] of bundledResult.workflows) {
-        workflowsByFile.set(filename, { workflow, source: 'bundled' });
+      for (const [filename, parsed] of bundledResult.workflows) {
+        workflowsByFile.set(filename, { ...parsed, source: 'bundled' });
       }
       allErrors.push(...bundledResult.errors);
       getLog().info({ count: bundledResult.workflows.size }, 'bundled_default_workflows_loaded');
@@ -409,8 +438,8 @@ export async function discoverWorkflows(
       try {
         await access(appDefaultsPath);
         const appResult = await loadWorkflowsFromDir(appDefaultsPath);
-        for (const [filename, workflow] of appResult.workflows) {
-          workflowsByFile.set(filename, { workflow, source: 'bundled' });
+        for (const [filename, parsed] of appResult.workflows) {
+          workflowsByFile.set(filename, { ...parsed, source: 'bundled' });
         }
         if (appResult.errors.length > 0) {
           getLog().warn(
@@ -439,11 +468,11 @@ export async function discoverWorkflows(
   try {
     await access(homeWorkflowPath);
     const homeResult = await loadWorkflowsFromDir(homeWorkflowPath);
-    for (const [filename, workflow] of homeResult.workflows) {
+    for (const [filename, parsed] of homeResult.workflows) {
       if (workflowsByFile.has(filename)) {
         getLog().debug({ filename }, 'home_workflow_overrides_bundled');
       }
-      workflowsByFile.set(filename, { workflow, source: 'global' });
+      workflowsByFile.set(filename, { ...parsed, source: 'global' });
     }
     allErrors.push(...homeResult.errors);
     getLog().info({ count: homeResult.workflows.size }, 'home_workflows_loaded');
@@ -480,13 +509,13 @@ export async function discoverWorkflows(
     // Repo workflows override bundled AND home scope by exact filename match.
     // Preserve 'bundled' source for workflows loaded from the defaults/ subdirectory
     // that were already registered as bundled in step 1.
-    for (const [filename, workflow] of repoResult.workflows) {
+    for (const [filename, parsed] of repoResult.workflows) {
       const existing = workflowsByFile.get(filename);
       if (existing?.source === 'bundled') {
         // This file was already loaded as a bundled default — the repo's defaults/
         // subdirectory is re-discovering it. Keep the bundled source label.
         getLog().debug({ filename }, 'repo_default_preserves_bundled_source');
-        workflowsByFile.set(filename, { workflow, source: 'bundled' });
+        workflowsByFile.set(filename, { ...parsed, source: 'bundled' });
       } else {
         if (existing) {
           getLog().debug(
@@ -494,7 +523,7 @@ export async function discoverWorkflows(
             'repo_workflow_overrides_lower_scope'
           );
         }
-        workflowsByFile.set(filename, { workflow, source: 'project' });
+        workflowsByFile.set(filename, { ...parsed, source: 'project' });
       }
     }
 

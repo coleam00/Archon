@@ -6,6 +6,7 @@ import rehypeHighlight from 'rehype-highlight';
 import { useEntity } from '../store/cache';
 import { K } from '../store/keys';
 import * as skill from '../skills';
+import { HttpError } from '../lib/http';
 import type { ArtifactFile } from '../skills/runs';
 
 interface ArtifactPanelProps {
@@ -41,6 +42,27 @@ export function ArtifactPanel({ runId }: ArtifactPanelProps): ReactElement {
     return <div className="p-6 text-[12px] text-text-tertiary">Loading artifacts…</div>;
   }
   if (listError !== undefined) {
+    // A 404 means the server could not resolve WHERE this run's output lives
+    // (or the run is gone) — an error state, deliberately distinct from the
+    // empty-list case below, which means "resolved fine, produced nothing".
+    // The route used to return an empty 200 for both, making them
+    // indistinguishable (#2200).
+    if (listError instanceof HttpError && listError.status === 404) {
+      return (
+        <div className="flex h-full items-center justify-center p-6">
+          <div className="max-w-md text-center text-[13px] text-text-tertiary">
+            <p className="text-error">Artifacts unavailable for this run.</p>
+            <p className="mt-2">
+              Archon could not resolve where this run&apos;s output was written — the run record may
+              have been deleted, or its project may no longer be registered.
+            </p>
+            <p className="mt-2 font-mono text-[11px]">
+              This is not the same as &ldquo;the run produced nothing&rdquo;.
+            </p>
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="p-6 font-mono text-[12px] text-error">
         Could not list artifacts: {listError.message}

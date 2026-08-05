@@ -77,6 +77,7 @@ For each simplification:
    - Anything under `$ARTIFACTS_DIR` (the artifacts directory normally lives outside the worktree, but copies/symlinks may exist)
    - `review/`, `simplify-report.md`, `*-report.md` at the repo root
    - `.pr-body.md`, `pr-body.md`, `*.scratch.md`, `*.tmp.md`
+   - Repo-local Archon telemetry: `.archon/artifacts/`, `.archon/logs/`, `.archon/state/` (local-only — never in git)
    - If `git status --porcelain` shows files you don't recognize as part of your simplifications, leave them unstaged
 4. Commit and push only the staged source edits:
    ```bash

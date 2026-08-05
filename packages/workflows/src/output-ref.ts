@@ -10,6 +10,15 @@
  *        field ∈ declaredFields, value present      → value
  *        field ∈ declaredFields, value absent/null  → '' (declared-optional / explicit null)
  *        field ∉ declaredFields                      → THROW (typo / not in the contract)
+ *        output is not a JSON object at all          → THROW (#2456 — a declared schema is
+ *                                                      never quieter than no schema; the
+ *                                                      leniency above covers a missing KEY
+ *                                                      in a parsed object, not a missing object)
+ *
+ *   Either THROW-on-unparseable above reports reason 'truncated' instead of
+ *   'unparseable' when the output carries the persistence truncation marker — same
+ *   parse failure, but the producer was right and a resumed run is reading a clipped
+ *   copy, so the author needs opposite advice. See utils/output-truncation.ts.
  *   2. Has a `structuredOutput` object but NO `declaredFields` (legacy rows, or a
  *      non-object schema) — prefer it, but stay LENIENT: with no declared schema we
  *      can't tell optional-absent from a typo, so:
@@ -31,6 +40,7 @@
  */
 import type { NodeOutput } from './schemas';
 import { findSimilar } from './utils/fuzzy-match';
+import { hasTruncationMarker } from './utils/output-truncation';
 
 /**
  * Thrown when a `$nodeId.output.field` reference cannot be honored under the
@@ -40,6 +50,8 @@ import { findSimilar } from './utils/fuzzy-match';
 export type OutputRefErrorReason =
   | 'not-in-schema'
   | 'unparseable'
+  | 'truncated'
+  | 'array-aggregate'
   | 'missing-key'
   | 'producer-not-run'
   | 'unknown-node';
@@ -68,6 +80,10 @@ export class OutputRefError extends Error {
         return `'${ref}' references field '${field}', which is not declared in node '${nodeId}'s output_format schema. Add '${field}' to the schema (and mark it optional if it can be absent), or fix the reference.`;
       case 'unparseable':
         return `'${ref}' references field '${field}', but node '${nodeId}'s output is not a JSON object, so the field cannot be read. Emit JSON containing '${field}', or reference '$${nodeId}.output' (whole text) instead.`;
+      case 'array-aggregate':
+        return `'${ref}' references field '${field}', but node '${nodeId}' is a fan-out and its output is a JSON ARRAY of per-child results, not an object — there is no '${field}' on it and no producer prompt to change, because the array shape is fixed by the engine. Reference '$${nodeId}.output' (the whole array) and read it in a script node, which is also where a failed child's { error, status } entry can be handled. See the fan_out docs.`;
+      case 'truncated':
+        return `'${ref}' references field '${field}', but node '${nodeId}'s persisted output was clipped at the event size cap and no longer parses as JSON. The node very likely emitted '${field}' correctly — this surfaces on a resumed run, which reads the clipped copy rather than the original. Write the payload to a file under $ARTIFACTS_DIR and read it downstream, or shrink the node's output.`;
       case 'missing-key':
         return `'${ref}' references field '${field}', but node '${nodeId}'s JSON output has no such key. Emit '${field}' in the output, or fix the reference.`;
       case 'producer-not-run':
@@ -109,6 +125,27 @@ export function declaredFieldsFromSchema(
   const props = outputFormat.properties;
   if (props === null || typeof props !== 'object' || Array.isArray(props)) return undefined;
   return Object.keys(props as Record<string, unknown>);
+}
+
+/**
+ * Distinguish "the producer emitted no JSON" from "the JSON it emitted was clipped
+ * before persistence". Same failure to parse, opposite advice to the author: the
+ * first means fix the producer, the second means the producer was already right and
+ * a resumed run is reading a clipped copy.
+ */
+function unparseableReason(output: string): OutputRefErrorReason {
+  if (hasTruncationMarker(output)) return 'truncated';
+  // A fan-out aggregate parses fine — it is simply an array, which `asPlainObject` rejects.
+  // Reporting that as 'unparseable' told the author to "emit JSON containing 'x'" from a
+  // producer they cannot change, since the engine fixes the array shape. Failing loudly
+  // here is correct (a { error, status } entry must never be consumed as data); only the
+  // advice was wrong.
+  try {
+    if (Array.isArray(JSON.parse(output) as unknown)) return 'array-aggregate';
+  } catch {
+    // fall through — genuinely unparseable
+  }
+  return 'unparseable';
 }
 
 export type FieldResolution = { kind: 'value'; value: unknown } | { kind: 'empty' };
@@ -162,9 +199,18 @@ export function resolveNodeOutputField(
       throw new OutputRefError(nodeId, field, 'not-in-schema');
     }
     // Prefer the parsed payload; fall back to parsing the JSON-serialized output
-    // (covers older NodeOutput rows that predate `structuredOutput`).
+    // (covers older NodeOutput rows that predate `structuredOutput`, and the resume
+    // path, which rehydrates text only).
     const obj = structuredObj ?? parseOutputObject(nodeOutput.output);
-    if (obj === undefined) return { kind: 'empty' };
+    // No parseable object AT ALL is not a declared-optional field — it is a producer
+    // that did not honour its schema, and it must fail exactly as loudly as the
+    // schemaless path below (#2456). Returning empty here made declaring
+    // `output_format` QUIETER than declaring nothing, which is backwards: a
+    // `workflow:` node's output_format is never validated against the child (it only
+    // populates declaredFields), so every declared field silently became ''.
+    if (obj === undefined) {
+      throw new OutputRefError(nodeId, field, unparseableReason(nodeOutput.output));
+    }
     const value = obj[field];
     // Required fields are guaranteed present (the producer validated post-parse),
     // so a missing/explicit-null value here is a declared-optional field → empty.
@@ -186,7 +232,9 @@ export function resolveNodeOutputField(
   // 3. Schemaless producer (bash/script/prose). The author wrote `.field`, so
   //    JSON carrying that key is expected; anything else is a drop they must see.
   const obj = parseOutputObject(nodeOutput.output);
-  if (obj === undefined) throw new OutputRefError(nodeId, field, 'unparseable');
+  if (obj === undefined) {
+    throw new OutputRefError(nodeId, field, unparseableReason(nodeOutput.output));
+  }
   if (!(field in obj)) throw new OutputRefError(nodeId, field, 'missing-key');
   return { kind: 'value', value: obj[field] };
 }

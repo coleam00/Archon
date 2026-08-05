@@ -338,6 +338,19 @@ export function WorkflowPicker({
                               </span>
                             ) : null}
                           </div>
+                          {w.parseWarnings.length > 0 ? (
+                            // role="img" because a bare <span> has the implicit
+                            // `generic` role, which prohibits an accessible name —
+                            // aria-label on it is dropped by assistive tech.
+                            <span
+                              role="img"
+                              className="shrink-0 font-mono text-[11px] text-warning"
+                              title={w.parseWarnings.join('\n')}
+                              aria-label={`Ignored keys: ${w.parseWarnings.join('; ')}`}
+                            >
+                              ⚠
+                            </span>
+                          ) : null}
                           <span
                             className={`shrink-0 text-[9px] uppercase tracking-[0.16em] ${sourceBadgeClass(w.source)}`}
                           >

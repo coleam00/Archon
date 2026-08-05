@@ -34,6 +34,12 @@ export {
   getRunLogPath,
   sanitizeScopeSegment,
   getScopeArtifactsPath,
+  resolveProjectStorageKey,
+  getProjectStoragePaths,
+  getStoragePathsForRoot,
+  isInsideArchonHome,
+  getRunArtifactsDirForKey,
+  getRunArtifactsDirForRoot,
   slugifyFolderName,
   getFolderProjectRoot,
   getFolderProjectArtifactsPath,
@@ -46,6 +52,7 @@ export {
   findMarkdownFilesRecursive,
   getWebDistDir,
 } from './archon-paths';
+export type { ProjectStorageKey, ProjectStoragePaths } from './archon-paths';
 
 // Env loader
 export { loadArchonEnv, isVerboseBoot } from './env-loader';

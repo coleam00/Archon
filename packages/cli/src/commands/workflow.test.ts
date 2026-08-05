@@ -431,6 +431,49 @@ describe('workflowListCommand', () => {
       'Error loading workflows: Permission denied'
     );
   });
+
+  // #2213 — a key the engine drops has to reach the author on the surface they
+  // use, not only in `archon validate workflows` (which nothing requires them
+  // to run).
+  it('prints parse warnings inline with the workflow that raised them', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [
+        makeTestWorkflowWithSource({ name: 'clean' }, 'project'),
+        makeTestWorkflowWithSource({ name: 'gated' }, 'project', [
+          "Node 'plan': unknown key 'interactive' will be ignored.",
+        ]),
+      ],
+      errors: [],
+    });
+
+    await workflowListCommand('/test/path');
+
+    expect(consoleSpy).toHaveBeenCalledWith(
+      "    Warning: Node 'plan': unknown key 'interactive' will be ignored."
+    );
+  });
+
+  it('carries parse warnings in --json output', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [
+        makeTestWorkflowWithSource({ name: 'clean' }, 'project'),
+        makeTestWorkflowWithSource({ name: 'gated' }, 'project', ["dropped 'interactive'"]),
+      ],
+      errors: [],
+    });
+
+    await workflowListCommand('/test/path', true);
+
+    const parsed = JSON.parse(firstJsonPayload(stdoutSpy)) as {
+      workflows: { name: string; parseWarnings?: string[] }[];
+    };
+    // Absent (not an empty array) on a clean workflow, so the field's presence
+    // alone is the signal.
+    expect(parsed.workflows[0].parseWarnings).toBeUndefined();
+    expect(parsed.workflows[1].parseWarnings).toEqual(["dropped 'interactive'"]);
+  });
 });
 
 describe('workflowRunCommand — requires: [github] gate', () => {
@@ -673,6 +716,64 @@ describe('workflowRunCommand', () => {
     }
 
     expect(consoleSpy).not.toHaveBeenCalledWith(expect.stringContaining('Discovery: root='));
+  });
+
+  // #2213 — `--json` silences Pino entirely (cli.ts sets the level to 'silent'),
+  // so stderr is the only channel left. Note this asserts only the CHANNEL
+  // (console.warn, not console.log); the JSON payload itself goes through
+  // `writeJsonLine` on the `--detach` branch, covered in the detach describe.
+  it('warns on stderr about keys the engine drops, even in json mode', async () => {
+    const warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+      (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+        workflows: [
+          makeTestWorkflowWithSource({ name: 'assist' }, 'project', [
+            "Node 'plan': unknown key 'interactive' will be ignored.",
+          ]),
+        ],
+        errors: [],
+      });
+
+      try {
+        await workflowRunCommand('/repo/root', 'assist', 'hello', {
+          json: true,
+          noWorktree: true,
+        });
+      } catch {
+        // Downstream failure is acceptable; this test only checks the warning.
+      }
+
+      expect(warnSpy).toHaveBeenCalledWith("Warning: 'assist' declares keys the engine ignores:");
+      expect(warnSpy).toHaveBeenCalledWith(
+        "  - Node 'plan': unknown key 'interactive' will be ignored."
+      );
+      // Never on stdout — a --json caller must still get a parseable payload.
+      expect(consoleSpy).not.toHaveBeenCalledWith(expect.stringContaining('unknown key'));
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('stays silent when the resolved workflow has no parse warnings', async () => {
+    const warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+      (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+        workflows: [
+          makeTestWorkflowWithSource({ name: 'assist' }, 'project'),
+          // A DIFFERENT workflow's warnings must not leak into this run.
+          makeTestWorkflowWithSource({ name: 'other' }, 'project', ["dropped 'interactive'"]),
+        ],
+        errors: [],
+      });
+
+      await workflowRunCommand('/repo/root', 'assist', 'hello', { noWorktree: true });
+
+      expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining('the engine ignores'));
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it('does not print discovery diagnostic in quiet mode', async () => {
@@ -2921,6 +3022,70 @@ describe('workflowGetCommand', () => {
     expect(code).toBe(1);
   });
 
+  // #2213 — the read path for a run whose warnings were recorded but never
+  // delivered to a conversation (CLI/REST runs, or a failed chat send).
+  it('surfaces recorded parse warnings in verbose output', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const workflowEventsDb = await import('@archon/core/db/workflow-events');
+
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-pw',
+      workflow_name: 'gated',
+      working_path: '/repo',
+      status: 'completed',
+      started_at: new Date(),
+      metadata: {},
+    });
+    (workflowEventsDb.listWorkflowEvents as ReturnType<typeof mock>).mockResolvedValueOnce([
+      {
+        id: 'e1',
+        workflow_run_id: 'run-pw',
+        event_type: 'workflow_parse_warnings',
+        step_name: null,
+        step_index: null,
+        data: { workflowName: 'gated', warnings: ["Node 'plan': unknown key 'interactive'"] },
+        created_at: new Date().toISOString(),
+      },
+    ]);
+
+    const code = await workflowGetCommand('run-pw', false, true);
+
+    const calls = consoleSpy.mock.calls.map((c: unknown[]) => String(c[0]));
+    expect(calls.some(c => c.includes('Ignored keys (1)'))).toBe(true);
+    expect(calls.some(c => c.includes("unknown key 'interactive'"))).toBe(true);
+    expect(code).toBe(0);
+  });
+
+  it('carries recorded parse warnings on the verbose --json payload', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const workflowEventsDb = await import('@archon/core/db/workflow-events');
+
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-pw',
+      workflow_name: 'gated',
+      working_path: '/repo',
+      status: 'completed',
+      started_at: new Date(),
+      metadata: {},
+    });
+    (workflowEventsDb.listWorkflowEvents as ReturnType<typeof mock>).mockResolvedValueOnce([
+      {
+        id: 'e1',
+        workflow_run_id: 'run-pw',
+        event_type: 'workflow_parse_warnings',
+        step_name: null,
+        step_index: null,
+        data: { workflowName: 'gated', warnings: ["Node 'plan': unknown key 'interactive'"] },
+        created_at: new Date().toISOString(),
+      },
+    ]);
+
+    await workflowGetCommand('run-pw', true, true);
+
+    const payload = JSON.parse(firstJsonPayload(stdoutSpy)) as { parseWarnings?: string[] };
+    expect(payload.parseWarnings).toEqual(["Node 'plan': unknown key 'interactive'"]);
+  });
+
   it('emits {ok:false} JSON (never throws) when the DB lookup fails', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockRejectedValueOnce(
@@ -3759,6 +3924,67 @@ describe('workflowRunCommand — detach', () => {
     expect(execAfter).toBe(execBefore);
     expect(child.unref).toHaveBeenCalledTimes(1);
     expect(consoleSpy).toHaveBeenCalledWith("Started 'assist' in the background.");
+  });
+
+  // #2213 — the headline `--json` claim. `writeJsonLine` (not console.log) is
+  // what emits the payload, and it is only reached on this `--detach` branch,
+  // so this is the only place the "stdout stays exactly the payload" guarantee
+  // can actually be observed. Asserts the captured stdout still JSON.parse()s
+  // while the warning went to stderr.
+  it('keeps stdout a parseable JSON payload while warning on stderr', async () => {
+    const warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const paths = await import('@archon/paths');
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [
+        makeTestWorkflowWithSource({ name: 'assist', description: 'Help' }, 'project', [
+          "Node 'plan': unknown key 'interactive' will be ignored.",
+        ]),
+      ],
+      errors: [],
+    });
+    (paths.getArchonHome as ReturnType<typeof mock>).mockImplementationOnce(() => {
+      throw new Error('no home in test');
+    });
+
+    const child = createDetachedChildFixture();
+    const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue(child.child);
+    const savedArgv = process.argv;
+    process.argv = [
+      'bun',
+      '/abs/cli.ts',
+      'workflow',
+      'run',
+      'assist',
+      'hello',
+      '--detach',
+      '--json',
+    ];
+
+    try {
+      const commandPromise = workflowRunCommand('/test/path', 'assist', 'hello', {
+        detach: true,
+        json: true,
+      });
+      await finishStartupWindow(commandPromise, spawnSpy);
+    } finally {
+      process.argv = savedArgv;
+      spawnSpy.mockRestore();
+    }
+
+    // stdout: exactly one line, and it parses.
+    const payload = JSON.parse(firstJsonPayload(stdoutSpy)) as {
+      ok: boolean;
+      action: string;
+      workflow: string;
+    };
+    expect(payload.ok).toBe(true);
+    expect(payload.action).toBe('run');
+    expect(payload.workflow).toBe('assist');
+    // The warning reached the user — on stderr, not in the payload.
+    expect(warnSpy).toHaveBeenCalledWith("Warning: 'assist' declares keys the engine ignores:");
+    expect(JSON.stringify(payload)).not.toContain('unknown key');
+    warnSpy.mockRestore();
   });
 
   it('does NOT pin a --branch on the detached child for a registered folder project', async () => {

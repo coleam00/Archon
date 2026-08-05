@@ -240,7 +240,8 @@ CREATE TABLE IF NOT EXISTS remote_agent_workflow_runs (
   started_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   completed_at TIMESTAMP WITH TIME ZONE,
   last_activity_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  working_path TEXT
+  working_path TEXT,
+  output_root TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_workflow_runs_conversation
@@ -428,6 +429,14 @@ ALTER TABLE remote_agent_workflow_runs
     REFERENCES remote_agent_workflow_runs(id) ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS idx_workflow_runs_parent_run
   ON remote_agent_workflow_runs(parent_run_id) WHERE parent_run_id IS NOT NULL;
+
+-- Durable output root (#2200): the resolved `~/.archon/workspaces/<project>/`
+-- directory this run's artifacts, logs, and state live under, written once at
+-- run start. Readers prefer it and only re-derive from codebase identity when
+-- it is NULL (pre-existing rows), so historical artifacts stay addressable
+-- across a codebase rename (#1192). Declared identically on SQLite (sqlite.ts).
+ALTER TABLE remote_agent_workflow_runs
+  ADD COLUMN IF NOT EXISTS output_root TEXT;
 
 -- From PR-C: per-user GitHub user-to-server tokens (device flow), encrypted at rest.
 -- One row per Archon user; cascades on user deletion. github_user_id is the

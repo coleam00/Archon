@@ -51,6 +51,7 @@ import { getCodebase } from '../db/codebases';
 import { executeWorkflow } from '@archon/workflows/executor';
 import type { WorkflowDefinition, WorkflowSource } from '@archon/workflows/schemas/workflow';
 import { createWorkflowDeps } from '../workflows/store-adapter';
+import { createChildWorktreeResolver } from '../workflows/child-isolation-resolver';
 import {
   cleanupToMakeRoom,
   getWorktreeStatusBreakdown,
@@ -283,6 +284,12 @@ export interface WorkflowRoutingContext {
    * to the privacy-safe "custom" treatment when not provided.
    */
   readonly source?: WorkflowSource;
+  /**
+   * Keys the engine dropped from the workflow's YAML (#2213). Forwarded to the
+   * executor so a background (web/console) run records them on the run like any
+   * other, independently of the chat notification.
+   */
+  readonly parseWarnings?: readonly string[];
 }
 
 /**
@@ -323,6 +330,10 @@ export async function dispatchBackgroundWorkflow(
   // is then fatal (never fall back to running in a shared/parent worktree).
   let workerCwd: string;
   let codebaseBaseBranch: string | undefined;
+  // Per-child isolation resolver (#2121 slice 2, PR-A): a `workflow:` node with
+  // `isolation: 'worktree'` gets its own worktree per child. Built for git-repo
+  // codebases only; undefined otherwise → the engine fails such a node fast.
+  let resolveChildIsolation: ReturnType<typeof createChildWorktreeResolver> | undefined;
   if (ctx.codebaseId) {
     const codebase = await getCodebase(ctx.codebaseId);
     if (!codebase) {
@@ -331,6 +342,16 @@ export async function dispatchBackgroundWorkflow(
       );
     }
     codebaseBaseBranch = codebase.default_branch?.trim() || undefined;
+    if (codebase.kind !== 'folder') {
+      resolveChildIsolation = createChildWorktreeResolver({
+        codebaseId: codebase.id,
+        codebaseName: codebase.name,
+        canonicalRepoPath: codebase.default_cwd,
+        baseBranch: codebaseBaseBranch,
+        createdByPlatform: ctx.platform.getPlatformType(),
+        createdByUserId: ctx.userId,
+      });
+    }
     if (workflow.worktree?.enabled === false) {
       // Respect an explicit worktree opt-out: skip isolation and run in the parent's cwd.
       getLog().info(
@@ -441,7 +462,9 @@ export async function dispatchBackgroundWorkflow(
             preCreatedRun,
             userId: ctx.userId,
             source: ctx.source,
+            parseWarnings: ctx.parseWarnings,
             baseBranch: codebaseBaseBranch,
+            resolveChildIsolation,
           }
         );
         // Surface workflow output to parent conversation as a result card

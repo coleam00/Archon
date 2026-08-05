@@ -56,6 +56,14 @@ Use `--no-worktree` only for tasks that don't modify code — questions, explora
 
 > **Recommendation**: Always use `--branch` with a descriptive name for code-changing workflows. It makes it easy to identify worktrees later and creates clean branch names on GitHub.
 
+### Worktrees from sub-runs
+
+A workflow can run another workflow as a governed child run. Those children normally share the parent's checkout, but a workflow author can give one its own worktree by writing `isolation: worktree` on the node — see [Composing a Governed Sub-Run](/guides/authoring-workflows/#composing-a-governed-sub-run-with-workflow).
+
+That's the second way a worktree gets created, and it's why `archon isolation list` sometimes shows branches you didn't name yourself, like `archon/task-3f9a1c2b-refactor-module-6fd3f873-child-0` — the parent run, the node that spawned the child, and which child it was. They're ordinary worktrees: `cleanup` and `complete` treat them exactly like any other, and like any other they stick around after the run so you can inspect or land the work.
+
+One caution: a paused or failed sub-run tree can still be resumed, and a resume reuses the child's original worktree rather than making a new one. If `cleanup` removed it in the meantime, the resume fails and you have to start over. Leave sub-run worktrees alone until the whole run is finished.
+
 ---
 
 ## Managing Your Worktrees

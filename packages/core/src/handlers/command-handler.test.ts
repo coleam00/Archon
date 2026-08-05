@@ -189,6 +189,8 @@ mock.module('@archon/isolation', () => ({
     adopt: mock(() => Promise.resolve(null)),
     healthCheck: mock(() => Promise.resolve(true)),
   }),
+  // Loaded transitively via the orchestrator → child-isolation-resolver (PR-A).
+  classifyIsolationError: (err: Error) => err.message,
 }));
 
 // Mock cleanup service
@@ -1294,6 +1296,32 @@ describe('CommandHandler', () => {
         // Verify loadConfig function is passed as the second argument
         expect(spyDiscoverWorkflows).toHaveBeenCalledWith(expect.any(String), expect.any(Function));
       });
+
+      // #2213 — chat is the surface most non-CLI authors use; a silently
+      // dropped key (e.g. an `interactive:` they believe is a gate) has to
+      // reach the conversation, not only `archon validate workflows`.
+      test('should show parse warnings inline with the workflow that raised them', async () => {
+        spyDiscoverWorkflows.mockResolvedValueOnce({
+          workflows: [
+            makeTestWorkflowWithSource({ name: 'clean' }),
+            makeTestWorkflowWithSource({ name: 'gated' }, 'project', [
+              "Node 'plan': unknown key 'interactive' will be ignored.",
+            ]),
+          ],
+          errors: [],
+        });
+
+        const result = await handleCommand(conversationWithCodebase, '/workflow list');
+
+        expect(result.success).toBe(true);
+        expect(result.message).toContain("unknown key 'interactive' will be ignored");
+        // Rendered under `gated`, not under `clean` — the author must be able to
+        // tell which workflow is affected without cross-referencing.
+        const gatedIdx = result.message.indexOf('`gated`');
+        const warningIdx = result.message.indexOf("unknown key 'interactive'");
+        expect(gatedIdx).toBeGreaterThan(-1);
+        expect(warningIdx).toBeGreaterThan(gatedIdx);
+      });
     });
 
     describe('/workflow reload', () => {
@@ -1405,6 +1433,45 @@ describe('CommandHandler', () => {
 
         expect(result.success).toBe(true);
         expect(result.workflow?.definition.name).toBe('assist');
+      });
+
+      // #2213 — the run path, not just `/workflow list`. Chat and the console
+      // both start runs through here; discarding parseWarnings meant the author
+      // saw a warning while browsing and silence at the moment of consequence.
+      test('should carry parse warnings on the run result', async () => {
+        spyDiscoverWorkflows.mockResolvedValueOnce({
+          workflows: [
+            makeTestWorkflowWithSource({ name: 'clean' }),
+            makeTestWorkflowWithSource({ name: 'gated' }, 'project', [
+              "Node 'plan': unknown key 'interactive' will be ignored.",
+            ]),
+          ],
+          errors: [],
+        });
+
+        const result = await handleCommand(conversationWithCodebase, '/workflow run gated');
+
+        expect(result.success).toBe(true);
+        expect(result.workflow?.definition.name).toBe('gated');
+        expect(result.workflow?.parseWarnings).toEqual([
+          "Node 'plan': unknown key 'interactive' will be ignored.",
+        ]);
+      });
+
+      test('should omit parse warnings for a clean workflow', async () => {
+        spyDiscoverWorkflows.mockResolvedValueOnce({
+          workflows: [
+            makeTestWorkflowWithSource({ name: 'clean' }),
+            // A DIFFERENT workflow's warnings must not attach to this run.
+            makeTestWorkflowWithSource({ name: 'gated' }, 'project', ["dropped 'interactive'"]),
+          ],
+          errors: [],
+        });
+
+        const result = await handleCommand(conversationWithCodebase, '/workflow run clean');
+
+        expect(result.success).toBe(true);
+        expect(result.workflow?.parseWarnings).toBeUndefined();
       });
 
       test('should match workflow name via suffix match', async () => {

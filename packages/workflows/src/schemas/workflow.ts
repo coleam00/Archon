@@ -9,7 +9,9 @@ import {
   thinkingConfigSchema,
   sandboxSettingsSchema,
   betasSchema,
+  KNOWN_DAG_NODE_KEYS,
 } from './dag-node';
+import type { NestedKeySpec } from './dag-node';
 
 // ---------------------------------------------------------------------------
 // Shared enum schemas
@@ -173,6 +175,58 @@ export const workflowDefinitionSchema = workflowBaseSchema.extend({
 export type WorkflowDefinition = z.infer<typeof workflowDefinitionSchema> & { prompt?: never };
 
 // ---------------------------------------------------------------------------
+// Known workflow keys — used by the loader to detect unknown/misplaced keys
+// ---------------------------------------------------------------------------
+
+/**
+ * All keys accepted at the workflow level.
+ * Derived from workflowDefinitionSchema shape — no hand-maintained list needed.
+ * Used by parseWorkflow to warn on unknown keys (#2213).
+ */
+export const KNOWN_WORKFLOW_KEYS: ReadonlySet<string> = new Set(
+  Object.keys(workflowDefinitionSchema.shape)
+);
+
+/**
+ * Workflow-only keys that are not valid on individual nodes. Used to produce a
+ * precise hint when a workflow-level key is misplaced on a node (#2213).
+ * Computed as the difference between workflow keys and node keys.
+ */
+export const WORKFLOW_ONLY_KEYS: ReadonlySet<string> = new Set(
+  [...KNOWN_WORKFLOW_KEYS].filter(k => !KNOWN_DAG_NODE_KEYS.has(k))
+);
+
+/**
+ * Known keys for the nested config objects a workflow can carry, keyed by the
+ * workflow-level field that holds them. Same purpose and same derivation as
+ * KNOWN_NODE_NESTED_KEYS — an unknown key one level down is stripped just as
+ * silently as one at the top (#2213).
+ *
+ * `sandbox` (`.passthrough()`) and `thinking` (`z.preprocess`) are omitted for
+ * the same reasons they are omitted at node level. `nodes` is handled by the
+ * per-node check, not here.
+ *
+ * Constructed with `keyof typeof workflowDefinitionSchema.shape` as the key type
+ * so a typo'd registration fails to compile rather than silently disabling the
+ * check; the exported type widens back to `string` for lookup (same split as
+ * KNOWN_NODE_NESTED_KEYS).
+ */
+export const KNOWN_WORKFLOW_NESTED_KEYS: ReadonlyMap<string, NestedKeySpec> = new Map<
+  keyof typeof workflowDefinitionSchema.shape,
+  NestedKeySpec
+>([
+  ['worktree', { kind: 'object', keys: new Set(Object.keys(workflowWorktreePolicySchema.shape)) }],
+  [
+    'container',
+    { kind: 'object', keys: new Set(Object.keys(workflowContainerPolicySchema.shape)) },
+  ],
+  [
+    'evidence_policy',
+    { kind: 'object', keys: new Set(Object.keys(workflowEvidencePolicySchema.shape)) },
+  ],
+]);
+
+// ---------------------------------------------------------------------------
 // LoadCommandResult — discriminated union for command load outcomes
 // ---------------------------------------------------------------------------
 
@@ -219,6 +273,8 @@ export type WorkflowSource = 'bundled' | 'global' | 'project';
 export interface WorkflowWithSource {
   readonly workflow: WorkflowDefinition;
   readonly source: WorkflowSource;
+  /** Warnings from YAML parsing (e.g. unknown keys) — never hard-fails. */
+  readonly parseWarnings?: readonly string[];
 }
 
 /**

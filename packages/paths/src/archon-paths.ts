@@ -3,18 +3,26 @@
  *
  * Directory structure:
  * ~/.archon/                              # User-level (ARCHON_HOME)
- * ├── workspaces/owner/repo/             # Project-centric layout
- * │   ├── source/                        # Clone or symlink → local path
- * │   ├── worktrees/                     # Git worktrees for this project
+ * ├── workspaces/<project>/              # Project-centric layout, where <project> is
+ * │   │                                  #   <owner>/<repo>   registered repo with a remote
+ * │   │                                  #   _local/<basename>  no-remote local git repo
+ * │   │                                  #   _folder/<slug>     folder project (non-git)
+ * │   │                                  #   _cwd/<basename>    unregistered working dir
+ * │   ├── source/                        # Clone or symlink → local path (repo kinds only)
+ * │   ├── worktrees/                     # Git worktrees for this project (repo kinds only)
  * │   ├── artifacts/runs/{workflow-id}/  # Workflow artifacts (NEVER in git)
- * │   └── logs/{workflow-id}.jsonl       # Workflow execution logs
+ * │   ├── logs/{workflow-id}.jsonl       # Workflow execution logs
+ * │   └── state/                         # $STATE_DIR — cross-run state, shared per project
  * ├── worktrees/                         # Legacy global worktrees (for repos not in workspaces/)
  * └── config.yaml                        # Global config
+ *
+ * `resolveProjectStorageKey` + `getProjectStoragePaths` are the single source of
+ * truth for that mapping; every consumer resolves through them.
  *
  * For Docker: /.archon/
  */
 
-import { join, dirname, normalize, basename } from 'path';
+import { join, dirname, normalize, basename, sep } from 'path';
 import { homedir } from 'os';
 import { access, mkdir, symlink, lstat, readdir, readlink, realpath, rm, stat } from 'fs/promises';
 import { readFileSync } from 'fs';
@@ -557,6 +565,171 @@ export function getScopeArtifactsPath(
   );
 }
 
+/**
+ * The storage identity of a project, in the exact three shapes Archon can
+ * resolve. This is the *one* key the whole codebase derives output paths from:
+ * a registered repo (`owner/repo` or the `_local/<basename>` pseudo-owner), a
+ * folder project (`_folder/<slug>`), or an unregistered working directory
+ * (`_cwd/<basename>`).
+ *
+ * It exists because the identity → storage rule was previously implemented
+ * three times at three different levels of correctness (the executor handled
+ * all kinds, the CLI's `continue` handled two, the two HTTP artifact routes
+ * handled one), so a folder project's artifacts were unreachable from the
+ * console while the run wrote them happily to disk (#2200).
+ */
+export type ProjectStorageKey =
+  | { kind: 'repo'; owner: string; repo: string }
+  | { kind: 'folder'; slug: string }
+  | { kind: 'cwd'; cwd: string };
+
+/**
+ * The four output roots every project kind has. Composed from one project root
+ * so the tree is identical no matter which key resolved it.
+ */
+export interface ProjectStoragePaths {
+  /** `~/.archon/workspaces/<...>/` — the project root all output hangs off. */
+  root: string;
+  /** Parent of the `runs/` and `scopes/` layouts. */
+  artifactsRoot: string;
+  /** Directory holding `<run-id>.jsonl` execution logs. */
+  logsDir: string;
+  /** `$STATE_DIR` — per-PROJECT cross-run state, shared by every workflow. */
+  stateRoot: string;
+}
+
+/**
+ * Resolve the {@link ProjectStorageKey} for a codebase row (or its absence).
+ * This is the single source of truth that keeps the executor, both HTTP
+ * artifact routes, and the CLI in agreement about where a run's output lives.
+ *
+ * Branch order matches what registration writes to disk:
+ * - `kind: 'folder'` → `_folder/<slug>`, slugified from the display name
+ *   ({@link slugifyFolderName}); folder projects never have an `owner/repo`
+ *   name.
+ * - anything else (including a NULL/absent `kind` on rows created before the
+ *   column existed) → repo-kind, via {@link resolveRepoProjectIdentity}, which
+ *   is the only thing that bridges the DB's bare basename for no-remote local
+ *   repos to the `_local/<basename>` pseudo-owner on disk.
+ * - no codebase, or a name+cwd that resolves to nothing → the unregistered
+ *   working directory itself.
+ *
+ * Takes a structural value object rather than a `Codebase` row type on purpose:
+ * `@archon/paths` has zero `@archon/*` dependencies and must stay that way.
+ */
+export function resolveProjectStorageKey(
+  codebase: { kind?: string | null; name: string; default_cwd: string } | null | undefined,
+  cwd: string
+): ProjectStorageKey {
+  if (codebase) {
+    if (codebase.kind === 'folder') {
+      return { kind: 'folder', slug: slugifyFolderName(codebase.name) };
+    }
+    const identity = resolveRepoProjectIdentity(codebase.name, codebase.default_cwd);
+    if (identity) {
+      return { kind: 'repo', owner: identity.owner, repo: identity.repo };
+    }
+  }
+  return { kind: 'cwd', cwd };
+}
+
+/**
+ * Compose the output roots for a storage key. Every kind resolves UNDER
+ * `ARCHON_HOME` — including `'cwd'`, which maps to the `_cwd` pseudo-owner.
+ *
+ * The `'cwd'` mapping is deliberately external: the engine used to write an
+ * unregistered run's artifacts and logs to `<cwd>/.archon/`, i.e. into the
+ * user's repository, where a worktree teardown destroyed them and `git status`
+ * showed them. Relocating it is a breaking change accepted in #2200 so that
+ * EVERY run's output is retrievable from one tree.
+ *
+ * COLLISIONS: distinct working directories sharing a basename share a project
+ * root. For `artifacts/` and `logs/` that is benign — both are keyed by run id,
+ * so the two projects' runs never touch the same file. `stateRoot` is NOT:
+ * `$STATE_DIR` is per project by design and has no run-id segment, so two local
+ * repos both called `api` share one `state/` and therefore one
+ * `triage-state.json`. Register a colliding project with a distinct name, or
+ * namespace inside `$STATE_DIR` (`$STATE_DIR/<something-unique>/`), if that
+ * matters. Same caveat applies to `_folder` slug collisions.
+ */
+export function getProjectStoragePaths(key: ProjectStorageKey): ProjectStoragePaths {
+  let root: string;
+  switch (key.kind) {
+    case 'repo':
+      root = getProjectRoot(key.owner, key.repo);
+      break;
+    case 'folder':
+      root = getFolderProjectRoot(key.slug);
+      break;
+    case 'cwd':
+      root = getProjectRoot('_cwd', sanitizeScopeSegment(basename(key.cwd)));
+      break;
+  }
+  return getStoragePathsForRoot(root);
+}
+
+/**
+ * True when `candidate` resolves inside `ARCHON_HOME`.
+ *
+ * Every storage key kind composes under `ARCHON_HOME` — including the `_cwd`
+ * pseudo-project since #2200 — so this is the trust boundary for any path that
+ * did NOT come straight from {@link getProjectStoragePaths}. In practice that
+ * means a persisted `workflow_runs.output_root`: the engine only ever writes an
+ * in-tree value, so an out-of-tree one is corruption or a hand edit, and acting
+ * on it would let a relative or whitespace root scatter a run's artifacts AND
+ * its shared state under whatever the server's cwd happens to be.
+ *
+ * Rejects relative paths implicitly — they cannot start with the absolute home.
+ */
+export function isInsideArchonHome(candidate: string): boolean {
+  const home = normalize(getArchonHome());
+  const normalised = normalize(candidate);
+  return normalised === home || normalised.startsWith(home + sep);
+}
+
+/**
+ * Compose the output roots from an already-resolved project root — the branch
+ * taken when a run recorded its `output_root` at start and must NOT re-derive
+ * identity (a renamed codebase would otherwise orphan its artifacts, #1192).
+ * Shares the layout rule with {@link getProjectStoragePaths} so a persisted root
+ * and a freshly-derived one can never disagree about where `artifacts/` lives.
+ *
+ * Callers passing a value that came from the DB must gate it on
+ * {@link isInsideArchonHome} first — this function is a pure composer and
+ * trusts its input.
+ */
+export function getStoragePathsForRoot(root: string): ProjectStoragePaths {
+  return {
+    root,
+    artifactsRoot: join(root, 'artifacts'),
+    logsDir: join(root, 'logs'),
+    stateRoot: join(root, 'state'),
+  };
+}
+
+/**
+ * Get the artifacts directory for one run of a project, for any storage key.
+ * Equivalent to {@link getRunArtifactsPath} / {@link getFolderRunArtifactsPath}
+ * for their respective kinds, and the only way to get it for `'cwd'`.
+ */
+export function getRunArtifactsDirForKey(key: ProjectStorageKey, workflowRunId: string): string {
+  return getRunArtifactsDirForRoot(getProjectStoragePaths(key).root, workflowRunId);
+}
+
+/**
+ * Get a run's artifacts directory from an already-resolved project root — the
+ * branch taken when a run's `output_root` was persisted at start.
+ *
+ * This is the single place the `<artifactsRoot>/runs/<id>` layout is composed
+ * for the persisted-root path, and it is deliberately shared by the WRITER
+ * (the executor, which creates the directory) and the READERS (the artifact
+ * routes and the CLI). Those drifting apart is #2200's own bug one level down:
+ * a run would write its output somewhere no reader looks.
+ */
+export function getRunArtifactsDirForRoot(root: string, workflowRunId: string): string {
+  return join(getStoragePathsForRoot(root).artifactsRoot, 'runs', workflowRunId);
+}
+
 // =============================================================================
 // Folder-project ("_folder") path functions
 // =============================================================================
@@ -575,8 +748,10 @@ export function getScopeArtifactsPath(
  * (e.g. a name that is entirely separators or unicode).
  *
  * Note: distinct display names can collide (e.g. "My App" and "my-app" both →
- * "my-app"); runs stay separated by run-id subdirectories, so collisions only
- * co-mingle listing-level artifacts. Accepted for now — see plan Questionables.
+ * "my-app"). Run artifacts and logs stay separated by run-id subdirectories, so
+ * a collision only co-mingles listing-level artifacts — but `state/` has no
+ * run-id segment, so colliding projects genuinely SHARE their `$STATE_DIR`
+ * files. Accepted for now — see plan Questionables.
  */
 export function slugifyFolderName(name: string): string {
   const slug = name

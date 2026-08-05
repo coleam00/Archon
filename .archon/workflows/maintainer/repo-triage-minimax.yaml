@@ -4,7 +4,7 @@ description: >-
   dedup detection + 3-day auto-close) and cross-references open PRs against
   open issues (conservative: suggests Closes #X only when a PR fully
   addresses an issue, never closes anything itself). State is persisted
-  under .archon/state/ so prior runs are remembered. Designed for periodic
+  under $STATE_DIR/ so prior runs are remembered. Designed for periodic
   runs; safe to re-run; idempotent.
 interactive: false
 
@@ -18,9 +18,72 @@ model: minimax/MiniMax-M2.7
 
 nodes:
   # ---------------------------------------------------------------------------
+  # State precondition — the single deterministic gate every state-reading node
+  # hangs off. INVARIANT: any node that reads or writes $STATE_DIR must be
+  # downstream of this node (directly or transitively). It is the sole root of
+  # this DAG; keep it that way.
+  #
+  # The question it answers is judgement-free and has exactly one correct
+  # answer, so it does not belong in a prompt: "is $STATE_DIR empty because this
+  # is a genuinely new project, or because state still sits unmigrated in the
+  # legacy .archon/state/?" Those are indistinguishable from any single state
+  # file, and guessing wrong makes this workflow re-post dedup comments and
+  # re-nudge stale issues on a PUBLIC repo — irreversible, and aimed at
+  # contributors rather than at the operator who ran it.
+  #
+  # Deliberately directory-level, never file-level: it names no state file, so a
+  # sixth state file added later is covered by construction.
+  - id: state-preflight
+    # Re-checked on every resume, never served from the resume cache: this is a
+    # precondition, not a work step, and it is a pure read with no side effects.
+    # Without this a resume would skip it (`prior_success`) and run against
+    # whatever $STATE_DIR looks like now rather than what it looked like then.
+    always_run: true
+    bash: |
+      set -euo pipefail
+
+      legacy_dir=".archon/state"
+      state_dir="$STATE_DIR"
+
+      count_files() {
+        # Regular files only, one level deep; .initialized is a marker, not state.
+        [ -d "$1" ] || { echo 0; return; }
+        find "$1" -maxdepth 1 -type f ! -name '.initialized' | wc -l | tr -d ' '
+      }
+
+      legacy_count=$(count_files "$legacy_dir")
+      migrated_count=$(count_files "$state_dir")
+
+      if [ "$legacy_count" -gt 0 ] && [ "$migrated_count" -eq 0 ] \
+         && [ ! -f "$state_dir/.initialized" ]; then
+        echo "[state-preflight] ABORT: $legacy_count state file(s) still sit in"
+        echo "  $legacy_dir"
+        echo "but $state_dir is empty."
+        echo ""
+        echo "Running now would read empty state as a first run and re-post dedup"
+        echo "comments and stale nudges that were already posted. Migrate first:"
+        echo ""
+        echo "  bun run scripts/migrate-state-dir.ts            # dry run"
+        echo "  bun run scripts/migrate-state-dir.ts --apply"
+        echo ""
+        echo "If the legacy files are genuinely obsolete and you accept a reset,"
+        echo "record that decision explicitly:"
+        echo ""
+        echo "  touch \"$state_dir/.initialized\""
+        exit 1
+      fi
+
+      if [ "$migrated_count" -eq 0 ] && [ ! -f "$state_dir/.initialized" ]; then
+        echo "[state-preflight] first run for this project — no legacy state to migrate."
+      else
+        echo "[state-preflight] ok — $migrated_count state file(s) in $state_dir"
+      fi
+
+  # ---------------------------------------------------------------------------
   # Issue triage — runs concurrently with pr-link (no depends_on between them).
   # ---------------------------------------------------------------------------
   - id: triage-issues
+    depends_on: [state-preflight]
     model: minimax/MiniMax-M2.7
     allowed_tools: [Bash, Read, Write]
     prompt: |
@@ -38,7 +101,7 @@ nodes:
           print a line prefixed `[DRY] would ...` with the full body you would
           have posted.
         - Do NOT run `gh issue (comment|close|edit)`. Do NOT use the Write
-          tool on `.archon/state/*.json`.
+          tool on `$STATE_DIR/*.json`.
         - End with the standard summary table, but prefix the title
           `## (DRY RUN) Issue triage — <now>`.
 
@@ -55,11 +118,8 @@ nodes:
 
       # State file
 
-      Location: `.archon/state/triage-state.json` (relative to repo root).
-      Before reading or writing, ensure the directory exists:
-
-          mkdir -p .archon/state
-
+      Location: `$STATE_DIR/triage-state.json`. `$STATE_DIR` is an
+      absolute path outside the repo, pre-created by the executor.
       Shape — on first run the file may not exist; treat missing as:
 
           {
@@ -81,13 +141,15 @@ nodes:
 
       ## 1. Read state
       ```
-      cat .archon/state/triage-state.json 2>/dev/null
+      cat $STATE_DIR/triage-state.json 2>/dev/null
       ```
       Parse handling:
-        - ENOENT (file missing) → start from default shape above.
-        - Empty file (zero bytes / whitespace only) → start from default shape.
+        - ENOENT (file missing) or empty file → start from the default shape
+          above. The `state-preflight` node this node depends on has already
+          ruled out the dangerous reading of an empty state dir (unmigrated
+          legacy state); reaching here means the emptiness is genuine.
         - JSON.parse THROWS (corrupt state) → ABORT the node loudly.
-          Print: `[triage-issues] ABORT: .archon/state/triage-state.json
+          Print: `[triage-issues] ABORT: $STATE_DIR/triage-state.json
           is corrupt — refusing to reset tracked state. Restore from a
           backup (check git history if tracked, or a local timestamped
           copy) or delete the file to start fresh.`
@@ -226,7 +288,7 @@ nodes:
 
       ## 8. SAVE
       Set `state.lastRunAt = <now-iso>`. Use the Write tool to persist
-      `.archon/state/triage-state.json` as formatted JSON (2-space indent).
+      `$STATE_DIR/triage-state.json` as formatted JSON (2-space indent).
 
       ## 9. Summary output
       Print a single compact block:
@@ -286,13 +348,13 @@ nodes:
         - Do read-only work (gh list/view, state reads, clustering).
         - For every mutation (comment, close, state write), print `[DRY] would ...`.
         - Do NOT run gh issue comment/close.
-        - Do NOT use Write on `.archon/state/*.json`.
+        - Do NOT use Write on `$STATE_DIR/*.json`.
         - End with a summary prefixed `## (DRY RUN) Closed-dedup check — <now>`.
 
       # Context artifact from triage-issues
 
       Open-issue briefs live in:
-          .archon/state/triage-state.json
+          $STATE_DIR/triage-state.json
 
       Schema (written by the triage-issues node earlier in this run):
 
@@ -320,7 +382,7 @@ nodes:
       # State file (this node)
 
       Separate file to isolate concerns from triage-issues:
-          .archon/state/closed-dedup-state.json
+          $STATE_DIR/closed-dedup-state.json
 
       Default shape when missing:
 
@@ -334,17 +396,17 @@ nodes:
       - `closedBriefs[<closedIssue>]`: { sha, summary, primarySymptom, area, closedAt, stateReason, resolvedByPr, briefedAt }
       - `closedMatchComments[<openIssue>]`: { matchedClosed, botCommentId, postedAt }
 
-      `mkdir -p .archon/state` before any write.
 
       # Step-by-step
 
       ## 1. Read both state files
-      - Read `.archon/state/triage-state.json` — grab `briefs` (open-issue briefs).
-      - Read `.archon/state/closed-dedup-state.json`:
-          ENOENT / empty → default shape. JSON.parse throw → ABORT loudly
-          (same rule as triage-issues step 1: never silently reset
-          tracked state; corrupt file means a backup restore or explicit
-          deletion, never a reset).
+      - Read `$STATE_DIR/triage-state.json` — grab `briefs` (open-issue briefs).
+      - Read `$STATE_DIR/closed-dedup-state.json`:
+          ENOENT / empty → default shape (the `state-preflight` node has
+          already ruled out unmigrated legacy state, so an empty state dir
+          here is genuine). JSON.parse throw → ABORT loudly: never silently
+          reset tracked state; a corrupt file means a backup restore or an
+          explicit deletion, never a reset.
 
       ## 2. Fetch recently-closed issues (last 90 days)
       Compute cutoff:
@@ -464,7 +526,7 @@ nodes:
 
       ## 8. SAVE
       Set `state.lastRunAt = <now-iso>`. Write
-      `.archon/state/closed-dedup-state.json` with the Write tool
+      `$STATE_DIR/closed-dedup-state.json` with the Write tool
       (2-space JSON).
 
       ## 9. Summary output
@@ -495,6 +557,7 @@ nodes:
   # other top-level nodes.
   # ---------------------------------------------------------------------------
   - id: closed-pr-dedup-check
+    depends_on: [state-preflight]
     model: minimax/MiniMax-M2.7
     allowed_tools: [Bash, Read, Write]
     prompt: |
@@ -519,8 +582,7 @@ nodes:
 
       # State file
 
-      Location: `.archon/state/closed-pr-dedup-state.json`.
-      `mkdir -p .archon/state` before any write.
+      Location: `$STATE_DIR/closed-pr-dedup-state.json`.
 
       Default shape when missing:
 
@@ -540,12 +602,14 @@ nodes:
 
       ## 1. Read state
       ```
-      cat .archon/state/closed-pr-dedup-state.json 2>/dev/null
+      cat $STATE_DIR/closed-pr-dedup-state.json 2>/dev/null
       ```
       Parse JSON:
-        ENOENT / empty → default shape. JSON.parse throw → ABORT loudly
-        (never silently reset tracked state; corrupt file means a backup
-        restore or explicit deletion, never a reset).
+        ENOENT / empty → default shape (the `state-preflight` node has already
+        ruled out unmigrated legacy state, so an empty state dir here is
+        genuine). JSON.parse throw → ABORT loudly: never silently reset
+        tracked state; a corrupt file means a backup restore or an explicit
+        deletion, never a reset.
 
       ## 2. Fetch PRs
       Compute the cutoff:
@@ -663,7 +727,7 @@ nodes:
 
       ## 7. SAVE
       Set `state.lastRunAt = <now-iso>`. Write
-      `.archon/state/closed-pr-dedup-state.json` with the Write tool.
+      `$STATE_DIR/closed-pr-dedup-state.json` with the Write tool.
 
       ## 8. Summary output
           ## Closed-PR dedup — <now>
@@ -687,6 +751,7 @@ nodes:
   # PR ↔ issue linker — runs concurrently with triage-issues.
   # ---------------------------------------------------------------------------
   - id: link-prs
+    depends_on: [state-preflight]
     model: minimax/MiniMax-M2.7
     allowed_tools: [Bash, Read, Write]
     prompt: |
@@ -711,7 +776,7 @@ nodes:
           write), print a line prefixed `[DRY] would ...` with the full
           body you would have posted on which target.
         - Do NOT run `gh issue comment` or `gh pr comment`. Do NOT use
-          the Write tool on `.archon/state/*.json`.
+          the Write tool on `$STATE_DIR/*.json`.
         - End with the standard summary table, but prefix the title
           `## (DRY RUN) PR-issue linker — <now>`.
 
@@ -727,8 +792,7 @@ nodes:
 
       # State file
 
-      Location: `.archon/state/pr-state.json`. `mkdir -p .archon/state`
-      before any write.
+      Location: `$STATE_DIR/pr-state.json`.
 
       Default shape when missing:
 
@@ -759,12 +823,14 @@ nodes:
 
       ## 1. Read state
       ```
-      cat .archon/state/pr-state.json 2>/dev/null
+      cat $STATE_DIR/pr-state.json 2>/dev/null
       ```
       Parse JSON:
-        ENOENT / empty → default shape. JSON.parse throw → ABORT loudly
-        (never silently reset tracked state; corrupt file means a backup
-        restore or explicit deletion, never a reset).
+        ENOENT / empty → default shape (the `state-preflight` node has already
+        ruled out unmigrated legacy state, so an empty state dir here is
+        genuine). JSON.parse throw → ABORT loudly: never silently reset
+        tracked state; a corrupt file means a backup restore or an explicit
+        deletion, never a reset.
 
       ## 2. Fetch
       ```
@@ -986,7 +1052,7 @@ nodes:
             // are already in `existing` and survive the spread
           };
 
-      Update `state.lastRunAt`. Write `.archon/state/pr-state.json` in
+      Update `state.lastRunAt`. Write `$STATE_DIR/pr-state.json` in
       ONE Write call at the end of the node.
 
       ## 8. Summary
@@ -1021,6 +1087,7 @@ nodes:
   # nudge each item once per quiet period.
   # ---------------------------------------------------------------------------
   - id: stale-nudge
+    depends_on: [state-preflight]
     model: minimax/MiniMax-M2.7
     allowed_tools: [Bash, Read, Write]
     prompt: |
@@ -1042,8 +1109,7 @@ nodes:
 
       # State file
 
-      Location: `.archon/state/stale-nudge-state.json`.
-      `mkdir -p .archon/state` before any write.
+      Location: `$STATE_DIR/stale-nudge-state.json`.
 
       Default shape:
 
@@ -1062,12 +1128,14 @@ nodes:
 
       ## 1. Read state
       ```
-      cat .archon/state/stale-nudge-state.json 2>/dev/null
+      cat $STATE_DIR/stale-nudge-state.json 2>/dev/null
       ```
       Parse JSON:
-        ENOENT / empty → default shape. JSON.parse throw → ABORT loudly
-        (never silently reset tracked state; corrupt file means a backup
-        restore or explicit deletion, never a reset).
+        ENOENT / empty → default shape (the `state-preflight` node has already
+        ruled out unmigrated legacy state, so an empty state dir here is
+        genuine). JSON.parse throw → ABORT loudly: never silently reset
+        tracked state; a corrupt file means a backup restore or an explicit
+        deletion, never a reset.
 
       ## 2. Fetch stale items
       Compute cutoff (STALE_DAYS ago):
@@ -1126,7 +1194,7 @@ nodes:
 
       ## 5. SAVE
       Set `state.lastRunAt = <now-iso>`. Write
-      `.archon/state/stale-nudge-state.json`.
+      `$STATE_DIR/stale-nudge-state.json`.
 
       ## 6. Summary
           ## Stale nudge — <now>
@@ -1179,7 +1247,7 @@ nodes:
       Some may include `(DRY RUN)` prefix or a "Skipping … per SKIP_X=1"
       line — pass those through honestly.
 
-      You may also read the state files under `.archon/state/` for any
+      You may also read the state files under `$STATE_DIR/` for any
       counts the summaries omitted, but keep it light — this is a digest,
       not a re-analysis.
 
@@ -1201,16 +1269,16 @@ nodes:
       3. Sources to read (all optional — missing files mean that node
          didn't run OR posted nothing):
 
-         a. `.archon/state/triage-state.json` → `pendingDedupComments`
+         a. `$STATE_DIR/triage-state.json` → `pendingDedupComments`
             Keyed by OPEN ISSUE number → `issues/<N>#issuecomment-<botCommentId>`.
 
-         b. `.archon/state/closed-dedup-state.json` → `closedMatchComments`
+         b. `$STATE_DIR/closed-dedup-state.json` → `closedMatchComments`
             Keyed by OPEN ISSUE number → `issues/<N>#issuecomment-<botCommentId>`.
 
-         c. `.archon/state/closed-pr-dedup-state.json` → `closedMatchComments`
+         c. `$STATE_DIR/closed-pr-dedup-state.json` → `closedMatchComments`
             Keyed by OPEN PR number → `pull/<N>#issuecomment-<botCommentId>`.
 
-         d. `.archon/state/pr-state.json` → `linkedPrs[<pr>].commentIds`:
+         d. `$STATE_DIR/pr-state.json` → `linkedPrs[<pr>].commentIds`:
               - `fullyAddresses[<issue>]` → comment lives ON THE PR:
                     `pull/<pr>#issuecomment-<id>`
               - `related.pr[<issue>]`     → `pull/<pr>#issuecomment-<id>`
@@ -1220,7 +1288,7 @@ nodes:
             in that case list the action without a URL and suffix
             `(no ID captured)`.
 
-         e. `.archon/state/stale-nudge-state.json` → `nudged`
+         e. `$STATE_DIR/stale-nudge-state.json` → `nudged`
             Keys: `"issue/<N>"` → `issues/<N>#issuecomment-<botCommentId>`
                   `"pr/<N>"`    → `pull/<N>#issuecomment-<botCommentId>`
 

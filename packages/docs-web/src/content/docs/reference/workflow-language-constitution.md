@@ -41,21 +41,55 @@ A proposed workflow-YAML feature (new field, new node type, new expression capab
 
 If a feature computes rather than coordinates, it is rejected — with the pointer to the escape hatch that already covers it.
 
-### Case law
+## The independence rule
+
+A second rule, narrower than the first and about a different axis. Where "YAML coordinates, code computes" governs *what may enter the surface*, this one governs *what the engine may do to work already running*:
+
+> **Parallel children are independent by default. Anything that couples their fates is opt-in, and must come from the author's declaration rather than be inferred.**
+
+This is the same instinct as the isolation rule — the engine never guesses what the author must have meant — applied to lifecycle instead of storage.
+
+It exists because a single wrong assumption can generate a whole family of wrong features. Treating a fan-out as *one job split N ways that jointly succeeds or fails* makes four decisions look obviously correct: default the join to all-or-nothing; cancel the siblings once the outcome is sealed, to stop burning tokens on a doomed join; let a winner abort the losers; infer isolation because N concurrent children must surely collide.
+
+Under the real model — **N independent workers with different scopes, producing different outputs that aggregate** — all four are wrong, and not subtly. They destroy the thing the feature exists for. Two planners with different scopes, or ten issue-triage children over ten issues, do not depend on each other. One failing is ordinary, and its siblings' output is still the point.
+
+Applying the rule to a proposed behaviour:
+
+- Does it end, abort, or discard work a **sibling** produced? Then it couples them, and it needs the author to have asked for it.
+- Does it configure children without linking their fates — a model, a concurrency bound, a per-item input? Then it is fine.
+- Is it inferred from an unrelated property — how many children there are, what join was chosen? Then it is inference, and the answer is no.
+
+The corollary for joins: the engine's job is to report *all terminal outcomes*, with failures represented as data. Deciding **how many successes are enough** is judgement, and belongs in a downstream script or prompt node reading the aggregate — not in a YAML enum. That is what stops a join rule growing into a policy language.
+
+#### The one exception, and why it is not a loophole
+
+A fan-out child that **pauses at an approval gate** is cancelled by the engine, and the node fails — regardless of `join`. That is the single place a fan-out ends a run it was not asked to end, so it has to be named here rather than left to the authoring guide.
+
+It is not a coupling, because nothing about a *sibling* decides it. A pause is not a terminal state, and a parent run has exactly one approval slot, so a fanned-out child that pauses is waiting for something it can never be given — the cancel is what makes its own state terminal, decided entirely by that child. Its siblings run to their own terminal states either way.
+
+The test the rule actually applies is *"does one child's outcome end another's?"*, and the answer here is no. What ends the child is the impossibility of its own situation. The distinction matters: an exception that could not be stated this precisely would be a loophole, and the reason a fan-out is autonomous is documented as the intended shape — gates belong before or after the fan-out node, not inside a child of it ([#2438](https://github.com/coleam00/Archon/issues/2438)).
+
+## Case law
 
 | Feature | Verdict | Why |
 |---------|---------|-----|
 | `approval:` nodes, `trigger_rule`, `retry:` | ✅ admitted | Pure governance — the engine must see them to pause, join, and re-run |
 | `loop:` / `loop_group:` | ✅ admitted | Iteration structure the engine must own for events, gates, and cost accounting |
 | `include:` (load-time inlining, [#2121](https://github.com/coleam00/Archon/issues/2121)) | ✅ admitted | Textual composition, zero new runtime semantics — the engine sees a flat DAG |
-| `first_success` racing join (proposed, [#1764](https://github.com/coleam00/Archon/issues/1764)) | ✅ admissible | A join rule — coordination |
-| Runtime sub-runs (`workflow:`, #2121 Phase 2) | ✅ shipped (slice 1) | A sub-run is a governance object (own run record, own gates, own audit trail). Slice 1: shared checkout, `input:` string, gate-aware pause/resume; fan-out, `worktree` isolation, racing, and `with:` remain deferred |
+| ~~`first_success` racing join~~ ([#1764](https://github.com/coleam00/Archon/issues/1764), implemented in [#2250](https://github.com/coleam00/Archon/pull/2250)) | ❌ **rejected 2026-08-04** — reverses an earlier ✅ | Admitted originally as "a join rule — coordination", which is true of its *shape* and misses what it does: the winner aborts and cancels the losers, so one child's outcome ends its siblings'. That is the coupling [the independence rule](#the-independence-rule) forbids, and it cannot be reshaped — racing without terminating the losers is not racing. The want underneath it (several genuinely different attempts, best result forward) is real and is served by N distinct nodes with their own models converging on a collector node, which needs no mutual cancellation |
+| Runtime sub-runs (`workflow:`, #2121 Phase 2) | ✅ shipped | A sub-run is a governance object (own run record, own gates, own audit trail). Slice 1: shared checkout, `input:` string, gate-aware pause/resume. Slice 2 adds opt-in per-child isolation (`isolation: worktree`) and data-driven fan-out (`fan_out:`); `with:` remains deferred and racing is rejected outright (row above) |
+| Data-driven fan-out (`fan_out:`, [#2224](https://github.com/coleam00/Archon/pull/2224)) | ✅ shipped | The expansion is *data*, not structure: the target is a static workflow name and only the child COUNT comes from a runtime array, so the parent DAG the executor runs stays flat and static. Each child is a real run record with its own gates, artifacts and cost — the sub-run escape this page already names for runtime-resolved structure (see [Composition metastasis](#2-composition-metastasis-structure-features-become-functions)). `max_parallel` and `join` are coordination (concurrency bound, join rule); nothing in the block computes |
+| Per-node isolation **inferred** from another field (auto-`worktree` because a node fans out, or has a concurrent sibling) | ❌ rejected | The engine never infers isolation. How many children a node spawns says nothing about whether they write — N review or research children over a shared checkout is the common case. The engine's job is to make the author's declaration hold, not to guess what they must have meant; `isolation: worktree` and `mutates_checkout: false` are where those two claims get made. (Run-level worktree-by-default is a different thing and stands: a whole run against a repo has an owner and a lifecycle.) |
+| Fail-fast sibling cancellation on a failing join | ❌ rejected | One child's failure cancelled its in-flight siblings mid-run so a doomed join stopped burning tokens. Defensible under "one job split N ways"; wrong under [independence](#the-independence-rule) — the siblings' output is exactly what a partial failure is supposed to preserve. Every index now spawns and every child reaches its own terminal state before the join reduces. The trade is explicit: worst-case spend is `items.length`, not "until the first failure", which is what makes a run-tree budget ceiling ([#1961](https://github.com/coleam00/Archon/issues/1961)) load-bearing rather than theoretical |
+| `join: all_success` as the **default** | ❌ rejected as a default (retained as an option) | Defaulting to all-or-nothing assumes children's fates are linked, which is the uncommon case — two researchers with different scopes, or ten triage children over ten issues, do not depend on each other. A failed child would discard its siblings' output at the join even after they ran to completion. `all_done` is the default: every terminal outcome aggregates, failures represented as data, and the downstream node decides what is enough. `all_success` stays for the genuinely dependent case, where the author says so |
+| A threshold join (`succeed if ≥ K children completed`) | ❌ rejected | Judgement wearing a join rule's clothes. How many results are enough is a decision about the work, and it belongs in a script or prompt node reading the `all_done` aggregate, with `when:` gating what follows. Admitting it starts a policy language inside an enum |
+| `workflow:` targets resolve at SPAWN time, not load time ([#2200](https://github.com/coleam00/Archon/issues/2200)) | ✅ admitted (deliberate) | Unlike `include:` (load-time inlining), a sub-run's target is resolved when the node runs. This asymmetry is the mechanism by which a run can author a workflow mid-flight and then execute it as a governed child run — the agent's decisions land as readable, promotable YAML rather than opaque in-conversation steps. It is *not* dynamic structure: the target is still a static name, and the child is a separate governance object with its own run record, gates, and audit trail. Adding a load-time existence check for `workflow:` targets would compile, pass every existing test, and silently destroy the capability. Locked by `describe('workflow: late resolution is a deliberate affordance')` in `packages/workflows/src/subrun.test.ts` |
 | `evidence_policy` terminal-success gate ([#2230](https://github.com/coleam00/Archon/issues/2230)) | ✅ admitted (thin slice) | A run-status transition (sibling of `approval:`) — the engine gates on `evidence.json` PRESENCE only; computing/validating the evidence stays in the workflow's script/bash nodes. The full typed-schema + reality-verification surface of PR #1601 was rejected as computation |
 | Arithmetic / string functions / regex in `when:` | ❌ rejected | Computation. A script node computes the decision; `when:` gates on its output |
 | Parentheses & nested boolean grouping in `when:` | ❌ rejected (see policy below) | The first step of home-growing an expression language |
 | Templating (Jinja-style interpolation, computed node ids) | ❌ rejected | Evaluation inside declaration — the Helm road |
 | Dynamic include targets (`include: $x.output`) | ❌ rejected | Turns structure into a runtime value; the engine can no longer statically validate the graph |
-| `with:` include parameters carrying expressions | ⚠️ constrained | Admissible only as **data-only** mapping (values or `$node.output` refs) — the moment values can be computed inline, it is function application |
+| `with:` include parameters | ✅ shipped (data-only) | Identifier-keyed string values are substituted during load-time expansion; inserted `$node.output` values continue through normal runtime output substitution. `workflow.with` is not yet shipped |
 
 ## The five smells — and the management lever for each
 
@@ -73,7 +107,7 @@ These are the specific mechanisms by which workflow languages rot. Each is liste
 
 **Mechanism.** Reuse primitives are the most dangerous axis because they converge on function application: includes become calls, parameters become arguments, loop-carried state becomes variables — and suddenly the config format has scoping rules, evaluation order, and abstraction. This is how Helm charts became programs.
 
-**Archon today.** `loop_group` already carries loop-state (`$LOOP_PREV`); `include:` Phase 1 adds textual reuse. Both were held on the declarative side deliberately: `include` is load-time expansion with zero runtime semantics, `with:` was **deferred and rejects fail-fast**, deep output access across the include boundary is unsupported, and dynamic targets are out of scope.
+**Archon today.** `loop_group` already carries loop-state (`$LOOP_PREV`); `include:` adds textual reuse. Both are held on the declarative side deliberately: `include` is load-time expansion with zero new runtime semantics, and its shipped `with:` surface is a data-only string mapping resolved during expansion. Expressions, deep output access across the include boundary, `workflow.with`, and dynamic targets remain unsupported.
 
 **Lever — composition must be resolvable at load time.** Any reuse feature must fully resolve before execution begins (the engine executes a flat, static DAG). Parameterization, if ever added, is data-only mapping. Anything requiring runtime resolution of *structure* is Phase-2 sub-run territory — where it becomes a governance object with its own run record, not a language feature.
 
@@ -102,6 +136,8 @@ These are the specific mechanisms by which workflow languages rot. Each is liste
 **Archon today.** A few deliberate implicits exist (`$CONTEXT` auto-append, parallel-layer session reset, default transient retries on AI nodes). Each is documented and each is either fail-safe or user-visible. Failed-run resume is explicit: users opt in with a CLI flag or command, or the web UI resume action. The engine's broader posture leans hard the other way: unresolvable `$node.output.field` refs *fail loudly*, structured-output misses *fail* rather than degrade, unknown providers *reject the file*, invalid fields *warn*.
 
 **Lever — the implicit-behavior budget.** Every implicit behavior must be (a) documented in the same table (the authoring docs' behavior list), (b) individually defeatable (`always_run`, `context: fresh`, explicit retry config), and (c) justified as fail-safe. New implicit behaviors require the same admissibility scrutiny as new fields — convenience alone never qualifies. When in doubt: explicit beats implicit, loud beats silent.
+
+**Applied case — the unregistered-cwd output fallback ([#2200](https://github.com/coleam00/Archon/issues/2200)).** A run whose codebase cannot be resolved used to write its artifacts and logs to `<cwd>/.archon/` — the ENGINE itself writing output into the user's repository, with no declaration anywhere in the workflow file. It is now an implicit behavior that fails safe: the run resolves to `~/.archon/workspaces/_cwd/<basename>/` like every other project kind, so output survives worktree teardown and is retrievable by run id. This was a **breaking change accepted without a migration** — in-repo output from older runs stays where it is and is no longer looked up. The escape hatch for authors who genuinely want output in git is unchanged and needs no engine support: an explicit `bash:` copy node from `$ARTIFACTS_DIR` into the worktree, committed normally. Note the shape of the fix — the answer to "the engine does something surprising" was to make the behavior *uniform*, not to add a YAML field to defeat it. A per-workflow `state: repo` opt-out was considered and rejected on question 3 of the admissibility test: a `bash:`/`script:` node writing a relative path expresses it today, which is exactly what every pre-`$STATE_DIR` workflow did with zero engine support.
 
 ## What this means in practice
 

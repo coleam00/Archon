@@ -80,6 +80,12 @@ export const WORKFLOW_EVENT_TYPES = [
   // `$ARTIFACTS_DIR/evidence.json` was absent at completion time — the run was
   // refused terminal `completed` and marked failed. Data carries the expected path.
   'evidence_validation_failed',
+  // #2213 — keys the engine dropped from this run's workflow YAML. Written by the
+  // executor at run start for EVERY run that has them, whatever surface started
+  // it, so the record does not depend on a chat/console notification being
+  // deliverable. `data.warnings` is the message list. Absence means the YAML was
+  // clean OR the run predates this event type — never that delivery failed.
+  'workflow_parse_warnings',
 ] as const;
 
 export type WorkflowEventType = (typeof WORKFLOW_EVENT_TYPES)[number];
@@ -153,9 +159,15 @@ export interface IWorkflowStore extends IRunTreeStore {
   findResumableRun(workflowName: string, workingPath: string): Promise<WorkflowRun | null>;
   failOrphanedRuns(): Promise<{ count: number }>;
   resumeWorkflowRun(id: string): Promise<WorkflowRun>;
+  /**
+   * `output_root` (#2200) is write-once: the executor sets it at run start only
+   * when the persisted value is null. Re-writing it on resume would re-derive
+   * the path from a possibly-renamed codebase and orphan the run's artifacts,
+   * defeating the whole point of persisting it.
+   */
   updateWorkflowRun(
     id: string,
-    updates: Partial<Pick<WorkflowRun, 'status' | 'metadata'>>
+    updates: Partial<Pick<WorkflowRun, 'status' | 'metadata' | 'output_root'>>
   ): Promise<void>;
   updateWorkflowActivity(id: string): Promise<void>;
   getWorkflowRunStatus(id: string): Promise<WorkflowRunStatus | null>;

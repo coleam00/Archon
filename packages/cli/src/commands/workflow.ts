@@ -39,6 +39,7 @@ import { join } from 'node:path';
 import { mkdirSync, openSync, closeSync, readFileSync, writeSync } from 'node:fs';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createWorkflowDeps } from '@archon/core/workflows/store-adapter';
+import { createChildWorktreeResolver } from '@archon/core/workflows/child-isolation-resolver';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { resolveWorkflowName } from '@archon/workflows/router';
 import { executeWorkflow, hydrateResumableRun } from '@archon/workflows/executor';
@@ -754,6 +755,24 @@ async function loadWorkflows(cwd: string): Promise<WorkflowLoadResult> {
   }
 }
 
+/**
+ * Print a workflow's parse warnings (keys the engine silently drops) to stderr.
+ *
+ * stderr rather than stdout so `--json` callers keep a parseable payload while
+ * still being told; `console.warn` rather than the logger because `--json` sets
+ * the log level to silent, which is exactly the case this has to survive.
+ */
+export function emitParseWarnings(
+  parseWarnings: readonly string[] | undefined,
+  workflowName: string
+): void {
+  if (!parseWarnings || parseWarnings.length === 0) return;
+  console.warn(`Warning: '${workflowName}' declares keys the engine ignores:`);
+  for (const warning of parseWarnings) {
+    console.warn(`  - ${warning}`);
+  }
+}
+
 function countWorkflowSources(
   workflows: readonly WorkflowWithSource[]
 ): Record<WorkflowSource, number> {
@@ -773,6 +792,8 @@ interface WorkflowJsonEntry {
   model?: string;
   modelReasoningEffort?: string;
   webSearchMode?: string;
+  /** Keys the workflow's YAML declares that the engine drops (#2213). */
+  parseWarnings?: string[];
 }
 
 /**
@@ -783,7 +804,7 @@ export async function workflowListCommand(cwd: string, json?: boolean): Promise<
 
   if (json) {
     const output = {
-      workflows: workflowEntries.map(({ workflow: w }) => {
+      workflows: workflowEntries.map(({ workflow: w, parseWarnings }) => {
         const entry: WorkflowJsonEntry = {
           name: w.name,
           description: w.description,
@@ -793,6 +814,7 @@ export async function workflowListCommand(cwd: string, json?: boolean): Promise<
         if (w.modelReasoningEffort !== undefined)
           entry.modelReasoningEffort = w.modelReasoningEffort;
         if (w.webSearchMode !== undefined) entry.webSearchMode = w.webSearchMode;
+        if (parseWarnings && parseWarnings.length > 0) entry.parseWarnings = [...parseWarnings];
         return entry;
       }),
       errors: errors.map(e => ({
@@ -816,11 +838,14 @@ export async function workflowListCommand(cwd: string, json?: boolean): Promise<
   if (workflowEntries.length > 0) {
     console.log(`\nFound ${workflowEntries.length} workflow(s):\n`);
 
-    for (const { workflow } of workflowEntries) {
+    for (const { workflow, parseWarnings } of workflowEntries) {
       console.log(`  ${workflow.name}`);
       console.log(`    ${workflow.description}`);
       if (workflow.provider) {
         console.log(`    Provider: ${workflow.provider}`);
+      }
+      for (const warning of parseWarnings ?? []) {
+        console.log(`    Warning: ${warning}`);
       }
       console.log('');
     }
@@ -863,11 +888,11 @@ export async function workflowRunCommand(
   const workflows = workflowEntries.map(ws => ws.workflow);
 
   const workflow = resolveWorkflowName(workflowName, workflows);
-  // Recover the discovery source (dropped by the .map above) for telemetry —
-  // bundled workflows report their real name, custom ones report "custom".
-  const workflowSource = workflow
-    ? workflowEntries.find(ws => ws.workflow === workflow)?.source
-    : undefined;
+  // Recover the discovery entry (dropped by the .map above) for telemetry —
+  // bundled workflows report their real name, custom ones report "custom" —
+  // and for the parse warnings surfaced just below.
+  const workflowEntry = workflow ? workflowEntries.find(ws => ws.workflow === workflow) : undefined;
+  const workflowSource = workflowEntry?.source;
 
   if (!workflow) {
     // Check if the requested workflow had a load error
@@ -887,6 +912,13 @@ export async function workflowRunCommand(
       `Workflow '${workflowName}' not found.\n\nAvailable workflows:\n${availableWorkflows}`
     );
   }
+
+  // Keys this workflow's YAML declares that the engine drops (#2213). Written to
+  // stderr, never stdout: in --json mode Pino is silenced and stdout must stay
+  // exactly the machine-readable payload, so this is the ONLY channel that
+  // reaches an agent driving runs through `--json`. Not gated on --quiet — a
+  // dropped key can be a gate the author believes is protecting the run.
+  emitParseWarnings(workflowEntry?.parseWarnings, workflow.name);
 
   // Validate mutually exclusive flags (defensive — cli.ts checks these for UX, but
   // workflowRunCommand is the authoritative boundary for programmatic callers)
@@ -1770,26 +1802,44 @@ export async function workflowRunCommand(
           ...(containerOverlayMode ? { overlayMode: containerOverlayMode } : {}),
         }
       : undefined;
+  // Per-child isolation resolver (#2121 slice 2, PR-A): built for git-repo codebases
+  // only — a folder project can't make worktrees, so a `workflow:` node requesting
+  // `isolation: 'worktree'` there fails fast in the engine (no resolver injected).
+  const resolveChildIsolation =
+    codebase && codebase.kind !== 'folder'
+      ? createChildWorktreeResolver({
+          codebaseId: codebase.id,
+          codebaseName: codebase.name,
+          canonicalRepoPath: codebase.default_cwd,
+          baseBranch: codebaseDefaultBranch,
+          createdByPlatform: 'cli',
+          createdByUserId: cliUserId,
+        })
+      : undefined;
   try {
     const opts = prepared
       ? {
           codebaseId: codebase?.id,
           source: workflowSource,
+          parseWarnings: workflowEntry?.parseWarnings,
           userId: cliUserId,
           baseBranch: codebaseDefaultBranch,
           baseOverride: flagBase,
           execContext,
           container: containerRunCtx,
+          resolveChildIsolation,
           ...prepared,
         }
       : {
           codebaseId: codebase?.id,
           source: workflowSource,
+          parseWarnings: workflowEntry?.parseWarnings,
           userId: cliUserId,
           baseBranch: codebaseDefaultBranch,
           baseOverride: flagBase,
           execContext,
           container: containerRunCtx,
+          resolveChildIsolation,
         };
     result = await executeWorkflow(
       deps,
@@ -2220,9 +2270,16 @@ export async function workflowGetCommand(
     }
 
     const verboseEvents = events ?? [];
+    const parseWarnings = readParseWarningEvents(verboseEvents);
     const output = rawEvents
       ? { ...run, events: verboseEvents }
-      : { ...run, nodes: buildNodeSummaries(verboseEvents) };
+      : {
+          ...run,
+          nodes: buildNodeSummaries(verboseEvents),
+          // Keys the engine dropped from this run's YAML (#2213). Surfaced as a
+          // named field rather than leaving the caller to scan raw events.
+          ...(parseWarnings.length > 0 ? { parseWarnings } : {}),
+        };
     await writeJsonLine(output);
     return 0;
   }
@@ -2254,9 +2311,31 @@ export async function workflowGetCommand(
     if (eventsFailed) {
       console.log('  (node events unavailable — see logs)');
     }
+    const parseWarnings = readParseWarningEvents(events);
+    if (parseWarnings.length > 0) {
+      console.log(`  Ignored keys (${String(parseWarnings.length)}):`);
+      for (const w of parseWarnings) console.log(`    - ${w}`);
+    }
     printVerboseNodes(events);
   }
   return 0;
+}
+
+/**
+ * Pull the dropped-key warnings out of a run's event log (#2213).
+ *
+ * The engine records them once at run start as `workflow_parse_warnings`,
+ * whatever surface started the run — so this is the read path for a run that
+ * had no conversation to post into (CLI, REST) or whose chat delivery failed.
+ */
+function readParseWarningEvents(events: readonly WorkflowEventRow[]): string[] {
+  const out: string[] = [];
+  for (const event of events) {
+    if (event.event_type !== 'workflow_parse_warnings') continue;
+    const raw: unknown = (event.data as Record<string, unknown> | null)?.warnings;
+    if (Array.isArray(raw)) out.push(...raw.filter((w): w is string => typeof w === 'string'));
+  }
+  return out;
 }
 
 /**
