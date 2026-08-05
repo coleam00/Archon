@@ -4022,7 +4022,7 @@ nodes:
       expect(err?.error).toContain("sibling node '$sib'");
     });
 
-    it('should warn (not fail) when a block command file cannot be resolved for scanning', async () => {
+    it('should fail when a block command file cannot be resolved for safety validation', async () => {
       const workflowDir = join(testDir, '.archon', 'workflows');
       await mkdir(workflowDir, { recursive: true });
 
@@ -4048,13 +4048,51 @@ nodes:
       );
 
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      // Unresolvable command → WARN, never a hard expansion error.
+      // An unresolved command cannot be checked for unsafe input or sibling references.
       const parentErrors = result.errors.filter(e => e.filename === 'ghost-parent.yaml');
-      expect(parentErrors).toHaveLength(0);
-      expect(result.workflows.some(w => w.workflow.name === 'ghost-parent')).toBe(true);
-      expect(mockLogger.warn).toHaveBeenCalledWith(
-        expect.objectContaining({ include: 'g', command: 'ghost-cmd-does-not-exist-xyz' }),
-        'include.command_file_unresolved_for_ref_scan'
+      expect(parentErrors).toHaveLength(1);
+      expect(parentErrors[0]?.error).toContain(
+        "command file 'ghost-cmd-does-not-exist-xyz.md' in included block 'ghost-block' could not be resolved"
+      );
+      expect(result.workflows.some(w => w.workflow.name === 'ghost-parent')).toBe(false);
+    });
+
+    it('should scan an included loop.command file for include inputs', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      const commandDir = join(testDir, '.archon', 'commands');
+      await mkdir(workflowDir, { recursive: true });
+      await mkdir(commandDir, { recursive: true });
+      await writeFile(join(commandDir, 'loop-review.md'), 'Review $INPUTS.scope.');
+      await writeFile(
+        join(workflowDir, 'loop-block.yaml'),
+        `
+name: loop-block
+description: Block with a deferred loop prompt
+nodes:
+  - id: repeat
+    loop:
+      command: loop-review
+      until: DONE
+      max_iterations: 1
+`
+      );
+      await writeFile(
+        join(workflowDir, 'loop-parent.yaml'),
+        `
+name: loop-parent
+description: Includes the loop block
+nodes:
+  - id: review
+    include: loop-block
+    with:
+      scope: production
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.workflows.some(w => w.workflow.name === 'loop-parent')).toBe(false);
+      expect(result.errors.find(error => error.filename === 'loop-parent.yaml')?.error).toContain(
+        "command file 'loop-review.md'"
       );
     });
   });

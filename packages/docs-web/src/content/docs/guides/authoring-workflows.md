@@ -981,18 +981,19 @@ nodes:
 ```
 
 Input names must start with a letter or underscore and may then contain letters, numbers,
-underscores, or hyphens. Values are string literals or `$node.output` references, never
-expressions. Expansion replaces `$INPUTS.<name>` at load time. An inserted output reference
-remains a reference and resolves through the normal runtime output substitution. A missing
-input is a load error; extra caller keys are ignored until workflow input declarations ship.
+underscores, or hyphens. Values must be strings and are inserted verbatim during load-time
+expansion. An inserted `$node.output` reference remains a reference and resolves through the
+normal runtime output substitution. A missing input is a load error; extra caller keys are
+ignored until workflow input declarations ship.
 
 #### Command bodies cannot use include inputs
 
-Phase 1 cannot parameterize a `command:` file used by an included block. Command bodies are
-read at execution time, after load-time include expansion has finished. If a resolved command
-body contains `$INPUTS.<name>`, workflow loading fails with a message directing you to inline
-the prompt text. Use an inline `prompt:` when the block needs include inputs. This restriction
-applies to `include:`; named `with:` mappings for `workflow:` sub-runs have not shipped.
+Phase 1 cannot parameterize a `command:` file or `loop.command` file used by an included
+block. Command bodies are read at execution time, after load-time include expansion has
+finished. Workflow loading fails if the command file cannot be resolved for safety validation
+or contains `$INPUTS.<name>`, with a message directing you to inline the prompt text. Use an
+inline `prompt:` when the block needs include inputs. This restriction applies to `include:`;
+named `with:` mappings for `workflow:` sub-runs have not shipped.
 
 ### Non-goals (Phase 1)
 

@@ -89,7 +89,7 @@ The test the rule actually applies is *"does one child's outcome end another's?"
 | Parentheses & nested boolean grouping in `when:` | ❌ rejected (see policy below) | The first step of home-growing an expression language |
 | Templating (Jinja-style interpolation, computed node ids) | ❌ rejected | Evaluation inside declaration — the Helm road |
 | Dynamic include targets (`include: $x.output`) | ❌ rejected | Turns structure into a runtime value; the engine can no longer statically validate the graph |
-| `with:` include parameters | ✅ shipped (data-only) | Identifier-keyed string literals or `$node.output` refs are substituted during load-time expansion. Expressions remain rejected because inline computation would be function application; `workflow.with` is not yet shipped |
+| `with:` include parameters | ✅ shipped (data-only) | Identifier-keyed string values are substituted during load-time expansion; inserted `$node.output` values continue through normal runtime output substitution. `workflow.with` is not yet shipped |
 
 ## The five smells — and the management lever for each
 

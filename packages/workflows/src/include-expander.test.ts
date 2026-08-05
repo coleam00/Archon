@@ -284,6 +284,58 @@ describe('expandWorkflowIncludes — with input mapping', () => {
     expect(use?.when).toBe("$gate.output == 'go'");
     expect(use && 'prompt' in use ? use.prompt : '').toBe('```\nliteral literal\n``` empty=[]');
   });
+
+  test('substitutes inputs across every other supported inline node surface', () => {
+    const block = wf('parameterized', [
+      { id: 'shell', bash: 'echo $INPUTS.value' },
+      { id: 'script', runtime: 'bun', script: 'console.log("$INPUTS.value")' },
+      {
+        id: 'loop',
+        loop: {
+          prompt: 'Do $INPUTS.value',
+          until: 'DONE',
+          max_iterations: 1,
+          until_bash: 'test "$INPUTS.value" = done',
+        },
+      },
+      { id: 'approval', approval: { message: 'Approve $INPUTS.value?' } },
+      { id: 'cancel', cancel: 'Stop: $INPUTS.value' },
+      { id: 'subrun', workflow: 'child', input: 'scope=$INPUTS.value' },
+      {
+        id: 'group',
+        loop_group: {
+          until: 'DONE',
+          max_iterations: 1,
+          until_bash: 'test "$INPUTS.value" = done',
+          nodes: [{ id: 'body', bash: 'echo $INPUTS.value' }],
+        },
+      },
+    ]);
+    const parent = wf('parent', [
+      { id: 'review', include: 'parameterized', with: { value: 'done' } },
+    ]);
+
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
+    expect(errors).toHaveLength(0);
+    const expanded = workflows.get('parent')!;
+    const loop = nodeById(expanded, 'review__loop');
+    const approval = nodeById(expanded, 'review__approval');
+    const group = nodeById(expanded, 'review__group');
+    expect(nodeById(expanded, 'review__shell')).toMatchObject({ bash: 'echo done' });
+    expect(nodeById(expanded, 'review__script')).toMatchObject({ script: 'console.log("done")' });
+    expect(loop).toMatchObject({
+      loop: { prompt: 'Do done', until_bash: 'test "done" = done' },
+    });
+    expect(approval).toMatchObject({ approval: { message: 'Approve done?' } });
+    expect(nodeById(expanded, 'review__cancel')).toMatchObject({ cancel: 'Stop: done' });
+    expect(nodeById(expanded, 'review__subrun')).toMatchObject({ input: 'scope=done' });
+    expect(group).toMatchObject({
+      loop_group: {
+        until_bash: 'test "done" = done',
+        nodes: [{ id: 'body', bash: 'echo done' }],
+      },
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -548,13 +600,29 @@ describe('expandWorkflowIncludes — command-file ref scan', () => {
     expect(workflows.has('parent')).toBe(true);
   });
 
-  test('does not fail expansion when the command file is unresolvable (null)', () => {
+  test('fails when the command file cannot be resolved for safety validation', () => {
     const [block, parent] = blockWithCommand();
     const commandContents = new Map<string, string | null>([['my-cmd', null]]);
     const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent), commandContents);
-    // Unresolvable → warn (asserted in loader.test.ts), never a hard error.
-    expect(errors).toHaveLength(0);
-    expect(workflows.has('parent')).toBe(true);
+    expect(workflows.has('parent')).toBe(false);
+    expect(errors.find(error => error.filename === 'parent')?.error).toContain(
+      "command file 'my-cmd.md' in included block 'cmdblk' could not be resolved"
+    );
+  });
+
+  test('fails when an included loop command file references an include input', () => {
+    const block = wf('loopblk', [
+      { id: 'repeat', loop: { command: 'loop-cmd', until: 'DONE', max_iterations: 1 } },
+    ]);
+    const parent = wf('parent', [{ id: 'inc', include: 'loopblk', with: { scope: 'prod' } }]);
+    const { workflows, errors } = expandWorkflowIncludes(
+      mapOf(block, parent),
+      new Map([['loop-cmd', 'Review $INPUTS.scope.']])
+    );
+    expect(workflows.has('parent')).toBe(false);
+    expect(errors.find(error => error.filename === 'parent')?.error).toContain(
+      "command file 'loop-cmd.md'"
+    );
   });
 
   test('skips the scan entirely when no commandContents map is supplied', () => {

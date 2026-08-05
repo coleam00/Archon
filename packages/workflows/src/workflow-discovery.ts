@@ -32,6 +32,7 @@ import { createLogger } from '@archon/paths';
 import { isValidCommandName, MAX_DISCOVERY_DEPTH } from './command-validation';
 import { parseWorkflow } from './loader';
 import { expandWorkflowIncludes } from './include-expander';
+import { getFileBackedCommandName } from './command-file';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -269,10 +270,10 @@ async function resolveCommandContentForScan(
 }
 
 /**
- * Pre-resolve command-file contents for every `command:` node that lives in a workflow
- * reachable as an `include:` target (transitively). The include expander uses these to
- * detect a block command file referencing a sibling id that namespacing renames. Touches
- * disk only when includes exist; returns an empty map otherwise.
+ * Pre-resolve command-file contents for every file-backed command node (including
+ * `loop.command`) that lives in a workflow reachable as an `include:` target
+ * (transitively). The include expander uses these to validate deferred prompt bodies.
+ * Touches disk only when includes exist; returns an empty map otherwise.
  */
 async function resolveIncludeBlockCommandContents(
   cwd: string | null,
@@ -297,8 +298,9 @@ async function resolveIncludeBlockCommandContents(
     const workflow = byName.get(name);
     if (!workflow) continue;
     for (const node of workflow.nodes) {
-      if ('command' in node && typeof node.command === 'string' && !contents.has(node.command)) {
-        contents.set(node.command, await resolveCommandContentForScan(cwd, node.command, config));
+      const commandName = getFileBackedCommandName(node);
+      if (commandName !== undefined && !contents.has(commandName)) {
+        contents.set(commandName, await resolveCommandContentForScan(cwd, commandName, config));
       }
     }
   }

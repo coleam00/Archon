@@ -40,6 +40,7 @@ import {
 } from './schemas';
 import { createLogger } from '@archon/paths';
 import { validateDagStructure } from './loader';
+import { getFileBackedCommandName } from './command-file';
 
 /**
  * Resolve the logger on every call rather than caching it at module scope.
@@ -384,10 +385,11 @@ function warnDroppedWorkflowLevelFields(includeNode: IncludeNode, child: Workflo
  * A `command:` node's file content is read only at EXECUTION time, so the expander cannot
  * rewrite `$sibling.output` refs inside it the way it rewrites inline node text. If a
  * block's command file references a sibling node id that namespacing renames, the ref
- * would silently substitute to '' at run time. Scan resolved command content (markdown
- * fences stripped) for refs to any renamed id and FAIL the expansion on a hit; WARN when
- * the file can't be resolved for scanning. Skipped entirely when no `commandContents` is
- * supplied (e.g. unit tests that don't exercise command files).
+ * would silently substitute to '' at run time. This applies equally to a loop's deferred
+ * `loop.command` prompt. Scan resolved command content (markdown fences stripped) for refs
+ * to any renamed id and FAIL the expansion on a hit. A file that cannot be resolved is also
+ * a load error: its safety cannot be verified. Skipped entirely when no `commandContents`
+ * is supplied (e.g. unit tests that don't exercise command files).
  */
 function scanBlockCommandRefs(
   includeNode: IncludeNode,
@@ -396,14 +398,13 @@ function scanBlockCommandRefs(
 ): void {
   const renamedIds = child.nodes.map(n => n.id); // every child top-level id gets a prefix
   for (const cn of child.nodes) {
-    if (!('command' in cn && typeof cn.command === 'string')) continue;
-    const content = commandContents.get(cn.command);
+    const commandName = getFileBackedCommandName(cn);
+    if (commandName === undefined) continue;
+    const content = commandContents.get(commandName);
     if (content === undefined || content === null) {
-      getLog().warn(
-        { include: includeNode.id, target: child.name, command: cn.command, renamedIds },
-        'include.command_file_unresolved_for_ref_scan'
+      throw new IncludeExpansionError(
+        `Node '${includeNode.id}': command file '${commandName}.md' in included block '${child.name}' could not be resolved for include safety validation. Make the command available, or inline the prompt.`
       );
-      continue;
     }
     const stripped = content.replace(/```[\s\S]*?```/g, '').replace(/`[^`\n]*`/g, '');
     for (const id of renamedIds) {
@@ -411,18 +412,16 @@ function scanBlockCommandRefs(
       const refRe = new RegExp(`\\$${escapeRegExp(id)}(?=\\.[a-zA-Z_])`);
       if (refRe.test(stripped)) {
         throw new IncludeExpansionError(
-          `Node '${includeNode.id}': command file '${cn.command}.md' in included block '${child.name}' references sibling node '$${id}', which include namespacing renames to '${includeNode.id}__${id}'. Command-file contents are read at execution time and cannot be rewritten — inline the prompt, or restructure so the command has no cross-node reference.`
+          `Node '${includeNode.id}': command file '${commandName}.md' in included block '${child.name}' references sibling node '$${id}', which include namespacing renames to '${includeNode.id}__${id}'. Command-file contents are read at execution time and cannot be rewritten — inline the prompt, or restructure so the command has no cross-node reference.`
         );
       }
     }
-    // Best effort by construction: discovery only supplies content it can resolve.
-    // Keep unresolved commands on the existing warning path above.
     INPUTS_REF.lastIndex = 0;
     const inputMatch = INPUTS_REF.exec(stripped);
     INPUTS_REF.lastIndex = 0;
     if (inputMatch?.[1] !== undefined) {
       throw new IncludeExpansionError(
-        `Node '${includeNode.id}': command file '${cn.command}.md' in included block '${child.name}' references parameter '$INPUTS.${inputMatch[1]}'. Command-file contents are read at execution time and cannot apply include inputs — inline the prompt instead.`
+        `Node '${includeNode.id}': command file '${commandName}.md' in included block '${child.name}' references parameter '$INPUTS.${inputMatch[1]}'. Command-file contents are read at execution time and cannot apply include inputs — inline the prompt instead.`
       );
     }
   }
