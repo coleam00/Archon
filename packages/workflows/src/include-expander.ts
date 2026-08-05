@@ -52,8 +52,9 @@ import { validateDagStructure } from './loader';
  * (#2458 — it cost three red tests in `loader.test.ts` whenever that file shared a
  * `bun test` process with `include-expander.test.ts`).
  *
- * Resolving per call costs one `rootLogger.child()` and both call sites are warn-only
- * paths reached once per include node at discovery, never in a hot loop.
+ * Resolving per call costs one `rootLogger.child()`, and both call sites are warn-only
+ * discovery paths: the first fires at most once per include node, the second once per
+ * unresolved command node. Neither is a hot loop.
  */
 function getLog(): ReturnType<typeof createLogger> {
   return createLogger('workflow.include-expander');
