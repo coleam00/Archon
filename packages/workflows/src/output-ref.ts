@@ -10,6 +10,10 @@
  *        field ∈ declaredFields, value present      → value
  *        field ∈ declaredFields, value absent/null  → '' (declared-optional / explicit null)
  *        field ∉ declaredFields                      → THROW (typo / not in the contract)
+ *        output is not a JSON object at all          → THROW (#2456 — a declared schema is
+ *                                                      never quieter than no schema; the
+ *                                                      leniency above covers a missing KEY
+ *                                                      in a parsed object, not a missing object)
  *   2. Has a `structuredOutput` object but NO `declaredFields` (legacy rows, or a
  *      non-object schema) — prefer it, but stay LENIENT: with no declared schema we
  *      can't tell optional-absent from a typo, so:
@@ -162,9 +166,16 @@ export function resolveNodeOutputField(
       throw new OutputRefError(nodeId, field, 'not-in-schema');
     }
     // Prefer the parsed payload; fall back to parsing the JSON-serialized output
-    // (covers older NodeOutput rows that predate `structuredOutput`).
+    // (covers older NodeOutput rows that predate `structuredOutput`, and the resume
+    // path, which rehydrates text only).
     const obj = structuredObj ?? parseOutputObject(nodeOutput.output);
-    if (obj === undefined) return { kind: 'empty' };
+    // No parseable object AT ALL is not a declared-optional field — it is a producer
+    // that did not honour its schema, and it must fail exactly as loudly as the
+    // schemaless path below (#2456). Returning empty here made declaring
+    // `output_format` QUIETER than declaring nothing, which is backwards: a
+    // `workflow:` node's output_format is never validated against the child (it only
+    // populates declaredFields), so every declared field silently became ''.
+    if (obj === undefined) throw new OutputRefError(nodeId, field, 'unparseable');
     const value = obj[field];
     // Required fields are guaranteed present (the producer validated post-parse),
     // so a missing/explicit-null value here is a declared-optional field → empty.

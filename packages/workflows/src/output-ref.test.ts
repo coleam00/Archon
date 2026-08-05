@@ -110,6 +110,46 @@ describe('resolveNodeOutputField — declared-schema producer', () => {
     const r = resolveNodeOutputField(completed('{"type":"BUG"}', undefined, ['type']), 'n', 'type');
     expect(r).toEqual({ kind: 'value', value: 'BUG' });
   });
+
+  // #2456 — a declared schema must never be QUIETER than no schema at all. Before this,
+  // an unparseable output returned empty here while the schemaless path threw, so
+  // declaring output_format on a `workflow:` node (whose child output is never
+  // validated) silently turned every declared field into ''.
+  it('unparseable output → throws, exactly like the schemaless path (#2456)', () => {
+    const broken = completed('I could not produce JSON, sorry.', undefined, declared);
+    expect(() => resolveNodeOutputField(broken, 'n', 'type')).toThrow(OutputRefError);
+    try {
+      resolveNodeOutputField(broken, 'n', 'type');
+    } catch (e) {
+      expect((e as OutputRefError).reason).toBe('unparseable');
+    }
+  });
+
+  it('declaring a schema is never quieter than declaring none (#2456)', () => {
+    const text = 'not json at all';
+    const withSchema = (): unknown =>
+      resolveNodeOutputField(completed(text, undefined, ['f']), 'n', 'f');
+    const withoutSchema = (): unknown => resolveNodeOutputField(completed(text), 'n', 'f');
+    // Both throw, and for the same reason — that symmetry IS the contract.
+    expect(withSchema).toThrow(OutputRefError);
+    expect(withoutSchema).toThrow(OutputRefError);
+    const reasonOf = (fn: () => unknown): string | undefined => {
+      try {
+        fn();
+      } catch (e) {
+        return (e as OutputRefError).reason;
+      }
+      return undefined;
+    };
+    expect(reasonOf(withSchema)).toBe(reasonOf(withoutSchema));
+  });
+
+  // The leniency that SURVIVES: a declared-optional field missing from a payload that
+  // genuinely parsed. Only "no parseable object at all" changed.
+  it('still lenient for a missing key inside a parsed object (#2456 scope guard)', () => {
+    const r = resolveNodeOutputField(completed('{"type":"BUG"}', undefined, declared), 'n', 'note');
+    expect(r).toEqual({ kind: 'empty' });
+  });
 });
 
 describe('resolveNodeOutputField — structuredOutput without a declared schema (lenient)', () => {
