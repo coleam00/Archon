@@ -41,11 +41,22 @@ import {
 import { createLogger } from '@archon/paths';
 import { validateDagStructure } from './loader';
 
-/** Lazy-initialized logger (deferred so test mocks can intercept createLogger). */
-let cachedLog: ReturnType<typeof createLogger> | undefined;
+/**
+ * Resolve the logger on every call rather than caching it at module scope.
+ *
+ * The deferral exists so test mocks can intercept `createLogger` — but a module-level
+ * cache only delivers that for whichever mock happens to be installed at the FIRST
+ * call. Bun's `mock.module` is process-wide and irreversible, so once another test
+ * file in the same process warms the cache, a later `mock.module('@archon/paths')`
+ * can no longer intercept these warns and log assertions silently come up empty
+ * (#2458 — it cost three red tests in `loader.test.ts` whenever that file shared a
+ * `bun test` process with `include-expander.test.ts`).
+ *
+ * Resolving per call costs one `rootLogger.child()` and both call sites are warn-only
+ * paths reached once per include node at discovery, never in a hot loop.
+ */
 function getLog(): ReturnType<typeof createLogger> {
-  if (!cachedLog) cachedLog = createLogger('workflow.include-expander');
-  return cachedLog;
+  return createLogger('workflow.include-expander');
 }
 
 /**
