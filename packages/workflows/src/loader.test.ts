@@ -4348,7 +4348,12 @@ nodes:
       const pw = result.workflows[0].parseWarnings ?? [];
       expect(pw.length).toBe(1);
       expect(pw[0]).toContain("'interactive'");
+      // The hint must name BOTH loop fields: the executor gates on
+      // `loop.interactive && loop.gate_message`, so an author who follows a
+      // gate_message-only hint gets a loop with a message and no gate.
+      expect(pw[0]).toContain('loop.interactive: true');
       expect(pw[0]).toContain('gate_message');
+      expect(pw[0]).toContain('approval:');
     });
 
     it('should warn when the workflow itself has an unknown key', async () => {
@@ -4431,6 +4436,185 @@ nodes:
       expect(pw.length).toBe(1);
       expect(pw[0]).toContain("'command'");
       expect(pw[0]).toContain('valid on individual nodes');
+    });
+  });
+
+  describe('unknown key warnings — nested (#2213)', () => {
+    /** Write a single workflow and return its parse warnings. */
+    const warningsFor = async (lines: string[]): Promise<string[]> => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      await writeFile(join(workflowDir, 'test.yaml'), lines.join('\n'));
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.workflows.length).toBe(1);
+      return [...(result.workflows[0].parseWarnings ?? [])];
+    };
+
+    it('should warn on an unknown key inside approval:', async () => {
+      const pw = await warningsFor([
+        'name: test',
+        'description: test',
+        'nodes:',
+        '  - id: gate',
+        '    approval:',
+        '      message: ok?',
+        '      capture_reponse: true', // typo for capture_response
+      ]);
+      expect(pw.length).toBe(1);
+      expect(pw[0]).toContain("Node 'gate'");
+      expect(pw[0]).toContain("unknown key 'approval.capture_reponse'");
+    });
+
+    it('should warn on an unknown key inside approval.on_reject (two levels down)', async () => {
+      const pw = await warningsFor([
+        'name: test',
+        'description: test',
+        'nodes:',
+        '  - id: gate',
+        '    approval:',
+        '      message: ok?',
+        '      on_reject:',
+        '        prompt: try again',
+        '        max_retries: 2', // real field is max_attempts
+      ]);
+      expect(pw.length).toBe(1);
+      expect(pw[0]).toContain("unknown key 'approval.on_reject.max_retries'");
+    });
+
+    it('should warn on an unknown key inside retry:', async () => {
+      const pw = await warningsFor([
+        'name: test',
+        'description: test',
+        'nodes:',
+        '  - id: n',
+        '    prompt: hello',
+        '    retry:',
+        '      max_attempts: 2',
+        '      backoff_ms: 5000', // real field is delay_ms
+      ]);
+      expect(pw.length).toBe(1);
+      expect(pw[0]).toContain("unknown key 'retry.backoff_ms'");
+    });
+
+    it('should warn on an unknown key inside an agents entry', async () => {
+      const pw = await warningsFor([
+        'name: test',
+        'description: test',
+        'nodes:',
+        '  - id: n',
+        '    prompt: hello',
+        '    agents:',
+        '      my-agent:',
+        '        description: does things',
+        '        prompt: do it',
+        '        disallowed_tools: [Bash]', // real field is disallowedTools
+      ]);
+      expect(pw.length).toBe(1);
+      // The agent id is author-chosen, so it must appear in the path verbatim
+      // rather than being reported as an unknown key itself.
+      expect(pw[0]).toContain("unknown key 'agents.my-agent.disallowed_tools'");
+    });
+
+    it('should warn on an unknown key on a loop_group body node', async () => {
+      const pw = await warningsFor([
+        'name: test',
+        'description: test',
+        'nodes:',
+        '  - id: refine',
+        '    loop_group:',
+        '      until: DONE',
+        '      max_iterations: 3',
+        '      nodes:',
+        '        - id: check',
+        '          prompt: check it',
+        '          interactive: true',
+      ]);
+      expect(pw.length).toBe(1);
+      expect(pw[0]).toContain("Node 'refine' → loop_group node 'check'");
+      expect(pw[0]).toContain("unknown key 'interactive'");
+      // The body node gets the same actionable guidance as a top-level node.
+      expect(pw[0]).toContain('loop.interactive: true');
+    });
+
+    it('should warn on an unknown key inside the loop_group control block', async () => {
+      const pw = await warningsFor([
+        'name: test',
+        'description: test',
+        'nodes:',
+        '  - id: refine',
+        '    loop_group:',
+        '      until: DONE',
+        '      max_iterations: 3',
+        '      max_attempts: 4', // not a loop control field
+        '      nodes:',
+        '        - id: check',
+        '          prompt: check it',
+      ]);
+      expect(pw.length).toBe(1);
+      expect(pw[0]).toContain("unknown key 'loop_group.max_attempts'");
+    });
+
+    it('should warn on an unknown key inside a workflow-level worktree block', async () => {
+      const pw = await warningsFor([
+        'name: test',
+        'description: test',
+        'worktree:',
+        '  enabled: true',
+        '  base_branch: main', // worktree policy has only `enabled`
+        'nodes:',
+        '  - id: n',
+        '    prompt: p',
+      ]);
+      expect(pw.length).toBe(1);
+      expect(pw[0]).toContain("Workflow 'test'");
+      expect(pw[0]).toContain("unknown key 'worktree.base_branch'");
+    });
+
+    it('should not warn on valid nested keys, including a clean loop_group body', async () => {
+      const pw = await warningsFor([
+        'name: test',
+        'description: test',
+        'worktree:',
+        '  enabled: true',
+        'nodes:',
+        '  - id: refine',
+        '    loop_group:',
+        '      until: DONE',
+        '      max_iterations: 3',
+        '      interactive: true',
+        '      gate_message: continue?',
+        '      nodes:',
+        '        - id: check',
+        '          prompt: check it',
+        '          retry:',
+        '            max_attempts: 2',
+        '            delay_ms: 1000',
+        '  - id: gate',
+        '    depends_on: [refine]',
+        '    approval:',
+        '      message: ok?',
+        '      capture_response: true',
+        '      on_reject:',
+        '        prompt: again',
+        '        max_attempts: 2',
+      ]);
+      expect(pw).toEqual([]);
+    });
+
+    it('should not treat free-form output_format keys as unknown', async () => {
+      const pw = await warningsFor([
+        'name: test',
+        'description: test',
+        'nodes:',
+        '  - id: n',
+        '    prompt: hello',
+        '    output_format:',
+        '      type: object',
+        '      properties:',
+        '        anything_at_all:',
+        '          type: string',
+      ]);
+      expect(pw).toEqual([]);
     });
   });
 });

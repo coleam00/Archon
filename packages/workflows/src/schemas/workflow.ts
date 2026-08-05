@@ -11,6 +11,7 @@ import {
   betasSchema,
   KNOWN_DAG_NODE_KEYS,
 } from './dag-node';
+import type { NestedKeySpec } from './dag-node';
 
 // ---------------------------------------------------------------------------
 // Shared enum schemas
@@ -194,6 +195,31 @@ export const KNOWN_WORKFLOW_KEYS: ReadonlySet<string> = new Set(
 export const WORKFLOW_ONLY_KEYS: ReadonlySet<string> = new Set(
   [...KNOWN_WORKFLOW_KEYS].filter(k => !KNOWN_DAG_NODE_KEYS.has(k))
 );
+
+/**
+ * Known keys for the nested config objects a workflow can carry, keyed by the
+ * workflow-level field that holds them. Same purpose and same derivation as
+ * KNOWN_NODE_NESTED_KEYS — an unknown key one level down is stripped just as
+ * silently as one at the top (#2213).
+ *
+ * `sandbox` (`.passthrough()`) and `thinking` (`z.preprocess`) are omitted for
+ * the same reasons they are omitted at node level. `nodes` is handled by the
+ * per-node check, not here.
+ */
+export const KNOWN_WORKFLOW_NESTED_KEYS: ReadonlyMap<string, NestedKeySpec> = new Map<
+  string,
+  NestedKeySpec
+>([
+  ['worktree', { kind: 'object', keys: new Set(Object.keys(workflowWorktreePolicySchema.shape)) }],
+  [
+    'container',
+    { kind: 'object', keys: new Set(Object.keys(workflowContainerPolicySchema.shape)) },
+  ],
+  [
+    'evidence_policy',
+    { kind: 'object', keys: new Set(Object.keys(workflowEvidencePolicySchema.shape)) },
+  ],
+]);
 
 // ---------------------------------------------------------------------------
 // LoadCommandResult — discriminated union for command load outcomes

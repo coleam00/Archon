@@ -61,6 +61,8 @@ export {
   INCLUDE_NODE_IGNORED_FIELDS,
   WORKFLOW_NODE_IGNORED_FIELDS,
   KNOWN_DAG_NODE_KEYS,
+  KNOWN_NODE_NESTED_KEYS,
+  approvalConfigSchema,
   dagNodeFlatSchema,
   effortLevelSchema,
   thinkingConfigSchema,
@@ -90,6 +92,7 @@ export type {
   SandboxSettings,
   AgentDefinition,
   PiNodeConfig,
+  NestedKeySpec,
 } from './dag-node';
 
 // Workflow definition
@@ -101,6 +104,7 @@ export {
   workflowBaseSchema,
   workflowDefinitionSchema,
   KNOWN_WORKFLOW_KEYS,
+  KNOWN_WORKFLOW_NESTED_KEYS,
   WORKFLOW_ONLY_KEYS,
 } from './workflow';
 export type {
