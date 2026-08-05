@@ -4616,6 +4616,174 @@ nodes:
       ]);
       expect(pw).toEqual([]);
     });
+
+    it('should not treat a thinking: config as an unknown-key surface', async () => {
+      // `thinking` is a z.preprocess over a union, not an object shape — there
+      // is nothing to compare keys against, so it must stay exempt rather than
+      // warning on its own legitimate fields.
+      const pw = await warningsFor([
+        'name: test',
+        'description: test',
+        'nodes:',
+        '  - id: n',
+        '    prompt: hello',
+        '    thinking:',
+        '      type: enabled',
+        '      budgetTokens: 4096',
+      ]);
+      expect(pw).toEqual([]);
+    });
+  });
+
+  describe('include: warnings stay with the file that declared the key (#2213)', () => {
+    // Pins CURRENT behaviour, which is a known gap documented in the authoring
+    // guide: warnings are keyed by the file they were parsed from, so an
+    // included block's unknown key is reported against the BLOCK, never against
+    // the workflow that includes it. Propagating across the include boundary is
+    // a deliberate follow-up — this test exists so that change is a visible,
+    // intentional edit rather than a silent behaviour shift.
+    it('reports on the included block, not the includer', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      await writeFile(
+        join(workflowDir, 'block.yaml'),
+        [
+          'name: block',
+          'description: shared block',
+          'nodes:',
+          '  - id: work',
+          '    prompt: do it',
+          '    interactive: true', // dropped, warned — on THIS file
+        ].join('\n')
+      );
+      await writeFile(
+        join(workflowDir, 'parent.yaml'),
+        [
+          'name: parent',
+          'description: includes the block',
+          'nodes:',
+          '  - id: blk',
+          '    include: block',
+        ].join('\n')
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      const byName = new Map(result.workflows.map(w => [w.workflow.name, w]));
+
+      const block = byName.get('block');
+      expect((block?.parseWarnings ?? []).length).toBe(1);
+      expect(block?.parseWarnings?.[0]).toContain("unknown key 'interactive'");
+
+      // The includer inlines the block's NODES but not its warnings.
+      const parent = byName.get('parent');
+      expect(parent).toBeDefined();
+      expect(parent?.parseWarnings ?? []).toEqual([]);
+    });
+  });
+
+  describe('parse warnings survive a filename collision (#2213)', () => {
+    // Discovery keys files by BARE filename, so `foo.yaml` at the root and
+    // `foo.yaml` in a 1-level subfolder (a supported layout) collide, and the
+    // loser is dropped. `readdir()` order decides which one wins, so these
+    // assert the ORDER-INDEPENDENT invariant instead of a fixed winner: the
+    // warnings that survive must describe the workflow that survived. Before
+    // the single-entry refactor the definition and the warnings came from two
+    // parallel maps, and a clean file could inherit the dropped file's warning.
+    const CLEAN = (name: string): string =>
+      ['name: ' + name, 'description: test', 'nodes:', '  - id: a', '    prompt: hi'].join('\n');
+    const DIRTY = (name: string): string =>
+      [
+        'name: ' + name,
+        'description: test',
+        'nodes:',
+        '  - id: a',
+        '    prompt: hi',
+        '    interactive: true',
+      ].join('\n');
+
+    /** Write root/sub `foo.yaml`, discover, and return the single survivor. */
+    const discoverColliding = async (
+      rootYaml: string,
+      subYaml: string
+    ): Promise<{ name: string; warnings: string[] }> => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(join(workflowDir, 'zsub'), { recursive: true });
+      await writeFile(join(workflowDir, 'foo.yaml'), rootYaml);
+      await writeFile(join(workflowDir, 'zsub', 'foo.yaml'), subYaml);
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      // One filename → one surviving entry, whichever side won.
+      expect(result.workflows.length).toBe(1);
+      return {
+        name: result.workflows[0].workflow.name,
+        warnings: [...(result.workflows[0].parseWarnings ?? [])],
+      };
+    };
+
+    it('does not attach the dropped file’s warning to a clean survivor', async () => {
+      const { name, warnings } = await discoverColliding(CLEAN('foo-root'), DIRTY('foo-sub'));
+      if (name === 'foo-root') {
+        expect(warnings).toEqual([]); // the clean file won — it declares no unknown key
+      } else {
+        expect(warnings.length).toBe(1);
+        expect(warnings[0]).toContain("unknown key 'interactive'");
+      }
+    });
+
+    it('does not drop a dirty survivor’s warning when a clean file collides', async () => {
+      const { name, warnings } = await discoverColliding(DIRTY('foo-root'), CLEAN('foo-sub'));
+      if (name === 'foo-root') {
+        expect(warnings.length).toBe(1);
+        expect(warnings[0]).toContain("unknown key 'interactive'");
+      } else {
+        expect(warnings).toEqual([]);
+      }
+    });
+  });
+
+  describe('no false positives on the real workflow corpus (#2213)', () => {
+    /**
+     * The unknown-key check is only useful if a legitimate key never trips it.
+     * Detection reaches into nested config blocks and `loop_group` bodies, so a
+     * schema field that drifts out of a derived key set would start warning on
+     * valid YAML — and a warning nobody can act on is worse than none.
+     *
+     * This runs discovery over Archon's own `.archon/workflows/` (its largest
+     * real corpus) and asserts that nothing OUTSIDE a known-bad allowlist warns.
+     * Deliberately one-directional: the allowlist may shrink freely (fixing
+     * `e2e-opencode-smoke.yaml` must not break this), but a new name appearing
+     * is a false positive and fails.
+     */
+    const KNOWN_BAD = new Set([
+      // `agent:` at workflow and node level — a real bug, silently dropped since
+      // April. Remove from this list when the file is fixed.
+      'e2e-opencode-smoke',
+    ]);
+
+    it('warns only on workflows already known to carry unknown keys', async () => {
+      // packages/workflows/src/ → repo root
+      const repoRoot = join(import.meta.dir, '..', '..', '..');
+      // Point ARCHON_HOME at an empty dir so a developer's own home-scoped
+      // workflows can't leak into the corpus and make this machine-dependent.
+      const emptyHome = join(testDir, 'empty-archon-home');
+      await mkdir(emptyHome, { recursive: true });
+      const savedHome = process.env.ARCHON_HOME;
+      process.env.ARCHON_HOME = emptyHome;
+      try {
+        const result = await discoverWorkflows(repoRoot);
+        // Guard against silently testing nothing if discovery ever stops
+        // finding the repo's workflows.
+        expect(result.workflows.length).toBeGreaterThan(20);
+
+        const warned = result.workflows
+          .filter(w => (w.parseWarnings ?? []).length > 0)
+          .map(w => w.workflow.name);
+        const unexpected = warned.filter(n => !KNOWN_BAD.has(n));
+        expect(unexpected).toEqual([]);
+      } finally {
+        if (savedHome === undefined) delete process.env.ARCHON_HOME;
+        else process.env.ARCHON_HOME = savedHome;
+      }
+    });
   });
 });
 
