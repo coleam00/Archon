@@ -2336,9 +2336,15 @@ describe('handleWorkflowRunCommand — E2 single codebase auto-select', () => {
       })
     );
     mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
+    // This branch re-resolves against the project's own discovery and uses that
+    // entry's warnings (see the shadowing test below), so they belong here too.
     mockDiscoverWorkflowsWithConfig.mockReturnValueOnce(
       Promise.resolve({
-        workflows: [makeTestWorkflowWithSource({ name: 'assist' })],
+        workflows: [
+          makeTestWorkflowWithSource({ name: 'assist' }, 'project', [
+            "Node 'plan': unknown key 'interactive' will be ignored.",
+          ]),
+        ],
         errors: [],
       })
     );
@@ -2352,6 +2358,48 @@ describe('handleWorkflowRunCommand — E2 single codebase auto-select', () => {
     );
     // The warning must not replace the run — it precedes it.
     expect(mockDispatchBackgroundWorkflow).toHaveBeenCalled();
+  });
+
+  // This branch re-resolves the workflow against the single project's own
+  // discovery, so the entry it lands on can differ from the one the caller
+  // resolved. The warnings sent must describe the workflow that will run.
+  test('prefers the re-resolved workflow’s warnings over the caller’s', async () => {
+    const conversation = makeConversation({ codebase_id: null });
+    const codebase = makeCodebaseForSync();
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
+    mockParseCommand.mockReturnValueOnce({ command: 'workflow', args: ['run', 'assist'] });
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve({
+        success: true,
+        message: 'Running workflow assist...',
+        workflow: {
+          definition: assistWorkflow,
+          args: 'test prompt',
+          // Resolved against a different scope — must NOT be forwarded.
+          parseWarnings: ["STALE: from the shadowed global 'assist'"],
+        },
+      })
+    );
+    mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
+    mockDiscoverWorkflowsWithConfig.mockReturnValueOnce(
+      Promise.resolve({
+        workflows: [
+          makeTestWorkflowWithSource({ name: 'assist' }, 'project', [
+            "FRESH: Node 'plan': unknown key 'interactive' will be ignored.",
+          ]),
+        ],
+        errors: [],
+      })
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run assist test prompt');
+
+    expect(platform.sendMessage).toHaveBeenCalledWith('conv-1', expect.stringContaining('FRESH:'));
+    expect(platform.sendMessage).not.toHaveBeenCalledWith(
+      'conv-1',
+      expect.stringContaining('STALE:')
+    );
   });
 
   test('sends no parse-warning message for a clean workflow', async () => {

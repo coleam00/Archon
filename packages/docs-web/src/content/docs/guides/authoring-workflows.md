@@ -1504,7 +1504,7 @@ This checks resource resolution beyond what load-time validation covers. Bundled
 
 A key Archon does not recognise is dropped from the parsed workflow — the YAML still loads and the workflow still runs. Because a dropped key can be one an author believed was doing something (the classic case is `interactive: true` on a command node, which reads like a human gate and is not one), Archon reports every dropped key as a **warning** naming the key, where it was found, and what to write instead:
 
-```
+```text
 WARNING [unknown_key] Node 'plan': unknown key 'interactive' will be ignored.
   Nothing on this node gates. For a human gate, use an 'approval:' node; to gate
   each iteration of a loop, set BOTH 'loop.interactive: true' and

@@ -208,7 +208,7 @@ When `cwd` is omitted, Archon returns bundled default workflows and any from `~/
 
 Returns `{ workflows: [...], recommended: [...], errors?: [...] }`.
 
-- `workflows[]` — each entry is `{ workflow, source, parseWarnings? }`. `parseWarnings` lists keys the engine silently dropped from that workflow's YAML (see [Unknown keys](/guides/authoring-workflows/#unknown-keys-are-reported-not-rejected)); it is **omitted entirely** when the workflow is clean, so its presence alone is the signal.
+- `workflows[]` — each entry is `{ workflow, source, parseWarnings? }`. `parseWarnings` contains warning messages identifying the keys the engine silently dropped from that workflow's YAML, each with the node it was found on and what to write instead (see [Unknown keys](/guides/authoring-workflows/#unknown-keys-are-reported-not-rejected)); it is **omitted entirely** when the workflow is clean, so its presence alone is the signal.
 - `recommended[]` — repo-owner-curated workflow names from `.archon/config.yaml`, filtered to discovered names and kept in declared order. Empty when there is no project context.
 - `errors[]` — YAML parsing failures encountered during discovery. Unlike `parseWarnings`, these workflows did **not** load.
 

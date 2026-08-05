@@ -2819,7 +2819,12 @@ async function handleWorkflowRunCommand(
       isolationHints,
       userId,
       resolvedEntry?.source,
-      { ...options, parseWarnings: options?.parseWarnings ?? resolvedEntry?.parseWarnings }
+      // Warnings must describe the workflow that will EXECUTE. This branch
+      // RE-RESOLVES the workflow against the single project's discovery, which
+      // can land on a different file than the caller resolved (a project
+      // workflow shadowing a same-named global one). Inheriting the caller's
+      // warnings would then describe a workflow that is not running.
+      { ...options, parseWarnings: resolvedEntry?.parseWarnings }
     );
     return;
   }
