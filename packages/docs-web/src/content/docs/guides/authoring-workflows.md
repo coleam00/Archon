@@ -1533,10 +1533,24 @@ WARNING [unknown_key] Node 'plan': unknown key 'interactive' will be ignored.
 |---|---|
 | `archon validate workflows` | A `WARNING [unknown_key]` issue (also in `--json`) |
 | `archon workflow list` | Inline under the workflow; `parseWarnings` on each `--json` entry |
-| `archon workflow run` | On **stderr** before the run starts, so `--json` stdout stays parseable |
+| `archon workflow run` | On **stderr** before the run starts (`--detach --json` keeps stdout to the payload) |
 | Chat (`/workflow list`) | Inline with the workflow that raised it |
-| Chat / console (starting a run) | Posted to the conversation before the run begins |
+| Chat / console (starting a run) | Posted to the conversation before the run begins — **best-effort**, see below |
 | Console workflow picker | A ⚠ marker on the row; full text in the tooltip |
+
+**Known gap — delivery when a run starts is best-effort.** The message posted at the
+start of a chat or console run is sent once and not retried: if the platform call
+fails (a revoked bot token, a rate limit, an API hiccup) the run still starts and
+that particular notification is lost, leaving only a `WARN` log line. Failing the
+run over an undeliverable warning would be worse, so the send is deliberately
+non-fatal.
+
+The warning itself is **not** lost — it is recomputed from the YAML on every
+discovery and is not stored anywhere. It is still waiting on `archon validate
+workflows`, `archon workflow list`, `/workflow list` in chat, and the console
+picker. What a failed send costs is the prompt at the moment of consequence, not
+the finding. Treat the run-start message as a convenience and those surfaces as
+the source of truth.
 
 **Known gap — `include:`.** Warnings belong to the file that declared the key. If workflow A `include:`s workflow B and B has an unknown key, the warning is reported against **B**, not against A. Running A surfaces nothing. Check the included block directly (`archon validate workflows <block-name>`) when auditing a composed workflow.
 

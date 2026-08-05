@@ -200,7 +200,9 @@ archon workflow run plan --cwd /path/to/repo --branch feature-x "Add caching"
 
 Progress events (node start/complete/fail/skip, approval gates) are written to stderr during execution.
 
-If the workflow's YAML declares keys the engine ignores, a warning naming each one is written to **stderr before the run starts**. This matters to `--json` callers: `--json` silences all logging, so stderr is the only channel that carries it, and stdout stays exactly the machine-readable payload. See [Unknown keys](/guides/authoring-workflows/#unknown-keys-are-reported-not-rejected).
+If the workflow's YAML declares keys the engine ignores, a warning naming each one is written to **stderr before the run starts**. This matters to `--detach --json` callers: `--json` silences all logging, so stderr is the only channel left, and it keeps stdout to exactly the JSON payload.
+
+Note that `run` emits a JSON payload **only** under `--detach`. Without it, `--json` suppresses logs but the command still prints human progress to stdout (`Running workflow: …`), so do not pipe plain `run --json` into a parser. See [Unknown keys](/guides/authoring-workflows/#unknown-keys-are-reported-not-rejected).
 
 **Flags:**
 

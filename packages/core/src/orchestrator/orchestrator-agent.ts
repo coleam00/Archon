@@ -615,7 +615,16 @@ interface WorkflowDispatchOptions {
    * Keys the engine dropped from the workflow's YAML (#2213). Mirrored into the
    * conversation before the run starts — chat and the console are where most
    * runs are STARTED, so a warning that only reaches the CLI misses the moment
-   * of consequence. Omitted on resume: the warning fired when the run began.
+   * of consequence.
+   *
+   * Deliberately unset on every resume path: delivery happens at most ONCE, at
+   * the run's original chat/console start. That is not the same as "the warning
+   * already fired" — delivery lives only in `dispatchOrchestratorWorkflow`, so a
+   * run started by `archon workflow run` (which warns on stderr instead) and
+   * later resumed with `/workflow resume` in chat never produced a chat warning,
+   * and neither did any run predating this feature. Resuming does not re-derive
+   * one; the author's durable surfaces are `validate`, `list` and the console
+   * picker.
    */
   parseWarnings?: readonly string[];
 }

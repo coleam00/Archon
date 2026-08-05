@@ -1182,7 +1182,8 @@ export function isPersistableNode(node: DagNode): boolean {
 // Reading `loopGroupNodeConfigSchema.shape` fires its `nodes` getter, which
 // builds `z.array(dagNodeSchema)`. Placed above `dagNodeSchema` this throws
 // `ReferenceError: Cannot access 'dagNodeSchema' before initialization` at
-// import time — a temporal dead zone tsc does not catch. Keep this block last.
+// import time — a temporal dead zone tsc does not catch. Keep this block below
+// `dagNodeSchema`; see the note on `loopGroupShape` for the full mechanism.
 /**
  * Known-key description for a nested config object, one level at a time.
  *
@@ -1217,8 +1218,10 @@ export type NestedKeySpec =
  *
  * tsc does NOT catch it — the cast type-checks cleanly either way, which is why
  * moving this registry up beside the `NestedKeySpec` type it belongs with (the
- * natural tidy) is a silent break. The position is load-bearing; keep this
- * block, and `KNOWN_NODE_NESTED_KEYS` below it, at the end of the file.
+ * natural tidy) is a silent break. The constraint is ordering, not position:
+ * this block and `KNOWN_NODE_NESTED_KEYS` below it must be declared AFTER
+ * `dagNodeSchema`. They sit at the end of the file only because nothing else
+ * needs to follow them — new code may be appended below without moving them.
  */
 const loopGroupShape = (loopGroupNodeConfigSchema as unknown as z.ZodObject<z.ZodRawShape>).shape;
 
@@ -1253,7 +1256,9 @@ export const KNOWN_NODE_NESTED_KEYS: ReadonlyMap<string, NestedKeySpec> = new Ma
     {
       kind: 'object',
       keys: new Set(Object.keys(approvalConfigSchema.shape)),
-      children: new Map<string, NestedKeySpec>([
+      // Same typo protection one level down: keyed by the parent's shape, so
+      // `'on_rejct'` is a compile error rather than a silently disabled check.
+      children: new Map<keyof typeof approvalConfigSchema.shape, NestedKeySpec>([
         ['on_reject', { kind: 'object', keys: new Set(Object.keys(approvalOnRejectSchema.shape)) }],
       ]),
     },
