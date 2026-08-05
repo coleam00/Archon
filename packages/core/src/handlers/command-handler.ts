@@ -999,6 +999,11 @@ async function handleWorkflowCommand(
 
       getLog().info({ workflow: workflow.name, args: workflowArgs }, 'cmd.workflow_starting');
 
+      // Recover the discovery entry the `.map()` above dropped, so the keys the
+      // engine ignores reach the conversation when the run STARTS — not only
+      // when the author happens to browse `/workflow list` (#2213).
+      const resolvedEntry = workflowEntries.find(ws => ws.workflow === workflow);
+
       // Return special result that triggers workflow execution in orchestrator
       return {
         success: true,
@@ -1007,6 +1012,9 @@ async function handleWorkflowCommand(
           definition: workflow,
           args: workflowArgs,
           force: force ? true : undefined,
+          ...(resolvedEntry?.parseWarnings && resolvedEntry.parseWarnings.length > 0
+            ? { parseWarnings: resolvedEntry.parseWarnings }
+            : {}),
         },
       };
     }

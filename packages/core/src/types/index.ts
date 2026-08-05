@@ -67,6 +67,8 @@ export interface CommandResult {
     force?: boolean;
     resumeRunId?: string;
     resumeRun?: WorkflowRun;
+    /** Keys the engine dropped from this workflow's YAML (#2213). */
+    parseWarnings?: readonly string[];
   };
 }
 

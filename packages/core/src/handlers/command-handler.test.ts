@@ -1435,6 +1435,45 @@ describe('CommandHandler', () => {
         expect(result.workflow?.definition.name).toBe('assist');
       });
 
+      // #2213 — the run path, not just `/workflow list`. Chat and the console
+      // both start runs through here; discarding parseWarnings meant the author
+      // saw a warning while browsing and silence at the moment of consequence.
+      test('should carry parse warnings on the run result', async () => {
+        spyDiscoverWorkflows.mockResolvedValueOnce({
+          workflows: [
+            makeTestWorkflowWithSource({ name: 'clean' }),
+            makeTestWorkflowWithSource({ name: 'gated' }, 'project', [
+              "Node 'plan': unknown key 'interactive' will be ignored.",
+            ]),
+          ],
+          errors: [],
+        });
+
+        const result = await handleCommand(conversationWithCodebase, '/workflow run gated');
+
+        expect(result.success).toBe(true);
+        expect(result.workflow?.definition.name).toBe('gated');
+        expect(result.workflow?.parseWarnings).toEqual([
+          "Node 'plan': unknown key 'interactive' will be ignored.",
+        ]);
+      });
+
+      test('should omit parse warnings for a clean workflow', async () => {
+        spyDiscoverWorkflows.mockResolvedValueOnce({
+          workflows: [
+            makeTestWorkflowWithSource({ name: 'clean' }),
+            // A DIFFERENT workflow's warnings must not attach to this run.
+            makeTestWorkflowWithSource({ name: 'gated' }, 'project', ["dropped 'interactive'"]),
+          ],
+          errors: [],
+        });
+
+        const result = await handleCommand(conversationWithCodebase, '/workflow run clean');
+
+        expect(result.success).toBe(true);
+        expect(result.workflow?.parseWarnings).toBeUndefined();
+      });
+
       test('should match workflow name via suffix match', async () => {
         spyDiscoverWorkflows.mockResolvedValueOnce({
           workflows: [
