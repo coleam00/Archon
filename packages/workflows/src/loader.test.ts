@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, spyOn, mock, type Mock } from 'bun:test';
-import { mkdir, writeFile, rm } from 'fs/promises';
-import { join } from 'path';
+import { mkdir, writeFile, rm, readdir, readFile } from 'fs/promises';
+import { join, basename } from 'path';
 import { tmpdir } from 'os';
 
 const isWindows = process.platform === 'win32';
@@ -4747,11 +4747,19 @@ nodes:
      * schema field that drifts out of a derived key set would start warning on
      * valid YAML — and a warning nobody can act on is worse than none.
      *
-     * This runs discovery over Archon's own `.archon/workflows/` (its largest
-     * real corpus) and asserts that nothing OUTSIDE a known-bad allowlist warns.
-     * Deliberately one-directional: the allowlist may shrink freely (fixing
+     * Runs over Archon's own `.archon/workflows/` — its largest real corpus —
+     * and asserts nothing OUTSIDE a known-bad allowlist warns. Deliberately
+     * one-directional: the allowlist may shrink freely (fixing
      * `e2e-opencode-smoke.yaml` must not break this), but a new name appearing
      * is a false positive and fails.
+     *
+     * Calls `parseWorkflow` per file rather than `discoverWorkflows`. Parsing is
+     * the only thing under test — running full discovery would additionally do
+     * include expansion, command-file resolution and config loading, which is
+     * both a looser unit and heavy enough to starve the other package test
+     * processes running in parallel (`bun --filter '*' --parallel test`). It
+     * measurably did: on a 2-core Windows CI runner it pushed an unrelated
+     * SQLite test from 250 ms past Bun's 5000 ms per-test timeout.
      */
     const KNOWN_BAD = new Set([
       // `agent:` at workflow and node level — a real bug, silently dropped since
@@ -4761,28 +4769,30 @@ nodes:
 
     it('warns only on workflows already known to carry unknown keys', async () => {
       // packages/workflows/src/ → repo root
-      const repoRoot = join(import.meta.dir, '..', '..', '..');
-      // Point ARCHON_HOME at an empty dir so a developer's own home-scoped
-      // workflows can't leak into the corpus and make this machine-dependent.
-      const emptyHome = join(testDir, 'empty-archon-home');
-      await mkdir(emptyHome, { recursive: true });
-      const savedHome = process.env.ARCHON_HOME;
-      process.env.ARCHON_HOME = emptyHome;
-      try {
-        const result = await discoverWorkflows(repoRoot);
-        // Guard against silently testing nothing if discovery ever stops
-        // finding the repo's workflows.
-        expect(result.workflows.length).toBeGreaterThan(20);
+      const corpusDir = join(import.meta.dir, '..', '..', '..', '.archon', 'workflows');
 
-        const warned = result.workflows
-          .filter(w => (w.parseWarnings ?? []).length > 0)
-          .map(w => w.workflow.name);
-        const unexpected = warned.filter(n => !KNOWN_BAD.has(n));
-        expect(unexpected).toEqual([]);
-      } finally {
-        if (savedHome === undefined) delete process.env.ARCHON_HOME;
-        else process.env.ARCHON_HOME = savedHome;
+      // Discovery descends one level; mirror that without invoking it.
+      const files: string[] = [];
+      for (const entry of await readdir(corpusDir, { withFileTypes: true })) {
+        const full = join(corpusDir, entry.name);
+        if (entry.isDirectory()) {
+          for (const sub of await readdir(full)) {
+            if (sub.endsWith('.yaml') || sub.endsWith('.yml')) files.push(join(full, sub));
+          }
+        } else if (entry.name.endsWith('.yaml') || entry.name.endsWith('.yml')) {
+          files.push(full);
+        }
       }
+      // Guard against silently testing nothing if the corpus moves.
+      expect(files.length).toBeGreaterThan(20);
+
+      const unexpected: string[] = [];
+      for (const file of files) {
+        const result = parseWorkflow(await readFile(file, 'utf-8'), basename(file));
+        if (!result.workflow || result.warnings.length === 0) continue;
+        if (!KNOWN_BAD.has(result.workflow.name)) unexpected.push(result.workflow.name);
+      }
+      expect(unexpected).toEqual([]);
     });
   });
 });
