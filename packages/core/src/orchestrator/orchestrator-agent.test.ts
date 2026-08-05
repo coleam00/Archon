@@ -2402,6 +2402,57 @@ describe('handleWorkflowRunCommand — E2 single codebase auto-select', () => {
     );
   });
 
+  // The contract behind persisting warnings on the run: a failed chat delivery
+  // must not take the record with it. If this ever regresses, a Slack hiccup at
+  // dispatch reproduces #2213 exactly — a dropped `interactive:` gate with
+  // nothing anywhere to show for it.
+  test('still hands warnings to the executor when sendMessage throws', async () => {
+    const conversation = makeConversation({ codebase_id: null });
+    const codebase = makeCodebaseForSync();
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
+    mockParseCommand.mockReturnValueOnce({ command: 'workflow', args: ['run', 'assist'] });
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve({
+        success: true,
+        message: 'Running workflow assist...',
+        workflow: { definition: assistWorkflow, args: 'test prompt' },
+      })
+    );
+    mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
+    mockDiscoverWorkflowsWithConfig.mockReturnValueOnce(
+      Promise.resolve({
+        workflows: [
+          makeTestWorkflowWithSource({ name: 'assist' }, 'project', [
+            "Node 'plan': unknown key 'interactive' will be ignored.",
+          ]),
+        ],
+        errors: [],
+      })
+    );
+
+    const platform = makePlatform();
+    // Fail ONLY the warning delivery — a rate limit or over-length message on
+    // that one call. Failing every send instead would throw out of an unrelated,
+    // pre-existing `sendMessage` earlier in the turn and never reach this code.
+    (platform.sendMessage as ReturnType<typeof mock>).mockImplementation(
+      (_id: string, text: string) =>
+        text.includes('declares keys the engine ignores')
+          ? Promise.reject(new Error('rate limited'))
+          : Promise.resolve()
+    );
+
+    // Must not throw: an undeliverable warning cannot fail the run.
+    await handleMessage(platform, 'conv-1', '/workflow run assist test prompt');
+
+    // The run still started, and it carries the warnings — so the executor
+    // records them as a `workflow_parse_warnings` event regardless of delivery.
+    expect(mockDispatchBackgroundWorkflow).toHaveBeenCalled();
+    const ctx = (mockDispatchBackgroundWorkflow as ReturnType<typeof mock>).mock.calls[0][0] as {
+      parseWarnings?: readonly string[];
+    };
+    expect(ctx.parseWarnings).toEqual(["Node 'plan': unknown key 'interactive' will be ignored."]);
+  });
+
   test('sends no parse-warning message for a clean workflow', async () => {
     const conversation = makeConversation({ codebase_id: null });
     const codebase = makeCodebaseForSync();

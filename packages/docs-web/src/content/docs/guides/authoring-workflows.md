@@ -1535,22 +1535,30 @@ WARNING [unknown_key] Node 'plan': unknown key 'interactive' will be ignored.
 | `archon workflow list` | Inline under the workflow; `parseWarnings` on each `--json` entry |
 | `archon workflow run` | On **stderr** before the run starts (`--detach --json` keeps stdout to the payload) |
 | Chat (`/workflow list`) | Inline with the workflow that raised it |
-| Chat / console (starting a run) | Posted to the conversation before the run begins — **best-effort**, see below |
+| Any run that starts | **Recorded on the run** as a `workflow_parse_warnings` event — always |
+| Chat / console (starting a run) | Also posted to the conversation, best-effort |
 | Console workflow picker | A ⚠ marker on the row; full text in the tooltip |
 
-**Known gap — delivery when a run starts is best-effort.** The message posted at the
-start of a chat or console run is sent once and not retried: if the platform call
-fails (a revoked bot token, a rate limit, an API hiccup) the run still starts and
-that particular notification is lost, leaving only a `WARN` log line. Failing the
-run over an undeliverable warning would be worse, so the send is deliberately
-non-fatal.
+**Recorded on the run, whatever started it.** When a run begins, the engine writes
+the dropped keys to the run's event log as `workflow_parse_warnings`. This happens
+for every run — CLI, chat, console, REST, and sub-runs — not only the ones with a
+conversation to post into, and it is written by the engine rather than by the
+notification path, so a failed message cannot take the record with it. Read it back
+with:
 
-The warning itself is **not** lost — it is recomputed from the YAML on every
-discovery and is not stored anywhere. It is still waiting on `archon validate
-workflows`, `archon workflow list`, `/workflow list` in chat, and the console
-picker. What a failed send costs is the prompt at the moment of consequence, not
-the finding. Treat the run-start message as a convenience and those surfaces as
-the source of truth.
+```bash
+archon workflow get <run-id> --verbose          # human-readable
+archon workflow get <run-id> --verbose --json   # `parseWarnings` on the payload
+```
+
+(`--verbose` is required: the plain form returns the run row without reading the
+event log.)
+
+The chat/console message at run start is a **notification on top of that record**.
+It is sent once and not retried: if the platform call fails (a revoked token, a rate
+limit) the run still starts and that message is lost, leaving a `WARN` log line —
+failing a run over an undeliverable warning would be worse. The finding is not lost
+with it; it is on the run, and still on `validate`, `list`, and the console picker.
 
 **Known gap — `include:`.** Warnings belong to the file that declared the key. If workflow A `include:`s workflow B and B has an unknown key, the warning is reported against **B**, not against A. Running A surfaces nothing. Check the included block directly (`archon validate workflows <block-name>`) when auditing a composed workflow.
 

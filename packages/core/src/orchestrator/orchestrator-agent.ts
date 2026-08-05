@@ -920,6 +920,7 @@ async function dispatchOrchestratorWorkflow(
           parentConversationId: conversation.id,
           userId,
           source,
+          parseWarnings: options?.parseWarnings,
           baseBranch: codebaseBaseBranch,
           resolveChildIsolation,
           ...prepared,
@@ -943,6 +944,7 @@ async function dispatchOrchestratorWorkflow(
           parentConversationId: conversation.id,
           userId,
           source,
+          parseWarnings: options?.parseWarnings,
           baseBranch: codebaseBaseBranch,
           resolveChildIsolation,
         }
@@ -962,6 +964,7 @@ async function dispatchOrchestratorWorkflow(
         isolationHints,
         userId,
         source,
+        parseWarnings: options?.parseWarnings,
       },
       workflow
     );
@@ -980,6 +983,7 @@ async function dispatchOrchestratorWorkflow(
         parentConversationId: conversation.id,
         userId,
         source,
+        parseWarnings: options?.parseWarnings,
         baseBranch: codebaseBaseBranch,
         resolveChildIsolation,
       }

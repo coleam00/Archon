@@ -3022,6 +3022,70 @@ describe('workflowGetCommand', () => {
     expect(code).toBe(1);
   });
 
+  // #2213 — the read path for a run whose warnings were recorded but never
+  // delivered to a conversation (CLI/REST runs, or a failed chat send).
+  it('surfaces recorded parse warnings in verbose output', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const workflowEventsDb = await import('@archon/core/db/workflow-events');
+
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-pw',
+      workflow_name: 'gated',
+      working_path: '/repo',
+      status: 'completed',
+      started_at: new Date(),
+      metadata: {},
+    });
+    (workflowEventsDb.listWorkflowEvents as ReturnType<typeof mock>).mockResolvedValueOnce([
+      {
+        id: 'e1',
+        workflow_run_id: 'run-pw',
+        event_type: 'workflow_parse_warnings',
+        step_name: null,
+        step_index: null,
+        data: { workflowName: 'gated', warnings: ["Node 'plan': unknown key 'interactive'"] },
+        created_at: new Date().toISOString(),
+      },
+    ]);
+
+    const code = await workflowGetCommand('run-pw', false, true);
+
+    const calls = consoleSpy.mock.calls.map((c: unknown[]) => String(c[0]));
+    expect(calls.some(c => c.includes('Ignored keys (1)'))).toBe(true);
+    expect(calls.some(c => c.includes("unknown key 'interactive'"))).toBe(true);
+    expect(code).toBe(0);
+  });
+
+  it('carries recorded parse warnings on the verbose --json payload', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const workflowEventsDb = await import('@archon/core/db/workflow-events');
+
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-pw',
+      workflow_name: 'gated',
+      working_path: '/repo',
+      status: 'completed',
+      started_at: new Date(),
+      metadata: {},
+    });
+    (workflowEventsDb.listWorkflowEvents as ReturnType<typeof mock>).mockResolvedValueOnce([
+      {
+        id: 'e1',
+        workflow_run_id: 'run-pw',
+        event_type: 'workflow_parse_warnings',
+        step_name: null,
+        step_index: null,
+        data: { workflowName: 'gated', warnings: ["Node 'plan': unknown key 'interactive'"] },
+        created_at: new Date().toISOString(),
+      },
+    ]);
+
+    await workflowGetCommand('run-pw', true, true);
+
+    const payload = JSON.parse(firstJsonPayload(stdoutSpy)) as { parseWarnings?: string[] };
+    expect(payload.parseWarnings).toEqual(["Node 'plan': unknown key 'interactive'"]);
+  });
+
   it('emits {ok:false} JSON (never throws) when the DB lookup fails', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockRejectedValueOnce(

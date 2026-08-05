@@ -431,6 +431,15 @@ export type ExecuteWorkflowOptions = ResumePayload & {
    * treatment when a caller doesn't thread it through.
    */
   source?: WorkflowSource;
+  /**
+   * Keys the engine dropped from this workflow's YAML (#2213), as produced by
+   * discovery. Recorded on the run as a `workflow_parse_warnings` event at
+   * start, so the finding survives independently of whether the chat/console
+   * notification could be delivered — and so it exists for CLI- and REST-started
+   * runs, which have no conversation to post into. Optional: a caller that
+   * doesn't thread it through simply records nothing.
+   */
+  parseWarnings?: readonly string[];
   /** Parent conversation ID — enables approve/reject auto-resume from chat. */
   parentConversationId?: string;
   /**
@@ -1029,6 +1038,7 @@ export async function executeWorkflow(
     priorTokenUsage,
     userId,
     source,
+    parseWarnings,
     baseBranch: callerBaseBranch,
     baseOverride: callerBaseOverride,
     execContext = { kind: 'host' },
@@ -1558,6 +1568,31 @@ export async function executeWorkflow(
           'workflow_event_persist_failed'
         );
       });
+
+    // Keys the engine dropped from this run's YAML (#2213). Recorded here rather
+    // than at the chat/console dispatch site for two reasons: every run reaches
+    // this line whatever surface started it (CLI and REST included, which have no
+    // conversation to post into), and the record is therefore written by a path
+    // that a failed `platform.sendMessage` cannot touch. That notification stays
+    // best-effort; this is the durable trace behind it, readable via
+    // `archon workflow get <id> --verbose` and the events API.
+    if (parseWarnings && parseWarnings.length > 0) {
+      deps.store
+        .createWorkflowEvent({
+          workflow_run_id: workflowRun.id,
+          event_type: 'workflow_parse_warnings',
+          data: {
+            workflowName: workflow.name,
+            warnings: [...parseWarnings],
+          },
+        })
+        .catch((err: Error) => {
+          getLog().error(
+            { err, workflowRunId: workflowRun.id, eventType: 'workflow_parse_warnings' },
+            'workflow_event_persist_failed'
+          );
+        });
+    }
 
     // Set status to running now that execution has started (skip for resumed runs — already running)
     if (!dagPriorCompletedNodes) {

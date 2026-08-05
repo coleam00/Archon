@@ -80,6 +80,12 @@ export const WORKFLOW_EVENT_TYPES = [
   // `$ARTIFACTS_DIR/evidence.json` was absent at completion time — the run was
   // refused terminal `completed` and marked failed. Data carries the expected path.
   'evidence_validation_failed',
+  // #2213 — keys the engine dropped from this run's workflow YAML. Written by the
+  // executor at run start for EVERY run that has them, whatever surface started
+  // it, so the record does not depend on a chat/console notification being
+  // deliverable. `data.warnings` is the message list. Absence means the YAML was
+  // clean OR the run predates this event type — never that delivery failed.
+  'workflow_parse_warnings',
 ] as const;
 
 export type WorkflowEventType = (typeof WORKFLOW_EVENT_TYPES)[number];

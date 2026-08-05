@@ -1821,6 +1821,7 @@ export async function workflowRunCommand(
       ? {
           codebaseId: codebase?.id,
           source: workflowSource,
+          parseWarnings: workflowEntry?.parseWarnings,
           userId: cliUserId,
           baseBranch: codebaseDefaultBranch,
           baseOverride: flagBase,
@@ -1832,6 +1833,7 @@ export async function workflowRunCommand(
       : {
           codebaseId: codebase?.id,
           source: workflowSource,
+          parseWarnings: workflowEntry?.parseWarnings,
           userId: cliUserId,
           baseBranch: codebaseDefaultBranch,
           baseOverride: flagBase,
@@ -2268,9 +2270,16 @@ export async function workflowGetCommand(
     }
 
     const verboseEvents = events ?? [];
+    const parseWarnings = readParseWarningEvents(verboseEvents);
     const output = rawEvents
       ? { ...run, events: verboseEvents }
-      : { ...run, nodes: buildNodeSummaries(verboseEvents) };
+      : {
+          ...run,
+          nodes: buildNodeSummaries(verboseEvents),
+          // Keys the engine dropped from this run's YAML (#2213). Surfaced as a
+          // named field rather than leaving the caller to scan raw events.
+          ...(parseWarnings.length > 0 ? { parseWarnings } : {}),
+        };
     await writeJsonLine(output);
     return 0;
   }
@@ -2302,9 +2311,31 @@ export async function workflowGetCommand(
     if (eventsFailed) {
       console.log('  (node events unavailable — see logs)');
     }
+    const parseWarnings = readParseWarningEvents(events);
+    if (parseWarnings.length > 0) {
+      console.log(`  Ignored keys (${String(parseWarnings.length)}):`);
+      for (const w of parseWarnings) console.log(`    - ${w}`);
+    }
     printVerboseNodes(events);
   }
   return 0;
+}
+
+/**
+ * Pull the dropped-key warnings out of a run's event log (#2213).
+ *
+ * The engine records them once at run start as `workflow_parse_warnings`,
+ * whatever surface started the run — so this is the read path for a run that
+ * had no conversation to post into (CLI, REST) or whose chat delivery failed.
+ */
+function readParseWarningEvents(events: readonly WorkflowEventRow[]): string[] {
+  const out: string[] = [];
+  for (const event of events) {
+    if (event.event_type !== 'workflow_parse_warnings') continue;
+    const raw: unknown = (event.data as Record<string, unknown> | null)?.warnings;
+    if (Array.isArray(raw)) out.push(...raw.filter((w): w is string => typeof w === 'string'));
+  }
+  return out;
 }
 
 /**

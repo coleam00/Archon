@@ -774,6 +774,90 @@ describe('executeWorkflow', () => {
   });
 
   // -------------------------------------------------------------------------
+  // Parse warnings recorded on the run (#2213)
+  // -------------------------------------------------------------------------
+
+  describe('workflow_parse_warnings', () => {
+    it('records the dropped keys on the run at start', async () => {
+      // Recorded HERE rather than at the chat dispatch site so the finding does
+      // not depend on a notification being deliverable — and so CLI- and
+      // REST-started runs, which have no conversation to post into, get it too.
+      const createEventSpy = mock(async () => {});
+      const store = makeStore({ createWorkflowEvent: createEventSpy });
+
+      await executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'test message',
+        'db-conv-1',
+        { parseWarnings: ["Node 'plan': unknown key 'interactive' will be ignored."] }
+      );
+
+      const warnEvent = createEventSpy.mock.calls
+        .map(call => call[0])
+        .find(event => event.event_type === 'workflow_parse_warnings');
+      expect(warnEvent?.data).toEqual({
+        workflowName: 'test-workflow',
+        warnings: ["Node 'plan': unknown key 'interactive' will be ignored."],
+      });
+    });
+
+    it('records nothing for a clean workflow', async () => {
+      const createEventSpy = mock(async () => {});
+      const store = makeStore({ createWorkflowEvent: createEventSpy });
+
+      await executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'test message',
+        'db-conv-1',
+        {}
+      );
+
+      const warnEvent = createEventSpy.mock.calls
+        .map(call => call[0])
+        .find(event => event.event_type === 'workflow_parse_warnings');
+      expect(warnEvent).toBeUndefined();
+    });
+
+    it('records even when the platform cannot be written to', async () => {
+      // The engine's record must not be coupled to platform delivery in any
+      // way — this is the whole reason the event exists rather than relying on
+      // the best-effort chat message.
+      const createEventSpy = mock(async () => {});
+      const store = makeStore({ createWorkflowEvent: createEventSpy });
+      const brokenPlatform = {
+        sendMessage: mock(() => Promise.reject(new Error('platform down'))),
+        getPlatformType: mock(() => 'slack'),
+      } as unknown as IWorkflowPlatform;
+
+      await executeWorkflow(
+        makeDeps(store),
+        brokenPlatform,
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'test message',
+        'db-conv-1',
+        { parseWarnings: ['dropped a key'] }
+      ).catch(() => {
+        // A broken platform may fail the run downstream; irrelevant here.
+      });
+
+      const warnEvent = createEventSpy.mock.calls
+        .map(call => call[0])
+        .find(event => event.event_type === 'workflow_parse_warnings');
+      expect(warnEvent?.data).toMatchObject({ warnings: ['dropped a key'] });
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // $DOCS_DIR default resolution
   // -------------------------------------------------------------------------
 

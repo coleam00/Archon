@@ -284,6 +284,12 @@ export interface WorkflowRoutingContext {
    * to the privacy-safe "custom" treatment when not provided.
    */
   readonly source?: WorkflowSource;
+  /**
+   * Keys the engine dropped from the workflow's YAML (#2213). Forwarded to the
+   * executor so a background (web/console) run records them on the run like any
+   * other, independently of the chat notification.
+   */
+  readonly parseWarnings?: readonly string[];
 }
 
 /**
@@ -456,6 +462,7 @@ export async function dispatchBackgroundWorkflow(
             preCreatedRun,
             userId: ctx.userId,
             source: ctx.source,
+            parseWarnings: ctx.parseWarnings,
             baseBranch: codebaseBaseBranch,
             resolveChildIsolation,
           }
