@@ -78,6 +78,7 @@ import {
   OutputRefError,
   similarNodeIds,
 } from './output-ref';
+import { buildTruncationMarker } from './utils/output-truncation';
 import { writeNodeArtifact, readNodeArtifacts } from './artifacts-index';
 import {
   logNodeStart,
@@ -2522,7 +2523,7 @@ function formatPersistedBashOutput(output: string): {
     return { nodeOutput: output, truncated: false };
   }
 
-  const marker = `\n\n… [truncated; original output was ${String(outputBytes.byteLength)} bytes]`;
+  const marker = buildTruncationMarker(outputBytes.byteLength);
   const markerBytes = Buffer.byteLength(marker, 'utf8');
   let headEnd = PERSISTED_BASH_OUTPUT_MAX_BYTES - markerBytes;
 

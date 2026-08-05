@@ -6,6 +6,7 @@ import {
   resolveNodeOutputField,
   similarNodeIds,
 } from './output-ref';
+import { buildTruncationMarker, hasTruncationMarker } from './utils/output-truncation';
 import type { NodeOutput } from './schemas';
 
 function completed(
@@ -149,6 +150,66 @@ describe('resolveNodeOutputField — declared-schema producer', () => {
   it('still lenient for a missing key inside a parsed object (#2456 scope guard)', () => {
     const r = resolveNodeOutputField(completed('{"type":"BUG"}', undefined, declared), 'n', 'note');
     expect(r).toEqual({ kind: 'empty' });
+  });
+});
+
+/**
+ * Clipped-on-persist output parses no better than prose, but the author needs the
+ * opposite advice: the producer was right and a RESUMED run is reading the clipped
+ * copy. `output_format` lives on `dagNodeBaseSchema`, so a bash node can declare one
+ * — and bash stdout is the thing the event cap clips.
+ */
+describe('resolveNodeOutputField — output clipped before persistence', () => {
+  /** What `getDagResumeSnapshot` hands back for a bash node that exceeded the cap. */
+  function clipped(payload: string): string {
+    return payload.slice(0, 40) + buildTruncationMarker(Buffer.byteLength(payload));
+  }
+
+  const bigPayload = JSON.stringify({ verdict: 'pass', blob: 'x'.repeat(40_000) });
+
+  it('reports truncated, not unparseable, on the declared-schema path', () => {
+    const node = completed(clipped(bigPayload), undefined, ['verdict', 'blob']);
+    try {
+      resolveNodeOutputField(node, 'gen', 'verdict');
+      throw new Error('expected a throw');
+    } catch (e) {
+      expect(e).toBeInstanceOf(OutputRefError);
+      expect((e as OutputRefError).reason).toBe('truncated');
+    }
+  });
+
+  it('reports truncated on the schemaless path too — both paths stay symmetric', () => {
+    try {
+      resolveNodeOutputField(completed(clipped(bigPayload)), 'gen', 'verdict');
+      throw new Error('expected a throw');
+    } catch (e) {
+      expect((e as OutputRefError).reason).toBe('truncated');
+    }
+  });
+
+  it('does not blame truncation for output that merely mentions it', () => {
+    // The marker is anchored, so prose quoting the phrase mid-string is still a
+    // plain producer error — otherwise this branch would misdiagnose in reverse.
+    const prose = 'the log said … [truncated; original output was 5 bytes] and then stopped';
+    try {
+      resolveNodeOutputField(completed(prose, undefined, ['verdict']), 'gen', 'verdict');
+      throw new Error('expected a throw');
+    } catch (e) {
+      expect((e as OutputRefError).reason).toBe('unparseable');
+    }
+  });
+
+  it('says the producer was probably right, and points at the artifacts dir', () => {
+    const err = new OutputRefError('gen', 'verdict', 'truncated');
+    expect(err.message).toContain('clipped');
+    expect(err.message).toContain('$ARTIFACTS_DIR');
+    // The old advice was actively wrong here — the node DID emit the field.
+    expect(err.message).not.toContain('Emit JSON containing');
+  });
+
+  it('marker round-trips through build/detect', () => {
+    expect(hasTruncationMarker(`head${buildTruncationMarker(1234)}`)).toBe(true);
+    expect(hasTruncationMarker('no marker here')).toBe(false);
   });
 });
 
