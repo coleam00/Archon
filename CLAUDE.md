@@ -149,7 +149,7 @@ bun test --watch            # Watch mode (single package)
 bun test packages/core/src/handlers/command-handler.test.ts  # Single file
 ```
 
-**Test isolation (mock.module pollution):** Bun's `mock.module()` permanently replaces modules in the process-wide cache — `mock.restore()` does NOT undo it ([oven-sh/bun#7823](https://github.com/oven-sh/bun/issues/7823)). To prevent cross-file pollution, packages that have conflicting `mock.module()` calls split their tests into separate `bun test` invocations: `@archon/core` (20 batches), `@archon/workflows` (5), `@archon/adapters` (6), `@archon/isolation` (3). See each package's `package.json` for the exact splits.
+**Test isolation (mock.module pollution):** Bun's `mock.module()` permanently replaces modules in the process-wide cache — `mock.restore()` does NOT undo it ([oven-sh/bun#7823](https://github.com/oven-sh/bun/issues/7823)). To prevent cross-file pollution, packages with conflicting `mock.module()` calls split their tests into separate `bun test` invocations — see each package's `package.json` `test` script for the current splits.
 
 **Do NOT run `bun test` from the repo root** — it discovers all test files across all packages and runs them in one process, causing ~135 mock pollution failures. Always use `bun run test` (which uses `bun --filter '*' --parallel test` for per-package isolation). Note the `--parallel`: all ten package test processes run concurrently, and each one that spawns subprocesses competes for the same cores — which is why subprocess-spawning tests should stay rare and cheap (see #2306).
 
@@ -171,7 +171,7 @@ bun run format:check
 bun run validate
 ```
 
-This runs `check:bundled`, `check:bundled-skill`, `check:bundled-schema`, `check:pi-vendor-map`, `check:capability-matrix`, type-check, lint, format check, and tests. All nine must pass for CI to succeed.
+Every step must pass for CI to succeed — see the `validate` script in the root `package.json` for the current list.
 
 ### ESLint Guidelines
 
@@ -199,7 +199,7 @@ This runs `check:bundled`, `check:bundled-skill`, `check:bundled-schema`, `check
 There is no migration ledger and no version gate. Both schemas are re-applied in full on every connection, by every process that opens the database — the server, *every* CLI invocation, every `--detach` child — including an **older** Archon binary that happens to be on `PATH` beside a dev checkout. Any writer may apply any vintage of the schema at any time. Therefore:
 
 - **Only ADD** tables, columns, and indexes. Never rename, retype, or drop anything a shipped version still reads or writes.
-- **Every `ADD COLUMN ... NOT NULL` must carry a `DEFAULT`.** Without one the statement fails outright on a non-empty table, and a writer that predates the column would produce rows the newer writer rejects. This holds for all 36 `ADD COLUMN` statements in the tree today — keep it that way.
+- **Every `ADD COLUMN ... NOT NULL` must carry a `DEFAULT`.** Without one the statement fails outright on a non-empty table, and a writer that predates the column would produce rows the newer writer rejects. This holds for every `ADD COLUMN` in the tree today — keep it that way.
 - **Adding `NOT NULL` to a column already in a `CREATE TABLE` body only binds databases created after the change.** `CREATE TABLE IF NOT EXISTS` is a no-op on existing tables and SQLite has no `ALTER COLUMN`, so the old shape survives forever. Treat such a constraint as documentation and keep application code tolerant of NULL, or do a full table rebuild in `migrateColumns()`.
 - **Mirror every change into both schemas** (see the generated-files note in the Defaults section). The parity test in `sqlite.test.ts` compares **table names only** — a column present in one dialect and missing in the other passes CI.
 - `remote_agent_schema_version` records which Archon build created the database and which last applied schema to it, surfaced by `archon doctor` and `GET /api/health`. It is diagnostic only — nothing gates on it, and the values come from `APP_VERSION` in `packages/core/src/db/schema-version.ts`, never from a hand-bumped number.
@@ -406,6 +406,7 @@ packages/
 │       ├── worktree.ts       # Worktree operations (create, remove, list)
 │       └── index.ts          # Package exports
 ├── isolation/                # @archon/isolation - Worktree + container isolation (depends on @archon/git + @archon/paths + @archon/providers/types)
+│   ├── docker/               # runner.Dockerfile + entrypoint.sh + SECURITY.md (the container runner image) — sibling of src/, not inside it
 │   └── src/
 │       ├── types.ts          # Isolation types and interfaces (incl. IIsolationBackend, ContainerBackendConfig)
 │       ├── errors.ts         # Error classifiers (classifyIsolationError, IsolationBlockedError; incl. docker patterns)
@@ -416,7 +417,6 @@ packages/
 │       ├── backend-router.ts # Kind-routed folder backend selection (resolveFolderBackend: in-place | container)
 │       ├── backends/         # Folder-project isolation backends (in-place.ts, container.ts — prepare/suspend/resumeEnv/finalize/applyChanges/discardChanges/destroy)
 │       ├── container/        # Docker CLI wrapper (docker-exec.ts) + overlay diff/apply walk (overlay.ts) for the container backend
-│       ├── docker/           # runner.Dockerfile + entrypoint.sh + SECURITY.md (the container runner image)
 │       ├── providers/
 │       │   └── worktree.ts   # WorktreeProvider implementation
 │       └── index.ts          # Package exports
