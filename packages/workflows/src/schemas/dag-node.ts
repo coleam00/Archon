@@ -1206,6 +1206,19 @@ export type NestedKeySpec =
  * Casting back recovers the real shape, so the key set stays derived instead of
  * being a hand-written `[...loopControl, 'nodes']` that a future body field
  * would silently fall out of.
+ *
+ * DO NOT MOVE THIS ABOVE `dagNodeSchema`. This line is evaluated at module load,
+ * and reading that `.shape` fires the schema's `nodes` getter, which builds
+ * `z.array(dagNodeSchema)`. Above `dagNodeSchema`'s declaration that is a
+ * temporal dead zone: the module throws
+ * `ReferenceError: Cannot access 'dagNodeSchema' before initialization` on
+ * import, so every test that imports this file dies at load rather than failing
+ * an assertion.
+ *
+ * tsc does NOT catch it — the cast type-checks cleanly either way, which is why
+ * moving this registry up beside the `NestedKeySpec` type it belongs with (the
+ * natural tidy) is a silent break. The position is load-bearing; keep this
+ * block, and `KNOWN_NODE_NESTED_KEYS` below it, at the end of the file.
  */
 const loopGroupShape = (loopGroupNodeConfigSchema as unknown as z.ZodObject<z.ZodRawShape>).shape;
 
