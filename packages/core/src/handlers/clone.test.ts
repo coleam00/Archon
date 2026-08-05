@@ -73,6 +73,10 @@ mock.module('@archon/paths', () => ({
 const mockLoadConfig = mock(() => Promise.resolve({ assistant: 'claude' }));
 mock.module('../config/config-loader', () => ({
   loadConfig: mockLoadConfig,
+  // Nothing here calls it, but this factory replaces the module process-wide and
+  // child-isolation-resolver.ts imports it by name — omitting it breaks that
+  // import at module-eval for anything in the same batch that pulls it in.
+  loadRepoConfig: mock(() => Promise.resolve(null)),
 }));
 
 // ── utils/commands mock ─────────────────────────────────────────────────────

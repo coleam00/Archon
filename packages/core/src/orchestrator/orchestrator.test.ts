@@ -146,6 +146,10 @@ const mockLoadConfig = mock(() =>
 
 mock.module('../config/config-loader', () => ({
   loadConfig: mockLoadConfig,
+  // orchestrator.ts imports createChildWorktreeResolver, which imports
+  // loadRepoConfig by name. This factory replaces the module process-wide, so
+  // omitting it fails that import at module-eval even though no test calls it.
+  loadRepoConfig: mock(() => Promise.resolve(null)),
 }));
 
 // Worktree sync mock

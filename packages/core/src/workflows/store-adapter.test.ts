@@ -71,6 +71,11 @@ mock.module('@archon/providers', () => ({
 
 mock.module('../config/config-loader', () => ({
   loadConfig: mock(() => Promise.resolve({ assistant: 'claude' })),
+  // Required even though nothing here calls it: this factory replaces the module
+  // for the whole process, and child-isolation-resolver.ts (same `bun test
+  // src/workflows/` batch) does `import { loadRepoConfig }`. Omit it and that
+  // import fails at module-eval with "Export named 'loadRepoConfig' not found".
+  loadRepoConfig: mock(() => Promise.resolve(null)),
 }));
 
 // Per-user provider credentials mocks
