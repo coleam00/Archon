@@ -1497,4 +1497,135 @@ nodes:
     expect(String(nodeFailed?.data?.error)).toContain('cleaned up');
     expect(String(nodeFailed?.data?.error)).not.toContain('ENOENT');
   });
+
+  it('a parent auto-resumed after a gated isolated child can still isolate its NEXT child', async () => {
+    // The flagship shape: isolated `implement` → the child's approval gate → approve →
+    // the parent auto-resumes → isolated `review`. The second spawn is the regression:
+    // maybeResumeParentRun re-enters executeWorkflow, and until the resolver was
+    // threaded into it that re-entry ran resolver-less, so `review` failed with
+    // "requires an injected child-isolation resolver" — on a git repo, via the CLI,
+    // with the resolver correctly wired at the top. The observable is the parent
+    // completing with BOTH children isolated, not merely "nothing threw".
+    await writeWorkflow(
+      'child-gated-iso',
+      `
+name: child-gated-iso
+description: isolated child that pauses at a gate
+interactive: true
+nodes:
+  - id: implement
+    prompt: "implement $ARGUMENTS"
+  - id: gate
+    approval:
+      message: "review the sub-run"
+    depends_on: [implement]
+  - id: wrap-up
+    prompt: "summarize"
+    depends_on: [gate]
+`
+    );
+    await writeWorkflow(
+      'child-review-iso',
+      `
+name: child-review-iso
+description: isolated child that reviews what the first one built
+nodes:
+  - id: review
+    prompt: "review $ARGUMENTS"
+`
+    );
+    await writeWorkflow(
+      'parent-gated-iso',
+      `
+name: parent-gated-iso
+description: isolated implement, gate, isolated review
+interactive: true
+nodes:
+  - id: implement
+    workflow: child-gated-iso
+    input: "build it"
+    isolation: worktree
+  - id: review
+    workflow: child-review-iso
+    input: "$implement.output"
+    isolation: worktree
+    depends_on: [implement]
+`
+    );
+
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    const parent = await discover('parent-gated-iso');
+
+    // One worktree per (parent run, node) — the shape buildChildIdentifier produces.
+    const calls: ChildIsolationRequest[] = [];
+    const resolver: ChildIsolationResolver = {
+      async resolve(req: ChildIsolationRequest): Promise<ChildIsolationResult> {
+        calls.push(req);
+        const dir = join(cwd, 'wt', `${req.parentRun.id}-${req.nodeId}`);
+        await mkdir(dir, { recursive: true });
+        return {
+          cwd: dir,
+          envId: `env-${req.nodeId}`,
+          branchName: `archon/task-${req.parentRun.id.slice(0, 8)}-${req.nodeId}-child-0`,
+        };
+      },
+    };
+
+    // First drive: `implement` spawns an isolated child, which pauses at its gate;
+    // the parent pauses blocked on it. `review` has not been reached.
+    const r1 = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parent,
+      'goal',
+      'conv-db',
+      { resolveChildIsolation: resolver }
+    );
+    expect(r1.success && 'paused' in r1 && r1.paused).toBe(true);
+    expect(calls.map(c => c.nodeId)).toEqual(['implement']);
+
+    const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'parent-gated-iso');
+    const gatedChild = [...store.runs.values()].find(r => r.workflow_name === 'child-gated-iso');
+    expect(parentRun?.status).toBe('paused');
+    expect(gatedChild?.status).toBe('paused');
+    expect(gatedChild?.working_path).not.toBe(cwd);
+
+    // Approve the child and resume it in its OWN worktree, the way the CLI does —
+    // with a resolver injected, since the surface builds one per dispatch. The
+    // child's completion fires the parent auto-resume hook in-process.
+    store.approveGate(gatedChild!.id);
+    const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(gatedChild!.id))!);
+    expect(hydrated).not.toBeNull();
+    await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      gatedChild!.working_path!,
+      await discover('child-gated-iso'),
+      gatedChild!.user_message,
+      'conv-db',
+      { ...hydrated!, resolveChildIsolation: resolver }
+    );
+
+    // The parent resumed and reached `review`, which got its OWN worktree.
+    expect(calls.map(c => c.nodeId)).toEqual(['implement', 'review']);
+    const reviewFailed = store.events.find(
+      e => e.event_type === 'node_failed' && e.step_name === 'review'
+    );
+    expect(reviewFailed).toBeUndefined();
+
+    const finalParent = await store.getWorkflowRun(parentRun!.id);
+    expect(finalParent?.status).toBe('completed');
+    expect((await store.getWorkflowRun(gatedChild!.id))?.status).toBe('completed');
+
+    // Distinct things, distinct checkouts: two isolated nodes → two worktrees, and
+    // neither is the parent's.
+    const reviewChild = [...store.runs.values()].find(r => r.workflow_name === 'child-review-iso');
+    expect(reviewChild?.status).toBe('completed');
+    expect(reviewChild?.working_path).not.toBe(cwd);
+    expect(reviewChild?.working_path).not.toBe(gatedChild?.working_path);
+  });
 });

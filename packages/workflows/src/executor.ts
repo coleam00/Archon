@@ -633,8 +633,12 @@ async function runChildWorkflow(
   }
 
   // 3. Resolve the child's execution cwd (slice 2, PR-A). `isolation: 'worktree'`
-  //    runs the child in its own git worktree obtained from the injected resolver;
-  //    on resume the child reuses its own recorded worktree (never re-created).
+  //    runs the child in its own git worktree obtained from the injected resolver.
+  //    A resume whose child run row still exists reuses that row's recorded path
+  //    instead of resolving again; a resume whose child row is GONE (never written,
+  //    or deleted) falls through to the fresh-spawn path and does re-resolve —
+  //    safely, because the identifier is deterministic per (parent, node, index)
+  //    and the env-row write is an upsert (see child-isolation-resolver.ts).
   //    `inherit` (or undefined) shares the parent's checkout — slice-1 behavior.
   //    Resolving AFTER the name + cycle guards means a bad reference never leaves an
   //    orphan worktree behind. The resolver throwing surfaces as a failed outcome
@@ -646,7 +650,8 @@ async function runChildWorkflow(
   let childIsolationEnv: ChildIsolationResult | undefined;
   if (resumeFailedChild) {
     // Reuse the child's own recorded working_path: its worktree for an isolated
-    // child, the shared parent checkout for `inherit`. Never re-resolve on resume.
+    // child, the shared parent checkout for `inherit`. Reaching this branch at all
+    // means the child row survived, so there is nothing to re-resolve.
     const priorPath = resumeFailedChild.working_path;
     // An isolated child's worktree can be pruned by `isolation cleanup`/`complete`
     // between its failure and this resume. Reusing a vanished path would surface as a
@@ -803,13 +808,24 @@ async function runChildWorkflow(
  * failure. Every await is guarded here (a parent-side failure is logged, and a
  * post-CAS failure marks the parent 'failed' so it stays resumable); the caller's
  * `.catch` is a belt-and-braces backstop, not the contract.
+ *
+ * `resolveChildIsolation` is a plain parameter rather than part of the resume state:
+ * {@link ResumePayload} carries what was RECORDED about the prior run, and a resolver
+ * is a live capability of the surface driving this process — it cannot be rehydrated
+ * from a run row. It has to be forwarded because the parent picks up here *mid-DAG*:
+ * a parent whose gated child just finished may still have `isolation: 'worktree'`
+ * nodes ahead of it, and re-entering without the resolver fails them with
+ * "requires an injected child-isolation resolver" even though the surface wired one.
+ * The child's resolver is the right one to pass: a child inherits the parent's
+ * `codebase_id`, and the resolver is codebase-bound and rejects a mismatch loudly.
  */
 async function maybeResumeParentRun(
   deps: WorkflowDeps,
   platform: IWorkflowPlatform,
   conversationId: string,
   conversationDbId: string,
-  childRun: WorkflowRun
+  childRun: WorkflowRun,
+  resolveChildIsolation?: ChildIsolationResolver
 ): Promise<void> {
   const parentRunId = childRun.parent_run_id;
   if (!parentRunId) return;
@@ -936,6 +952,7 @@ async function maybeResumeParentRun(
       {
         ...hydrated,
         codebaseId: parent.codebase_id ?? undefined,
+        resolveChildIsolation,
       }
     );
   } catch (err) {
@@ -1657,7 +1674,12 @@ export async function executeWorkflow(
         platform,
         conversationId,
         conversationDbId,
-        finalStatus
+        finalStatus,
+        // The parent resumes mid-DAG and may still have isolated sub-run nodes ahead
+        // of it; without this it would fail them for a missing resolver the surface
+        // did inject. Same resolver the child ran with — it is codebase-bound and the
+        // child shares the parent's codebase.
+        resolveChildIsolation
       ).catch((err: unknown) => {
         getLog().error(
           {
