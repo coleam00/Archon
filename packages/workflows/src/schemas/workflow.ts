@@ -205,9 +205,14 @@ export const WORKFLOW_ONLY_KEYS: ReadonlySet<string> = new Set(
  * `sandbox` (`.passthrough()`) and `thinking` (`z.preprocess`) are omitted for
  * the same reasons they are omitted at node level. `nodes` is handled by the
  * per-node check, not here.
+ *
+ * Constructed with `keyof typeof workflowDefinitionSchema.shape` as the key type
+ * so a typo'd registration fails to compile rather than silently disabling the
+ * check; the exported type widens back to `string` for lookup (same split as
+ * KNOWN_NODE_NESTED_KEYS).
  */
 export const KNOWN_WORKFLOW_NESTED_KEYS: ReadonlyMap<string, NestedKeySpec> = new Map<
-  string,
+  keyof typeof workflowDefinitionSchema.shape,
   NestedKeySpec
 >([
   ['worktree', { kind: 'object', keys: new Set(Object.keys(workflowWorktreePolicySchema.shape)) }],

@@ -138,7 +138,8 @@ function unknownNodeKeyHint(key: string): string {
       " Nothing on this node gates. For a human gate, use an 'approval:' node; to gate each" +
       " iteration of a loop, set BOTH 'loop.interactive: true' and 'loop.gate_message'" +
       " ('gate_message' on its own does not gate). Workflow-level 'interactive:' is a" +
-      ' different setting — it forces foreground execution.'
+      ' different setting, and only on the web UI — it keeps the run in the foreground' +
+      ' there; chat platforms already run in the foreground, so it does nothing for them.'
     );
   }
   if (WORKFLOW_ONLY_KEYS.has(key)) {
@@ -147,8 +148,16 @@ function unknownNodeKeyHint(key: string): string {
   return '';
 }
 
-/** Record one unknown-key warning, both for callers and for the run-time log. */
+/**
+ * Record one unknown-key warning, both for callers and for the run-time log.
+ *
+ * `id` is the bare node or workflow id — a stable value a log consumer can
+ * filter on. `label` is its human rendering (it may carry a breadcrumb, e.g.
+ * `Node 'refine' → loop_group node 'check'`) and appears only inside the
+ * message prose, never as a structured field.
+ */
 function pushUnknownKeyWarning(
+  id: string,
   label: string,
   key: string,
   hint: string,
@@ -159,7 +168,7 @@ function pushUnknownKeyWarning(
   warnings.push(message);
   // Carry the prose, not just the payload: the run path (`archon workflow run`)
   // reads this log line and never reads the warning string (#2213).
-  getLog().warn({ node: label, key, warning: message }, event);
+  getLog().warn({ id, key, warning: message }, event);
 }
 
 /**
@@ -170,6 +179,7 @@ function pushUnknownKeyWarning(
 function collectUnknownConfigKeys(
   raw: unknown,
   spec: NestedKeySpec,
+  id: string,
   label: string,
   keyPath: string,
   event: string,
@@ -183,6 +193,7 @@ function collectUnknownConfigKeys(
       collectUnknownConfigKeys(
         entryValue,
         spec.entry,
+        id,
         label,
         `${keyPath}${entryKey}.`,
         event,
@@ -194,12 +205,12 @@ function collectUnknownConfigKeys(
 
   for (const key of Object.keys(obj)) {
     if (!spec.keys.has(key)) {
-      pushUnknownKeyWarning(label, `${keyPath}${key}`, '', event, warnings);
+      pushUnknownKeyWarning(id, label, `${keyPath}${key}`, '', event, warnings);
       continue;
     }
     const child = spec.children?.get(key);
     if (child) {
-      collectUnknownConfigKeys(obj[key], child, label, `${keyPath}${key}.`, event, warnings);
+      collectUnknownConfigKeys(obj[key], child, id, label, `${keyPath}${key}.`, event, warnings);
     }
   }
 }
@@ -214,13 +225,14 @@ function collectUnknownConfigKeys(
  * the same schema, so they strip unknown keys just as silently — and a body node
  * is exactly where an `interactive: true` gate is most likely to be attempted.
  */
-function collectUnknownNodeKeys(raw: unknown, label: string, warnings: string[]): void {
+function collectUnknownNodeKeys(raw: unknown, id: string, label: string, warnings: string[]): void {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return;
   const obj = raw as Record<string, unknown>;
 
   for (const key of Object.keys(obj)) {
     if (!KNOWN_DAG_NODE_KEYS.has(key)) {
       pushUnknownKeyWarning(
+        id,
         label,
         key,
         unknownNodeKeyHint(key),
@@ -234,6 +246,7 @@ function collectUnknownNodeKeys(raw: unknown, label: string, warnings: string[])
       collectUnknownConfigKeys(
         obj[key],
         nested,
+        id,
         label,
         `${key}.`,
         'node_unknown_key_ignored',
@@ -247,11 +260,8 @@ function collectUnknownNodeKeys(raw: unknown, label: string, warnings: string[])
   const body = (group as Record<string, unknown>).nodes;
   if (!Array.isArray(body)) return;
   body.forEach((bodyNode: unknown, i: number) => {
-    collectUnknownNodeKeys(
-      bodyNode,
-      `${label} → loop_group node '${nodeIdForMessages(bodyNode, i)}'`,
-      warnings
-    );
+    const bodyId = nodeIdForMessages(bodyNode, i);
+    collectUnknownNodeKeys(bodyNode, bodyId, `${label} → loop_group node '${bodyId}'`, warnings);
   });
 }
 
@@ -279,7 +289,7 @@ function parseDagNode(
 
   const node = result.data;
 
-  collectUnknownNodeKeys(raw, `Node '${id}'`, warnings);
+  collectUnknownNodeKeys(raw, id, `Node '${id}'`, warnings);
 
   // Warn about AI-specific fields on non-AI nodes (runtime behavior, not schema errors)
   let nonAiNode: { type: string; fields: readonly string[] } | undefined;
@@ -947,13 +957,15 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
 
     // Detect unknown workflow-level keys, and unknown keys inside the nested
     // workflow-level configs (#2213)
-    const workflowLabel = `Workflow '${raw.name}'`;
+    const workflowName = raw.name;
+    const workflowLabel = `Workflow '${workflowName}'`;
     for (const key of Object.keys(raw)) {
       if (!KNOWN_WORKFLOW_KEYS.has(key)) {
         const hint = KNOWN_DAG_NODE_KEYS.has(key)
           ? ` ('${key}' is valid on individual nodes, not at workflow level.)`
           : '';
         pushUnknownKeyWarning(
+          workflowName,
           workflowLabel,
           key,
           hint,
@@ -967,6 +979,7 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
         collectUnknownConfigKeys(
           raw[key],
           nested,
+          workflowName,
           workflowLabel,
           `${key}.`,
           'workflow_unknown_key_ignored',
