@@ -1500,6 +1500,22 @@ archon validate workflows <name>
 
 This checks resource resolution beyond what load-time validation covers. Bundled and global workflows also reject `@custom` model aliases because those refs are not portable across projects. Use `--json` for machine-readable output. See the [CLI Reference](/reference/cli/) for details.
 
+### Unknown Keys Are Reported, Not Rejected
+
+A key Archon does not recognise is dropped from the parsed workflow — the YAML still loads and the workflow still runs. Because a dropped key can be one an author believed was doing something (the classic case is `interactive: true` on a command node, which reads like a human gate and is not one), Archon reports every dropped key as a **warning** naming the key, where it was found, and what to write instead:
+
+```
+WARNING [unknown_key] Node 'plan': unknown key 'interactive' will be ignored.
+  Nothing on this node gates. For a human gate, use an 'approval:' node; to gate
+  each iteration of a loop, set BOTH 'loop.interactive: true' and
+  'loop.gate_message' ('gate_message' on its own does not gate). Workflow-level
+  'interactive:' is a different setting — it forces foreground execution.
+```
+
+Detection covers the workflow root, every node, the nested config blocks (`approval:`, `approval.on_reject:`, `retry:`, `loop:`, `loop_group:`, `pi:`, each `agents:` entry, `worktree:`, `container:`, `evidence_policy:`), and every node inside a `loop_group` body. Free-form blocks are exempt because nothing is dropped from them: `output_format:` accepts any JSON Schema, `sandbox:` preserves unknown keys, and `hooks:` rejects them outright as an error.
+
+The warnings appear in `archon validate workflows`, `archon workflow list` (and its `--json` `parseWarnings` field), before an `archon workflow run` starts (on stderr, so `--json` stdout stays parseable), in `/workflow list` in chat, and on the workflow picker in the console.
+
 ### Example: Config Defaults + Workflow Override
 
 **`.archon/config.yaml`:**
