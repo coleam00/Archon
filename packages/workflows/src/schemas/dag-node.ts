@@ -447,6 +447,21 @@ export type CancelNode = z.infer<typeof cancelNodeSchema> & {
 };
 
 /**
+ * Identifier grammar for an include input name.
+ *
+ * Shared deliberately with the `$INPUTS.<name>` reference pattern in include-expander.ts,
+ * which builds its regex from this source. The two encode the identical concept and the
+ * drift between them is one-directional and silent: loosening this validator alone would
+ * let `with: {my.key: v}` pass while `$INPUTS.my.key` matches only `$INPUTS.my`, leaving
+ * `.key` as trailing literal text in the prompt. (The reverse drift fails loudly at load,
+ * because the matching `with:` key would be rejected here.) Sharing one source removes the
+ * dangerous direction. This is scoped to that pair only — the similar-looking node-id
+ * grammar elsewhere in the tree encodes a different concept and stays separate.
+ */
+export const INPUT_NAME_SOURCE = String.raw`[a-zA-Z_][a-zA-Z0-9_-]*`;
+const INPUT_NAME_PATTERN = new RegExp(`^${INPUT_NAME_SOURCE}$`);
+
+/**
  * Include node schema — a load-time directive that inlines another workflow's
  * nodes into this DAG at discovery time (see include-expander.ts). It carries no
  * execution surface of its own: `include` is the target workflow name, `with` is
@@ -683,8 +698,15 @@ export const dagNodeFlatSchema = dagNodeBaseSchema.extend({
   // over a data-driven item list. Only meaningful on a `workflow:` node (guarded in
   // superRefine).
   fan_out: fanOutConfigSchema.optional(),
-  // Reserved for Phase 1b input mapping. Present only so the superRefine below can
-  // fail fast when it appears on an include or workflow node ("not yet supported").
+  // Raw (not `z.record(z.string(), z.string())`) because the shape is only settled for
+  // ONE of the two modes that care. Include mode validates it in superRefine below and
+  // retains it on the parsed node; workflow mode rejects it outright as unsupported
+  // (phase 2, #2470) and never retains it in any form. Typing the shared flat field to
+  // the include shape now would commit `workflow.with` to a mapping whose phase-2 shape
+  // is still undecided, making a later widening a breaking change. (Note this is NOT the
+  // same situation as `isolation`/`fan_out`, which are typed at the flat level and
+  // rejected per-mode — their shape is settled.) Other node modes strip it with the rest
+  // of their unsupported surface.
   with: z.unknown().optional(),
   // Script-only
   script: z.string().optional(),
@@ -801,7 +823,7 @@ export const dagNodeSchema = dagNodeFlatSchema
         });
       } else {
         for (const [key, value] of Object.entries(data.with)) {
-          if (!/^[a-zA-Z_][a-zA-Z0-9_-]*$/.test(key)) {
+          if (!INPUT_NAME_PATTERN.test(key)) {
             ctx.addIssue({
               code: z.ZodIssueCode.custom,
               message: `invalid include input name '${key}'; use letters, numbers, underscores, or hyphens and start with a letter or underscore`,
@@ -1145,6 +1167,11 @@ export const dagNodeSchema = dagNodeFlatSchema
 // ---------------------------------------------------------------------------
 // Type guards (preserved from original types.ts)
 // ---------------------------------------------------------------------------
+
+/** Type guard: check if a DAG node is a command (named command file) node */
+export function isCommandNode(node: DagNode): node is CommandNode {
+  return 'command' in node && typeof node.command === 'string';
+}
 
 /** Type guard: check if a DAG node is a bash (shell script) node */
 export function isBashNode(node: DagNode): node is BashNode {

@@ -982,17 +982,27 @@ nodes:
 
 Input names must start with a letter or underscore and may then contain letters, numbers,
 underscores, or hyphens. Values must be strings and are inserted verbatim during load-time
-expansion. An inserted `$node.output` reference remains a reference and resolves through the
-normal runtime output substitution. A missing input is a load error; extra caller keys are
-ignored until workflow input declarations ship.
+expansion — they are **never expressions**: nothing is evaluated, computed, or interpreted,
+and the value is spliced in as text exactly as written. An inserted `$node.output` reference
+remains a reference and resolves through the normal runtime output substitution. A missing
+input is a load error; extra caller keys are ignored until workflow input declarations ship.
+
+Substitution applies everywhere the value could reach the model or the shell, including
+inside Markdown code fences and inline code spans — `$INPUTS.<name>` has no
+documentation-only meaning, so a fenced occurrence is still a live parameter.
 
 #### Command bodies cannot use include inputs
 
 Phase 1 cannot parameterize a `command:` file or `loop.command` file used by an included
 block. Command bodies are read at execution time, after load-time include expansion has
-finished. Workflow loading fails if the command file cannot be resolved for safety validation
-or contains `$INPUTS.<name>`, with a message directing you to inline the prompt text. Use an
-inline `prompt:` when the block needs include inputs. This restriction applies to `include:`;
+finished. When such a file can be read at load time and contains `$INPUTS.<name>` anywhere —
+including inside a code fence — workflow loading fails with a message directing you to inline
+the prompt text. Use an inline `prompt:` when the block needs include inputs.
+
+This check is best-effort, so a clean load is not a guarantee. It covers the block's
+top-level `command:`/`loop.command` nodes only, so a command nested inside a `loop_group`
+body is not scanned; and a command file that cannot be resolved at load time is logged as a
+warning and skipped rather than failing the workflow. This restriction applies to `include:`;
 named `with:` mappings for `workflow:` sub-runs have not shipped.
 
 ### Non-goals (Phase 1)

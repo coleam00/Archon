@@ -44,6 +44,8 @@ export {
   workflowNodeSchema,
   fanOutConfigSchema,
   dagNodeSchema,
+  INPUT_NAME_SOURCE,
+  isCommandNode,
   isBashNode,
   isLoopNode,
   isLoopGroupNode,

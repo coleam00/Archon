@@ -37,6 +37,7 @@ import {
   isBashNode,
   isScriptNode,
   isWorkflowNode,
+  INPUT_NAME_SOURCE,
 } from './schemas';
 import { createLogger } from '@archon/paths';
 import { validateDagStructure } from './loader';
@@ -89,8 +90,13 @@ const OUTPUT_REF_PATTERN = /\$([a-zA-Z_][a-zA-Z0-9_-]*)\.output/g;
  */
 const WHEN_REF_PATTERN = /\$([a-zA-Z_][a-zA-Z0-9_-]*)(?=\.[a-zA-Z_])/g;
 
-/** Load-time include parameter references. */
-const INPUTS_REF = /\$INPUTS\.([a-zA-Z_][a-zA-Z0-9_-]*)/g;
+/**
+ * Load-time include parameter references. Built from the same identifier source the
+ * `with:` key validator uses (INPUT_NAME_SOURCE in schemas/dag-node.ts) so a key that
+ * validates can never fail to match here — see that constant for why the drift between
+ * the two is silent in one direction.
+ */
+const INPUTS_REF = new RegExp(String.raw`\$INPUTS\.(${INPUT_NAME_SOURCE})`, 'g');
 
 /** Fenced (``` ```) and inline (` `` `) markdown code spans — documentation, not live refs. */
 const CODE_SPAN_PATTERN = /```[\s\S]*?```|`[^`\n]*`/g;
@@ -152,9 +158,15 @@ class IncludeExpansionError extends Error {}
  *     workflow.input / workflow.fan_out.items) — canonical `.output` refs are LIVE (never
  *     documentation) → rewritten verbatim.
  *
- * KEEP IN SYNC (three ref-surface enumerations must agree): this rewrite, the loader's
- * validateDagStructure scan, and the substituteNodeOutputRefs call sites in dag-executor.ts.
- * Adding a substituted field to one means updating all three.
+ * KEEP IN SYNC (FOUR ref-surface enumerations must agree): this rewrite, applyInputsMacro
+ * below, the loader's validateDagStructure scan, and the substituteNodeOutputRefs call
+ * sites in dag-executor.ts. Adding a substituted field to one means updating all four.
+ * (The count read "three" while applyInputsMacro already existed and had already drifted —
+ * it was missing workflow.fan_out.items, which shipped literal `$INPUTS` text to the model.)
+ *
+ * applyInputsMacro is a SUPERSET of this function, not a mirror: it additionally walks the
+ * AI-turn surfaces below (systemPrompt / agents / approval.on_reject.prompt) that this
+ * rewrite skips. That asymmetry is deliberate — see the note on applyInputsMacro.
  */
 function rewriteNodeOutputRefs(node: DagNode, rename: (id: string) => string): void {
   const code = (text: string): string => applyOutputRefRename(text, rename);
@@ -199,11 +211,32 @@ function rewriteNodeOutputRefs(node: DagNode, rename: (id: string) => string): v
  * `$INPUTS` has no documentation-only meaning. An inserted value may itself be a
  * `$node.output` reference; it deliberately remains unresolved for the executor's existing
  * runtime substitution pass.
+ *
+ * This walks a SUPERSET of rewriteNodeOutputRefs' field set, and the extra fields are the
+ * point. `$INPUTS` has no runtime resolution pass anywhere in the engine — load-time
+ * expansion is the ONLY path that resolves it. So the two functions have different
+ * fallbacks for a surface they skip:
+ *
+ *   - a surface rewriteNodeOutputRefs misses is only a NAMESPACING miss; the executor's
+ *     substituteNodeOutputRefs pass still resolves the ref at run time.
+ *   - a surface this function misses is permanent. The literal `$INPUTS.<name>` reaches
+ *     the model as text, and because the field was never visited the name never reaches
+ *     `missing` either — so a caller who forgot to supply it gets no load error.
+ *
+ * That is why systemPrompt / agents.*.prompt / agents.*.description /
+ * approval.on_reject.prompt are walked here despite being blind spots in the rewrite (a
+ * separate, lower-severity gap tracked on its own). Every model-facing string field must
+ * be walked here, whether or not the rewrite walks it.
  */
 function applyInputsMacro(node: DagNode, args: Record<string, string>, missing: Set<string>): void {
   const substitute = (text: string): string =>
     text.replace(INPUTS_REF, (match, name: string) => {
-      const value = args[name];
+      // `Object.hasOwn` rather than a plain `args[name]` lookup: a bare index read reaches
+      // Object.prototype, so an unsupplied `$INPUTS.toString` / `$INPUTS.constructor`
+      // would resolve to an inherited member and splice a native function body into the
+      // prompt instead of being reported as a missing input. Anything not supplied as an
+      // OWN key is missing, and missing always fails the load — never a silent passthrough.
+      const value = Object.hasOwn(args, name) ? args[name] : undefined;
       if (value === undefined) {
         missing.add(name);
         return match;
@@ -212,6 +245,17 @@ function applyInputsMacro(node: DagNode, args: Record<string, string>, missing: 
     });
 
   if (node.when !== undefined) node.when = substitute(node.when);
+
+  // Base AI-turn fields — valid on every AI node mode (command / prompt / loop_group), so
+  // they are walked outside the mode chain, like `when:`. Both go straight to the provider
+  // with no substitution of their own downstream.
+  if (node.systemPrompt !== undefined) node.systemPrompt = substitute(node.systemPrompt);
+  if (node.agents !== undefined) {
+    for (const agent of Object.values(node.agents)) {
+      agent.prompt = substitute(agent.prompt);
+      agent.description = substitute(agent.description);
+    }
+  }
 
   if (isLoopNode(node)) {
     if (node.loop.prompt !== undefined) node.loop.prompt = substitute(node.loop.prompt);
@@ -225,12 +269,16 @@ function applyInputsMacro(node: DagNode, args: Record<string, string>, missing: 
     for (const body of node.loop_group.nodes) applyInputsMacro(body, args, missing);
   } else if (isApprovalNode(node)) {
     node.approval.message = substitute(node.approval.message);
+    if (node.approval.on_reject !== undefined) {
+      node.approval.on_reject.prompt = substitute(node.approval.on_reject.prompt);
+    }
   } else if (isBashNode(node)) {
     node.bash = substitute(node.bash);
   } else if (isScriptNode(node)) {
     node.script = substitute(node.script);
   } else if (isWorkflowNode(node)) {
     if (node.input !== undefined) node.input = substitute(node.input);
+    if (node.fan_out !== undefined) node.fan_out.items = substitute(node.fan_out.items);
   } else if (isCancelNode(node)) {
     node.cancel = substitute(node.cancel);
   } else if ('prompt' in node && typeof node.prompt === 'string') {
@@ -386,10 +434,20 @@ function warnDroppedWorkflowLevelFields(includeNode: IncludeNode, child: Workflo
  * rewrite `$sibling.output` refs inside it the way it rewrites inline node text. If a
  * block's command file references a sibling node id that namespacing renames, the ref
  * would silently substitute to '' at run time. This applies equally to a loop's deferred
- * `loop.command` prompt. Scan resolved command content (markdown fences stripped) for refs
- * to any renamed id and FAIL the expansion on a hit. A file that cannot be resolved is also
- * a load error: its safety cannot be verified. Skipped entirely when no `commandContents`
- * is supplied (e.g. unit tests that don't exercise command files).
+ * `loop.command` prompt. Scan resolved command content for refs to any renamed id, and for
+ * `$INPUTS.<name>` parameters that can never be applied, and FAIL the expansion on a hit.
+ *
+ * BEST-EFFORT BY CONSTRUCTION. This scan sees only what discovery could resolve, and only
+ * the block's TOP-LEVEL command nodes — a command nested in a `loop_group` body is not
+ * reached. So a clean scan is "nothing found in what we could read", never a proof of
+ * safety. That is why an UNRESOLVABLE file warns and continues instead of failing: it is
+ * an incomplete-information state, not an unsafe one, and the difference matters because
+ * failing it would drop workflows that never opted into inputs at all (no `with:`, no
+ * `$INPUTS` anywhere) — breaking the "undeclared includes keep working byte-for-byte"
+ * guarantee. Only a file we actually READ and found a problem in is a hard error.
+ *
+ * Skipped entirely when no `commandContents` is supplied (e.g. unit tests that don't
+ * exercise command files).
  */
 function scanBlockCommandRefs(
   includeNode: IncludeNode,
@@ -402,9 +460,11 @@ function scanBlockCommandRefs(
     if (commandName === undefined) continue;
     const content = commandContents.get(commandName);
     if (content === undefined || content === null) {
-      throw new IncludeExpansionError(
-        `Node '${includeNode.id}': command file '${commandName}.md' in included block '${child.name}' could not be resolved for include safety validation. Make the command available, or inline the prompt.`
+      getLog().warn(
+        { include: includeNode.id, target: child.name, command: commandName, renamedIds },
+        'include.command_file_unresolved_for_ref_scan'
       );
+      continue;
     }
     const stripped = content.replace(/```[\s\S]*?```/g, '').replace(/`[^`\n]*`/g, '');
     for (const id of renamedIds) {
@@ -416,8 +476,15 @@ function scanBlockCommandRefs(
         );
       }
     }
+    // Scanned against RAW content, not the fence-stripped copy the sibling scan uses.
+    // The sibling scan strips because a fenced `$other.output` can plausibly be an example
+    // the author wants rendered literally to the model. `$INPUTS` has no such reading —
+    // applyInputsMacro deliberately substitutes inside code spans, so a fenced
+    // `$INPUTS.<name>` in an INLINE prompt is a live parameter. A command body can never
+    // have inputs applied at all, which makes writing one there an unkeepable promise
+    // wherever it appears. Stripping here would let exactly that promise through.
     INPUTS_REF.lastIndex = 0;
-    const inputMatch = INPUTS_REF.exec(stripped);
+    const inputMatch = INPUTS_REF.exec(content);
     INPUTS_REF.lastIndex = 0;
     if (inputMatch?.[1] !== undefined) {
       throw new IncludeExpansionError(

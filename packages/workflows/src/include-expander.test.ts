@@ -196,6 +196,113 @@ describe('expandWorkflowIncludes — with input mapping', () => {
     expect(message).toContain('$INPUTS.base, $INPUTS.scope');
   });
 
+  // `$INPUTS` has no runtime resolution pass — load-time expansion is the ONLY path
+  // that resolves it. A surface the macro skips therefore delivers literal
+  // `$INPUTS.<name>` text to the model forever, and is never recorded in
+  // missingInputs either, so a caller who forgot the value gets no load error.
+  test('substitutes the AI-turn surfaces that have no runtime second chance', () => {
+    const block = wf('parameterized', [
+      {
+        id: 'work',
+        prompt: 'Main: $INPUTS.detail',
+        systemPrompt: 'You handle $INPUTS.detail',
+        agents: {
+          helper: {
+            description: 'Handles $INPUTS.detail',
+            prompt: 'Sub-task: $INPUTS.detail',
+          },
+        },
+      },
+      {
+        id: 'gate',
+        approval: {
+          message: 'Approve $INPUTS.detail?',
+          on_reject: { prompt: 'Retry with $INPUTS.detail' },
+        },
+      },
+    ]);
+    const parent = wf('parent', [
+      { id: 'review', include: 'parameterized', with: { detail: 'CLEAN-TEMP-FILES' } },
+    ]);
+
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
+    expect(errors).toHaveLength(0);
+    const expanded = workflows.get('parent')!;
+    expect(nodeById(expanded, 'review__work')).toMatchObject({
+      prompt: 'Main: CLEAN-TEMP-FILES',
+      systemPrompt: 'You handle CLEAN-TEMP-FILES',
+      agents: {
+        helper: {
+          description: 'Handles CLEAN-TEMP-FILES',
+          prompt: 'Sub-task: CLEAN-TEMP-FILES',
+        },
+      },
+    });
+    expect(nodeById(expanded, 'review__gate')).toMatchObject({
+      approval: {
+        message: 'Approve CLEAN-TEMP-FILES?',
+        on_reject: { prompt: 'Retry with CLEAN-TEMP-FILES' },
+      },
+    });
+  });
+
+  test('an unsupplied input on those same surfaces fails the load', () => {
+    const block = wf('parameterized', [
+      {
+        id: 'work',
+        prompt: 'no refs here',
+        systemPrompt: 'You handle $INPUTS.fromSystem',
+        agents: { helper: { description: 'd', prompt: 'Sub: $INPUTS.fromAgent' } },
+      },
+      {
+        id: 'gate',
+        approval: { message: 'ok?', on_reject: { prompt: 'Retry $INPUTS.fromReject' } },
+      },
+      { id: 'fan', workflow: 'child', fan_out: { items: '$INPUTS.fromFanOut' } },
+    ]);
+    const parent = wf('parent', [{ id: 'review', include: 'parameterized' }]);
+
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
+    expect(workflows.has('parent')).toBe(false);
+    const message = errors.find(error => error.filename === 'parent')?.error;
+    expect(message).toContain('$INPUTS.fromAgent');
+    expect(message).toContain('$INPUTS.fromFanOut');
+    expect(message).toContain('$INPUTS.fromReject');
+    expect(message).toContain('$INPUTS.fromSystem');
+  });
+
+  // Inherited Object.prototype members are not supplied inputs. Reading them with a
+  // plain `args[name]` lookup substitutes a native function body into the prompt
+  // instead of reporting the input as missing.
+  test('an inherited property name is treated as missing, not as a value', () => {
+    const block = wf('parameterized', [
+      { id: 'use', prompt: 'a=$INPUTS.toString b=$INPUTS.constructor c=$INPUTS.__proto__' },
+    ]);
+    const parent = wf('parent', [
+      { id: 'review', include: 'parameterized', with: { unrelated: 'x' } },
+    ]);
+
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
+    expect(workflows.has('parent')).toBe(false);
+    const message = errors.find(error => error.filename === 'parent')?.error;
+    expect(message).toContain('$INPUTS.__proto__');
+    expect(message).toContain('$INPUTS.constructor');
+    expect(message).toContain('$INPUTS.toString');
+    expect(message).not.toContain('native code');
+  });
+
+  test('an own property that shadows an inherited name still substitutes', () => {
+    const block = wf('parameterized', [{ id: 'use', prompt: 'v=$INPUTS.toString' }]);
+    const parent = wf('parent', [
+      { id: 'review', include: 'parameterized', with: { toString: 'literal-value' } },
+    ]);
+
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
+    expect(errors).toHaveLength(0);
+    const use = nodeById(workflows.get('parent')!, 'review__use');
+    expect(use && 'prompt' in use ? use.prompt : '').toBe('v=literal-value');
+  });
+
   test('two callers substitute independently', () => {
     const block = wf('parameterized', [{ id: 'use', prompt: 'Use $INPUTS.value' }]);
     const parent = wf('parent', [
@@ -300,7 +407,12 @@ describe('expandWorkflowIncludes — with input mapping', () => {
       },
       { id: 'approval', approval: { message: 'Approve $INPUTS.value?' } },
       { id: 'cancel', cancel: 'Stop: $INPUTS.value' },
-      { id: 'subrun', workflow: 'child', input: 'scope=$INPUTS.value' },
+      {
+        id: 'subrun',
+        workflow: 'child',
+        input: 'scope=$INPUTS.value',
+        fan_out: { items: '["$INPUTS.value"]' },
+      },
       {
         id: 'group',
         loop_group: {
@@ -328,7 +440,13 @@ describe('expandWorkflowIncludes — with input mapping', () => {
     });
     expect(approval).toMatchObject({ approval: { message: 'Approve done?' } });
     expect(nodeById(expanded, 'review__cancel')).toMatchObject({ cancel: 'Stop: done' });
-    expect(nodeById(expanded, 'review__subrun')).toMatchObject({ input: 'scope=done' });
+    expect(nodeById(expanded, 'review__subrun')).toMatchObject({
+      input: 'scope=done',
+      // fan_out.items is a live data-string surface that rewriteNodeOutputRefs already
+      // walks; the macro must walk it too or the literal reaches the executor, which
+      // JSON.parses it and spawns a child per unsubstituted placeholder.
+      fan_out: { items: '["done"]' },
+    });
     expect(group).toMatchObject({
       loop_group: {
         until_bash: 'test "done" = done',
@@ -600,14 +718,43 @@ describe('expandWorkflowIncludes — command-file ref scan', () => {
     expect(workflows.has('parent')).toBe(true);
   });
 
-  test('fails when the command file cannot be resolved for safety validation', () => {
+  // A command body can never have inputs applied — it is read at execution time, after
+  // expansion. So `$INPUTS.<name>` there is an unkeepable promise wherever it appears,
+  // and unlike the sibling-ref scan the fence has no bearing on it: the macro itself
+  // substitutes inside code spans, because `$INPUTS` has no documentation-only meaning.
+  test('fails when a command file references an include input inside a fenced block', () => {
     const [block, parent] = blockWithCommand();
-    const commandContents = new Map<string, string | null>([['my-cmd', null]]);
+    const commandContents = new Map<string, string | null>([
+      ['my-cmd', 'Run this:\n\n```bash\necho "$INPUTS.scope"\n```\n'],
+    ]);
     const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent), commandContents);
     expect(workflows.has('parent')).toBe(false);
     expect(errors.find(error => error.filename === 'parent')?.error).toContain(
-      "command file 'my-cmd.md' in included block 'cmdblk' could not be resolved"
+      "parameter '$INPUTS.scope'"
     );
+  });
+
+  test('fails when a command file references an include input inside inline code', () => {
+    const [block, parent] = blockWithCommand();
+    const commandContents = new Map<string, string | null>([
+      ['my-cmd', 'The scope is `$INPUTS.scope` — use it.'],
+    ]);
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent), commandContents);
+    expect(workflows.has('parent')).toBe(false);
+    expect(errors.find(error => error.filename === 'parent')?.error).toContain(
+      "parameter '$INPUTS.scope'"
+    );
+  });
+
+  // An unresolvable command file is an incomplete-information state, not an unsafe one.
+  // Failing it would drop workflows that never opted into this feature — including ones
+  // with no `with:` and no `$INPUTS` anywhere.
+  test('warns (not fails) when the command file cannot be resolved for scanning', () => {
+    const [block, parent] = blockWithCommand();
+    const commandContents = new Map<string, string | null>([['my-cmd', null]]);
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent), commandContents);
+    expect(errors).toHaveLength(0);
+    expect(workflows.has('parent')).toBe(true);
   });
 
   test('fails when an included loop command file references an include input', () => {

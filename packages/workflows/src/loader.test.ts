@@ -4022,7 +4022,7 @@ nodes:
       expect(err?.error).toContain("sibling node '$sib'");
     });
 
-    it('should fail when a block command file cannot be resolved for safety validation', async () => {
+    it('should warn (not fail) when a block command file cannot be resolved for scanning', async () => {
       const workflowDir = join(testDir, '.archon', 'workflows');
       await mkdir(workflowDir, { recursive: true });
 
@@ -4048,13 +4048,16 @@ nodes:
       );
 
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      // An unresolved command cannot be checked for unsafe input or sibling references.
+      // Unresolvable command → WARN, never a hard expansion error. The scan is
+      // best-effort by construction; a file it cannot read is unverified, not unsafe,
+      // and dropping the workflow would break includes that never used this feature.
       const parentErrors = result.errors.filter(e => e.filename === 'ghost-parent.yaml');
-      expect(parentErrors).toHaveLength(1);
-      expect(parentErrors[0]?.error).toContain(
-        "command file 'ghost-cmd-does-not-exist-xyz.md' in included block 'ghost-block' could not be resolved"
+      expect(parentErrors).toHaveLength(0);
+      expect(result.workflows.some(w => w.workflow.name === 'ghost-parent')).toBe(true);
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ include: 'g', command: 'ghost-cmd-does-not-exist-xyz' }),
+        'include.command_file_unresolved_for_ref_scan'
       );
-      expect(result.workflows.some(w => w.workflow.name === 'ghost-parent')).toBe(false);
     });
 
     it('should scan an included loop.command file for include inputs', async () => {
