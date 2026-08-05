@@ -4689,6 +4689,20 @@ nodes:
     // warnings that survive must describe the workflow that survived. Before
     // the single-entry refactor the definition and the warnings came from two
     // parallel maps, and a clean file could inherit the dropped file's warning.
+    //
+    // READ THIS BEFORE TRUSTING THE PAIR: only ONE of these two is a live
+    // regression test on any given platform, and which one depends on the
+    // filesystem. The bug was that warnings were sticky — set, never cleared —
+    // so it is only observable when the CLEAN file wins: post-fix its warnings
+    // are empty, pre-fix it inherited the dirty file's. When the DIRTY file
+    // wins, pre-fix and post-fix produce the same correct warning, so that
+    // direction cannot distinguish them and passes either way. There is no
+    // assertion that fixes this; it is inherent to the bug's shape.
+    //
+    // Forcing both orderings would need a test seam in `loadWorkflowsFromDir`
+    // or a `mock.module('fs/promises')` that would break the real-I/O tests
+    // throughout this file. Judged not worth it (#2455 review S5) — but do not
+    // read this as two regression tests, because it is one plus a companion.
     const CLEAN = (name: string): string =>
       ['name: ' + name, 'description: test', 'nodes:', '  - id: a', '    prompt: hi'].join('\n');
     const DIRTY = (name: string): string =>
