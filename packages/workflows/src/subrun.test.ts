@@ -1498,6 +1498,72 @@ nodes:
     expect(String(nodeFailed?.data?.error)).not.toContain('ENOENT');
   });
 
+  it('resume of a child row with a NULL working path fails instead of falling back to the parent checkout', async () => {
+    // `working_path` is nullable in the schema. Falling back to the parent's cwd here
+    // would be the one silent shared-checkout fallback left in runChildWorkflow — and
+    // for a child the author isolated on purpose, that is exactly the concurrent-write
+    // collision the isolation was requested to prevent. Not reachable through normal
+    // creation (every child row gets a real path), so this pins the guard directly.
+    await writeWorkflow(
+      'child-null-path',
+      `
+name: child-null-path
+description: isolated child whose row loses its working path
+nodes:
+  - id: boom
+    bash: "exit 3"
+`
+    );
+    await writeWorkflow(
+      'parent-null-path',
+      `
+name: parent-null-path
+description: parent resuming a child with no recorded checkout
+nodes:
+  - id: sub
+    workflow: child-null-path
+    input: "x"
+    isolation: worktree
+`
+    );
+
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    const parent = await discover('parent-null-path');
+    const { resolver } = makeFakeResolver(join(cwd, 'wt', 'null-path-child'));
+
+    // First drive: the child fails, leaving the parent a resumable failed child.
+    await executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, parent, 'goal', 'conv-db', {
+      resolveChildIsolation: resolver,
+    });
+    const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'parent-null-path');
+    const child = [...store.runs.values()].find(r => r.workflow_name === 'child-null-path');
+    expect(child?.status).toBe('failed');
+
+    // Erase the recorded checkout, then resume the parent.
+    store.runs.get(child!.id)!.working_path = null;
+    const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(parentRun!.id))!);
+    const resumeOpts = hydrated ?? { preCreatedRun: await store.resumeWorkflowRun(parentRun!.id) };
+    const r2 = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parent,
+      'goal',
+      'conv-db',
+      { ...resumeOpts, resolveChildIsolation: resolver }
+    );
+
+    expect(r2.success).toBe(false);
+    const nodeFailed = [...store.events]
+      .reverse()
+      .find(e => e.event_type === 'node_failed' && e.step_name === 'sub');
+    expect(String(nodeFailed?.data?.error)).toContain('no recorded working path');
+    // The child must NOT have been re-run in the parent's checkout.
+    expect((await store.getWorkflowRun(child!.id))?.working_path).not.toBe(cwd);
+  });
+
   it('a parent auto-resumed after a gated isolated child can still isolate its NEXT child', async () => {
     // The flagship shape: isolated `implement` → the child's approval gate → approve →
     // the parent auto-resumes → isolated `review`. The second spawn is the regression:

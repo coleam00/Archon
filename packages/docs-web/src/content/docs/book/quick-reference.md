@@ -158,7 +158,7 @@ All nodes share these base fields:
 | Field | Required | Type | Description |
 |-------|----------|------|-------------|
 | `input` | No | string | Data string forwarded as the child's `$ARGUMENTS`. Substituted like a `prompt:` body (`$nodeId.output`, workflow variables) |
-| `isolation` | No | `'inherit'` | Only `'inherit'` (shared checkout) is supported; `'worktree'` is reserved and rejected at load time (slice 2) |
+| `isolation` | No | `'inherit' \| 'worktree'` | Which checkout the child runs in. Default (and `'inherit'`) shares the parent's. `'worktree'` gives the child its own worktree + branch — opt-in only, never inferred, and it fails the node rather than falling back to the shared checkout when a worktree can't be created (folder projects, surfaces with no resolver) |
 
 `retry` is rejected on `workflow:` nodes, and `workflow:` is rejected inside a `loop_group` body. The child's terminal output threads back as `$nodeId.output`; a child approval gate pauses the whole tree — approve the **child** by run id and the parent auto-resumes.
 

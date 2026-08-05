@@ -366,7 +366,7 @@ export interface RunChildWorkflowArgs {
    * its own git worktree via the injected child-isolation resolver; `'inherit'`
    * (or undefined) shares the parent's checkout. Threaded from `node.isolation`.
    */
-  isolation?: 'inherit' | 'worktree';
+  isolation?: WorkflowNode['isolation'];
   /** Present only when re-driving a FAILED child on parent resume (D5 recovery path). */
   resumeFailedChild?: WorkflowRun;
 }

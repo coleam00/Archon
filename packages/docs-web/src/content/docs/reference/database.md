@@ -93,7 +93,7 @@ The database has 18 tables, all prefixed with `remote_agent_`:
 
 5. **`remote_agent_workflow_runs`** - Workflow execution tracking
    - Tracks active workflows per conversation
-   - Locks concurrent execution per `working_path`: a second dispatch on a path with an active run (status `pending`/`running`/`paused`) is auto-cancelled with an actionable message. Stale `pending` rows older than 5 minutes are treated as orphaned and ignored. A `workflow:` sub-run shares its parent's checkout, so the path-lock excludes the run's ancestor chain (via `parent_run_id`).
+   - Locks concurrent execution per `working_path`: a second dispatch on a path with an active run (status `pending`/`running`/`paused`) is auto-cancelled with an actionable message. Stale `pending` rows older than 5 minutes are treated as orphaned and ignored. A `workflow:` sub-run shares its parent's checkout unless the node declares `isolation: worktree`, so the path-lock excludes both the run's ancestor chain and its descendants (via `parent_run_id`) — a child never contends with its own parent. Siblings are **not** excluded.
    - Stores workflow state, step progress, and parent conversation linkage
    - Nullable `user_id` records which user triggered the run
    - Nullable `parent_run_id` (#2121 Phase 2) — self-referential FK (`ON DELETE SET NULL`) linking a `workflow:` sub-run to the run that spawned it; null for top-level runs. Makes the run tree walkable (`findChildRuns`/`getRunAncestry`) for the abandon cascade and cost roll-up.

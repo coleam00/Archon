@@ -22,9 +22,14 @@ import type {
   ChildIsolationResult,
 } from '@archon/workflows/executor';
 import { createHash } from 'node:crypto';
-import { getIsolationProvider, classifyIsolationError } from '@archon/isolation';
+import {
+  getIsolationProvider,
+  configureIsolation,
+  classifyIsolationError,
+} from '@archon/isolation';
 import * as git from '@archon/git';
 import { createLogger } from '@archon/paths';
+import { loadRepoConfig } from '../config/config-loader';
 import * as isolationDb from '../db/isolation-environments';
 
 /**
@@ -130,6 +135,30 @@ function getLog(): ReturnType<typeof createLogger> {
 export function createChildWorktreeResolver(
   config: ChildWorktreeResolverConfig
 ): ChildIsolationResolver {
+  // Configure the isolation provider HERE rather than relying on the caller.
+  //
+  // `configureIsolation` is what gives `WorktreeProvider` the repo-config loader;
+  // without it the factory falls back to `() => Promise.resolve(null)` and the
+  // repo's ENTIRE `worktree:` block is silently ignored — `baseBranch`, `path`,
+  // `remote`, and `copyFiles` (the sting: files the repo seeds into worktrees,
+  // e.g. `.env`, simply never arrive, and the child's build fails confusingly).
+  //
+  // Both existing callers only configure it on paths that create a TOP-LEVEL
+  // worktree: the CLI inside `else if (wantsIsolation && codebase)`, the
+  // orchestrator via `getResolver()`. A `--no-worktree` parent — the shape the
+  // authoring guide explicitly endorses, "a parent started with --no-worktree can
+  // still hand an isolated child its own worktree" — skips both and would create
+  // the child's worktree unconfigured. Binding it to the resolver instead means
+  // every construction site is covered, including ones added later.
+  //
+  // Idempotent and cheap: it swaps the loader and drops the provider singleton,
+  // which is rebuilt lazily. Re-running it after the CLI/orchestrator already
+  // configured it is a no-op in effect — all three loaders are the same function.
+  configureIsolation(async (repoPath: string) => {
+    const repoConfig = await loadRepoConfig(repoPath);
+    return repoConfig?.worktree ?? null;
+  });
+
   return {
     async resolve(req: ChildIsolationRequest): Promise<ChildIsolationResult> {
       const childIndex = req.childIndex ?? 0;

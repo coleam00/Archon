@@ -664,7 +664,20 @@ async function runChildWorkflow(
         resumeFailedChild.id
       );
     }
-    childCwd = priorPath ?? cwd;
+    // `working_path` is nullable in the schema, and falling back to the parent's
+    // `cwd` here would be the one silent shared-checkout fallback in this function —
+    // for an ISOLATED child that is exactly the concurrent-write collision the
+    // isolation was requested to prevent. Unreachable today (every child row is
+    // created with a real path, see the createWorkflowRun call below), so this is
+    // defense-in-depth: fail loudly rather than resume somewhere the author didn't ask for.
+    if (!priorPath) {
+      return failOutcome(
+        `Cannot resume sub-run '${childWorkflowName}': its run row has no recorded working ` +
+          'path, so the checkout it ran in is unknown — start a fresh run.',
+        resumeFailedChild.id
+      );
+    }
+    childCwd = priorPath;
   } else if (isolation === 'worktree') {
     if (!resolveChildIsolation) {
       return failOutcome(

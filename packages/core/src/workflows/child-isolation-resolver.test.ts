@@ -24,9 +24,15 @@ const mockProviderCreate = mock((_req: { identifier: string }) =>
   })
 );
 
+/** Records the loader the resolver hands to the isolation factory (see the M1 test). */
+const mockConfigureIsolation = mock((_loader: (repoPath: string) => Promise<unknown>) => undefined);
+
 mock.module('@archon/isolation', () => ({
   getIsolationProvider: () => ({ create: mockProviderCreate }),
-  classifyIsolationError: (err: Error) => err.message,
+  configureIsolation: mockConfigureIsolation,
+  // Distinctive prefix, not identity: proves the resolver actually routes provider
+  // failures through classifyIsolationError rather than rethrowing the raw error.
+  classifyIsolationError: (err: Error) => `classified: ${err.message}`,
 }));
 
 const mockIsolationDbCreate = mock((_env: { metadata: Record<string, unknown> }) =>
@@ -173,6 +179,54 @@ describe('createChildWorktreeResolver', () => {
     nextCreateAdopts = false;
     mockProviderCreate.mockClear();
     mockIsolationDbCreate.mockClear();
+    mockConfigureIsolation.mockClear();
+  });
+
+  test('constructing a resolver configures the isolation provider with a repo-config loader', () => {
+    // M1: without this, a process that never called configureIsolation itself — the
+    // `--no-worktree` parent the authoring guide endorses, or a first orchestrator
+    // dispatch pinned to `worktree.enabled: false` — builds the child's worktree with
+    // the factory's no-op loader, silently dropping the repo's entire `worktree:`
+    // block (baseBranch, path, remote, and copyFiles, which is what actually bites:
+    // seeded files like .env never reach the child and its build fails confusingly).
+    // Binding it to the resolver covers every construction site, present and future.
+    createChildWorktreeResolver({
+      codebaseId: 'cb-2',
+      codebaseName: 'owner/repo',
+      canonicalRepoPath: '/repo',
+      createdByPlatform: 'cli',
+    });
+
+    expect(mockConfigureIsolation).toHaveBeenCalledTimes(1);
+    expect(typeof mockConfigureIsolation.mock.calls[0][0]).toBe('function');
+  });
+
+  test('a provider failure is routed through classifyIsolationError, not rethrown raw', async () => {
+    // The resolver's catch block had no coverage: a refactor that dropped the
+    // classify call, or renamed the paired `_failed` log event, would have passed CI
+    // while turning an actionable message back into raw git stderr.
+    mockProviderCreate.mockImplementationOnce(() =>
+      Promise.reject(new Error('No space left on device'))
+    );
+
+    await expect(
+      resolver.resolve({ parentRun, nodeId: 'refactor-auth', codebaseId: 'cb-1' })
+    ).rejects.toThrow('classified: No space left on device');
+
+    // Failure happens before registration — no orphan environment row.
+    expect(mockIsolationDbCreate).not.toHaveBeenCalled();
+  });
+
+  test('a codebase mismatch fails loudly before any worktree is created', async () => {
+    // The resolver is bound to one codebase; a sub-run carrying a different one means
+    // it was wired to the wrong project, and creating a checkout in the wrong repo is
+    // worse than failing. Guard had no coverage.
+    await expect(
+      resolver.resolve({ parentRun, nodeId: 'refactor-auth', codebaseId: 'cb-OTHER' })
+    ).rejects.toThrow(/bound to codebase 'cb-1'.*carries codebase 'cb-OTHER'/s);
+
+    expect(mockProviderCreate).not.toHaveBeenCalled();
+    expect(mockIsolationDbCreate).not.toHaveBeenCalled();
   });
 
   test('two isolated sub-run nodes in one parent request distinct worktrees', async () => {
