@@ -29,5 +29,9 @@ const TRUNCATION_MARKER_PATTERN = /\n\n… \[truncated; original output was \d+ 
 
 /** Whether `output` ends with the persistence truncation marker. */
 export function hasTruncationMarker(output: string): boolean {
-  return TRUNCATION_MARKER_PATTERN.test(output);
+  // Trailing whitespace can never be meaningful *after* the marker, so we
+  // match it leniently — otherwise a future normalisation step that appends a
+  // newline would silently degrade the clipped-output error into the generic
+  // "not a JSON object" one with no test catching the regression.
+  return TRUNCATION_MARKER_PATTERN.test(output.trimEnd());
 }
