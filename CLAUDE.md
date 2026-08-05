@@ -118,36 +118,11 @@ These are implementation constraints, not slogans. Apply them by default.
 
 ### Development
 
-```bash
-# Start server + Web UI together (hot reload for both)
-bun run dev
-
-# Or start individually
-bun run dev:server  # Backend only (port 3090)
-bun run dev:web     # Frontend only (port 5173)
-```
-
-Regenerating frontend API types (requires server to be running at port 3090):
-
-```bash
-bun run dev:server  # must be running first
-bun --filter @archon/web generate:types
-```
-
-Optional: Use PostgreSQL instead of SQLite by setting `DATABASE_URL` in `.env`:
-
-```bash
-docker-compose --profile with-db up -d postgres
-# Set DATABASE_URL=postgresql://postgres:postgres@localhost:5432/remote_coding_agent in .env
-```
+`bun run dev` starts server + Web UI together with hot reload; `bun run dev:server` (port 3090) and `bun run dev:web` (port 5173) run them individually. Regenerating the frontend API types needs the server already running: `bun --filter @archon/web generate:types`. To use PostgreSQL instead of the default SQLite, `docker-compose --profile with-db up -d postgres` and set `DATABASE_URL` in `.env`.
 
 ### Testing
 
-```bash
-bun run test                # Run all tests (per-package, isolated processes)
-bun test --watch            # Watch mode (single package)
-bun test packages/core/src/handlers/command-handler.test.ts  # Single file
-```
+`bun run test` runs everything (per-package, isolated processes). `bun test --watch` and `bun test <path>` work within a single package.
 
 **Test isolation (mock.module pollution):** Bun's `mock.module()` permanently replaces modules in the process-wide cache — `mock.restore()` does NOT undo it ([oven-sh/bun#7823](https://github.com/oven-sh/bun/issues/7823)). To prevent cross-file pollution, packages with conflicting `mock.module()` calls split their tests into separate `bun test` invocations — see each package's `package.json` `test` script for the current splits.
 
@@ -155,23 +130,11 @@ bun test packages/core/src/handlers/command-handler.test.ts  # Single file
 
 ### Type Checking & Linting
 
-```bash
-bun run type-check
-bun run lint
-bun run lint:fix
-bun run format
-bun run format:check
-```
+`bun run type-check`, `lint`, `lint:fix`, `format`, `format:check`.
 
 ### Pre-PR Validation
 
-**Always run before creating a pull request:**
-
-```bash
-bun run validate
-```
-
-Every step must pass for CI to succeed — see the `validate` script in the root `package.json` for the current list.
+**Always run `bun run validate` before creating a pull request.** Every step must pass for CI to succeed — see the `validate` script in the root `package.json` for the current list.
 
 ### ESLint Guidelines
 
@@ -359,30 +322,7 @@ Per-assistant model and option defaults live in `.archon/config.yaml` under `ass
 
 ### Running the App in Worktrees
 
-Agents working in worktrees can run the app for self-testing (make changes → run app → test via curl → fix). Ports are automatically allocated to avoid conflicts:
-
-```bash
-# Run in worktree (port auto-allocated based on path)
-bun dev &
-# [Hono] Worktree detected (/path/to/worktree)
-# [Hono] Auto-allocated port: 3637 (base: 3090, offset: +547)
-
-# Test via web API (production path)
-# 1) Create a conversation
-curl -X POST http://localhost:3637/api/conversations \
-  -H "Content-Type: application/json" \
-  -d '{}'
-
-# 2) Send a message
-curl -X POST http://localhost:3637/api/conversations/<conversationId>/message \
-  -H "Content-Type: application/json" \
-  -d '{"message":"/status"}'
-
-# 3) Fetch messages (polling)
-curl http://localhost:3637/api/conversations/<conversationId>/messages
-
-# Note: SSE streaming is available at /api/stream/<conversationId>
-```
+Agents working in worktrees can run the app for self-testing (make changes → run app → test via curl → fix). `bun dev` auto-allocates a port and logs it at startup.
 
 **Port Allocation:**
 - Worktrees: Automatic unique port (3190-4089 range, hash-based on path)
@@ -460,32 +400,7 @@ Import and use external SDK types directly (`import { query, type Options } from
 
 ### Logging
 
-**Structured logging with Pino** (`packages/paths/src/logger.ts`):
-
-```typescript
-import { createLogger } from '@archon/paths';
-
-const log = createLogger('orchestrator');
-
-// Event naming: {domain}.{action}_{state}
-// Standard states: _started, _completed, _failed, _validated, _rejected
-async function createSession(conversationId: string, codebaseId: string) {
-  log.info({ conversationId, codebaseId }, 'session.create_started');
-
-  try {
-    const session = await doCreate();
-    log.info({ conversationId, codebaseId, sessionId: session.id }, 'session.create_completed');
-    return session;
-  } catch (e) {
-    const err = e as Error;
-    log.error(
-      { conversationId, error: err.message, errorType: err.constructor.name, err },
-      'session.create_failed',
-    );
-    throw err;
-  }
-}
-```
+Structured logging uses Pino via `createLogger('<module>')` from `@archon/paths`. Log a structured object first, event name second — `log.info({ conversationId, sessionId }, 'session.create_completed')`. On failure include `error: err.message`, `errorType: err.constructor.name`, and `err` itself.
 
 **Event naming rules:**
 - Format: `{domain}.{action}_{state}` — e.g. `workflow.step_started`, `isolation.create_failed`
@@ -557,40 +472,9 @@ async function createSession(conversationId: string, codebaseId: string) {
 
 ### Error Handling
 
-**Database Errors:**
-```typescript
-// INSERT operations
-try {
-  await db.query('INSERT INTO conversations ...', params);
-} catch (error) {
-  log.error({ err: error, params }, 'db_insert_failed');
-  throw new Error('Failed to create conversation');
-}
+**Database errors.** Wrap writes in try/catch, log with the failing parameters, and re-throw — never swallow. Archon's update helpers already throw when no row matched, so a re-thrown error is how a missing record surfaces; don't check rowCount yourself.
 
-// UPDATE operations - verify rowCount to catch missing records
-try {
-  await db.updateConversation(conversationId, { codebase_id: codebaseId });
-} catch (error) {
-  // updateConversation throws if no rows matched (conversation not found)
-  log.error({ err: error, conversationId }, 'db_update_failed');
-  throw error; // Re-throw to surface the issue
-}
-```
-
-**Git Operation Errors (don't fail silently):**
-```typescript
-// When isolation environment creation fails:
-try {
-  // ... isolation creation logic ...
-} catch (error) {
-  const err = error as Error;
-  const userMessage = classifyIsolationError(err);
-  log.error({ err, codebaseId, codebaseName }, 'isolation_creation_failed');
-  await platform.sendMessage(conversationId, userMessage);
-}
-```
-
-Pattern: Use `classifyIsolationError()` (from `@archon/isolation`) to map git errors (permission denied, timeout, no space, not a git repo) to user-friendly messages. Always log the raw error for debugging and send a classified message to the user.
+**Git/isolation errors — don't fail silently.** Map the raw error through `classifyIsolationError()` (`@archon/isolation`), which turns permission-denied / timeout / no-space / not-a-git-repo into a user-facing message. Log the raw error for debugging **and** send the classified message to the user; doing only one of the two is the bug this pattern exists to prevent.
 
 ### API Endpoints
 
