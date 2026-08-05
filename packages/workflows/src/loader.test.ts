@@ -35,6 +35,9 @@ registerBuiltinProviders();
 
 import { discoverWorkflows, discoverWorkflowsWithConfig } from './workflow-discovery';
 import { isBashNode, isCancelNode, isLoopNode } from './schemas';
+import { parseWorkflow } from './loader';
+import { workflowDefinitionSchema } from './schemas/workflow';
+import type { WorkflowDefinition } from './schemas/workflow';
 import * as bundledDefaults from './defaults/bundled-defaults';
 
 describe('Workflow Loader', () => {
@@ -4073,4 +4076,145 @@ nodes:
       }
     });
   });
+});
+
+// ---------------------------------------------------------------------------
+// Workflow-level field parity (#2457)
+// ---------------------------------------------------------------------------
+
+/**
+ * `parseWorkflow` does not derive its result from `workflowDefinitionSchema` — it
+ * hand-assembles a WorkflowDefinition field by field into an object literal. A field
+ * added to the schema but not added to that literal is SILENTLY DISCARDED: the YAML
+ * parses, the workflow loads, and the feature is simply inert.
+ *
+ * That is not hypothetical. `requires:` was added to `workflowBaseSchema` in ab81248d
+ * (2026-06-01) without touching the loader, and the assembly block only landed in
+ * 2d7bf587 (2026-07-16) — six weeks in which the GitHub capability gate could never
+ * fire for any discovered workflow, fixed incidentally inside an unrelated PR.
+ *
+ * This is the guard. The field list is DERIVED from `workflowDefinitionSchema.shape`,
+ * so a new schema field fails the test until it is given a fixture here — the same
+ * "the derived check fails until the new thing is registered" ratchet used by
+ * `check:capability-matrix` and the schema-parity test in `sqlite.test.ts`.
+ *
+ * Deliberately NOT solved by deriving the assembly itself (`schema.parse(raw)`): the
+ * hand assembly exists BECAUSE of warn-and-drop — a present-but-invalid field is logged
+ * and dropped rather than aborting the whole discovery pass — and `.parse()` rejects
+ * instead. See #2457.
+ */
+describe('workflow-level field parity (#2457)', () => {
+  /**
+   * One fixture per workflow-level schema key: a YAML fragment setting the field, and a
+   * predicate proving it survived `parseWorkflow`. `present` is deliberately a survival
+   * check rather than deep equality — several fields are normalised on the way through
+   * (tags deduped, betas trimmed, thinking preprocessed), and this guard is about the
+   * field reaching the result at all, not about how it is parsed.
+   */
+  const FIELD_FIXTURES: Record<
+    string,
+    { yaml: string; present: (w: WorkflowDefinition) => boolean }
+  > = {
+    name: { yaml: '', present: w => w.name === 'parity' },
+    description: { yaml: '', present: w => w.description === 'parity fixture' },
+    nodes: { yaml: '', present: w => w.nodes.length === 1 },
+    provider: { yaml: 'provider: claude', present: w => w.provider === 'claude' },
+    model: { yaml: 'model: sonnet', present: w => w.model === 'sonnet' },
+    modelReasoningEffort: {
+      yaml: 'modelReasoningEffort: high',
+      present: w => w.modelReasoningEffort === 'high',
+    },
+    webSearchMode: { yaml: 'webSearchMode: live', present: w => w.webSearchMode === 'live' },
+    interactive: { yaml: 'interactive: true', present: w => w.interactive === true },
+    effort: { yaml: 'effort: high', present: w => w.effort !== undefined },
+    thinking: { yaml: 'thinking: adaptive', present: w => w.thinking !== undefined },
+    fallbackModel: {
+      yaml: 'fallbackModel: haiku',
+      present: w => w.fallbackModel === 'haiku',
+    },
+    betas: { yaml: 'betas:\n  - some-beta', present: w => w.betas?.includes('some-beta') === true },
+    sandbox: { yaml: 'sandbox:\n  enabled: true', present: w => w.sandbox !== undefined },
+    worktree: { yaml: 'worktree:\n  enabled: false', present: w => w.worktree?.enabled === false },
+    container: {
+      yaml: 'container:\n  enabled: true',
+      present: w => w.container?.enabled === true,
+    },
+    evidence_policy: {
+      yaml: 'evidence_policy:\n  required: true',
+      present: w => w.evidence_policy?.required === true,
+    },
+    mutates_checkout: {
+      yaml: 'mutates_checkout: false',
+      present: w => w.mutates_checkout === false,
+    },
+    persist_sessions: {
+      yaml: 'persist_sessions: true',
+      present: w => w.persist_sessions === true,
+    },
+    tags: { yaml: 'tags:\n  - alpha', present: w => w.tags?.includes('alpha') === true },
+    requires: {
+      yaml: 'requires:\n  - github',
+      present: w => w.requires?.includes('github') === true,
+    },
+  };
+
+  const schemaKeys = Object.keys(workflowDefinitionSchema.shape);
+
+  it('has a fixture for every workflow-level schema key (the ratchet)', () => {
+    const missing = schemaKeys.filter(k => !(k in FIELD_FIXTURES));
+    expect(
+      missing,
+      `Workflow-level schema keys with no parity fixture: ${missing.join(', ')}. ` +
+        'Add a fixture in FIELD_FIXTURES AND make sure parseWorkflow actually carries the ' +
+        'field into its returned object literal — a schema field missing from that literal ' +
+        'is silently discarded at parse (see #2457).'
+    ).toEqual([]);
+  });
+
+  it('has no fixture for a key that is not in the schema', () => {
+    const stale = Object.keys(FIELD_FIXTURES).filter(k => !schemaKeys.includes(k));
+    expect(stale, `Parity fixtures for keys no longer in the schema: ${stale.join(', ')}`).toEqual(
+      []
+    );
+  });
+
+  for (const key of Object.keys(FIELD_FIXTURES)) {
+    it(`round-trips '${key}' through parseWorkflow`, () => {
+      const fixture = FIELD_FIXTURES[key];
+      const yaml = [
+        'name: parity',
+        'description: parity fixture',
+        fixture.yaml,
+        'nodes:',
+        '  - id: only',
+        '    prompt: hello',
+      ]
+        .filter(line => line !== '')
+        .join('\n');
+
+      // Warn-and-drop means an INVALID fixture value is dropped by design. Clearing the
+      // logger first lets the assertion below tell the two causes apart: a warn means the
+      // fixture is wrong, silence means the loader dropped a valid field (the #2457 bug).
+      mockLogger.warn.mockClear();
+
+      const result = parseWorkflow(yaml, `parity-${key}.yaml`);
+      expect(
+        result.error,
+        `parseWorkflow rejected the '${key}' fixture: ${result.error?.error}`
+      ).toBeNull();
+
+      const warned = mockLogger.warn.mock.calls.length > 0;
+      expect(
+        fixture.present(result.workflow as WorkflowDefinition),
+        warned
+          ? `Field '${key}' did not survive parseWorkflow, but a warning fired — the FIXTURE ` +
+              'value above is almost certainly invalid for this field, which warn-and-drop ' +
+              'discards by design. Fix the fixture, not the loader.'
+          : `Field '${key}' is declared on workflowDefinitionSchema, was accepted without a ` +
+              'warning, and still did NOT survive parseWorkflow — so it is missing from the ' +
+              'object literal parseWorkflow returns. That is the #2457 bug: add the field to ' +
+              'that literal.'
+      ).toBe(true);
+    });
+  }
 });
