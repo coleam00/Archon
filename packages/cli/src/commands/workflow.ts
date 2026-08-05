@@ -755,6 +755,24 @@ async function loadWorkflows(cwd: string): Promise<WorkflowLoadResult> {
   }
 }
 
+/**
+ * Print a workflow's parse warnings (keys the engine silently drops) to stderr.
+ *
+ * stderr rather than stdout so `--json` callers keep a parseable payload while
+ * still being told; `console.warn` rather than the logger because `--json` sets
+ * the log level to silent, which is exactly the case this has to survive.
+ */
+export function emitParseWarnings(
+  parseWarnings: readonly string[] | undefined,
+  workflowName: string
+): void {
+  if (!parseWarnings || parseWarnings.length === 0) return;
+  console.warn(`Warning: '${workflowName}' declares keys the engine ignores:`);
+  for (const warning of parseWarnings) {
+    console.warn(`  - ${warning}`);
+  }
+}
+
 function countWorkflowSources(
   workflows: readonly WorkflowWithSource[]
 ): Record<WorkflowSource, number> {
@@ -774,6 +792,8 @@ interface WorkflowJsonEntry {
   model?: string;
   modelReasoningEffort?: string;
   webSearchMode?: string;
+  /** Keys the workflow's YAML declares that the engine drops (#2213). */
+  parseWarnings?: string[];
 }
 
 /**
@@ -784,7 +804,7 @@ export async function workflowListCommand(cwd: string, json?: boolean): Promise<
 
   if (json) {
     const output = {
-      workflows: workflowEntries.map(({ workflow: w }) => {
+      workflows: workflowEntries.map(({ workflow: w, parseWarnings }) => {
         const entry: WorkflowJsonEntry = {
           name: w.name,
           description: w.description,
@@ -794,6 +814,7 @@ export async function workflowListCommand(cwd: string, json?: boolean): Promise<
         if (w.modelReasoningEffort !== undefined)
           entry.modelReasoningEffort = w.modelReasoningEffort;
         if (w.webSearchMode !== undefined) entry.webSearchMode = w.webSearchMode;
+        if (parseWarnings && parseWarnings.length > 0) entry.parseWarnings = [...parseWarnings];
         return entry;
       }),
       errors: errors.map(e => ({
@@ -817,11 +838,14 @@ export async function workflowListCommand(cwd: string, json?: boolean): Promise<
   if (workflowEntries.length > 0) {
     console.log(`\nFound ${workflowEntries.length} workflow(s):\n`);
 
-    for (const { workflow } of workflowEntries) {
+    for (const { workflow, parseWarnings } of workflowEntries) {
       console.log(`  ${workflow.name}`);
       console.log(`    ${workflow.description}`);
       if (workflow.provider) {
         console.log(`    Provider: ${workflow.provider}`);
+      }
+      for (const warning of parseWarnings ?? []) {
+        console.log(`    Warning: ${warning}`);
       }
       console.log('');
     }
@@ -864,11 +888,11 @@ export async function workflowRunCommand(
   const workflows = workflowEntries.map(ws => ws.workflow);
 
   const workflow = resolveWorkflowName(workflowName, workflows);
-  // Recover the discovery source (dropped by the .map above) for telemetry —
-  // bundled workflows report their real name, custom ones report "custom".
-  const workflowSource = workflow
-    ? workflowEntries.find(ws => ws.workflow === workflow)?.source
-    : undefined;
+  // Recover the discovery entry (dropped by the .map above) for telemetry —
+  // bundled workflows report their real name, custom ones report "custom" —
+  // and for the parse warnings surfaced just below.
+  const workflowEntry = workflow ? workflowEntries.find(ws => ws.workflow === workflow) : undefined;
+  const workflowSource = workflowEntry?.source;
 
   if (!workflow) {
     // Check if the requested workflow had a load error
@@ -888,6 +912,13 @@ export async function workflowRunCommand(
       `Workflow '${workflowName}' not found.\n\nAvailable workflows:\n${availableWorkflows}`
     );
   }
+
+  // Keys this workflow's YAML declares that the engine drops (#2213). Written to
+  // stderr, never stdout: in --json mode Pino is silenced and stdout must stay
+  // exactly the machine-readable payload, so this is the ONLY channel that
+  // reaches an agent driving runs through `--json`. Not gated on --quiet — a
+  // dropped key can be a gate the author believes is protecting the run.
+  emitParseWarnings(workflowEntry?.parseWarnings, workflow.name);
 
   // Validate mutually exclusive flags (defensive — cli.ts checks these for UX, but
   // workflowRunCommand is the authoritative boundary for programmatic callers)

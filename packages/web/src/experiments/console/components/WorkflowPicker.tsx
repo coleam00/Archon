@@ -338,6 +338,15 @@ export function WorkflowPicker({
                               </span>
                             ) : null}
                           </div>
+                          {w.parseWarnings.length > 0 ? (
+                            <span
+                              className="shrink-0 font-mono text-[11px] text-warning"
+                              title={w.parseWarnings.join('\n')}
+                              aria-label={`Ignored keys: ${w.parseWarnings.join('; ')}`}
+                            >
+                              ⚠
+                            </span>
+                          ) : null}
                           <span
                             className={`shrink-0 text-[9px] uppercase tracking-[0.16em] ${sourceBadgeClass(w.source)}`}
                           >

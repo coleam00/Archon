@@ -198,6 +198,36 @@ describe('GET /api/workflows', () => {
     const body = (await response.json()) as { recommended: string[] };
     expect(body.recommended).toEqual(['fix', 'plan']);
   });
+
+  // #2213 — discovery records the keys the engine dropped; the console reads
+  // this endpoint, so dropping the field here makes the warning unreachable on
+  // the surface most authors edit workflows on.
+  test('carries parseWarnings through to the response', async () => {
+    const app = createTestApp();
+    registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+    mockDiscoverWorkflows.mockResolvedValueOnce({
+      workflows: [
+        makeTestWorkflowWithSource({ name: 'clean' }, 'project'),
+        makeTestWorkflowWithSource({ name: 'gated' }, 'project', [
+          "Node 'plan': unknown key 'interactive' will be ignored.",
+        ]),
+      ],
+      errors: [],
+    });
+
+    const response = await app.request('/api/workflows');
+    expect(response.status).toBe(200);
+
+    const body = (await response.json()) as {
+      workflows: { workflow: { name: string }; parseWarnings?: string[] }[];
+    };
+    // Absent (not an empty array) on a clean workflow — presence is the signal.
+    expect(body.workflows[0].parseWarnings).toBeUndefined();
+    expect(body.workflows[1].parseWarnings).toEqual([
+      "Node 'plan': unknown key 'interactive' will be ignored.",
+    ]);
+  });
 });
 
 describe('POST /api/workflows/validate', () => {

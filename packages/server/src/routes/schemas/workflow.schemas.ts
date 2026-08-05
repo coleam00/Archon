@@ -33,6 +33,12 @@ export const workflowListEntrySchema = z
   .object({
     workflow: workflowDefinitionSchema,
     source: workflowSourceSchema,
+    /**
+     * Non-fatal warnings raised while parsing this workflow's YAML — today, keys
+     * the engine silently drops (#2213). The workflow still loads and runs;
+     * these tell the author what was ignored. Omitted when there are none.
+     */
+    parseWarnings: z.array(z.string()).optional(),
   })
   .openapi('WorkflowListEntry');
 

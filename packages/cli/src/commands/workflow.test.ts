@@ -431,6 +431,49 @@ describe('workflowListCommand', () => {
       'Error loading workflows: Permission denied'
     );
   });
+
+  // #2213 — a key the engine drops has to reach the author on the surface they
+  // use, not only in `archon validate workflows` (which nothing requires them
+  // to run).
+  it('prints parse warnings inline with the workflow that raised them', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [
+        makeTestWorkflowWithSource({ name: 'clean' }, 'project'),
+        makeTestWorkflowWithSource({ name: 'gated' }, 'project', [
+          "Node 'plan': unknown key 'interactive' will be ignored.",
+        ]),
+      ],
+      errors: [],
+    });
+
+    await workflowListCommand('/test/path');
+
+    expect(consoleSpy).toHaveBeenCalledWith(
+      "    Warning: Node 'plan': unknown key 'interactive' will be ignored."
+    );
+  });
+
+  it('carries parse warnings in --json output', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [
+        makeTestWorkflowWithSource({ name: 'clean' }, 'project'),
+        makeTestWorkflowWithSource({ name: 'gated' }, 'project', ["dropped 'interactive'"]),
+      ],
+      errors: [],
+    });
+
+    await workflowListCommand('/test/path', true);
+
+    const parsed = JSON.parse(firstJsonPayload(stdoutSpy)) as {
+      workflows: { name: string; parseWarnings?: string[] }[];
+    };
+    // Absent (not an empty array) on a clean workflow, so the field's presence
+    // alone is the signal.
+    expect(parsed.workflows[0].parseWarnings).toBeUndefined();
+    expect(parsed.workflows[1].parseWarnings).toEqual(["dropped 'interactive'"]);
+  });
 });
 
 describe('workflowRunCommand — requires: [github] gate', () => {
@@ -673,6 +716,62 @@ describe('workflowRunCommand', () => {
     }
 
     expect(consoleSpy).not.toHaveBeenCalledWith(expect.stringContaining('Discovery: root='));
+  });
+
+  // #2213 — `--json` silences Pino entirely (cli.ts sets the level to 'silent'),
+  // so stderr is the only channel left. stdout must stay exactly the payload.
+  it('warns on stderr about keys the engine drops, even in json mode', async () => {
+    const warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+      (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+        workflows: [
+          makeTestWorkflowWithSource({ name: 'assist' }, 'project', [
+            "Node 'plan': unknown key 'interactive' will be ignored.",
+          ]),
+        ],
+        errors: [],
+      });
+
+      try {
+        await workflowRunCommand('/repo/root', 'assist', 'hello', {
+          json: true,
+          noWorktree: true,
+        });
+      } catch {
+        // Downstream failure is acceptable; this test only checks the warning.
+      }
+
+      expect(warnSpy).toHaveBeenCalledWith("Warning: 'assist' declares keys the engine ignores:");
+      expect(warnSpy).toHaveBeenCalledWith(
+        "  - Node 'plan': unknown key 'interactive' will be ignored."
+      );
+      // Never on stdout — a --json caller must still get a parseable payload.
+      expect(consoleSpy).not.toHaveBeenCalledWith(expect.stringContaining('unknown key'));
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('stays silent when the resolved workflow has no parse warnings', async () => {
+    const warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+      (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+        workflows: [
+          makeTestWorkflowWithSource({ name: 'assist' }, 'project'),
+          // A DIFFERENT workflow's warnings must not leak into this run.
+          makeTestWorkflowWithSource({ name: 'other' }, 'project', ["dropped 'interactive'"]),
+        ],
+        errors: [],
+      });
+
+      await workflowRunCommand('/repo/root', 'assist', 'hello', { noWorktree: true });
+
+      expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining('the engine ignores'));
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it('does not print discovery diagnostic in quiet mode', async () => {

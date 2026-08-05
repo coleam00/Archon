@@ -2966,7 +2966,15 @@ export function registerApiRoutes(
       }
 
       return c.json({
-        workflows: result.workflows.map(ws => ({ workflow: ws.workflow, source: ws.source })),
+        workflows: result.workflows.map(ws => ({
+          workflow: ws.workflow,
+          source: ws.source,
+          // Keys the engine dropped from this YAML (#2213) — the console is the
+          // surface most authors edit workflows on, so it has to carry them.
+          ...(ws.parseWarnings && ws.parseWarnings.length > 0
+            ? { parseWarnings: [...ws.parseWarnings] }
+            : {}),
+        })),
         recommended,
         errors: result.errors.length > 0 ? result.errors : undefined,
       });

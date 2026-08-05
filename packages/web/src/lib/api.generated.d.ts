@@ -3281,6 +3281,7 @@ export interface components {
     WorkflowListEntry: {
       workflow: components['schemas']['WorkflowDefinition'];
       source: components['schemas']['WorkflowSource'];
+      parseWarnings?: string[];
     };
     WorkflowDefinition: {
       name: string;

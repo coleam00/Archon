@@ -637,9 +637,16 @@ async function handleWorkflowCommand(
 
       if (workflowEntries.length > 0) {
         msg += 'Available Workflows:\n\n';
-        for (const { workflow: w } of workflowEntries) {
+        for (const { workflow: w, parseWarnings } of workflowEntries) {
           const modeInfo = `DAG: ${String(w.nodes.length)} nodes`;
-          msg += `**\`${w.name}\`**\n  ${w.description}\n  ${modeInfo}\n\n`;
+          msg += `**\`${w.name}\`**\n  ${w.description}\n  ${modeInfo}\n`;
+          // Keys the engine silently drops (#2213). Rendered inline with the
+          // workflow rather than in a trailer so the author sees which of their
+          // workflows is affected without cross-referencing.
+          for (const warning of parseWarnings ?? []) {
+            msg += `  ⚠️ ${warning}\n`;
+          }
+          msg += '\n';
         }
       }
 

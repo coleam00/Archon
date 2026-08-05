@@ -3,7 +3,7 @@ import { orderWithRecommended } from './recommended';
 import type { Workflow } from '../primitives/workflow';
 
 function wf(name: string, source: Workflow['source'] = 'bundled'): Workflow {
-  return { name, description: null, source };
+  return { name, description: null, source, parseWarnings: [] };
 }
 
 describe('orderWithRecommended', () => {
