@@ -1,0 +1,117 @@
+name: t1-fix-issue
+description: |
+  ENGINE-PRIMITIVE TEST — not a quality workflow. Prompts are deliberately minimal;
+  the point is to exercise the engine, not to produce good output.
+
+  Proves: bash node (stdout as output) · structured output + strict `.field` access ·
+  `when:` on a structured field · `cancel:` as a first-class outcome · `loop_group`
+  self-heal, where BOTH the validation failure and the review findings feed the next
+  implement iteration via `$LOOP_PREV` · `until:` signal · `max_iterations` bound.
+
+  NO ARTIFACTS. Nothing writes to $ARTIFACTS_DIR. Every hand-off between nodes is
+  `$node.output`. This is the by-reference-vs-by-value experiment (#2123, #1848) run
+  as a workflow: if in-and-out alone is sufficient here, that is evidence.
+
+  Usage: archon workflow run t1-fix-issue "<issue-number>"
+model: '@mini'
+
+nodes:
+  - id: fetch
+    depends_on: []
+    bash: |
+      set -euo pipefail
+      gh issue view "$ARGUMENTS" --json number,title,body,comments
+
+  - id: assess
+    depends_on: [fetch]
+    prompt: |
+      $fetch.output
+
+      Read the code this issue refers to. Is the problem real and worth fixing now?
+    output_format:
+      type: object
+      properties:
+        verdict:
+          type: string
+          enum: ['fix', 'skip']
+        reason:
+          type: string
+      required: [verdict, reason]
+
+  - id: bail
+    depends_on: [assess]
+    when: "$assess.output.verdict == 'skip'"
+    cancel: 'Not worth fixing — $assess.output.reason'
+
+  - id: build
+    depends_on: [assess]
+    when: "$assess.output.verdict == 'fix'"
+    loop_group:
+      until: 'BUILD-CLEAN'
+      max_iterations: 3
+      nodes:
+        - id: implement
+          depends_on: []
+          prompt: |
+            Fix this issue with the smallest change that works, then commit.
+            Do not write any report files — your reply is the only output that matters.
+
+            $fetch.output
+
+            Findings from the previous attempt (empty on the first iteration):
+            $LOOP_PREV.review.output
+
+        - id: check
+          depends_on: [implement]
+          bash: |
+            # This node must ALWAYS exit 0. A failing body node fails the whole
+            # loop_group immediately — which would kill the very loop that exists to
+            # fix the failure. So the gate REPORTS a verdict and `review` acts on it.
+            # (Fail-fast is right for a linear DAG and wrong inside a self-heal loop.)
+            set -o pipefail
+            ok=1
+            echo '=== type-check ==='
+            bun run type-check 2>&1 | tail -30 || ok=0
+            # `bun --filter`, never a bare `bun test <dir>`. A single invocation over a
+            # whole package runs every file in ONE process, where conflicting
+            # `mock.module()` calls poison each other — 616 spurious failures on an
+            # unmodified tree. Each package's own `test` script carries the splits that
+            # avoid it (see CLAUDE.md, "Test isolation").
+            for p in $(git diff --name-only "$BASE_BRANCH"...HEAD | grep '^packages/' | cut -d/ -f2 | sort -u); do
+              echo "=== tests: @archon/$p ==="
+              bun --filter "@archon/$p" test 2>&1 | tail -20 || ok=0
+            done
+            if [ "$ok" = 1 ]; then echo 'VALIDATION: PASS'; else echo 'VALIDATION: FAIL'; fi
+
+        - id: review
+          depends_on: [check]
+          prompt: |
+            Validation output — type-check, plus the tests of every package the diff touches:
+            $check.output
+
+            Review the working-tree diff against $BASE_BRANCH.
+
+            The validation above is AUTHORITATIVE and you cannot overrule it. If it ends
+            in `VALIDATION: FAIL`, do not reply BUILD-CLEAN no matter how the diff reads —
+            say what failed and what to change.
+
+            If it ends in `VALIDATION: PASS` and you have no findings of your own, reply
+            with exactly: BUILD-CLEAN
+            Otherwise list what to fix, in one short paragraph. That text is fed back
+            to the implementer verbatim on the next iteration.
+
+  - id: open-pr
+    depends_on: [build]
+    bash: |
+      set -euo pipefail
+      git push -u origin HEAD
+      gh pr create --base "$BASE_BRANCH" --title "fix: issue $ARGUMENTS" --body "$(cat <<'ARCHON_EOF'
+      Automated fix for issue $ARGUMENTS.
+
+      ## Assessment
+      $assess.output.reason
+
+      ## Final review pass
+      $build.output
+      ARCHON_EOF
+      )"

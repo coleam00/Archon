@@ -1,0 +1,27 @@
+name: t4-subrun
+description: |
+  ENGINE-PRIMITIVE TEST — the minimal sub-run. A parent that does nothing except
+  start one child and use its result.
+
+  Proves: `workflow:` as a runtime child run (#2121 phase 2) · its own run row with
+  `parent_run_id` · `input:` forwarding as the child's `$ARGUMENTS` · the child's
+  terminal output threading back as `$node.output`.
+
+  Deliberately trivial. If this fails, the sub-run mechanism is what failed — there
+  is nothing else in the graph to blame.
+
+  Usage: archon workflow run t4-subrun "<issue-number>"
+model: '@mini'
+
+nodes:
+  - id: delegate
+    depends_on: []
+    workflow: t3-probe-issue
+    input: '$ARGUMENTS'
+
+  - id: report
+    depends_on: [delegate]
+    prompt: |
+      $delegate.output
+
+      State in one line what the child run concluded.

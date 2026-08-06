@@ -73,6 +73,26 @@ jobs:
       - name: Run deterministic workflow
         run: bun run cli workflow run e2e-deterministic --no-worktree "smoke test"
 
+      # Composition primitives with no AI node: join semantics, until_bash
+      # termination, output_type, and fan-out over a literal list. Each asserts in
+      # bash and exits non-zero on failure, so a red step is a real regression.
+      - name: Join semantics + until_bash
+        run: bun run cli workflow run e2e-joins --no-worktree ""
+
+      - name: Fan-out — all_done aggregates a failed child
+        run: bun run cli workflow run e2e-fanout-alldone --no-worktree ""
+
+      # NEGATIVE test: one child fails, and `join: all_success` must fail the
+      # fan-out node. A zero exit here means all_success behaved like all_done,
+      # which is the regression this step exists to catch.
+      - name: Fan-out — all_success rejects a failed child (expected failure)
+        run: |
+          if bun run cli workflow run e2e-fanout-allsuccess --no-worktree ""; then
+            echo "REGRESSION: all_success completed despite a failed child"
+            exit 1
+          fi
+          echo "all_success correctly failed the node"
+
   # ─── Tier 1b: Container isolation (Docker, no API keys needed) ──────────
   # Deterministic slice of the container-isolation e2e (folder project +
   # --container). Bash-node-only, so no AI credential is required. Gated on

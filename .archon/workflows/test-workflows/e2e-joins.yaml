@@ -1,0 +1,86 @@
+name: e2e-joins
+description: |
+  ENGINE-PRIMITIVE TEST — join semantics and per-node flags, with ZERO AI nodes.
+  Runs in seconds and costs nothing, so it can go in a loop.
+
+  Covers the gaps `e2e-deterministic` leaves: `trigger_rule: all_done` and
+  `none_failed_min_one_success` against a SKIPPED upstream (skips are the cheap way
+  to make joins interesting without failing the run), `always_run`, `output_type`
+  sidecars, and a `loop_group` terminating on `until_bash` rather than a signal.
+
+  Ends `completed`. Any assertion failure fails a bash node, so a red run means a
+  real regression. The deliberately-failing counterpart is `e2e-fanout-allsuccess`,
+  which is expected to fail — see its header.
+
+  Usage: archon workflow run e2e-joins ""
+mutates_checkout: false
+
+nodes:
+  - id: seed
+    depends_on: []
+    bash: echo 'seed-ok'
+    output_type: probe-seed
+
+  - id: taken
+    depends_on: [seed]
+    when: "$seed.output == 'seed-ok'"
+    bash: echo 'taken-ran'
+
+  - id: skipped
+    depends_on: [seed]
+    when: "$seed.output == 'never'"
+    bash: echo 'should-not-run'
+
+  # all_done: fires even though `skipped` never ran.
+  - id: join-all-done
+    depends_on: [taken, skipped]
+    trigger_rule: all_done
+    bash: |
+      set -euo pipefail
+      test $taken.output = 'taken-ran' || { echo "taken did not run"; exit 1; }
+      echo 'join-all-done-ok'
+
+  # none_failed_min_one_success: one success, one skip, zero failures -> fires.
+  - id: join-none-failed
+    depends_on: [taken, skipped]
+    trigger_rule: none_failed_min_one_success
+    bash: echo 'join-none-failed-ok'
+
+  # Running AFTER a skipped upstream is `trigger_rule: all_done`, NOT `always_run`.
+  # `always_run` is a RESUME-CACHE opt-out ("re-run on resume even if a prior run
+  # completed it") — dag-node.ts:229-231. It cannot be observed without a resume, so
+  # it is declared here for coverage but nothing asserts on it.
+  - id: after-skip
+    depends_on: [skipped]
+    trigger_rule: all_done
+    always_run: true
+    bash: echo 'after-skip-ran'
+
+  # loop_group terminating on until_bash exit 0 rather than an `until:` signal.
+  - id: countdown
+    depends_on: [seed]
+    loop_group:
+      max_iterations: 5
+      # `until:` is REQUIRED by the schema even when termination is driven entirely
+      # by `until_bash:` (loop.ts:22 — `z.string().min(1)`, while until_bash is
+      # optional). This body is pure bash and emits no model text, so the signal can
+      # never appear: it is dead config the author is forced to write. Filed as a wart.
+      until: __NEVER_SIGNALLED__
+      until_bash: 'test "$(wc -l < ./.e2e-joins-counter 2>/dev/null || echo 0)" -ge 3'
+      nodes:
+        - id: tick
+          depends_on: []
+          bash: echo tick >> ./.e2e-joins-counter && wc -l < ./.e2e-joins-counter
+
+  - id: verify
+    depends_on: [join-all-done, join-none-failed, after-skip, countdown]
+    trigger_rule: all_done
+    bash: |
+      set -euo pipefail
+      test $join-all-done.output = 'join-all-done-ok'   || { echo 'all_done join did not fire'; exit 1; }
+      test $join-none-failed.output = 'join-none-failed-ok' || { echo 'none_failed join did not fire'; exit 1; }
+      test $after-skip.output = 'after-skip-ran'         || { echo 'all_done after a skip did not fire'; exit 1; }
+      lines=$(wc -l < ./.e2e-joins-counter)
+      test "$lines" -ge 3 || { echo "until_bash exited early at $lines"; exit 1; }
+      rm -f ./.e2e-joins-counter
+      echo "ALL JOINS OK (loop ran $lines iterations)"

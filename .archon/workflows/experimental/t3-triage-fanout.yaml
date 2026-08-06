@@ -1,0 +1,45 @@
+name: t3-triage-fanout
+description: |
+  ENGINE-PRIMITIVE TEST — fan-out over unlabelled issues, one child run each.
+
+  Proves: `fan_out` over a runtime item list (#2224, merged 5 Aug) · `max_parallel` ·
+  `join: all_done` · child runs with `parent_run_id` · terminal outputs threading back
+  into the parent as `$node.output`.
+
+  READ-ONLY BY DESIGN. No child writes anything, so no child needs isolation — this is
+  the common fan-out shape, and the one that shows isolation is not a prerequisite.
+  Labels are proposed to a human, never applied.
+
+  The assertions that matter here are negative: a child returning `needs-human` must
+  not fail the parent, and abandoning the parent must cascade-cancel the children.
+
+  Usage: archon workflow run t3-triage-fanout ""
+model: '@mini'
+
+nodes:
+  - id: find
+    depends_on: []
+    bash: |
+      set -euo pipefail
+      gh issue list --state open --search 'no:label' --limit 3 --json number \
+        | jq -c '[.[].number | tostring]'
+
+  - id: probe-each
+    depends_on: [find]
+    workflow: t3-probe-issue
+    input: '$find.output'
+    fan_out:
+      # 2, not 3 — with max_parallel == item count nothing ever queues, so the
+      # concurrency bound would go untested. 3 items through a width of 2 forces
+      # one child to wait for a slot.
+      max_parallel: 2
+      items: '$find.output'
+      join: all_done
+
+  - id: triage
+    depends_on: [probe-each]
+    prompt: |
+      $probe-each.output
+
+      List each issue with its proposed label and a one-line reason.
+      End with the single label you are least confident about, and why.

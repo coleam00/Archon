@@ -1,0 +1,44 @@
+name: t2-fix-issue-include
+description: |
+  ENGINE-PRIMITIVE TEST — t1 with the review step pulled in by reference instead of
+  written inline. Same task, different composition.
+
+  Proves: `include:` load-time inlining · `with:` inputs and the `$INPUTS.<name>`
+  macro (#2467, merged 5 Aug) · namespacing — the block's internal `$gather.output`
+  ref must survive being renamed to `review__gather` · `$includeId.output` resolving
+  to the block's terminal node.
+
+  Worth running once with a required input REMOVED, to confirm it fails the LOAD
+  rather than reaching a model.
+
+  Usage: archon workflow run t2-fix-issue-include "<issue-number>"
+model: '@mini'
+
+nodes:
+  - id: fetch
+    depends_on: []
+    bash: |
+      set -euo pipefail
+      gh issue view "$ARGUMENTS" --json number,title,body
+
+  - id: implement
+    depends_on: [fetch]
+    prompt: |
+      Fix this issue with the smallest change that works, then commit.
+
+      $fetch.output
+
+  - id: review
+    depends_on: [implement]
+    include: t2-review-block
+    with:
+      base: dev
+      focus: correctness of the fix, and nothing else
+
+  - id: summary
+    depends_on: [review]
+    prompt: |
+      Review findings:
+      $review.output
+
+      State in one line whether this change is ready to open as a PR.

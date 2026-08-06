@@ -1,0 +1,30 @@
+name: e2e-fanout-allsuccess
+description: |
+  ENGINE-PRIMITIVE TEST — the inverse of `e2e-fanout-alldone`. Same literal item list with one failing
+  child, but `join: all_success` instead of `all_done`.
+
+  **This workflow is EXPECTED TO FAIL.** That is the assertion: under `all_success`
+  a single failed child must fail the fan-out node, where `all_done` aggregates it
+  and continues (t6 proves that half). A green run here is the regression.
+
+  Zero AI nodes — children are e2e-echo-child, one bash node each. Costs nothing.
+
+  Pass condition: run status `failed`, failure attributed to node `spread`,
+  and `report` skipped by trigger_rule.
+
+  Usage: archon workflow run e2e-fanout-allsuccess ""
+mutates_checkout: false
+
+nodes:
+  - id: spread
+    depends_on: []
+    workflow: e2e-echo-child
+    fan_out:
+      items: '["one", "two", "fail-3"]'
+      max_parallel: 2
+      join: all_success
+
+  # Must NOT run. If it does, all_success behaved like all_done.
+  - id: report
+    depends_on: [spread]
+    bash: echo 'REGRESSION — all_success let a failed child through'

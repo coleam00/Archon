@@ -1,0 +1,23 @@
+name: t8-cascade
+description: |
+  ENGINE-PRIMITIVE TEST — cascade-cancel. Fans out three sleeping children, so the
+  parent can be abandoned mid-flight and the children observed.
+
+  Pass condition: abandoning the parent leaves every non-terminal child `cancelled`,
+  not orphaned `running`. Nothing here spends a model call.
+
+  Usage: archon workflow run t8-cascade "" --detach   # then: archon workflow abandon <id>
+mutates_checkout: false
+
+nodes:
+  - id: spread
+    depends_on: []
+    workflow: t8-slow-child
+    fan_out:
+      items: '["a", "b", "c"]'
+      max_parallel: 3
+      join: all_done
+
+  - id: after
+    depends_on: [spread]
+    bash: echo 'should not be reached if the parent was abandoned'

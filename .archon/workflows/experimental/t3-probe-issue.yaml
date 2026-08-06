@@ -1,0 +1,45 @@
+name: t3-probe-issue
+description: |
+  ENGINE-PRIMITIVE TEST — the fan-out child. Probes ONE issue and reports a triage
+  verdict. Read-only: it reads the issue, reads the code, reads direction.md, and
+  writes nothing. No labels are applied — the parent reports proposals to a human.
+
+  Runs standalone too: archon workflow run t3-probe-issue "<issue-number>"
+model: '@mini'
+
+# Required for the fan-out in t3-triage-fanout. Concurrent children on one shared
+# checkout take a path-exclusive lock, so without this the engine refuses to spawn
+# them at all (correctly — a lock-cancelled child is not recoverable by resume,
+# #2180). This workflow only reads the issue, the code and direction.md.
+mutates_checkout: false
+
+nodes:
+  - id: issue
+    depends_on: []
+    bash: |
+      set -euo pipefail
+      gh issue view "$ARGUMENTS" --json number,title,body,comments,labels
+
+  - id: probe
+    depends_on: [issue]
+    prompt: |
+      $issue.output
+
+      Check the issue's claims against the actual code, then check it against the
+      project direction in `.archon/maintainer-standup/direction.md`.
+
+      Pick one label:
+        should-fix    — real, in scope, worth doing
+        should-close  — not real, already fixed, or out of scope per direction.md
+        needs-human   — you cannot tell without a maintainer's judgement
+    output_format:
+      type: object
+      properties:
+        issue:
+          type: string
+        label:
+          type: string
+          enum: ['should-fix', 'should-close', 'needs-human']
+        reason:
+          type: string
+      required: [issue, label, reason]

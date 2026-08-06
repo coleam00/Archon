@@ -3,3 +3,11 @@ worktree:
 
 docs:
   path: packages/docs-web/src/content/docs
+
+aliases:
+  # Cheap model for the t1–t4 engine-primitive test workflows. Every test workflow
+  # references `@mini` rather than a literal model id, so retargeting them all is a
+  # one-line edit here — and so per-run tier/alias rebinding (#2481) can reach them.
+  '@mini':
+    provider: pi
+    model: minimax/MiniMax-M3
