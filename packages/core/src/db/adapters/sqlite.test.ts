@@ -67,14 +67,6 @@ function columnsOf(uri: string, table: string): string[] {
 }
 
 describe('SqliteAdapter upgrade path', () => {
-  let legacySeed: SqliteAdapter | undefined;
-  afterEach(async () => {
-    if (legacySeed) {
-      await legacySeed.close();
-      legacySeed = undefined;
-    }
-  });
-
   // Regression: the event_order index and trigger were briefly created inside
   // createSchema(). Both reference a column absent from any database predating
   // it, and CREATE INDEX on a missing column aborts the entire createSchema()
@@ -82,32 +74,38 @@ describe('SqliteAdapter upgrade path', () => {
   // column, never ran. Every existing SQLite install was bricked on upgrade,
   // and the migration that would fix it could never execute.
   test('converges a database that predates event_order', async () => {
-    const legacy = await makeDbWithoutEventOrder();
-    legacySeed = legacy.seed;
-    expect(columnsOf(legacy.uri, 'remote_agent_workflow_events')).not.toContain('event_order');
-
-    // Must not throw, and must converge.
-    const upgraded = new SqliteAdapter(legacy.uri);
-    await upgraded.close();
-
-    expect(columnsOf(legacy.uri, 'remote_agent_workflow_events')).toContain('event_order');
-
-    const raw = new Database(legacy.uri);
-    const stmt = raw.prepare('SELECT name FROM sqlite_master WHERE name IN (?, ?)');
-    let objects: string[];
+    const { uri, seed } = await makeDbWithoutEventOrder();
     try {
-      objects = (
-        stmt.all('idx_workflow_events_run_order', 'remote_agent_workflow_events_assign_order') as {
-          name: string;
-        }[]
-      ).map(o => o.name);
-    } finally {
-      stmt.finalize();
-      raw.close();
-    }
+      expect(columnsOf(uri, 'remote_agent_workflow_events')).not.toContain('event_order');
 
-    expect(objects).toContain('idx_workflow_events_run_order');
-    expect(objects).toContain('remote_agent_workflow_events_assign_order');
+      // Must not throw, and must converge.
+      const upgraded = new SqliteAdapter(uri);
+      await upgraded.close();
+
+      expect(columnsOf(uri, 'remote_agent_workflow_events')).toContain('event_order');
+
+      const raw = new Database(uri);
+      const stmt = raw.prepare('SELECT name FROM sqlite_master WHERE name IN (?, ?)');
+      let objects: string[];
+      try {
+        objects = (
+          stmt.all(
+            'idx_workflow_events_run_order',
+            'remote_agent_workflow_events_assign_order'
+          ) as {
+            name: string;
+          }[]
+        ).map(o => o.name);
+      } finally {
+        stmt.finalize();
+        raw.close();
+      }
+
+      expect(objects).toContain('idx_workflow_events_run_order');
+      expect(objects).toContain('remote_agent_workflow_events_assign_order');
+    } finally {
+      await seed.close();
+    }
   });
 });
 
