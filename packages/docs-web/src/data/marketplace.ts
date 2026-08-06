@@ -215,4 +215,16 @@ export const marketplaceEntries: MarketplaceEntry[] = [
     tags: ['automation', 'development'],
     archonVersionCompat: '>=0.5.0',
   },
+  {
+    slug: 'hello-flow',
+    name: 'hello-flow',
+    author: 'seanrobertwright',
+    description:
+      'A minimal disposable test workflow used to live-validate Archon\'s Marketplace Submission flow (safe to delete).',
+    sourceUrl:
+      'https://github.com/seanrobertwright/archon-marketplace-test/tree/d4e4e119b02bce0f08b133dce26b83a5dd5e2eda/.archon/marketplace/hello-flow',
+    sha: 'd4e4e119b02bce0f08b133dce26b83a5dd5e2eda',
+    tags: ['automation'],
+    archonVersionCompat: '>=0.5.0',
+  },
 ];
