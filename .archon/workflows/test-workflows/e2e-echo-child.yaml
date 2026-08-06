@@ -4,7 +4,7 @@ description: |
   Echoes its `$ARGUMENTS` so the parent can prove output threading per index.
 
   Exists so fan-out mechanics (spawn, concurrency, join, parent linkage) can be
-  exercised for effectively zero cost. The experimental `t3-triage-fanout` does the
+  exercised for effectively zero cost. `rasmus-tests/t3-triage-fanout` does the
   same with real AI probes and takes minutes; this takes seconds.
 
   `fail-<n>` as the argument makes it exit non-zero, which is how `e2e-fanout-alldone`

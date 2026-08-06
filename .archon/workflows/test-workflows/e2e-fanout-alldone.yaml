@@ -6,7 +6,7 @@ description: |
   One item in the list is `fail-3`, which makes that child exit non-zero. Under
   `join: all_done` the node still aggregates and the run continues — a failed child
   becomes `{error, status}` in the output rather than killing the node. That is the
-  half the experimental `t3-triage-fanout` cannot show, because all its children succeed.
+  half `rasmus-tests/t3-triage-fanout` cannot show, because all its children succeed.
 
   `items` is a LITERAL JSON array here rather than a `$node.output` ref, which also
   covers the literal-list form of `fan_out.items`.
