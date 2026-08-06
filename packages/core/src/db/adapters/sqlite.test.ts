@@ -39,15 +39,20 @@ async function makeDbWithoutEventOrder(): Promise<{ uri: string; seed: SqliteAda
   // would get an empty database. Keep the seed connection open so this named
   // shared-cache database survives until the upgrade assertions finish.
   const seed = new SqliteAdapter(uri); // writes the current schema
-  const raw = new Database(uri);
   try {
-    raw.run('DROP TRIGGER IF EXISTS remote_agent_workflow_events_assign_order');
-    raw.run('DROP INDEX IF EXISTS idx_workflow_events_run_order');
-    raw.run('ALTER TABLE remote_agent_workflow_events DROP COLUMN event_order');
-  } finally {
-    raw.close();
+    const raw = new Database(uri);
+    try {
+      raw.run('DROP TRIGGER IF EXISTS remote_agent_workflow_events_assign_order');
+      raw.run('DROP INDEX IF EXISTS idx_workflow_events_run_order');
+      raw.run('ALTER TABLE remote_agent_workflow_events DROP COLUMN event_order');
+    } finally {
+      raw.close();
+    }
+    return { uri, seed };
+  } catch (error) {
+    await seed.close();
+    throw error;
   }
-  return { uri, seed };
 }
 
 function columnsOf(uri: string, table: string): string[] {
