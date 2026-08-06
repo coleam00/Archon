@@ -7,6 +7,13 @@ argument-hint: <issue-number|url|"description">
 
 **Input**: $ARGUMENTS
 
+**Execute this command yourself.** Do not delegate to an installed skill, agent,
+or other workflow, even when one looks like it covers this — this file is the
+procedure. A skill carries its own input router and its own preconditions; hand
+it the request and it may re-interpret the intent, demand an artifact that only
+this command produces, and decline. The node still exits 0, so a refusal reads
+downstream as a completed investigation.
+
 ---
 
 ## Your Mission
@@ -27,6 +34,11 @@ Investigate the issue/problem and produce a comprehensive implementation plan th
 
 **Check the input format:**
 
+- **Strip any leading intent verb first** (`fix`, `resolve`, `implement`,
+  `investigate`, `close`) along with a following `issue` or `#`. The input is the
+  user's whole trigger message, not a cleaned argument, so `fix issue 123` and
+  `123` identify the same issue. The verb is not a mode switch — you are always
+  investigating here, whatever it says.
 - Looks like a number (`123`, `#123`) → GitHub issue number
 - Starts with `http` → GitHub URL (extract issue number)
 - Anything else → Free-form description
