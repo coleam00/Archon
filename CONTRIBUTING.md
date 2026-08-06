@@ -56,7 +56,7 @@ bun run validate
 
 ## Architecture
 
-See [CLAUDE.md](./CLAUDE.md) for detailed architecture documentation.
+See [AGENTS.md](./AGENTS.md) for detailed architecture documentation.
 
 ## Contributing Workflows to the Marketplace
 
