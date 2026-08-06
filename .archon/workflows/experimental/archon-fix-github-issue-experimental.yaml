@@ -523,6 +523,11 @@ nodes:
   # pass. (Workflow constitution: the reliability carve-out, not a style rule.)
   - id: capture-pr-number
     bash: |
+      # Clear first so .pr-number reflects THIS validation and nothing earlier.
+      # pr-exists treats the file's presence as authoritative, so a stale one
+      # left by a prior attempt would send the review tail at a PR that is no
+      # longer there.
+      rm -f "$ARTIFACTS_DIR/.pr-number" "$ARTIFACTS_DIR/.pr-url"
       pr=$(gh pr view --json number --jq .number 2>/dev/null || true)
       if ! printf '%s' "$pr" | grep -qE '^[0-9]+$'; then
         echo "capture-pr-number: no PR resolves for the current branch." >&2

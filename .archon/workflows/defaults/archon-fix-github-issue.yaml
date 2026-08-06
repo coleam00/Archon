@@ -161,7 +161,14 @@ nodes:
       elif [ -f "$ARTIFACTS_DIR/investigation.md" ]; then
         echo "investigation.md exists from investigate step"
       else
-        echo "WARNING: No investigation.md or plan.md found — implement may fail"
+        # Fail, do not warn. investigate/plan can "succeed" while producing no
+        # artifact — an AI node that declines the task still exits 0, so the
+        # refusal reads downstream as a completed investigation. This node holds
+        # the only cheap deterministic view of that precondition, so it is where
+        # the run has to stop, before implement spends a model on nothing.
+        echo "bridge-artifacts: neither investigation.md nor plan.md exists in \$ARTIFACTS_DIR." >&2
+        echo "The investigate/plan phase produced no specification — implement has nothing to work from." >&2
+        exit 1
       fi
     depends_on: [investigate, plan]
     trigger_rule: one_success
