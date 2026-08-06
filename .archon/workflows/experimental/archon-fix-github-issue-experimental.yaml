@@ -534,6 +534,29 @@ nodes:
       echo "{\"pr_number\":\"$pr\"}"
     depends_on: [create-pr]
 
+  # Whether the review phase has anything to review.
+  #
+  # This exists because trigger_rule alone cannot express it. synthesize uses
+  # all_done so it waits for every reviewer to reach a terminal state, including
+  # the ones the classifier skipped by design — but all_done also fires when the
+  # reviewers were skipped because the RUN DIED upstream. On run 42acf940 the
+  # implementation phase failed, every reviewer was skipped, and the tail
+  # (synthesize -> self-fix -> simplify -> report) still ran to completion and
+  # posted a public comment on the issue saying the run was blocked.
+  #
+  # capture-pr-number exits 1 when no PR resolves, so the absence of .pr-number
+  # is authoritative. all_done here so this node itself always fires and the
+  # tail always has a signal to read.
+  - id: pr-exists
+    bash: |
+      if [ -f "$ARTIFACTS_DIR/.pr-number" ]; then
+        echo '{"has_pr":"true"}'
+      else
+        echo '{"has_pr":"false"}'
+      fi
+    depends_on: [capture-pr-number]
+    trigger_rule: all_done
+
   - id: review-scope
     command: archon-pr-review-scope
     depends_on: [capture-pr-number]
@@ -663,13 +686,19 @@ nodes:
   - id: synthesize
     command: archon-synthesize-review
     output_type: review-synthesis
-    depends_on: [code-review, error-handling, test-coverage, comment-quality, docs-impact]
+    depends_on: [code-review, error-handling, test-coverage, comment-quality, docs-impact, pr-exists]
     # all_done, not one_success: synthesize only once EVERY reviewer is terminal.
     # one_success would let a synthesis stand on a subset if the reviewers ever land
     # in different layers, and it reports that partial view as if it were the whole
     # review. all_done also still fires when reviewers were skipped by design (the
     # common case — the classifier only asks for the relevant specialists).
+    #
+    # `when:` carries the other half — all_done cannot tell a by-design skip from a
+    # dead run, so pr-exists decides whether there is anything to review at all.
+    # Skipping here propagates to self-fix -> simplify -> report through the
+    # default all_success, which is what keeps a failed run from reporting.
     trigger_rule: all_done
+    when: "$pr-exists.output.has_pr == 'true'"
     context: fresh
 
   - id: self-fix
