@@ -25,6 +25,7 @@ These commands are handled deterministically by the orchestrator — they always
 | `/update-project <name> <path>` | Update a project's directory path |
 | `/remove-project <name>` | Remove a project registration |
 | `/setproject <name>` | Bind this conversation to a registered project. Clears any working-directory/worktree override and starts a fresh AI session on the next message (chat history stays visible) |
+| `/setproject none` | Detach this conversation from its project, clearing the project scope (also `clear` or `-`). Same three writes as a rebind, with no project bound, plus the same fresh AI session. Useful on persistent chats -- a Telegram chat is one permanent conversation row, so without this it stays pinned to the first project it ever attached to |
 
 ## Workflows
 

@@ -2638,7 +2638,16 @@ async function handleRemoveProject(message: string): Promise<string> {
 }
 
 /**
- * Handle /setproject command. Four effects:
+ * Reserved single-token arguments to `/setproject` that detach the conversation
+ * from its project instead of binding it to a named one.
+ */
+const SETPROJECT_CLEAR_KEYWORDS = new Set(['none', 'clear', '-']);
+
+/**
+ * Handle /setproject command. Two modes, both writing by the DB primary key
+ * (conversation.id), never the platform conversation id.
+ *
+ * REBIND — `/setproject <name>`. Four effects:
  * 1. Binds the conversation to the resolved codebase (writes `codebase_id`).
  * 2. Clears `cwd` — the project root remains codebase.default_cwd;
  *    conversation.cwd is only an explicit runtime override.
@@ -2646,13 +2655,66 @@ async function handleRemoveProject(message: string): Promise<string> {
  * 4. Deactivates the active AI session ('project-changed'), so the next
  *    message starts fresh in the new project's context.
  * Uses 4-tier fuzzy name resolution (exact → case-insensitive → prefix →
- * substring) via resolveCodebaseName. Updates by the DB primary key
- * (conversation.id), never the platform conversation id.
+ * substring) via resolveCodebaseName.
+ *
+ * CLEAR — `/setproject none` (also `clear`, `-`). The same three column writes
+ * with `codebase_id: null`, and the same session deactivation. It clears the
+ * project SCOPE; it does not reproduce a brand-new conversation, whose
+ * `ai_assistant_type` is resolved once at creation and which updateConversation
+ * cannot touch.
  */
 async function handleSetProject(message: string, conversation: Conversation): Promise<string> {
   const { args } = commandHandler.parseCommand(message);
   if (args.length < 1) {
-    return 'Usage: /setproject <project-name>';
+    return 'Usage: /setproject <project-name> (or /setproject none to detach)';
+  }
+
+  // Clear-to-neutral. Persistent chats (a Telegram chat_id is one permanent row)
+  // otherwise stay pinned to the first project they ever attached to: nothing
+  // else nulls codebase_id, and /reset preserves it by design. Gated on a single
+  // exact token — a project genuinely named `none` stays reachable through the
+  // prefix/substring tiers, but not by its bare exact name.
+  //
+  // Deliberately returns BEFORE listCodebases(): detaching must work with zero
+  // projects registered, and must not be breakable by a bad project list.
+  if (args.length === 1 && SETPROJECT_CLEAR_KEYWORDS.has(args[0].toLowerCase())) {
+    // Deactivate BEFORE clearing, for the same reason the rebind path below
+    // does. getActiveSession filters on conversation_id + active only, so a
+    // surviving session hands its assistant_session_id to the provider on the
+    // next turn alongside the now-neutral cwd. Claude resumes-or-errors on an
+    // invalid id, and because that turn throws, tryPersistSessionId is never
+    // reached — the stale id stays put and every later turn fails identically.
+    const session = await sessionDb.getActiveSession(conversation.id);
+    if (session) {
+      await safeDeactivateSession(session.id, 'setproject');
+    }
+
+    // Non-destructive, exactly as in the rebind path: the worktree may hold
+    // uncommitted work, so the env row is left for the cleanup tools.
+    const detachedWorktree = conversation.isolation_env_id !== null;
+    await db.updateConversation(conversation.id, {
+      codebase_id: null,
+      cwd: null,
+      isolation_env_id: null,
+    });
+    if (detachedWorktree) {
+      getLog().info(
+        { conversationId: conversation.id, isolationEnvId: conversation.isolation_env_id },
+        'project.clear_worktree_detached'
+      );
+    }
+    getLog().info({ conversationId: conversation.id }, 'project.clear_completed');
+
+    let cleared =
+      'Project scope cleared — this conversation is now neutral. Name a project or run a workflow to attach one.';
+    if (detachedWorktree) {
+      // Same caveat as the rebind path, and worse here: `/worktree remove` reads
+      // isolation_env_id from THIS conversation (just cleared) and is gated
+      // behind a codebase check that a detached conversation also fails.
+      cleared +=
+        '\n\nNote: the previous worktree was detached but left in place — clean it up with `archon isolation cleanup` or from the project’s Environments list in the web UI.';
+    }
+    return cleared;
   }
 
   const projectName = args.join(' ');
