@@ -11539,6 +11539,59 @@ describe('executeDagWorkflow -- script nodes', () => {
     expect(prompt).toContain(`bash=${stateDir}`);
   });
 
+  it('WORKFLOW_ID reaches script and bash subprocesses as an env var, not just as text', async () => {
+    // $WORKFLOW_ID substitutes into the body, so a node that spells it inline
+    // always worked. A heredoc'd python/node block reads os.environ instead,
+    // and found WORKFLOW_ID missing while ARTIFACTS_DIR/STATE_DIR/LOG_DIR beside
+    // it were all present — an inconsistency that fails only at runtime, inside
+    // the nested interpreter, with a bare KeyError.
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const runId = 'wf-workflowid-env';
+    const workflowRun = makeWorkflowRun(runId, {
+      workflow_name: 'workflow-id-env-test',
+      conversation_id: 'conv-wfid',
+      user_message: 'workflow id env test',
+    });
+
+    const commandsDir = join(testDir, '.archon', 'commands');
+    await mkdir(commandsDir, { recursive: true });
+    await writeFile(
+      join(commandsDir, 'check-wfid.md'),
+      'script=$from-script.output bash=$from-bash.output'
+    );
+
+    const nodes: DagNode[] = [
+      // Neither body contains the literal `$WORKFLOW_ID`, so the textual
+      // substitution path cannot make this pass — only the env bag can.
+      { id: 'from-script', script: 'console.log(process.env.WORKFLOW_ID)', runtime: 'bun' },
+      { id: 'from-bash', bash: 'printf %s "${WORKFLOW_ID}"' },
+      { id: 'check', command: 'check-wfid', depends_on: ['from-script', 'from-bash'] },
+    ];
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-wfid',
+      testDir,
+      { name: 'workflow-id-env', nodes },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(mockSendQueryDag.mock.calls.length).toBe(1);
+    const prompt = mockSendQueryDag.mock.calls[0][0] as string;
+    expect(prompt).toContain(`script=${runId}`);
+    expect(prompt).toContain(`bash=${runId}`);
+  });
+
   it('named script not found at runtime results in failed state and platform message', async () => {
     const mockDeps = createMockDeps();
     const platform = createMockPlatform();

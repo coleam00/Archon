@@ -2659,6 +2659,10 @@ async function executeBashNode(
     ARTIFACTS_DIR: artifactsDir,
     STATE_DIR: stateDir,
     LOG_DIR: logDir,
+    // $WORKFLOW_ID substitutes into the body, but a heredoc'd python/node block
+    // reads os.environ and found it missing while its siblings above were all
+    // present. Deliver it the same way.
+    WORKFLOW_ID: workflowRun.id,
     BASE_BRANCH: baseBranch,
     USER_MESSAGE: workflowRun.user_message,
     ARGUMENTS: workflowRun.user_message,
@@ -2930,6 +2934,10 @@ async function executeScriptNode(
     ARTIFACTS_DIR: artifactsDir,
     STATE_DIR: stateDir,
     LOG_DIR: logDir,
+    // $WORKFLOW_ID substitutes into the body, but a heredoc'd python/node block
+    // reads os.environ and found it missing while its siblings above were all
+    // present. Deliver it the same way.
+    WORKFLOW_ID: workflowRun.id,
     BASE_BRANCH: baseBranch,
     USER_MESSAGE: workflowRun.user_message,
     ARGUMENTS: workflowRun.user_message,
