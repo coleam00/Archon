@@ -152,13 +152,20 @@ nodes:
   # Bridge: ensure investigation.md exists for the implement step
   # archon-fix-issue reads from $ARTIFACTS_DIR/investigation.md
   # archon-create-plan writes to $ARTIFACTS_DIR/plan.md
-  # This node copies plan.md → investigation.md when the plan path was taken
+  # Bridges plan.md → investigation.md and emits the proceed/skip gate signal
+  # (JSON on stdout) that `implement` gates on; also handles the sanctioned
+  # .no-op sentinel and the malfunction hard-fail.
   - id: bridge-artifacts
     bash: |
       # Emits pure JSON on stdout ({"proceed":"true"|"false"}); human-readable
       # notes go to stderr. `implement` gates on $bridge-artifacts.output.proceed.
       if [ -f "$ARTIFACTS_DIR/plan.md" ] && [ ! -f "$ARTIFACTS_DIR/investigation.md" ]; then
-        cp "$ARTIFACTS_DIR/plan.md" "$ARTIFACTS_DIR/investigation.md"
+        # Hard-fail if the copy fails — proceeding with proceed:"true" against a
+        # missing investigation.md would send `implement` in with no spec.
+        if ! cp "$ARTIFACTS_DIR/plan.md" "$ARTIFACTS_DIR/investigation.md"; then
+          echo "bridge-artifacts: failed to copy plan.md → investigation.md (cp exited non-zero)." >&2
+          exit 1
+        fi
         echo "Bridged plan.md to investigation.md for implement step" >&2
         echo '{"proceed":"true"}'
       elif [ -f "$ARTIFACTS_DIR/investigation.md" ]; then
