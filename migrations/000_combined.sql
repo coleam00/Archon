@@ -282,9 +282,12 @@ CREATE INDEX IF NOT EXISTS idx_workflow_events_type
 -- (WHERE created_at >= $1 ORDER BY created_at ASC).
 CREATE INDEX IF NOT EXISTS idx_workflow_events_created_at
   ON remote_agent_workflow_events(created_at);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_events_run_order
-  ON remote_agent_workflow_events(workflow_run_id, event_order)
-  WHERE event_order IS NOT NULL;
+-- idx_workflow_events_run_order is NOT created here (#2508). It indexes
+-- event_order, and on an EXISTING database the CREATE TABLE above is a no-op —
+-- so the column is absent at this point and the index aborts the whole
+-- schema-apply transaction. It is created in the additive block below, directly
+-- after the ALTER TABLE that adds the column, which is correct for both a fresh
+-- and an upgrading database.
 
 COMMENT ON TABLE remote_agent_workflow_events IS
   'Lean UI-relevant workflow events for observability (step transitions, artifacts, errors)';
