@@ -45,6 +45,9 @@ const mockUpdateWorkflowRun = mock(() => Promise.resolve());
 // findChildRuns → pool.query → created and schema-initialised a real SQLite
 // database on disk, in a test that reads as fully mocked (#2240).
 const mockFindChildRuns = mock(() => Promise.resolve([]));
+const mockFindResumableRunIdsForConversation = mock(
+  (): Promise<string[]> => Promise.resolve([] as string[])
+);
 // CAS gate resolvers (#2113) — approve/reject stamp the resolution atomically here
 // instead of via updateWorkflowRun. resolveAndCancelApprovalGate is the atomic
 // resolve+cancel for terminal reject outcomes. Default to "won the race".
@@ -102,6 +105,7 @@ mock.module('../db/workflows', () => ({
   listWorkflowRuns: mockListWorkflowRuns,
   getWorkflowRun: mockGetWorkflowRun,
   findChildRuns: mockFindChildRuns,
+  findResumableRunIdsForConversation: mockFindResumableRunIdsForConversation,
   resumeWorkflowRun: mockResumeWorkflowRun,
   failWorkflowRun: mockFailWorkflowRun,
   updateWorkflowRun: mockUpdateWorkflowRun,
@@ -741,6 +745,72 @@ describe('CommandHandler', () => {
     });
 
     describe('/reset', () => {
+      beforeEach(() => {
+        mockFindResumableRunIdsForConversation.mockClear();
+        mockFindResumableRunIdsForConversation.mockImplementation(() => Promise.resolve([]));
+        mockUpdateConversation.mockClear();
+        mockUpdateConversation.mockImplementation(() => Promise.resolve());
+        mockGetWorkflowRun.mockClear();
+        mockCancelWorkflowRun.mockClear();
+        mockCancelWorkflowRun.mockImplementation(() => Promise.resolve({ cancelled: true }));
+      });
+
+      test('clears the execution binding but preserves the project attachment', async () => {
+        mockGetActiveSession.mockResolvedValue(null);
+
+        const result = await handleCommand(baseConversation, '/reset');
+
+        expect(result.success).toBe(true);
+        // cwd + isolation env go; codebase_id is deliberately absent from the
+        // payload — detaching the project is /setproject none's job.
+        expect(mockUpdateConversation).toHaveBeenCalledWith(baseConversation.id, {
+          cwd: null,
+          isolation_env_id: null,
+        });
+        const [, payload] = mockUpdateConversation.mock.calls[0] as [string, object];
+        expect(payload).not.toHaveProperty('codebase_id');
+        expect(result.message).toContain('Project attachment preserved');
+      });
+
+      test('abandons resumable runs and names the count', async () => {
+        mockGetActiveSession.mockResolvedValue(null);
+        mockFindResumableRunIdsForConversation.mockImplementation(() =>
+          Promise.resolve(['run-a', 'run-b'])
+        );
+        mockGetWorkflowRun.mockImplementation((id: unknown) =>
+          Promise.resolve({ id, status: 'paused', metadata: {} })
+        );
+
+        const result = await handleCommand(baseConversation, '/reset');
+
+        expect(mockFindResumableRunIdsForConversation).toHaveBeenCalledWith(baseConversation.id);
+        expect(mockCancelWorkflowRun.mock.calls.map(c => c[0])).toEqual(['run-a', 'run-b']);
+        // "resumable", not "pending": pending is itself a status name and reads
+        // as "waiting" to a user.
+        expect(result.message).toContain('Abandoned 2 resumable run(s).');
+      });
+
+      test('still reports the abandoned count when clearing the binding fails', async () => {
+        // The two effects live in separate try blocks precisely so a failure in
+        // the second cannot swallow what the first already did.
+        mockGetActiveSession.mockResolvedValue(null);
+        mockFindResumableRunIdsForConversation.mockImplementation(() => Promise.resolve(['run-a']));
+        mockGetWorkflowRun.mockImplementation((id: unknown) =>
+          Promise.resolve({ id, status: 'paused', metadata: {} })
+        );
+        mockUpdateConversation.mockImplementation(() =>
+          Promise.reject(new Error('Conversation not found: conv-123'))
+        );
+
+        const result = await handleCommand(baseConversation, '/reset');
+
+        expect(result.success).toBe(false);
+        expect(result.message).toContain('Abandoned 1 resumable run(s).');
+        expect(result.message).toContain('Could not clear the workspace binding');
+        // And it must NOT claim the binding was cleared.
+        expect(result.message).not.toContain('Cleared workspace binding');
+      });
+
       test('should deactivate active session', async () => {
         mockGetActiveSession.mockResolvedValue({
           id: 'session-123',

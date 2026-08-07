@@ -48,7 +48,7 @@ These commands are handled deterministically by the orchestrator — they always
 | Command | Description |
 |---------|-------------|
 | `/status` | Show conversation state |
-| `/reset` | Clear session completely |
+| `/reset` | Start fresh: clears the AI session, releases the execution binding (working-directory override + isolation env), and abandons this conversation's **resumable** runs (`paused`/`failed`) so the next message does not continue one. Runs that are actively executing (`pending`/`running`) are never touched -- they may belong to another process entirely. The project attachment (`codebase_id`) is preserved; use `/setproject none` to drop that too |
 | `/help` | Show all commands |
 
 ---
@@ -111,9 +111,9 @@ Bot: Platform: telegram
 ```
 You: /reset
 
-Bot: Session cleared. Starting fresh on next message.
-
-     Codebase configuration preserved.
+Bot: Session cleared. Cleared workspace binding (worktree + isolation env).
+     Abandoned 1 resumable run(s). Project attachment preserved — next message
+     starts fresh.
 ```
 
 ---

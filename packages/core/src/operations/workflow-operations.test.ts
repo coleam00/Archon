@@ -9,6 +9,9 @@ const mockListWorkflowRuns = mock(() => Promise.resolve([]));
 const mockUpdateWorkflowRun = mock(() => Promise.resolve());
 const mockCancelWorkflowRun = mock(() => Promise.resolve({ cancelled: true }));
 const mockFindChildRuns = mock((): Promise<unknown[]> => Promise.resolve([]));
+const mockFindResumableRunIdsForConversation = mock(
+  (): Promise<string[]> => Promise.resolve([] as string[])
+);
 // CAS gate resolvers (#2113): default to "won the race". Tests that simulate a
 // concurrent loser override with mockResolvedValueOnce({ resolved: false }).
 // resolveApprovalGate = stay-paused resolution (approve, reject stage-rework);
@@ -22,6 +25,7 @@ mock.module('../db/workflows', () => ({
   updateWorkflowRun: mockUpdateWorkflowRun,
   cancelWorkflowRun: mockCancelWorkflowRun,
   findChildRuns: mockFindChildRuns,
+  findResumableRunIdsForConversation: mockFindResumableRunIdsForConversation,
   resolveApprovalGate: mockResolveApprovalGate,
   resolveAndCancelApprovalGate: mockResolveAndCancelApprovalGate,
 }));
@@ -66,6 +70,7 @@ const {
   getWorkflowStatus,
   resumeWorkflow,
   abandonWorkflow,
+  abandonResumableRunsForConversation,
   resetWorkflowNodeSessions,
 } = await import('./workflow-operations');
 
@@ -918,6 +923,73 @@ describe('abandonWorkflow', () => {
 
     await expect(abandonWorkflow('run-1')).rejects.toThrow(
       "Cannot abandon run with status 'cancelled'"
+    );
+  });
+});
+
+describe('abandonResumableRunsForConversation', () => {
+  beforeEach(() => {
+    mockFindResumableRunIdsForConversation.mockClear();
+    mockFindResumableRunIdsForConversation.mockImplementation(() => Promise.resolve([]));
+    mockGetWorkflowRun.mockClear();
+    mockGetWorkflowRun.mockImplementation(() => Promise.resolve(makePausedRun()));
+    mockCancelWorkflowRun.mockClear();
+    mockCancelWorkflowRun.mockImplementation(() => Promise.resolve({ cancelled: true }));
+    mockFindChildRuns.mockClear();
+    mockFindChildRuns.mockImplementation(() => Promise.resolve([]));
+  });
+
+  test('reports zero when the conversation has nothing resumable', async () => {
+    const result = await abandonResumableRunsForConversation('conv-1');
+
+    expect(result).toEqual({ abandoned: 0, failures: 0 });
+    expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  test('routes every resumable run through the shared abandon op', async () => {
+    // Going through abandonWorkflow (rather than a bulk UPDATE) is what buys the
+    // CAS guard, the sub-run cascade and the container/volume reclaim.
+    mockFindResumableRunIdsForConversation.mockImplementation(() =>
+      Promise.resolve(['run-a', 'run-b'])
+    );
+    mockGetWorkflowRun.mockImplementation((id: unknown) =>
+      Promise.resolve(makePausedRun({ id: id as string }))
+    );
+
+    const result = await abandonResumableRunsForConversation('conv-1');
+
+    expect(result).toEqual({ abandoned: 2, failures: 0 });
+    expect(mockFindResumableRunIdsForConversation).toHaveBeenCalledWith('conv-1');
+    expect(mockCancelWorkflowRun.mock.calls.map(c => c[0])).toEqual(['run-a', 'run-b']);
+  });
+
+  test('counts a run that went terminal mid-loop and keeps going', async () => {
+    // A row can go terminal between the SELECT and the abandon, which makes
+    // abandonWorkflow throw. One racing run must not abort the whole reset.
+    mockFindResumableRunIdsForConversation.mockImplementation(() =>
+      Promise.resolve(['run-gone', 'run-ok'])
+    );
+    mockGetWorkflowRun.mockImplementation((id: unknown) =>
+      Promise.resolve(
+        id === 'run-gone'
+          ? makePausedRun({ id: 'run-gone', status: 'completed' })
+          : makePausedRun({ id: id as string })
+      )
+    );
+
+    const result = await abandonResumableRunsForConversation('conv-1');
+
+    expect(result).toEqual({ abandoned: 1, failures: 1 });
+    expect(mockCancelWorkflowRun.mock.calls.map(c => c[0])).toEqual(['run-ok']);
+  });
+
+  test('propagates a lookup failure rather than reporting a false all-clear', async () => {
+    mockFindResumableRunIdsForConversation.mockImplementation(() =>
+      Promise.reject(new Error('Connection refused'))
+    );
+
+    await expect(abandonResumableRunsForConversation('conv-1')).rejects.toThrow(
+      'Connection refused'
     );
   });
 });
