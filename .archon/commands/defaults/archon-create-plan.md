@@ -720,6 +720,25 @@ Plan ready. Proceeding to implementation setup.
 
 ---
 
+## Handling Edge Cases
+
+### When there is legitimately nothing to plan (sanctioned no-op)
+
+If — and ONLY if — you deliberately conclude there is nothing to implement (the issue is
+already closed/fixed, already assigned, or the run's trigger was conditional and its
+precondition is NOT met, e.g. "check if #123 is still open; if yes, tackle it"), do NOT
+fabricate a `plan.md`. Instead, signal a clean no-op so the workflow terminates
+successfully rather than erroring:
+
+```bash
+echo "issue #123 already closed (fixed by #456); conditional trigger not met" > "$ARTIFACTS_DIR/.no-op"
+```
+
+Write ONE line stating the reason. Still report your conclusion in chat / on the GitHub
+issue as usual. Do this only for a genuine decision — never to escape a hard planning task.
+
+---
+
 ## Success Criteria
 
 - **CONTEXT_COMPLETE**: All patterns, gotchas, integration points documented from actual codebase via Explore agent

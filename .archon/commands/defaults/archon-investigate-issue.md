@@ -602,11 +602,29 @@ Run `/implement-issue {number}` to execute the plan.
 
 ### Issue is already closed
 - Report: "Issue #{number} is already closed"
-- Still create artifact if user wants analysis
+- For an *unconditional* investigation request, still create the artifact if the
+  user wants analysis.
+- For a *conditional* trigger whose precondition is now false (see the sanctioned
+  no-op below), do NOT fabricate an artifact — signal a clean no-op instead.
 
 ### Issue already has linked PR
 - Warn: "PR #{pr} already addresses this issue"
 - Ask if user wants to continue anyway
+
+### When there is legitimately nothing to investigate (sanctioned no-op)
+
+If — and ONLY if — you deliberately conclude there is nothing to implement (the issue is
+already closed/fixed, already assigned, or the run's trigger was conditional and its
+precondition is NOT met, e.g. "check if #123 is still open; if yes, tackle it"), do NOT
+fabricate an `investigation.md`. Instead, signal a clean no-op so the workflow terminates
+successfully rather than erroring:
+
+```bash
+echo "issue #123 already closed (fixed by #456); conditional trigger not met" > "$ARTIFACTS_DIR/.no-op"
+```
+
+Write ONE line stating the reason. Still report your conclusion in chat / on the GitHub
+issue as usual. Do this only for a genuine decision — never to escape a hard investigation.
 
 ### Can't determine root cause
 - Document what you found

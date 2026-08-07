@@ -155,19 +155,32 @@ nodes:
   # This node copies plan.md → investigation.md when the plan path was taken
   - id: bridge-artifacts
     bash: |
+      # Emits pure JSON on stdout ({"proceed":"true"|"false"}); human-readable
+      # notes go to stderr. `implement` gates on $bridge-artifacts.output.proceed.
       if [ -f "$ARTIFACTS_DIR/plan.md" ] && [ ! -f "$ARTIFACTS_DIR/investigation.md" ]; then
         cp "$ARTIFACTS_DIR/plan.md" "$ARTIFACTS_DIR/investigation.md"
-        echo "Bridged plan.md to investigation.md for implement step"
+        echo "Bridged plan.md to investigation.md for implement step" >&2
+        echo '{"proceed":"true"}'
       elif [ -f "$ARTIFACTS_DIR/investigation.md" ]; then
-        echo "investigation.md exists from investigate step"
+        echo "investigation.md exists from investigate step" >&2
+        echo '{"proceed":"true"}'
+      elif [ -f "$ARTIFACTS_DIR/.no-op" ]; then
+        # investigate/plan DELIBERATELY declined — a sanctioned no-op (issue already
+        # closed/fixed/assigned, or a conditional precondition not met). This is the
+        # right outcome, not a malfunction: terminate the run cleanly by telling
+        # `implement` (and the whole tail) to skip. A malfunctioning/refusing skill
+        # never writes .no-op, so the hard-fail branch below still catches it.
+        echo "bridge-artifacts: investigate/plan reported a deliberate no-op:" >&2
+        cat "$ARTIFACTS_DIR/.no-op" >&2
+        echo '{"proceed":"false"}'
       else
         # Fail, do not warn. investigate/plan can "succeed" while producing no
         # artifact — an AI node that declines the task still exits 0, so the
-        # refusal reads downstream as a completed investigation. This node holds
-        # the only cheap deterministic view of that precondition, so it is where
-        # the run has to stop, before implement spends a model on nothing.
-        echo "bridge-artifacts: neither investigation.md nor plan.md exists in \$ARTIFACTS_DIR." >&2
-        echo "The investigate/plan phase produced no specification — implement has nothing to work from." >&2
+        # refusal reads downstream as a completed investigation. Absent both a spec
+        # AND the .no-op sentinel, this is a genuine malfunction: stop the run here,
+        # before implement spends a model on nothing.
+        echo "bridge-artifacts: neither investigation.md nor plan.md nor a .no-op sentinel exists in \$ARTIFACTS_DIR." >&2
+        echo "The investigate/plan phase produced no specification and did not signal a deliberate no-op — implement has nothing to work from." >&2
         exit 1
       fi
     depends_on: [investigate, plan]
@@ -180,6 +193,9 @@ nodes:
   - id: implement
     command: archon-fix-issue
     depends_on: [bridge-artifacts]
+    # Skip (and cascade-skip the whole tail) when investigate/plan deliberately
+    # declined — a clean no-op terminates the run as `completed`, not an error.
+    when: "$bridge-artifacts.output.proceed == 'true'"
     context: fresh
     model: large
 
