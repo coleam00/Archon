@@ -27,6 +27,7 @@ import { toError } from '../utils/error';
 import { safeDeactivateSession } from '../state/session-transitions';
 import { getAgentProvider, getProviderCapabilities } from '@archon/providers';
 import { buildManageRunTool } from './manage-run-tool';
+import { resolveDispatch, resolveDispatchSigil, type DispatchDecision } from './dispatch';
 import { getArchonWorkspacesPath, ensureArchonWorkspacesPath } from '@archon/paths';
 import { syncArchonToWorktree } from '../utils/worktree-sync';
 import {
@@ -627,6 +628,14 @@ interface WorkflowDispatchOptions {
    * picker.
    */
   parseWarnings?: readonly string[];
+
+  /**
+   * Files that arrived with the triggering message. Delivered to the run as the
+   * `ARCHON_ATTACHMENTS` env var for `bash:`/`script:` nodes. Rides in the
+   * options bag so both entry points (`handleWorkflowRunCommand` for
+   * `/workflow run`, and default-workflow dispatch) thread it the same way.
+   */
+  attachments?: readonly AttachedFile[];
 }
 
 const FAILED_RUN_PROMPT_PREVIEW_MAX = 160;
@@ -921,6 +930,7 @@ async function dispatchOrchestratorWorkflow(
           userId,
           source,
           parseWarnings: options?.parseWarnings,
+          attachments: options?.attachments,
           baseBranch: codebaseBaseBranch,
           resolveChildIsolation,
           ...prepared,
@@ -945,6 +955,7 @@ async function dispatchOrchestratorWorkflow(
           userId,
           source,
           parseWarnings: options?.parseWarnings,
+          attachments: options?.attachments,
           baseBranch: codebaseBaseBranch,
           resolveChildIsolation,
         }
@@ -965,6 +976,7 @@ async function dispatchOrchestratorWorkflow(
         userId,
         source,
         parseWarnings: options?.parseWarnings,
+        attachments: options?.attachments,
       },
       workflow
     );
@@ -984,11 +996,122 @@ async function dispatchOrchestratorWorkflow(
         userId,
         source,
         parseWarnings: options?.parseWarnings,
+        attachments: options?.attachments,
         baseBranch: codebaseBaseBranch,
         resolveChildIsolation,
       }
     );
   }
+}
+
+// ─── Default-Workflow Dispatch ──────────────────────────────────────────────
+
+/**
+ * Decide what the global `dispatch:` table means for this conversation's next
+ * message.
+ *
+ * Split from the execution below so `handleMessage` reads as decide-then-act.
+ * Ordered cheapest-check-first: an unscoped conversation costs nothing, and an
+ * install with no `dispatch:` configured (the overwhelming majority) costs one
+ * memoized global-config read and never touches the database. `loadConfig()` is
+ * called without a repo path on purpose — `dispatch:` is global-only, so the
+ * repo layer has nothing to contribute.
+ */
+async function resolveConversationDispatch(
+  conversation: Conversation,
+  message: string
+): Promise<DispatchDecision> {
+  if (!conversation.codebase_id) return { kind: 'chat', message };
+
+  const { dispatch, dispatchSigil } = await loadConfig();
+  if (!dispatch || Object.keys(dispatch).length === 0) return { kind: 'chat', message };
+
+  const codebase = await codebaseDb.getCodebase(conversation.codebase_id);
+  return resolveDispatch(message, codebase?.name, dispatch, dispatchSigil);
+}
+
+/**
+ * Run the default workflow that a `dispatch:` entry names.
+ *
+ * A configured-but-unresolvable workflow is reported to the user and the
+ * message is dropped — never quietly forwarded to the AI router. Silently
+ * reverting a dispatched project to normal routing is the failure mode that is
+ * hardest to notice from inside a chat thread, since the reply still looks
+ * plausible (Fail Fast + Explicit Errors).
+ *
+ * Execution reuses `handleWorkflowRunCommand`, the same path `/workflow run`
+ * takes, so isolation resolution, `requires:` gates, and resume detection all
+ * behave identically however the workflow was chosen.
+ */
+async function runDispatchedWorkflow(
+  platform: IPlatformAdapter,
+  conversationId: string,
+  conversation: Conversation,
+  workflowName: string,
+  message: string,
+  isolationHints: HandleMessageContext['isolationHints'],
+  userId: string | undefined,
+  attachments: readonly AttachedFile[] | undefined
+): Promise<void> {
+  const { workflows: discovered } = await discoverAllWorkflows(conversation);
+  const available = discovered.map(w => w.workflow);
+
+  // Needed only by the two failure paths below, but naming the install's actual
+  // escape prefix is the whole point of telling the user about it — a hardcoded
+  // `?` would be wrong advice on any install that configured `dispatchSigil:`.
+  // `loadConfig` is memoized, so this re-read costs nothing.
+  const sigil = resolveDispatchSigil((await loadConfig()).dispatchSigil);
+
+  let workflow: WorkflowDefinition | undefined;
+  try {
+    workflow = resolveWorkflowName(workflowName, available);
+  } catch (error) {
+    // resolveWorkflowName throws only on ambiguity (a fuzzy tier matched more
+    // than one workflow). Report the ambiguity verbatim — it names the
+    // candidates, which is exactly what the operator needs to fix the mapping.
+    getLog().error(
+      { err: error as Error, conversationId, workflowName },
+      'orchestrator.dispatch_workflow_ambiguous'
+    );
+    await platform.sendMessage(
+      conversationId,
+      `⚠️ This project's default workflow \`${workflowName}\` (\`dispatch:\` in ` +
+        `\`~/.archon/config.yaml\`) is ambiguous: ${(error as Error).message}\n\n` +
+        'Nothing was run. Use the exact workflow name, or prefix a message with ' +
+        `\`${sigil}\` to chat with the AI instead.`
+    );
+    return;
+  }
+
+  if (!workflow) {
+    getLog().error(
+      { conversationId, workflowName, availableCount: available.length },
+      'orchestrator.dispatch_workflow_not_found'
+    );
+    await platform.sendMessage(
+      conversationId,
+      `⚠️ This project's default workflow \`${workflowName}\` (\`dispatch:\` in ` +
+        '`~/.archon/config.yaml`) was not found.\n\n' +
+        'Nothing was run. Fix the mapping, check `/workflow list`, or prefix a ' +
+        `message with \`${sigil}\` to chat with the AI instead.`
+    );
+    return;
+  }
+
+  getLog().info(
+    { conversationId, workflowName: workflow.name, codebaseId: conversation.codebase_id },
+    'orchestrator.dispatch_started'
+  );
+  await handleWorkflowRunCommand(
+    platform,
+    conversationId,
+    conversation,
+    workflow,
+    message,
+    isolationHints,
+    userId,
+    { attachments }
+  );
 }
 
 // ─── Session Helpers ────────────────────────────────────────────────────────
@@ -1393,12 +1516,40 @@ export async function handleMessage(
               resumeRunId: result.workflow.resumeRunId,
               resumeRun: result.workflow.resumeRun,
               parseWarnings: result.workflow.parseWarnings,
+              attachments: attachedFiles,
             }
           );
         }
         return;
       }
     }
+
+    // 3. Convention-based default-workflow dispatch. A conversation bound to a
+    // project listed in `dispatch:` sends every plain message straight to that
+    // project's workflow, bypassing the AI router. Slash commands already
+    // returned above; a message led by the escape sigil (`dispatchSigil:`,
+    // default `"? "`) falls through to chat below.
+    //
+    // Placed after the paused-approval branch so answering an open gate still
+    // wins, and before the message-persistence block so a dispatched turn
+    // creates no orphan user row — exactly how `/workflow run` behaves.
+    const dispatchDecision = await resolveConversationDispatch(conversation, message);
+    if (dispatchDecision.kind === 'workflow') {
+      await runDispatchedWorkflow(
+        platform,
+        conversationId,
+        conversation,
+        dispatchDecision.workflowName,
+        dispatchDecision.message,
+        isolationHints,
+        userId,
+        attachedFiles
+      );
+      return;
+    }
+    // From here on `message` is the ROUTED text: byte-for-byte the inbound
+    // message, except in a dispatched project where a leading sigil was consumed.
+    message = dispatchDecision.message;
 
     // Persist the inbound user message for non-web platforms (Slack/Telegram/
     // GitHub/Discord/CLI) — the web adapter's route persists web turns itself.

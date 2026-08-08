@@ -222,6 +222,13 @@ const DEFAULT_CONFIG_CONTENT = `# Archon Global Configuration
 # Concurrency settings
 # concurrency:
 #   maxConversations: 10
+
+# Per-project default workflow (global only, all platforms).
+# Every non-slash message in a conversation bound to a listed project runs that
+# workflow instead of the AI router. Prefix a message with "? " to ask the AI instead.
+# dispatch:
+#   githubName/githubRepo: assignedWorkflow   # <registered project name>: <workflow name>
+# dispatchSigil: '? '   # escape prefix; quote it — the trailing space is part of it
 `;
 
 /**
@@ -513,6 +520,18 @@ function mergeGlobalConfig(defaults: MergedConfig, global: GlobalConfig): Merged
   // Container backend defaults (folder projects)
   if (global.container) {
     result.container = { ...global.container };
+  }
+
+  // Project → default-workflow interception table. Global-only by design (the
+  // keys are install-level project names), so there is no matching branch in
+  // mergeRepoConfig.
+  if (global.dispatch) {
+    result.dispatch = { ...global.dispatch };
+  }
+  // Passed through raw — the `"? "` default lives in `resolveDispatchSigil`,
+  // not here, so an unset key stays distinguishable from an explicit one.
+  if (global.dispatchSigil !== undefined) {
+    result.dispatchSigil = global.dispatchSigil;
   }
 
   return result;

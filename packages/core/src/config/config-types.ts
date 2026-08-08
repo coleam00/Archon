@@ -178,6 +178,51 @@ export interface GlobalConfig {
    * overrides these per-field.
    */
   container?: ContainerConfig;
+
+  /**
+   * Per-project message interception: `<registered project>: <workflow name>`.
+   *
+   * Every non-slash message in a conversation bound to a listed project goes
+   * straight to that workflow, bypassing the AI router. Projects not listed
+   * here are untouched and keep normal routing.
+   *
+   * Global-only by design: the keys are install-level project names (the ones
+   * used with `/register-project <name>` and `/setproject <name>`), which a
+   * repo's own config cannot know — and folder projects have no repo to hold a
+   * config file at all.
+   *
+   * Platform-agnostic: enforced at the single `handleMessage` intake seam, so
+   * it applies identically to Slack, Telegram, Discord, GitHub, web, and CLI.
+   *
+   * Escape hatches, in precedence order:
+   *   1. `/command`  — slash commands route exactly as they do today
+   *   2. `? message` — the `dispatchSigil:` prefix falls through to normal AI chat
+   *
+   * A listed project whose workflow cannot be resolved is reported to the user,
+   * never silently fallen through to the AI router (Fail Fast — a config typo
+   * must not quietly restore the old behavior).
+   *
+   * @example
+   * dispatch:
+   *   githubName/githubRepo: assignedWorkflow
+   */
+  dispatch?: Record<string, string>;
+
+  /**
+   * Prefix that opts a single message out of `dispatch:` and back into normal
+   * AI chat/routing. Defaults to `"? "` — note the trailing space, which is
+   * part of the sigil and is what makes the escape deliberate rather than
+   * accidental (`?!` and `?typo` are content, `? explain this` is a question).
+   *
+   * Global-only, for the same reason as `dispatch:` itself: it is meaningless
+   * without the table it escapes from, and the two must be read together.
+   *
+   * Quote it in YAML — bare trailing whitespace is stripped by the parser:
+   *
+   * @example
+   * dispatchSigil: '? '
+   */
+  dispatchSigil?: string;
 }
 
 /**
@@ -419,6 +464,20 @@ export interface MergedConfig {
    * config is consumed (CLI folder branch). Undefined when nothing is configured.
    */
   container?: ContainerConfig;
+  /**
+   * Project → default-workflow interception table, passed through from global
+   * config. Undefined when nothing is configured (the overwhelmingly common
+   * case), which is what keeps the intake seam a single cheap check. Global-only
+   * by design, so there is no repo-level merge for it.
+   */
+  dispatch?: Record<string, string>;
+  /**
+   * Escape prefix for `dispatch:`, passed through from global config. Undefined
+   * when nothing is configured; the default (`"? "`) is applied where it is
+   * consumed, by `resolveDispatchSigil`, so the raw absence stays visible here.
+   * Global-only by design, so there is no repo-level merge for it.
+   */
+  dispatchSigil?: string;
 }
 
 /**

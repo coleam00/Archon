@@ -451,9 +451,37 @@ type ResumePayload =
  * and spread them in. The executor never queries the store for a prior run on
  * its own; that decision belongs at the call site.
  */
+/**
+ * A file that arrived with the message that started this run.
+ *
+ * Structurally mirrors `AttachedFile` in `@archon/core` — declared here rather
+ * than imported because `@archon/workflows` must not depend on `@archon/core`
+ * (the dependency runs the other way). The two are assignable, so core call
+ * sites pass their `AttachedFile[]` straight through.
+ */
+export interface WorkflowAttachment {
+  /** Absolute path on disk where the adapter saved the file. */
+  path: string;
+  name: string;
+  mimeType: string;
+  size: number;
+}
+
 export type ExecuteWorkflowOptions = ResumePayload & {
   /** Codebase ID for env vars + isolation context. */
   codebaseId?: string;
+  /**
+   * Files that arrived with the triggering message (Slack/Discord uploads, web
+   * UI attachments). Delivered to `bash:`/`script:` nodes as the
+   * `ARCHON_ATTACHMENTS` env var — a JSON array, ALWAYS set (`[]` when there
+   * are none) so a script can `JSON.parse` it unconditionally rather than
+   * branching on presence.
+   *
+   * Not substituted into prompts: prompt nodes already learn about attachments
+   * from the message text, and a `$ATTACHMENTS` variable would mean inventing
+   * an escaping rule for arbitrary filenames (YAGNI until asked for).
+   */
+  attachments?: readonly WorkflowAttachment[];
   /**
    * Caller-provided base branch fallback for `$BASE_BRANCH`, normally the
    * codebase's stored `default_branch`. Repo config still wins when
@@ -1109,6 +1137,7 @@ export async function executeWorkflow(
     userId,
     source,
     parseWarnings,
+    attachments,
     baseBranch: callerBaseBranch,
     baseOverride: callerBaseOverride,
     execContext = { kind: 'host' },
@@ -1154,12 +1183,24 @@ export async function executeWorkflow(
   const userGitHubEnv = await resolveUserGithubEnvForWorkflow(deps, userId);
   const config: WorkflowConfig = {
     ...fileConfig,
-    // Order: file < db < bot-token < per-user. Per-codebase env vars are
-    // operator-set; the injected bot token is system-set; the per-user override
-    // wins last so a run routes through the originating human's token (or scrubs
-    // the org/bot token when they haven't connected). Empty-string values from
-    // the per-user policy scrub the corresponding key via the subprocess merge.
-    envVars: { ...fileConfig.envVars, ...dbEnvVars, ...botGitHubEnv, ...userGitHubEnv },
+    // Order: file < db < bot-token < per-user < attachments. Per-codebase env
+    // vars are operator-set; the injected bot token is system-set; the per-user
+    // override wins over those so a run routes through the originating human's
+    // token (or scrubs the org/bot token when they haven't connected).
+    // Empty-string values from the per-user policy scrub the corresponding key
+    // via the subprocess merge.
+    //
+    // ARCHON_ATTACHMENTS is applied LAST and unconditionally: it describes THIS
+    // run's inbound files, so a stale operator-set value of the same name must
+    // never shadow it, and always setting it (to `[]` when empty) lets scripts
+    // JSON.parse without a presence check.
+    envVars: {
+      ...fileConfig.envVars,
+      ...dbEnvVars,
+      ...botGitHubEnv,
+      ...userGitHubEnv,
+      ARCHON_ATTACHMENTS: JSON.stringify(attachments ?? []),
+    },
   };
   const configuredCommandFolder = config.commands.folder;
 

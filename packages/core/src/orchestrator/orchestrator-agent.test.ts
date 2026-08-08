@@ -1255,7 +1255,10 @@ describe('discoverAllWorkflows — remote sync', () => {
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
     mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
     mockGetCodebaseEnvVars.mockResolvedValueOnce({ DB_SECRET: 'db-value' });
-    mockLoadConfig.mockResolvedValueOnce({
+    // Not `...Once`: handleMessage reads config more than once per turn (the
+    // dispatch lookup, then the chat path), and a single-shot queue would hand
+    // the second reader the default mock. beforeEach resets this.
+    mockLoadConfig.mockResolvedValue({
       assistants: { claude: {}, codex: {} },
       envVars: { FILE_SECRET: 'file-value' },
     });
@@ -1287,7 +1290,10 @@ describe('discoverAllWorkflows — remote sync', () => {
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
     mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
     mockGetCodebaseEnvVars.mockRejectedValueOnce(new Error('db unavailable'));
-    mockLoadConfig.mockResolvedValueOnce({
+    // Not `...Once`: handleMessage reads config more than once per turn (the
+    // dispatch lookup, then the chat path), and a single-shot queue would hand
+    // the second reader the default mock. beforeEach resets this.
+    mockLoadConfig.mockResolvedValue({
       assistants: { claude: {}, codex: {} },
       envVars: { FILE_SECRET: 'file-value' },
     });

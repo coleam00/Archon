@@ -1373,9 +1373,77 @@ describe('executeWorkflow', () => {
       // DB env vars should have been fetched for the codebaseId
       expect(store.getCodebaseEnvVars).toHaveBeenCalledWith('codebase-1');
 
-      // The config passed to executeDagWorkflow (arg index 12) should have merged envVars
+      // The config passed to executeDagWorkflow (arg index 13) should have merged envVars.
+      // ARCHON_ATTACHMENTS is always present — see the attachments suite below.
       const configArg = mockExecuteDagWorkflow.mock.calls[0]?.[13] as WorkflowConfig | undefined;
-      expect(configArg?.envVars).toEqual({ FILE_KEY: 'file_val', DB_KEY: 'db_val' });
+      expect(configArg?.envVars).toEqual({
+        FILE_KEY: 'file_val',
+        DB_KEY: 'db_val',
+        ARCHON_ATTACHMENTS: '[]',
+      });
+    });
+
+    it('exposes inbound attachments to bash/script nodes as ARCHON_ATTACHMENTS', async () => {
+      const deps = makeDeps(makeStore());
+      const attachment = {
+        path: '/tmp/uploads/note.pdf',
+        name: 'note.pdf',
+        mimeType: 'application/pdf',
+        size: 1234,
+      };
+
+      await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'test message',
+        'db-conv-1',
+        { attachments: [attachment] }
+      );
+
+      const configArg = mockExecuteDagWorkflow.mock.calls[0]?.[13] as WorkflowConfig | undefined;
+      expect(JSON.parse(configArg?.envVars?.ARCHON_ATTACHMENTS ?? 'null')).toEqual([attachment]);
+    });
+
+    it('sets ARCHON_ATTACHMENTS to an empty array when nothing was attached', async () => {
+      // Always set, so a script can JSON.parse without a presence check.
+      const deps = makeDeps(makeStore());
+
+      await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'test message',
+        'db-conv-1'
+      );
+
+      const configArg = mockExecuteDagWorkflow.mock.calls[0]?.[13] as WorkflowConfig | undefined;
+      expect(configArg?.envVars?.ARCHON_ATTACHMENTS).toBe('[]');
+    });
+
+    it('does not let a stale operator-set ARCHON_ATTACHMENTS shadow the real one', async () => {
+      const store = makeStore({
+        getCodebaseEnvVars: mock(async () => ({ ARCHON_ATTACHMENTS: 'stale' })),
+      });
+      const deps = makeDeps(store);
+
+      await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'test message',
+        'db-conv-1',
+        { codebaseId: 'codebase-1' }
+      );
+
+      const configArg = mockExecuteDagWorkflow.mock.calls[0]?.[13] as WorkflowConfig | undefined;
+      expect(configArg?.envVars?.ARCHON_ATTACHMENTS).toBe('[]');
     });
 
     it('does not call getCodebaseEnvVars when no codebaseId', async () => {
