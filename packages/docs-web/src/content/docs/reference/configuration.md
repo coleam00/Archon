@@ -116,6 +116,66 @@ aliases:
 
 The `tiers:` block above is no longer hand-edit-only -- you can also set the `small`/`medium`/`large` presets from the console **AI Settings** -> **Model Tiers** panel, or from the CLI with [`archon ai tier set`](/reference/cli/#ai). Connecting your own provider API key or subscription is covered in [Per-user credentials and AI Settings](/getting-started/ai-assistants/#per-user-credentials-and-ai-settings).
 
+### Default workflow dispatch (`dispatch`)
+
+Makes a project **convention-based**: every plain message in a conversation bound to that project runs one specific workflow, instead of asking the AI router to pick. Useful for integration projects where the thread is an intake channel, not a conversation.
+
+Valid on **global** `~/.archon/config.yaml` only — the keys are install-level project names (the ones used with `/register-project <name> <path>` and `/setproject <name>`), which a project's own repo config cannot know, and folder projects have no repo to hold a config file at all:
+
+```yaml
+dispatch:
+  githubName/githubRepo: assignedWorkflow # <registered project name>: <workflow name>
+```
+
+**How a message is routed** in a listed project:
+
+| Message          | Goes to                             |
+| ---------------- | ----------------------------------- |
+| `add a note`     | the `assignedWorkflow` workflow     |
+| `/workflow list` | the slash command, exactly as today |
+| `? what's in it` | normal AI chat, as `what's in it`   |
+| `?urgent note`   | the `assignedWorkflow` workflow     |
+
+**Semantics:**
+
+- **Every platform** — enforced at Archon's single message-intake seam, so Slack, Telegram, Discord, GitHub, the web UI, and `archon chat` all behave identically. There is nothing per-adapter to configure.
+- **Unlisted projects are untouched** — they keep normal AI routing, byte for byte. So does every conversation with no project bound.
+- **Slash commands always win** — `/help`, `/workflow`, `/setproject` and friends are never intercepted.
+- **A `?` followed by a space escapes a single message** — the prefix is consumed, so the AI sees the question without it. **The trailing space is part of it**: `? what's in it` escapes, but `?urgent note`, `??`, and a lone `?` are ordinary content and still dispatch. Only a *leading* prefix escapes (`did it work? really` still dispatches), and it is only special in a project that actually dispatches — everywhere else it is ordinary text. Change it with [`dispatchSigil`](#escape-prefix-dispatchsigil).
+- **An open approval gate still wins** — if a workflow in the thread is paused awaiting approval, your reply answers the gate rather than starting a new run.
+- **Fails loud, not soft** — if the named workflow can't be resolved (typo, deleted workflow, ambiguous name), Archon says so in the thread and runs nothing. It never silently falls back to the AI router, because a plausible-looking AI reply is the hardest failure to notice from inside a chat thread.
+- **Matching** — project names are matched exactly first, then case-insensitively, so a capitalization slip in hand-written YAML still resolves.
+- **Restart required** — like all global config, `~/.archon/config.yaml` is read once and cached for the life of the server process. Restart Archon after editing `dispatch:`.
+
+#### Escape prefix (`dispatchSigil`)
+
+The escape prefix defaults to `"? "` — a question mark **and a trailing space**. The space is deliberate: in an intake thread, a message that merely opens with a question mark is far more likely to be content than an instruction to the router, so the escape has to be typed as a separated prefix to count.
+
+Override it per install alongside `dispatch:` (global config only):
+
+```yaml
+dispatch:
+  githubName/githubRepo: assignedWorkflow
+
+dispatchSigil: '>> ' # now `>> what's in it` escapes, and `? anything` does not
+```
+
+- **Quote it.** YAML strips unquoted trailing whitespace, so an unquoted `dispatchSigil: ?` followed by a space silently becomes `?`. Always write `'? '`.
+- **Any string works** — `'>> '`, `'ai: '`, `'!'`. Set it to `'?'` (no space) to restore the original behavior, where any leading question mark escapes.
+- **Case-sensitive**, unlike project keys: with `dispatchSigil: 'ai: '`, `AI: explain` dispatches. The project key is written once in YAML where a capitalization slip is invisible; the sigil is retyped on every message, so matching exactly what you configured is the predictable rule.
+- **An empty or whitespace-only value is ignored** and the default is used. An empty prefix would match every message and silently disable dispatch install-wide.
+- The prefix Archon quotes back to you in its error messages is the one your install actually uses.
+
+**Attachments.** Files that arrive with a dispatched message (Slack/Discord uploads, web UI attachments) are exposed to that run's `bash:` and `script:` nodes as the `ARCHON_ATTACHMENTS` environment variable — a JSON array, always set, so a script can parse it without checking for presence:
+
+```ts
+// Inside a script: node
+const attachments = JSON.parse(process.env.ARCHON_ATTACHMENTS ?? '[]');
+// → [{ path: '/abs/path/note.pdf', name: 'note.pdf', mimeType: 'application/pdf', size: 1234 }]
+```
+
+`ARCHON_ATTACHMENTS` is set for **every** run, not just dispatched ones — `/workflow run` with a file attached populates it too.
+
 ## Repository Configuration
 
 Create `.archon/config.yaml` in any repository for project-specific settings:
@@ -295,66 +355,6 @@ container:
 ```
 
 **Selection precedence:** `--container` flag > workflow `container.enabled` > config `container.enabled` > `false`. (A workflow `enabled: false` hard-disables relative to config, but the flag still wins.)
-
-### Default workflow dispatch (`dispatch`)
-
-Makes a project **convention-based**: every plain message in a conversation bound to that project runs one specific workflow, instead of asking the AI router to pick. Useful for integration projects where the thread is an intake channel, not a conversation.
-
-Valid on **global** `~/.archon/config.yaml` only — the keys are install-level project names (the ones used with `/register-project <name> <path>` and `/setproject <name>`), which a project's own repo config cannot know, and folder projects have no repo to hold a config file at all:
-
-```yaml
-dispatch:
-  githubName/githubRepo: assignedWorkflow # <registered project name>: <workflow name>
-```
-
-**How a message is routed** in a listed project:
-
-| Message          | Goes to                             |
-| ---------------- | ----------------------------------- |
-| `add a note`     | the `assignedWorkflow` workflow     |
-| `/workflow list` | the slash command, exactly as today |
-| `? what's in it` | normal AI chat, as `what's in it`   |
-| `?urgent note`   | the `assignedWorkflow` workflow     |
-
-**Semantics:**
-
-- **Every platform** — enforced at Archon's single message-intake seam, so Slack, Telegram, Discord, GitHub, the web UI, and `archon chat` all behave identically. There is nothing per-adapter to configure.
-- **Unlisted projects are untouched** — they keep normal AI routing, byte for byte. So does every conversation with no project bound.
-- **Slash commands always win** — `/help`, `/workflow`, `/setproject` and friends are never intercepted.
-- **`? ` escapes a single message** — the prefix is consumed, so the AI sees the question without it. **The trailing space is part of it**: `? what's in it` escapes, but `?urgent note`, `??`, and a lone `?` are ordinary content and still dispatch. Only a *leading* prefix escapes (`did it work? really` still dispatches), and it is only special in a project that actually dispatches — everywhere else it is ordinary text. Change it with [`dispatchSigil`](#escape-prefix-dispatchsigil).
-- **An open approval gate still wins** — if a workflow in the thread is paused awaiting approval, your reply answers the gate rather than starting a new run.
-- **Fails loud, not soft** — if the named workflow can't be resolved (typo, deleted workflow, ambiguous name), Archon says so in the thread and runs nothing. It never silently falls back to the AI router, because a plausible-looking AI reply is the hardest failure to notice from inside a chat thread.
-- **Matching** — project names are matched exactly first, then case-insensitively, so a capitalization slip in hand-written YAML still resolves.
-- **Restart required** — like all global config, `~/.archon/config.yaml` is read once and cached for the life of the server process. Restart Archon after editing `dispatch:`.
-
-#### Escape prefix (`dispatchSigil`)
-
-The escape prefix defaults to `"? "` — a question mark **and a trailing space**. The space is deliberate: in an intake thread, a message that merely opens with a question mark is far more likely to be content than an instruction to the router, so the escape has to be typed as a separated prefix to count.
-
-Override it per install alongside `dispatch:` (global config only):
-
-```yaml
-dispatch:
-  githubName/githubRepo: assignedWorkflow
-
-dispatchSigil: '>> ' # now `>> what's in it` escapes, and `? anything` does not
-```
-
-- **Quote it.** YAML strips unquoted trailing whitespace, so `dispatchSigil: ? ` silently becomes `?`. Always write `'? '`.
-- **Any string works** — `'>> '`, `'ai: '`, `'!'`. Set it to `'?'` (no space) to restore the original behavior, where any leading question mark escapes.
-- **Case-sensitive**, unlike project keys: with `dispatchSigil: 'ai: '`, `AI: explain` dispatches. The project key is written once in YAML where a capitalization slip is invisible; the sigil is retyped on every message, so matching exactly what you configured is the predictable rule.
-- **An empty or whitespace-only value is ignored** and the default is used. An empty prefix would match every message and silently disable dispatch install-wide.
-- The prefix Archon quotes back to you in its error messages is the one your install actually uses.
-
-**Attachments.** Files that arrive with a dispatched message (Slack/Discord uploads, web UI attachments) are exposed to that run's `bash:` and `script:` nodes as the `ARCHON_ATTACHMENTS` environment variable — a JSON array, always set, so a script can parse it without checking for presence:
-
-```ts
-// Inside a script: node
-const attachments = JSON.parse(process.env.ARCHON_ATTACHMENTS ?? '[]');
-// → [{ path: '/abs/path/note.pdf', name: 'note.pdf', mimeType: 'application/pdf', size: 1234 }]
-```
-
-`ARCHON_ATTACHMENTS` is set for **every** run, not just dispatched ones — `/workflow run` with a file attached populates it too.
 
 **Write-back mode** is a per-workflow policy (not a config key). After a container run finishes, its overlay diff is reviewed before touching the live root:
 

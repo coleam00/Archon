@@ -1102,16 +1102,32 @@ async function runDispatchedWorkflow(
     { conversationId, workflowName: workflow.name, codebaseId: conversation.codebase_id },
     'orchestrator.dispatch_started'
   );
-  await handleWorkflowRunCommand(
-    platform,
-    conversationId,
-    conversation,
-    workflow,
-    message,
-    isolationHints,
-    userId,
-    { attachments }
-  );
+  try {
+    await handleWorkflowRunCommand(
+      platform,
+      conversationId,
+      conversation,
+      workflow,
+      message,
+      isolationHints,
+      userId,
+      { attachments }
+    );
+  } catch (error) {
+    // Re-thrown, not swallowed — `handleMessage`'s catch is what tells the user.
+    // Logged here anyway because that catch knows only the conversation: this is
+    // the only frame that can name the workflow the dispatch table chose, which
+    // is the first thing an operator debugging a bad mapping needs.
+    getLog().error(
+      { err: toError(error), conversationId, workflowName: workflow.name },
+      'orchestrator.dispatch_failed'
+    );
+    throw error;
+  }
+  // Terminal pair for `dispatch_started`. Scoped to the DISPATCH, not the run:
+  // a background workflow returns here once it has been STARTED, so this marks a
+  // successful hand-off to the run machinery, never a finished workflow.
+  getLog().info({ conversationId, workflowName: workflow.name }, 'orchestrator.dispatch_completed');
 }
 
 // ─── Session Helpers ────────────────────────────────────────────────────────
