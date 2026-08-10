@@ -18,5 +18,7 @@ export async function chatCommand(message: string): Promise<void> {
   // TODO: thread userId once the CLI auth path lands. handleMessage will then
   // receive { userId } via HandleMessageContext and the conversation row will
   // be attributed to the local operator.
-  await handleMessage(adapter, conversationId, message);
+  await handleMessage(adapter, conversationId, message, {
+    channelRef: { adapter: 'cli', channelId: conversationId },
+  });
 }

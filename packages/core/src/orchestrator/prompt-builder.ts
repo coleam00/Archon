@@ -3,7 +3,7 @@
  * Constructs the system prompt for the orchestrator agent with all
  * registered projects and available workflows.
  */
-import type { Codebase, Conversation } from '../types';
+import type { Codebase, Conversation, ChannelReference } from '../types';
 import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
 import { isApprovalContext, isGateResolved } from '@archon/workflows/schemas/workflow-run';
 
@@ -373,6 +373,24 @@ Run these from within the project's git repo (any subdirectory works — they re
 - \`archon workflow abandon <run-id> [--json]\` — cancel a non-terminal run
 
 When the user asks what's running, whether a run passed/failed, or to approve / reject / resume / cancel a run, use these commands directly instead of invoking a workflow. The \`manage-run\` skill has the full reference if it is loaded.`;
+}
+
+/**
+ * Build the "Message Origin" section of the orchestrator prompt, giving the
+ * chat agent direct-chat awareness of which adapter/channel it's replying in.
+ *
+ * Appended unconditionally (any provider, any scope) whenever the caller has
+ * a `channelRef` — unlike buildRunManagementSection(), this isn't gated by
+ * provider capability or project scope, since it's a one-line informational
+ * fact any provider can consume. Content is stable per conversation (the
+ * channel doesn't change turn to turn), so it stays cache-friendly the same
+ * way the rest of buildOrchestratorSystemAppend()'s output is.
+ */
+export function buildChannelReferenceSection(ref: ChannelReference): string {
+  const location = ref.channelName
+    ? `"${ref.channelName}" (\`${ref.channelId}\`)`
+    : `\`${ref.channelId}\``;
+  return `## Message Origin\n\nYou are replying via **${ref.adapter}**, channel ${location}.`;
 }
 
 /**

@@ -4,7 +4,7 @@
 import { mkdir, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { dirname } from 'path';
-import type { IWorkflowPlatform, WorkflowMessageMetadata } from './deps';
+import type { IWorkflowPlatform, WorkflowMessageMetadata, ChannelReference } from './deps';
 import type { WorkflowDeps, WorkflowConfig } from './deps';
 import * as archonPaths from '@archon/paths';
 import { createLogger, captureWorkflowInvoked, captureWorkflowCompleted } from '@archon/paths';
@@ -515,6 +515,14 @@ export type ExecuteWorkflowOptions = ResumePayload & {
    * is preserved on resume.
    */
   userId?: string;
+  /**
+   * Which adapter and channel triggered this run. Threaded to `$ADAPTER` /
+   * `$CHANNEL_ID` / `$CHANNEL_NAME` prompt substitution, `ARCHON_ADAPTER` /
+   * `ARCHON_CHANNEL_ID` / `ARCHON_CHANNEL_NAME` env vars for bash:/script:
+   * nodes, and recorded on `WorkflowRun.metadata`. Optional — absence is a
+   * no-op on all three surfaces.
+   */
+  channelRef?: ChannelReference;
   /**
    * Execution context resolved by the isolation seam: `{ kind: 'host' }` (default)
    * runs on the Archon host; `{ kind: 'container', … }` (folder-project container
@@ -1160,6 +1168,7 @@ export async function executeWorkflow(
     priorCompletedNodes,
     priorUsage,
     userId,
+    channelRef,
     source,
     parseWarnings,
     baseBranch: callerBaseBranch,
@@ -1396,6 +1405,7 @@ export async function executeWorkflow(
         // path passes to `backend.resumeEnv()` (Phase C).
         metadata: {
           ...(issueContext ? { github_context: issueContext } : {}),
+          ...(channelRef ? { channel_ref: channelRef } : {}),
           ...(execContext.kind === 'container' ? { isolation: 'container' } : {}),
           ...(containerCtx ? { isolation_env_id: containerCtx.envId } : {}),
           // Declared inputs supplied by a direct top-level invocation (#2554), already
@@ -1915,7 +1925,8 @@ export async function executeWorkflow(
       // `isolation: 'worktree'` child gets its own worktree cwd.
       (childArgs: RunChildWorkflowArgs): Promise<ChildWorkflowOutcome> =>
         runChildWorkflow(deps, platform, childArgs, resolveChildIsolation),
-      dagPriorUsage
+      dagPriorUsage,
+      channelRef
     );
 
     // executeDagWorkflow throws on fatal errors; check DB status for result

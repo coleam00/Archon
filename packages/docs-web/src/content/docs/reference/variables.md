@@ -32,6 +32,9 @@ They are also substituted in a node's **AI-configuration text** — `systemPromp
 | `$REJECTION_REASON` | Reviewer feedback from an approval node rejection | Only available in `on_reject` prompts. Empty string elsewhere |
 | `$LOOP_PREV_OUTPUT` | Cleaned output of the previous loop iteration (loop nodes only) | Empty string on the first iteration. Useful for `fresh_context: true` loops that need to reference the prior pass without carrying the full session history |
 | `$LOOP_PREV.<nodeId>.output` | A body node's output from the previous iteration (loop_group body nodes only) | Empty string on iteration 1. `$LOOP_PREV.<nodeId>.output.<field>` accesses structured-output fields with the same strict semantics as `$nodeId.output.field`. See [Cross-Node Loops](/guides/loop-nodes/#cross-node-loops-with-loop_group) |
+| `$ADAPTER` | Which adapter triggered this run (`slack`, `telegram`, `discord`, `github`, `gitlab`, `gitea`, `web`, or `cli`) | Empty string when the run has no known origin (e.g. `archon workflow run` from a script with no chat/webhook trigger) |
+| `$CHANNEL_ID` | The adapter-specific channel identifier | Not always the same as the run's conversation — see the note below. Empty string when unavailable |
+| `$CHANNEL_NAME` | The channel's display name, when the adapter can supply it without an extra network call | Populated for Discord and Telegram today; empty string for Slack, GitHub, GitLab, Gitea, Web, and CLI |
 
 ### Context Variable Behavior
 
@@ -68,6 +71,15 @@ Two properties matter:
 
 Like `$BASE_BRANCH`, referencing `$STATE_DIR` where no state directory could be resolved
 **throws** rather than substituting an empty string.
+
+### `$CHANNEL_ID` vs. the run's conversation
+
+`$CHANNEL_ID` is not a stand-in for the workflow's internal conversation identifier — it's
+the adapter's own notion of "channel," which differs by platform. Telegram's chat *is* the
+channel, so they're identical there. Slack and Discord distinguish a channel from a thread
+within it, so `$CHANNEL_ID` names the channel even when the run itself is scoped to one
+thread inside it. GitHub, GitLab, and Gitea have no chat-channel concept; `$CHANNEL_ID`
+resolves to the repository (`owner/repo`) there.
 
 If Archon finds a legacy `<repo>/.archon/state/` directory when a run starts, it logs one
 warning with the exact `mv` command and moves nothing.
@@ -109,7 +121,7 @@ During the current run, downstream interpolation and `when:` conditions see the 
 
 `$nodeId.output` values are **auto shell-quoted** when substituted into `bash:` scripts, so the value is always safe to embed in a shell command. For small outputs, values are single-quoted inline. For outputs exceeding 32 KB, Archon writes an engine-owned `$ARTIFACTS_DIR/.archon/node-output-spills/<node>[.<field>].nodeoutput` file and substitutes `$(cat '<path>')` instead — the unquoted assignment form is correct in both cases. These files follow the [run-artifact retention lifecycle](/reference/archon-directories/#user-level-archon). They are **not** shell-quoted when substituted into `script:` bodies — the raw value is embedded as-is. For script nodes, treat substituted values as untrusted input and parse them with language features (e.g. `JSON.parse`), not by interpolating into shell syntax.
 
-User-controlled variables (`$ARGUMENTS`, `$USER_MESSAGE`, `$LOOP_USER_INPUT`, `$LOOP_PREV_OUTPUT`, `$REJECTION_REASON`, `$CONTEXT` and its aliases) are delivered to `bash:` and `script:` nodes as subprocess **environment variables** (`ARGUMENTS`, `USER_MESSAGE`, `LOOP_USER_INPUT`, `LOOP_PREV_OUTPUT`, `REJECTION_REASON`, `CONTEXT`/`EXTERNAL_CONTEXT`/`ISSUE_CONTEXT`), never spliced as raw text into executable code — so attacker-influenced input can't inject. In `bash:` read them as `"$ARGUMENTS"`; in `script:` read them via `process.env.ARGUMENTS` (bun) or `os.environ['ARGUMENTS']` (uv/python). A literal `$ARGUMENTS`/`$USER_MESSAGE`/`$CONTEXT` left in a `script:` body no longer resolves and logs a one-release migration warning.
+User-controlled variables (`$ARGUMENTS`, `$USER_MESSAGE`, `$LOOP_USER_INPUT`, `$LOOP_PREV_OUTPUT`, `$REJECTION_REASON`, `$CONTEXT` and its aliases, `$ADAPTER`, `$CHANNEL_ID`, `$CHANNEL_NAME`) are delivered to `bash:` and `script:` nodes as subprocess **environment variables** (`ARGUMENTS`, `USER_MESSAGE`, `LOOP_USER_INPUT`, `LOOP_PREV_OUTPUT`, `REJECTION_REASON`, `CONTEXT`/`EXTERNAL_CONTEXT`/`ISSUE_CONTEXT`, `ADAPTER`, `CHANNEL_ID`, `CHANNEL_NAME`), never spliced as raw text into executable code — so attacker-influenced input can't inject. `$ADAPTER`/`$CHANNEL_ID`/`$CHANNEL_NAME` are treated as user-controlled for this purpose because their values (a channel name in particular) originate from external platform data, not from Archon itself. In `bash:` read them as `"$ARGUMENTS"`; in `script:` read them via `process.env.ARGUMENTS` (bun) or `os.environ['ARGUMENTS']` (uv/python). A literal `$ARGUMENTS`/`$USER_MESSAGE`/`$CONTEXT` left in a `script:` body no longer resolves and logs a one-release migration warning.
 
 Because `bash:` substitutions arrive pre-quoted, wrapping them in double quotes is a silent footgun for small (inline) values:
 
@@ -150,7 +162,7 @@ nodes:
 
 Variables are substituted in a defined order:
 
-1. **Workflow variables** -- `$WORKFLOW_ID`, `$USER_MESSAGE`, `$ARGUMENTS`, `$ARTIFACTS_DIR`, `$STATE_DIR`, `$BASE_BRANCH`, `$DOCS_DIR`, `$LOOP_USER_INPUT`, `$REJECTION_REASON`, `$LOOP_PREV_OUTPUT`
+1. **Workflow variables** -- `$WORKFLOW_ID`, `$USER_MESSAGE`, `$ARGUMENTS`, `$ARTIFACTS_DIR`, `$STATE_DIR`, `$BASE_BRANCH`, `$DOCS_DIR`, `$LOOP_USER_INPUT`, `$REJECTION_REASON`, `$LOOP_PREV_OUTPUT`, `$ADAPTER`, `$CHANNEL_ID`, `$CHANNEL_NAME`
 2. **Context variables** -- `$CONTEXT`, `$EXTERNAL_CONTEXT`, `$ISSUE_CONTEXT`
 3. **Node output references** -- `$nodeId.output`, `$nodeId.output.field`
 
@@ -175,6 +187,7 @@ Positional arguments (`$1` through `$9`) are **not** supported in any context �
 | `$REJECTION_REASON` | Yes (`on_reject` only) | No | No |
 | `$LOOP_PREV_OUTPUT` | Yes (loop nodes) | No | No |
 | `$LOOP_PREV.<nodeId>.output` | Yes (loop_group body nodes) | No | No |
+| `$ADAPTER` / `$CHANNEL_ID` / `$CHANNEL_NAME` | Yes | No | No |
 | `$nodeId.output` | Yes (DAG nodes) | No | Yes |
 
 Workflow variables and `$nodeId.output` refs both resolve in `systemPrompt:` and `agents.*.prompt` / `agents.*.description` on any AI node.

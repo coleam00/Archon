@@ -1242,6 +1242,7 @@ ${userComment}`;
           threadContext,
           isolationHints,
           userId: archonUserId,
+          channelRef: { adapter: 'github', channelId: `${owner}/${repo}` },
         });
       } catch (error) {
         const err = toError(error);

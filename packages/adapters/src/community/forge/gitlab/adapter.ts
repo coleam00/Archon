@@ -810,6 +810,7 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
             threadContext,
             isolationHints,
             userId: archonUserId,
+            channelRef: { adapter: 'gitlab', channelId: projectPath },
           });
         } catch (error) {
           const err = toError(error);

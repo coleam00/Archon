@@ -573,6 +573,11 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
               parentConversationId,
               isolationHints: { workflowType: 'thread', workflowId: conversationId },
               userId,
+              channelRef: {
+                adapter: 'discord',
+                channelId: message.channelId,
+                channelName: discordAdapter.getChannelName(message),
+              },
             });
           })
           .catch(createMessageErrorHandler('Discord', discordAdapter, conversationId));
@@ -650,6 +655,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
               parentConversationId,
               isolationHints: { workflowType: 'thread', workflowId: conversationId },
               userId,
+              channelRef: { adapter: 'slack', channelId: event.channel },
             });
           })
           .catch(createMessageErrorHandler('Slack', slackAdapter, conversationId));
@@ -933,7 +939,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
 
     // Register message handler (auth is handled internally by adapter)
     telegramAdapter.onMessage(
-      async ({ conversationId, message, userId: telegramUserId, displayName }) => {
+      async ({ conversationId, message, userId: telegramUserId, displayName, chatTitle }) => {
         // Resolve Telegram user id (numeric) → Archon user UUID.
         const userId = await resolveUserId('telegram', telegramUserId, displayName);
 
@@ -943,6 +949,11 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
             await handleMessage(telegramAdapter, conversationId, message, {
               isolationHints: { workflowType: 'thread', workflowId: conversationId },
               userId,
+              channelRef: {
+                adapter: 'telegram',
+                channelId: conversationId,
+                channelName: chatTitle,
+              },
             });
           })
           .catch(createMessageErrorHandler('Telegram', telegramAdapter, conversationId));

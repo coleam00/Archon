@@ -934,6 +934,7 @@ Use 'tea pr view ${String(pr.number)}' for full details if needed.`;
           threadContext,
           isolationHints,
           userId: archonUserId,
+          channelRef: { adapter: 'gitea', channelId: `${owner}/${repo}` },
         });
       } catch (error) {
         const err = toError(error);

@@ -17,6 +17,7 @@ import type {
   WorkflowMessageMetadata,
   WorkflowConfig,
   WorkflowDeps,
+  ChannelReference,
 } from './deps';
 import type {
   SendQueryOptions,
@@ -1481,7 +1482,8 @@ async function executeNodeInternal(
   resolvedTier?: TierName,
   resolvedEffort?: string,
   stepNamePrefix = '',
-  iteration?: number
+  iteration?: number,
+  channelRef?: ChannelReference
 ): Promise<NodeExecutionResult> {
   const nodeStartTime = Date.now();
   const nodeContext: SendMessageContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -1579,7 +1581,7 @@ async function executeNodeInternal(
       docsDir,
       issueContext,
       `dag node '${node.id}' prompt`,
-      { stateDir, inputs: resolveRunInputs(workflowRun) }
+      { stateDir, inputs: resolveRunInputs(workflowRun), channelRef }
     );
   } catch (error) {
     const err = error as Error;
@@ -2795,7 +2797,8 @@ async function executeBashNode(
   envVars?: Record<string, string>,
   stepNamePrefix = '',
   iteration?: number,
-  execContext: ExecutionContext = { kind: 'host' }
+  execContext: ExecutionContext = { kind: 'host' },
+  channelRef?: ChannelReference
 ): Promise<NodeOutput> {
   const nodeStartTime = Date.now();
   const nodeContext: SendMessageContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -2840,7 +2843,7 @@ async function executeBashNode(
     undefined,
     undefined,
     undefined,
-    { shellSafe: true, stateDir }
+    { shellSafe: true, stateDir, channelRef }
   );
   const finalScript = substituteNodeOutputRefs(substitutedScript, nodeOutputs, true, artifactsDir);
 
@@ -2884,6 +2887,9 @@ async function executeBashNode(
     CONTEXT: issueContext ?? '',
     EXTERNAL_CONTEXT: issueContext ?? '',
     ISSUE_CONTEXT: issueContext ?? '',
+    ADAPTER: channelRef?.adapter ?? '',
+    CHANNEL_ID: channelRef?.channelId ?? '',
+    CHANNEL_NAME: channelRef?.channelName ?? '',
   };
 
   const bashPath = resolveBashPath();
@@ -3072,7 +3078,8 @@ async function executeScriptNode(
   // env (never spliced into source — #2115). '' for top-level scripts and non-first
   // iterations (mirrors executeBashNode, which delivers loop input via quoted splice).
   loopUserInput = '',
-  execContext: ExecutionContext = { kind: 'host' }
+  execContext: ExecutionContext = { kind: 'host' },
+  channelRef?: ChannelReference
 ): Promise<NodeOutput> {
   const nodeStartTime = Date.now();
   const nodeContext: SendMessageContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -3124,7 +3131,7 @@ async function executeScriptNode(
     undefined,
     undefined,
     undefined,
-    { shellSafe: true, stateDir }
+    { shellSafe: true, stateDir, channelRef }
   );
   const finalScript = substituteNodeOutputRefs(substitutedScript, nodeOutputs, false);
 
@@ -3171,6 +3178,9 @@ async function executeScriptNode(
     CONTEXT: issueContext ?? '',
     EXTERNAL_CONTEXT: issueContext ?? '',
     ISSUE_CONTEXT: issueContext ?? '',
+    ADAPTER: channelRef?.adapter ?? '',
+    CHANNEL_ID: channelRef?.channelId ?? '',
+    CHANNEL_NAME: channelRef?.channelName ?? '',
   };
 
   // Build the command and args based on runtime and inline vs named
@@ -3575,7 +3585,8 @@ async function executeLoopGroupNode(
   issueContext?: string,
   stepNamePrefix = '',
   execContext: ExecutionContext = { kind: 'host' },
-  runChildWorkflow?: RunChildWorkflowFn
+  runChildWorkflow?: RunChildWorkflowFn,
+  channelRef?: ChannelReference
 ): Promise<NodeExecutionResult> {
   const group = node.loop_group;
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -3749,6 +3760,7 @@ async function executeLoopGroupNode(
       docsDir,
       configuredCommandFolder: undefined,
       issueContext,
+      channelRef,
       // Body nodes inherit the group's execution context so bash/script/AI inside
       // a loop_group body exec in the same place (host, or the container in Phase B)
       // — without this a loop_group body would be a host-escape hole.
@@ -3900,7 +3912,7 @@ async function executeLoopGroupNode(
           i === startIteration ? loopUserInput : undefined,
           undefined,
           undefined,
-          { shellSafe: true, stateDir }
+          { shellSafe: true, stateDir, channelRef }
         );
         const substitutedBash = substituteNodeOutputRefs(
           bashPrompt,
@@ -3927,6 +3939,9 @@ async function executeLoopGroupNode(
             CONTEXT: issueContext ?? '',
             EXTERNAL_CONTEXT: issueContext ?? '',
             ISSUE_CONTEXT: issueContext ?? '',
+            ADAPTER: channelRef?.adapter ?? '',
+            CHANNEL_ID: channelRef?.channelId ?? '',
+            CHANNEL_NAME: channelRef?.channelName ?? '',
           },
         });
         bashComplete = true;
@@ -4355,7 +4370,8 @@ async function executeLoopNode(
   execContext: ExecutionContext = { kind: 'host' },
   resolvedModel?: string,
   resolvedTier?: TierName,
-  resolvedEffort?: string
+  resolvedEffort?: string,
+  channelRef?: ChannelReference
 ): Promise<NodeExecutionResult> {
   const loop = node.loop;
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -4767,7 +4783,7 @@ async function executeLoopNode(
           i === startIteration ? loopUserInput : '',
           undefined, // rejectionReason
           i === startIteration ? '' : lastIterationOutput,
-          { stateDir, inputs: resolveRunInputs(workflowRun) }
+          { stateDir, inputs: resolveRunInputs(workflowRun), channelRef }
         );
         const basePrompt = substituteNodeOutputRefs(substitutedPrompt, nodeOutputs);
         // A reask re-runs this iteration's prompt with the schema errors appended, so
@@ -5453,7 +5469,7 @@ async function executeLoopNode(
           undefined,
           undefined,
           undefined,
-          { shellSafe: true, stateDir }
+          { shellSafe: true, stateDir, channelRef }
         );
         const substitutedBash = substituteNodeOutputRefs(
           bashPrompt,
@@ -5483,6 +5499,9 @@ async function executeLoopNode(
             CONTEXT: issueContext ?? '',
             EXTERNAL_CONTEXT: issueContext ?? '',
             ISSUE_CONTEXT: issueContext ?? '',
+            ADAPTER: channelRef?.adapter ?? '',
+            CHANNEL_ID: channelRef?.channelId ?? '',
+            CHANNEL_NAME: channelRef?.channelName ?? '',
           },
         });
         bashComplete = true; // exit 0 = complete
@@ -5808,7 +5827,8 @@ async function executeApprovalNode(
   workflowPreset?: ModelAliasPreset,
   stepNamePrefix = '',
   iteration?: number,
-  execContext: ExecutionContext = { kind: 'host' }
+  execContext: ExecutionContext = { kind: 'host' },
+  channelRef?: ChannelReference
 ): Promise<NodeOutput> {
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
   // Namespaced persisted step_name for loop_group bodies ('' → node.id at top level, #2090).
@@ -5870,7 +5890,7 @@ async function executeApprovalNode(
       undefined, // loopUserInput
       rejectionReason,
       undefined, // loopPrevOutput
-      { stateDir, inputs: resolveRunInputs(workflowRun) }
+      { stateDir, inputs: resolveRunInputs(workflowRun), channelRef }
     );
 
     // Build a synthetic PromptNode to reuse executeNodeInternal.
@@ -5941,7 +5961,8 @@ async function executeApprovalNode(
       resolvedTier,
       resolvedEffort,
       stepNamePrefix,
-      iteration
+      iteration,
+      channelRef
     );
 
     if (output.state === 'failed') {
@@ -6093,7 +6114,7 @@ async function executeWorkflowNode(
     // exactly as it does in the sibling `with:` values below (a nested sub-run forwarding
     // a parent input into a grandchild's $ARGUMENTS). Without this the token would throw
     // "This run has no declared inputs" on a run that DOES have inputs (#2470 parity).
-    { stateDir: ctx.stateDir, inputs: parentInputs }
+    { stateDir: ctx.stateDir, inputs: parentInputs, channelRef: ctx.channelRef }
   );
   const input = substituteNodeOutputRefs(substitutedInput, ctx.nodeOutputs);
 
@@ -6686,7 +6707,11 @@ async function executeFanOutWorkflowNode(
       ctx.artifactsDir,
       ctx.baseBranch,
       ctx.docsDir,
-      ctx.issueContext
+      ctx.issueContext,
+      undefined, // loopUserInput
+      undefined, // rejectionReason
+      undefined, // loopPrevOutput
+      { stateDir: ctx.stateDir, channelRef: ctx.channelRef }
     );
     const itemsResolved = substituteNodeOutputRefs(itemsVarsResolved, ctx.nodeOutputs);
     const parsed: unknown = JSON.parse(itemsResolved);
@@ -7214,6 +7239,8 @@ interface RunLayersContext {
   docsDir: string;
   configuredCommandFolder?: string;
   issueContext?: string;
+  /** Which adapter/channel triggered this run — run-level invariant like issueContext. */
+  channelRef?: ChannelReference;
   /** Cross-run session-persistence scope key (DB conversation UUID), or undefined to skip. */
   persistScopeKey: string | undefined;
   /** Workflow-level default for per-node `persist_session` (opt-in). */
@@ -7300,6 +7327,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
     docsDir,
     configuredCommandFolder,
     issueContext,
+    channelRef,
     persistScopeKey,
     workflowPersistSessions,
     scopeArtifactsDir,
@@ -7583,7 +7611,8 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                   config.envVars,
                   stepNamePrefix,
                   iteration,
-                  execContext
+                  execContext,
+                  channelRef
                 )
             );
             return { nodeId: node.id, output };
@@ -7636,7 +7665,8 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               execContext,
               resolvedLoopModel,
               resolvedLoopTier,
-              resolvedLoopEffort
+              resolvedLoopEffort,
+              channelRef
             );
             // Loop nodes run every iteration on the same resolved provider, so the
             // result session (if any) is attributable to loopProvider — tag it so a
@@ -7691,7 +7721,8 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               issueContext,
               stepNamePrefix,
               execContext,
-              ctx.runChildWorkflow
+              ctx.runChildWorkflow,
+              channelRef
             );
             return { nodeId: node.id, output };
           }
@@ -7721,7 +7752,8 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               workflowPreset,
               stepNamePrefix,
               iteration,
-              execContext
+              execContext,
+              channelRef
             );
             return { nodeId: node.id, output };
           }
@@ -7786,7 +7818,8 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                   stepNamePrefix,
                   iteration,
                   ctx.bodyLoopUserInput ?? '',
-                  execContext
+                  execContext,
+                  channelRef
                 )
             );
             return { nodeId: node.id, output };
@@ -7971,7 +8004,8 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                 resolvedTier,
                 resolvedEffort,
                 stepNamePrefix,
-                iteration
+                iteration,
+                channelRef
               ),
             { state: 'failed', output: '', error: 'Node did not execute' } as NodeExecutionResult
           );
@@ -8736,7 +8770,8 @@ export async function executeDagWorkflow(
    */
   runChildWorkflow?: RunChildWorkflowFn,
   /** Cumulative usage restored from prior node_completed events on resume. */
-  priorUsage?: PriorRunUsage
+  priorUsage?: PriorRunUsage,
+  channelRef?: ChannelReference
 ): Promise<string | undefined> {
   const dagStartTime = Date.now();
 
@@ -8861,6 +8896,8 @@ export async function executeDagWorkflow(
       layerCount: layers.length,
       hasIssueContext: !!issueContext,
       issueContextLength: issueContext?.length ?? 0,
+      adapter: channelRef?.adapter,
+      channelId: channelRef?.channelId,
     },
     'dag_workflow_starting'
   );
@@ -8898,6 +8935,7 @@ export async function executeDagWorkflow(
     docsDir,
     configuredCommandFolder,
     issueContext,
+    channelRef,
     persistScopeKey,
     workflowPersistSessions,
     // Scope-keyed persistence surface: without a scope key there is no durable

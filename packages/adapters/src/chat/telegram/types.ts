@@ -8,4 +8,6 @@ export interface TelegramMessageContext {
   message: string;
   userId: number | undefined;
   displayName?: string;
+  /** ctx.chat.title — group/supergroup title. Undefined for private chats. */
+  chatTitle?: string;
 }
