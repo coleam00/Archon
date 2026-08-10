@@ -5429,6 +5429,10 @@ async function executeWorkflowNode(
     return executeFanOutWorkflowNode(node, ctx, node.fan_out, ctx.runChildWorkflow);
   }
 
+  // This run's named inputs (#2470), resolved once — threaded identically into the
+  // `input:` string and every `with:` value below.
+  const parentInputs = resolveRunInputs(parentRun);
+
   // Resolve the input data string (workflow vars + $node.output refs), exactly as
   // prompt/bash nodes resolve their text surface.
   const rawInput = node.input ?? '';
@@ -5443,7 +5447,11 @@ async function executeWorkflowNode(
     undefined, // loopUserInput
     undefined, // rejectionReason
     undefined, // loopPrevOutput
-    { stateDir: ctx.stateDir }
+    // Thread the parent run's inputs so `$INPUTS.<name>` resolves in an `input:` string
+    // exactly as it does in the sibling `with:` values below (a nested sub-run forwarding
+    // a parent input into a grandchild's $ARGUMENTS). Without this the token would throw
+    // "This run has no declared inputs" on a run that DOES have inputs (#2470 parity).
+    { stateDir: ctx.stateDir, inputs: parentInputs }
   );
   const input = substituteNodeOutputRefs(substitutedInput, ctx.nodeOutputs);
 
@@ -5467,7 +5475,7 @@ async function executeWorkflowNode(
         undefined,
         undefined,
         undefined,
-        { stateDir: ctx.stateDir, inputs: resolveRunInputs(parentRun) }
+        { stateDir: ctx.stateDir, inputs: parentInputs }
       );
       resolvedInputs[name] = substituteNodeOutputRefs(substituted, ctx.nodeOutputs);
     }
@@ -6057,6 +6065,7 @@ async function executeFanOutWorkflowNode(
   // (load-time collision-checked so `as` never overwrites a `with:` key). Resolved here
   // rather than per-child because the values don't depend on the item.
   const fanOutStaticInputs: Record<string, string> = {};
+  const parentInputs = resolveRunInputs(parentRun);
   try {
     if (node.with !== undefined) {
       for (const [name, rawValue] of Object.entries(node.with)) {
@@ -6071,7 +6080,7 @@ async function executeFanOutWorkflowNode(
           undefined,
           undefined,
           undefined,
-          { stateDir: ctx.stateDir, inputs: resolveRunInputs(parentRun) }
+          { stateDir: ctx.stateDir, inputs: parentInputs }
         );
         fanOutStaticInputs[name] = substituteNodeOutputRefs(substituted, ctx.nodeOutputs);
       }
