@@ -43,7 +43,10 @@ import { createChildWorktreeResolver } from '@archon/core/workflows/child-isolat
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { resolveWorkflowName } from '@archon/workflows/router';
 import { executeWorkflow, hydrateResumableRun } from '@archon/workflows/executor';
-import { assertWorkflowRequirementsMet } from '@archon/workflows/utils/workflow-requirements';
+import {
+  assertWorkflowRequirementsMet,
+  assertWorkflowInputsSatisfiable,
+} from '@archon/workflows/utils/workflow-requirements';
 import {
   getWorkflowEventEmitter,
   type WorkflowEmitterEvent,
@@ -1013,6 +1016,11 @@ export async function workflowRunCommand(
   // codebase lookup below. Fail fast — never silently ignore the flags.
   assertNoWorktreeOptionsForFolder(options.folder === true, options);
   assertWorkflowNotWorktreePinnedForFolder(options.folder === true, pinnedEnabled, workflow.name);
+
+  // Signature gate (#2470): a workflow declaring `required` inputs is a reusable block —
+  // only a caller's `with:` can satisfy them, so a bare top-level run fails here, before
+  // the --detach fork and any worktree/clone/AI cost. It still lists/loads normally.
+  assertWorkflowInputsSatisfiable(workflow);
 
   // Capability gate: hard-fail before the --detach fork and any worktree/clone/
   // AI cost if the workflow declares `requires: [github]` and the acting CLI

@@ -40,11 +40,17 @@ import {
   webSearchModeSchema,
   workflowRequirementSchema,
   workflowEvidencePolicySchema,
+  workflowInputSpecSchema,
   KNOWN_WORKFLOW_KEYS,
   KNOWN_WORKFLOW_NESTED_KEYS,
   WORKFLOW_ONLY_KEYS,
 } from './schemas/workflow';
-import type { WorkflowRequirement, WorkflowEvidencePolicy } from './schemas/workflow';
+import type {
+  WorkflowRequirement,
+  WorkflowEvidencePolicy,
+  WorkflowInputSpec,
+} from './schemas/workflow';
+import { INPUT_NAME_PATTERN, inputEnvKey } from './schemas/dag-node';
 import { workflowNodeHooksSchema } from './schemas/hooks';
 import { z } from '@hono/zod-openapi';
 
@@ -399,11 +405,12 @@ export function validateDagStructure(
   // loop_group.until_bash, workflow.input, workflow.fan_out.items). A dangling ref in
   // any of them silently substitutes to '' at run time, so all must be validated here.
   //
-  // KEEP IN SYNC (three ref-surface enumerations must agree):
+  // KEEP IN SYNC (four ref-surface enumerations must agree):
   //   1. this scan (loader validateDagStructure) — validates refs,
   //   2. rewriteNodeOutputRefs (include-expander.ts) — renames refs on inline,
-  //   3. the substituteNodeOutputRefs call sites (dag-executor.ts) — resolves refs at run.
-  // Adding a substituted field to one means updating all three.
+  //   3. the substituteNodeOutputRefs call sites (dag-executor.ts) — resolves refs at run,
+  //   4. applyInputsMacro (include-expander.ts) — inlines include `with:` values (#2470).
+  // Adding a substituted field to one means updating all four.
   //
   // Prose fields (prompt / loop.prompt) may contain triple-backtick fenced blocks or
   // single-backtick inline code that are documentation meant to render literally to
@@ -428,6 +435,13 @@ export function validateDagStructure(
     if (isWorkflowNode(node)) {
       if (node.input) sources.push(node.input);
       if (node.fan_out) sources.push(node.fan_out.items);
+      // A `workflow:` node's `with:` values (#2470) are live ref surfaces: unlike
+      // an `include:` node's `with:` (inlined by the macro and caught post-expansion
+      // by this same scan), sub-run `with:` values are never inlined — they resolve
+      // at runtime into `$INPUTS.<name>` — so scan them here for dangling refs.
+      if (node.with) {
+        for (const value of Object.values(node.with)) sources.push(value);
+      }
     }
     if (isCancelNode(node)) sources.push(node.cancel);
     if (isApprovalNode(node)) sources.push(node.approval.message);
@@ -893,6 +907,90 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
       getLog().warn({ filename, value: raw.requires }, 'invalid_workflow_requires_block_ignored');
     }
 
+    // Parse optional inputs — the declared signature (#2470). Per-key warn-and-drop:
+    // an invalid spec, a non-identifier name (env mangling needs identifier names), or
+    // a contradictory `required: true` + `default:` pair is dropped with a warning. The
+    // surviving record is set only when non-empty. Absent/invalid block leaves `inputs`
+    // undefined — a workflow with no declared inputs keeps Phase-1 behaviour untouched.
+    let inputs: Record<string, WorkflowInputSpec> | undefined;
+    const rawInputs = raw.inputs;
+    if (rawInputs !== undefined) {
+      if (
+        typeof rawInputs === 'object' &&
+        rawInputs !== null &&
+        !Array.isArray(rawInputs) &&
+        (Object.getPrototypeOf(rawInputs) === Object.prototype ||
+          Object.getPrototypeOf(rawInputs) === null)
+      ) {
+        const valid: Record<string, WorkflowInputSpec> = {};
+        for (const [name, spec] of Object.entries(rawInputs as Record<string, unknown>)) {
+          if (!INPUT_NAME_PATTERN.test(name)) {
+            getLog().warn({ filename, name }, 'invalid_workflow_input_name_ignored');
+            continue;
+          }
+          const parsed = workflowInputSpecSchema.safeParse(spec);
+          if (!parsed.success) {
+            getLog().warn({ filename, name, value: spec }, 'invalid_workflow_input_spec_ignored');
+            continue;
+          }
+          if (parsed.data.required === true && parsed.data.default !== undefined) {
+            getLog().warn(
+              { filename, name },
+              'contradictory_workflow_input_required_with_default_ignored'
+            );
+            continue;
+          }
+          valid[name] = parsed.data;
+        }
+        // Reject env-key mangling collisions: two names that fold to the same
+        // INPUTS_<UPPER_SNAKE> env key would silently clobber each other for
+        // bash/script sub-run nodes (Task 17). Catch it here where all names are
+        // visible; a colliding pair is a hard load error, not a warn-and-drop.
+        const envKeyOwners = new Map<string, string>();
+        for (const name of Object.keys(valid)) {
+          const envKey = inputEnvKey(name);
+          const existing = envKeyOwners.get(envKey);
+          if (existing !== undefined) {
+            return {
+              workflow: null,
+              error: {
+                filename,
+                error: `Workflow inputs '${existing}' and '${name}' both map to env var '${envKey}' — rename one so each input has a unique env key`,
+                errorType: 'validation_error',
+              },
+            };
+          }
+          envKeyOwners.set(envKey, name);
+        }
+        if (Object.keys(valid).length > 0) inputs = valid;
+      } else {
+        getLog().warn({ filename, value: rawInputs }, 'invalid_workflow_inputs_block_ignored');
+      }
+    }
+
+    // Parse optional returns — the node id whose output IS this workflow's result
+    // (#2470). Accept a non-empty string; warn-and-drop otherwise. The referenced id
+    // must name a top-level node — checked below once dagNodes is assembled.
+    let returns: string | undefined;
+    if (typeof raw.returns === 'string' && raw.returns.trim().length > 0) {
+      returns = raw.returns.trim();
+    } else if (raw.returns !== undefined) {
+      getLog().warn({ filename, value: raw.returns }, 'invalid_workflow_returns_value_ignored');
+    }
+    // `returns` must name a top-level node id. Done here (not in validateDagStructure,
+    // which takes nodes and is reused for loop_group bodies / the expander with no
+    // `returns` in scope) now that dagNodes is computed.
+    if (returns !== undefined && !dagNodes.some(n => n.id === returns)) {
+      return {
+        workflow: null,
+        error: {
+          filename,
+          error: `Workflow declares returns: '${returns}' but no top-level node has that id`,
+          errorType: 'validation_error',
+        },
+      };
+    }
+
     // Parse workflow-level fallback fields. Same warn-and-drop pattern as
     // `modelReasoningEffort` / `webSearchMode` above. These are declared on
     // `workflowBaseSchema` and consumed by the DAG executor's
@@ -1010,6 +1108,8 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
         ...(evidencePolicy !== undefined ? { evidence_policy: evidencePolicy } : {}),
         ...(tags !== undefined ? { tags } : {}),
         ...(requires !== undefined ? { requires } : {}),
+        ...(inputs !== undefined ? { inputs } : {}),
+        ...(returns !== undefined ? { returns } : {}),
       },
       error: null,
       warnings: parseWarnings,

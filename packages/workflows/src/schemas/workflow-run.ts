@@ -156,11 +156,15 @@ export type WorkflowRun = z.infer<typeof workflowRunSchema>;
  *                    child, which is what distinguishes the two on re-entry.
  * `fan_out_item_hash` — hash of the item the child was spawned with, so a resume can warn
  *                    when a non-deterministic producer changed it under the same index.
+ * `inputs`         — the resolved `with:` map (name → string) the parent supplied (#2470),
+ *                    persisted at spawn so the child's `$INPUTS.<name>` reconstitutes on a
+ *                    cold resume without re-resolving parent refs that may be out of scope.
  */
 export const SUBRUN_METADATA_KEYS = {
   parentNodeId: 'parent_node_id',
   childIndex: 'child_index',
   fanOutItemHash: 'fan_out_item_hash',
+  inputs: 'inputs',
 } as const;
 
 /** Typed view of the sub-run keys on a run's metadata; each is undefined when unset. */
@@ -168,14 +172,29 @@ export function readSubrunMetadata(metadata: Record<string, unknown> | undefined
   parentNodeId: string | undefined;
   childIndex: number | undefined;
   fanOutItemHash: string | undefined;
+  inputs: Record<string, string> | undefined;
 } {
   const parentNodeId = metadata?.[SUBRUN_METADATA_KEYS.parentNodeId];
   const childIndex = metadata?.[SUBRUN_METADATA_KEYS.childIndex];
   const fanOutItemHash = metadata?.[SUBRUN_METADATA_KEYS.fanOutItemHash];
+  const rawInputs = metadata?.[SUBRUN_METADATA_KEYS.inputs];
+  // Accept only a plain object of string values; anything else reads as unset. The
+  // writer always stores a Record<string,string>, so a non-conforming value is
+  // corrupt/foreign metadata, not a shape this reader should try to coerce.
+  let inputs: Record<string, string> | undefined;
+  if (
+    typeof rawInputs === 'object' &&
+    rawInputs !== null &&
+    !Array.isArray(rawInputs) &&
+    Object.values(rawInputs as Record<string, unknown>).every(v => typeof v === 'string')
+  ) {
+    inputs = rawInputs as Record<string, string>;
+  }
   return {
     parentNodeId: typeof parentNodeId === 'string' ? parentNodeId : undefined,
     childIndex: typeof childIndex === 'number' ? childIndex : undefined,
     fanOutItemHash: typeof fanOutItemHash === 'string' ? fanOutItemHash : undefined,
+    inputs,
   };
 }
 

@@ -115,6 +115,29 @@ export const workflowEvidencePolicySchema = z.object({
 export type WorkflowEvidencePolicy = z.infer<typeof workflowEvidencePolicySchema>;
 
 // ---------------------------------------------------------------------------
+// Workflow signature — declared inputs (#2470, Signature Phase 2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Declaration of a single input a workflow accepts. All fields optional:
+ *  - `required` — a caller MUST supply this via `with:`; a bare top-level run
+ *    of a workflow with an unsatisfied required input fails before any cost.
+ *  - `default`  — value used when a caller omits the input (mutually exclusive
+ *    with `required: true`; the loader drops any key that declares both).
+ *  - `description` — human documentation only, unused by the engine.
+ *
+ * This is declarative metadata the engine needs to wire and validate `with:`
+ * against — it coordinates, it does not compute (Workflow Language Constitution).
+ */
+export const workflowInputSpecSchema = z.object({
+  required: z.boolean().optional(),
+  default: z.string().optional(),
+  description: z.string().optional(),
+});
+
+export type WorkflowInputSpec = z.infer<typeof workflowInputSpecSchema>;
+
+// ---------------------------------------------------------------------------
 // WorkflowBase — common fields shared by all workflow types
 // ---------------------------------------------------------------------------
 
@@ -155,6 +178,23 @@ export const workflowBaseSchema = z.object({
    * when per-user GitHub is enabled; a no-op for solo PAT installs.
    */
   requires: z.array(workflowRequirementSchema).optional(),
+  /**
+   * Declared inputs this workflow accepts (#2470). A caller supplies values via
+   * `with:` on the `include:`/`workflow:` node that references this workflow;
+   * for sub-runs the values become `$INPUTS.<name>` runtime variables on the
+   * child. When a workflow declares `inputs:`, callers are validated against it
+   * (missing required / undeclared key = load error); a workflow with no
+   * `inputs:` keeps Phase-1 behaviour untouched.
+   */
+  inputs: z.record(z.string(), workflowInputSpecSchema).optional(),
+  /**
+   * The node id whose output IS this workflow's result (#2470). Drives
+   * `$blk.output` for include blocks (the block's `primarySink`, overriding the
+   * positional first-sink default) and the terminal output of a `workflow:`
+   * sub-run child. Selecting by id (not text) works for every node type,
+   * including a non-sink node.
+   */
+  returns: z.string().min(1).optional(),
 });
 
 export type WorkflowBase = z.infer<typeof workflowBaseSchema>;
@@ -223,6 +263,16 @@ export const KNOWN_WORKFLOW_NESTED_KEYS: ReadonlyMap<string, NestedKeySpec> = ne
   [
     'evidence_policy',
     { kind: 'object', keys: new Set(Object.keys(workflowEvidencePolicySchema.shape)) },
+  ],
+  // First `record` entry in this map: `inputs` is a record of input-name → spec,
+  // so unknown keys under an individual spec (e.g. `inputs.diff.typo`) warn.
+  // `returns` is a plain string and needs no nested registration.
+  [
+    'inputs',
+    {
+      kind: 'record',
+      entry: { kind: 'object', keys: new Set(Object.keys(workflowInputSpecSchema.shape)) },
+    },
   ],
 ]);
 

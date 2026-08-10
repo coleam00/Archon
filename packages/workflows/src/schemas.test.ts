@@ -15,6 +15,8 @@ import {
   BASH_NODE_AI_FIELDS,
   approvalOnRejectSchema,
   dagNodeSchema,
+  inputEnvKey,
+  readSubrunMetadata,
 } from './schemas';
 import type {
   WorkflowDefinition,
@@ -1051,5 +1053,29 @@ describe('INCLUDE_NODE_IGNORED_FIELDS', () => {
     for (const f of ['id', 'depends_on', 'when', 'trigger_rule', 'include', 'description']) {
       expect(INCLUDE_NODE_IGNORED_FIELDS).not.toContain(f);
     }
+  });
+});
+
+describe('inputEnvKey (#2470)', () => {
+  test('mangles an input name to INPUTS_<UPPER_SNAKE>', () => {
+    expect(inputEnvKey('plan')).toBe('INPUTS_PLAN');
+    expect(inputEnvKey('base-branch')).toBe('INPUTS_BASE_BRANCH');
+    expect(inputEnvKey('foo_bar')).toBe('INPUTS_FOO_BAR');
+    // hyphen and underscore fold to the same key — the loader rejects such a pair.
+    expect(inputEnvKey('foo-bar')).toBe(inputEnvKey('foo_bar'));
+  });
+});
+
+describe('readSubrunMetadata — inputs (#2470)', () => {
+  test('reads a well-formed inputs map', () => {
+    const md = readSubrunMetadata({ inputs: { plan: 'do it', mode: 'fast' } });
+    expect(md.inputs).toEqual({ plan: 'do it', mode: 'fast' });
+  });
+
+  test('treats a non-string-valued or non-object inputs as unset', () => {
+    expect(readSubrunMetadata({ inputs: { plan: 5 } }).inputs).toBeUndefined();
+    expect(readSubrunMetadata({ inputs: ['a'] }).inputs).toBeUndefined();
+    expect(readSubrunMetadata({}).inputs).toBeUndefined();
+    expect(readSubrunMetadata(undefined).inputs).toBeUndefined();
   });
 });

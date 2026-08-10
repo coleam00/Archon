@@ -653,6 +653,7 @@ async function runChildWorkflow(
     childIndex,
     itemHash,
     resumeFailedChild,
+    inputs,
   } = args;
 
   // Every failure below returns a `{ status: 'failed' }` outcome (never throws);
@@ -829,6 +830,14 @@ async function runChildWorkflow(
           // alongside so resume can WARN on a non-deterministic producer (same index, new item).
           ...(childIndex !== undefined ? { [SUBRUN_METADATA_KEYS.childIndex]: childIndex } : {}),
           ...(itemHash !== undefined ? { [SUBRUN_METADATA_KEYS.fanOutItemHash]: itemHash } : {}),
+          // Named inputs (#2470) — persisted at spawn so the child's `$INPUTS.<name>`
+          // resolves from `metadata.inputs` at runtime (resolveRunInputs) and survives a
+          // COLD resume: both resume paths (hydrateResumableRun and the zero-completed-node
+          // resumeWorkflowRun fallback) reload THIS run row, so the map is intact without
+          // re-resolving parent refs that may be out of scope. Stamped only when non-empty.
+          ...(inputs !== undefined && Object.keys(inputs).length > 0
+            ? { [SUBRUN_METADATA_KEYS.inputs]: inputs }
+            : {}),
           // Record the child's own worktree env + branch (mirrors the container path's
           // isolation_env_id) so `isolation list` correlation + PR-E console grouping
           // can find it. Absent for `inherit`/shared-checkout children.

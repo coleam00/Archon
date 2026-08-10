@@ -179,6 +179,34 @@ describe('validateWorkflowResources — command nodes', () => {
 });
 
 // =============================================================================
+// validateWorkflowResources — bundled sub-run target check (#2470)
+// =============================================================================
+
+describe('validateWorkflowResources — bundled workflow: target check', () => {
+  test('bundled workflow with a workflow: node to a non-existent bundled name fails', async () => {
+    const workflow = makeWorkflow('test', [
+      { id: 'sub', workflow: 'definitely-not-a-bundled-workflow' } as DagNode,
+    ]);
+    const issues = await validateWorkflowResources(workflow, tmpDir, {
+      workflowSource: 'bundled',
+    });
+    expect(
+      issues.some(i => i.field === 'workflow' && i.message.includes('not a bundled workflow'))
+    ).toBe(true);
+  });
+
+  test('project workflow with a workflow: node to a non-existent name is NOT checked (runtime-resolved)', async () => {
+    const workflow = makeWorkflow('test', [
+      { id: 'sub', workflow: 'definitely-not-a-bundled-workflow' } as DagNode,
+    ]);
+    const issues = await validateWorkflowResources(workflow, tmpDir, {
+      workflowSource: 'project',
+    });
+    expect(issues.some(i => i.field === 'workflow')).toBe(false);
+  });
+});
+
+// =============================================================================
 // validateWorkflowResources — portable model refs
 // =============================================================================
 

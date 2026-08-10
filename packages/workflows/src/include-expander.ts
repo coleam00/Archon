@@ -12,8 +12,11 @@
  *   - the include node's own `depends_on`/`when`/`trigger_rule` attach to the
  *     sub-DAG's ENTRY nodes (those with no internal upstream)
  *   - other parent nodes that referenced the include id resolve `depends_on: [I]`
- *     to the sub-DAG's SINKS and `$I.output` to its PRIMARY sink (first sink in
- *     definition order — the same terminal-selection rule loop_group uses)
+ *     to the sub-DAG's SINKS and `$I.output` to its PRIMARY sink. The primary sink is
+ *     the block's declared `returns:` node when it sets one (#2470) — which may be a
+ *     NON-sink node — otherwise the first sink in definition order. `returns:` moves
+ *     ONLY the primary sink; `depends_on: [I]` still waits on every sink. (loop_group's
+ *     own first-sink terminal rule is deliberately unchanged.)
  *
  * Targets are resolved recursively (a target may itself `include:` others),
  * depth-capped and cycle-detected. Because expansion runs BEFORE any
@@ -296,11 +299,58 @@ interface ExpandedInclude {
 }
 
 /**
+ * Resolve a caller's `with:` map against a block's declared `inputs:` (#2470).
+ * Only active when the block declares `inputs:` — an undeclared block keeps Phase-1
+ * behaviour byte-for-byte (the caller's `with:` passes through verbatim). When declared:
+ * applies each input's `default` for an omitted name, errors on an unsupplied `required`
+ * input, and errors on a caller `with:` key the block doesn't declare.
+ */
+function resolveIncludeInputs(
+  includeNode: IncludeNode,
+  child: WorkflowDefinition
+): Record<string, string> {
+  const callerWith = includeNode.with ?? {};
+  const declared = child.inputs;
+  if (declared === undefined) return callerWith;
+
+  // Reject caller keys the block does not declare.
+  const undeclared = Object.keys(callerWith).filter(k => !Object.hasOwn(declared, k));
+  if (undeclared.length > 0) {
+    const names = undeclared.sort();
+    throw new IncludeExpansionError(
+      `Node '${includeNode.id}': included block '${child.name}' does not declare input${names.length === 1 ? '' : 's'} ${names.map(n => `'${n}'`).join(', ')}. Declared inputs: ${Object.keys(declared).sort().join(', ') || '(none)'}.`
+    );
+  }
+
+  const resolved: Record<string, string> = {};
+  const missingRequired: string[] = [];
+  for (const [name, spec] of Object.entries(declared)) {
+    if (Object.hasOwn(callerWith, name)) {
+      resolved[name] = callerWith[name];
+    } else if (spec.default !== undefined) {
+      resolved[name] = spec.default;
+    } else if (spec.required === true) {
+      missingRequired.push(name);
+    }
+    // Declared, not supplied, not required, no default: omitted. If the block body
+    // references `$INPUTS.<name>`, applyInputsMacro reports it as missing and fails.
+  }
+  if (missingRequired.length > 0) {
+    const names = missingRequired.sort();
+    throw new IncludeExpansionError(
+      `Node '${includeNode.id}': included block '${child.name}' requires input${names.length === 1 ? '' : 's'} ${names.map(n => `'${n}'`).join(', ')}. Pass ${names.length === 1 ? 'it' : 'them'} through 'with:'.`
+    );
+  }
+  return resolved;
+}
+
+/**
  * Inline one include node's fully-expanded child into namespaced parent nodes.
- * Never mutates `childNodes` (each node is deep-cloned first), so a building block
+ * Never mutates the child's nodes (each node is deep-cloned first), so a building block
  * shared by two parents is namespaced independently.
  */
-function inlineInclude(includeNode: IncludeNode, childNodes: DagNode[]): ExpandedInclude {
+function inlineInclude(includeNode: IncludeNode, child: WorkflowDefinition): ExpandedInclude {
+  const childNodes = child.nodes;
   const prefix = `${includeNode.id}__`;
   const childTopLevelIds = new Set(childNodes.map(n => n.id));
   const rename = (id: string): string => (childTopLevelIds.has(id) ? prefix + id : id);
@@ -311,6 +361,7 @@ function inlineInclude(includeNode: IncludeNode, childNodes: DagNode[]): Expande
 
   const parentDeps = includeNode.depends_on ?? [];
   const missingInputs = new Set<string>();
+  const resolvedInputs = resolveIncludeInputs(includeNode, child);
 
   const namespaced = childNodes.map(cn => {
     const clone = structuredClone(cn);
@@ -320,7 +371,7 @@ function inlineInclude(includeNode: IncludeNode, childNodes: DagNode[]): Expande
     // load-bearing: a caller ref such as `$gather.output` must remain parent-scoped even
     // when the included block also has a node named `gather`.
     rewriteNodeOutputRefs(clone, rename);
-    applyInputsMacro(clone, includeNode.with ?? {}, missingInputs);
+    applyInputsMacro(clone, resolvedInputs, missingInputs);
     clone.id = prefix + cn.id;
 
     if (wasEntry) {
@@ -368,8 +419,13 @@ function inlineInclude(includeNode: IncludeNode, childNodes: DagNode[]): Expande
   return {
     namespaced,
     sinks: sinkOriginalIds.map(id => prefix + id),
+    // `$blk.output` resolves to the block's declared `returns:` node when set (#2470) —
+    // even a NON-sink node — otherwise the first sink in definition order. `returns:`
+    // was validated at load to name a top-level child node, so `prefix + returns` is a
+    // real namespaced id. Only `primarySink` moves; `sinks` (and thus `depends_on:[blk]`)
+    // still covers every terminal node.
     // A valid non-empty DAG always has ≥1 sink; sinkOriginalIds[0] is defined.
-    primarySink: prefix + (sinkOriginalIds[0] ?? ''),
+    primarySink: prefix + (child.returns ?? sinkOriginalIds[0] ?? ''),
   };
 }
 
@@ -385,6 +441,11 @@ const NON_DROPPED_WORKFLOW_KEYS: ReadonlySet<string> = new Set([
   'description',
   'nodes',
   'tags',
+  // #2470: both are CONSUMED by inlining, not dropped — `returns` drives the block's
+  // primarySink and `inputs` validates the caller's `with:`. Warning "dropped" would be
+  // misleading.
+  'returns',
+  'inputs',
 ]);
 
 /** Isolation/concurrency-safety fields — a silent drop of these is the most dangerous. */
@@ -566,7 +627,7 @@ export function expandWorkflowIncludes(
         }
         warnDroppedWorkflowLevelFields(node, child);
         if (commandContents) scanBlockCommandRefs(node, child, commandContents);
-        const inlined = inlineInclude(node, child.nodes);
+        const inlined = inlineInclude(node, child);
         sinksByIncludeId.set(node.id, inlined.sinks);
         primarySinkByIncludeId.set(node.id, inlined.primarySink);
         newNodes.push(...inlined.namespaced);
