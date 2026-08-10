@@ -1274,7 +1274,10 @@ describe('discoverAllWorkflows — remote sync', () => {
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
     mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
     mockGetCodebaseEnvVars.mockResolvedValueOnce({ DB_SECRET: 'db-value' });
-    mockLoadConfig.mockResolvedValueOnce({
+    // Persistent, not one-time: the default-workflow dispatch check now reads
+    // loadConfig() once before workflow discovery does, so a `...Once` mock
+    // here would be consumed by the wrong call.
+    mockLoadConfig.mockResolvedValue({
       assistants: { claude: {}, codex: {} },
       envVars: { FILE_SECRET: 'file-value' },
     });
@@ -1306,7 +1309,8 @@ describe('discoverAllWorkflows — remote sync', () => {
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
     mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
     mockGetCodebaseEnvVars.mockRejectedValueOnce(new Error('db unavailable'));
-    mockLoadConfig.mockResolvedValueOnce({
+    // Persistent, not one-time — see the identical note above.
+    mockLoadConfig.mockResolvedValue({
       assistants: { claude: {}, codex: {} },
       envVars: { FILE_SECRET: 'file-value' },
     });
