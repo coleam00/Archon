@@ -206,12 +206,14 @@ async function resolveCommand(
         return commandName in BUNDLED_COMMANDS ? `[bundled:${commandName}]` : null;
       }
     }
-    const workflowsRoot =
-      packaged.owner.source === 'project'
-        ? join(cwd, '.archon', 'workflows')
-        : packaged.owner.source === 'global'
-          ? getHomeWorkflowsPath()
-          : dirname(getDefaultWorkflowsPath());
+    let workflowsRoot: string;
+    if (packaged.owner.source === 'project') {
+      workflowsRoot = join(cwd, '.archon', 'workflows');
+    } else if (packaged.owner.source === 'global') {
+      workflowsRoot = getHomeWorkflowsPath();
+    } else {
+      workflowsRoot = dirname(getDefaultWorkflowsPath());
+    }
     const path = join(
       getPackagedResourceDirectory(workflowsRoot, packaged.owner, 'commands'),
       `${packaged.name}.md`

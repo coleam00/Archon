@@ -73,6 +73,48 @@ interface PackagedDefaults {
   sourcePaths: string[];
 }
 
+interface PackagedScriptFile {
+  extension: string;
+  localName: string;
+  path: string;
+  relativePath: string;
+  runtime: BundledScript['runtime'];
+}
+
+function getScriptRuntime(extension: string): BundledScript['runtime'] | null {
+  if (extension === '.py') return 'uv';
+  if (extension === '.ts' || extension === '.js') return 'bun';
+  return null;
+}
+
+async function listPackagedScriptFiles(scriptPath: string): Promise<PackagedScriptFile[]> {
+  const files: PackagedScriptFile[] = [];
+  for (const entry of (await readdir(scriptPath)).sort((a, b) => a.localeCompare(b))) {
+    const entryPath = join(scriptPath, entry);
+    const entryStat = await stat(entryPath);
+    const candidates = entryStat.isDirectory()
+      ? (await readdir(entryPath))
+          .sort((a, b) => a.localeCompare(b))
+          .map(child => ({ path: join(entryPath, child), relativePath: `${entry}/${child}` }))
+      : [{ path: entryPath, relativePath: entry }];
+
+    for (const candidate of candidates) {
+      if (!(await stat(candidate.path)).isFile()) continue;
+      const extension = extname(candidate.path);
+      const runtime = getScriptRuntime(extension);
+      if (runtime === null) continue;
+      files.push({
+        extension,
+        localName: basename(candidate.path, extension),
+        path: candidate.path,
+        relativePath: candidate.relativePath,
+        runtime,
+      });
+    }
+  }
+  return files;
+}
+
 async function ensureDir(dir: string, label: string): Promise<void> {
   try {
     await access(dir);
@@ -270,22 +312,17 @@ async function collectPackagedDefaults(root: string): Promise<PackagedDefaults> 
       const scriptPath = join(workflowPath, 'scripts');
       if (await isDirectory(scriptPath)) {
         const seen = new Set<string>();
-        for (const entry of (await readdir(scriptPath)).sort((a, b) => a.localeCompare(b))) {
-          const extension = extname(entry);
-          const runtime =
-            extension === '.py' ? 'uv' : extension === '.ts' || extension === '.js' ? 'bun' : null;
-          if (runtime === null) continue;
-          const localName = basename(entry, extension);
+        for (const script of await listPackagedScriptFiles(scriptPath)) {
+          const { extension, localName, path, relativePath, runtime } = script;
           if (!isValidWorkflowFolderSegment(localName)) {
             throw new Error(
-              `Invalid packaged script filename "${pack}/${workflow}/scripts/${entry}".`
+              `Invalid packaged script filename "${pack}/${workflow}/scripts/${relativePath}".`
             );
           }
           if (seen.has(localName)) {
             throw new Error(`Duplicate packaged script "${localName}" in ${pack}/${workflow}.`);
           }
           seen.add(localName);
-          const path = join(scriptPath, entry);
           const key = formatPackagedResourceReference(owner, localName);
           scripts.set(key, { content: await readBundledContent(path), extension, runtime });
           sourcePaths.push(path);

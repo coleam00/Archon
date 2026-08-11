@@ -9,7 +9,7 @@ import type { WebAdapter } from '../adapters/web';
 import { boundMetadataToolOutputs } from '../adapters/web/truncate';
 import { rm, readFile, writeFile, unlink, mkdir, readdir, stat } from 'fs/promises';
 import { existsSync, readFileSync } from 'fs';
-import { normalize, join, sep, basename } from 'path';
+import { normalize, join, sep, basename, dirname, resolve } from 'path';
 import { randomUUID } from 'crypto';
 import type { Context } from 'hono';
 import type {
@@ -84,7 +84,10 @@ import {
   BUNDLED_IS_BINARY,
   BUNDLED_VERSION,
 } from '@archon/paths';
-import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
+import {
+  discoverWorkflowsWithConfig,
+  isValidWorkflowFolderSegment,
+} from '@archon/workflows/workflow-discovery';
 import { parseWorkflow } from '@archon/workflows/loader';
 import { isValidCommandName, isValidWorkflowName } from '@archon/workflows/command-validation';
 import { BUNDLED_WORKFLOWS, BUNDLED_COMMANDS, isBinaryBuild } from '@archon/workflows/defaults';
@@ -104,6 +107,119 @@ let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('api');
   return cachedLog;
+}
+
+interface RawWorkflowFile {
+  absolutePath: string;
+  filename: string;
+  packaged: boolean;
+  parsed: ReturnType<typeof parseWorkflow>;
+}
+
+async function tryReadWorkflowAt(dir: string, name: string): Promise<RawWorkflowFile | null> {
+  const acceptedNames = new Set(name.includes('/') ? [name, basename(name)] : [name]);
+  for (const ext of ['yaml', 'yml']) {
+    const filename = `${name}.${ext}`;
+    const absolutePath = join(dir, filename);
+    try {
+      const content = await readFile(absolutePath, 'utf-8');
+      const parsed = parseWorkflow(content, filename);
+      if (parsed.workflow !== null && !acceptedNames.has(parsed.workflow.name)) continue;
+      return { absolutePath, filename, packaged: false, parsed };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  }
+  return null;
+}
+
+async function findPackagedWorkflowAt(
+  workflowsRoot: string,
+  name: string
+): Promise<RawWorkflowFile | null> {
+  let packs: string[];
+  try {
+    packs = await readdir(workflowsRoot);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
+
+  let match: RawWorkflowFile | null = null;
+  for (const pack of packs.sort((a, b) => a.localeCompare(b))) {
+    if (!isValidWorkflowFolderSegment(pack)) continue;
+    const packPath = join(workflowsRoot, pack);
+    if (!(await stat(packPath)).isDirectory()) continue;
+
+    const workflowFolders = await readdir(packPath);
+    for (const workflowFolder of workflowFolders.sort((a, b) => a.localeCompare(b))) {
+      if (!isValidWorkflowFolderSegment(workflowFolder)) continue;
+      const workflowPath = join(packPath, workflowFolder);
+      if (!(await stat(workflowPath)).isDirectory()) continue;
+
+      const yamlFiles = (await readdir(workflowPath))
+        .filter(entry => entry.endsWith('.yaml') || entry.endsWith('.yml'))
+        .sort((a, b) => a.localeCompare(b));
+      if (yamlFiles.length !== 1) continue;
+
+      const yamlFilename = yamlFiles[0];
+      const absolutePath = join(workflowPath, yamlFilename);
+      const content = await readFile(absolutePath, 'utf-8');
+      const parsed = parseWorkflow(content, yamlFilename);
+      if (parsed.workflow?.name !== name) continue;
+      if (match !== null) {
+        throw new Error(`Multiple packaged workflows declare the name '${name}'`);
+      }
+      match = {
+        absolutePath,
+        filename: `${pack}/${workflowFolder}/${yamlFilename}`,
+        packaged: true,
+        parsed,
+      };
+    }
+  }
+  return match;
+}
+
+async function findWorkflowAt(
+  workflowsRoot: string,
+  name: string
+): Promise<RawWorkflowFile | null> {
+  return (
+    (await tryReadWorkflowAt(workflowsRoot, name)) ??
+    (await findPackagedWorkflowAt(workflowsRoot, name))
+  );
+}
+
+function isBundledWorkflowsRoot(workflowsRoot: string): boolean {
+  return resolve(workflowsRoot) === resolve(dirname(getDefaultWorkflowsPath()));
+}
+
+function findBundledWorkflow(
+  name: string
+): { filename: string; parsed: ReturnType<typeof parseWorkflow> } | null {
+  const direct = BUNDLED_WORKFLOWS[name];
+  if (direct !== undefined) {
+    const filename = `${name}.yaml`;
+    const parsed = parseWorkflow(direct, filename);
+    if (parsed.error !== null || parsed.workflow?.name === name) {
+      return { filename, parsed };
+    }
+  }
+
+  let match: {
+    filename: string;
+    parsed: ReturnType<typeof parseWorkflow>;
+  } | null = null;
+  for (const [filenameStem, content] of Object.entries(BUNDLED_WORKFLOWS)) {
+    if (filenameStem === name) continue;
+    const filename = `${filenameStem}.yaml`;
+    const parsed = parseWorkflow(content, filename);
+    if (parsed.workflow?.name !== name) continue;
+    if (match !== null) throw new Error(`Multiple bundled workflows declare the name '${name}'`);
+    match = { filename, parsed };
+  }
+  return match;
 }
 import * as conversationDb from '@archon/core/db/conversations';
 import * as codebaseDb from '@archon/core/db/codebases';
@@ -3682,24 +3798,6 @@ export function registerApiRoutes(
       return apiError(c, 400, 'Invalid workflow name');
     }
 
-    // Try `.yaml` then `.yml`, mirroring `loadWorkflowsFromDir` in
-    // workflow-discovery.ts so by-name lookup matches the list endpoint.
-    // Returns null if neither extension exists (caller tries the next source).
-    const tryReadWorkflowAt = async (
-      dir: string
-    ): Promise<{ filename: string; content: string } | null> => {
-      for (const ext of ['yaml', 'yml']) {
-        const filename = `${name}.${ext}`;
-        try {
-          const content = await readFile(join(dir, filename), 'utf-8');
-          return { filename, content };
-        } catch (err) {
-          if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
-        }
-      }
-      return null;
-    };
-
     try {
       const cwd = c.req.query('cwd');
       let workingDir = cwd;
@@ -3715,10 +3813,13 @@ export function registerApiRoutes(
       // 1. Try user-defined workflow in cwd.
       if (workingDir) {
         const [workflowFolder] = getWorkflowFolderSearchPaths();
+        const projectWorkflowsRoot = join(workingDir, workflowFolder);
         try {
-          const hit = await tryReadWorkflowAt(join(workingDir, workflowFolder));
-          if (hit) {
-            const result = parseWorkflow(hit.content, hit.filename);
+          const hit = await findWorkflowAt(projectWorkflowsRoot, name);
+          const isSourceBundledPackage =
+            hit?.packaged === true && isBundledWorkflowsRoot(projectWorkflowsRoot);
+          if (hit && !isSourceBundledPackage) {
+            const result = hit.parsed;
             if (result.error) {
               return apiError(c, 500, `Workflow file is invalid: ${result.error.error}`);
             }
@@ -3737,9 +3838,9 @@ export function registerApiRoutes(
       // 2. Fall back to home-scoped workflow (`~/.archon/workflows/`).
       // Mirrors the discovery order in `discoverWorkflowsWithConfig`.
       try {
-        const hit = await tryReadWorkflowAt(getHomeWorkflowsPath());
+        const hit = await findWorkflowAt(getHomeWorkflowsPath(), name);
         if (hit) {
-          const result = parseWorkflow(hit.content, hit.filename);
+          const result = hit.parsed;
           if (result.error) {
             return apiError(c, 500, `Home workflow file is invalid: ${result.error.error}`);
           }
@@ -3755,25 +3856,26 @@ export function registerApiRoutes(
       }
 
       // 3. Fall back to bundled defaults.
-      if (Object.hasOwn(BUNDLED_WORKFLOWS, name)) {
-        const bundledFilename = `${name}.yaml`;
-        const bundledContent = BUNDLED_WORKFLOWS[name];
-        const result = parseWorkflow(bundledContent, bundledFilename);
+      const bundled = findBundledWorkflow(name);
+      if (bundled !== null) {
+        const result = bundled.parsed;
         if (result.error) {
           return apiError(c, 500, `Bundled workflow is invalid: ${result.error.error}`);
         }
         return c.json({
           workflow: result.workflow,
-          filename: bundledFilename,
+          filename: bundled.filename,
           source: 'bundled' as WorkflowSource,
         });
       }
 
       if (!isBinaryBuild()) {
         try {
-          const hit = await tryReadWorkflowAt(getDefaultWorkflowsPath());
+          const hit =
+            (await tryReadWorkflowAt(getDefaultWorkflowsPath(), name)) ??
+            (await findPackagedWorkflowAt(dirname(getDefaultWorkflowsPath()), name));
           if (hit) {
-            const result = parseWorkflow(hit.content, hit.filename);
+            const result = hit.parsed;
             if (result.error) {
               return apiError(c, 500, `Default workflow is invalid: ${result.error.error}`);
             }
@@ -3849,11 +3951,16 @@ export function registerApiRoutes(
           ? getHomeWorkflowsPath()
           : join(workingDir, getWorkflowFolderSearchPaths()[0]);
       await mkdir(dirPath, { recursive: true });
-      const filePath = join(dirPath, `${name}.yaml`);
+      const existing = await findWorkflowAt(dirPath, name);
+      if (existing?.packaged === true && isBundledWorkflowsRoot(dirPath)) {
+        return apiError(c, 400, `Cannot overwrite bundled default workflow: ${name}`);
+      }
+      const filePath = existing?.absolutePath ?? join(dirPath, `${name}.yaml`);
+      const filename = existing?.filename ?? `${name}.yaml`;
       await writeFile(filePath, yamlContent, 'utf-8');
       return c.json({
         workflow: parsed.workflow,
-        filename: `${name}.yaml`,
+        filename,
         source,
       });
     } catch (error) {
@@ -3873,11 +3980,6 @@ export function registerApiRoutes(
     const targetSource = c.req.query('source');
     if (targetSource && targetSource !== 'project' && targetSource !== 'global') {
       return apiError(c, 400, 'Invalid workflow source');
-    }
-
-    // Refuse to delete bundled defaults
-    if (targetSource !== 'global' && Object.hasOwn(BUNDLED_WORKFLOWS, name)) {
-      return apiError(c, 400, `Cannot delete bundled default workflow: ${name}`);
     }
 
     const cwd = c.req.query('cwd');
@@ -3901,6 +4003,20 @@ export function registerApiRoutes(
         ? getHomeWorkflowsPath()
         : join(workingDir, getWorkflowFolderSearchPaths()[0]);
 
+    try {
+      const packaged = await findPackagedWorkflowAt(dir, name);
+      if (packaged !== null) {
+        if (isBundledWorkflowsRoot(dir)) {
+          return apiError(c, 400, `Cannot delete bundled default workflow: ${name}`);
+        }
+        await rm(dirname(packaged.absolutePath), { recursive: true });
+        return c.json({ deleted: true, name });
+      }
+    } catch (err) {
+      getLog().error({ err, name }, 'workflow.delete_failed');
+      return apiError(c, 500, 'Failed to delete workflow');
+    }
+
     // Remove both `.yaml` and `.yml` variants (discovery accepts either), so a
     // twin file can't stay active after a reported deletion.
     let deleted = false;
@@ -3917,6 +4033,9 @@ export function registerApiRoutes(
     }
     if (deleted) {
       return c.json({ deleted: true, name });
+    }
+    if (targetSource !== 'global' && findBundledWorkflow(name) !== null) {
+      return apiError(c, 400, `Cannot delete bundled default workflow: ${name}`);
     }
     return apiError(c, 404, `Workflow not found: ${name}`);
   });

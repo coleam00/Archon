@@ -315,12 +315,14 @@ export async function loadCommandPrompt(
       }
     }
 
-    const workflowsRoot =
-      packaged.owner.source === 'project'
-        ? join(cwd, '.archon', 'workflows')
-        : packaged.owner.source === 'global'
-          ? archonPaths.getHomeWorkflowsPath()
-          : dirname(archonPaths.getDefaultWorkflowsPath());
+    let workflowsRoot: string;
+    if (packaged.owner.source === 'project') {
+      workflowsRoot = join(cwd, '.archon', 'workflows');
+    } else if (packaged.owner.source === 'global') {
+      workflowsRoot = archonPaths.getHomeWorkflowsPath();
+    } else {
+      workflowsRoot = dirname(archonPaths.getDefaultWorkflowsPath());
+    }
     const filePath = join(
       getPackagedResourceDirectory(workflowsRoot, packaged.owner, 'commands'),
       `${packaged.name}.md`
@@ -337,14 +339,17 @@ export async function loadCommandPrompt(
       return { success: true, content };
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
+      let reason: 'permission_denied' | 'not_found' | 'read_error';
+      if (err.code === 'EACCES') {
+        reason = 'permission_denied';
+      } else if (err.code === 'ENOENT') {
+        reason = 'not_found';
+      } else {
+        reason = 'read_error';
+      }
       return {
         success: false,
-        reason:
-          err.code === 'EACCES'
-            ? 'permission_denied'
-            : err.code === 'ENOENT'
-              ? 'not_found'
-              : 'read_error',
+        reason,
         message:
           err.code === 'ENOENT'
             ? `Packaged command not found: ${filePath}`

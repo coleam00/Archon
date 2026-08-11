@@ -134,13 +134,14 @@ describe('generate-bundled-defaults: untracked-file guard (#1578)', () => {
     try {
       const packageDir = join(repoRoot, '.archon/workflows/author-pack/release-flow');
       mkdirSync(join(packageDir, 'commands'), { recursive: true });
-      mkdirSync(join(packageDir, 'scripts'), { recursive: true });
+      mkdirSync(join(packageDir, 'scripts/helpers'), { recursive: true });
       writeFileSync(
         join(packageDir, 'release.yaml'),
         'name: release\ndescription: release\nnodes:\n  - id: run\n    command: prepare\n'
       );
       writeFileSync(join(packageDir, 'commands/prepare.md'), '# Prepare the release\n');
       writeFileSync(join(packageDir, 'scripts/publish.ts'), "console.log('published');\n");
+      writeFileSync(join(packageDir, 'scripts/helpers/announce.py'), "print('announced')\n");
       runGit(repoRoot, ['add', '.archon/workflows/author-pack']);
 
       const { exitCode, stderr } = runScript(repoRoot);
@@ -151,6 +152,7 @@ describe('generate-bundled-defaults: untracked-file guard (#1578)', () => {
       expect(output).toContain('"release": {"pack":"author-pack","workflow":"release-flow"}');
       expect(output).toContain('__archon_pack__bundled:author-pack:release-flow::prepare');
       expect(output).toContain('__archon_pack__bundled:author-pack:release-flow::publish');
+      expect(output).toContain('__archon_pack__bundled:author-pack:release-flow::announce');
       expect(output).toContain('BUNDLED_SCRIPTS');
     } finally {
       rmSync(repoRoot, { recursive: true, force: true });

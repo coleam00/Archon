@@ -76,26 +76,23 @@ function isNamedScript(script: string): boolean {
   return !script.includes('\n') && !/[;(){}&|<>$`"' ]/.test(script);
 }
 
+function qualifyResourceReference(reference: string, owner: WorkflowResourceOwner): string {
+  if (parsePackagedResourceReference(reference) !== null) return reference;
+  return formatPackagedResourceReference(owner, reference);
+}
+
 function qualifyNodeResources(
   node: WorkflowDefinition['nodes'][number],
   owner: WorkflowResourceOwner
 ): void {
-  if (isCommandNode(node) && parsePackagedResourceReference(node.command) === null) {
-    node.command = formatPackagedResourceReference(owner, node.command);
+  if (isCommandNode(node)) {
+    node.command = qualifyResourceReference(node.command, owner);
   }
-  if (
-    isScriptNode(node) &&
-    isNamedScript(node.script) &&
-    parsePackagedResourceReference(node.script) === null
-  ) {
-    node.script = formatPackagedResourceReference(owner, node.script);
+  if (isScriptNode(node) && isNamedScript(node.script)) {
+    node.script = qualifyResourceReference(node.script, owner);
   }
-  if (
-    isLoopNode(node) &&
-    node.loop.command !== undefined &&
-    parsePackagedResourceReference(node.loop.command) === null
-  ) {
-    node.loop.command = formatPackagedResourceReference(owner, node.loop.command);
+  if (isLoopNode(node) && node.loop.command !== undefined) {
+    node.loop.command = qualifyResourceReference(node.loop.command, owner);
   }
   if (isLoopGroupNode(node)) {
     for (const child of node.loop_group.nodes) qualifyNodeResources(child, owner);

@@ -45,6 +45,8 @@ import {
   qualifyWorkflowResources,
 } from './packaged-workflow';
 
+export { isValidWorkflowFolderSegment } from './packaged-workflow';
+
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -113,21 +115,19 @@ interface DirLoadResult {
 }
 
 function mergeScopeResults(base: DirLoadResult, packaged: DirLoadResult): DirLoadResult {
-  const collisions = new Set<string>();
   for (const [filename, parsed] of packaged.workflows) {
-    if (base.workflows.has(filename)) {
-      collisions.add(filename);
-      base.workflows.delete(filename);
-      base.errors.push({
-        filename,
-        error: `Workflow filename collision within one scope: '${filename}'. Workflow filenames must be unique across flat and packaged folders.`,
-        errorType: 'validation_error',
-      });
-    } else {
+    if (!base.workflows.has(filename)) {
       base.workflows.set(filename, parsed);
+      continue;
     }
+
+    base.workflows.delete(filename);
+    base.errors.push({
+      filename,
+      error: `Workflow filename collision within one scope: '${filename}'. Workflow filenames must be unique across flat and packaged folders.`,
+      errorType: 'validation_error',
+    });
   }
-  for (const filename of collisions) packaged.workflows.delete(filename);
   base.errors.push(...packaged.errors);
   return base;
 }
