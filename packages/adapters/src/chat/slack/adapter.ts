@@ -400,17 +400,33 @@ export class SlackAdapter implements IPlatformAdapter {
     threadTs: string,
     userId: string
   ): Promise<void> {
+    // Authorize at the adapter boundary, like every other messageHandler entry
+    // point (app_mention / message.im / slash), so a synthetic command can never
+    // bypass the whitelist even if a caller forgets to check. Silent + masked,
+    // matching the inbound handlers.
+    if (!isSlackUserAuthorized(userId, this.allowedUserIds)) {
+      const maskedId = userId ? `${userId.slice(0, 4)}***` : 'unknown';
+      getLog().info({ maskedUserId: maskedId }, 'slack.thread_command_unauthorized');
+      return;
+    }
     if (!this.messageHandler) return;
-    const displayName = await this.fetchDisplayName(userId);
-    const messageEvent: SlackMessageEvent = {
-      text,
-      user: userId,
-      channel,
-      ts: threadTs,
-      thread_ts: threadTs,
-      displayName,
-    };
-    await this.messageHandler(messageEvent);
+    getLog().info({ channel }, 'slack.thread_command_dispatch_started');
+    try {
+      const displayName = await this.fetchDisplayName(userId);
+      const messageEvent: SlackMessageEvent = {
+        text,
+        user: userId,
+        channel,
+        ts: threadTs,
+        thread_ts: threadTs,
+        displayName,
+      };
+      await this.messageHandler(messageEvent);
+      getLog().info({ channel }, 'slack.thread_command_dispatch_completed');
+    } catch (error) {
+      getLog().error({ err: error as Error, channel }, 'slack.thread_command_dispatch_failed');
+      throw error;
+    }
   }
 
   /**
