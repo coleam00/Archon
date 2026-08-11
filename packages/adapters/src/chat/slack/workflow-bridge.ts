@@ -466,6 +466,9 @@ export class SlackWorkflowBridge {
     // block builder or chat.update can throw. Bolt has no app.error registered,
     // so an unhandled rejection here means the user sees nothing.
     let outcomeNote: string | undefined;
+    // Whether the resolved gate leaves the run in a resumable state that the
+    // Slack side must continue itself (see the dispatch below).
+    let shouldResume = false;
     try {
       try {
         if (decision === 'approved') {
@@ -478,6 +481,7 @@ export class SlackWorkflowBridge {
             result.type === 'interactive_loop'
               ? 'recorded — finalizes if the gate paused after a completion condition was met, otherwise the loop runs another iteration on resume'
               : 'workflow resumed';
+          shouldResume = true;
         } else {
           const result = await workflowOperations.rejectWorkflow(runId, 'Rejected');
           outcomeNote = result.cancelled
@@ -487,12 +491,39 @@ export class SlackWorkflowBridge {
             : result.newMode
               ? 'recorded — the run continues'
               : 'recorded — workflow will retry with feedback';
+          // A non-cancelling reject runs the node's on_reject flow on resume.
+          shouldResume = !result.cancelled;
         }
       } catch (error) {
         const err = error as Error;
         getLog().error({ err, runId, nodeId, decision }, 'slack.bridge_approval_action_failed');
         // Keep the user-facing note generic — full error stays in logs.
         outcomeNote = 'error: see server logs';
+      }
+
+      // The server's post-gate auto-resume (`tryAutoResumeAfterGate`) only fires
+      // for web-sourced parents; a Slack-resolved gate otherwise strands the run
+      // in "approved/awaiting resume" with no further output in the thread.
+      // Continue it here by dispatching `/workflow resume <id>` back through the
+      // Slack conversation, so the remaining nodes and final report stream into
+      // this same thread. Fire-and-forget: the resolution edit below must still
+      // land even if the resume dispatch is slow or fails.
+      if (shouldResume) {
+        const runState = this.runs.get(runId);
+        if (runState && actorId) {
+          void this.adapter
+            .dispatchThreadCommand(
+              `/workflow resume ${runId}`,
+              runState.channel,
+              runState.threadTs,
+              actorId
+            )
+            .catch(err => {
+              getLog().error({ err, runId }, 'slack.bridge_resume_dispatch_failed');
+            });
+        } else {
+          getLog().warn({ runId, hasRunState: Boolean(runState) }, 'slack.bridge_resume_skipped');
+        }
       }
 
       await this.applyResolutionEdit({

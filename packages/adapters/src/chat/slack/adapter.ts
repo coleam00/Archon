@@ -385,6 +385,35 @@ export class SlackAdapter implements IPlatformAdapter {
   }
 
   /**
+   * Dispatch a synthetic orchestrator command inside an existing run's thread.
+   *
+   * The server's post-gate auto-resume (`tryAutoResumeAfterGate`) only fires
+   * for web-sourced parents; non-web parents are expected to run their own
+   * re-run flow. The workflow bridge uses this to resume a run after a
+   * Slack-side gate approval so the resumed output streams back into the same
+   * thread instead of a web worker conversation. Routing through the same
+   * `messageHandler` inbound path keeps the run bound to its Slack conversation.
+   */
+  async dispatchThreadCommand(
+    text: string,
+    channel: string,
+    threadTs: string,
+    userId: string
+  ): Promise<void> {
+    if (!this.messageHandler) return;
+    const displayName = await this.fetchDisplayName(userId);
+    const messageEvent: SlackMessageEvent = {
+      text,
+      user: userId,
+      channel,
+      ts: threadTs,
+      thread_ts: threadTs,
+      displayName,
+    };
+    await this.messageHandler(messageEvent);
+  }
+
+  /**
    * Start the bot (connects via Socket Mode)
    */
   async start(): Promise<void> {

@@ -88,6 +88,12 @@ function makeFakeAdapter(allowedUserIds: string[] = []) {
   const updated: UpdatedMessage[] = [];
   const reactionsAdded: ReactionCall[] = [];
   const reactionsRemoved: ReactionCall[] = [];
+  const resumeDispatches: Array<{
+    text: string;
+    channel: string;
+    threadTs: string;
+    userId: string;
+  }> = [];
   let nextTs = 1;
 
   let registeredActions: Array<{ pattern: RegExp; handler: (args: unknown) => Promise<void> }> = [];
@@ -129,6 +135,11 @@ function makeFakeAdapter(allowedUserIds: string[] = []) {
       triggerMap.delete(id);
     },
     getAllowedUserIds: () => allowedUserIds,
+    dispatchThreadCommand: mock(
+      async (text: string, channel: string, threadTs: string, userId: string) => {
+        resumeDispatches.push({ text, channel, threadTs, userId });
+      }
+    ),
   };
 
   return {
@@ -138,6 +149,7 @@ function makeFakeAdapter(allowedUserIds: string[] = []) {
     updated,
     reactionsAdded,
     reactionsRemoved,
+    resumeDispatches,
     triggerMap,
     actions: () => registeredActions,
     dispatchAction: async (actionId: string, body: Record<string, unknown>) => {
@@ -256,7 +268,8 @@ describe('SlackWorkflowBridge', () => {
   });
 
   test('approve button calls approveWorkflow and edits the message', async () => {
-    const { adapter, posted, updated, triggerMap, dispatchAction } = makeFakeAdapter();
+    const { adapter, posted, updated, triggerMap, dispatchAction, resumeDispatches } =
+      makeFakeAdapter();
     triggerMap.set('C1:111.0', { channel: 'C1', ts: '111.0' });
     mockGetConversationId.mockReturnValue('C1:111.0');
 
@@ -293,6 +306,16 @@ describe('SlackWorkflowBridge', () => {
     expect(headerText).toContain('Approved');
     expect(headerText).toContain('<@U123>');
     expect(headerText).toContain('workflow resumed');
+
+    // The server auto-resumes only web parents, so the Slack bridge must resume
+    // the run itself — dispatched back through the run's own thread as the actor.
+    expect(resumeDispatches).toHaveLength(1);
+    expect(resumeDispatches[0]).toEqual({
+      text: '/workflow resume r1',
+      channel: 'C1',
+      threadTs: '111.0',
+      userId: 'U123',
+    });
   });
 
   test('interactive-loop approval describes the aggregate completion condition', async () => {
@@ -364,7 +387,7 @@ describe('SlackWorkflowBridge', () => {
   });
 
   test('reject button at max attempts notes the run was cancelled', async () => {
-    const { adapter, updated, triggerMap, dispatchAction } = makeFakeAdapter();
+    const { adapter, updated, triggerMap, dispatchAction, resumeDispatches } = makeFakeAdapter();
     triggerMap.set('C1:111.0', { channel: 'C1', ts: '111.0' });
     mockGetConversationId.mockReturnValue('C1:111.0');
     mockRejectWorkflow.mockResolvedValue({ cancelled: true, maxAttemptsReached: true });
@@ -393,6 +416,8 @@ describe('SlackWorkflowBridge', () => {
     const text = (updated[0]?.blocks?.[0] as { text?: { text?: string } } | undefined)?.text?.text;
     expect(text).toContain('Rejected');
     expect(text).toContain('max reject attempts reached');
+    // A cancelling reject ends the run — nothing to resume.
+    expect(resumeDispatches).toHaveLength(0);
   });
 
   test('cancel button calls abandonWorkflow', async () => {
