@@ -10,11 +10,15 @@ import {
   Events,
   ThreadAutoArchiveDuration,
 } from 'discord.js';
-import type { IPlatformAdapter, MessageMetadata } from '@archon/core';
+import type { AttachedFile, IPlatformAdapter, MessageMetadata } from '@archon/core';
 import { createLogger } from '@archon/paths';
 import { isDiscordUserAuthorized } from './auth';
 import { parseAllowedUserIds } from './auth';
 import { splitIntoParagraphChunks } from '../../../utils/message-splitting';
+import {
+  downloadAttachments as downloadAttachmentsCore,
+  type SkippedAttachment,
+} from '../../../utils/attachment-download';
 import type { DiscordMessageContext } from './types';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -25,6 +29,26 @@ function getLog(): ReturnType<typeof createLogger> {
 }
 
 const MAX_LENGTH = 2000;
+
+/**
+ * Discord attachment URLs (`message.attachments`) are signed, time-limited
+ * links returned directly by the Discord API — no bot token is attached to
+ * the download request, so this check is a lighter-weight sanity guard than
+ * Slack's (which protects a bearer token), but still worth proving before
+ * fetching a URL sourced from inbound event data.
+ */
+function isTrustedDiscordDownloadUrl(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  return (
+    parsed.protocol === 'https:' &&
+    (parsed.hostname === 'cdn.discordapp.com' || parsed.hostname === 'media.discordapp.net')
+  );
+}
 
 export class DiscordAdapter implements IPlatformAdapter {
   private client: Client;
@@ -174,6 +198,31 @@ export class DiscordAdapter implements IPlatformAdapter {
     // Remove <@BOT_ID> or <@!BOT_ID> (with nickname)
     const mentionRegex = new RegExp(`<@!?${botUser.id}>\\s*`, 'g');
     return message.content.replace(mentionRegex, '').trim();
+  }
+
+  /**
+   * Download a message's Discord file attachments to disk, producing
+   * `AttachedFile[]` in the same shape the Web upload endpoint uses.
+   * Discord attachment URLs are ready to fetch directly (no auth header, no
+   * extra API round-trip) — this method only maps `message.attachments` to
+   * download candidates and delegates the rest to the shared pipeline.
+   */
+  async downloadAttachments(
+    message: Message,
+    conversationId: string
+  ): Promise<{ files: AttachedFile[]; uploadDir: string; skipped: SkippedAttachment[] }> {
+    const candidates = [...message.attachments.values()].map(a => ({
+      url: a.url,
+      name: a.name,
+      id: a.id,
+      mimeType: a.contentType ?? undefined,
+      size: a.size,
+    }));
+    return downloadAttachmentsCore(candidates, {
+      platform: 'discord',
+      conversationId,
+      isTrustedUrl: isTrustedDiscordDownloadUrl,
+    });
   }
 
   /**

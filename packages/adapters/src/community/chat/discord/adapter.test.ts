@@ -1,7 +1,7 @@
 /**
  * Unit tests for Discord adapter
  */
-import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test';
 import type { Mock } from 'bun:test';
 
 // Mock logger to suppress noisy output during tests
@@ -820,6 +820,89 @@ describe('DiscordAdapter', () => {
 
       const callArgs = mockStartThread.mock.calls[0][0] as { name: string };
       expect(callArgs.name).toBe('Bot Response');
+    });
+  });
+
+  describe('downloadAttachments', () => {
+    let adapter: DiscordAdapter;
+    let originalFetch: typeof fetch;
+
+    beforeEach(() => {
+      adapter = new DiscordAdapter('fake-token-for-testing');
+      originalFetch = globalThis.fetch;
+      globalThis.fetch = mock(() =>
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-length': '4' }),
+          arrayBuffer: () => Promise.resolve(new ArrayBuffer(4)),
+        } as Response)
+      ) as unknown as typeof fetch;
+    });
+
+    afterEach(() => {
+      globalThis.fetch = originalFetch;
+    });
+
+    function makeMessageWithAttachments(
+      attachments: {
+        id: string;
+        name: string;
+        url: string;
+        contentType: string | null;
+        size: number;
+      }[]
+    ): import('discord.js').Message {
+      return {
+        attachments: new Map(attachments.map(a => [a.id, a])),
+      } as unknown as import('discord.js').Message;
+    }
+
+    test('returns empty result when the message has no attachments', async () => {
+      const message = makeMessageWithAttachments([]);
+      const result = await adapter.downloadAttachments(message, 'conv-1');
+      expect(result).toEqual({ files: [], uploadDir: '', skipped: [] });
+    });
+
+    test('downloads attachments directly from the CDN URL, no auth header', async () => {
+      const message = makeMessageWithAttachments([
+        {
+          id: 'A1',
+          name: 'photo.png',
+          url: 'https://cdn.discordapp.com/attachments/1/2/photo.png',
+          contentType: 'image/png',
+          size: 4,
+        },
+      ]);
+
+      const result = await adapter.downloadAttachments(message, 'conv-1');
+
+      expect(result.files).toHaveLength(1);
+      expect(result.files[0].name).toBe('photo.png');
+      expect(result.files[0].mimeType).toBe('image/png');
+      const fetchCall = (globalThis.fetch as Mock<typeof fetch>).mock.calls[0];
+      expect(fetchCall[0]).toBe('https://cdn.discordapp.com/attachments/1/2/photo.png');
+      expect((fetchCall[1] as RequestInit | undefined)?.headers).toBeUndefined();
+    });
+
+    test('rejects a URL not on a Discord CDN host without ever calling fetch', async () => {
+      const fetchSpy = mock(() => Promise.reject(new Error('should not be called')));
+      globalThis.fetch = fetchSpy as unknown as typeof fetch;
+
+      const message = makeMessageWithAttachments([
+        {
+          id: 'A1',
+          name: 'evil.png',
+          url: 'https://evil.example.com/photo.png',
+          contentType: 'image/png',
+          size: 4,
+        },
+      ]);
+
+      const result = await adapter.downloadAttachments(message, 'conv-1');
+
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(result.skipped).toEqual([{ name: 'evil.png', reason: 'untrusted_url' }]);
     });
   });
 });

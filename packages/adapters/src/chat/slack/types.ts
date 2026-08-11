@@ -12,4 +12,14 @@ export interface SlackMessageEvent {
   ts: string;
   thread_ts?: string;
   displayName?: string;
+  files?: SlackFileRef[];
+}
+
+/** File attachment reference as it appears on an inbound Slack message event. */
+export interface SlackFileRef {
+  id: string;
+  name?: string;
+  mimetype?: string;
+  url_private_download?: string;
+  size?: number;
 }

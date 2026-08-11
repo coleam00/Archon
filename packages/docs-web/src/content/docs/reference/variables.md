@@ -182,9 +182,11 @@ Workflow variables and `$nodeId.output` refs both resolve in `systemPrompt:` and
 ## Attachments
 
 `bash:` and `script:` nodes can read the files attached to the message that
-triggered the run (Slack uploads, web UI attachments) via the `ARCHON_ATTACHMENTS`
-environment variable — a JSON array of `{ path, name, mimeType, size }` objects,
-where `path` is the absolute path on disk where the adapter saved the file.
+triggered the run (Slack, Telegram, and Discord uploads, web UI attachments) via
+the `ARCHON_ATTACHMENTS` environment variable — a JSON array of
+`{ path, name, mimeType, size }` objects, where `path` is the absolute path on
+disk where the adapter saved the file. GitHub, GitLab, and Gitea comments don't
+expose a structured attachment field, so this is inert on those adapters.
 
 `ARCHON_ATTACHMENTS` is **always set**, even when there are no attachments
 (`[]`) — no presence check is needed:
