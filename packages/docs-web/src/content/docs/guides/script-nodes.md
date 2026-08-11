@@ -132,10 +132,14 @@ identifier, add a trailing comment or newline to force inline mode.
 
 Named scripts are discovered from, in precedence order:
 
-1. `<repoRoot>/.archon/scripts/` — repo-local
-2. `~/.archon/scripts/` — home-scoped (shared across every repo)
+1. The owning packaged workflow's `scripts/` directory, when the workflow lives at `.archon/workflows/<pack>/<workflow>/`
+2. `<repoRoot>/.archon/scripts/` — repo-local shared scripts
+3. `~/.archon/scripts/` — home-scoped shared scripts
+4. Embedded packaged scripts for bundled workflows
 
-Each directory is walked one subfolder deep (e.g. `.archon/scripts/triage/foo.ts`
+Workflow-local lookup is scoped to the workflow that declared the node, including through `include:` expansion. Authors still write only the bare name (`script: publish`); the ownership key is internal.
+
+Each shared scripts directory is walked one subfolder deep (e.g. `.archon/scripts/triage/foo.ts`
 resolves as `foo`). Deeper nesting is ignored. On a same-name collision the
 repo-local entry wins silently — see [Global Workflows](/guides/global-workflows/)
 for the shared precedence rules.

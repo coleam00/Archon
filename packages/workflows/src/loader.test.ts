@@ -39,6 +39,7 @@ import { parseWorkflow } from './loader';
 import { workflowDefinitionSchema } from './schemas/workflow';
 import type { WorkflowDefinition } from './schemas/workflow';
 import * as bundledDefaults from './defaults/bundled-defaults';
+import { parsePackagedResourceReference } from './packaged-workflow';
 
 describe('Workflow Loader', () => {
   let testDir: string;
@@ -72,6 +73,125 @@ describe('Workflow Loader', () => {
     } else {
       process.env.ARCHON_DOCKER = originalArchonDocker;
     }
+  });
+
+  describe('packaged workflow folders (#2527)', () => {
+    it('discovers arbitrary repo pack/workflow folders and qualifies local resources', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows', 'team-kit', 'ship-it');
+      await mkdir(workflowDir, { recursive: true });
+      await writeFile(
+        join(workflowDir, 'release.yaml'),
+        `name: release\ndescription: release\nnodes:\n  - id: command\n    command: prepare\n  - id: script\n    script: publish\n    runtime: bun\n`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toEqual([]);
+      const workflow = result.workflows.find(entry => entry.workflow.name === 'release')?.workflow;
+      expect(workflow).toBeDefined();
+      const command = parsePackagedResourceReference(
+        (workflow?.nodes[0] as { command: string }).command
+      );
+      const script = parsePackagedResourceReference(
+        (workflow?.nodes[1] as { script: string }).script
+      );
+      expect(command).toEqual({
+        owner: { source: 'project', pack: 'team-kit', workflow: 'ship-it' },
+        name: 'prepare',
+      });
+      expect(script).toEqual({
+        owner: { source: 'project', pack: 'team-kit', workflow: 'ship-it' },
+        name: 'publish',
+      });
+    });
+
+    it('retains an included workflow own packaged resource owner', async () => {
+      const parentDir = join(testDir, '.archon', 'workflows', 'product', 'parent');
+      const blockDir = join(testDir, '.archon', 'workflows', 'shared', 'review-block');
+      await mkdir(parentDir, { recursive: true });
+      await mkdir(blockDir, { recursive: true });
+      await writeFile(
+        join(parentDir, 'parent.yaml'),
+        `name: parent\ndescription: parent\nnodes:\n  - id: review\n    include: review-block\n`
+      );
+      await writeFile(
+        join(blockDir, 'block.yaml'),
+        `name: review-block\ndescription: block\nnodes:\n  - id: run\n    command: inspect\n`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      const parent = result.workflows.find(entry => entry.workflow.name === 'parent')?.workflow;
+      const included = parent?.nodes.find(node => node.id === 'review__run') as
+        | { command: string }
+        | undefined;
+      expect(parsePackagedResourceReference(included?.command ?? '')).toEqual({
+        owner: { source: 'project', pack: 'shared', workflow: 'review-block' },
+        name: 'inspect',
+      });
+    });
+
+    it('uses the identical authored structure in home scope', async () => {
+      const homeDir = join(testDir, 'home', 'workflows', 'personal-pack', 'daily');
+      await mkdir(homeDir, { recursive: true });
+      await writeFile(
+        join(homeDir, 'daily.yaml'),
+        `name: daily\ndescription: daily\nnodes:\n  - id: run\n    command: summarize\n`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      const workflow = result.workflows.find(entry => entry.workflow.name === 'daily');
+      expect(workflow?.source).toBe('global');
+      expect(
+        parsePackagedResourceReference((workflow?.workflow.nodes[0] as { command: string }).command)
+      ).toEqual({
+        owner: { source: 'global', pack: 'personal-pack', workflow: 'daily' },
+        name: 'summarize',
+      });
+    });
+
+    it('reports same-scope packaged workflow filename collisions', async () => {
+      for (const [pack, workflow, name] of [
+        ['one', 'first', 'first'],
+        ['two', 'second', 'second'],
+      ] as const) {
+        const dir = join(testDir, '.archon', 'workflows', pack, workflow);
+        await mkdir(dir, { recursive: true });
+        await writeFile(
+          join(dir, 'same.yaml'),
+          `name: ${name}\ndescription: collision\nnodes:\n  - id: run\n    prompt: hi\n`
+        );
+      }
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.workflows.some(entry => entry.workflow.name === 'first')).toBe(false);
+      expect(result.workflows.some(entry => entry.workflow.name === 'second')).toBe(false);
+      expect(result.errors.some(error => error.error.includes('filename collision'))).toBe(true);
+    });
+
+    it('repo filename override selects the repo packaged resource owner', async () => {
+      const homeDir = join(testDir, 'home', 'workflows', 'home-pack', 'flow');
+      const repoDir = join(testDir, '.archon', 'workflows', 'repo-pack', 'flow');
+      await mkdir(homeDir, { recursive: true });
+      await mkdir(repoDir, { recursive: true });
+      await writeFile(
+        join(homeDir, 'same.yaml'),
+        `name: home-version\ndescription: home\nnodes:\n  - id: run\n    command: shared\n`
+      );
+      await writeFile(
+        join(repoDir, 'same.yaml'),
+        `name: repo-version\ndescription: repo\nnodes:\n  - id: run\n    command: shared\n`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.workflows.some(entry => entry.workflow.name === 'home-version')).toBe(false);
+      const repo = result.workflows.find(entry => entry.workflow.name === 'repo-version');
+      expect(repo?.source).toBe('project');
+      expect(
+        parsePackagedResourceReference((repo?.workflow.nodes[0] as { command: string }).command)
+      ).toEqual({
+        owner: { source: 'project', pack: 'repo-pack', workflow: 'flow' },
+        name: 'shared',
+      });
+    });
   });
 
   describe('parseWorkflow (via discoverWorkflows)', () => {
@@ -1155,8 +1275,8 @@ nodes:
       expect(entry?.source).toBe('global');
     });
 
-    it('does NOT descend past 1 level of subfolders (rejects workflows/a/b/foo.yaml)', async () => {
-      const nestedDir = join(homeDir, 'workflows', 'a', 'b');
+    it('does NOT descend past the fixed pack/workflow boundary', async () => {
+      const nestedDir = join(homeDir, 'workflows', 'a', 'b', 'c');
       await mkdir(nestedDir, { recursive: true });
       await writeFile(
         join(nestedDir, 'too-deep.yaml'),

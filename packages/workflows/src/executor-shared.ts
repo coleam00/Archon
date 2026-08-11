@@ -6,13 +6,14 @@
  * utilities. Single source of truth; no logic changes from either copy.
  */
 import { readFile } from 'fs/promises';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import type { IWorkflowPlatform, WorkflowDeps, WorkflowMessageMetadata } from './deps';
 import * as archonPaths from '@archon/paths';
 import { BUNDLED_COMMANDS, isBinaryBuild } from './defaults/bundled-defaults';
 import { createLogger } from '@archon/paths';
 import { isValidCommandName } from './command-validation';
 import type { LoadCommandResult } from './schemas';
+import { getPackagedResourceDirectory, parsePackagedResourceReference } from './packaged-workflow';
 
 /** Lazy-initialized logger */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -290,6 +291,66 @@ export async function loadCommandPrompt(
       'config_load_failed_using_defaults'
     );
     config = { defaults: { loadDefaultCommands: true } };
+  }
+
+  const packaged = parsePackagedResourceReference(commandName);
+  if (packaged !== null) {
+    if (packaged.owner.source === 'bundled') {
+      if (config.defaults?.loadDefaultCommands === false) {
+        return {
+          success: false,
+          reason: 'not_found',
+          message: `Packaged command not found: ${packaged.name}.md`,
+        };
+      }
+      if (isBinaryBuild()) {
+        const content = BUNDLED_COMMANDS[commandName];
+        return content === undefined
+          ? {
+              success: false,
+              reason: 'not_found',
+              message: `Packaged command not found: ${packaged.name}.md`,
+            }
+          : { success: true, content };
+      }
+    }
+
+    const workflowsRoot =
+      packaged.owner.source === 'project'
+        ? join(cwd, '.archon', 'workflows')
+        : packaged.owner.source === 'global'
+          ? archonPaths.getHomeWorkflowsPath()
+          : dirname(archonPaths.getDefaultWorkflowsPath());
+    const filePath = join(
+      getPackagedResourceDirectory(workflowsRoot, packaged.owner, 'commands'),
+      `${packaged.name}.md`
+    );
+    try {
+      const content = await readFile(filePath, 'utf-8');
+      if (!content.trim()) {
+        return {
+          success: false,
+          reason: 'empty_file',
+          message: `Command file is empty: ${filePath}`,
+        };
+      }
+      return { success: true, content };
+    } catch (error) {
+      const err = error as NodeJS.ErrnoException;
+      return {
+        success: false,
+        reason:
+          err.code === 'EACCES'
+            ? 'permission_denied'
+            : err.code === 'ENOENT'
+              ? 'not_found'
+              : 'read_error',
+        message:
+          err.code === 'ENOENT'
+            ? `Packaged command not found: ${filePath}`
+            : `Error reading packaged command ${filePath}: ${err.message}`,
+      };
+    }
   }
 
   // Use command folder paths with optional configured folder.

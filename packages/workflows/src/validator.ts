@@ -9,13 +9,15 @@
  * REST API can use it.
  */
 
-import { join, resolve, isAbsolute } from 'path';
+import { dirname, join, resolve, isAbsolute } from 'path';
 import { access, readFile } from 'fs/promises';
 import {
   createLogger,
   getCommandFolderSearchPaths,
   getDefaultCommandsPath,
+  getDefaultWorkflowsPath,
   getHomeCommandsPath,
+  getHomeWorkflowsPath,
   findMarkdownFilesRecursive,
 } from '@archon/paths';
 import { execFileAsync } from '@archon/git';
@@ -36,6 +38,7 @@ import type { ScriptRuntime } from './script-discovery';
 import { discoverScriptsForCwd } from './script-discovery';
 import { isInlineScript } from './executor-shared';
 import { buildAiProfile, resolveModelSpec } from './model-validation';
+import { getPackagedResourceDirectory, parsePackagedResourceReference } from './packaged-workflow';
 import type { RawAliasesConfig, RawTiersConfig, ResolvedAiProfile } from './model-validation';
 
 // =============================================================================
@@ -152,7 +155,7 @@ export async function discoverAvailableCommands(
   if (loadDefaults) {
     if (isBinaryBuild()) {
       for (const name of Object.keys(BUNDLED_COMMANDS)) {
-        names.add(name);
+        if (parsePackagedResourceReference(name) === null) names.add(name);
       }
     } else {
       const defaultsPath = getDefaultCommandsPath();
@@ -195,6 +198,32 @@ async function resolveCommand(
   cwd: string,
   config?: ValidationConfig
 ): Promise<string | null> {
+  const packaged = parsePackagedResourceReference(commandName);
+  if (packaged !== null) {
+    if (packaged.owner.source === 'bundled') {
+      if (config?.loadDefaultCommands === false) return null;
+      if (isBinaryBuild()) {
+        return commandName in BUNDLED_COMMANDS ? `[bundled:${commandName}]` : null;
+      }
+    }
+    const workflowsRoot =
+      packaged.owner.source === 'project'
+        ? join(cwd, '.archon', 'workflows')
+        : packaged.owner.source === 'global'
+          ? getHomeWorkflowsPath()
+          : dirname(getDefaultWorkflowsPath());
+    const path = join(
+      getPackagedResourceDirectory(workflowsRoot, packaged.owner, 'commands'),
+      `${packaged.name}.md`
+    );
+    try {
+      await access(path);
+      return path;
+    } catch {
+      return null;
+    }
+  }
+
   // Each scope is walked 1 subfolder deep by basename — so `triage/review.md`
   // is resolvable as `review`. This matches the workflows/scripts discovery
   // convention and makes the listed commands in `discoverAvailableCommands`

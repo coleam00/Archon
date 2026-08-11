@@ -5,8 +5,13 @@ const mockReaddir = mock(async (_path: string): Promise<string[]> => []);
 const mockStat = mock(async (_path: string) => ({ isDirectory: () => false }));
 
 mock.module('fs/promises', () => ({
+  access: mock(async () => undefined),
+  mkdir: mock(async () => undefined),
   readdir: mockReaddir,
+  rename: mock(async () => undefined),
+  rm: mock(async () => undefined),
   stat: mockStat,
+  writeFile: mock(async () => undefined),
 }));
 
 // Mock logger
@@ -19,12 +24,17 @@ const mockLogger = {
   trace: mock(() => undefined),
 };
 let mockHomeScriptsPath = '/home/scripts';
+let mockHomeWorkflowsPath = '/home/workflows';
 mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
+  getArchonHome: mock(() => '/home'),
+  getDefaultWorkflowsPath: mock(() => '/app/workflows/defaults'),
   getHomeScriptsPath: mock(() => mockHomeScriptsPath),
+  getHomeWorkflowsPath: mock(() => mockHomeWorkflowsPath),
 }));
 
 import { discoverScripts, discoverScriptsForCwd, getDefaultScripts } from './script-discovery';
+import { formatPackagedResourceReference } from './packaged-workflow';
 
 // On Windows, path.join produces backslashes (e.g. `\scripts\triage`). The
 // mocks below key on forward-slash paths for readability, so normalize before
@@ -219,6 +229,7 @@ describe('discoverScriptsForCwd — merge repo + home with repo winning', () => 
     mockReaddir.mockReset();
     mockStat.mockReset();
     mockHomeScriptsPath = '/home/scripts';
+    mockHomeWorkflowsPath = '/home/workflows';
   });
 
   test('merges scripts from ~/.archon/scripts and <cwd>/.archon/scripts', async () => {
@@ -266,6 +277,42 @@ describe('discoverScriptsForCwd — merge repo + home with repo winning', () => 
     const result = await discoverScriptsForCwd('/repo');
     expect(result.size).toBe(1);
     expect(result.has('only-repo')).toBe(true);
+  });
+
+  test('isolates identical local script names in repo and home packaged workflows', async () => {
+    mockReaddir.mockImplementation(async (path: string) => {
+      const p = norm(path);
+      if (p === '/app/workflows') return [];
+      if (p === '/home/scripts' || p === '/repo/.archon/scripts') return [];
+      if (p === '/home/workflows') return ['personal-pack'];
+      if (p === '/home/workflows/personal-pack') return ['daily'];
+      if (p === '/home/workflows/personal-pack/daily/scripts') return ['shared.py'];
+      if (p === '/repo/.archon/workflows') return ['team-pack'];
+      if (p === '/repo/.archon/workflows/team-pack') return ['release'];
+      if (p === '/repo/.archon/workflows/team-pack/release/scripts') return ['shared.ts'];
+      return [];
+    });
+    mockStat.mockImplementation(async (path: string) => ({
+      isDirectory: () => !/\.(ts|py)$/.test(norm(path)),
+    }));
+
+    const result = await discoverScriptsForCwd('/repo');
+    const homeName = formatPackagedResourceReference(
+      { source: 'global', pack: 'personal-pack', workflow: 'daily' },
+      'shared'
+    );
+    const repoName = formatPackagedResourceReference(
+      { source: 'project', pack: 'team-pack', workflow: 'release' },
+      'shared'
+    );
+    expect(result.get(homeName)?.runtime).toBe('uv');
+    expect(result.get(repoName)?.runtime).toBe('bun');
+    expect(result.get(homeName)?.path).toBe(
+      '/home/workflows/personal-pack/daily/scripts/shared.py'
+    );
+    expect(result.get(repoName)?.path).toBe(
+      '/repo/.archon/workflows/team-pack/release/scripts/shared.ts'
+    );
   });
 });
 
