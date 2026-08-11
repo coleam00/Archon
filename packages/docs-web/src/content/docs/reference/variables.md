@@ -179,6 +179,28 @@ Positional arguments (`$1` through `$9`) are **not** supported in any context �
 
 Workflow variables and `$nodeId.output` refs both resolve in `systemPrompt:` and `agents.*.prompt` / `agents.*.description` on any AI node.
 
+## Attachments
+
+`bash:` and `script:` nodes can read the files attached to the message that
+triggered the run (Slack uploads, web UI attachments) via the `ARCHON_ATTACHMENTS`
+environment variable — a JSON array of `{ path, name, mimeType, size }` objects,
+where `path` is the absolute path on disk where the adapter saved the file.
+
+`ARCHON_ATTACHMENTS` is **always set**, even when there are no attachments
+(`[]`) — no presence check is needed:
+
+```ts
+const attachments = JSON.parse(process.env.ARCHON_ATTACHMENTS ?? '[]');
+// → [{ path: '/abs/path/note.pdf', name: 'note.pdf', mimeType: 'application/pdf', size: 1234 }]
+```
+
+Like the [Authentication Environment Variables](#authentication-environment-variables)
+below, this is a raw `process.env` value, not a `$`-substituted workflow
+variable — there is no `$ATTACHMENTS` template for `prompt:` nodes; they
+already see attached files described in the AI-facing prompt text. Attachments
+are not restored on `/workflow resume` — they are per-triggering-message, not
+persisted.
+
 ## Authentication Environment Variables
 
 These are standard environment variables read from `process.env` at clone time. They are **not** workflow-substituted variables — they must be set in your shell environment or `.env` file before Archon starts.

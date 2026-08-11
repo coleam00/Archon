@@ -36,6 +36,7 @@ import {
   Codebase,
   ConversationNotFoundError,
   isWebAdapter,
+  type AttachedFile,
 } from '../types';
 import type { IsolationHints, IsolationEnvironmentRow } from '@archon/isolation';
 import {
@@ -300,6 +301,11 @@ export interface WorkflowRoutingContext {
    * path where pre-creation failed and the executor creates the row itself.
    */
   readonly inputs?: Readonly<Record<string, string>>;
+  /**
+   * Files attached to the triggering message, forwarded to `executeWorkflow`
+   * as `ExecuteWorkflowOptions.attachments`.
+   */
+  readonly attachments?: readonly AttachedFile[];
 }
 
 /**
@@ -496,6 +502,7 @@ export async function dispatchBackgroundWorkflow(
             // the executor creates the row itself); otherwise the row above already
             // carries them.
             inputs: ctx.inputs,
+            attachments: ctx.attachments,
           }
         );
         // Surface workflow output to parent conversation as a result card

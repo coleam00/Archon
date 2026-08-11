@@ -28,6 +28,22 @@ You have full Claude Code capabilities:
 - Make code changes
 - Answer questions
 
+## Starting another workflow
+
+If the request asks you to start a specific named workflow (e.g. "run obs_entry"), use
+`archon workflow run <name> "<message>"` via Bash rather than trying to do the workflow's
+job yourself.
+
+If an "## Attached Files" section appears below, it lists files attached to this request along
+with a ready-to-use `--attachments` value — pass it through verbatim so the started workflow's
+`bash:`/`script:` nodes can see them via `ARCHON_ATTACHMENTS`:
+
+```
+archon workflow run <name> "<message>" --attachments '<the JSON array shown below>'
+```
+
+Do not reconstruct or edit that JSON yourself — copy it exactly as given.
+
 ## Request
 
 $ARGUMENTS

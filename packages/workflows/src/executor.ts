@@ -61,6 +61,21 @@ import { assistantModelDefaults, resolveWorkflowModelScope } from './node-model-
 /** The per-user prefs layer as returned by `WorkflowDeps.getUserAiPrefs`. */
 type UserAiPrefsLayer = Awaited<ReturnType<NonNullable<WorkflowDeps['getUserAiPrefs']>>>;
 
+/**
+ * A file attached to the message that triggered this workflow run. Structurally
+ * identical to `AttachedFile` in `@archon/core/types` — redeclared here rather
+ * than imported because `@archon/workflows` must never depend on `@archon/core`
+ * (see the package-layer rules). Callers pass their `AttachedFile[]` straight
+ * through; TypeScript accepts it because the shapes are structurally assignable.
+ */
+export interface WorkflowAttachment {
+  /** Absolute path on disk where the file was saved by the adapter. */
+  path: string;
+  name: string;
+  mimeType: string;
+  size: number;
+}
+
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -557,6 +572,13 @@ export type ExecuteWorkflowOptions = ResumePayload & {
    * Ignored on a resume: the row already carries the inputs validated at creation.
    */
   inputs?: Readonly<Record<string, string>>;
+  /**
+   * Files attached to the message that triggered this run (Slack uploads, web
+   * UI attachments). Delivered to `bash:`/`script:` node subprocesses as the
+   * `ARCHON_ATTACHMENTS` env var — always set, `[]` when empty. Not restored
+   * on resume: attachments are per-triggering-message, not persisted.
+   */
+  attachments?: readonly WorkflowAttachment[];
 };
 
 /**
@@ -1168,6 +1190,7 @@ export async function executeWorkflow(
     container: containerCtx,
     resolveChildIsolation,
     inputs: suppliedInputs,
+    attachments,
   } = opts;
 
   // Guard: a container run MUST be resumed with its container rewired (the CLI does
@@ -1208,12 +1231,20 @@ export async function executeWorkflow(
   const userGitHubEnv = await resolveUserGithubEnvForWorkflow(deps, userId);
   const config: WorkflowConfig = {
     ...fileConfig,
-    // Order: file < db < bot-token < per-user. Per-codebase env vars are
-    // operator-set; the injected bot token is system-set; the per-user override
-    // wins last so a run routes through the originating human's token (or scrubs
-    // the org/bot token when they haven't connected). Empty-string values from
-    // the per-user policy scrub the corresponding key via the subprocess merge.
-    envVars: { ...fileConfig.envVars, ...dbEnvVars, ...botGitHubEnv, ...userGitHubEnv },
+    // Order: file < db < bot-token < per-user < ARCHON_ATTACHMENTS. Per-codebase
+    // env vars are operator-set; the injected bot token is system-set; the
+    // per-user override wins next so a run routes through the originating
+    // human's token (or scrubs the org/bot token when they haven't connected).
+    // ARCHON_ATTACHMENTS is merged last and unconditionally so a stale
+    // operator-set env var of the same name can never shadow the real,
+    // run-scoped value (#2517).
+    envVars: {
+      ...fileConfig.envVars,
+      ...dbEnvVars,
+      ...botGitHubEnv,
+      ...userGitHubEnv,
+      ARCHON_ATTACHMENTS: JSON.stringify(attachments ?? []),
+    },
   };
   const configuredCommandFolder = config.commands.folder;
 

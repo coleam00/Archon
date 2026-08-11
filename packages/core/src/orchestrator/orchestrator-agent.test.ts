@@ -15,7 +15,7 @@
 import { mock, describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { createMockLogger } from '../test/mocks/logger';
 import { makeTestWorkflow, makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
-import type { Codebase, Conversation, IPlatformAdapter } from '../types';
+import type { AttachedFile, Codebase, Conversation, IPlatformAdapter } from '../types';
 import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 
@@ -343,6 +343,7 @@ import {
   handleMessage,
   resolveChatModelRequest,
   resolveTitleRequest,
+  appendAttachmentsNote,
 } from './orchestrator-agent';
 import { buildAiProfile } from '@archon/workflows/model-validation';
 
@@ -4909,5 +4910,58 @@ describe('resolveTitleRequest', () => {
     const req = await resolveTitleRequest('codex', 'user-1');
 
     expect(req).toEqual({ provider: 'codex', options: {} });
+  });
+});
+
+describe('appendAttachmentsNote — attachment JSON is safe to paste into a shell command', () => {
+  function makeAttachment(overrides: Partial<AttachedFile> = {}): AttachedFile {
+    return {
+      path: '/repo/.archon/artifacts/uploads/conv-1/abc123_report.pdf',
+      name: 'report.pdf',
+      mimeType: 'application/pdf',
+      size: 1024,
+      ...overrides,
+    };
+  }
+
+  test('no-op when there are no attachments', () => {
+    expect(appendAttachmentsNote('hello', undefined)).toBe('hello');
+    expect(appendAttachmentsNote('hello', [])).toBe('hello');
+  });
+
+  test('appends a single-quoted --attachments snippet with the file listing', () => {
+    const note = appendAttachmentsNote('hello', [makeAttachment()]);
+
+    expect(note).toContain('## Attached Files');
+    expect(note).toContain('- report.pdf (application/pdf, 1024 bytes)');
+    expect(note).toMatch(/--attachments '.*'$/);
+  });
+
+  test('a single quote in an attacker-influenceable field cannot break out of the shell quoting', () => {
+    // Regression test: an uploaded file's Content-Type header can carry a stray
+    // `'` through the upload endpoint's MIME normalization (it only splits on
+    // `;`, it doesn't strip quotes). If the JSON embedded here were wrapped in
+    // a naive `'${...}'`, a mimeType like the one below would close the shell
+    // string early and let anything after it execute as a new command.
+    const malicious = makeAttachment({ mimeType: "text/plain'; touch /tmp/pwned #" });
+    const note = appendAttachmentsNote('hello', [malicious]);
+
+    const match = /--attachments (.+)$/.exec(note);
+    expect(match).not.toBeNull();
+    const shellArg = match![1];
+
+    // The whole snippet must be ONE single-quoted argument: starts and ends
+    // with `'`, and every interior `'` is escaped via the `'\''` idiom —
+    // never a bare, unescaped closing quote followed by more text.
+    expect(shellArg.startsWith("'")).toBe(true);
+    expect(shellArg.endsWith("'")).toBe(true);
+    const interior = shellArg.slice(1, -1);
+    expect(interior.split("'\\''").join('')).not.toContain("'");
+
+    // Reconstructing what a POSIX shell would parse from this single-quoted
+    // argument must reproduce the exact original JSON, quote included.
+    const reconstructed = interior.split("'\\''").join("'");
+    expect(reconstructed).toBe(JSON.stringify([malicious]));
+    expect(JSON.parse(reconstructed)).toEqual([malicious]);
   });
 });
