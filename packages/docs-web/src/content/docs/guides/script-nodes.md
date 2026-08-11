@@ -99,7 +99,7 @@ The file `.archon/scripts/fetch-github-pages.ts` is loaded and executed with
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `script` | string | Yes | Inline code, or the basename (no extension) of a file in `.archon/scripts/` or `~/.archon/scripts/` |
+| `script` | string | Yes | Inline code, or a named script in the owning package (packaged workflows) or shared script directories (legacy workflows) |
 | `runtime` | `'bun'` \| `'uv'` | Yes | Which runtime executes the script. Must match the file extension for named scripts |
 | `deps` | string[] | No | Python dependencies to install for this run. **uv only** — ignored with a warning for `bun` |
 | `timeout` | number (ms) | No | Hard kill after this many milliseconds. Default: `120000` (2 min) |
@@ -130,12 +130,10 @@ identifier, add a trailing comment or newline to force inline mode.
 
 ### Named Script Resolution
 
-Named scripts are discovered from, in precedence order:
+Named scripts use one of two resolution modes:
 
-1. The owning packaged workflow's `scripts/` directory, when the workflow lives at `.archon/workflows/<pack>/<workflow>/`
-2. `<repoRoot>/.archon/scripts/` — repo-local shared scripts
-3. `~/.archon/scripts/` — home-scoped shared scripts
-4. Embedded packaged scripts for bundled workflows
+- **Packaged workflow:** resolve only from the owning workflow's `scripts/` directory. Bundled package scripts use the same ownership rule and are embedded for binary distribution.
+- **Legacy workflow:** resolve shared scripts from `<repoRoot>/.archon/scripts/`, then `~/.archon/scripts/`.
 
 Workflow-local lookup is scoped to the workflow that declared the node, including through `include:` expansion. Authors still write only the bare name (`script: publish`); the ownership key is internal.
 
@@ -253,9 +251,9 @@ for the full story.
 
 `archon validate workflows <name>` checks script nodes for:
 
-- **Script file exists** — for named scripts, the basename must exist in
-  `.archon/scripts/` or `~/.archon/scripts/` with a matching extension for
-  the declared runtime. Missing files fail validation with a hint showing
+- **Script file exists** — for named scripts, the basename must exist in the
+  owning package or the legacy shared search path, with a matching extension
+  for the declared runtime. Missing files fail validation with a hint showing
   the expected path.
 - **Runtime available on PATH** — `bun` or `uv` must be installed. Missing
   runtimes emit a warning with the official install command:

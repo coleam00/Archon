@@ -18,7 +18,7 @@ iterate on a design until validation passes, or refine output until quality
 criteria are met.
 
 A loop node's iteration prompt can live **inline** (`loop.prompt`) or in a
-**command file** (`loop.command`, loaded from `.archon/commands/` the same way
+**command file** (`loop.command`, resolved the same way
 [`command:` nodes](/guides/authoring-commands/) load their text). Provide
 exactly one — both at once, or neither, is rejected at workflow load time.
 
@@ -71,7 +71,7 @@ the executor checks for workflow cancellation.
 - id: my-loop
   loop:
     prompt: "..."           # Inline prompt. Exactly one of `prompt` or `command` is required.
-    # command: <name>       # Alternative to `prompt`: command name under .archon/commands/,
+    # command: <name>       # Alternative to `prompt`: package-local or shared command name,
     #                       # loaded once per run and reused for every iteration.
     #                       # Never combine with `prompt` — the loader rejects both together.
     until: COMPLETE         # Required. Completion signal string.
@@ -111,15 +111,15 @@ thread the session.
 
 ### `command`
 
-Alternative to `prompt` — names a command file (under `.archon/commands/`)
+Alternative to `prompt` — names a command file
 whose body is loaded as the iteration prompt. **Exactly one of `prompt` or
 `command` is required**; specifying both, or neither, is rejected at workflow
 load time with a clear error.
 
-The named command resolves with the same repo → home → bundled precedence as a
-[`command:` node](/guides/authoring-commands/): `.archon/commands/<name>.md`
-relative to the working directory first, then `~/.archon/commands/<name>.md`,
-then the bundled defaults shipped with Archon. The same command-name safety
+The named command resolves exactly like a [`command:` node](/guides/authoring-commands/).
+In a packaged workflow it resolves only from that workflow's `commands/`
+directory, including after `include:` expansion. In a legacy workflow it uses
+repo → home → bundled precedence. The same command-name safety
 rules apply — no path separators, no `..`, no leading `.` — and unsafe names
 are rejected at parse time. Static workflow validation also flags a
 `loop.command` that points at a missing file (with "did you mean…" /

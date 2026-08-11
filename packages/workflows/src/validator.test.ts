@@ -191,6 +191,19 @@ describe('validateWorkflowResources — command nodes', () => {
     const issues = await validateWorkflowResources(workflow, tmpDir);
     expect(issues.filter(issue => issue.level === 'error')).toHaveLength(0);
   });
+
+  test('rejects a directory masquerading as a packaged command file', async () => {
+    const commandsDir = join(tmpDir, '.archon', 'workflows', 'team-pack', 'release', 'commands');
+    await mkdir(join(commandsDir, 'prepare.md'), { recursive: true });
+    const command = formatPackagedResourceReference(
+      { source: 'project', pack: 'team-pack', workflow: 'release' },
+      'prepare'
+    );
+    const workflow = makeWorkflow('test', [{ id: 'step1', command } as DagNode]);
+
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    expect(issues.some(issue => issue.level === 'error' && issue.field === 'command')).toBe(true);
+  });
 });
 
 // =============================================================================

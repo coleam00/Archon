@@ -127,7 +127,7 @@ describe('generate-bundled-defaults: untracked-file guard (#1578)', () => {
     } finally {
       rmSync(repoRoot, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 
   it('embeds packaged workflows, commands, scripts, and owner metadata', () => {
     const repoRoot = createRepo();

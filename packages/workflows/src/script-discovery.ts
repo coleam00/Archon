@@ -1,8 +1,11 @@
 /**
- * Script discovery - finds and loads script files from .archon/scripts/.
+ * Discover shared scripts and workflow-local packaged scripts.
  *
- * Scripts are keyed by filename without extension. Runtime is auto-detected
- * from the file extension: .ts/.js -> bun, .py -> uv.
+ * Shared scripts from `.archon/scripts/` are keyed by filename without an
+ * extension. Packaged scripts live under
+ * `.archon/workflows/<pack>/<workflow>/scripts/` and receive owner-qualified
+ * internal keys. Runtime is inferred from the extension: .ts/.js -> bun,
+ * .py -> uv.
  */
 import { access, mkdir, readdir, rename, rm, stat, writeFile } from 'fs/promises';
 import { createHash, randomUUID } from 'crypto';
@@ -168,21 +171,34 @@ async function discoverPackagedScripts(
     const packPath = join(workflowsRoot, pack);
     try {
       if (!(await stat(packPath)).isDirectory()) continue;
-    } catch {
-      continue;
+    } catch (error) {
+      const err = error as NodeJS.ErrnoException;
+      if (err.code === 'ENOENT') continue;
+      throw new Error(`Failed to inspect packaged workflow pack "${packPath}": ${err.message}`, {
+        cause: err,
+      });
     }
     let workflowFolders: string[];
     try {
       workflowFolders = await readdir(packPath);
-    } catch {
-      continue;
+    } catch (error) {
+      const err = error as NodeJS.ErrnoException;
+      if (err.code === 'ENOENT') continue;
+      throw new Error(`Failed to read packaged workflow pack "${packPath}": ${err.message}`, {
+        cause: err,
+      });
     }
     for (const workflow of workflowFolders) {
       if (!isValidWorkflowFolderSegment(workflow)) continue;
       try {
         if (!(await stat(join(packPath, workflow))).isDirectory()) continue;
-      } catch {
-        continue;
+      } catch (error) {
+        const err = error as NodeJS.ErrnoException;
+        if (err.code === 'ENOENT') continue;
+        throw new Error(
+          `Failed to inspect packaged workflow "${join(packPath, workflow)}": ${err.message}`,
+          { cause: err }
+        );
       }
       const owner = { source, pack, workflow };
       const localScripts = await discoverScripts(
@@ -246,14 +262,13 @@ async function discoverBundledPackagedScripts(): Promise<Map<string, ScriptDefin
 /**
  * Discover scripts across all scopes for a given repo cwd.
  *
- * Resolution order (repo wins on same-name collision — matches the
- * workflows/commands precedence):
- *   1. `<cwd>/.archon/scripts/` — repo-scoped (`source: 'project'` equivalent)
- *   2. `~/.archon/scripts/`    — home-scoped (`source: 'global'` equivalent)
+ * Shared bare-name scripts use repo-over-home precedence. Packaged scripts
+ * are owner-qualified and merge without participating in that override rule.
+ * Sources are bundled packages, home shared/package scripts, then repo
+ * shared/package scripts.
  *
- * Within a single scope, duplicate basenames across extensions still throw
- * (matches `discoverScripts` behavior). Across scopes, the repo-level entry
- * silently overrides the home-level one.
+ * Within a single shared scope, duplicate basenames across extensions still
+ * throw (matches `discoverScripts` behavior).
  */
 export async function discoverScriptsForCwd(cwd: string): Promise<Map<string, ScriptDefinition>> {
   const bundledPackagedScripts = await discoverBundledPackagedScripts();

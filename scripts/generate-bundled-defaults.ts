@@ -1,7 +1,8 @@
 #!/usr/bin/env bun
 /**
  * Regenerates packages/workflows/src/defaults/bundled-defaults.generated.ts from
- * the on-disk defaults in .archon/commands/defaults/ and .archon/workflows/defaults/.
+ * the on-disk legacy defaults and packaged workflows under
+ * .archon/workflows/<pack>/<workflow>/.
  *
  * Emits inline string literals (via JSON.stringify) rather than Bun's
  * `import X from '...' with { type: 'text' }` attributes so the module loads
@@ -59,11 +60,21 @@ interface BundledWorkflowOwner {
   workflow: string;
 }
 
-interface BundledScript {
-  content: string;
-  extension: string;
-  runtime: 'bun' | 'uv';
-}
+type BundledScript =
+  | {
+      content: string;
+      extension: '.py';
+      runtime: 'uv';
+    }
+  | {
+      content: string;
+      extension: '.js' | '.ts';
+      runtime: 'bun';
+    };
+
+type BundledScriptKind =
+  | { extension: '.py'; runtime: 'uv' }
+  | { extension: '.js' | '.ts'; runtime: 'bun' };
 
 interface PackagedDefaults {
   workflows: BundledFile[];
@@ -74,16 +85,15 @@ interface PackagedDefaults {
 }
 
 interface PackagedScriptFile {
-  extension: string;
+  kind: BundledScriptKind;
   localName: string;
   path: string;
   relativePath: string;
-  runtime: BundledScript['runtime'];
 }
 
-function getScriptRuntime(extension: string): BundledScript['runtime'] | null {
-  if (extension === '.py') return 'uv';
-  if (extension === '.ts' || extension === '.js') return 'bun';
+function getBundledScriptKind(extension: string): BundledScriptKind | null {
+  if (extension === '.py') return { extension, runtime: 'uv' };
+  if (extension === '.ts' || extension === '.js') return { extension, runtime: 'bun' };
   return null;
 }
 
@@ -100,15 +110,13 @@ async function listPackagedScriptFiles(scriptPath: string): Promise<PackagedScri
 
     for (const candidate of candidates) {
       if (!(await stat(candidate.path)).isFile()) continue;
-      const extension = extname(candidate.path);
-      const runtime = getScriptRuntime(extension);
-      if (runtime === null) continue;
+      const kind = getBundledScriptKind(extname(candidate.path));
+      if (kind === null) continue;
       files.push({
-        extension,
-        localName: basename(candidate.path, extension),
+        kind,
+        localName: basename(candidate.path, kind.extension),
         path: candidate.path,
         relativePath: candidate.relativePath,
-        runtime,
       });
     }
   }
@@ -174,10 +182,12 @@ async function assertNoUntrackedFiles(
 
 async function assertTrackedPackagedFiles(paths: readonly string[]): Promise<void> {
   if (paths.length === 0) return;
-  const relativePaths = paths.map(path => relative(REPO_ROOT, path));
-  const { stdout } = await execFileAsync('git', ['ls-files', '--cached', '--', ...relativePaths], {
-    cwd: REPO_ROOT,
-  });
+  const relativePaths = paths.map(path => relative(REPO_ROOT, path).replaceAll('\\', '/'));
+  const { stdout } = await execFileAsync(
+    'git',
+    ['-c', 'core.quotePath=false', 'ls-files', '--cached', '--', ...relativePaths],
+    { cwd: REPO_ROOT }
+  );
   const tracked = new Set(stdout.trim().split('\n').filter(Boolean));
   const missing = relativePaths.filter(path => !tracked.has(path));
   if (missing.length > 0) {
@@ -237,8 +247,12 @@ async function readBundledContent(path: string): Promise<string> {
 async function isDirectory(path: string): Promise<boolean> {
   try {
     return (await stat(path)).isDirectory();
-  } catch {
-    return false;
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    if (err.code === 'ENOENT') return false;
+    throw new Error(`Failed to inspect packaged workflow path "${path}": ${err.message}`, {
+      cause: err,
+    });
   }
 }
 
@@ -313,7 +327,7 @@ async function collectPackagedDefaults(root: string): Promise<PackagedDefaults> 
       if (await isDirectory(scriptPath)) {
         const seen = new Set<string>();
         for (const script of await listPackagedScriptFiles(scriptPath)) {
-          const { extension, localName, path, relativePath, runtime } = script;
+          const { kind, localName, path, relativePath } = script;
           if (!isValidWorkflowFolderSegment(localName)) {
             throw new Error(
               `Invalid packaged script filename "${pack}/${workflow}/scripts/${relativePath}".`
@@ -324,7 +338,7 @@ async function collectPackagedDefaults(root: string): Promise<PackagedDefaults> 
           }
           seen.add(localName);
           const key = formatPackagedResourceReference(owner, localName);
-          scripts.set(key, { content: await readBundledContent(path), extension, runtime });
+          scripts.set(key, { content: await readBundledContent(path), ...kind });
           sourcePaths.push(path);
         }
       }
@@ -352,7 +366,8 @@ function renderMapRecord<T>(
   comment: string,
   exportName: string,
   typeName: string,
-  entries: ReadonlyMap<string, T>
+  entries: ReadonlyMap<string, T>,
+  recordType = `Record<string, ${typeName}>`
 ): string {
   const rendered = [...entries.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
@@ -360,7 +375,7 @@ function renderMapRecord<T>(
     .join('\n');
   return [
     `// ${comment} (${entries.size} total)`,
-    `export const ${exportName}: Record<string, ${typeName}> = {`,
+    `export const ${exportName}: ${recordType} = {`,
     rendered,
     '};',
   ].join('\n');
@@ -398,11 +413,9 @@ function renderFile(
     '  readonly workflow: string;',
     '}',
     '',
-    'export interface BundledScript {',
-    '  readonly content: string;',
-    '  readonly extension: string;',
-    "  readonly runtime: 'bun' | 'uv';",
-    '}',
+    'export type BundledScript =',
+    "  | { readonly content: string; readonly extension: '.py'; readonly runtime: 'uv' }",
+    "  | { readonly content: string; readonly extension: '.js' | '.ts'; readonly runtime: 'bun' };",
     '',
     renderRecord('Bundled commands', 'BUNDLED_COMMANDS', commands),
     '',
@@ -412,7 +425,8 @@ function renderFile(
       'Packaged workflow owners',
       'BUNDLED_WORKFLOW_OWNERS',
       'BundledWorkflowOwner',
-      workflowOwners
+      workflowOwners,
+      'Readonly<Partial<Record<keyof typeof BUNDLED_WORKFLOWS, BundledWorkflowOwner>>>'
     ),
     '',
     renderMapRecord('Bundled scripts', 'BUNDLED_SCRIPTS', 'BundledScript', scripts),

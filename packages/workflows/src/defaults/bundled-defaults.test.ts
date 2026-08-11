@@ -20,6 +20,22 @@ const REPO_ROOT = join(import.meta.dir, '..', '..', '..', '..');
 const COMMANDS_DIR = join(REPO_ROOT, '.archon/commands/defaults');
 const WORKFLOWS_DIR = join(REPO_ROOT, '.archon/workflows/defaults');
 
+function findPackagedScriptPath(scriptDir: string, name: string, extension: string): string {
+  const filename = `${name}${extension}`;
+  const direct = join(scriptDir, filename);
+  if (existsSync(direct)) return direct;
+  const matches = readdirSync(scriptDir, { withFileTypes: true })
+    .filter(entry => entry.isDirectory())
+    .map(entry => join(scriptDir, entry.name, filename))
+    .filter(path => existsSync(path));
+  if (matches.length !== 1) {
+    throw new Error(
+      `Expected exactly one packaged script named ${filename} under ${scriptDir}, found ${matches.length}`
+    );
+  }
+  return matches[0];
+}
+
 describe('bundled-defaults', () => {
   describe('isBinaryBuild', () => {
     it('should return false in dev/test mode', () => {
@@ -113,15 +129,15 @@ describe('bundled-defaults', () => {
         expect(script.content.length).toBeGreaterThan(0);
         const packaged = parsePackagedResourceReference(name);
         expect(packaged).not.toBeNull();
-        const diskPath = join(
+        const scriptDir = join(
           REPO_ROOT,
           '.archon',
           'workflows',
           packaged!.owner.pack,
           packaged!.owner.workflow,
-          'scripts',
-          `${packaged!.name}${script.extension}`
+          'scripts'
         );
+        const diskPath = findPackagedScriptPath(scriptDir, packaged!.name, script.extension);
         expect(script.content).toBe(readFileSync(diskPath, 'utf-8').replace(/\r\n/g, '\n'));
       }
     });

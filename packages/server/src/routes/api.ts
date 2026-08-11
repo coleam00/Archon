@@ -149,24 +149,56 @@ async function findPackagedWorkflowAt(
   for (const pack of packs.sort((a, b) => a.localeCompare(b))) {
     if (!isValidWorkflowFolderSegment(pack)) continue;
     const packPath = join(workflowsRoot, pack);
-    if (!(await stat(packPath)).isDirectory()) continue;
+    try {
+      if (!(await stat(packPath)).isDirectory()) continue;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      throw error;
+    }
 
-    const workflowFolders = await readdir(packPath);
+    let workflowFolders: string[];
+    try {
+      workflowFolders = await readdir(packPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      throw error;
+    }
     for (const workflowFolder of workflowFolders.sort((a, b) => a.localeCompare(b))) {
       if (!isValidWorkflowFolderSegment(workflowFolder)) continue;
       const workflowPath = join(packPath, workflowFolder);
-      if (!(await stat(workflowPath)).isDirectory()) continue;
+      try {
+        if (!(await stat(workflowPath)).isDirectory()) continue;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        throw error;
+      }
 
-      const yamlFiles = (await readdir(workflowPath))
+      let workflowEntries: string[];
+      try {
+        workflowEntries = await readdir(workflowPath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        throw error;
+      }
+      const yamlFiles = workflowEntries
         .filter(entry => entry.endsWith('.yaml') || entry.endsWith('.yml'))
         .sort((a, b) => a.localeCompare(b));
       if (yamlFiles.length !== 1) continue;
 
       const yamlFilename = yamlFiles[0];
       const absolutePath = join(workflowPath, yamlFilename);
-      const content = await readFile(absolutePath, 'utf-8');
+      let content: string;
+      try {
+        content = await readFile(absolutePath, 'utf-8');
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        throw error;
+      }
       const parsed = parseWorkflow(content, yamlFilename);
-      if (parsed.workflow?.name !== name) continue;
+      const yamlStem = yamlFilename.replace(/\.ya?ml$/, '');
+      const isMalformedTarget =
+        parsed.workflow === null && (yamlStem === name || workflowFolder === name);
+      if (parsed.workflow?.name !== name && !isMalformedTarget) continue;
       if (match !== null) {
         throw new Error(`Multiple packaged workflows declare the name '${name}'`);
       }
@@ -4034,8 +4066,15 @@ export function registerApiRoutes(
     if (deleted) {
       return c.json({ deleted: true, name });
     }
-    if (targetSource !== 'global' && findBundledWorkflow(name) !== null) {
-      return apiError(c, 400, `Cannot delete bundled default workflow: ${name}`);
+    if (targetSource !== 'global') {
+      try {
+        if (findBundledWorkflow(name) !== null) {
+          return apiError(c, 400, `Cannot delete bundled default workflow: ${name}`);
+        }
+      } catch (err) {
+        getLog().error({ err, name }, 'workflow.delete_failed');
+        return apiError(c, 500, 'Failed to delete workflow');
+      }
     }
     return apiError(c, 404, `Workflow not found: ${name}`);
   });

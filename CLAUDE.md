@@ -477,7 +477,7 @@ Structured logging uses Pino via `createLogger('<module>')` from `@archon/paths`
 - Scripts: `~/.archon/scripts/` (or `$ARCHON_HOME/scripts/`)
 - Source label: `source: 'global'` on workflows and commands (scripts don't have a source label)
 - Load priority: bundled < global < project (repo overrides global by filename or script name)
-- Layouts: flat YAML and one-level grouped YAML remain supported. Packaged workflows use exactly `~/.archon/workflows/<pack>/<workflow>/`; deeper YAML nesting is ignored.
+- Layouts: flat YAML and one-level grouped YAML remain supported. Packaged workflows use exactly `~/.archon/workflows/<pack>/<workflow>/`; YAML must be directly inside the workflow folder. Deeper YAML is not loaded, and a workflow folder without exactly one direct YAML reports a validation error.
 - Discovery is automatic — `discoverWorkflowsWithConfig(cwd, loadConfig)` and `discoverScriptsForCwd(cwd)` both read home-scoped paths unconditionally; no caller option needed
 - **Migration from pre-0.x `~/.archon/.archon/workflows/`**: if Archon detects files at the old location it emits a one-time WARN with the exact `mv` command and does NOT load from there. Move with: `mv ~/.archon/.archon/workflows ~/.archon/workflows && rmdir ~/.archon/.archon`
 - See the docs site at `packages/docs-web/` for details

@@ -305,13 +305,21 @@ export async function loadCommandPrompt(
       }
       if (isBinaryBuild()) {
         const content = BUNDLED_COMMANDS[commandName];
-        return content === undefined
-          ? {
-              success: false,
-              reason: 'not_found',
-              message: `Packaged command not found: ${packaged.name}.md`,
-            }
-          : { success: true, content };
+        if (content === undefined) {
+          return {
+            success: false,
+            reason: 'not_found',
+            message: `Packaged command not found: ${packaged.name}.md`,
+          };
+        }
+        if (!content.trim()) {
+          return {
+            success: false,
+            reason: 'empty_file',
+            message: `Command file is empty: ${packaged.name}.md`,
+          };
+        }
+        return { success: true, content };
       }
     }
 
@@ -346,6 +354,9 @@ export async function loadCommandPrompt(
         reason = 'not_found';
       } else {
         reason = 'read_error';
+      }
+      if (err.code !== 'ENOENT') {
+        getLog().error({ err, commandName, filePath }, 'packaged_command_file_read_error');
       }
       return {
         success: false,

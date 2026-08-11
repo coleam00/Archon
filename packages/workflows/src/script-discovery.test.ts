@@ -279,6 +279,32 @@ describe('discoverScriptsForCwd — merge repo + home with repo winning', () => 
     expect(result.has('only-repo')).toBe(true);
   });
 
+  test('tolerates an ENOENT race while scanning a packaged workflow', async () => {
+    mockReaddir.mockImplementation(async (path: string) => {
+      const p = norm(path);
+      if (p === '/app/workflows') return ['removed-pack'];
+      return [];
+    });
+    mockStat.mockRejectedValueOnce(Object.assign(new Error('removed'), { code: 'ENOENT' }));
+
+    await expect(discoverScriptsForCwd('/repo')).resolves.toEqual(new Map());
+  });
+
+  test('surfaces permission failures while scanning packaged workflows', async () => {
+    mockReaddir.mockImplementation(async (path: string) => {
+      const p = norm(path);
+      if (p === '/app/workflows') return ['private-pack'];
+      return [];
+    });
+    mockStat.mockRejectedValueOnce(
+      Object.assign(new Error('permission denied'), { code: 'EACCES' })
+    );
+
+    await expect(discoverScriptsForCwd('/repo')).rejects.toThrow(
+      'Failed to inspect packaged workflow pack'
+    );
+  });
+
   test('isolates identical local script names in repo and home packaged workflows', async () => {
     mockReaddir.mockImplementation(async (path: string) => {
       const p = norm(path);

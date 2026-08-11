@@ -19,11 +19,9 @@ export interface BundledWorkflowOwner {
   readonly workflow: string;
 }
 
-export interface BundledScript {
-  readonly content: string;
-  readonly extension: string;
-  readonly runtime: 'bun' | 'uv';
-}
+export type BundledScript =
+  | { readonly content: string; readonly extension: '.py'; readonly runtime: 'uv' }
+  | { readonly content: string; readonly extension: '.js' | '.ts'; readonly runtime: 'bun' };
 
 // Bundled commands (37 total)
 export const BUNDLED_COMMANDS: Record<string, string> = {
@@ -92,7 +90,7 @@ export const BUNDLED_WORKFLOWS: Record<string, string> = {
 };
 
 // Packaged workflow owners (0 total)
-export const BUNDLED_WORKFLOW_OWNERS: Record<string, BundledWorkflowOwner> = {
+export const BUNDLED_WORKFLOW_OWNERS: Readonly<Partial<Record<keyof typeof BUNDLED_WORKFLOWS, BundledWorkflowOwner>>> = {
 
 };
 

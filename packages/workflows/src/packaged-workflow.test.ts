@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'bun:test';
 import type { WorkflowDefinition } from './schemas';
-import { parsePackagedResourceReference, qualifyWorkflowResources } from './packaged-workflow';
+import {
+  formatPackagedResourceReference,
+  parsePackagedResourceReference,
+  qualifyWorkflowResources,
+} from './packaged-workflow';
 
 const owner = { source: 'project' as const, pack: 'author-pack', workflow: 'workflow-x' };
 
@@ -50,5 +54,17 @@ describe('packaged workflow resource qualification (#2527)', () => {
 
     qualifyWorkflowResources(workflow, owner);
     expect((workflow.nodes[0] as { script: string }).script).toBe('console.log("inline")');
+  });
+
+  it('refuses to format an invalid packaged resource reference', () => {
+    expect(() =>
+      formatPackagedResourceReference(
+        { source: 'project', pack: '..', workflow: 'workflow-x' },
+        'review'
+      )
+    ).toThrow('Invalid packaged resource reference');
+    expect(() => formatPackagedResourceReference(owner, '../review')).toThrow(
+      'Invalid packaged resource reference'
+    );
   });
 });

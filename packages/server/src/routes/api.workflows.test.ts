@@ -3,7 +3,7 @@ import { OpenAPIHono } from '@hono/zod-openapi';
 import type { ConversationLockManager } from '@archon/core';
 import type { WebAdapter } from '../adapters/web';
 import { access, mkdir, readFile, rm, writeFile, symlink as fsSymlink } from 'fs/promises';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import { tmpdir } from 'os';
 import * as archonPaths from '@archon/paths';
 import { validationErrorHook } from './openapi-defaults';
@@ -716,6 +716,33 @@ describe('GET /api/workflows/:name', () => {
     }
   });
 
+  test('surfaces malformed YAML in the requested packaged workflow', async () => {
+    const testDir = join(tmpdir(), `wf-get-malformed-packaged-${Date.now()}`);
+    const packageDir = join(testDir, '.archon', 'workflows', 'author-pack', 'test');
+    await mkdir(packageDir, { recursive: true });
+    await writeFile(join(packageDir, 'definition.yaml'), 'name: [invalid\nnodes: []\n');
+
+    try {
+      const app = createTestApp();
+      registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+      mockListCodebases.mockImplementationOnce(async () => [{ default_cwd: testDir }]);
+      mockParseWorkflow.mockReturnValueOnce({
+        workflow: null,
+        error: {
+          filename: 'definition.yaml',
+          error: 'unexpected token',
+          errorType: 'parse_error',
+        },
+      });
+
+      const response = await app.request(`/api/workflows/test?cwd=${testDir}`);
+      expect(response.status).toBe(500);
+      expect(await response.text()).toContain('Workflow file is invalid');
+    } finally {
+      await rm(testDir, { recursive: true, force: true });
+    }
+  });
+
   test('classifies a package in the app workflow root as bundled', async () => {
     const testDir = join(tmpdir(), `wf-get-source-bundle-${Date.now()}`);
     const workflowsRoot = join(testDir, '.archon', 'workflows');
@@ -996,6 +1023,35 @@ describe('PUT /api/workflows/:name', () => {
     }
   });
 
+  test('does not update either package when declared workflow names collide', async () => {
+    const testDir = join(tmpdir(), `wf-put-packaged-collision-${Date.now()}`);
+    const first = join(testDir, '.archon', 'workflows', 'pack-a', 'flow-a', 'a.yaml');
+    const second = join(testDir, '.archon', 'workflows', 'pack-b', 'flow-b', 'b.yaml');
+    await mkdir(dirname(first), { recursive: true });
+    await mkdir(dirname(second), { recursive: true });
+    const firstContent = 'name: test\ndescription: First\nnodes: []\n';
+    const secondContent = 'name: test\ndescription: Second\nnodes: []\n';
+    await writeFile(first, firstContent);
+    await writeFile(second, secondContent);
+
+    try {
+      const app = createTestApp();
+      registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+      mockListCodebases.mockImplementationOnce(async () => [{ default_cwd: testDir }]);
+      const response = await app.request(`/api/workflows/test?cwd=${testDir}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ definition: { name: 'test', description: 'After', nodes: [] } }),
+      });
+
+      expect(response.status).toBe(500);
+      expect(await readFile(first, 'utf-8')).toBe(firstContent);
+      expect(await readFile(second, 'utf-8')).toBe(secondContent);
+    } finally {
+      await rm(testDir, { recursive: true, force: true });
+    }
+  });
+
   test('refuses to overwrite a packaged workflow in the app bundled root', async () => {
     const testDir = join(tmpdir(), `wf-put-source-bundle-${Date.now()}`);
     const workflowsRoot = join(testDir, '.archon', 'workflows');
@@ -1239,6 +1295,31 @@ describe('DELETE /api/workflows/:name', () => {
       });
       expect(response.status).toBe(200);
       await expect(access(packageDir)).rejects.toThrow();
+    } finally {
+      await rm(testDir, { recursive: true, force: true });
+    }
+  });
+
+  test('does not delete either package when declared workflow names collide', async () => {
+    const testDir = join(tmpdir(), `wf-delete-packaged-collision-${Date.now()}`);
+    const first = join(testDir, '.archon', 'workflows', 'pack-a', 'flow-a', 'a.yaml');
+    const second = join(testDir, '.archon', 'workflows', 'pack-b', 'flow-b', 'b.yaml');
+    await mkdir(dirname(first), { recursive: true });
+    await mkdir(dirname(second), { recursive: true });
+    await writeFile(first, 'name: test\nnodes: []\n');
+    await writeFile(second, 'name: test\nnodes: []\n');
+
+    try {
+      const app = createTestApp();
+      registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+      mockListCodebases.mockImplementationOnce(async () => [{ default_cwd: testDir }]);
+      const response = await app.request(`/api/workflows/test?cwd=${testDir}`, {
+        method: 'DELETE',
+      });
+
+      expect(response.status).toBe(500);
+      await access(first);
+      await access(second);
     } finally {
       await rm(testDir, { recursive: true, force: true });
     }

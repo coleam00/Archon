@@ -218,14 +218,29 @@ async function loadPackagedWorkflowsFromDir(
   } catch (error) {
     const err = error as NodeJS.ErrnoException;
     if (err.code === 'ENOENT') return { workflows, errors };
-    throw error;
+    getLog().warn({ err, workflowsRoot }, 'packaged_workflow_directory_read_error');
+    errors.push({
+      filename: workflowsRoot,
+      error: `Directory read error: ${err.message} (${err.code ?? 'unknown'})`,
+      errorType: 'read_error',
+    });
+    return { workflows, errors };
   }
 
   for (const pack of packs.sort((a, b) => a.localeCompare(b))) {
     const packPath = join(workflowsRoot, pack);
     try {
       if (!(await stat(packPath)).isDirectory()) continue;
-    } catch {
+    } catch (error) {
+      const err = error as NodeJS.ErrnoException;
+      if (err.code !== 'ENOENT') {
+        getLog().warn({ err, packPath }, 'packaged_workflow_path_read_error');
+        errors.push({
+          filename: pack,
+          error: `Path read error: ${err.message} (${err.code ?? 'unknown'})`,
+          errorType: 'read_error',
+        });
+      }
       continue;
     }
     if (!isValidWorkflowFolderSegment(pack)) {
@@ -253,7 +268,16 @@ async function loadPackagedWorkflowsFromDir(
       const workflowPath = join(packPath, workflowFolder);
       try {
         if (!(await stat(workflowPath)).isDirectory()) continue;
-      } catch {
+      } catch (error) {
+        const err = error as NodeJS.ErrnoException;
+        if (err.code !== 'ENOENT') {
+          getLog().warn({ err, workflowPath }, 'packaged_workflow_path_read_error');
+          errors.push({
+            filename: `${pack}/${workflowFolder}`,
+            error: `Path read error: ${err.message} (${err.code ?? 'unknown'})`,
+            errorType: 'read_error',
+          });
+        }
         continue;
       }
       if (!isValidWorkflowFolderSegment(workflowFolder)) {
@@ -409,8 +433,13 @@ async function resolveCommandContentForScan(
         ),
         'utf-8'
       );
-    } catch {
-      return null;
+    } catch (error) {
+      const err = error as NodeJS.ErrnoException;
+      if (err.code === 'ENOENT') return null;
+      throw new Error(
+        `Failed to read packaged command "${commandName}" during include validation: ${err.message}`,
+        { cause: err }
+      );
     }
   }
 

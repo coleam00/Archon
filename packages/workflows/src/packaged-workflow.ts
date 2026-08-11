@@ -30,6 +30,15 @@ export function formatPackagedResourceReference(
   owner: WorkflowResourceOwner,
   name: string
 ): string {
+  if (
+    !isValidWorkflowFolderSegment(owner.pack) ||
+    !isValidWorkflowFolderSegment(owner.workflow) ||
+    !isValidCommandName(name)
+  ) {
+    throw new Error(
+      `Invalid packaged resource reference: ${owner.source}:${owner.pack}:${owner.workflow}::${name}`
+    );
+  }
   return `${PACKAGED_RESOURCE_PREFIX}${owner.source}${OWNER_SEPARATOR}${owner.pack}${OWNER_SEPARATOR}${owner.workflow}${RESOURCE_SEPARATOR}${name}`;
 }
 

@@ -167,6 +167,27 @@ describe('Workflow Loader', () => {
       expect(result.errors.some(error => error.error.includes('filename collision'))).toBe(true);
     });
 
+    it('reports a filename collision between flat and packaged workflows', async () => {
+      const workflowsRoot = join(testDir, '.archon', 'workflows');
+      const packageDir = join(workflowsRoot, 'one', 'first');
+      await mkdir(packageDir, { recursive: true });
+      await writeFile(
+        join(workflowsRoot, 'same.yaml'),
+        'name: flat\ndescription: flat\nnodes:\n  - id: run\n    prompt: hi\n'
+      );
+      await writeFile(
+        join(packageDir, 'same.yaml'),
+        'name: packaged\ndescription: packaged\nnodes:\n  - id: run\n    prompt: hi\n'
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.workflows.some(entry => entry.workflow.name === 'flat')).toBe(false);
+      expect(result.workflows.some(entry => entry.workflow.name === 'packaged')).toBe(false);
+      expect(result.errors.some(error => error.error.includes('collision within one scope'))).toBe(
+        true
+      );
+    });
+
     it('repo filename override selects the repo packaged resource owner', async () => {
       const homeDir = join(testDir, 'home', 'workflows', 'home-pack', 'flow');
       const repoDir = join(testDir, '.archon', 'workflows', 'repo-pack', 'flow');

@@ -10,7 +10,7 @@
  */
 
 import { dirname, join, resolve, isAbsolute } from 'path';
-import { access, readFile } from 'fs/promises';
+import { access, readFile, stat } from 'fs/promises';
 import {
   createLogger,
   getCommandFolderSearchPaths,
@@ -219,10 +219,14 @@ async function resolveCommand(
       `${packaged.name}.md`
     );
     try {
-      await access(path);
-      return path;
-    } catch {
-      return null;
+      return (await stat(path)).isFile() ? path : null;
+    } catch (error) {
+      const err = error as NodeJS.ErrnoException;
+      if (err.code === 'ENOENT') return null;
+      getLog().error({ err, path, commandName }, 'packaged_command_inspection_failed');
+      throw new Error(`Cannot inspect packaged command '${commandName}': ${err.message}`, {
+        cause: err,
+      });
     }
   }
 
@@ -821,21 +825,16 @@ export interface ScriptValidationResult {
 }
 
 /**
- * Discover all script names from the repo and home scopes.
- * Returns a list of { name, path, runtime } entries. Repo-scoped scripts
- * silently override same-named home-scoped entries.
+ * Discover all shared and packaged script names.
+ * Returns a list of { name, path, runtime } entries. Repo-scoped shared
+ * scripts override same-named home entries; packaged names retain ownership.
+ * Filesystem failures propagate so validation cannot report a false success.
  */
 export async function discoverAvailableScripts(
   cwd: string
 ): Promise<{ name: string; path: string; runtime: ScriptRuntime }[]> {
-  try {
-    const scripts = await discoverScriptsForCwd(cwd);
-    return [...scripts.values()].map(s => ({ name: s.name, path: s.path, runtime: s.runtime }));
-  } catch (error) {
-    const err = error as Error;
-    getLog().warn({ err, cwd }, 'script_discovery_failed');
-    return [];
-  }
+  const scripts = await discoverScriptsForCwd(cwd);
+  return [...scripts.values()].map(s => ({ name: s.name, path: s.path, runtime: s.runtime }));
 }
 
 /**
