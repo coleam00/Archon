@@ -222,6 +222,21 @@ const DEFAULT_CONFIG_CONTENT = `# Archon Global Configuration
 # Concurrency settings
 # concurrency:
 #   maxConversations: 10
+
+# Resolve channel display names into ChannelReference.channelName (surfaced
+# in the AI system prompt, structured logs, and workflow $CHANNEL_NAME / env
+# vars). Off by default for every adapter — a channel name can reveal a
+# client or project identity, so exposing it is opt-in even where it costs
+# nothing to obtain (Discord/Telegram). Slack additionally requires the
+# channels:read bot scope (groups:read for private channels) and pays for a
+# conversations.info call per not-yet-cached channel.
+# adapters:
+#   slack:
+#     resolveChannelNames: true
+#   discord:
+#     resolveChannelNames: true
+#   telegram:
+#     resolveChannelNames: true
 `;
 
 /**
@@ -513,6 +528,24 @@ function mergeGlobalConfig(defaults: MergedConfig, global: GlobalConfig): Merged
   // Container backend defaults (folder projects)
   if (global.container) {
     result.container = { ...global.container };
+  }
+
+  // Per-adapter behavior toggles (e.g. named-channel resolution opt-in).
+  // Shallow per-adapter merge, same shape as streaming above — repo config
+  // doesn't carry this key, so global is the only source.
+  if (global.adapters) {
+    result.adapters = {
+      ...result.adapters,
+      ...(global.adapters.slack
+        ? { slack: { ...result.adapters?.slack, ...global.adapters.slack } }
+        : {}),
+      ...(global.adapters.discord
+        ? { discord: { ...result.adapters?.discord, ...global.adapters.discord } }
+        : {}),
+      ...(global.adapters.telegram
+        ? { telegram: { ...result.adapters?.telegram, ...global.adapters.telegram } }
+        : {}),
+    };
   }
 
   return result;
