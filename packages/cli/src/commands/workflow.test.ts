@@ -543,7 +543,7 @@ describe('workflowRunCommand — dry-run', () => {
       json: true,
     });
 
-    expect(dryRun.loadDryRunStubs).toHaveBeenCalledWith('/test/path/fixtures.yaml');
+    expect(dryRun.loadDryRunStubs).toHaveBeenCalledWith(join('/test/path', 'fixtures.yaml'));
     expect(dryRun.dryRunWorkflow).toHaveBeenCalledWith(
       expect.objectContaining({
         userMessage: 'hello',
