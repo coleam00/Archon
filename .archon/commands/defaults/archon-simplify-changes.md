@@ -50,7 +50,15 @@ Review ALL code changed on this branch and implement simplifications directly. Y
 ### Phase 1: ANALYZE
 
 1. Read CLAUDE.md for project conventions
-2. Get changed files: `git diff $BASE_BRANCH...HEAD --name-only`
+2. Get changed files — this is your **scope allow-list**; you may edit nothing outside it:
+   ```bash
+   git fetch origin "$BASE_BRANCH" 2>/dev/null || true
+   # $ARTIFACTS_DIR, not /tmp: Archon runs workflows concurrently and worktree
+   # isolation does not isolate /tmp, so a fixed host-global path lets two runs
+   # clobber each other's allow-list and revert each other's legitimate edits.
+   git diff "origin/$BASE_BRANCH"...HEAD --name-only | sort -u > "$ARTIFACTS_DIR/simplify-allowlist.txt"
+   cat "$ARTIFACTS_DIR/simplify-allowlist.txt"
+   ```
 3. Read each changed file
 4. Identify simplification opportunities per file
 
@@ -66,25 +74,50 @@ For each simplification:
 ### Phase 3: VALIDATE & COMMIT
 
 1. Run full validation: `bun run type-check && bun run lint`
-2. If simplifications were applied, stage **only** the files you edited in Phase 2 — never `git add -A`, `git add .`, or `git add -u`:
+2. **Scope gate (hard, self-enforcing).** Auto-revert any out-of-scope edits — do not
+   wait for manual judgment. Simplify never adds files and never touches anything
+   outside the PR diff:
+   ```bash
+   # Auto-revert any out-of-scope edits — do not wait for manual judgment
+   while IFS= read -r oos_file; do
+     [ -z "$oos_file" ] && continue
+     echo "SCOPE LEAK — reverting out-of-scope edit: $oos_file"
+     if git ls-files --error-unmatch "$oos_file" 2>/dev/null; then
+       git checkout -- "$oos_file"
+     else
+       rm -f "$oos_file"
+     fi
+   done < <(comm -23 <({ git diff --name-only; git ls-files --others --exclude-standard; } | sort -u) "$ARTIFACTS_DIR/simplify-allowlist.txt")
+   # Verify clean. Untracked files are unioned in above and here: `git diff
+   # --name-only` alone lists only tracked changes, so a stray NEW out-of-scope
+   # file would slip past a gate that explicitly claims to `rm` such files.
+   REMAINING=$(comm -23 <({ git diff --name-only; git ls-files --others --exclude-standard; } | sort -u) "$ARTIFACTS_DIR/simplify-allowlist.txt")
+   if [ -n "$REMAINING" ]; then
+     echo "ERROR: Could not revert all out-of-scope files: $REMAINING" >&2
+     exit 1
+   fi
+   ```
+   Report any reverts in the Phase 4 summary — a simplification that touched an
+   out-of-scope file is a scope leak, not a simplification.
+3. If simplifications were applied, stage **only** the files you edited in Phase 2 — never `git add -A`, `git add .`, or `git add -u`:
    ```bash
    # Stage by name, using the list you tracked in Phase 2
    git add path/to/file1.ts path/to/file2.ts
    # Verify nothing else snuck in
    git status --porcelain
    ```
-3. **Never stage** report, scratch, or PR-body artifacts, even if they show up as untracked or modified in the worktree:
+4. **Never stage** report, scratch, or PR-body artifacts, even if they show up as untracked or modified in the worktree:
    - Anything under `$ARTIFACTS_DIR` (the artifacts directory normally lives outside the worktree, but copies/symlinks may exist)
    - `review/`, `simplify-report.md`, `*-report.md` at the repo root
    - `.pr-body.md`, `pr-body.md`, `*.scratch.md`, `*.tmp.md`
    - Repo-local Archon telemetry: `.archon/artifacts/`, `.archon/logs/`, `.archon/state/` (local-only — never in git)
    - If `git status --porcelain` shows files you don't recognize as part of your simplifications, leave them unstaged
-4. Commit and push only the staged source edits:
+5. Commit and push only the staged source edits:
    ```bash
    git commit -m "simplify: reduce complexity in changed files"
    git push
    ```
-5. If no simplifications were applied, skip the commit entirely
+6. If no simplifications were applied, skip the commit entirely
 
 ### Phase 4: REPORT
 
