@@ -712,15 +712,10 @@ export const dagNodeFlatSchema = dagNodeBaseSchema.extend({
   // over a data-driven item list. Only meaningful on a `workflow:` node (guarded in
   // superRefine).
   fan_out: fanOutConfigSchema.optional(),
-  // Raw (not `z.record(z.string(), z.string())`) because the shape is only settled for
-  // ONE of the two modes that care. Include mode validates it in superRefine below and
-  // retains it on the parsed node; workflow mode rejects it outright as unsupported
-  // (phase 2, #2470) and never retains it in any form. Typing the shared flat field to
-  // the include shape now would commit `workflow.with` to a mapping whose phase-2 shape
-  // is still undecided, making a later widening a breaking change. (Note this is NOT the
-  // same situation as `isolation`/`fan_out`, which are typed at the flat level and
-  // rejected per-mode — their shape is settled.) Other node modes strip it with the rest
-  // of their unsupported surface.
+  // Raw (not `z.record(z.string(), z.string())`) so each relevant node mode validates it
+  // contextually. Include and workflow nodes both accept the same identifier-keyed string
+  // map, validate it in superRefine, and retain it in their transform. Other node modes
+  // strip it with the rest of their unsupported surface.
   with: z.unknown().optional(),
   // Script-only
   script: z.string().optional(),

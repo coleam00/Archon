@@ -747,7 +747,7 @@ async function dispatchOrchestratorWorkflow(
   } catch (err) {
     if (err instanceof WorkflowMissingInputsError) {
       getLog().info(
-        { workflowName: workflow.name, conversationId, userId, missing: err.missing },
+        { workflowName: workflow.name, missing: err.missing },
         'workflow.required_inputs_unsatisfiable'
       );
       await platform.sendMessage(conversationId, err.message);

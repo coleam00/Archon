@@ -969,13 +969,24 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
     }
 
     // Parse optional returns — the node id whose output IS this workflow's result
-    // (#2470). Accept a non-empty string; warn-and-drop otherwise. The referenced id
+    // (#2470). Accept a non-empty string; reject every other present value. Silently
+    // dropping an invalid selector would change the workflow result by falling back to
+    // positional sink selection. The referenced id
     // must name a top-level node — checked below once dagNodes is assembled.
     let returns: string | undefined;
     if (typeof raw.returns === 'string' && raw.returns.trim().length > 0) {
       returns = raw.returns.trim();
     } else if (raw.returns !== undefined) {
-      getLog().warn({ filename, value: raw.returns }, 'invalid_workflow_returns_value_ignored');
+      getLog().warn({ filename, value: raw.returns }, 'invalid_workflow_returns_value_rejected');
+      return {
+        workflow: null,
+        error: {
+          filename,
+          error:
+            "Invalid 'returns': expected the non-empty id of a top-level node whose output is this workflow's result",
+          errorType: 'validation_error',
+        },
+      };
     }
     // `returns` must name a top-level node id. Done here (not in validateDagStructure,
     // which takes nodes and is reused for loop_group bodies / the expander with no

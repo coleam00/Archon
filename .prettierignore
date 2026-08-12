@@ -38,6 +38,7 @@ packages/docs-web/
 
 # Project documentation (don't auto-format)
 docs/
+AGENTS.md
 CLAUDE.md
 README.md
 CHANGELOG.md

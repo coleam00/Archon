@@ -5124,6 +5124,40 @@ nodes:
     expect(error?.error).toContain("returns: 'nope'");
   });
 
+  it('rejects an empty returns value instead of falling back to a positional sink', () => {
+    const { workflow, error } = parseWorkflow(
+      `
+name: empty-returns
+description: invalid empty selector
+returns: "   "
+nodes:
+  - id: build
+    prompt: "hi"
+`,
+      'empty-returns.yaml'
+    );
+    expect(workflow).toBeNull();
+    expect(error?.errorType).toBe('validation_error');
+    expect(error?.error).toContain("Invalid 'returns'");
+  });
+
+  it('rejects a non-string returns value instead of falling back to a positional sink', () => {
+    const { workflow, error } = parseWorkflow(
+      `
+name: object-returns
+description: invalid object selector
+returns: { node: build }
+nodes:
+  - id: build
+    prompt: "hi"
+`,
+      'object-returns.yaml'
+    );
+    expect(workflow).toBeNull();
+    expect(error?.errorType).toBe('validation_error');
+    expect(error?.error).toContain("Invalid 'returns'");
+  });
+
   it('drops a contradictory required+default input (warn-and-drop)', () => {
     const { workflow, error } = parseWorkflow(
       `
@@ -5142,6 +5176,48 @@ nodes:
     expect(error).toBeNull();
     // The single contradictory key is dropped, leaving no inputs.
     expect(workflow?.inputs).toBeUndefined();
+  });
+
+  it('drops an invalid input name with a warning while preserving the workflow', () => {
+    mockLogger.warn.mockClear();
+    const { workflow, error } = parseWorkflow(
+      `
+name: invalid-input-name
+description: invalid input name
+inputs:
+  bad.name:
+    default: value
+nodes:
+  - id: build
+    prompt: "hi"
+`,
+      'invalid-input-name.yaml'
+    );
+    expect(error).toBeNull();
+    expect(workflow?.inputs).toBeUndefined();
+    expect(mockLogger.warn.mock.calls.map(call => call[1])).toContain(
+      'invalid_workflow_input_name_ignored'
+    );
+  });
+
+  it('ignores a non-object inputs block with a warning while preserving the workflow', () => {
+    mockLogger.warn.mockClear();
+    const { workflow, error } = parseWorkflow(
+      `
+name: invalid-inputs-block
+description: invalid inputs block
+inputs: [wrong]
+nodes:
+  - id: build
+    prompt: "hi"
+`,
+      'invalid-inputs-block.yaml'
+    );
+    expect(error).toBeNull();
+    expect(workflow?.inputs).toBeUndefined();
+    expect(mockLogger.warn.mock.calls.map(call => call[1])).toContain(
+      'invalid_workflow_inputs_block_ignored'
+    );
   });
 
   it('rejects two input names that mangle to the same env key', () => {

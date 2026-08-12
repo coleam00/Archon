@@ -211,6 +211,14 @@ describe('validateWorkflowResources — command nodes', () => {
 // =============================================================================
 
 describe('validateWorkflowResources — bundled workflow: target check', () => {
+  test('bundled workflow with a real bundled workflow: target passes', async () => {
+    const workflow = makeWorkflow('test', [{ id: 'sub', workflow: 'archon-assist' } as DagNode]);
+    const issues = await validateWorkflowResources(workflow, tmpDir, {
+      workflowSource: 'bundled',
+    });
+    expect(issues.some(i => i.field === 'workflow')).toBe(false);
+  });
+
   test('bundled workflow with a workflow: node to a non-existent bundled name fails', async () => {
     const workflow = makeWorkflow('test', [
       { id: 'sub', workflow: 'definitely-not-a-bundled-workflow' } as DagNode,

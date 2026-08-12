@@ -641,7 +641,15 @@ export function expandWorkflowIncludes(
       throw new IncludeExpansionError(structureError);
     }
 
-    const result: WorkflowDefinition = { ...raw, nodes: newNodes };
+    const result: WorkflowDefinition = {
+      ...raw,
+      nodes: newNodes,
+      // `returns:` may name an include directive that no longer exists after flattening.
+      // Rebind it to the same primary sink used for `$includeId.output`; ordinary node ids
+      // pass through unchanged. Without this, a nested reusable workflow can finish with a
+      // dangling return id even though every node-level reference was rewritten correctly.
+      ...(raw.returns !== undefined ? { returns: renameIncludeRef(raw.returns) } : {}),
+    };
     memo.set(name, result);
     return result;
   }

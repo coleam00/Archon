@@ -22,6 +22,18 @@ describe('CLI help output', () => {
       'workflow resume <run-id>   Resume a failed or paused run from completed nodes'
     );
   });
+
+  it('documents workflow dry-run flags', () => {
+    const result = spawnSync(process.execPath, [join(import.meta.dir, 'cli.ts'), '--help'], {
+      encoding: 'utf8',
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('--dry-run');
+    expect(result.stdout).toContain('--stubs <path>');
+    expect(result.stdout).toContain('--exec-code');
+    expect(result.stdout).toContain('--pause-at-gates');
+  });
 });
 
 // Test the argument parsing logic used in cli.ts
@@ -45,6 +57,10 @@ describe('CLI argument parsing', () => {
         verbose: { type: 'boolean', short: 'v' },
         scope: { type: 'string' },
         force: { type: 'boolean' },
+        'dry-run': { type: 'boolean' },
+        stubs: { type: 'string' },
+        'exec-code': { type: 'boolean' },
+        'pause-at-gates': { type: 'boolean' },
       },
       allowPositionals: true,
       strict: false,
@@ -172,6 +188,24 @@ describe('CLI argument parsing', () => {
     it('should parse --base flag for workflow run', () => {
       const result = parseCliArgs(['workflow', 'run', 'assist', '--base', 'epic/foo']);
       expect(result.values.base).toBe('epic/foo');
+    });
+
+    it('parses workflow dry-run flags', () => {
+      const result = parseCliArgs([
+        'workflow',
+        'run',
+        'assist',
+        '--dry-run',
+        '--stubs',
+        'fixtures.yaml',
+        '--exec-code',
+        '--pause-at-gates',
+      ]);
+
+      expect(result.values['dry-run']).toBe(true);
+      expect(result.values.stubs).toBe('fixtures.yaml');
+      expect(result.values['exec-code']).toBe(true);
+      expect(result.values['pause-at-gates']).toBe(true);
     });
   });
 

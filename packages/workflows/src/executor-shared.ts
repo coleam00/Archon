@@ -272,7 +272,7 @@ export function detectCreditExhaustion(text: string): string | null {
  * @returns On success: `{ success: true, content }`. On failure: `{ success: false, reason, message }`.
  */
 export async function loadCommandPrompt(
-  deps: WorkflowDeps,
+  deps: Pick<WorkflowDeps, 'loadConfig'>,
   cwd: string,
   commandName: string,
   configuredFolder?: string

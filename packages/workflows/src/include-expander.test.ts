@@ -1018,6 +1018,32 @@ describe('expandWorkflowIncludes — returns drives primarySink (#2470)', () => 
     // depends_on: [blk] still expands to the block's sink (implement), so the wait is intact.
     expect(consume.depends_on).toContain('blk__implement');
   });
+
+  test('rewrites workflow-level returns when it names an included block', () => {
+    const inner = withSignature(
+      wf('inner', [
+        { id: 'result', prompt: 'result' },
+        { id: 'cleanup', prompt: 'cleanup', depends_on: ['result'] },
+      ]),
+      { returns: 'result' }
+    );
+    const outer = withSignature(wf('outer', [{ id: 'blk', include: 'inner' }]), {
+      returns: 'blk',
+    });
+    const parent = wf('parent', [
+      { id: 'outer', include: 'outer' },
+      { id: 'consume', prompt: 'value: $outer.output', depends_on: ['outer'] },
+    ]);
+
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(inner, outer, parent));
+    expect(errors).toHaveLength(0);
+    // The expanded outer definition no longer contains the include id `blk`, so its
+    // contract must follow the include's declared primary sink.
+    expect(workflows.get('outer')?.returns).toBe('blk__result');
+    // A caller including that outer workflow observes the same return selection.
+    const consume = nodeById(workflows.get('parent')!, 'consume')!;
+    expect('prompt' in consume ? consume.prompt : '').toBe('value: $outer__blk__result.output');
+  });
 });
 
 describe('expandWorkflowIncludes — with vs declared inputs (#2470)', () => {
