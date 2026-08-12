@@ -56,7 +56,7 @@ Archon is being positioned as a governed agentic automation engine for business 
 - Worktrees enable parallel development per conversation without branch conflicts
 - Workspace sync is non-destructive by default: fetch, classify state, and fast-forward only when safe
 - Use explicit `mode: 'reset'` only for Archon-owned checkout paths where the caller intentionally wants to hard-reset to `origin/<branch>` before creating a managed worktree
-- **NEVER run `git clean -fd`** - it permanently deletes untracked files (use `git checkout .` instead)
+- **NEVER run `git clean -fd`**. For user-owned workspaces, preserve tracked and untracked changes and surface the state for user action; never commit their artifacts or logs. Explicit reset mode is limited to Archon-owned checkout paths.
 
 ## Engineering Principles
 
@@ -232,7 +232,7 @@ are more current than any tree drawn here.
 13. **`user_provider_keys`** - Per-user AI-provider credentials encrypted at rest (AES-256-GCM); one row per `(user_id, provider)` (`UNIQUE(user_id, provider)`), cascades on user deletion; `kind` is `api_key` or `oauth`; resolved + injected into the **acting user's** (run starter / message sender) runs/chat env at execution time. Always available — the encryption key is auto-provisioned at `~/.archon/credential-key` when `TOKEN_ENCRYPTION_KEY` is not set. Since #1955 the `provider` column holds **vendor-canonical credential ids** (`anthropic`, `openai`, `github-copilot`, plus the Pi backend vendors) — NOT agent ids; legacy `claude`/`codex`/`copilot` rows are renamed by an idempotent startup data fix (vendor row wins on conflict), and the connectable catalog is derived from provider registrations (`acceptedCredentials` via `credentials:` on `ProviderRegistration`), never hand-listed
 14. **`user_ai_prefs`** - Per-user AI preferences (Phase 3): personal model `tiers`/`aliases` (JSON-as-TEXT) + `default_provider` + `default_model` (#1998 — per-user default CHAT model, written atomically with `default_provider`; replaces the `large`-tier lookup for direct chat only when the effective provider matches — workflows still resolve `large`). NON-encrypted (model names aren't secrets — mirrors `codebase_env_vars`, not the provider-key store); one row per user (`UNIQUE(user_id)`), cascades on user deletion. Folded into `buildAiProfile` as the highest-precedence layer at the userId-aware seams (workflow executor: run starter; chat orchestrator: message **sender**-first, conversation creator only as fallback — #1982); needs a web/CLI identity but NO `TOKEN_ENCRYPTION_KEY`
 15–18. **`remote_agent_auth_user` / `remote_agent_auth_session` / `remote_agent_auth_account` / `remote_agent_auth_verification`** - Better Auth tables for opt-in web login (**PostgreSQL only**; always created on Postgres via the idempotent schema apply, but populated only when web auth is enabled — `DATABASE_URL` + `BETTER_AUTH_SECRET`). Owned and shaped by Better Auth (text ids, camelCase columns); Archon never queries them directly — a session maps to the canonical `users` row via `user_identities('web', <betterAuthUserId>)`
-19. **`schema_version`** - Diagnostic schema vintage (#2316): single row (`id = 1`) recording `created_app_version` (the Archon build that created this database — NULL, never guessed, for databases predating the table) and `app_version`/`applied_at` (the build that last applied schema). Written from `APP_VERSION` by both adapters' existing idempotent apply-on-connect path, and only when the value changes. Surfaced by `archon doctor` and `GET /api/health`; **nothing gates on it**
+19. **`remote_agent_schema_version`** - Diagnostic schema vintage (#2316): single row (`id = 1`) recording `created_app_version` (the Archon build that created this database — NULL, never guessed, for databases predating the table) and `app_version`/`applied_at` (the build that last applied schema). Written from `APP_VERSION` by both adapters' existing idempotent apply-on-connect path, and only when the value changes. Surfaced by `archon doctor` and `GET /api/health`; **nothing gates on it**
 
 **Key Patterns:**
 - Conversation ID format: Platform-specific (`thread_ts`, `chat_id`, `user/repo#123`)
@@ -307,7 +307,7 @@ see .archon/config.yaml setup as needed
 
 **Assistant Defaults:**
 
-Per-assistant model and option defaults live in `.archon/config.yaml` under `assistants.<provider>`, alongside `tiers:` and `aliases:`. The docs site's configuration reference (`packages/docs-web/src/content/docs/reference/configuration.md`) carries the full key set and value ranges; the schema in `@archon/core/config` is the authority. Two keys are worth knowing before you look: `claudeBinaryPath`/`codexBinaryPath` are required in compiled binaries when the matching `*_BIN_PATH` env var is unset, and `settingSources` controls which `CLAUDE.md`, skills, commands and agents the Claude SDK loads — omit both `project` and `user` to restrict a run to project-only.
+Per-assistant model and option defaults live in `.archon/config.yaml` under `assistants.<provider>`, alongside `tiers:` and `aliases:`. The docs site's configuration reference (`packages/docs-web/src/content/docs/reference/configuration.md`) carries the full key set and value ranges; the schema in `@archon/core/config` is the authority. Two keys are worth knowing before you look: `claudeBinaryPath`/`codexBinaryPath` are required in compiled binaries when the matching `*_BIN_PATH` env var is unset, and `settingSources` controls which `CLAUDE.md`, skills, commands and agents the Claude SDK loads — use exactly `['project']` to restrict a run to project-only sources.
 
 **Configuration Priority:**
 1. Workflow-level options (in YAML `model`, `modelReasoningEffort`, etc.)
@@ -333,7 +333,7 @@ Agents working in worktrees can run the app for self-testing (make changes → r
 **Important:**
 - Use the web API routes for manual validation (avoid running multiple platform adapters)
 - Database is shared (same conversations/codebases available)
-- Kill the server when done: `pkill -f "bun.*dev"` or use the specific port
+- Stop the server when done using its recorded PID. If that PID is unavailable, identify and stop only the process bound to the exact configured port; never use a broad process-name match across worktrees.
 
 ### Archon Directory Structure
 
@@ -342,7 +342,8 @@ Agents working in worktrees can run the app for self-testing (make changes → r
 What matters here: **artifacts and logs live outside the repo and must never be committed** — `$ARTIFACTS_DIR` points at `artifacts/runs/{id}/`, and typed node sidecars land in its `nodes/` subdirectory. `ARCHON_HOME` overrides the base directory; Docker sets it to `/.archon/`.
 
 **Repo-level (`.archon/` in any repository):**
-```
+
+```text
 .archon/
 ├── commands/       # Custom commands
 ├── workflows/      # Workflow definitions (YAML files)
@@ -550,7 +551,9 @@ Structured logging uses Pino via `createLogger('<module>')` from `@archon/paths`
 - `PATCH /api/auth/me/ai-prefs/default` - Set the personal default assistant + default chat model: `{ provider, model? }` written ATOMICALLY (omitted `model` clears any pin; `model` without `provider` → 400; `provider: null` clears both). Chat model precedence (#1998, chat call-site only): user `default_model` (provider must match) → configured `large` tier (user > repo > global) → install `assistants.<p>.model` (beats only the built-in tier default) → built-in tier default.
 - Stored in `remote_agent_user_ai_prefs` (non-encrypted); folded into `buildAiProfile` as the **highest-precedence** layer (global < repo < user) at the userId-aware seams — workflow executor (`deps.getUserAiPrefs`, resolved from the run starter) and chat orchestrator (sender-first: `executionUserId = context.userId ?? conversation.user_id` — the SENDER's prefs and credentials win; the conversation creator is only the fallback when no sender identity resolves, see #1982). The per-user `defaultProvider` rebases tier defaults and the chat assistant. No identity → byte-for-byte config-only behavior (solo unchanged). A chat request for tier `large` that resolves via the fallback chain emits a one-line non-blocking nudge (`orchestrator.tier_fallback_nudge`). Note: on genuinely shared threads (Slack/Telegram), per-sender prefs mean the provider can differ per turn within one thread (session transitions churn accordingly), and a sender's turn carries the shared thread history into a call billed to their credential — accepted semantics.
 
-**Config (System; ungated — works on solo installs, NOT `requireWebUser`):**
+**Config and provider metadata (System; not `requireWebUser`, but covered by the global API gate):**
+- These routes are ungated on solo installs and when `ARCHON_WEB_AUTH_REQUIRED=false`. With web auth's default API gate enabled, they require either a Better Auth session or the trusted reverse-proxy identity header; only `/api/auth/*` and `/api/health*` bypass that gate. The proxy header is safe only when a trusted proxy strips client-supplied copies (or Archon binds to loopback).
+- The config `PATCH` routes do not add a route-specific identity requirement. Consequently, disabling the global API gate leaves them writable whether or not the optional proxy header is present; deployments that opt out must enforce the equivalent boundary at their proxy.
 - `GET /api/config` - Read-only safe config; returns `{ config, database }`. `config` includes `tiers` (configured small/medium/large presets), `tierDefaults` (built-in presets for the default provider, computed via `buildAiProfile` — lets the UI show what an unset tier resolves to), and `aliases` (configured `@custom` aliases, merged repo > global).
 - `PATCH /api/config/assistants` - Update default assistant + per-provider model defaults.
 - `PATCH /api/config/tiers` - Update model-tier presets; body `{ tiers: { small?, medium?, large? } }` where each tier is `{ provider, model, effort? }` or `null` (unset). Per-key merge; validates each `provider` via `isRegisteredProvider`. Writes `~/.archon/config.yaml`. Drives the console "AI Settings → Model Tiers" panel + `archon ai tier` CLI.
