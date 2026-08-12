@@ -45,6 +45,7 @@ import {
 import { createLogger } from '@archon/paths';
 import { validateDagStructure } from './loader';
 import { getFileBackedCommandName } from './command-file';
+import { resolveDeclaredInputs } from './workflow-inputs';
 
 /**
  * Resolve the logger on every call rather than caching it at module scope.
@@ -196,10 +197,13 @@ function rewriteNodeOutputRefs(node: DagNode, rename: (id: string) => string): v
   } else if (isScriptNode(node)) {
     node.script = code(node.script);
   } else if (isWorkflowNode(node)) {
-    // workflow.input and workflow.fan_out.items are live code/expression ref surfaces
-    // (data strings), so refs inside an included block's `workflow:` node namespace
-    // verbatim.
+    // workflow.input, workflow.with values and workflow.fan_out.items are live
+    // code/expression ref surfaces (data strings), so refs inside an included block's
+    // `workflow:` node namespace verbatim.
     if (node.input !== undefined) node.input = code(node.input);
+    if (node.with !== undefined) {
+      for (const [key, value] of Object.entries(node.with)) node.with[key] = code(value);
+    }
     if (node.fan_out !== undefined) node.fan_out.items = code(node.fan_out.items);
   } else if (isCancelNode(node)) {
     node.cancel = code(node.cancel);
@@ -281,6 +285,9 @@ function applyInputsMacro(node: DagNode, args: Record<string, string>, missing: 
     node.script = substitute(node.script);
   } else if (isWorkflowNode(node)) {
     if (node.input !== undefined) node.input = substitute(node.input);
+    if (node.with !== undefined) {
+      for (const [key, value] of Object.entries(node.with)) node.with[key] = substitute(value);
+    }
     if (node.fan_out !== undefined) node.fan_out.items = substitute(node.fan_out.items);
   } else if (isCancelNode(node)) {
     node.cancel = substitute(node.cancel);
@@ -309,39 +316,19 @@ function resolveIncludeInputs(
   includeNode: IncludeNode,
   child: WorkflowDefinition
 ): Record<string, string> {
-  const callerWith = includeNode.with ?? {};
-  const declared = child.inputs;
-  if (declared === undefined) return callerWith;
-
-  // Reject caller keys the block does not declare.
-  const undeclared = Object.keys(callerWith).filter(k => !Object.hasOwn(declared, k));
-  if (undeclared.length > 0) {
-    const names = undeclared.sort();
-    throw new IncludeExpansionError(
-      `Node '${includeNode.id}': included block '${child.name}' does not declare input${names.length === 1 ? '' : 's'} ${names.map(n => `'${n}'`).join(', ')}. Declared inputs: ${Object.keys(declared).sort().join(', ') || '(none)'}.`
+  try {
+    return resolveDeclaredInputs(
+      includeNode.with ?? {},
+      child.inputs,
+      `Node '${includeNode.id}'`,
+      `included block '${child.name}'`
     );
+  } catch (err) {
+    // Re-typed so the per-workflow expansion loop treats a contract violation as the
+    // same resilient "drop one workflow, keep the rest" failure as every other
+    // expansion error, rather than escaping as an unhandled throw.
+    throw new IncludeExpansionError((err as Error).message);
   }
-
-  const resolved: Record<string, string> = {};
-  const missingRequired: string[] = [];
-  for (const [name, spec] of Object.entries(declared)) {
-    if (Object.hasOwn(callerWith, name)) {
-      resolved[name] = callerWith[name];
-    } else if (spec.default !== undefined) {
-      resolved[name] = spec.default;
-    } else if (spec.required === true) {
-      missingRequired.push(name);
-    }
-    // Declared, not supplied, not required, no default: omitted. If the block body
-    // references `$INPUTS.<name>`, applyInputsMacro reports it as missing and fails.
-  }
-  if (missingRequired.length > 0) {
-    const names = missingRequired.sort();
-    throw new IncludeExpansionError(
-      `Node '${includeNode.id}': included block '${child.name}' requires input${names.length === 1 ? '' : 's'} ${names.map(n => `'${n}'`).join(', ')}. Pass ${names.length === 1 ? 'it' : 'them'} through 'with:'.`
-    );
-  }
-  return resolved;
 }
 
 /**

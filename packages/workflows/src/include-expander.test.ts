@@ -1065,3 +1065,45 @@ describe('expandWorkflowIncludes — with vs declared inputs (#2470)', () => {
     expect('prompt' in work ? work.prompt : '').toBe('v: hello');
   });
 });
+
+describe('expandWorkflowIncludes — workflow: node `with:` values (#2470)', () => {
+  test('namespaces child-local node refs and substitutes $INPUTS in every with: value', () => {
+    // Block: a local node whose output is forwarded to a child workflow alongside
+    // an `$INPUTS`-sourced value. Both surfaces live in `with:`, which the
+    // expander must walk exactly like `input:` and `fan_out.items`.
+    const block = withSignature(
+      wf('caller-blk', [
+        { id: 'local', bash: 'echo hi' },
+        {
+          id: 'call',
+          workflow: 'child',
+          depends_on: ['local'],
+          with: { payload: '$local.output', style: '$INPUTS.style' },
+        },
+      ]),
+      { inputs: { style: { default: 'strict' } } }
+    );
+    const parent = wf('parent', [{ id: 'outer', include: 'caller-blk' }]);
+
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
+    expect(errors).toHaveLength(0);
+
+    const call = nodeById(workflows.get('parent')!, 'outer__call')!;
+    expect('with' in call ? call.with : undefined).toEqual({
+      payload: '$outer__local.output',
+      style: 'strict',
+    });
+  });
+
+  test('reports a missing required input referenced only from a with: value', () => {
+    const block = withSignature(
+      wf('caller-blk', [{ id: 'call', workflow: 'child', with: { diff: '$INPUTS.diff' } }]),
+      { inputs: { diff: { required: true } } }
+    );
+    const parent = wf('parent', [{ id: 'outer', include: 'caller-blk' }]);
+
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
+    expect(workflows.has('parent')).toBe(false);
+    expect(errors.find(e => e.filename === 'parent')?.error).toContain("requires input 'diff'");
+  });
+});

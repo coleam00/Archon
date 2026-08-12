@@ -25,12 +25,14 @@ import {
   isApprovalContext,
   isRunBlockedOnChild,
   SUBRUN_METADATA_KEYS,
+  readSubrunMetadata,
 } from './schemas';
 import { executeDagWorkflow, childOutcomeFromRun } from './dag-executor';
 import type { RunChildWorkflowArgs, ChildWorkflowOutcome } from './dag-executor';
 import { discoverWorkflowsWithConfig } from './workflow-discovery';
 import { maybeWarnLegacyStatePath, maybeWarnLegacyArtifactsPath } from './state-migration';
 import { resolveWorkflowName } from './router';
+import { resolveDeclaredInputs, defaultRunInputs } from './workflow-inputs';
 import { logWorkflowStart, logWorkflowError } from './logger';
 import { formatDuration, parseDbTimestamp } from './utils/duration';
 import { keepAwake } from './utils/keep-awake';
@@ -715,6 +717,26 @@ async function runChildWorkflow(
     );
   }
 
+  // 2b. Enforce the RESOLVED child's declared `inputs:` contract (#2470) — the exact
+  //     same resolution `include:` performs at load time, through the same shared
+  //     implementation, so a `with:` map accepted by one surface is accepted by the
+  //     other. It can only run here (not at load time) because the target is resolved
+  //     late by design, so it sits before isolation/worktree creation and before the
+  //     child run row exists: a contract violation must never leave an orphan worktree
+  //     or a doomed child row behind.
+  let childInputs: Record<string, string> | undefined;
+  try {
+    const resolved = resolveDeclaredInputs(
+      inputs ?? {},
+      childWorkflow.inputs,
+      `Node '${nodeId}'`,
+      `sub-run workflow '${childWorkflow.name}'`
+    );
+    childInputs = Object.keys(resolved).length > 0 ? resolved : undefined;
+  } catch (err) {
+    return failOutcome((err as Error).message);
+  }
+
   // 3. Resolve the child's execution cwd (slice 2, PR-A). `isolation: 'worktree'`
   //    runs the child in its own git worktree obtained from the injected resolver.
   //    A resume whose child run row still exists reuses that row's recorded path
@@ -835,9 +857,9 @@ async function runChildWorkflow(
           // COLD resume: both resume paths (hydrateResumableRun and the zero-completed-node
           // resumeWorkflowRun fallback) reload THIS run row, so the map is intact without
           // re-resolving parent refs that may be out of scope. Stamped only when non-empty.
-          ...(inputs !== undefined && Object.keys(inputs).length > 0
-            ? { [SUBRUN_METADATA_KEYS.inputs]: inputs }
-            : {}),
+          // This is the CONTRACT-RESOLVED map (declared defaults applied), not the raw
+          // caller map — the child must see exactly what its `inputs:` block promises.
+          ...(childInputs !== undefined ? { [SUBRUN_METADATA_KEYS.inputs]: childInputs } : {}),
           // Record the child's own worktree env + branch (mirrors the container path's
           // isolation_env_id) so `isolation list` correlation + PR-E console grouping
           // can find it. Absent for `inherit`/shared-checkout children.
@@ -1804,6 +1826,28 @@ export async function executeWorkflow(
       // Continue anyway - workflow is already recorded in database
     }
 
+    // Declared-input defaults for a run with no caller (#2470). Runtime `$INPUTS`
+    // otherwise comes only from `metadata.inputs`, which a parent stamps at spawn — so a
+    // workflow started directly (CLI / chat / web) would throw on its own
+    // `$INPUTS.<name>` while the identical workflow invoked as a `workflow:` child
+    // resolved it. Derived from the definition rather than persisted, so it stays
+    // correct across a cold resume and when the defaults are later edited. Any caller-
+    // supplied value already on the row wins; only defaults are filled in.
+    const declaredDefaults = defaultRunInputs(workflow.inputs);
+    const runForDag: WorkflowRun = declaredDefaults
+      ? {
+          ...workflowRun,
+          metadata: {
+            ...(workflowRun.metadata as Record<string, unknown> | undefined),
+            [SUBRUN_METADATA_KEYS.inputs]: {
+              ...declaredDefaults,
+              ...(readSubrunMetadata(workflowRun.metadata as Record<string, unknown> | undefined)
+                .inputs ?? {}),
+            },
+          },
+        }
+      : workflowRun;
+
     // Execute the DAG workflow
     const dagSummary = await executeDagWorkflow(
       deps,
@@ -1811,7 +1855,7 @@ export async function executeWorkflow(
       conversationId,
       cwd,
       workflow,
-      workflowRun,
+      runForDag,
       resolvedProvider,
       resolvedModel,
       artifactsDir,
