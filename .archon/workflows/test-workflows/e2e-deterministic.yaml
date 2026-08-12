@@ -63,13 +63,14 @@ nodes:
       if [ -z "$bash_read" ]; then echo "FAIL: bash-read-output empty"; fail=1; fi
       if [ -z "$branch_t" ]; then echo "FAIL: branch-true empty"; fail=1; fi
       if [ -z "$merge" ]; then echo "FAIL: merge-node empty"; fail=1; fi
-      # Regression guard: a correctly consumed ref is raw JSON, never a value
-      # wrapped in literal apostrophes. Non-empty alone would not catch that.
+      # Regression guard: a correctly consumed ref is the exact raw JSON value,
+      # never a value wrapped in literal apostrophes or with trailing content.
       case "$bash_echo" in
         "'"*"'") echo "FAIL: bash-echo carries literal quotes: $bash_echo"; fail=1 ;;
       esac
-      if [ "${bash_echo#\{}" = "$bash_echo" ]; then
-        echo "FAIL: bash-echo is not raw JSON: $bash_echo"; fail=1
+      if [ "$bash_echo" != '{"status":"ok","value":42}' ]; then
+        echo "FAIL: bash-echo has unexpected JSON: $bash_echo"
+        fail=1
       fi
       if [ "$fail" -eq 1 ]; then exit 1; fi
       echo "PASS: all deterministic nodes produced output"
