@@ -99,7 +99,7 @@ The file `.archon/scripts/fetch-github-pages.ts` is loaded and executed with
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `script` | string | Yes | Inline code, or a named script in the owning package (packaged workflows) or shared script directories (legacy workflows) |
+| `script` | string | Yes | Inline code, or a named script in the owning workflow's `scripts/` directory (packaged workflows) or shared script directories (legacy workflows) |
 | `runtime` | `'bun'` \| `'uv'` | Yes | Which runtime executes the script. Must match the file extension for named scripts |
 | `deps` | string[] | No | Python dependencies to install for this run. **uv only** — ignored with a warning for `bun` |
 | `timeout` | number (ms) | No | Hard kill after this many milliseconds. Default: `120000` (2 min) |
@@ -252,9 +252,9 @@ for the full story.
 `archon validate workflows <name>` checks script nodes for:
 
 - **Script file exists** — for named scripts, the basename must exist in the
-  owning package or the legacy shared search path, with a matching extension
-  for the declared runtime. Missing files fail validation with a hint showing
-  the expected path.
+  owning workflow's `scripts/` directory or the legacy shared search path, with
+  a matching extension for the declared runtime. Missing files fail validation
+  with a hint showing the expected path.
 - **Runtime available on PATH** — `bun` or `uv` must be installed. Missing
   runtimes emit a warning with the official install command:
   - `curl -fsSL https://bun.sh/install | bash`

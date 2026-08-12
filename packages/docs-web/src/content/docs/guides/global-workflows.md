@@ -39,7 +39,7 @@ mkdir -p ~/.archon/workflows ~/.archon/commands ~/.archon/scripts
 
 Shared commands/scripts and legacy grouped workflows support one grouping folder. Packaged workflows instead use exactly `<pack>/<workflow>/`, with one YAML file directly inside the workflow folder.
 
-```
+```text
 ~/.archon/workflows/
 ├── my-review.yaml              # ✅ top-level file
 ├── triage/                     # ✅ 1-level subfolder (grouping)

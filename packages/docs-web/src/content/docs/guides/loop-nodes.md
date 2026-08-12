@@ -122,9 +122,10 @@ directory, including after `include:` expansion. In a legacy workflow it uses
 repo → home → bundled precedence. The same command-name safety
 rules apply — no path separators, no `..`, no leading `.` — and unsafe names
 are rejected at parse time. Static workflow validation also flags a
-`loop.command` that points at a missing file (with "did you mean…" /
-"create `.archon/commands/<name>.md`" guidance), the same way it does for
-`command:` nodes.
+`loop.command` that points at a missing file, with guidance to create it in the
+owning workflow's `commands/` directory for packaged workflows or in
+`.archon/commands/` for legacy workflows, the same way it does for `command:`
+nodes.
 
 The file is **read once per run** — loaded when the loop node starts and
 reused for every iteration, including across interactive-gate pauses: the
