@@ -119,10 +119,10 @@ All nodes share these base fields:
 | Field | Required | Type | Description |
 |-------|----------|------|-------------|
 | `id` | Yes | string | Unique node identifier; used in `depends_on` and `$nodeId.output` |
-| `command` | One of | string | Name of a command file in `.archon/commands/` |
+| `command` | One of | string | Package-local command name (packaged workflow) or shared command name (legacy workflow) |
 | `prompt` | One of | string | Inline AI instructions |
 | `bash` | One of | string | Shell script (runs without AI; stdout captured as `$nodeId.output`) |
-| `script` | One of | string | TypeScript/JavaScript (bun) or Python (uv) — inline or named ref to `.archon/scripts/`. Requires `runtime`. See [Script Nodes](/guides/script-nodes/) |
+| `script` | One of | string | TypeScript/JavaScript (bun) or Python (uv) — inline or named package-local/shared reference. Requires `runtime`. See [Script Nodes](/guides/script-nodes/) |
 | `loop` | One of | object | Loop configuration (see Loop Options below) |
 | `loop_group` | One of | object | Multi-node sub-DAG repeated per iteration (see Loop Group Options below) |
 | `approval` | One of | object | Pause for human review; see [Approval Nodes](/guides/approval-nodes/) |
@@ -190,7 +190,7 @@ Defined under `loop:` inside a node:
 | Field | Required | Type | Description |
 |-------|----------|------|-------------|
 | `prompt` | One of `prompt`/`command` | string | Inline AI instructions executed each iteration |
-| `command` | One of `prompt`/`command` | string | Command file (under `.archon/commands/`) whose body is the iteration prompt — exactly one of `prompt` or `command` |
+| `command` | One of `prompt`/`command` | string | Package-local or shared command whose body is the iteration prompt — exactly one of `prompt` or `command` |
 | `until` | Yes | string | Completion signal string — loop ends when AI output contains this |
 | `max_iterations` | Yes | number | Maximum iterations before the node fails |
 | `fresh_context` | No | boolean | Start a new session each iteration (default: false) |
@@ -340,7 +340,7 @@ defaults:
 | Error | Likely Cause | Fix |
 |-------|-------------|-----|
 | `Workflow "X" not found` | YAML file not discovered | Check file is in `.archon/workflows/` and `archon workflow list` shows it |
-| `Command "X" not found` | Command file missing | Check `.archon/commands/X.md` exists and `archon validate commands X` passes |
+| `Command "X" not found` | Command file missing | For a packaged workflow, check its own `commands/X.md` and run `archon validate workflows <name>`; otherwise check the shared command path and run `archon validate commands X` |
 | `Routing unclear — falling back to archon-assist` | No workflow matched the input | Use an explicit workflow name: `archon workflow run my-workflow "..."` |
 | `Worktree already exists for branch X` | Prior run left a worktree | Run `archon complete X` or `archon isolation cleanup` |
 | `Not a git repository` | Running outside a repo | `cd` into a git repo first — workflow and isolation commands require one |

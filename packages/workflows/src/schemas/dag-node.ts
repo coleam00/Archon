@@ -459,7 +459,19 @@ export type CancelNode = z.infer<typeof cancelNodeSchema> & {
  * grammar elsewhere in the tree encodes a different concept and stays separate.
  */
 export const INPUT_NAME_SOURCE = String.raw`[a-zA-Z_][a-zA-Z0-9_-]*`;
-const INPUT_NAME_PATTERN = new RegExp(`^${INPUT_NAME_SOURCE}$`);
+export const INPUT_NAME_PATTERN = new RegExp(`^${INPUT_NAME_SOURCE}$`);
+
+/**
+ * Env-var key an input name is delivered under to bash/script sub-run nodes (#2470):
+ * `INPUTS_` + UPPER_SNAKE(name) (hyphens → underscores, uppercased). Because `-` and
+ * `_` both fold to `_`, two distinct names (`foo-bar`, `foo_bar`) can collide on one
+ * env key — the loader rejects that at load time (all names for one workflow are
+ * visible there). Bash/script bodies read `$INPUTS_<UPPER_SNAKE>`; `$INPUTS.<name>`
+ * text is only substituted into non-shell (AI/prompt) surfaces.
+ */
+export function inputEnvKey(name: string): string {
+  return `INPUTS_${name.replace(/-/g, '_').toUpperCase()}`;
+}
 
 /**
  * Include node schema — a load-time directive that inlines another workflow's
@@ -518,11 +530,10 @@ export type IncludeNode = z.infer<typeof includeNodeSchema> & {
  *      forbids, and racing cannot be reshaped without it. The enum value is retained only
  *      so existing YAML gets a message explaining the rejection.
  *
- * `as` is a forward seam reserved for PR-B (#2214, `with:`/`$INPUTS`): it will name the
- * per-item value as `$INPUTS.<as>` inside the child. The key is accepted here so PR-B
- * needs no schema migration, but until PR-B lands the superRefine REJECTS it at load —
- * it has no runtime effect, and silently ignoring it would deliver a literal
- * `$INPUTS.<as>` to the model. The item travels as the child's `$ARGUMENTS` today.
+ * `as` names the per-item value as `$INPUTS.<as>` inside each child (#2470 lifted the
+ * PR-B/#2214 placeholder now that #2224 merged). It is generally accepted; the superRefine
+ * rejects it only when it collides with a `with:` key of the same name (both would populate
+ * the same `$INPUTS.<name>` slot). When `as` is unset the item still travels as `$ARGUMENTS`.
  */
 export const fanOutConfigSchema = z.object({
   items: z
@@ -556,6 +567,9 @@ export type FanOutConfig = z.infer<typeof fanOutConfigSchema>;
 export const workflowNodeSchema = dagNodeBaseSchema.extend({
   workflow: z.string().min(1, "'workflow' must be a non-empty workflow name"),
   input: z.string().optional(),
+  // Named inputs passed to the child sub-run as `$INPUTS.<name>` (#2470). Mutually
+  // exclusive with `input:`. Same identifier-keyed string-map shape as `include.with`.
+  with: z.record(z.string(), z.string()).optional(),
   isolation: z.enum(['inherit', 'worktree']).optional(),
   fan_out: fanOutConfigSchema.optional(),
 });
@@ -698,15 +712,10 @@ export const dagNodeFlatSchema = dagNodeBaseSchema.extend({
   // over a data-driven item list. Only meaningful on a `workflow:` node (guarded in
   // superRefine).
   fan_out: fanOutConfigSchema.optional(),
-  // Raw (not `z.record(z.string(), z.string())`) because the shape is only settled for
-  // ONE of the two modes that care. Include mode validates it in superRefine below and
-  // retains it on the parsed node; workflow mode rejects it outright as unsupported
-  // (phase 2, #2470) and never retains it in any form. Typing the shared flat field to
-  // the include shape now would commit `workflow.with` to a mapping whose phase-2 shape
-  // is still undecided, making a later widening a breaking change. (Note this is NOT the
-  // same situation as `isolation`/`fan_out`, which are typed at the flat level and
-  // rejected per-mode — their shape is settled.) Other node modes strip it with the rest
-  // of their unsupported surface.
+  // Raw (not `z.record(z.string(), z.string())`) so each relevant node mode validates it
+  // contextually. Include and workflow nodes both accept the same identifier-keyed string
+  // map, validate it in superRefine, and retain it in their transform. Other node modes
+  // strip it with the rest of their unsupported surface.
   with: z.unknown().optional(),
   // Script-only
   script: z.string().optional(),
@@ -803,9 +812,11 @@ export const dagNodeSchema = dagNodeFlatSchema
       return z.NEVER;
     }
 
-    // `include.with` is a load-time, identifier-keyed string map. Keep the flat
-    // field raw so other node variants can still strip it contextually.
-    if (hasInclude && data.with !== undefined) {
+    // `with:` is an identifier-keyed string map on BOTH include and workflow nodes
+    // (#2470). For includes it inlines at load time (applyInputsMacro); for sub-runs it
+    // becomes `$INPUTS.<name>` runtime variables on the child. Same shape validation for
+    // both; the flat field stays `z.unknown()` so other node variants strip it contextually.
+    const validateWithShape = (kind: 'include' | 'workflow'): void => {
       const prototype =
         typeof data.with === 'object' && data.with !== null
           ? Object.getPrototypeOf(data.with)
@@ -818,33 +829,39 @@ export const dagNodeSchema = dagNodeFlatSchema
       ) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: "'with' on include nodes must be an object mapping input names to strings",
+          message: `'with' on ${kind} nodes must be an object mapping input names to strings`,
           path: ['with'],
         });
-      } else {
-        for (const [key, value] of Object.entries(data.with)) {
-          if (!INPUT_NAME_PATTERN.test(key)) {
-            ctx.addIssue({
-              code: z.ZodIssueCode.custom,
-              message: `invalid include input name '${key}'; use letters, numbers, underscores, or hyphens and start with a letter or underscore`,
-              path: ['with'],
-            });
-          }
-          if (typeof value !== 'string') {
-            ctx.addIssue({
-              code: z.ZodIssueCode.custom,
-              message: `include input '${key}' must be a string`,
-              path: ['with'],
-            });
-          }
+        return;
+      }
+      for (const [key, value] of Object.entries(data.with)) {
+        if (!INPUT_NAME_PATTERN.test(key)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `invalid ${kind} input name '${key}'; use letters, numbers, underscores, or hyphens and start with a letter or underscore`,
+            path: ['with'],
+          });
+        }
+        if (typeof value !== 'string') {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `${kind} input '${key}' must be a string`,
+            path: ['with'],
+          });
         }
       }
-    }
-    if (hasWorkflow && data.with !== undefined) {
+    };
+    if (hasInclude && data.with !== undefined) validateWithShape('include');
+    if (hasWorkflow && data.with !== undefined) validateWithShape('workflow');
+    // A `workflow:` node has ONE input channel per invocation: either the untyped
+    // `input:` string ($ARGUMENTS) or the named `with:` map ($INPUTS.<name>). Accepting
+    // both would require a precedence rule between two overlapping channels — the exact
+    // ambiguity the constitution's smell #5 warns against — so reject them together.
+    if (hasWorkflow && data.with !== undefined && data.input !== undefined) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message:
-          "'with:' named-parameter mapping is not yet supported on workflow nodes (slice 2). Use 'input:' instead.",
+          "'with:' and 'input:' cannot both be set on a workflow node — 'with:' supplies named $INPUTS, 'input:' supplies the child's $ARGUMENTS. Use one.",
         path: ['with'],
       });
     }
@@ -901,18 +918,22 @@ export const dagNodeSchema = dagNodeFlatSchema
         path: ['fan_out', 'join'],
       });
     }
-    // `as` names the per-item value for the `$INPUTS.<as>` channel that PR-B (#2214) will
-    // add. Accept the key in the schema (so PR-B lifts a guard rather than migrating YAML)
-    // but reject it fail-fast now, exactly as `first_success` above. `$INPUTS` exists
-    // nowhere in the engine today, so an author writing `as: task` and `$INPUTS.task` in
-    // the child gets the literal string delivered to the model — silently wrong output
-    // with no error. A field that quietly does nothing reads as a working feature.
-    if (hasWorkflow && data.fan_out?.as !== undefined) {
+    // `fan_out.as` names the per-item value as `$INPUTS.<as>` inside each child (#2470
+    // lifts the PR-B/#2214 placeholder — #2224 merged). It is now generally accepted; the
+    // only rejection is a COLLISION with a `with:` key, since both would populate the same
+    // `$INPUTS.<name>` slot on the child with a precedence rule between them — the same
+    // two-channels-one-name ambiguity the `with:`+`input:` guard rejects above.
+    if (
+      hasWorkflow &&
+      data.fan_out?.as !== undefined &&
+      typeof data.with === 'object' &&
+      data.with !== null &&
+      !Array.isArray(data.with) &&
+      Object.prototype.hasOwnProperty.call(data.with, data.fan_out.as)
+    ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message:
-          "'fan_out.as' (the $INPUTS channel) is not yet supported (PR-B, #2214). Remove it — " +
-          "each item is delivered to the child as $ARGUMENTS, which the child's prompts can use today.",
+        message: `'fan_out.as: ${data.fan_out.as}' collides with a 'with:' key of the same name — both would populate $INPUTS.${data.fan_out.as}. Rename one.`,
         path: ['fan_out', 'as'],
       });
     }
@@ -1131,6 +1152,10 @@ export const dagNodeSchema = dagNodeFlatSchema
         ...(data.output_format !== undefined ? { output_format: data.output_format } : {}),
         workflow: data.workflow.trim(),
         ...(data.input !== undefined ? { input: data.input } : {}),
+        // `with:` supplies named $INPUTS to the child sub-run (#2470), validated in shape
+        // by the superRefine above and mutually exclusive with `input:`. Mirrors the
+        // include transform's `with` assembly.
+        ...(data.with !== undefined ? { with: data.with as Record<string, string> } : {}),
         // Isolation is EXPLICIT-ONLY — never inferred, including from `fan_out`. How many
         // children a node spawns says nothing about whether they write; N review or
         // research children over the shared checkout is the common case. A shared-checkout

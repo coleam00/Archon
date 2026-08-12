@@ -82,7 +82,7 @@ any-repo/.archon/
 
 **Purpose:**
 - `commands/` - Slash commands (auto-loaded on clone)
-- `workflows/` - YAML workflow definitions, discovered recursively at runtime
+- `workflows/` - YAML workflow definitions in flat, one-level grouped, or exact `<pack>/<workflow>/` packaged layouts
 - `scripts/` - Named scripts referenced by `script:` nodes
 - `config.yaml` - Project-specific settings
 

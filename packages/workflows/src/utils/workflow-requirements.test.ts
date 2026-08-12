@@ -1,5 +1,10 @@
 import { describe, test, expect } from 'bun:test';
-import { assertWorkflowRequirementsMet, WorkflowRequirementError } from './workflow-requirements';
+import {
+  assertWorkflowRequirementsMet,
+  WorkflowRequirementError,
+  assertWorkflowInputsSatisfiable,
+  WorkflowMissingInputsError,
+} from './workflow-requirements';
 
 describe('assertWorkflowRequirementsMet', () => {
   test('passes when there are no requirements', () => {
@@ -26,5 +31,36 @@ describe('assertWorkflowRequirementsMet', () => {
     expect((thrown as WorkflowRequirementError).requirement).toBe('github');
     // user-facing message names a connect path
     expect((thrown as WorkflowRequirementError).message).toContain('connect github');
+  });
+});
+
+describe('assertWorkflowInputsSatisfiable (#2470)', () => {
+  test('passes with no declared inputs', () => {
+    expect(() => assertWorkflowInputsSatisfiable({})).not.toThrow();
+    expect(() => assertWorkflowInputsSatisfiable({ inputs: {} })).not.toThrow();
+  });
+
+  test('passes when all declared inputs are optional or defaulted', () => {
+    expect(() =>
+      assertWorkflowInputsSatisfiable({
+        inputs: { a: { default: 'x' }, b: { description: 'optional' } },
+      })
+    ).not.toThrow();
+  });
+
+  test('throws naming missing required inputs on a bare top-level run', () => {
+    let thrown: unknown;
+    try {
+      assertWorkflowInputsSatisfiable({
+        name: 'block',
+        inputs: { diff: { required: true }, plan: { required: true }, style: { default: 's' } },
+      });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(WorkflowMissingInputsError);
+    expect((thrown as WorkflowMissingInputsError).missing).toEqual(['diff', 'plan']);
+    expect((thrown as WorkflowMissingInputsError).message).toContain("'diff', 'plan'");
+    expect((thrown as WorkflowMissingInputsError).message).toContain('with:');
   });
 });

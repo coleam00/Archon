@@ -48,18 +48,30 @@ nodes:
       for name in bash-echo script-bun script-python bash-read-output branch-true merge-node; do
         echo "$name output received"
       done
-      bash_echo="$bash-echo.output"
-      script_bun="$script-bun.output"
-      script_python="$script-python.output"
-      bash_read="$bash-read-output.output"
-      branch_t="$branch-true.output"
-      merge="$merge-node.output"
+      # Assign BARE: the engine already shell-quotes an output ref. Wrapping it
+      # in our own quotes puts literal quote characters inside the value — the
+      # old form here passed only because these checks were non-empty tests.
+      bash_echo=$bash-echo.output
+      script_bun=$script-bun.output
+      script_python=$script-python.output
+      bash_read=$bash-read-output.output
+      branch_t=$branch-true.output
+      merge=$merge-node.output
       if [ -z "$bash_echo" ]; then echo "FAIL: bash-echo empty"; fail=1; fi
       if [ -z "$script_bun" ]; then echo "FAIL: script-bun empty"; fail=1; fi
       if [ -z "$script_python" ]; then echo "FAIL: script-python empty"; fail=1; fi
       if [ -z "$bash_read" ]; then echo "FAIL: bash-read-output empty"; fail=1; fi
       if [ -z "$branch_t" ]; then echo "FAIL: branch-true empty"; fail=1; fi
       if [ -z "$merge" ]; then echo "FAIL: merge-node empty"; fail=1; fi
+      # Regression guard: a correctly consumed ref is the exact raw JSON value,
+      # never a value wrapped in literal apostrophes or with trailing content.
+      case "$bash_echo" in
+        "'"*"'") echo "FAIL: bash-echo carries literal quotes: $bash_echo"; fail=1 ;;
+      esac
+      if [ "$bash_echo" != '{"status":"ok","value":42}' ]; then
+        echo "FAIL: bash-echo has unexpected JSON: $bash_echo"
+        fail=1
+      fi
       if [ "$fail" -eq 1 ]; then exit 1; fi
       echo "PASS: all deterministic nodes produced output"
     depends_on: [bash-read-output, script-bun, script-python, merge-node]

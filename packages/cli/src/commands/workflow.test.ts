@@ -115,6 +115,28 @@ mock.module('@archon/workflows/executor', () => ({
   executeWorkflow: mock(() => Promise.resolve({ success: true, workflowRunId: 'test-run-id' })),
   hydrateResumableRun: mock(() => Promise.resolve(null)),
 }));
+mock.module('@archon/workflows/dry-run', () => ({
+  loadDryRunStubs: mock(() => Promise.resolve({ node: 'stubbed output' })),
+  dryRunWorkflow: mock(() =>
+    Promise.resolve({
+      workflow: 'plan',
+      outcome: 'completed',
+      trace: [
+        {
+          nodeId: 'node',
+          nodeType: 'command',
+          state: 'stubbed',
+          resolvedText: 'command:test-command',
+          output: 'stubbed output',
+        },
+      ],
+      missingStubs: [],
+      unusedStubs: [],
+      summary: 'stubbed output',
+    })
+  ),
+  formatDryRunTrace: mock(() => 'DRY RUN TRACE'),
+}));
 
 // Capture the subscription handler so tests can trigger events
 let capturedSubscribeHandler: ((event: WorkflowEmitterEvent) => void) | null = null;
@@ -473,6 +495,110 @@ describe('workflowListCommand', () => {
     // alone is the signal.
     expect(parsed.workflows[0].parseWarnings).toBeUndefined();
     expect(parsed.workflows[1].parseWarnings).toEqual(["dropped 'interactive'"]);
+  });
+});
+
+describe('workflowRunCommand — dry-run', () => {
+  let stdoutSpy: ReturnType<typeof spyOn>;
+  let consoleSpy: ReturnType<typeof spyOn>;
+
+  beforeEach(async () => {
+    stdoutSpy = spyOnJsonStdout();
+    consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const dryRun = await import('@archon/workflows/dry-run');
+    (executeWorkflow as ReturnType<typeof mock>).mockClear();
+    (dryRun.loadDryRunStubs as ReturnType<typeof mock>).mockClear();
+    (dryRun.dryRunWorkflow as ReturnType<typeof mock>).mockClear();
+    (dryRun.formatDryRunTrace as ReturnType<typeof mock>).mockClear();
+    (dryRun.dryRunWorkflow as ReturnType<typeof mock>).mockResolvedValue({
+      workflow: 'plan',
+      outcome: 'completed',
+      trace: [],
+      missingStubs: [],
+      unusedStubs: [],
+      summary: 'done',
+    });
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'plan' }, 'project')],
+      errors: [],
+    });
+  });
+
+  afterEach(() => {
+    stdoutSpy.mockRestore();
+    consoleSpy.mockRestore();
+  });
+
+  it('runs the simulator before real-run setup and writes one JSON document', async () => {
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const dryRun = await import('@archon/workflows/dry-run');
+
+    await workflowRunCommand('/test/path', 'plan', 'hello', {
+      dryRun: true,
+      stubsPath: 'fixtures.yaml',
+      execCode: true,
+      pauseAtGates: true,
+      json: true,
+    });
+
+    expect(dryRun.loadDryRunStubs).toHaveBeenCalledWith(join('/test/path', 'fixtures.yaml'));
+    expect(dryRun.dryRunWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userMessage: 'hello',
+        cwd: '/test/path',
+        execCode: true,
+        pauseAtGates: true,
+      })
+    );
+    expect(executeWorkflow).not.toHaveBeenCalled();
+    expect(stdoutSpy).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(firstJsonPayload(stdoutSpy))).toMatchObject({
+      workflow: 'plan',
+      outcome: 'completed',
+    });
+    expect(consoleSpy).not.toHaveBeenCalled();
+  });
+
+  it('writes the human trace through guaranteed stdout delivery', async () => {
+    const dryRun = await import('@archon/workflows/dry-run');
+
+    await workflowRunCommand('/test/path', 'plan', '', { dryRun: true });
+
+    expect(dryRun.formatDryRunTrace).toHaveBeenCalled();
+    expect(firstJsonPayload(stdoutSpy)).toBe('DRY RUN TRACE');
+  });
+
+  it('rejects dry-run-only and incompatible lifecycle flags', async () => {
+    await expect(
+      workflowRunCommand('/test/path', 'plan', '', { stubsPath: 'fixtures.yaml' })
+    ).rejects.toThrow('--stubs requires --dry-run');
+
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'plan' }, 'project')],
+      errors: [],
+    });
+    await expect(
+      workflowRunCommand('/test/path', 'plan', '', { dryRun: true, detach: true })
+    ).rejects.toThrow('--dry-run cannot be combined with --detach');
+  });
+
+  it('emits failure JSON before returning a nonzero-worthy error', async () => {
+    const dryRun = await import('@archon/workflows/dry-run');
+    (dryRun.dryRunWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflow: 'plan',
+      outcome: 'failed',
+      trace: [],
+      missingStubs: ['node'],
+      unusedStubs: [],
+    });
+
+    await expect(
+      workflowRunCommand('/test/path', 'plan', '', { dryRun: true, json: true })
+    ).rejects.toThrow('missing stubs: node');
+    expect(JSON.parse(firstJsonPayload(stdoutSpy))).toMatchObject({ outcome: 'failed' });
   });
 });
 

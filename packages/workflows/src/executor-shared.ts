@@ -6,13 +6,25 @@
  * utilities. Single source of truth; no logic changes from either copy.
  */
 import { readFile } from 'fs/promises';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import type { IWorkflowPlatform, WorkflowDeps, WorkflowMessageMetadata } from './deps';
 import * as archonPaths from '@archon/paths';
 import { BUNDLED_COMMANDS, isBinaryBuild } from './defaults/bundled-defaults';
 import { createLogger } from '@archon/paths';
 import { isValidCommandName } from './command-validation';
 import type { LoadCommandResult } from './schemas';
+import { INPUT_NAME_SOURCE } from './schemas/dag-node';
+import { similarNodeIds } from './output-ref';
+import { getPackagedResourceDirectory, parsePackagedResourceReference } from './packaged-workflow';
+
+/**
+ * Runtime `$INPUTS.<name>` reference — the sub-run twin of the include-expander's
+ * load-time INPUTS_REF, built from the same identifier grammar so a name that
+ * validates as a `with:` key can never fail to match here. Resolved only for
+ * `workflow:` sub-runs (child runs get `metadata.inputs`), and only into non-shell
+ * surfaces (shell nodes get `INPUTS_<UPPER_SNAKE>` env vars instead — see #2470).
+ */
+const INPUTS_RUNTIME_REF = new RegExp(String.raw`\$INPUTS\.(${INPUT_NAME_SOURCE})`, 'g');
 
 /** Lazy-initialized logger */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -260,7 +272,7 @@ export function detectCreditExhaustion(text: string): string | null {
  * @returns On success: `{ success: true, content }`. On failure: `{ success: false, reason, message }`.
  */
 export async function loadCommandPrompt(
-  deps: WorkflowDeps,
+  deps: Pick<WorkflowDeps, 'loadConfig'>,
   cwd: string,
   commandName: string,
   configuredFolder?: string
@@ -290,6 +302,82 @@ export async function loadCommandPrompt(
       'config_load_failed_using_defaults'
     );
     config = { defaults: { loadDefaultCommands: true } };
+  }
+
+  const packaged = parsePackagedResourceReference(commandName);
+  if (packaged !== null) {
+    if (packaged.owner.source === 'bundled') {
+      if (config.defaults?.loadDefaultCommands === false) {
+        return {
+          success: false,
+          reason: 'not_found',
+          message: `Packaged command not found: ${packaged.name}.md`,
+        };
+      }
+      if (isBinaryBuild()) {
+        const content = BUNDLED_COMMANDS[commandName];
+        if (content === undefined) {
+          return {
+            success: false,
+            reason: 'not_found',
+            message: `Packaged command not found: ${packaged.name}.md`,
+          };
+        }
+        if (!content.trim()) {
+          return {
+            success: false,
+            reason: 'empty_file',
+            message: `Command file is empty: ${packaged.name}.md`,
+          };
+        }
+        return { success: true, content };
+      }
+    }
+
+    let workflowsRoot: string;
+    if (packaged.owner.source === 'project') {
+      workflowsRoot = join(cwd, '.archon', 'workflows');
+    } else if (packaged.owner.source === 'global') {
+      workflowsRoot = archonPaths.getHomeWorkflowsPath();
+    } else {
+      workflowsRoot = dirname(archonPaths.getDefaultWorkflowsPath());
+    }
+    const filePath = join(
+      getPackagedResourceDirectory(workflowsRoot, packaged.owner, 'commands'),
+      `${packaged.name}.md`
+    );
+    try {
+      const content = await readFile(filePath, 'utf-8');
+      if (!content.trim()) {
+        return {
+          success: false,
+          reason: 'empty_file',
+          message: `Command file is empty: ${filePath}`,
+        };
+      }
+      return { success: true, content };
+    } catch (error) {
+      const err = error as NodeJS.ErrnoException;
+      let reason: 'permission_denied' | 'not_found' | 'read_error';
+      if (err.code === 'EACCES') {
+        reason = 'permission_denied';
+      } else if (err.code === 'ENOENT') {
+        reason = 'not_found';
+      } else {
+        reason = 'read_error';
+      }
+      if (err.code !== 'ENOENT') {
+        getLog().error({ err, commandName, filePath }, 'packaged_command_file_read_error');
+      }
+      return {
+        success: false,
+        reason,
+        message:
+          err.code === 'ENOENT'
+            ? `Packaged command not found: ${filePath}`
+            : `Error reading packaged command ${filePath}: ${err.message}`,
+      };
+    }
   }
 
   // Use command folder paths with optional configured folder.
@@ -424,6 +512,9 @@ export const CONTEXT_VAR_PATTERN_STR =
  * - $LOOP_PREV_OUTPUT - Cleaned output of the previous loop iteration. Empty string on the
  *   first iteration (no prior output exists). Useful for fresh_context loops that need
  *   to reference what the previous pass produced or why it failed.
+ * - $INPUTS.<name> - Named sub-run inputs (#2470), supplied by a caller's `with:` on a
+ *   `workflow:` node. Resolved from `options.inputs` in the non-shell branch only; an
+ *   unknown name THROWS. Shell (bash/script) nodes read `INPUTS_<UPPER_SNAKE>` env vars.
  *
  * When issueContext is undefined, context variables are replaced with empty string
  * to avoid sending literal "$CONTEXT" to the AI.
@@ -439,7 +530,7 @@ export function substituteWorkflowVariables(
   loopUserInput?: string,
   rejectionReason?: string,
   loopPrevOutput?: string,
-  options?: { shellSafe?: boolean; stateDir?: string }
+  options?: { shellSafe?: boolean; stateDir?: string; inputs?: Record<string, string> }
 ): { prompt: string; contextSubstituted: boolean } {
   // Fail fast if the prompt references $BASE_BRANCH but no base branch could be resolved
   if (!baseBranch && prompt.includes('$BASE_BRANCH')) {
@@ -483,6 +574,26 @@ export function substituteWorkflowVariables(
       .replace(/\$LOOP_USER_INPUT/g, loopUserInput ?? '')
       .replace(/\$REJECTION_REASON/g, rejectionReason ?? '')
       .replace(/\$LOOP_PREV_OUTPUT/g, loopPrevOutput ?? '');
+
+    // $INPUTS.<name> — named sub-run inputs (#2470). Substituted ONLY in the non-shell
+    // branch: a sub-run's input value can derive from AI output (e.g. `with: {plan:
+    // $plan.output}`), the exact user-controlled class shellSafe keeps out of shell
+    // source (#2115). Bash/script bodies read INPUTS_<UPPER_SNAKE> env vars instead.
+    // An unknown name THROWS (mirrors $node.output.field strictness) rather than
+    // substituting '' — a typo'd input silently emptying is worse than a load-visible error.
+    const inputs = options?.inputs;
+    result = result.replace(INPUTS_RUNTIME_REF, (_match, name: string) => {
+      if (inputs && Object.hasOwn(inputs, name)) return inputs[name];
+      const known = inputs ? Object.keys(inputs) : [];
+      const hint = similarNodeIds(name, known);
+      const suffix =
+        hint.length > 0
+          ? ` Did you mean ${hint.map(h => `$INPUTS.${h}`).join(', ')}?`
+          : known.length > 0
+            ? ` Available inputs: ${known.map(k => `$INPUTS.${k}`).join(', ')}.`
+            : ' This run has no declared inputs.';
+      throw new Error(`Unknown input '$INPUTS.${name}'.${suffix}`);
+    });
   }
 
   // Check if context variables exist (use fresh regex to avoid lastIndex issues)
@@ -534,7 +645,7 @@ export function buildPromptWithContext(
   docsDir: string,
   issueContext: string | undefined,
   logLabel: string,
-  options?: { shellSafe?: boolean; stateDir?: string }
+  options?: { shellSafe?: boolean; stateDir?: string; inputs?: Record<string, string> }
 ): string {
   const { prompt, contextSubstituted } = substituteWorkflowVariables(
     template,
