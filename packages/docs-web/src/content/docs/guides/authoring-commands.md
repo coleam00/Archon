@@ -15,7 +15,7 @@ This guide explains how to write effective commands for Archon's AI workflow sys
 
 A command is a **markdown file** that serves as a detailed instruction set for an AI agent. When a workflow executes a step like `- command: investigate-issue`, Archon:
 
-1. Loads the command file from `.archon/commands/investigate-issue.md`
+1. Loads the command from its workflow package, or from the shared command search path for a legacy workflow
 2. Substitutes variables like `$ARGUMENTS` with actual values
 3. Sends the entire document as a prompt to the AI
 4. The AI follows the instructions and produces output
@@ -26,9 +26,9 @@ A command is a **markdown file** that serves as a detailed instruction set for a
 
 ## File Format
 
-Commands live in `.archon/commands/` relative to the working directory and are loaded at runtime.
+Shared commands live in `.archon/commands/` relative to the working directory and are loaded at runtime. A packaged workflow keeps its commands beside the YAML in `<workflow>/commands/`; those references resolve only inside the owning package and do not fall back to shared commands.
 
-> **`defaults/` is maintainer-territory:** `.archon/commands/defaults/` is reserved for commands shipped with Archon itself (embedded into the binary at build time). For your own commands use `.archon/commands/` (project-scoped) or `~/.archon/commands/` (home-scoped). Every file under `defaults/` must be committed in git — `bun run validate` will error if untracked files are found there.
+> **`defaults/` is maintainer-territory:** `.archon/commands/defaults/` is reserved for commands shipped with Archon itself (embedded into the binary at build time). For your own commands use an owning workflow package's `commands/`, `.archon/commands/` (project-scoped), or `~/.archon/commands/` (home-scoped). Every file under `defaults/` must be committed in git — `bun run validate` will error if untracked files are found there.
 
 > **CLI vs Server:** The CLI reads commands from wherever you run it (sees uncommitted changes). The server reads from `~/.archon/workspaces/owner/repo/`, which only syncs from the remote before worktree creation — so changes must be committed and pushed for the server to pick them up.
 

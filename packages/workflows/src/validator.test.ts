@@ -17,6 +17,7 @@ import {
   discoverAvailableCommands,
 } from './validator';
 import type { WorkflowDefinition, DagNode } from './schemas';
+import { formatPackagedResourceReference } from './packaged-workflow';
 
 // =============================================================================
 // Test helpers
@@ -175,6 +176,33 @@ describe('validateWorkflowResources — command nodes', () => {
     const errors = issues.filter(i => i.level === 'error');
     expect(errors).toHaveLength(1);
     expect(errors[0].message).toContain('Invalid command name');
+  });
+
+  test('validates a command inside its owning packaged workflow', async () => {
+    const commandsDir = join(tmpDir, '.archon', 'workflows', 'team-pack', 'release', 'commands');
+    await mkdir(commandsDir, { recursive: true });
+    await writeFile(join(commandsDir, 'prepare.md'), '# Prepare');
+    const command = formatPackagedResourceReference(
+      { source: 'project', pack: 'team-pack', workflow: 'release' },
+      'prepare'
+    );
+    const workflow = makeWorkflow('test', [{ id: 'step1', command } as DagNode]);
+
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    expect(issues.filter(issue => issue.level === 'error')).toHaveLength(0);
+  });
+
+  test('rejects a directory masquerading as a packaged command file', async () => {
+    const commandsDir = join(tmpDir, '.archon', 'workflows', 'team-pack', 'release', 'commands');
+    await mkdir(join(commandsDir, 'prepare.md'), { recursive: true });
+    const command = formatPackagedResourceReference(
+      { source: 'project', pack: 'team-pack', workflow: 'release' },
+      'prepare'
+    );
+    const workflow = makeWorkflow('test', [{ id: 'step1', command } as DagNode]);
+
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    expect(issues.some(issue => issue.level === 'error' && issue.field === 'command')).toBe(true);
   });
 });
 
@@ -624,6 +652,24 @@ describe('validateWorkflowResources — script nodes', () => {
     const issues = await validateWorkflowResources(workflow, tmpDir);
     const scriptErrors = issues.filter(i => i.level === 'error' && i.field === 'script');
     expect(scriptErrors).toHaveLength(0);
+  });
+
+  test('validates a named script inside its owning packaged workflow', async () => {
+    const scriptsDir = join(tmpDir, '.archon', 'workflows', 'team-pack', 'release', 'scripts');
+    await mkdir(scriptsDir, { recursive: true });
+    await writeFile(join(scriptsDir, 'publish.ts'), 'console.log("publish")');
+    const script = formatPackagedResourceReference(
+      { source: 'project', pack: 'team-pack', workflow: 'release' },
+      'publish'
+    );
+    const workflow = makeWorkflow('test', [
+      { id: 'step1', script, runtime: 'bun' } as unknown as DagNode,
+    ]);
+
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    expect(
+      issues.filter(issue => issue.level === 'error' && issue.field === 'script')
+    ).toHaveLength(0);
   });
 });
 

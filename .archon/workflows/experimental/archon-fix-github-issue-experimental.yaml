@@ -370,7 +370,17 @@ nodes:
       elif [ -f "$ARTIFACTS_DIR/investigation.md" ]; then
         echo "investigation.md exists from investigate step"
       else
-        echo "WARNING: No investigation.md or plan.md found — implement may fail"
+        # Fail, do not warn. investigate/plan can "succeed" while producing no
+        # artifact — an AI node that declines the task still exits 0. On run
+        # 42acf940 the investigate node refused (it delegated to an installed
+        # skill whose router demanded a prior artifact), this branch printed a
+        # WARNING and exited 0, and implement then burned a `model: large` node
+        # with nothing to implement before assert-implemented caught it.
+        # This node holds the only cheap, deterministic view of that
+        # precondition, so it is the one that has to stop the run.
+        echo "bridge-artifacts: neither investigation.md nor plan.md exists in \$ARTIFACTS_DIR." >&2
+        echo "The investigate/plan phase produced no specification — implement has nothing to work from." >&2
+        exit 1
       fi
     depends_on: [investigate, plan]
     trigger_rule: one_success
@@ -513,6 +523,11 @@ nodes:
   # pass. (Workflow constitution: the reliability carve-out, not a style rule.)
   - id: capture-pr-number
     bash: |
+      # Clear first so .pr-number reflects THIS validation and nothing earlier.
+      # pr-exists treats the file's presence as authoritative, so a stale one
+      # left by a prior attempt would send the review tail at a PR that is no
+      # longer there.
+      rm -f "$ARTIFACTS_DIR/.pr-number" "$ARTIFACTS_DIR/.pr-url"
       pr=$(gh pr view --json number --jq .number 2>/dev/null || true)
       if ! printf '%s' "$pr" | grep -qE '^[0-9]+$'; then
         echo "capture-pr-number: no PR resolves for the current branch." >&2
@@ -523,6 +538,29 @@ nodes:
       gh pr view --json url --jq .url > "$ARTIFACTS_DIR/.pr-url" 2>/dev/null || true
       echo "{\"pr_number\":\"$pr\"}"
     depends_on: [create-pr]
+
+  # Whether the review phase has anything to review.
+  #
+  # This exists because trigger_rule alone cannot express it. synthesize uses
+  # all_done so it waits for every reviewer to reach a terminal state, including
+  # the ones the classifier skipped by design — but all_done also fires when the
+  # reviewers were skipped because the RUN DIED upstream. On run 42acf940 the
+  # implementation phase failed, every reviewer was skipped, and the tail
+  # (synthesize -> self-fix -> simplify -> report) still ran to completion and
+  # posted a public comment on the issue saying the run was blocked.
+  #
+  # capture-pr-number exits 1 when no PR resolves, so the absence of .pr-number
+  # is authoritative. all_done here so this node itself always fires and the
+  # tail always has a signal to read.
+  - id: pr-exists
+    bash: |
+      if [ -f "$ARTIFACTS_DIR/.pr-number" ]; then
+        echo '{"has_pr":"true"}'
+      else
+        echo '{"has_pr":"false"}'
+      fi
+    depends_on: [capture-pr-number]
+    trigger_rule: all_done
 
   - id: review-scope
     command: archon-pr-review-scope
@@ -653,13 +691,19 @@ nodes:
   - id: synthesize
     command: archon-synthesize-review
     output_type: review-synthesis
-    depends_on: [code-review, error-handling, test-coverage, comment-quality, docs-impact]
+    depends_on: [code-review, error-handling, test-coverage, comment-quality, docs-impact, pr-exists]
     # all_done, not one_success: synthesize only once EVERY reviewer is terminal.
     # one_success would let a synthesis stand on a subset if the reviewers ever land
     # in different layers, and it reports that partial view as if it were the whole
     # review. all_done also still fires when reviewers were skipped by design (the
     # common case — the classifier only asks for the relevant specialists).
+    #
+    # `when:` carries the other half — all_done cannot tell a by-design skip from a
+    # dead run, so pr-exists decides whether there is anything to review at all.
+    # Skipping here propagates to self-fix -> simplify -> report through the
+    # default all_success, which is what keeps a failed run from reporting.
     trigger_rule: all_done
+    when: "$pr-exists.output.has_pr == 'true'"
     context: fresh
 
   - id: self-fix

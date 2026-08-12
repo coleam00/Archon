@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-08-06
+
+Run output moves out of the repository for good — see Breaking below before upgrading. Alongside it, workflow composition grows up: sub-run nodes can now fan out over a runtime list and take their own worktree, and include blocks accept parameters. Plus a batch of fixes for failures that were previously silent.
+
+### Breaking
+
+- **Repo-local `.archon/state/` is no longer read, and is never migrated automatically.** Cross-run state now lives at `$STATE_DIR` (`~/.archon/workspaces/<project>/state/`). A run that finds a legacy directory emits exactly one warning containing the literal `mv` command and then proceeds with an empty state directory — so a workflow depending on prior state will not error, it will behave as though it is running for the first time. **Move it before upgrading, or on the first warning.** From a source checkout, `bun run scripts/migrate-state-dir.ts` reports what would move (dry run by default) and `--apply` performs it; binary installs should use the `mv` printed in the warning. (#2299)
+- **Runs in an unregistered directory no longer write artifacts and logs into `<cwd>/.archon/`.** The engine's fallback previously placed its own output inside the working directory — inside a user's repository, where it was stageable. Output now resolves under `~/.archon/workspaces/` for every run. Anything reading run artifacts from a repo-relative path must be repointed at `$ARTIFACTS_DIR`. (#2299)
+- **`GET /api/runs/:runId/artifacts` returns 404 instead of an empty list** when a run's project storage cannot be resolved. It previously answered HTTP 200 with `{ files: [] }` for folder projects and local repos without a remote, which was indistinguishable from a run that wrote nothing. Consumers treating an empty list as "no artifacts" must now also handle 404. (#2299)
+
+### Added
+
+- **Dynamic fan-out for `workflow:` sub-run nodes.** `fan_out: { items, max_parallel, join }` expands one governed child run per item of a runtime list, bounded by a sliding concurrency window and joined by `all_done` (default) or `all_success`. Results aggregate as a JSON array in item order and thread back as `$nodeId.output`. Previously a sub-run node was strictly 1:1 with its width fixed in YAML, so the orchestrator-worker pattern had no encoding short of a `bash:` dispatcher spawning detached children with hand-rolled polling — out of process, with no native await, cost roll-up, or run tree. (#2224)
+- **Per-child worktree isolation for `workflow:` sub-run nodes.** A sub-run node may declare `isolation: worktree` to get its own checkout and branch instead of sharing the parent's. Isolation is explicit-only and never inferred from `fan_out` — concurrent children on a shared checkout are refused by a spawn-time preflight rather than silently given a worktree. (#2223)
+- **Parameterised include blocks.** `with:` on an `include:` node plus the `$INPUTS.<name>` macro let one shared sub-DAG be reused with different values instead of forked. Substitution resolves entirely at load time, so the executor still sees a flat static DAG and load-time validation, resume, and the audit trail are unaffected. An unsupplied input fails the load rather than substituting silently. (#2467)
+- **`$STATE_DIR` for cross-run state.** A per-project directory alongside `$ARTIFACTS_DIR`, pre-created by the executor and living outside the repository. It replaces the `.archon/state/` convention, which had no engine support at all — prompts did `mkdir -p .archon/state` relative to cwd, so inside an isolated run the "cross-run memory" wrote to the worktree and died at cleanup, and in a user's repo it was stageable. A legacy directory produces one warning with the exact `mv` and is never moved. (#2299)
+
+### Changed
+
+- **One resolver now backs every run-output path.** The identity-to-storage-path rule had been implemented three times at three levels of correctness — the executor, the CLI's `continue`, and the two HTTP artifact routes — which is what allowed the artifact routes to silently fail for two of the three project kinds Archon can register. A single `resolveProjectStorageKey` in `@archon/paths` now backs all four call sites. (#2299)
+- **Run artifacts stay addressable across a project rename.** A durable `output_root` pointer is recorded once at run start and never rewritten on resume, so historical runs keep resolving to the tree they actually wrote to even if the codebase is later renamed. (#2299)
+- **Unknown YAML keys are reported instead of silently stripped.** Unrecognised keys now surface as non-blocking warnings across every surface an author looks at — `archon validate workflows` (human and `--json`), chat, the console workflow picker, and the API — each naming the node and the key, and persisted to the audit trail as a `workflow_parse_warnings` event. Warn rather than reject, so workflows that load today keep loading. (#2455)
+
+### Fixed
+
+- **A declared `output_format` no longer silences an unparseable output.** "No parseable object at all" was treated as a declared-optional field and resolved to empty on the declared-schema path while the schemaless path threw — so declaring `output_format` made a broken producer quieter than declaring nothing. It bit hardest on `workflow:` sub-run nodes, where a child returning prose instead of JSON turned every declared field into an empty string with no error or warning. Both paths now fail. Genuine leniency is untouched: a field missing from a payload that actually parsed still resolves to empty. (#2460)
+- **The issue-fix workflow stops when its specification is missing.** A run that had already lost its specification would spend a large-model implement node plus four review-tail nodes and then post a public comment on the issue announcing it was blocked — an AI node that *declines* still exits 0, and the one cheap deterministic precondition check only warned. The check now fails, and the investigate step runs its command directly instead of delegating to an ambient skill that routed on the leading verb of the input. Applied to both the experimental and bundled default workflows. (#2499, #2500)
+- **Archon telemetry stays out of target-repo pull requests.** Repo-local `.archon/artifacts/`, `.archon/logs/`, and `.archon/state/` are documented as never belonging in git, but no bundled default told the agent to ignore them or refuse to stage them. Every "never stage" blocklist in the bundled defaults now lists them, and runs that create or modify a `.gitignore` must include them. (#2199)
+- **Truncation is named correctly in clipped-output errors.** The truncation marker was matched against the exact tail, so a single trailing newline was enough to report the generic "not a JSON object" error instead of naming the truncation. (#2493)
+- **Include-expander warnings are visible to tests again.** The expander cached its logger at module scope behind a comment stating the deferral existed so test mocks could intercept it — the cache defeated exactly that, and three loader tests failed whenever they shared a process with the expander's own tests. CI had been protected only by the accident of running them in different batches. (#2461)
+- **Installer environment-variable documentation corrected**, along with the release tooling's changelog commit boundary. (#2437)
+
 ## [0.7.1] - 2026-08-04
 
 Workflow runs now record what they actually resolved to — assistant, model, effort, isolation, base branch — so two runs can be told apart after the fact. Plus retry classification for transient Codex failures, and a batch of installer and CLI repairs.

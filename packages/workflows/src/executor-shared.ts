@@ -6,13 +6,14 @@
  * utilities. Single source of truth; no logic changes from either copy.
  */
 import { readFile } from 'fs/promises';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import type { IWorkflowPlatform, WorkflowDeps, WorkflowMessageMetadata } from './deps';
 import * as archonPaths from '@archon/paths';
 import { BUNDLED_COMMANDS, isBinaryBuild } from './defaults/bundled-defaults';
 import { createLogger } from '@archon/paths';
 import { isValidCommandName } from './command-validation';
 import type { LoadCommandResult } from './schemas';
+import { getPackagedResourceDirectory, parsePackagedResourceReference } from './packaged-workflow';
 
 /** Lazy-initialized logger */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -290,6 +291,82 @@ export async function loadCommandPrompt(
       'config_load_failed_using_defaults'
     );
     config = { defaults: { loadDefaultCommands: true } };
+  }
+
+  const packaged = parsePackagedResourceReference(commandName);
+  if (packaged !== null) {
+    if (packaged.owner.source === 'bundled') {
+      if (config.defaults?.loadDefaultCommands === false) {
+        return {
+          success: false,
+          reason: 'not_found',
+          message: `Packaged command not found: ${packaged.name}.md`,
+        };
+      }
+      if (isBinaryBuild()) {
+        const content = BUNDLED_COMMANDS[commandName];
+        if (content === undefined) {
+          return {
+            success: false,
+            reason: 'not_found',
+            message: `Packaged command not found: ${packaged.name}.md`,
+          };
+        }
+        if (!content.trim()) {
+          return {
+            success: false,
+            reason: 'empty_file',
+            message: `Command file is empty: ${packaged.name}.md`,
+          };
+        }
+        return { success: true, content };
+      }
+    }
+
+    let workflowsRoot: string;
+    if (packaged.owner.source === 'project') {
+      workflowsRoot = join(cwd, '.archon', 'workflows');
+    } else if (packaged.owner.source === 'global') {
+      workflowsRoot = archonPaths.getHomeWorkflowsPath();
+    } else {
+      workflowsRoot = dirname(archonPaths.getDefaultWorkflowsPath());
+    }
+    const filePath = join(
+      getPackagedResourceDirectory(workflowsRoot, packaged.owner, 'commands'),
+      `${packaged.name}.md`
+    );
+    try {
+      const content = await readFile(filePath, 'utf-8');
+      if (!content.trim()) {
+        return {
+          success: false,
+          reason: 'empty_file',
+          message: `Command file is empty: ${filePath}`,
+        };
+      }
+      return { success: true, content };
+    } catch (error) {
+      const err = error as NodeJS.ErrnoException;
+      let reason: 'permission_denied' | 'not_found' | 'read_error';
+      if (err.code === 'EACCES') {
+        reason = 'permission_denied';
+      } else if (err.code === 'ENOENT') {
+        reason = 'not_found';
+      } else {
+        reason = 'read_error';
+      }
+      if (err.code !== 'ENOENT') {
+        getLog().error({ err, commandName, filePath }, 'packaged_command_file_read_error');
+      }
+      return {
+        success: false,
+        reason,
+        message:
+          err.code === 'ENOENT'
+            ? `Packaged command not found: ${filePath}`
+            : `Error reading packaged command ${filePath}: ${err.message}`,
+      };
+    }
   }
 
   // Use command folder paths with optional configured folder.

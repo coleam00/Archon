@@ -29,6 +29,7 @@ mock.module('@archon/paths', () => ({
 
 import { loadCommandPrompt } from './executor-shared';
 import type { WorkflowDeps } from './deps';
+import { formatPackagedResourceReference } from './packaged-workflow';
 
 // Minimal deps stub — loadCommandPrompt only calls loadConfig.
 function makeDeps(loadDefaultCommands = true): WorkflowDeps {
@@ -127,5 +128,49 @@ describe('loadCommandPrompt — home-scope resolution', () => {
 
     expect(result.success).toBe(false);
     if (!result.success) expect(result.reason).toBe('empty_file');
+  });
+
+  it('resolves repo and home packaged commands with the same local basename', async () => {
+    const repoCommandDir = join(
+      repoRoot,
+      '.archon',
+      'workflows',
+      'team-pack',
+      'release',
+      'commands'
+    );
+    const homeCommandDir = join(archonHome, 'workflows', 'personal-pack', 'daily', 'commands');
+    mkdirSync(repoCommandDir, { recursive: true });
+    mkdirSync(homeCommandDir, { recursive: true });
+    writeFileSync(join(repoCommandDir, 'shared.md'), 'REPO PACKAGED');
+    writeFileSync(join(homeCommandDir, 'shared.md'), 'HOME PACKAGED');
+
+    const repoName = formatPackagedResourceReference(
+      { source: 'project', pack: 'team-pack', workflow: 'release' },
+      'shared'
+    );
+    const homeName = formatPackagedResourceReference(
+      { source: 'global', pack: 'personal-pack', workflow: 'daily' },
+      'shared'
+    );
+    const repoResult = await loadCommandPrompt(makeDeps(false), repoRoot, repoName);
+    const homeResult = await loadCommandPrompt(makeDeps(false), repoRoot, homeName);
+
+    expect(repoResult.success && repoResult.content).toBe('REPO PACKAGED');
+    expect(homeResult.success && homeResult.content).toBe('HOME PACKAGED');
+  });
+
+  it('does not fall through when the owning packaged command is missing', async () => {
+    const otherCommandDir = join(archonHome, 'workflows', 'same-pack', 'same-workflow', 'commands');
+    mkdirSync(otherCommandDir, { recursive: true });
+    writeFileSync(join(otherCommandDir, 'shared.md'), 'WRONG SCOPE');
+    const projectName = formatPackagedResourceReference(
+      { source: 'project', pack: 'same-pack', workflow: 'same-workflow' },
+      'shared'
+    );
+
+    const result = await loadCommandPrompt(makeDeps(false), repoRoot, projectName);
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.reason).toBe('not_found');
   });
 });
