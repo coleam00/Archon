@@ -238,10 +238,10 @@ Archon supports eight node types. Exactly one mode field is required per node:
 
 | Type | Syntax | When to use |
 |------|--------|-------------|
-| **Command** | `command: my-command` | Load a command from `.archon/commands/my-command.md`. The standard choice. |
+| **Command** | `command: my-command` | Load from the owning package in packaged workflows, or shared command lookup in legacy workflows. The standard choice. |
 | **Prompt** | `prompt: "inline instructions..."` | Quick, one-off instructions that don't need a reusable command file. |
 | **Bash** | `bash: "shell command"` | Run a shell script without AI. Stdout is captured as `$nodeId.output`. Deterministic operations only. |
-| **Script** | `script: "..." ` + `runtime: bun \| uv` | Run TypeScript/JavaScript (bun) or Python (uv) without AI. Inline code or named reference to `.archon/scripts/`. Stdout captured as `$nodeId.output`. See [Script Nodes](/guides/script-nodes/). |
+| **Script** | `script: "..."` + `runtime: bun \| uv` | Run TypeScript/JavaScript (bun) or Python (uv) without AI. Inline code or a package-local/shared named reference. Stdout captured as `$nodeId.output`. See [Script Nodes](/guides/script-nodes/). |
 | **Loop** | `loop: { prompt: "...", until: SIGNAL }` | Repeat an AI prompt until a completion signal appears in the output. See [Loop Nodes](/guides/loop-nodes/). |
 | **Loop Group** | `loop_group: { until: SIGNAL, nodes: [...] }` | Repeat a multi-node sub-DAG body until a completion condition is met (cross-node iteration). See [Loop Nodes](/guides/loop-nodes/). |
 | **Approval** | `approval: { message: "..." }` | Pause the workflow for a human approve/reject decision. See [Approval Nodes](/guides/approval-nodes/). |

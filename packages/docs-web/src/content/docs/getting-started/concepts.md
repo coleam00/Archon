@@ -37,7 +37,7 @@ Nodes are the building blocks of workflows. Each node does exactly one thing, an
 
 | Type | What it does |
 |------|-------------|
-| `command:` | Loads a command file from `.archon/commands/` and sends it to an AI agent |
+| `command:` | Loads a package-local command (packaged workflow) or shared command (legacy workflow) and sends it to an AI agent |
 | `prompt:` | Sends an inline prompt string to an AI agent |
 | `bash:` | Runs a shell script (no AI). Stdout is captured as `$nodeId.output` |
 | `loop:` | Runs an AI prompt repeatedly until a completion signal is detected |
@@ -69,7 +69,7 @@ nodes:
 
 ## Commands
 
-A **command** is a markdown file in `.archon/commands/` that serves as an AI prompt template. When a workflow node references `command: investigate-issue`, Archon loads `.archon/commands/investigate-issue.md`, substitutes variables, and sends the result to the AI.
+A **command** is a markdown prompt template. Packaged workflows load it only from their owning `commands/` directory; legacy workflows search shared repo, home, then bundled commands. Archon substitutes variables and sends the result to the AI.
 
 Commands support variable substitution. The most commonly used variables:
 

@@ -35,17 +35,21 @@ mkdir -p ~/.archon/workflows ~/.archon/commands ~/.archon/scripts
 
 > **Note on location.** These are direct children of `~/.archon/` -- same level as `workspaces/`, `archon.db`, and `config.yaml`. Earlier Archon versions stored global workflows at `~/.archon/.archon/workflows/`; see [Migrating from the old path](#migrating-from-the-old-path) below.
 
-## Subfolders (1 level deep)
+## Supported layouts
 
-Each directory supports one level of subfolders for grouping, matching the existing `defaults/` convention. Deeper nesting is ignored silently.
+Shared commands/scripts and legacy grouped workflows support one grouping folder. Packaged workflows instead use exactly `<pack>/<workflow>/`, with one YAML file directly inside the workflow folder.
 
-```
+```text
 ~/.archon/workflows/
 ├── my-review.yaml              # ✅ top-level file
 ├── triage/                     # ✅ 1-level subfolder (grouping)
 │   └── weekly-cleanup.yaml     # ✅ resolvable as `weekly-cleanup`
-└── team/personal/too-deep.yaml # ❌ ignored — 2 levels down
+└── team/                       # ✅ packaged workflow
+    └── personal/
+        └── personal.yaml       # exactly one direct YAML is required
 ```
+
+YAML nested below the workflow folder is not loaded. A package folder without exactly one direct YAML is reported as invalid rather than ignored silently.
 
 Resolution is by **filename without extension** (for commands) or **exact filename** (for workflows), regardless of which subfolder the file lives in. Duplicate basenames within the same scope are a user error -- keep each name unique within `~/.archon/commands/` (or `<repoRoot>/.archon/commands/`), across whatever subfolders you use.
 
@@ -55,7 +59,7 @@ Resolution is by **filename without extension** (for commands) or **exact filena
 2. **Global / home-scoped** -- `~/.archon/workflows/`, `~/.archon/commands/`, `~/.archon/scripts/` (override bundled by filename).
 3. **Repo-specific** -- `<repoRoot>/.archon/workflows/`, `<repoRoot>/.archon/commands/`, `<repoRoot>/.archon/scripts/` (override global by filename).
 
-Same-named files at a higher scope win. A repo can override a personal helper by dropping a file with the same name in its own `.archon/workflows/`, `.archon/commands/`, or `.archon/scripts/`.
+Same-named legacy/shared files at a higher scope win. Packaged commands and scripts resolve only within their owning package and never fall through to another scope.
 
 ## Practical Examples
 
