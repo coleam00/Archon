@@ -35,7 +35,7 @@ import {
   readTierNoticeState,
   markTierNoticeShown,
 } from '@archon/paths';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { mkdirSync, openSync, closeSync, readFileSync, writeSync } from 'node:fs';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createWorkflowDeps } from '@archon/core/workflows/store-adapter';
@@ -43,6 +43,7 @@ import { createChildWorktreeResolver } from '@archon/core/workflows/child-isolat
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { resolveWorkflowName } from '@archon/workflows/router';
 import { executeWorkflow, hydrateResumableRun } from '@archon/workflows/executor';
+import { dryRunWorkflow, formatDryRunTrace, loadDryRunStubs } from '@archon/workflows/dry-run';
 import { assertWorkflowRequirementsMet } from '@archon/workflows/utils/workflow-requirements';
 import {
   getWorkflowEventEmitter,
@@ -210,6 +211,14 @@ export interface WorkflowRunOptions {
    * `--json` alone still suppresses CLI logs but does not change the output).
    */
   json?: boolean;
+  /** Simulate deterministic DAG control flow without creating run state or contacting a provider. */
+  dryRun?: boolean;
+  /** YAML mapping of node ids to scalar or structured simulated outputs. */
+  stubsPath?: string;
+  /** Execute reachable bash/script nodes locally instead of requiring stubs. */
+  execCode?: boolean;
+  /** Stop at the first approval gate instead of auto-approving it. */
+  pauseAtGates?: boolean;
 }
 
 /**
@@ -919,6 +928,61 @@ export async function workflowRunCommand(
   // reaches an agent driving runs through `--json`. Not gated on --quiet — a
   // dropped key can be a gate the author believes is protecting the run.
   emitParseWarnings(workflowEntry?.parseWarnings, workflow.name);
+
+  const dryRunOnlyOptions = [
+    ['--stubs', options.stubsPath !== undefined],
+    ['--exec-code', options.execCode === true],
+    ['--pause-at-gates', options.pauseAtGates === true],
+  ] as const;
+  const optionWithoutDryRun = dryRunOnlyOptions.find(([, present]) => present)?.[0];
+  if (!options.dryRun && optionWithoutDryRun) {
+    throw new Error(`${optionWithoutDryRun} requires --dry-run.`);
+  }
+
+  if (options.dryRun) {
+    const incompatible = [
+      ['--branch', options.branchName !== undefined],
+      ['--from/--from-branch', options.fromBranch !== undefined],
+      ['--base', options.baseBranch !== undefined],
+      ['--no-worktree', options.noWorktree === true],
+      ['--folder', options.folder === true],
+      ['--container', options.container === true],
+      ['--resume', options.resume === true],
+      ['--detach', options.detach === true],
+    ] as const;
+    const incompatibleFlag = incompatible.find(([, present]) => present)?.[0];
+    if (incompatibleFlag) {
+      throw new Error(`--dry-run cannot be combined with ${incompatibleFlag}.`);
+    }
+
+    const stubsPath = options.stubsPath
+      ? isAbsolute(options.stubsPath)
+        ? options.stubsPath
+        : join(effectiveDiscoveryCwd, options.stubsPath)
+      : undefined;
+    const stubs = await loadDryRunStubs(stubsPath);
+    const result = await dryRunWorkflow({
+      workflow,
+      userMessage,
+      cwd: effectiveDiscoveryCwd,
+      stubs,
+      execCode: options.execCode,
+      pauseAtGates: options.pauseAtGates,
+    });
+    if (options.json) {
+      await writeJsonLine(result);
+    } else {
+      await writeStdout(`${formatDryRunTrace(result)}\n`);
+    }
+    if (result.outcome === 'failed') {
+      throw new Error(
+        result.missingStubs.length > 0
+          ? `Dry-run failed; missing stubs: ${result.missingStubs.join(', ')}`
+          : 'Dry-run failed. See the trace for details.'
+      );
+    }
+    return;
+  }
 
   // Validate mutually exclusive flags (defensive — cli.ts checks these for UX, but
   // workflowRunCommand is the authoritative boundary for programmatic callers)
