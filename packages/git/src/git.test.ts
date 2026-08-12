@@ -917,6 +917,26 @@ branch refs/heads/feature/auth
       );
     });
 
+    test('treats a missing repository path as an operational failure', async () => {
+      mockLogger.warn.mockClear();
+      mockLogger.error.mockClear();
+      execSpy.mockRejectedValue(
+        new Error("fatal: cannot change to '/workspace/missing': No such file or directory")
+      );
+
+      await expect(git.getDefaultBranch('/workspace/missing')).rejects.toThrow(
+        "Failed to get default branch for /workspace/missing: fatal: cannot change to '/workspace/missing': No such file or directory"
+      );
+      expect(mockLogger.warn).not.toHaveBeenCalled();
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        expect.objectContaining({
+          repoPath: '/workspace/missing',
+          remote: 'origin',
+        }),
+        'default_branch_symbolic_ref_failed'
+      );
+    });
+
     test('error message names all three configuration surfaces (#2471)', async () => {
       // Acceptance criterion: the reader should see the cheapest fix for their
       // situation — CLI flag, repo config, and codebase DB field.

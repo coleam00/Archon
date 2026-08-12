@@ -49,10 +49,7 @@ export async function getDefaultBranch(repoPath: RepoPath, remote = 'origin'): P
     // Expected: symbolic-ref not set (fresh clone without `git remote set-head`).
     // Cannot detect the default branch — surface a config-driven fix instead of
     // guessing. See #2471.
-    if (
-      errorText.includes('not a symbolic ref') ||
-      errorText.includes('No such file or directory')
-    ) {
+    if (errorText.includes('not a symbolic ref')) {
       getLog().warn({ repoPath, remote }, 'default_branch_detection_failed');
       throw new Error(
         `Cannot detect default branch for ${repoPath}: ${remote}/HEAD is not set. ` +
