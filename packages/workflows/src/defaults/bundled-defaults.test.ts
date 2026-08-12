@@ -1,7 +1,17 @@
 import { describe, it, expect } from 'bun:test';
-import { readFileSync, readdirSync } from 'fs';
+import { existsSync, readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
-import { isBinaryBuild, BUNDLED_COMMANDS, BUNDLED_WORKFLOWS } from './bundled-defaults';
+import {
+  isBinaryBuild,
+  BUNDLED_COMMANDS,
+  BUNDLED_SCRIPTS,
+  BUNDLED_WORKFLOWS,
+  BUNDLED_WORKFLOW_OWNERS,
+} from './bundled-defaults';
+import {
+  formatPackagedResourceReference,
+  parsePackagedResourceReference,
+} from '../packaged-workflow';
 
 // Resolve the on-disk defaults directories relative to this test file so the
 // tests work regardless of cwd. From packages/workflows/src/defaults go up
@@ -9,6 +19,22 @@ import { isBinaryBuild, BUNDLED_COMMANDS, BUNDLED_WORKFLOWS } from './bundled-de
 const REPO_ROOT = join(import.meta.dir, '..', '..', '..', '..');
 const COMMANDS_DIR = join(REPO_ROOT, '.archon/commands/defaults');
 const WORKFLOWS_DIR = join(REPO_ROOT, '.archon/workflows/defaults');
+
+function findPackagedScriptPath(scriptDir: string, name: string, extension: string): string {
+  const filename = `${name}${extension}`;
+  const direct = join(scriptDir, filename);
+  if (existsSync(direct)) return direct;
+  const matches = readdirSync(scriptDir, { withFileTypes: true })
+    .filter(entry => entry.isDirectory())
+    .map(entry => join(scriptDir, entry.name, filename))
+    .filter(path => existsSync(path));
+  if (matches.length !== 1) {
+    throw new Error(
+      `Expected exactly one packaged script named ${filename} under ${scriptDir}, found ${matches.length}`
+    );
+  }
+  return matches[0];
+}
 
 describe('bundled-defaults', () => {
   describe('isBinaryBuild', () => {
@@ -33,7 +59,11 @@ describe('bundled-defaults', () => {
         .filter(f => f.endsWith('.md'))
         .map(f => f.slice(0, -'.md'.length))
         .sort();
-      expect(Object.keys(BUNDLED_COMMANDS).sort()).toEqual(onDisk);
+      expect(
+        Object.keys(BUNDLED_COMMANDS)
+          .filter(name => parsePackagedResourceReference(name) === null)
+          .sort()
+      ).toEqual(onDisk);
     });
 
     it('BUNDLED_WORKFLOWS contains every .yaml/.yml file in .archon/workflows/defaults/', () => {
@@ -41,7 +71,11 @@ describe('bundled-defaults', () => {
         .filter(f => f.endsWith('.yaml') || f.endsWith('.yml'))
         .map(f => f.replace(/\.ya?ml$/, ''))
         .sort();
-      expect(Object.keys(BUNDLED_WORKFLOWS).sort()).toEqual(onDisk);
+      expect(
+        Object.keys(BUNDLED_WORKFLOWS)
+          .filter(name => BUNDLED_WORKFLOW_OWNERS[name] === undefined)
+          .sort()
+      ).toEqual(onDisk);
     });
 
     it('bundled content matches on-disk file content (defense against generator corruption)', () => {
@@ -62,6 +96,49 @@ describe('bundled-defaults', () => {
           diskContent = readLF(join(WORKFLOWS_DIR, `${name}.yml`));
         }
         expect(content).toBe(diskContent);
+      }
+    });
+
+    it('packaged bundle metadata is internally consistent', () => {
+      for (const [workflow, owner] of Object.entries(BUNDLED_WORKFLOW_OWNERS)) {
+        expect(BUNDLED_WORKFLOWS[workflow]).toBeDefined();
+        expect(owner.pack.length).toBeGreaterThan(0);
+        expect(owner.workflow.length).toBeGreaterThan(0);
+        const workflowDir = join(REPO_ROOT, '.archon', 'workflows', owner.pack, owner.workflow);
+        const yaml = readdirSync(workflowDir).find(entry => /\.ya?ml$/.test(entry));
+        expect(yaml).toBeDefined();
+        expect(BUNDLED_WORKFLOWS[workflow]).toBe(
+          readFileSync(join(workflowDir, yaml!), 'utf-8').replace(/\r\n/g, '\n')
+        );
+
+        const commandDir = join(workflowDir, 'commands');
+        if (existsSync(commandDir)) {
+          for (const entry of readdirSync(commandDir).filter(entry => entry.endsWith('.md'))) {
+            const localName = entry.slice(0, -'.md'.length);
+            const key = formatPackagedResourceReference({ source: 'bundled', ...owner }, localName);
+            expect(BUNDLED_COMMANDS[key]).toBe(
+              readFileSync(join(commandDir, entry), 'utf-8').replace(/\r\n/g, '\n')
+            );
+          }
+        }
+      }
+      for (const [name, script] of Object.entries(BUNDLED_SCRIPTS)) {
+        expect(name.startsWith('__archon_pack__bundled:')).toBe(true);
+        expect(['.ts', '.js', '.py']).toContain(script.extension);
+        expect(['bun', 'uv']).toContain(script.runtime);
+        expect(script.content.length).toBeGreaterThan(0);
+        const packaged = parsePackagedResourceReference(name);
+        expect(packaged).not.toBeNull();
+        const scriptDir = join(
+          REPO_ROOT,
+          '.archon',
+          'workflows',
+          packaged!.owner.pack,
+          packaged!.owner.workflow,
+          'scripts'
+        );
+        const diskPath = findPackagedScriptPath(scriptDir, packaged!.name, script.extension);
+        expect(script.content).toBe(readFileSync(diskPath, 'utf-8').replace(/\r\n/g, '\n'));
       }
     });
   });

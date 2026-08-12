@@ -175,7 +175,7 @@ archon workflow list --cwd /path/to/repo
 archon workflow list --cwd /path/to/repo --json
 ```
 
-Discovers workflows from `.archon/workflows/` (recursive), `~/.archon/workflows/` (global, home-scoped), and bundled defaults. See [Global Workflows](/guides/global-workflows/).
+Discovers flat, one-level grouped, and exact `<pack>/<workflow>/` packaged layouts from `.archon/workflows/` and `~/.archon/workflows/`, plus bundled defaults. See [Global Workflows](/guides/global-workflows/).
 
 **Flags:**
 
@@ -202,7 +202,7 @@ Progress events (node start/complete/fail/skip, approval gates) are written to s
 
 If the workflow's YAML declares keys the engine ignores, a warning naming each one is written to **stderr before the run starts**. This matters to `--detach --json` callers: `--json` silences all logging, so stderr is the only channel left, and it keeps stdout to exactly the JSON payload.
 
-Note that `run` emits a JSON payload **only** under `--detach`. Without it, `--json` suppresses logs but the command still prints human progress to stdout (`Running workflow: …`), so do not pipe plain `run --json` into a parser. See [Unknown keys](/guides/authoring-workflows/#unknown-keys-are-reported-not-rejected).
+Note that a real `run` emits a JSON payload **only** under `--detach`. Without it, `--json` suppresses logs but the command still prints human progress to stdout (`Running workflow: …`), so do not pipe a plain real `run --json` into a parser. The side-effect-free `--dry-run --json` mode below is the other exception: it emits exactly one complete trace document. See [Unknown keys](/guides/authoring-workflows/#unknown-keys-are-reported-not-rejected).
 
 **Flags:**
 
@@ -219,6 +219,36 @@ Note that `run` emits a JSON payload **only** under `--detach`. Without it, `--j
 | `--quiet`, `-q` | Suppress all progress output to stderr |
 | `--verbose`, `-v` | Also show tool-level events (tool name and duration) |
 | `--detach` | Run in a detached background child and return immediately. The child does all the work; find it later with `workflow runs`/`workflow get`. Child stdout/stderr is captured to `~/.archon/logs/detached-run-<id>.log`. Combine with `--json` for a machine-readable ack. |
+| `--dry-run` | Simulate deterministic DAG control flow in memory. Creates no run, worktree, session, event, artifact, or provider request. |
+| `--stubs <path>` | YAML mapping of node ids to scalar or structured outputs for `--dry-run`. Relative paths resolve from `--cwd`. |
+| `--exec-code` | During `--dry-run`, execute trusted `bash:`/`script:` nodes locally instead of requiring stubs. Default is no code execution. |
+| `--pause-at-gates` | During `--dry-run`, stop at the first approval gate instead of auto-approving it. |
+
+#### Deterministic dry-run
+
+Use dry-run to test DAG routing, joins, loops, `when:`, strict output fields, and variable substitution without starting a real workflow:
+
+```bash
+cat > stubs.yaml <<'YAML'
+classify:
+  issue_type: bug
+  severity: high
+investigate: "Root cause: stale cache"
+YAML
+
+archon workflow run triage --cwd /path/to/repo \
+  --dry-run --stubs stubs.yaml "Issue #2100"
+
+# One complete JSON document, safe to pipe in CI
+archon workflow run triage --cwd /path/to/repo \
+  --dry-run --stubs stubs.yaml --json | jq '.trace, .outcome'
+```
+
+The stub file must contain one YAML mapping. Each value is either a string or an object. Object stubs are preserved as structured output, so downstream `$classify.output.severity` references behave like live structured producers. A reachable AI, bash, or script node without a stub fails the simulation and appears in `missingStubs`; stubs for unknown or unreachable nodes appear in `unusedStubs`. Whole-output references retain their normal lenient behavior, while invalid strict `$node.output.field` references fail the consuming node exactly as they do in a real run. See [Node Output References](/reference/variables/#node-output-references).
+
+By default, bash and script nodes are never executed. `--exec-code` is an explicit opt-in for trusted local workflow code and is the only dry-run mode that can cause code-level side effects. Approval nodes auto-complete unless `--pause-at-gates` is set. Runtime `workflow:` sub-runs are reported as unsupported instead of being launched. Dry-run is incompatible with lifecycle and isolation flags such as `--branch`, `--no-worktree`, `--folder`, `--container`, `--resume`, and `--detach`.
+
+The ordered trace records each node as completed, stubbed, skipped, failed, or paused, including its reason, resolved text, safe output, and final outcome. This validates deterministic engine wiring; it does not validate model reasoning. It adds no workflow-YAML language surface and follows the [workflow language constitution](/reference/workflow-language-constitution/): YAML coordinates, code computes, and agents judge.
 
 **Default (no flags):**
 - Creates worktree with auto-generated branch (`archon/task-<workflow>-<timestamp>`)

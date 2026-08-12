@@ -45,6 +45,7 @@ export {
   fanOutConfigSchema,
   dagNodeSchema,
   INPUT_NAME_SOURCE,
+  inputEnvKey,
   isCommandNode,
   isBashNode,
   isLoopNode,
@@ -103,6 +104,7 @@ export {
   webSearchModeSchema,
   workflowRequirementSchema,
   workflowEvidencePolicySchema,
+  workflowInputSpecSchema,
   workflowBaseSchema,
   workflowDefinitionSchema,
   KNOWN_WORKFLOW_KEYS,
@@ -114,6 +116,7 @@ export type {
   WebSearchMode,
   WorkflowRequirement,
   WorkflowEvidencePolicy,
+  WorkflowInputSpec,
   WorkflowBase,
   WorkflowDefinition,
 } from './workflow';

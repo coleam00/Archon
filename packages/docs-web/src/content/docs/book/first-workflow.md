@@ -32,7 +32,7 @@ nodes:
     depends_on: [first]
 ```
 
-That's it. Three fields at the top, a list of nodes below. Each node needs a unique `id`. Archon discovers workflow files recursively inside `.archon/workflows/`, so you can organize them in subdirectories if you want.
+That's it. Three fields at the top, a list of nodes below. Each node needs a unique `id`. Archon supports flat files, one grouping folder, or the exact `.archon/workflows/<pack>/<workflow>/<file>.yaml` package layout.
 
 > **Where to put it**: Create `.archon/workflows/my-workflow.yaml` in your repository. Run `archon workflow list` to confirm Archon found it.
 

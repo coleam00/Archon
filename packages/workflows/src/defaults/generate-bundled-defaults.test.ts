@@ -127,5 +127,55 @@ describe('generate-bundled-defaults: untracked-file guard (#1578)', () => {
     } finally {
       rmSync(repoRoot, { recursive: true, force: true });
     }
+  }, 15_000);
+
+  it('embeds packaged workflows, commands, scripts, and owner metadata', () => {
+    const repoRoot = createRepo();
+    try {
+      const packageDir = join(repoRoot, '.archon/workflows/author-pack/release-flow');
+      mkdirSync(join(packageDir, 'commands'), { recursive: true });
+      mkdirSync(join(packageDir, 'scripts/helpers'), { recursive: true });
+      writeFileSync(
+        join(packageDir, 'release.yaml'),
+        'name: release\ndescription: release\nnodes:\n  - id: run\n    command: prepare\n'
+      );
+      writeFileSync(join(packageDir, 'commands/prepare.md'), '# Prepare the release\n');
+      writeFileSync(join(packageDir, 'scripts/publish.ts'), "console.log('published');\n");
+      writeFileSync(join(packageDir, 'scripts/helpers/announce.py'), "print('announced')\n");
+      runGit(repoRoot, ['add', '.archon/workflows/author-pack']);
+
+      const { exitCode, stderr } = runScript(repoRoot);
+      expect(stderr).toBe('');
+      expect(exitCode).toBe(0);
+      const output = readFileSync(join(repoRoot, OUTPUT_REL), 'utf-8');
+      expect(output).toContain('BUNDLED_WORKFLOW_OWNERS');
+      expect(output).toContain('"release": {"pack":"author-pack","workflow":"release-flow"}');
+      expect(output).toContain('__archon_pack__bundled:author-pack:release-flow::prepare');
+      expect(output).toContain('__archon_pack__bundled:author-pack:release-flow::publish');
+      expect(output).toContain('__archon_pack__bundled:author-pack:release-flow::announce');
+      expect(output).toContain('BUNDLED_SCRIPTS');
+    } finally {
+      rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects an untracked file inside a packaged workflow', () => {
+    const repoRoot = createRepo();
+    try {
+      const packageDir = join(repoRoot, '.archon/workflows/author-pack/release-flow');
+      mkdirSync(packageDir, { recursive: true });
+      writeFileSync(
+        join(packageDir, 'release.yaml'),
+        'name: release\ndescription: release\nnodes:\n  - id: run\n    prompt: hi\n'
+      );
+
+      const { exitCode, stderr } = runScript(repoRoot);
+      expect(exitCode).toBe(1);
+      expect(stderr).toContain('untracked files');
+      expect(stderr).toContain('.archon/workflows/author-pack/release-flow/release.yaml');
+      expect(readFileSync(join(repoRoot, OUTPUT_REL), 'utf-8')).toBe(SENTINEL);
+    } finally {
+      rmSync(repoRoot, { recursive: true, force: true });
+    }
   });
 });

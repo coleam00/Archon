@@ -44,6 +44,8 @@ import { executeWorkflow, hydrateResumableRun } from '@archon/workflows/executor
 import {
   assertWorkflowRequirementsMet,
   WorkflowRequirementError,
+  assertWorkflowInputsSatisfiable,
+  WorkflowMissingInputsError,
 } from '@archon/workflows/utils/workflow-requirements';
 import type {
   WorkflowDefinition,
@@ -736,6 +738,23 @@ async function dispatchOrchestratorWorkflow(
           createdByUserId: userId,
         })
       : undefined;
+
+  // Signature gate (#2470): a workflow declaring `required` inputs is a reusable block —
+  // only a caller's `with:` satisfies them, so a bare top-level invocation fails here,
+  // before any worktree/clone/AI cost. It still lists/loads normally (builder + discovery).
+  try {
+    assertWorkflowInputsSatisfiable(workflow);
+  } catch (err) {
+    if (err instanceof WorkflowMissingInputsError) {
+      getLog().info(
+        { workflowName: workflow.name, missing: err.missing },
+        'workflow.required_inputs_unsatisfiable'
+      );
+      await platform.sendMessage(conversationId, err.message);
+      return;
+    }
+    throw err;
+  }
 
   // Capability gate: hard-fail before any worktree/clone/AI cost if the
   // workflow declares `requires: [github]` and the originating user hasn't

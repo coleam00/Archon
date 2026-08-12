@@ -29,7 +29,7 @@ Archon supports a layered configuration system with sensible defaults, optional 
 └── config.yaml             # Global configuration (optional)
 ```
 
-Home-scoped `workflows/`, `commands/`, and `scripts/` apply to every project on the machine. Repo-local files at `<repoRoot>/.archon/{workflows,commands,scripts}/` override them by filename (or script name). Each directory supports one level of subfolders for grouping; deeper nesting is ignored. See [Global Workflows](/guides/global-workflows/) for details and dotfiles-sync examples.
+Home-scoped `workflows/`, `commands/`, and `scripts/` apply to every project on the machine. Repo-local legacy/shared files at `<repoRoot>/.archon/{workflows,commands,scripts}/` override them by filename (or script name). Shared/grouped layouts support one subfolder; packaged workflows use exactly `workflows/<pack>/<workflow>/` with one YAML directly inside. Package-owned commands and scripts do not fall through across scopes. See [Global Workflows](/guides/global-workflows/) for details and dotfiles-sync examples.
 
 ### Repository-Level (.archon/)
 

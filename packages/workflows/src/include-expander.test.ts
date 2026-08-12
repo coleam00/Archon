@@ -982,3 +982,154 @@ describe('expandWorkflowIncludes — determinism', () => {
     expect(workflows.get('plain')).toBe(plain);
   });
 });
+
+// ---------------------------------------------------------------------------
+// returns: + declared inputs: (#2470)
+// ---------------------------------------------------------------------------
+
+/** Add workflow-level signature fields to a block. */
+function withSignature(
+  base: WorkflowDefinition,
+  sig: { returns?: string; inputs?: WorkflowDefinition['inputs'] }
+): WorkflowDefinition {
+  return { ...base, ...sig };
+}
+
+describe('expandWorkflowIncludes — returns drives primarySink (#2470)', () => {
+  test('$blk.output resolves to the declared returns node (a non-sink); depends_on still waits on the sink', () => {
+    // Block: synthesize -> implement (implement is the sole sink; synthesize is NOT).
+    const block = withSignature(
+      wf('review-block', [
+        { id: 'synthesize', prompt: 'synthesize' },
+        { id: 'implement', prompt: 'implement $synthesize.output', depends_on: ['synthesize'] },
+      ]),
+      { returns: 'synthesize' }
+    );
+    const parent = wf('parent', [
+      { id: 'blk', include: 'review-block' },
+      { id: 'consume', prompt: 'result: $blk.output', depends_on: ['blk'] },
+    ]);
+
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
+    expect(errors).toHaveLength(0);
+    const consume = nodeById(workflows.get('parent')!, 'consume')!;
+    // $blk.output → the returns node (synthesize), NOT the positional first sink (implement).
+    expect('prompt' in consume ? consume.prompt : '').toBe('result: $blk__synthesize.output');
+    // depends_on: [blk] still expands to the block's sink (implement), so the wait is intact.
+    expect(consume.depends_on).toContain('blk__implement');
+  });
+
+  test('rewrites workflow-level returns when it names an included block', () => {
+    const inner = withSignature(
+      wf('inner', [
+        { id: 'result', prompt: 'result' },
+        { id: 'cleanup', prompt: 'cleanup', depends_on: ['result'] },
+      ]),
+      { returns: 'result' }
+    );
+    const outer = withSignature(wf('outer', [{ id: 'blk', include: 'inner' }]), {
+      returns: 'blk',
+    });
+    const parent = wf('parent', [
+      { id: 'outer', include: 'outer' },
+      { id: 'consume', prompt: 'value: $outer.output', depends_on: ['outer'] },
+    ]);
+
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(inner, outer, parent));
+    expect(errors).toHaveLength(0);
+    // The expanded outer definition no longer contains the include id `blk`, so its
+    // contract must follow the include's declared primary sink.
+    expect(workflows.get('outer')?.returns).toBe('blk__result');
+    // A caller including that outer workflow observes the same return selection.
+    const consume = nodeById(workflows.get('parent')!, 'consume')!;
+    expect('prompt' in consume ? consume.prompt : '').toBe('value: $outer__blk__result.output');
+  });
+});
+
+describe('expandWorkflowIncludes — with vs declared inputs (#2470)', () => {
+  test('applies a declared default for an omitted input', () => {
+    const block = withSignature(wf('blk', [{ id: 'work', prompt: 'style: $INPUTS.style' }]), {
+      inputs: { style: { default: 'strict' } },
+    });
+    const parent = wf('parent', [{ id: 'blk', include: 'blk' }]);
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
+    expect(errors).toHaveLength(0);
+    const work = nodeById(workflows.get('parent')!, 'blk__work')!;
+    expect('prompt' in work ? work.prompt : '').toBe('style: strict');
+  });
+
+  test('errors on a missing required input', () => {
+    const block = withSignature(wf('blk', [{ id: 'work', prompt: 'diff: $INPUTS.diff' }]), {
+      inputs: { diff: { required: true } },
+    });
+    const parent = wf('parent', [{ id: 'blk', include: 'blk' }]);
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
+    expect(workflows.has('parent')).toBe(false);
+    expect(errors.find(e => e.filename === 'parent')?.error).toContain("requires input 'diff'");
+  });
+
+  test('errors on a caller with: key the block does not declare', () => {
+    const block = withSignature(wf('blk', [{ id: 'work', prompt: 'x' }]), {
+      inputs: { known: { default: 'v' } },
+    });
+    const parent = wf('parent', [{ id: 'blk', include: 'blk', with: { unknown: 'oops' } }]);
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
+    expect(workflows.has('parent')).toBe(false);
+    expect(errors.find(e => e.filename === 'parent')?.error).toContain(
+      "does not declare input 'unknown'"
+    );
+  });
+
+  test('a block with NO declared inputs keeps Phase-1 passthrough (undeclared key accepted)', () => {
+    const block = wf('blk', [{ id: 'work', prompt: 'v: $INPUTS.v' }]);
+    const parent = wf('parent', [
+      { id: 'blk', include: 'blk', with: { v: 'hello', extra: 'ignored' } },
+    ]);
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
+    expect(errors).toHaveLength(0);
+    const work = nodeById(workflows.get('parent')!, 'blk__work')!;
+    expect('prompt' in work ? work.prompt : '').toBe('v: hello');
+  });
+});
+
+describe('expandWorkflowIncludes — workflow: node `with:` values (#2470)', () => {
+  test('namespaces child-local node refs and substitutes $INPUTS in every with: value', () => {
+    // Block: a local node whose output is forwarded to a child workflow alongside
+    // an `$INPUTS`-sourced value. Both surfaces live in `with:`, which the
+    // expander must walk exactly like `input:` and `fan_out.items`.
+    const block = withSignature(
+      wf('caller-blk', [
+        { id: 'local', bash: 'echo hi' },
+        {
+          id: 'call',
+          workflow: 'child',
+          depends_on: ['local'],
+          with: { payload: '$local.output', style: '$INPUTS.style' },
+        },
+      ]),
+      { inputs: { style: { default: 'strict' } } }
+    );
+    const parent = wf('parent', [{ id: 'outer', include: 'caller-blk' }]);
+
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
+    expect(errors).toHaveLength(0);
+
+    const call = nodeById(workflows.get('parent')!, 'outer__call')!;
+    expect('with' in call ? call.with : undefined).toEqual({
+      payload: '$outer__local.output',
+      style: 'strict',
+    });
+  });
+
+  test('reports a missing required input referenced only from a with: value', () => {
+    const block = withSignature(
+      wf('caller-blk', [{ id: 'call', workflow: 'child', with: { diff: '$INPUTS.diff' } }]),
+      { inputs: { diff: { required: true } } }
+    );
+    const parent = wf('parent', [{ id: 'outer', include: 'caller-blk' }]);
+
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
+    expect(workflows.has('parent')).toBe(false);
+    expect(errors.find(e => e.filename === 'parent')?.error).toContain("requires input 'diff'");
+  });
+});

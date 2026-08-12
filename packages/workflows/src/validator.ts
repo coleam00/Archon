@@ -9,17 +9,19 @@
  * REST API can use it.
  */
 
-import { join, resolve, isAbsolute } from 'path';
-import { access, readFile } from 'fs/promises';
+import { dirname, join, resolve, isAbsolute } from 'path';
+import { access, readFile, stat } from 'fs/promises';
 import {
   createLogger,
   getCommandFolderSearchPaths,
   getDefaultCommandsPath,
+  getDefaultWorkflowsPath,
   getHomeCommandsPath,
+  getHomeWorkflowsPath,
   findMarkdownFilesRecursive,
 } from '@archon/paths';
 import { execFileAsync } from '@archon/git';
-import { BUNDLED_COMMANDS, isBinaryBuild } from './defaults/bundled-defaults';
+import { BUNDLED_COMMANDS, BUNDLED_WORKFLOWS, isBinaryBuild } from './defaults/bundled-defaults';
 import { isValidCommandName } from './command-validation';
 import { levenshtein, findSimilar } from './utils/fuzzy-match';
 import { getProviderCapabilities, isRegisteredProvider, skillSearchRoots } from '@archon/providers';
@@ -30,12 +32,22 @@ function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('workflow.validator');
   return cachedLog;
 }
-import { isBashNode, isLoopNode, isLoopGroupNode, isScriptNode, isIncludeNode } from './schemas';
+import {
+  isBashNode,
+  isLoopNode,
+  isLoopGroupNode,
+  isScriptNode,
+  isIncludeNode,
+  isWorkflowNode,
+} from './schemas';
+import { parseWorkflow } from './loader';
+import { resolveWorkflowName } from './router';
 import type { WorkflowDefinition, DagNode, WorkflowSource } from './schemas';
 import type { ScriptRuntime } from './script-discovery';
 import { discoverScriptsForCwd } from './script-discovery';
 import { isInlineScript } from './executor-shared';
 import { buildAiProfile, resolveModelSpec } from './model-validation';
+import { getPackagedResourceDirectory, parsePackagedResourceReference } from './packaged-workflow';
 import type { RawAliasesConfig, RawTiersConfig, ResolvedAiProfile } from './model-validation';
 
 // =============================================================================
@@ -152,7 +164,7 @@ export async function discoverAvailableCommands(
   if (loadDefaults) {
     if (isBinaryBuild()) {
       for (const name of Object.keys(BUNDLED_COMMANDS)) {
-        names.add(name);
+        if (parsePackagedResourceReference(name) === null) names.add(name);
       }
     } else {
       const defaultsPath = getDefaultCommandsPath();
@@ -195,6 +207,38 @@ async function resolveCommand(
   cwd: string,
   config?: ValidationConfig
 ): Promise<string | null> {
+  const packaged = parsePackagedResourceReference(commandName);
+  if (packaged !== null) {
+    if (packaged.owner.source === 'bundled') {
+      if (config?.loadDefaultCommands === false) return null;
+      if (isBinaryBuild()) {
+        return commandName in BUNDLED_COMMANDS ? `[bundled:${commandName}]` : null;
+      }
+    }
+    let workflowsRoot: string;
+    if (packaged.owner.source === 'project') {
+      workflowsRoot = join(cwd, '.archon', 'workflows');
+    } else if (packaged.owner.source === 'global') {
+      workflowsRoot = getHomeWorkflowsPath();
+    } else {
+      workflowsRoot = dirname(getDefaultWorkflowsPath());
+    }
+    const path = join(
+      getPackagedResourceDirectory(workflowsRoot, packaged.owner, 'commands'),
+      `${packaged.name}.md`
+    );
+    try {
+      return (await stat(path)).isFile() ? path : null;
+    } catch (error) {
+      const err = error as NodeJS.ErrnoException;
+      if (err.code === 'ENOENT') return null;
+      getLog().error({ err, path, commandName }, 'packaged_command_inspection_failed');
+      throw new Error(`Cannot inspect packaged command '${commandName}': ${err.message}`, {
+        cause: err,
+      });
+    }
+  }
+
   // Each scope is walked 1 subfolder deep by basename — so `triage/review.md`
   // is resolvable as `review`. This matches the workflows/scripts discovery
   // convention and makes the listed commands in `discoverAvailableCommands`
@@ -280,6 +324,26 @@ function resolveProvider(
 ): string | undefined {
   if ('provider' in node && node.provider) return node.provider;
   return workflowProvider ?? defaultProvider;
+}
+
+/**
+ * Bundled workflow definitions, parsed once and cached (#2470). Used only by the
+ * bundled-set-only `workflow:` target check below — a bundled workflow's sub-run target
+ * must itself resolve within the bundled set (a bundled workflow can't depend on a
+ * project/global workflow that may not exist on another install). Resolution reuses the
+ * runtime fuzzy `resolveWorkflowName` so a legal suffix/substring ref isn't reported broken.
+ * parseWorkflow never expands includes, so `workflow.name` is the authoritative id here.
+ */
+let bundledWorkflowDefsCache: WorkflowDefinition[] | undefined;
+function getBundledWorkflowDefs(): WorkflowDefinition[] {
+  if (bundledWorkflowDefsCache) return bundledWorkflowDefsCache;
+  const defs: WorkflowDefinition[] = [];
+  for (const [filename, content] of Object.entries(BUNDLED_WORKFLOWS)) {
+    const { workflow } = parseWorkflow(content, filename);
+    if (workflow) defs.push(workflow);
+  }
+  bundledWorkflowDefsCache = defs;
+  return defs;
 }
 
 /**
@@ -374,6 +438,40 @@ export async function validateWorkflowResources(
       });
     }
     if ('model' in node && node.model) validateModelRef(node.model, node.id);
+
+    // --- Bundled `workflow:` sub-run target check (#2470) ---
+    // A BUNDLED workflow ships with the binary and runs on any install, so its sub-run
+    // targets must resolve within the bundled set — a reference to a project/global
+    // workflow could be absent elsewhere. Only the bundled set is checked at load/CI;
+    // project sub-run targets stay RUNTIME-resolved on purpose (a load-time existence
+    // check would silently kill mid-flight authoring — constitution case-law), and the
+    // check uses the SAME fuzzy resolver as runtime so a legal suffix ref isn't flagged.
+    if (config?.workflowSource === 'bundled' && isWorkflowNode(node)) {
+      let resolvedTarget: WorkflowDefinition | undefined;
+      let ambiguityMessage: string | undefined;
+      try {
+        resolvedTarget = resolveWorkflowName(node.workflow, getBundledWorkflowDefs());
+      } catch (err) {
+        ambiguityMessage = (err as Error).message;
+      }
+      if (ambiguityMessage !== undefined) {
+        issues.push({
+          level: 'error',
+          nodeId: node.id,
+          field: 'workflow',
+          message: `Node '${node.id}' sub-run target '${node.workflow}' is ambiguous within the bundled set: ${ambiguityMessage}`,
+          hint: 'Use the full bundled workflow name.',
+        });
+      } else if (!resolvedTarget) {
+        issues.push({
+          level: 'error',
+          nodeId: node.id,
+          field: 'workflow',
+          message: `Node '${node.id}' targets sub-run '${node.workflow}', which is not a bundled workflow`,
+          hint: 'A bundled workflow may only reference other bundled workflows (project/global targets are not guaranteed to exist on every install).',
+        });
+      }
+    }
 
     // --- Command nodes: check file exists ---
     if ('command' in node && typeof node.command === 'string') {
@@ -790,21 +888,16 @@ export interface ScriptValidationResult {
 }
 
 /**
- * Discover all script names from the repo and home scopes.
- * Returns a list of { name, path, runtime } entries. Repo-scoped scripts
- * silently override same-named home-scoped entries.
+ * Discover all shared and packaged script names.
+ * Returns a list of { name, path, runtime } entries. Repo-scoped shared
+ * scripts override same-named home entries; packaged names retain ownership.
+ * Filesystem failures propagate so validation cannot report a false success.
  */
 export async function discoverAvailableScripts(
   cwd: string
 ): Promise<{ name: string; path: string; runtime: ScriptRuntime }[]> {
-  try {
-    const scripts = await discoverScriptsForCwd(cwd);
-    return [...scripts.values()].map(s => ({ name: s.name, path: s.path, runtime: s.runtime }));
-  } catch (error) {
-    const err = error as Error;
-    getLog().warn({ err, cwd }, 'script_discovery_failed');
-    return [];
-  }
+  const scripts = await discoverScriptsForCwd(cwd);
+  return [...scripts.values()].map(s => ({ name: s.name, path: s.path, runtime: s.runtime }));
 }
 
 /**
