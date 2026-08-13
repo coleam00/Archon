@@ -11,9 +11,10 @@ sidebar:
 
 DAG workflow nodes support an `mcp` field that attaches MCP (Model Context Protocol)
 servers to individual nodes. Claude workflow nodes exclude ambient user/project/plugin
-MCP by default and expose exactly the servers in their declared file. Codex is an
-explicit exception: its SDK adds declared servers to ambient configuration rather
-than replacing it.
+MCP by default and expose exactly the external servers in their declared file, plus
+governed native tools that Archon injects for the current workflow when applicable.
+Codex is an explicit exception: its SDK adds declared servers to ambient configuration
+rather than replacing it.
 
 MCP works with Claude, Codex, and Copilot workflow nodes. Pi and OpenCode nodes
 currently warn and ignore the `mcp` field.
@@ -180,8 +181,10 @@ named `github` and `postgres`, the node gets:
 - `mcp__github__*`
 - `mcp__postgres__*`
 
-With no `mcp:` declaration, a Claude workflow node receives no MCP servers. This
-does not disable `CLAUDE.md`, built-in agents, or filesystem-defined agents.
+With no `mcp:` declaration, a Claude workflow node receives no ambient or
+author-declared MCP servers. Archon may still inject its own governed native-tool
+server for a node that requests an engine capability. This does not disable
+`CLAUDE.md`, built-in agents, or filesystem-defined agents.
 
 Codex nodes pass the same MCP config as per-node `mcp_servers` overrides to the
 Codex SDK, so the servers are available for that node without requiring global

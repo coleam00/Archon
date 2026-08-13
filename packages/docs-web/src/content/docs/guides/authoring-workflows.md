@@ -312,12 +312,12 @@ These fields map directly to Claude Agent SDK options. `maxBudgetUsd`, `systemPr
       denyWrite: ['/etc', '/usr']
 ```
 
-**settingSources** — control which filesystem setting sources the Claude SDK loads (project `CLAUDE.md`/`.claude/` skills, commands, agents vs the user-level `~/.claude/`). Loading fewer sources gives a leaner context and a faster node start — a lean reviewer node can skip project context entirely while a writer node in the same workflow keeps it:
+**settingSources** — control which filesystem setting sources the Claude SDK discovers (project `CLAUDE.md`/`.claude/` skills, commands, agents vs the user-level `~/.claude/`). For workflow skills, this controls eligibility rather than activation: `skills:` selects the exact active set, and a declaration must exist under an enabled source. Loading fewer sources gives a leaner context and a faster node start — a lean reviewer node can skip project context entirely while a writer node in the same workflow keeps it:
 
 ```yaml
 - id: lean-review
   command: review
-  settingSources: []              # load no CLAUDE.md / skills / commands / agents
+  settingSources: []              # no setting sources; skills must be omitted or []
 
 - id: implement
   command: implement

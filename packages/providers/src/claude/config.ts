@@ -22,7 +22,7 @@ export function parseClaudeConfig(raw: Record<string, unknown>): ClaudeProviderD
     const valid = raw.settingSources.filter(
       (s): s is 'project' | 'user' => s === 'project' || s === 'user'
     );
-    if (valid.length > 0) {
+    if (raw.settingSources.length === 0 || valid.length > 0) {
       result.settingSources = valid;
     }
   }

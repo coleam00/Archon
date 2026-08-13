@@ -1260,6 +1260,22 @@ describe('ClaudeProvider', () => {
       expect(callArgs.options.settingSources).toEqual(['project']);
     });
 
+    test('honors assistant-level settingSources: [] without widening to defaults', async () => {
+      mockQuery.mockImplementation(async function* () {
+        yield { type: 'result', session_id: 'test-session' };
+      });
+
+      for await (const _ of client.sendQuery('test', '/tmp', undefined, {
+        assistantConfig: { settingSources: [] },
+      })) {
+        // consume
+      }
+
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+      const callArgs = mockQuery.mock.calls[0][0] as { options: Record<string, unknown> };
+      expect(callArgs.options.settingSources).toEqual([]);
+    });
+
     test('per-node settingSources override wins over the assistant default', async () => {
       mockQuery.mockImplementation(async function* () {
         yield { type: 'result', session_id: 'test-session' };
@@ -2301,6 +2317,22 @@ describe('sendQuery decomposition behaviors', () => {
         for await (const _ of client.sendQuery('test', workflowCwd, undefined, {
           assistantConfig: { settingSources: ['project', 'user'] },
           nodeConfig: { nodeId: 'no-sources', skills: ['disabled'], settingSources: [] },
+        })) {
+          // consume
+        }
+      };
+
+      await expect(consume()).rejects.toThrow(/effective settingSources currently enables none/);
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+
+    test('assistant-level empty settingSources rejects every declared workflow skill', async () => {
+      stageClaudeSkill('assistant-disabled');
+
+      const consume = async (): Promise<void> => {
+        for await (const _ of client.sendQuery('test', workflowCwd, undefined, {
+          assistantConfig: { settingSources: [] },
+          nodeConfig: { nodeId: 'assistant-no-sources', skills: ['assistant-disabled'] },
         })) {
           // consume
         }

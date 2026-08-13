@@ -446,7 +446,8 @@ interface ProviderWarning {
 
 /**
  * Translate nodeConfig into Claude SDK-specific options.
- * Called inside sendQuery when nodeConfig is present (workflow path).
+ * Called inside sendQuery when nodeConfig is present. A non-empty nodeId marks
+ * the workflow path; partial non-workflow configs keep ambient SDK behavior.
  * Returns structured warnings that the caller should yield as system chunks.
  */
 async function applyNodeConfig(

@@ -72,13 +72,12 @@ Claude SDK options:
   skills: ["remotion-best-practices"]
   strictMcpConfig: true
   ↓
-SDK advertises only that declared skill to the model
-  ↓
-Agent invokes the skill progressively through the Skill tool
+SDK loads only the declared skill into the main-session system prompt
 ```
 
-The `Skill` tool is automatically added to `allowedTools` so the agent can invoke
-skills. You don't need to add it manually.
+The SDK's native selection also uses `Skill(name)` permission rules. When a node
+sets `allowed_tools`, Archon keeps the `Skill` tool enabled automatically so the
+declared selection remains usable. You don't need to add it manually.
 
 On Claude, omission and `skills: []` both select no skills. A non-empty list is
 an exact allowlist of installed Claude-native skills for that node. The separate
@@ -213,8 +212,8 @@ A node can have multiple skills. All are injected:
       - api-design
 ```
 
-Keep the list concise. Claude first receives declared skill metadata and loads the
-selected `SKILL.md` through its Skill tool when needed.
+Keep the list concise. Claude loads each selected skill into the main-session
+system prompt; unlisted installed skills are not exposed to that workflow node.
 
 ## Combining Skills with MCP
 
