@@ -44,7 +44,13 @@ nodes:
 ```
 
 For Codex, also invoke the skill explicitly in the node body, preferably in a named
-command file:
+command file. First install it into Codex's native `.agents/skills/` root:
+
+```bash
+npx skills add remotion-dev/skills --agent codex --skill remotion-best-practices -y
+```
+
+Then invoke it from the workflow body:
 
 ```markdown
 Use $remotion-best-practices to create the requested video.
