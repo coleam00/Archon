@@ -210,6 +210,32 @@ function buildCodexMcpConfigOverrides(
   return { mcp_servers: mcpServers };
 }
 
+function isWorkflowNode(requestOptions?: SendQueryOptions): boolean {
+  const nodeId = requestOptions?.nodeConfig?.nodeId;
+  return typeof nodeId === 'string' && nodeId.trim().length > 0;
+}
+
+function withWorkflowSkillCatalogDisabled(config?: CodexConfigOverrides): CodexConfigOverrides {
+  return {
+    ...(config ?? {}),
+    skills: { include_instructions: false },
+  };
+}
+
+function isWorkflowSkillCatalogConfigUnsupported(errorMessage: string): boolean {
+  const normalized = errorMessage.toLowerCase();
+  const namesCatalogSetting =
+    normalized.includes('skills.include_instructions') ||
+    normalized.includes('include_instructions');
+  const isConfigRejection =
+    normalized.includes('config') ||
+    normalized.includes('unknown field') ||
+    normalized.includes('unknown key') ||
+    normalized.includes('unrecognized') ||
+    normalized.includes('failed to parse');
+  return namesCatalogSetting && isConfigRejection;
+}
+
 // Maps slugs that ChatGPT-plan accounts now reject (previously shipped as Archon
 // suggestions/defaults) to a current, plan-accepted slug to suggest instead.
 const CODEX_MODEL_FALLBACKS: Record<string, string> = {
@@ -855,7 +881,7 @@ export class CodexProvider implements IAgentProvider {
     const assistantConfig = requestOptions?.assistantConfig ?? {};
     const codexConfig = parseCodexConfig(assistantConfig);
     const providerWarnings: ProviderWarning[] = [];
-    let codexConfigOverrides: CodexConfigOverrides | undefined;
+    let declaredMcpConfigOverrides: CodexConfigOverrides | undefined;
 
     if (requestOptions?.nodeConfig?.mcp) {
       const mcpPath = requestOptions.nodeConfig.mcp;
@@ -864,7 +890,7 @@ export class CodexProvider implements IAgentProvider {
         cwd,
         buildMcpEnvSource(requestOptions.env)
       );
-      codexConfigOverrides = buildCodexMcpConfigOverrides(servers);
+      declaredMcpConfigOverrides = buildCodexMcpConfigOverrides(servers);
       getLog().info({ serverNames, mcpPath }, 'codex.mcp_config_loaded');
       if (missingVars.length > 0) {
         const uniqueVars = [...new Set(missingVars)];
@@ -876,12 +902,17 @@ export class CodexProvider implements IAgentProvider {
       }
     }
 
+    const suppressWorkflowSkillCatalog = isWorkflowNode(requestOptions);
+    let codexConfigOverrides = suppressWorkflowSkillCatalog
+      ? withWorkflowSkillCatalogDisabled(declaredMcpConfigOverrides)
+      : declaredMcpConfigOverrides;
+
     for (const warning of providerWarnings) {
       yield { type: 'system', content: `⚠️ ${warning.message}` };
     }
 
     // 1. Initialize SDK and build thread options
-    const codex = await this.createCodexClient(
+    let codex = await this.createCodexClient(
       codexConfig.codexBinaryPath,
       requestOptions?.env,
       codexConfigOverrides
@@ -938,6 +969,7 @@ export class CodexProvider implements IAgentProvider {
     const { turnOptions, hasOutputFormat } = buildTurnOptions(requestOptions);
     const effectivePrompt = buildEffectivePrompt(prompt, requestOptions);
     let lastError: Error | undefined;
+    let skillCatalogCompatibilityFallbackUsed = false;
 
     for (let attempt = 0; attempt <= MAX_SUBPROCESS_RETRIES; attempt++) {
       if (requestOptions?.abortSignal?.aborted) {
@@ -979,7 +1011,56 @@ export class CodexProvider implements IAgentProvider {
 
         try {
           // 4. Run streamed turn
-          const result = await thread.runStreamed(effectivePrompt, turnOptions);
+          let result;
+          try {
+            result = await thread.runStreamed(effectivePrompt, turnOptions);
+          } catch (error) {
+            const err = error as Error;
+            if (
+              !suppressWorkflowSkillCatalog ||
+              skillCatalogCompatibilityFallbackUsed ||
+              !isWorkflowSkillCatalogConfigUnsupported(err.message)
+            ) {
+              throw error;
+            }
+
+            skillCatalogCompatibilityFallbackUsed = true;
+            codexConfigOverrides = declaredMcpConfigOverrides;
+            getLog().warn(
+              { err, nodeId: requestOptions?.nodeConfig?.nodeId },
+              'codex.workflow_skill_catalog_suppression_unsupported'
+            );
+            yield {
+              type: 'system',
+              content:
+                '⚠️ This Codex binary does not support suppressing the automatic skill catalog. Continuing with native skill discovery enabled.',
+            };
+
+            codex = await this.createCodexClient(
+              codexConfig.codexBinaryPath,
+              requestOptions?.env,
+              codexConfigOverrides
+            );
+            if (resumeSessionId) {
+              try {
+                thread = codex.resumeThread(resumeSessionId, threadOptions);
+              } catch (resumeError) {
+                getLog().error(
+                  { err: resumeError, sessionId: resumeSessionId },
+                  'resume_thread_failed'
+                );
+                thread = codex.startThread(threadOptions);
+                sessionResumeFailed = true;
+                yield {
+                  type: 'system',
+                  content: '⚠️ Could not resume previous session. Starting fresh conversation.',
+                };
+              }
+            } else {
+              thread = codex.startThread(threadOptions);
+            }
+            result = await thread.runStreamed(effectivePrompt, turnOptions);
+          }
 
           // 5. Stream normalized events (fresh state per attempt to avoid dedup leaks)
           yield* withResumedOutcome(

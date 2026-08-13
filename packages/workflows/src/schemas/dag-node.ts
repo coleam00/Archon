@@ -184,10 +184,7 @@ export const dagNodeBaseSchema = z.object({
   retry: stepRetryConfigSchema.optional(),
   hooks: workflowNodeHooksSchema.optional(),
   mcp: z.string().min(1, "'mcp' must be a non-empty string path").optional(),
-  skills: z
-    .array(z.string().min(1, 'each skill must be a non-empty string'))
-    .nonempty("'skills' must be a non-empty array")
-    .optional(),
+  skills: z.array(z.string().min(1, 'each skill must be a non-empty string')).optional(),
   agents: z
     .record(z.string(), agentDefinitionSchema)
     // Validate agent-id keys in a superRefine rather than via a regex on the

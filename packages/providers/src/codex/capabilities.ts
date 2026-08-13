@@ -4,7 +4,10 @@ export const CODEX_CAPABILITIES: ProviderCapabilities = {
   sessionResume: true,
   mcp: true,
   hooks: false,
-  skills: true, // filesystem autodiscovery from .agents/skills/ — not per-node injection; nodeConfig.skills is ignored
+  // Codex has native filesystem skills, but does not implement Archon's per-node
+  // `skills:` list. Workflow nodes suppress the automatic catalog and authors
+  // invoke installed skills explicitly with `$skill-name` in the node body.
+  skills: false,
   agents: false,
   toolRestrictions: false,
   structuredOutput: 'enforced', // SDK outputSchema grammar-constrains decoding

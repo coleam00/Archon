@@ -1040,4 +1040,19 @@ describe('validateWorkflowResources — skills search roots', () => {
     const issues = await validateWorkflowResources(skillsWorkflow('empty-skill'), tmpDir);
     expect(missingSkillWarnings(issues)).toHaveLength(1);
   });
+
+  test('Codex warns about unsupported YAML skills without four-root validation', async () => {
+    await stageSkill(tmpDir, '.claude', 'claude-only');
+    const workflow = makeWorkflow(
+      'test',
+      [{ id: 'step1', prompt: 'do work', skills: ['claude-only'] } as unknown as DagNode],
+      'codex'
+    );
+
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    expect(missingSkillWarnings(issues)).toHaveLength(0);
+    const warning = issues.find(issue => issue.level === 'warning' && issue.field === 'skills');
+    expect(warning?.message).toContain("not supported by provider 'codex'");
+    expect(warning?.hint).toContain('$skill-name');
+  });
 });

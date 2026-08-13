@@ -590,40 +590,49 @@ export async function validateWorkflowResources(
 
     // --- Skills nodes: check skill directories exist ---
     if ('skills' in node && Array.isArray(node.skills)) {
-      const searchRoots = skillSearchRoots(cwd);
-      for (const skillName of node.skills) {
-        let found = false;
-        for (const root of searchRoots) {
-          const skillPath = join(root, skillName, 'SKILL.md');
-          if (await fileExists(skillPath)) {
-            found = true;
-            break;
-          }
-        }
+      const providerCaps =
+        provider && isRegisteredProvider(provider) ? getProviderCapabilities(provider) : undefined;
 
-        if (!found) {
-          issues.push({
-            level: 'warning',
-            nodeId: node.id,
-            field: 'skills',
-            message: `Skill '${skillName}' not found in .agents/skills/ or .claude/skills/ (project or user scope)`,
-            hint: `Install with: npx skills add <repo> — or create manually at .agents/skills/${skillName}/SKILL.md`,
-          });
+      // Only validate filesystem names when the provider actually consumes the
+      // YAML list. In particular, Codex's native roots/metadata rules do not
+      // match Archon's shared four-root resolver, so accepting a `.claude`
+      // match here would falsely imply that Codex can invoke it.
+      if (providerCaps?.skills !== false) {
+        const searchRoots = skillSearchRoots(cwd);
+        for (const skillName of node.skills) {
+          let found = false;
+          for (const root of searchRoots) {
+            const skillPath = join(root, skillName, 'SKILL.md');
+            if (await fileExists(skillPath)) {
+              found = true;
+              break;
+            }
+          }
+
+          if (!found) {
+            issues.push({
+              level: 'warning',
+              nodeId: node.id,
+              field: 'skills',
+              message: `Skill '${skillName}' not found in .agents/skills/ or .claude/skills/ (project or user scope)`,
+              hint: `Install with: npx skills add <repo> — or create manually at .agents/skills/${skillName}/SKILL.md`,
+            });
+          }
         }
       }
 
       // Warn if using skills with a provider that doesn't support them
-      if (provider && isRegisteredProvider(provider)) {
-        const caps = getProviderCapabilities(provider);
-        if (!caps.skills) {
-          issues.push({
-            level: 'warning',
-            nodeId: node.id,
-            field: 'skills',
-            message: `Skills are not supported by provider '${provider}' — this will be ignored`,
-            hint: 'Remove the skills field or switch to a provider that supports skills',
-          });
-        }
+      if (providerCaps?.skills === false && node.skills.length > 0) {
+        issues.push({
+          level: 'warning',
+          nodeId: node.id,
+          field: 'skills',
+          message: `The skills field is not supported by provider '${provider}' — this will be ignored`,
+          hint:
+            provider === 'codex'
+              ? 'Invoke an installed Codex skill explicitly in the command or prompt with $skill-name'
+              : 'Remove the skills field or switch to a provider that supports skills',
+        });
       }
     }
 

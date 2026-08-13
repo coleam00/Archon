@@ -86,13 +86,6 @@ const SKIP_KEYS = new Set<keyof ProviderCapabilities>(['knownToolNames', 'rename
  */
 const CAVEATS: readonly { provider: string; key: keyof ProviderCapabilities; note: string }[] = [
   {
-    provider: 'codex',
-    key: 'skills',
-    note:
-      'Filesystem auto-discovery from `.agents/skills/` — per-node `skills:` lists are ' +
-      'informational; use `provider: claude` for node-scoped skills.',
-  },
-  {
     provider: 'opencode',
     key: 'agents',
     note:

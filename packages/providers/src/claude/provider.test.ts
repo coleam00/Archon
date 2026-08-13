@@ -2100,6 +2100,23 @@ describe('sendQuery decomposition behaviors', () => {
       expect(callArgs.options.agent).toBeUndefined();
     });
 
+    test('treats an empty skills list like omission without creating a wrapper agent', async () => {
+      mockQuery.mockImplementation(async function* () {
+        yield { type: 'result', session_id: 'sid' };
+      });
+
+      for await (const _ of client.sendQuery('test', '/workspace', undefined, {
+        nodeConfig: { skills: [] },
+      })) {
+        // consume
+      }
+
+      const callArgs = mockQuery.mock.calls[0][0] as { options: Record<string, unknown> };
+      expect(callArgs.options.agent).toBeUndefined();
+      expect(callArgs.options.agents).toBeUndefined();
+      expect(callArgs.options.allowedTools).toBeUndefined();
+    });
+
     test('merges inline agents with skills wrapper; user wins on ID collision', async () => {
       mockQuery.mockImplementation(async function* () {
         yield { type: 'result', session_id: 'sid' };

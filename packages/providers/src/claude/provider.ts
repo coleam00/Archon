@@ -519,7 +519,7 @@ async function applyNodeConfig(
   }
 
   // skills → AgentDefinition wrapping
-  if (nodeConfig.skills) {
+  if (nodeConfig.skills && nodeConfig.skills.length > 0) {
     const skills = nodeConfig.skills;
     const agentId = 'dag-node-skills';
     const agentDef: {

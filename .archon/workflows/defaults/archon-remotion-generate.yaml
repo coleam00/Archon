@@ -36,6 +36,8 @@ nodes:
 
       $ARGUMENTS
 
+      Use $remotion-best-practices for the implementation.
+
       Rules:
       - Use useCurrentFrame() and interpolate()/spring() for ALL animations
       - Never use CSS transitions, Math.random(), setTimeout, or Date.now()

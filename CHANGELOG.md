@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Codex workflow nodes no longer advertise ambient skills automatically.** Workflow commands and prompts now invoke installed Codex skills explicitly with `$skill-name`; direct Codex chat is unchanged. This is a behavioral guard rather than filesystem isolation, and Codex MCP configuration remains additive to ambient servers. (#2498)
+
 ## [0.8.0] - 2026-08-06
 
 Run output moves out of the repository for good — see Breaking below before upgrading. Alongside it, workflow composition grows up: sub-run nodes can now fan out over a runtime list and take their own worktree, and include blocks accept parameters. Plus a batch of fixes for failures that were previously silent.

@@ -36,10 +36,10 @@ per-node YAML field for that provider; a ❌ means the field is accepted but ign
 | Capability | `claude` | `codex` | `opencode` | `pi` | `copilot` |
 | --- | --- | --- | --- | --- | --- |
 | Session resume | ✅ | ✅ | ✅ | ✅ | ✅ |
-| MCP servers (`mcp:`) | ✅ | ✅ | ✅ | ❌ | ✅ |
+| MCP servers (`mcp:`) | ✅ | ✅ | ❌ | ❌ | ✅ |
 | Hooks (`hooks:`) | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Skills (`skills:`) | ✅ | ✅¹ | ✅ | ✅ | ✅ |
-| Inline sub-agents (`agents:`) | ✅ | ❌ | ✅² | ❌ | ✅ |
+| Skills (`skills:`) | ✅ | ❌ | ❌ | ✅ | ✅ |
+| Inline sub-agents (`agents:`) | ✅ | ❌ | ✅¹ | ❌ | ✅ |
 | Tool restrictions (`allowed_tools`/`denied_tools`) | ✅ | ❌ | ✅ | ✅ | ✅ |
 | Structured output (`output_format`) | **enforced** | **enforced** | **enforced** | best-effort | best-effort |
 | Env injection (`env:`) | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -54,8 +54,7 @@ per-node YAML field for that provider; a ❌ means the field is accepted but ign
 
 ## Caveats
 
-- ¹ `codex` — Skills (`skills:`) — Filesystem auto-discovery from `.agents/skills/` — per-node `skills:` lists are informational; use `provider: claude` for node-scoped skills.
-- ² `opencode` — Inline sub-agents (`agents:`) — Config-file-based agent selection (named agents from `opencode.json`) with per-call model/tools overrides — not inline sub-agent definitions.
+- ¹ `opencode` — Inline sub-agents (`agents:`) — Config-file-based agent selection (named agents from `opencode.json`) with per-call model/tools overrides — not inline sub-agent definitions.
 
 ## Legend
 

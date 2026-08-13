@@ -9,16 +9,17 @@ sidebar:
   order: 8
 ---
 
-DAG workflow nodes support a `skills` field that preloads named skills into the
-node's agent context. Each node gets specialized procedural knowledge — code review
-patterns, Remotion best practices, testing conventions — without polluting other nodes.
+DAG workflow nodes support a `skills` field for providers that can load named skills
+for one node. Each node can receive specialized procedural knowledge — code review
+patterns, Remotion practices, testing conventions — without advertising it to every
+other node.
 
-Skills work across providers, with two delivery models. Claude, Pi, OpenCode, and
-Copilot support **per-node** skill injection — only the skills listed on a node are
-loaded for that node (Claude injects them via the SDK's `AgentDefinition.skills`
-field). Codex instead auto-discovers skills from the filesystem (`.agents/skills/`),
-so every installed skill is available on every Codex node — the YAML `skills:` list
-is informational for Codex.
+Delivery is provider-specific. Claude, Pi, and Copilot consume the per-node list.
+Codex workflow nodes deliberately suppress Codex's automatic filesystem-skill catalog;
+authors invoke an installed skill explicitly in the command or prompt with
+`$skill-name`. OpenCode does not currently implement the top-level YAML field. Check
+the [provider capability matrix](/reference/provider-capabilities/) before relying on
+portable behavior.
 
 ## Quick Start
 
@@ -42,9 +43,15 @@ nodes:
       - remotion-best-practices
 ```
 
-That's it. The skill's content is injected into the agent's context when the node
-runs. The agent can reference the skill's knowledge (animation patterns, API usage,
-gotchas) without the user having to paste instructions into the prompt.
+For Codex, also invoke the skill explicitly in the node body, preferably in a named
+command file:
+
+```markdown
+Use $remotion-best-practices to create the requested video.
+```
+
+Codex then loads the original `SKILL.md` and resolves its relative references,
+scripts, and assets from the installed directory.
 
 ## How It Works
 
@@ -70,6 +77,12 @@ Agent executes with full skill knowledge available
 
 The `Skill` tool is automatically added to `allowedTools` so the agent can invoke
 skills. You don't need to add it manually.
+
+On Claude, `skills: []` is equivalent to omission and creates no wrapper agent.
+A non-empty list keeps the existing `AgentDefinition.skills` behavior. This does
+not change Claude's separate `settingSources` option: its default remains
+`['project', 'user']`, which can load project/user instructions and other SDK
+settings. This PR does not claim filesystem isolation for ambient Claude skills.
 
 ## Installing Skills
 
@@ -214,34 +227,40 @@ produce better results than either alone.
 
 ## Codex Compatibility
 
-Codex supports skills via filesystem auto-discovery from `<project>/.agents/skills/`
-(its canonical project-level skill path). After running `archon skill install` —
-or `archon setup`, which installs them automatically — both Claude Code and
-Codex pick up the bundled `archon` and `manage-run` skills with no further setup.
+Codex supports installed skills through native filesystem discovery from
+`<project>/.agents/skills/` and its user-level Codex roots. It does not natively
+discover `.claude/skills/`.
 
-Important differences vs Claude:
+For every Codex-backed workflow AI node, Archon disables the automatic skill catalog.
+This prevents description matching from spontaneously selecting an unrelated ambient
+skill. Direct Codex chat and other non-workflow calls keep their normal Codex behavior.
 
-- **Auto-discovery, not per-node injection** — Codex loads every skill present
-  under `.agents/skills/`. The `skills:` list in YAML is informational for
-  Codex nodes; Codex does not scope skills per node.
-- **No SDK-level skill activation** — Archon does not pass `skills:` to the
-  Codex SDK. Skills work entirely through filesystem discovery.
+- **Explicit invocation is required** — write `Use $skill-name to ...` in the
+  command file or prompt. Codex performs progressive disclosure and loads the
+  selected skill from its original directory.
+- **YAML `skills:` is not Codex activation** — a non-empty list does not re-enable
+  the automatic catalog, inject metadata, or create an exclusive allowlist. It is
+  ignored with a warning. Keep the list when another selected provider needs it,
+  but still write the explicit `$skill-name` invocation for Codex portability.
+- **Omission and `skills: []`** — both keep the automatic catalog off on Codex
+  workflow nodes. Exact-loading providers interpret `[]` as an empty declared set.
 - **SKILL.md format** — Codex parses the same `name`/`description` frontmatter
   as Claude Code. Any Claude-specific `!bash` execution lines in a skill body
   are treated as literal text by Codex (no error, no execution).
+- **Behavioral boundary, not filesystem security** — an explicit request for an
+  ambient `$skill-name` can still activate that installed skill. Archon prevents
+  automatic advertisement; it does not hide or move files.
+- **External future binaries** — if a Codex version rejects the catalog-suppression
+  config, Archon warns and continues with native discovery instead of rejecting the run.
 
-To opt out of a skill on Codex, remove it from `.agents/skills/`. To force
-per-node scoping, use `provider: claude` on the node — Claude honors the
-`skills:` list strictly.
+Normal repository instructions such as `AGENTS.md` remain active with the catalog off.
 
 ## Limitations
 
 - **Pre-installation required** — skills must exist on disk before the workflow runs.
   There is no on-demand fetching (yet).
-- **Per-node scoping is Claude-only** — Claude honors the YAML `skills:` list via
-  the SDK's `AgentDefinition.skills` field. Codex auto-discovers all installed
-  skills from `.agents/skills/`; for Codex the `skills:` list is informational
-  and every installed skill is available on every node.
+- **Provider semantics differ** — consult the capability matrix. Codex uses explicit
+  `$skill-name` invocation rather than YAML list injection.
 - **Full injection** — skill content is fully injected at startup, not progressively
   disclosed. Keep skills concise.
 - **No validation** — if a named skill doesn't exist, the SDK may fail silently.
@@ -252,7 +271,8 @@ per-node scoping, use `provider: claude` on the node — Claude honors the
 | Problem | Cause | Fix |
 |---------|-------|-----|
 | Skill not found | Not installed | Run `npx skills add <source>` (or `archon skill install` for the bundled Archon skills) |
-| Skill loads on wrong node | Codex auto-discovers all installed skills; the `skills:` list is informational for Codex | Use `provider: claude` to scope per-node, or remove the skill from `.agents/skills/` |
+| Codex does not use a skill | Automatic catalogs are off in workflow nodes | Invoke it explicitly in the command/prompt with `$skill-name` and install it under a Codex-native root such as `.agents/skills/` |
+| Codex warns about `skills:` | Codex does not implement the YAML list | Keep the list only for other providers; use `$skill-name` for Codex |
 | Too many skills | Context budget exceeded | Reduce to 2-3 most relevant skills per node |
 | Skill has no effect | Description too vague | Rewrite SKILL.md with specific, actionable instructions |
 

@@ -9,12 +9,13 @@ sidebar:
   order: 7
 ---
 
-DAG workflow nodes support a `mcp` field that attaches MCP (Model Context Protocol)
-servers to individual nodes. Each node gets exactly the external tools it needs —
-GitHub, Linear, Postgres, etc. — without over-provisioning.
+DAG workflow nodes support an `mcp` field that attaches MCP (Model Context Protocol)
+servers to individual nodes. On providers with a closed per-node configuration this
+limits the node to its declared external tools. Codex is an explicit exception: its
+SDK adds the declared servers to ambient configuration rather than replacing it.
 
-MCP works with Codex and Claude workflow nodes. Pi nodes still warn and ignore
-the `mcp` field.
+MCP works with Claude, Codex, and Copilot workflow nodes. Pi and OpenCode nodes
+currently warn and ignore the `mcp` field.
 
 ## Quick Start
 
@@ -220,6 +221,18 @@ when the workflow did not configure MCP itself — they're not actionable for th
 workflow author. They appear only in debug logs as
 `dag.mcp_plugin_connection_suppressed`. Run the CLI with `--verbose` (or set
 `LOG_LEVEL=debug` on the server) if you need to see them.
+
+### Codex ambient MCP limitation
+
+Codex's SDK applies node `mcp:` servers as additive configuration overrides. It
+does not replace the ambient user/project/plugin MCP catalog: with no node `mcp:`,
+ambient servers may remain available, and with a declared file, both ambient and
+declared servers may be present. `mcp_servers={}` does not clear inherited entries,
+and the current SDK has no wildcard/default global-off control.
+
+Archon therefore does not describe Codex `mcp:` as an exclusive tool boundary.
+It preserves runnable additive behavior and reports the limitation rather than
+mutating user configuration or rejecting the workflow.
 
 ## Workflow Examples
 
