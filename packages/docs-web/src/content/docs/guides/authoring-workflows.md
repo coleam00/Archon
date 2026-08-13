@@ -948,10 +948,13 @@ written the nodes by hand. There is no separate child run.
   `id: review` yields `review__verify-pr-base`, `review__sync`, `review__implement-fixes`,
   and so on. These namespaced ids are what appear in the event stream and in
   `archon workflow get <id>`.
-- **Edges.** Internal `depends_on` edges and `$id.output` references inside the block are
-  rewired to the namespaced ids automatically. The include node's own `depends_on` /
-  `when` / `trigger_rule` attach to the block's **entry** nodes (those with no upstream
-  inside the block).
+- **Edges.** Internal `depends_on` edges and `$id.output` references in inline node text are
+  rewired to the namespaced ids automatically. Named `command:` and `loop.command` files
+  remain external and cannot be rewritten; when a readable command body references a
+  top-level block node whose id will be namespaced, workflow loading fails. This best-effort
+  scan includes nested `loop_group` bodies; unresolved files warn and are skipped. The include
+  node's own `depends_on` / `when` / `trigger_rule` attach to the block's **entry** nodes
+  (those with no upstream inside the block).
 - **Sink asymmetry (a downstream node depending on the include).** A `depends_on:
   [<includeId>]` on a downstream node fans out to **all** of the block's sink nodes (every
   node with no dependents inside the block), so it waits for the whole block to finish.
