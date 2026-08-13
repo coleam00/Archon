@@ -316,6 +316,31 @@ function resolveIncludeInputs(
   }
 }
 
+/** structuredClone intentionally drops symbol keys; retain the engine-private compiled
+ * loop metadata while cloning a reusable child for another include level. */
+function cloneNodeForInclude(node: DagNode): DagNode {
+  const clone = structuredClone(node);
+  const preserveCompiledLoops = (source: DagNode, target: DagNode): void => {
+    if (isLoopNode(source) && isLoopNode(target)) {
+      const compiled = (source.loop as typeof source.loop & LoopWithCompiledCommand)[
+        COMPILED_LOOP_COMMAND
+      ];
+      if (compiled !== undefined) {
+        (target.loop as typeof target.loop & LoopWithCompiledCommand)[COMPILED_LOOP_COMMAND] =
+          structuredClone(compiled);
+      }
+    }
+    if (isLoopGroupNode(source) && isLoopGroupNode(target)) {
+      for (const [index, sourceChild] of source.loop_group.nodes.entries()) {
+        const targetChild = target.loop_group.nodes[index];
+        if (targetChild !== undefined) preserveCompiledLoops(sourceChild, targetChild);
+      }
+    }
+  };
+  preserveCompiledLoops(node, clone);
+  return clone;
+}
+
 /**
  * Inline one include node's fully-expanded child into namespaced parent nodes.
  * Never mutates the child's nodes (each node is deep-cloned first), so a building block
@@ -350,7 +375,7 @@ function inlineInclude(
 
   const namespaced = childNodes.map(cn => {
     const clone = materializeBlockCommandPrompts(
-      structuredClone(cn),
+      cloneNodeForInclude(cn),
       includeNode,
       child,
       commandContents,
@@ -543,6 +568,10 @@ function materializeBlockCommandPrompts(
   }
 
   if (isLoopNode(node) && node.loop.command !== undefined) {
+    const existing = (node.loop as typeof node.loop & LoopWithCompiledCommand)[
+      COMPILED_LOOP_COMMAND
+    ];
+    if (existing !== undefined) return node;
     const loop = { ...node.loop } as typeof node.loop & LoopWithCompiledCommand;
     loop[COMPILED_LOOP_COMMAND] = compile(node.loop.command);
     return { ...node, loop };

@@ -560,6 +560,33 @@ describe('expandWorkflowIncludes — nested', () => {
     expect(ids).toContain('outer__inner__x');
     expect(workflows.get('parent')!.nodes.some(n => 'include' in n)).toBe(false);
   });
+
+  test('preserves a compiled loop command across three-level composition', () => {
+    const leaf = wf('leaf-loop', [
+      { id: 'seed', bash: 'echo seed' },
+      {
+        id: 'repeat',
+        loop: { command: 'leaf-loop-command', until: 'DONE', max_iterations: 1 },
+        depends_on: ['seed'],
+      },
+    ]);
+    leaf.inputs = { context: { required: true } };
+    const middle = wf('middle-loop', [
+      { id: 'inner', include: 'leaf-loop', with: { context: 'bound value' } },
+    ]);
+    const parent = wf('parent', [{ id: 'outer', include: 'middle-loop' }]);
+
+    const { workflows, errors } = expandWorkflowIncludes(
+      mapOf(leaf, middle, parent),
+      new Map([['leaf-loop-command', 'Use $seed.output with $INPUTS.context and continue.']])
+    );
+
+    expect(errors).toHaveLength(0);
+    const repeat = nodeById(workflows.get('parent')!, 'outer__inner__repeat');
+    expect(compiledLoopPrompt(repeat)).toBe(
+      'Use $outer__inner__seed.output with bound value and continue.'
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
