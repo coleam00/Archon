@@ -117,6 +117,7 @@ export async function validateWorkflowsCommand(
         assistant: mergedConfig.assistant,
         aliases: mergedConfig.aliases,
         tiers: mergedConfig.tiers,
+        claudeSettingSources: mergedConfig.assistants.claude?.settingSources,
       },
       defaultProvider
     );

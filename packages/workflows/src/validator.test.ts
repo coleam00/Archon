@@ -1073,4 +1073,98 @@ describe('validateWorkflowResources — skills search roots', () => {
     expect(warning?.message).toContain("not supported by provider 'codex'");
     expect(warning?.hint).toContain('$skill-name');
   });
+
+  test('uses a node model alias provider for Claude skill validation', async () => {
+    const workflow = makeWorkflow(
+      'test',
+      [
+        {
+          id: 'step1',
+          prompt: 'do work',
+          model: '@claude-node',
+          skills: ['missing'],
+        } as unknown as DagNode,
+      ],
+      'codex'
+    );
+
+    const issues = await validateWorkflowResources(workflow, tmpDir, {
+      aliases: { '@claude-node': { provider: 'claude', model: 'sonnet' } },
+      assistant: 'codex',
+    });
+
+    const missing = missingSkillIssues(issues);
+    expect(missing).toHaveLength(1);
+    expect(missing[0].level).toBe('error');
+    expect(issues.some(issue => issue.message.includes("not supported by provider 'codex'"))).toBe(
+      false
+    );
+  });
+
+  test('uses a workflow model alias provider for inherited Codex skill warnings', async () => {
+    const workflow = {
+      ...skillsWorkflow('missing'),
+      model: '@codex-workflow',
+    } as WorkflowDefinition;
+
+    const issues = await validateWorkflowResources(workflow, tmpDir, {
+      aliases: { '@codex-workflow': { provider: 'codex', model: 'gpt-5.5' } },
+      assistant: 'claude',
+    });
+
+    expect(missingSkillIssues(issues)).toHaveLength(0);
+    expect(issues.some(issue => issue.message.includes("not supported by provider 'codex'"))).toBe(
+      true
+    );
+  });
+
+  test('Claude project-only settingSources rejects a user-only skill', async () => {
+    await stageSkill(fakeHome, '.claude', 'user-only');
+
+    const issues = await validateWorkflowResources(skillsWorkflow('user-only'), tmpDir, {
+      claudeSettingSources: ['project'],
+    });
+
+    expect(missingSkillIssues(issues)).toHaveLength(1);
+  });
+
+  test('Claude user-only node settingSources rejects a project-only skill', async () => {
+    await stageSkill(tmpDir, '.claude', 'project-only');
+    const workflow = makeWorkflow(
+      'test',
+      [
+        {
+          id: 'step1',
+          prompt: 'do work',
+          skills: ['project-only'],
+          settingSources: ['user'],
+        } as unknown as DagNode,
+      ],
+      'claude'
+    );
+
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+
+    expect(missingSkillIssues(issues)).toHaveLength(1);
+  });
+
+  test('Claude empty settingSources rejects every declared skill', async () => {
+    await stageSkill(tmpDir, '.claude', 'disabled');
+    const workflow = makeWorkflow(
+      'test',
+      [
+        {
+          id: 'step1',
+          prompt: 'do work',
+          skills: ['disabled'],
+          settingSources: [],
+        } as unknown as DagNode,
+      ],
+      'claude'
+    );
+
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+
+    expect(missingSkillIssues(issues)).toHaveLength(1);
+  });
 });

@@ -2255,6 +2255,61 @@ describe('sendQuery decomposition behaviors', () => {
       expect(options.skills).toEqual(['custom-skill']);
     });
 
+    test('rejects a user-only skill when effective settingSources is project-only', async () => {
+      const configDir = join(workflowCwd, 'project-only-config');
+      const skillDir = join(configDir, 'skills', 'user-only');
+      mkdirSync(skillDir, { recursive: true });
+      writeFileSync(join(skillDir, 'SKILL.md'), '# user only\n');
+
+      const consume = async (): Promise<void> => {
+        for await (const _ of client.sendQuery('test', workflowCwd, undefined, {
+          env: { CLAUDE_CONFIG_DIR: configDir },
+          assistantConfig: { settingSources: ['project'] },
+          nodeConfig: { nodeId: 'project-only', skills: ['user-only'] },
+        })) {
+          // consume
+        }
+      };
+
+      await expect(consume()).rejects.toThrow(/enabled Claude-native skill directory/);
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+
+    test('rejects a project-only skill when per-node settingSources is user-only', async () => {
+      stageClaudeSkill('project-only');
+
+      const consume = async (): Promise<void> => {
+        for await (const _ of client.sendQuery('test', workflowCwd, undefined, {
+          nodeConfig: {
+            nodeId: 'user-only',
+            skills: ['project-only'],
+            settingSources: ['user'],
+          },
+        })) {
+          // consume
+        }
+      };
+
+      await expect(consume()).rejects.toThrow(/enabled Claude-native skill directory/);
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+
+    test('rejects every declared skill when effective settingSources is empty', async () => {
+      stageClaudeSkill('disabled');
+
+      const consume = async (): Promise<void> => {
+        for await (const _ of client.sendQuery('test', workflowCwd, undefined, {
+          assistantConfig: { settingSources: ['project', 'user'] },
+          nodeConfig: { nodeId: 'no-sources', skills: ['disabled'], settingSources: [] },
+        })) {
+          // consume
+        }
+      };
+
+      await expect(consume()).rejects.toThrow(/effective settingSources currently enables none/);
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+
     test('container workflows fail before spend for a host user-only skill', async () => {
       mockQuery.mockImplementation(async function* () {
         yield { type: 'result', session_id: 'sid' };
@@ -2278,7 +2333,7 @@ describe('sendQuery decomposition behaviors', () => {
       }
 
       expect(error).toBeInstanceOf(Error);
-      expect((error as Error).message).toContain('container workflows');
+      expect((error as Error).message).toContain('Container workflows');
       expect((error as Error).message).toContain('project-local .claude/skills/');
       expect(mockQuery).not.toHaveBeenCalled();
     });

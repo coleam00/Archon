@@ -188,6 +188,11 @@ without a `tiers:` block. Other providers must configure any tier they use, or r
 
 Controls which sources the Claude Agent SDK discovers during sessions — `CLAUDE.md`, skills, commands, agents, and hooks. In workflow nodes, discovery does not activate ambient skills: the node's `skills:` list remains the exact active set, and omission/`[]` selects none.
 
+A declared skill must be installed under a source that remains enabled. For example,
+`settingSources: ['project']` cannot select a user-global skill, and
+`settingSources: []` requires `skills` to be omitted or empty. Archon rejects that
+mismatch before provider spend.
+
 | Value | Description |
 |-------|-------------|
 | `project` | Load project-level `<cwd>/.claude/` (CLAUDE.md, skills, commands, agents) |

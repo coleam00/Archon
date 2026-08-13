@@ -51,7 +51,7 @@ import type { WorkflowDefinition, DagNode, WorkflowSource } from './schemas';
 import type { ScriptRuntime } from './script-discovery';
 import { discoverScriptsForCwd } from './script-discovery';
 import { isInlineScript } from './executor-shared';
-import { buildAiProfile, resolveModelSpec } from './model-validation';
+import { buildAiProfile, isLiteralSpec, resolveModelSpec } from './model-validation';
 import { getPackagedResourceDirectory, parsePackagedResourceReference } from './packaged-workflow';
 import type { RawAliasesConfig, RawTiersConfig, ResolvedAiProfile } from './model-validation';
 
@@ -106,6 +106,7 @@ export interface ValidationConfig {
   assistant?: string;
   aliases?: RawAliasesConfig;
   tiers?: RawTiersConfig;
+  claudeSettingSources?: ('project' | 'user')[];
 }
 
 // Levenshtein distance and fuzzy matching now live in ./utils/fuzzy-match so lean
@@ -331,6 +332,24 @@ function resolveProvider(
   return workflowProvider ?? defaultProvider;
 }
 
+function resolveValidationProvider(
+  node: DagNode,
+  workflowProvider: string | undefined,
+  defaultProvider: string | undefined,
+  aiProfile: ResolvedAiProfile | undefined
+): string | undefined {
+  let provider = resolveProvider(node, workflowProvider, defaultProvider);
+  if (!aiProfile || !('model' in node) || !node.model) return provider;
+
+  try {
+    const modelSpec = resolveModelSpec(aiProfile, node.model);
+    if (!isLiteralSpec(modelSpec)) provider = modelSpec.provider;
+  } catch {
+    // validateModelRef reports the actionable model error separately.
+  }
+  return provider;
+}
+
 /**
  * Bundled workflow definitions, parsed once and cached (#2470). Used only by the
  * bundled-set-only `workflow:` target check below — a bundled workflow's sub-run target
@@ -409,6 +428,18 @@ export async function validateWorkflowResources(
   }
   if (workflow.model) validateModelRef(workflow.model);
 
+  let effectiveWorkflowProvider = workflow.provider ?? defaultProvider;
+  if (workflow.model && aiProfile) {
+    try {
+      const workflowModelSpec = resolveModelSpec(aiProfile, workflow.model);
+      if (!isLiteralSpec(workflowModelSpec)) {
+        effectiveWorkflowProvider = workflowModelSpec.provider;
+      }
+    } catch {
+      // validateModelRef reports the actionable model error separately.
+    }
+  }
+
   // Flatten top-level nodes plus every loop_group body (recursing into nested
   // loop_groups) so resource checks (commands, mcp, skills, scripts) validate
   // body nodes too. ID-uniqueness/cycle checks are the loader's job; the validator
@@ -431,7 +462,12 @@ export async function validateWorkflowResources(
     // parseWorkflow, not this resource pass). Kept so a future raw caller can't crash here.
     if (isIncludeNode(node)) continue;
 
-    const provider = resolveProvider(node, workflow.provider, defaultProvider);
+    const provider = resolveValidationProvider(
+      node,
+      effectiveWorkflowProvider,
+      defaultProvider,
+      aiProfile
+    );
     const providerCaps =
       provider && isRegisteredProvider(provider) ? getProviderCapabilities(provider) : undefined;
 
@@ -599,8 +635,17 @@ export async function validateWorkflowResources(
       // match Archon's shared four-root resolver, so accepting a `.claude`
       // match here would falsely imply that Codex can invoke it.
       if (providerCaps?.skills !== false) {
+        const settingSources =
+          'settingSources' in node && node.settingSources !== undefined
+            ? node.settingSources
+            : (config?.claudeSettingSources ?? ['project', 'user']);
         const searchRoots =
-          provider === 'claude' ? claudeSkillSearchRoots(cwd) : skillSearchRoots(cwd);
+          provider === 'claude'
+            ? claudeSkillSearchRoots(cwd, {
+                includeProject: settingSources.includes('project'),
+                includeUser: settingSources.includes('user'),
+              })
+            : skillSearchRoots(cwd);
         for (const skillName of node.skills) {
           let found = false;
           for (const root of searchRoots) {

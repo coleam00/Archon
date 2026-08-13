@@ -195,4 +195,12 @@ describe('resolveClaudeSkillDirectories', () => {
       missing: ['user-only'],
     });
   });
+
+  test('can exclude project skills when project settings are disabled', () => {
+    fake.stageSkill('cwd', '.claude', 'project-only');
+
+    expect(
+      resolveClaudeSkillDirectories(fake.cwd, ['project-only'], { includeProject: false })
+    ).toEqual({ paths: [], missing: ['project-only'] });
+  });
 });

@@ -453,7 +453,12 @@ async function applyNodeConfig(
   options: Options,
   nodeConfig: NodeConfig,
   cwd: string,
-  skillSearch: { userConfigDir?: string; includeUser: boolean }
+  skillSearch: {
+    userConfigDir?: string;
+    includeProject: boolean;
+    includeUser: boolean;
+    isContainer: boolean;
+  }
 ): Promise<ProviderWarning[]> {
   const warnings: ProviderWarning[] = [];
   const isWorkflowNode =
@@ -468,11 +473,19 @@ async function applyNodeConfig(
     if (nodeConfig.skills && nodeConfig.skills.length > 0) {
       const { missing } = resolveClaudeSkillDirectories(cwd, nodeConfig.skills, skillSearch);
       if (missing.length > 0) {
-        const installLocation = skillSearch.includeUser
-          ? '.claude/skills/ in the project or effective Claude config directory'
-          : 'the project-local .claude/skills/ directory (container workflows cannot use host user-global skills)';
+        const enabledRoots = [
+          ...(skillSearch.includeProject ? ['project-local .claude/skills/'] : []),
+          ...(skillSearch.includeUser ? ['the effective Claude config directory skills/'] : []),
+        ];
+        const installLocation =
+          enabledRoots.length > 0
+            ? enabledRoots.join(' or ')
+            : 'an enabled Claude setting source (effective settingSources currently enables none)';
+        const containerNote = skillSearch.isContainer
+          ? ' Container workflows cannot use host user-global skills.'
+          : '';
         throw new Error(
-          `Claude skill${missing.length === 1 ? '' : 's'} not found in a Claude-native skill directory: ${missing.join(', ')}. Install ${missing.length === 1 ? 'it' : 'them'} under ${installLocation}.`
+          `Claude skill${missing.length === 1 ? '' : 's'} not found in an enabled Claude-native skill directory: ${missing.join(', ')}. Install ${missing.length === 1 ? 'it' : 'them'} under ${installLocation}.${containerNote}`
         );
       }
     }
@@ -687,7 +700,8 @@ function buildBaseClaudeOptions(
   stderrLines: string[],
   toolResultQueue: ToolResultEntry[],
   env: NodeJS.ProcessEnv,
-  cliPath: string | undefined
+  cliPath: string | undefined,
+  settingSources: ('project' | 'user')[]
 ): Options {
   const isJsExecutable = shouldPassNoEnvFile(cliPath);
   getLog().debug({ cliPath: cliPath ?? null, isJsExecutable }, 'claude.subprocess_env_file_flag');
@@ -738,8 +752,7 @@ function buildBaseClaudeOptions(
     systemPrompt: requestOptions?.systemPrompt ?? { type: 'preset', preset: 'claude_code' },
     // Per-node override wins over the assistant-level default; the final
     // fallback stays ['project', 'user'] (the SDK-loading default Archon ships).
-    settingSources: requestOptions?.nodeConfig?.settingSources ??
-      assistantDefaults.settingSources ?? ['project', 'user'],
+    settingSources,
     hooks: buildToolCaptureHooks(toolResultQueue),
     stderr: (data: string): void => {
       const output = data.trim();
@@ -1283,6 +1296,10 @@ export class ClaudeProvider implements IAgentProvider {
     // process.env never crosses the boundary (the isolation invariant); the host
     // path inherits the (already-cleaned) process env exactly as before.
     const env = buildRequestSubprocessEnv(requestOptions);
+    const settingSources =
+      requestOptions?.nodeConfig?.settingSources ??
+      assistantDefaults.settingSources ??
+      (['project', 'user'] as const);
 
     // Apply nodeConfig translation once (deterministic, not retry-dependent)
     // We need a throwaway Options to extract warnings from applyNodeConfig,
@@ -1291,7 +1308,9 @@ export class ClaudeProvider implements IAgentProvider {
     let nodeConfigWarnings: ProviderWarning[] = [];
     const skillSearch = {
       ...(env.CLAUDE_CONFIG_DIR ? { userConfigDir: env.CLAUDE_CONFIG_DIR } : {}),
-      includeUser: !isContainerRun,
+      includeProject: settingSources.includes('project'),
+      includeUser: !isContainerRun && settingSources.includes('user'),
+      isContainer: isContainerRun,
     };
     if (requestOptions?.nodeConfig) {
       const tempOptions: Options = {} as Options;
@@ -1337,7 +1356,8 @@ export class ClaudeProvider implements IAgentProvider {
         stderrLines,
         toolResultQueue,
         env,
-        resolvedCliPath
+        resolvedCliPath,
+        [...settingSources]
       );
 
       // 2. Apply nodeConfig translation (re-applied per attempt since options are fresh)

@@ -12,6 +12,8 @@ export interface ResolvedSkills {
 export interface ClaudeSkillSearchOptions {
   /** Effective Claude config directory. Defaults to CLAUDE_CONFIG_DIR or ~/.claude. */
   userConfigDir?: string;
+  /** Whether Claude is configured to load project settings. */
+  includeProject?: boolean;
   /** Container runs cannot see host user skills unless explicitly mounted. */
   includeUser?: boolean;
 }
@@ -22,7 +24,10 @@ export function claudeSkillSearchRoots(
   options: ClaudeSkillSearchOptions = {}
 ): string[] {
   const home = process.env.HOME ?? homedir();
-  const roots = [join(cwd, '.claude', 'skills')];
+  const roots: string[] = [];
+  if (options.includeProject !== false) {
+    roots.push(join(cwd, '.claude', 'skills'));
+  }
   if (options.includeUser !== false) {
     const userConfigDir =
       options.userConfigDir ?? process.env.CLAUDE_CONFIG_DIR ?? join(home, '.claude');

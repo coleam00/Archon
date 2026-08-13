@@ -83,7 +83,10 @@ skills. You don't need to add it manually.
 On Claude, omission and `skills: []` both select no skills. A non-empty list is
 an exact allowlist of installed Claude-native skills for that node. The separate
 `settingSources` default remains `['project', 'user']`, preserving project/user
-instructions and agents without making their ambient skills available.
+instructions and agents without making their ambient skills available. A declared
+skill must still live under an enabled source: project skills require `project`,
+user-global skills require `user`, and `settingSources: []` cannot be combined with
+a non-empty `skills:` list. Archon checks this before starting the provider.
 
 ## Installing Skills
 
@@ -152,7 +155,8 @@ Skills are discovered from these locations (via the default
 
 Set `assistants.claude.settingSources: ['project']` in `.archon/config.yaml`
 when you also want to exclude user-level instructions and agents. Skill selection
-itself remains exact per node regardless of this setting.
+itself remains exact per node, but a user-global declared skill is unavailable when
+the `user` source is disabled.
 
 Skills installed via `npx skills add` land in `.claude/skills/` by default.
 Use `-g` for global installation to `~/.claude/skills/`.
