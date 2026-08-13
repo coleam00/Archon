@@ -1028,8 +1028,10 @@ Canonical references are live even inside Markdown code fences and inline code b
 substitution is syntax-agnostic.
 
 Named `script:` files are different: they are opaque programs, not prompt templates. Archon
-does not scan or rewrite their source. They receive declared inputs through the documented
-`INPUTS_<UPPER_SNAKE>` environment variables.
+does not scan or rewrite their source. An `include:` may bind `$INPUTS` in the YAML `script:`
+selector, but flattening does not inject those values into the selected program's environment.
+The documented `INPUTS_<UPPER_SNAKE>` environment variables apply to `workflow:` sub-runs,
+whose concrete inputs are persisted in child-run metadata.
 
 ### Non-goals (Phase 1)
 
