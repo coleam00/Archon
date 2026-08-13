@@ -470,6 +470,9 @@ export function validateDagStructure(
       outputRefPattern.lastIndex = 0; // reset stateful g-flag regex before each new source string
       while ((m = outputRefPattern.exec(source.text)) !== null) {
         const refNodeId = m[1];
+        // `$INPUTS.name` is an input macro. In particular, `$INPUTS.output` also
+        // matches the canonical node-ref grammar, so the macro must take precedence.
+        if (refNodeId === 'INPUTS') continue;
         // Output refs (unlike depends_on) may also reach ENCLOSING-scope nodes: the
         // executor seeds a loop_group iteration's scoped output map with the outer
         // DAG's outputs, so `$outerNode.output` inside a body prompt is valid.

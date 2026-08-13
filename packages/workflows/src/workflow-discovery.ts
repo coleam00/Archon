@@ -436,7 +436,7 @@ async function resolveCommandContentForScan(
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
       if (err.code === 'ENOENT') return null;
-      return { path: commandPath, message: err.message };
+      return { path: commandPath, message: err.message, operation: 'read' };
     }
   }
 
@@ -455,9 +455,10 @@ async function resolveCommandContentForScan(
     let entries: Awaited<ReturnType<typeof archonPaths.findMarkdownFilesRecursive>>;
     try {
       entries = await archonPaths.findMarkdownFilesRecursive(dir, '', { maxDepth: 1 });
-    } catch {
-      // The scope itself could not be enumerated, so no candidate matched.
-      continue;
+    } catch (error) {
+      const err = error as NodeJS.ErrnoException;
+      if (err.code === 'ENOENT') continue;
+      return { path: dir, message: err.message, operation: 'inspect' };
     }
     const match = entries.find(e => e.commandName === commandName);
     if (!match) continue;
@@ -466,7 +467,7 @@ async function resolveCommandContentForScan(
       return await readFile(commandPath, 'utf-8');
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
-      return { path: commandPath, message: err.message };
+      return { path: commandPath, message: err.message, operation: 'read' };
     }
   }
 
@@ -481,9 +482,10 @@ async function resolveCommandContentForScan(
   let entries: Awaited<ReturnType<typeof archonPaths.findMarkdownFilesRecursive>>;
   try {
     entries = await archonPaths.findMarkdownFilesRecursive(defaultsDir, '', { maxDepth: 1 });
-  } catch {
-    // no app defaults dir
-    return null;
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    if (err.code === 'ENOENT') return null;
+    return { path: defaultsDir, message: err.message, operation: 'inspect' };
   }
   const match = entries.find(e => e.commandName === commandName);
   if (!match) return null;
@@ -492,7 +494,7 @@ async function resolveCommandContentForScan(
     return await readFile(commandPath, 'utf-8');
   } catch (error) {
     const err = error as NodeJS.ErrnoException;
-    return { path: commandPath, message: err.message };
+    return { path: commandPath, message: err.message, operation: 'read' };
   }
 }
 

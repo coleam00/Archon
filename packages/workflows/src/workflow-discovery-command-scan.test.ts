@@ -169,4 +169,61 @@ describe('discoverWorkflows — nested included command compilation', () => {
       }
     }
   );
+
+  test.skipIf(process.platform === 'win32')(
+    'fails closed when a higher-precedence command scope cannot be inspected',
+    async () => {
+      const cwd = await mkdtemp(join(tmpdir(), 'archon-workflow-discovery-'));
+      tempDirectories.push(cwd);
+      const workflowDir = join(cwd, '.archon', 'workflows');
+      const commandDir = join(cwd, '.archon', 'commands');
+      const archonHome = join(cwd, 'home');
+      const homeCommandDir = join(archonHome, 'commands');
+      await Promise.all([
+        mkdir(workflowDir, { recursive: true }),
+        mkdir(commandDir, { recursive: true }),
+        mkdir(homeCommandDir, { recursive: true }),
+      ]);
+      await writeFile(
+        join(workflowDir, 'block.yaml'),
+        JSON.stringify({
+          name: 'scope-error-block',
+          description: 'Scope inspection errors must not fall through',
+          nodes: [{ id: 'review', command: 'scope-error-command' }],
+        })
+      );
+      await writeFile(
+        join(workflowDir, 'parent.yaml'),
+        JSON.stringify({
+          name: 'parent',
+          description: 'Includes a command while the project scope is unreadable',
+          nodes: [{ id: 'inc', include: 'scope-error-block' }],
+        })
+      );
+      await writeFile(
+        join(homeCommandDir, 'scope-error-command.md'),
+        'HOME fallback must never execute.'
+      );
+      await chmod(commandDir, 0o000);
+
+      const originalArchonHome = process.env.ARCHON_HOME;
+      process.env.ARCHON_HOME = archonHome;
+      try {
+        const result = await discoverWorkflows(cwd, { loadDefaults: false });
+
+        expect(result.workflows.map(item => item.workflow.name)).not.toContain('parent');
+        const message = result.errors.find(error => error.filename === 'parent.yaml')?.error;
+        expect(message).toContain("included workflow 'scope-error-block'");
+        expect(message).toContain("node 'review'");
+        expect(message).toContain("command 'scope-error-command'");
+        expect(message).toContain(commandDir);
+        expect(message).toContain('could not inspect higher-precedence command scope');
+        expect(message).toContain('will not fall through');
+      } finally {
+        if (originalArchonHome === undefined) delete process.env.ARCHON_HOME;
+        else process.env.ARCHON_HOME = originalArchonHome;
+        await chmod(commandDir, 0o700);
+      }
+    }
+  );
 });

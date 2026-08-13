@@ -2275,6 +2275,46 @@ nodes:
       expect(result.workflows).toHaveLength(0);
     });
 
+    it('treats $INPUTS.output as a declared input macro before include expansion', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      await Promise.all([
+        writeFile(
+          join(workflowDir, 'input-output-block.yaml'),
+          `
+name: input-output-block
+description: Block with an input named output
+inputs:
+  output:
+    required: true
+nodes:
+  - id: review
+    prompt: "Review $INPUTS.output"
+`
+        ),
+        writeFile(
+          join(workflowDir, 'input-output-parent.yaml'),
+          `
+name: input-output-parent
+description: Includes the input output block
+nodes:
+  - id: inc
+    include: input-output-block
+    with:
+      output: bound-value
+`
+        ),
+      ]);
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(0);
+      const parent = result.workflows.find(
+        item => item.workflow.name === 'input-output-parent'
+      )?.workflow;
+      const review = parent?.nodes.find(node => node.id === 'inc__review');
+      expect(review && 'prompt' in review ? review.prompt : undefined).toBe('Review bound-value');
+    });
+
     it('should validate script/cancel/approval.message/until_bash refs at load time', async () => {
       const workflowDir = join(testDir, '.archon', 'workflows');
       await mkdir(workflowDir, { recursive: true });

@@ -534,8 +534,12 @@ function materializeBlockCommandPrompts(
   const compile = (commandName: string): CompiledLoopCommand => {
     const content = commandContents.get(commandName);
     if (isIncludeCommandReadError(content)) {
+      const failure =
+        content.operation === 'inspect'
+          ? `could not inspect higher-precedence command scope '${content.path}'`
+          : `matched '${content.path}' but could not be read`;
       return {
-        error: `Node '${includeNode.id}': included workflow '${child.name}' node '${nodePath}' command '${commandName}' matched '${content.path}' but could not be read: ${content.message}. Archon will not fall through to a lower-precedence command after a match.`,
+        error: `Node '${includeNode.id}': included workflow '${child.name}' node '${nodePath}' command '${commandName}' ${failure}: ${content.message}. Archon will not fall through to a lower-precedence command when a higher-precedence scope cannot be inspected or its matched file cannot be read.`,
       };
     }
     if (content === undefined || content === null) {
