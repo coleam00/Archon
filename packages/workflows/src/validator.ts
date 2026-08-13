@@ -107,6 +107,7 @@ export interface ValidationConfig {
   aliases?: RawAliasesConfig;
   tiers?: RawTiersConfig;
   claudeSettingSources?: ('project' | 'user')[];
+  claudeConfigDir?: string;
 }
 
 // Levenshtein distance and fuzzy matching now live in ./utils/fuzzy-match so lean
@@ -642,6 +643,7 @@ export async function validateWorkflowResources(
         const searchRoots =
           provider === 'claude'
             ? claudeSkillSearchRoots(cwd, {
+                ...(config?.claudeConfigDir ? { userConfigDir: config.claudeConfigDir } : {}),
                 includeProject: settingSources.includes('project'),
                 includeUser: settingSources.includes('user'),
               })

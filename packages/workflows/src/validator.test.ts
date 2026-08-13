@@ -1027,6 +1027,30 @@ describe('validateWorkflowResources — skills search roots', () => {
     expect(missingSkillIssues(issues)).toHaveLength(0);
   });
 
+  test('Claude accepts a user skill from the configured CLAUDE_CONFIG_DIR', async () => {
+    const configDir = join(fakeHome, 'custom-claude-config');
+    const skillDir = join(configDir, 'skills', 'custom-user-skill');
+    await mkdir(skillDir, { recursive: true });
+    await writeFile(join(skillDir, 'SKILL.md'), '# custom user skill\n');
+
+    const issues = await validateWorkflowResources(skillsWorkflow('custom-user-skill'), tmpDir, {
+      claudeConfigDir: configDir,
+    });
+
+    expect(missingSkillIssues(issues)).toHaveLength(0);
+  });
+
+  test('Claude rejects a HOME skill when configured CLAUDE_CONFIG_DIR replaces user scope', async () => {
+    await stageSkill(fakeHome, '.claude', 'home-only');
+    const configDir = join(fakeHome, 'empty-custom-claude-config');
+
+    const issues = await validateWorkflowResources(skillsWorkflow('home-only'), tmpDir, {
+      claudeConfigDir: configDir,
+    });
+
+    expect(missingSkillIssues(issues)).toHaveLength(1);
+  });
+
   test('Claude reports an error when the skill exists in neither native root', async () => {
     const issues = await validateWorkflowResources(skillsWorkflow('nonexistent-skill'), tmpDir);
     const missing = missingSkillIssues(issues);
