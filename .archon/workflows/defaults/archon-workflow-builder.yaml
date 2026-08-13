@@ -144,7 +144,7 @@ nodes:
           # Use for deterministic data transforms the shell would mangle (JSON parsing, etc.)
           script: |
             // JSON is valid JS expression syntax — assign directly (String.raw breaks on backticks)
-            const data = $other-node.output;
+            const data = $<other-node>.output;
             console.log(JSON.stringify({ count: data.items.length }));
           runtime: bun                       # required: 'bun' (.ts/.js) or 'uv' (.py)
           # deps: [requests]                 # uv only
@@ -199,10 +199,10 @@ nodes:
       5. Use `bash` nodes for deterministic shell operations (file checks, git commands, installs)
       6. Use `script` nodes for typed data transforms (TypeScript JSON parsing, Python with deps)
          — stdout is captured as output, stderr is forwarded as a warning.
-         `$nodeId.output` is NOT shell-quoted in script bodies.
-         - **TypeScript/bun**: assign directly — `const data = $nodeId.output;`
+         `$<node-id>.output` is NOT shell-quoted in script bodies.
+         - **TypeScript/bun**: assign directly — `const data = $<node-id>.output;`
            (JSON is valid JS expression syntax; avoid String.raw — it breaks on backticks)
-         - **Python/uv**: use json.loads — `import json; data = json.loads("""$nodeId.output""")`
+         - **Python/uv**: use json.loads — `import json; data = json.loads("""$<node-id>.output""")`
          Never interpolate into shell syntax.
       7. Use `prompt` nodes for AI reasoning tasks
       8. Use `approval` nodes to pause for human review at risky gates (plan→execute boundary, destructive actions)

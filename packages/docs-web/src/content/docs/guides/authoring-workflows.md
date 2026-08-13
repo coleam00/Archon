@@ -948,13 +948,13 @@ written the nodes by hand. There is no separate child run.
   `id: review` yields `review__verify-pr-base`, `review__sync`, `review__implement-fixes`,
   and so on. These namespaced ids are what appear in the event stream and in
   `archon workflow get <id>`.
-- **Edges.** Internal `depends_on` edges and `$id.output` references in inline node text are
-  rewired to the namespaced ids automatically. Named `command:` and `loop.command` files
-  remain external and cannot be rewritten; when a readable command body references a
-  top-level block node whose id will be namespaced, workflow loading fails. This best-effort
-  scan includes nested `loop_group` bodies; unresolved files warn and are skipped. The include
-  node's own `depends_on` / `when` / `trigger_rule` attach to the block's **entry** nodes
-  (those with no upstream inside the block).
+- **Edges and command bodies.** Internal `depends_on` edges and `$id.output` references are
+  rewired to the namespaced ids automatically. This includes named `command:` and
+  `loop.command` files: discovery resolves their bodies and compiles them into the flat DAG
+  before namespacing. Compilation recurses through nested `loop_group` bodies. An unresolved
+  included command is a load error because its references cannot otherwise be proven safe.
+  The include node's own `depends_on` / `when` / `trigger_rule` attach to the block's
+  **entry** nodes (those with no upstream inside the block).
 - **Sink asymmetry (a downstream node depending on the include).** A `depends_on:
   [<includeId>]` on a downstream node fans out to **all** of the block's sink nodes (every
   node with no dependents inside the block), so it waits for the whole block to finish.
@@ -1006,21 +1006,24 @@ Substitution applies everywhere the value could reach the model or the shell, in
 inside Markdown code fences and inline code spans — `$INPUTS.<name>` has no
 documentation-only meaning, so a fenced occurrence is still a live parameter.
 
-#### Command bodies cannot use include inputs
+#### Command bodies use the same explicit interface
 
-Phase 1 cannot parameterize a `command:` file or `loop.command` file used by an included
-block. Command bodies are read at execution time, after load-time include expansion has
-finished. When such a file can be read at load time and contains `$INPUTS.<name>` anywhere —
-including inside a code fence — workflow loading fails with a message directing you to inline
-the prompt text. Use an inline `prompt:` when the block needs include inputs.
+Named `command:` and `loop.command` files are the preferred home for substantial prompts and
+can use both workflow-local `$node.output` references and declared `$INPUTS.<name>` values.
+For an `include:`, Archon resolves and snapshots the command body during load-time composition,
+then applies the same input binding and node-id namespacing as an inline prompt. The authored
+workflow stays command-first; the executor receives a deterministic flat DAG.
 
-This check is best-effort, so a clean load is not a guarantee. It covers `command:` and
-`loop.command` files throughout the block, including nested `loop_group` bodies. A command
-file that cannot be resolved at load time is logged as a warning and skipped rather than
-failing the workflow. This restriction applies to `include:`
-only — a `workflow:` sub-run's named inputs **do** reach `command:` bodies, because they
-resolve at runtime rather than at load time (see the binding-time table in
-[Workflow Signature](#workflow-signature-inputs-returns-and-inputs)).
+Every live reference in the command body must belong to the included workflow's lexical node
+scope. A direct `$caller.output` reference is rejected whether or not the parent happens to
+have a node called `caller`; declare an input and pass it with `with:` instead. Failure to
+resolve or read an included command is also a load error, not a warning or best-effort check.
+Canonical references are live even inside Markdown code fences and inline code because runtime
+substitution is syntax-agnostic.
+
+Named `script:` files are different: they are opaque programs, not prompt templates. Archon
+does not scan or rewrite their source. They receive declared inputs through the documented
+`INPUTS_<UPPER_SNAKE>` environment variables.
 
 ### Non-goals (Phase 1)
 
@@ -1088,12 +1091,13 @@ which surfaces can read it:
 
 | Caller | When `$INPUTS` resolves | Reaches `prompt:`/`bash:`/`script:` | Reaches `command:` file bodies |
 |--------|-------------------------|-------------------------------------|--------------------------------|
-| `include:` | **Load time** (the block is inlined; values are spliced into node text) | Yes | **No** — a command file is read after expansion, so `$INPUTS` in one is a load error |
+| `include:` | **Load time** (the block and command bodies are compiled into the flat DAG) | Yes | **Yes** — resolved command bodies receive the same input binding before execution |
 | `workflow:` sub-run | **Runtime** (values become `$INPUTS` variables on the child run) | Yes | **Yes** — every child node flows through runtime substitution |
 
-That asymmetry is the point: a sub-run's named inputs reach `command:` bodies precisely because
-they resolve at runtime, where an include's load-time macro cannot. Sub-run inputs are also
-persisted to the child run's metadata at spawn, so `$INPUTS` reconstitutes on a cold resume.
+Both composition paths support command-backed prompts; their binding time differs. Includes
+snapshot and bind the resolved command body at load time, while sub-runs resolve inputs at
+runtime. Sub-run inputs are persisted to the child run's metadata at spawn, so `$INPUTS`
+reconstitutes on a cold resume.
 
 ### `$INPUTS` in `bash:`/`script:` nodes uses env vars
 

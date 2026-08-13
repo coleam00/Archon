@@ -115,6 +115,9 @@ function formatNodeIssue(id: string, issue: z.ZodIssue): string {
  */
 const OUTPUT_REF_SOURCE = String.raw`\$([a-zA-Z_][a-zA-Z0-9_-]*)\.output`;
 
+/** `when:` also accepts `$nodeId.field` as shorthand for `$nodeId.output.field`. */
+const WHEN_REF_SOURCE = String.raw`\$([a-zA-Z_][a-zA-Z0-9_-]*)\.([a-zA-Z_][a-zA-Z0-9_]*)`;
+
 /**
  * The node's `id` for messages, falling back to its 1-based position when the
  * id is missing or blank (the schema reports that separately as an error).
@@ -401,9 +404,10 @@ export function validateDagStructure(
 
   // Check $nodeId.output references across EVERY field the executor substitutes at
   // runtime: when:, and the text surfaces that flow through substituteNodeOutputRefs
-  // (prompt, bash, script, approval.message, cancel, loop.prompt, loop.until_bash,
-  // loop_group.until_bash, workflow.input, workflow.fan_out.items). A dangling ref in
-  // any of them silently substitutes to '' at run time, so all must be validated here.
+  // (prompt, bash, script, approval.message/on_reject.prompt, cancel, loop.prompt,
+  // loop.until_bash, loop_group.until_bash, workflow.input/with/fan_out.items). A dangling
+  // ref in any of them can bind the wrong flat-DAG output or fail at run time, so all must
+  // be validated here.
   //
   // KEEP IN SYNC (four ref-surface enumerations must agree):
   //   1. this scan (loader validateDagStructure) — validates refs,
@@ -412,62 +416,79 @@ export function validateDagStructure(
   //   4. applyInputsMacro (include-expander.ts) — inlines include `with:` values (#2470).
   // Adding a substituted field to one means updating all four.
   //
-  // Prose fields (prompt / loop.prompt) may contain triple-backtick fenced blocks or
-  // single-backtick inline code that are documentation meant to render literally to
-  // the LLM (e.g. the workflow-builder shows authors how to write `$<other-node>.output`
-  // inside a script-node example); strip those before scanning so they don't false-match.
-  // The code/expression fields (bash / script / until_bash / cancel) and when: clauses
-  // carry live refs (not documentation), so they are scanned verbatim.
+  // Runtime substitution is syntax-agnostic: canonical refs inside Markdown fences and
+  // inline code are live too. Validation therefore scans every surface verbatim.
   const outputRefPattern = new RegExp(OUTPUT_REF_SOURCE, 'g');
-  const stripMarkdownCode = (s: string): string =>
-    s.replace(/```[\s\S]*?```/g, '').replace(/`[^`\n]*`/g, '');
+  const whenRefPattern = new RegExp(WHEN_REF_SOURCE, 'g');
   for (const node of nodes) {
-    const sources: string[] = [];
-    if (node.when) sources.push(node.when);
+    const sources: { field: string; text: string }[] = [];
     if ('prompt' in node && typeof node.prompt === 'string') {
-      sources.push(stripMarkdownCode(node.prompt));
+      sources.push({ field: 'prompt', text: node.prompt });
     }
-    if (isBashNode(node)) sources.push(node.bash);
-    if (isScriptNode(node)) sources.push(node.script);
+    if (isBashNode(node)) sources.push({ field: 'bash', text: node.bash });
+    if (isScriptNode(node)) sources.push({ field: 'script', text: node.script });
     // workflow.input is a live ref surface (a data string), scanned verbatim like
     // bash/script — not prose, so no markdown stripping. workflow.fan_out.items (slice
     // 2, PR-C) is a live `$node.output` ref to a JSON array — scanned the same way.
     if (isWorkflowNode(node)) {
-      if (node.input) sources.push(node.input);
-      if (node.fan_out) sources.push(node.fan_out.items);
+      if (node.input) sources.push({ field: 'input', text: node.input });
+      if (node.fan_out) sources.push({ field: 'fan_out.items', text: node.fan_out.items });
       // A `workflow:` node's `with:` values (#2470) are live ref surfaces: unlike
       // an `include:` node's `with:` (inlined by the macro and caught post-expansion
       // by this same scan), sub-run `with:` values are never inlined — they resolve
       // at runtime into `$INPUTS.<name>` — so scan them here for dangling refs.
       if (node.with) {
-        for (const value of Object.values(node.with)) sources.push(value);
+        for (const [name, value] of Object.entries(node.with)) {
+          sources.push({ field: `with.${name}`, text: value });
+        }
       }
     }
-    if (isCancelNode(node)) sources.push(node.cancel);
-    if (isApprovalNode(node)) sources.push(node.approval.message);
-    if (isLoopNode(node)) {
-      // Only inline `loop.prompt` is scanned for `$nodeId.output` refs. A
-      // command-backed loop (`loop.command`) loads its prompt text from a file
-      // at runtime; that file's contents are the author's responsibility, the
-      // same way a `command:` node's body is not scanned at parse time.
-      if (typeof node.loop.prompt === 'string') {
-        sources.push(stripMarkdownCode(node.loop.prompt));
+    if (isCancelNode(node)) sources.push({ field: 'cancel', text: node.cancel });
+    if (isApprovalNode(node)) {
+      sources.push({ field: 'approval.message', text: node.approval.message });
+      if (node.approval.on_reject !== undefined) {
+        sources.push({
+          field: 'approval.on_reject.prompt',
+          text: node.approval.on_reject.prompt,
+        });
       }
-      if (node.loop.until_bash) sources.push(node.loop.until_bash);
+    }
+    if (isLoopNode(node)) {
+      if (typeof node.loop.prompt === 'string') {
+        sources.push({ field: 'loop.prompt', text: node.loop.prompt });
+      }
+      if (node.loop.until_bash) {
+        sources.push({ field: 'loop.until_bash', text: node.loop.until_bash });
+      }
     }
     if (isLoopGroupNode(node) && node.loop_group.until_bash) {
-      sources.push(node.loop_group.until_bash);
+      sources.push({ field: 'loop_group.until_bash', text: node.loop_group.until_bash });
     }
     for (const source of sources) {
       let m: RegExpExecArray | null;
       outputRefPattern.lastIndex = 0; // reset stateful g-flag regex before each new source string
-      while ((m = outputRefPattern.exec(source)) !== null) {
+      while ((m = outputRefPattern.exec(source.text)) !== null) {
         const refNodeId = m[1];
         // Output refs (unlike depends_on) may also reach ENCLOSING-scope nodes: the
         // executor seeds a loop_group iteration's scoped output map with the outer
         // DAG's outputs, so `$outerNode.output` inside a body prompt is valid.
         if (refNodeId !== undefined && !ids.has(refNodeId) && !enclosingIds?.has(refNodeId)) {
-          return `Node '${node.id}' references unknown node '$${refNodeId}.output'`;
+          return `Node '${node.id}' field '${source.field}' references unknown node '$${refNodeId}.output'. In a composed workflow, pass caller data through declared 'inputs:' and caller 'with:' instead of referencing a caller node directly`;
+        }
+      }
+    }
+
+    if (node.when !== undefined) {
+      let m: RegExpExecArray | null;
+      whenRefPattern.lastIndex = 0;
+      while ((m = whenRefPattern.exec(node.when)) !== null) {
+        const refNodeId = m[1];
+        const field = m[2];
+        // `$INPUTS.name` is an include-time macro, not a node reference. It is
+        // resolved (or rejected as missing) before the composed graph is revalidated.
+        if (refNodeId === 'INPUTS') continue;
+        if (refNodeId !== undefined && !ids.has(refNodeId) && !enclosingIds?.has(refNodeId)) {
+          return `Node '${node.id}' field 'when' references unknown node '$${refNodeId}.${field ?? ''}'. In a composed workflow, pass caller data through declared 'inputs:' and caller 'with:' instead of referencing a caller node directly`;
         }
       }
     }

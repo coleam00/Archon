@@ -12,8 +12,8 @@ afterEach(async () => {
   );
 });
 
-describe('discoverWorkflows — nested command-file scan', () => {
-  test('pre-resolves loop_group command files before include expansion', async () => {
+describe('discoverWorkflows — nested included command compilation', () => {
+  test('pre-resolves and compiles loop_group command files before include expansion', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'archon-workflow-discovery-'));
     tempDirectories.push(cwd);
     const workflowDir = join(cwd, '.archon', 'workflows');
@@ -58,8 +58,52 @@ describe('discoverWorkflows — nested command-file scan', () => {
 
     const result = await discoverWorkflows(cwd, { loadDefaults: false });
 
+    expect(result.errors.filter(error => error.filename === 'parent.yaml')).toHaveLength(0);
+    const parent = result.workflows.find(item => item.workflow.name === 'parent')?.workflow;
+    const group = parent?.nodes.find(node => node.id === 'inc__group');
+    const repeat = group && 'loop_group' in group ? group.loop_group.nodes[0] : undefined;
+    expect(repeat && 'loop' in repeat ? repeat.loop.prompt : '').toBe(
+      'Read $inc__seed.output and continue.'
+    );
+  });
+
+  test('rejects a command-body caller ref even when the parent has the same node id', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'archon-workflow-discovery-'));
+    tempDirectories.push(cwd);
+    const workflowDir = join(cwd, '.archon', 'workflows');
+    const commandDir = join(cwd, '.archon', 'commands');
+    await Promise.all([
+      mkdir(workflowDir, { recursive: true }),
+      mkdir(commandDir, { recursive: true }),
+    ]);
+    await writeFile(
+      join(workflowDir, 'block.yaml'),
+      JSON.stringify({
+        name: 'leaky-block',
+        description: 'Must not bind parent state',
+        nodes: [{ id: 'review', command: 'leaky-command' }],
+      })
+    );
+    await writeFile(
+      join(workflowDir, 'parent.yaml'),
+      JSON.stringify({
+        name: 'parent',
+        description: 'Has a colliding caller id',
+        nodes: [
+          { id: 'caller', bash: 'echo parent' },
+          { id: 'inc', include: 'leaky-block', depends_on: ['caller'] },
+        ],
+      })
+    );
+    await writeFile(join(commandDir, 'leaky-command.md'), 'Use $caller.output directly.');
+
+    const result = await discoverWorkflows(cwd, { loadDefaults: false });
+
     expect(result.workflows.map(item => item.workflow.name)).not.toContain('parent');
-    expect(result.errors.some(error => error.filename === 'parent.yaml')).toBe(true);
-    expect(result.errors.some(error => error.error.includes("sibling node '$seed'"))).toBe(true);
+    const message = result.errors.find(error => error.filename === 'parent.yaml')?.error;
+    expect(message).toContain("command 'leaky-command'");
+    expect(message).toContain("'$caller.output'");
+    expect(message).toContain('inputs:');
+    expect(message).toContain('with:');
   });
 });

@@ -104,11 +104,12 @@ describe('Workflow Loader', () => {
       });
     });
 
-    it('retains an included workflow own packaged resource owner', async () => {
+    it('resolves an included workflow command from its own package before compiling it', async () => {
       const parentDir = join(testDir, '.archon', 'workflows', 'product', 'parent');
       const blockDir = join(testDir, '.archon', 'workflows', 'shared', 'review-block');
+      const blockCommandsDir = join(blockDir, 'commands');
       await mkdir(parentDir, { recursive: true });
-      await mkdir(blockDir, { recursive: true });
+      await mkdir(blockCommandsDir, { recursive: true });
       await writeFile(
         join(parentDir, 'parent.yaml'),
         `name: parent\ndescription: parent\nnodes:\n  - id: review\n    include: review-block\n`
@@ -117,16 +118,14 @@ describe('Workflow Loader', () => {
         join(blockDir, 'block.yaml'),
         `name: review-block\ndescription: block\nnodes:\n  - id: run\n    command: inspect\n`
       );
+      await writeFile(join(blockCommandsDir, 'inspect.md'), 'Package-owned review prompt.');
 
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
       const parent = result.workflows.find(entry => entry.workflow.name === 'parent')?.workflow;
-      const included = parent?.nodes.find(node => node.id === 'review__run') as
-        | { command: string }
-        | undefined;
-      expect(parsePackagedResourceReference(included?.command ?? '')).toEqual({
-        owner: { source: 'project', pack: 'shared', workflow: 'review-block' },
-        name: 'inspect',
-      });
+      const included = parent?.nodes.find(node => node.id === 'review__run');
+      expect(included && 'prompt' in included ? included.prompt : '').toBe(
+        'Package-owned review prompt.'
+      );
     });
 
     it('uses the identical authored structure in home scope', async () => {
@@ -2301,10 +2300,7 @@ nodes:
       expect(result.errors[0].error).toContain('$missing.output');
     });
 
-    it('should ignore $nodeId.output inside fenced code blocks in prompt: bodies', async () => {
-      // Prompt bodies often embed fenced documentation examples for the LLM
-      // (e.g. workflow-builder shows how to author a script node). The literal
-      // $other-node.output in such a fence is documentation, not a real ref.
+    it('should validate $nodeId.output inside fenced code blocks in prompt: bodies', async () => {
       const workflowDir = join(testDir, '.archon', 'workflows');
       await mkdir(workflowDir, { recursive: true });
 
@@ -2327,12 +2323,12 @@ nodes:
       );
 
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      expect(result.errors).toHaveLength(0);
-      expect(result.workflows).toHaveLength(1);
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0].error).toContain('$other-node.output');
+      expect(result.workflows).toHaveLength(0);
     });
 
-    it('should ignore $nodeId.output inside inline backtick code in prompt: bodies', async () => {
-      // Inline `code` mentions like \`$nodeId.output\` are also documentation.
+    it('should validate $nodeId.output inside inline backtick code in prompt: bodies', async () => {
       const workflowDir = join(testDir, '.archon', 'workflows');
       await mkdir(workflowDir, { recursive: true });
 
@@ -2350,8 +2346,51 @@ nodes:
       );
 
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      expect(result.errors).toHaveLength(0);
-      expect(result.workflows).toHaveLength(1);
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0].error).toContain('$nodeId.output');
+      expect(result.workflows).toHaveLength(0);
+    });
+
+    it('should validate shorthand when refs at load time', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      await writeFile(
+        join(workflowDir, 'bad-when-shorthand.yaml'),
+        `name: bad-when-shorthand
+description: dangling shorthand condition
+nodes:
+  - id: task
+    prompt: work
+    when: "$caller.status == 'ok'"
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0].error).toContain("field 'when'");
+      expect(result.errors[0].error).toContain('$caller.status');
+    });
+
+    it('should validate approval.on_reject.prompt refs at load time', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      await writeFile(
+        join(workflowDir, 'bad-rejection-ref.yaml'),
+        `name: bad-rejection-ref
+description: dangling rejection prompt ref
+nodes:
+  - id: gate
+    approval:
+      message: Approve?
+      on_reject:
+        prompt: "Revise $caller.output"
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0].error).toContain("field 'approval.on_reject.prompt'");
+      expect(result.errors[0].error).toContain('$caller.output');
     });
 
     it('should still reject unknown $nodeId.output refs outside code', async () => {
@@ -2383,8 +2422,7 @@ nodes:
       expect(result.errors[0].error).toContain('missing-node');
     });
 
-    it('should ignore $nodeId.output inside fenced code in loop.prompt', async () => {
-      // Loop prompts get the same documentation-stripping treatment as node prompts.
+    it('should validate $nodeId.output inside fenced code in loop.prompt', async () => {
       const workflowDir = join(testDir, '.archon', 'workflows');
       await mkdir(workflowDir, { recursive: true });
 
@@ -2408,8 +2446,9 @@ nodes:
       );
 
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      expect(result.errors).toHaveLength(0);
-      expect(result.workflows).toHaveLength(1);
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0].error).toContain('$other-node.output');
+      expect(result.workflows).toHaveLength(0);
     });
   });
 
@@ -4078,13 +4117,12 @@ nodes:
       expect(payload.safetyNote).toContain('sandbox');
     });
 
-    it('should fail expansion when a block command file references a renamed sibling', async () => {
+    it('should compile a block command file and namespace a local sibling ref', async () => {
       const workflowDir = join(testDir, '.archon', 'workflows');
       const commandsDir = join(testDir, '.archon', 'commands');
       await mkdir(workflowDir, { recursive: true });
       await mkdir(commandsDir, { recursive: true });
 
-      // Command file references a SIBLING node id that namespacing will rename.
       await writeFile(join(commandsDir, 'blk-runner.md'), 'Summarize $sib.output for the report.');
       await writeFile(
         join(workflowDir, 'cmd-block.yaml'),
@@ -4111,13 +4149,15 @@ nodes:
       );
 
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      expect(result.workflows.some(w => w.workflow.name === 'cmd-parent')).toBe(false);
-      const err = result.errors.find(e => e.filename === 'cmd-parent.yaml');
-      expect(err?.error).toContain("command file 'blk-runner.md'");
-      expect(err?.error).toContain("sibling node '$sib'");
+      expect(result.errors.filter(error => error.filename === 'cmd-parent.yaml')).toHaveLength(0);
+      const parent = result.workflows.find(w => w.workflow.name === 'cmd-parent')?.workflow;
+      const runner = parent?.nodes.find(node => node.id === 'rev__runner');
+      expect(runner && 'prompt' in runner ? runner.prompt : '').toBe(
+        'Summarize $rev__sib.output for the report.'
+      );
     });
 
-    it('should fail expansion when a resolved block command file references an include input', async () => {
+    it('should compile a resolved block command file with a declared include input', async () => {
       const workflowDir = join(testDir, '.archon', 'workflows');
       const commandsDir = join(testDir, '.archon', 'commands');
       await mkdir(workflowDir, { recursive: true });
@@ -4129,6 +4169,8 @@ nodes:
         `
 name: parameterized-block
 description: Block whose command references an include input
+inputs:
+  scope: { required: true }
 nodes:
   - id: runner
     command: parameterized-runner
@@ -4148,24 +4190,22 @@ nodes:
       );
 
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      expect(result.workflows.some(w => w.workflow.name === 'parameterized-parent')).toBe(false);
-      const message = result.errors.find(
-        error => error.filename === 'parameterized-parent.yaml'
-      )?.error;
-      expect(message).toContain("Node 'review'");
-      expect(message).toContain("included block 'parameterized-block'");
-      expect(message).toContain("command file 'parameterized-runner.md'");
-      expect(message).toContain("parameter '$INPUTS.scope'");
-      expect(message).toContain('inline the prompt');
+      expect(
+        result.errors.filter(error => error.filename === 'parameterized-parent.yaml')
+      ).toHaveLength(0);
+      const parent = result.workflows.find(
+        workflow => workflow.workflow.name === 'parameterized-parent'
+      )?.workflow;
+      const runner = parent?.nodes.find(node => node.id === 'review__runner');
+      expect(runner && 'prompt' in runner ? runner.prompt : '').toBe('Review main.');
     });
 
-    it('should scan block command files in a configured custom command folder (config parity)', async () => {
+    it('should compile block commands from a configured custom command folder', async () => {
       const workflowDir = join(testDir, '.archon', 'workflows');
       const customCmds = join(testDir, 'my-cmds');
       await mkdir(workflowDir, { recursive: true });
       await mkdir(customCmds, { recursive: true });
 
-      // The command file lives ONLY in the configured custom folder, referencing a sibling.
       await writeFile(
         join(customCmds, 'custom-runner.md'),
         'Summarize $sib.output for the report.'
@@ -4194,20 +4234,23 @@ nodes:
 `
       );
 
-      // Through discoverWorkflowsWithConfig with the custom command folder configured, the
-      // scan resolves the command (config parity) and catches the sibling ref.
       const result = await discoverWorkflowsWithConfig(testDir, () =>
         Promise.resolve({
           defaults: { loadDefaultWorkflows: false },
           commands: { folder: 'my-cmds' },
         })
       );
-      expect(result.workflows.some(w => w.workflow.name === 'cc-parent')).toBe(false);
-      const err = result.errors.find(e => e.filename === 'cc-parent.yaml');
-      expect(err?.error).toContain("sibling node '$sib'");
+      expect(result.errors.filter(error => error.filename === 'cc-parent.yaml')).toHaveLength(0);
+      const parent = result.workflows.find(
+        workflow => workflow.workflow.name === 'cc-parent'
+      )?.workflow;
+      const runner = parent?.nodes.find(node => node.id === 'rev__runner');
+      expect(runner && 'prompt' in runner ? runner.prompt : '').toBe(
+        'Summarize $rev__sib.output for the report.'
+      );
     });
 
-    it('should warn (not fail) when a block command file cannot be resolved for scanning', async () => {
+    it('should fail closed when a block command file cannot be resolved', async () => {
       const workflowDir = join(testDir, '.archon', 'workflows');
       await mkdir(workflowDir, { recursive: true });
 
@@ -4233,19 +4276,14 @@ nodes:
       );
 
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      // Unresolvable command → WARN, never a hard expansion error. The scan is
-      // best-effort by construction; a file it cannot read is unverified, not unsafe,
-      // and dropping the workflow would break includes that never used this feature.
       const parentErrors = result.errors.filter(e => e.filename === 'ghost-parent.yaml');
-      expect(parentErrors).toHaveLength(0);
-      expect(result.workflows.some(w => w.workflow.name === 'ghost-parent')).toBe(true);
-      expect(mockLogger.warn).toHaveBeenCalledWith(
-        expect.objectContaining({ include: 'g', command: 'ghost-cmd-does-not-exist-xyz' }),
-        'include.command_file_unresolved_for_ref_scan'
-      );
+      expect(parentErrors).toHaveLength(1);
+      expect(result.workflows.some(w => w.workflow.name === 'ghost-parent')).toBe(false);
+      expect(parentErrors[0].error).toContain("command 'ghost-cmd-does-not-exist-xyz'");
+      expect(parentErrors[0].error).toContain('could not be resolved during composition');
     });
 
-    it('should scan an included loop.command file for include inputs', async () => {
+    it('should compile an included loop.command file with declared inputs', async () => {
       const workflowDir = join(testDir, '.archon', 'workflows');
       const commandDir = join(testDir, '.archon', 'commands');
       await mkdir(workflowDir, { recursive: true });
@@ -4256,6 +4294,8 @@ nodes:
         `
 name: loop-block
 description: Block with a deferred loop prompt
+inputs:
+  scope: { required: true }
 nodes:
   - id: repeat
     loop:
@@ -4278,10 +4318,12 @@ nodes:
       );
 
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      expect(result.workflows.some(w => w.workflow.name === 'loop-parent')).toBe(false);
-      expect(result.errors.find(error => error.filename === 'loop-parent.yaml')?.error).toContain(
-        "command file 'loop-review.md'"
-      );
+      expect(result.errors.filter(error => error.filename === 'loop-parent.yaml')).toHaveLength(0);
+      const parent = result.workflows.find(
+        workflow => workflow.workflow.name === 'loop-parent'
+      )?.workflow;
+      const repeat = parent?.nodes.find(node => node.id === 'review__repeat');
+      expect(repeat && 'loop' in repeat ? repeat.loop.prompt : '').toBe('Review production.');
     });
   });
 

@@ -176,7 +176,7 @@ describe('expandWorkflowIncludes — with input mapping', () => {
     const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
     expect(workflows.has('parent')).toBe(false);
     expect(errors.find(error => error.filename === 'parent')?.error).toContain(
-      "Node 'review__judge' references unknown node '$nosuch.output'"
+      "Node 'review__judge' field 'prompt' references unknown node '$nosuch.output'"
     );
   });
 
@@ -461,21 +461,25 @@ describe('expandWorkflowIncludes — with input mapping', () => {
 // ---------------------------------------------------------------------------
 
 describe('expandWorkflowIncludes — when gate combination', () => {
-  // Parent with a `gate` node; the include references it via when. The block's entry
-  // node carries its OWN when (referencing the same parent node, left intact because
-  // `gate` is not a block-internal id).
   function parentWith(includeWhen: string, entryWhen: string): Map<string, WorkflowDefinition> {
     const block = wf('gated-blk', [{ id: 'e', prompt: 'e', when: entryWhen }]);
+    block.inputs = { gate: { required: true } };
     const parent = wf('parent', [
       { id: 'gate', bash: 'echo gate' },
-      { id: 'review', include: 'gated-blk', depends_on: ['gate'], when: includeWhen },
+      {
+        id: 'review',
+        include: 'gated-blk',
+        depends_on: ['gate'],
+        when: includeWhen,
+        with: { gate: '$gate.output' },
+      },
     ]);
     return mapOf(block, parent);
   }
 
   test('combines the include gate with the entry node own when (both plain, no ||)', () => {
     const { workflows, errors } = expandWorkflowIncludes(
-      parentWith("$gate.output == 'go'", "$gate.output == 'yes'")
+      parentWith("$gate.output == 'go'", "$INPUTS.gate == 'yes'")
     );
     expect(errors).toHaveLength(0);
     expect(nodeById(workflows.get('parent')!, 'review__e')?.when).toBe(
@@ -485,7 +489,7 @@ describe('expandWorkflowIncludes — when gate combination', () => {
 
   test('fails the expansion when the ENTRY own when uses || (precedence would change)', () => {
     const { workflows, errors } = expandWorkflowIncludes(
-      parentWith("$gate.output == 'go'", "$gate.output == 'a' || $gate.output == 'b'")
+      parentWith("$gate.output == 'go'", "$INPUTS.gate == 'a' || $INPUTS.gate == 'b'")
     );
     expect(workflows.has('parent')).toBe(false);
     const err = errors.find(e => e.filename === 'parent');
@@ -495,17 +499,23 @@ describe('expandWorkflowIncludes — when gate combination', () => {
 
   test('fails the expansion when the INCLUDE gate uses || (precedence would change)', () => {
     const { workflows, errors } = expandWorkflowIncludes(
-      parentWith("$gate.output == 'go' || $gate.output == 'stop'", "$gate.output == 'yes'")
+      parentWith("$gate.output == 'go' || $gate.output == 'stop'", "$INPUTS.gate == 'yes'")
     );
     expect(workflows.has('parent')).toBe(false);
     expect(errors.find(e => e.filename === 'parent')?.error).toContain('cannot combine');
   });
 
   test('entry-only when is preserved unchanged when the include has no gate', () => {
-    const block = wf('gated-blk', [{ id: 'e', prompt: 'e', when: "$gate.output == 'yes'" }]);
+    const block = wf('gated-blk', [{ id: 'e', prompt: 'e', when: "$INPUTS.gate == 'yes'" }]);
+    block.inputs = { gate: { required: true } };
     const parent = wf('parent', [
       { id: 'gate', bash: 'echo gate' },
-      { id: 'review', include: 'gated-blk', depends_on: ['gate'] },
+      {
+        id: 'review',
+        include: 'gated-blk',
+        depends_on: ['gate'],
+        with: { gate: '$gate.output' },
+      },
     ]);
     const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
     expect(errors).toHaveLength(0);
@@ -584,14 +594,27 @@ describe('expandWorkflowIncludes — shorthand when: refs', () => {
     const { workflows } = expandWorkflowIncludes(mapOf(block, parent));
     expect(nodeById(workflows.get('parent')!, 'inc__b')?.when).toBe("$inc__a.output == 'x'");
   });
+
+  test('rejects an external shorthand ref even when the parent has a colliding id', () => {
+    const block = wf('blk3', [{ id: 'task', prompt: 'work', when: "$caller.status == 'ok'" }]);
+    const parent = wf('parent', [
+      { id: 'caller', bash: 'echo parent' },
+      { id: 'inc', include: 'blk3', depends_on: ['caller'] },
+    ]);
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
+    expect(workflows.has('parent')).toBe(false);
+    expect(errors.find(error => error.filename === 'parent')?.error).toContain(
+      "field 'when' references unknown node '$caller.status'"
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
-// Fence-aware prose: documentation examples inside prompts must NOT be rewritten
+// Markdown code spans are live because runtime substitution is syntax-agnostic
 // ---------------------------------------------------------------------------
 
-describe('expandWorkflowIncludes — fence-aware prose', () => {
-  test('rewrites a live prompt ref but leaves a fenced example untouched', () => {
+describe('expandWorkflowIncludes — refs in Markdown code spans', () => {
+  test('rewrites refs both outside and inside a fenced example', () => {
     const block = wf('blk', [
       { id: 'helper', bash: 'echo hi' },
       {
@@ -605,10 +628,8 @@ describe('expandWorkflowIncludes — fence-aware prose', () => {
     expect(errors).toHaveLength(0);
     const writer = nodeById(workflows.get('parent')!, 'inc__writer');
     const prompt = writer && 'prompt' in writer ? writer.prompt : '';
-    // Live ref (outside the fence) renamed…
     expect(prompt).toContain('Live: $inc__helper.output');
-    // …fenced example left verbatim.
-    expect(prompt).toContain('```\nexample: $helper.output\n```');
+    expect(prompt).toContain('```\nexample: $inc__helper.output\n```');
   });
 
   test('bash refs are rewritten verbatim (code fields are not fence-protected)', () => {
@@ -620,6 +641,33 @@ describe('expandWorkflowIncludes — fence-aware prose', () => {
     const { workflows } = expandWorkflowIncludes(mapOf(block, parent));
     const b = nodeById(workflows.get('parent')!, 'inc__b');
     expect(b && 'bash' in b ? b.bash : '').toBe('echo $inc__a.output');
+  });
+
+  test('rewrites approval rejection prompts to the included sibling namespace', () => {
+    const block = wf('approval-block', [
+      { id: 'plan', prompt: 'plan' },
+      {
+        id: 'gate',
+        approval: {
+          message: 'Approve $plan.output',
+          on_reject: { prompt: 'Revise $plan.output' },
+        },
+        depends_on: ['plan'],
+      },
+    ]);
+    const parent = wf('parent', [
+      { id: 'plan', prompt: 'parent plan' },
+      { id: 'inc', include: 'approval-block', depends_on: ['plan'] },
+    ]);
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
+    expect(errors).toHaveLength(0);
+    const gate = nodeById(workflows.get('parent')!, 'inc__gate');
+    expect(gate && 'approval' in gate ? gate.approval.message : '').toBe(
+      'Approve $inc__plan.output'
+    );
+    expect(gate && 'approval' in gate ? gate.approval.on_reject?.prompt : '').toBe(
+      'Revise $inc__plan.output'
+    );
   });
 
   // #2121 Phase 2: a `workflow:` (sub-run) node inside an included block is a live
@@ -667,10 +715,10 @@ describe('expandWorkflowIncludes — fence-aware prose', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Command-file ref scan (contents can't be rewritten → fail-fast at load time)
+// Included command compilation (resolved bodies become namespaced inline prompts)
 // ---------------------------------------------------------------------------
 
-describe('expandWorkflowIncludes — command-file ref scan', () => {
+describe('expandWorkflowIncludes — included command compilation', () => {
   function blockWithCommand(): [WorkflowDefinition, WorkflowDefinition] {
     const block = wf('cmdblk', [
       { id: 'sib', bash: 'echo hi' },
@@ -680,99 +728,143 @@ describe('expandWorkflowIncludes — command-file ref scan', () => {
     return [block, parent];
   }
 
-  test('fails when a block command file references a renamed sibling id', () => {
+  test('materializes a block command and namespaces its local sibling ref', () => {
     const [block, parent] = blockWithCommand();
     const commandContents = new Map<string, string | null>([
       ['my-cmd', 'Process the results from $sib.output and summarize.'],
     ]);
     const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent), commandContents);
-    expect(workflows.has('parent')).toBe(false);
-    const err = errors.find(e => e.filename === 'parent');
-    expect(err?.error).toContain("command file 'my-cmd.md'");
-    expect(err?.error).toContain("sibling node '$sib'");
+    expect(errors).toHaveLength(0);
+    const runner = nodeById(workflows.get('parent')!, 'inc__runner');
+    expect(runner && 'prompt' in runner ? runner.prompt : '').toBe(
+      'Process the results from $inc__sib.output and summarize.'
+    );
+    expect(runner && 'command' in runner).toBe(false);
   });
 
-  test('fails when a block command file references an include input', () => {
+  test('materializes a command body and binds its declared include input', () => {
     const [block, parent] = blockWithCommand();
+    block.inputs = { scope: { required: true } };
+    const includeNode = parent.nodes[0];
+    if (includeNode && 'include' in includeNode) includeNode.with = { scope: 'prod' };
     const commandContents = new Map<string, string | null>([
       ['my-cmd', 'Review scope $INPUTS.scope.'],
     ]);
     const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent), commandContents);
-    expect(workflows.has('parent')).toBe(false);
-    const message = errors.find(error => error.filename === 'parent')?.error;
-    expect(message).toContain("Node 'inc'");
-    expect(message).toContain("command file 'my-cmd.md'");
-    expect(message).toContain("included block 'cmdblk'");
-    expect(message).toContain("parameter '$INPUTS.scope'");
-    expect(message).toContain('inline the prompt');
+    expect(errors).toHaveLength(0);
+    const runner = nodeById(workflows.get('parent')!, 'inc__runner');
+    expect(runner && 'prompt' in runner ? runner.prompt : '').toBe('Review scope prod.');
   });
 
-  test('passes when the command file has no cross-node reference', () => {
+  test('keeps a caller ref passed through a command input parent-scoped on id collision', () => {
+    const block = wf('collision-command-block', [
+      { id: 'gather', prompt: 'local gather' },
+      { id: 'runner', command: 'collision-command', depends_on: ['gather'] },
+    ]);
+    block.inputs = { context: { required: true } };
+    const parent = wf('parent', [
+      { id: 'gather', prompt: 'parent gather' },
+      {
+        id: 'inc',
+        include: 'collision-command-block',
+        depends_on: ['gather'],
+        with: { context: '$gather.output' },
+      },
+    ]);
+    const { workflows, errors } = expandWorkflowIncludes(
+      mapOf(block, parent),
+      new Map([['collision-command', 'Review $INPUTS.context.']])
+    );
+    expect(errors).toHaveLength(0);
+    const runner = nodeById(workflows.get('parent')!, 'inc__runner');
+    expect(runner && 'prompt' in runner ? runner.prompt : '').toBe('Review $gather.output.');
+  });
+
+  test('treats canonical refs inside Markdown code as live and namespaces them', () => {
     const [block, parent] = blockWithCommand();
     const commandContents = new Map<string, string | null>([
       ['my-cmd', 'Work from $ARTIFACTS_DIR only. See `$sib.output` in fenced docs.'],
     ]);
     const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent), commandContents);
-    // The only $sib.output is inside inline code (stripped), so no live ref → clean.
     expect(errors).toHaveLength(0);
-    expect(workflows.has('parent')).toBe(true);
+    const runner = nodeById(workflows.get('parent')!, 'inc__runner');
+    expect(runner && 'prompt' in runner ? runner.prompt : '').toContain('`$inc__sib.output`');
   });
 
-  // A command body can never have inputs applied — it is read at execution time, after
-  // expansion. So `$INPUTS.<name>` there is an unkeepable promise wherever it appears,
-  // and unlike the sibling-ref scan the fence has no bearing on it: the macro itself
-  // substitutes inside code spans, because `$INPUTS` has no documentation-only meaning.
-  test('fails when a command file references an include input inside a fenced block', () => {
+  test('binds a declared include input inside a fenced block', () => {
     const [block, parent] = blockWithCommand();
+    block.inputs = { scope: { required: true } };
+    const includeNode = parent.nodes[0];
+    if (includeNode && 'include' in includeNode) includeNode.with = { scope: 'prod' };
     const commandContents = new Map<string, string | null>([
       ['my-cmd', 'Run this:\n\n```bash\necho "$INPUTS.scope"\n```\n'],
     ]);
     const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent), commandContents);
-    expect(workflows.has('parent')).toBe(false);
-    expect(errors.find(error => error.filename === 'parent')?.error).toContain(
-      "parameter '$INPUTS.scope'"
-    );
+    expect(errors).toHaveLength(0);
+    const runner = nodeById(workflows.get('parent')!, 'inc__runner');
+    expect(runner && 'prompt' in runner ? runner.prompt : '').toContain('echo "prod"');
   });
 
-  test('fails when a command file references an include input inside inline code', () => {
+  test('rejects a command ref outside the included workflow namespace', () => {
     const [block, parent] = blockWithCommand();
     const commandContents = new Map<string, string | null>([
-      ['my-cmd', 'The scope is `$INPUTS.scope` — use it.'],
+      ['my-cmd', 'Use $caller.output directly.'],
     ]);
     const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent), commandContents);
     expect(workflows.has('parent')).toBe(false);
-    expect(errors.find(error => error.filename === 'parent')?.error).toContain(
-      "parameter '$INPUTS.scope'"
+    const message = errors.find(error => error.filename === 'parent')?.error;
+    expect(message).toContain("included workflow 'cmdblk'");
+    expect(message).toContain("node 'runner'");
+    expect(message).toContain("command 'my-cmd'");
+    expect(message).toContain("'$caller.output'");
+    expect(message).toContain('inputs:');
+    expect(message).toContain('with:');
+  });
+
+  test('rejects the same external command ref when the parent has a colliding id', () => {
+    const [block] = blockWithCommand();
+    const parent = wf('parent', [
+      { id: 'caller', bash: 'echo parent' },
+      { id: 'inc', include: 'cmdblk', depends_on: ['caller'] },
+    ]);
+    const result = expandWorkflowIncludes(
+      mapOf(block, parent),
+      new Map([['my-cmd', 'Use $caller.output directly.']])
+    );
+    expect(result.workflows.has('parent')).toBe(false);
+    expect(result.errors.find(error => error.filename === 'parent')?.error).toContain(
+      "'$caller.output'"
     );
   });
 
-  // An unresolvable command file is an incomplete-information state, not an unsafe one.
-  // Failing it would drop workflows that never opted into this feature — including ones
-  // with no `with:` and no `$INPUTS` anywhere.
-  test('warns (not fails) when the command file cannot be resolved for scanning', () => {
+  test('fails closed when the command body cannot be resolved', () => {
     const [block, parent] = blockWithCommand();
     const commandContents = new Map<string, string | null>([['my-cmd', null]]);
     const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent), commandContents);
-    expect(errors).toHaveLength(0);
-    expect(workflows.has('parent')).toBe(true);
+    expect(workflows.has('parent')).toBe(false);
+    expect(errors.find(error => error.filename === 'parent')?.error).toContain("command 'my-cmd'");
+    expect(errors.find(error => error.filename === 'parent')?.error).toContain(
+      'could not be resolved during composition'
+    );
   });
 
-  test('fails when an included loop command file references an include input', () => {
+  test('materializes loop.command and binds its declared include input', () => {
     const block = wf('loopblk', [
       { id: 'repeat', loop: { command: 'loop-cmd', until: 'DONE', max_iterations: 1 } },
     ]);
+    block.inputs = { scope: { required: true } };
     const parent = wf('parent', [{ id: 'inc', include: 'loopblk', with: { scope: 'prod' } }]);
     const { workflows, errors } = expandWorkflowIncludes(
       mapOf(block, parent),
       new Map([['loop-cmd', 'Review $INPUTS.scope.']])
     );
-    expect(workflows.has('parent')).toBe(false);
-    expect(errors.find(error => error.filename === 'parent')?.error).toContain(
-      "command file 'loop-cmd.md'"
-    );
+    expect(errors).toHaveLength(0);
+    const repeat = nodeById(workflows.get('parent')!, 'inc__repeat');
+    expect(repeat && 'loop' in repeat ? repeat.loop.prompt : '').toBe('Review prod.');
+    expect(repeat && 'loop' in repeat ? repeat.loop.command : undefined).toBeUndefined();
   });
 
-  test('fails when a nested loop command file references a renamed top-level node', () => {
+  test('materializes a nested loop command and namespaces an enclosing top-level ref', () => {
     const block = wf('nested-loopblk', [
       { id: 'seed', bash: 'echo seed' },
       {
@@ -794,13 +886,15 @@ describe('expandWorkflowIncludes — command-file ref scan', () => {
       mapOf(block, parent),
       new Map([['nested-loop-cmd', 'Read $seed.output and continue.']])
     );
-    expect(workflows.has('parent')).toBe(false);
-    const message = errors.find(error => error.filename === 'parent')?.error;
-    expect(message).toContain("command file 'nested-loop-cmd.md'");
-    expect(message).toContain("sibling node '$seed'");
+    expect(errors).toHaveLength(0);
+    const group = nodeById(workflows.get('parent')!, 'inc__group');
+    const repeat = group && 'loop_group' in group ? group.loop_group.nodes[0] : undefined;
+    expect(repeat && 'loop' in repeat ? repeat.loop.prompt : '').toBe(
+      'Read $inc__seed.output and continue.'
+    );
   });
 
-  test('fails for a command node inside a second-level nested loop group', () => {
+  test('materializes a command inside a second-level nested loop group', () => {
     const block = wf('deep-command-block', [
       { id: 'seed', bash: 'echo seed' },
       {
@@ -827,13 +921,16 @@ describe('expandWorkflowIncludes — command-file ref scan', () => {
       new Map([['deep-command', 'Read $seed.output and continue.']])
     );
 
-    expect(workflows.has('parent')).toBe(false);
-    expect(errors.find(error => error.filename === 'parent')?.error).toContain(
-      "command file 'deep-command.md'"
+    expect(errors).toHaveLength(0);
+    const outer = nodeById(workflows.get('parent')!, 'inc__outer');
+    const inner = outer && 'loop_group' in outer ? outer.loop_group.nodes[0] : undefined;
+    const review = inner && 'loop_group' in inner ? inner.loop_group.nodes[0] : undefined;
+    expect(review && 'prompt' in review ? review.prompt : '').toBe(
+      'Read $inc__seed.output and continue.'
     );
   });
 
-  test('fails when a nested loop command file references an include input', () => {
+  test('binds an include input in a nested loop command', () => {
     const block = wf('nested-input-loopblk', [
       {
         id: 'group',
@@ -852,14 +949,15 @@ describe('expandWorkflowIncludes — command-file ref scan', () => {
     const parent = wf('parent', [
       { id: 'inc', include: 'nested-input-loopblk', with: { scope: 'prod' } },
     ]);
+    block.inputs = { scope: { required: true } };
     const { workflows, errors } = expandWorkflowIncludes(
       mapOf(block, parent),
       new Map([['nested-input-cmd', 'Review $INPUTS.scope.']])
     );
-    expect(workflows.has('parent')).toBe(false);
-    expect(errors.find(error => error.filename === 'parent')?.error).toContain(
-      "parameter '$INPUTS.scope'"
-    );
+    expect(errors).toHaveLength(0);
+    const group = nodeById(workflows.get('parent')!, 'inc__group');
+    const repeat = group && 'loop_group' in group ? group.loop_group.nodes[0] : undefined;
+    expect(repeat && 'loop' in repeat ? repeat.loop.prompt : '').toBe('Review prod.');
   });
 
   test('passes when a nested loop command file references a local body node', () => {
@@ -888,11 +986,11 @@ describe('expandWorkflowIncludes — command-file ref scan', () => {
     expect(workflows.has('parent')).toBe(true);
   });
 
-  test('skips the scan entirely when no commandContents map is supplied', () => {
+  test('fails closed when no commandContents map is supplied', () => {
     const [block, parent] = blockWithCommand();
     const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
-    expect(errors).toHaveLength(0);
-    expect(workflows.has('parent')).toBe(true);
+    expect(workflows.has('parent')).toBe(false);
+    expect(errors).toHaveLength(1);
   });
 });
 
