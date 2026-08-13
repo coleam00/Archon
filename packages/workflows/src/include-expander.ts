@@ -43,8 +43,8 @@ import {
   INPUT_NAME_SOURCE,
 } from './schemas';
 import { createLogger } from '@archon/paths';
+import { collectFileBackedCommandNames } from './command-file';
 import { validateDagStructure } from './loader';
-import { getFileBackedCommandName } from './command-file';
 import { resolveDeclaredInputs } from './workflow-inputs';
 
 /**
@@ -485,9 +485,8 @@ function warnDroppedWorkflowLevelFields(includeNode: IncludeNode, child: Workflo
  * `loop.command` prompt. Scan resolved command content for refs to any renamed id, and for
  * `$INPUTS.<name>` parameters that can never be applied, and FAIL the expansion on a hit.
  *
- * BEST-EFFORT BY CONSTRUCTION. This scan sees only what discovery could resolve, and only
- * the block's TOP-LEVEL command nodes — a command nested in a `loop_group` body is not
- * reached. So a clean scan is "nothing found in what we could read", never a proof of
+ * BEST-EFFORT BY CONSTRUCTION. This scan sees only what discovery could resolve. So a
+ * clean scan is "nothing found in what we could read", never a proof of
  * safety. That is why an UNRESOLVABLE file warns and continues instead of failing: it is
  * an incomplete-information state, not an unsafe one, and the difference matters because
  * failing it would drop workflows that never opted into inputs at all (no `with:`, no
@@ -503,9 +502,7 @@ function scanBlockCommandRefs(
   commandContents: ReadonlyMap<string, string | null>
 ): void {
   const renamedIds = child.nodes.map(n => n.id); // every child top-level id gets a prefix
-  for (const cn of child.nodes) {
-    const commandName = getFileBackedCommandName(cn);
-    if (commandName === undefined) continue;
+  for (const commandName of collectFileBackedCommandNames(child.nodes)) {
     const content = commandContents.get(commandName);
     if (content === undefined || content === null) {
       getLog().warn(

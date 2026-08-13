@@ -37,7 +37,7 @@ import { createLogger } from '@archon/paths';
 import { isValidCommandName, MAX_DISCOVERY_DEPTH } from './command-validation';
 import { parseWorkflow } from './loader';
 import { expandWorkflowIncludes } from './include-expander';
-import { getFileBackedCommandName } from './command-file';
+import { collectFileBackedCommandNames } from './command-file';
 import {
   getPackagedResourceDirectory,
   isValidWorkflowFolderSegment,
@@ -510,9 +510,8 @@ async function resolveIncludeBlockCommandContents(
   for (const name of targetNames) {
     const workflow = byName.get(name);
     if (!workflow) continue;
-    for (const node of workflow.nodes) {
-      const commandName = getFileBackedCommandName(node);
-      if (commandName !== undefined && !contents.has(commandName)) {
+    for (const commandName of collectFileBackedCommandNames(workflow.nodes)) {
+      if (!contents.has(commandName)) {
         contents.set(commandName, await resolveCommandContentForScan(cwd, commandName, config));
       }
     }
