@@ -2338,6 +2338,61 @@ describe('sendQuery decomposition behaviors', () => {
       expect(mockQuery).not.toHaveBeenCalled();
     });
 
+    test('container workflows accept a declared project-local skill', async () => {
+      mockQuery.mockImplementation(async function* () {
+        yield { type: 'result', session_id: 'sid' };
+      });
+      stageClaudeSkill('container-project-skill');
+
+      for await (const _ of client.sendQuery('test', workflowCwd, undefined, {
+        execContext: { kind: 'container', containerId: 'c-1' },
+        nodeConfig: { nodeId: 'container-project', skills: ['container-project-skill'] },
+      })) {
+        // consume
+      }
+
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+      const options = (mockQuery.mock.calls[0][0] as { options: Record<string, unknown> }).options;
+      expect(options.skills).toEqual(['container-project-skill']);
+      expect(options.strictMcpConfig).toBe(true);
+    });
+
+    test('retries preserve exact declared skill, MCP, and tool restrictions', async () => {
+      let attempt = 0;
+      mockQuery.mockImplementation(async function* () {
+        attempt++;
+        if (attempt === 1) throw new Error('process exited with code 1');
+        yield { type: 'result', session_id: 'sid' };
+      });
+      stageClaudeSkill('retry-skill');
+      const mcpPath = join(workflowCwd, 'retry-mcp.json');
+      writeFileSync(mcpPath, JSON.stringify({ exact: { command: 'node', args: ['server.js'] } }));
+
+      for await (const _ of client.sendQuery('test', workflowCwd, undefined, {
+        nodeConfig: {
+          nodeId: 'retry-node',
+          skills: ['retry-skill'],
+          mcp: mcpPath,
+          allowed_tools: ['Read'],
+        },
+      })) {
+        // consume
+      }
+
+      expect(mockQuery).toHaveBeenCalledTimes(2);
+      for (const call of mockQuery.mock.calls) {
+        const options = (call[0] as { options: Record<string, unknown> }).options;
+        expect(options.skills).toEqual(['retry-skill']);
+        expect(options.strictMcpConfig).toBe(true);
+        expect(options.mcpServers).toEqual({
+          exact: { command: 'node', args: ['server.js'] },
+        });
+        expect(options.tools).toEqual(['Read', 'Skill']);
+        expect(options.allowedTools).toHaveLength(2);
+        expect(options.allowedTools).toEqual(expect.arrayContaining(['Skill', 'mcp__exact__*']));
+      }
+    });
+
     test('uses the same closed capability options when resuming', async () => {
       mockQuery.mockImplementation(async function* () {
         yield { type: 'result', session_id: 'sid' };
