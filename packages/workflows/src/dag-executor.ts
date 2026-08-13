@@ -761,10 +761,11 @@ function shellQuoteOrFile(
  * Substitute $node_id.output and $node_id.output.field references in a prompt.
  * Called AFTER the standard substituteWorkflowVariables pass.
  *
- * KEEP IN SYNC (four ref-surface enumerations must agree): the fields this is called on
- * (search call sites below), the loader's validateDagStructure scan, rewriteNodeOutputRefs,
- * and applyInputsMacro in include-expander.ts. Adding a substituted field to one means
- * checking all four.
+ * KEEP IN SYNC: public YAML call sites, the loader's validateDagStructure scan, and
+ * rewriteNodeOutputRefs must cover the same runtime node-ref surfaces. Included
+ * loop-command bodies are validated separately during materialization. applyInputsMacro is
+ * intentionally a superset because some AI configuration strings accept include inputs
+ * without receiving runtime node-output substitution.
  *
  * @param escapedForBash - When true, wraps substituted values in single quotes so
  *   they are safe to embed in bash scripts passed to `bash -c`. Set true only for

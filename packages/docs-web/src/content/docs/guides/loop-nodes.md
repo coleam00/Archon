@@ -135,10 +135,12 @@ that is unreadable fails closed; Archon never falls through to a lower-precedenc
 command with the same name. A missing, empty, unreadable, or non-hermetic included
 command fails before a fresh AI turn.
 
-In both cases the resolved text is reused for every iteration and persisted with
-an interactive pause. A resumed run prefers that persisted snapshot, so editing
-or deleting the source while the run is paused neither changes nor breaks its
-prompt. A fresh run still requires successful command resolution or compilation.
+For any interactive loop — whether authored with `prompt` or `command` — Archon
+persists the resolved prompt template at the gate. A resumed run prefers that
+snapshot, so editing inline YAML or a command source while the run is paused does
+not change its prompt; deleting a command source does not break that resume either.
+Source edits affect fresh runs, which still require successful command resolution
+or compilation.
 
 Once loaded, the text behaves identically to an inline `prompt`: all the
 variable substitution above applies unchanged (including `$LOOP_PREV_OUTPUT`

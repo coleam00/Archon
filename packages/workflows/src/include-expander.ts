@@ -66,9 +66,9 @@ import {
  * (#2458 — it cost three red tests in `loader.test.ts` whenever that file shared a
  * `bun test` process with `include-expander.test.ts`).
  *
- * Resolving per call costs one `rootLogger.child()`, and both call sites are warn-only
- * discovery paths: the first fires at most once per include node, the second once per
- * unresolved command node. Neither is a hot loop.
+ * Resolving per call costs one `rootLogger.child()` on a warn-only discovery path that
+ * fires at most once per include node whose workflow-level fields are dropped. It is not
+ * a hot loop.
  */
 function getLog(): ReturnType<typeof createLogger> {
   return createLogger('workflow.include-expander');
@@ -144,13 +144,12 @@ class IncludeExpansionError extends Error {}
  *     workflow.input / workflow.fan_out.items) — canonical `.output` refs are LIVE (never
  *     documentation) → rewritten verbatim.
  *
- * KEEP IN SYNC (FOUR ref-surface enumerations must agree): this rewrite, applyInputsMacro
- * below, the loader's validateDagStructure scan, and the substituteNodeOutputRefs call
- * sites in dag-executor.ts. Adding a substituted field to one means updating all four.
- * (The count read "three" while applyInputsMacro already existed and had already drifted —
- * it was missing workflow.fan_out.items, which shipped literal `$INPUTS` text to the model.)
+ * Public runtime node-ref surfaces stay aligned across this rewrite, the loader's
+ * validateDagStructure scan, and the substituteNodeOutputRefs call sites in
+ * dag-executor.ts. Included loop-command bodies are validated separately during command
+ * materialization, then their compiled prompts pass through this rewrite.
  *
- * applyInputsMacro is a SUPERSET of this function, not a mirror: it additionally walks
+ * applyInputsMacro is a SUPERSET of these node-ref surfaces, not a mirror: it additionally walks
  * systemPrompt and agents fields. Those fields accept include inputs but do not receive
  * node-output substitution at runtime, so they are not node-reference surfaces.
  */
@@ -519,8 +518,9 @@ function warnDroppedWorkflowLevelFields(includeNode: IncludeNode, child: Workflo
  * their authored identity plus symbol-keyed compiled prompt/error metadata so cold resume can
  * reach a persisted prompt snapshot even after source deletion. The ordinary namespacing and
  * `$INPUTS` passes transform compiled bodies without a second grammar.
- * Named script files are deliberately outside this function: they are opaque programs and
- * receive declared inputs through environment variables.
+ * Named script files are deliberately outside this function: their source is opaque. An
+ * included block can bind inputs in the YAML `script:` selector, but the flattened include
+ * does not add `INPUTS_*` environment variables inside the selected script program.
  */
 function materializeBlockCommandPrompts(
   node: DagNode,
@@ -625,11 +625,12 @@ function materializeBlockCommandPrompts(
  * from the output and an error is recorded — other workflows still expand.
  *
  * `commandContents` maps command NAME → file content, null when no candidate resolves, or a
- * matched-file read error. Discovery pre-resolves every include-target command with
- * execution-equivalent precedence and never falls through after a matching file fails to
- * read. A caller that omits the map may still expand workflows without commands. Included
- * command nodes fail composition; included loop commands fail before a fresh AI turn but
- * remain discoverable so an already-paused loop can resume from its validated snapshot.
+ * path-bearing error when a higher-precedence scope cannot be inspected or a matched file
+ * cannot be read. Discovery pre-resolves every include-target command with
+ * execution-equivalent precedence and never falls through after either error. A caller that
+ * omits the map may still expand workflows without commands. Included command nodes fail
+ * composition; included loop commands fail before a fresh AI turn but remain discoverable
+ * so an already-paused loop can resume from its persisted read-once snapshot.
  */
 export function expandWorkflowIncludes(
   rawByName: Map<string, WorkflowDefinition>,

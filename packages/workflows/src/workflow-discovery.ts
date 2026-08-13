@@ -400,9 +400,9 @@ interface CommandScanConfig {
  * Resolve a command name to its file CONTENT, mirroring the runtime/validator search
  * order (repo `.archon/commands/` + configured `commandFolder` → `~/.archon/commands/` →
  * bundled defaults, unless `loadDefaultCommands` is false). Returns `null` when no candidate
- * resolves, and a path-bearing error after a candidate matches but cannot be read. Read-only;
- * used so the include expander can compile a block's command body while proving its lexical
- * reference boundary.
+ * resolves, and a path-bearing error when a higher-precedence scope cannot be inspected or a
+ * matched candidate cannot be read. Read-only; used so the include expander can compile a
+ * block's command body while proving its lexical reference boundary.
  */
 async function resolveCommandContentForScan(
   cwd: string | null,

@@ -1402,7 +1402,7 @@ can line results up against the input list positionally.
 | Field | Default | What it does |
 |-------|---------|--------------|
 | `items` | required | A `$node.output` (or `$node.output.field`) reference that must resolve to a **JSON array** at run time. Anything else — an object, a bare string, malformed JSON, a dangling ref — fails the node before any child is created. It never fans out over the characters of a string, and never silently degrades to zero items. An empty array is legal: the node completes immediately with `[]`. |
-| `as` | — | Reserved for a future `$INPUTS.<as>` channel ([#2214](https://github.com/coleam00/Archon/issues/2214)) and **rejected at load** until then, rather than accepted and ignored — writing `as: task` and then `$INPUTS.task` in the child would otherwise deliver the literal string to the model. The item reaches the child as `$ARGUMENTS`. |
+| `as` | — | Names the current item as `$INPUTS.<as>` in each child. It must not collide with a `with:` key. The item also reaches the child as `$ARGUMENTS`. |
 | `max_parallel` | `5` | How many children may be **in flight at once**. |
 | `join` | `all_done` | How N child outcomes reduce to one node outcome (below). |
 
@@ -1615,8 +1615,8 @@ re-deriving it.
 
 ### Non-goals (this slice)
 
-- **No `with:` named-parameter mapping** — use `input:` (a single data string). A
-  `workflow:` node with a `with:` key is rejected with a clear error.
+- **Choose one input form** — `input:` sends a single data string as `$ARGUMENTS`;
+  `with:` supplies named `$INPUTS` values. The two forms are mutually exclusive.
 - **No racing** (`join: first_success`) — rejected outright, not deferred (see [Why there is no racing join](#why-there-is-no-racing-join)).
 - **Not inside a `loop_group` body** — a `workflow:` node, fanned out or not, is rejected
   there at load time ([#2439](https://github.com/coleam00/Archon/issues/2439)).

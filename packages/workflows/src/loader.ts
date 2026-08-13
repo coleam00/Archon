@@ -403,19 +403,21 @@ export function validateDagStructure(
     return `Cycle detected among nodes: ${cycleNodes.join(', ')}`;
   }
 
-  // Check $nodeId.output references across EVERY field the executor substitutes at
+  // Check $nodeId.output references across every public YAML field the executor substitutes at
   // runtime: when:, and the text surfaces that flow through substituteNodeOutputRefs
   // (prompt, bash, script, approval.message/on_reject.prompt, cancel, loop.prompt,
   // loop.until_bash, loop_group.until_bash, workflow.input/with/fan_out.items). A dangling
   // ref in any of them can bind the wrong flat-DAG output or fail at run time, so all must
   // be validated here.
   //
-  // KEEP IN SYNC (four ref-surface enumerations must agree):
+  // KEEP IN SYNC (public runtime node-ref surfaces):
   //   1. this scan (loader validateDagStructure) — validates refs,
   //   2. rewriteNodeOutputRefs (include-expander.ts) — renames refs on inline,
   //   3. the substituteNodeOutputRefs call sites (dag-executor.ts) — resolves refs at run,
-  //   4. applyInputsMacro (include-expander.ts) — inlines include `with:` values (#2470).
-  // Adding a substituted field to one means updating all four.
+  // Adding a substituted field to one means updating all three. Included loop-command
+  // bodies are validated separately while materialized, then rewritten by (2).
+  // applyInputsMacro is intentionally a superset because some AI configuration strings
+  // accept include inputs without being runtime node-ref surfaces.
   //
   // Runtime substitution is syntax-agnostic: canonical refs inside Markdown fences and
   // inline code are live too. Validation therefore scans every surface verbatim.
