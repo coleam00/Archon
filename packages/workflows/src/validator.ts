@@ -24,7 +24,12 @@ import { execFileAsync } from '@archon/git';
 import { BUNDLED_COMMANDS, BUNDLED_WORKFLOWS, isBinaryBuild } from './defaults/bundled-defaults';
 import { isValidCommandName } from './command-validation';
 import { levenshtein, findSimilar } from './utils/fuzzy-match';
-import { getProviderCapabilities, isRegisteredProvider, skillSearchRoots } from '@archon/providers';
+import {
+  claudeSkillSearchRoots,
+  getProviderCapabilities,
+  isRegisteredProvider,
+  skillSearchRoots,
+} from '@archon/providers';
 
 /** Lazy-initialized logger */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -594,7 +599,8 @@ export async function validateWorkflowResources(
       // match Archon's shared four-root resolver, so accepting a `.claude`
       // match here would falsely imply that Codex can invoke it.
       if (providerCaps?.skills !== false) {
-        const searchRoots = skillSearchRoots(cwd);
+        const searchRoots =
+          provider === 'claude' ? claudeSkillSearchRoots(cwd) : skillSearchRoots(cwd);
         for (const skillName of node.skills) {
           let found = false;
           for (const root of searchRoots) {
@@ -607,11 +613,17 @@ export async function validateWorkflowResources(
 
           if (!found) {
             issues.push({
-              level: 'warning',
+              level: provider === 'claude' ? 'error' : 'warning',
               nodeId: node.id,
               field: 'skills',
-              message: `Skill '${skillName}' not found in .agents/skills/ or .claude/skills/ (project or user scope)`,
-              hint: `Install with: npx skills add <repo> — or create manually at .agents/skills/${skillName}/SKILL.md`,
+              message:
+                provider === 'claude'
+                  ? `Claude skill '${skillName}' not found in .claude/skills/ (project or user scope)`
+                  : `Skill '${skillName}' not found in .agents/skills/ or .claude/skills/ (project or user scope)`,
+              hint:
+                provider === 'claude'
+                  ? `Install the skill for Claude Code, or create .claude/skills/${skillName}/SKILL.md`
+                  : `Install with: npx skills add <repo> — or create manually at .agents/skills/${skillName}/SKILL.md`,
             });
           }
         }

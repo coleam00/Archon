@@ -53,6 +53,7 @@ import { buildArchonMcpServer, ARCHON_TOOL_SERVER } from './native-tools';
 import { createLogger } from '@archon/paths';
 import { loadMcpConfig } from '../mcp/config';
 import { withResumedOutcome, resumedOutcome } from '../shared/resumed';
+import { resolveClaudeSkillDirectories } from '../shared/skills';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -454,9 +455,31 @@ async function applyNodeConfig(
   cwd: string
 ): Promise<ProviderWarning[]> {
   const warnings: ProviderWarning[] = [];
+  const isWorkflowNode =
+    typeof nodeConfig.nodeId === 'string' && nodeConfig.nodeId.trim().length > 0;
+  if (isWorkflowNode) {
+    // Workflow nodes are declared-only capability boundaries. Keep normal
+    // project/user settings (CLAUDE.md and agents), but exclude ambient skills
+    // and MCP unless the workflow names them explicitly.
+    options.skills = nodeConfig.skills ?? [];
+    options.strictMcpConfig = true;
+
+    if (nodeConfig.skills && nodeConfig.skills.length > 0) {
+      const { missing } = resolveClaudeSkillDirectories(cwd, nodeConfig.skills);
+      if (missing.length > 0) {
+        throw new Error(
+          `Claude skill${missing.length === 1 ? '' : 's'} not found in a Claude-native skill directory: ${missing.join(', ')}. Install ${missing.length === 1 ? 'it' : 'them'} under .claude/skills/ in the project or user home.`
+        );
+      }
+    }
+  }
+
   // allowed_tools → tools
   if (nodeConfig.allowed_tools !== undefined) {
-    options.tools = nodeConfig.allowed_tools;
+    options.tools =
+      nodeConfig.skills && nodeConfig.skills.length > 0
+        ? [...new Set([...nodeConfig.allowed_tools, 'Skill'])]
+        : nodeConfig.allowed_tools;
   }
 
   // denied_tools → disallowedTools
@@ -518,52 +541,19 @@ async function applyNodeConfig(
     }
   }
 
-  // skills → AgentDefinition wrapping
+  // Native skill selection. The SDK requires Skill to remain allowed when an
+  // explicit tool list is present; without a list, its normal tool set applies.
   if (nodeConfig.skills && nodeConfig.skills.length > 0) {
-    const skills = nodeConfig.skills;
-    const agentId = 'dag-node-skills';
-    const agentDef: {
-      description: string;
-      prompt: string;
-      skills: string[];
-      tools?: string[];
-      model?: string;
-    } = {
-      description: 'DAG node with skills',
-      prompt: `You have preloaded skills: ${skills.join(', ')}. Use them when relevant.`,
-      skills,
-    };
-    if (options.tools) {
-      agentDef.tools = [...(options.tools as string[]), 'Skill'];
-    }
-    if (options.model) agentDef.model = options.model;
-    options.agents = { [agentId]: agentDef };
-    options.agent = agentId;
     if (!options.allowedTools?.includes('Skill')) {
       options.allowedTools = [...(options.allowedTools ?? []), 'Skill'];
     }
-    getLog().info({ skills, agentId }, 'claude.skills_agent_created');
+    getLog().info({ skills: nodeConfig.skills }, 'claude.skills_selected');
   }
 
   // agents → inline AgentDefinition pass-through.
-  // Runs AFTER skills: so user-defined agents win on ID collision with
-  // the internal 'dag-node-skills' wrapper.
-  // options.agent is intentionally left alone — inline agents are sub-agents
-  // invokable via the Task tool, not the primary agent for the query.
+  // Inline agents remain sub-agents invokable through the Agent tool; native
+  // skill selection does not replace the query's primary agent.
   if (nodeConfig.agents) {
-    // Warn loudly when a user-defined agent overrides the internal
-    // 'dag-node-skills' wrapper set by the skills: block above. The
-    // merge is by design (user wins) but silent capability removal
-    // is the exact failure mode we want to avoid.
-    if (
-      Object.hasOwn(nodeConfig.agents, 'dag-node-skills') &&
-      options.agents?.['dag-node-skills'] !== undefined
-    ) {
-      getLog().warn(
-        { nodeSkills: nodeConfig.skills ?? [] },
-        'claude.inline_agents_override_skills_wrapper'
-      );
-    }
     options.agents = {
       ...(options.agents ?? {}),
       ...(nodeConfig.agents as NonNullable<Options['agents']>),

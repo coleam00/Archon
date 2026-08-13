@@ -233,7 +233,7 @@ nodes:
 | `denied_tools` | string[] | — | Tools to remove. Applied after `allowed_tools`. All providers except Codex |
 | `hooks` | object | — | Per-node SDK hook callbacks. Claude only. See [Hooks](/guides/hooks/) |
 | `mcp` | string | — | Path to MCP server config JSON file. Claude/Codex/Copilot; Codex adds servers to ambient config rather than replacing it. See [MCP Servers](/guides/mcp-servers/) |
-| `skills` | string[] | — | Skills to preload on Claude/Pi/Copilot. `[]` is a valid empty declaration. Codex workflow commands/prompts invoke installed skills explicitly with `$skill-name`; OpenCode does not implement this field. See [Skills](/guides/skills/) |
+| `skills` | string[] | — | Exact Claude-native skill selection (omission/`[]` selects none); skill declarations for Pi/Copilot. Codex workflow commands/prompts invoke installed skills explicitly with `$skill-name`; OpenCode does not implement this field. See [Skills](/guides/skills/) |
 | `agents` | object | — | Inline sub-agent definitions keyed by kebab-case ID. Claude only. See [Inline sub-agents](#inline-sub-agents) |
 | `effort` | `'low'`\|`'medium'`\|`'high'`\|`'max'` | — | Reasoning depth. Claude/Pi/Copilot. Also settable at workflow level |
 | `thinking` | string \| object | — | Thinking mode: `'adaptive'`, `'disabled'`, or `{type:'enabled', budgetTokens:N}`. Claude/Pi/Copilot. Also settable at workflow level |
@@ -242,7 +242,7 @@ nodes:
 | `fallbackModel` | string | — | Model to use if primary model fails. Claude only. Also settable at workflow level |
 | `betas` | string[] | — | SDK beta feature flags (e.g., `'context-1m-2025-08-07'`). Claude only. Also settable at workflow level |
 | `sandbox` | object | — | OS-level filesystem/network restrictions for the Claude subprocess. Claude only. Also settable at workflow level |
-| `settingSources` | (`'project'`\|`'user'`)[] | inherited | Which filesystem setting sources Claude loads (CLAUDE.md, skills, commands, agents). Overrides the assistant-level default; unset everywhere = `['project', 'user']`. `[]` loads none. Claude only. Per-node only |
+| `settingSources` | (`'project'`\|`'user'`)[] | inherited | Which filesystem setting sources Claude discovers (CLAUDE.md, skills, commands, agents). Workflow `skills:` remains the exact active skill set. Overrides the assistant-level default; unset everywhere = `['project', 'user']`. `[]` loads none. Claude only. Per-node only |
 
 ### Claude SDK Advanced Options
 
@@ -518,7 +518,7 @@ Keys:
 
 - Agent IDs must be **kebab-case** (`^[a-z0-9]+(-[a-z0-9]+)*$`)
 - Each definition requires `description` and `prompt`; `model`, `tools`, `disallowedTools`, `skills`, and `maxTurns` are optional
-- Map is merged with any SDK-level agents and with the internal `dag-node-skills` wrapper created by `skills:` — user-defined agents win on ID collision (a warning is logged when this happens)
+- Map is merged with any SDK-level agents and composes independently with native Claude `skills:` selection
 - Claude only. Codex and community providers that don't support inline agents emit a warning and ignore the field
 
 **When to use `agents:` vs `.claude/agents/*.md` files:**
@@ -2300,7 +2300,7 @@ Before deploying a workflow:
 9. **`retry:`** — AI nodes auto-retry transient errors (default: 2 retries / 3 total attempts, 3 s backoff); `bash:`/`script:` retry only with an explicit `retry:` block
 10. **`hooks`** — attach SDK hook callbacks to Claude nodes for tool control and context injection
 11. **`mcp:`** — attach per-node MCP servers via JSON config (Claude/Codex/Copilot; Codex configuration is additive)
-12. **`skills:`** — preload skills on Claude/Pi/Copilot; Codex workflow bodies use explicit `$skill-name`
+12. **`skills:`** — select exact active skills on Claude and declare skills for Pi/Copilot; Codex workflow bodies use explicit `$skill-name`
 13. **`agents:`** — inline Claude sub-agent definitions invokable via the `Task` tool
 14. **`effort` / `thinking`** — control reasoning depth and thinking mode per node or workflow (Claude/Pi/Copilot)
 15. **`maxBudgetUsd`** — set a USD cost cap per node; fails with error if exceeded (Claude only)

@@ -10,9 +10,10 @@ sidebar:
 ---
 
 DAG workflow nodes support an `mcp` field that attaches MCP (Model Context Protocol)
-servers to individual nodes. On providers with a closed per-node configuration this
-limits the node to its declared external tools. Codex is an explicit exception: its
-SDK adds the declared servers to ambient configuration rather than replacing it.
+servers to individual nodes. Claude workflow nodes exclude ambient user/project/plugin
+MCP by default and expose exactly the servers in their declared file. Codex is an
+explicit exception: its SDK adds declared servers to ambient configuration rather
+than replacing it.
 
 MCP works with Claude, Codex, and Copilot workflow nodes. Pi and OpenCode nodes
 currently warn and ignore the `mcp` field.
@@ -179,6 +180,9 @@ named `github` and `postgres`, the node gets:
 - `mcp__github__*`
 - `mcp__postgres__*`
 
+With no `mcp:` declaration, a Claude workflow node receives no MCP servers. This
+does not disable `CLAUDE.md`, built-in agents, or filesystem-defined agents.
+
 Codex nodes pass the same MCP config as per-node `mcp_servers` overrides to the
 Codex SDK, so the servers are available for that node without requiring global
 `~/.codex/config.toml` setup.
@@ -215,12 +219,9 @@ MCP server connection failed: github (failed)
 The node continues executing but without the tools from the failed server.
 Check your config file path, server command, and environment variables if this happens.
 
-User-level plugin MCPs inherited from provider-specific user config routinely
-fail to connect inside headless workflow subprocesses and are **not** surfaced
-when the workflow did not configure MCP itself — they're not actionable for the
-workflow author. They appear only in debug logs as
-`dag.mcp_plugin_connection_suppressed`. Run the CLI with `--verbose` (or set
-`LOG_LEVEL=debug` on the server) if you need to see them.
+Claude's strict workflow configuration prevents undeclared user/plugin MCPs from
+starting, so their connection failures do not affect the run. Codex can still
+inherit ambient servers as described below.
 
 ### Codex ambient MCP limitation
 

@@ -9,11 +9,17 @@ export interface ResolvedSkills {
   missing: string[];
 }
 
+/** Claude Code's provider-native skill roots, in discovery precedence order. */
+export function claudeSkillSearchRoots(cwd: string): string[] {
+  const home = process.env.HOME ?? homedir();
+  return [join(cwd, '.claude', 'skills'), join(home, '.claude', 'skills')];
+}
+
 /**
- * Skill-discovery search order for a named skill. Mirrors the locations
- * Claude's SDK and Pi's default resource loader both respect, so Archon
- * workflows that already work under Claude find the same skills under any
- * provider that calls this resolver.
+ * Cross-provider skill-discovery search order for a named skill. Pi and
+ * Copilot use this compatibility resolver. Claude uses the narrower
+ * `claudeSkillSearchRoots` contract because its CLI does not discover
+ * `.agents/skills`.
  *
  * Order (first match wins per name):
  *   1. `<cwd>/.agents/skills/<name>/`     — project-local, agentskills.io standard
@@ -50,11 +56,17 @@ export function resolveSkillDirectories(
   cwd: string,
   skillNames: string[] | undefined
 ): ResolvedSkills {
+  return resolveSkillDirectoriesFromRoots(skillSearchRoots(cwd), skillNames);
+}
+
+function resolveSkillDirectoriesFromRoots(
+  roots: string[],
+  skillNames: string[] | undefined
+): ResolvedSkills {
   if (!skillNames || skillNames.length === 0) {
     return { paths: [], missing: [] };
   }
 
-  const roots = skillSearchRoots(cwd);
   const paths: string[] = [];
   const missing: string[] = [];
   const seen = new Set<string>();
@@ -88,4 +100,18 @@ export function resolveSkillDirectories(
   }
 
   return { paths, missing };
+}
+
+/**
+ * Resolve skills only from locations Claude Code natively discovers.
+ *
+ * Claude does not discover the cross-provider `.agents/skills` convention.
+ * Keep this separate from `resolveSkillDirectories`, which Pi and Copilot use
+ * for their broader compatibility contract.
+ */
+export function resolveClaudeSkillDirectories(
+  cwd: string,
+  skillNames: string[] | undefined
+): ResolvedSkills {
+  return resolveSkillDirectoriesFromRoots(claudeSkillSearchRoots(cwd), skillNames);
 }

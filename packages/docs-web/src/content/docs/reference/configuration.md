@@ -186,7 +186,7 @@ without a `tiers:` block. Other providers must configure any tier they use, or r
 
 ### Claude settingSources
 
-Controls which sources the Claude Agent SDK loads during sessions — `CLAUDE.md`, skills, commands, agents, and hooks:
+Controls which sources the Claude Agent SDK discovers during sessions — `CLAUDE.md`, skills, commands, agents, and hooks. In workflow nodes, discovery does not activate ambient skills: the node's `skills:` list remains the exact active set, and omission/`[]` selects none.
 
 | Value | Description |
 |-------|-------------|

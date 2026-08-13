@@ -1,4 +1,7 @@
 import { describe, test, expect, mock, beforeEach, afterEach, spyOn } from 'bun:test';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createMockLogger } from '../test/mocks/logger';
 
 const mockLogger = createMockLogger();
@@ -2055,6 +2058,22 @@ describe('sendQuery decomposition behaviors', () => {
   });
 
   describe('inline agents (nodeConfig.agents)', () => {
+    let workflowCwd: string;
+
+    beforeEach(() => {
+      workflowCwd = mkdtempSync(join(tmpdir(), 'archon-claude-workflow-'));
+    });
+
+    afterEach(() => {
+      rmSync(workflowCwd, { recursive: true, force: true });
+    });
+
+    const stageClaudeSkill = (name: string): void => {
+      const dir = join(workflowCwd, '.claude', 'skills', name);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'SKILL.md'), `---\nname: ${name}\ndescription: test\n---\n`);
+    };
+
     test('passes inline agents map through to SDK options.agents', async () => {
       mockQuery.mockImplementation(async function* () {
         yield { type: 'result', session_id: 'sid' };
@@ -2069,8 +2088,8 @@ describe('sendQuery decomposition behaviors', () => {
         },
       };
 
-      for await (const _ of client.sendQuery('test', '/workspace', undefined, {
-        nodeConfig: { agents },
+      for await (const _ of client.sendQuery('test', workflowCwd, undefined, {
+        nodeConfig: { nodeId: 'agent-node', agents },
       })) {
         // consume
       }
@@ -2085,8 +2104,9 @@ describe('sendQuery decomposition behaviors', () => {
         yield { type: 'result', session_id: 'sid' };
       });
 
-      for await (const _ of client.sendQuery('test', '/workspace', undefined, {
+      for await (const _ of client.sendQuery('test', workflowCwd, undefined, {
         nodeConfig: {
+          nodeId: 'agent-node',
           agents: {
             'sub-a': { description: 'd', prompt: 'p' },
           },
@@ -2096,17 +2116,19 @@ describe('sendQuery decomposition behaviors', () => {
       }
 
       const callArgs = mockQuery.mock.calls[0][0] as { options: Record<string, unknown> };
-      // agent (singular) is set by skills wrapper; inline-only must leave it unset
       expect(callArgs.options.agent).toBeUndefined();
+      expect(callArgs.options.agents).toMatchObject({
+        'sub-a': { description: 'd', prompt: 'p' },
+      });
     });
 
-    test('treats an empty skills list like omission without creating a wrapper agent', async () => {
+    test('workflow omission selects no skills and enables strict MCP', async () => {
       mockQuery.mockImplementation(async function* () {
         yield { type: 'result', session_id: 'sid' };
       });
 
-      for await (const _ of client.sendQuery('test', '/workspace', undefined, {
-        nodeConfig: { skills: [] },
+      for await (const _ of client.sendQuery('test', workflowCwd, undefined, {
+        nodeConfig: { nodeId: 'closed-node' },
       })) {
         // consume
       }
@@ -2115,22 +2137,22 @@ describe('sendQuery decomposition behaviors', () => {
       expect(callArgs.options.agent).toBeUndefined();
       expect(callArgs.options.agents).toBeUndefined();
       expect(callArgs.options.allowedTools).toBeUndefined();
+      expect(callArgs.options.skills).toEqual([]);
+      expect(callArgs.options.strictMcpConfig).toBe(true);
+      expect(callArgs.options.mcpServers).toBeUndefined();
     });
 
-    test('merges inline agents with skills wrapper; user wins on ID collision', async () => {
+    test('passes exact native skill selection while preserving inline agents', async () => {
       mockQuery.mockImplementation(async function* () {
         yield { type: 'result', session_id: 'sid' };
       });
+      stageClaudeSkill('my-skill');
 
-      for await (const _ of client.sendQuery('test', '/workspace', undefined, {
+      for await (const _ of client.sendQuery('test', workflowCwd, undefined, {
         nodeConfig: {
+          nodeId: 'skilled-node',
           skills: ['my-skill'],
           agents: {
-            // Intentionally collides with the internal 'dag-node-skills' wrapper ID
-            'dag-node-skills': {
-              description: 'user override',
-              prompt: 'user-defined prompt',
-            },
             'extra-sub': { description: 'd', prompt: 'p' },
           },
         },
@@ -2139,46 +2161,22 @@ describe('sendQuery decomposition behaviors', () => {
       }
 
       const callArgs = mockQuery.mock.calls[0][0] as { options: Record<string, unknown> };
-      const outAgents = callArgs.options.agents as Record<
-        string,
-        { description: string; prompt: string }
-      >;
-      // Both entries present
-      expect(Object.keys(outAgents).sort()).toEqual(['dag-node-skills', 'extra-sub']);
-      // User's definition wins the collision
-      expect(outAgents['dag-node-skills'].description).toBe('user override');
-      expect(outAgents['dag-node-skills'].prompt).toBe('user-defined prompt');
+      expect(callArgs.options.skills).toEqual(['my-skill']);
+      expect(callArgs.options.agent).toBeUndefined();
+      expect(callArgs.options.agents).toEqual({
+        'extra-sub': { description: 'd', prompt: 'p' },
+      });
     });
 
-    test('logs a warning when user-defined dag-node-skills overrides the skills wrapper', async () => {
+    test('native skills without allowed_tools leave the SDK tool set unrestricted', async () => {
       mockQuery.mockImplementation(async function* () {
         yield { type: 'result', session_id: 'sid' };
       });
 
-      for await (const _ of client.sendQuery('test', '/workspace', undefined, {
+      stageClaudeSkill('agent-browser');
+      for await (const _ of client.sendQuery('test', workflowCwd, undefined, {
         nodeConfig: {
-          skills: ['my-skill'],
-          agents: {
-            'dag-node-skills': { description: 'user override', prompt: 'p' },
-          },
-        },
-      })) {
-        // consume
-      }
-
-      expect(mockLogger.warn).toHaveBeenCalledWith(
-        expect.objectContaining({ nodeSkills: ['my-skill'] }),
-        'claude.inline_agents_override_skills_wrapper'
-      );
-    });
-
-    test('skills without allowed_tools omits tools field so SDK defaults apply', async () => {
-      mockQuery.mockImplementation(async function* () {
-        yield { type: 'result', session_id: 'sid' };
-      });
-
-      for await (const _ of client.sendQuery('test', '/workspace', undefined, {
-        nodeConfig: {
+          nodeId: 'skilled-node',
           skills: ['agent-browser'],
           // no allowed_tools → options.tools is undefined
         },
@@ -2187,12 +2185,8 @@ describe('sendQuery decomposition behaviors', () => {
       }
 
       const callArgs = mockQuery.mock.calls[0][0] as { options: Record<string, unknown> };
-      const outAgents = callArgs.options.agents as Record<
-        string,
-        { description: string; tools?: string[] }
-      >;
-      // tools should NOT be set — lets SDK provide all default native tools
-      expect(outAgents['dag-node-skills'].tools).toBeUndefined();
+      expect(callArgs.options.skills).toEqual(['agent-browser']);
+      expect(callArgs.options.tools).toBeUndefined();
     });
 
     test('skills with allowed_tools includes Skill in the tools list', async () => {
@@ -2200,8 +2194,10 @@ describe('sendQuery decomposition behaviors', () => {
         yield { type: 'result', session_id: 'sid' };
       });
 
-      for await (const _ of client.sendQuery('test', '/workspace', undefined, {
+      stageClaudeSkill('agent-browser');
+      for await (const _ of client.sendQuery('test', workflowCwd, undefined, {
         nodeConfig: {
+          nodeId: 'skilled-node',
           skills: ['agent-browser'],
           allowed_tools: ['Bash', 'Read'],
         },
@@ -2210,34 +2206,95 @@ describe('sendQuery decomposition behaviors', () => {
       }
 
       const callArgs = mockQuery.mock.calls[0][0] as { options: Record<string, unknown> };
-      const outAgents = callArgs.options.agents as Record<
-        string,
-        { description: string; tools?: string[] }
-      >;
-      // tools should include the explicit list plus Skill
-      expect(outAgents['dag-node-skills'].tools).toEqual(['Bash', 'Read', 'Skill']);
+      expect(callArgs.options.tools).toEqual(['Bash', 'Read', 'Skill']);
+      expect(callArgs.options.allowedTools).toContain('Skill');
     });
 
-    test('does NOT warn when inline agents do not collide with the skills wrapper', async () => {
+    test('fails before querying when a declared skill is unavailable to Claude', async () => {
+      mockQuery.mockImplementation(async function* () {
+        yield { type: 'result', session_id: 'sid' };
+      });
+      const agentsOnly = join(workflowCwd, '.agents', 'skills', 'my-skill');
+      mkdirSync(agentsOnly, { recursive: true });
+      writeFileSync(join(agentsOnly, 'SKILL.md'), '# agents only\n');
+
+      let error: unknown;
+      try {
+        for await (const _ of client.sendQuery('test', workflowCwd, undefined, {
+          nodeConfig: { nodeId: 'missing-skill', skills: ['my-skill'] },
+        })) {
+          // consume
+        }
+      } catch (caught) {
+        error = caught;
+      }
+
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain('.claude/skills/');
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+
+    test('uses the same closed capability options when resuming', async () => {
       mockQuery.mockImplementation(async function* () {
         yield { type: 'result', session_id: 'sid' };
       });
 
-      for await (const _ of client.sendQuery('test', '/workspace', undefined, {
-        nodeConfig: {
-          skills: ['my-skill'],
-          agents: {
-            'brief-gen': { description: 'd', prompt: 'p' },
-          },
-        },
+      for (const sessionId of [undefined, 'resume-me']) {
+        for await (const _ of client.sendQuery('test', workflowCwd, sessionId, {
+          nodeConfig: { nodeId: 'closed-node' },
+        })) {
+          // consume
+        }
+      }
+
+      expect(mockQuery).toHaveBeenCalledTimes(2);
+      for (const call of mockQuery.mock.calls) {
+        const options = (call[0] as { options: Record<string, unknown> }).options;
+        expect(options.skills).toEqual([]);
+        expect(options.strictMcpConfig).toBe(true);
+      }
+      const resumedOptions = (mockQuery.mock.calls[1][0] as { options: Record<string, unknown> })
+        .options;
+      expect(resumedOptions.resume).toBe('resume-me');
+    });
+
+    test('strict MCP passes exactly the workflow-declared server map', async () => {
+      mockQuery.mockImplementation(async function* () {
+        yield { type: 'result', session_id: 'sid' };
+      });
+      const mcpPath = join(workflowCwd, 'mcp.json');
+      writeFileSync(
+        mcpPath,
+        JSON.stringify({ declared: { command: 'node', args: ['server.mjs'] } })
+      );
+
+      for await (const _ of client.sendQuery('test', workflowCwd, undefined, {
+        nodeConfig: { nodeId: 'mcp-node', mcp: mcpPath },
       })) {
         // consume
       }
 
-      const warnCalls = mockLogger.warn.mock.calls.filter(
-        (args: unknown[]) => args[1] === 'claude.inline_agents_override_skills_wrapper'
-      );
-      expect(warnCalls).toHaveLength(0);
+      const options = (mockQuery.mock.calls[0][0] as { options: Record<string, unknown> }).options;
+      expect(options.strictMcpConfig).toBe(true);
+      expect(Object.keys(options.mcpServers as Record<string, unknown>)).toEqual(['declared']);
+      expect(options.allowedTools).toContain('mcp__declared__*');
+    });
+
+    test('keeps partial non-workflow nodeConfig on ambient defaults', async () => {
+      mockQuery.mockImplementation(async function* () {
+        yield { type: 'result', session_id: 'sid' };
+      });
+
+      for await (const _ of client.sendQuery('title', workflowCwd, undefined, {
+        nodeConfig: { allowed_tools: [] },
+      })) {
+        // consume
+      }
+
+      const options = (mockQuery.mock.calls[0][0] as { options: Record<string, unknown> }).options;
+      expect(options.skills).toBeUndefined();
+      expect(options.strictMcpConfig).toBeUndefined();
+      expect(options.tools).toEqual([]);
     });
   });
 });

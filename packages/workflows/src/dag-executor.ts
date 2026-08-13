@@ -1105,23 +1105,6 @@ async function resolveNodeProviderAndModel(
     }
   }
 
-  // Surface agents + skills ID collision — user-defined 'dag-node-skills'
-  // silently overrides Archon's skills wrapper. User wins (by design) but
-  // the operator should know they've neutered the wrapper.
-  if (
-    node.agents?.['dag-node-skills'] !== undefined &&
-    node.skills !== undefined &&
-    node.skills.length > 0
-  ) {
-    getLog().warn({ nodeId: node.id }, 'dag.agents_skills_id_collision');
-    await safeSendMessage(
-      platform,
-      conversationId,
-      `Warning: Node '${node.id}' defines an agent with reserved ID 'dag-node-skills' AND uses 'skills:'. Your inline agent overrides Archon's automatic skills wrapper — the 'skills:' field will NOT take effect. Rename the agent or remove 'skills:' to fix.`,
-      { workflowId: workflowRunId, nodeName: node.id }
-    );
-  }
-
   // Build universal base options
   const baseOptions: SendQueryOptions = {};
   if (model) baseOptions.model = model;

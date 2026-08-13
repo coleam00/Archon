@@ -994,51 +994,69 @@ describe('validateWorkflowResources — skills search roots', () => {
     );
   }
 
-  function missingSkillWarnings(issues: Awaited<ReturnType<typeof validateWorkflowResources>>) {
-    return issues.filter(
-      i => i.level === 'warning' && i.field === 'skills' && i.message.includes('not found')
-    );
+  function missingSkillIssues(issues: Awaited<ReturnType<typeof validateWorkflowResources>>) {
+    return issues.filter(i => i.field === 'skills' && i.message.includes('not found'));
   }
 
-  test('no warning for a skill under <cwd>/.agents/skills/', async () => {
+  test('Claude rejects a skill installed only under <cwd>/.agents/skills/', async () => {
     await stageSkill(tmpDir, '.agents', 'my-skill');
     const issues = await validateWorkflowResources(skillsWorkflow('my-skill'), tmpDir);
-    expect(missingSkillWarnings(issues)).toHaveLength(0);
+    const missing = missingSkillIssues(issues);
+    expect(missing).toHaveLength(1);
+    expect(missing[0].level).toBe('error');
+    expect(missing[0].message).toContain('.claude/skills/');
   });
 
-  test('no warning for a skill under <cwd>/.claude/skills/', async () => {
+  test('Claude accepts a skill under <cwd>/.claude/skills/', async () => {
     await stageSkill(tmpDir, '.claude', 'my-skill');
     const issues = await validateWorkflowResources(skillsWorkflow('my-skill'), tmpDir);
-    expect(missingSkillWarnings(issues)).toHaveLength(0);
+    expect(missingSkillIssues(issues)).toHaveLength(0);
   });
 
-  test('no warning for a skill under ~/.agents/skills/', async () => {
+  test('Claude rejects a skill installed only under ~/.agents/skills/', async () => {
     await stageSkill(fakeHome, '.agents', 'home-skill');
     const issues = await validateWorkflowResources(skillsWorkflow('home-skill'), tmpDir);
-    expect(missingSkillWarnings(issues)).toHaveLength(0);
+    const missing = missingSkillIssues(issues);
+    expect(missing).toHaveLength(1);
+    expect(missing[0].level).toBe('error');
   });
 
-  test('no warning for a skill under ~/.claude/skills/', async () => {
+  test('Claude accepts a skill under ~/.claude/skills/', async () => {
     await stageSkill(fakeHome, '.claude', 'home-skill');
     const issues = await validateWorkflowResources(skillsWorkflow('home-skill'), tmpDir);
-    expect(missingSkillWarnings(issues)).toHaveLength(0);
+    expect(missingSkillIssues(issues)).toHaveLength(0);
   });
 
-  test('warning when the skill exists in none of the search roots', async () => {
+  test('Claude reports an error when the skill exists in neither native root', async () => {
     const issues = await validateWorkflowResources(skillsWorkflow('nonexistent-skill'), tmpDir);
-    const warnings = missingSkillWarnings(issues);
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0].nodeId).toBe('step1');
-    expect(warnings[0].message).toContain("Skill 'nonexistent-skill' not found");
-    expect(warnings[0].message).toContain('.agents/skills/');
-    expect(warnings[0].hint).toContain('.agents/skills/nonexistent-skill/SKILL.md');
+    const missing = missingSkillIssues(issues);
+    expect(missing).toHaveLength(1);
+    expect(missing[0].level).toBe('error');
+    expect(missing[0].nodeId).toBe('step1');
+    expect(missing[0].message).toContain("Claude skill 'nonexistent-skill' not found");
+    expect(missing[0].message).toContain('.claude/skills/');
+    expect(missing[0].hint).toContain('.claude/skills/nonexistent-skill/SKILL.md');
   });
 
-  test('skill directory without SKILL.md still warns', async () => {
+  test('Claude skill directory without SKILL.md still errors', async () => {
     // An empty directory is not a valid skill — the resolver requires SKILL.md.
-    await mkdir(join(tmpDir, '.agents', 'skills', 'empty-skill'), { recursive: true });
+    await mkdir(join(tmpDir, '.claude', 'skills', 'empty-skill'), { recursive: true });
     const issues = await validateWorkflowResources(skillsWorkflow('empty-skill'), tmpDir);
-    expect(missingSkillWarnings(issues)).toHaveLength(1);
+    const missing = missingSkillIssues(issues);
+    expect(missing).toHaveLength(1);
+    expect(missing[0].level).toBe('error');
+  });
+
+  test('Pi keeps accepting the shared .agents skill root', async () => {
+    await stageSkill(tmpDir, '.agents', 'portable-skill');
+    const workflow = makeWorkflow(
+      'test',
+      [{ id: 'step1', prompt: 'do work', skills: ['portable-skill'] } as unknown as DagNode],
+      'pi'
+    );
+
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    expect(missingSkillIssues(issues)).toHaveLength(0);
   });
 
   test('Codex warns about unsupported YAML skills without four-root validation', async () => {
@@ -1050,7 +1068,7 @@ describe('validateWorkflowResources — skills search roots', () => {
     );
 
     const issues = await validateWorkflowResources(workflow, tmpDir);
-    expect(missingSkillWarnings(issues)).toHaveLength(0);
+    expect(missingSkillIssues(issues)).toHaveLength(0);
     const warning = issues.find(issue => issue.level === 'warning' && issue.field === 'skills');
     expect(warning?.message).toContain("not supported by provider 'codex'");
     expect(warning?.hint).toContain('$skill-name');
