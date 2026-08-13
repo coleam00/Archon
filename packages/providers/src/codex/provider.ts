@@ -903,7 +903,7 @@ export class CodexProvider implements IAgentProvider {
     }
 
     const suppressWorkflowSkillCatalog = isWorkflowNode(requestOptions);
-    let codexConfigOverrides = suppressWorkflowSkillCatalog
+    const initialConfigOverrides = suppressWorkflowSkillCatalog
       ? withWorkflowSkillCatalogDisabled(declaredMcpConfigOverrides)
       : declaredMcpConfigOverrides;
 
@@ -915,7 +915,7 @@ export class CodexProvider implements IAgentProvider {
     let codex = await this.createCodexClient(
       codexConfig.codexBinaryPath,
       requestOptions?.env,
-      codexConfigOverrides
+      initialConfigOverrides
     );
     const threadOptions = buildThreadOptions(cwd, requestOptions?.model, assistantConfig);
 
@@ -1010,73 +1010,77 @@ export class CodexProvider implements IAgentProvider {
         }
 
         try {
-          // 4. Run streamed turn
-          let result;
-          try {
-            result = await thread.runStreamed(effectivePrompt, turnOptions);
-          } catch (error) {
-            const err = error as Error;
-            if (
-              !suppressWorkflowSkillCatalog ||
-              skillCatalogCompatibilityFallbackUsed ||
-              !isWorkflowSkillCatalogConfigUnsupported(err.message)
-            ) {
-              throw error;
-            }
-
-            skillCatalogCompatibilityFallbackUsed = true;
-            codexConfigOverrides = declaredMcpConfigOverrides;
-            getLog().warn(
-              { err, nodeId: requestOptions?.nodeConfig?.nodeId },
-              'codex.workflow_skill_catalog_suppression_unsupported'
-            );
-            yield {
-              type: 'system',
-              content:
-                '⚠️ This Codex binary does not support suppressing the automatic skill catalog. Continuing with native skill discovery enabled.',
-            };
-
-            codex = await this.createCodexClient(
-              codexConfig.codexBinaryPath,
-              requestOptions?.env,
-              codexConfigOverrides
-            );
-            if (resumeSessionId) {
-              try {
-                thread = codex.resumeThread(resumeSessionId, threadOptions);
-              } catch (resumeError) {
-                getLog().error(
-                  { err: resumeError, sessionId: resumeSessionId },
-                  'resume_thread_failed'
-                );
-                thread = codex.startThread(threadOptions);
-                sessionResumeFailed = true;
-                yield {
-                  type: 'system',
-                  content: '⚠️ Could not resume previous session. Starting fresh conversation.',
-                };
+          // 4. Run and consume the streamed turn. Codex starts its subprocess
+          // lazily while events are iterated, so compatibility errors must be
+          // caught around both runStreamed() and event consumption.
+          let providerEventEmitted = false;
+          while (true) {
+            try {
+              const result = await thread.runStreamed(effectivePrompt, turnOptions);
+              for await (const chunk of withResumedOutcome(
+                streamCodexEvents(
+                  result.events as AsyncIterable<Record<string, unknown>>,
+                  hasOutputFormat,
+                  thread.id,
+                  attemptController.signal,
+                  Boolean(requestOptions?.nodeConfig?.mcp)
+                ),
+                // Stamp from the attempt that produced the result: any retry
+                // (attempt > 0) re-runs on a fresh startThread (cold), so the prior
+                // session context is lost even when the initial resumeThread succeeded.
+                resumedOutcome(resumeSessionId, !sessionResumeFailed && attempt === 0)
+              )) {
+                providerEventEmitted = true;
+                yield chunk;
               }
-            } else {
-              thread = codex.startThread(threadOptions);
-            }
-            result = await thread.runStreamed(effectivePrompt, turnOptions);
-          }
+              return;
+            } catch (error) {
+              const err = error as Error;
+              if (
+                providerEventEmitted ||
+                !suppressWorkflowSkillCatalog ||
+                skillCatalogCompatibilityFallbackUsed ||
+                !isWorkflowSkillCatalogConfigUnsupported(err.message)
+              ) {
+                throw error;
+              }
 
-          // 5. Stream normalized events (fresh state per attempt to avoid dedup leaks)
-          yield* withResumedOutcome(
-            streamCodexEvents(
-              result.events as AsyncIterable<Record<string, unknown>>,
-              hasOutputFormat,
-              thread.id,
-              attemptController.signal,
-              Boolean(requestOptions?.nodeConfig?.mcp)
-            ),
-            // Stamp from the attempt that produced the result: any retry
-            // (attempt > 0) re-runs on a fresh startThread (cold), so the prior
-            // session context is lost even when the initial resumeThread succeeded.
-            resumedOutcome(resumeSessionId, !sessionResumeFailed && attempt === 0)
-          );
-          return;
+              skillCatalogCompatibilityFallbackUsed = true;
+              getLog().warn(
+                { err, nodeId: requestOptions?.nodeConfig?.nodeId },
+                'codex.workflow_skill_catalog_suppression_unsupported'
+              );
+              yield {
+                type: 'system',
+                content:
+                  '⚠️ This Codex binary does not support suppressing the automatic skill catalog. Continuing with native skill discovery enabled.',
+              };
+
+              codex = await this.createCodexClient(
+                codexConfig.codexBinaryPath,
+                requestOptions?.env,
+                declaredMcpConfigOverrides
+              );
+              if (resumeSessionId) {
+                try {
+                  thread = codex.resumeThread(resumeSessionId, threadOptions);
+                } catch (resumeError) {
+                  getLog().error(
+                    { err: resumeError, sessionId: resumeSessionId },
+                    'resume_thread_failed'
+                  );
+                  thread = codex.startThread(threadOptions);
+                  sessionResumeFailed = true;
+                  yield {
+                    type: 'system',
+                    content: '⚠️ Could not resume previous session. Starting fresh conversation.',
+                  };
+                }
+              } else {
+                thread = codex.startThread(threadOptions);
+              }
+            }
+          }
         } catch (error) {
           const err = error as Error;
 

@@ -152,13 +152,14 @@ describe('CodexProvider', () => {
       let calls = 0;
       mockRunStreamed.mockImplementation(() => {
         calls++;
-        if (calls === 1) {
-          return Promise.reject(
-            new Error('Error loading config: unknown field `include_instructions` in `skills`')
-          );
-        }
+        const call = calls;
         return Promise.resolve({
           events: (async function* () {
+            if (call === 1) {
+              throw new Error(
+                'Error loading config: unknown field `include_instructions` in `skills`'
+              );
+            }
             yield { type: 'turn.completed', usage: defaultUsage };
           })(),
         });
@@ -204,6 +205,36 @@ describe('CodexProvider', () => {
       });
       expect(mockLogger.warn).toHaveBeenCalledWith(
         expect.objectContaining({ nodeId: 'investigate' }),
+        'codex.workflow_skill_catalog_suppression_unsupported'
+      );
+    });
+
+    test('does not replay a turn when a catalog config error arrives after provider output', async () => {
+      mockRunStreamed.mockResolvedValue({
+        events: (async function* () {
+          yield {
+            type: 'item.completed',
+            item: { id: 'message-1', type: 'agent_message', text: 'already emitted' },
+          };
+          throw new Error('Error loading config: unknown field `include_instructions` in `skills`');
+        })(),
+      });
+
+      const chunks = [];
+      await expect(
+        (async (): Promise<void> => {
+          for await (const chunk of client.sendQuery('test prompt', '/workspace', undefined, {
+            nodeConfig: { nodeId: 'investigate' },
+          })) {
+            chunks.push(chunk);
+          }
+        })()
+      ).rejects.toThrow('include_instructions');
+
+      expect(chunks).toContainEqual({ type: 'assistant', content: 'already emitted' });
+      expect(MockCodex).toHaveBeenCalledTimes(1);
+      expect(mockLogger.warn).not.toHaveBeenCalledWith(
+        expect.anything(),
         'codex.workflow_skill_catalog_suppression_unsupported'
       );
     });
