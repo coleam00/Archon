@@ -2234,6 +2234,55 @@ describe('sendQuery decomposition behaviors', () => {
       expect(mockQuery).not.toHaveBeenCalled();
     });
 
+    test('resolves user skills from the effective CLAUDE_CONFIG_DIR on host', async () => {
+      mockQuery.mockImplementation(async function* () {
+        yield { type: 'result', session_id: 'sid' };
+      });
+      const configDir = join(workflowCwd, 'custom-claude-config');
+      const skillDir = join(configDir, 'skills', 'custom-skill');
+      mkdirSync(skillDir, { recursive: true });
+      writeFileSync(join(skillDir, 'SKILL.md'), '# custom\n');
+
+      for await (const _ of client.sendQuery('test', workflowCwd, undefined, {
+        env: { CLAUDE_CONFIG_DIR: configDir },
+        nodeConfig: { nodeId: 'custom-config', skills: ['custom-skill'] },
+      })) {
+        // consume
+      }
+
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+      const options = (mockQuery.mock.calls[0][0] as { options: Record<string, unknown> }).options;
+      expect(options.skills).toEqual(['custom-skill']);
+    });
+
+    test('container workflows fail before spend for a host user-only skill', async () => {
+      mockQuery.mockImplementation(async function* () {
+        yield { type: 'result', session_id: 'sid' };
+      });
+      const configDir = join(workflowCwd, 'host-claude-config');
+      const skillDir = join(configDir, 'skills', 'user-only');
+      mkdirSync(skillDir, { recursive: true });
+      writeFileSync(join(skillDir, 'SKILL.md'), '# user only\n');
+
+      let error: unknown;
+      try {
+        for await (const _ of client.sendQuery('test', workflowCwd, undefined, {
+          env: { CLAUDE_CONFIG_DIR: configDir },
+          execContext: { kind: 'container', containerId: 'c-1' },
+          nodeConfig: { nodeId: 'container-skill', skills: ['user-only'] },
+        })) {
+          // consume
+        }
+      } catch (caught) {
+        error = caught;
+      }
+
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain('container workflows');
+      expect((error as Error).message).toContain('project-local .claude/skills/');
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+
     test('uses the same closed capability options when resuming', async () => {
       mockQuery.mockImplementation(async function* () {
         yield { type: 'result', session_id: 'sid' };

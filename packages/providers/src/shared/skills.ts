@@ -9,10 +9,26 @@ export interface ResolvedSkills {
   missing: string[];
 }
 
+export interface ClaudeSkillSearchOptions {
+  /** Effective Claude config directory. Defaults to CLAUDE_CONFIG_DIR or ~/.claude. */
+  userConfigDir?: string;
+  /** Container runs cannot see host user skills unless explicitly mounted. */
+  includeUser?: boolean;
+}
+
 /** Claude Code's provider-native skill roots, in discovery precedence order. */
-export function claudeSkillSearchRoots(cwd: string): string[] {
+export function claudeSkillSearchRoots(
+  cwd: string,
+  options: ClaudeSkillSearchOptions = {}
+): string[] {
   const home = process.env.HOME ?? homedir();
-  return [join(cwd, '.claude', 'skills'), join(home, '.claude', 'skills')];
+  const roots = [join(cwd, '.claude', 'skills')];
+  if (options.includeUser !== false) {
+    const userConfigDir =
+      options.userConfigDir ?? process.env.CLAUDE_CONFIG_DIR ?? join(home, '.claude');
+    roots.push(join(userConfigDir, 'skills'));
+  }
+  return roots;
 }
 
 /**
@@ -111,7 +127,8 @@ function resolveSkillDirectoriesFromRoots(
  */
 export function resolveClaudeSkillDirectories(
   cwd: string,
-  skillNames: string[] | undefined
+  skillNames: string[] | undefined,
+  options?: ClaudeSkillSearchOptions
 ): ResolvedSkills {
-  return resolveSkillDirectoriesFromRoots(claudeSkillSearchRoots(cwd), skillNames);
+  return resolveSkillDirectoriesFromRoots(claudeSkillSearchRoots(cwd, options), skillNames);
 }

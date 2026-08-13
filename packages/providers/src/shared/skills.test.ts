@@ -173,4 +173,26 @@ describe('resolveClaudeSkillDirectories', () => {
       missing: ['agents-only'],
     });
   });
+
+  test('honors a custom Claude config directory for user skills', () => {
+    const customConfig = join(fake.root, 'custom-claude');
+    const skill = join(customConfig, 'skills', 'custom-skill');
+    mkdirSync(skill, { recursive: true });
+    writeFileSync(join(skill, 'SKILL.md'), '# custom\n');
+
+    expect(
+      resolveClaudeSkillDirectories(fake.cwd, ['custom-skill'], {
+        userConfigDir: customConfig,
+      })
+    ).toEqual({ paths: [skill], missing: [] });
+  });
+
+  test('can restrict discovery to project skills for isolated execution', () => {
+    fake.stageSkill('home', '.claude', 'user-only');
+
+    expect(resolveClaudeSkillDirectories(fake.cwd, ['user-only'], { includeUser: false })).toEqual({
+      paths: [],
+      missing: ['user-only'],
+    });
+  });
 });

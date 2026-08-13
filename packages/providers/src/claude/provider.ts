@@ -452,7 +452,8 @@ interface ProviderWarning {
 async function applyNodeConfig(
   options: Options,
   nodeConfig: NodeConfig,
-  cwd: string
+  cwd: string,
+  skillSearch: { userConfigDir?: string; includeUser: boolean }
 ): Promise<ProviderWarning[]> {
   const warnings: ProviderWarning[] = [];
   const isWorkflowNode =
@@ -465,10 +466,13 @@ async function applyNodeConfig(
     options.strictMcpConfig = true;
 
     if (nodeConfig.skills && nodeConfig.skills.length > 0) {
-      const { missing } = resolveClaudeSkillDirectories(cwd, nodeConfig.skills);
+      const { missing } = resolveClaudeSkillDirectories(cwd, nodeConfig.skills, skillSearch);
       if (missing.length > 0) {
+        const installLocation = skillSearch.includeUser
+          ? '.claude/skills/ in the project or effective Claude config directory'
+          : 'the project-local .claude/skills/ directory (container workflows cannot use host user-global skills)';
         throw new Error(
-          `Claude skill${missing.length === 1 ? '' : 's'} not found in a Claude-native skill directory: ${missing.join(', ')}. Install ${missing.length === 1 ? 'it' : 'them'} under .claude/skills/ in the project or user home.`
+          `Claude skill${missing.length === 1 ? '' : 's'} not found in a Claude-native skill directory: ${missing.join(', ')}. Install ${missing.length === 1 ? 'it' : 'them'} under ${installLocation}.`
         );
       }
     }
@@ -1285,9 +1289,18 @@ export class ClaudeProvider implements IAgentProvider {
     // then re-apply per attempt. But nodeConfig warnings are deterministic,
     // so we compute them once and yield them before the first attempt.
     let nodeConfigWarnings: ProviderWarning[] = [];
+    const skillSearch = {
+      ...(env.CLAUDE_CONFIG_DIR ? { userConfigDir: env.CLAUDE_CONFIG_DIR } : {}),
+      includeUser: !isContainerRun,
+    };
     if (requestOptions?.nodeConfig) {
       const tempOptions: Options = {} as Options;
-      nodeConfigWarnings = await applyNodeConfig(tempOptions, requestOptions.nodeConfig, cwd);
+      nodeConfigWarnings = await applyNodeConfig(
+        tempOptions,
+        requestOptions.nodeConfig,
+        cwd,
+        skillSearch
+      );
     }
 
     // Yield provider warnings once before retries
@@ -1329,7 +1342,7 @@ export class ClaudeProvider implements IAgentProvider {
 
       // 2. Apply nodeConfig translation (re-applied per attempt since options are fresh)
       if (requestOptions?.nodeConfig) {
-        await applyNodeConfig(options, requestOptions.nodeConfig, cwd);
+        await applyNodeConfig(options, requestOptions.nodeConfig, cwd, skillSearch);
       }
 
       // 2b. Register in-process native tools (e.g. manage_run) as an archon MCP

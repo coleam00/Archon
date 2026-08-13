@@ -263,6 +263,9 @@ Normal repository instructions such as `AGENTS.md` remain active with the catalo
   There is no on-demand fetching (yet).
 - **Provider-native paths** — Claude declarations resolve only from project/user
   `.claude/skills/`; Archon does not copy `.agents/skills/` into Claude's roots.
+- **Container workflows** — only project-local `.claude/skills/` is visible in the
+  isolated runner. A host user-global skill must also be installed in the project
+  before a container node can declare it; Archon fails before provider spend otherwise.
 - **Provider semantics differ** — consult the capability matrix. Codex uses explicit
   `$skill-name` invocation rather than YAML list injection.
 - **Fail-fast validation** — a Claude node that declares a skill unavailable from
