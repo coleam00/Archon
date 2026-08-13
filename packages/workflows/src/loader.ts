@@ -336,7 +336,8 @@ function parseDagNode(
 
 /**
  * Validate DAG structure: unique IDs, depends_on references exist, no cycles,
- * and $nodeId.output refs in when:/prompt: fields point to known nodes.
+ * and every runtime-substituted node-output reference points to a known node in its
+ * current or enclosing loop scope.
  * Returns error message or null if valid.
  *
  * Exported so the include-expander can re-run the same structural checks on the

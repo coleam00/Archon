@@ -84,6 +84,11 @@ import { dagNodeSchema } from './schemas';
 import { discoverWorkflows } from './workflow-discovery';
 import { parseWorkflow } from './loader';
 import { expandWorkflowIncludes } from './include-expander';
+import {
+  COMPILED_LOOP_COMMAND,
+  type CompiledLoopCommand,
+  type LoopWithCompiledCommand,
+} from './compiled-command';
 import { OutputRefError } from './output-ref';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
 import type { IWorkflowStore } from './store';
@@ -820,9 +825,9 @@ describe('substituteNodeOutputRefs', () => {
 
   it('unknown node ref WITH a field throws (no-silent-drop, unknown-node)', () => {
     // The whole-text `$missing.output` form stays lenient ('' — see test above), but a
-    // `.field` ref to an unknown id is a typo the load-time validator can't always see
-    // (bash/script/approval/cancel + command-file refs aren't scanned). It must fail the
-    // consuming node loudly, matching known-producer strict-field posture.
+    // `.field` ref to an unknown id can still reach the executor through a programmatically
+    // constructed definition that bypasses discovery. It must fail the consuming node
+    // loudly, matching known-producer strict-field posture.
     const outputs = new Map([['analyze', makeOutput('completed', '{"type":"BUG"}')]]);
     let caught: unknown;
     try {
@@ -8498,25 +8503,27 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         description: 'Includes the command-backed loop',
         nodes: [{ id: 'included', include: 'materialized-loop-block' } satisfies DagNode],
       } satisfies WorkflowDefinition;
-      const rawWorkflows = new Map([
-        [blockWorkflow.name, blockWorkflow],
-        [parentWorkflow.name, parentWorkflow],
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      const commandPath = join(testDir, '.archon', 'commands', 'materialized-loop-command.md');
+      await mkdir(workflowDir, { recursive: true });
+      await Promise.all([
+        writeFile(join(workflowDir, 'materialized-block.yaml'), JSON.stringify(blockWorkflow)),
+        writeFile(join(workflowDir, 'materialized-parent.yaml'), JSON.stringify(parentWorkflow)),
+        writeFile(commandPath, 'ORIGINAL materialized command. USER=<<$LOOP_USER_INPUT>>'),
       ]);
-      const firstExpansion = expandWorkflowIncludes(
-        rawWorkflows,
-        new Map([
-          ['materialized-loop-command', 'ORIGINAL materialized command. USER=<<$LOOP_USER_INPUT>>'],
-        ])
-      );
-      const originalWorkflow = firstExpansion.workflows.get(parentWorkflow.name)!;
-      expect(firstExpansion.errors).toHaveLength(0);
+      const firstDiscovery = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(firstDiscovery.errors).toHaveLength(0);
+      const originalWorkflow = firstDiscovery.workflows.find(
+        item => item.workflow.name === parentWorkflow.name
+      )?.workflow;
+      expect(originalWorkflow).toBeDefined();
 
       await executeDagWorkflow(
         firstDeps,
         platform,
         'conv-dag',
         testDir,
-        originalWorkflow,
+        originalWorkflow!,
         makeWorkflowRun(),
         'claude',
         undefined,
@@ -8541,15 +8548,16 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         yield { type: 'assistant', content: 'refined. <promise>COMPLETE</promise>' };
         yield { type: 'result', sessionId: 'sid-prompt-2' };
       });
-      // Cold rediscovery after the source command was deleted still returns the
+      // Cold filesystem rediscovery after the source command was deleted still returns the
       // workflow. Its engine-private compilation error blocks a fresh run, while
       // this resumed run can reach and reuse the persisted snapshot.
-      const rediscovery = expandWorkflowIncludes(
-        rawWorkflows,
-        new Map([['materialized-loop-command', null]])
-      );
+      unlinkSync(commandPath);
+      const rediscovery = await discoverWorkflows(testDir, { loadDefaults: false });
       expect(rediscovery.errors).toHaveLength(0);
-      const rediscoveredWorkflow = rediscovery.workflows.get(parentWorkflow.name)!;
+      const rediscoveredWorkflow = rediscovery.workflows.find(
+        item => item.workflow.name === parentWorkflow.name
+      )?.workflow;
+      expect(rediscoveredWorkflow).toBeDefined();
       mockSendQueryDag.mockClear();
       const freshStore = createMockStore();
       await executeDagWorkflow(
@@ -8557,7 +8565,7 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         platform,
         'conv-dag',
         testDir,
-        rediscoveredWorkflow,
+        rediscoveredWorkflow!,
         makeWorkflowRun('fresh-invalid-command-run'),
         'claude',
         undefined,
@@ -8590,7 +8598,7 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         platform,
         'conv-dag',
         testDir,
-        rediscoveredWorkflow,
+        rediscoveredWorkflow!,
         resumedRun,
         'claude',
         undefined,
@@ -8606,6 +8614,107 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       expect(resumedPrompt).toContain('ORIGINAL materialized command.');
       expect(resumedPrompt).toContain('USER=<<tighten the summary>>');
       expect(resumedPrompt).not.toContain('could not be resolved');
+    });
+
+    it('fails before provider invocation when compiled loop metadata is malformed', async () => {
+      const loop: Extract<DagNode, { loop: unknown }>['loop'] & LoopWithCompiledCommand = {
+        command: 'malformed-compiled-command',
+        until: 'DONE',
+        max_iterations: 1,
+      };
+      loop[COMPILED_LOOP_COMMAND] = {} as CompiledLoopCommand;
+      const store = createMockStore();
+
+      await executeDagWorkflow(
+        createMockDeps(store),
+        createMockPlatform(),
+        'conv-dag',
+        testDir,
+        {
+          name: 'malformed-compiled-command-workflow',
+          nodes: [{ id: 'repeat', loop }],
+        },
+        makeWorkflowRun('malformed-compiled-command-run'),
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'state'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      expect(mockSendQueryDag).not.toHaveBeenCalled();
+      const failures = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls.filter(
+        (call: unknown[]) => (call[0] as Record<string, unknown>).event_type === 'node_failed'
+      );
+      expect(failures).toHaveLength(1);
+      expect((failures[0]?.[0] as { data: { error: string } }).data.error).toContain(
+        'malformed compiled command metadata'
+      );
+    });
+
+    it('keeps a whitespace-only included loop discoverable but fails a fresh run', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      await Promise.all([
+        writeFile(
+          join(workflowDir, 'empty-loop-block.yaml'),
+          JSON.stringify({
+            name: 'empty-loop-block',
+            description: 'Whitespace loop command block',
+            nodes: [
+              {
+                id: 'repeat',
+                loop: { command: 'empty-included-loop', until: 'DONE', max_iterations: 1 },
+              },
+            ],
+          })
+        ),
+        writeFile(
+          join(workflowDir, 'empty-loop-parent.yaml'),
+          JSON.stringify({
+            name: 'empty-loop-parent',
+            description: 'Includes whitespace loop command block',
+            nodes: [{ id: 'inc', include: 'empty-loop-block' }],
+          })
+        ),
+        writeFile(join(testDir, '.archon', 'commands', 'empty-included-loop.md'), '  \n\t'),
+      ]);
+      const discovery = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(discovery.errors).toHaveLength(0);
+      const workflow = discovery.workflows.find(
+        item => item.workflow.name === 'empty-loop-parent'
+      )?.workflow;
+      expect(workflow).toBeDefined();
+      const store = createMockStore();
+
+      await executeDagWorkflow(
+        createMockDeps(store),
+        createMockPlatform(),
+        'conv-dag',
+        testDir,
+        workflow!,
+        makeWorkflowRun('empty-included-loop-run'),
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'state'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      expect(mockSendQueryDag).not.toHaveBeenCalled();
+      const failures = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls.filter(
+        (call: unknown[]) => (call[0] as Record<string, unknown>).event_type === 'node_failed'
+      );
+      expect(failures).toHaveLength(1);
+      expect((failures[0]?.[0] as { data: { error: string } }).data.error).toContain(
+        "command 'empty-included-loop' is empty"
+      );
     });
 
     it('closes the loop lifecycle with exactly one node_failed on max-iterations exhaustion', async () => {
@@ -16952,7 +17061,7 @@ describe('executeDagWorkflow -- provider-boundary session threading (#1992)', ()
 // top-level nodes for events, terminal-output selection, resume-skip, and always_run.
 // ---------------------------------------------------------------------------
 
-describe('executeDagWorkflow -- include expansion (zero runtime machinery)', () => {
+describe('executeDagWorkflow -- flattened include expansion', () => {
   let testDir: string;
 
   beforeEach(async () => {

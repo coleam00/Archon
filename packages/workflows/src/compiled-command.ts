@@ -9,3 +9,16 @@ export type CompiledLoopCommand =
 export interface LoopWithCompiledCommand {
   [COMPILED_LOOP_COMMAND]?: CompiledLoopCommand;
 }
+
+export interface IncludeCommandReadError {
+  path: string;
+  message: string;
+}
+
+export type IncludeCommandContent = string | null | IncludeCommandReadError;
+
+export function isIncludeCommandReadError(
+  value: IncludeCommandContent | undefined
+): value is IncludeCommandReadError {
+  return typeof value === 'object' && value !== null;
+}

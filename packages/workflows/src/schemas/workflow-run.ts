@@ -305,9 +305,9 @@ export interface ApprovalContext {
    * Interactive-loop only. Read-once snapshot of the resolved loop prompt
    * template, whether authored as `loop.prompt` or loaded from `loop.command`,
    * persisted at gate pause so the resumed invocation reuses the exact text the
-   * run started with. This also preserves included commands after composition
-   * materializes them as prompts. Absent on runs paused by builds that predate
-   * this field; those resume from the current prompt or command source.
+   * run started with. This also takes precedence over an included loop command's
+   * load-time compiled prompt/error after rediscovery. Absent on runs paused by builds
+   * that predate this field; those resume from the current prompt or command source.
    */
   commandSnapshot?: string | null;
 }

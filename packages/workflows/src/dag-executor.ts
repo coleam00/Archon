@@ -781,10 +781,10 @@ export function substituteNodeOutputRefs(
     (match, nodeId: string, field: string | undefined) => {
       const nodeOutput = nodeOutputs.get(nodeId);
       if (!nodeOutput) {
-        // A `.field` ref that resolves to no output (a typo the load-time validator
-        // can't always see — refs in bash/script/approval/cancel fields and inside
-        // command-file content aren't scanned — or a real node that hasn't run before
-        // this reference) fails the consuming node loudly, matching the strict
+        // A `.field` ref that resolves to no output (for example, a programmatically
+        // constructed definition that bypassed discovery, or a real producer whose
+        // output is unavailable on this execution path) fails the consuming node loudly,
+        // matching the strict
         // no-silent-drop posture for known-producer field access below. The whole-text
         // `$id.output` form stays lenient ('') as a long-documented surface (changing
         // it is a bigger compatibility break).
@@ -4193,24 +4193,33 @@ async function executeLoopNode(
 
   // Resolve the iteration prompt source once per run/node. The interactive gate
   // persists the resolved template (`commandSnapshot` in the pause context) for
-  // both inline and command-backed loops. This also covers included commands,
-  // which composition materializes as inline prompts: rediscovery after a pause
-  // cannot change their running prompt if the source command is edited or deleted.
+  // both inline and command-backed loops. Included loops retain their command identity
+  // plus a load-time compiled prompt/error; rediscovery after a pause cannot change their
+  // running prompt because a persisted snapshot takes precedence over that metadata.
   // The schema guarantees exactly one of prompt/command is defined.
   let loopPromptTemplate: string;
   if (isLoopResume && typeof loopGateMeta?.commandSnapshot === 'string') {
     loopPromptTemplate = loopGateMeta.commandSnapshot;
   } else if (typeof loop.command === 'string') {
     const compiled = (loop as typeof loop & LoopWithCompiledCommand)[COMPILED_LOOP_COMMAND];
-    if (compiled?.error !== undefined) {
+    const hasCompiledError = compiled !== undefined && typeof compiled.error === 'string';
+    const hasCompiledPrompt = compiled !== undefined && typeof compiled.prompt === 'string';
+    if (hasCompiledError && !hasCompiledPrompt) {
       getLog().error(
         { nodeId: node.id, command: loop.command, error: compiled.error },
         'loop_node.command_compilation_failed'
       );
       return failLoopNode(compiled.error, { data: { command: loop.command } });
     }
-    if (compiled?.prompt !== undefined) {
+    if (hasCompiledPrompt && !hasCompiledError) {
       loopPromptTemplate = compiled.prompt;
+    } else if (compiled !== undefined) {
+      const errorMsg = `Loop node '${node.id}' has malformed compiled command metadata for '${loop.command}' — expected exactly one string prompt or error.`;
+      getLog().error(
+        { nodeId: node.id, command: loop.command, compiled },
+        'loop_node.command_compilation_metadata_invalid'
+      );
+      return failLoopNode(errorMsg, { data: { command: loop.command } });
     } else {
       const promptResult = await loadCommandPrompt(
         deps,
@@ -5089,8 +5098,8 @@ async function executeLoopNode(
         // can persist it on node_completed instead of reporting nothing (#2333).
         signaledTokens: completionDetected ? (loopTotalTokens ?? null) : null,
         // Read-once resolved template for both prompt- and command-backed loops.
-        // Included commands are materialized as prompts during composition, so
-        // snapshotting both forms preserves their resume determinism too.
+        // Included command-backed loops use their load-time compiled body here, so
+        // snapshotting both forms preserves resume determinism after source deletion.
         commandSnapshot: loopPromptTemplate,
       });
       // Return completed — the between-layer status check sees 'paused' and halts cleanly.

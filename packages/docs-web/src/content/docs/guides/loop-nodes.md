@@ -127,12 +127,18 @@ owning workflow's `commands/` directory for packaged workflows or in
 `.archon/commands/` for legacy workflows, the same way it does for `command:`
 nodes.
 
-The file is **read once per run** — loaded when the loop node starts and
-reused for every iteration, including across interactive-gate pauses: the
-loaded text is persisted with the pause, so editing or deleting the file while
-a run sits paused neither changes nor breaks the resumed loop's prompt. A
-missing, empty, or unreadable target fails the node immediately with an
-actionable error — no iterations execute.
+For an ordinary workflow, the file is **read once per run** when the loop node
+starts. For a workflow composed through `include:`, Archon resolves and compiles
+the command body during load-time composition so its node references and declared
+inputs are proven before the child joins the parent's flat DAG. A matching file
+that is unreadable fails closed; Archon never falls through to a lower-precedence
+command with the same name. A missing, empty, unreadable, or non-hermetic included
+command fails before a fresh AI turn.
+
+In both cases the resolved text is reused for every iteration and persisted with
+an interactive pause. A resumed run prefers that persisted snapshot, so editing
+or deleting the source while the run is paused neither changes nor breaks its
+prompt. A fresh run still requires successful command resolution or compilation.
 
 Once loaded, the text behaves identically to an inline `prompt`: all the
 variable substitution above applies unchanged (including `$LOOP_PREV_OUTPUT`

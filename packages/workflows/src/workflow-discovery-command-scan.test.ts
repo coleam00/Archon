@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from 'fs/promises';
+import { chmod, mkdtemp, mkdir, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, describe, expect, test } from 'bun:test';
@@ -110,4 +110,63 @@ describe('discoverWorkflows — nested included command compilation', () => {
     expect(message).toContain('inputs:');
     expect(message).toContain('with:');
   });
+
+  test.skipIf(process.platform === 'win32')(
+    'fails closed when a matched project command cannot be read',
+    async () => {
+      const cwd = await mkdtemp(join(tmpdir(), 'archon-workflow-discovery-'));
+      tempDirectories.push(cwd);
+      const workflowDir = join(cwd, '.archon', 'workflows');
+      const commandDir = join(cwd, '.archon', 'commands');
+      const archonHome = join(cwd, 'home');
+      const homeCommandDir = join(archonHome, 'commands');
+      await Promise.all([
+        mkdir(workflowDir, { recursive: true }),
+        mkdir(commandDir, { recursive: true }),
+        mkdir(homeCommandDir, { recursive: true }),
+      ]);
+      await writeFile(
+        join(workflowDir, 'block.yaml'),
+        JSON.stringify({
+          name: 'read-error-block',
+          description: 'Matched command read errors must not fall through',
+          nodes: [{ id: 'review', command: 'read-error-command' }],
+        })
+      );
+      await writeFile(
+        join(workflowDir, 'parent.yaml'),
+        JSON.stringify({
+          name: 'parent',
+          description: 'Includes a command whose project file is unreadable',
+          nodes: [{ id: 'inc', include: 'read-error-block' }],
+        })
+      );
+      const projectCommandPath = join(commandDir, 'read-error-command.md');
+      await writeFile(projectCommandPath, 'PROJECT body must not fall through.');
+      await chmod(projectCommandPath, 0o000);
+      await writeFile(
+        join(homeCommandDir, 'read-error-command.md'),
+        'HOME fallback must never execute.'
+      );
+
+      const originalArchonHome = process.env.ARCHON_HOME;
+      process.env.ARCHON_HOME = archonHome;
+      try {
+        const result = await discoverWorkflows(cwd, { loadDefaults: false });
+
+        expect(result.workflows.map(item => item.workflow.name)).not.toContain('parent');
+        const message = result.errors.find(error => error.filename === 'parent.yaml')?.error;
+        expect(message).toContain("included workflow 'read-error-block'");
+        expect(message).toContain("node 'review'");
+        expect(message).toContain("command 'read-error-command'");
+        expect(message).toContain(projectCommandPath);
+        expect(message).toContain('could not be read');
+        expect(message).toContain('will not fall through');
+      } finally {
+        if (originalArchonHome === undefined) delete process.env.ARCHON_HOME;
+        else process.env.ARCHON_HOME = originalArchonHome;
+        await chmod(projectCommandPath, 0o600);
+      }
+    }
+  );
 });

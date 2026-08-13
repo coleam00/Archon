@@ -20,10 +20,11 @@
  *
  * Targets are resolved recursively (a target may itself `include:` others),
  * depth-capped and cycle-detected. Because expansion runs BEFORE any
- * WorkflowDefinition reaches the executor, the inlined nodes are indistinguishable
- * from hand-written nodes — there is zero new runtime machinery. Every execution
- * path re-discovers → re-expands deterministically, so resume matches the persisted
- * namespaced step names byte-for-byte.
+ * WorkflowDefinition reaches the executor, the executor receives a flat DAG with no
+ * include nodes. Included command-backed loops additionally carry symbol-keyed compiled
+ * prompt/error metadata so a resumed run can prefer its persisted prompt snapshot even
+ * when the source command has disappeared. Every execution path re-discovers → re-expands
+ * deterministically, so resume matches the persisted namespaced step names byte-for-byte.
  *
  * Delimiter note: the namespace joiner is `__` (double underscore), NOT `.`. The
  * output-ref substitution regex forbids dots in a node id, so a dotted id would
@@ -48,7 +49,9 @@ import { validateDagStructure } from './loader';
 import { resolveDeclaredInputs } from './workflow-inputs';
 import {
   COMPILED_LOOP_COMMAND,
+  isIncludeCommandReadError,
   type CompiledLoopCommand,
+  type IncludeCommandContent,
   type LoopWithCompiledCommand,
 } from './compiled-command';
 
@@ -349,7 +352,7 @@ function cloneNodeForInclude(node: DagNode): DagNode {
 function inlineInclude(
   includeNode: IncludeNode,
   child: WorkflowDefinition,
-  commandContents: ReadonlyMap<string, string | null>
+  commandContents: ReadonlyMap<string, IncludeCommandContent>
 ): ExpandedInclude {
   // Prove the child's lexical boundary before its nodes share the parent's flat id/output
   // maps. Discovery already parsed each file independently; this repeat is intentional so
@@ -510,7 +513,7 @@ function warnDroppedWorkflowLevelFields(includeNode: IncludeNode, child: Workflo
 
 /**
  * Compile an included workflow's named AI command bodies into the flat DAG. Composition
- * must prove the child's lexical boundary before parent nodes share one output map, so an
+ * must prove the child's lexical boundary before parent nodes share one output map, so
  * every canonical ref in a resolved body must name a node in the command node's current or
  * enclosing workflow scope. Ordinary command nodes become prompt nodes. Loop commands keep
  * their authored identity plus symbol-keyed compiled prompt/error metadata so cold resume can
@@ -523,13 +526,18 @@ function materializeBlockCommandPrompts(
   node: DagNode,
   includeNode: IncludeNode,
   child: WorkflowDefinition,
-  commandContents: ReadonlyMap<string, string | null>,
+  commandContents: ReadonlyMap<string, IncludeCommandContent>,
   currentIds: ReadonlySet<string>,
   enclosingIds: ReadonlySet<string>,
   nodePath: string
 ): DagNode {
   const compile = (commandName: string): CompiledLoopCommand => {
     const content = commandContents.get(commandName);
+    if (isIncludeCommandReadError(content)) {
+      return {
+        error: `Node '${includeNode.id}': included workflow '${child.name}' node '${nodePath}' command '${commandName}' matched '${content.path}' but could not be read: ${content.message}. Archon will not fall through to a lower-precedence command after a match.`,
+      };
+    }
     if (content === undefined || content === null) {
       return {
         error: `Node '${includeNode.id}': included workflow '${child.name}' node '${nodePath}' uses command '${commandName}', but its body could not be resolved during composition through the package-owned, project/configured, user, or enabled bundled command scopes. Included commands must resolve before a fresh execution so their references and declared inputs can be compiled safely.`,
@@ -545,6 +553,7 @@ function materializeBlockCommandPrompts(
     let match: RegExpExecArray | null;
     while ((match = outputRefPattern.exec(content)) !== null) {
       const referencedId = match[1];
+      if (referencedId === 'INPUTS') continue;
       if (
         referencedId !== undefined &&
         !currentIds.has(referencedId) &&
@@ -611,15 +620,16 @@ function materializeBlockCommandPrompts(
  * depth, id collision, invalid flattened structure, command-file cross-ref) is dropped
  * from the output and an error is recorded — other workflows still expand.
  *
- * `commandContents` maps command NAME → file content (or null when unresolvable). Discovery
- * pre-resolves every include-target command with execution-equivalent precedence. A caller
- * that omits the map may still expand workflows without commands. Included command nodes
- * fail composition; included loop commands fail before a fresh AI turn but remain discoverable
- * so an already-paused loop can resume from its validated snapshot.
+ * `commandContents` maps command NAME → file content, null when no candidate resolves, or a
+ * matched-file read error. Discovery pre-resolves every include-target command with
+ * execution-equivalent precedence and never falls through after a matching file fails to
+ * read. A caller that omits the map may still expand workflows without commands. Included
+ * command nodes fail composition; included loop commands fail before a fresh AI turn but
+ * remain discoverable so an already-paused loop can resume from its validated snapshot.
  */
 export function expandWorkflowIncludes(
   rawByName: Map<string, WorkflowDefinition>,
-  commandContents?: ReadonlyMap<string, string | null>
+  commandContents?: ReadonlyMap<string, IncludeCommandContent>
 ): {
   workflows: Map<string, WorkflowDefinition>;
   errors: WorkflowLoadError[];

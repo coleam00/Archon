@@ -44,6 +44,7 @@ import {
   parsePackagedResourceReference,
   qualifyWorkflowResources,
 } from './packaged-workflow';
+import type { IncludeCommandContent } from './compiled-command';
 
 export { isValidWorkflowFolderSegment } from './packaged-workflow';
 
@@ -398,15 +399,16 @@ interface CommandScanConfig {
 /**
  * Resolve a command name to its file CONTENT, mirroring the runtime/validator search
  * order (repo `.archon/commands/` + configured `commandFolder` → `~/.archon/commands/` →
- * bundled defaults, unless `loadDefaultCommands` is false). Returns `null` when the command
- * cannot be resolved. Read-only; used solely so the include expander can scan a block's
- * command files for sibling refs that namespacing renames.
+ * bundled defaults, unless `loadDefaultCommands` is false). Returns `null` when no candidate
+ * resolves, and a path-bearing error after a candidate matches but cannot be read. Read-only;
+ * used so the include expander can compile a block's command body while proving its lexical
+ * reference boundary.
  */
 async function resolveCommandContentForScan(
   cwd: string | null,
   commandName: string,
   config: CommandScanConfig
-): Promise<string | null> {
+): Promise<IncludeCommandContent> {
   if (!isValidCommandName(commandName)) return null;
 
   const packaged = parsePackagedResourceReference(commandName);
@@ -425,21 +427,16 @@ async function resolveCommandContentForScan(
     } else {
       workflowsRoot = dirname(archonPaths.getDefaultWorkflowsPath());
     }
+    const commandPath = join(
+      getPackagedResourceDirectory(workflowsRoot, packaged.owner, 'commands'),
+      `${packaged.name}.md`
+    );
     try {
-      return await readFile(
-        join(
-          getPackagedResourceDirectory(workflowsRoot, packaged.owner, 'commands'),
-          `${packaged.name}.md`
-        ),
-        'utf-8'
-      );
+      return await readFile(commandPath, 'utf-8');
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
       if (err.code === 'ENOENT') return null;
-      throw new Error(
-        `Failed to read packaged command "${commandName}" during include validation: ${err.message}`,
-        { cause: err }
-      );
+      return { path: commandPath, message: err.message };
     }
   }
 
@@ -455,12 +452,21 @@ async function resolveCommandContentForScan(
   dirs.push(archonPaths.getHomeCommandsPath());
 
   for (const dir of dirs) {
+    let entries: Awaited<ReturnType<typeof archonPaths.findMarkdownFilesRecursive>>;
     try {
-      const entries = await archonPaths.findMarkdownFilesRecursive(dir, '', { maxDepth: 1 });
-      const match = entries.find(e => e.commandName === commandName);
-      if (match) return await readFile(join(dir, match.relativePath), 'utf-8');
+      entries = await archonPaths.findMarkdownFilesRecursive(dir, '', { maxDepth: 1 });
     } catch {
-      // ENOENT / unreadable scope → try the next one.
+      // The scope itself could not be enumerated, so no candidate matched.
+      continue;
+    }
+    const match = entries.find(e => e.commandName === commandName);
+    if (!match) continue;
+    const commandPath = join(dir, match.relativePath);
+    try {
+      return await readFile(commandPath, 'utf-8');
+    } catch (error) {
+      const err = error as NodeJS.ErrnoException;
+      return { path: commandPath, message: err.message };
     }
   }
 
@@ -471,15 +477,23 @@ async function resolveCommandContentForScan(
   if (isBinaryBuild()) {
     return BUNDLED_COMMANDS[commandName] ?? null;
   }
+  const defaultsDir = archonPaths.getDefaultCommandsPath();
+  let entries: Awaited<ReturnType<typeof archonPaths.findMarkdownFilesRecursive>>;
   try {
-    const defaultsDir = archonPaths.getDefaultCommandsPath();
-    const entries = await archonPaths.findMarkdownFilesRecursive(defaultsDir, '', { maxDepth: 1 });
-    const match = entries.find(e => e.commandName === commandName);
-    if (match) return await readFile(join(defaultsDir, match.relativePath), 'utf-8');
+    entries = await archonPaths.findMarkdownFilesRecursive(defaultsDir, '', { maxDepth: 1 });
   } catch {
     // no app defaults dir
+    return null;
   }
-  return null;
+  const match = entries.find(e => e.commandName === commandName);
+  if (!match) return null;
+  const commandPath = join(defaultsDir, match.relativePath);
+  try {
+    return await readFile(commandPath, 'utf-8');
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    return { path: commandPath, message: err.message };
+  }
 }
 
 /**
@@ -492,7 +506,7 @@ async function resolveIncludeBlockCommandContents(
   cwd: string | null,
   byName: ReadonlyMap<string, WorkflowDefinition>,
   config: CommandScanConfig
-): Promise<Map<string, string | null>> {
+): Promise<Map<string, IncludeCommandContent>> {
   const targetNames = new Set<string>();
   const visit = (workflow: WorkflowDefinition): void => {
     for (const node of workflow.nodes) {
@@ -505,7 +519,7 @@ async function resolveIncludeBlockCommandContents(
   };
   for (const workflow of byName.values()) visit(workflow);
 
-  const contents = new Map<string, string | null>();
+  const contents = new Map<string, IncludeCommandContent>();
   if (targetNames.size === 0) return contents; // no includes → nothing to scan
   for (const name of targetNames) {
     const workflow = byName.get(name);

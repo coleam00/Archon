@@ -26,7 +26,7 @@ A command is a **markdown file** that serves as a detailed instruction set for a
 
 ## File Format
 
-Shared commands live in `.archon/commands/` relative to the working directory and are loaded at runtime. A packaged workflow keeps its commands beside the YAML in `<workflow>/commands/`; those references resolve only inside the owning package and do not fall back to shared commands.
+Shared commands live in `.archon/commands/` relative to the working directory. Ordinary command nodes load them at runtime. When a workflow is composed through `include:`, Archon resolves and snapshots its command bodies during load-time composition so references and declared inputs can be validated before the nodes join the parent's DAG. A packaged workflow keeps its commands beside the YAML in `<workflow>/commands/`; those references resolve only inside the owning package and do not fall back to shared commands.
 
 > **`defaults/` is maintainer-territory:** `.archon/commands/defaults/` is reserved for commands shipped with Archon itself (embedded into the binary at build time). For your own commands use an owning workflow package's `commands/`, `.archon/commands/` (project-scoped), or `~/.archon/commands/` (home-scoped). Every file under `defaults/` must be committed in git — `bun run validate` will error if untracked files are found there.
 

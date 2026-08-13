@@ -561,13 +561,22 @@ describe('expandWorkflowIncludes — nested', () => {
     expect(workflows.get('parent')!.nodes.some(n => 'include' in n)).toBe(false);
   });
 
-  test('preserves a compiled loop command across three-level composition', () => {
+  test('preserves a nested compiled loop command across three-level composition', () => {
     const leaf = wf('leaf-loop', [
       { id: 'seed', bash: 'echo seed' },
       {
-        id: 'repeat',
-        loop: { command: 'leaf-loop-command', until: 'DONE', max_iterations: 1 },
+        id: 'group',
         depends_on: ['seed'],
+        loop_group: {
+          until: 'DONE',
+          max_iterations: 1,
+          nodes: [
+            {
+              id: 'repeat',
+              loop: { command: 'leaf-loop-command', until: 'DONE', max_iterations: 1 },
+            },
+          ],
+        },
       },
     ]);
     leaf.inputs = { context: { required: true } };
@@ -582,7 +591,8 @@ describe('expandWorkflowIncludes — nested', () => {
     );
 
     expect(errors).toHaveLength(0);
-    const repeat = nodeById(workflows.get('parent')!, 'outer__inner__repeat');
+    const group = nodeById(workflows.get('parent')!, 'outer__inner__group');
+    const repeat = group && 'loop_group' in group ? group.loop_group.nodes[0] : undefined;
     expect(compiledLoopPrompt(repeat)).toBe(
       'Use $outer__inner__seed.output with bound value and continue.'
     );
@@ -789,6 +799,20 @@ describe('expandWorkflowIncludes — included command compilation', () => {
     expect(runner && 'prompt' in runner ? runner.prompt : '').toBe('Review scope prod.');
   });
 
+  test('binds a declared include input named output in an ordinary command', () => {
+    const [block, parent] = blockWithCommand();
+    block.inputs = { output: { required: true } };
+    const includeNode = parent.nodes[0];
+    if (includeNode && 'include' in includeNode) includeNode.with = { output: 'bound value' };
+    const { workflows, errors } = expandWorkflowIncludes(
+      mapOf(block, parent),
+      new Map([['my-cmd', 'Review $INPUTS.output.']])
+    );
+    expect(errors).toHaveLength(0);
+    const runner = nodeById(workflows.get('parent')!, 'inc__runner');
+    expect(runner && 'prompt' in runner ? runner.prompt : '').toBe('Review bound value.');
+  });
+
   test('keeps a caller ref passed through a command input parent-scoped on id collision', () => {
     const block = wf('collision-command-block', [
       { id: 'gather', prompt: 'local gather' },
@@ -907,6 +931,42 @@ describe('expandWorkflowIncludes — included command compilation', () => {
     const repeat = nodeById(workflows.get('parent')!, 'inc__repeat');
     expect(compiledLoopPrompt(repeat)).toBe('Review prod.');
     expect(repeat && 'loop' in repeat ? repeat.loop.command : undefined).toBe('loop-cmd');
+  });
+
+  test('binds a declared include input named output in a loop command', () => {
+    const block = wf('loop-output-block', [
+      { id: 'repeat', loop: { command: 'loop-output-cmd', until: 'DONE', max_iterations: 1 } },
+    ]);
+    block.inputs = { output: { required: true } };
+    const parent = wf('parent', [
+      { id: 'inc', include: 'loop-output-block', with: { output: 'bound value' } },
+    ]);
+    const { workflows, errors } = expandWorkflowIncludes(
+      mapOf(block, parent),
+      new Map([['loop-output-cmd', 'Review $INPUTS.output.']])
+    );
+    expect(errors).toHaveLength(0);
+    expect(compiledLoopPrompt(nodeById(workflows.get('parent')!, 'inc__repeat'))).toBe(
+      'Review bound value.'
+    );
+  });
+
+  test('keeps a whitespace-only loop command as an actionable compiled error', () => {
+    const block = wf('empty-loop-block', [
+      { id: 'repeat', loop: { command: 'empty-loop-cmd', until: 'DONE', max_iterations: 1 } },
+    ]);
+    const parent = wf('parent', [{ id: 'inc', include: 'empty-loop-block' }]);
+    const { workflows, errors } = expandWorkflowIncludes(
+      mapOf(block, parent),
+      new Map([['empty-loop-cmd', '  \n\t']])
+    );
+    expect(errors).toHaveLength(0);
+    const repeat = nodeById(workflows.get('parent')!, 'inc__repeat');
+    const compiled =
+      repeat && 'loop' in repeat
+        ? (repeat.loop as typeof repeat.loop & LoopWithCompiledCommand)[COMPILED_LOOP_COMMAND]
+        : undefined;
+    expect(compiled?.error).toContain("command 'empty-loop-cmd' is empty");
   });
 
   test('materializes a nested loop command and namespaces an enclosing top-level ref', () => {
