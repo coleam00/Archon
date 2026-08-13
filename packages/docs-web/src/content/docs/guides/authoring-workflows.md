@@ -956,7 +956,9 @@ written the nodes by hand. There is no separate child run.
   Command nodes fail composition immediately; loop commands retain a private compilation error
   so a paused loop can still resume from its persisted, validated prompt snapshot.
   The include node's own `depends_on` / `when` / `trigger_rule` attach to the block's
-  **entry** nodes (those with no upstream inside the block).
+  **entry** nodes (those with no upstream inside the block). If both the include and an entry
+  define `when:` and either condition contains `||`, loading fails because the grammar cannot
+  group them without changing precedence; put the gate only on the include or inside the block.
 - **Sink asymmetry (a downstream node depending on the include).** A `depends_on:
   [<includeId>]` on a downstream node fans out to **all** of the block's sink nodes (every
   node with no dependents inside the block), so it waits for the whole block to finish.

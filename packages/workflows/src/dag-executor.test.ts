@@ -8490,14 +8490,14 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
               interactive: true,
               gate_message: 'Review materialized prompt.',
             },
-          } as unknown as DagNode,
+          } satisfies DagNode,
         ],
-      } as WorkflowDefinition;
+      } satisfies WorkflowDefinition;
       const parentWorkflow = {
         name: 'materialized-loop-gated',
         description: 'Includes the command-backed loop',
-        nodes: [{ id: 'included', include: 'materialized-loop-block' } as unknown as DagNode],
-      } as WorkflowDefinition;
+        nodes: [{ id: 'included', include: 'materialized-loop-block' } satisfies DagNode],
+      } satisfies WorkflowDefinition;
       const rawWorkflows = new Map([
         [blockWorkflow.name, blockWorkflow],
         [parentWorkflow.name, parentWorkflow],
