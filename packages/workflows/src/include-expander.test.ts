@@ -795,11 +795,41 @@ describe('expandWorkflowIncludes — command-file ref scan', () => {
       new Map([['nested-loop-cmd', 'Read $seed.output and continue.']])
     );
     expect(workflows.has('parent')).toBe(false);
-    expect(errors.find(error => error.filename === 'parent')?.error).toContain(
-      "command file 'nested-loop-cmd.md'"
+    const message = errors.find(error => error.filename === 'parent')?.error;
+    expect(message).toContain("command file 'nested-loop-cmd.md'");
+    expect(message).toContain("sibling node '$seed'");
+  });
+
+  test('fails for a command node inside a second-level nested loop group', () => {
+    const block = wf('deep-command-block', [
+      { id: 'seed', bash: 'echo seed' },
+      {
+        id: 'outer',
+        loop_group: {
+          until: 'DONE',
+          max_iterations: 1,
+          nodes: [
+            {
+              id: 'inner',
+              loop_group: {
+                until: 'DONE',
+                max_iterations: 1,
+                nodes: [{ id: 'review', command: 'deep-command' }],
+              },
+            },
+          ],
+        },
+      },
+    ]);
+    const parent = wf('parent', [{ id: 'inc', include: 'deep-command-block' }]);
+    const { workflows, errors } = expandWorkflowIncludes(
+      mapOf(block, parent),
+      new Map([['deep-command', 'Read $seed.output and continue.']])
     );
+
+    expect(workflows.has('parent')).toBe(false);
     expect(errors.find(error => error.filename === 'parent')?.error).toContain(
-      "sibling node '$seed'"
+      "command file 'deep-command.md'"
     );
   });
 

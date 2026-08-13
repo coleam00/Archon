@@ -478,7 +478,8 @@ function warnDroppedWorkflowLevelFields(includeNode: IncludeNode, child: Workflo
 }
 
 /**
- * A `command:` node's file content is read only at EXECUTION time, so the expander cannot
+ * A `command:` node's file remains external to the flattened DAG and becomes the node's
+ * prompt at execution time. Discovery may pre-read it for validation, but the expander cannot
  * rewrite `$sibling.output` refs inside it the way it rewrites inline node text. If a
  * block's command file references a sibling node id that namespacing renames, the ref
  * would silently substitute to '' at run time. This applies equally to a loop's deferred
@@ -550,8 +551,8 @@ function scanBlockCommandRefs(
  *
  * `commandContents` maps command NAME → file content (or null when unresolvable). When
  * provided (discovery pre-resolves it for include-target command nodes) the expander
- * scans block command files for sibling refs that namespacing would break; omit it to
- * skip that scan.
+ * scans block command files for sibling refs that namespacing would break and `$INPUTS`
+ * parameters that cannot be applied to external command bodies; omit it to skip that scan.
  */
 export function expandWorkflowIncludes(
   rawByName: Map<string, WorkflowDefinition>,

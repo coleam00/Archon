@@ -1011,10 +1011,10 @@ finished. When such a file can be read at load time and contains `$INPUTS.<name>
 including inside a code fence — workflow loading fails with a message directing you to inline
 the prompt text. Use an inline `prompt:` when the block needs include inputs.
 
-This check is best-effort, so a clean load is not a guarantee. It covers the block's
-top-level `command:`/`loop.command` nodes only, so a command nested inside a `loop_group`
-body is not scanned; and a command file that cannot be resolved at load time is logged as a
-warning and skipped rather than failing the workflow. This restriction applies to `include:`
+This check is best-effort, so a clean load is not a guarantee. It covers `command:` and
+`loop.command` files throughout the block, including nested `loop_group` bodies. A command
+file that cannot be resolved at load time is logged as a warning and skipped rather than
+failing the workflow. This restriction applies to `include:`
 only — a `workflow:` sub-run's named inputs **do** reach `command:` bodies, because they
 resolve at runtime rather than at load time (see the binding-time table in
 [Workflow Signature](#workflow-signature-inputs-returns-and-inputs)).
