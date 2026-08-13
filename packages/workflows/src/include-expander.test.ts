@@ -848,6 +848,18 @@ describe('expandWorkflowIncludes — included command compilation', () => {
     );
   });
 
+  test('rejects an empty command body during composition', () => {
+    const [block, parent] = blockWithCommand();
+    const { workflows, errors } = expandWorkflowIncludes(
+      mapOf(block, parent),
+      new Map([['my-cmd', '  \n\t']])
+    );
+    expect(workflows.has('parent')).toBe(false);
+    const message = errors.find(error => error.filename === 'parent')?.error;
+    expect(message).toContain("command 'my-cmd' is empty");
+    expect(message).toContain('non-whitespace prompt body');
+  });
+
   test('materializes loop.command and binds its declared include input', () => {
     const block = wf('loopblk', [
       { id: 'repeat', loop: { command: 'loop-cmd', until: 'DONE', max_iterations: 1 } },

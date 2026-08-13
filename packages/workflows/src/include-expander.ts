@@ -497,6 +497,11 @@ function materializeBlockCommandPrompts(
         `Node '${includeNode.id}': included workflow '${child.name}' node '${nodePath}' uses command '${commandName}', but its body could not be resolved during composition through the package-owned, project/configured, user, or enabled bundled command scopes. Included commands must resolve at load time so their references and declared inputs can be compiled safely.`
       );
     }
+    if (content.trim().length === 0) {
+      throw new IncludeExpansionError(
+        `Node '${includeNode.id}': included workflow '${child.name}' node '${nodePath}' command '${commandName}' is empty. Included commands must contain a non-whitespace prompt body.`
+      );
+    }
 
     const outputRefPattern = new RegExp(OUTPUT_REF_PATTERN.source, 'g');
     let match: RegExpExecArray | null;

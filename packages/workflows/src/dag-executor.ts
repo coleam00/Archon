@@ -4190,40 +4190,32 @@ async function executeLoopNode(
     return { state: 'completed', output: finalizeOutput, sessionId: currentSessionId };
   }
 
-  // Resolve the iteration prompt source. `loop.prompt` is used directly;
-  // `loop.command` is read ONCE per run/node: the first invocation loads the
-  // command file, and the interactive gate persists the loaded text
-  // (`commandSnapshot` in the pause context) so a resumed invocation reuses the
-  // snapshot instead of re-reading — a command file edited or deleted while the
-  // run sat paused at a gate can neither change nor break the running loop's
-  // prompt. The schema guarantees exactly one of prompt/command is defined.
+  // Resolve the iteration prompt source once per run/node. The interactive gate
+  // persists the resolved template (`commandSnapshot` in the pause context) for
+  // both inline and command-backed loops. This also covers included commands,
+  // which composition materializes as inline prompts: rediscovery after a pause
+  // cannot change their running prompt if the source command is edited or deleted.
+  // The schema guarantees exactly one of prompt/command is defined.
   let loopPromptTemplate: string;
-  if (typeof loop.prompt === 'string') {
+  if (isLoopResume && typeof loopGateMeta?.commandSnapshot === 'string') {
+    loopPromptTemplate = loopGateMeta.commandSnapshot;
+  } else if (typeof loop.prompt === 'string') {
     loopPromptTemplate = loop.prompt;
   } else if (typeof loop.command === 'string') {
-    if (isLoopResume && typeof loopGateMeta?.commandSnapshot === 'string') {
-      loopPromptTemplate = loopGateMeta.commandSnapshot;
-    } else {
-      // Fresh execution — or a resume of a run paused under a build that
-      // predates commandSnapshot: fall back to a fresh read (documented,
-      // fail-safe) rather than failing an otherwise-valid resume.
-      const promptResult = await loadCommandPrompt(
-        deps,
-        cwd,
-        loop.command,
-        configuredCommandFolder
+    // Fresh execution — or a resume of a run paused under a build that predates
+    // commandSnapshot: fall back to a fresh read rather than failing an
+    // otherwise-valid resume.
+    const promptResult = await loadCommandPrompt(deps, cwd, loop.command, configuredCommandFolder);
+    if (!promptResult.success) {
+      getLog().error(
+        { nodeId: node.id, command: loop.command, error: promptResult.message },
+        'loop_node.command_load_failed'
       );
-      if (!promptResult.success) {
-        getLog().error(
-          { nodeId: node.id, command: loop.command, error: promptResult.message },
-          'loop_node.command_load_failed'
-        );
-        // The failing command name travels on the node_failed payload so the
-        // event stream carries the same context as the structured log.
-        return failLoopNode(promptResult.message, { data: { command: loop.command } });
-      }
-      loopPromptTemplate = promptResult.content;
+      // The failing command name travels on the node_failed payload so the
+      // event stream carries the same context as the structured log.
+      return failLoopNode(promptResult.message, { data: { command: loop.command } });
     }
+    loopPromptTemplate = promptResult.content;
   } else {
     // Unreachable: superRefine on loopNodeConfigSchema enforces exactly-one.
     throw new Error(
@@ -5083,10 +5075,10 @@ async function executeLoopNode(
         // Usage consumed up to this gate, so a bare approve (finalize, no re-run)
         // can persist it on node_completed instead of reporting nothing (#2333).
         signaledTokens: completionDetected ? (loopTotalTokens ?? null) : null,
-        // Read-once command body for command-backed loops: the resumed invocation
-        // reuses this snapshot instead of re-reading the file (explicit null for
-        // prompt-based loops — same json_patch convention as `sessionId`).
-        commandSnapshot: typeof loop.command === 'string' ? loopPromptTemplate : null,
+        // Read-once resolved template for both prompt- and command-backed loops.
+        // Included commands are materialized as prompts during composition, so
+        // snapshotting both forms preserves their resume determinism too.
+        commandSnapshot: loopPromptTemplate,
       });
       // Return completed — the between-layer status check sees 'paused' and halts cleanly.
       // This mirrors the approval-node pattern, preventing false "DAG nodes failed" warnings

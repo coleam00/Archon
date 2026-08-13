@@ -8469,6 +8469,96 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       expect(failed).toHaveLength(0);
     });
 
+    it('reuses the pause-time prompt snapshot after a composed loop prompt is rediscovered', async () => {
+      mockSendQueryDag.mockImplementation(function* () {
+        yield { type: 'assistant', content: 'iteration output, no signal yet' };
+        yield { type: 'result', sessionId: 'sid-prompt-1' };
+      });
+
+      const platform = createMockPlatform();
+      const firstDeps = createMockDeps();
+      const originalWorkflow = {
+        name: 'materialized-loop-gated',
+        nodes: [
+          {
+            id: 'gated-loop',
+            loop: {
+              prompt: 'ORIGINAL materialized command. USER=<<$LOOP_USER_INPUT>>',
+              until: 'COMPLETE',
+              max_iterations: 5,
+              interactive: true,
+              gate_message: 'Review materialized prompt.',
+            },
+          } as unknown as DagNode,
+        ],
+      };
+
+      await executeDagWorkflow(
+        firstDeps,
+        platform,
+        'conv-dag',
+        testDir,
+        originalWorkflow,
+        makeWorkflowRun(),
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'state'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      const pauseCalls = (
+        firstDeps.store.pauseWorkflowRun as Mock<
+          (id: string, ctx: Record<string, unknown>) => Promise<void>
+        >
+      ).mock.calls;
+      const pausedContext = pauseCalls[0]?.[1] as Record<string, unknown>;
+      expect(pausedContext.commandSnapshot).toContain('ORIGINAL materialized command.');
+
+      mockSendQueryDag.mockClear();
+      mockSendQueryDag.mockImplementation(function* () {
+        yield { type: 'assistant', content: 'refined. <promise>COMPLETE</promise>' };
+        yield { type: 'result', sessionId: 'sid-prompt-2' };
+      });
+      const rediscoveredWorkflow = structuredClone(originalWorkflow);
+      const rediscoveredLoop = rediscoveredWorkflow.nodes[0];
+      if (rediscoveredLoop && 'loop' in rediscoveredLoop) {
+        rediscoveredLoop.loop.prompt = 'TAMPERED materialized command.';
+      }
+      const resumedRun = makeWorkflowRun('materialized-resume-run', {
+        metadata: {
+          approval: { ...pausedContext },
+          loop_user_input: 'tighten the summary',
+          loop_feedback_given: true,
+        },
+      });
+
+      await executeDagWorkflow(
+        createMockDeps(createMockStore()),
+        platform,
+        'conv-dag',
+        testDir,
+        rediscoveredWorkflow,
+        resumedRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'state'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      const resumedPrompt = mockSendQueryDag.mock.calls[0]?.[0] as string;
+      expect(resumedPrompt).toContain('ORIGINAL materialized command.');
+      expect(resumedPrompt).toContain('USER=<<tighten the summary>>');
+      expect(resumedPrompt).not.toContain('TAMPERED');
+    });
+
     it('closes the loop lifecycle with exactly one node_failed on max-iterations exhaustion', async () => {
       // Failure finalizer contract: every failed exit after node_started goes
       // through one finalizer — exactly one node_failed row per started loop

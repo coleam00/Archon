@@ -302,13 +302,12 @@ export interface ApprovalContext {
    */
   signaledTokens?: { input: number; output: number } | null;
   /**
-   * Interactive-loop only. Read-once snapshot of a command-backed loop's
-   * (`loop.command`) loaded prompt body, persisted at gate pause so the resumed
-   * invocation reuses the exact text the run started with — a command file
-   * edited or deleted while the run sat paused cannot change or break the
-   * running loop's prompt. Null for prompt-based loops (explicit-null pause
-   * convention, same as `sessionId`). Absent on runs paused by builds that
-   * predate this field — the resume path then falls back to re-reading the file.
+   * Interactive-loop only. Read-once snapshot of the resolved loop prompt
+   * template, whether authored as `loop.prompt` or loaded from `loop.command`,
+   * persisted at gate pause so the resumed invocation reuses the exact text the
+   * run started with. This also preserves included commands after composition
+   * materializes them as prompts. Absent on runs paused by builds that predate
+   * this field; those resume from the current prompt or command source.
    */
   commandSnapshot?: string | null;
 }
