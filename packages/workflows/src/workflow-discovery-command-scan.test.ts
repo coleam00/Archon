@@ -3,6 +3,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { discoverWorkflows } from './workflow-discovery';
+import { COMPILED_LOOP_COMMAND, type LoopWithCompiledCommand } from './compiled-command';
 
 const tempDirectories: string[] = [];
 
@@ -62,9 +63,12 @@ describe('discoverWorkflows — nested included command compilation', () => {
     const parent = result.workflows.find(item => item.workflow.name === 'parent')?.workflow;
     const group = parent?.nodes.find(node => node.id === 'inc__group');
     const repeat = group && 'loop_group' in group ? group.loop_group.nodes[0] : undefined;
-    expect(repeat && 'loop' in repeat ? repeat.loop.prompt : '').toBe(
-      'Read $inc__seed.output and continue.'
-    );
+    const compiled =
+      repeat && 'loop' in repeat
+        ? (repeat.loop as typeof repeat.loop & LoopWithCompiledCommand)[COMPILED_LOOP_COMMAND]
+        : undefined;
+    expect(compiled?.prompt).toBe('Read $inc__seed.output and continue.');
+    expect(repeat && 'loop' in repeat ? repeat.loop.command : undefined).toBe('nested-command');
   });
 
   test('rejects a command-body caller ref even when the parent has the same node id', async () => {

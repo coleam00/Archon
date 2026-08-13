@@ -86,6 +86,7 @@ import {
 } from './output-ref';
 import { buildTruncationMarker } from './utils/output-truncation';
 import { writeNodeArtifact, readNodeArtifacts } from './artifacts-index';
+import { COMPILED_LOOP_COMMAND, type LoopWithCompiledCommand } from './compiled-command';
 import {
   logNodeStart,
   logNodeComplete,
@@ -4199,23 +4200,35 @@ async function executeLoopNode(
   let loopPromptTemplate: string;
   if (isLoopResume && typeof loopGateMeta?.commandSnapshot === 'string') {
     loopPromptTemplate = loopGateMeta.commandSnapshot;
+  } else if (typeof loop.command === 'string') {
+    const compiled = (loop as typeof loop & LoopWithCompiledCommand)[COMPILED_LOOP_COMMAND];
+    if (compiled?.error !== undefined) {
+      getLog().error(
+        { nodeId: node.id, command: loop.command, error: compiled.error },
+        'loop_node.command_compilation_failed'
+      );
+      return failLoopNode(compiled.error, { data: { command: loop.command } });
+    }
+    if (compiled?.prompt !== undefined) {
+      loopPromptTemplate = compiled.prompt;
+    } else {
+      const promptResult = await loadCommandPrompt(
+        deps,
+        cwd,
+        loop.command,
+        configuredCommandFolder
+      );
+      if (!promptResult.success) {
+        getLog().error(
+          { nodeId: node.id, command: loop.command, error: promptResult.message },
+          'loop_node.command_load_failed'
+        );
+        return failLoopNode(promptResult.message, { data: { command: loop.command } });
+      }
+      loopPromptTemplate = promptResult.content;
+    }
   } else if (typeof loop.prompt === 'string') {
     loopPromptTemplate = loop.prompt;
-  } else if (typeof loop.command === 'string') {
-    // Fresh execution — or a resume of a run paused under a build that predates
-    // commandSnapshot: fall back to a fresh read rather than failing an
-    // otherwise-valid resume.
-    const promptResult = await loadCommandPrompt(deps, cwd, loop.command, configuredCommandFolder);
-    if (!promptResult.success) {
-      getLog().error(
-        { nodeId: node.id, command: loop.command, error: promptResult.message },
-        'loop_node.command_load_failed'
-      );
-      // The failing command name travels on the node_failed payload so the
-      // event stream carries the same context as the structured log.
-      return failLoopNode(promptResult.message, { data: { command: loop.command } });
-    }
-    loopPromptTemplate = promptResult.content;
   } else {
     // Unreachable: superRefine on loopNodeConfigSchema enforces exactly-one.
     throw new Error(

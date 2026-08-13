@@ -36,6 +36,7 @@ registerBuiltinProviders();
 import { discoverWorkflows, discoverWorkflowsWithConfig } from './workflow-discovery';
 import { isBashNode, isCancelNode, isLoopNode } from './schemas';
 import { parseWorkflow } from './loader';
+import { COMPILED_LOOP_COMMAND, type LoopWithCompiledCommand } from './compiled-command';
 import { workflowDefinitionSchema } from './schemas/workflow';
 import type { WorkflowDefinition } from './schemas/workflow';
 import * as bundledDefaults from './defaults/bundled-defaults';
@@ -4323,7 +4324,12 @@ nodes:
         workflow => workflow.workflow.name === 'loop-parent'
       )?.workflow;
       const repeat = parent?.nodes.find(node => node.id === 'review__repeat');
-      expect(repeat && 'loop' in repeat ? repeat.loop.prompt : '').toBe('Review production.');
+      const compiled =
+        repeat && 'loop' in repeat
+          ? (repeat.loop as typeof repeat.loop & LoopWithCompiledCommand)[COMPILED_LOOP_COMMAND]
+          : undefined;
+      expect(compiled?.prompt).toBe('Review production.');
+      expect(repeat && 'loop' in repeat ? repeat.loop.command : undefined).toBe('loop-review');
     });
   });
 

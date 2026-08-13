@@ -8477,13 +8477,14 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
 
       const platform = createMockPlatform();
       const firstDeps = createMockDeps();
-      const originalWorkflow = {
-        name: 'materialized-loop-gated',
+      const blockWorkflow = {
+        name: 'materialized-loop-block',
+        description: 'Command-backed loop block',
         nodes: [
           {
             id: 'gated-loop',
             loop: {
-              prompt: 'ORIGINAL materialized command. USER=<<$LOOP_USER_INPUT>>',
+              command: 'materialized-loop-command',
               until: 'COMPLETE',
               max_iterations: 5,
               interactive: true,
@@ -8491,7 +8492,24 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
             },
           } as unknown as DagNode,
         ],
-      };
+      } as WorkflowDefinition;
+      const parentWorkflow = {
+        name: 'materialized-loop-gated',
+        description: 'Includes the command-backed loop',
+        nodes: [{ id: 'included', include: 'materialized-loop-block' } as unknown as DagNode],
+      } as WorkflowDefinition;
+      const rawWorkflows = new Map([
+        [blockWorkflow.name, blockWorkflow],
+        [parentWorkflow.name, parentWorkflow],
+      ]);
+      const firstExpansion = expandWorkflowIncludes(
+        rawWorkflows,
+        new Map([
+          ['materialized-loop-command', 'ORIGINAL materialized command. USER=<<$LOOP_USER_INPUT>>'],
+        ])
+      );
+      const originalWorkflow = firstExpansion.workflows.get(parentWorkflow.name)!;
+      expect(firstExpansion.errors).toHaveLength(0);
 
       await executeDagWorkflow(
         firstDeps,
@@ -8523,11 +8541,41 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         yield { type: 'assistant', content: 'refined. <promise>COMPLETE</promise>' };
         yield { type: 'result', sessionId: 'sid-prompt-2' };
       });
-      const rediscoveredWorkflow = structuredClone(originalWorkflow);
-      const rediscoveredLoop = rediscoveredWorkflow.nodes[0];
-      if (rediscoveredLoop && 'loop' in rediscoveredLoop) {
-        rediscoveredLoop.loop.prompt = 'TAMPERED materialized command.';
-      }
+      // Cold rediscovery after the source command was deleted still returns the
+      // workflow. Its engine-private compilation error blocks a fresh run, while
+      // this resumed run can reach and reuse the persisted snapshot.
+      const rediscovery = expandWorkflowIncludes(
+        rawWorkflows,
+        new Map([['materialized-loop-command', null]])
+      );
+      expect(rediscovery.errors).toHaveLength(0);
+      const rediscoveredWorkflow = rediscovery.workflows.get(parentWorkflow.name)!;
+      mockSendQueryDag.mockClear();
+      const freshStore = createMockStore();
+      await executeDagWorkflow(
+        createMockDeps(freshStore),
+        platform,
+        'conv-dag',
+        testDir,
+        rediscoveredWorkflow,
+        makeWorkflowRun('fresh-invalid-command-run'),
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'state'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+      expect(mockSendQueryDag).not.toHaveBeenCalled();
+      const freshFailures = (
+        freshStore.createWorkflowEvent as ReturnType<typeof mock>
+      ).mock.calls.filter(
+        (call: unknown[]) => (call[0] as Record<string, unknown>).event_type === 'node_failed'
+      );
+      expect(freshFailures).toHaveLength(1);
+
       const resumedRun = makeWorkflowRun('materialized-resume-run', {
         metadata: {
           approval: { ...pausedContext },
@@ -8536,6 +8584,7 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         },
       });
 
+      mockSendQueryDag.mockClear();
       await executeDagWorkflow(
         createMockDeps(createMockStore()),
         platform,
@@ -8556,7 +8605,7 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       const resumedPrompt = mockSendQueryDag.mock.calls[0]?.[0] as string;
       expect(resumedPrompt).toContain('ORIGINAL materialized command.');
       expect(resumedPrompt).toContain('USER=<<tighten the summary>>');
-      expect(resumedPrompt).not.toContain('TAMPERED');
+      expect(resumedPrompt).not.toContain('could not be resolved');
     });
 
     it('closes the loop lifecycle with exactly one node_failed on max-iterations exhaustion', async () => {

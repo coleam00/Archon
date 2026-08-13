@@ -952,7 +952,9 @@ written the nodes by hand. There is no separate child run.
   rewired to the namespaced ids automatically. This includes named `command:` and
   `loop.command` files: discovery resolves their bodies and compiles them into the flat DAG
   before namespacing. Compilation recurses through nested `loop_group` bodies. An unresolved
-  included command is a load error because its references cannot otherwise be proven safe.
+  included command cannot start a fresh execution because its references cannot be proven safe.
+  Command nodes fail composition immediately; loop commands retain a private compilation error
+  so a paused loop can still resume from its persisted, validated prompt snapshot.
   The include node's own `depends_on` / `when` / `trigger_rule` attach to the block's
   **entry** nodes (those with no upstream inside the block).
 - **Sink asymmetry (a downstream node depending on the include).** A `depends_on:
@@ -1017,7 +1019,9 @@ workflow stays command-first; the executor receives a deterministic flat DAG.
 Every live reference in the command body must belong to the included workflow's lexical node
 scope. A direct `$caller.output` reference is rejected whether or not the parent happens to
 have a node called `caller`; declare an input and pass it with `with:` instead. Failure to
-resolve or read an included command is also a load error, not a warning or best-effort check.
+resolve or read an included command is never a warning or best-effort bypass: a fresh execution
+fails before an AI turn. A paused loop remains resumable from its saved prompt snapshot even if
+the command is later deleted or made invalid.
 Canonical references are live even inside Markdown code fences and inline code because runtime
 substitution is syntax-agnostic.
 

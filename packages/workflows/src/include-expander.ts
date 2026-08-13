@@ -46,6 +46,11 @@ import {
 import { createLogger } from '@archon/paths';
 import { validateDagStructure } from './loader';
 import { resolveDeclaredInputs } from './workflow-inputs';
+import {
+  COMPILED_LOOP_COMMAND,
+  type CompiledLoopCommand,
+  type LoopWithCompiledCommand,
+} from './compiled-command';
 
 /**
  * Resolve the logger on every call rather than caching it at module scope.
@@ -153,9 +158,11 @@ function rewriteNodeOutputRefs(node: DagNode, rename: (id: string) => string): v
   if (node.when !== undefined) node.when = whenExpr(node.when);
 
   if (isLoopNode(node)) {
-    // A command-backed loop has no inline prompt; its `command` is a NAME, not a ref
-    // (same rule as `command:` nodes above), so there is nothing to rewrite.
     if (node.loop.prompt !== undefined) node.loop.prompt = code(node.loop.prompt);
+    const compiled = (node.loop as typeof node.loop & LoopWithCompiledCommand)[
+      COMPILED_LOOP_COMMAND
+    ];
+    if (compiled?.prompt !== undefined) compiled.prompt = code(compiled.prompt);
     if (node.loop.until_bash !== undefined) node.loop.until_bash = code(node.loop.until_bash);
   } else if (isLoopGroupNode(node)) {
     if (node.loop_group.until_bash !== undefined) {
@@ -240,6 +247,10 @@ function applyInputsMacro(node: DagNode, args: Record<string, string>, missing: 
 
   if (isLoopNode(node)) {
     if (node.loop.prompt !== undefined) node.loop.prompt = substitute(node.loop.prompt);
+    const compiled = (node.loop as typeof node.loop & LoopWithCompiledCommand)[
+      COMPILED_LOOP_COMMAND
+    ];
+    if (compiled?.prompt !== undefined) compiled.prompt = substitute(compiled.prompt);
     if (node.loop.until_bash !== undefined) {
       node.loop.until_bash = substitute(node.loop.until_bash);
     }
@@ -475,9 +486,11 @@ function warnDroppedWorkflowLevelFields(includeNode: IncludeNode, child: Workflo
 /**
  * Compile an included workflow's named AI command bodies into the flat DAG. Composition
  * must prove the child's lexical boundary before parent nodes share one output map, so an
- * unresolved command is a hard error and every canonical ref in a resolved body must name
- * a node in the command node's current or enclosing workflow scope. Once materialized as
- * prompt text, the ordinary namespacing and `$INPUTS` passes apply without a second grammar.
+ * every canonical ref in a resolved body must name a node in the command node's current or
+ * enclosing workflow scope. Ordinary command nodes become prompt nodes. Loop commands keep
+ * their authored identity plus symbol-keyed compiled prompt/error metadata so cold resume can
+ * reach a persisted prompt snapshot even after source deletion. The ordinary namespacing and
+ * `$INPUTS` passes transform compiled bodies without a second grammar.
  * Named script files are deliberately outside this function: they are opaque programs and
  * receive declared inputs through environment variables.
  */
@@ -490,17 +503,17 @@ function materializeBlockCommandPrompts(
   enclosingIds: ReadonlySet<string>,
   nodePath: string
 ): DagNode {
-  const materialize = (commandName: string): string => {
+  const compile = (commandName: string): CompiledLoopCommand => {
     const content = commandContents.get(commandName);
     if (content === undefined || content === null) {
-      throw new IncludeExpansionError(
-        `Node '${includeNode.id}': included workflow '${child.name}' node '${nodePath}' uses command '${commandName}', but its body could not be resolved during composition through the package-owned, project/configured, user, or enabled bundled command scopes. Included commands must resolve at load time so their references and declared inputs can be compiled safely.`
-      );
+      return {
+        error: `Node '${includeNode.id}': included workflow '${child.name}' node '${nodePath}' uses command '${commandName}', but its body could not be resolved during composition through the package-owned, project/configured, user, or enabled bundled command scopes. Included commands must resolve before a fresh execution so their references and declared inputs can be compiled safely.`,
+      };
     }
     if (content.trim().length === 0) {
-      throw new IncludeExpansionError(
-        `Node '${includeNode.id}': included workflow '${child.name}' node '${nodePath}' command '${commandName}' is empty. Included commands must contain a non-whitespace prompt body.`
-      );
+      return {
+        error: `Node '${includeNode.id}': included workflow '${child.name}' node '${nodePath}' command '${commandName}' is empty. Included commands must contain a non-whitespace prompt body.`,
+      };
     }
 
     const outputRefPattern = new RegExp(OUTPUT_REF_PATTERN.source, 'g');
@@ -513,22 +526,26 @@ function materializeBlockCommandPrompts(
         !enclosingIds.has(referencedId)
       ) {
         const offendingRef = match[0];
-        throw new IncludeExpansionError(
-          `Node '${includeNode.id}': included workflow '${child.name}' node '${nodePath}' command '${commandName}' references '${offendingRef}' outside its workflow namespace. Declare it under '${child.name}' inputs:, pass the caller value through '${includeNode.id}' with:, and read it as '$INPUTS.<name>' instead.`
-        );
+        return {
+          error: `Node '${includeNode.id}': included workflow '${child.name}' node '${nodePath}' command '${commandName}' references '${offendingRef}' outside its workflow namespace. Declare it under '${child.name}' inputs:, pass the caller value through '${includeNode.id}' with:, and read it as '$INPUTS.<name>' instead.`,
+        };
       }
     }
-    return content;
+    return { prompt: content };
   };
 
   if (isCommandNode(node)) {
+    const compiled = compile(node.command);
+    if (compiled.error !== undefined) throw new IncludeExpansionError(compiled.error);
     const { command, ...base } = node;
-    return { ...base, prompt: materialize(command) };
+    void command;
+    return { ...base, prompt: compiled.prompt };
   }
 
   if (isLoopNode(node) && node.loop.command !== undefined) {
-    const { command, ...loop } = node.loop;
-    return { ...node, loop: { ...loop, prompt: materialize(command) } };
+    const loop = { ...node.loop } as typeof node.loop & LoopWithCompiledCommand;
+    loop[COMPILED_LOOP_COMMAND] = compile(node.loop.command);
+    return { ...node, loop };
   }
 
   if (isLoopGroupNode(node)) {
@@ -567,8 +584,9 @@ function materializeBlockCommandPrompts(
  *
  * `commandContents` maps command NAME → file content (or null when unresolvable). Discovery
  * pre-resolves every include-target command with execution-equivalent precedence. A caller
- * that omits the map may still expand workflows without commands; any included command
- * fails closed because its lexical boundary cannot otherwise be proven.
+ * that omits the map may still expand workflows without commands. Included command nodes
+ * fail composition; included loop commands fail before a fresh AI turn but remain discoverable
+ * so an already-paused loop can resume from its validated snapshot.
  */
 export function expandWorkflowIncludes(
   rawByName: Map<string, WorkflowDefinition>,

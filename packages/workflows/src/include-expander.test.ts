@@ -2,6 +2,7 @@ import { describe, test, expect } from 'bun:test';
 import { expandWorkflowIncludes, INCLUDE_MAX_DEPTH } from './include-expander';
 import { dagNodeSchema } from './schemas';
 import type { WorkflowDefinition, DagNode } from './schemas';
+import { COMPILED_LOOP_COMMAND, type LoopWithCompiledCommand } from './compiled-command';
 
 // ---------------------------------------------------------------------------
 // Helpers — build WorkflowDefinitions in-memory (pure: no parseWorkflow, no
@@ -22,6 +23,11 @@ function mapOf(...workflows: WorkflowDefinition[]): Map<string, WorkflowDefiniti
 
 function nodeById(w: WorkflowDefinition, id: string): DagNode | undefined {
   return w.nodes.find(n => n.id === id);
+}
+
+function compiledLoopPrompt(node: DagNode | undefined): string | undefined {
+  if (!node || !('loop' in node)) return undefined;
+  return (node.loop as typeof node.loop & LoopWithCompiledCommand)[COMPILED_LOOP_COMMAND]?.prompt;
 }
 
 /** A 3-node review-like block: verify -> scope -> impl (sole sink = impl). */
@@ -872,8 +878,8 @@ describe('expandWorkflowIncludes — included command compilation', () => {
     );
     expect(errors).toHaveLength(0);
     const repeat = nodeById(workflows.get('parent')!, 'inc__repeat');
-    expect(repeat && 'loop' in repeat ? repeat.loop.prompt : '').toBe('Review prod.');
-    expect(repeat && 'loop' in repeat ? repeat.loop.command : undefined).toBeUndefined();
+    expect(compiledLoopPrompt(repeat)).toBe('Review prod.');
+    expect(repeat && 'loop' in repeat ? repeat.loop.command : undefined).toBe('loop-cmd');
   });
 
   test('materializes a nested loop command and namespaces an enclosing top-level ref', () => {
@@ -901,9 +907,7 @@ describe('expandWorkflowIncludes — included command compilation', () => {
     expect(errors).toHaveLength(0);
     const group = nodeById(workflows.get('parent')!, 'inc__group');
     const repeat = group && 'loop_group' in group ? group.loop_group.nodes[0] : undefined;
-    expect(repeat && 'loop' in repeat ? repeat.loop.prompt : '').toBe(
-      'Read $inc__seed.output and continue.'
-    );
+    expect(compiledLoopPrompt(repeat)).toBe('Read $inc__seed.output and continue.');
   });
 
   test('materializes a command inside a second-level nested loop group', () => {
@@ -969,7 +973,7 @@ describe('expandWorkflowIncludes — included command compilation', () => {
     expect(errors).toHaveLength(0);
     const group = nodeById(workflows.get('parent')!, 'inc__group');
     const repeat = group && 'loop_group' in group ? group.loop_group.nodes[0] : undefined;
-    expect(repeat && 'loop' in repeat ? repeat.loop.prompt : '').toBe('Review prod.');
+    expect(compiledLoopPrompt(repeat)).toBe('Review prod.');
   });
 
   test('passes when a nested loop command file references a local body node', () => {
