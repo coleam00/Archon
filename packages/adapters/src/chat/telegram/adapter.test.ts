@@ -7,6 +7,9 @@
  */
 import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test';
 import type { Mock } from 'bun:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 // Mock logger to suppress noisy output during tests
 const mockLogger = {
@@ -324,6 +327,13 @@ describe('TelegramAdapter', () => {
     let adapter: TelegramAdapter;
     let mockGetFile: Mock<(fileId: string) => Promise<{ file_id: string; file_path?: string }>>;
     let originalFetch: typeof fetch;
+    // getArchonHome() is not mocked (see the @archon/paths mock above) — it
+    // reads process.env.ARCHON_HOME at call time, so a successful download
+    // test writes real files under it. Point it at a fresh temp dir per test
+    // and remove that dir afterward, rather than leaving upload artifacts in
+    // the developer's/CI's actual Archon home.
+    let tempHome: string;
+    let originalArchonHome: string | undefined;
 
     beforeEach(() => {
       adapter = new TelegramAdapter('fake-token-for-testing');
@@ -338,12 +348,27 @@ describe('TelegramAdapter', () => {
           status: 200,
           headers: new Headers({ 'content-length': '4' }),
           arrayBuffer: () => Promise.resolve(new ArrayBuffer(4)),
-        } as Response)
+          body: new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new Uint8Array(4));
+              controller.close();
+            },
+          }),
+        } as unknown as Response)
       ) as unknown as typeof fetch;
+      originalArchonHome = process.env.ARCHON_HOME;
+      tempHome = mkdtempSync(join(tmpdir(), 'telegram-adapter-test-'));
+      process.env.ARCHON_HOME = tempHome;
     });
 
     afterEach(() => {
       globalThis.fetch = originalFetch;
+      if (originalArchonHome === undefined) {
+        delete process.env.ARCHON_HOME;
+      } else {
+        process.env.ARCHON_HOME = originalArchonHome;
+      }
+      rmSync(tempHome, { recursive: true, force: true });
     });
 
     test('returns empty result when the message has no document or photo', async () => {

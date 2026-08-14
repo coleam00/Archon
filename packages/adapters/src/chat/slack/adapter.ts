@@ -18,6 +18,7 @@ import { parseAllowedUserIds } from './auth';
 import { splitIntoParagraphChunks } from '../../utils/message-splitting';
 import {
   downloadAttachments as downloadAttachmentsCore,
+  MAX_ATTACHMENTS_PER_MESSAGE,
   type SkippedAttachment,
 } from '../../utils/attachment-download';
 import { formatCostFooter } from './blocks';
@@ -374,7 +375,14 @@ export class SlackAdapter implements IPlatformAdapter {
     if (!files || files.length === 0) {
       return { files: [], uploadDir: '', skipped: [] };
     }
-    const candidates = files
+    // Cap the SOURCE list first — the per-message count limit applies to every
+    // attached file, not just the ones that happen to have a download URL.
+    // Capping only `candidates` (post-filter) would let an undownloadable file
+    // ahead of the limit silently bump a valid file past it and into
+    // `download_failed` obscurity instead of the correct `too_many`.
+    const withinCap = files.slice(0, MAX_ATTACHMENTS_PER_MESSAGE);
+    const overCap = files.slice(MAX_ATTACHMENTS_PER_MESSAGE);
+    const candidates = withinCap
       .filter((f): f is SlackFileRef & { url_private_download: string } =>
         Boolean(f.url_private_download)
       )
@@ -388,7 +396,7 @@ export class SlackAdapter implements IPlatformAdapter {
       }));
     // Files with no download URL at all can never be fetched — report them
     // as skipped up front rather than silently dropping them from the count.
-    const undownloadable = files.filter(f => !f.url_private_download);
+    const undownloadable = withinCap.filter(f => !f.url_private_download);
     const result = await downloadAttachmentsCore(candidates, {
       platform: 'slack',
       conversationId,
@@ -399,6 +407,7 @@ export class SlackAdapter implements IPlatformAdapter {
       skipped: [
         ...result.skipped,
         ...undownloadable.map(f => ({ name: f.name ?? f.id, reason: 'download_failed' as const })),
+        ...overCap.map(f => ({ name: f.name ?? f.id, reason: 'too_many' as const })),
       ],
     };
   }

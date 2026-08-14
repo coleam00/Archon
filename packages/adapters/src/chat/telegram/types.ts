@@ -7,6 +7,10 @@ import type { Document, PhotoSize } from 'grammy/types';
  * `document`/`photo` are the raw grammY attachment fields, present only when
  * the inbound message carried a file — `message` is `text ?? caption ?? ''`,
  * so an attachment-only message (no text, no caption) yields an empty string.
+ * `unsupportedMediaLabel` is set when the message carries a media type this
+ * feature does not download (video, voice, audio, animation, video note,
+ * sticker) — so the shared "attachment could not be processed" notice still
+ * reaches the user instead of the message being silently dropped.
  */
 export interface TelegramMessageContext {
   conversationId: string;
@@ -15,4 +19,5 @@ export interface TelegramMessageContext {
   displayName?: string;
   document?: Document;
   photo?: PhotoSize[];
+  unsupportedMediaLabel?: string;
 }

@@ -1246,6 +1246,15 @@ export async function workflowRunCommand(
     if (options.conversationId === undefined) {
       extraArgs.push('--conversation-id', childConversationId);
     }
+    // Explicitly re-forward attachments rather than relying on them surviving
+    // inside `process.argv` (which `spawnDetachedWorkflowRun` also reuses) —
+    // that's true only when `options.attachments` came from a literal
+    // `--attachments` flag on THIS invocation, not when a caller sets it
+    // programmatically. Passed as one argv array element (never shell
+    // interpolation), so no escaping is needed for its JSON content.
+    if (options.attachments !== undefined) {
+      extraArgs.push('--attachments', JSON.stringify(options.attachments));
+    }
 
     const logPath = await spawnDetachedWorkflowRun(cwd, childConversationId, extraArgs);
 

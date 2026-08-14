@@ -20,8 +20,9 @@
  */
 
 import { randomUUID } from 'crypto';
+import { join } from 'path';
 import type { BranchName } from '@archon/git';
-import { createLogger } from '@archon/paths';
+import { createLogger, getArchonHome } from '@archon/paths';
 import type { WriteBackFinalizeResult, WriteBackApplySummary } from '@archon/providers/types';
 import type {
   BackendPrepareRequest,
@@ -596,6 +597,13 @@ export class ContainerBackend implements IIsolationBackend {
       `${hostRoot}:/mnt/lower:ro`,
       '-v',
       `${volume}:/mnt/upper`,
+      // Read-only: bash:/script: nodes only need to READ attachment files via
+      // ARCHON_ATTACHMENTS, never write into the upload store. Path must stay
+      // in sync with CONTAINER_ATTACHMENTS_MOUNT in @archon/workflows/executor
+      // (workflows can't import @archon/isolation — see package-layer rules —
+      // so this is a matched literal, not a shared constant).
+      '-v',
+      `${join(getArchonHome(), 'artifacts', 'uploads')}:/mnt/attachments:ro`,
       '-e',
       `ARCHON_WORKSPACE_PATH=${hostRoot}`,
       '-e',

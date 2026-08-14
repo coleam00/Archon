@@ -3,6 +3,9 @@
  */
 import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test';
 import type { Mock } from 'bun:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 // Mock logger to suppress noisy output during tests
 const mockLogger = {
@@ -826,6 +829,13 @@ describe('DiscordAdapter', () => {
   describe('downloadAttachments', () => {
     let adapter: DiscordAdapter;
     let originalFetch: typeof fetch;
+    // getArchonHome() is not mocked (see the @archon/paths mock above) — it
+    // reads process.env.ARCHON_HOME at call time, so a successful download
+    // test writes real files under it. Point it at a fresh temp dir per test
+    // and remove that dir afterward, rather than leaving upload artifacts in
+    // the developer's/CI's actual Archon home.
+    let tempHome: string;
+    let originalArchonHome: string | undefined;
 
     beforeEach(() => {
       adapter = new DiscordAdapter('fake-token-for-testing');
@@ -836,12 +846,27 @@ describe('DiscordAdapter', () => {
           status: 200,
           headers: new Headers({ 'content-length': '4' }),
           arrayBuffer: () => Promise.resolve(new ArrayBuffer(4)),
-        } as Response)
+          body: new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new Uint8Array(4));
+              controller.close();
+            },
+          }),
+        } as unknown as Response)
       ) as unknown as typeof fetch;
+      originalArchonHome = process.env.ARCHON_HOME;
+      tempHome = mkdtempSync(join(tmpdir(), 'discord-adapter-test-'));
+      process.env.ARCHON_HOME = tempHome;
     });
 
     afterEach(() => {
       globalThis.fetch = originalFetch;
+      if (originalArchonHome === undefined) {
+        delete process.env.ARCHON_HOME;
+      } else {
+        process.env.ARCHON_HOME = originalArchonHome;
+      }
+      rmSync(tempHome, { recursive: true, force: true });
     });
 
     function makeMessageWithAttachments(

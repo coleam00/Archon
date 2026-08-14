@@ -156,6 +156,10 @@ export type { WorkflowNodeSession } from './workflow-node-session';
 export { nodeArtifactSchema } from './node-artifact';
 export type { NodeArtifact } from './node-artifact';
 
+// Message attachments forwarded into bash:/script: node env
+export { workflowAttachmentSchema } from './attachment';
+export type { WorkflowAttachment } from './attachment';
+
 // Result types (non-schema hand-written types)
 export type {
   LoadCommandResult,

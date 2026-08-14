@@ -57,7 +57,8 @@ export type SkippedAttachmentReason =
   | 'too_large'
   | 'untrusted_url'
   | 'download_failed'
-  | 'timeout';
+  | 'timeout'
+  | 'unsupported_type';
 
 export interface SkippedAttachment {
   name: string;
@@ -195,17 +196,46 @@ export async function downloadAttachments(
         continue;
       }
 
-      const buffer = Buffer.from(await response.arrayBuffer());
-      if (buffer.byteLength > maxBytes) {
+      // Enforce the byte cap WHILE reading, not after buffering the whole
+      // body — `response.arrayBuffer()` would pull a chunked response (no, or
+      // an understated, Content-Length) entirely into memory before any size
+      // check ran, defeating `maxBytes` as a memory guard. Cancelling the
+      // reader as soon as the cap is crossed bounds the buffered amount to at
+      // most one chunk beyond `maxBytes`.
+      const reader = response.body?.getReader();
+      const chunks: Uint8Array[] = [];
+      let receivedBytes = 0;
+      let tooLarge = false;
+      if (reader) {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          receivedBytes += value.byteLength;
+          if (receivedBytes > maxBytes) {
+            tooLarge = true;
+            await reader.cancel().catch(() => undefined);
+            break;
+          }
+          chunks.push(value);
+        }
+      }
+      if (tooLarge) {
         log.warn(
-          { platform, conversationId, name: file.name, size: buffer.byteLength },
+          { platform, conversationId, name: file.name, size: receivedBytes },
           'attachment.too_large'
         );
         skipped.push({ name: file.name, reason: 'too_large' });
         continue;
       }
+      const buffer = Buffer.concat(
+        chunks.map(chunk => Buffer.from(chunk)),
+        receivedBytes
+      );
 
-      await mkdir(uploadDir, { recursive: true });
+      // Owner-only permissions: a permissive umask on the host must not expose
+      // downloaded attachments (which can be arbitrary user-supplied content)
+      // to other local users.
+      await mkdir(uploadDir, { recursive: true, mode: 0o700 });
       dirCreated = true;
       // Both path components are untrusted (sourced from inbound event
       // data). `basename` drops any directory part, then the character
@@ -216,7 +246,7 @@ export async function downloadAttachments(
       const safeName = basename(file.name).replace(/[^a-zA-Z0-9._-]/g, '_');
       const safeId = file.id.replace(/[^a-zA-Z0-9_-]/g, '_');
       const filePath = join(uploadDir, `${safeId}_${safeName}`);
-      await writeFile(filePath, buffer);
+      await writeFile(filePath, buffer, { mode: 0o600 });
       saved.push({
         path: filePath,
         name: safeName || safeId,
@@ -290,6 +320,7 @@ export function formatSkippedAttachmentsNotice(
     untrusted_url: 'file link could not be verified',
     download_failed: 'download failed',
     timeout: 'download timed out',
+    unsupported_type: 'file type not supported',
   };
   const lines = skipped.map(s => `- ${s.name}: ${reasonText[s.reason]}`);
   const plural = skipped.length === 1 ? 'attachment' : 'attachments';

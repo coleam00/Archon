@@ -3,7 +3,7 @@
  */
 import { mkdir, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
-import { dirname } from 'path';
+import { dirname, join } from 'path';
 import type { IWorkflowPlatform, WorkflowMessageMetadata } from './deps';
 import type { WorkflowDeps, WorkflowConfig } from './deps';
 import * as archonPaths from '@archon/paths';
@@ -61,19 +61,43 @@ import { assistantModelDefaults, resolveWorkflowModelScope } from './node-model-
 /** The per-user prefs layer as returned by `WorkflowDeps.getUserAiPrefs`. */
 type UserAiPrefsLayer = Awaited<ReturnType<NonNullable<WorkflowDeps['getUserAiPrefs']>>>;
 
+// WorkflowAttachment (schema-derived) is re-exported below alongside the other
+// executor.ts exports so `@archon/workflows/executor` importers (cli.ts et al.)
+// don't need a second import path; the schema itself lives in ./schemas/attachment
+// so the CLI can validate parsed --attachments input against the same contract.
+import { workflowAttachmentSchema, type WorkflowAttachment } from './schemas/attachment';
+export { workflowAttachmentSchema };
+export type { WorkflowAttachment };
+
 /**
- * A file attached to the message that triggered this workflow run. Structurally
- * identical to `AttachedFile` in `@archon/core/types` — redeclared here rather
- * than imported because `@archon/workflows` must never depend on `@archon/core`
- * (see the package-layer rules). Callers pass their `AttachedFile[]` straight
- * through; TypeScript accepts it because the shapes are structurally assignable.
+ * Where the container backend (`@archon/isolation`'s `ContainerBackend`)
+ * bind-mounts the host attachment-uploads root (read-only). Must match the
+ * literal in `runContainerInMode` there — `@archon/workflows` cannot import
+ * `@archon/isolation` (see package-layer rules), so this is a matched
+ * constant, not a shared one.
  */
-export interface WorkflowAttachment {
-  /** Absolute path on disk where the file was saved by the adapter. */
-  path: string;
-  name: string;
-  mimeType: string;
-  size: number;
+const CONTAINER_ATTACHMENTS_MOUNT = '/mnt/attachments';
+
+/**
+ * Rewrite each attachment's host path to its in-container mount path when
+ * running inside the container backend — the subprocess env only ever sees
+ * paths meaningful to where it's actually executing. Every attachment path
+ * (adapter downloads and the Web upload endpoint alike) is rooted at
+ * `<archonHome>/artifacts/uploads/`; a path that ISN'T (e.g. a hand-crafted
+ * CLI `--attachments` value pointing elsewhere) is left unchanged — it was
+ * never going to be readable from inside the container regardless.
+ */
+function containerAwareAttachments(
+  attachments: readonly WorkflowAttachment[] | undefined,
+  execContext: ExecutionContext
+): readonly WorkflowAttachment[] | undefined {
+  if (!attachments || execContext.kind !== 'container') return attachments;
+  const uploadsRoot = join(archonPaths.getArchonHome(), 'artifacts', 'uploads');
+  return attachments.map(file =>
+    file.path.startsWith(uploadsRoot)
+      ? { ...file, path: CONTAINER_ATTACHMENTS_MOUNT + file.path.slice(uploadsRoot.length) }
+      : file
+  );
 }
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -576,7 +600,10 @@ export type ExecuteWorkflowOptions = ResumePayload & {
    * Files attached to the message that triggered this run (Slack uploads, web
    * UI attachments). Delivered to `bash:`/`script:` node subprocesses as the
    * `ARCHON_ATTACHMENTS` env var — always set, `[]` when empty. Not restored
-   * on resume: attachments are per-triggering-message, not persisted.
+   * on resume: attachments are per-triggering-message, not persisted. Under
+   * `execContext.kind === 'container'`, each `path` is rewritten to its
+   * in-container mount point (see `containerAwareAttachments`) — the
+   * container backend bind-mounts the host uploads root read-only.
    */
   attachments?: readonly WorkflowAttachment[];
 };
@@ -1243,7 +1270,7 @@ export async function executeWorkflow(
       ...dbEnvVars,
       ...botGitHubEnv,
       ...userGitHubEnv,
-      ARCHON_ATTACHMENTS: JSON.stringify(attachments ?? []),
+      ARCHON_ATTACHMENTS: JSON.stringify(containerAwareAttachments(attachments, execContext) ?? []),
     },
   };
   const configuredCommandFolder = config.commands.folder;
@@ -1689,6 +1716,12 @@ export async function executeWorkflow(
   // returns {} when the feature is disabled or no userId is present).
   const userProviderEnv = await resolveUserProviderEnvForWorkflow(deps, userId, artifactsDir);
   config.envVars = { ...config.envVars, ...userProviderEnv };
+  // Reapply the reserved key: userProviderEnv is an unrestricted per-user env
+  // bag (deps.getUserProviderEnv), so without this a colliding key of the same
+  // name would silently shadow the real run-scoped attachments JSON set above.
+  config.envVars.ARCHON_ATTACHMENTS = JSON.stringify(
+    containerAwareAttachments(attachments, execContext) ?? []
+  );
 
   // Wrap execution in try-catch to ensure workflow is marked as failed on any error.
   //

@@ -38,7 +38,7 @@ If an "## Attached Files" section appears below, it lists files attached to this
 with a ready-to-use `--attachments` value — pass it through verbatim so the started workflow's
 `bash:`/`script:` nodes can see them via `ARCHON_ATTACHMENTS`:
 
-```
+```bash
 archon workflow run <name> "<message>" --attachments '<the JSON array shown below>'
 ```
 

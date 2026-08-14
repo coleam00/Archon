@@ -55,7 +55,7 @@ import {
   isValidEventType,
 } from './commands/workflow';
 import { WORKFLOW_EVENT_TYPES } from '@archon/workflows/store';
-import type { WorkflowAttachment } from '@archon/workflows/executor';
+import { workflowAttachmentSchema, type WorkflowAttachment } from '@archon/workflows/executor';
 import {
   isolationListCommand,
   isolationCleanupCommand,
@@ -602,7 +602,13 @@ async function main(): Promise<number> {
                 if (!Array.isArray(parsed)) {
                   throw new Error('--attachments must be a JSON array');
                 }
-                attachments = parsed as WorkflowAttachment[];
+                attachments = parsed.map((entry: unknown, index: number) => {
+                  const result = workflowAttachmentSchema.safeParse(entry);
+                  if (!result.success) {
+                    throw new Error(`entry ${String(index)}: ${result.error.message}`);
+                  }
+                  return result.data;
+                });
               } catch (error) {
                 console.error(
                   `Error: --attachments must be a JSON array of {path, name, mimeType, size}: ${(error as Error).message}`

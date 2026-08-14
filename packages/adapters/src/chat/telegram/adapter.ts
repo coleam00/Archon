@@ -170,9 +170,18 @@ export class TelegramAdapter implements IPlatformAdapter {
    * sends the same photo at multiple resolutions).
    */
   async downloadAttachments(
-    attachment: { document?: Document; photo?: PhotoSize[] },
+    attachment: {
+      document?: Document;
+      photo?: PhotoSize[];
+      unsupportedMediaLabel?: string;
+    },
     conversationId: string
   ): Promise<{ files: AttachedFile[]; uploadDir: string; skipped: SkippedAttachment[] }> {
+    // Reported immediately — there is no file to fetch for these types, only
+    // a notice that the message carried something this feature can't download.
+    const unsupportedSkipped: SkippedAttachment[] = attachment.unsupportedMediaLabel
+      ? [{ name: attachment.unsupportedMediaLabel, reason: 'unsupported_type' }]
+      : [];
     const refs: { fileId: string; name: string; mimeType?: string; size?: number }[] = [];
     if (attachment.document) {
       refs.push({
@@ -192,7 +201,7 @@ export class TelegramAdapter implements IPlatformAdapter {
       });
     }
     if (refs.length === 0) {
-      return { files: [], uploadDir: '', skipped: [] };
+      return { files: [], uploadDir: '', skipped: unsupportedSkipped };
     }
 
     const candidates: {
@@ -231,7 +240,7 @@ export class TelegramAdapter implements IPlatformAdapter {
       conversationId,
       isTrustedUrl: isTrustedTelegramDownloadUrl,
     });
-    return { ...result, skipped: [...result.skipped, ...preSkipped] };
+    return { ...result, skipped: [...result.skipped, ...preSkipped, ...unsupportedSkipped] };
   }
 
   /**
@@ -274,7 +283,25 @@ export class TelegramAdapter implements IPlatformAdapter {
       const document = ctx.message.document;
       const photo = ctx.message.photo;
       const message = ctx.message.text ?? ctx.message.caption ?? '';
-      const hasAttachment = Boolean(document) || Boolean(photo && photo.length > 0);
+      // Media types this feature does not download. Detected (not silently
+      // dropped) so an attachment-only message of one of these types still
+      // reaches the handler and gets the shared "not supported" notice,
+      // instead of the message vanishing with no reply at all.
+      const unsupportedMediaLabel = ctx.message.video
+        ? 'video'
+        : ctx.message.voice
+          ? 'voice message'
+          : ctx.message.audio
+            ? 'audio'
+            : ctx.message.animation
+              ? 'animation'
+              : ctx.message.video_note
+                ? 'video note'
+                : ctx.message.sticker
+                  ? 'sticker'
+                  : undefined;
+      const hasAttachment =
+        Boolean(document) || Boolean(photo && photo.length > 0) || Boolean(unsupportedMediaLabel);
       if (!message && !hasAttachment) return;
 
       // Authorization check - verify sender is in whitelist
@@ -296,7 +323,15 @@ export class TelegramAdapter implements IPlatformAdapter {
             : undefined;
         const displayName = fullName ?? from?.username ?? undefined;
         // Fire-and-forget - errors handled by caller
-        void this.messageHandler({ conversationId, message, userId, displayName, document, photo });
+        void this.messageHandler({
+          conversationId,
+          message,
+          userId,
+          displayName,
+          document,
+          photo,
+          unsupportedMediaLabel,
+        });
       } else {
         // Intentional: message dropped silently if handler not registered yet.
         // In production the server always calls onMessage() before start(); this

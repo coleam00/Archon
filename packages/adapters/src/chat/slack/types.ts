@@ -1,3 +1,16 @@
+import { z } from '@hono/zod-openapi';
+
+/** File attachment reference as it appears on an inbound Slack message event. */
+export const slackFileRefSchema = z.object({
+  id: z.string(),
+  name: z.string().optional(),
+  mimetype: z.string().optional(),
+  url_private_download: z.string().optional(),
+  size: z.number().optional(),
+});
+
+export type SlackFileRef = z.infer<typeof slackFileRefSchema>;
+
 /**
  * Slack message event context for the message handler.
  * `displayName` is enriched lazily via `users.info` on first sight of a user;
@@ -13,13 +26,4 @@ export interface SlackMessageEvent {
   thread_ts?: string;
   displayName?: string;
   files?: SlackFileRef[];
-}
-
-/** File attachment reference as it appears on an inbound Slack message event. */
-export interface SlackFileRef {
-  id: string;
-  name?: string;
-  mimetype?: string;
-  url_private_download?: string;
-  size?: number;
 }

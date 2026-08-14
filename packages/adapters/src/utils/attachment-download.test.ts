@@ -61,13 +61,23 @@ afterEach(() => {
 const alwaysTrusted = (): boolean => true;
 
 function mockFetchOnce(response: Partial<Response> & { body?: ArrayBuffer }): void {
+  const bodyBuffer = response.body ?? new ArrayBuffer(4);
+  // A real Response.body is a ReadableStream — the production code reads it
+  // incrementally (not via arrayBuffer()), so the mock must provide one too.
+  const bodyStream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new Uint8Array(bodyBuffer));
+      controller.close();
+    },
+  });
   globalThis.fetch = mock(() =>
     Promise.resolve({
       ok: response.ok ?? true,
       status: response.status ?? 200,
       headers: response.headers ?? new Headers(),
-      arrayBuffer: () => Promise.resolve(response.body ?? new ArrayBuffer(4)),
-    } as Response)
+      arrayBuffer: () => Promise.resolve(bodyBuffer),
+      body: bodyStream,
+    } as unknown as Response)
   ) as unknown as typeof fetch;
 }
 
