@@ -188,10 +188,16 @@ without a `tiers:` block. Other providers must configure any tier they use, or r
 
 Controls which sources the Claude Agent SDK discovers during sessions — `CLAUDE.md`, skills, commands, agents, and hooks. In workflow nodes, discovery does not activate ambient skills: the node's `skills:` list remains the exact active set, and omission/`[]` selects none.
 
-A declared skill must be installed under a source that remains enabled. For example,
-`settingSources: ['project']` cannot select a user-global skill, and
-`settingSources: []` requires `skills` to be omitted or empty. Archon rejects that
-mismatch before provider spend.
+A declared skill that is installed on disk must live under a source that remains
+enabled — `settingSources: ['project']` cannot select a user-global skill, for
+instance — and Archon rejects that mismatch before provider spend. Names that are
+absent from disk entirely, such as Claude's built-in skills and plugin-qualified
+`plugin:skill` entries, are left to the SDK to resolve.
+
+Unrecognized entries are dropped rather than ignored: `settingSources: ['projct']`
+resolves to no sources and logs `claude.setting_sources_invalid_entries`. A typo
+therefore narrows and reports itself, instead of falling back to the permissive
+`['project', 'user']` default.
 
 | Value | Description |
 |-------|-------------|

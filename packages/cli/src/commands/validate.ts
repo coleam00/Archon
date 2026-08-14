@@ -22,6 +22,7 @@ import type {
   ScriptValidationResult,
 } from '@archon/workflows/validator';
 import { loadConfig, loadRepoConfig } from '@archon/core';
+import { parseClaudeSettingSources } from '@archon/providers';
 
 /**
  * Build ValidationConfig from the repo's .archon/config.yaml
@@ -117,7 +118,13 @@ export async function validateWorkflowsCommand(
         assistant: mergedConfig.assistant,
         aliases: mergedConfig.aliases,
         tiers: mergedConfig.tiers,
-        claudeSettingSources: mergedConfig.assistants.claude?.settingSources,
+        // Normalize through the provider's own parser: config YAML is not schema
+        // -validated, so an unrecognized entry must be dropped here exactly as it
+        // is at run time, or validation and execution disagree about the node's
+        // effective sources.
+        claudeSettingSources: parseClaudeSettingSources(
+          mergedConfig.assistants.claude?.settingSources
+        ).value,
         claudeConfigDir: mergedConfig.envVars?.CLAUDE_CONFIG_DIR,
       },
       defaultProvider

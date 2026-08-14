@@ -50,7 +50,12 @@ export { ClaudeProvider } from './claude/provider';
 export { CodexProvider } from './codex/provider';
 
 // Config parsers
-export { parseClaudeConfig, type ClaudeProviderDefaults } from './claude/config';
+export {
+  parseClaudeConfig,
+  parseClaudeSettingSources,
+  type ClaudeProviderDefaults,
+  type ParsedSettingSources,
+} from './claude/config';
 export { parseCodexConfig, type CodexProviderDefaults } from './codex/config';
 
 // Utilities (needed by consumers)
@@ -65,7 +70,7 @@ export {
 export { resolveClaudeBinaryPath, fileExists as claudeFileExists } from './claude/binary-resolver';
 
 // Skills resolution
-export { claudeSkillSearchRoots, skillSearchRoots } from './shared/skills';
+export { claudeSkillSearchRoots, findInstalledSkillNames, skillSearchRoots } from './shared/skills';
 
 // Community providers
 export {
