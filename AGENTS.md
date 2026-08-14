@@ -40,7 +40,7 @@ Archon is being positioned as a governed agentic automation engine for business 
 **Git Workflow and Releases**
 - `main` is the release branch. Never commit directly to `main`.
 - `dev` is the working branch. All feature work branches off `dev` and merges back into `dev`.
-- All PRs must use the template at `.github/pull_request_template.md` — fill in every section. When opening a PR via `gh pr create`, copy the template into the body explicitly; GitHub only auto-applies it through the web UI.
+- All PRs must use the template at `.github/pull_request_template.md`. Always keep Problem and outcome, Review guidance, Solution, and Validation; include the conditional sections only when they add material information, and delete the rest along with every instructional comment. Do not write "N/A" to preserve a section. When opening a PR via `gh pr create`, copy the template into the body explicitly; GitHub only auto-applies it through the web UI.
 - Link the issue with `Closes #<number>` (or `Fixes` / `Resolves`) in the PR description so it auto-closes on merge.
 - To release, use the `/release` skill. It compares `dev` to `main`, generates changelog entries, bumps the version, and creates a PR to merge `dev` into `main`.
 - Releases follow Semantic Versioning: `/release` (patch), `/release minor`, `/release major`.
