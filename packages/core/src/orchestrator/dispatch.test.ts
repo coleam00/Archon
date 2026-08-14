@@ -94,9 +94,20 @@ describe('resolveDispatch', () => {
     });
   });
 
-  test('a bare slash with no word characters does not count as a slash command', () => {
+  test('a bare leading slash counts as a slash command', () => {
+    // Matches the orchestrator's own "is this message shaped like a command"
+    // pre-check (message.startsWith('/')), which has no \w+ requirement.
     const result = resolveDispatch('/', 'acme/support-inbox', table, '* ');
-    expect(result.kind).toBe('workflow');
+    expect(result.kind).toBe('chat');
+  });
+
+  test('leading whitespace before a slash command still bypasses', () => {
+    const result = resolveDispatch('   /status', 'acme/support-inbox', table, '* ');
+    expect(result).toEqual({
+      kind: 'chat',
+      message: '   /status',
+      notice: 'Command (slash) detected, bypassing default workflow: intake-workflow',
+    });
   });
 
   test('slash command bypasses even with no bypass sigil configured', () => {
@@ -108,7 +119,7 @@ describe('resolveDispatch', () => {
     });
   });
 
-  test('a slash-command pattern anywhere in the message bypasses, not just at the start', () => {
+  test('a slash-command pattern mid-message does NOT bypass — only a leading command does', () => {
     const result = resolveDispatch(
       'what do you know about /workflow list',
       'acme/support-inbox',
@@ -116,15 +127,15 @@ describe('resolveDispatch', () => {
       '* '
     );
     expect(result).toEqual({
-      kind: 'chat',
+      kind: 'workflow',
+      workflowName: 'intake-workflow',
       message: 'what do you know about /workflow list',
-      notice: 'Command (slash) detected, bypassing default workflow: intake-workflow',
     });
   });
 
-  test('conversational text mentioning a slash command still bypasses', () => {
+  test('conversational text merely mentioning a slash command is dispatched through the workflow', () => {
     const result = resolveDispatch('hey archon /workfloe list', 'acme/support-inbox', table, '* ');
-    expect(result.kind).toBe('chat');
+    expect(result.kind).toBe('workflow');
   });
 
   test('project keys match case-insensitively', () => {

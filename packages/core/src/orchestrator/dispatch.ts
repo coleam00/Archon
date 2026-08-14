@@ -53,11 +53,11 @@ function lookupDefaultWorkflow(
  *
  *   1. A configured bypass prefix at the start of the message -> normal AI
  *      chat, with a notice naming what was bypassed.
- *   2. A slash-command pattern (`/word`) ANYWHERE in the message -> normal AI
- *      chat, with a notice. Not anchored to the start: "what do you know
- *      about /workflow list" bypasses just as much as a message that opens
- *      with the slash, since either way the user is talking ABOUT a command,
- *      not sending a plain instruction for the default workflow to act on.
+ *   2. A leading slash command (message starts with `/`, ignoring leading
+ *      whitespace) -> normal AI chat, with a notice. Anchored to the start
+ *      so a plain instruction that merely mentions a slash mid-sentence
+ *      (e.g. "log the receipt in accounting/2026") still runs the default
+ *      workflow — only an actual command invocation bypasses it.
  *   3. Otherwise -> the project's default workflow.
  *
  * @param message          Raw inbound message text.
@@ -98,7 +98,7 @@ export function resolveDispatch(
     };
   }
 
-  if (/\/\w+/.test(message)) {
+  if (leading.startsWith('/')) {
     return {
       kind: 'chat',
       message,
