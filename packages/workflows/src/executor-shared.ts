@@ -523,7 +523,7 @@ export const CONTEXT_VAR_PATTERN_STR =
  * - $ADAPTER, $CHANNEL_ID, $CHANNEL_NAME - Which adapter/channel triggered this run
  *   (from ChannelReference), empty string when absent. Externally-supplied platform
  *   data, so — like $USER_MESSAGE — these are skipped under shellSafe (delivered via
- *   subprocess env vars instead; see ARCHON_ADAPTER/ARCHON_CHANNEL_ID/ARCHON_CHANNEL_NAME).
+ *   subprocess env vars instead; see ADAPTER/CHANNEL_ID/CHANNEL_NAME).
  *
  * When issueContext is undefined, context variables are replaced with empty string
  * to avoid sending literal "$CONTEXT" to the AI.

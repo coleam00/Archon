@@ -517,10 +517,10 @@ export type ExecuteWorkflowOptions = ResumePayload & {
   userId?: string;
   /**
    * Which adapter and channel triggered this run. Threaded to `$ADAPTER` /
-   * `$CHANNEL_ID` / `$CHANNEL_NAME` prompt substitution, `ARCHON_ADAPTER` /
-   * `ARCHON_CHANNEL_ID` / `ARCHON_CHANNEL_NAME` env vars for bash:/script:
-   * nodes, and recorded on `WorkflowRun.metadata`. Optional — absence is a
-   * no-op on all three surfaces.
+   * `$CHANNEL_ID` / `$CHANNEL_NAME` prompt substitution, `ADAPTER` /
+   * `CHANNEL_ID` / `CHANNEL_NAME` env vars for bash:/script: nodes, and
+   * recorded on `WorkflowRun.metadata`. Optional — absence is a no-op on
+   * all three surfaces.
    */
   channelRef?: ChannelReference;
   /**
@@ -686,6 +686,7 @@ async function runChildWorkflow(
     itemHash,
     resumeFailedChild,
     inputs,
+    channelRef,
   } = args;
 
   // Every failure below returns a `{ status: 'failed' }` outcome (never throws);
@@ -852,13 +853,13 @@ async function runChildWorkflow(
     if (resumeFailedChild) {
       const hydrated = await hydrateResumableRun(deps, resumeFailedChild);
       if (hydrated) {
-        childOpts = { ...hydrated, codebaseId, resolveChildIsolation };
+        childOpts = { ...hydrated, codebaseId, resolveChildIsolation, channelRef };
         childRunId = hydrated.preCreatedRun.id;
       } else {
         // Failed child with no completed nodes — flip it back to running and re-run
         // from the top (nothing to skip).
         const preCreatedRun = await deps.store.resumeWorkflowRun(resumeFailedChild.id);
-        childOpts = { preCreatedRun, codebaseId, resolveChildIsolation };
+        childOpts = { preCreatedRun, codebaseId, resolveChildIsolation, channelRef };
         childRunId = preCreatedRun.id;
       }
     } else {
@@ -899,9 +900,10 @@ async function runChildWorkflow(
                 branch_name: childIsolationEnv.branchName,
               }
             : {}),
+          ...(channelRef ? { channel_ref: channelRef } : {}),
         },
       });
-      childOpts = { preCreatedRun: childRun, codebaseId, resolveChildIsolation };
+      childOpts = { preCreatedRun: childRun, codebaseId, resolveChildIsolation, channelRef };
       childRunId = childRun.id;
     }
   } catch (err) {

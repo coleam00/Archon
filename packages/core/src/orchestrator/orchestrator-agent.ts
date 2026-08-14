@@ -1987,6 +1987,7 @@ export async function handleMessage(
                   codebaseId: scopedCodebaseId,
                   availableWorkflows: workflows,
                   userId,
+                  channelRef,
                 },
                 wf
               );

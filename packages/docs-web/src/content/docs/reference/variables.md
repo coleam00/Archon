@@ -34,7 +34,7 @@ They are also substituted in a node's **AI-configuration text** — `systemPromp
 | `$LOOP_PREV.<nodeId>.output` | A body node's output from the previous iteration (loop_group body nodes only) | Empty string on iteration 1. `$LOOP_PREV.<nodeId>.output.<field>` accesses structured-output fields with the same strict semantics as `$nodeId.output.field`. See [Cross-Node Loops](/guides/loop-nodes/#cross-node-loops-with-loop_group) |
 | `$ADAPTER` | Which adapter triggered this run (`slack`, `telegram`, `discord`, `github`, `gitlab`, `gitea`, `web`, or `cli`) | Empty string when the run has no known origin (e.g. `archon workflow run` from a script with no chat/webhook trigger) |
 | `$CHANNEL_ID` | The adapter-specific channel identifier | Not always the same as the run's conversation — see the note below. Empty string when unavailable |
-| `$CHANNEL_NAME` | The channel's display name, when the adapter can supply it without an extra network call | Populated for Discord and Telegram today; empty string for Slack, GitHub, GitLab, Gitea, Web, and CLI |
+| `$CHANNEL_NAME` | The channel's display name, when the adapter can supply it without an extra network call | Opt-in per adapter via `adapters.<id>.resolveChannelNames` (disabled by default). When enabled: populated for Discord and Telegram without an extra API call, and for Slack via a `conversations.info` call. Always empty string for GitHub, GitLab, Gitea, Web, and CLI |
 
 ### Context Variable Behavior
 

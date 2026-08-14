@@ -217,6 +217,21 @@ function inputEnvVars(node: DagNode, ctx: ShellInputContext): NodeJS.ProcessEnv 
   return env;
 }
 
+/**
+ * Env-var bag delivering ADAPTER/CHANNEL_ID/CHANNEL_NAME to bash/script nodes.
+ * Empty when `channelRef` is absent (rather than the keys resolving to empty
+ * strings), so an unset channelRef never clobbers a configured project env var
+ * that happens to be named e.g. `ADAPTER`.
+ */
+function channelEnvVars(channelRef: ChannelReference | undefined): NodeJS.ProcessEnv {
+  if (!channelRef) return {};
+  return {
+    ADAPTER: channelRef.adapter,
+    CHANNEL_ID: channelRef.channelId,
+    CHANNEL_NAME: channelRef.channelName ?? '',
+  };
+}
+
 interface RunningTool {
   toolName: string;
   startedAt: number;
@@ -495,6 +510,12 @@ export interface RunChildWorkflowArgs {
    * on cold resume. Undefined/empty when the node declares no `with:`/`as`.
    */
   inputs?: Record<string, string>;
+  /**
+   * Which adapter/channel triggered the PARENT run — inherited by the child so its
+   * own `$ADAPTER`/`$CHANNEL_ID`/`$CHANNEL_NAME` substitution, bash/script env vars,
+   * and `metadata.channel_ref` aren't silently dropped at the child-run boundary.
+   */
+  channelRef?: ChannelReference;
 }
 
 /**
@@ -2887,9 +2908,7 @@ async function executeBashNode(
     CONTEXT: issueContext ?? '',
     EXTERNAL_CONTEXT: issueContext ?? '',
     ISSUE_CONTEXT: issueContext ?? '',
-    ADAPTER: channelRef?.adapter ?? '',
-    CHANNEL_ID: channelRef?.channelId ?? '',
-    CHANNEL_NAME: channelRef?.channelName ?? '',
+    ...channelEnvVars(channelRef),
   };
 
   const bashPath = resolveBashPath();
@@ -3178,9 +3197,7 @@ async function executeScriptNode(
     CONTEXT: issueContext ?? '',
     EXTERNAL_CONTEXT: issueContext ?? '',
     ISSUE_CONTEXT: issueContext ?? '',
-    ADAPTER: channelRef?.adapter ?? '',
-    CHANNEL_ID: channelRef?.channelId ?? '',
-    CHANNEL_NAME: channelRef?.channelName ?? '',
+    ...channelEnvVars(channelRef),
   };
 
   // Build the command and args based on runtime and inline vs named
@@ -3939,9 +3956,7 @@ async function executeLoopGroupNode(
             CONTEXT: issueContext ?? '',
             EXTERNAL_CONTEXT: issueContext ?? '',
             ISSUE_CONTEXT: issueContext ?? '',
-            ADAPTER: channelRef?.adapter ?? '',
-            CHANNEL_ID: channelRef?.channelId ?? '',
-            CHANNEL_NAME: channelRef?.channelName ?? '',
+            ...channelEnvVars(channelRef),
           },
         });
         bashComplete = true;
@@ -5499,9 +5514,7 @@ async function executeLoopNode(
             CONTEXT: issueContext ?? '',
             EXTERNAL_CONTEXT: issueContext ?? '',
             ISSUE_CONTEXT: issueContext ?? '',
-            ADAPTER: channelRef?.adapter ?? '',
-            CHANNEL_ID: channelRef?.channelId ?? '',
-            CHANNEL_NAME: channelRef?.channelName ?? '',
+            ...channelEnvVars(channelRef),
           },
         });
         bashComplete = true; // exit 0 = complete
@@ -6313,6 +6326,7 @@ async function executeWorkflowNode(
     userId: parentRun.user_id ?? undefined,
     codebaseId: parentRun.codebase_id ?? undefined,
     isolation: node.isolation,
+    channelRef: ctx.channelRef,
     ...(resolvedInputs !== undefined ? { inputs: resolvedInputs } : {}),
   };
 
@@ -7016,6 +7030,7 @@ async function executeFanOutWorkflowNode(
         isolation: node.isolation,
         childIndex: i,
         itemHash: hashFanOutItem(input),
+        channelRef: ctx.channelRef,
         ...(Object.keys(childInputs).length > 0 ? { inputs: childInputs } : {}),
         ...(resumeChild ? { resumeFailedChild: resumeChild } : {}),
       });

@@ -652,19 +652,20 @@ describe('SlackAdapter', () => {
       expect(mockLogger.warn).toHaveBeenCalled();
     });
 
-    test('missing_scope WARN fires only once per adapter even after many sightings', async () => {
+    test('missing_scope WARN fires only once per adapter even after many sightings, and later sightings skip the API call during the cooldown', async () => {
       mockLogger.warn.mockClear();
       const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
-      const makeErr = (): Error =>
-        Object.assign(new Error('missing_scope'), { data: { error: 'missing_scope' } });
-      mockConversationsInfo.mockRejectedValueOnce(makeErr());
-      mockConversationsInfo.mockRejectedValueOnce(makeErr());
-      mockConversationsInfo.mockRejectedValueOnce(makeErr());
+      const slackErr = Object.assign(new Error('missing_scope'), {
+        data: { error: 'missing_scope' },
+      });
+      // Only ONE rejection queued: the cooldown means C_B/C_C never reach the API.
+      mockConversationsInfo.mockRejectedValueOnce(slackErr);
 
       await adapter.fetchChannelName('C_A');
       await adapter.fetchChannelName('C_B');
       await adapter.fetchChannelName('C_C');
 
+      expect(mockConversationsInfo).toHaveBeenCalledTimes(1);
       const missingScopeCalls = (
         mockLogger.warn as unknown as Mock<(obj: object, evt: string) => void>
       ).mock.calls.filter(c => c[1] === 'slack.conversations_info_missing_scope');
