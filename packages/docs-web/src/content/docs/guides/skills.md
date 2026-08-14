@@ -83,9 +83,9 @@ On Claude, omission and `skills: []` both select no skills. A non-empty list is
 an exact allowlist of installed Claude-native skills for that node. The separate
 `settingSources` default remains `['project', 'user']`, preserving project/user
 instructions and agents without making their ambient skills available. A declared
-skill must still live under an enabled source: project skills require `project`,
-user-global skills require `user`, and `settingSources: []` cannot be combined with
-a non-empty `skills:` list. Archon checks this before starting the provider.
+skill installed on disk must live under an enabled source: project skills require
+`project`, and user-global skills require `user`. Archon checks that before starting
+the provider — see [How Claude handles an unresolved name](#how-claude-handles-an-unresolved-name).
 
 ## Installing Skills
 
@@ -262,8 +262,8 @@ Normal repository instructions such as `AGENTS.md` remain active with the catalo
 
 ## Limitations
 
-- **Pre-installation required** — skills must exist on disk before the workflow runs.
-  There is no on-demand fetching (yet).
+- **Pre-installation required** — a skill installed on disk must exist before the
+  workflow runs. There is no on-demand fetching (yet).
 - **Provider-native paths** — Claude declarations resolve only from project/user
   `.claude/skills/`; Archon does not copy `.agents/skills/` into Claude's roots.
 - **Container workflows** — only project-local `.claude/skills/` is visible in the
@@ -271,14 +271,26 @@ Normal repository instructions such as `AGENTS.md` remain active with the catalo
   before a container node can declare it; Archon fails before provider spend otherwise.
 - **Provider semantics differ** — consult the capability matrix. Codex uses explicit
   `$skill-name` invocation rather than YAML list injection.
-- **Fail-fast validation** — a Claude node that declares a skill unavailable from
-  its native roots fails before the provider query starts.
+
+### How Claude handles an unresolved name
+
+Archon distinguishes two cases, because Claude's skill namespace is larger than the
+filesystem:
+
+| The declared name | Archon's response |
+|---|---|
+| Installed, but not in a `.claude/skills/` directory an enabled setting source covers — for example it only exists under `.agents/skills/`, or under `user` scope while `settingSources: ['project']` | **Error before spend.** Claude provably cannot load it, and the fix is a path change. |
+| Absent from every skills directory | **Warning, and the run continues.** Claude's own **built-in** skills and **plugin-qualified** names (`plugin:skill`) live outside any skills directory, so Archon lets the SDK resolve them. A misspelled name lands here too — it is reported, and Claude ignores an unknown name rather than loading it. |
+
+Built-in and plugin skills are therefore declarable on a Claude node, exactly like an
+installed one.
 
 ## Troubleshooting
 
 | Problem | Cause | Fix |
 |---------|-------|-----|
-| Claude skill not found | Not installed in a Claude-native root | Run `npx skills add <source>` for Claude, or create `.claude/skills/<name>/SKILL.md` |
+| Claude skill not found (error) | Installed, but outside an enabled `.claude/skills/` root | Move it to `.claude/skills/<name>/SKILL.md`, or enable the setting source that holds it |
+| Claude skill not found (warning) | Absent from disk — normal for built-in and `plugin:skill` names | Ignore it for those; otherwise check the spelling or run `npx skills add <source>` |
 | Codex does not use a skill | Automatic catalogs are off in workflow nodes | Invoke it explicitly in the command/prompt with `$skill-name` and install it under a Codex-native root such as `.agents/skills/` |
 | Codex warns about `skills:` | Codex does not implement the YAML list | Keep the list only for other providers; use `$skill-name` for Codex |
 | Too many skills | Context budget exceeded | Reduce to 2-3 most relevant skills per node |

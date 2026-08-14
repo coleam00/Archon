@@ -53,7 +53,12 @@ import { buildArchonMcpServer, ARCHON_TOOL_SERVER } from './native-tools';
 import { createLogger } from '@archon/paths';
 import { loadMcpConfig } from '../mcp/config';
 import { withResumedOutcome, resumedOutcome } from '../shared/resumed';
-import { resolveClaudeSkillDirectories } from '../shared/skills';
+import {
+  claudeSkillSearchRoots,
+  findInstalledSkillNames,
+  resolveClaudeSkillDirectories,
+  skillSearchRoots,
+} from '../shared/skills';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -474,30 +479,66 @@ async function applyNodeConfig(
     if (nodeConfig.skills && nodeConfig.skills.length > 0) {
       const { missing } = resolveClaudeSkillDirectories(cwd, nodeConfig.skills, skillSearch);
       if (missing.length > 0) {
-        const enabledRoots = [
-          ...(skillSearch.includeProject ? ['project-local .claude/skills/'] : []),
-          ...(skillSearch.includeUser ? ['the effective Claude config directory skills/'] : []),
-        ];
-        const installLocation =
-          enabledRoots.length > 0
-            ? enabledRoots.join(' or ')
-            : 'an enabled Claude setting source (effective settingSources currently enables none)';
-        const containerNote = skillSearch.isContainer
-          ? ' Container workflows cannot use host user-global skills.'
-          : '';
-        throw new Error(
-          `Claude skill${missing.length === 1 ? '' : 's'} not found in an enabled Claude-native skill directory: ${missing.join(', ')}. Install ${missing.length === 1 ? 'it' : 'them'} under ${installLocation}.${containerNote}`
+        // Split by whether the name exists on disk at all. A skill that resolves
+        // under some other root — `.agents/skills/`, or a scope this node's
+        // settingSources disables — is installed but unreachable, so fail before
+        // spend with the exact remediation. A name that resolves nowhere may be
+        // one of Claude's built-in or `plugin:skill` entries, which live outside
+        // every filesystem root: the SDK is the authority on those, so warn
+        // rather than block a capability Claude genuinely provides.
+        const unreachable = findInstalledSkillNames(
+          [
+            ...skillSearchRoots(cwd),
+            ...claudeSkillSearchRoots(cwd, {
+              ...(skillSearch.userConfigDir ? { userConfigDir: skillSearch.userConfigDir } : {}),
+              includeProject: true,
+              includeUser: true,
+            }),
+          ],
+          missing
         );
+
+        if (unreachable.length > 0) {
+          const enabledRoots = [
+            ...(skillSearch.includeProject ? ['project-local .claude/skills/'] : []),
+            ...(skillSearch.includeUser ? ['the effective Claude config directory skills/'] : []),
+          ];
+          const installLocation =
+            enabledRoots.length > 0
+              ? enabledRoots.join(' or ')
+              : 'an enabled Claude setting source (effective settingSources currently enables none)';
+          const containerNote = skillSearch.isContainer
+            ? ' Container workflows cannot use host user-global skills.'
+            : '';
+          getLog().error(
+            { nodeId: nodeConfig.nodeId, unreachable, skillSearch },
+            'claude.declared_skills_unreachable'
+          );
+          throw new Error(
+            `Claude skill${unreachable.length === 1 ? '' : 's'} not found in an enabled Claude-native skill directory: ${unreachable.join(', ')}. Install ${unreachable.length === 1 ? 'it' : 'them'} under ${installLocation}.${containerNote}`
+          );
+        }
+
+        getLog().warn(
+          { nodeId: nodeConfig.nodeId, missing, skillSearch },
+          'claude.declared_skills_unresolved'
+        );
+        warnings.push({
+          code: 'claude_skills_unresolved',
+          message: `Claude skill${missing.length === 1 ? '' : 's'} not found on disk: ${missing.join(', ')}. This is expected for Claude's built-in skills and for plugin-qualified names (plugin:skill), which the SDK resolves itself. If you meant an installed skill, check the name — an unknown name is ignored rather than loaded.`,
+        });
       }
     }
   }
 
-  // allowed_tools → tools
+  // allowed_tools → tools. `Skill` is re-added only on the workflow path, which
+  // is the only one that narrows `options.skills`; adding it for a non-workflow
+  // caller would expose the ambient catalog instead of a declared subset.
+  const selectsSkills = isWorkflowNode && (nodeConfig.skills?.length ?? 0) > 0;
   if (nodeConfig.allowed_tools !== undefined) {
-    options.tools =
-      nodeConfig.skills && nodeConfig.skills.length > 0
-        ? [...new Set([...nodeConfig.allowed_tools, 'Skill'])]
-        : nodeConfig.allowed_tools;
+    options.tools = selectsSkills
+      ? [...new Set([...nodeConfig.allowed_tools, 'Skill'])]
+      : nodeConfig.allowed_tools;
   }
 
   // denied_tools → disallowedTools
@@ -561,7 +602,7 @@ async function applyNodeConfig(
 
   // Native skill selection. The SDK requires Skill to remain allowed when an
   // explicit tool list is present; without a list, its normal tool set applies.
-  if (nodeConfig.skills && nodeConfig.skills.length > 0) {
+  if (selectsSkills) {
     if (!options.allowedTools?.includes('Skill')) {
       options.allowedTools = [...(options.allowedTools ?? []), 'Skill'];
     }

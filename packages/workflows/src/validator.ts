@@ -26,6 +26,7 @@ import { isValidCommandName } from './command-validation';
 import { levenshtein, findSimilar } from './utils/fuzzy-match';
 import {
   claudeSkillSearchRoots,
+  findInstalledSkillNames,
   getProviderCapabilities,
   isRegisteredProvider,
   skillSearchRoots,
@@ -659,19 +660,51 @@ export async function validateWorkflowResources(
           }
 
           if (!found) {
-            issues.push({
-              level: provider === 'claude' ? 'error' : 'warning',
-              nodeId: node.id,
-              field: 'skills',
-              message:
-                provider === 'claude'
-                  ? `Claude skill '${skillName}' not found in .claude/skills/ (project or user scope)`
-                  : `Skill '${skillName}' not found in .agents/skills/ or .claude/skills/ (project or user scope)`,
-              hint:
-                provider === 'claude'
-                  ? `Install the skill for Claude Code, or create .claude/skills/${skillName}/SKILL.md`
-                  : `Install with: npx skills add <repo> — or create manually at .agents/skills/${skillName}/SKILL.md`,
-            });
+            // Mirror the provider's rule (claude/provider.ts): a Claude skill
+            // that exists under some other root is installed but unreachable, so
+            // it is an error. A name that exists nowhere on disk may be one of
+            // Claude's built-in or `plugin:skill` entries, which no filesystem
+            // root contains — warn there rather than failing a workflow that runs.
+            // Same helper the provider preflight uses, over the same roots, so
+            // validation and execution always agree on which case this is.
+            const installedButUnusable =
+              provider === 'claude' &&
+              findInstalledSkillNames(
+                [
+                  ...searchRoots,
+                  ...skillSearchRoots(cwd),
+                  ...claudeSkillSearchRoots(cwd, {
+                    ...(config?.claudeConfigDir ? { userConfigDir: config.claudeConfigDir } : {}),
+                    includeProject: true,
+                    includeUser: true,
+                  }),
+                ],
+                [skillName]
+              ).length > 0;
+
+            if (installedButUnusable) {
+              issues.push({
+                level: 'error',
+                nodeId: node.id,
+                field: 'skills',
+                message: `Claude skill '${skillName}' not found in an enabled .claude/skills/ directory, though it is installed elsewhere`,
+                hint: `Claude reads .claude/skills/ only (never .agents/skills/), and only from scopes settingSources enables. Ensure .claude/skills/${skillName}/SKILL.md exists in an enabled scope`,
+              });
+            } else {
+              issues.push({
+                level: 'warning',
+                nodeId: node.id,
+                field: 'skills',
+                message:
+                  provider === 'claude'
+                    ? `Claude skill '${skillName}' not found on disk — expected for built-in and plugin-qualified skills, which Claude resolves itself`
+                    : `Skill '${skillName}' not found in .agents/skills/ or .claude/skills/ (project or user scope)`,
+                hint:
+                  provider === 'claude'
+                    ? `If this is not a built-in or plugin:skill name, check the spelling or create .claude/skills/${skillName}/SKILL.md`
+                    : `Install with: npx skills add <repo> — or create manually at .agents/skills/${skillName}/SKILL.md`,
+              });
+            }
           }
         }
       }

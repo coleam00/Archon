@@ -2250,6 +2250,54 @@ describe('sendQuery decomposition behaviors', () => {
       expect(mockQuery).not.toHaveBeenCalled();
     });
 
+    test('warns but still runs when a declared skill is on no root at all', async () => {
+      // Claude's built-in skills and `plugin:skill` names resolve inside the SDK
+      // and exist under no skills directory. Throwing on "absent from disk" made
+      // every one of them undeclarable (PR #2535 review), so an unresolved name
+      // warns and lets the SDK decide.
+      mockQuery.mockImplementation(async function* () {
+        yield { type: 'result', session_id: 'sid' };
+      });
+
+      const chunks: string[] = [];
+      for await (const chunk of client.sendQuery('test', workflowCwd, undefined, {
+        nodeConfig: { nodeId: 'builtin-skill', skills: ['dataviz'] },
+      })) {
+        if (chunk.type === 'system') chunks.push(chunk.content ?? '');
+      }
+
+      expect(mockQuery).toHaveBeenCalled();
+      const callArgs = mockQuery.mock.calls[0]![0] as { options: Options };
+      expect(callArgs.options.skills).toEqual(['dataviz']);
+      expect(chunks.join('\n')).toContain('built-in');
+    });
+
+    test('names only the unreachable skill when a built-in is declared alongside it', async () => {
+      mockQuery.mockImplementation(async function* () {
+        yield { type: 'result', session_id: 'sid' };
+      });
+      const agentsOnly = join(workflowCwd, '.agents', 'skills', 'stranded-skill');
+      mkdirSync(agentsOnly, { recursive: true });
+      writeFileSync(join(agentsOnly, 'SKILL.md'), '# agents only\n');
+
+      let error: unknown;
+      try {
+        for await (const _ of client.sendQuery('test', workflowCwd, undefined, {
+          nodeConfig: { nodeId: 'mixed', skills: ['dataviz', 'stranded-skill'] },
+        })) {
+          // consume
+        }
+      } catch (caught) {
+        error = caught;
+      }
+
+      // 'dataviz' resolves nowhere on disk and may be a built-in, so it must not
+      // be blamed in an error about a misplaced install.
+      expect((error as Error).message).toContain('stranded-skill');
+      expect((error as Error).message).not.toContain('dataviz');
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+
     test('resolves user skills from the effective CLAUDE_CONFIG_DIR on host', async () => {
       mockQuery.mockImplementation(async function* () {
         yield { type: 'result', session_id: 'sid' };
@@ -2486,6 +2534,26 @@ describe('sendQuery decomposition behaviors', () => {
       expect(options.skills).toBeUndefined();
       expect(options.strictMcpConfig).toBeUndefined();
       expect(options.tools).toEqual([]);
+    });
+
+    test('does not grant Skill to a non-workflow call that carries skills', async () => {
+      // The `options.skills` narrowing is gated on the workflow path. Granting
+      // the Skill tool outside that gate would expose the whole ambient catalog
+      // instead of a declared subset (PR #2535 review).
+      mockQuery.mockImplementation(async function* () {
+        yield { type: 'result', session_id: 'sid' };
+      });
+
+      for await (const _ of client.sendQuery('title', workflowCwd, undefined, {
+        nodeConfig: { allowed_tools: ['Read'], skills: ['my-skill'] },
+      })) {
+        // consume
+      }
+
+      const options = (mockQuery.mock.calls[0][0] as { options: Record<string, unknown> }).options;
+      expect(options.skills).toBeUndefined();
+      expect(options.tools).toEqual(['Read']);
+      expect(options.allowedTools ?? []).not.toContain('Skill');
     });
   });
 });

@@ -124,6 +124,29 @@ function resolveSkillDirectoriesFromRoots(
 }
 
 /**
+ * Names whose skill *directory* exists under any of `roots`, whether or not it
+ * holds a loadable `SKILL.md`.
+ *
+ * This separates "installed, but not loadable from here" — a wrong path, a
+ * disabled setting source, or a directory missing its SKILL.md, all of which are
+ * actionable author errors — from "absent from disk entirely", which is the
+ * normal state of Claude's built-in and `plugin:skill` entries. Shared by the
+ * provider preflight and workflow validation so the two cannot disagree about
+ * which case a declared name falls into.
+ */
+export function findInstalledSkillNames(roots: string[], skillNames: string[]): string[] {
+  const installed: string[] = [];
+  for (const rawName of skillNames) {
+    if (typeof rawName !== 'string') continue;
+    const name = rawName.trim();
+    if (name.length === 0) continue;
+    if (isAbsolute(name) || basename(name) !== name || name === '.' || name === '..') continue;
+    if (roots.some(root => existsSync(join(root, name)))) installed.push(rawName);
+  }
+  return installed;
+}
+
+/**
  * Resolve skills only from locations Claude Code natively discovers.
  *
  * Claude does not discover the cross-provider `.agents/skills` convention.

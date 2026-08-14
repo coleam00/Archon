@@ -1051,14 +1051,17 @@ describe('validateWorkflowResources — skills search roots', () => {
     expect(missingSkillIssues(issues)).toHaveLength(1);
   });
 
-  test('Claude reports an error when the skill exists in neither native root', async () => {
+  test('Claude warns, not errors, when the skill is on no root at all', async () => {
+    // A name absent from every filesystem root may still be one of Claude's
+    // built-in skills or a `plugin:skill` entry — neither lives under a skills
+    // directory. Erroring here would make those undeclarable (PR #2535 review).
     const issues = await validateWorkflowResources(skillsWorkflow('nonexistent-skill'), tmpDir);
     const missing = missingSkillIssues(issues);
     expect(missing).toHaveLength(1);
-    expect(missing[0].level).toBe('error');
+    expect(missing[0].level).toBe('warning');
     expect(missing[0].nodeId).toBe('step1');
     expect(missing[0].message).toContain("Claude skill 'nonexistent-skill' not found");
-    expect(missing[0].message).toContain('.claude/skills/');
+    expect(missing[0].message).toContain('built-in');
     expect(missing[0].hint).toContain('.claude/skills/nonexistent-skill/SKILL.md');
   });
 
@@ -1119,7 +1122,9 @@ describe('validateWorkflowResources — skills search roots', () => {
 
     const missing = missingSkillIssues(issues);
     expect(missing).toHaveLength(1);
-    expect(missing[0].level).toBe('error');
+    // Claude-specific wording proves the alias-resolved provider drove the
+    // check, rather than the workflow-level 'codex' default.
+    expect(missing[0].message).toContain('Claude skill');
     expect(issues.some(issue => issue.message.includes("not supported by provider 'codex'"))).toBe(
       false
     );
