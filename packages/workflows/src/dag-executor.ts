@@ -7241,10 +7241,6 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
     const layer = layers[layerIdx];
     const isParallelLayer = layer.length > 1;
 
-    if (isParallelLayer) {
-      ctx.lastSequentialSession = undefined; // reset — parallel nodes can't share sessions
-    }
-
     // Execute all nodes in the layer concurrently. `sessionProvider` is the resolved
     // provider that produced `output.sessionId` — set only by the session-producing
     // dispatch paths (AI command/prompt nodes and loop nodes) so the cursor write
@@ -7755,8 +7751,11 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
           );
 
           // 5. Determine session — parallel or context:fresh → always fresh
-          // Parallel layers always get fresh sessions; explicit 'fresh' context also forces it.
-          // 'shared' forces continuation. Default: fresh for parallel, inherited for sequential.
+          // Parallel layers default to fresh sessions; explicit 'fresh' context also forces
+          // it. Explicit 'shared' overrides the parallel default and forces continuation
+          // from ctx.lastSequentialSession (siblings still fork independently — see the
+          // !isParallelLayer guard below that stops a parallel node's own output from
+          // becoming the next cursor). Default: fresh for parallel, inherited for sequential.
           // isFreshSequential controls in-run threading (lastSequentialSession).
           // Cross-provider guard (#1992): a session id can only be resumed by the provider
           // that created it, so the cursor is threaded only into nodes that resolve to the
@@ -7769,11 +7768,16 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
           // behaving differently depending on who composed it. The boundary is where a
           // different file's history begins, so the cursor is cleared for the same reason
           // a parallel layer clears it. `context: 'shared'` is the individual opt-out for
-          // an author who genuinely wants the parent's thread to continue into the block.
+          // an author who genuinely wants the parent's thread to continue into the block —
+          // and, on a parallel layer, the individual opt-out from that layer's own fresh
+          // default (siblings still fork independently — see the !isParallelLayer guard
+          // below that stops a parallel node's own output from becoming the next cursor).
           const composedBlockEntry =
             readComposedMeta(node)?.blockEntry === true && node.context !== 'shared';
           const isFreshSequential =
-            isParallelLayer || node.context === 'fresh' || composedBlockEntry;
+            node.context === 'fresh' ||
+            (isParallelLayer && node.context !== 'shared') ||
+            composedBlockEntry;
           const cursor = ctx.lastSequentialSession;
           let resumeSessionId: string | undefined;
           if (isFreshSequential || cursor === undefined) {
@@ -8126,6 +8130,15 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
           { workflowId: workflowRun.id }
         );
       }
+    }
+
+    if (isParallelLayer) {
+      // Reset AFTER dispatch (not before): nodes in this layer may have read the
+      // pre-layer cursor via context:'shared' above. A parallel layer still can't
+      // hand a single cursor to the next sequential layer — siblings fork
+      // independently and never write back to it (see the !isParallelLayer guard
+      // in the per-node completion handling above), so clear it now.
+      ctx.lastSequentialSession = undefined;
     }
 
     if (layerHadFailure) {

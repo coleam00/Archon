@@ -19505,6 +19505,44 @@ describe('executeDagWorkflow -- provider-boundary session threading (#1992)', ()
     expect(pauseCtx.sessionId).toBeNull();
     expect(pauseCtx.sessionProvider).toBeNull();
   });
+
+  it("context: 'shared' on a parallel-layer node overrides the fresh default and resumes the prior sequential session", async () => {
+    mockSendQueryDag.mockImplementation(function* (prompt: string) {
+      if (prompt.includes('First')) {
+        yield { type: 'assistant', content: 'first done' };
+        yield { type: 'result', sessionId: 'sess-a' };
+      } else if (prompt.includes('Shared')) {
+        yield { type: 'assistant', content: 'shared done' };
+        yield { type: 'result', sessionId: 'sess-shared' };
+      } else {
+        yield { type: 'assistant', content: 'plain done' };
+        yield { type: 'result', sessionId: 'sess-plain' };
+      }
+    });
+
+    await runWorkflow(
+      'conv-parallel-shared',
+      {
+        name: 'dag-parallel-shared-context',
+        nodes: [
+          { id: 'a', prompt: 'First step' },
+          { id: 'shared', prompt: 'Shared step', depends_on: ['a'], context: 'shared' },
+          { id: 'plain', prompt: 'Plain step', depends_on: ['a'] },
+        ],
+      },
+      makeWorkflowRun('parallel-shared-context-run')
+    );
+
+    expect(mockSendQueryDag.mock.calls.length).toBe(3);
+    const resumeIdByPrompt = new Map(
+      mockSendQueryDag.mock.calls.map(call => [call[0] as string, call[2] as string | undefined])
+    );
+    expect(resumeIdByPrompt.get('First step')).toBeUndefined();
+    // Explicit 'shared' overrides the parallel-layer fresh default.
+    expect(resumeIdByPrompt.get('Shared step')).toBe('sess-a');
+    // A sibling without the override still defaults to fresh in a parallel layer.
+    expect(resumeIdByPrompt.get('Plain step')).toBeUndefined();
+  });
 });
 
 // ---------------------------------------------------------------------------
