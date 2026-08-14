@@ -54,6 +54,21 @@ export interface HandleMessageContext {
    * own auth flows are wired.
    */
   readonly userId?: string;
+  /**
+   * Set only by the console builder's Copilot panel (never Slack/CLI/ordinary
+   * project chats). Gates the `propose_workflow_edits` native tool injection
+   * in orchestrator-agent.ts — a narrower condition than `manage_run`'s
+   * project-scoped + nativeTools gate. See ADR-0002 (builder subtree) and
+   * PRE-FLIGHT #1 in the PR-5 plan.
+   */
+  readonly builderMode?: boolean;
+  /**
+   * The live (possibly-unsaved) canvas workflow, serialized to JSON by the
+   * builder Copilot each turn — fed to the agent as context so it proposes
+   * edits against what the author is actually looking at, not the last saved
+   * YAML. Only meaningful alongside `builderMode: true`.
+   */
+  readonly canvasState?: string;
 }
 
 export interface CommandResult {

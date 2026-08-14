@@ -244,6 +244,26 @@ When the user asks what's running, whether a run passed/failed, or to approve / 
 }
 
 /**
+ * Build the builder-copilot section of the orchestrator prompt.
+ *
+ * Steers the agent to PROPOSE workflow edits via the `propose_workflow_edits`
+ * native tool rather than acting on the workflow directly — going straight to
+ * the `.yaml` file or shelling out to mutate it would bypass the builder's
+ * preview/accept gate the tool exists for. Appended ONLY when the orchestrator
+ * (orchestrator-agent.ts) has injected the tool for this turn (builder-mode
+ * conversation + a nativeTools-capable provider) — see ADR-0002.
+ */
+export function buildBuilderCopilotSection(): string {
+  return `## Builder Copilot
+
+You are assisting an author who has a workflow open in Archon's visual builder. You can see the current (possibly unsaved) canvas state above under "Current Canvas State".
+
+When the author asks for a canvas change (add a node, connect two nodes, change a field, rename or remove a node), call \`propose_workflow_edits\` ONCE with the whole batch of edits as a JSON array in \`ops\`. Do NOT call it more than once per request — batch every op for one request into a single call.
+
+You do NOT apply edits yourself. The tool only proposes; the author previews the batch on the canvas and explicitly Accepts or Rejects it. Never edit the workflow's YAML file on disk and never run bash to mutate it — both would bypass the preview/accept gate this tool exists for. For anything that isn't a canvas edit (answering questions, explaining the workflow), just respond normally.`;
+}
+
+/**
  * Build the static orchestrator context string for use as a cacheable system prompt append.
  * Returns the same content as buildOrchestratorPrompt/buildProjectScopedPrompt depending
  * on whether the conversation is scoped to a project. The run-management section is NOT

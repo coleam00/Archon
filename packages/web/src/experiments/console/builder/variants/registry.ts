@@ -51,6 +51,23 @@ export interface VariantRegistryEntry<K extends VariantId> {
    * rather than silently classifying every key as unsupported.
    */
   wireKeys: readonly (keyof WireDagNode)[];
+  /**
+   * Every `data` key this variant accepts, including OPTIONAL ones.
+   *
+   * Distinct from both neighbours and neither can substitute for it:
+   * `Object.keys(defaultData())` covers only the initialized fields (it would
+   * drop `timeout`, `deps`, `capture_response`, …), and `wireKeys` is in the
+   * WIRE namespace (approval's wire key is `approval`, but its data key is
+   * `message`).
+   *
+   * Consumed by the Builder Copilot's op validation to reject a mis-keyed
+   * `addNode.data` — see `copilot/op-schema.ts` and the mirror in
+   * `@archon/core`'s `propose-workflow-edits-tool.ts`. Typed as
+   * `keyof VariantDataMap[K]` (same discipline as `wireKeys`) so a renamed or
+   * mistyped field fails to compile rather than silently narrowing what an
+   * author is allowed to propose.
+   */
+  dataKeys: readonly (keyof VariantDataMap[K])[];
 }
 
 /** Per-variant registry. Strongly typed per key. */
@@ -61,6 +78,7 @@ export const VARIANT_REGISTRY: { [K in VariantId]: VariantRegistryEntry<K> } = {
     fromDag: promptFromDag,
     toDag: promptToDag,
     wireKeys: ['prompt'],
+    dataKeys: ['prompt'],
     capabilities: VARIANT_CAPABILITIES.prompt,
   },
   command: {
@@ -69,6 +87,7 @@ export const VARIANT_REGISTRY: { [K in VariantId]: VariantRegistryEntry<K> } = {
     fromDag: commandFromDag,
     toDag: commandToDag,
     wireKeys: ['command'],
+    dataKeys: ['command'],
     capabilities: VARIANT_CAPABILITIES.command,
   },
   bash: {
@@ -77,6 +96,7 @@ export const VARIANT_REGISTRY: { [K in VariantId]: VariantRegistryEntry<K> } = {
     fromDag: bashFromDag,
     toDag: bashToDag,
     wireKeys: ['bash', 'timeout'],
+    dataKeys: ['bash', 'timeout'],
     capabilities: VARIANT_CAPABILITIES.bash,
   },
   script: {
@@ -85,6 +105,7 @@ export const VARIANT_REGISTRY: { [K in VariantId]: VariantRegistryEntry<K> } = {
     fromDag: scriptFromDag,
     toDag: scriptToDag,
     wireKeys: ['script', 'runtime', 'deps', 'timeout'],
+    dataKeys: ['script', 'runtime', 'deps', 'timeout'],
     capabilities: VARIANT_CAPABILITIES.script,
   },
   loop: {
@@ -93,6 +114,16 @@ export const VARIANT_REGISTRY: { [K in VariantId]: VariantRegistryEntry<K> } = {
     fromDag: loopFromDag,
     toDag: loopToDag,
     wireKeys: ['loop'],
+    dataKeys: [
+      'prompt',
+      'command',
+      'until',
+      'max_iterations',
+      'fresh_context',
+      'until_bash',
+      'interactive',
+      'gate_message',
+    ],
     capabilities: VARIANT_CAPABILITIES.loop,
   },
   approval: {
@@ -101,6 +132,7 @@ export const VARIANT_REGISTRY: { [K in VariantId]: VariantRegistryEntry<K> } = {
     fromDag: approvalFromDag,
     toDag: approvalToDag,
     wireKeys: ['approval'],
+    dataKeys: ['message', 'capture_response', 'on_reject'],
     capabilities: VARIANT_CAPABILITIES.approval,
   },
   cancel: {
@@ -109,6 +141,7 @@ export const VARIANT_REGISTRY: { [K in VariantId]: VariantRegistryEntry<K> } = {
     fromDag: cancelFromDag,
     toDag: cancelToDag,
     wireKeys: ['cancel'],
+    dataKeys: ['reason'],
     capabilities: VARIANT_CAPABILITIES.cancel,
   },
 };

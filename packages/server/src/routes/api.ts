@@ -687,8 +687,11 @@ const sendMessageRoute = createRoute({
   tags: ['Conversations'],
   summary: 'Send a message (JSON or multipart with file uploads)',
   description:
-    'Accepts `application/json` with `{ message: string }` or `multipart/form-data` ' +
-    'with a `message` field and optional file attachments (max 5 files, 10 MB each).',
+    'Accepts `application/json` with `{ message: string, builderMode?: boolean, canvasState?: ' +
+    'string }` or `multipart/form-data` with a `message` field and optional file attachments ' +
+    '(max 5 files, 10 MB each). `builderMode`/`canvasState` are set only by the console builder ' +
+    'Copilot panel — never by the ordinary chat composer — and gate the `propose_workflow_edits` ' +
+    'native tool.',
   request: {
     params: conversationIdParamsSchema,
   },
@@ -2087,6 +2090,12 @@ export function registerApiRoutes(
   /** Maximum number of files per message (enforced server-side) */
   const MAX_FILES_PER_MESSAGE = 5;
   /**
+   * Maximum serialized builder-canvas size accepted on a Copilot turn (256 KB).
+   * Sized well above any hand-authored workflow — it is a runaway guard, not a
+   * working limit. See the `canvasState` check in the message route.
+   */
+  const MAX_CANVAS_STATE_CHARS = 256 * 1024;
+  /**
    * Binary (non-text) MIME types explicitly allowed for upload.
    * All text/* types are accepted separately via isAllowedUploadType().
    */
@@ -2707,6 +2716,11 @@ export function registerApiRoutes(
     let message: string;
     let savedFiles: AttachedFile[] = [];
     let uploadDir = '';
+    // Builder Copilot only — never sent by the ordinary chat composer, Slack,
+    // Telegram, GitHub, or CLI. JSON-only (the copilot never attaches files),
+    // so these stay unset on the multipart branch below.
+    let builderMode = false;
+    let canvasState: string | undefined;
 
     const contentType = c.req.header('content-type') ?? '';
 
@@ -2746,7 +2760,7 @@ export function registerApiRoutes(
         getLog().info({ conversationId, fileCount: savedFiles.length }, 'message.files_uploaded');
       }
     } else {
-      let body: { message?: unknown };
+      let body: { message?: unknown; builderMode?: unknown; canvasState?: unknown };
       try {
         body = await c.req.json();
       } catch (parseErr: unknown) {
@@ -2758,6 +2772,23 @@ export function registerApiRoutes(
         return c.json({ error: 'message must be a non-empty string' }, 400);
       }
       message = body.message;
+      builderMode = body.builderMode === true;
+      canvasState = typeof body.canvasState === 'string' ? body.canvasState : undefined;
+      // `canvasState` is re-injected into the prompt on EVERY copilot turn, so an
+      // unbounded canvas is a per-turn token cost with no ceiling. Reject loudly
+      // rather than silently forwarding it into a billed prompt.
+      if (canvasState !== undefined && canvasState.length > MAX_CANVAS_STATE_CHARS) {
+        getLog().warn(
+          { conversationId, canvasStateChars: canvasState.length },
+          'message.canvas_state_too_large'
+        );
+        return c.json(
+          {
+            error: `canvasState must be at most ${MAX_CANVAS_STATE_CHARS.toString()} characters (got ${canvasState.length.toString()})`,
+          },
+          400
+        );
+      }
     }
 
     // Look up conversation for message persistence
@@ -2799,8 +2830,11 @@ export function registerApiRoutes(
     // Pass savedFiles to dispatchToOrchestrator so cleanup happens inside the lock handler,
     // AFTER handleMessage completes — not in the HTTP handler's finally block where the
     // fire-and-forget lock callback may still be running and the AI has not yet read the files.
-    const extraContext: Omit<HandleMessageContext, 'isolationHints'> =
-      savedFiles.length > 0 ? { userId, attachedFiles: savedFiles } : { userId };
+    const extraContext: Omit<HandleMessageContext, 'isolationHints'> = {
+      userId,
+      ...(savedFiles.length > 0 ? { attachedFiles: savedFiles } : {}),
+      ...(builderMode ? { builderMode, canvasState } : {}),
+    };
     let filesToCleanup: { files: AttachedFile[]; uploadDir: string } | undefined;
     if (savedFiles.length > 0) {
       filesToCleanup = { files: savedFiles, uploadDir };

@@ -54,6 +54,28 @@ interface BuilderPageProps {
    * re-validation never clobbers a server/import issue.
    */
   extraIssues?: readonly Issue[];
+  /**
+   * A Builder Copilot Proposal being previewed (PR-5, Pre-flight #5) — additive,
+   * like `extraIssues`. `workflow` is the UNION of the current graph and the
+   * proposed batch (removed nodes are re-included so they render struck
+   * through); `ghosts` tags which nodes are add/changed/remove; `positions`
+   * supplies layout only for nodes new to the union (merged UNDER the live
+   * position map so real nodes never jump). `null`/undefined renders normally.
+   */
+  preview?: {
+    workflow: BuilderWorkflow;
+    ghosts: ReadonlyMap<string, 'add' | 'changed' | 'remove'>;
+    /** Proposed connection changes, keyed by edge id — added links render dashed-accent, dropped ones struck. */
+    edgeGhosts?: ReadonlyMap<string, 'add' | 'remove'>;
+    positions: ReadonlyMap<string, XYPosition>;
+    issues: readonly Issue[];
+  } | null;
+  /**
+   * Applies a batch of actions as ONE undo step (Builder Copilot Accept) — a
+   * `useEffect` below dispatches `{ type: 'batch' }` whenever `nonce` changes.
+   * The parent bumps `nonce` per Accept click; `null`/undefined does nothing.
+   */
+  applyBatch?: { actions: readonly EditorAction[]; nonce: number } | null;
 }
 
 const VALIDATION_DEBOUNCE_MS = 300;
@@ -69,6 +91,8 @@ export function BuilderPage({
   initialWorkflow,
   onChange,
   extraIssues,
+  preview,
+  applyBatch,
 }: BuilderPageProps): ReactElement {
   const [state, dispatch] = useReducer(editorReducer, initialWorkflow, createEditorState);
   const [issues, setIssues] = useState<Issue[]>(() => runValidation(initialWorkflow));
@@ -80,6 +104,17 @@ export function BuilderPage({
   const stamped = useCallback((action: UnstampedAction): void => {
     dispatch({ ...action, at: Date.now() } as EditorAction);
   }, []);
+
+  // Builder Copilot Accept: apply the externally-supplied batch as ONE undo
+  // step exactly once per `nonce` bump (StrictMode-safe — re-running the
+  // effect with the same nonce must not double-apply the batch).
+  const appliedBatchNonce = useRef<number | null>(null);
+  useEffect(() => {
+    if (!applyBatch) return;
+    if (appliedBatchNonce.current === applyBatch.nonce) return;
+    appliedBatchNonce.current = applyBatch.nonce;
+    stamped({ type: 'batch', actions: applyBatch.actions });
+  }, [applyBatch, stamped]);
 
   // Re-validate on a debounce after edits (PR-1 client tiers only).
   useEffect(() => {
@@ -103,7 +138,21 @@ export function BuilderPage({
   }, [state.workflow, onChange]);
 
   const { nodes, edges } = useMemo(() => {
-    const derived = builderToFlow(state.workflow, state.positions, state.selectedNodes);
+    const displayWorkflow = preview?.workflow ?? state.workflow;
+    // Preview positions supply layout ONLY for nodes new to the union (its
+    // dagre fold recomputes the whole graph) — spreading them first means the
+    // live position map, spread second, wins for every node that already has
+    // one, so accepted/real nodes never jump while a Proposal is previewed.
+    const positions = preview
+      ? new Map([...preview.positions, ...state.positions])
+      : state.positions;
+    const derived = builderToFlow(
+      displayWorkflow,
+      positions,
+      state.selectedNodes,
+      preview?.ghosts,
+      preview?.edgeGhosts
+    );
     return {
       nodes: derived.nodes,
       // Override the edge's inline stroke when selected: xyflow's `.selected`
@@ -120,7 +169,7 @@ export function BuilderPage({
           : e
       ),
     };
-  }, [state.workflow, state.positions, state.selectedNodes, state.selectedEdges]);
+  }, [state.workflow, state.positions, state.selectedNodes, state.selectedEdges, preview]);
 
   const yamlText = useMemo(
     () => serializeToYaml(toWorkflowDefinition(state.workflow)),
@@ -134,8 +183,9 @@ export function BuilderPage({
     const byId = new Map<string, Issue>();
     for (const issue of issues) byId.set(issue.id, issue);
     for (const issue of extraIssues ?? []) byId.set(issue.id, issue);
+    for (const issue of preview?.issues ?? []) byId.set(issue.id, issue);
     return [...byId.values()];
-  }, [issues, extraIssues]);
+  }, [issues, extraIssues, preview]);
 
   const selectedNode =
     state.selectedNodes.size === 1

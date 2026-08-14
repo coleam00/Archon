@@ -46,13 +46,33 @@ export function builderToFlowEdges(bw: BuilderWorkflow): BuilderFlowEdge[] {
   return edges;
 }
 
-/** Map a `BuilderWorkflow` (+ saved positions) to xyflow nodes and edges. */
+/** Map a `BuilderWorkflow` (+ saved positions) to xyflow nodes and edges. `ghosts`, when
+ *  supplied, tags each matching node's data so `BuilderNodeView` can render the Builder
+ *  Copilot's Proposal overlay (add/changed/remove) without a separate render path. */
 export function builderToFlow(
   bw: BuilderWorkflow,
   positions?: ReadonlyMap<string, XYPosition>,
-  selectedNodeIds: ReadonlySet<string> = new Set()
+  selectedNodeIds: ReadonlySet<string> = new Set(),
+  ghosts?: ReadonlyMap<string, 'add' | 'changed' | 'remove'>,
+  edgeGhosts?: ReadonlyMap<string, 'add' | 'remove'>
 ): { nodes: BuilderFlowNode[]; edges: BuilderFlowEdge[] } {
-  const edges = builderToFlowEdges(bw);
+  const baseEdges = builderToFlowEdges(bw);
+  // Restyle proposed connections so an added link reads as provisional and a
+  // dropped one stays visible while struck, matching the node ghost vocabulary.
+  const edges =
+    edgeGhosts === undefined || edgeGhosts.size === 0
+      ? baseEdges
+      : baseEdges.map(e => {
+          const kind = edgeGhosts.get(e.id);
+          if (kind === undefined) return e;
+          return kind === 'add'
+            ? {
+                ...e,
+                animated: true,
+                style: { stroke: 'var(--accent-bright)', strokeDasharray: '6 4' },
+              }
+            : { ...e, style: { stroke: 'var(--error)', strokeDasharray: '2 4', opacity: 0.6 } };
+        });
 
   const needsLayout = bw.nodes.some(n => !positions?.has(n.id));
   const computed = needsLayout
@@ -87,7 +107,7 @@ export function builderToFlow(
       // the node's real rendered height on the canvas.
       initialWidth: NODE_WIDTH,
       initialHeight: NODE_HEIGHT,
-      data: { node, label: VARIANT_REGISTRY[node.variant].label },
+      data: { node, label: VARIANT_REGISTRY[node.variant].label, ghost: ghosts?.get(node.id) },
     };
   });
 

@@ -32,6 +32,13 @@ export function contentPreview(node: BuilderNode): string {
   }
 }
 
+/** Per-`ghost` kind overlay classes for the Builder Copilot's Proposal preview. */
+const GHOST_STYLES: Record<'add' | 'changed' | 'remove', string> = {
+  add: 'border-dashed border-accent-bright/70 opacity-70',
+  changed: 'border-dashed border-accent-bright ring-1 ring-accent-bright/50',
+  remove: 'border-dashed border-error/70 opacity-60',
+};
+
 function BuilderNodeRender({ data, selected }: NodeProps<BuilderFlowNode>): ReactElement {
   const node = data.node;
   const capabilities = VARIANT_REGISTRY[node.variant].capabilities;
@@ -42,11 +49,25 @@ function BuilderNodeRender({ data, selected }: NodeProps<BuilderFlowNode>): Reac
     background: `color-mix(in oklch, var(--node-${node.variant}), transparent 85%)`,
   };
   const hasWhen = typeof node.base.when === 'string' && node.base.when.length > 0;
+  const ghost = data.ghost;
 
   return (
     <div
+      title={
+        ghost === 'add'
+          ? 'Proposed: new node'
+          : ghost === 'remove'
+            ? 'Proposed: will be removed'
+            : ghost === 'changed'
+              ? 'Proposed: will change'
+              : undefined
+      }
       className={`flex w-[180px] cursor-pointer overflow-hidden rounded-lg border bg-surface transition-all ${
-        selected ? 'border-accent-bright ring-1 ring-accent-bright' : 'border-border'
+        ghost !== undefined
+          ? GHOST_STYLES[ghost]
+          : selected
+            ? 'border-accent-bright ring-1 ring-accent-bright'
+            : 'border-border'
       }`}
     >
       <Handle type="target" position={Position.Top} className="!h-2 !w-2 !bg-accent" />
@@ -61,7 +82,11 @@ function BuilderNodeRender({ data, selected }: NodeProps<BuilderFlowNode>): Reac
           >
             {data.label}
           </span>
-          <span className="truncate font-mono text-xs font-medium text-text-primary">
+          <span
+            className={`truncate font-mono text-xs font-medium text-text-primary ${
+              ghost === 'remove' ? 'line-through' : ''
+            }`}
+          >
             {node.id}
           </span>
         </div>

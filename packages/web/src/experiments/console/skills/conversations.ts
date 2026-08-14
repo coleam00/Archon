@@ -45,17 +45,40 @@ export async function listConversations(projectId: string): Promise<Conversation
   return raw.map(toConversationSummary);
 }
 
+/**
+ * Builder Copilot-only turn options — never used by the ordinary chat composer.
+ * `canvasState` is the live (possibly unsaved) workflow, JSON-serialized by the
+ * caller, resent every turn so the agent proposes edits against what the
+ * author is actually looking at rather than the last saved YAML.
+ */
+export interface BuilderModeOptions {
+  builderMode: true;
+  canvasState: string;
+}
+
 export async function sendMessage(
   conversationPlatformId: string,
   message: string,
-  files?: File[]
+  files?: File[],
+  builderOptions?: BuilderModeOptions
 ): Promise<void> {
   const url = `/api/conversations/${encodeURIComponent(conversationPlatformId)}/message`;
+
+  // The server reads `builderMode`/`canvasState` only on the JSON branch, so
+  // pairing them with files would drop them silently and the Copilot would
+  // reason about a canvas it was never given. Fail loudly instead — the Copilot
+  // never attaches files, so this combination is always a caller bug.
+  if (builderOptions !== undefined && files !== undefined && files.length > 0) {
+    throw new Error(
+      'sendMessage: builder-mode options cannot be combined with file attachments ' +
+        '(the multipart branch cannot carry them).'
+    );
+  }
 
   if (files === undefined || files.length === 0) {
     await requestJson<{ accepted: boolean; status: string }>(url, {
       method: 'POST',
-      body: JSON.stringify({ message }),
+      body: JSON.stringify({ message, ...builderOptions }),
     });
     return;
   }

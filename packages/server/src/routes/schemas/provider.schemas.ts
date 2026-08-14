@@ -19,6 +19,10 @@ const providerCapabilitiesSchema = z
     thinkingControl: z.boolean(),
     fallbackModel: z.boolean(),
     sandbox: z.boolean(),
+    // Mirrors ProviderCapabilities.nativeTools — whether the provider can register
+    // in-process NativeTools for a turn (Claude, Pi). Drives the Builder Copilot's
+    // "needs Claude or Pi" availability note (packages/web builder/copilot).
+    nativeTools: z.boolean(),
   })
   .openapi('ProviderCapabilities');
 

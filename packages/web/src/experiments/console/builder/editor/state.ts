@@ -50,7 +50,20 @@ export interface NodeSize {
 export const NODE_ID_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_-]*$/;
 
 export type EditorAction =
-  | { type: 'add-node'; variant: VariantId; position: XYPosition; at: number }
+  | {
+      type: 'add-node';
+      variant: VariantId;
+      position: XYPosition;
+      at: number;
+      /**
+       * Optional caller-supplied id (the Builder Copilot's `addNode` op names
+       * its own id, e.g. "gate"). Used verbatim when it's a fresh, valid
+       * `NODE_ID_PATTERN` id; otherwise falls back to the usual `variant-N`
+       * synthesis. Every other caller (palette click, canvas drop) omits this
+       * and keeps today's auto-numbered behavior unchanged.
+       */
+      id?: string;
+    }
   | { type: 'patch-node'; node: BuilderNode; at: number }
   | { type: 'rename-node'; id: string; nextId: string; at: number }
   | { type: 'remove-nodes'; ids: readonly string[]; at: number }
@@ -74,7 +87,20 @@ export type EditorAction =
   | { type: 'distribute'; axis: 'h' | 'v'; sizes?: ReadonlyMap<string, NodeSize>; at: number }
   | { type: 'auto-arrange'; at: number }
   | { type: 'undo' }
-  | { type: 'redo' };
+  | { type: 'redo' }
+  | {
+      /**
+       * Fold a batch of sub-actions as ONE undo step — the Builder Copilot's
+       * Accept applies a whole Proposal atomically. Reuses `editorReducer`
+       * itself for every sub-action (so each op maps to its real, tested
+       * transform) but discards the per-sub-action history entries those calls
+       * push, replacing them with a single snapshot of the PRE-batch state
+       * (mirrors the `cut` case's compose-then-relabel pattern below).
+       */
+      type: 'batch';
+      actions: readonly EditorAction[];
+      at: number;
+    };
 
 /** Initial editor state: dagre-layout every node, nothing selected. */
 export function createEditorState(workflow: BuilderWorkflow): EditorState {
@@ -163,7 +189,15 @@ function stripDeps(nodes: readonly BuilderNode[], removed: ReadonlySet<string>):
 export function editorReducer(state: EditorState, action: EditorAction): EditorState {
   switch (action.type) {
     case 'add-node': {
-      const id = uniqueNodeId(action.variant, nodeIds(state.workflow));
+      const taken = nodeIds(state.workflow);
+      const requested = action.id?.trim();
+      const id =
+        requested !== undefined &&
+        requested.length > 0 &&
+        NODE_ID_PATTERN.test(requested) &&
+        !taken.has(requested)
+          ? requested
+          : uniqueNodeId(action.variant, taken);
       // The (variant, data) pair is consistent by construction — both come
       // from the same registry entry — so this is a valid union member.
       const node = {
@@ -465,6 +499,22 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         // See `undo`: selection may dangle against the restored snapshot.
         selectedNodes: new Set(),
         selectedEdges: new Set(),
+      };
+    }
+
+    case 'batch': {
+      if (action.actions.length === 0) return state;
+      let working: EditorState = state;
+      for (const sub of action.actions) {
+        working = editorReducer(working, sub);
+      }
+      if (working === state) return state;
+      return {
+        ...working,
+        // Discard every per-sub-action history entry the fold above pushed;
+        // replace with ONE snapshot of the state as it was before the batch —
+        // one undo restores the whole pre-Proposal workflow + positions.
+        history: remember(state, 'batch', action.at),
       };
     }
   }

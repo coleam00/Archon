@@ -64,7 +64,11 @@ user feedback during dogfooding rather than a milestone roadmap. Issues and
 ideas land via the PR template's UX Journey section.
 
 The `builder/` subtree (Archon Studio workflow builder): PR-1 (data layer —
-types, variant registry, round-trip model, validation) and PR-2 (the canvas UI)
-are merged; PR-3 wires connected mode (`/console/builder[/:name]`, project
-picker, load/save/rename/delete through the workflow API, dirty + nav guard,
-bundled Save-as) and is in review. See `builder/README.md`.
+types, variant registry, round-trip model, validation), PR-2 (the canvas UI),
+and PR-3 (connected mode — `/console/builder[/:name]`, project picker,
+load/save/rename/delete through the workflow API, dirty + nav guard, bundled
+Save-as) are merged. PR-5 adds a **Builder Copilot** panel beside the canvas —
+an AI chat (reusing the console chat verbatim, no dedicated endpoint) that
+proposes batches of edits previewed as ghost nodes for the author to Accept or
+Reject; canvas-driving needs Claude or Pi (a native-tool-only capability), other
+assistants can still converse in the panel. See `builder/README.md`.

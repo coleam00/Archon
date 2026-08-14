@@ -3899,6 +3899,7 @@ export interface components {
       thinkingControl: boolean;
       fallbackModel: boolean;
       sandbox: boolean;
+      nativeTools: boolean;
     };
     PiModelListResponse: {
       models: components['schemas']['PiModelInfo'][];

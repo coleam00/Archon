@@ -20,6 +20,14 @@ export interface XYPosition {
 export interface BuilderNodeData {
   node: BuilderNode;
   label: string;
+  /**
+   * Set only when a Builder Copilot Proposal is being previewed: 'add' (new,
+   * not yet accepted), 'changed' (existing node the batch would modify), or
+   * 'remove' (existing node the batch would delete — still rendered, struck
+   * through, so the author can see what's about to disappear). Undefined for
+   * every ordinary render.
+   */
+  ghost?: 'add' | 'changed' | 'remove';
   /** Required by React Flow's Node<T> constraint — do not rely on this for typed access. */
   [key: string]: unknown;
 }

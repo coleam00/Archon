@@ -24,12 +24,18 @@ The in-console workflow builder. Ported from the standalone
   Save flow with a dirty indicator + nav guard, server-tier validation surfaced
   into the issue panel, and full CRUD — with bundled workflows opening read-only
   and saving as a project override. See **PR-3 specifics** below.
+- **PR-5 (shipped): Builder Copilot.** An AI chat panel beside the canvas that
+  proposes batches of edits (add/connect/set-field/rename/remove) previewed as
+  ghost nodes before the author Accepts or Rejects. See **PR-5 specifics** below.
 
 `BuilderPage` stays a **controlled component**: it takes
 `initialWorkflow: BuilderWorkflow` as a prop and reports edits via `onChange`.
 PR-3's only additive change to it is an optional `extraIssues?: Issue[]` prop
-(import + server issues merged into the panel). All server I/O, dirty/nav logic,
-and CRUD live in `BuilderConnected` + `connect/*`.
+(import + server issues merged into the panel). PR-5 adds two more additive
+props in the same spirit: `preview?` (a Builder Copilot Proposal's ghost
+overlay) and `applyBatch?` (Accept's one-undo-step batch trigger) — see
+**PR-5 specifics** below. All server I/O, dirty/nav logic, and CRUD live in
+`BuilderConnected` + `connect/*`.
 
 ## What's here
 
@@ -51,9 +57,15 @@ builder/
 │                 #   reducer (state.ts), keymap bindings (console useKeymap)
 ├── components/   # PR-2: canvas, node view, palette, inspector (+ per-variant
 │                 #   sub-forms), WhenBuilder, IssueList, YamlPreview, Toolbar
-├── BuilderPage.tsx       # PR-2: the controlled assembly (+ PR-3 extraIssues prop)
+├── BuilderPage.tsx       # PR-2: the controlled assembly (+ PR-3 extraIssues,
+│                         #   PR-5 preview/applyBatch props)
 ├── BuilderConnected.tsx  # PR-3: connected /console/builder[/:name] route
+│                         #   (PR-5: also mounts CopilotPanel + owns its state)
 ├── connect/              # PR-3: pure save/rename/issue logic + selected-project hook
+├── copilot/      # PR-5: op-schema, translate-ops, preview-diff (pure + tested),
+│                 #   use-copilot hook, CopilotPanel + ProposalPreview (React)
+├── docs/adr/     # Architecture decisions that break M1's "pure-web" stance
+│                 #   (ADR-0001 marketplace submission, ADR-0002 builder copilot)
 └── **/*.test.ts  # bun:test units (pure logic only — no DOM, no mock.module)
 ```
 
@@ -150,6 +162,58 @@ in isolation — reviewable by construction.
 - **Subdir limitation (known).** `GET /api/workflows/:name` does not recurse into
   `.archon/workflows/<subdir>/`; subfoldered workflows won't load via the
   single-name route and surface a "not found" empty state (offers New).
+
+## PR-5 specifics (Builder Copilot)
+
+- **Reuses the console chat — no dedicated endpoint.** The Copilot is a DB-backed
+  conversation (`skill.createConversation`/`sendMessage`/`listMessages`) rendered
+  with the same `ChatStream`/`ChatComposer` the project chat uses. See
+  `docs/adr/0002-builder-copilot-reuses-chat-via-native-tool.md` for why.
+- **Builder-mode signal is a per-message request flag**, not a conversation
+  column: `sendMessage`'s optional 4th arg (`{ builderMode: true, canvasState }`)
+  rides the existing `POST /api/conversations/:id/message` JSON body. The
+  orchestrator (`@archon/core`) gates the `propose_workflow_edits` native tool on
+  this flag — ordinary project chats, Slack, Telegram, GitHub, and CLI never see
+  it. `canvasState` is the live (possibly unsaved) `BuilderWorkflow`,
+  JSON-serialized fresh every turn.
+- **Claude/Pi-only.** The tool is a native in-process tool call, which only
+  Claude and Pi's harnesses support (`ProviderCapabilities.nativeTools`). On
+  Codex/OpenCode/Copilot the panel shows a "needs Claude or Pi" note (from
+  `GET /api/providers` + `GET /api/config`'s default assistant) — chat still
+  works, canvas-driving doesn't.
+- **Tool-call delivery is post-turn, not mid-stream.** The console's SSE
+  consumers are deliberately signal-only (`lib/sse.ts`): they invalidate the
+  message cache and nothing reads `input` off the raw SSE event. The pending
+  Proposal is read off the latest assistant message's `toolCalls` array once it
+  lands via the normal `GET /.../messages` refetch — same pattern `ChatPage`
+  already uses for tool-call rendering.
+- **Ops → `EditorAction`s is a pure, fully-tested pipeline**: `op-schema.ts`
+  (parse + validate the agent's `ops` JSON — the same shape `@archon/core`'s
+  `propose-workflow-edits-tool.ts` hand-duplicates on the server side, since a
+  web package can't be imported there) → `translate-ops.ts` (maps each op onto
+  the real `EditorAction` union, surfacing unresolvable ops as `Issue[]`, never
+  throwing) → `preview-diff.ts` (folds the batch over a CLONE via `editorReducer`
+  itself and diffs against the live workflow for the ghost overlay).
+- **`editorReducer` gained two small, additive members** to support this:
+  `add-node` now accepts an optional caller-supplied `id` (falls back to the
+  usual `variant-N` synthesis when omitted, taken, or invalid — every existing
+  caller is unaffected), and a new `batch` action folds a list of sub-actions
+  through the reducer but collapses them to ONE history snapshot — Accept
+  applies the whole Proposal as a single undo step.
+- **Preview overlay is additive on `BuilderPage`**, matching PR-3's
+  `extraIssues` discipline: `preview?` carries a union workflow (current +
+  proposed, with removed nodes re-included so they render struck through), a
+  ghost map (`add`/`changed`/`remove`) threaded through `builderToFlow` →
+  `BuilderNodeView` for dashed/translucent/struck styling, and would-be issues.
+  `applyBatch?` is a `{ actions, nonce }` pair a `useEffect` dispatches once per
+  nonce bump. Neither prop touches `BuilderPage`'s own reducer state directly.
+- **Accept is atomic; Reject is a no-op on the canvas.** Accept dispatches the
+  batch (one undo step); Reject just clears the panel's pending-Proposal state
+  — nothing was ever applied to live editor state, so there's nothing to revert.
+- **No persistence of Accept/Reject decisions.** Which tool calls have been
+  resolved lives in the panel's own React state, not the DB — reloading mid-turn
+  can resurface an already-decided Proposal. Acceptable for v1; a future pass
+  could fold this into message metadata if it proves annoying in practice.
 
 ## Round-trip contract
 

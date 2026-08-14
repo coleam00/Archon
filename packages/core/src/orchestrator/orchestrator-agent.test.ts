@@ -1386,6 +1386,66 @@ describe('discoverAllWorkflows — remote sync', () => {
       capsMock.mockReturnValue({ envInjection: true });
     }
   });
+
+  // The Builder Copilot's headline bug shipped in the DELIVERY path, not the
+  // logic: every unit test passed while the tool never reached the canvas. These
+  // pin both halves of the gate — that `builderMode` actually adds the tool, and
+  // that an ordinary chat never sees it.
+  test('injects propose_workflow_edits ONLY for a builder-mode turn', async () => {
+    const providers = await import('@archon/providers');
+    const capsMock = providers.getProviderCapabilities as ReturnType<typeof mock>;
+    capsMock.mockReturnValue({ envInjection: true, nativeTools: true });
+    const codebase = makeCodebaseForSync();
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeConversation({ ai_assistant_type: 'claude', codebase_id: 'codebase-1' }))
+    );
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
+    mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
+
+    try {
+      const platform = makePlatform();
+      await handleMessage(platform, 'conv-1', 'Add a gate', {
+        builderMode: true,
+        canvasState: '{"name":"w","nodes":[]}',
+      });
+
+      const requestOptions = mockSendQuery.mock.calls[0][3] as Record<string, unknown>;
+      const names = (requestOptions.nativeTools as { name: string }[]).map(t => t.name);
+      expect(names).toContain('propose_workflow_edits');
+      // manage_run is appended to, not replaced.
+      expect(names).toContain('manage_run');
+      // The propose-not-do steering rides along only when the tool does.
+      const sp = requestOptions.systemPrompt as { append?: string };
+      expect(sp.append).toContain('Builder Copilot');
+    } finally {
+      capsMock.mockReturnValue({ envInjection: true });
+    }
+  });
+
+  test('does NOT inject propose_workflow_edits into an ordinary project chat', async () => {
+    const providers = await import('@archon/providers');
+    const capsMock = providers.getProviderCapabilities as ReturnType<typeof mock>;
+    capsMock.mockReturnValue({ envInjection: true, nativeTools: true });
+    const codebase = makeCodebaseForSync();
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeConversation({ ai_assistant_type: 'claude', codebase_id: 'codebase-1' }))
+    );
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
+    mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
+
+    try {
+      const platform = makePlatform();
+      await handleMessage(platform, 'conv-1', 'Hello');
+
+      const requestOptions = mockSendQuery.mock.calls[0][3] as Record<string, unknown>;
+      const names = (requestOptions.nativeTools as { name: string }[]).map(t => t.name);
+      expect(names).not.toContain('propose_workflow_edits');
+      const sp = requestOptions.systemPrompt as { append?: string };
+      expect(sp.append).not.toContain('Builder Copilot');
+    } finally {
+      capsMock.mockReturnValue({ envInjection: true });
+    }
+  });
 });
 
 // ─── provider cwd resolution (issue #1179) ──────────────────────────────────
