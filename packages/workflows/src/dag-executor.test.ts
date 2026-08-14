@@ -58,7 +58,7 @@ import {
   clearRegistry,
   getProviderCapabilities,
 } from '@archon/providers';
-import type { SendQueryOptions } from '@archon/providers';
+import type { SendQueryOptions, MessageChunk } from '@archon/providers';
 clearRegistry();
 registerBuiltinProviders();
 // Pi is a community provider (best-effort structured output) — register it so the
@@ -19507,16 +19507,19 @@ describe('executeDagWorkflow -- provider-boundary session threading (#1992)', ()
   });
 
   it("context: 'shared' on a parallel-layer node overrides the fresh default and resumes the prior sequential session", async () => {
-    mockSendQueryDag.mockImplementation(function* (prompt: string) {
+    mockSendQueryDag.mockImplementation(function* (prompt: string): Generator<MessageChunk> {
       if (prompt.includes('First')) {
         yield { type: 'assistant', content: 'first done' };
         yield { type: 'result', sessionId: 'sess-a' };
       } else if (prompt.includes('Shared')) {
         yield { type: 'assistant', content: 'shared done' };
         yield { type: 'result', sessionId: 'sess-shared' };
-      } else {
+      } else if (prompt.includes('Plain')) {
         yield { type: 'assistant', content: 'plain done' };
         yield { type: 'result', sessionId: 'sess-plain' };
+      } else {
+        yield { type: 'assistant', content: 'after done' };
+        yield { type: 'result', sessionId: 'sess-after' };
       }
     });
 
@@ -19528,20 +19531,27 @@ describe('executeDagWorkflow -- provider-boundary session threading (#1992)', ()
           { id: 'a', prompt: 'First step' },
           { id: 'shared', prompt: 'Shared step', depends_on: ['a'], context: 'shared' },
           { id: 'plain', prompt: 'Plain step', depends_on: ['a'] },
+          { id: 'after', prompt: 'After step', depends_on: ['shared', 'plain'] },
         ],
       },
       makeWorkflowRun('parallel-shared-context-run')
     );
 
-    expect(mockSendQueryDag.mock.calls.length).toBe(3);
-    const resumeIdByPrompt = new Map(
-      mockSendQueryDag.mock.calls.map(call => [call[0] as string, call[2] as string | undefined])
+    expect(mockSendQueryDag.mock.calls.length).toBe(4);
+    const resumeIdByPrompt = new Map<string, string | undefined>(
+      mockSendQueryDag.mock.calls.map((call): [string, string | undefined] => [
+        call[0] as string,
+        call[2] as string | undefined,
+      ])
     );
     expect(resumeIdByPrompt.get('First step')).toBeUndefined();
     // Explicit 'shared' overrides the parallel-layer fresh default.
     expect(resumeIdByPrompt.get('Shared step')).toBe('sess-a');
     // A sibling without the override still defaults to fresh in a parallel layer.
     expect(resumeIdByPrompt.get('Plain step')).toBeUndefined();
+    // The sequential-session cursor reset (moved to after layer dispatch) still
+    // takes effect before the next layer: a node after the parallel layer starts fresh.
+    expect(resumeIdByPrompt.get('After step')).toBeUndefined();
   });
 });
 
