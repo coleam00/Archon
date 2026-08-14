@@ -1167,7 +1167,8 @@ async function continueResolvedGateRun(
   run: WorkflowRun,
   action: 'approve' | 'reject',
   isolationHints?: HandleMessageContext['isolationHints'],
-  userId?: string
+  userId?: string,
+  channelRef?: HandleMessageContext['channelRef']
 ): Promise<void> {
   const decision = action === 'approve' ? 'Approved' : 'Rejected';
   const notify = async (text: string): Promise<void> => {
@@ -1223,6 +1224,7 @@ async function continueResolvedGateRun(
         run.user_message,
         isolationHints,
         userId,
+        channelRef,
         source,
         { resumeRunId: run.id, resumeRun: run }
       );
@@ -2062,7 +2064,8 @@ export async function handleMessage(
           gateResolution.resolved.run,
           gateResolution.resolved.action,
           isolationHints,
-          userId
+          userId,
+          channelRef
         );
       }
     }
