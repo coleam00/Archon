@@ -1,0 +1,10 @@
+name: aiderdesk-smoke-test
+description: Smoke test for the AiderDesk provider with Ollama
+provider: aiderdesk
+model: ollama/qwen3-coder:30b
+
+nodes:
+  - id: hello
+    prompt: |
+      Say "Hello from AiderDesk!" and list the files in the current directory.
+      Keep your response brief.

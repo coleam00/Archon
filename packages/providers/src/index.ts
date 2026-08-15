@@ -108,3 +108,14 @@ export {
   resolveCopilotBinaryPath,
   fileExists as copilotFileExists,
 } from './community/copilot/binary-resolver';
+
+// AiderDesk (community) — wraps AiderDesk's REST API for local inference
+export {
+  AiderDeskProvider,
+  parseAiderdeskConfig,
+  registerAiderdeskProvider,
+  listAiderdeskModels,
+  AiderDeskClient,
+  type AiderDeskProviderDefaults,
+  type AiderDeskModelInfo,
+} from './community/aiderdesk';

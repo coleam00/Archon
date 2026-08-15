@@ -155,6 +155,29 @@ export interface OpencodeProviderDefaults {
   agent?: string;
 }
 
+/**
+ * Community provider defaults for AiderDesk.
+ * AiderDesk wraps a local REST API (localhost:24337) that delegates inference
+ * to its own agent infrastructure (which can use Ollama for zero-cost local inference).
+ */
+export interface AiderDeskProviderDefaults {
+  [key: string]: unknown;
+  /** Default model ref in '<provider>/<model>' format (e.g. 'ollama/qwen3-coder:30b'). */
+  model?: string;
+  /** Base URL of the AiderDesk REST API. Defaults to env or Docker gateway detection. */
+  apiUrl?: string;
+  /** Optional AiderDesk agent profile ID to use for tasks. */
+  agentProfileId?: string;
+  /** Default run mode for prompts: code, ask, architect, context, or agent. */
+  mode?: 'code' | 'ask' | 'architect' | 'context' | 'agent';
+  /** Poll interval (ms) for checking task state after run-prompt. */
+  pollIntervalMs?: number;
+  /** Timeout (ms) for the blocking run-prompt POST. */
+  requestTimeoutMs?: number;
+  /** Whether to clear AiderDesk task context after each run. */
+  clearContextAfterRun?: boolean;
+}
+
 /** Generic per-provider defaults bag used by config surfaces and UI. */
 export type ProviderDefaults = Record<string, unknown>;
 
