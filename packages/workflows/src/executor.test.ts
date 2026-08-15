@@ -92,7 +92,7 @@ mock.module('@archon/paths', () => ({
   getProjectLogsPath: mock(() => '/tmp/logs'),
   // WS is this suite's fake ARCHON_HOME (see comment above) — containerAwareAttachments
   // calls the real getArchonHome() for container executions, so it must resolve here too.
-  getArchonHome: mock(() => WS),
+  getArchonHome: mock((): string => WS),
   getProjectArtifactsPath: mock(() => '/tmp/artifacts-root'),
   resolveProjectStorageKey: mock(fakeResolveProjectStorageKey),
   getProjectStoragePaths: mock(fakeGetProjectStoragePaths),
@@ -1490,7 +1490,7 @@ describe('executeWorkflow', () => {
       expect(configArg?.envVars?.ARCHON_ATTACHMENTS).toBe('[]');
     });
 
-    it('clears a reused container staging directory even when the new run has no attachments', async () => {
+    it('clears a reused container staging directory even when the new run has no attachments', async (): Promise<void> => {
       const { mkdirSync, writeFileSync, existsSync, rmSync } = await import('node:fs');
       const stagingDir = join(WS, 'artifacts', 'attachments-staging', 'archon-reused');
       mkdirSync(stagingDir, { recursive: true });
