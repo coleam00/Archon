@@ -107,7 +107,7 @@ async function containerAwareAttachments(
   attachments: readonly WorkflowAttachment[] | undefined,
   execContext: ExecutionContext
 ): Promise<readonly WorkflowAttachment[] | undefined> {
-  if (!attachments || execContext.kind !== 'container') return attachments;
+  if (execContext.kind !== 'container') return attachments;
   const uploadsRoot = join(archonPaths.getArchonHome(), 'artifacts', 'uploads');
   const stagingDir = join(
     archonPaths.getArchonHome(),
@@ -116,6 +116,10 @@ async function containerAwareAttachments(
     execContext.containerName
   );
 
+  // Clear on EVERY container execution, even with zero attachments — a
+  // resumed/reused container keeps its /mnt/attachments mount live, so
+  // skipping this when `attachments` is empty/undefined would leave a
+  // PREVIOUS run's files readable by this run's bash:/script: nodes.
   await mkdir(stagingDir, { recursive: true });
   const stale = await readdir(stagingDir).catch(() => [] as string[]);
   await Promise.all(
@@ -123,7 +127,7 @@ async function containerAwareAttachments(
   );
 
   const staged: WorkflowAttachment[] = [];
-  for (const [index, file] of attachments.entries()) {
+  for (const [index, file] of (attachments ?? []).entries()) {
     // `relative()` (not `startsWith`) so a sibling path that merely shares
     // the `uploads` prefix as a string (e.g. `artifacts/uploads-backup/file.txt`)
     // is never mistaken for a descendant and staged/rewritten.
