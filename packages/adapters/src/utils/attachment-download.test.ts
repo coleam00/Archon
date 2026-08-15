@@ -60,7 +60,7 @@ afterEach(() => {
 
 const alwaysTrusted = (): boolean => true;
 
-function mockFetchOnce(response: Partial<Response> & { body?: ArrayBuffer }): void {
+function mockFetchOnce(response: Omit<Partial<Response>, 'body'> & { body?: ArrayBuffer }): void {
   const bodyBuffer = response.body ?? new ArrayBuffer(4);
   // A real Response.body is a ReadableStream — the production code reads it
   // incrementally (not via arrayBuffer()), so the mock must provide one too.

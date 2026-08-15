@@ -20,6 +20,7 @@
  */
 
 import { randomUUID } from 'crypto';
+import { rm } from 'fs/promises';
 import { join } from 'path';
 import type { BranchName } from '@archon/git';
 import { createLogger, getArchonHome } from '@archon/paths';
@@ -201,7 +202,7 @@ export class ContainerBackend implements IIsolationBackend {
 
     return {
       cwd: hostRoot,
-      execContext: { kind: 'container', containerId },
+      execContext: { kind: 'container', containerId, containerName },
       envId: row.id,
       overlayMode,
     };
@@ -257,6 +258,23 @@ export class ContainerBackend implements IIsolationBackend {
       throw new Error(
         `Failed to remove the isolation container/volume for env '${envId}': ` + failures.join('; ')
       );
+    }
+
+    // Best-effort: the staged attachment directory has no tracking row of its
+    // own (it's a plain host directory keyed by containerName, populated by
+    // @archon/workflows' containerAwareAttachments — see runContainerInMode),
+    // so nothing else ever reclaims it. A failure here must not block the
+    // destroy that already succeeded above.
+    if (containerName) {
+      await rm(join(getArchonHome(), 'artifacts', 'attachments-staging', containerName), {
+        recursive: true,
+        force: true,
+      }).catch(err => {
+        log.warn(
+          { envId, containerName, err: err as Error },
+          'isolation.container_destroy_attachments_staging_cleanup_failed'
+        );
+      });
     }
 
     await this.store.updateStatus(envId, 'destroyed').catch(err => {
@@ -323,14 +341,14 @@ export class ContainerBackend implements IIsolationBackend {
     if (presence === 'running') {
       const containerId = await this.getContainerId(containerName);
       log.info({ envId, containerName }, 'isolation.container_resume_reused_running');
-      return this.preparedEnvFor(containerId, workspacePath, envId, priorMode);
+      return this.preparedEnvFor(containerId, containerName, workspacePath, envId, priorMode);
     }
     if (presence === 'stopped') {
       await this.docker(['start', containerName]);
       const containerId = await this.getContainerId(containerName);
       await this.waitForReady(containerId);
       log.info({ envId, containerName }, 'isolation.container_resume_restarted');
-      return this.preparedEnvFor(containerId, workspacePath, envId, priorMode);
+      return this.preparedEnvFor(containerId, containerName, workspacePath, envId, priorMode);
     }
 
     // Container is gone. The overlay lives on the volume — recreate over it, or
@@ -350,7 +368,7 @@ export class ContainerBackend implements IIsolationBackend {
       codebaseId
     );
     log.info({ envId, containerName, volume }, 'isolation.container_resume_recreated');
-    return this.preparedEnvFor(containerId, workspacePath, envId, mode);
+    return this.preparedEnvFor(containerId, containerName, workspacePath, envId, mode);
   }
 
   /**
@@ -430,11 +448,17 @@ export class ContainerBackend implements IIsolationBackend {
 
   private preparedEnvFor(
     containerId: string,
+    containerName: string,
     cwd: string,
     envId: string,
     overlayMode: OverlayMode
   ): PreparedEnv {
-    return { cwd, execContext: { kind: 'container', containerId }, envId, overlayMode };
+    return {
+      cwd,
+      execContext: { kind: 'container', containerId, containerName },
+      envId,
+      overlayMode,
+    };
   }
 
   /**
@@ -598,12 +622,20 @@ export class ContainerBackend implements IIsolationBackend {
       '-v',
       `${volume}:/mnt/upper`,
       // Read-only: bash:/script: nodes only need to READ attachment files via
-      // ARCHON_ATTACHMENTS, never write into the upload store. Path must stay
-      // in sync with CONTAINER_ATTACHMENTS_MOUNT in @archon/workflows/executor
-      // (workflows can't import @archon/isolation — see package-layer rules —
-      // so this is a matched literal, not a shared constant).
+      // ARCHON_ATTACHMENTS, never write into the upload store. This mounts a
+      // per-CONTAINER staging directory, NOT the shared uploads root — the
+      // uploads root holds every attachment ever downloaded across every
+      // conversation/project on this install, and ARCHON_ATTACHMENTS is not
+      // an access-control mechanism, so mounting it whole would let any
+      // bash:/script: node enumerate and read other runs' files. Populated
+      // by `containerAwareAttachments()` in @archon/workflows/executor with
+      // only the CURRENT run's attachments before each run starts. Path must
+      // stay in sync with the literal there (workflows can't import
+      // @archon/isolation — see package-layer rules — so this is a matched
+      // literal, not a shared constant); the mount source auto-creates empty
+      // if this container has never staged anything yet.
       '-v',
-      `${join(getArchonHome(), 'artifacts', 'uploads')}:/mnt/attachments:ro`,
+      `${join(getArchonHome(), 'artifacts', 'attachments-staging', containerName)}:/mnt/attachments:ro`,
       '-e',
       `ARCHON_WORKSPACE_PATH=${hostRoot}`,
       '-e',

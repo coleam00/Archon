@@ -1,9 +1,9 @@
 /**
  * Workflow Executor - runs DAG-based workflows
  */
-import { mkdir, writeFile } from 'fs/promises';
+import { copyFile, mkdir, readdir, rm, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
-import { dirname, join } from 'path';
+import { basename, dirname, isAbsolute, join, relative } from 'path';
 import type { IWorkflowPlatform, WorkflowMessageMetadata } from './deps';
 import type { WorkflowDeps, WorkflowConfig } from './deps';
 import * as archonPaths from '@archon/paths';
@@ -71,33 +71,73 @@ export type { WorkflowAttachment };
 
 /**
  * Where the container backend (`@archon/isolation`'s `ContainerBackend`)
- * bind-mounts the host attachment-uploads root (read-only). Must match the
- * literal in `runContainerInMode` there — `@archon/workflows` cannot import
- * `@archon/isolation` (see package-layer rules), so this is a matched
- * constant, not a shared one.
+ * bind-mounts this run's per-container attachment staging directory
+ * (read-only). Must match the literal in `runContainerInMode` there —
+ * `@archon/workflows` cannot import `@archon/isolation` (see package-layer
+ * rules), so this is a matched literal, not a shared constant.
  */
 const CONTAINER_ATTACHMENTS_MOUNT = '/mnt/attachments';
 
 /**
- * Rewrite each attachment's host path to its in-container mount path when
- * running inside the container backend — the subprocess env only ever sees
- * paths meaningful to where it's actually executing. Every attachment path
- * (adapter downloads and the Web upload endpoint alike) is rooted at
- * `<archonHome>/artifacts/uploads/`; a path that ISN'T (e.g. a hand-crafted
- * CLI `--attachments` value pointing elsewhere) is left unchanged — it was
- * never going to be readable from inside the container regardless.
+ * Stage this run's attachments into a dedicated per-container host directory
+ * and rewrite each attachment's path to its in-container mount path, when
+ * running inside the container backend.
+ *
+ * The container's `/mnt/attachments` is bound to
+ * `<archonHome>/artifacts/attachments-staging/<containerName>` (see
+ * `runContainerInMode`) rather than to the shared uploads root — bind-mounting
+ * the whole uploads root would let any bash:/script: node in the container
+ * enumerate and read every attachment ever downloaded across every
+ * conversation/project on this install, since `ARCHON_ATTACHMENTS` only tells
+ * the agent which paths matter, not an access-control mechanism. Copying
+ * (not symlinking) into the staging dir is required: a symlink's target is a
+ * HOST path the container has no other mount for, so it would dangle.
+ *
+ * Clears any files staged by a PREVIOUS run that reused this same container
+ * (via resume) before writing the current set, so a stale attachment is never
+ * left reachable after a new run should have superseded it.
+ *
+ * Every attachment path (adapter downloads and the Web upload endpoint alike)
+ * is rooted at `<archonHome>/artifacts/uploads/`; a path that ISN'T (e.g. a
+ * hand-crafted CLI `--attachments` value pointing elsewhere) is left
+ * unchanged and never staged — it was never going to be readable from inside
+ * the container regardless.
  */
-function containerAwareAttachments(
+async function containerAwareAttachments(
   attachments: readonly WorkflowAttachment[] | undefined,
   execContext: ExecutionContext
-): readonly WorkflowAttachment[] | undefined {
+): Promise<readonly WorkflowAttachment[] | undefined> {
   if (!attachments || execContext.kind !== 'container') return attachments;
   const uploadsRoot = join(archonPaths.getArchonHome(), 'artifacts', 'uploads');
-  return attachments.map(file =>
-    file.path.startsWith(uploadsRoot)
-      ? { ...file, path: CONTAINER_ATTACHMENTS_MOUNT + file.path.slice(uploadsRoot.length) }
-      : file
+  const stagingDir = join(
+    archonPaths.getArchonHome(),
+    'artifacts',
+    'attachments-staging',
+    execContext.containerName
   );
+
+  await mkdir(stagingDir, { recursive: true });
+  const stale = await readdir(stagingDir).catch(() => [] as string[]);
+  await Promise.all(
+    stale.map(entry => rm(join(stagingDir, entry), { force: true }).catch(() => undefined))
+  );
+
+  const staged: WorkflowAttachment[] = [];
+  for (const [index, file] of attachments.entries()) {
+    // `relative()` (not `startsWith`) so a sibling path that merely shares
+    // the `uploads` prefix as a string (e.g. `artifacts/uploads-backup/file.txt`)
+    // is never mistaken for a descendant and staged/rewritten.
+    const rel = relative(uploadsRoot, file.path);
+    const isDescendant = rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
+    if (!isDescendant) {
+      staged.push(file);
+      continue;
+    }
+    const stagedName = `${index}-${basename(file.path)}`;
+    await copyFile(file.path, join(stagingDir, stagedName));
+    staged.push({ ...file, path: `${CONTAINER_ATTACHMENTS_MOUNT}/${stagedName}` });
+  }
+  return staged;
 }
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -1270,7 +1310,9 @@ export async function executeWorkflow(
       ...dbEnvVars,
       ...botGitHubEnv,
       ...userGitHubEnv,
-      ARCHON_ATTACHMENTS: JSON.stringify(containerAwareAttachments(attachments, execContext) ?? []),
+      ARCHON_ATTACHMENTS: JSON.stringify(
+        (await containerAwareAttachments(attachments, execContext)) ?? []
+      ),
     },
   };
   const configuredCommandFolder = config.commands.folder;
@@ -1720,7 +1762,7 @@ export async function executeWorkflow(
   // bag (deps.getUserProviderEnv), so without this a colliding key of the same
   // name would silently shadow the real run-scoped attachments JSON set above.
   config.envVars.ARCHON_ATTACHMENTS = JSON.stringify(
-    containerAwareAttachments(attachments, execContext) ?? []
+    (await containerAwareAttachments(attachments, execContext)) ?? []
   );
 
   // Wrap execution in try-catch to ensure workflow is marked as failed on any error.

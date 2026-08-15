@@ -96,7 +96,11 @@ describe('ContainerBackend.prepare', () => {
     const prepared = await backend.prepare({ codebase: FOLDER });
 
     expect(prepared.cwd).toBe('/tmp/ops-client');
-    expect(prepared.execContext).toEqual({ kind: 'container', containerId: 'abc123containerid' });
+    expect(prepared.execContext).toEqual({
+      kind: 'container',
+      containerId: 'abc123containerid',
+      containerName: expect.stringMatching(/^archon-/) as unknown as string,
+    });
     expect(prepared.envId).toBe('env-1');
 
     const runArgs = docker.calls.find(c => c[0] === 'run');
@@ -146,7 +150,11 @@ describe('ContainerBackend.prepare', () => {
     const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
     const prepared = await backend.prepare({ codebase: FOLDER });
 
-    expect(prepared.execContext).toEqual({ kind: 'container', containerId: 'cid-2' });
+    expect(prepared.execContext).toEqual({
+      kind: 'container',
+      containerId: 'cid-2',
+      containerName: expect.stringMatching(/^archon-/) as unknown as string,
+    });
     expect(runCount).toBe(2);
     // The failed fuse container is removed before the native attempt.
     expect(docker.calls.find(c => c[0] === 'rm')).toBeDefined();
@@ -251,7 +259,11 @@ describe('ContainerBackend.prepare', () => {
     const prepared = await backend.prepare({ codebase: FOLDER });
     // Only ONE run — fuse succeeded; the inspect blip did NOT escalate to native.
     expect(runCount).toBe(1);
-    expect(prepared.execContext).toEqual({ kind: 'container', containerId: 'cid-1' });
+    expect(prepared.execContext).toEqual({
+      kind: 'container',
+      containerId: 'cid-1',
+      containerName: expect.stringMatching(/^archon-/) as unknown as string,
+    });
     expect((store.created?.metadata as { overlayMode: string }).overlayMode).toBe('fuse');
   });
 
@@ -275,7 +287,11 @@ describe('ContainerBackend.prepare', () => {
     const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
     const prepared = await backend.prepare({ codebase: FOLDER });
     expect(runAttempts).toBe(2);
-    expect(prepared.execContext).toEqual({ kind: 'container', containerId: 'cid-nofuse' });
+    expect(prepared.execContext).toEqual({
+      kind: 'container',
+      containerId: 'cid-nofuse',
+      containerName: expect.stringMatching(/^archon-/) as unknown as string,
+    });
     expect((store.created?.metadata as { overlayMode: string }).overlayMode).toBe('native');
   });
 });
@@ -448,7 +464,11 @@ describe('ContainerBackend.resumeEnv', () => {
     });
     const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
     const prepared = await backend.resumeEnv('env-c');
-    expect(prepared.execContext).toEqual({ kind: 'container', containerId: 'cid-run' });
+    expect(prepared.execContext).toEqual({
+      kind: 'container',
+      containerId: 'cid-run',
+      containerName: 'archon-res-1',
+    });
     expect(docker.calls.find(c => c[0] === 'start')).toBeUndefined();
   });
 
@@ -467,7 +487,11 @@ describe('ContainerBackend.resumeEnv', () => {
     });
     const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
     const prepared = await backend.resumeEnv('env-c');
-    expect(prepared.execContext).toEqual({ kind: 'container', containerId: 'cid-started' });
+    expect(prepared.execContext).toEqual({
+      kind: 'container',
+      containerId: 'cid-started',
+      containerName: 'archon-res-1',
+    });
     expect(docker.calls.find(c => c[0] === 'start')).toEqual(['start', 'archon-res-1']);
   });
 
@@ -490,7 +514,11 @@ describe('ContainerBackend.resumeEnv', () => {
     const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
     const prepared = await backend.resumeEnv('env-c');
     expect(ran).toBe(true);
-    expect(prepared.execContext).toEqual({ kind: 'container', containerId: 'cid-recreated' });
+    expect(prepared.execContext).toEqual({
+      kind: 'container',
+      containerId: 'cid-recreated',
+      containerName: 'archon-res-1',
+    });
   });
 
   test('fails LOUD when both the container and the volume are gone (work lost)', async () => {
