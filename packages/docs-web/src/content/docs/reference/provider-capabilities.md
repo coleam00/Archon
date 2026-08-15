@@ -30,27 +30,28 @@ per-node YAML field for that provider; a ❌ means the field is accepted but ign
 - `opencode` — OpenCode (community) *(community provider)*
 - `pi` — Pi (community) *(community provider)*
 - `copilot` — Copilot (GitHub) *(community provider)*
+- `aiderdesk` — AiderDesk (community) *(community provider)*
 
 ## Capabilities
 
-| Capability | `claude` | `codex` | `opencode` | `pi` | `copilot` |
-| --- | --- | --- | --- | --- | --- |
-| Session resume | ✅ | ✅ | ✅ | ✅ | ✅ |
-| MCP servers (`mcp:`) | ✅ | ✅ | ❌ | ❌ | ✅ |
-| Hooks (`hooks:`) | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Skills (`skills:`) | ✅ | ❌ | ❌ | ✅ | ✅ |
-| Inline sub-agents (`agents:`) | ✅ | ❌ | ✅¹ | ❌ | ✅ |
-| Tool restrictions (`allowed_tools`/`denied_tools`) | ✅ | ❌ | ✅ | ✅ | ✅ |
-| Structured output (`output_format`) | **enforced** | **enforced** | **enforced** | best-effort | best-effort |
-| Env injection (`env:`) | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Cost control (`maxBudgetUsd`) | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Effort control (`effort`) | ✅ | ❌ | ❌ | ✅ | ✅ |
-| Thinking control (`thinking`) | ✅ | ❌ | ❌ | ✅ | ✅ |
-| Fallback model (`fallbackModel`) | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Sandbox (`sandbox`) | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Setting sources (`settingSources`) | ✅ | ❌ | ❌ | ❌ | ❌ |
-| In-process native tools | ✅ | ❌ | ❌ | ✅ | ❌ |
-| Container exec (folder-project container backend) | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Capability | `claude` | `codex` | `opencode` | `pi` | `copilot` | `aiderdesk` |
+| --- | --- | --- | --- | --- | --- | --- |
+| Session resume | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| MCP servers (`mcp:`) | ✅ | ✅ | ❌ | ❌ | ✅ | ❌ |
+| Hooks (`hooks:`) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Skills (`skills:`) | ✅ | ❌ | ❌ | ✅ | ✅ | ❌ |
+| Inline sub-agents (`agents:`) | ✅ | ❌ | ✅¹ | ❌ | ✅ | ❌ |
+| Tool restrictions (`allowed_tools`/`denied_tools`) | ✅ | ❌ | ✅ | ✅ | ✅ | ❌ |
+| Structured output (`output_format`) | **enforced** | **enforced** | **enforced** | best-effort | best-effort | best-effort |
+| Env injection (`env:`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Cost control (`maxBudgetUsd`) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Effort control (`effort`) | ✅ | ❌ | ❌ | ✅ | ✅ | ❌ |
+| Thinking control (`thinking`) | ✅ | ❌ | ❌ | ✅ | ✅ | ❌ |
+| Fallback model (`fallbackModel`) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Sandbox (`sandbox`) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Setting sources (`settingSources`) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| In-process native tools | ✅ | ❌ | ❌ | ✅ | ❌ | ❌ |
+| Container exec (folder-project container backend) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
 
 ## Caveats
 
