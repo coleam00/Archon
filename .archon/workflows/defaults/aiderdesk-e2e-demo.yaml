@@ -1,17 +1,54 @@
 name: aiderdesk-e2e-demo
-description: End-to-end demo — AiderDesk + Ollama local inference through Archon
+description: End-to-end demo — AiderDesk + local inference. Surfaces the cwd binding with a deterministic bash pre-step so the LLM sees confirmed context, not implicit assumptions.
 provider: aiderdesk
 model: ollama/qwen3-coder:30b-8k
 
+inputs:
+  projectLabel:
+    required: false
+    default: "(unspecified repo)"
+    description: Human label of the repo under review
+
+returns:
+  nodeId: summarize
+
 nodes:
+  - id: bootstrap
+    # Deterministic, no AI. Verifies the cwd binding that the engine resolved
+    # from the conversation's bound codebase / worktree, then lists files.
+    # Output becomes $bootstrap.output for downstream nodes — this is how the
+    # agent's "where am I working" question is answered in-engine.
+    bash: |
+      echo "=== CWD binding confirmation ==="
+      echo "pwd  = $(pwd)"
+      echo "user = ${USER:-unknown}"
+      echo "files (top-level, max 50):"
+      ls -1 | head -50
+      echo "=== TypeScript files under src/ ==="
+      (find src -maxdepth 4 -type f -name '*.ts' 2>/dev/null || echo "(no src/ directory)") | head -50
+
   - id: explore
+    depends_on: [bootstrap]
     prompt: |
-      List all TypeScript files in the src/ directory of this project.
-      For each file, show the first 5 lines.
-      Be concise — just the file list and the first few lines of each.
+      You are exploring $inputs.projectLabel at the working directory that the engine bound to this run.
+      The bash pre-step already confirmed the cwd and listed files; here is its output:
+
+      ---
+      $bootstrap.output
+      ---
+
+      Task: list every TypeScript file under src/ (one path per line).
+      For each file, show the first 5 lines. Be concise.
 
   - id: summarize
     depends_on: [explore]
     prompt: |
-      Based on the files found, write a 3-sentence summary of what this codebase does.
-      Then suggest one improvement you would make.
+      You previously enumerated the TypeScript files of $inputs.projectLabel.
+      Here is the explorer's output:
+
+      ---
+      $explore.output
+      ---
+
+      Write a 3-sentence summary of what this codebase does,
+      then suggest one *small* and *concrete* improvement you would make.

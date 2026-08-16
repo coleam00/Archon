@@ -1,10 +1,35 @@
 name: aiderdesk-smoke-test
-description: Smoke test for the AiderDesk provider with Ollama
+description: Smoke test for the AiderDesk provider. Confirms cwd binding with a deterministic bash pre-step, then tests round-trip streaming.
 provider: aiderdesk
-model: ollama/qwen3-coder:30b
+model: ollama/qwen3-coder:30b-8k
+
+inputs:
+  projectLabel:
+    required: false
+    default: "(unspecified repo)"
+    description: Human label of the repo under review
+
+returns:
+  nodeId: confirm
 
 nodes:
-  - id: hello
+  - id: bootstrap
+    # Deterministic pre-flight: prove the cwd binding the engine handed us.
+    bash: |
+      echo "=== CWD binding confirmation ==="
+      echo "pwd  = $(pwd)"
+      echo "=== Top-level files ==="
+      ls -1 | head -20
+
+  - id: confirm
+    depends_on: [bootstrap]
     prompt: |
-      Say "Hello from AiderDesk!" and list the files in the current directory.
-      Keep your response brief.
+      You are running against $inputs.projectLabel.
+      The bash pre-step confirmed the cwd and listed the top-level entries:
+
+      ---
+      $bootstrap.output
+      ---
+
+      Say hello and confirm the engine → provider → AiderDesk → Ollama round-trip is working.
+      Keep your response under 50 words.
