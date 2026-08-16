@@ -1,7 +1,7 @@
 name: aiderdesk-smoke-test
-description: Smoke test for the AiderDesk provider. Confirms cwd binding with a deterministic bash pre-step, then tests round-trip streaming.
+description: Smoke test for the AiderDesk provider. Confirms cwd binding with a deterministic bash pre-step, then tests round-trip streaming with the fast hosted Poe minimax-m3 model (Poe-hosted inference routes through AiderDesk → poe.com, not Ollama).
 provider: aiderdesk
-model: ollama/qwen3-coder:30b-8k
+model: poe/minimax-m3
 
 inputs:
   projectLabel:
@@ -30,5 +30,6 @@ nodes:
       $bootstrap.output
       ---
 
-      Say hello and confirm the engine → provider → AiderDesk → Ollama round-trip is working.
+      Say hello and confirm the engine → provider → AiderDesk → poe.com round-trip is working
+      (model poe/minimax-m3, routed via AiderDesk's poe provider — not Ollama).
       Keep your response under 50 words.

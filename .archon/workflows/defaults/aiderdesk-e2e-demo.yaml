@@ -1,7 +1,7 @@
 name: aiderdesk-e2e-demo
-description: End-to-end demo — AiderDesk + local inference. Surfaces the cwd binding with a deterministic bash pre-step so the LLM sees confirmed context, not implicit assumptions.
+description: End-to-end demo — AiderDesk routing to the hosted Poe minimax-m3 model. Surfaces the cwd binding with a deterministic bash pre-step so the LLM sees confirmed context, not implicit assumptions. Poe-hosted inference routes through AiderDesk → poe.com (not Ollama), which keeps the demo responsive.
 provider: aiderdesk
-model: ollama/qwen3-coder:30b-8k
+model: poe/minimax-m3
 
 inputs:
   projectLabel:
