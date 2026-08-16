@@ -9,8 +9,7 @@ inputs:
     default: "(unspecified repo)"
     description: Human label of the repo under review
 
-returns:
-  nodeId: summarize
+returns: summarize
 
 nodes:
   - id: bootstrap
