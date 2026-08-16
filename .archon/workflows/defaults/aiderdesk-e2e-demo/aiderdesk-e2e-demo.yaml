@@ -1,0 +1,17 @@
+name: aiderdesk-e2e-demo
+description: End-to-end demo — AiderDesk + Ollama local inference through Archon
+provider: aiderdesk
+model: ollama/qwen3-coder:30b-8k
+
+nodes:
+  - id: explore
+    prompt: |
+      List all TypeScript files in the src/ directory of this project.
+      For each file, show the first 5 lines.
+      Be concise — just the file list and the first few lines of each.
+
+  - id: summarize
+    depends_on: [explore]
+    prompt: |
+      Based on the files found, write a 3-sentence summary of what this codebase does.
+      Then suggest one improvement you would make.
