@@ -118,3 +118,83 @@ export interface AiderDeskModelInfo {
   /** Combined ref in 'provider/model' format (e.g. 'ollama/qwen3-coder:30b'). */
   ref: string;
 }
+
+// ─── SSE event shapes — POST /api/run-prompt with Accept: text/event-stream ────────
+//
+// Per the docs at aiderdesk.hotovo.com/docs/features/rest-api, run-prompt supports
+// Server-Sent Events when negotiated via Accept: text/event-stream. The stream
+// starts once and ends with a `stream-end` event.
+//
+// Verified against live AiderDesk on /home/lfontanez/dev/archon-v2 (host :24337):
+// the actual stream emits events in approximately this order:
+//   user-message → log (optional) → task-updated (0..n) → response-chunk(*)
+//   → response-completed → stream-end.
+// Tool events can interleave between response-chunks when AiderDesk's agent
+// uses bash/read/edit. ask-question is rare but emitted when the agent requires
+// explicit human input.
+
+/**
+ * A single SSE event parsed from /api/run-prompt.
+ */
+export type AiderDeskSseEvent =
+  | { kind: 'user-message'; taskId: string; baseDir: string; content: string }
+  | {
+      kind: 'log';
+      taskId: string;
+      baseDir: string;
+      level: string;
+      message?: string;
+      finished: boolean;
+    }
+  | { kind: 'task-updated'; task: AiderDeskTask }
+  | {
+      kind: 'response-chunk';
+      taskId: string;
+      messageId: string;
+      chunk: string;
+      reasoning?: string;
+    }
+  | {
+      kind: 'response-completed';
+      taskId: string;
+      messageId: string;
+      content: string;
+      reasoning?: string;
+    }
+  | {
+      kind: 'tool';
+      taskId: string;
+      messageId?: string;
+      toolName: string;
+      finished: boolean;
+      result?: string;
+    }
+  | { kind: 'ask-question'; taskId: string; question: string; options?: string[] }
+  | { kind: 'stream-end' }
+  | { kind: 'unknown'; eventName: string; payload: unknown };
+
+/**
+ * Payload accepted by POST /api/project/tasks. The endpoint accepts a partial
+ * TaskData object as `updates`, plus the projectDir + id of the task to mutate.
+ * Documented as the supported way to bind `mainModel`, `currentMode`,
+ * `workingMode`, `agentProfileId`, and other task-level fields.
+ *
+ * Critically: this is required to bind a model to a fresh task before
+ * run-prompt, because `/api/project/tasks/new` returns a task that resolves
+ * its agent from project defaults (which may not match the requested model
+ * — claude 401 fallback observed on the live host).
+ */
+export interface AiderDeskTaskUpdate {
+  /** Model ref to bind to the task (e.g. 'poe/minimax-m3'). */
+  mainModel?: string;
+  /** Aider mode (e.g. 'agent', 'code', 'ask'). */
+  currentMode?: string;
+  /** local | worktree. */
+  workingMode?: 'local' | 'worktree';
+  /** AiderDesk agent profile UUID. Optional — AiderDesk auto-binds by mainModel. */
+  agentProfileId?: string | null;
+  /** When true, activate the task so other APIs resolve it as the active one. */
+  activate?: boolean;
+  /** Display name shown in AiderDesk UI. */
+  name?: string;
+}

@@ -17,8 +17,10 @@ import type {
   AiderDeskModelsResponse,
   AiderDeskProvider,
   AiderDeskRunMode,
+  AiderDeskSseEvent,
   AiderDeskTask,
   AiderDeskTaskFull,
+  AiderDeskTaskUpdate,
 } from './types';
 import { AiderDeskApiError } from './errors';
 
@@ -111,7 +113,6 @@ export class AiderDeskClient {
       controller.abort();
     }, timeout);
 
-    // If caller provides an abort signal, forward its abort to our controller
     if (options?.abortSignal) {
       if (options.abortSignal.aborted) {
         controller.abort();
@@ -182,6 +183,28 @@ export class AiderDeskClient {
     });
   }
 
+  /**
+   * Update a task's properties. Per AiderDesk REST docs this is the supported
+   * way to bind `mainModel`, `currentMode`, `workingMode`, `agentProfileId`,
+   * and other task-level fields. Returns the updated `TaskData`.
+   *
+   * Critically: this is required to bind a model to a fresh task before
+   * run-prompt, because `/api/project/tasks/new` returns a task that resolves
+   * its agent from project defaults (which may not match the requested
+   * model — claude 401 fallback in our AiderDesk host).
+   */
+  async updateTask(
+    projectDir: string,
+    taskId: string,
+    updates: AiderDeskTaskUpdate
+  ): Promise<AiderDeskTask> {
+    return this.request<AiderDeskTask>('POST', '/project/tasks', {
+      projectDir,
+      id: taskId,
+      updates,
+    });
+  }
+
   /** Load a task with full conversation data (messages, files, etc.). */
   async loadTask(projectDir: string, taskId: string): Promise<AiderDeskTaskFull> {
     return this.request<AiderDeskTaskFull>('POST', '/project/tasks/load', {
@@ -198,28 +221,144 @@ export class AiderDeskClient {
     });
   }
 
-  // ─── Run Prompt ──────────────────────────────────────────────────────────
+  // ─── Run Prompt (SSE streaming) ────────────────────────────────────────
 
   /**
-   * Run a prompt against an AiderDesk task.
+   * Run a prompt against an AiderDesk task — streaming variant.
    *
-   * This is a BLOCKING POST — the call does not return until the AiderDesk
-   * agent finishes processing (or the request times out). There is no SSE
-   * or WebSocket streaming; completion is determined by the HTTP response.
+   * Negotiates `Accept: text/event-stream` against AiderDesk's run-prompt
+   * endpoint. Returns an async generator that yields parsed SSE events. The
+   * stream terminates when AiderDesk writes the final `stream-end` event or
+   * when the underlying fetch response body is fully consumed.
+   *
+   * Per the REST docs the stream events are: `user-message`, `log`,
+   * `task-updated`, `response-chunk` (text deltas of the assistant message),
+   * `response-completed` (final assistant message), `tool`, `ask-question`,
+   * and `stream-end` (terminal).
+   *
+   * Verified against live AiderDesk on /home/lfontanez/dev/archon-v2 (host
+   * :24337) with this exact ordering on a healthy task bound to a real model:
+   *   user-message → log → task-updated → response-chunk(*)
+   *                 → response-completed → stream-end.
    */
-  async runPrompt(
-    projectDir: string,
-    taskId: string,
-    prompt: string,
-    mode: AiderDeskRunMode = 'code',
-    options?: { abortSignal?: AbortSignal; timeoutMs?: number }
-  ): Promise<AiderDeskTaskFull> {
-    return this.request<AiderDeskTaskFull>(
-      'POST',
-      '/run-prompt',
-      { taskId, prompt, mode, projectDir },
-      options
-    );
+  async *runPromptStream(options: {
+    projectDir: string;
+    taskId: string;
+    prompt: string;
+    mode?: AiderDeskRunMode;
+    abortSignal?: AbortSignal;
+    timeoutMs?: number;
+  }): AsyncGenerator<AiderDeskSseEvent> {
+    const url = this.url('/run-prompt');
+    const timeout = options.timeoutMs ?? this.timeoutMs;
+    const mode: AiderDeskRunMode = options.mode ?? 'agent';
+
+    // Combine caller's abort signal with our timeout signal
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      controller.abort();
+    }, timeout);
+
+    if (options.abortSignal) {
+      if (options.abortSignal.aborted) {
+        controller.abort();
+      } else {
+        options.abortSignal.addEventListener(
+          'abort',
+          () => {
+            controller.abort();
+          },
+          { once: true }
+        );
+      }
+    }
+
+    let response: Response;
+    try {
+      response = await this.fetchFn(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'text/event-stream',
+        },
+        body: JSON.stringify({
+          taskId: options.taskId,
+          prompt: options.prompt,
+          mode,
+          projectDir: options.projectDir,
+        }),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeoutId);
+    }
+
+    if (!response.ok) {
+      const bodyText = await response.text().catch(() => '');
+      throw new AiderDeskApiError(
+        response.status,
+        `AiderDesk stream open failed: ${response.status} ${response.statusText}`,
+        bodyText
+      );
+    }
+
+    if (!response.body) {
+      // No body AND no error — extremely unusual. Treat as a stream-end so
+      // the provider can finalize cleanly rather than hang.
+      yield { kind: 'stream-end' };
+      return;
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+
+        // SSE frames are delimited by a blank line. On the wire these arrive
+        // as \n\n, but we also accept \r\n\r\n (CRLF) in case the upstream
+        // hop rewrites endings.
+        let nlStart = indexOfFrameSeparator(buffer);
+        while (nlStart !== -1) {
+          const nlEnd = nlStart;
+          const matchLen = matchLengthAt(buffer, nlStart);
+          const frame = buffer.slice(0, nlEnd);
+          buffer = buffer.slice(nlEnd + matchLen);
+
+          const evt = parseSseFrame(frame);
+          if (evt) yield evt;
+
+          nlStart = indexOfFrameSeparator(buffer);
+        }
+      }
+
+      // Flush any trailing frame that the reader delivered without a final
+      // blank-line separator (AiderDesk sometimes omits the trailing blank
+      // line on the very last `stream-end` event).
+      const trailing = buffer.trim();
+      if (trailing.length > 0) {
+        const evt = parseSseFrame(trailing);
+        if (evt) yield evt;
+      }
+    } finally {
+      try {
+        reader.releaseLock();
+      } catch {
+        /* noop — already released */
+      }
+    }
+
+    if (options.abortSignal?.aborted) {
+      // The caller aborted mid-stream — flag the abort here so the provider
+      // can finalize the result chunk with the correct outcome instead of
+      // just letting the stream end silently.
+      yield { kind: 'unknown', eventName: 'aborted', payload: null };
+    }
   }
 
   // ─── Context Files ───────────────────────────────────────────────────────
@@ -299,5 +438,145 @@ export class AiderDeskClient {
   async getMessages(projectDir: string, taskId: string): Promise<AiderDeskMessage[]> {
     const task = await this.loadTask(projectDir, taskId);
     return task.messages ?? [];
+  }
+}
+
+// ─── SSE separator helpers ────────────────────────────────────────────────
+//
+// We accept both LF (\n\n) and CRLF (\r\n\r\n) frame separators because
+// AiderDesk has been observed to use either depending on backend version.
+// Splitting manually (rather than `frame.split('\n\n')`) keeps the matched
+// width so we can advance the buffer by the exact bytes we consumed.
+
+function indexOfFrameSeparator(buf: string): number {
+  const lf = buf.indexOf('\n\n');
+  const crlf = buf.indexOf('\r\n\r\n');
+  if (lf === -1) return crlf;
+  if (crlf === -1) return lf;
+  return Math.min(lf, crlf);
+}
+
+function matchLengthAt(buf: string, start: number): number {
+  // We already know the match exists (indexOfFrameSeparator returned >= 0),
+  // so we peek at the next 4 chars to choose the length.
+  if (buf.startsWith('\r\n\r\n', start)) return 4;
+  return 2;
+}
+
+// ─── Free function: parseSseFrame ─────────────────────────────────────────
+
+/**
+ * Parses a single SSE frame into a typed {@link AiderDeskSseEvent}.
+ *
+ * A frame is a series of `event:` and `data:` lines, terminated by a blank
+ * line. We tolerate CRLF line endings, missing `event:` lines (fallback
+ * default name `message`), and non-JSON payloads (returned under the
+ * `unknown` kind so the provider can still see them in diagnostics).
+ *
+ * @param frame Raw frame text WITHOUT the trailing blank-line separator.
+ * @returns A typed event or `null` for empty / keep-alive frames.
+ */
+export function parseSseFrame(frame: string): AiderDeskSseEvent | null {
+  let eventName = 'message';
+  const dataLines: string[] = [];
+
+  for (const raw of frame.split(/\r?\n/)) {
+    if (raw.length === 0) continue;
+    if (raw.startsWith(':')) continue; // comment / keep-alive
+    const colon = raw.indexOf(':');
+    if (colon === -1) continue; // malformed line — drop silently
+    const field = raw.slice(0, colon);
+    // SSE strips a single leading space after the colon.
+    const valueStart = raw[colon + 1] === ' ' ? colon + 2 : colon + 1;
+    const value = raw.slice(valueStart);
+
+    if (field === 'event') {
+      eventName = value;
+    } else if (field === 'data') {
+      dataLines.push(value);
+    }
+    // `id:` and `retry:` are legal SSE but we don't track them.
+  }
+
+  const dataStr = dataLines.join('\n');
+  if (!dataStr) return null;
+
+  // Conventional [DONE] sentinel — AiderDesk uses `stream-end` events instead,
+  // but some proxies still forward [DONE]; treat them as stream-end.
+  if (dataStr.trim() === '[DONE]' || eventName === 'stream-end') {
+    return { kind: 'stream-end' };
+  }
+
+  let payload: unknown;
+  try {
+    payload = JSON.parse(dataStr);
+  } catch {
+    // Non-JSON payload — preserve the raw bytes for diagnostics.
+    return { kind: 'unknown', eventName, payload: dataStr };
+  }
+
+  if (!payload || typeof payload !== 'object') {
+    return { kind: 'unknown', eventName, payload };
+  }
+
+  const p = payload as Record<string, unknown>;
+  const taskId = typeof p.taskId === 'string' ? p.taskId : '';
+  const baseDir = typeof p.baseDir === 'string' ? p.baseDir : '';
+
+  switch (eventName) {
+    case 'user-message':
+      return {
+        kind: 'user-message',
+        taskId,
+        baseDir,
+        content: typeof p.content === 'string' ? p.content : '',
+      };
+    case 'log': {
+      const level = typeof p.level === 'string' ? p.level : 'info';
+      const message = typeof p.message === 'string' ? p.message : undefined;
+      const finished = typeof p.finished === 'boolean' ? p.finished : Boolean(p.finished);
+      return { kind: 'log', taskId, baseDir, level, message, finished };
+    }
+    case 'response-chunk':
+      return {
+        kind: 'response-chunk',
+        taskId,
+        messageId: typeof p.messageId === 'string' ? p.messageId : '',
+        chunk: typeof p.chunk === 'string' ? p.chunk : '',
+        reasoning: typeof p.reasoning === 'string' ? p.reasoning : undefined,
+      };
+    case 'response-completed':
+      return {
+        kind: 'response-completed',
+        taskId,
+        messageId: typeof p.messageId === 'string' ? p.messageId : '',
+        content: typeof p.content === 'string' ? p.content : '',
+        reasoning: typeof p.reasoning === 'string' ? p.reasoning : undefined,
+      };
+    case 'ask-question':
+      return {
+        kind: 'ask-question',
+        taskId,
+        question: typeof p.question === 'string' ? p.question : '',
+        options: Array.isArray(p.options)
+          ? p.options.filter((o): o is string => typeof o === 'string')
+          : undefined,
+      };
+    case 'task-updated':
+      // Per the verified live probe, the data payload of a `task-updated`
+      // event is the entire task object (not a wrapper). We trust the shape
+      // and cast — the provider only reads a few fields.
+      return { kind: 'task-updated', task: p as unknown as AiderDeskTask };
+    case 'tool':
+      return {
+        kind: 'tool',
+        taskId,
+        messageId: typeof p.messageId === 'string' ? p.messageId : undefined,
+        toolName: typeof p.toolName === 'string' ? p.toolName : 'unknown',
+        finished: typeof p.finished === 'boolean' ? p.finished : Boolean(p.finished),
+        result: typeof p.result === 'string' ? p.result : undefined,
+      };
+    default:
+      return { kind: 'unknown', eventName, payload };
   }
 }

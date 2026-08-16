@@ -4,21 +4,26 @@
  * Architecture:
  * - AiderDesk runs on the host at localhost:24337 (or via Docker bridge gateway
  *   at 172.18.0.1:24337 when Archon runs in a container).
- * - The provider creates/resumes AiderDesk tasks, runs prompts (blocking POST),
- *   and streams MessageChunk events back to the Archon workflow engine.
+ * - The provider creates/resumes AiderDesk tasks, binds a model with
+ *   `POST /api/project/tasks {updates:{mainModel, currentMode, workingMode}}`,
+ *   then opens a streaming `POST /api/run-prompt` with `Accept: text/event-stream`
+ *   and forwards parsed SSE frames as MessageChunks.
  * - No SDK subprocess — pure HTTP via the injectable AiderDeskClient.
  * - Session resume: AiderDesk tasks persist their conversation; resume by
  *   loading the task ID.
  *
- * sendQuery() flow:
- *   1. Parse config (defensive, never throws)
- *   2. Resolve API URL (env → Docker detection → localhost)
- *   3. Create or resume an AiderDesk task
- *   4. Call run-prompt (blocking POST with timeout + abort support)
- *   5. Extract assistant messages from the task response
- *   6. Yield assistant content as MessageChunk {type:'assistant'}
- *   7. Yield final result chunk with sessionId, tokens, cost
- *   8. Wrap with withResumedOutcome for resume reporting
+ * sendQuery() flow (bind-then-stream, issue: empty handshake on unbound task):
+ *   1. Parse config (defensive, never throws).
+ *   2. Resolve API URL (env → Docker detection → localhost).
+ *   3. Create or resume an AiderDesk task.
+ *   4. BIND mainModel/currentMode/workingMode via /api/project/tasks (this is
+ *      the load-bearing step — without it, AiderDesk's project-default agent
+ *      hijacks routing and run-prompt returns the empty 14-s handshake).
+ *   5. Apply output_format prompt augmentation (best-effort JSON Schema path).
+ *   6. Stream SSE frames from /api/run-prompt and dispatch each `kind` onto
+ *      the IAProvider chunk shape.
+ *   7. Yield final result chunk with sessionId, stopReason, resolved model.
+ *   8. Stamp `resumed` via withResumedOutcome for resume reporting.
  */
 import { createLogger } from '@archon/paths';
 import type {
@@ -26,7 +31,6 @@ import type {
   MessageChunk,
   ProviderCapabilities,
   SendQueryOptions,
-  TokenUsage,
 } from '../../types';
 import { withResumedOutcome, resumedOutcome } from '../../shared/resumed';
 import {
@@ -36,8 +40,9 @@ import {
 import { AIDERDESK_CAPABILITIES } from './capabilities';
 import { parseAiderdeskConfig } from './config';
 import { AiderDeskClient, resolveDefaultApiUrl, type FetchFn } from './client';
-import { classifyAiderdeskError, enrichAiderdeskError, errorMessage } from './errors';
-import { TERMINAL_TASK_STATES, type AiderDeskMessage, type AiderDeskTaskFull } from './types';
+import { classifyAiderdeskError, errorMessage } from './errors';
+import { AiderDeskApiError } from './errors';
+import type { AiderDeskTaskState } from './types';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -45,9 +50,7 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
-const DEFAULT_POLL_INTERVAL_MS = 500;
-const DEFAULT_REQUEST_TIMEOUT_MS = 300_000; // 5 minutes
-const MAX_POLL_DURATION_MS = 600_000; // 10 minutes total polling cap
+const DEFAULT_REQUEST_TIMEOUT_MS = 300_000; // 5 minutes — caps a single stream
 
 /**
  * Parse a model ref in 'provider/model' format.
@@ -62,62 +65,6 @@ function parseModelRef(modelRef: string): { providerId: string; modelId: string 
   if (!providerId || !modelId) return null;
 
   return { providerId, modelId };
-}
-
-/**
- * Extract token usage from the last assistant message's usageReport.
- */
-function extractTokenUsage(messages: AiderDeskMessage[]): TokenUsage | undefined {
-  // Find the last assistant message with a usageReport
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    if (msg.role === 'assistant' && msg.usageReport) {
-      const report = msg.usageReport;
-      return {
-        input: report.inputTokens ?? 0,
-        output: report.outputTokens ?? 0,
-        total: report.totalTokens,
-        cost: report.cost,
-      };
-    }
-  }
-  return undefined;
-}
-
-/**
- * Extract the total cost from a task (aiderTotalCost + agentTotalCost).
- */
-function extractTaskCost(task: AiderDeskTaskFull): number | undefined {
-  const total = (task.aiderTotalCost ?? 0) + (task.agentTotalCost ?? 0);
-  return total > 0 ? total : undefined;
-}
-
-/**
- * Check if a task state is terminal (polling should stop).
- */
-function isTerminalState(state: string): boolean {
-  return TERMINAL_TASK_STATES.has(state as never);
-}
-
-/**
- * Sleep helper that respects an abort signal.
- */
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(new Error('Aborted'));
-      return;
-    }
-    const timeoutId = setTimeout(resolve, ms);
-    signal?.addEventListener(
-      'abort',
-      () => {
-        clearTimeout(timeoutId);
-        reject(new Error('Aborted'));
-      },
-      { once: true }
-    );
-  });
 }
 
 /**
@@ -155,7 +102,6 @@ export class AiderDeskProvider implements IAgentProvider {
       assistantConfig.apiUrl ??
       resolveDefaultApiUrl();
 
-    const pollIntervalMs = assistantConfig.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
     const requestTimeoutMs = assistantConfig.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
 
     // ── 3. Create client ─────────────────────────────────────────────────
@@ -185,7 +131,7 @@ export class AiderDeskProvider implements IAgentProvider {
     if (!parsedModel) {
       yield {
         type: 'system',
-        content: `⚠️ Invalid model format '${modelRef}'. Expected 'provider/model' (e.g. 'ollama/qwen3-coder:30b').`,
+        content: `⚠️ Invalid model format '${modelRef}'. Expected 'provider/model' (e.g. 'poe/minimax-m3').`,
       };
       yield {
         type: 'result',
@@ -198,178 +144,232 @@ export class AiderDeskProvider implements IAgentProvider {
     // ── 5. Resolve task (create or resume) ────────────────────────────────
     let taskId: string;
     let resumeSucceeded = false;
+    let lastSeenTaskState: AiderDeskTaskState | undefined;
 
-    if (resumeSessionId) {
-      try {
-        const task = await client.loadTask(cwd, resumeSessionId);
-        taskId = task.id;
-        resumeSucceeded = true;
-        log.info({ taskId, state: task.state }, 'aiderdesk.task_resumed');
-      } catch (error) {
-        log.warn({ error: (error as Error).message, resumeSessionId }, 'aiderdesk.resume_failed');
-        yield {
-          type: 'system',
-          content: '⚠️ Could not resume AiderDesk session. Starting fresh conversation.',
-        };
+    try {
+      if (resumeSessionId) {
+        try {
+          const task = await client.loadTask(cwd, resumeSessionId);
+          taskId = task.id;
+          lastSeenTaskState = task.state;
+          resumeSucceeded = true;
+          log.info({ taskId, state: task.state }, 'aiderdesk.task_resumed');
+        } catch (error) {
+          log.warn({ error: errorMessage(error), resumeSessionId }, 'aiderdesk.resume_failed');
+          yield {
+            type: 'system',
+            content: '⚠️ Could not resume AiderDesk session; starting fresh conversation.',
+          };
+          const newTask = await client.createTask(cwd);
+          taskId = newTask.id;
+          lastSeenTaskState = newTask.state;
+        }
+      } else {
         const newTask = await client.createTask(cwd);
         taskId = newTask.id;
+        lastSeenTaskState = newTask.state;
+        log.info({ taskId }, 'aiderdesk.task_created');
       }
-    } else {
-      const newTask = await client.createTask(cwd);
-      taskId = newTask.id;
-      log.info({ taskId }, 'aiderdesk.task_created');
+    } catch (error) {
+      const aborted = abortSignal?.aborted ?? false;
+      const errorClass = classifyAiderdeskError(error, aborted);
+      log.error({ error: errorMessage(error), errorClass }, 'aiderdesk.task_acquisition_failed');
+      yield {
+        type: 'system',
+        content: `⚠️ AiderDesk task acquisition failed (${errorClass}): ${errorMessage(error)}`,
+      };
+      yield {
+        type: 'result',
+        isError: true,
+        errors: [errorMessage(error)],
+        resumed: resumedOutcome(resumeSessionId, false),
+      };
+      return;
     }
 
-    // ── 6. Optional: structured output augmentation ───────────────────────
-    let effectivePrompt = prompt;
-    let structuredOutput: unknown;
+    // ── 6. BIND mainModel + mode BEFORE run-prompt ───────────────────────
+    // The load-bearing step. Without this, AiderDesk resolves the request to
+    // its project-default agent (on the live host this is Claude with no API
+    // key) and run-prompt returns the near-empty 14-s handshake. We tolerate
+    // bind failure if the task was RESUMED — the resumed task may already
+    // have the model bound by a prior run. Fresh tasks always bind.
+    try {
+      await client.updateTask(cwd, taskId, {
+        mainModel: modelRef,
+        currentMode: assistantConfig.mode ?? 'agent',
+        workingMode: 'local',
+        activate: false,
+      });
+      log.info({ taskId, model: modelRef }, 'aiderdesk.task_bound');
+    } catch (error) {
+      if (!resumeSucceeded) {
+        // Fresh task failed to bind — the run would be incoherent otherwise.
+        const aborted = abortSignal?.aborted ?? false;
+        const errorClass = classifyAiderdeskError(error, aborted);
+        log.error({ error: errorMessage(error), errorClass, taskId }, 'aiderdesk.task_bind_failed');
+        yield {
+          type: 'system',
+          content: `⚠️ AiderDesk bind failed (${errorClass}): ${errorMessage(error)}`,
+        };
+        yield {
+          type: 'result',
+          isError: true,
+          errors: [`Task bind failed: ${errorMessage(error)}`],
+          sessionId: taskId,
+          resumed: resumedOutcome(resumeSessionId, false),
+        };
+        return;
+      }
+      log.warn(
+        { error: errorMessage(error), taskId },
+        'aiderdesk.task_bind_failed_continue_with_resume'
+      );
+    }
 
+    // ── 7. Optional: structured output augmentation ───────────────────────
+    let effectivePrompt = prompt;
     if (requestOptions?.outputFormat?.schema) {
       effectivePrompt = augmentPromptForJsonSchema(prompt, requestOptions.outputFormat.schema);
     }
 
-    // ── 7. Run prompt (blocking POST) ────────────────────────────────────
-    const mode = assistantConfig.mode ?? 'code';
+    // ── 8. Stream SSE frames from /api/run-prompt ────────────────────────
+    const mode: 'code' | 'ask' | 'architect' | 'context' | 'agent' =
+      assistantConfig.mode ?? 'agent';
 
-    let taskResult: AiderDeskTaskFull;
+    let finalMessage: string | null = null;
+    let askedQuestion: string | null = null;
+    let askedSystemEmitted = false;
+    let errorSystemEmitted = false;
+    let streamError: unknown;
+
     try {
-      log.info({ taskId, mode, model: modelRef }, 'aiderdesk.run_prompt_started');
-
-      // runPrompt is a blocking call — it returns when the AiderDesk agent
-      // finishes processing the prompt.
-      taskResult = await client.runPrompt(cwd, taskId, effectivePrompt, mode, {
+      for await (const ev of client.runPromptStream({
+        projectDir: cwd,
+        taskId,
+        prompt: effectivePrompt,
+        mode,
         abortSignal,
         timeoutMs: requestTimeoutMs,
-      });
+      })) {
+        // Dispatch each SSE event kind onto the IAProvider chunk shape.
+        switch (ev.kind) {
+          case 'user-message':
+            // Echoed input — ignore. The engine recorded the original `prompt:`
+            // arg already; surfacing the echo would double-display it.
+            break;
 
-      log.info({ taskId, state: taskResult.state }, 'aiderdesk.run_prompt_completed');
+          case 'response-chunk':
+            if (ev.chunk.length > 0) {
+              yield { type: 'assistant', content: ev.chunk };
+            }
+            break;
+
+          case 'response-completed':
+            finalMessage = ev.content;
+            break;
+
+          case 'tool':
+            if (ev.finished) {
+              yield {
+                type: 'tool_result',
+                toolName: ev.toolName,
+                toolOutput: ev.result ?? '',
+                toolCallId: ev.messageId,
+              };
+            } else {
+              yield { type: 'tool', toolName: ev.toolName, toolCallId: ev.messageId };
+            }
+            break;
+
+          case 'ask-question':
+            askedQuestion = ev.question;
+            askedSystemEmitted = true;
+            yield { type: 'system', content: `⚠️ ${ev.question}` };
+            break;
+
+          case 'log':
+            if (ev.level === 'error') {
+              errorSystemEmitted = true;
+              yield {
+                type: 'system',
+                content: `⚠️ ${ev.message ?? 'aiderdesk log level=error'}`,
+              };
+            }
+            break;
+
+          case 'task-updated':
+            lastSeenTaskState = ev.task.state;
+            if (ev.task.state === 'INTERRUPTED') {
+              throw new AiderDeskApiError(500, `AiderDesk task interrupted (${taskId})`, undefined);
+            }
+            break;
+
+          case 'stream-end':
+            break;
+
+          case 'unknown':
+            // Unrecognized event — diagnostic surface area only. Currently
+            // left as a silent no-op so unrecognized event names do not
+            // pollute the user-visible stream.
+            break;
+        }
+      }
     } catch (error) {
+      streamError = error;
+    }
+
+    // ── 9. Surface stream failure if any ─────────────────────────────────
+    if (streamError) {
+      const isInterrupt = errorMessage(streamError).toLowerCase().includes('interrupted');
       const aborted = abortSignal?.aborted ?? false;
-      const errorClass = classifyAiderdeskError(error, aborted);
-      const enriched = enrichAiderdeskError(error, errorClass);
-
+      const errorClass = classifyAiderdeskError(streamError, aborted);
       log.error(
-        { error: (error as Error).message, errorClass, taskId },
-        'aiderdesk.run_prompt_failed'
+        { error: errorMessage(streamError), errorClass, taskId },
+        'aiderdesk.run_prompt_stream_failed'
       );
-
-      yield {
-        type: 'system',
-        content: `⚠️ AiderDesk query failed (${errorClass}): ${errorMessage(error)}`,
-      };
-
+      if (!errorSystemEmitted && !isInterrupt) {
+        yield {
+          type: 'system',
+          content: `⚠️ AiderDesk stream failed (${errorClass}): ${errorMessage(streamError)}`,
+        };
+      }
       yield {
         type: 'result',
         isError: true,
-        errors: [enriched.message],
+        errors: [errorMessage(streamError)],
         sessionId: taskId,
+        stopReason: isInterrupt ? 'interrupted' : undefined,
         resumed: resumedOutcome(resumeSessionId, resumeSucceeded),
       };
       return;
     }
 
-    // ── 8. If task is not yet terminal, poll for completion ──────────────
-    // runPrompt returns when the HTTP call completes, but the task may still
-    // be in a non-terminal state if AiderDesk's internal processing is async.
-    const pollStart = Date.now();
-
-    while (!isTerminalState(taskResult.state)) {
-      if (Date.now() - pollStart > MAX_POLL_DURATION_MS) {
-        log.warn({ taskId, state: taskResult.state }, 'aiderdesk.poll_timeout');
-        yield {
-          type: 'system',
-          content: `⚠️ AiderDesk task timed out after ${MAX_POLL_DURATION_MS / 1000}s in state: ${taskResult.state}`,
-        };
-        yield {
-          type: 'result',
-          isError: true,
-          errors: [`Task timed out in state: ${taskResult.state}`],
-          sessionId: taskId,
-          resumed: resumedOutcome(resumeSessionId, resumeSucceeded),
-        };
-        return;
-      }
-
-      if (abortSignal?.aborted) {
-        yield {
-          type: 'result',
-          isError: true,
-          errors: ['AiderDesk query aborted'],
-          sessionId: taskId,
-          resumed: resumedOutcome(resumeSessionId, resumeSucceeded),
-        };
-        return;
-      }
-
-      try {
-        await sleep(pollIntervalMs, abortSignal);
-      } catch {
-        // Aborted during sleep
-        yield {
-          type: 'result',
-          isError: true,
-          errors: ['AiderDesk query aborted'],
-          sessionId: taskId,
-          resumed: resumedOutcome(resumeSessionId, resumeSucceeded),
-        };
-        return;
-      }
-
-      try {
-        taskResult = await client.loadTask(cwd, taskId);
-        log.debug({ taskId, state: taskResult.state }, 'aiderdesk.poll');
-      } catch (error) {
-        log.error({ error: (error as Error).message, taskId }, 'aiderdesk.poll_failed');
-        // Continue polling — transient network errors shouldn't kill the run
-      }
-    }
-
-    // ── 9. Extract and yield assistant messages ──────────────────────────
-    const messages = taskResult.messages ?? [];
-    const assistantMessages = messages.filter(m => m.role === 'assistant');
-
-    // Yield each assistant message as a content chunk
-    for (const msg of assistantMessages) {
-      const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
-      yield {
-        type: 'assistant',
-        content,
-      };
-    }
-
     // ── 10. Parse structured output if declared ──────────────────────────
-    if (requestOptions?.outputFormat?.schema && assistantMessages.length > 0) {
-      const lastContent = assistantMessages[assistantMessages.length - 1].content;
-      structuredOutput = tryParseStructuredOutput(lastContent);
+    let structuredOutput: unknown;
+    if (requestOptions?.outputFormat?.schema && finalMessage) {
+      structuredOutput = tryParseStructuredOutput(finalMessage);
     }
 
-    // ── 11. Optional: clear context ──────────────────────────────────────
-    if (assistantConfig.clearContextAfterRun) {
-      try {
-        await client.clearContext(cwd, taskId);
-      } catch {
-        // Non-fatal — context cleanup failure shouldn't fail the run
-        log.warn({ taskId }, 'aiderdesk.clear_context_failed');
-      }
-    }
-
-    // ── 12. Yield result chunk ───────────────────────────────────────────
-    const tokens = extractTokenUsage(messages);
-    const cost = extractTaskCost(taskResult);
-    const isError = taskResult.state === 'INTERRUPTED';
+    // ── 11. Yield result chunk ───────────────────────────────────────────
+    const isError =
+      lastSeenTaskState === 'INTERRUPTED' || (askedQuestion != null && !askedSystemEmitted);
+    const stopReason = askedQuestion
+      ? 'awaiting_user_input'
+      : lastSeenTaskState === 'INTERRUPTED'
+        ? 'interrupted'
+        : 'end_turn';
 
     const resultChunk: MessageChunk = {
       type: 'result',
       sessionId: taskId,
-      tokens,
-      cost,
-      isError,
       structuredOutput,
+      isError,
+      stopReason,
       resolvedModel: { id: modelRef },
-      stopReason: taskResult.state,
     };
 
-    // Wrap with withResumedOutcome to stamp the resumed flag
+    // Wrap with withResumedOutcome so the resumed flag is correct on the
+    // terminal chunk.
     yield* withResumedOutcome(
       (async function* (): AsyncGenerator<MessageChunk> {
         yield resultChunk;
