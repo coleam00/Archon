@@ -42,7 +42,7 @@ import { parseAiderdeskConfig } from './config';
 import { AiderDeskClient, resolveDefaultApiUrl, type FetchFn } from './client';
 import { classifyAiderdeskError, errorMessage } from './errors';
 import { AiderDeskApiError } from './errors';
-import type { AiderDeskTaskState } from './types';
+import type { AiderDeskProfile, AiderDeskTaskState, AiderDeskTaskUpdate } from './types';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -51,6 +51,14 @@ function getLog(): ReturnType<typeof createLogger> {
 }
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 300_000; // 5 minutes — caps a single stream
+
+/**
+ * TTL for the per-instance /api/agent-profiles cache (Section 5 of the v2
+ * spec). 60s — long enough to absorb burst traffic inside a single workflow,
+ * short enough that newly-registered AiderDesk agents become available with
+ * a tolerable delay.
+ */
+const AGENT_PROFILES_TTL_MS = 60_000;
 
 /**
  * Parse a model ref in 'provider/model' format.
@@ -76,6 +84,15 @@ function parseModelRef(modelRef: string): { providerId: string; modelId: string 
  */
 export class AiderDeskProvider implements IAgentProvider {
   private readonly fetchFn: FetchFn | undefined;
+  /**
+   * Per-instance cache of GET /api/agent-profiles. The cache is implicitly
+   * keyed by `(client + projectDir)` because every `sendQuery` constructs a
+   * fresh `AiderDeskClient`, so the cache is effectively per-provider-instance.
+   *
+   * TTL is 60s — checked lazily on every read against `Date.now()`. No timer,
+   * no eviction callback, no manual reset.
+   */
+  private agentProfilesCache: { agents: AiderDeskProfile[]; fetchedAt: number } | null = null;
 
   constructor(options?: { fetchFn?: FetchFn }) {
     this.fetchFn = options?.fetchFn;
@@ -187,20 +204,94 @@ export class AiderDeskProvider implements IAgentProvider {
       return;
     }
 
-    // ── 6. BIND mainModel + mode BEFORE run-prompt ───────────────────────
+    // ── 6. BIND mainModel + agentProfileId BEFORE run-prompt ─────────────
     // The load-bearing step. Without this, AiderDesk resolves the request to
     // its project-default agent (on the live host this is Claude with no API
     // key) and run-prompt returns the near-empty 14-s handshake. We tolerate
     // bind failure if the task was RESUMED — the resumed task may already
     // have the model bound by a prior run. Fresh tasks always bind.
+    //
+    // Dual-bind: BOTH `mainModel` (the inference endpoint) AND
+    // `agentProfileId` (the runtime: systemPrompt + tool surface + MCP) must
+    // be set. Binding only `mainModel` falls through to the project-default
+    // agent — the empirical bug we are fixing (workflow run e5859a6a).
+    let resolvedAgentId: string | null = null;
+
+    // Rule 1: explicit pin via assistantConfig.
+    if (assistantConfig.agentProfileId) {
+      resolvedAgentId = assistantConfig.agentProfileId;
+    } else if (!resumeSessionId) {
+      // Rules 2-4: catalog lookup. Skip on resume — the task is already bound
+      // by its prior run.
+      let agents = this.agentProfilesCache?.agents;
+      const now = Date.now();
+      if (
+        !agents ||
+        !this.agentProfilesCache ||
+        now - this.agentProfilesCache.fetchedAt > AGENT_PROFILES_TTL_MS
+      ) {
+        try {
+          agents = await client.listAgentProfiles();
+          this.agentProfilesCache = { agents, fetchedAt: now };
+        } catch (error) {
+          // Catalog fetch failure is non-fatal — log and fall through to a
+          // `mainModel`-only bind (the project default agent, but at least
+          // the right inference endpoint).
+          log.warn(
+            { error: errorMessage(error) },
+            'aiderdesk.agent_profiles_fetch_failed_falling_back_to_main_model_only'
+          );
+          agents = [];
+        }
+      }
+
+      // Rule 2: exact match on (provider AND model).
+      const exactMatches = agents.filter(
+        a => a.provider === parsedModel.providerId && a.model === parsedModel.modelId
+      );
+      if (exactMatches.length >= 1) {
+        exactMatches.sort((a, b) => a.name.localeCompare(b.name));
+        resolvedAgentId = exactMatches[0].id;
+      } else {
+        // Rule 3: provider-only match with (ruleFiles-non-empty wins, lex-first).
+        const providerMatches = agents.filter(a => a.provider === parsedModel.providerId);
+        if (providerMatches.length > 0) {
+          providerMatches.sort((a, b) => {
+            const aKey = a.ruleFiles?.length === 0 ? 1 : 0;
+            const bKey = b.ruleFiles?.length === 0 ? 1 : 0;
+            if (aKey !== bKey) return aKey - bKey;
+            return a.name.localeCompare(b.name);
+          });
+          resolvedAgentId = providerMatches[0].id;
+        } else {
+          // Rule 4: no match. Emit warning chunk BEFORE updateTask; the
+          // updateTask call STILL happens with mainModel only (do NOT skip
+          // step 6 — see spec anti-rules).
+          yield {
+            type: 'system',
+            content: `⚠️ No AiderDesk agent profile matches ${parsedModel.providerId}/${parsedModel.modelId}; using AiderDesk project default`,
+          };
+          // resolvedAgentId stays null; updateBody below omits agentProfileId.
+        }
+      }
+    }
+
+    const updateBody: AiderDeskTaskUpdate = {
+      mainModel: modelRef,
+      currentMode: assistantConfig.mode ?? 'agent',
+      workingMode: 'local',
+      activate: false,
+    };
+    if (resolvedAgentId) {
+      updateBody.agentProfileId = resolvedAgentId;
+    }
+
     try {
-      await client.updateTask(cwd, taskId, {
-        mainModel: modelRef,
-        currentMode: assistantConfig.mode ?? 'agent',
-        workingMode: 'local',
-        activate: false,
-      });
-      log.info({ taskId, model: modelRef }, 'aiderdesk.task_bound');
+      await client.updateTask(cwd, taskId, updateBody);
+      log.info(
+        { taskId, model: modelRef, agentProfileId: resolvedAgentId },
+        'aiderdesk.task_bound'
+      );
     } catch (error) {
       if (!resumeSucceeded) {
         // Fresh task failed to bind — the run would be incoherent otherwise.

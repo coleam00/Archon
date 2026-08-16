@@ -119,6 +119,34 @@ export interface AiderDeskModelInfo {
   ref: string;
 }
 
+/**
+ * An AiderDesk agent profile returned by GET /api/agent-profiles.
+ *
+ * Minimal shape — only fields the dual-bind resolver needs to pick an
+ * agent given a `(providerId, modelId)` pair. The full AiderDesk profile
+ * surface includes systemPrompt, toolApprovals, enabledMcpServers, etc.;
+ * we do not type those here because the resolver only reads `id`, `name`,
+ * `provider`, `model`, and `ruleFiles`.
+ */
+export interface AiderDeskProfile {
+  /** AiderDesk agent UUID (the field bound into `AiderDeskTaskUpdate.agentProfileId`). */
+  id: string;
+  /** Human-readable agent name (e.g. 'Poe', 'Inspector', 'Codenomicron'). */
+  name: string;
+  /** Provider the agent invokes (e.g. 'poe', 'ollama'). */
+  provider: string;
+  /** Model id within that provider (e.g. 'minimax-m3'). */
+  model: string;
+  /**
+   * Rules files attached to the agent. Empty array on agents without a
+   * `rules/` directory; non-empty on agents like Poe/Inspector that load
+   * Archon-specific rules. The resolver uses presence (`length > 0`) as
+   * the deterministic tiebreaker when discriminating agents that share
+   * the same `provider+model`.
+   */
+  ruleFiles?: string[];
+}
+
 // ─── SSE event shapes — POST /api/run-prompt with Accept: text/event-stream ────────
 //
 // Per the docs at aiderdesk.hotovo.com/docs/features/rest-api, run-prompt supports

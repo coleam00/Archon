@@ -15,6 +15,7 @@ import type {
   AiderDeskMessage,
   AiderDeskModel,
   AiderDeskModelsResponse,
+  AiderDeskProfile,
   AiderDeskProvider,
   AiderDeskRunMode,
   AiderDeskSseEvent,
@@ -427,6 +428,19 @@ export class AiderDeskClient {
   /** List configured providers from AiderDesk. */
   async getProviders(): Promise<AiderDeskProvider[]> {
     return this.request<AiderDeskProvider[]>('GET', '/providers');
+  }
+
+  /**
+   * List all AiderDesk agent profiles via GET /api/agent-profiles.
+   *
+   * Returns the parsed list of agent profiles used by the dual-bind
+   * resolver in `provider.ts` to pick the right `agentProfileId` for a
+   * given `(providerId, modelId)` pair. Reuses the same `this.request()`
+   * and `this.fetchFn` plumbing as the rest of the client — there is no
+   * new HTTP machinery here, only a new endpoint.
+   */
+  async listAgentProfiles(): Promise<AiderDeskProfile[]> {
+    return this.request<AiderDeskProfile[]>('GET', '/agent-profiles');
   }
 
   // ─── Helpers ─────────────────────────────────────────────────────────────
