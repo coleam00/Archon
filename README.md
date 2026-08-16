@@ -365,7 +365,7 @@ Please read [CONTRIBUTING.md](CONTRIBUTING.md) before submitting a pull request.
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/chart?repos=coleam00/Archon&type=date&legend=top-left)](https://www.star-history.com/?repos=coleam00%2FArchon&type=date&legend=top-left)
+[![Star History Chart](https://star-history.dera.page/svg?repos=coleam00/Archon&type=date&legend=top-left)](https://star-history.dera.page/#coleam00/Archon&type=date&legend=top-left)
 
 ## License
 
