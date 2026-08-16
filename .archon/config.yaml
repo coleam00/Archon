@@ -11,3 +11,19 @@ aliases:
   '@mini':
     provider: pi
     model: minimax/MiniMax-M3
+
+# Tier presets for the aiderdesk community provider — these resolve when any node
+# references the tier keyword `small` / `medium` / `large`. Without them, the
+# orchestrator's title-resolve path falls back to claude (which has no API key in
+# this container) and stalls the conversation lock. Models live on the host-side
+# Ollama served at shin-blackmamba:11434 (see services/aiderdesk/provider.ts).
+tiers:
+  small:
+    provider: aiderdesk
+    model: ollama/gemma4:8b-8k
+  medium:
+    provider: aiderdesk
+    model: ollama/richardyoung/gemma-4-coder-abliterated:11b-8k
+  large:
+    provider: aiderdesk
+    model: ollama/hf.co/OBLITERATUS/Gemma-4-B-OBLITERATED:11b-16k
