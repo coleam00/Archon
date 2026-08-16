@@ -123,3 +123,9 @@ test-results/
 
 # Stray run logs from a mis-threaded logDir argument (see #2299) — never committed.
 main/
+
+# --- Archon local-only caches (kept out of repo) ---
+.aider-desk/
+.aider.input.history
+.aider.tags.cache.v4/
+.playwright-mcp/
