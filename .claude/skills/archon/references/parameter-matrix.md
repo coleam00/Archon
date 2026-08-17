@@ -55,6 +55,7 @@ Organized by what you're trying to do, not by field name. Useful when you know t
 | Join after mutually-exclusive routes             | `trigger_rule: none_failed_min_one_success` or `one_success` |
 | Run two independent branches in parallel         | Two nodes with no shared `depends_on`                        |
 | Iterate until tests pass                         | `loop: {until_bash: "bun run test", max_iterations: N}` — no `until:`, so nothing matches prose |
+| Iterate until the model judges it done            | `output_format: {...done: boolean...}` + `loop: {until_field: done, max_iterations: N}` — a validated boolean, not a sentinel |
 | Iterate a multi-node unit (implement → test → review per cycle) | `loop_group: {nodes: [...], until: ..., max_iterations: N}` |
 | Read the previous iteration's per-node output    | `$LOOP_PREV.<nodeId>.output` (loop_group body) or `$LOOP_PREV_OUTPUT` (loop) |
 | Iterate through a backlog without memory bleed   | `loop: {fresh_context: true}`, state written to `$ARTIFACTS_DIR` |
@@ -89,7 +90,7 @@ Organized by what you're trying to do, not by field name. Useful when you know t
 
 Things that don't fail parsing but don't do what you'd expect:
 
-1. **`hooks` / `mcp` / `skills` / `output_format` / `allowed_tools` / `denied_tools` on a loop, loop_group, bash, script, approval, or cancel node** → silently ignored. (NOT `model`/`provider` on loop/loop_group — those work: forwarded per iteration / as body defaults.)
+1. **`hooks` / `mcp` / `skills` / `allowed_tools` / `denied_tools` on a loop, loop_group, bash, script, approval, or cancel node** → silently ignored. (NOT `model`/`provider` on loop/loop_group — those work: forwarded per iteration / as body defaults. NOT `output_format` on a `loop:` — that works too since #2563: the loop runs its own provider call, so the schema is honored and `loop.until_field` can terminate on a declared boolean. It IS still ignored on `loop_group`.)
 2. **`context: fresh` on a loop / loop_group** → ignored. Use the loop config's `fresh_context: true` instead.
 3. **`output_format` on a bash or script node** → schema is accepted but bash/script output is whatever stdout says; no JSON coercion.
 4. **Unknown `$nodeId.output` (whole-text) reference at runtime** → resolves to empty string + warning. But `$nodeId.output.field` is STRICT — an unresolvable field (not in the producer's schema, non-JSON schemaless output, missing key, or producer skipped) **fails the consuming node loudly**, it does not resolve empty. And load-time validation rejects refs to node ids that don't exist at all.

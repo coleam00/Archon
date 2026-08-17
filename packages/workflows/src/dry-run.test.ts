@@ -387,6 +387,41 @@ describe('dryRunWorkflow', () => {
     expect(result.trace[0]?.reason).toContain("'done' is true");
   });
 
+  test('until: plus until_bash assumes completion when the stub carries no sentinel', async () => {
+    // Behaviour CHANGE, recorded deliberately (#2563). Before, this combination
+    // simulated as a max-iterations failure because only `until` was evaluated. Now
+    // the unevaluable `until_bash` triggers the documented assumption, because the
+    // real run's check may well have fired. The shipped `archon-adversarial-dev`
+    // default declares exactly this pair, so the old verdict was a failure the real
+    // run would not produce. The trade: a dry run can no longer prove a prose stub
+    // trips `until:` on a loop that also declares `until_bash`.
+    const workflow = makeTestWorkflow({
+      name: 'signal-and-bash',
+      nodes: [
+        {
+          id: 'sprint',
+          loop: {
+            prompt: 'work',
+            until: 'ALL_SPRINTS_COMPLETE',
+            until_bash: 'grep -q complete state.json',
+            max_iterations: 3,
+          },
+        },
+      ],
+    });
+
+    const result = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd: process.cwd(),
+      stubs: { sprint: 'still working, no sentinel here' },
+    });
+
+    expect(result.outcome).not.toBe('failed');
+    expect(result.trace[0]?.reason).toContain('assumed complete after 1 iteration(s)');
+    expect(result.trace[0]?.reason).toContain('until_bash');
+  });
+
   test('a until_field-only loop is not credited to until_bash it never declared', async () => {
     // Regression: the "assumed complete" fallback blamed `until_bash` unconditionally,
     // naming a channel the author had not written.

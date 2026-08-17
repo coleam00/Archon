@@ -998,7 +998,7 @@ describe('dagNodeSchema — loop completion channel (#2563)', () => {
   // share code (@archon/web must not import @archon/workflows), so matching names are
   // what makes a future divergence visible. Change one, change both.
   describe('channel verdict matrix (twin: builder structural.test.ts)', () => {
-    const cases: Array<[string, Record<string, unknown>, boolean]> = [
+    const cases: Array<[string, Record<string, string>, boolean]> = [
       ['neither declared', {}, false],
       ['until only, real', { until: 'COMPLETE' }, true],
       ['until_bash only, real', { until_bash: 'bun run test' }, true],
@@ -1011,12 +1011,28 @@ describe('dagNodeSchema — loop completion channel (#2563)', () => {
       ['until_bash empty string', { until_bash: '' }, false],
       ['padded until (legit)', { until: ' COMPLETE ' }, true],
       ['multiline until_bash (legit)', { until_bash: '  set -e\n  test -f x\n' }, true],
+      // Third channel (#2563 Part B) — same case names as the builder's twin.
+      ['until_field only, real', { until_field: 'done' }, true],
+      ['until_field blank', { until_field: '  ' }, false],
     ];
+
+    // `until_field` cases need an `output_format` on the node or they would be
+    // rejected for a DIFFERENT reason ("declares no 'output_format'") — which would
+    // make the matrix agree with the builder by accident rather than on the channel
+    // rule it exists to compare. The builder mirrors only the channel rules, so the
+    // schema is supplied here to isolate the same question.
+    const untilFieldSchema = {
+      type: 'object',
+      properties: { done: { type: 'boolean' } },
+      required: ['done'],
+    };
 
     for (const [name, channels, shouldParse] of cases) {
       test(`${name} -> ${shouldParse ? 'accepted' : 'rejected'}`, () => {
+        const needsSchema = 'until_field' in channels;
         const result = dagNodeSchema.safeParse({
           id: 'l',
+          ...(needsSchema ? { output_format: untilFieldSchema } : {}),
           loop: { prompt: 'iterate', max_iterations: 5, ...channels },
         });
         expect(result.success).toBe(shouldParse);

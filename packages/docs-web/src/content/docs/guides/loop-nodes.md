@@ -226,6 +226,12 @@ Controls session continuity between iterations:
 
 The first iteration is always fresh regardless of this setting.
 
+A structured-output re-ask (see [`until_field`](#until_field)) does **not** disturb
+threading. It runs in its own throwaway session so an invalid turn is not carried
+forward as context, and that session is discarded — the next iteration still resumes
+the conversation the loop was already threading. The repaired answer still reaches it
+through `$LOOP_PREV_OUTPUT`.
+
 ### `until_bash`
 
 Bash script executed after each iteration. If it exits with code 0, the loop

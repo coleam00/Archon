@@ -331,6 +331,15 @@ type SimulatedCompletion =
  * would not produce is the worse lie, and the trace reason names the channel that
  * went unevaluated. If none fires and there is nothing unevaluable to hide behind,
  * the iteration genuinely did not complete.
+ *
+ * Note the reach of that middle rule (#2563): it fires whenever `until_bash` is
+ * declared, INCLUDING alongside an `until:` whose sentinel the stub did not carry.
+ * That combination previously simulated as a max-iterations failure, and a shipped
+ * default uses it (`archon-adversarial-dev.yaml` declares both). Assuming completion
+ * is the honest answer — the real run's `until_bash` may well have fired — but it
+ * does mean a dry run cannot prove a prose stub trips `until:` on a loop that also
+ * declares `until_bash`. Drop `until_bash` from the workflow, or stub the sentinel,
+ * if that is what you are trying to check.
  */
 function loopIterationCompletes(
   control: LoopChannels,

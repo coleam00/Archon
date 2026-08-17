@@ -342,28 +342,27 @@ function parseDagNode(
  * or `null` when it can.
  *
  * Comparing a model's entire reply to an exact string is false the moment it writes a
- * sentence instead of a token — and the node is then skipped with no error. All three
- * AI producers below are rejected, but for three DIFFERENT reasons, so each gets its own
+ * sentence instead of a token — and the node is then skipped with no error. Both AI
+ * producer kinds below are rejected, but for DIFFERENT reasons, so each gets its own
  * remedy. Each claim was verified by parsing a node through `dagNodeSchema`, not read off
  * the field lists:
  *
- *   'schema-capable' — `prompt:` / `command:`: `output_format` survives the transform,
- *                      and on a valid structured turn the executor REPLACES the node's
- *                      output text with the validated JSON document. So declaring one is
- *                      both the fix (compare a field) and the opt-out (the whole output
- *                      is then a document the author controls, not prose).
- *   'loop'           — `loop:`: `output_format` is DROPPED at parse. It belongs to the
- *                      schema's `aiOnly` group, and the LoopNode branch of the transform
- *                      does not spread `aiOnly` (it rescues only `pi`), so the field never
- *                      reaches the node object and can populate nothing. Declaring one is
- *                      not an opt-out; it is a no-op.
- *   'loop-group'     — `loop_group:`: `output_format` DOES survive the transform here
- *                      (the LoopGroupNode branch spreads `aiOnly`), so this is not the
- *                      same case — but the group's completion returns
- *                      `output: lastIterationOutput` with no `structuredOutput` and no
- *                      `declaredFields`, so the whole-output channel is still the last
- *                      iteration's raw text. Declaring a schema cannot make `$group.output`
- *                      a JSON document.
+ *   'schema-capable' — `prompt:` / `command:` / `loop:`: `output_format` survives the
+ *                      transform, and on a valid structured turn the executor REPLACES
+ *                      the node's output text with the validated JSON document. So
+ *                      declaring one is both the fix (compare a field) and the opt-out
+ *                      (the whole output is then a document the author controls, not
+ *                      prose). `loop:` joined this group in #2563 — it runs its own
+ *                      sendQuery, so the schema reaches the provider and each iteration's
+ *                      payload is validated against it. Before that it was its own kind,
+ *                      because the field was dropped at parse and declaring one was a
+ *                      no-op; that is no longer true and the separate kind is gone.
+ *   'loop-group'     — `loop_group:`: `output_format` survives the transform here too,
+ *                      but the group never calls the provider itself — its completion
+ *                      returns `output: lastIterationOutput` with no `structuredOutput`
+ *                      and no `declaredFields`, so the whole-output channel is still the
+ *                      last iteration's raw text. Declaring a schema cannot make
+ *                      `$group.output` a JSON document. This is the one asymmetry left.
  *
  * Everything else keeps whole-output comparison: `bash:`/`script:` stdout is
  * author-controlled and exact by construction, an `approval:` capture is what a human

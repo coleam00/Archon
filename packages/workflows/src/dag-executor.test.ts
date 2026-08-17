@@ -7414,6 +7414,196 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       expect(completed.length).toBe(1);
     });
 
+    it('keeps threading the loop session across a mid-loop re-ask', async () => {
+      // A reask runs in a throwaway session by design. Adopting it as the loop's
+      // thread would silently discard every earlier iteration while
+      // `fresh_context: false` still promises "each iteration resumes the prior
+      // conversation" — so attempt 0's session stays the thread.
+      const sessions: Array<string | undefined> = [];
+      let calls = 0;
+      mockSendQueryDag.mockImplementation(function* (
+        _p: unknown,
+        _cwd: unknown,
+        resumeId: string | undefined
+      ) {
+        calls++;
+        sessions.push(resumeId);
+        if (calls === 1) {
+          // iteration 1, attempt 0 — valid but not done; establishes the thread.
+          yield { type: 'result', sessionId: 'thread-1', structuredOutput: { done: false } };
+        } else if (calls === 2) {
+          // iteration 2, attempt 0 — schema miss, triggers a reask.
+          yield { type: 'result', sessionId: 'thread-2', structuredOutput: { note: 'bad' } };
+        } else if (calls === 3) {
+          // iteration 2, reask — fresh throwaway session, repaired but not done.
+          yield { type: 'result', sessionId: 'throwaway', structuredOutput: { done: false } };
+        } else {
+          yield { type: 'result', sessionId: 'thread-3', structuredOutput: { done: true } };
+        }
+      });
+
+      const mockDeps = createMockDeps();
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun('loop-reask-threading');
+
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-dag',
+        testDir,
+        {
+          name: 'dag-loop-reask-threading',
+          nodes: [
+            {
+              id: 'my-loop',
+              provider: 'pi',
+              output_format: untilFieldSchema,
+              loop: {
+                prompt: 'go',
+                max_iterations: 5,
+                until_field: 'done',
+                fresh_context: false,
+              },
+            },
+          ],
+        },
+        workflowRun,
+        'pi',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'state'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        { ...minimalConfig, assistant: 'pi' }
+      );
+
+      // 1: fresh (iteration 1 always is). 2: threads from iteration 1's session.
+      // 3: the reask, deliberately fresh. 4: MUST thread from attempt 0's session,
+      // not from the throwaway one the reask created.
+      expect(sessions[0]).toBeUndefined();
+      expect(sessions[1]).toBe('thread-1');
+      expect(sessions[2]).toBeUndefined();
+      expect(sessions[3]).toBe('thread-2');
+      expect(sessions[3]).not.toBe('throwaway');
+    });
+
+    it('keeps threading when the re-ask happens on iteration 1', async () => {
+      // The i === 1 case. Iteration 1 has no session to resume FROM, so any fix that
+      // restores the pre-iteration cursor is a no-op here and leaves the throwaway
+      // session as the thread — the same defect, one iteration earlier. Attempt 0's
+      // session is the loop's real conversation and is what iteration 2 must resume.
+      const sessions: Array<string | undefined> = [];
+      let calls = 0;
+      mockSendQueryDag.mockImplementation(function* (
+        _p: unknown,
+        _cwd: unknown,
+        resumeId: string | undefined
+      ) {
+        calls++;
+        sessions.push(resumeId);
+        if (calls === 1)
+          yield { type: 'result', sessionId: 'orig-1', structuredOutput: { bad: 1 } };
+        else if (calls === 2)
+          yield { type: 'result', sessionId: 'throwaway', structuredOutput: { done: false } };
+        else yield { type: 'result', sessionId: 'orig-2', structuredOutput: { done: true } };
+      });
+
+      const mockDeps = createMockDeps();
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun('loop-reask-iter1');
+
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-dag',
+        testDir,
+        {
+          name: 'dag-loop-reask-iter1',
+          nodes: [
+            {
+              id: 'my-loop',
+              provider: 'pi',
+              output_format: untilFieldSchema,
+              loop: { prompt: 'go', max_iterations: 5, until_field: 'done', fresh_context: false },
+            },
+          ],
+        },
+        workflowRun,
+        'pi',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'state'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        { ...minimalConfig, assistant: 'pi' }
+      );
+
+      expect(sessions[0]).toBeUndefined(); // iteration 1, attempt 0 — always fresh
+      expect(sessions[1]).toBeUndefined(); // the reask — deliberately fresh
+      expect(sessions[2]).toBe('orig-1'); // iteration 2 threads the real conversation
+      expect(sessions[2]).not.toBe('throwaway');
+    });
+
+    it('hands the next sequential node the loop conversation, not a re-ask session', async () => {
+      // R7 crosses the node boundary: the loop's completion returns
+      // `sessionId: currentSessionId`, which becomes ctx.lastSequentialSession, and
+      // downstream threading off that cursor is automatic. So a reask on the FINAL
+      // iteration would otherwise hand the next node a single-turn throwaway.
+      const sessions: Array<string | undefined> = [];
+      let calls = 0;
+      mockSendQueryDag.mockImplementation(function* (
+        _p: unknown,
+        _cwd: unknown,
+        resumeId: string | undefined
+      ) {
+        calls++;
+        sessions.push(resumeId);
+        if (calls === 1)
+          yield { type: 'result', sessionId: 'loop-conv', structuredOutput: { x: 1 } };
+        else if (calls === 2)
+          yield { type: 'result', sessionId: 'throwaway', structuredOutput: { done: true } };
+        else yield { type: 'assistant', content: 'downstream ran' };
+      });
+
+      const mockDeps = createMockDeps();
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun('loop-reask-crossnode');
+
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-dag',
+        testDir,
+        {
+          name: 'dag-loop-reask-crossnode',
+          nodes: [
+            {
+              id: 'my-loop',
+              provider: 'pi',
+              output_format: untilFieldSchema,
+              loop: { prompt: 'go', max_iterations: 3, until_field: 'done', fresh_context: false },
+            },
+            { id: 'after', provider: 'pi', prompt: 'continue', depends_on: ['my-loop'] },
+          ],
+        },
+        workflowRun,
+        'pi',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'state'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        { ...minimalConfig, assistant: 'pi' }
+      );
+
+      // The third call is the downstream node; it must inherit the loop's conversation.
+      expect(sessions[2]).toBe('loop-conv');
+      expect(sessions[2]).not.toBe('throwaway');
+    });
+
     it('fails the node when best-effort re-asks are exhausted', async () => {
       mockSendQueryDag.mockImplementation(function* () {
         yield { type: 'result', sessionId: 's', structuredOutput: { note: 'still wrong' } };

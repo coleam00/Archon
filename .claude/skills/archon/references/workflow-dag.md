@@ -524,7 +524,8 @@ First iteration is always fresh regardless.
 - `provider`, `model` — **WORK**: resolved once and forwarded to every iteration's AI call
 - `idle_timeout` — works, applies per iteration
 - `retry` — **hard error** at parse time (the loop manages its own iteration)
-- `hooks`, `mcp`, `skills`, `allowed_tools`, `denied_tools`, `output_format` — silently ignored (loader warning)
+- `output_format` — **WORKS** (#2563): a loop runs its own provider call, so the schema reaches it, each iteration's payload is validated against it, and the node's output becomes the validated JSON. Pairs with `until_field`
+- `hooks`, `mcp`, `skills`, `allowed_tools`, `denied_tools` — silently ignored (loader warning)
 - `context: fresh` — ignored (use `loop.fresh_context` instead)
 - `persist_session` — not supported on loops (in-run session threading between iterations only)
 

@@ -4608,7 +4608,30 @@ async function executeLoopNode(
                 });
               runningTools.delete(toolCallId);
             }
-            if (msg.sessionId) currentSessionId = msg.sessionId;
+            // Session threading follows attempt 0 ONLY (#2563). A reask deliberately
+            // runs in a throwaway session so an invalid turn is not carried forward as
+            // context — which makes that session the wrong thing to thread the NEXT
+            // iteration from: it holds one repaired turn and none of the run's history,
+            // so adopting it would silently discard iterations 1…N and break the
+            // `fresh_context: false` contract ("each iteration resumes the prior
+            // conversation"). Attempt 0's session is the loop's conversation and stays
+            // the thread; the repaired answer still reaches the next iteration through
+            // $LOOP_PREV_OUTPUT, which is prompt text rather than session state.
+            if (msg.sessionId) {
+              if (reaskAttempt === 0) {
+                currentSessionId = msg.sessionId;
+              } else if (currentSessionId !== msg.sessionId) {
+                getLog().debug(
+                  {
+                    nodeId: node.id,
+                    iteration: i,
+                    attempt: reaskAttempt,
+                    keptSessionId: currentSessionId,
+                  },
+                  'loop_node.reask_session_not_threaded'
+                );
+              }
+            }
             // Overwrite, don't accumulate — a later result in the same iteration
             // (background-task wait, #2083) carries session-cumulative values.
             if (msg.cost !== undefined) {
