@@ -20,7 +20,7 @@
  *   - #2567 — the builder's legacy copy used `\w`, which excludes the hyphen, so
  *     it silently validated none of the hyphenated node ids the bundled
  *     workflows use.
- *   - #2588 — #2579 added a `$INPUTS.<name>` branch to the engine atom, and the
+ *   - #2591 — #2579 added a `$INPUTS.<name>` branch to the engine atom, and the
  *     builder's copy did not follow, so `when: "$INPUTS.mode == 'fast'"` was an
  *     error in the builder and a clean load in the engine.
  *
@@ -150,7 +150,7 @@ describe('node-ref parity: @archon/web mirrors the engine', () => {
  *
  *   - `.source` identity pins the GRAMMAR, including the parts no corpus entry
  *     happens to exercise. An alternation branch added to one side only fails
- *     here immediately, which is exactly what #2588 needed and did not have.
+ *     here immediately, which is exactly what #2591 needed and did not have.
  *   - the corpus pins the PARSE SEMANTICS around the grammar — the rules that
  *     live in code after the regex matches. `$INPUTS.a.b` is the standing
  *     example: both patterns match it (it backtracks into the node branch), and
@@ -181,7 +181,7 @@ describe('when-atom parity: the builder parses what the engine parses', () => {
     // #2567: hyphenated ids, which the builder's legacy `\w` copy rejected.
     "$check-reproduction.output == 'done'",
     "$classify-testability.output.testable == 'e2e_testable'",
-    // #2588: the `$INPUTS.<name>` scope #2579 added to the engine.
+    // #2591: the `$INPUTS.<name>` scope #2579 added to the engine.
     "$INPUTS.mode == 'fast'",
     "$INPUTS.my-input == 'x'",
     "$INPUTS.output == 'x'",

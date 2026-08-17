@@ -135,7 +135,7 @@ describe('when-grammar parse', () => {
 });
 
 // `$INPUTS.<name>` is the engine's input scope (#2470), and the builder rejected
-// every one of these conditions until #2588 — a workflow using a declared input in
+// every one of these conditions until #2591 — a workflow using a declared input in
 // a `when:` validated clean at load and red in the builder.
 describe('when-grammar parse — $INPUTS (engine parity)', () => {
   test('parses an input atom', () => {
