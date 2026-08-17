@@ -4,6 +4,8 @@
 import type { WorkflowDefinition, WorkflowLoadError, DagNode, WorkflowNodeHooks } from './schemas';
 import {
   isBashNode,
+  isCommandNode,
+  isPromptNode,
   isLoopNode,
   isLoopGroupNode,
   isApprovalNode,
@@ -52,6 +54,7 @@ import type {
 } from './schemas/workflow';
 import { INPUT_NAME_PATTERN, inputEnvKey } from './schemas/dag-node';
 import { workflowNodeHooksSchema } from './schemas/hooks';
+import { parseWhenAtom, whenAtoms } from './when-atom';
 import { z } from '@hono/zod-openapi';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -335,38 +338,73 @@ function parseDagNode(
 }
 
 /**
+ * Why a producer's WHOLE output cannot be compared to a literal in a `when:` (#2566),
+ * or `null` when it can.
+ *
+ * Comparing a model's entire reply to an exact string is false the moment it writes a
+ * sentence instead of a token — and the node is then skipped with no error. Which
+ * remedy to name depends on the producer:
+ *
+ *   'schema-capable'  — `prompt:` / `command:`: `output_format` is honoured, so the fix
+ *                       is to declare one and compare a field. Declaring one is also the
+ *                       opt-out: the output is then a JSON document, not prose.
+ *   'no-schema-channel' — `loop:` / `loop_group:`: `output_format` is an IGNORED field on
+ *                       these (see LOOP_NODE_AI_FIELDS), so pointing an author at it
+ *                       would hand them a no-op. They have no structured completion
+ *                       channel yet (#2563); the decision has to leave the loop.
+ *
+ * Everything else keeps whole-output comparison: `bash:`/`script:` stdout is
+ * author-controlled and exact by construction, an `approval:` capture is what a human
+ * typed, and a `workflow:` sub-run's output is the callee's business.
+ *
+ * `command:` is grouped with `prompt:` even though #2566 names only three node types: a
+ * command file is an inline prompt that lives in another file, so excluding it would
+ * leave the same hazard reachable by moving the prompt.
+ */
+function freeFormAiProducerKind(node: DagNode): 'schema-capable' | 'no-schema-channel' | null {
+  if (isLoopNode(node) || isLoopGroupNode(node)) return 'no-schema-channel';
+  if (!isPromptNode(node) && !isCommandNode(node)) return null;
+  return node.output_format === undefined ? 'schema-capable' : null;
+}
+
+/**
  * Validate DAG structure: unique IDs, depends_on references exist, no cycles,
- * and every runtime-substituted node-output reference points to a known node in its
- * current or enclosing loop scope.
+ * every runtime-substituted node-output reference points to a known node in its
+ * current or enclosing loop scope, and no `when:` compares a free-form AI output to
+ * a literal.
  * Returns error message or null if valid.
  *
  * Exported so the include-expander can re-run the same structural checks on the
  * fully-flattened, namespaced node list after inlining (duplicate-id collisions,
  * cycles introduced by rewired edges, unknown deps).
+ *
+ * `enclosingNodes` carries the enclosing loop scope's nodes BY ID rather than just
+ * their ids, because a `loop_group` body's `when:` may reference an outer producer and
+ * the free-form-AI check needs that producer's type and `output_format`.
  */
 export function validateDagStructure(
   nodes: DagNode[],
-  enclosingIds?: ReadonlySet<string>
+  enclosingNodes?: ReadonlyMap<string, DagNode>
 ): string | null {
   // Check ID uniqueness
-  const ids = new Set<string>();
+  const nodesById = new Map<string, DagNode>();
   for (const node of nodes) {
-    if (ids.has(node.id)) {
+    if (nodesById.has(node.id)) {
       return `Duplicate node id: '${node.id}'`;
     }
     // A loop_group body node must not reuse an enclosing DAG's node id: the executor
     // seeds each iteration's scoped output map with the outer outputs, so a colliding
     // body node would silently shadow the outer node for $id.output refs.
-    if (enclosingIds?.has(node.id)) {
+    if (enclosingNodes?.has(node.id)) {
       return `Node id '${node.id}' shadows a node id in the enclosing DAG`;
     }
-    ids.add(node.id);
+    nodesById.set(node.id, node);
   }
 
   // Check depends_on references
   for (const node of nodes) {
     for (const dep of node.depends_on ?? []) {
-      if (!ids.has(dep)) {
+      if (!nodesById.has(dep)) {
         return `Node '${node.id}' depends_on unknown node '${dep}'`;
       }
     }
@@ -478,7 +516,11 @@ export function validateDagStructure(
         // Output refs (unlike depends_on) may also reach ENCLOSING-scope nodes: the
         // executor seeds a loop_group iteration's scoped output map with the outer
         // DAG's outputs, so `$outerNode.output` inside a body prompt is valid.
-        if (refNodeId !== undefined && !ids.has(refNodeId) && !enclosingIds?.has(refNodeId)) {
+        if (
+          refNodeId !== undefined &&
+          !nodesById.has(refNodeId) &&
+          !enclosingNodes?.has(refNodeId)
+        ) {
           return `Node '${node.id}' field '${source.field}' references unknown node '$${refNodeId}.output'. In a composed workflow, pass caller data through declared 'inputs:' and caller 'with:' instead of referencing a caller node directly`;
         }
       }
@@ -490,12 +532,42 @@ export function validateDagStructure(
       while ((m = whenRefPattern.exec(node.when)) !== null) {
         const refNodeId = m[1];
         const field = m[2];
-        // `$INPUTS.name` is an include-time macro, not a node reference. It is
-        // resolved (or rejected as missing) before the composed graph is revalidated.
+        // `$INPUTS.name` is an include-time macro at load and a run-time input scope in
+        // a sub-run — either way it is not a node reference.
         if (refNodeId === 'INPUTS') continue;
-        if (refNodeId !== undefined && !ids.has(refNodeId) && !enclosingIds?.has(refNodeId)) {
+        if (
+          refNodeId !== undefined &&
+          !nodesById.has(refNodeId) &&
+          !enclosingNodes?.has(refNodeId)
+        ) {
           return `Node '${node.id}' field 'when' references unknown node '$${refNodeId}.${field ?? ''}'. In a composed workflow, pass caller data through declared 'inputs:' and caller 'with:' instead of referencing a caller node directly`;
         }
+      }
+
+      // #2566: reject a `when:` that compares a producer's WHOLE free-form AI output to
+      // a literal. `actual === expected` on a model's entire reply is false as soon as
+      // the model writes "This is a BUG." instead of "BUG" — and the node is then
+      // skipped with no error, so the run reaches a terminal state looking successful
+      // while having quietly done less than the author asked for. Caught here, before
+      // any spend, with the fix in the message.
+      //
+      // The atom decomposition comes from the shared `when-atom` parser (the same one
+      // the evaluator runs), because the coarse `whenRefPattern` sweep above captures
+      // only the first path segment and so cannot tell `$n.output` from
+      // `$n.output.field`. An atom that does not parse is left alone: the executor
+      // already fails closed on it, loudly.
+      for (const atomText of whenAtoms(node.when)) {
+        const atom = parseWhenAtom(atomText);
+        if (atom?.ref.kind !== 'node' || atom.ref.field !== undefined) continue;
+        const producerId = atom.ref.nodeId;
+        const producer = nodesById.get(producerId) ?? enclosingNodes?.get(producerId);
+        if (!producer) continue;
+        const kind = freeFormAiProducerKind(producer);
+        if (kind === null) continue;
+        const problem = `Node '${node.id}' field 'when' compares the whole output of AI node '${producerId}' to a literal ('${atom.expected}'). That output is free-form prose, so the comparison silently fails and '${node.id}' is skipped.`;
+        return kind === 'schema-capable'
+          ? `${problem} Declare 'output_format' on '${producerId}' and compare a field (e.g. "$${producerId}.output.status ${atom.operator} '${atom.expected}'"), or produce the value from a 'bash:'/'script:' node`
+          : `${problem} 'output_format' is ignored on loop nodes, so move the decision out of the loop: compute it in a 'bash:'/'script:' node and gate on that node's output instead`;
       }
     }
   }
@@ -554,8 +626,8 @@ export function validateDagStructure(
       if (workflowInBody) {
         return `loop_group '${node.id}' body: 'workflow' (sub-run) is not supported inside a loop_group body`;
       }
-      const scopeIds = new Set([...(enclosingIds ?? []), ...ids]);
-      const bodyError = validateDagStructure(node.loop_group.nodes, scopeIds);
+      const scopeNodes = new Map<string, DagNode>([...(enclosingNodes ?? []), ...nodesById]);
+      const bodyError = validateDagStructure(node.loop_group.nodes, scopeNodes);
       if (bodyError) {
         return `loop_group '${node.id}' body: ${bodyError}`;
       }

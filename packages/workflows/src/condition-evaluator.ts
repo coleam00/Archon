@@ -5,6 +5,8 @@
  *   String equality:  "$nodeId.output == 'VALUE'"  / "$nodeId.output != 'VALUE'"
  *   Dot notation:     "$nodeId.output.field == 'VALUE'"
  *   Shorthand path:   "$nodeId.field == 'VALUE'"  (equivalent to "$nodeId.output.field")
+ *   Named inputs:     "$INPUTS.mode == 'fast'"  (#2470 inputs, supplied by a caller's
+ *                     `with:` — see `resolveInputRef`)
  *   Numeric ops:      "$nodeId.output > '80'"  / ">=" / "<" / "<="
  *                     (both sides must parse as finite numbers; fail-closed otherwise)
  *   Unquoted RHS:     "$nodeId.exit_code == 0"  / "$nodeId.passed == true"
@@ -13,21 +15,26 @@
  *                     "$a.output == 'X' || $b.output == 'Y'"
  *                     AND has higher precedence than OR. No parentheses.
  *
+ * The atom grammar itself lives in `when-atom.ts`, shared with the loader's load-time
+ * `when:` validation so the two can never disagree about what an atom means.
+ *
  * Returns true = run this node, false = skip it.
  *
  * Two different error modes:
  *   - A malformed/unparseable EXPRESSION (bad syntax) is fail-closed → result
  *     false (skip the node), parsed: false.
- *   - An unresolvable `$node.output.field` REFERENCE (field not in the producer's
- *     declared schema, or a schemaless node whose output isn't JSON / lacks the
- *     key) THROWS an `OutputRefError` that propagates to FAIL the node — under the
+ *   - An unresolvable REFERENCE THROWS, propagating to FAIL the node — under the
  *     no-silent-drop contract a referenced-but-missing value is a visible failure,
- *     not a silent skip. (Declared-optional fields and whole-text `$node.output`
+ *     not a silent skip. That covers `$node.output.field` (field not in the
+ *     producer's declared schema, or a schemaless node whose output isn't JSON /
+ *     lacks the key) via `OutputRefError`, and an undeclared `$INPUTS.<name>` via
+ *     `InputRefError`. (Declared-optional fields and whole-text `$node.output`
  *     still resolve to '' and never throw.)
  */
 import type { NodeOutput } from './schemas';
 import { createLogger } from '@archon/paths';
 import { resolveNodeOutputField, OutputRefError, similarNodeIds } from './output-ref';
+import { parseWhenAtom, splitOutsideQuotes, type WhenAtomRef } from './when-atom';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -90,100 +97,84 @@ function resolveOutputRef(
 }
 
 /**
- * Split a string on a separator, but only when not inside single-quoted regions.
- * Returns at least one element (the full trimmed string if no split occurs).
+ * Thrown when a `when:` atom references a `$INPUTS.<name>` this run does not carry.
+ *
+ * Loud, never `''`: a typo'd input that silently emptied would make the condition
+ * quietly false and skip the node — the exact silent-branch failure #2566 removes
+ * from the whole-output case. The prompt surface already throws for the same
+ * reference (`substituteWorkflowVariables` in executor-shared.ts); this is the
+ * `when:` twin of it, worded the same way so an author sees one message for one
+ * mistake regardless of where they made it.
  */
-function splitOutsideQuotes(expr: string, sep: string): string[] {
-  const parts: string[] = [];
-  let current = '';
-  let inQuote = false;
-  let i = 0;
-  while (i < expr.length) {
-    if (expr[i] === "'") {
-      inQuote = !inQuote;
-      current += expr[i++];
-    } else if (!inQuote && expr.startsWith(sep, i)) {
-      parts.push(current.trim());
-      current = '';
-      i += sep.length;
-    } else {
-      current += expr[i++];
-    }
+export class InputRefError extends Error {
+  constructor(
+    /** The referenced input name. Not `name` — `Error.name` is the class tag. */
+    public readonly inputName: string,
+    knownInputs: readonly string[]
+  ) {
+    super(InputRefError.messageFor(inputName, knownInputs));
+    this.name = 'InputRefError';
   }
-  parts.push(current.trim());
-  return parts;
+
+  private static messageFor(name: string, knownInputs: readonly string[]): string {
+    // `similarNodeIds` is the shared did-you-mean ranker; it takes any id-like strings.
+    const hint = similarNodeIds(name, knownInputs);
+    const suffix =
+      hint.length > 0
+        ? ` Did you mean ${hint.map(h => `$INPUTS.${h}`).join(', ')}?`
+        : knownInputs.length > 0
+          ? ` Available inputs: ${knownInputs.map(k => `$INPUTS.${k}`).join(', ')}.`
+          : ' This run has no declared inputs.';
+    return `Unknown input '$INPUTS.${name}'.${suffix}`;
+  }
 }
 
 /**
- * Pattern matching a single condition atom.
+ * Resolve a `$INPUTS.<name>` reference to this run's input value.
  *
- * Capture groups:
- *   1. nodeId       — `$nodeId`
- *   2. segment1     — first path segment after the node (`output` for canonical refs, else a
- *                     shorthand field name)
- *   3. segment2     — optional second path segment (the field name when segment1 is `output`)
- *   4. operator     — `== | != | <= | >= | < | >`
- *   5. quotedValue  — single-quoted RHS literal (may be empty)
- *   6. unquotedValue — bare numeric or boolean RHS (`-?\d+(.\d+)?` | `true` | `false`)
- *
- * Exactly one of groups 5/6 is populated on a successful match. The canonical-vs-shorthand
- * path resolution and the sub-field rejection happen in evaluateAtom.
+ * Inputs are supplied by a caller's `with:` on a `workflow:` node (or a direct run's
+ * `--input`), reach the child as `metadata.inputs`, and are threaded here by the
+ * executor. An undeclared name THROWS — see {@link InputRefError}.
  */
-const atomPattern =
-  /^\$([a-zA-Z_][a-zA-Z0-9_-]*)\.([a-zA-Z_][a-zA-Z0-9_]*)(?:\.([a-zA-Z_][a-zA-Z0-9_]*))?\s*(==|!=|<=|>=|<|>)\s*(?:'([^']*)'|(-?\d+(?:\.\d+)?|true|false))$/;
+function resolveInputRef(name: string, inputs: Record<string, string> | undefined): string {
+  if (inputs && Object.hasOwn(inputs, name)) return inputs[name];
+  throw new InputRefError(name, inputs ? Object.keys(inputs) : []);
+}
+
+/** Resolve either kind of atom reference to the string the operator compares. */
+function resolveAtomRef(
+  ref: WhenAtomRef,
+  nodeOutputs: Map<string, NodeOutput>,
+  inputs: Record<string, string> | undefined
+): string {
+  return ref.kind === 'input'
+    ? resolveInputRef(ref.name, inputs)
+    : resolveOutputRef(ref.nodeId, ref.field, nodeOutputs);
+}
 
 /**
  * Evaluate a single atomic condition expression against upstream node outputs.
  */
 function evaluateAtom(
   expr: string,
-  nodeOutputs: Map<string, NodeOutput>
+  nodeOutputs: Map<string, NodeOutput>,
+  inputs: Record<string, string> | undefined
 ): { result: boolean; parsed: boolean } {
-  const trimmed = expr.trim();
-  const match = atomPattern.exec(trimmed);
+  const atom = parseWhenAtom(expr);
 
-  if (!match) {
+  if (!atom) {
     getLog().debug({ expr }, 'condition_parse_failed');
     return { result: false, parsed: false };
   }
 
-  const [, nodeId, segment1, segment2, operator, quotedValue, unquotedValue] = match;
+  const { ref, operator, expected } = atom;
 
-  if (nodeId === undefined || segment1 === undefined || operator === undefined) {
-    getLog().debug({ expr }, 'condition_parse_unexpected_undefined');
-    return { result: false, parsed: false };
-  }
-
-  // Resolve the effective field, preserving the canonical `$node.output[.field]` semantics
-  // while also accepting the `$node.field` shorthand:
-  //   - `$node.output`        → bare output reference (field undefined)
-  //   - `$node.output.field`  → field access on the output
-  //   - `$node.field`         → shorthand, equivalent to `$node.output.field`
-  // The shorthand form cannot carry a sub-field (`$node.field.sub` is rejected fail-closed).
-  let field: string | undefined;
-  if (segment1 === 'output') {
-    field = segment2;
-  } else {
-    if (segment2 !== undefined) {
-      getLog().debug({ expr }, 'condition_parse_failed');
-      return { result: false, parsed: false };
-    }
-    field = segment1;
-  }
-
-  // Quoted RHS takes precedence; the unquoted alternative covers numbers and booleans.
-  const expected = quotedValue !== undefined ? quotedValue : unquotedValue;
-  if (expected === undefined) {
-    getLog().debug({ expr }, 'condition_parse_unexpected_undefined');
-    return { result: false, parsed: false };
-  }
-
-  // resolveOutputRef may throw OutputRefError for an unresolvable `.field` ref
-  // (typo / schemaless non-JSON / missing key). It is deliberately NOT caught
-  // here — under the no-silent-drop contract it must propagate to fail the node,
-  // not fail-closed to a silent skip. (Pure-syntax parse failures still return
-  // {parsed:false} via the atomPattern miss above and remain fail-closed.)
-  const actual = resolveOutputRef(nodeId, field, nodeOutputs);
+  // Reference resolution may throw — OutputRefError for an unresolvable `.field` ref
+  // (typo / schemaless non-JSON / missing key), InputRefError for an undeclared
+  // `$INPUTS.<name>`. Deliberately NOT caught here: under the no-silent-drop contract
+  // it must propagate to fail the node, not fail-closed to a silent skip. (Pure-syntax
+  // parse failures still return {parsed:false} via the parse miss above.)
+  const actual = resolveAtomRef(ref, nodeOutputs, inputs);
 
   let result: boolean;
   if (operator === '==' || operator === '!=') {
@@ -203,7 +194,9 @@ function evaluateAtom(
   }
 
   getLog().debug(
-    { nodeId, field: field ?? null, operator, expected, actual, result },
+    ref.kind === 'input'
+      ? { input: ref.name, operator, expected, actual, result }
+      : { nodeId: ref.nodeId, field: ref.field ?? null, operator, expected, actual, result },
     'condition_evaluated'
   );
   return { result, parsed: true };
@@ -214,12 +207,15 @@ function evaluateAtom(
  *
  * @param expr - The when: expression string e.g. "$classify.output.type == 'BUG'"
  * @param nodeOutputs - Map of nodeId → NodeOutput for all settled upstream nodes (completed, failed, or skipped)
+ * @param inputs - This run's named inputs (#2470), for `$INPUTS.<name>` atoms. Omitted by
+ *   callers that carry no inputs; a `$INPUTS.<name>` atom then throws `InputRefError`.
  * @returns `{ result: boolean; parsed: boolean }` — result is true to run the node, false to skip;
  *   parsed is false when the expression could not be parsed (fail-closed: result defaults to false)
  */
 export function evaluateCondition(
   expr: string,
-  nodeOutputs: Map<string, NodeOutput>
+  nodeOutputs: Map<string, NodeOutput>,
+  inputs?: Record<string, string>
 ): { result: boolean; parsed: boolean } {
   const trimmed = expr.trim();
 
@@ -232,7 +228,7 @@ export function evaluateCondition(
     let orClauseResult = true;
 
     for (const atom of andAtoms) {
-      const { result, parsed } = evaluateAtom(atom, nodeOutputs);
+      const { result, parsed } = evaluateAtom(atom, nodeOutputs, inputs);
       if (!parsed) return { result: false, parsed: false }; // fail-closed on any parse error
       if (!result) {
         orClauseResult = false;

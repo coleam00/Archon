@@ -18,8 +18,9 @@ mock.module('@archon/paths', () => ({
 
 // --- Imports (after mocks) ---
 
-import { evaluateCondition } from './condition-evaluator';
+import { evaluateCondition, InputRefError } from './condition-evaluator';
 import { OutputRefError } from './output-ref';
+import { parseWhenAtom, whenAtoms } from './when-atom';
 import type { NodeOutput } from './schemas';
 
 /**
@@ -677,5 +678,157 @@ describe('evaluateCondition', () => {
     expect(
       evaluateCondition("$classify.type == 'BUG' || $test.passed == false", outputs).result
     ).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Shared when-atom parser (#2566) — the grammar the loader validates against and
+// the evaluator runs. Tested here rather than in a new file so it stays in the
+// same `bun test` invocation as its primary consumer.
+// ---------------------------------------------------------------------------
+
+describe('parseWhenAtom', () => {
+  it('parses a whole-output ref (no field)', () => {
+    expect(parseWhenAtom("$check.output == 'ok'")).toEqual({
+      ref: { kind: 'node', nodeId: 'check', field: undefined },
+      operator: '==',
+      expected: 'ok',
+    });
+  });
+
+  it('parses a canonical field ref', () => {
+    expect(parseWhenAtom("$classify.output.type == 'BUG'")).toEqual({
+      ref: { kind: 'node', nodeId: 'classify', field: 'type' },
+      operator: '==',
+      expected: 'BUG',
+    });
+  });
+
+  it('parses the $node.field shorthand as a field ref', () => {
+    expect(parseWhenAtom("$classify.type != 'BUG'")).toEqual({
+      ref: { kind: 'node', nodeId: 'classify', field: 'type' },
+      operator: '!=',
+      expected: 'BUG',
+    });
+  });
+
+  it('parses an unquoted numeric RHS under every operator', () => {
+    for (const op of ['==', '!=', '<=', '>=', '<', '>'] as const) {
+      expect(parseWhenAtom(`$t.output.score ${op} 80`)).toEqual({
+        ref: { kind: 'node', nodeId: 't', field: 'score' },
+        operator: op,
+        expected: '80',
+      });
+    }
+  });
+
+  it('parses $INPUTS.<name> as an input ref, not a node called INPUTS', () => {
+    expect(parseWhenAtom("$INPUTS.mode == 'fast'")).toEqual({
+      ref: { kind: 'input', name: 'mode' },
+      operator: '==',
+      expected: 'fast',
+    });
+  });
+
+  it('parses a hyphenated input name (the with:/inputs: grammar allows hyphens)', () => {
+    expect(parseWhenAtom("$INPUTS.base-branch == 'dev'")).toEqual({
+      ref: { kind: 'input', name: 'base-branch' },
+      operator: '==',
+      expected: 'dev',
+    });
+  });
+
+  it('treats $INPUTS.output as the input NAMED output, not a whole-output ref', () => {
+    expect(parseWhenAtom("$INPUTS.output == 'x'")).toEqual({
+      ref: { kind: 'input', name: 'output' },
+      operator: '==',
+      expected: 'x',
+    });
+  });
+
+  it('rejects a sub-field on an input ref (INPUTS is reserved, not a node id)', () => {
+    expect(parseWhenAtom("$INPUTS.a.b == 'x'")).toBeNull();
+  });
+
+  it('rejects a sub-field on the shorthand form', () => {
+    expect(parseWhenAtom("$classify.type.sub == 'x'")).toBeNull();
+  });
+
+  it('rejects malformed atoms', () => {
+    expect(parseWhenAtom("$classify.output = 'BUG'")).toBeNull();
+    expect(parseWhenAtom('not an atom')).toBeNull();
+    expect(parseWhenAtom('$classify.output ==')).toBeNull();
+  });
+});
+
+describe('whenAtoms', () => {
+  it('flattens && and || into individual atoms', () => {
+    expect(whenAtoms("$a.output == 'X' && $b.output != 'Y' || $c.output == 'Z'")).toEqual([
+      "$a.output == 'X'",
+      "$b.output != 'Y'",
+      "$c.output == 'Z'",
+    ]);
+  });
+
+  it('does not split on separators inside a quoted literal', () => {
+    expect(whenAtoms("$a.output == 'x && y'")).toEqual(["$a.output == 'x && y'"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// $INPUTS in when: (#2453 defect 1) — a sub-run child can BRANCH on a caller's
+// `with:` value, not just read it in a prompt.
+// ---------------------------------------------------------------------------
+
+describe('evaluateCondition — $INPUTS refs', () => {
+  const noOutputs = new Map<string, NodeOutput>();
+
+  it('branches on a supplied input value', () => {
+    const inputs = { mode: 'fast' };
+    expect(evaluateCondition("$INPUTS.mode == 'fast'", noOutputs, inputs).result).toBe(true);
+    expect(evaluateCondition("$INPUTS.mode == 'slow'", noOutputs, inputs).result).toBe(false);
+    expect(evaluateCondition("$INPUTS.mode != 'slow'", noOutputs, inputs).parsed).toBe(true);
+  });
+
+  it('supports numeric comparison on an input value', () => {
+    expect(evaluateCondition("$INPUTS.limit > '5'", noOutputs, { limit: '10' }).result).toBe(true);
+  });
+
+  it('combines with node-output refs in a compound expression', () => {
+    const outputs = new Map([['gate', makeOutput(JSON.stringify({ verdict: 'go' }))]]);
+    expect(
+      evaluateCondition("$INPUTS.mode == 'fast' && $gate.output.verdict == 'go'", outputs, {
+        mode: 'fast',
+      }).result
+    ).toBe(true);
+  });
+
+  it('resolves an input literally named "output" instead of coincidentally returning empty', () => {
+    // Before #2453 defect 1 was fixed, `$INPUTS.output` parsed as node `INPUTS` with no
+    // field and resolved to '' — a condition that quietly compared nothing.
+    expect(evaluateCondition("$INPUTS.output == 'v'", noOutputs, { output: 'v' }).result).toBe(
+      true
+    );
+  });
+
+  it('THROWS on an undeclared input rather than resolving to empty', () => {
+    expect(() => evaluateCondition("$INPUTS.mode == ''", noOutputs, { other: 'x' })).toThrow(
+      InputRefError
+    );
+    expect(() => evaluateCondition("$INPUTS.mode == 'fast'", noOutputs, { other: 'x' })).toThrow(
+      /Available inputs: \$INPUTS\.other\./
+    );
+  });
+
+  it('THROWS when the run carries no inputs at all', () => {
+    expect(() => evaluateCondition("$INPUTS.mode == 'fast'", noOutputs)).toThrow(
+      /This run has no declared inputs\./
+    );
+  });
+
+  it('offers a did-you-mean hint for a near-miss input name', () => {
+    expect(() => evaluateCondition("$INPUTS.mdoe == 'fast'", noOutputs, { mode: 'fast' })).toThrow(
+      /Did you mean \$INPUTS\.mode\?/
+    );
   });
 });

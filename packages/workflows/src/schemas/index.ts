@@ -47,6 +47,7 @@ export {
   INPUT_NAME_SOURCE,
   inputEnvKey,
   isCommandNode,
+  isPromptNode,
   isBashNode,
   isLoopNode,
   isLoopGroupNode,

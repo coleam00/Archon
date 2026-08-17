@@ -168,15 +168,18 @@ This time `plan` runs; `investigate` is skipped. The same workflow, two paths.
 `when:` evaluates a condition before running a node. If the condition is false, the node is skipped:
 
 ```yaml
-when: "$nodeId.output == 'VALUE'"
+when: "$nodeId.output == 'VALUE'"         # whole output — bash:/script: producers only
 when: "$nodeId.output != 'VALUE'"
 when: "$nodeId.output.field == 'VALUE'"   # JSON field access
+when: "$INPUTS.name == 'VALUE'"           # a declared input supplied by the caller
 ```
 
 Two failure modes, by design:
 
 - An **invalid/unparseable expression** (bad syntax) is fail-closed — the node is **skipped**.
-- A `$node.output.field` **reference that can't resolve** — a field not declared in the producer's `output_format` schema, or a schemaless node whose output isn't JSON or lacks that key — **fails the node** (it is not silently treated as empty). The one exception: a field the producer declared **optional** but left absent resolves to `''`. Whole-text `$node.output` never fails.
+- A `$node.output.field` **reference that can't resolve** — a field not declared in the producer's `output_format` schema, or a schemaless node whose output isn't JSON or lacks that key — **fails the node** (it is not silently treated as empty). The one exception: a field the producer declared **optional** but left absent resolves to `''`. Whole-text `$node.output` never fails. A `$INPUTS.<name>` the run does not carry likewise **fails the node**.
+
+Comparing the **whole output** of an AI producer (`prompt:`, `command:`, `loop:`, `loop_group:` with no `output_format`) to a literal is rejected when the workflow loads — a model's free-form reply is never byte-identical to `BUG`, so the comparison would silently skip the node. Declare `output_format` and compare a field. See [`when:` Condition Syntax](/guides/authoring-workflows/#when-condition-syntax).
 
 ### Accessing Node Output
 

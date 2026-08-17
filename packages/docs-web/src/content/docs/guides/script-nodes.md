@@ -88,7 +88,8 @@ The file `.archon/scripts/fetch-github-pages.ts` is loaded and executed with
   deps: ["httpx", "pydantic>=2"]               # optional, uv-only (see below)
   timeout: 60000                               # optional ms, default 120000
   depends_on: [upstream]                       # optional
-  when: "$upstream.output != ''"               # optional
+  when: "$upstream.output != '[]'"             # optional (upstream is a bash/script node;
+                                               #  an AI producer needs output_format + a field)
   trigger_rule: all_success                    # optional (default)
   retry:                                       # optional; same shape as bash/AI nodes
     max_attempts: 3

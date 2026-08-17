@@ -77,7 +77,7 @@ to the user on whatever platform they're using (CLI, Slack, GitHub, etc.). On th
       prompt: "Fix based on feedback: $REJECTION_REASON"
       max_attempts: 3         # optional: default 3, range 1–10
   depends_on: [upstream-node]  # optional
-  when: "$plan.output != ''"   # optional condition
+  when: "$plan.output.ready == 'true'"  # optional condition (see note below)
   trigger_rule: all_success    # optional (default: all_success)
 ```
 
@@ -96,7 +96,11 @@ Approval nodes do not support AI-specific fields (`model`, `provider`, `context`
 as a separate AI node using the workflow's default provider.)
 
 Standard DAG fields (`id`, `depends_on`, `when`, `trigger_rule`) work as
-expected. `retry` is accepted by the schema but has **no effect** on an approval
+expected. Note that a `when:` gating the approval cannot compare the *whole* output of
+an AI producer to a literal — declare `output_format` on the producer and compare a field,
+as above. See
+[`when:` Condition Syntax](/guides/authoring-workflows/#when-condition-syntax).
+`retry` is accepted by the schema but has **no effect** on an approval
 node — the approval dispatch path never enters the retry loop. To rework a
 rejected gate, use `on_reject` (see [Rejection with AI Rework](#rejection-with-ai-rework-on_reject)),
 not `retry`.
