@@ -133,28 +133,6 @@ export async function logTool(
 }
 
 /**
- * Log validation check result
- */
-export async function logValidation(
-  logDir: string,
-  workflowRunId: string,
-  payload: {
-    check: string;
-    result: 'pass' | 'fail' | 'warn' | 'unknown';
-    error?: string;
-    step?: string;
-  }
-): Promise<void> {
-  await logWorkflowEvent(logDir, workflowRunId, {
-    type: 'validation',
-    check: payload.check,
-    result: payload.result,
-    error: payload.error,
-    step: payload.step,
-  });
-}
-
-/**
  * Log workflow error
  */
 export async function logWorkflowError(

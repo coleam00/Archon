@@ -27,7 +27,6 @@ import {
   logWorkflowStart,
   logAssistant,
   logTool,
-  logValidation,
   logWorkflowError,
   logWorkflowComplete,
   type WorkflowEvent,
@@ -170,21 +169,6 @@ Line 3`;
 
       const events = await readLogFile('complex-tool-test');
       expect(events[0].tool_input).toEqual(complexInput);
-    });
-  });
-
-  describe('logValidation', () => {
-    it('should log validation event with check/result', async () => {
-      await logValidation(testDir, 'validation-test', {
-        check: 'type-check',
-        result: 'fail',
-        error: 'tsc not found',
-      });
-
-      const events = await readLogFile('validation-test');
-      expect(events[0].type).toBe('validation');
-      expect(events[0].check).toBe('type-check');
-      expect(events[0].result).toBe('fail');
     });
   });
 
