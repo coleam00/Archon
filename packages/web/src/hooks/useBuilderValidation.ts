@@ -145,10 +145,11 @@ export function getDebouncedIssues(nodes: DagFlowNode[], edges: Edge[]): Validat
   // the two builders can no longer disagree about what a reference IS.
   //
   // They can still disagree about WHERE one is looked for, and this scan is the
-  // narrower of the two. It reads the bodies `resolveNodeDisplay` surfaces
-  // (`dag-layout.ts`): `when`, `promptText`, `bashScript`. `DagNodeData extends
+  // narrower of the two. It reads `when` — which arrives on `data` via the
+  // `...dn` spread — plus the two bodies `resolveNodeDisplay` synthesizes
+  // (`dag-layout.ts`): `promptText` and `bashScript`. `DagNodeData extends
   // DagNode`, so a script node's `script` and an approval node's
-  // `approval.message` do reach `data` through the spread — but
+  // `approval.message` reach `data` through that same spread — but
   // `resolveNodeDisplay` has no `script` branch and its `approval` branch
   // returns no text, so nothing copies them into the fields read here. The
   // engine loader and the console builder DO validate refs in both. Refs there

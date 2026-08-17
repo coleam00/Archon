@@ -47,16 +47,41 @@ function missing(name: string, file: string): Error {
 }
 
 /**
- * Both extractors anchor the declaration to the start of its line (`^\s*`, `m`).
- * Without that they take the FIRST textual match, so a commented-out copy holding
- * the CURRENT value — an ordinary thing to find above a constant someone is
- * mid-refactor on — shadows a genuinely drifted live one and the whole suite
- * passes. That was verified, not theorised: unanchored, a dropped hyphen in
- * `NODE_ID_SOURCE` plus an extra `when:` operator in `atomPattern` left this file
- * at 3 pass / 0 fail. A guard that can be silently defeated is worse than none,
- * because it buys confidence in exactly the invariant it fails to check.
+ * A regex over raw source cannot tell a DECLARATION from a MENTION of one. That
+ * is the whole difficulty here, and every layer below is about narrowing the gap
+ * — none of them closes it, so treat this as "cheap steps toward reading code",
+ * not as a solved problem.
+ *
+ * The failure mode is concrete: a commented-out copy holding the CURRENT value,
+ * sitting above a live constant that has genuinely drifted. That is an ordinary
+ * thing to find in a file someone is mid-refactor on, and it makes the whole
+ * suite pass while the invariant is broken. Measured against the real test file,
+ * each row with the #2567 regression (a dropped hyphen in `NODE_ID_SOURCE`) live:
+ *
+ *   extractor                  `// …`      `/*` indented   `/*` at column 0
+ *   no anchor                  DEFEATED    DEFEATED        DEFEATED
+ *   `^\s*(?:export )?const`    caught      DEFEATED        DEFEATED
+ *   `^(?:export )?const`       caught      caught          DEFEATED
+ *   + strip comments first     caught      caught          caught
+ *
+ * Hence both layers, which are complementary rather than redundant: stripping
+ * removes commented-out copies whatever their indentation, and the column-0
+ * anchor still rejects a mention embedded mid-line in live code, which stripping
+ * leaves untouched.
+ *
+ * Column 0 is safe rather than brittle: all six constants this file extracts are
+ * top-level, and an indented one would not be. If a future constant is nested,
+ * widen deliberately and re-run the decoy matrix — do not reach for `\s*`.
+ *
+ * A guard that can be silently defeated is worse than no guard: it buys
+ * confidence in exactly the invariant it is failing to check.
  */
-const DECL = String.raw`^\s*(?:export )?const`;
+const DECL = String.raw`^(?:export )?const`;
+
+/** Drop block comments and whole-line `//` comments before matching. */
+function stripComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
+}
 
 /**
  * Extract a `const <name> = String.raw`…`` literal, failing loudly if it moved.
@@ -64,7 +89,7 @@ const DECL = String.raw`^\s*(?:export )?const`;
  * pattern is spelled.
  */
 function rawConstant(file: string, name: string): string {
-  const source = readFileSync(file, 'utf8');
+  const source = stripComments(readFileSync(file, 'utf8'));
   const match = new RegExp(
     String.raw`${DECL} ${name} =\s*(?:new RegExp\(\s*)?String\.raw\x60([^\x60]*)\x60`,
     'm'
@@ -75,7 +100,7 @@ function rawConstant(file: string, name: string): string {
 
 /** Extract a `const <name> = /…/;` regex literal, joining a wrapped one back up. */
 function regexConstant(file: string, name: string): string {
-  const source = readFileSync(file, 'utf8');
+  const source = stripComments(readFileSync(file, 'utf8'));
   const match = new RegExp(String.raw`${DECL} ${name} =\s*\/([\s\S]*?)\/;`, 'm').exec(source);
   if (match?.[1] === undefined) throw missing(name, file);
   return match[1]
