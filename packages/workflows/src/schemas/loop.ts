@@ -25,11 +25,13 @@ const isNonBlank = (value: string): boolean => value.trim().length > 0;
  *
  * ## Completion channels (#2563)
  *
- * A loop ends through a **completion channel** it declared. `until` (prose signal)
- * and `until_bash` (deterministic check) are the channels today. No single one is
- * required: a loop whose completion is fully checkable declares only `until_bash`
- * and then has no prose-matching path at all, so a sentinel string the model
- * happens to emit while reasoning cannot end it.
+ * A loop ends through a **completion channel** it declared. This shared surface
+ * carries two — `until` (prose signal) and `until_bash` (deterministic check) —
+ * and `loop:` adds a third, `until_field` (a declared boolean in the node's
+ * `output_format`), which `loop_group:` does not have. No single one is required:
+ * a loop whose completion is fully checkable declares only `until_bash` and then
+ * has no prose-matching path at all, so a sentinel string the model happens to
+ * emit while reasoning cannot end it.
  *
  * Two independent rules govern the set, and both are needed:
  *  - **per channel** — a declared channel must carry a usable (non-blank) value;
@@ -42,10 +44,20 @@ const isNonBlank = (value: string): boolean => value.trim().length > 0;
  * `detectCompletionSignal`, whose own-line and end-of-output patterns then match a
  * whitespace-only markdown line or any output ending in a space.
  *
- * Adding a channel means adding it to BOTH rules, and to the console builder's
- * hand-written mirror in `builder/validation/structural.ts` — @archon/web cannot
- * import this package, so the two encodings agree by convention. Verify agreement
- * by parsing both, never by reading them.
+ * Adding a channel means adding it to BOTH rules here, and to TWO hand-maintained
+ * files in the console builder — @archon/web cannot import this package, so they
+ * agree by convention rather than by type. They fail differently, and the second
+ * is the dangerous one:
+ *  - `builder/validation/structural.ts` mirrors these rules. Miss it and the
+ *    builder reports the wrong verdict for a workflow the engine accepts.
+ *  - `builder/variants/loop.ts` (`loopFromDag`/`loopToDag`) is a hand-written FIELD
+ *    LIST, and the importer's unsupported-key warning only walks TOP-LEVEL wire
+ *    keys — anything nested inside `loop: {…}` is invisible to it. Miss it and the
+ *    field is SILENTLY DELETED the first time anyone opens the workflow in the
+ *    console and saves: no import issue, no warning, the loop just quietly loses a
+ *    completion channel. `signal_completes` behaves this way today.
+ *
+ * Verify agreement by parsing both, never by reading them.
  */
 export const loopControlSchema = z
   .object({
