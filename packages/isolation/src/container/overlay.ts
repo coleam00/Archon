@@ -232,8 +232,15 @@ function pushCapped(list: string[], path: string): void {
 // Shell scripts. Parameterized ($1=upperdir, $2=lower|dest, $3=project root) and
 // portable (no `stat -c` / `realpath -m`) so they run in the runner image AND under
 // bash in the unit tests. NUL-delimited, TAB-separated records. `set -f` disables
-// globbing so adversarial filenames can't expand. NO `${…}` brace expansion (it
-// would be read as a JS template interpolation) — basename/dirname/cut/ls are used.
+// globbing so adversarial filenames can't expand.
+//
+// Path splitting uses `${…}` parameter expansion, escaped as `\${…}` so TypeScript
+// does not read it as a template interpolation. It replaced per-entry
+// basename/dirname/cut forks (#2558) — and note the expansions are the SAFER form,
+// not merely the cheaper one: `$(…)` strips trailing newlines, so a filename ending
+// in one used to decode to a different name and act on the wrong file. Do not
+// reintroduce command substitution here. The escaping is parser-enforced: an
+// unescaped `${…}` in these template literals is a TypeScript syntax error.
 // ---------------------------------------------------------------------------
 
 /**

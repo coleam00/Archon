@@ -164,9 +164,53 @@ describe('apply script — rel/base/dir splitting', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
+  // The expansions are not merely cheaper than the forks they replaced — they are
+  // correct where the forks were not, and these two cases were live holes. Nothing
+  // in the suite caught either, because the whole pre-PR implementation passes it.
+  test.skipIf(isWin)('a whiteout name ending in a newline deletes THAT file, not its stem', () => {
+    // `$(basename …)` strips trailing newlines, so `.wh.evil\n` used to decode to
+    // `evil` and delete a different, innocent file — while `safe_parent` also
+    // confined the wrong path. Skipped on win32: creating such a name is not
+    // portable there, and these scripts only ever run in the Linux runner image.
+    const { root, upper, dest, ws } = makeDirs();
+    writeFileSync(join(upper, '.wh.evil\n'), '');
+    writeFileSync(join(dest, 'evil\n'), 'the real target');
+    writeFileSync(join(dest, 'evil'), 'innocent bystander');
+
+    const { records } = runScript(buildApplyScript(), upper, dest, ws);
+
+    expect(existsSync(join(dest, 'evil\n'))).toBe(false);
+    expect(existsSync(join(dest, 'evil'))).toBe(true);
+    expect(records.some(r => r.tag === 'D' && r.fields[0] === 'evil\n')).toBe(true);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test('a whiteout under a `-`-prefixed directory still decodes instead of being copied', () => {
+    // `basename "-d/.wh.foo"` exits 1 with "illegal option -- d", so `base` came
+    // back empty, the `.wh.*` arm never matched, and the marker was applied as an
+    // ordinary FILE — planting a `.wh.foo` file in the live root instead of
+    // deleting `foo`.
+    const { root, upper, dest, ws } = makeDirs();
+    mkdirSync(join(upper, '-d'), { recursive: true });
+    writeFileSync(join(upper, '-d', '.wh.foo'), '');
+    mkdirSync(join(dest, '-d'), { recursive: true });
+    writeFileSync(join(dest, '-d', 'foo'), 'should be deleted');
+
+    const { records } = runScript(buildApplyScript(), upper, dest, ws);
+
+    expect(existsSync(join(dest, '-d', 'foo'))).toBe(false);
+    // The marker itself must never land in the destination.
+    expect(existsSync(join(dest, '-d', '.wh.foo'))).toBe(false);
+    expect(records.some(r => r.tag === 'D' && r.fields[0] === '-d/foo')).toBe(true);
+    rmSync(root, { recursive: true, force: true });
+  });
+
   test('`.wh..wh.x` decodes to `.wh.x` — one prefix stripped, not four characters', () => {
-    // cut -c5- and ${base#.wh.} agree here, and this pins that they keep agreeing:
-    // stripping greedily (##) would decode to 'x' and delete the wrong entry.
+    // cut -c5- and ${base#.wh.} agree here, and this pins that they keep agreeing.
+    // The mutation it catches is `${base##*.wh.}`, which decodes to 'x' and deletes
+    // the wrong entry. Note plain `##` is NOT the hazard: with a literal pattern
+    // `${base##.wh.}` is byte-identical to `${base#.wh.}` — only adding the `*`
+    // makes it greedy.
     const { root, upper, dest, ws } = makeDirs();
     writeFileSync(join(upper, '.wh..wh.x'), '');
     writeFileSync(join(dest, '.wh.x'), 'the real target');
@@ -282,6 +326,28 @@ describe('summary script — faithful representation (M1)', () => {
     expect(okLink?.fields[2]).toBe('0'); // in-project
     expect(records.some(r => r.tag === 'A' && r.fields[0] === 'added.txt')).toBe(true);
     expect(records.some(r => r.tag === 'M' && r.fields[0] === 'mod.txt')).toBe(true);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  // The summary script carries its OWN copy of the rel/base/dir splitting, and
+  // until this test nothing executed it: the case above is skipped on win32, sits
+  // entirely at the top level, and contains no whiteout. Drift between the two
+  // copies would therefore be invisible — and it is the summary that renders the
+  // delete list a human approves, so a wrong `dir` there misinforms consent rather
+  // than merely misapplying. No symlinks, so this runs everywhere.
+  test('a nested whiteout is reported at its full path, not its stem', () => {
+    const { root, upper, dest, ws } = makeDirs();
+    mkdirSync(join(upper, 'sub'), { recursive: true });
+    writeFileSync(join(upper, 'sub', '.wh.gone.txt'), '');
+    mkdirSync(join(dest, 'sub'), { recursive: true });
+    writeFileSync(join(dest, 'sub', 'gone.txt'), 'bye');
+
+    const { records } = runScript(buildSummaryScript(), upper, dest, ws);
+
+    expect(records.some(r => r.tag === 'D' && r.fields[0] === 'sub/gone.txt')).toBe(true);
+    // An empty `dir` would report the top-level name and invite the approver to
+    // sign off on deleting a different file.
+    expect(records.some(r => r.tag === 'D' && r.fields[0] === 'gone.txt')).toBe(false);
     rmSync(root, { recursive: true, force: true });
   });
 });
