@@ -92,13 +92,15 @@ Declaring more than one is fine and means "whichever fires first ends it".
     # command: <name>       # Alternative to `prompt`: package-local or shared command name,
     #                       # loaded once per run and reused for every iteration.
     #                       # Never combine with `prompt` — the loader rejects both together.
-    until: COMPLETE         # Completion signal string. Required unless `until_bash` is set.
+    until: COMPLETE         # Prose completion signal.
     max_iterations: 10      # Required. Hard limit — node fails if exceeded.
     fresh_context: true     # Optional. Default: false.
     until_bash: "..."       # Bash script checked after each iteration; exit 0 = complete.
     until_field: done       # Property in this node's `output_format` whose validated
                             # value `true` ends the loop.
-                            # At least one of until / until_bash / until_field is required.
+                            #
+                            # At least ONE completion channel is required — any of
+                            # until / until_bash / until_field. None is required alone.
     interactive: true       # Optional. Default: false. Pause after each non-completing
                             # iteration for user input via /workflow approve.
     gate_message: "..."     # Required when interactive: true. Message shown to the
@@ -247,18 +249,19 @@ loop:
                               # false-positive on, and no dead field to invent.
 ```
 
-`until_bash` runs only on iterations that the `until` signal did not already
-complete, so a loop declaring both never pays for a redundant check.
+`until_bash` runs only on iterations that no other completion channel already
+ended, so a loop declaring more than one never pays for a redundant check.
 
 :::caution[If your `until_bash` accumulates state]
-The skip means the script does not run on a signalled iteration, so a check that
-*mutates* state each time it runs — a counter, an append, a cursor — advances once
-fewer than it would have. The completion verdict is unaffected either way (the
+The skip means the script does not run on an iteration another channel already
+completed, so a check that *mutates* state each time it runs — a counter, an append,
+a cursor — advances once fewer than it would have. The completion verdict is unaffected either way (the
 channels are OR'd), and a non-interactive loop ends on that same iteration, so
 nothing observable differs.
 
 The one case where the timing does shift: an **interactive** loop whose first run
-signals still gates rather than completing (unless `signal_completes: true`). If you
+completes on another channel still gates rather than finishing (unless
+`signal_completes: true`). If you
 then approve *with text*, another iteration runs — and its `until_bash` sees state
 one increment behind where it would have been. A state-accumulating check therefore
 reaches its threshold one iteration later. Approving with no text finalizes from the
@@ -446,8 +449,8 @@ Combine LLM work with a deterministic completion check:
 The loop ends either when the AI signals completion or when the bash check
 succeeds — whichever comes first.
 
-**The bash check does not veto the signal.** The two channels are OR'd, so an AI
-that emits `TESTS_PASS` while tests still fail ends the loop anyway. If the tests
+**No channel vetoes another.** They are OR'd, so an AI that emits `TESTS_PASS`
+while tests still fail ends the loop anyway — the bash check never gets to disagree. If the tests
 are the real exit criterion, say so by dropping `until` and the sentence that
 teaches the model to emit it:
 
