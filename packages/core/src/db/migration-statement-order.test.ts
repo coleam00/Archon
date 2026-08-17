@@ -30,6 +30,9 @@ const SCHEMA_SQL = readFileSync(
   'utf8'
 );
 
+/** The SQLite adapter source, read as text — the twin schema is code, not a file. */
+const SQLITE_ADAPTER = readFileSync(resolve(import.meta.dir, 'adapters/sqlite.ts'), 'utf8');
+
 /** Header of the trailing section that owns every column-referencing statement. */
 const SECTION_HEADER = '-- Indexes and column comments';
 
@@ -85,6 +88,44 @@ describe('migrations/000_combined.sql — statement ordering', () => {
       addColumn
     );
     expect(SCHEMA_SQL.indexOf('ALTER COLUMN event_order SET DEFAULT')).toBeGreaterThan(addColumn);
+  });
+
+  /**
+   * The SQLite twin has the same hazard through a different mechanism:
+   * `createSchema()` runs BEFORE `migrateColumns()`, so an index in the
+   * `createSchema()` exec block that names a column `migrateColumns()` adds
+   * throws `no such column` and takes the whole adapter constructor with it.
+   * This is the structural equivalent of the Postgres assertions above — it
+   * catches any future column, not only the three that were wrong.
+   */
+  test('no index in SQLite createSchema() names a column migrateColumns() adds', () => {
+    const addedByMigration = new Map<string, Set<string>>();
+    for (const m of SQLITE_ADAPTER.matchAll(/ALTER TABLE (\w+) ADD COLUMN (\w+)/g)) {
+      const [, table, column] = m;
+      if (!addedByMigration.has(table)) addedByMigration.set(table, new Set());
+      addedByMigration.get(table)!.add(column);
+    }
+    expect(addedByMigration.size).toBeGreaterThan(0);
+
+    // Everything from createSchema() onward — migrateColumns() sits above it.
+    // SQL line comments are stripped so prose describing this very hazard (or a
+    // future comment quoting an index definition) cannot trip the scan.
+    const createSchemaStart = SQLITE_ADAPTER.indexOf('private createSchema()');
+    expect(createSchemaStart).toBeGreaterThan(-1);
+    const createSchemaBlock = SQLITE_ADAPTER.slice(createSchemaStart).replace(/^\s*--.*$/gm, '');
+
+    const offenders: string[] = [];
+    const indexStatement = /CREATE\s+(?:UNIQUE\s+)?INDEX[^;]*?ON\s+(\w+)\s*\(([^)]*)\)([^;]*);/gi;
+    for (const m of createSchemaBlock.matchAll(indexStatement)) {
+      const [statement, table, columnList, tail] = m;
+      for (const column of addedByMigration.get(table) ?? []) {
+        if (new RegExp(`\\b${column}\\b`).test(columnList + tail)) {
+          offenders.push(`${column} in: ${statement.replace(/\s+/g, ' ').trim()}`);
+        }
+      }
+    }
+
+    expect(offenders).toEqual([]);
   });
 
   test('the CREATE TABLE body still declares event_order, so fresh installs are unaffected', () => {

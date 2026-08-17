@@ -27,6 +27,14 @@ bun run test           # All tests (per-package isolation)
 bun run validate
 ```
 
+**Schema changes**: `bun run validate` does not cover `migrations/000_combined.sql`
+upgrades — that check needs a live PostgreSQL, so CI runs it as its own job. If you
+touched the schema, run it yourself against any PostgreSQL:
+
+```bash
+bun run check:schema-upgrades   # PGHOST/PGUSER/… or DATABASE_URL
+```
+
 **Bundled defaults**: If you added, removed, or edited a file under
 `.archon/commands/defaults/` or `.archon/workflows/defaults/`, run
 `bun run generate:bundled` to refresh the embedded bundle before committing.

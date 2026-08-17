@@ -22,8 +22,8 @@
  *   bun run check:schema-upgrades v0.7.0 HEAD~50
  *
  * Connection: standard psql env vars (PGHOST/PGPORT/PGUSER/PGPASSWORD), or a
- * DATABASE_URL whose database name is ignored — this script creates and drops
- * its own scratch databases.
+ * DATABASE_URL — its options are honoured but its database name is replaced,
+ * since this script creates and drops its own scratch databases.
  */
 import { spawnSync } from 'child_process';
 import { mkdtempSync, writeFileSync, rmSync } from 'fs';
@@ -41,35 +41,42 @@ interface Baseline {
   sql: string;
 }
 
+/**
+ * Deliberately `spawnSync` rather than `@archon/git`: this script must run in CI
+ * with no `bun install` (it imports nothing outside Node builtins), and reads
+ * history — `git show <ref>:<path>` — rather than manipulating worktrees, which
+ * is what `@archon/git` covers. The argument array means no ref ever reaches a
+ * shell.
+ */
 function git(...args: string[]): { ok: boolean; stdout: string } {
   const r = spawnSync('git', args, { encoding: 'utf8' });
   return { ok: r.status === 0, stdout: r.stdout ?? '' };
 }
 
-/** psql env, with DATABASE_URL decomposed into PG* vars when present. */
-function psqlEnv(): Record<string, string> {
-  const env: Record<string, string> = { ...(process.env as Record<string, string>) };
+/**
+ * Connection target for one database. With DATABASE_URL set, the URI is passed
+ * through with only its database name replaced, so `?sslmode=…` and every other
+ * option survives; otherwise psql reads the standard PG* env vars.
+ */
+function connectionFor(db: string): string {
   const url = process.env.DATABASE_URL;
-  if (url) {
-    const u = new URL(url);
-    if (u.hostname) env.PGHOST = u.hostname;
-    if (u.port) env.PGPORT = u.port;
-    if (u.username) env.PGUSER = decodeURIComponent(u.username);
-    if (u.password) env.PGPASSWORD = decodeURIComponent(u.password);
-  }
-  return env;
+  if (!url) return db;
+  const u = new URL(url);
+  u.pathname = `/${db}`;
+  return u.toString();
 }
 
 /** Run psql against `db`. `file` applies a script transactionally; `sql` runs one query. */
 function psql(db: string, opts: { file?: string; sql?: string }): { code: number; out: string } {
-  const args = ['-X', '-q', '-v', 'ON_ERROR_STOP=1', '-d', db];
+  const args = ['-X', '-q', '-v', 'ON_ERROR_STOP=1', '-d', connectionFor(db)];
   if (opts.file) args.push('--single-transaction', '-f', opts.file);
   if (opts.sql) args.push('-A', '-t', '-c', opts.sql);
-  const r = spawnSync('psql', args, { encoding: 'utf8', env: psqlEnv() });
+  const r = spawnSync('psql', args, { encoding: 'utf8' });
   if (r.error) {
-    console.error(`\npsql could not be executed: ${r.error.message}`);
-    console.error('Install the PostgreSQL client and point PGHOST/PGPORT/PGUSER at a server.');
-    process.exit(1);
+    throw new Error(
+      `psql could not be executed: ${r.error.message}\n` +
+        'Install the PostgreSQL client and point PGHOST/PGPORT/PGUSER (or DATABASE_URL) at a server.'
+    );
   }
   return { code: r.status ?? 1, out: `${r.stdout ?? ''}${r.stderr ?? ''}` };
 }
@@ -115,7 +122,38 @@ const CATALOG_QUERIES: Record<string, string> = {
              LEFT JOIN pg_class c ON c.oid = d.objoid
              LEFT JOIN pg_attribute a ON a.attrelid = d.objoid AND a.attnum = d.objsubid
              ORDER BY 1`,
+  constraints: `SELECT conrelid::regclass||' '||conname||' '||pg_get_constraintdef(oid)
+                FROM pg_constraint WHERE connamespace = 'public'::regnamespace ORDER BY 1`,
+  sequences: `SELECT sequencename||' owned_by='||COALESCE(
+                (SELECT c.relname||'.'||a.attname
+                 FROM pg_depend d
+                 JOIN pg_class c ON c.oid = d.refobjid
+                 JOIN pg_attribute a ON a.attrelid = d.refobjid AND a.attnum = d.refobjsubid
+                 WHERE d.objid = (schemaname||'.'||sequencename)::regclass AND d.deptype = 'a'),
+                '-')
+              FROM pg_sequences WHERE schemaname = 'public' ORDER BY 1`,
 };
+
+/**
+ * Divergences between a fresh install and an upgrade that are known and
+ * sanctioned rather than bugs — kept as a small tracked allowlist, in the spirit
+ * of the SQLite/Postgres parity test. Every entry needs a reason, and hits are
+ * printed on every run so an allowance never becomes invisible.
+ */
+const ALLOWED_DRIFT: { catalog: string; prefix: string; why: string }[] = [
+  {
+    catalog: 'constraints',
+    prefix: 'remote_agent_codebases remote_agent_codebases_kind_check',
+    why:
+      'a CHECK declared in a CREATE TABLE body binds only databases created after it (AGENTS.md); ' +
+      'SQLite cannot add one by ALTER at all, so enforcing it on Postgres alone would break dialect ' +
+      'parity. Application code stays tolerant instead.',
+  },
+];
+
+function allowedDrift(catalogName: string, line: string): string | undefined {
+  return ALLOWED_DRIFT.find(a => a.catalog === catalogName && line.startsWith(a.prefix))?.why;
+}
 
 function catalog(db: string): Record<string, string> {
   const snapshot: Record<string, string> = {};
@@ -127,13 +165,24 @@ function catalog(db: string): Record<string, string> {
   return snapshot;
 }
 
+/**
+ * Scratch databases this run created. Tracked so no failure path can leak one:
+ * the interesting failure is "the current schema does not apply", and leaving
+ * the wreckage of that behind on a developer's persistent server would be a poor
+ * thank-you for the check that found it.
+ */
+const createdDbs = new Set<string>();
+
 function recreate(db: string): void {
   admin(`DROP DATABASE IF EXISTS ${db}`);
   const r = admin(`CREATE DATABASE ${db}`);
-  if (r.code !== 0) {
-    console.error(`could not create ${db}: ${r.out}`);
-    process.exit(1);
-  }
+  if (r.code !== 0) throw new Error(`could not create ${db}: ${r.out}`);
+  createdDbs.add(db);
+}
+
+function drop(db: string): void {
+  admin(`DROP DATABASE IF EXISTS ${db}`);
+  createdDbs.delete(db);
 }
 
 function dbNameFor(ref: string): string {
@@ -152,18 +201,14 @@ let failures = 0;
 
 try {
   const baselines = loadBaselines(refs, workDir);
-  if (baselines.length === 0) {
-    console.error('none of the requested refs carry the schema file');
-    process.exit(1);
-  }
+  if (baselines.length === 0) throw new Error('none of the requested refs carry the schema file');
 
   // Reference: what a fresh install of the CURRENT schema looks like.
   const freshDb = 'archon_upgrade_fresh';
   recreate(freshDb);
   const fresh = psql(freshDb, { file: SCHEMA_PATH });
   if (fresh.code !== 0) {
-    console.error(`FAIL fresh install of the current schema:\n${fresh.out}`);
-    process.exit(1);
+    throw new Error(`FAIL fresh install of the current schema:\n${fresh.out}`);
   }
   const freshCatalog = catalog(freshDb);
   console.log(`fresh install OK (${freshCatalog.indexes.split('\n').length} indexes)\n`);
@@ -178,7 +223,7 @@ try {
       // but still a real "you cannot stand this version up" signal worth failing on.
       console.error(`FAIL ${ref}: the baseline schema itself did not apply\n${base.out}`);
       failures++;
-      admin(`DROP DATABASE IF EXISTS ${db}`);
+      drop(db);
       continue;
     }
 
@@ -186,7 +231,7 @@ try {
     if (upgrade.code !== 0) {
       console.error(`FAIL ${ref}: upgrading to the current schema aborted\n${upgrade.out}`);
       failures++;
-      admin(`DROP DATABASE IF EXISTS ${db}`);
+      drop(db);
       continue;
     }
 
@@ -195,39 +240,54 @@ try {
     if (again.code !== 0) {
       console.error(`FAIL ${ref}: re-applying the current schema is not idempotent\n${again.out}`);
       failures++;
-      admin(`DROP DATABASE IF EXISTS ${db}`);
+      drop(db);
       continue;
     }
 
+    // An upgrade that survives but lands somewhere else is the other half of
+    // this failure mode: the crash is gone and an index quietly is too.
     const upgraded = catalog(db);
-    const drift = Object.keys(CATALOG_QUERIES).filter(k => upgraded[k] !== freshCatalog[k]);
-    if (drift.length > 0) {
-      // An upgrade that survives but lands somewhere else is the other half of
-      // this failure mode: the crash is gone and an index quietly is too.
-      console.error(
-        `FAIL ${ref}: upgraded schema differs from a fresh install (${drift.join(', ')})`
-      );
-      for (const k of drift) {
-        const freshLines = new Set(freshCatalog[k].split('\n'));
-        const upgradedLines = new Set(upgraded[k].split('\n'));
-        for (const line of freshLines) {
-          if (!upgradedLines.has(line)) console.error(`  missing after upgrade [${k}]: ${line}`);
-        }
-        for (const line of upgradedLines) {
-          if (!freshLines.has(line)) console.error(`  extra after upgrade   [${k}]: ${line}`);
-        }
+    const differences: string[] = [];
+    const allowed: string[] = [];
+
+    for (const k of Object.keys(CATALOG_QUERIES)) {
+      const freshLines = new Set(freshCatalog[k].split('\n').filter(Boolean));
+      const upgradedLines = new Set(upgraded[k].split('\n').filter(Boolean));
+      for (const line of freshLines) {
+        if (upgradedLines.has(line)) continue;
+        const sanctioned = allowedDrift(k, line);
+        if (sanctioned) allowed.push(`[${k}] ${line}\n     sanctioned: ${sanctioned}`);
+        else differences.push(`  missing after upgrade [${k}]: ${line}`);
       }
+      for (const line of upgradedLines) {
+        if (freshLines.has(line)) continue;
+        const sanctioned = allowedDrift(k, line);
+        if (sanctioned) allowed.push(`[${k}] ${line}\n     sanctioned: ${sanctioned}`);
+        else differences.push(`  extra after upgrade   [${k}]: ${line}`);
+      }
+    }
+
+    if (differences.length > 0) {
+      console.error(`FAIL ${ref}: upgraded schema differs from a fresh install`);
+      for (const line of differences) console.error(line);
       failures++;
-      admin(`DROP DATABASE IF EXISTS ${db}`);
+      drop(db);
       continue;
     }
 
     console.log(`ok   ${ref} → current (idempotent, converges on the fresh schema)`);
-    admin(`DROP DATABASE IF EXISTS ${db}`);
+    // Never silent: an allowed divergence is still printed every run.
+    for (const line of allowed) console.log(`     allowed divergence ${line}`);
+    drop(db);
   }
 
-  admin(`DROP DATABASE IF EXISTS ${freshDb}`);
+  drop(freshDb);
+} catch (err) {
+  console.error(`\n${(err as Error).message}`);
+  failures++;
 } finally {
+  // Runs on every path, including the early failures above.
+  for (const db of createdDbs) admin(`DROP DATABASE IF EXISTS ${db}`);
   rmSync(workDir, { recursive: true, force: true });
 }
 

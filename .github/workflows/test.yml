@@ -77,6 +77,8 @@ jobs:
     # apply on an upgrade. This job applies the current schema on top of
     # databases built by older RELEASES, which is the only place that shows up.
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     services:
       postgres:
         image: postgres:17-alpine
@@ -100,6 +102,9 @@ jobs:
           # Baselines are release tags read with `git show <tag>:<path>`;
           # the default shallow clone has neither the tags nor the history.
           fetch-depth: 0
+          # The checker only reads local history — it never needs the token,
+          # so don't leave it in the worktree's git config.
+          persist-credentials: false
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2

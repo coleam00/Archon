@@ -562,7 +562,10 @@ CREATE TABLE IF NOT EXISTS remote_agent_auth_verification (
 --
 -- Keeping these statements below the additive block makes that failure
 -- unrepresentable instead of something each author has to remember. Add new
--- indexes and column comments HERE, never beside the table body.
+-- indexes and column comments HERE, never beside the table body — and add new
+-- `ALTER TABLE ... ADD COLUMN` statements ABOVE this section, not after it, so
+-- this section stays last. (Both mistakes fail migration-statement-order.test.ts
+-- rather than reaching a user's upgrade.)
 --
 -- Guarded by packages/core/src/db/migration-statement-order.test.ts and
 -- exercised against real PostgreSQL upgrades by scripts/check-schema-upgrades.ts.

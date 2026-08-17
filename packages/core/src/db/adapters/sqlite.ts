@@ -313,8 +313,18 @@ export class SqliteAdapter implements IDatabase {
       this.db.run(
         'CREATE INDEX IF NOT EXISTS idx_conversations_hidden ON remote_agent_conversations(hidden)'
       );
-      // Replaces the older non-partial index of the same name.
-      this.db.run('DROP INDEX IF EXISTS idx_conversations_codebase');
+      // idx_conversations_codebase was originally non-partial. Replace it once,
+      // not on every open: an unconditional DROP + CREATE rebuilds the index
+      // each time the adapter is constructed, and leaves a window where the
+      // index is gone if the re-create fails.
+      const existingCodebaseIdx = this.db
+        .prepare(
+          "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_conversations_codebase'"
+        )
+        .get() as { sql: string | null } | null;
+      if (existingCodebaseIdx && !(existingCodebaseIdx.sql ?? '').includes('deleted_at IS NULL')) {
+        this.db.run('DROP INDEX idx_conversations_codebase');
+      }
       this.db.run(
         'CREATE INDEX IF NOT EXISTS idx_conversations_codebase ON remote_agent_conversations(codebase_id) WHERE deleted_at IS NULL'
       );
