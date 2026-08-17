@@ -53,6 +53,8 @@ import type {
   EffortLevel,
   ThinkingConfig,
   SandboxSettings,
+  ModelReasoningEffort,
+  WebSearchMode,
   WorkflowSource,
   WorkflowDefinition,
   LoopGateRunMetadata,
@@ -337,13 +339,22 @@ export async function loadConfiguredMcpServerNames(
   }
 }
 
-/** Workflow-level Claude SDK options — per-node overrides take precedence via ?? */
+/** Workflow-level provider options. The first five have node-level counterparts and
+ *  are resolved as `node.X ?? workflowLevelOptions.X`; the two Codex fields below have
+ *  NO node-level equivalent (they are absent from `dagNodeSchema`), so a workflow-level
+ *  value is the only value. */
 interface WorkflowLevelOptions {
   effort?: EffortLevel;
   thinking?: ThinkingConfig;
   fallbackModel?: string;
   betas?: string[];
   sandbox?: SandboxSettings;
+  /** Codex-only: reasoning effort, consumed as `assistantConfig.modelReasoningEffort`.
+   *  Written only when the resolved provider is Codex — see `resolveNodeProviderAndModel`. */
+  modelReasoningEffort?: ModelReasoningEffort;
+  /** Codex-only: web-search mode, consumed as `assistantConfig.webSearchMode`. Same
+   *  provider gate as `modelReasoningEffort`. */
+  webSearchMode?: WebSearchMode;
   /** Workflow-level tier keyword (when `workflow.model` is small/medium/large), so
    *  nodes that inherit the workflow model can still surface the `← tier` annotation. */
   workflowTier?: 'small' | 'medium' | 'large';
@@ -1092,6 +1103,21 @@ async function resolveNodeProviderAndModel(
     }
   }
 
+  // `modelReasoningEffort`/`webSearchMode` are read only by Codex (codex/provider.ts).
+  // They have no ProviderCapabilities axis, so capChecks above cannot see them — adding
+  // a second effort-shaped axis is the wrong fix and is deliberately deferred to #2556.
+  // Surfacing them here reuses the existing loud-mismatch path so a workflow that
+  // declares either one on a non-Codex node gets the same warning every other
+  // capability mismatch produces, instead of a silent no-op.
+  if (provider !== 'codex') {
+    if (workflowLevelOptions.modelReasoningEffort !== undefined) {
+      unsupported.push('modelReasoningEffort');
+    }
+    if (workflowLevelOptions.webSearchMode !== undefined) {
+      unsupported.push('webSearchMode');
+    }
+  }
+
   if (unsupported.length > 0) {
     getLog().warn({ nodeId: node.id, provider, unsupported }, 'dag.unsupported_capabilities');
     const delivered = await safeSendMessage(
@@ -1158,11 +1184,30 @@ async function resolveNodeProviderAndModel(
     nodeConfig,
     assistantConfig
   );
+  // Workflow-level Codex options (#2246). Applied AFTER applyPresetOptions so an
+  // explicit workflow literal beats a preset-routed effort — precedence is
+  // workflow-level > tier preset > config.yaml — and BEFORE the resolvedEffort read
+  // below so telemetry reports the value that actually runs.
+  //
+  // Gated on the resolved provider: Codex is the only consumer (codex/provider.ts),
+  // and an ungated write would land on Copilot too, which reads the same key from
+  // assistantConfig with a narrower enum. Declaring either field on a non-Codex node
+  // warns via the capability block above rather than silently doing nothing.
+  if (provider === 'codex') {
+    if (workflowLevelOptions.modelReasoningEffort !== undefined) {
+      assistantConfig.modelReasoningEffort = workflowLevelOptions.modelReasoningEffort;
+    }
+    if (workflowLevelOptions.webSearchMode !== undefined) {
+      assistantConfig.webSearchMode = workflowLevelOptions.webSearchMode;
+    }
+  }
+
   // Read POST-routing values only. applyPresetOptions -> routePresetEffort has
   // already placed effort where the provider actually consumes it — nodeConfig
   // for providers taking a node-level `effort:`, assistantConfig for Codex's
-  // modelReasoningEffort — and warned + dropped it where unsupported. So both
-  // reads below hold effort that will genuinely be applied.
+  // modelReasoningEffort — and warned + dropped it where unsupported; the
+  // workflow-level override above has already been applied. So both reads below
+  // hold effort that will genuinely be applied.
   //
   // Do NOT gate this on caps.effortControl: that flag means "accepts the
   // node-level effort: field", not "can apply reasoning effort". Codex is
@@ -8097,6 +8142,8 @@ export async function executeDagWorkflow(
     fallbackModel: workflow.fallbackModel,
     betas: workflow.betas,
     sandbox: workflow.sandbox,
+    modelReasoningEffort: workflow.modelReasoningEffort,
+    webSearchMode: workflow.webSearchMode,
     workflowTier,
   };
   const layers = buildTopologicalLayers(workflow.nodes);

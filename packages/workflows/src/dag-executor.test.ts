@@ -11113,6 +11113,183 @@ describe('executeDagWorkflow -- Claude SDK advanced options', () => {
     const warning = messages.find(m => m.includes('effort') && m.toLowerCase().includes('codex'));
     expect(warning).toBeDefined();
   });
+
+  it('forwards workflow-level modelReasoningEffort and webSearchMode to a Codex node', async () => {
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'codex',
+      getCapabilities: mockCodexCapabilities,
+    }));
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'codex-workflow-options-test',
+        nodes: [{ id: 'step1', command: 'my-cmd' }],
+        modelReasoningEffort: 'minimal',
+        webSearchMode: 'live',
+      },
+      workflowRun,
+      'codex',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      { ...minimalConfig, assistant: 'codex' }
+    );
+
+    expect(mockSendQueryDag.mock.calls.length).toBeGreaterThan(0);
+    const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
+    const assistantConfig = optionsArg?.assistantConfig as Record<string, unknown>;
+    expect(assistantConfig?.modelReasoningEffort).toBe('minimal');
+    expect(assistantConfig?.webSearchMode).toBe('live');
+  });
+
+  it('workflow-level modelReasoningEffort beats a preset-routed effort, and node_started reports the applied value', async () => {
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'codex',
+      getCapabilities: mockCodexCapabilities,
+    }));
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+    const aiProfile = buildAiProfile('claude', {
+      repoTiers: {
+        medium: { provider: 'codex', model: 'gpt-5.5', effort: 'medium' },
+      },
+    });
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'codex-workflow-beats-preset-test',
+        nodes: [{ id: 'step1', command: 'my-cmd', model: 'medium' }],
+        modelReasoningEffort: 'xhigh',
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      aiProfile
+    );
+
+    const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
+    const assistantConfig = optionsArg?.assistantConfig as Record<string, unknown>;
+    expect(assistantConfig?.modelReasoningEffort).toBe('xhigh');
+
+    // The write must land BEFORE resolvedEffort is captured, or the audit trail and
+    // console report an effort the node did not run at.
+    const createEventCalls = (mockDeps.store.createWorkflowEvent as ReturnType<typeof mock>).mock
+      .calls as Array<[{ event_type: string; data?: Record<string, unknown> }]>;
+    const nodeStartedCall = createEventCalls.find(([arg]) => arg.event_type === 'node_started');
+    expect(nodeStartedCall?.[0].data?.effort).toBe('xhigh');
+  });
+
+  it('workflow-level modelReasoningEffort does not strip preset effort from a Claude node', async () => {
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+    const aiProfile = buildAiProfile('claude', {
+      repoTiers: {
+        medium: { provider: 'claude', model: 'sonnet', effort: 'medium' },
+      },
+    });
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'mixed-provider-preset-effort-test',
+        nodes: [{ id: 'step1', command: 'my-cmd', model: 'medium' }],
+        // Declared for the workflow's Codex nodes; must not affect this Claude node.
+        modelReasoningEffort: 'high',
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      aiProfile
+    );
+
+    const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
+    const nodeConfig = optionsArg?.nodeConfig as Record<string, unknown>;
+    const assistantConfig = optionsArg?.assistantConfig as Record<string, unknown>;
+    expect(nodeConfig?.effort).toBe('medium');
+    expect(assistantConfig?.modelReasoningEffort).toBeUndefined();
+  });
+
+  it('warns when workflow-level Codex options land on a non-Codex node', async () => {
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'codex-options-on-claude-test',
+        nodes: [{ id: 'step1', command: 'my-cmd' }],
+        modelReasoningEffort: 'high',
+        webSearchMode: 'live',
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
+    const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
+    const warning = messages.find(
+      m => m.includes('modelReasoningEffort') && m.includes('webSearchMode')
+    );
+    expect(warning).toBeDefined();
+
+    // Nothing meaningless is written onto a provider that cannot read it.
+    const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
+    const assistantConfig = optionsArg?.assistantConfig as Record<string, unknown>;
+    expect(assistantConfig?.modelReasoningEffort).toBeUndefined();
+    expect(assistantConfig?.webSearchMode).toBeUndefined();
+  });
 });
 
 describe('executeDagWorkflow -- cost tracking', () => {
