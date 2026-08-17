@@ -250,6 +250,7 @@ function pushCapped(list: string[], path: string): void {
 const SHELL_HELPERS = `
 set -uf
 UP="$1"; OTHER="$2"; WS="$3"
+TAB_CHAR="	"
 
 # Reject a decoded whiteout name that could escape or wipe: empty, '.'/'..', or
 # containing a slash (defensive — a real basename can't, but never trust it).
@@ -277,6 +278,16 @@ safe_parent() {
     _cur="$_cur/$_seg"
   done
   IFS="$_oldifs"; return 0
+}
+
+# Records are TAB-separated and decoded POSITIONALLY (parseRecords), so a TAB in a
+# filename shifts every later field: a symlink named 'a<TAB>b' decodes as
+# ["L","a","b",target,esc], handing the consumer the target from the name slot and a
+# path where the escape flag belongs — an escaping symlink reaches the approval gate
+# looking safe. Refuse such an entry instead of emitting an undecodable record, and
+# render the TAB as '?' so the refusal itself decodes. Builtins only, no fork.
+has_tab() {
+  case "$1" in *"$TAB_CHAR"*) return 0 ;; *) return 1 ;; esac
 }
 
 # A char device is an overlay WHITEOUT iff its major,minor is 0,0. Parsed from
@@ -311,17 +322,19 @@ export function buildSummaryScript(): string {
 [ -d "$UP" ] || exit 0
 cd "$UP"
 find . -mindepth 1 -print0 2>/dev/null | while IFS= read -r -d '' p; do
-  # Builtins, not sed/basename/dirname. These three ran once per entry, and on
-  # Windows resolveBashPath() gives Git-Bash, whose MSYS fork emulation makes a
-  # process creation dear enough that they dominated the runtime (#2558). Note
-  # \${rel%/*} is NOT dirname: with no slash it returns rel unchanged, where
-  # dirname returns '.', so the no-slash case is branched explicitly.
+  # Builtins, not sed/basename/dirname — see the note above SHELL_HELPERS in
+  # overlay.ts for why (#2558). \${rel%/*} is NOT dirname: with no slash it
+  # returns rel unchanged, so the no-slash case is branched explicitly.
   rel="\${p#./}"
   base="\${rel##*/}"
   case "$rel" in
     */*) dir="\${rel%/*}" ;;
     *) dir="" ;;
   esac
+  if has_tab "$rel"; then
+    printf 'S\\t%s\\tunsafe-record-name\\0' "\${rel//"$TAB_CHAR"/?}"
+    continue
+  fi
 
   # --- whiteout markers → deletion ---
   is_wh=0; whname=""
@@ -363,17 +376,19 @@ DEST="$OTHER"
 [ -d "$UP" ] || exit 0
 cd "$UP"
 find . -mindepth 1 -print0 2>/dev/null | while IFS= read -r -d '' p; do
-  # Builtins, not sed/basename/dirname. These three ran once per entry, and on
-  # Windows resolveBashPath() gives Git-Bash, whose MSYS fork emulation makes a
-  # process creation dear enough that they dominated the runtime (#2558). Note
-  # \${rel%/*} is NOT dirname: with no slash it returns rel unchanged, where
-  # dirname returns '.', so the no-slash case is branched explicitly.
+  # Builtins, not sed/basename/dirname — see the note above SHELL_HELPERS in
+  # overlay.ts for why (#2558). \${rel%/*} is NOT dirname: with no slash it
+  # returns rel unchanged, so the no-slash case is branched explicitly.
   rel="\${p#./}"
   base="\${rel##*/}"
   case "$rel" in
     */*) dir="\${rel%/*}" ;;
     *) dir="" ;;
   esac
+  if has_tab "$rel"; then
+    printf 'S\\t%s\\tunsafe-record-name\\0' "\${rel//"$TAB_CHAR"/?}"
+    continue
+  fi
 
   # --- whiteout markers → deletion ---
   is_wh=0; whname=""

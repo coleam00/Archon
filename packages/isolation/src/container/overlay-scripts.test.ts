@@ -335,6 +335,27 @@ describe('summary script — faithful representation (M1)', () => {
   // copies would therefore be invisible — and it is the summary that renders the
   // delete list a human approves, so a wrong `dir` there misinforms consent rather
   // than merely misapplying. No symlinks, so this runs everywhere.
+  // Records are TAB-separated and decoded positionally, so a TAB in a filename used
+  // to shift every later field: an escaping symlink was rendered to the approver
+  // with its TARGET in the name slot and a path where the `escapes` flag belongs —
+  // reaching the gate looking safe. Apply still refused it, so the exposure was
+  // misinformed consent rather than over-apply, which is why it survived unnoticed.
+  test.skipIf(isWin)('a TAB in a filename cannot forge the fields of a later record', () => {
+    const { root, upper, dest, ws } = makeDirs();
+    symlinkSync('/etc/shadow', join(upper, 'a\tb'));
+
+    const { records } = runScript(buildSummaryScript(), upper, dest, ws);
+
+    // Refused outright, with the TAB rendered so the refusal itself decodes.
+    const refusal = records.find(r => r.tag === 'S' && r.fields[1] === 'unsafe-record-name');
+    expect(refusal?.fields[0]).toBe('a?b');
+    // The decisive property: no record claims this entry is a non-escaping symlink.
+    expect(records.some(r => r.tag === 'L' && r.fields[2] === '0')).toBe(false);
+    // And every emitted record decodes to its declared arity.
+    for (const r of records) expect(r.fields[0]).not.toContain('\t');
+    rmSync(root, { recursive: true, force: true });
+  });
+
   test('a nested whiteout is reported at its full path, not its stem', () => {
     const { root, upper, dest, ws } = makeDirs();
     mkdirSync(join(upper, 'sub'), { recursive: true });
