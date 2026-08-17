@@ -49,13 +49,23 @@ mock.module('@archon/paths', () => ({
 }));
 
 // --- Bootstrap provider registry (after path mocks, before dag-executor import) ---
-import { registerBuiltinProviders, registerPiProvider, clearRegistry } from '@archon/providers';
+import {
+  registerBuiltinProviders,
+  registerPiProvider,
+  registerAiderdeskProvider,
+  clearRegistry,
+} from '@archon/providers';
 clearRegistry();
 registerBuiltinProviders();
 // Pi is a community provider (best-effort structured output) — register it so the
 // reask-loop tests can resolve `getProviderCapabilities('pi')` to 'best-effort'.
 // deps.getAgentProvider is mocked, so the real Pi SDK is never loaded.
 registerPiProvider();
+// AiderDesk is a community provider too — register it so the bundled-defaults
+// opus-invariant loop (#1610) parses `aiderdesk-*.yaml` defaults rather than
+// failing with `Unknown provider 'aiderdesk'` and tripping `'nodes' in null`
+// inside dag-executor.test.ts's "bundled opus nodes" describe block.
+registerAiderdeskProvider();
 
 // --- Imports (after mocks) ---
 import {
