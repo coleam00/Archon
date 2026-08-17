@@ -173,6 +173,12 @@ describe('node-ref parity: @archon/web mirrors the engine', () => {
  * out by hand on both sides, and textually different while behaviourally
  * identical, so no `.toString()` trick applies — is pinned only for the strings
  * enumerated below, plus their grouping.
+ *
+ * The ordering itself — `||` outer, `&&` inner — is written here rather than read
+ * from the engine, so this pins the BUILDER against that contract, not the engine
+ * against it. An engine-side precedence change is caught instead by
+ * `condition-evaluator.test.ts` ("&& has higher precedence than ||"), behaviourally,
+ * on a truth table.
  */
 describe('when-atom parity: the builder parses what the engine parses', () => {
   test("the builder's atom pattern is byte-identical to the engine's", () => {
