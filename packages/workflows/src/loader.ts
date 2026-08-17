@@ -588,7 +588,13 @@ export function validateDagStructure(
         if (kind === 'loop') {
           return `${problem} 'output_format' is dropped from a 'loop:' node when the workflow is parsed, so declaring one on '${producerId}' would change nothing — ${GATE_ON_A_SHELL_NODE}`;
         }
-        return `${problem} A 'loop_group:' node's output is the last iteration's raw text — unlike a 'prompt:' node, declaring 'output_format' does not replace it with the JSON document — so ${GATE_ON_A_SHELL_NODE}`;
+        if (kind === 'loop-group') {
+          return `${problem} A 'loop_group:' node's output is the last iteration's raw text — unlike a 'prompt:' node, declaring 'output_format' does not replace it with the JSON document — so ${GATE_ON_A_SHELL_NODE}`;
+        }
+        // Exhaustive: a new producer kind must state its own reason rather than inherit
+        // whichever branch happened to be last. Silently handing an author the wrong
+        // remedy is the same class of failure this whole check exists to remove.
+        return kind satisfies never;
       }
     }
   }

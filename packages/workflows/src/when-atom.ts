@@ -24,8 +24,10 @@
 import { INPUT_NAME_SOURCE } from './schemas/dag-node';
 
 /**
- * The reserved scope name for workflow inputs, and the one spelling of it — `loader.ts`
- * imports this rather than re-typing the literal in its ref scans.
+ * The reserved scope name for workflow inputs. `loader.ts` imports this rather than
+ * re-typing the literal in its two ref scans. It is NOT the only spelling in the tree —
+ * `include-expander.ts` and `executor-shared.ts` still hardcode the word, and
+ * `dagNodeSchema` (which enforces the reservation) cannot import it back without a cycle.
  *
  * `INPUTS` can never be a node id: `dagNodeSchema.superRefine` rejects it outright
  * ("node id 'INPUTS' is reserved for the $INPUTS.<name> parameter surface"). So binding
