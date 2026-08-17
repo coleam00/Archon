@@ -408,7 +408,8 @@ when: "$INPUTS.mode == 'fast' && $check.output.ok == 'true'"
 - `$nodeId.output.field` accesses a JSON field (for `output_format` nodes)
 - `$INPUTS.<name>` references a declared input supplied by a caller's `with:` (or a direct
   run's `--input`). A name this run does not carry **fails the node** — it never quietly
-  becomes an empty string. `$INPUTS` is a reserved scope, so it can never name a node.
+  becomes an empty string. `INPUTS` is a reserved scope name, so `$INPUTS.x` always means
+  an input and never a node, even if a node happens to be called `INPUTS`.
 - Invalid or unparseable expressions default to `false` (fail-closed — node is skipped with a warning)
 - Numeric operators fail-closed if either side is not a finite number
 - Parentheses are not supported — use standard AND/OR precedence to structure conditions
@@ -445,14 +446,16 @@ than you asked. Declare the shape you are branching on instead:
   when: "$analyze.output.status == 'BUG'"
 ```
 
-Unaffected, because their output is author-controlled and exact by construction:
-`bash:` and `script:` producers keep whole-output comparison (`when: "$check.output ==
-'true'"`), as do `approval:` captures and `workflow:` sub-run results. A field access
-(`$analyze.output.status`) is always allowed.
+Unaffected: `bash:` and `script:` producers keep whole-output comparison
+(`when: "$check.output == 'true'"`) because their stdout is author-controlled and exact by
+construction, and so do `approval:` captures (a human typed them) and `workflow:` sub-run
+results (the callee owns that contract). A field access (`$analyze.output.status`) is
+always allowed.
 
-**`loop:` and `loop_group:` have no opt-out.** `output_format` is an *ignored* field on
-them (the loader already warns), so declaring one would silence the error without
-producing any structure. Compute the decision in a `bash:`/`script:` node — or an
+**`loop:` and `loop_group:` have no opt-out.** A loop's output is the *last iteration's raw
+text*, and `output_format` does not change that — the schema can still populate
+`$loop.output.field`, but the whole-output channel stays prose (the loader also warns the
+field as ignored on loop nodes). Compute the decision in a `bash:`/`script:` node — or an
 `until_bash` check — and gate on that node's output instead.
 :::
 

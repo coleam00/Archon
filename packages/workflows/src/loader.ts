@@ -345,13 +345,20 @@ function parseDagNode(
  * sentence instead of a token — and the node is then skipped with no error. Which
  * remedy to name depends on the producer:
  *
- *   'schema-capable'  — `prompt:` / `command:`: `output_format` is honoured, so the fix
- *                       is to declare one and compare a field. Declaring one is also the
- *                       opt-out: the output is then a JSON document, not prose.
- *   'no-schema-channel' — `loop:` / `loop_group:`: `output_format` is an IGNORED field on
- *                       these (see LOOP_NODE_AI_FIELDS), so pointing an author at it
- *                       would hand them a no-op. They have no structured completion
- *                       channel yet (#2563); the decision has to leave the loop.
+ *   'schema-capable'  — `prompt:` / `command:`: declaring `output_format` REPLACES the
+ *                       node's output text with the validated JSON document
+ *                       (`dag-executor.ts`, the structured-output flattening in the
+ *                       reask loop), so the fix is to declare one and compare a field —
+ *                       and declaring one is also the opt-out, because the whole output
+ *                       is then a document the author controls, not prose.
+ *   'no-schema-channel' — `loop:` / `loop_group:`: a loop's output is the LAST
+ *                       ITERATION'S raw text, and `output_format` does not change that
+ *                       (the schema can reach the provider and populate
+ *                       `structuredOutput` for `.field` access, but the loop's `output`
+ *                       is never flattened to JSON the way a prompt node's is, and the
+ *                       loader warns the field as ignored on loop nodes anyway). There
+ *                       is no whole-output opt-out to offer, so the message sends the
+ *                       decision out of the loop instead.
  *
  * Everything else keeps whole-output comparison: `bash:`/`script:` stdout is
  * author-controlled and exact by construction, an `approval:` capture is what a human
@@ -567,7 +574,7 @@ export function validateDagStructure(
         const problem = `Node '${node.id}' field 'when' compares the whole output of AI node '${producerId}' to a literal ('${atom.expected}'). That output is free-form prose, so the comparison silently fails and '${node.id}' is skipped.`;
         return kind === 'schema-capable'
           ? `${problem} Declare 'output_format' on '${producerId}' and compare a field (e.g. "$${producerId}.output.status ${atom.operator} '${atom.expected}'"), or produce the value from a 'bash:'/'script:' node`
-          : `${problem} 'output_format' is ignored on loop nodes, so move the decision out of the loop: compute it in a 'bash:'/'script:' node and gate on that node's output instead`;
+          : `${problem} A loop node's output is the last iteration's raw text and 'output_format' does not change that, so there is nothing to declare here — compute the decision in a 'bash:'/'script:' node (or an 'until_bash' check) and gate on that node's output instead`;
       }
     }
   }

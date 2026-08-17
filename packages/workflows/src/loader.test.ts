@@ -2565,9 +2565,10 @@ nodes:
       );
       expect(result.errors).toHaveLength(1);
       expect(result.errors[0].error).toContain("whole output of AI node 'refine'");
-      // A loop's `output_format` is an ignored field, so the message must NOT send the
-      // author to it — it points out of the loop instead.
-      expect(result.errors[0].error).toContain("'output_format' is ignored on loop nodes");
+      // A loop's whole-output channel is prose regardless of `output_format`, so the
+      // message must NOT send the author to it — it points out of the loop instead.
+      expect(result.errors[0].error).toContain("last iteration's raw text");
+      expect(result.errors[0].error).not.toContain("Declare 'output_format'");
     });
 
     it('rejects it for a loop producer even when it declares an (ignored) output_format', async () => {
@@ -2594,7 +2595,7 @@ nodes:
 `
       );
       expect(result.errors).toHaveLength(1);
-      expect(result.errors[0].error).toContain("'output_format' is ignored on loop nodes");
+      expect(result.errors[0].error).toContain("last iteration's raw text");
     });
 
     it('rejects it for a loop_group producer', async () => {
