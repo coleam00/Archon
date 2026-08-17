@@ -101,7 +101,7 @@ export function curatedOptionsForAgent(agentId: string): readonly ModelOption[] 
 // ---------------------------------------------------------------------------
 // Effort. There is ONE reasoning-depth vocabulary (#2556): a tier/alias `effort`
 // reaches every agent whose `capabilities.effortControl` is true, and that agent
-// clamps a rung its SDK lacks to the nearest one it has. So the vocabulary is a
+// clamps any rung its SDK lacks to the nearest one it has. So the vocabulary is a
 // constant and the only per-agent question is whether the field applies at all
 // — answered by the capability the providers endpoint already returns, not by a
 // hardcoded agent-id list. The web package cannot import @archon/workflows, so

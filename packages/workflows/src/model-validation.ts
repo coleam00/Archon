@@ -234,7 +234,7 @@ export function isLiteralSpec(spec: ResolvedModelSpec): spec is { literal: strin
  * not per request).
  *
  * There is one vocabulary now, not one per provider (#2556): every provider
- * with `effortControl` takes the whole ladder and clamps a rung its SDK lacks
+ * with `effortControl` takes the whole ladder and clamps any rung its SDK lacks
  * to the nearest one it has. So this answers "does effort reach this provider",
  * and the ladder answers "is this a rung" — which is what the tier-config write
  * paths (`PATCH /api/config/tiers`, `archon ai tier set --effort`) need to

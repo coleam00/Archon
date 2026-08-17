@@ -331,7 +331,7 @@ see .archon/config.yaml setup as needed
 Per-assistant model and option defaults live in `.archon/config.yaml` under `assistants.<provider>`, alongside `tiers:` and `aliases:`. The docs site's configuration reference (`packages/docs-web/src/content/docs/reference/configuration.md`) carries the full key set and value ranges; the schema in `@archon/core/config` is the authority. Two keys are worth knowing before you look: `claudeBinaryPath`/`codexBinaryPath` are required in compiled binaries when the matching `*_BIN_PATH` env var is unset, and `settingSources` controls which `CLAUDE.md`, skills, commands and agents the Claude SDK loads — use exactly `['project']` to restrict a run to project-only sources.
 
 **Configuration Priority:**
-1. Workflow-level options (in YAML `model`, `modelReasoningEffort`, etc.)
+1. Workflow-level options (in YAML `model`, `effort`, etc.)
 2. Config file defaults (`.archon/config.yaml` `assistants.*`)
 3. SDK defaults
 

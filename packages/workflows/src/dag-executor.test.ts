@@ -11340,7 +11340,7 @@ describe('executeDagWorkflow -- Claude SDK advanced options', () => {
     expect(nodeStartedCall?.[0].data?.effort).toBe('xhigh');
   });
 
-  it('a node-level effort beats the deprecated workflow-level modelReasoningEffort', async () => {
+  it('applies the node-level effort; the deprecated field is inert at this layer', async () => {
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
       getType: () => 'codex',
@@ -11491,7 +11491,9 @@ describe('executeDagWorkflow -- Claude SDK advanced options', () => {
       {
         name: 'mixed-provider-preset-effort-test',
         nodes: [{ id: 'step1', command: 'my-cmd', model: 'medium' }],
-        // Declared for the workflow's Codex nodes; must not affect this Claude node.
+        // A definition that still carries the deprecated field — only a
+        // loader-bypassing caller can produce one. It affects nothing: the
+        // executor never reads it (the loader translates it away).
         modelReasoningEffort: 'high',
       },
       workflowRun,

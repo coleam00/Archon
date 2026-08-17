@@ -188,7 +188,7 @@ Use this matrix to find the right parameter. Use these references for the full e
 | `agents`                        | yes           | no                                      | no                                   | **yes**              | **yes**             |
 | `sandbox` / `maxBudgetUsd` / `fallbackModel` | yes | no                                | no                                   | no                   | no                  |
 | Model naming                    | `haiku`, `sonnet`, `opus`, `opus[1m]`   | Codex model ID (e.g. `gpt-5.6-sol`)   | `<vendor>/<model>` (e.g. `anthropic/claude-opus-4-5`, `openrouter/qwen/qwen3-coder`) | OpenCode catalog ref | Copilot model id |
-| `effort` / `thinking`           | yes           | `effort:` yes (→ `modelReasoningEffort`); no `thinking` | via `effort:` (maps to thinking level) | no (opencode.json agent config) | yes (maps like Pi) |
+| `effort` / `thinking`           | yes           | `effort:` yes (→ `modelReasoningEffort`, `max`→`xhigh`); no `thinking` | via `effort:` (all six rungs native, nothing clamped) | no (opencode.json agent config) | yes, but clamps both ends (`max`→`xhigh`, `minimal`→`low`) |
 | Provider session resume (`persist_session`, `context: shared` threading) | yes | yes            | yes                                  | yes                  | yes                 |
 
 This table is kept in sync by hand with the canonical, generated [Provider Capability Matrix](https://archon.diy/reference/provider-capabilities/) (produced from each provider's `capabilities.ts` via `bun run generate:capability-matrix`) — treat that page as the source of truth if the two ever disagree.

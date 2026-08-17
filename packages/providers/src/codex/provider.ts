@@ -80,7 +80,7 @@ async function getCodex(configCodexBinaryPath?: string): Promise<Codex> {
  * Resolve Codex's `modelReasoningEffort` from Archon's inputs.
  *
  * Precedence: `nodeConfig.effort` > `assistants.codex.modelReasoningEffort`
- * from config.yaml — mirroring Copilot's `resolveReasoning`, so a workflow's
+ * from config.yaml — mirroring Copilot's `resolveCopilotReasoning`, so a workflow's
  * declared depth beats the install default on both providers alike.
  *
  * Codex has no `max` rung, so `effort: max` clamps to `xhigh` (see

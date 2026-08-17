@@ -1076,8 +1076,9 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
             `IGNORED because this workflow also declares 'effort: ${declaredEffort}', which now applies on ` +
             "every provider including Codex. Delete the 'modelReasoningEffort:' line.";
       parseWarnings.push(message);
-      // Carry the prose, not just the payload: the run path reads this log line
-      // and never reads the warning string (#2213).
+      // Carry the prose, not just the payload, so the warning is legible on both
+      // channels: the log stream, and `parseWarnings` — which `executeWorkflow`
+      // persists verbatim as a `workflow_parse_warnings` event (#2213).
       getLog().warn({ filename, warning: message }, 'workflow_model_reasoning_effort_deprecated');
     }
     const thinking = parseOptionalField(
