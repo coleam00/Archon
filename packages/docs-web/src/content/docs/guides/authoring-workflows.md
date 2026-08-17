@@ -123,8 +123,8 @@ description: |
 # Optional workflow-level configuration
 provider: claude
 model: sonnet
-modelReasoningEffort: medium     # Codex only
-webSearchMode: live              # Codex only
+modelReasoningEffort: medium     # Codex only, workflow level only (no per-node form)
+webSearchMode: live              # Codex only, workflow level only (no per-node form)
 interactive: true                # Web only: run in foreground instead of background
 requires: [github]               # Optional: hard-block invocation unless the triggering
                                  #   user has connected their GitHub identity. Enforced only
@@ -1686,10 +1686,19 @@ webSearchMode: live             # 'disabled' | 'cached' | 'live'
 - `medium` - Balanced (default)
 - `high`, `xhigh` - More thorough, expensive
 
-**Web search mode:**
-- `disabled` - No web access (default)
+**Web search mode:** controls Codex's built-in web-search tool. It is not a network
+switch — Codex nodes always run with network access enabled, so `disabled` stops Codex
+from searching, not from reaching the network.
+
+- `disabled` - No built-in web search (default)
 - `cached` - Use cached search results
 - `live` - Real-time web search
+
+Both fields are **workflow-level only** — there is no per-node `modelReasoningEffort:` or
+`webSearchMode:`. Declaring either on a workflow whose node resolves to a provider other
+than Codex logs a warning and applies nothing, the same way any other unsupported option
+does. The reverse also holds: `effort:` on a Codex node warns and is ignored, because Codex
+takes reasoning depth only through `modelReasoningEffort`.
 
 ### Web Execution Mode
 
