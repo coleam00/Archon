@@ -20,7 +20,7 @@ There are **eight** node types. Exactly one of `command`, `prompt`, `bash`, `scr
 | `timeout` (total, not idle)                  | —       | —       | yes     | yes     | —                            | — (on body bash/script nodes) | —             | —       |
 | `model` / `provider`                         | yes     | yes     | ignored | ignored | **yes — forwarded to every iteration** | **yes — default for body AI nodes** | ignored | ignored |
 | `context: fresh` \| `shared`                 | yes     | yes     | ignored | ignored | ignored (use `loop.fresh_context`) | ignored (use `fresh_context`) | ignored  | ignored |
-| `output_format`                              | yes     | yes     | ignored | ignored | ignored                      | ignored (works on body nodes) | ignored       | ignored |
+| `output_format`                              | yes     | yes     | ignored | ignored | **yes** (pairs with `loop.until_field`) | ignored (works on body nodes) | ignored       | ignored |
 | `allowed_tools` / `denied_tools`             | yes     | yes     | ignored | ignored | ignored                      | ignored (works on body nodes) | ignored       | ignored |
 | `hooks` / `mcp` / `skills` / `agents`        | yes     | yes     | ignored | ignored | ignored                      | ignored (work on body nodes) | ignored        | ignored |
 | `retry`                                      | yes (default: 2× transient) | yes (default: 2× transient) | explicit block only (#2088)¹ | explicit block only (#2088)¹ | **hard error** | **hard error**  | ignored² | ignored |
@@ -40,7 +40,7 @@ There are **eight** node types. Exactly one of `command`, `prompt`, `bash`, `scr
 - **ignored** — field is accepted by the parser but has no effect at runtime. Loader emits a warning (`<node-type>_node_ai_fields_ignored`).
 - **hard error** — workflow fails to load. Only `retry` on a loop/loop_group node does this.
 
-Most AI features work on `command` and `prompt` nodes. Loop and loop_group nodes are iteration controllers — but their `model`/`provider` ARE honored (forwarded to iterations / body defaults). A loop_group **body node** is a full node of its own type, so per-node AI fields work normally inside the body. `bash` and `script` nodes ignore AI fields with a warning. `approval` and `cancel` nodes don't invoke AI (except `approval.on_reject.prompt`).
+Most AI features work on `command` and `prompt` nodes. Loop and loop_group nodes are iteration controllers — but their `model`/`provider` ARE honored (forwarded to iterations / body defaults), and a **`loop:`** additionally honors `output_format`, because it makes its own provider call (#2563). A loop_group **body node** is a full node of its own type, so per-node AI fields work normally inside the body. `bash` and `script` nodes ignore AI fields with a warning. `approval` and `cancel` nodes don't invoke AI (except `approval.on_reject.prompt`).
 
 ## Parameter Selection by Intent
 
