@@ -25,10 +25,11 @@
  * rejected: every spawn that got as far as resolving a destination used to create
  * a 704 KB SQLite database — including a `PRAGMA busy_timeout = 5000` carrier, the
  * exact bound that turned out to be #2473's real cause — and that creation is now
- * gone. (The five argument-parsing cases never did: `parseArgs` runs at module
- * load and exits before `resolveTarget` is reached.) Whether it was also the
- * cause here is testable only by leaving the alarm armed and seeing whether the
- * timeouts stop. A larger budget would answer the question by silencing it.
+ * gone. (The five argument-parsing cases never did: four exit from `parseArgs` at
+ * module load, and the nonexistent-`--cwd` one exits from `main()` — all of them
+ * before `resolveTarget` is reached.) Whether it was also the cause here is
+ * testable only by leaving the alarm armed and seeing whether the timeouts stop.
+ * A larger budget would answer the question by silencing it.
  * If it does recur, find the specific colliding bound the way #2473 did; do not
  * reach for the timeout.
  */
@@ -54,8 +55,8 @@ interface Sandbox {
  *
  * `maxRetries` covers the Windows case where a just-exited child still holds a
  * handle inside the sandbox: node's `rm` retries on EBUSY, EMFILE, ENFILE,
- * ENOTEMPTY and EPERM, which covers what this hits. On PR #2513 an unretried `rm` threw
- * `EBUSY … archon-migrate-dhOLl3` from teardown and failed the check. A leaked
+ * ENOTEMPTY and EPERM, which covers what this hits. On PR #2513 an unretried `rm`
+ * threw `EBUSY … archon-migrate-dhOLl3` from teardown and failed the check. A leaked
  * temp directory is not a test failure, so a final failure warns instead of
  * throwing — but it does warn, so a genuine leak stays visible.
  */
@@ -307,13 +308,19 @@ describe('migrate-state-dir', () => {
         // be deduced from the absence of a local file. Without the dialect clause
         // the whole suite still passes while every DATABASE_URL install silently
         // takes the _cwd fallback — a wrong destination in a script that writes
-        // `.initialized`. Pointing at a closed port is enough to prove the lookup
-        // was attempted; no live Postgres needed, and it costs ~0.1s.
+        // `.initialized`.
+        //
+        // The DSN points at a UNIX SOCKET path inside this test's own sandbox, so
+        // the lookup fails with ENOENT at the filesystem layer — no TCP, no
+        // listener anything could occupy, and nothing a firewall or network policy
+        // can delay. An earlier revision used 127.0.0.1:1, which would have been a
+        // unit test touching a real network resource in the very PR about tests
+        // doing hidden real I/O (#2186, #2240).
         await seedLegacy(ctx, { 'triage-state.json': '{"a":1}' });
 
         const result = await runWithEnv(
           ctx,
-          { DATABASE_URL: 'postgresql://postgres:postgres@127.0.0.1:1/nope' },
+          { DATABASE_URL: `postgresql://u@/db?host=${join(ctx.root, 'no-such-socket-dir')}` },
           ctx.repo,
           '--apply'
         );

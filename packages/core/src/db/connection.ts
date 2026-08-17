@@ -25,10 +25,6 @@ let database: IDatabase | null = null;
 let dialect: SqlDialect | null = null;
 
 /**
- * Get or create the database connection
- * Auto-detects PostgreSQL vs SQLite based on DATABASE_URL
- */
-/**
  * Where the SQLite registry lives when DATABASE_URL is unset.
  *
  * Exported because a caller that needs to know whether the registry EXISTS must
@@ -41,6 +37,10 @@ export function getSqliteDbPath(): string {
   return join(getArchonHome(), 'archon.db');
 }
 
+/**
+ * Get or create the database connection
+ * Auto-detects PostgreSQL vs SQLite based on DATABASE_URL
+ */
 export function getDatabase(): IDatabase {
   if (database) {
     return database;
