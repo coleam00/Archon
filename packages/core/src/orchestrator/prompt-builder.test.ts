@@ -258,6 +258,29 @@ describe('formatPausedGateSection', () => {
     expect(section).toContain('no gate you can resolve');
   });
 
+  test('does not promise continuation for a container run', () => {
+    // executeWorkflow refuses a resume it cannot rewire, so "the run continues"
+    // is false here — the agent must send the user to the CLI instead.
+    const section = formatPausedGateSection({ ...openGate, containerRun: true });
+
+    expect(section).not.toContain('no separate resume step');
+    expect(section).toContain('isolation container');
+    expect(section).toContain('archon workflow resume run-abc');
+  });
+
+  test('does not tell the agent to resolve the gate when it has no route to the verbs', () => {
+    // No project scope means neither manage_run nor the CLI section is present.
+    const section = formatPausedGateSection({ ...openGate, agentCanResolve: false });
+
+    expect(section).toContain('## Paused Approval Gate');
+    expect(section).toContain('Approve the plan above.');
+    expect(section).toContain('no project is attached');
+    expect(section).toContain('/workflow approve run-abc');
+    // It must not hand out the decision policy for verbs it cannot reach.
+    expect(section).not.toContain('resolve the gate as APPROVED');
+    expect(section).not.toContain('no separate resume step');
+  });
+
   test('falls back to the explicit commands when the approval context is unusable', () => {
     for (const approval of [undefined, null, {}, { nodeId: 'x' }, 'garbage']) {
       const section = formatPausedGateSection({ ...openGate, approval });

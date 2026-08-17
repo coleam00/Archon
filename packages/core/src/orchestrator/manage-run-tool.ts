@@ -1,6 +1,6 @@
 import type { NativeTool } from '@archon/providers/types';
 import { createLogger } from '@archon/paths';
-import { isApprovalContext } from '@archon/workflows/schemas/workflow-run';
+import { isApprovalContext, isContainerRun } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { listDashboardRuns, findWorkflowRunsByIdPrefix } from '../db/workflows';
 import {
@@ -404,12 +404,24 @@ async function handleWrite(
  * outcome for the agent. Returns the sentence to append to the action's reply:
  * a promise the run continues when a continuation is wired, and the explicit
  * manual step when it is not — never silence, which reads as "it's handled".
+ *
+ * A container run is never handed over: `executeWorkflow` refuses a resume it
+ * cannot rewire, so scheduling one would fail the run to say what we can say
+ * here for free (#2565).
  */
 function signalGateResolved(
   ctx: ManageRunContext,
   run: WorkflowRun,
   action: 'approve' | 'reject'
 ): string {
+  if (isContainerRun(run)) {
+    log.info({ runId: run.id, action }, 'manage_run.gate_continuation_container_only_cli');
+    return (
+      ' This run executed inside an isolation container, so it cannot continue from chat — ' +
+      `tell the user to finish it with \`archon workflow resume ${run.id}\` from the CLI in ` +
+      'the same project.'
+    );
+  }
   const scheduled = ctx.onGateResolved?.(run, action) ?? false;
   if (!scheduled) {
     log.info({ runId: run.id, action }, 'manage_run.gate_continuation_unavailable');

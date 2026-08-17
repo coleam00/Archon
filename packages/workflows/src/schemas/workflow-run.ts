@@ -377,6 +377,20 @@ export function isRunBlockedOnChild(
   );
 }
 
+/**
+ * True when `run` executed inside an isolation container.
+ *
+ * Such a run can only be resumed where the docker backend is reachable and the
+ * container can be rewired — the CLI. `executeWorkflow` enforces this: a resume
+ * without a container context fails the run with a CLI pointer rather than
+ * silently running host-side and dropping the write-back. Callers that offer to
+ * continue a run consult this FIRST so they never promise a continuation the
+ * executor will refuse (#2565). Reads defensively from possibly-absent metadata.
+ */
+export function isContainerRun(run: { metadata?: Record<string, unknown> }): boolean {
+  return run.metadata?.isolation === 'container';
+}
+
 // ---------------------------------------------------------------------------
 // ArtifactType
 // ---------------------------------------------------------------------------

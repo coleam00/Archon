@@ -2658,6 +2658,65 @@ describe('paused approval gate routing', () => {
     expect(toolReplies[0]).toContain('Nothing further runs');
   });
 
+  test('a provider crash after the gate is resolved still continues the run', async () => {
+    // The resolution commits to the DB the moment the tool call returns. If the
+    // rest of the turn throws — a provider subprocess crash, a dropped stream —
+    // skipping the continuation would leave the run resolved and parked with
+    // only a generic error to show for it.
+    arrangeGatedChat();
+    const toolReplies: string[] = [];
+    mockSendQuery.mockImplementationOnce(async function* () {
+      const tool = inFlightManageRunTool();
+      if (tool) {
+        toolReplies.push(await tool.handler({ action: 'approve', runId: 'run-1', confirm: true }));
+      }
+      yield { type: 'assistant', content: 'Approved.' };
+      throw new Error('provider subprocess exited unexpectedly');
+    });
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'ship it');
+
+    expect(mockResolveApprovalGate).toHaveBeenCalled();
+    expect(mockExecuteWorkflow).toHaveBeenCalled();
+    expect(platform.sendMessage).toHaveBeenCalledWith(
+      'conv-1',
+      expect.stringContaining('Resuming')
+    );
+  });
+
+  test('a container run is resolved but not resumed from chat', async () => {
+    // Chat cannot rewire the container, so the executor would refuse the resume.
+    arrangeGatedChat({
+      metadata: { approval: { nodeId: 'gate-1', message: 'Apply?' }, isolation: 'container' },
+    });
+    const toolReplies: string[] = [];
+    agentCallsManageRun({ action: 'approve', runId: 'run-1', confirm: true }, toolReplies);
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'apply the changes');
+
+    expect(mockResolveApprovalGate).toHaveBeenCalled();
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    expect(toolReplies[0]).toContain('archon workflow resume');
+    // The prompt must have warned the agent before it acted.
+    expect(lastPrompt()).toContain('isolation container');
+  });
+
+  test('an unscoped conversation gets the gate but no instruction to resolve it', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeConversation({ codebase_id: null }))
+    );
+    mockGetPausedWorkflowRun.mockImplementation(() => Promise.resolve(makePausedRun()));
+
+    await handleMessage(makePlatform(), 'conv-1', 'looks good');
+
+    const prompt = lastPrompt();
+    expect(prompt).toContain('## Paused Approval Gate');
+    expect(prompt).toContain('no project is attached');
+    expect(prompt).not.toContain('resolve the gate as APPROVED');
+  });
+
   test('manage_run without confirm previews the gate action and resolves nothing', async () => {
     arrangeGatedChat();
     const toolReplies: string[] = [];

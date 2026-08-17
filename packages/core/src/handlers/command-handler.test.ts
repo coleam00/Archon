@@ -2500,6 +2500,23 @@ describe('CommandHandler', () => {
         expect(result.workflow).toBeUndefined();
       });
 
+      test('a container run is resolved but points at the CLI instead of resuming', async () => {
+        // Chat cannot rewire the container, so dispatching a resume would fail
+        // the run to say what this message says for free.
+        const run = pausedRun({ metadata: { ...pausedRun().metadata, isolation: 'container' } });
+        stubRunReads(run);
+        stubWorkflowDiscovery();
+
+        const result = await handleCommand(baseConversation, '/workflow approve run-gate');
+
+        expect(result.success).toBe(true);
+        expect(result.message).toContain('approved');
+        expect(result.message).toContain('isolation container');
+        expect(result.message).toContain('archon workflow resume run-gate');
+        expect(result.message).not.toContain('/workflow resume run-gate');
+        expect(result.workflow).toBeUndefined();
+      });
+
       test('an unresolvable continuation still reports the decision as recorded', async () => {
         const run = pausedRun();
         stubRunReads(run);

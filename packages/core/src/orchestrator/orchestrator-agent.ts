@@ -79,6 +79,7 @@ import { reportUnpushedWorkInSource } from './post-message-reminder';
 import * as messageDb from '../db/messages';
 import * as workflowDb from '../db/workflows';
 import { getCodebaseEnvVars } from '../db/env-vars';
+import { isContainerRun } from '@archon/workflows/schemas/workflow-run';
 import {
   buildAiProfile,
   isLiteralSpec,
@@ -1127,7 +1128,9 @@ interface ResolvedGate {
  * Resolution without continuation would strand the run on every chat surface.
  *
  * Never throws — the gate decision is already committed, so a failure here costs
- * the user a manual `/workflow resume`, not the decision.
+ * the user a manual `/workflow resume`, not the decision. The whole body is
+ * guarded so that guarantee holds for the `finally` this runs from, where a
+ * throw would replace the error the user actually needs to see.
  */
 async function continueResolvedGateRun(
   platform: IPlatformAdapter,
@@ -1141,76 +1144,83 @@ async function continueResolvedGateRun(
   userId?: string
 ): Promise<void> {
   const decision = action === 'approve' ? 'Approved' : 'Rejected';
-  const workflow = findWorkflow(
-    run.workflow_name,
-    workflowsWithSource.map(w => w.workflow)
-  );
-  if (!workflow) {
-    getLog().warn(
-      { conversationId, workflowRunId: run.id, workflowName: run.workflow_name },
-      'orchestrator.gate_continuation_workflow_not_found'
-    );
-    await platform.sendMessage(
-      conversationId,
-      `${decision}, but workflow \`${run.workflow_name}\` was not found, so the run could not ` +
-        'continue. The decision is recorded — use `/workflow list` to check available workflows.'
-    );
-    return;
-  }
-  if (!codebase) {
-    getLog().warn(
-      { conversationId, workflowRunId: run.id },
-      'orchestrator.gate_continuation_no_codebase'
-    );
-    await platform.sendMessage(
-      conversationId,
-      `${decision}, but no project is attached to this conversation, so the run could not ` +
-        `continue. The decision is recorded — use \`/workflow resume ${run.id}\` from the project.`
-    );
-    return;
-  }
+  const notify = async (text: string): Promise<void> => {
+    await platform.sendMessage(conversationId, text).catch((sendErr: unknown) => {
+      getLog().warn(
+        { err: toError(sendErr), conversationId, workflowRunId: run.id },
+        'orchestrator.gate_continuation_notice_failed'
+      );
+    });
+  };
 
-  const source = workflowsWithSource.find(w => w.workflow === workflow)?.source;
-  getLog().info(
-    { conversationId, workflowRunId: run.id, workflowName: workflow.name, action },
-    'orchestrator.gate_continuation_started'
-  );
   try {
-    await platform.sendMessage(conversationId, `▶️ Resuming **${workflow.name}**...`);
-    await dispatchOrchestratorWorkflow(
-      platform,
-      conversationId,
-      conversation,
-      codebase,
-      workflow,
-      run.user_message,
-      isolationHints,
-      userId,
-      source,
-      { resumeRunId: run.id, resumeRun: run }
+    const workflow = findWorkflow(
+      run.workflow_name,
+      workflowsWithSource.map(w => w.workflow)
     );
+    if (!workflow) {
+      getLog().warn(
+        { conversationId, workflowRunId: run.id, workflowName: run.workflow_name },
+        'orchestrator.gate_continuation_workflow_not_found'
+      );
+      await notify(
+        `${decision}, but workflow \`${run.workflow_name}\` was not found, so the run could not ` +
+          'continue. The decision is recorded — use `/workflow list` to check available workflows.'
+      );
+      return;
+    }
+    if (!codebase) {
+      getLog().warn(
+        { conversationId, workflowRunId: run.id },
+        'orchestrator.gate_continuation_no_codebase'
+      );
+      await notify(
+        `${decision}, but no project is attached to this conversation, so the run could not ` +
+          `continue. The decision is recorded — use \`/workflow resume ${run.id}\` from the project.`
+      );
+      return;
+    }
+
+    const source = workflowsWithSource.find(w => w.workflow === workflow)?.source;
     getLog().info(
       { conversationId, workflowRunId: run.id, workflowName: workflow.name, action },
-      'orchestrator.gate_continuation_completed'
+      'orchestrator.gate_continuation_started'
     );
-  } catch (error) {
-    const err = toError(error);
-    getLog().error(
-      { err, errorType: err.constructor.name, conversationId, workflowRunId: run.id, action },
-      'orchestrator.gate_continuation_failed'
-    );
-    await platform
-      .sendMessage(
+    try {
+      await notify(`▶️ Resuming **${workflow.name}**...`);
+      await dispatchOrchestratorWorkflow(
+        platform,
         conversationId,
+        conversation,
+        codebase,
+        workflow,
+        run.user_message,
+        isolationHints,
+        userId,
+        source,
+        { resumeRunId: run.id, resumeRun: run }
+      );
+      getLog().info(
+        { conversationId, workflowRunId: run.id, workflowName: workflow.name, action },
+        'orchestrator.gate_continuation_completed'
+      );
+    } catch (error) {
+      const err = toError(error);
+      getLog().error(
+        { err, errorType: err.constructor.name, conversationId, workflowRunId: run.id, action },
+        'orchestrator.gate_continuation_failed'
+      );
+      await notify(
         `${decision}, but resuming **${workflow.name}** failed: ${err.message}. ` +
           `The decision is recorded — retry with \`/workflow resume ${run.id}\`.`
-      )
-      .catch((sendErr: unknown) => {
-        getLog().warn(
-          { err: toError(sendErr), conversationId },
-          'orchestrator.gate_continuation_notice_failed'
-        );
-      });
+      );
+    }
+  } catch (error) {
+    // Belt and braces for the "never throws" contract the finally relies on.
+    getLog().error(
+      { err: toError(error), conversationId, workflowRunId: run.id, action },
+      'orchestrator.gate_continuation_failed'
+    );
   }
 }
 
@@ -1641,6 +1651,12 @@ export async function handleMessage(
           runId: pausedGateRun.id,
           workflowName: pausedGateRun.workflow_name,
           approval: pausedGateRun.metadata.approval,
+          // Chat cannot rewire a container, so it cannot continue such a run.
+          containerRun: isContainerRun(pausedGateRun),
+          // Both resolution routes — the `manage_run` tool and the CLI-pointer
+          // section — are gated on a scoped project; without one the section
+          // must not instruct the agent to use verbs it does not have.
+          agentCanResolve: conversation.codebase_id !== null,
         }) || undefined
       : undefined;
     if (pausedGateContext !== undefined) {
@@ -1943,55 +1959,63 @@ export async function handleMessage(
     }
 
     const mode = platform.getStreamingMode();
-    if (mode === 'stream') {
-      await handleStreamMode(
-        platform,
-        conversationId,
-        message,
-        codebases,
-        workflowsWithSource,
-        aiClient,
-        fullPrompt,
-        cwd,
-        session,
-        isolationHints,
-        conversation,
-        issueContext,
-        requestOptions,
-        userId
-      );
-    } else {
-      await handleBatchMode(
-        platform,
-        conversationId,
-        message,
-        codebases,
-        workflowsWithSource,
-        aiClient,
-        fullPrompt,
-        cwd,
-        session,
-        isolationHints,
-        conversation,
-        issueContext,
-        requestOptions,
-        userId
-      );
-    }
-
-    // The agent resolved a human gate during the turn — now continue the run.
-    if (gateResolution.resolved !== null) {
-      await continueResolvedGateRun(
-        platform,
-        conversationId,
-        conversation,
-        discoveredCodebase ?? null,
-        workflowsWithSource,
-        gateResolution.resolved.run,
-        gateResolution.resolved.action,
-        isolationHints,
-        userId
-      );
+    // `finally`, not straight-line code: the gate resolution is committed to the
+    // DB the moment the tool call returns, so once the agent has resolved a gate
+    // the continuation must run even if the rest of the turn throws — a provider
+    // subprocess crash after a successful tool call would otherwise leave the run
+    // resolved and parked with only a generic error to show for it. The outer
+    // catch cannot cover this: it does not know about the resolution.
+    // continueResolvedGateRun never throws, so this cannot mask the real error.
+    try {
+      if (mode === 'stream') {
+        await handleStreamMode(
+          platform,
+          conversationId,
+          message,
+          codebases,
+          workflowsWithSource,
+          aiClient,
+          fullPrompt,
+          cwd,
+          session,
+          isolationHints,
+          conversation,
+          issueContext,
+          requestOptions,
+          userId
+        );
+      } else {
+        await handleBatchMode(
+          platform,
+          conversationId,
+          message,
+          codebases,
+          workflowsWithSource,
+          aiClient,
+          fullPrompt,
+          cwd,
+          session,
+          isolationHints,
+          conversation,
+          issueContext,
+          requestOptions,
+          userId
+        );
+      }
+    } finally {
+      if (gateResolution.resolved !== null) {
+        await continueResolvedGateRun(
+          platform,
+          conversationId,
+          conversation,
+          discoveredCodebase ?? null,
+          workflowsWithSource,
+          gateResolution.resolved.run,
+          gateResolution.resolved.action,
+          isolationHints,
+          userId
+        );
+      }
     }
 
     // Direct-chat turns may have written to source/. If there is local-only state

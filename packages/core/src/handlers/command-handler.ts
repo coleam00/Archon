@@ -25,6 +25,7 @@ import type {
   WorkflowLoadError,
   WorkflowDefinition,
 } from '@archon/workflows/schemas/workflow';
+import { isContainerRun } from '@archon/workflows/schemas/workflow-run';
 import * as workflowDb from '../db/workflows';
 import {
   approveWorkflow,
@@ -279,9 +280,21 @@ async function resolveRunContinuation(
   workflowCwd: string
 ): Promise<
   | { ok: true; workflow: NonNullable<CommandResult['workflow']>; workflowName: string }
-  | { ok: false; message: string }
+  // `resumeHint` replaces the caller's default "retry with /workflow resume"
+  // line when that is the wrong next step.
+  | { ok: false; message: string; resumeHint?: string }
 > {
   const run = await resumeWorkflow(runId);
+  // A container run can only be resumed where the container can be rewired, so
+  // handing this one back for a chat dispatch would fail the run to say what we
+  // can say here for free (#2565).
+  if (isContainerRun(run)) {
+    return {
+      ok: false,
+      message: 'it executed inside an isolation container, which chat cannot rewire.',
+      resumeHint: `Finish it with \`archon workflow resume ${runId}\` from the CLI in the same project.`,
+    };
+  }
   let workflowEntries: readonly WorkflowWithSource[];
   let loadErrors: readonly WorkflowLoadError[];
   try {
@@ -353,9 +366,11 @@ async function withRunContinuation(
     continuation = { ok: false, message: err.message };
   }
   if (!continuation.ok) {
+    const hint =
+      continuation.resumeHint ?? `Resume it with \`/workflow resume ${runId}\` once that is fixed.`;
     return {
       success: true,
-      message: `${headline}\nThe run could not be continued automatically: ${continuation.message}\nResume it with \`/workflow resume ${runId}\` once that is fixed.`,
+      message: `${headline}\nThe run could not be continued automatically: ${continuation.message}\n${hint}`,
     };
   }
   return {

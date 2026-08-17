@@ -72,6 +72,21 @@ export interface PausedGateContext {
   workflowName: string;
   /** The run's raw `metadata.approval` — may be absent or malformed. */
   approval: unknown;
+  /**
+   * The run executed inside an isolation container, so chat cannot continue it
+   * (`isContainerRun`). The section promises continuation, and that promise is
+   * false here — the executor refuses a resume it cannot rewire.
+   */
+  containerRun?: boolean;
+  /**
+   * This turn actually has a route to the approve/reject verbs — i.e. the
+   * conversation is project-scoped, which is what gates both the `manage_run`
+   * tool and the CLI-pointer section. Default `true`. When false the section
+   * must not tell the agent to resolve the gate itself; the routes it would name
+   * are not wired, and handing out instructions for an absent tool is the same
+   * dishonesty this issue removed.
+   */
+  agentCanResolve?: boolean;
 }
 
 /**
@@ -123,13 +138,39 @@ export function formatPausedGateSection(gate: PausedGateContext): string {
     facts.push(`- Loop iteration: ${String(approval.iteration)}`);
   }
 
-  return (
+  const explicitCommands = `\`/workflow approve ${gate.runId} [comment]\` or \`/workflow reject ${gate.runId} <reason>\``;
+
+  const preamble =
     header +
     'A workflow run in this conversation is PAUSED waiting for a human decision. It does not ' +
     'continue until the gate is resolved.\n\n' +
     facts.join('\n') +
     '\n\nWhat the run is asking:\n\n' +
-    `> ${approval.message.replace(/\n/g, '\n> ')}\n\n` +
+    `> ${approval.message.replace(/\n/g, '\n> ')}\n\n`;
+
+  // No project is attached, so neither the `manage_run` tool nor the CLI-pointer
+  // section is present this turn. Relay the gate rather than instructing the
+  // agent to use verbs it does not have.
+  if (gate.agentCanResolve === false) {
+    return (
+      preamble +
+      'You have no way to resolve this gate yourself in this conversation — no project is ' +
+      'attached, so the run-management verbs are not available. If the user is answering the ' +
+      `gate, tell them to decide it explicitly with ${explicitCommands}. Do not claim you ` +
+      'resolved anything.'
+    );
+  }
+
+  // A container run can only be resumed where the container can be rewired.
+  const continuation = gate.containerRun
+    ? 'This run executed inside an isolation container, so resolving the gate records the ' +
+      'decision but CANNOT continue the run from here — only the CLI can rewire the ' +
+      `container. Tell the user to finish it with \`archon workflow resume ${gate.runId}\` ` +
+      'from the CLI in the same project.'
+    : 'Resolving the gate also continues the run — there is no separate resume step.';
+
+  return (
+    preamble +
     "Read the user's message and judge what it means for THIS gate:\n\n" +
     '- It clearly approves → resolve the gate as APPROVED, passing their own words verbatim as ' +
     'the comment (a workflow may read that comment as the gate node’s output).\n' +
@@ -141,9 +182,8 @@ export function formatPausedGateSection(gate: PausedGateContext): string {
     'resolve it in the same turn rather than making them repeat themselves. When you are not ' +
     'sure what they meant, ask: leaving the gate open costs nothing, and resolving it against ' +
     'their intent cannot be undone.\n\n' +
-    'Resolving the gate also continues the run — there is no separate resume step. The user ' +
-    `can always decide it themselves with \`/workflow approve ${gate.runId} [comment]\` or ` +
-    `\`/workflow reject ${gate.runId} <reason>\`.`
+    continuation +
+    ` The user can always decide it themselves with ${explicitCommands}.`
   );
 }
 

@@ -505,6 +505,28 @@ describe('manage_run — gate continuation', () => {
     expect(mockApprove).not.toHaveBeenCalled();
   });
 
+  test('a container run is never handed to the continuation — it points at the CLI', async () => {
+    // executeWorkflow fails a resume it cannot rewire, so scheduling one would
+    // fail the run to say what the reply says for free.
+    mockFindByPrefix.mockResolvedValue([
+      makeRun({ status: 'paused', metadata: { isolation: 'container' } }),
+    ]);
+    mockApprove.mockResolvedValue({ workflowName: 'wf', type: 'approval_gate' });
+    const { resolved, ctx } = makeCtx();
+
+    const out = await buildManageRunTool(ctx).handler({
+      action: 'approve',
+      runId: 'r1abcdef',
+      confirm: true,
+    });
+
+    expect(mockApprove).toHaveBeenCalled(); // the decision is still recorded
+    expect(resolved).toHaveLength(0);
+    expect(out).toContain('isolation container');
+    expect(out).toContain('archon workflow resume r1abcdef-1234');
+    expect(out).not.toContain('continues from here');
+  });
+
   test('a declined continuation is reported as a manual resume, not as silence', async () => {
     // The orchestrator continues ONE run per turn. A gate it declines must reach
     // the agent as words, or the run is resolved and stranded with no signal.
