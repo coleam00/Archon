@@ -74,11 +74,15 @@ export class WebAdapter implements IWebPlatformAdapter {
       return;
     }
 
+    // `category` rides the wire so the client segments messages from the same
+    // typed signal `MessagePersistence.appendText` uses (persistence.ts), rather
+    // than re-deriving it by pattern-matching the message text.
     const event = JSON.stringify({
       type: 'text',
       content: message,
       isComplete: true,
       timestamp: Date.now(),
+      ...(metadata?.category ? { category: metadata.category } : {}),
       ...(metadata?.workflowResult ? { workflowResult: metadata.workflowResult } : {}),
     });
 

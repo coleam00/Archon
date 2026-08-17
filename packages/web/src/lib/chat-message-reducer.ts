@@ -6,10 +6,19 @@
  * the same output with no side effects.
  */
 
-import type { ChatMessage } from './types';
+import type { ChatMessage, MessageCategory, TextEventMeta } from './types';
 
-/** Regex that identifies workflow-status messages (🚀 / ✅ prefix). */
-const WORKFLOW_STATUS_RE = /^[\u{1F680}\u{2705}]/u;
+/**
+ * Whether a message is workflow-status narration that deserves its own bubble.
+ *
+ * The client-side counterpart to the `isWorkflowStatus` check in the web
+ * adapter's `MessagePersistence.appendText` — both answer the same question
+ * about the same message, so they must name the same categories. The category
+ * arrives on the `text` SSE event; a message without one is agent prose.
+ */
+export function isWorkflowStatusCategory(category: MessageCategory | undefined): boolean {
+  return category === 'workflow_status' || category === 'workflow_dispatch_status';
+}
 
 /**
  * Builds a new streaming assistant message.  The `id` is caller-supplied so
@@ -20,7 +29,7 @@ function makeStreamingMessage(
   content: string,
   timestamp: number,
   isStreaming: boolean,
-  workflowResult?: { workflowName: string; runId: string }
+  meta: TextEventMeta = {}
 ): ChatMessage {
   return {
     id,
@@ -29,7 +38,8 @@ function makeStreamingMessage(
     timestamp,
     isStreaming,
     toolCalls: [],
-    ...(workflowResult !== undefined ? { workflowResult } : {}),
+    ...(meta.category !== undefined ? { category: meta.category } : {}),
+    ...(meta.workflowResult !== undefined ? { workflowResult: meta.workflowResult } : {}),
   };
 }
 
@@ -46,21 +56,26 @@ function makeStreamingMessage(
  * 5. Otherwise → append to the current streaming message.
  * 6. No streaming assistant message → create a new one.
  *
+ * "Workflow-status" is decided by `isWorkflowStatusCategory` on the event's
+ * server-supplied `category`, never by inspecting the text.
+ *
  * @param prev        Current message list (treated as immutable).
  * @param content     Text to apply.
  * @param makeId      Factory for generating a new message ID (injectable for testing).
  * @param now         Timestamp to use for new messages (injectable for testing).
- * @param workflowResult  Optional workflow-result metadata carried by the text event.
+ * @param meta        Server-supplied metadata from the text event (category,
+ *                    workflow-result). Absent `category` means agent prose.
  */
 export function applyOnText(
   prev: ChatMessage[],
   content: string,
   makeId: () => string = () => `msg-${String(Date.now())}`,
   now: number = Date.now(),
-  workflowResult?: { workflowName: string; runId: string }
+  meta: TextEventMeta = {}
 ): ChatMessage[] {
   const last = prev[prev.length - 1];
-  const isWorkflowStatus = WORKFLOW_STATUS_RE.test(content);
+  const isWorkflowStatus = isWorkflowStatusCategory(meta.category);
+  const { workflowResult } = meta;
 
   // Rule 1: workflow-result messages always start as a new non-streaming message.
   // Dedup: SSETransport replays buffered events on reconnect, so skip if already present.
@@ -72,18 +87,18 @@ export function applyOnText(
       last?.role === 'assistant' && last.isStreaming
         ? [...prev.slice(0, -1), { ...last, isStreaming: false }]
         : [...prev];
-    return [...updated, makeStreamingMessage(makeId(), content, now, false, workflowResult)];
+    return [...updated, makeStreamingMessage(makeId(), content, now, false, meta)];
   }
 
   if (last?.role === 'assistant' && last.isStreaming) {
-    const lastIsWorkflowStatus = WORKFLOW_STATUS_RE.test(last.content);
+    const lastIsWorkflowStatus = isWorkflowStatusCategory(last.category);
 
     // Rules 2 & 3: workflow-status boundary.
     if ((isWorkflowStatus && last.content) || (lastIsWorkflowStatus && !isWorkflowStatus)) {
       return [
         ...prev.slice(0, -1),
         { ...last, isStreaming: false },
-        makeStreamingMessage(makeId(), content, now, true),
+        makeStreamingMessage(makeId(), content, now, true, meta),
       ];
     }
 
@@ -93,7 +108,7 @@ export function applyOnText(
       return [
         ...prev.slice(0, -1),
         { ...last, isStreaming: false },
-        makeStreamingMessage(makeId(), content, now, true),
+        makeStreamingMessage(makeId(), content, now, true, meta),
       ];
     }
 
@@ -102,5 +117,5 @@ export function applyOnText(
   }
 
   // Rule 6: no active streaming assistant message → create a new one.
-  return [...prev, makeStreamingMessage(makeId(), content, now, true)];
+  return [...prev, makeStreamingMessage(makeId(), content, now, true, meta)];
 }

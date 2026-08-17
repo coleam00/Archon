@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import type {
+  MessageCategory,
+  TextEventMeta,
   SSEEvent,
   ErrorDisplay,
   LoopIterationEvent,
@@ -31,7 +33,7 @@ function parseSSEEvent(raw: string): SSEEvent | null {
 }
 
 interface SSEHandlers {
-  onText: (content: string, workflowResult?: { workflowName: string; runId: string }) => void;
+  onText: (content: string, meta?: TextEventMeta) => void;
   onToolCall: (name: string, input: Record<string, unknown>, toolCallId?: string) => void;
   onToolResult: (name: string, output: string, duration: number, toolCallId?: string) => void;
   onError: (error: ErrorDisplay) => void;
@@ -61,18 +63,33 @@ export function useSSE(
   // Text batching: accumulate text for 50ms before dispatching
   const textBufferRef = useRef('');
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingCategoryRef = useRef<MessageCategory | undefined>(undefined);
   const pendingWorkflowResultRef = useRef<{ workflowName: string; runId: string } | undefined>(
     undefined
   );
 
   const flushText = useCallback((): void => {
     if (textBufferRef.current) {
-      handlersRef.current.onText(textBufferRef.current, pendingWorkflowResultRef.current);
+      handlersRef.current.onText(textBufferRef.current, {
+        category: pendingCategoryRef.current,
+        workflowResult: pendingWorkflowResultRef.current,
+      });
       textBufferRef.current = '';
+      pendingCategoryRef.current = undefined;
       pendingWorkflowResultRef.current = undefined;
     }
     flushTimerRef.current = null;
   }, []);
+
+  /** Cancel the batching window and dispatch immediately, if anything is buffered. */
+  const flushTextNow = useCallback((): void => {
+    if (!textBufferRef.current) return;
+    if (flushTimerRef.current) {
+      clearTimeout(flushTimerRef.current);
+      flushTimerRef.current = null;
+    }
+    flushText();
+  }, [flushText]);
 
   useEffect(() => {
     if (!conversationId) return;
@@ -116,7 +133,16 @@ export function useSSE(
 
         switch (data.type) {
           case 'text':
+            // One batch carries one category, so a category change is a message
+            // boundary: flush what is buffered before mixing in text of a
+            // different kind. Without this, a workflow-status line batched behind
+            // agent prose would inherit — or overwrite — the wrong category and
+            // lose its own bubble.
+            if (data.category !== pendingCategoryRef.current) {
+              flushTextNow();
+            }
             textBufferRef.current += data.content;
+            pendingCategoryRef.current = data.category;
             if (
               'workflowResult' in data &&
               data.workflowResult &&
@@ -134,24 +160,12 @@ export function useSSE(
           case 'tool_call':
             // Flush buffered text before tool events to ensure text
             // attaches to the correct message (not the previous one)
-            if (textBufferRef.current) {
-              if (flushTimerRef.current) {
-                clearTimeout(flushTimerRef.current);
-                flushTimerRef.current = null;
-              }
-              flushText();
-            }
+            flushTextNow();
             h.onToolCall(data.name, data.input, data.toolCallId);
             break;
           case 'tool_result':
             // Flush buffered text before tool result too
-            if (textBufferRef.current) {
-              if (flushTimerRef.current) {
-                clearTimeout(flushTimerRef.current);
-                flushTimerRef.current = null;
-              }
-              flushText();
-            }
+            flushTextNow();
             h.onToolResult(data.name, data.output, data.duration, data.toolCallId);
             break;
           case 'error':
@@ -165,12 +179,8 @@ export function useSSE(
             // Flush any buffered text before processing lock change,
             // otherwise text arriving just before lock release creates
             // a streaming message that never gets cleared.
-            if (!data.locked && textBufferRef.current) {
-              if (flushTimerRef.current) {
-                clearTimeout(flushTimerRef.current);
-                flushTimerRef.current = null;
-              }
-              flushText();
+            if (!data.locked) {
+              flushTextNow();
             }
             h.onLockChange(data.locked, data.queuePosition);
             break;
@@ -197,16 +207,10 @@ export function useSSE(
             h.onLoopIteration?.(data);
             break;
           case 'workflow_dispatch':
-            // Flush buffered text before dispatch events to ensure the dispatch
-            // message (🚀) is committed as an assistant message before
-            // onWorkflowDispatch attaches metadata to the "last assistant message".
-            if (textBufferRef.current) {
-              if (flushTimerRef.current) {
-                clearTimeout(flushTimerRef.current);
-                flushTimerRef.current = null;
-              }
-              flushText();
-            }
+            // Flush buffered text before dispatch events to ensure the
+            // `workflow_dispatch_status` message is committed as an assistant message
+            // before onWorkflowDispatch attaches metadata to the "last assistant message".
+            flushTextNow();
             h.onWorkflowDispatch?.(data);
             break;
           case 'workflow_output_preview':
@@ -231,6 +235,7 @@ export function useSSE(
               flushTimerRef.current = null;
             }
             textBufferRef.current = '';
+            pendingCategoryRef.current = undefined;
             pendingWorkflowResultRef.current = undefined;
             h.onRetract?.();
             break;
@@ -263,7 +268,7 @@ export function useSSE(
         flushText();
       }
     };
-  }, [conversationId, flushText]);
+  }, [conversationId, flushText, flushTextNow]);
 
   return { connected };
 }
