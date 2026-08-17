@@ -24,6 +24,7 @@
     "check:pi-vendor-map": "bun run scripts/generate-pi-vendor-map.ts --check",
     "generate:capability-matrix": "bun run scripts/generate-capability-matrix.ts",
     "check:capability-matrix": "bun run scripts/generate-capability-matrix.ts --check",
+    "check:schema-upgrades": "bun run scripts/check-schema-upgrades.ts",
     "test:install": "bash scripts/test-install.sh",
     "test": "bun --filter '*' --parallel test && bun test ./scripts/",
     "test:watch": "bun --filter @archon/server test:watch",

@@ -303,12 +303,20 @@ export class SqliteAdapter implements IDatabase {
           'ALTER TABLE remote_agent_conversations ADD COLUMN user_id TEXT REFERENCES remote_agent_users(id) ON DELETE SET NULL'
         );
       }
-      // Index must be created here, not in createSchema(): the column doesn't
-      // exist on pre-0.4.0 databases until the ALTER TABLE above runs, and
+      // Indexes must be created here, not in createSchema(): these columns don't
+      // exist on older databases until the ALTER TABLE statements above run, and
       // CREATE INDEX on a missing column aborts the entire createSchema()
-      // exec block. Idempotent so it's safe to run unconditionally.
+      // exec block. Idempotent so they're safe to run unconditionally.
       this.db.run(
         'CREATE INDEX IF NOT EXISTS idx_conversations_user_id ON remote_agent_conversations(user_id) WHERE user_id IS NOT NULL'
+      );
+      this.db.run(
+        'CREATE INDEX IF NOT EXISTS idx_conversations_hidden ON remote_agent_conversations(hidden)'
+      );
+      // Replaces the older non-partial index of the same name.
+      this.db.run('DROP INDEX IF EXISTS idx_conversations_codebase');
+      this.db.run(
+        'CREATE INDEX IF NOT EXISTS idx_conversations_codebase ON remote_agent_conversations(codebase_id) WHERE deleted_at IS NULL'
       );
     } catch (e: unknown) {
       getLog().warn({ err: e as Error }, 'db.sqlite_migration_conversations_columns_failed');
@@ -357,6 +365,9 @@ export class SqliteAdapter implements IDatabase {
       );
       this.db.run(
         'CREATE INDEX IF NOT EXISTS idx_workflow_runs_parent_run ON remote_agent_workflow_runs(parent_run_id) WHERE parent_run_id IS NOT NULL'
+      );
+      this.db.run(
+        'CREATE INDEX IF NOT EXISTS idx_workflow_runs_parent_conv ON remote_agent_workflow_runs(parent_conversation_id)'
       );
     } catch (e: unknown) {
       getLog().warn({ err: e as Error }, 'db.sqlite_migration_workflow_runs_columns_failed');
@@ -762,10 +773,12 @@ export class SqliteAdapter implements IDatabase {
       CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON remote_agent_messages(conversation_id, created_at ASC);
       CREATE INDEX IF NOT EXISTS idx_workflow_node_sessions_scope ON remote_agent_workflow_node_sessions(scope_key);
       CREATE INDEX IF NOT EXISTS idx_workflow_node_sessions_workflow ON remote_agent_workflow_node_sessions(workflow_name);
-      CREATE INDEX IF NOT EXISTS idx_workflow_runs_parent_conv ON remote_agent_workflow_runs(parent_conversation_id);
-      CREATE INDEX IF NOT EXISTS idx_conversations_hidden ON remote_agent_conversations(hidden);
-      DROP INDEX IF EXISTS idx_conversations_codebase;
-      CREATE INDEX IF NOT EXISTS idx_conversations_codebase ON remote_agent_conversations(codebase_id) WHERE deleted_at IS NULL;
+      -- NOTE: idx_workflow_runs_parent_conv, idx_conversations_hidden and the
+      -- partial idx_conversations_codebase are NOT created here either. They
+      -- reference parent_conversation_id / hidden / deleted_at, which
+      -- migrateColumns() adds — so they are missing on any database created
+      -- before those columns existed, and a CREATE INDEX on a missing column
+      -- aborts this whole exec block before migrateColumns() can run.
       CREATE INDEX IF NOT EXISTS idx_conversations_isolation_env_id ON remote_agent_conversations(isolation_env_id);
       CREATE INDEX IF NOT EXISTS idx_sessions_codebase ON remote_agent_sessions(codebase_id);
       CREATE INDEX IF NOT EXISTS idx_isolation_env_status ON remote_agent_isolation_environments(status);
