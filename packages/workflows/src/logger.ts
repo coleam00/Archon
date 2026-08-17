@@ -16,6 +16,12 @@ function getLog(): ReturnType<typeof createLogger> {
 // Track whether we've warned about logging failures (warn once per session)
 let logWarningShown = false;
 
+/**
+ * A row in a run's JSONL log. Some variants are historical: `'validation'` (with
+ * `check`/`result`) lost its writer when sequential execution mode was removed, so no
+ * current run emits one. It stays because logs already on disk contain those rows —
+ * keep it when reading, don't reach for it when writing.
+ */
 export interface WorkflowEvent {
   type:
     | 'workflow_start'
