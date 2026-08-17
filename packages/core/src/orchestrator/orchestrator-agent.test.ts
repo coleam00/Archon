@@ -2028,6 +2028,69 @@ describe('workflow dispatch routing — interactive flag', () => {
     expect(mockExecuteWorkflow).toHaveBeenCalled();
   });
 
+  test('re-raises the deferred input error when hydration finds nothing to resume', async () => {
+    // The gate defers a contract violation while a continuation looks possible. This is
+    // the ONE branch where that prediction turns out wrong — hydration returns null, so
+    // a FRESH run row gets created after all — and the deferred error has to come back.
+    // Without the re-raise, a required-input workflow would silently start with the
+    // input never supplied and never validated: neither a safe refusal nor a real resume.
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve(makeWorkflowResult(true, { inputs: { diff: { required: true } } }))
+    );
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve({
+        id: 'nothing-to-resume-1',
+        workflow_name: 'test-workflow',
+        working_path: '/repos/test-repo/worktrees/paused',
+        parent_conversation_id: 'conv-1',
+        status: 'paused',
+      })
+    );
+    // Nothing worth resuming → the fresh-run fallthrough.
+    mockHydrateResumableRun.mockReturnValueOnce(Promise.resolve(null));
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
+
+    const sent = platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n');
+    expect(sent).toContain("requires input 'diff'");
+    // Must NOT reach the generic "starting fresh in the same worktree" dispatch.
+    expect(sent).not.toContain('starting fresh in the same worktree');
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+  });
+
+  test('refuses immediately when the resumable run is not a continuation candidate', async () => {
+    // A FAILED (non-paused) prior run is not continued — the user gets a
+    // resume/abandon/force menu. Deferring the gate for that case swallowed the input
+    // error entirely: the caller saw a generic menu and was never told which input was
+    // wrong. Such an invocation must be refused up front, before isolation resolution.
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve(makeWorkflowResult(true, { inputs: { diff: { required: true } } }))
+    );
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve({
+        id: 'failed-prior-1',
+        workflow_name: 'test-workflow',
+        working_path: '/repos/test-repo/worktrees/failed',
+        parent_conversation_id: 'conv-1',
+        status: 'failed',
+      })
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
+
+    const sent = platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n');
+    expect(sent).toContain("requires input 'diff'");
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    // Refused at the gate, so the resume menu never rendered and no isolation ran.
+    expect(mockHydrateResumableRun).not.toHaveBeenCalled();
+  });
+
   test('a resume of a required-input workflow is not re-gated', async () => {
     // The row already carries inputs validated at creation; re-gating with nothing
     // supplied would make every such resume impossible — a regression this feature

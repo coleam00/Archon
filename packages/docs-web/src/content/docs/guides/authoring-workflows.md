@@ -1164,6 +1164,15 @@ map goes through — so a map accepted when composing is accepted here:
 - both refusals happen **before any worktree, clone, or AI cost**;
 - supplied values are recorded on the run, so a resume replays exactly what the run started with.
 
+One consequence worth knowing on **chat, the run route, and the console** — the surfaces that reuse a
+conversation. Invoking a workflow there when a resumable run of it already exists in that
+conversation *continues that run* rather than starting a new one, without any resume vocabulary
+(see [DAG Resume on Failure](#dag-resume-on-failure)). New `inputs` values passed on such a call are
+**not applied** — the continued run keeps what it started with, and Archon says so, naming the
+values it ignored. To run fresh with different values, abandon the existing run first
+(`/workflow abandon <id>`) and invoke again. The CLI has no such implicit continuation: a plain
+`archon workflow run` always starts fresh, and `--input` with `--resume` is rejected outright.
+
 Chat platforms (Slack, Telegram, Discord, GitHub) have **no** channel for inputs yet: they carry
 only a trigger message, so a required-input workflow invoked there still refuses up front and
 points at the CLI and console. That gap is tracked in

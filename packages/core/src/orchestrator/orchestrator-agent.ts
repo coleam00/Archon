@@ -771,10 +771,16 @@ async function dispatchOrchestratorWorkflow(
         conversation.id,
         codebase.id
       )));
-  // A candidate with a working path means this dispatch continues existing work rather
-  // than creating a fresh run row — either resuming it, or (for a non-paused one)
-  // showing the user the resume/abandon/force choice.
-  const willContinueExistingRun = Boolean(resumableRun?.working_path);
+  // Whether this dispatch will CONTINUE existing work rather than create a fresh run
+  // row. Deliberately mirrors the resume branch's own condition below: a candidate that
+  // is neither paused nor the explicitly-targeted run does not continue — it shows the
+  // resume/abandon/force choice and returns. Only a genuine continuation may defer the
+  // signature gate, so an invocation that was never going to continue is still refused
+  // immediately, with the specific input error rather than a generic menu, and before
+  // isolation resolution can create a worktree.
+  const willContinueExistingRun =
+    Boolean(resumableRun?.working_path) &&
+    (resumableRun?.status === 'paused' || resumableRun?.id === options?.resumeRunId);
 
   // Signature gate (#2470, #2554): resolve this invocation's declared inputs from the
   // values its channel supplied — the run route's `inputs` map today; chat platforms
@@ -968,7 +974,11 @@ async function dispatchOrchestratorWorkflow(
         await platform.sendMessage(
           conversationId,
           `⚠️ **${workflow.name}** is already being resumed (status: ${err.currentStatus}). ` +
-            'No action taken — follow the existing run for progress.'
+            'No action taken — follow the existing run for progress.' +
+            // The gate deferred a contract violation because this looked like a
+            // continuation; losing the race means it never got surfaced anywhere else.
+            // Say it here rather than let an already-computed, actionable error die.
+            (deferredInputError ? `\n\nAlso note: ${deferredInputError.message}` : '')
         );
         return;
       }
