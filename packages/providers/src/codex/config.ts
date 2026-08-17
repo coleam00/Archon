@@ -4,6 +4,7 @@
  */
 import type { ModelReasoningEffort } from '@openai/codex-sdk';
 import type { CodexProviderDefaults } from '../types';
+import type { AssertNever } from '../shared/effort';
 
 // Re-export so consumers can import the type from either location
 export type { CodexProviderDefaults } from '../types';
@@ -26,6 +27,12 @@ export const CODEX_EFFORTS = [
   'high',
   'xhigh',
 ] as const satisfies readonly ModelReasoningEffort[];
+
+/** Coverage, which `satisfies` above cannot express — a rung the SDK gains must
+ *  be added here rather than silently clamped away. See `AssertNever`. */
+export type CodexEffortsAreComplete = AssertNever<
+  Exclude<ModelReasoningEffort, (typeof CODEX_EFFORTS)[number]>
+>;
 
 function isCodexEffort(value: unknown): value is ModelReasoningEffort {
   return typeof value === 'string' && (CODEX_EFFORTS as readonly string[]).includes(value);

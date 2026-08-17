@@ -22,14 +22,20 @@ import type { ThinkingLevel } from '@earendil-works/pi-ai';
 type PiTool = ReturnType<typeof createCodingTools>[number];
 
 import type { NodeConfig } from '../../types';
-import { clampEffort } from '../../shared/effort';
+import { clampEffort, type AssertNever } from '../../shared/effort';
 
 // ─── Thinking level ────────────────────────────────────────────────────────
 
 /**
- * Pi's ThinkingLevel is Archon's ladder without `max`, so `effort: max` clamps
- * to `xhigh` and every other rung passes through — see `clampEffort`. The `off`
- * sentinel is handled by the caller, before this runs.
+ * Pi's `ThinkingLevel` is Archon's ladder exactly — all six rungs, `max`
+ * included — so every rung passes through unclamped. The `off` sentinel is
+ * handled by the caller, before this runs.
+ *
+ * `satisfies` alone would not have caught the omission this list previously
+ * carried: it proves every element IS a `ThinkingLevel` (containment), not that
+ * every `ThinkingLevel` appears (coverage). Missing `max` type-checked cleanly
+ * while silently downgrading `effort: max` on every Pi model that supports it.
+ * The coverage assertion below is the half `satisfies` cannot express.
  */
 const PI_NATIVE_LEVELS = [
   'minimal',
@@ -37,7 +43,15 @@ const PI_NATIVE_LEVELS = [
   'medium',
   'high',
   'xhigh',
+  'max',
 ] as const satisfies readonly ThinkingLevel[];
+
+/** Compile-time proof that PI_NATIVE_LEVELS covers Pi's whole vocabulary — a
+ *  rung the SDK gains (or one dropped here) becomes a type error, not a silent
+ *  downgrade. */
+export type PiLevelsAreComplete = AssertNever<
+  Exclude<ThinkingLevel, (typeof PI_NATIVE_LEVELS)[number]>
+>;
 
 function normalizeToThinkingLevel(v: unknown): ThinkingLevel | undefined {
   return clampEffort(v, PI_NATIVE_LEVELS);

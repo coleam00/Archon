@@ -1067,8 +1067,9 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
       const message =
         declaredEffort === undefined
           ? `Workflow '${raw.name}': 'modelReasoningEffort: ${modelReasoningEffort}' is deprecated and ` +
-            `has been applied as 'effort: ${modelReasoningEffort}'. Write 'effort:' instead — it applies ` +
-            'on every provider that has a reasoning control, and can be set per node.'
+            `has been applied as 'effort: ${modelReasoningEffort}'. NOTE: 'effort:' applies to EVERY node ` +
+            'in this workflow, including non-Codex ones, where the old Codex-only field applied to none. ' +
+            "Set 'effort:' per node if only some nodes should reason that deeply."
           : `Workflow '${raw.name}': 'modelReasoningEffort: ${modelReasoningEffort}' is deprecated and was ` +
             `IGNORED because this workflow also declares 'effort: ${declaredEffort}', which now applies on ` +
             "every provider including Codex. Delete the 'modelReasoningEffort:' line.";

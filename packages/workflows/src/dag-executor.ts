@@ -1198,7 +1198,7 @@ async function resolveNodeProviderAndModel(
   // it. `assistants.<provider>.modelReasoningEffort` from config.yaml never
   // enters nodeConfig, so it stays the fallback.
   //
-  // Providers clamp a rung their SDK lacks (`max` → `xhigh` on Codex/Pi/Copilot),
+  // Providers clamp a rung their SDK lacks (`max` → `xhigh` on Codex/Copilot),
   // and this reports the declared rung rather than the clamped one — consistent
   // across providers, and no longer able to name a field the provider ignored,
   // which was the #2395 failure mode.

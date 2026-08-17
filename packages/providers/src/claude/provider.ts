@@ -53,7 +53,7 @@ import { buildArchonMcpServer, ARCHON_TOOL_SERVER } from './native-tools';
 import { createLogger } from '@archon/paths';
 import { loadMcpConfig } from '../mcp/config';
 import { withResumedOutcome, resumedOutcome } from '../shared/resumed';
-import { clampEffort } from '../shared/effort';
+import { clampEffort, type AssertNever } from '../shared/effort';
 import {
   claudeSkillSearchRoots,
   findInstalledSkillNames,
@@ -77,6 +77,12 @@ const CLAUDE_EFFORTS = [
   'xhigh',
   'max',
 ] as const satisfies readonly NonNullable<Options['effort']>[];
+
+/** Coverage, which `satisfies` above cannot express — a rung the SDK gains must
+ *  be added here rather than silently clamped away. See `AssertNever`. */
+export type ClaudeEffortsAreComplete = AssertNever<
+  Exclude<NonNullable<Options['effort']>, (typeof CLAUDE_EFFORTS)[number]>
+>;
 
 /**
  * Content block type for assistant messages

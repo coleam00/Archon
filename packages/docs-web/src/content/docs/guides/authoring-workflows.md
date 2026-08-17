@@ -256,10 +256,11 @@ Most of these fields map directly to Claude Agent SDK options. `maxBudgetUsd`, `
   effort: high   # 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 ```
 
-The ladder is the union of every provider's vocabulary, and each provider clamps a
-rung its model does not offer to the nearest one it does — `max` becomes `xhigh` on
-Codex, Pi, and Copilot; `minimal` becomes `low` on Claude and Copilot. So `effort: max`
-always means "as deep as this model goes", whichever provider the node resolves to.
+The ladder is the union of every provider's vocabulary. Pi accepts all six rungs;
+the others clamp a rung their model does not offer to the nearest one it does —
+`max` becomes `xhigh` on Codex and Copilot, `minimal` becomes `low` on Claude and
+Copilot. So `effort: max` always means "as deep as this model goes", whichever
+provider the node resolves to.
 
 **thinking** — extended thinking mode (string shorthand or object form):
 

@@ -112,7 +112,14 @@ function resolveGenericGitHubToken(env: Record<string, string>): string | undefi
 // ─── Reasoning ──────────────────────────────────────────────────────────────
 
 function normalizeReasoning(value: unknown): CopilotReasoningEffort | undefined {
-  return clampEffort(value, COPILOT_EFFORTS);
+  const clamped = clampEffort(value, COPILOT_EFFORTS);
+  // Copilot's SDK lacks both ends of the ladder, so it clamps more often than
+  // any other provider — the one that most needs the adjustment to be visible.
+  // Matches `claude.effort_clamped` / `codex.effort_clamped`.
+  if (clamped !== undefined && clamped !== value) {
+    getLog().debug({ declared: value, applied: clamped }, 'copilot.effort_clamped');
+  }
+  return clamped;
 }
 
 /**

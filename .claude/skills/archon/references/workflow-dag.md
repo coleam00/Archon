@@ -52,7 +52,7 @@ These fields apply workflow-wide and can each be overridden per-node. They are C
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `effort` | `'minimal'` \| `'low'` \| `'medium'` \| `'high'` \| `'xhigh'` \| `'max'` | Reasoning depth — **the one spelling, on every provider that has the control** (Claude, Codex, Pi, Copilot). Each clamps a rung its SDK lacks to the nearest one it has. OpenCode has none |
+| `effort` | `'minimal'` \| `'low'` \| `'medium'` \| `'high'` \| `'xhigh'` \| `'max'` | Reasoning depth — **the one spelling, on every provider that has the control** (Claude, Codex, Pi, Copilot). Pi takes all six; Claude has no `minimal`, Codex no `max`, Copilot neither, and each clamps to its nearest rung. OpenCode has none |
 | `thinking` | string \| object | Extended thinking. String shorthand: `'adaptive'` \| `'enabled'` \| `'disabled'`. Object form: `{ type: 'enabled', budgetTokens: 8000 }` |
 | `fallbackModel` | string | Model to use if the primary model fails (e.g. `claude-haiku-4-5-20251001`) |
 | `betas` | string[] | SDK beta feature flags (non-empty array). Example: `['context-1m-2025-08-07']` for 1M-context Claude |

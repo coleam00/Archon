@@ -1,11 +1,12 @@
 import { describe, test, expect } from 'bun:test';
 import { EFFORT_LADDER, clampEffort, isEffortRung } from './effort';
 
-// The vocabularies the four effort-capable SDKs accept. These are the real
-// slices — Claude has no `minimal`, Codex/Pi have no `max`, Copilot neither.
+// The vocabularies the four effort-capable SDKs accept. Pi's is the full ladder;
+// the rest are real slices — Claude has no `minimal`, Codex no `max`, Copilot
+// neither.
 const CLAUDE = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 const CODEX = ['minimal', 'low', 'medium', 'high', 'xhigh'] as const;
-const PI = CODEX;
+const PI = EFFORT_LADDER; // Pi's ThinkingLevel is the full ladder, `max` included
 const COPILOT = ['low', 'medium', 'high', 'xhigh'] as const;
 
 describe('isEffortRung', () => {
@@ -24,11 +25,12 @@ describe('clampEffort', () => {
   });
 
   test('clamps down to the nearest supported rung', () => {
-    // No `max` on Codex/Pi/Copilot — the top of Archon's ladder means "as deep
-    // as this model goes", so it lands on their strongest rung, not nothing.
+    // No `max` on Codex/Copilot — the top of Archon's ladder means "as deep as
+    // this model goes", so it lands on their strongest rung, not nothing. Pi
+    // has `max` natively and must NOT be clamped.
     expect(clampEffort('max', CODEX)).toBe('xhigh');
-    expect(clampEffort('max', PI)).toBe('xhigh');
     expect(clampEffort('max', COPILOT)).toBe('xhigh');
+    expect(clampEffort('max', PI)).toBe('max');
   });
 
   test('clamps up when no weaker rung is supported', () => {

@@ -24,7 +24,8 @@ Workflows are YAML files discovered from `.archon/workflows/` (recursively) plus
 - **Used by**: Router prompt — this is the primary signal the AI uses to select a workflow. Include `Use when:` and `NOT for:` sections.
 
 ### `provider` (optional)
-- **Type**: `'claude'` | `'codex'`
+- **Type**: any registered provider id — `'claude'` | `'codex'` | `'pi'` | `'copilot'` | `'opencode'`
+  (validated at load against the registry, so the list follows what is registered)
 - **Default**: falls back to `.archon/config.yaml` assistants default (Claude)
 
 ### `model` (optional)
@@ -36,8 +37,9 @@ Workflows are YAML files discovered from `.archon/workflows/` (recursively) plus
 ### `effort` (optional)
 - **Type**: `'minimal'` | `'low'` | `'medium'` | `'high'` | `'xhigh'` | `'max'`
 - **Applies to**: every provider with a reasoning control (Claude, Codex, Pi, Copilot).
-  Each clamps a rung its SDK lacks to the nearest one it has (`max` → `xhigh` on
-  Codex/Pi/Copilot; `minimal` → `low` on Claude/Copilot). OpenCode has none.
+  Pi takes all six; the others clamp a rung their SDK lacks to the nearest one
+  they have (`max` → `xhigh` on Codex/Copilot; `minimal` → `low` on
+  Claude/Copilot). OpenCode has none.
 - **Also valid per-node**, where it overrides the workflow-level value.
 
 ### `modelReasoningEffort` (optional, Codex only) — DEPRECATED

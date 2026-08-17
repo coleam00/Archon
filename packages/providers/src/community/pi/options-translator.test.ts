@@ -37,9 +37,20 @@ describe('resolvePiThinkingLevel', () => {
     expect(resolvePiThinkingLevel({ effort: 'off' })).toEqual({ level: undefined });
   });
 
-  test("'max' (Archon EffortLevel enum) translates to Pi 'xhigh'", () => {
-    expect(resolvePiThinkingLevel({ effort: 'max' })).toEqual({ level: 'xhigh' });
-    expect(resolvePiThinkingLevel({ thinking: 'max' })).toEqual({ level: 'xhigh' });
+  // Pi's `ThinkingLevel` is Archon's ladder exactly — `max` included
+  // (@earendil-works/pi-ai types.d.ts). This previously asserted a downgrade to
+  // `xhigh`, which was the bug: `effort: max` meant "as deep as this model goes"
+  // everywhere except Pi, where a rung was quietly removed before Pi could apply
+  // its own per-model handling.
+  test("'max' reaches Pi natively rather than being downgraded", () => {
+    expect(resolvePiThinkingLevel({ effort: 'max' })).toEqual({ level: 'max' });
+    expect(resolvePiThinkingLevel({ thinking: 'max' })).toEqual({ level: 'max' });
+  });
+
+  test('every rung on the ladder passes through Pi unclamped', () => {
+    for (const rung of ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const) {
+      expect(resolvePiThinkingLevel({ effort: rung })).toEqual({ level: rung });
+    }
   });
 
   test('warns on Claude-shape object thinking config', () => {
@@ -48,6 +59,12 @@ describe('resolvePiThinkingLevel', () => {
     } as NodeConfig);
     expect(result.level).toBeUndefined();
     expect(result.warning).toContain('object form is Claude-specific');
+    // The REMEDY half, not just the diagnosis. This clause has drifted every
+    // time the ladder changed — it is operator-facing advice, and advice that
+    // lists the wrong rungs steers authors away from levels Pi supports.
+    for (const rung of ['minimal', 'low', 'medium', 'high', 'xhigh', 'max']) {
+      expect(result.warning).toContain(rung);
+    }
   });
 
   test('warns on unknown string thinking value', () => {
