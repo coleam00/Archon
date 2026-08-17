@@ -37,10 +37,10 @@ DATABASE_URL=postgresql://user:password@host:5432/dbname
 
 **No manual migration step is required.** On startup, the Postgres adapter applies the bundled `migrations/000_combined.sql` inside an advisory-lock transaction. The SQL is idempotent (`CREATE TABLE IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`), so both fresh installs and version upgrades converge automatically — including new tables and columns added in later releases.
 
-Upgrades are verified, not assumed: CI applies the current schema on top of databases created by
-older release tags, re-applies it to confirm idempotence, and compares the result against a fresh
-install — columns, indexes, column comments, constraints and sequences. Run the same check yourself
-against any PostgreSQL with `bun run check:schema-upgrades`.
+Upgrades are verified, not assumed: CI applies the current schema on top of a database built from
+every distinct schema Archon has ever released, re-applies it to confirm idempotence, and compares
+the result against a fresh install — columns, indexes, column comments, constraints and sequences.
+Run the same check yourself against any PostgreSQL with `bun run check:schema-upgrades`.
 
 If schema application fails (permissions, syntax error, network), the process aborts at the first DB operation with the underlying Postgres error logged at `db.pg_schema_init_failed`.
 

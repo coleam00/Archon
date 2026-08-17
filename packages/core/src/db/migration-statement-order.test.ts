@@ -108,6 +108,9 @@ describe('migrations/000_combined.sql — statement ordering', () => {
     expect(addedByMigration.size).toBeGreaterThan(0);
 
     // Everything from createSchema() onward — migrateColumns() sits above it.
+    // This bounds the exec block only because createSchema() is the last method
+    // in the class; a method added after it would be scanned too, which fails
+    // loudly here rather than letting anything through.
     // SQL line comments are stripped so prose describing this very hazard (or a
     // future comment quoting an index definition) cannot trip the scan.
     const createSchemaStart = SQLITE_ADAPTER.indexOf('private createSchema()');

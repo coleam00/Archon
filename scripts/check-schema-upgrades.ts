@@ -33,9 +33,6 @@ import { join, resolve } from 'path';
 const SCHEMA_PATH = resolve(import.meta.dir, '..', 'migrations', '000_combined.sql');
 const SCHEMA_REPO_PATH = 'migrations/000_combined.sql';
 
-/** How many of the most recent release tags to test upgrades from. */
-const RECENT_BASELINES = 5;
-
 interface Baseline {
   ref: string;
   sql: string;
@@ -50,18 +47,33 @@ interface Baseline {
  */
 function git(...args: string[]): { ok: boolean; stdout: string } {
   const r = spawnSync('git', args, { encoding: 'utf8' });
+  // A launch failure is not "this ref has no schema file" — reporting it as one
+  // would accuse the repository of missing a file that is present.
+  if (r.error) throw new Error(`git could not be executed: ${r.error.message}`);
   return { ok: r.status === 0, stdout: r.stdout ?? '' };
 }
 
 /**
  * Connection target for one database. With DATABASE_URL set, the URI is passed
- * through with only its database name replaced, so `?sslmode=…` and every other
- * option survives; otherwise psql reads the standard PG* env vars.
+ * through with only its database name replaced, so `?sslmode=…` and the rest of
+ * the query string survive; otherwise psql reads the standard PG* env vars.
+ *
+ * One documented libpq shape is not supported: a comma-separated multi-host URI
+ * (`postgresql://a:5432,b:5432/db`) is not parseable by WHATWG `URL`. Use PG* env
+ * vars for that case.
  */
 function connectionFor(db: string): string {
   const url = process.env.DATABASE_URL;
   if (!url) return db;
-  const u = new URL(url);
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    throw new Error(
+      `DATABASE_URL is not a parseable URI: ${url.replace(/:[^:@/]*@/, ':***@')}\n` +
+        'Multi-host URIs are the known unsupported shape — use PGHOST/PGPORT/PGUSER instead.'
+    );
+  }
   u.pathname = `/${db}`;
   return u.toString();
 }
@@ -85,17 +97,39 @@ function admin(sql: string): { code: number; out: string } {
   return psql('postgres', { sql });
 }
 
-/** Release tags to upgrade from: the oldest that carries the schema, plus the most recent ones. */
+/**
+ * Every DISTINCT schema ever shipped in a release tag, oldest tag per version.
+ *
+ * A release that does not touch the schema ships the same file as the one before
+ * it — 21 tags carry 8 distinct versions today, and v0.3.0 through v0.3.12 are all
+ * byte-identical. Deduplicating by blob therefore makes this the set of vintages a
+ * real install can actually have, rather than a sample of recent releases, and it
+ * grows with schema churn instead of release cadence.
+ */
 function defaultBaselines(): string[] {
-  const tags = git('tag', '--sort=-creatordate').stdout.split('\n').filter(Boolean);
-  const withSchema = tags.filter(t => git('cat-file', '-e', `${t}:${SCHEMA_REPO_PATH}`).ok);
-  const skipped = tags.length - withSchema.length;
-  if (skipped > 0) {
-    console.log(`note: ${skipped} tag(s) predate ${SCHEMA_REPO_PATH} and cannot be a baseline`);
+  const tags = git('tag', '--sort=creatordate').stdout.split('\n').filter(Boolean);
+  const oldestTagPerSchema = new Map<string, string>();
+  let withoutSchema = 0;
+
+  for (const tag of tags) {
+    const blob = git('rev-parse', `${tag}:${SCHEMA_REPO_PATH}`);
+    if (!blob.ok) {
+      withoutSchema++;
+      continue;
+    }
+    const id = blob.stdout.trim();
+    if (!oldestTagPerSchema.has(id)) oldestTagPerSchema.set(id, tag);
   }
-  const recent = withSchema.slice(0, RECENT_BASELINES);
-  const oldest = withSchema[withSchema.length - 1];
-  return oldest && !recent.includes(oldest) ? [...recent, oldest] : recent;
+
+  if (withoutSchema > 0) {
+    console.log(
+      `note: ${withoutSchema} tag(s) predate ${SCHEMA_REPO_PATH} and cannot be a baseline`
+    );
+  }
+  console.log(
+    `note: ${tags.length - withoutSchema} tag(s) carry ${oldestTagPerSchema.size} distinct schema version(s)`
+  );
+  return [...oldestTagPerSchema.values()];
 }
 
 function loadBaselines(refs: string[], dir: string): Baseline[] {
@@ -135,24 +169,29 @@ const CATALOG_QUERIES: Record<string, string> = {
 };
 
 /**
- * Divergences between a fresh install and an upgrade that are known and
- * sanctioned rather than bugs — kept as a small tracked allowlist, in the spirit
- * of the SQLite/Postgres parity test. Every entry needs a reason, and hits are
- * printed on every run so an allowance never becomes invisible.
+ * The one divergence between a fresh install and an upgrade that is expected.
+ *
+ * `remote_agent_codebases.kind` carries `CHECK (kind IN ('repo','folder'))` in the
+ * CREATE TABLE body, and a constraint declared there binds only databases created
+ * after it (AGENTS.md). It is deliberately NOT repeated in the additive block:
+ * `ALTER TABLE ... ADD CONSTRAINT` validates existing rows, so a single unexpected
+ * value would abort the entire apply — the crash-loop class this check exists to
+ * prevent. SQLite cannot add a CHECK by ALTER at all, so both dialects agree in
+ * staying tolerant and letting application code enforce the value set.
+ *
+ * Deliberately not a general allowlist. One exception, matched on the exact
+ * constraint identity — `<table> <conname>`, so Postgres's auto-generated
+ * `..._kind_check1` sibling is NOT covered — and consulted in only one direction,
+ * where the UPGRADED database is the one missing it. Anything else, including an
+ * upgrade that GAINED a constraint, still fails.
  */
-const ALLOWED_DRIFT: { catalog: string; prefix: string; why: string }[] = [
-  {
-    catalog: 'constraints',
-    prefix: 'remote_agent_codebases remote_agent_codebases_kind_check',
-    why:
-      'a CHECK declared in a CREATE TABLE body binds only databases created after it (AGENTS.md); ' +
-      'SQLite cannot add one by ALTER at all, so enforcing it on Postgres alone would break dialect ' +
-      'parity. Application code stays tolerant instead.',
-  },
-];
+const EXPECTED_MISSING_CONSTRAINT = 'remote_agent_codebases remote_agent_codebases_kind_check';
 
-function allowedDrift(catalogName: string, line: string): string | undefined {
-  return ALLOWED_DRIFT.find(a => a.catalog === catalogName && line.startsWith(a.prefix))?.why;
+/** True for the single sanctioned "fresh has it, upgraded does not" constraint. */
+function isExpectedMissingConstraint(catalogName: string, line: string): boolean {
+  if (catalogName !== 'constraints') return false;
+  const [table, conname] = line.split(' ');
+  return `${table} ${conname}` === EXPECTED_MISSING_CONSTRAINT;
 }
 
 function catalog(db: string): Record<string, string> {
@@ -198,6 +237,8 @@ if (refs.length === 0) {
 
 const workDir = mkdtempSync(join(tmpdir(), 'archon-schema-upgrade-'));
 let failures = 0;
+/** Whether the one sanctioned divergence actually turned up — see the stale check below. */
+let expectedMissingSeen = false;
 
 try {
   const baselines = loadBaselines(refs, workDir);
@@ -255,17 +296,24 @@ try {
       const upgradedLines = new Set(upgraded[k].split('\n').filter(Boolean));
       for (const line of freshLines) {
         if (upgradedLines.has(line)) continue;
-        const sanctioned = allowedDrift(k, line);
-        if (sanctioned) allowed.push(`[${k}] ${line}\n     sanctioned: ${sanctioned}`);
-        else differences.push(`  missing after upgrade [${k}]: ${line}`);
+        if (isExpectedMissingConstraint(k, line)) {
+          expectedMissingSeen = true;
+          allowed.push(`[${k}] ${line}`);
+          continue;
+        }
+        differences.push(`  missing after upgrade [${k}]: ${line}`);
       }
+      // No exception in this direction: an upgrade that GAINED something the
+      // fresh schema lacks is always a finding.
       for (const line of upgradedLines) {
-        if (freshLines.has(line)) continue;
-        const sanctioned = allowedDrift(k, line);
-        if (sanctioned) allowed.push(`[${k}] ${line}\n     sanctioned: ${sanctioned}`);
-        else differences.push(`  extra after upgrade   [${k}]: ${line}`);
+        if (!freshLines.has(line)) differences.push(`  extra after upgrade   [${k}]: ${line}`);
       }
     }
+
+    // Printed before the verdict, so a ref with both a real and an expected
+    // divergence still shows what was excused. Labelled with the ref, since it
+    // no longer sits under that ref's ok line.
+    for (const line of allowed) console.log(`     ${ref}: expected divergence ${line}`);
 
     if (differences.length > 0) {
       console.error(`FAIL ${ref}: upgraded schema differs from a fresh install`);
@@ -276,8 +324,6 @@ try {
     }
 
     console.log(`ok   ${ref} → current (idempotent, converges on the fresh schema)`);
-    // Never silent: an allowed divergence is still printed every run.
-    for (const line of allowed) console.log(`     allowed divergence ${line}`);
     drop(db);
   }
 
@@ -287,8 +333,25 @@ try {
   failures++;
 } finally {
   // Runs on every path, including the early failures above.
-  for (const db of createdDbs) admin(`DROP DATABASE IF EXISTS ${db}`);
+  for (const db of createdDbs) {
+    const r = admin(`DROP DATABASE IF EXISTS ${db}`);
+    // Not fatal — the next run's DROP ... IF EXISTS collects it — but never silent.
+    if (r.code !== 0) console.error(`warning: could not drop scratch database ${db}\n${r.out}`);
+  }
   rmSync(workDir, { recursive: true, force: true });
+}
+
+// The exception above must keep describing real drift, or it is a hole that
+// outlived its reason. On a default run the oldest baseline guarantees it fires;
+// an explicit-ref run may legitimately not reach it, so only assert the default.
+if (requested.length === 0 && failures === 0 && !expectedMissingSeen) {
+  console.error(
+    `\ncheck:schema-upgrades FAILED: the expected divergence (${EXPECTED_MISSING_CONSTRAINT}) never appeared.`
+  );
+  console.error(
+    'It is stale. If that constraint was renamed or removed, delete EXPECTED_MISSING_CONSTRAINT from this script.'
+  );
+  process.exit(1);
 }
 
 if (failures > 0) {
