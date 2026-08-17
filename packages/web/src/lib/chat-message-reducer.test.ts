@@ -161,6 +161,38 @@ describe('applyOnText — workflow-status boundary (Rules 2 & 3)', () => {
     expect(result[0].content).toBe('🚀 Starting');
   });
 
+  test('an empty placeholder adopts the category of the first text that lands in it', () => {
+    // ChatInterface pushes `{ content: '', isStreaming: true }` the moment the
+    // user sends, so a dispatch status is the first text to reach it. Without
+    // adopting the category the placeholder would look like prose, and the
+    // following text would merge into a workflow-status bubble.
+    const placeholder: ChatMessage[] = [makeAssistant({ content: '' })];
+    const filled = applyOnText(placeholder, '🚀 Dispatching workflow', makeId, NOW, {
+      category: 'workflow_dispatch_status',
+    });
+
+    expect(filled).toHaveLength(1);
+    expect(filled[0].category).toBe('workflow_dispatch_status');
+
+    const next = applyOnText(filled, 'agent prose', makeId, NOW);
+    expect(next).toHaveLength(2);
+    expect(next[0].isStreaming).toBe(false);
+    expect(next[1].content).toBe('agent prose');
+  });
+
+  test('consecutive workflow-status messages each get their own bubble', () => {
+    const prev: ChatMessage[] = [
+      makeAssistant({ content: '🚀 Starting', category: 'workflow_status' }),
+    ];
+    const result = applyOnText(prev, '🚀 Dispatching', makeId, NOW, {
+      category: 'workflow_dispatch_status',
+    });
+
+    expect(result).toHaveLength(2);
+    expect(result[0].isStreaming).toBe(false);
+    expect(result[1].category).toBe('workflow_dispatch_status');
+  });
+
   test('stamps the category on the message it creates so the next event can read it', () => {
     const result = applyOnText([], 'Starting', makeId, NOW, { category: 'workflow_status' });
 

@@ -113,7 +113,23 @@ export function applyOnText(
     }
 
     // Rule 5: append to existing streaming message.
-    return [...prev.slice(0, -1), { ...last, content: last.content + content }];
+    //
+    // A message can start life without a category: `ChatInterface` pushes an
+    // empty "thinking" placeholder the moment the user sends, and the guard in
+    // Rules 2 & 3 lets text fall through into it (`last.content` is ''). The
+    // first text to land therefore defines what that message is — adopt its
+    // category, or the *next* event's trailing-boundary check reads `undefined`
+    // and merges prose into what is really a workflow-status bubble.
+    return [
+      ...prev.slice(0, -1),
+      {
+        ...last,
+        content: last.content + content,
+        ...(last.category === undefined && meta.category !== undefined
+          ? { category: meta.category }
+          : {}),
+      },
+    ];
   }
 
   // Rule 6: no active streaming assistant message → create a new one.
