@@ -17,10 +17,10 @@ function getLog(): ReturnType<typeof createLogger> {
 let logWarningShown = false;
 
 /**
- * A row in a run's JSONL log. Some variants are historical: `'validation'` (with
- * `check`/`result`) lost its writer when sequential execution mode was removed, so no
- * current run emits one. It stays because logs already on disk contain those rows —
- * keep it when reading, don't reach for it when writing.
+ * A row in a run's JSONL log. Some variants are historical: nothing has emitted
+ * `'validation'` (with `check`/`result`) since #805 removed its call site along with
+ * sequential execution mode, and its writer is now deleted too. It stays because logs
+ * already on disk contain those rows — keep it when reading, never write a new one.
  */
 export interface WorkflowEvent {
   type:
