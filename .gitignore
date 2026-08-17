@@ -98,6 +98,12 @@ Thumbs.db
 *.db-wal
 *.db-journal
 
+# bun:sqlite leaks: `:memory:?mode=memory&cache=shared` URIs are materialized
+# as sibling triples (`-shared`, `-shared-shm`, `-shared-wal`) wherever they
+# are opened. Observed under `packages/core/` from test runs where the URI
+# query string slipped past the in-memory fast-path. Matches at any depth.
+**/file:archon-test-sqlite-legacy-*
+
 # Defensive: literal 'undefined' directories from env var bugs
 undefined/
 
