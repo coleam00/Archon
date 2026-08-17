@@ -373,10 +373,14 @@ function parseDagNode(
  * command file is an inline prompt that lives in another file, so excluding it would
  * leave the same hazard reachable by moving the prompt.
  */
-function freeFormAiProducerKind(node: DagNode): 'schema-capable' | 'loop' | 'loop-group' | null {
-  if (isLoopNode(node)) return 'loop';
+function freeFormAiProducerKind(node: DagNode): 'schema-capable' | 'loop-group' | null {
+  // A `loop:` node is schema-capable since #2563: it makes its own sendQuery, so a
+  // declared `output_format` reaches the provider and its output becomes the
+  // validated JSON — exactly like a prompt/command node. It therefore gets the same
+  // verdict and the same remedy, and there is no longer a separate 'loop' kind. (A
+  // `loop_group:` still has none of that: it never calls the provider itself.)
   if (isLoopGroupNode(node)) return 'loop-group';
-  if (!isPromptNode(node) && !isCommandNode(node)) return null;
+  if (!isLoopNode(node) && !isPromptNode(node) && !isCommandNode(node)) return null;
   return node.output_format === undefined ? 'schema-capable' : null;
 }
 
@@ -584,9 +588,6 @@ export function validateDagStructure(
         const problem = `Node '${node.id}' field 'when' compares the whole output of AI node '${producerId}' to a literal ('${atom.expected}'). That output is free-form prose, so the comparison silently fails and '${node.id}' is skipped.`;
         if (kind === 'schema-capable') {
           return `${problem} Declare 'output_format' on '${producerId}' and compare a field (e.g. "$${producerId}.output.status ${atom.operator} '${atom.expected}'"), or produce the value from a 'bash:'/'script:' node`;
-        }
-        if (kind === 'loop') {
-          return `${problem} 'output_format' is dropped from a 'loop:' node when the workflow is parsed, so declaring one on '${producerId}' would change nothing — ${GATE_ON_A_SHELL_NODE}`;
         }
         if (kind === 'loop-group') {
           return `${problem} A 'loop_group:' node's output is the last iteration's raw text — unlike a 'prompt:' node, declaring 'output_format' does not replace it with the JSON document — so ${GATE_ON_A_SHELL_NODE}`;

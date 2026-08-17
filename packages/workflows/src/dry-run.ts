@@ -302,28 +302,72 @@ function stubFor(node: DagNode, ctx: DryRunContext): DryRunStubValue | undefined
   return stub;
 }
 
+/** The completion channels a simulated loop may declare. */
+interface LoopChannels {
+  until?: string;
+  until_bash?: string;
+  until_field?: string;
+}
+
+/** What the dry run can conclude about one simulated iteration. */
+type SimulatedCompletion =
+  | { kind: 'field' }
+  | { kind: 'signal' }
+  | { kind: 'assumed' }
+  | { kind: 'incomplete' };
+
 /**
  * Would this iteration's output end the loop, as far as a dry run can tell?
  *
- * The simulator executes nothing, so `until_bash` is unobservable. A loop that
- * declared only `until_bash` (#2563) is therefore assumed to complete on its first
- * iteration: reporting the max-iterations failure the real run would not produce is
- * a worse lie than assuming the deterministic check passes, and the trace reason
- * names the channel that went unevaluated.
+ * Two of the three channels are decidable from a stub and one is not:
+ *  - `until_field` IS evaluable — a stub object is hydrated onto
+ *    `NodeOutput.structuredOutput`, so the engine's own `=== true` rule can be
+ *    applied exactly. Guessing here would be strictly worse than deciding.
+ *  - `until` IS evaluable — run the same detector the executor runs.
+ *  - `until_bash` is NOT: the simulator executes nothing.
+ *
+ * So: an evaluable channel that fires wins. If none fires but an unevaluable one is
+ * declared, assume completion — reporting a max-iterations failure the real run
+ * would not produce is the worse lie, and the trace reason names the channel that
+ * went unevaluated. If none fires and there is nothing unevaluable to hide behind,
+ * the iteration genuinely did not complete.
  */
 function loopIterationCompletes(
-  control: { until?: string; until_bash?: string },
-  output: string
-): boolean {
-  if (control.until === undefined) return true;
-  return detectCompletionSignal(output, control.until);
+  control: LoopChannels,
+  hydrated: { output: string; structuredOutput?: unknown }
+): SimulatedCompletion {
+  if (control.until_field !== undefined) {
+    const payload = hydrated.structuredOutput;
+    if (
+      payload !== null &&
+      typeof payload === 'object' &&
+      (payload as Record<string, unknown>)[control.until_field] === true
+    ) {
+      return { kind: 'field' };
+    }
+  }
+  if (control.until !== undefined && detectCompletionSignal(hydrated.output, control.until)) {
+    return { kind: 'signal' };
+  }
+  if (control.until_bash !== undefined) return { kind: 'assumed' };
+  return { kind: 'incomplete' };
 }
 
 /** Trace reason for a simulated loop completion — see {@link loopIterationCompletes}. */
-function completionReason(control: { until?: string }, iterations: number): string {
-  return control.until === undefined
-    ? `assumed complete after ${String(iterations)} iteration(s) — 'until_bash' is not executed in a dry run`
-    : `completion signal after ${String(iterations)} iteration(s)`;
+function completionReason(
+  completion: SimulatedCompletion,
+  control: LoopChannels,
+  iterations: number
+): string {
+  const n = String(iterations);
+  switch (completion.kind) {
+    case 'field':
+      return `'${control.until_field ?? ''}' is true after ${n} iteration(s)`;
+    case 'signal':
+      return `completion signal after ${n} iteration(s)`;
+    default:
+      return `assumed complete after ${n} iteration(s) — 'until_bash' is not executed in a dry run`;
+  }
 }
 
 async function simulateLoop(
@@ -353,13 +397,14 @@ async function simulateLoop(
     }
     const hydrated = completedOutput(node, stub);
     previous = hydrated.output;
-    if (loopIterationCompletes(node.loop, previous)) {
+    const completion = loopIterationCompletes(node.loop, hydrated);
+    if (completion.kind !== 'incomplete') {
       outputs.set(node.id, hydrated);
       ctx.trace.push({
         nodeId: node.id,
         nodeType: 'loop',
         state: 'stubbed',
-        reason: completionReason(node.loop, current),
+        reason: completionReason(completion, node.loop, current),
         resolvedText,
         output: previous,
         ...(iteration ? { iteration } : {}),
@@ -407,13 +452,14 @@ async function simulateLoopGroup(
       return;
     }
     if (ctx.halted) return;
-    if (loopIterationCompletes(node.loop_group, lastOutput)) {
+    const groupCompletion = loopIterationCompletes(node.loop_group, { output: lastOutput });
+    if (groupCompletion.kind !== 'incomplete') {
       outputs.set(node.id, { state: 'completed', output: lastOutput });
       ctx.trace.push({
         nodeId: node.id,
         nodeType: 'loop_group',
         state: 'completed',
-        reason: completionReason(node.loop_group, current),
+        reason: completionReason(groupCompletion, node.loop_group, current),
         output: lastOutput,
         ...(iteration ? { iteration } : {}),
       });

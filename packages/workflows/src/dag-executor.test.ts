@@ -7460,6 +7460,132 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       expect(failed.length).toBeGreaterThan(0);
     });
 
+    it('gives a bare-approve finalize the same strict field contract as a normal completion', async () => {
+      // The finalize-on-approve exit (#2074) is a COMPLETION path, so it must carry
+      // declaredFields like every other one — otherwise a downstream
+      // `$loop.output.<declared-optional>` THROWS here while resolving to '' on the
+      // identical loop that completed without a gate. Re-derived from the definition,
+      // exactly like the resume-hydration path (#2091).
+      mockSendQueryDag.mockImplementation(function* () {
+        yield { type: 'assistant', content: 'should never run' };
+        yield { type: 'result', sessionId: 'never' };
+      });
+
+      const mockDeps = createMockDeps();
+      const platform = createMockPlatform();
+      // `note` is declared-optional and ABSENT from the finalized payload: with
+      // declaredFields it resolves to ''; without, it throws an OutputRefError.
+      const workflowRun = makeWorkflowRun('finalize-declared-fields', {
+        metadata: {
+          approval: {
+            type: 'interactive_loop',
+            nodeId: 'judge',
+            iteration: 1,
+            sessionId: 'sig-1',
+            message: 'gate',
+            completionSignaled: true,
+            signaledOutput: JSON.stringify({ done: true }),
+          },
+          loop_user_input: '',
+          loop_feedback_given: false,
+        },
+      });
+
+      const result = await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-dag',
+        testDir,
+        {
+          name: 'finalize-declared-fields',
+          nodes: [
+            {
+              id: 'judge',
+              output_format: untilFieldSchema,
+              loop: {
+                prompt: 'judge',
+                until: 'APPROVED',
+                max_iterations: 5,
+                until_field: 'done',
+                interactive: true,
+                gate_message: 'Review.',
+              },
+            },
+            {
+              id: 'report',
+              depends_on: ['judge'],
+              bash: 'echo "note=[$judge.output.note]"',
+            },
+          ],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'state'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      // Declared-but-absent optional resolves to empty (shell-quoted by the
+      // bash-escaped substitution path), not a failed consumer.
+      expect(result).toContain("note=['']");
+    });
+
+    it('still honours an until signal at the very end of the PROSE when output_format is set', async () => {
+      // Regression: detection originally concatenated prose + payload into one
+      // haystack. `detectCompletionSignal`'s end-of-output pattern is anchored with
+      // `$` and NO `m` flag, and an object payload always ends in `}` — so the
+      // documented inline "sentinel at the very end of output" form silently stopped
+      // firing for every loop that declared a schema. The own-line and <promise>
+      // forms survive concatenation, which is why this needs its own test.
+      let calls = 0;
+      mockSendQueryDag.mockImplementation(function* () {
+        calls++;
+        yield { type: 'assistant', content: 'All tasks are finished. ALLDONE' };
+        yield {
+          type: 'result',
+          sessionId: `s-${String(calls)}`,
+          structuredOutput: { done: false, note: 'still working' },
+        };
+      });
+
+      const mockDeps = createMockDeps();
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun('loop-inline-sentinel');
+
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-dag',
+        testDir,
+        {
+          name: 'dag-loop-inline-sentinel',
+          nodes: [
+            {
+              id: 'my-loop',
+              output_format: untilFieldSchema,
+              loop: { prompt: 'go', until: 'ALLDONE', max_iterations: 4, until_field: 'done' },
+            },
+          ],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'state'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      // `done` stays false, so only the prose sentinel can have ended this.
+      expect(calls).toBe(1);
+    });
+
     it('still honours an until signal emitted inside the structured payload', async () => {
       // A loop declaring BOTH until: and output_format. On a grammar-constrained
       // provider the prose is empty, so detection reads the serialized payload too —

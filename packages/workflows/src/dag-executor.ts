@@ -4228,7 +4228,19 @@ async function executeLoopNode(
         nodeId: node.id,
       })
     );
-    return { state: 'completed', output: finalizeOutput, sessionId: currentSessionId };
+    // Same declared-field capture as the normal completion return below and as the
+    // resume-hydration path (#2091). This is a COMPLETION exit, so a consumer's
+    // `$loop.output.field` must get the identical strict contract here: without it a
+    // declared-optional field that the payload omits would throw instead of resolving
+    // to '', and an explicit null would substitute the literal "null". Re-derived
+    // from the definition rather than carried through the pause, exactly like resume.
+    const finalizeDeclaredFields = declaredFieldsFromSchema(node.output_format);
+    return {
+      state: 'completed',
+      output: finalizeOutput,
+      sessionId: currentSessionId,
+      ...(finalizeDeclaredFields !== undefined ? { declaredFields: finalizeDeclaredFields } : {}),
+    };
   }
 
   // Resolve the iteration prompt source once per run/node. The interactive gate
@@ -5108,10 +5120,19 @@ async function executeLoopNode(
     // decoding the prose is routinely empty, so a loop declaring both `until:` and
     // `output_format` would otherwise have a signal channel that could never fire —
     // silently, which is the failure mode this issue exists to remove.
-    const signalHaystack =
-      structuredText === undefined ? fullOutput : `${fullOutput}\n${structuredText}`;
+    //
+    // TWO independent calls, never one concatenated haystack. `detectCompletionSignal`
+    // supports a sentinel "at the very end of output", and that pattern is anchored
+    // with `$` and NO `m` flag (see executor-shared.ts). Appending the payload moves
+    // the end of the string past the prose — and an object payload always ends in
+    // `}` — so concatenating silently kills the documented inline end-of-output form
+    // for every loop that declares a schema. (The own-line and `<promise>` forms
+    // survive it, which is exactly why it is easy to miss.) Checking each haystack
+    // separately preserves each one's own anchor.
     const signalDetected =
-      loop.until !== undefined && detectCompletionSignal(signalHaystack, loop.until);
+      loop.until !== undefined &&
+      (detectCompletionSignal(fullOutput, loop.until) ||
+        (structuredText !== undefined && detectCompletionSignal(structuredText, loop.until)));
 
     // Check deterministic bash condition (if configured). Skipped once a cheaper
     // channel already completed this iteration: completion is an OR, so the outcome

@@ -458,12 +458,15 @@ construction, and so do `approval:` captures (a human typed them) and `workflow:
 results (the callee owns that contract). A field access (`$analyze.output.status`) is
 always allowed.
 
-**`loop:` and `loop_group:` have no opt-out — for two different reasons.** On a `loop:`,
-`output_format` is *dropped when the workflow is parsed*, so declaring one is a no-op. On a
-`loop_group:` it survives, but the group's output is the *last iteration's raw text* and a
-schema never replaces it with the JSON document the way it does on a `prompt:` node. Either
-way, compute the decision in a `bash:`/`script:` node — or an `until_bash` check — and gate
-on that node's output instead.
+**A `loop:` opts out the same way a `prompt:` node does** — declare `output_format` on it
+and the loop's output becomes the validated JSON document, so `$loop.output.field` is
+available to gate on. (Before #2563 the field was dropped at parse and this was a no-op.)
+
+**A `loop_group:` still has no opt-out.** It keeps the field, but the group's output is the
+*last iteration's raw text* and a schema never replaces it with the JSON document the way it
+does on a `prompt:` or `loop:` node — the group never calls the provider itself. Compute the
+decision in a `bash:`/`script:` node — or an `until_bash` check — and gate on that node's
+output instead.
 :::
 
 ### `$node_id.output` Substitution

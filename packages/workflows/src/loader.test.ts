@@ -2760,21 +2760,22 @@ nodes:
       );
       expect(result.errors).toHaveLength(1);
       expect(result.errors[0].error).toContain("whole output of AI node 'refine'");
-      // `loop:` and `loop_group:` are both rejected but for DIFFERENT reasons, and the
-      // message must name the right one. On a `loop:` the schema is dropped at parse.
-      expect(result.errors[0].error).toContain("dropped from a 'loop:' node");
-      expect(result.errors[0].error).not.toContain("Declare 'output_format'");
+      // Since #2563 a `loop:` is schema-capable, so it gets the SAME remedy as a
+      // prompt node: declare output_format and compare a field. (A `loop_group:` still
+      // gets its own reason — it never calls the provider itself.)
+      expect(result.errors[0].error).toContain("Declare 'output_format'");
     });
 
-    it('rejects it for a loop producer even when it declares an output_format', async () => {
-      // `output_format` never reaches a LoopNode: it is in the schema's `aiOnly` group
-      // and the loop branch of the transform does not spread it. So there is nothing to
-      // opt out with, and the message must not pretend otherwise.
+    it('ACCEPTS a loop producer that declares an output_format (#2563)', async () => {
+      // `output_format` now reaches a LoopNode — it runs its own sendQuery — so the
+      // loop's output IS the validated JSON document and declaring a schema is a real
+      // opt-out, exactly as it is for a prompt node. Before #2563 this was rejected on
+      // the grounds that the schema was dropped at parse, which is no longer true.
       const result = await loadYaml(
         'ai-loop-declared-format.yaml',
         `
 name: ai-loop-declared-format
-description: output_format on a loop node is dropped, so it is not an opt-out
+description: output_format on a loop node is a real opt-out
 nodes:
   - id: refine
     output_format:
@@ -2792,8 +2793,7 @@ nodes:
     when: "$refine.output == 'DONE'"
 `
       );
-      expect(result.errors).toHaveLength(1);
-      expect(result.errors[0].error).toContain("dropped from a 'loop:' node");
+      expect(result.errors).toHaveLength(0);
     });
 
     it('rejects it for a loop_group producer that declares output_format, for its own reason', async () => {

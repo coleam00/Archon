@@ -1221,9 +1221,13 @@ describe('dagNodeSchema — output_format survival by node type', () => {
    * was stated in five places and derived from none. Its history earned it: the claim was
    * written three times across #2579 and was wrong or imprecise twice.
    *
-   * If a future change (e.g. #2563's loop structured completion) spreads `aiOnly` in the
-   * `loop` branch, THIS is what fails — and the loader message telling authors that
-   * declaring `output_format` on a loop "would change nothing" has to be revisited.
+   * #2563 is the change this tripwire was written to catch, and it fired: a `loop:`
+   * node now KEEPS `output_format` (it makes its own sendQuery, so the schema reaches
+   * the provider and the node's output becomes the validated JSON). The loader message
+   * telling authors that declaring one on a loop "would change nothing" was removed
+   * with it — a `loop:` is now classified `schema-capable` and gets the same remedy as
+   * a prompt node. The asymmetry that remains is `loop_group:`, which never calls the
+   * provider itself.
    */
   const outputFormat = { type: 'object', properties: { done: { type: 'boolean' } } };
 
@@ -1234,10 +1238,10 @@ describe('dagNodeSchema — output_format survival by node type', () => {
     return result.data as { output_format?: unknown };
   }
 
-  test('a loop node DROPS output_format (aiOnly is not spread)', () => {
+  test('a loop node KEEPS output_format (#2563 — it runs its own sendQuery)', () => {
     expect(
       parsedNode({ loop: { until: 'DONE', max_iterations: 3, prompt: 'go' } }).output_format
-    ).toBeUndefined();
+    ).toEqual(outputFormat);
   });
 
   test('a loop_group node KEEPS output_format (aiOnly is spread)', () => {

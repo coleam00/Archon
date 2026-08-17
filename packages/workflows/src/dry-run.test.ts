@@ -318,6 +318,102 @@ describe('dryRunWorkflow', () => {
     expect(result.trace[0]?.reason).toContain('until_bash');
   });
 
+  test('evaluates until_field exactly rather than guessing (#2563)', async () => {
+    // The stub is hydrated onto NodeOutput.structuredOutput, so the simulator can
+    // apply the engine's own `=== true` rule instead of assuming. Guessing would be
+    // strictly worse here than in the until_bash case the docblock justifies.
+    const workflow = makeTestWorkflow({
+      name: 'judgment-loop',
+      nodes: [
+        {
+          id: 'triage',
+          output_format: {
+            type: 'object',
+            properties: { done: { type: 'boolean' } },
+            required: ['done'],
+          },
+          loop: { prompt: 'work', max_iterations: 3, until_field: 'done' },
+        },
+      ],
+    });
+
+    const done = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd: process.cwd(),
+      stubs: { triage: { done: true } },
+    });
+    expect(done.outcome).not.toBe('failed');
+    expect(done.trace[0]?.reason).toContain("'done' is true after 1 iteration(s)");
+
+    // false must NOT be assumed complete — the channel is decidable and says no.
+    const notDone = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd: process.cwd(),
+      stubs: { triage: { done: false } },
+    });
+    expect(notDone.outcome).toBe('failed');
+    expect(notDone.trace[0]?.reason).toContain('exceeded max iterations (3)');
+    expect(notDone.trace[0]?.reason).toContain("'done' ever being true");
+  });
+
+  test('until: plus until_field does not report a failure the real run would not produce', async () => {
+    // Regression: the simulator only knew `until`, so an object stub (which carries
+    // no prose sentinel) reported a max-iterations failure even though `until_field`
+    // was satisfied.
+    const workflow = makeTestWorkflow({
+      name: 'both-channels',
+      nodes: [
+        {
+          id: 'triage',
+          output_format: {
+            type: 'object',
+            properties: { done: { type: 'boolean' } },
+            required: ['done'],
+          },
+          loop: { prompt: 'work', until: 'DONE', max_iterations: 3, until_field: 'done' },
+        },
+      ],
+    });
+
+    const result = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd: process.cwd(),
+      stubs: { triage: { done: true } },
+    });
+    expect(result.outcome).not.toBe('failed');
+    expect(result.trace[0]?.reason).toContain("'done' is true");
+  });
+
+  test('a until_field-only loop is not credited to until_bash it never declared', async () => {
+    // Regression: the "assumed complete" fallback blamed `until_bash` unconditionally,
+    // naming a channel the author had not written.
+    const workflow = makeTestWorkflow({
+      name: 'field-only',
+      nodes: [
+        {
+          id: 'triage',
+          output_format: {
+            type: 'object',
+            properties: { done: { type: 'boolean' } },
+            required: ['done'],
+          },
+          loop: { prompt: 'work', max_iterations: 2, until_field: 'done' },
+        },
+      ],
+    });
+
+    const result = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd: process.cwd(),
+      stubs: { triage: { done: true } },
+    });
+    expect(result.trace[0]?.reason).not.toContain('until_bash');
+  });
+
   test('simulates loop-group body outputs without leaking iteration state', async () => {
     const workflow = makeTestWorkflow({
       name: 'loop-group',
