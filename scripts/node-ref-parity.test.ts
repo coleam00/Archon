@@ -43,6 +43,7 @@ import { join } from 'node:path';
 import {
   WHEN_ATOM_PATTERN,
   parseWhenAtom,
+  splitOutsideQuotes,
   whenAtoms,
   type WhenAtom,
 } from '../packages/workflows/src/when-atom';
@@ -151,16 +152,27 @@ describe('node-ref parity: @archon/web mirrors the engine', () => {
  *   - `.source` identity pins the GRAMMAR, including the parts no corpus entry
  *     happens to exercise. An alternation branch added to one side only fails
  *     here immediately, which is exactly what #2591 needed and did not have.
- *   - the corpus pins the PARSE SEMANTICS around the grammar — the rules that
- *     live in code after the regex matches. `$INPUTS.a.b` is the standing
- *     example: both patterns match it (it backtracks into the node branch), and
- *     only the follow-up reserved-id rejection makes it an error. Identical
- *     patterns with a missing rejection would pass the first check and fail here.
+ *   - the corpus pins the PARSE SEMANTICS around the grammar — the rules that run
+ *     before the regex sees a substring (the `||`/`&&` splitter) and after it
+ *     matches. `$INPUTS.a.b` is the standing example of the latter: both patterns
+ *     match it (it backtracks into the node branch), and only the follow-up
+ *     reserved-id rejection makes it an error. Identical patterns with a missing
+ *     rejection would pass the first check and fail here.
+ *
+ * Each accepted entry is compared THREE ways — verdict, atom list, and GROUPING.
+ * The third is not redundant: both parsers flatten `||`/`&&` into an ordered list,
+ * and splitting on two disjoint separators in either order yields the same list,
+ * so a one-sided precedence swap is invisible to an atom-list comparison no matter
+ * how many entries it has. It is caught only by comparing the AND/OR shape.
  *
  * Honest limit: the corpus catches a semantic divergence only where it has an
- * entry. A new rule added after the regex, on one side only, in a case no entry
- * covers, still slips through — so a change to either parser's post-match rules
- * should arrive with a corpus entry.
+ * entry. A new rule on one side only, in a case no entry covers, still slips
+ * through — so a change to either parser should arrive with a corpus entry. The
+ * splitter is the weaker half: the atom pattern is pinned exhaustively by
+ * `.source` (every character of the compiled regex), while the splitter — written
+ * out by hand on both sides, and textually different while behaviourally
+ * identical, so no `.toString()` trick applies — is pinned only for the strings
+ * enumerated below, plus their grouping.
  */
 describe('when-atom parity: the builder parses what the engine parses', () => {
   test("the builder's atom pattern is byte-identical to the engine's", () => {
@@ -187,13 +199,13 @@ describe('when-atom parity: the builder parses what the engine parses', () => {
     "$INPUTS.output == 'x'",
     '$INPUTS.retries >= 3',
     "$INPUTS.a.b == 'x'",
-    // The case that DISCRIMINATES the reserved-id rule from the shorthand rule, and
-    // the only corpus entry that does. `$INPUTS.a.b` backtracks into the node branch
-    // and is then caught by the shorthand-cannot-carry-a-sub-field rule anyway, so it
-    // still agrees with a parser that has forgotten `INPUTS` is reserved. This one
-    // does not: `output` is the canonical segment, so a parser missing that rule
-    // accepts it as a field read on a node called `INPUTS`. Found by deleting the
-    // rule and watching the suite stay green.
+    // The only entry that catches the reserved-id rule being DELETED (the two below
+    // catch it being MIS-SPELLED). `$INPUTS.a.b` backtracks into the node branch and is
+    // then caught by the shorthand-cannot-carry-a-sub-field rule anyway, so it still
+    // agrees with a parser that has forgotten `INPUTS` is reserved. This one does not:
+    // `output` is the canonical segment, so a parser missing the rule accepts it as a
+    // field read on a node called `INPUTS`. Found by deleting the rule and watching the
+    // suite stay green.
     "$INPUTS.output.x == 'y'",
     "$INPUTS == 'x'",
     "$INPUTS. == 'x'",
@@ -214,13 +226,26 @@ describe('when-atom parity: the builder parses what the engine parses', () => {
     '$n.output == false',
     '$score.output.value >= -0.5',
     "$n.output == ''",
-    // Compound expressions — these also pin the quote-aware splitter, which is
-    // duplicated on both sides just like the atom pattern is.
+    // Compound expressions — the only entries that reach the quote-aware splitter,
+    // which is hand-duplicated on both sides. Unlike the atom pattern it has no
+    // exhaustive pin, so these carry it by example; the grouping assertion below is
+    // what makes them catch a precedence divergence rather than just an atom-set one.
     "$a.output == 'X' && $b.output == 'Y'",
     "$a.output == 'X' || $b.output == 'Y'",
     "$a.output == 'X' && $b.output == 'Y' || $c.output == 'Z'",
+    // Mixed precedence across four atoms: correct grouping is [1,2,1], and splitting
+    // `&&` outer instead would give [2,2]. The three-atom case above discriminates
+    // too, but this one fails on shape LENGTH as well, not only on distribution.
+    "$a.output == 'X' || $b.output == 'Y' && $c.output == 'Z' || $d.output == 'W'",
     "$a.output == 'x && y || z'",
     "$INPUTS.mode == 'fast' && $classify.output.type == 'BUG'",
+    // Splitter edges: an unterminated quote (which leaves the scanner in-quote to the
+    // end), a separator flush against a closing quote with no whitespace, and doubled
+    // separators that leave an empty atom between them.
+    "$a.output == 'x",
+    "$a.output == 'X'&&$b.output == 'Y'",
+    "$a.output == 'X' &&&& $b.output == 'Y'",
+    "$a.output == 'X' |||| $b.output == 'Y'",
     // Malformed.
     '',
     '   ',
@@ -273,9 +298,37 @@ describe('when-atom parity: the builder parses what the engine parses', () => {
     );
   }
 
+  /**
+   * The AND/OR shape as a list of group sizes — `[2, 1]` for `a && b || c`.
+   *
+   * The engine has no grouped parse to compare against (`whenAtoms` flattens on
+   * purpose, because its callers want every atom, not the boolean structure), so
+   * the expected shape is derived from the engine's OWN exported splitter. That
+   * keeps this a cross-package comparison rather than the web checking itself.
+   *
+   * `null` for a rejected expression, so the two sides stay comparable on the
+   * malformed entries as well.
+   */
+  function engineGroupShape(expr: string): number[] | null {
+    if (engineParse(expr) === null) return null;
+    return splitOutsideQuotes(expr.trim(), '||').map(
+      clause => splitOutsideQuotes(clause, '&&').length
+    );
+  }
+
+  function webGroupShape(expr: string): number[] | null {
+    const result = parse(expr);
+    return result.ok ? result.ast.or.map(group => group.length) : null;
+  }
+
   for (const expr of CORPUS) {
     test(`agrees on ${JSON.stringify(expr)}`, () => {
       expect(webParse(expr)).toEqual(engineParse(expr));
+      // Not implied by the line above: both sides flatten, and `a && b || c` and
+      // `a || b && c` flatten to the SAME ordered atom list. Only the grouping
+      // separates them, and getting it wrong changes the boolean formula the
+      // builder writes back through `format()`.
+      expect(webGroupShape(expr)).toEqual(engineGroupShape(expr));
     });
   }
 });
