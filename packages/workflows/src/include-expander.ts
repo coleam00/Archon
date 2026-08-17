@@ -477,7 +477,7 @@ const SAFETY_WORKFLOW_KEYS: ReadonlySet<string> = new Set(['mutates_checkout', '
  * `requires`/`provider`/`mutates_checkout`/`sandbox`/… can change behavior under a
  * different parent. The dropped set is DERIVED from the child's own defined keys (not a
  * hand-maintained list) so any future workflow-level field is covered automatically —
- * parseWorkflow emits provider/model/modelReasoningEffort/webSearchMode/interactive as
+ * parseWorkflow emits provider/model/webSearchMode/interactive as
  * always-present keys, so undefined values are filtered out.
  */
 function warnDroppedWorkflowLevelFields(includeNode: IncludeNode, child: WorkflowDefinition): void {

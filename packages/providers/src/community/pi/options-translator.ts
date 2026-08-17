@@ -93,7 +93,7 @@ export function resolvePiThinkingLevel(nodeConfig?: NodeConfig): ResolvedThinkin
     return {
       level: undefined,
       warning:
-        'Pi ignored `thinking` (object form is Claude-specific). Use `effort: minimal|low|medium|high|xhigh|max` in YAML (max → xhigh on Pi; the rest are Pi-native).',
+        'Pi ignored `thinking` (object form is Claude-specific). Use `effort: minimal|low|medium|high|xhigh|max` in YAML — Pi accepts every rung natively.',
     };
   }
 

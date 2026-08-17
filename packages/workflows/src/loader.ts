@@ -755,8 +755,10 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
       'invalid_model_reasoning_effort',
       { valid: modelReasoningEffortSchema.options }
     );
-    // The deprecation is resolved below, once `effort` has been parsed too —
-    // `modelReasoningEffort` is TRANSLATED into it rather than carried forward.
+    // Parsed here for validation only. The deprecation is RESOLVED far below,
+    // next to `const effort = ...`, because translating needs `effort` too:
+    // `modelReasoningEffort` becomes `effort` and is never carried forward.
+    // Search `workflow_model_reasoning_effort_deprecated` for the other half.
     const webSearchMode = parseOptionalField(
       raw.webSearchMode,
       webSearchModeSchema,

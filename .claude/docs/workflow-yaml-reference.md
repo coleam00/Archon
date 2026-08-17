@@ -42,7 +42,7 @@ Workflows are YAML files discovered from `.archon/workflows/` (recursively) plus
   Claude/Copilot). OpenCode has none.
 - **Also valid per-node**, where it overrides the workflow-level value.
 
-### `modelReasoningEffort` (optional, Codex only) — DEPRECATED
+### `modelReasoningEffort` (was Codex-only) — DEPRECATED
 - **Type**: `'minimal'` | `'low'` | `'medium'` | `'high'` | `'xhigh'`
 - **Use `effort:` instead.** Still accepted: the loader translates it into
   `effort:` and warns. If both are declared, `effort:` wins and this one is

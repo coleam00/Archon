@@ -547,7 +547,7 @@ nodes:
 | Extensions (community + local) | ✅ (default on) | `enableExtensions: false` to disable; `interactive: false` to load without UI bridge; `extensionFlags: { <name>: true }` per extension. Scope per node with a `pi:` block (`pi: { interactive, enableExtensions, extensionFlags }`) — see [Scoping extension posture per node](#scoping-extension-posture-per-node) |
 | Session resume | ✅ | automatic (Archon persists `sessionId`) |
 | Tool restrictions | ✅ | `allowed_tools` / `denied_tools` (read, bash, edit, write, grep, find, ls) |
-| Thinking level | ✅ | `effort: minimal\|low\|medium\|high\|xhigh\|max` (max → xhigh; the rest are Pi-native) |
+| Thinking level | ✅ | `effort: minimal\|low\|medium\|high\|xhigh\|max` (every rung is Pi-native; nothing is clamped) |
 | Skills | ✅ | `skills: [name]` (searches `.agents/skills`, `.claude/skills`, user-global) |
 | Inline sub-agents | ❌ | `agents:` is Claude-only; ignored with a warning on Pi |
 | System prompt override | ✅ | `systemPrompt:` |

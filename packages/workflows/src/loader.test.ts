@@ -690,6 +690,35 @@ nodes:
       expect(deprecation).toContain('non-Codex');
     });
 
+    it('translates for a NON-Codex workflow too — the widening, pinned', async () => {
+      // R22's cost, as behavior rather than a sentence. The deprecated field was
+      // Codex-gated in the executor: on a Claude workflow it applied to nothing
+      // and warned. Translation is provider-blind (the loader cannot know which
+      // nodes resolve to Codex), so it now applies. That is deliberate and
+      // disclosed — and a plausible "fix" would be to re-add a Codex gate here,
+      // which would silently restore the two-field hole #1764 Task 1 needs gone.
+      // This test is what makes that regression fail.
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      const yaml = `name: deprecated-on-claude
+description: Codex-only spelling on a Claude workflow
+provider: claude
+modelReasoningEffort: high
+nodes:
+  - id: test
+    command: test
+`;
+      await writeFile(join(workflowDir, 'claude-deprecated.yaml'), yaml);
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.workflows).toHaveLength(1);
+      const w = result.workflows[0].workflow;
+      expect(w.provider).toBe('claude');
+      // Applied, not dropped, and under the canonical spelling.
+      expect(w.effort).toBe('high');
+      expect(w.modelReasoningEffort).toBeUndefined();
+    });
+
     it('should ignore modelReasoningEffort when effort is also declared, and say which won', async () => {
       // The loader cannot know which nodes resolve to Codex, so the deprecated
       // field's Codex-only precedence is not expressible at load time. `effort:`

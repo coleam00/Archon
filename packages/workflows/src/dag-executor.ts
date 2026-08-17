@@ -338,9 +338,11 @@ export async function loadConfiguredMcpServerNames(
   }
 }
 
-/** Workflow-level provider options. All have node-level counterparts and are
- *  resolved as `node.X ?? workflowLevelOptions.X`, except `webSearchMode`, which
- *  is absent from `dagNodeSchema` — so a workflow-level value is the only value. */
+/** Workflow-level provider options. The provider options have node-level
+ *  counterparts and are resolved as `node.X ?? workflowLevelOptions.X`. Two do
+ *  not: `webSearchMode`, absent from `dagNodeSchema` so a workflow-level value
+ *  is the only value, and `workflowTier`, which is not an author-facing field at
+ *  all — it carries the workflow's resolved tier keyword for annotation. */
 interface WorkflowLevelOptions {
   effort?: EffortLevel;
   thinking?: ThinkingConfig;
