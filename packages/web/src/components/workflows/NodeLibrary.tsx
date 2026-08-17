@@ -140,10 +140,10 @@ export function NodeLibrary({ commands, isLoading }: NodeLibraryProps): React.Re
             {/* Command groups */}
             {filteredGroups.map(group => (
               <CollapsibleSection
-                key={group.name}
-                title={group.name}
+                key={group.source}
+                title={group.label}
                 count={group.commands.length}
-                defaultOpen={group.name === 'Project'}
+                defaultOpen={group.source === 'project'}
               >
                 {group.commands.map(cmd => (
                   <DraggableItem

@@ -78,15 +78,15 @@ export function CommandPicker({
         )}
 
         {groups.map(group => {
-          const isCollapsed = collapsedGroups.has(group.name);
+          const isCollapsed = collapsedGroups.has(group.source);
 
           return (
-            <div key={group.name}>
+            <div key={group.source}>
               {/* Group header */}
               <button
                 type="button"
                 onClick={(): void => {
-                  toggleGroup(group.name);
+                  toggleGroup(group.source);
                 }}
                 className="w-full flex items-center gap-1.5 px-3 py-1.5 hover:bg-surface-hover transition-colors cursor-pointer"
               >
@@ -96,7 +96,7 @@ export function CommandPicker({
                   <ChevronDown className="size-3 text-text-tertiary shrink-0" />
                 )}
                 <span className="text-[10px] font-semibold text-text-secondary uppercase tracking-wide">
-                  {group.name}
+                  {group.label}
                 </span>
                 <span className="text-[10px] text-text-tertiary">({group.commands.length})</span>
               </button>

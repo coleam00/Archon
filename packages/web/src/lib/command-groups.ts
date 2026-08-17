@@ -16,7 +16,14 @@
 import type { CommandEntry, WorkflowSource } from '@/lib/api';
 
 export interface CommandGroup {
-  name: string;
+  /**
+   * The declared source this group represents — stable identity for React keys,
+   * collapse state, and default-open checks. Distinct from `label`, which is
+   * display text: a caller keying off the label would tie behaviour to prose.
+   */
+  source: string;
+  /** Display text for the group header. */
+  label: string;
   commands: CommandEntry[];
 }
 
@@ -43,12 +50,14 @@ export function groupCommandsBySource(commands: CommandEntry[]): CommandGroup[] 
   const groups: CommandGroup[] = [];
   for (const { source, label } of SOURCE_GROUPS) {
     const found = bySource.get(source);
-    if (found && found.length > 0) groups.push({ name: label, commands: found });
+    if (found && found.length > 0) groups.push({ source, label, commands: found });
     bySource.delete(source);
   }
-  // Anything left is an unknown source — surface it rather than hide it.
+  // Anything left is an unknown source — surface it rather than hide it. Its
+  // raw value is the label, which is why identity lives in `source`: a drifted
+  // value spelled "Project" must not merge with the known project group.
   for (const [source, found] of bySource) {
-    if (found.length > 0) groups.push({ name: source, commands: found });
+    if (found.length > 0) groups.push({ source, label: source, commands: found });
   }
   return groups;
 }

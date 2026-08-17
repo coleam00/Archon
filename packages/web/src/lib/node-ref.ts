@@ -11,8 +11,8 @@
  *
  * So this is a deliberate copy, kept honest two ways: it is the ONLY copy in
  * `packages/web` (both builders and the id-rename check import it), and
- * `node-ref.test.ts` reads the engine file as text and fails when the two
- * definitions diverge.
+ * `scripts/node-ref-parity.test.ts` compares it against the engine's literal so
+ * a divergence fails the repository's test run rather than shipping.
  */
 
 /**
@@ -24,24 +24,26 @@
  */
 export const NODE_ID_SOURCE = String.raw`[a-zA-Z_][a-zA-Z0-9_-]*`;
 
+/**
+ * A `$<nodeId>.output` reference, capturing the id in group 1. Named after the
+ * engine constant it mirrors, so the parity check reads as the equality it is.
+ */
+export const OUTPUT_REF_SOURCE = String.raw`\$(${NODE_ID_SOURCE})\.output`;
+
 /** Anchored form, for validating a single id (e.g. on rename). */
 export const NODE_ID_PATTERN = new RegExp(`^${NODE_ID_SOURCE}$`);
 
 /**
- * A fresh `g`-flagged `$<nodeId>.output` scanner, capturing the id in group 1.
+ * Every distinct node id referenced as `$<id>.output` in `text`.
  *
- * A factory rather than a shared instance: a `g` regex carries mutable
- * `lastIndex`, so sharing one across call sites is how a scan starts skipping
- * matches. The engine builds a new `RegExp` per use for the same reason.
+ * Builds its own `g`-flagged RegExp per call rather than reusing a module-level
+ * one: a `g` regex carries mutable `lastIndex`, and sharing a single instance
+ * across call sites is how a scan starts skipping matches. The engine builds a
+ * fresh `RegExp` per use for the same reason.
  */
-export function outputRefPattern(): RegExp {
-  return new RegExp(String.raw`\$(${NODE_ID_SOURCE})\.output`, 'g');
-}
-
-/** Every distinct node id referenced as `$<id>.output` in `text`. */
 export function findOutputRefs(text: string): Set<string> {
   const refs = new Set<string>();
-  for (const match of text.matchAll(outputRefPattern())) {
+  for (const match of text.matchAll(new RegExp(OUTPUT_REF_SOURCE, 'g'))) {
     const id = match[1];
     if (id !== undefined) refs.add(id);
   }
