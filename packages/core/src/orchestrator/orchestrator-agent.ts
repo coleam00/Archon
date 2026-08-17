@@ -781,9 +781,13 @@ async function dispatchOrchestratorWorkflow(
   //
   // It does NOT mirror the other refusal exit below — an explicit resume naming a run
   // with no `working_path` is now preempted by the gate instead of reaching that check.
-  // That is a behaviour change and it is deliberate: every row-creation site records a
-  // real `working_path`, so a NULL one means a row predating the column, which predates
-  // `inputs:` entirely and therefore cannot reach the gate with a violation to defer.
+  // That is a behaviour change and it is deliberate. Every row-creation site records a
+  // real `working_path`, so a NULL one means a row predating the column; reaching the
+  // gate with a violation to defer additionally needs that ancient run's workflow to
+  // have since gained a required input, and someone to resume it explicitly. (The gate
+  // judges the CURRENT YAML, not the row's vintage, so that combination is improbable
+  // rather than impossible.) Both exits refuse at zero cost, so which message wins is a
+  // wording question, not a correctness one.
   const willContinueExistingRun =
     Boolean(resumableRun?.working_path) &&
     (resumableRun?.status === 'paused' || resumableRun?.id === options?.resumeRunId);
