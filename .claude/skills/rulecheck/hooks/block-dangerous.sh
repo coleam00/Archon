@@ -19,7 +19,7 @@ if echo "$COMMAND" | grep -qE 'git\s+push\s+.*(-f|--force)'; then
   exit 2
 fi
 
-# Block git clean -fd (explicit CLAUDE.md rule)
+# Block git clean -fd (explicit AGENTS.md rule)
 if echo "$COMMAND" | grep -qE 'git\s+clean'; then
   echo "Blocked: git clean permanently deletes untracked files. Use 'git checkout .' instead." >&2
   exit 2
