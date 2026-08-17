@@ -31,6 +31,10 @@
 #   2. Point DNS A record to your server
 #   3. Add --profile cloud — Caddy handles TLS automatically via Let's Encrypt
 #
+# Boot recovery:
+#   All restart policies are pinned to `no`; stack lifecycle is owned by the
+#   host systemd user timer (`~/.config/systemd/user/archon-v2.timer`).
+#
 
 services:
   # -------------------------------------------------------------------------
@@ -49,7 +53,6 @@ services:
       - ${ARCHON_USER_HOME:-archon_user_home}:/home/appuser
     networks:
       - archon-network
-    restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:${PORT:-3000}/api/health"]
       interval: 30s
@@ -61,6 +64,7 @@ services:
       - 8.8.4.4
     sysctls:
       - net.ipv6.conf.all.disable_ipv6=1
+    restart: "no"
 
   # -------------------------------------------------------------------------
   # PostgreSQL (optional: --profile with-db)
@@ -86,6 +90,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    restart: "no"
 
   # -------------------------------------------------------------------------
   # Caddy reverse proxy with automatic HTTPS (optional: --profile cloud)
@@ -94,7 +99,7 @@ services:
   caddy:
     image: caddy:2-alpine
     profiles: ["cloud"]
-    restart: unless-stopped
+    restart: "no"
     env_file: .env
     ports:
       - "80:80"
@@ -119,7 +124,7 @@ services:
   auth-service:
     build: ./auth-service
     profiles: ["auth"]
-    restart: unless-stopped
+    restart: "no"
     env_file: .env
     environment:
       AUTH_PORT: "${AUTH_SERVICE_PORT:-9000}"
