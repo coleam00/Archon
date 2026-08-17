@@ -239,6 +239,24 @@ loop:
 `until_bash` runs only on iterations that the `until` signal did not already
 complete, so a loop declaring both never pays for a redundant check.
 
+:::caution[If your `until_bash` accumulates state]
+The skip means the script does not run on a signalled iteration, so a check that
+*mutates* state each time it runs — a counter, an append, a cursor — advances once
+fewer than it would have. The completion verdict is unaffected either way (the
+channels are OR'd), and a non-interactive loop ends on that same iteration, so
+nothing observable differs.
+
+The one case where the timing does shift: an **interactive** loop whose first run
+signals still gates rather than completing (unless `signal_completes: true`). If you
+then approve *with text*, another iteration runs — and its `until_bash` sees state
+one increment behind where it would have been. A state-accumulating check therefore
+reaches its threshold one iteration later. Approving with no text finalizes from the
+already-computed output and does not diverge at all.
+
+Prefer a `until_bash` that only *reads* state — `test`, `grep`, a test suite — and
+let a `bash:` node inside the loop own any mutation.
+:::
+
 This is useful for deterministic completion criteria: test suites, lint checks,
 build success. The bash script supports the same variable substitution as
 `prompt` (`$ARTIFACTS_DIR`, `$nodeId.output`, etc.). Note: `$nodeId.output`
