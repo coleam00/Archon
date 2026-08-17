@@ -94,11 +94,11 @@ export function NodeLibrary({ commands, isLoading }: NodeLibraryProps): React.Re
     if (!search.trim()) return groups;
     const term = search.toLowerCase();
     return groups
-      .map(cat => ({
-        ...cat,
-        commands: cat.commands.filter(cmd => cmd.name.toLowerCase().includes(term)),
+      .map(group => ({
+        ...group,
+        commands: group.commands.filter(cmd => cmd.name.toLowerCase().includes(term)),
       }))
-      .filter(cat => cat.commands.length > 0);
+      .filter(group => group.commands.length > 0);
   }, [groups, search]);
 
   const showQuickNodes =
