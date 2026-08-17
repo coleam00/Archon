@@ -37,7 +37,7 @@ import type {
   SendQueryOptions,
 } from '../types';
 import { OLLAMA_CAPABILITIES } from './capabilities';
-import { OllamaClient, type FetchFn } from './client';
+import { OllamaClient, ollamaEventContent, type FetchFn } from './client';
 import { UnknownOllamaModelError } from './errors';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -120,9 +120,13 @@ export class OllamaProvider implements IAgentProvider {
         prompt: effectivePrompt,
         signal: abortSignal,
       })) {
-        if (typeof ev.response === 'string' && ev.response.length > 0) {
-          accumulated += ev.response;
-          yield { type: 'assistant', content: ev.response };
+        // Ollama's /api/chat emits `{message:{role,content}}` per chunk; we
+        // also accept the flat `{response}` shape as a defensive fallback.
+        // See ollamaEventContent(src/ollama/client.ts) for the precedence.
+        const delta = ollamaEventContent(ev);
+        if (delta !== null) {
+          accumulated += delta;
+          yield { type: 'assistant', content: delta };
         }
         if (ev.done === true) {
           doneSeen = true;

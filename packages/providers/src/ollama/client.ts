@@ -37,10 +37,24 @@ export function resolveOllamaBaseUrl(requestOptionsBaseUrl?: string | undefined)
   return url.replace(/\/+$/, '');
 }
 
-/** A single NDJSON event yielded by `/api/chat` (stream format). */
+/**
+ * A single NDJSON event yielded by `/api/chat` (stream format).
+ *
+ * Ollama's `/api/chat` streaming wire format emits a top-level `message`
+ * object whose `content` field carries the assistant delta for this tick
+ * (e.g. `"Sure"`, `","`, `" what's your"`). The flat `response` field is a
+ * legacy/some-other-API shape — present in our own early test fixtures but
+ * never produced by Ollama itself. `OllamaProvider` reads `message.content`
+ * first and only falls back to `response` if the upstream is misrouted.
+ */
 export interface OllamaChatEvent {
-  /** Delta text the assistant appended this tick. */
+  /** Legacy/shim: flat-string delta. Ollama does NOT emit this; ignore on first. */
   response?: string;
+  /** Ollama-shape: assistant message delta carrier. */
+  message?: {
+    role?: 'user' | 'assistant' | 'system' | string;
+    content?: string;
+  };
   /** Whether this is the terminal event of the stream. */
   done?: boolean;
   /** Error message if Ollama returned a structured error mid-stream. */
@@ -49,6 +63,24 @@ export interface OllamaChatEvent {
   model?: string;
   /** Capture only the fields we care about — Ollama emits many more. */
   [key: string]: unknown;
+}
+
+/**
+ * Extract the assistant delta from an Ollama NDJSON event.
+ *
+ * Reads `message.content` first (the live Ollama shape — verified with a raw
+ * `curl -N http://100.66.140.50:11434/api/chat` against the operator's
+ * shin-blackmamba:11434), falls back to `response` (a non-Ollama legacy). If
+ * neither is set, returns `null` and the caller skips the event.
+ *
+ * Exposed for unit tests; not a hot-path API.
+ */
+export function ollamaEventContent(ev: OllamaChatEvent): string | null {
+  const msg = ev.message?.content;
+  if (typeof msg === 'string' && msg.length > 0) return msg;
+  const flat = ev.response;
+  if (typeof flat === 'string' && flat.length > 0) return flat;
+  return null;
 }
 
 export interface OllamaChatOptions {
