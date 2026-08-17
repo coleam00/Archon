@@ -1,5 +1,10 @@
 import { requestJson } from '../lib/http';
-import { toWorkflow, type Workflow, type WorkflowSource } from '../primitives/workflow';
+import {
+  toWorkflow,
+  type Workflow,
+  type WorkflowSource,
+  type RawWorkflowShape,
+} from '../primitives/workflow';
 import type { WorkflowGraphNode } from '../primitives/workflow-graph';
 import type { WireWorkflowDefinition } from '../builder/types/wire';
 
@@ -15,11 +20,16 @@ interface RawNode {
   script?: unknown;
 }
 
-interface RawWorkflow {
-  name: string;
-  description?: string;
+/**
+ * Shares `RawWorkflowShape` with `toWorkflow`'s own wire type rather than re-declaring
+ * the common fields: `listWorkflows` feeds these entries straight into `toWorkflow`, so
+ * a field this copy omitted (as it once omitted `inputs`) would still compile and still
+ * arrive at runtime, leaving the type quietly wrong. `nodes` is the one field only this
+ * side needs — `getWorkflowGraph` reads it.
+ */
+type RawWorkflow = RawWorkflowShape & {
   nodes?: RawNode[];
-}
+};
 
 interface WorkflowListEntry {
   workflow: RawWorkflow;

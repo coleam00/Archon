@@ -1143,7 +1143,8 @@ archon workflow run archon-review-block --input diff=... "focus on the auth chan
 In the **web console**, a workflow that declares `inputs:` renders a field per input in the run
 card — description as help text, `default:` as the placeholder, `*` on the required ones. The
 Start button stays disabled, and says which input it is waiting for, until every required field
-has a value.
+has a value. A field left blank is **omitted**, so it falls back to its declared `default:`;
+the console therefore cannot send a deliberate empty string, where `--input name=` can.
 
 The grammar is deliberately small:
 

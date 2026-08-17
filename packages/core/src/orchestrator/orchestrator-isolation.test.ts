@@ -330,7 +330,7 @@ describe('dispatchBackgroundWorkflow', () => {
     } as WorkflowDefinition;
   }
 
-  function makeRoutingCtx(): WorkflowRoutingContext {
+  function makeRoutingCtx(overrides?: Partial<WorkflowRoutingContext>): WorkflowRoutingContext {
     return {
       platform,
       conversationId: 'parent-conv',
@@ -339,6 +339,7 @@ describe('dispatchBackgroundWorkflow', () => {
       conversationDbId: 'parent-db-id',
       codebaseId: 'cb-1',
       availableWorkflows: [],
+      ...overrides,
     };
   }
 
@@ -377,6 +378,40 @@ describe('dispatchBackgroundWorkflow', () => {
       { workflowName: 'bg-workflow', conversationId: 'parent-conv', codebaseId: 'cb-1' },
       'workflow.worktree_disabled_by_policy'
     );
+
+    await flushBackgroundExecution();
+  });
+
+  // This path PRE-CREATES the run row (so the console can fetch it immediately), which
+  // means the executor's own `if (!workflowRun)` stamp never fires here — the values
+  // have to be written onto the row below. It is also the console's default path for
+  // non-interactive workflows, so losing the stamp would silently start every
+  // console-supplied run with its inputs missing rather than failing (#2554).
+  test('stamps caller-supplied declared inputs onto the pre-created run row', async () => {
+    const workflow = makeWorkflow({ worktree: { enabled: false } });
+
+    await dispatchBackgroundWorkflow(makeRoutingCtx({ inputs: { diff: 'D1' } }), workflow);
+
+    expect(mockCreateWorkflowRun).toHaveBeenCalledTimes(1);
+    const runRow = mockCreateWorkflowRun.mock.calls[0]?.[0] as unknown as {
+      metadata?: Record<string, unknown>;
+    };
+    expect(runRow.metadata?.inputs).toEqual({ diff: 'D1' });
+
+    await flushBackgroundExecution();
+  });
+
+  test('writes no inputs key on the pre-created row when none are supplied', async () => {
+    // Bare-run parity with the executor-level row: a run that supplied nothing must
+    // look exactly as it did before #2554.
+    const workflow = makeWorkflow({ worktree: { enabled: false } });
+
+    await dispatchBackgroundWorkflow(makeRoutingCtx(), workflow);
+
+    const runRow = mockCreateWorkflowRun.mock.calls[0]?.[0] as unknown as {
+      metadata?: Record<string, unknown>;
+    };
+    expect(runRow.metadata).not.toHaveProperty('inputs');
 
     await flushBackgroundExecution();
   });

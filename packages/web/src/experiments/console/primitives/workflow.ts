@@ -26,15 +26,26 @@ export interface Workflow {
   inputs: WorkflowInput[];
 }
 
+/**
+ * The workflow object as `GET /api/workflows` sends it, for the fields the console
+ * reads. Exported because `skills/workflows.ts` describes the same wire shape for its
+ * own `listWorkflows`/`getWorkflowGraph` calls — two hand-rolled copies drifted once
+ * already (its copy never learned about `inputs`, which type-checked silently because
+ * a missing optional property still satisfies the parameter type, and would have gone
+ * on compiling while the run form quietly stopped rendering).
+ */
+export interface RawWorkflowShape {
+  name: string;
+  description?: string | null;
+  inputs?: Record<
+    string,
+    { required?: boolean; default?: string; description?: string } | null | undefined
+  >;
+  returns?: string;
+}
+
 interface RawWorkflowEntry {
-  workflow: {
-    name: string;
-    description?: string | null;
-    inputs?: Record<
-      string,
-      { required?: boolean; default?: string; description?: string } | null | undefined
-    >;
-  };
+  workflow: RawWorkflowShape;
   source: string;
   parseWarnings?: string[];
 }

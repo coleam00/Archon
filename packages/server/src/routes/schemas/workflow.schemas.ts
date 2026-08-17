@@ -221,7 +221,20 @@ export const dashboardRunsResponseSchema = z
   })
   .openapi('DashboardRunsResponse');
 
-/** POST /api/workflows/:name/run request body. */
+/**
+ * POST /api/workflows/:name/run request body.
+ *
+ * NOT WIRED, and deliberately so: `runWorkflowRoute` omits `request.body` because this
+ * route also accepts `multipart/form-data`, which Zod would reject against a JSON schema
+ * (the documented multipart-or-JSON exception in AGENTS.md). Nothing references this
+ * schema, so it contributes nothing to `/api/openapi.json` — `RunWorkflowBody` does not
+ * appear in the generated spec or in `api.generated.d.ts`. The route's real contract is
+ * the hand-written validation in the handler plus the route `description` string; those
+ * are what a caller and the generated client actually see.
+ *
+ * It is kept as the declared shape of the JSON body for a reader, and must be updated
+ * alongside the handler — but do not add a field here believing that publishes it.
+ */
 export const runWorkflowBodySchema = z
   .object({
     conversationId: z.string(),

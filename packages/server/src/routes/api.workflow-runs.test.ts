@@ -722,6 +722,32 @@ describe('POST /api/workflows/:name/run', () => {
     expect(mockHandleMessage).not.toHaveBeenCalled();
   });
 
+  test('treats an explicit empty `inputs` object as nothing supplied', async () => {
+    // `{}` is valid, not an error — it means "take every declared default", so the
+    // context must carry no workflowInputs rather than an empty map.
+    mockFindConversationByPlatformId.mockImplementationOnce(async () => MOCK_CONV);
+    mockAddMessage.mockImplementationOnce(async () => ({
+      id: 'msg-1',
+      conversation_id: MOCK_CONV.id,
+      role: 'user' as const,
+      content: 'Go',
+      metadata: '{}',
+      created_at: NOW,
+    }));
+    mockHandleMessage.mockImplementationOnce(async () => {});
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/deploy/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ conversationId: 'web-test-abc', message: 'Go', inputs: {} }),
+    });
+    expect(response.status).toBe(200);
+
+    const ctx = mockHandleMessage.mock.calls[0][3] as Record<string, unknown>;
+    expect(ctx).not.toHaveProperty('workflowInputs');
+  });
+
   test('accepts a multipart `inputs` field carrying the map JSON-encoded', async () => {
     mockFindConversationByPlatformId.mockImplementationOnce(async () => MOCK_CONV);
     mockAddMessage.mockImplementationOnce(async () => ({

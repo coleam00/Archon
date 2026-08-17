@@ -291,6 +291,25 @@ curl -X POST http://localhost:3090/api/workflows/archon-assist/run \
   -F "files=@screenshot.png"
 ```
 
+**Supplying declared inputs.** A workflow that declares [`inputs:`](/guides/authoring-workflows/#running-a-workflow-that-declares-inputs) takes their values through an optional `inputs` map — a flat object of string values. Omit a name to take its declared `default:`.
+
+```bash
+# JSON: inputs is a nested object
+curl -X POST http://localhost:3090/api/workflows/review-block/run \
+  -H "Content-Type: application/json" \
+  -d '{"message": "review it", "conversationId": "conv-123",
+       "inputs": {"diff": "...", "style": "terse"}}'
+
+# multipart: form fields are strings, so the same map travels JSON-encoded
+curl -X POST http://localhost:3090/api/workflows/review-block/run \
+  -F "conversationId=conv-123" \
+  -F "message=review it" \
+  -F 'inputs={"diff":"...","style":"terse"}' \
+  -F "files=@context.md"
+```
+
+Values are validated against the workflow's declaration before any worktree, clone, or AI cost: a missing **required** input and an **undeclared** name are both refused up front, through the same contract a composing `with:` map goes through. `400` if `inputs` is not an object of strings (or, on multipart, not valid JSON). An empty object is the same as omitting the field.
+
 #### List Run Artifacts
 
 ```bash

@@ -853,6 +853,54 @@ describe('workflowRunCommand — --input declared inputs (#2554)', () => {
     expect(executeWorkflow).not.toHaveBeenCalled();
   });
 
+  it('does not re-gate a --resume of a required-input workflow', async () => {
+    // The gate is deliberately skipped on resume: the run row already carries inputs
+    // validated at creation, and a resume supplies nothing. A refactor that hoists
+    // `resolveTopLevelInputs` out of the `if (!options.resume)` guard would make every
+    // CLI resume of a required-input workflow throw instead — this is what catches it.
+    // (The `--input` + `--resume` test below cannot: it fails on the mutual-exclusion
+    // check before ever reaching the gate.)
+    const { executeWorkflow, hydrateResumableRun } = await import('@archon/workflows/executor');
+    const conversationDb = await import('@archon/core/db/conversations');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const workflowDb = await import('@archon/core/db/workflows');
+    await stubInputWorkflow();
+
+    (hydrateResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      preCreatedRun: { id: 'run-prior', workflow_name: 'review-block' },
+      priorCompletedNodes: new Map([['node-a', 'done']]),
+    });
+    (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'conv-resume',
+    });
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-resume',
+      default_cwd: '/repo/root',
+      default_branch: 'develop',
+    });
+    // working_path null keeps the resume on the caller cwd, skipping the existsSync probe.
+    (workflowDb.findResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-prior',
+      working_path: null,
+      workflow_name: 'review-block',
+    });
+    (conversationDb.updateConversation as ReturnType<typeof mock>).mockResolvedValueOnce(undefined);
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      workflowRunId: 'run-prior',
+    });
+
+    // No --input, and the workflow declares a required one: this must NOT throw.
+    await workflowRunCommand('/repo/root', 'review-block', 'go', { resume: true });
+
+    expect(executeWorkflow).toHaveBeenCalledTimes(1);
+    // The resume branch carries the row's own inputs; it never re-stamps from a flag.
+    const opts = (executeWorkflow as ReturnType<typeof mock>).mock.calls[0][7] as {
+      inputs?: Record<string, string>;
+    };
+    expect(opts.inputs).toBeUndefined();
+  });
+
   it('rejects --input combined with --resume rather than silently ignoring it', async () => {
     const { executeWorkflow } = await import('@archon/workflows/executor');
     // Flag validation runs after name resolution (as every other flag check does),
