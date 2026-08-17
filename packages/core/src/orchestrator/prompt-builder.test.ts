@@ -4,6 +4,7 @@ import {
   formatWorkflowContextSection,
   buildOrchestratorSystemAppend,
   buildRunManagementSection,
+  formatPausedGateSection,
 } from './prompt-builder';
 
 describe('buildRoutingRulesWithProject', () => {
@@ -165,5 +166,158 @@ describe('buildRunManagementSection', () => {
     }
     expect(section).toContain('--json');
     expect(section).toContain('--detach');
+  });
+
+  test('tells the CLI-path providers to pass the user’s own words', () => {
+    // Codex/OpenCode/Copilot reach the verbs only through this section — without
+    // the clause they get less instruction density than Claude/Pi, which also see
+    // the manage_run tool help.
+    const section = buildRunManagementSection();
+
+    expect(section).toContain("user's own words");
+    expect(section).toContain('never a summary');
+    expect(section).toContain('on_reject');
+  });
+
+  test('warns that a --json gate decision does not continue the run', () => {
+    // The CLI-pointer path is how tool-less providers resolve a gate (#2565).
+    // `approve --json` records the decision WITHOUT resuming, so an agent that
+    // reflexively adds --json would resolve the gate and strand the run.
+    const section = buildRunManagementSection();
+    expect(section).toContain('stranded');
+    expect(section).toContain('archon workflow resume');
+  });
+});
+
+describe('formatPausedGateSection', () => {
+  const openGate = {
+    runId: 'run-abc',
+    workflowName: 'prd',
+    approval: { type: 'approval', nodeId: 'review', message: 'Approve the plan above.' },
+  };
+
+  test('states the gate facts the agent needs to act on', () => {
+    const section = formatPausedGateSection(openGate);
+
+    expect(section).toContain('## Paused Approval Gate');
+    expect(section).toContain('run-abc');
+    expect(section).toContain('prd');
+    expect(section).toContain('review');
+    expect(section).toContain('Approve the plan above.');
+  });
+
+  test('spells out all three outcomes, including resolving nothing', () => {
+    const section = formatPausedGateSection(openGate);
+
+    expect(section).toContain('APPROVED');
+    expect(section).toContain('REJECTED');
+    // The outcome the old auto-approve branch could not produce at all.
+    expect(section).toContain('resolve NOTHING');
+  });
+
+  test('demonstrates verbatim-ness with a rejection, not only a rule', () => {
+    // Stating the rule is weaker than showing it, and the rejection reason is the
+    // case where a paraphrase does the most damage — it is what on_reject reworks.
+    const section = formatPausedGateSection(openGate);
+
+    expect(section).toContain('why is it editing the schema?');
+    expect(section).toContain('NOT "the user objected to the schema change"');
+    expect(section).toContain('add error handling for the edge cases');
+  });
+
+  test('names no tool, so the section stays usable by every provider', () => {
+    // Claude/Pi reach the verbs through `manage_run`; Codex/OpenCode/Copilot reach
+    // them through the CLI section. Naming either here advertises the wrong route
+    // to half the providers.
+    const section = formatPausedGateSection(openGate);
+
+    expect(section).not.toContain('manage_run');
+    expect(section).not.toContain('archon workflow');
+  });
+
+  test('tells the agent to pass the user’s own words through', () => {
+    // A gate with capture_response reads the comment as the node's output, so a
+    // paraphrase silently rewrites workflow input.
+    expect(formatPausedGateSection(openGate)).toContain('verbatim');
+  });
+
+  test('promises continuation so the agent does not hunt for a resume step', () => {
+    expect(formatPausedGateSection(openGate)).toContain('no separate resume step');
+  });
+
+  test('quotes a multi-line gate message as a single block', () => {
+    const section = formatPausedGateSection({
+      ...openGate,
+      approval: { type: 'approval', nodeId: 'review', message: 'Line one\nLine two' },
+    });
+
+    expect(section).toContain('> Line one\n> Line two');
+  });
+
+  test('names the loop iteration on an interactive-loop gate', () => {
+    const section = formatPausedGateSection({
+      ...openGate,
+      approval: {
+        type: 'interactive_loop',
+        nodeId: 'refine',
+        iteration: 3,
+        message: 'Review the output',
+      },
+    });
+
+    expect(section).toContain('Loop iteration: 3');
+  });
+
+  test('returns nothing for a gate already resolved and awaiting resume', () => {
+    // Resolved gates are waiting on the machine, not on a human — offering them
+    // to the agent invites a second decision the operations reject.
+    expect(
+      formatPausedGateSection({
+        ...openGate,
+        approval: { ...openGate.approval, resolved: 'approved' },
+      })
+    ).toBe('');
+  });
+
+  test('points at the child run when the pause belongs to a sub-run', () => {
+    const section = formatPausedGateSection({
+      ...openGate,
+      approval: { type: 'child_workflow', nodeId: 'child', message: 'blocked', childRunId: 'kid' },
+    });
+
+    expect(section).toContain('kid');
+    expect(section).toContain('no gate you can resolve');
+  });
+
+  test('does not promise continuation for a container run', () => {
+    // executeWorkflow refuses a resume it cannot rewire, so "the run continues"
+    // is false here — the agent must send the user to the CLI instead.
+    const section = formatPausedGateSection({ ...openGate, containerRun: true });
+
+    expect(section).not.toContain('no separate resume step');
+    expect(section).toContain('isolation container');
+    expect(section).toContain('archon workflow resume run-abc');
+  });
+
+  test('does not tell the agent to resolve the gate when it has no route to the verbs', () => {
+    // No project scope means neither manage_run nor the CLI section is present.
+    const section = formatPausedGateSection({ ...openGate, agentCanResolve: false });
+
+    expect(section).toContain('## Paused Approval Gate');
+    expect(section).toContain('Approve the plan above.');
+    expect(section).toContain('no project is attached');
+    expect(section).toContain('/workflow approve run-abc');
+    // It must not hand out the decision policy for verbs it cannot reach.
+    expect(section).not.toContain('resolve the gate as APPROVED');
+    expect(section).not.toContain('no separate resume step');
+  });
+
+  test('falls back to the explicit commands when the approval context is unusable', () => {
+    for (const approval of [undefined, null, {}, { nodeId: 'x' }, 'garbage']) {
+      const section = formatPausedGateSection({ ...openGate, approval });
+      expect(section).toContain('missing or malformed');
+      expect(section).toContain('/workflow approve run-abc');
+      expect(section).toContain('/workflow reject run-abc');
+    }
   });
 });

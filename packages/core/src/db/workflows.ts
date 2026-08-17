@@ -428,7 +428,8 @@ export async function getActiveWorkflowRun(conversationId: string): Promise<Work
 
 /**
  * Find a paused workflow run for a conversation (or its parent).
- * Used by the message handler to detect approval gates awaiting a natural-language response.
+ * Used by the message handler to give the chat agent the open approval gate as
+ * context for the turn (#2565).
  * Non-throwing: returns null on DB error so the caller can fall through to normal routing.
  */
 export async function getPausedWorkflowRun(conversationId: string): Promise<WorkflowRun | null> {

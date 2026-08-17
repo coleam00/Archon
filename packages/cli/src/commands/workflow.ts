@@ -2789,7 +2789,8 @@ export async function workflowApproveCommand(
   const resolvedId = await resolveRunIdArg(runId, cwd);
   const result = await approveWorkflow(resolvedId, comment);
 
-  // CLI auto-resumes after approval (unlike chat, which defers to next user message)
+  // CLI auto-resumes after approval, as chat does since #2565. `--json` (handled
+  // above) is the one surface that records the decision without continuing.
   if (!result.workingPath) {
     throw new Error(
       `Workflow run '${resolvedId}' has no working path recorded.\n` +

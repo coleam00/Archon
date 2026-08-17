@@ -2400,6 +2400,141 @@ describe('CommandHandler', () => {
       });
     });
 
+    // A gate decision that does not continue the run leaves it stranded (#2565).
+    // Before #2565 these commands told the user to "type your response to
+    // resume", which relied on a natural-language branch that no longer exists.
+    describe('/workflow approve|reject — run continuation', () => {
+      const baseConversation: Conversation = {
+        id: 'conv-approve',
+        platform_type: 'telegram',
+        platform_conversation_id: 'chat-approve',
+        ai_assistant_type: 'claude',
+        codebase_id: null,
+        cwd: null,
+        isolation_env_id: null,
+        last_activity_at: null,
+        created_at: new Date(),
+        updated_at: new Date(),
+      };
+
+      function pausedRun(overrides: Record<string, unknown> = {}) {
+        return {
+          id: 'run-gate',
+          workflow_name: 'gated-wf',
+          conversation_id: 'conv-approve',
+          parent_conversation_id: null,
+          codebase_id: null,
+          status: 'paused' as const,
+          user_message: 'original prompt',
+          metadata: { approval: { type: 'approval', nodeId: 'review', message: 'Approve?' } },
+          started_at: new Date(),
+          completed_at: null,
+          last_activity_at: new Date(),
+          working_path: '/repo',
+          ...overrides,
+        };
+      }
+
+      /** The gate op reads the run, then the continuation reads it again. */
+      function stubRunReads(run: ReturnType<typeof pausedRun>): void {
+        mockGetWorkflowRun.mockResolvedValueOnce(run).mockResolvedValueOnce(run);
+      }
+
+      function stubWorkflowDiscovery(): void {
+        spyDiscoverWorkflows?.mockResolvedValue({
+          workflows: [makeTestWorkflowWithSource({ name: 'gated-wf' })],
+          errors: [],
+        });
+      }
+
+      test('approve hands the orchestrator the resume payload for the same run', async () => {
+        const run = pausedRun();
+        stubRunReads(run);
+        stubWorkflowDiscovery();
+
+        const result = await handleCommand(baseConversation, '/workflow approve run-gate LGTM');
+
+        expect(result.success).toBe(true);
+        expect(result.message).toContain('approved');
+        expect(result.message).toContain('Resuming');
+        expect(result.workflow?.resumeRunId).toBe('run-gate');
+        expect(result.workflow?.resumeRun).toBe(run);
+        expect(result.workflow?.definition.name).toBe('gated-wf');
+        // The run's own prompt drives the resume, not the approve comment.
+        expect(result.workflow?.args).toBe('original prompt');
+      });
+
+      test('reject with an on_reject rework hands back the resume payload', async () => {
+        const run = pausedRun({
+          metadata: {
+            approval: {
+              type: 'approval',
+              nodeId: 'review',
+              message: 'Approve?',
+              onRejectPrompt: 'Address $REJECTION_REASON',
+            },
+          },
+        });
+        stubRunReads(run);
+        stubWorkflowDiscovery();
+
+        const result = await handleCommand(
+          baseConversation,
+          '/workflow reject run-gate schema is wrong'
+        );
+
+        expect(result.success).toBe(true);
+        expect(result.message).toContain('Reworking');
+        expect(result.workflow?.resumeRunId).toBe('run-gate');
+      });
+
+      test('reject that cancels the run hands back nothing to resume', async () => {
+        // No on_reject prompt ⇒ the run is cancelled, which IS its terminal
+        // state — a resume payload here would try to restart a dead run.
+        mockGetWorkflowRun.mockResolvedValueOnce(pausedRun());
+
+        const result = await handleCommand(baseConversation, '/workflow reject run-gate no thanks');
+
+        expect(result.success).toBe(true);
+        expect(result.message).toContain('rejected and cancelled');
+        expect(result.workflow).toBeUndefined();
+      });
+
+      test('a container run is resolved but points at the CLI instead of resuming', async () => {
+        // Chat cannot rewire the container, so dispatching a resume would fail
+        // the run to say what this message says for free.
+        const run = pausedRun({ metadata: { ...pausedRun().metadata, isolation: 'container' } });
+        stubRunReads(run);
+        stubWorkflowDiscovery();
+
+        const result = await handleCommand(baseConversation, '/workflow approve run-gate');
+
+        expect(result.success).toBe(true);
+        expect(result.message).toContain('approved');
+        expect(result.message).toContain('isolation container');
+        expect(result.message).toContain('archon workflow resume run-gate');
+        expect(result.message).not.toContain('/workflow resume run-gate');
+        expect(result.workflow).toBeUndefined();
+      });
+
+      test('an unresolvable continuation still reports the decision as recorded', async () => {
+        const run = pausedRun();
+        stubRunReads(run);
+        // The workflow YAML is gone, so the run cannot be continued.
+        spyDiscoverWorkflows?.mockResolvedValue({ workflows: [], errors: [] });
+
+        const result = await handleCommand(baseConversation, '/workflow approve run-gate');
+
+        // success:false would send the user to re-approve a gate that is already
+        // resolved — and the second approve throws.
+        expect(result.success).toBe(true);
+        expect(result.message).toContain('approved');
+        expect(result.message).toContain('could not be continued automatically');
+        expect(result.message).toContain('/workflow resume run-gate');
+        expect(result.workflow).toBeUndefined();
+      });
+    });
+
     describe('/workflow approve — standard approval node with captureResponse', () => {
       const baseConversation: Conversation = {
         id: 'conv-approve',

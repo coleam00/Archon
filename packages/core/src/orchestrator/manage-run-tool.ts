@@ -1,6 +1,6 @@
 import type { NativeTool } from '@archon/providers/types';
 import { createLogger } from '@archon/paths';
-import { isApprovalContext } from '@archon/workflows/schemas/workflow-run';
+import { isApprovalContext, isContainerRun } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { listDashboardRuns, findWorkflowRunsByIdPrefix } from '../db/workflows';
 import {
@@ -21,6 +21,26 @@ export interface ManageRunContext {
    * context isn't available — `start` is then rejected.
    */
   startWorkflow?: (workflowName: string, message: string) => Promise<string>;
+  /**
+   * Continuation seam for a gate the agent just resolved. Called with the run
+   * (as read BEFORE the resolution) once `approve`/`reject` leaves it resumable
+   * — never for a reject that cancelled the run, which is already terminal.
+   *
+   * Resolving a gate and continuing the run are two halves of one user action:
+   * a tool that only did the first would leave every gate the agent resolves
+   * stranded (#2565). The orchestrator registers this and drives the resume
+   * AFTER the agent's turn ends, so the tool call returns promptly instead of
+   * blocking the agent loop on a whole workflow.
+   *
+   * Returns whether it accepted the run — a turn continues ONE run, so a second
+   * gate resolved in the same turn is declined and told to resume manually. Any
+   * false answer must reach the agent as words, or the run is stranded silently.
+   *
+   * Synchronous and non-throwing by contract — it records intent, it does not
+   * perform the resume. Omitted when the caller has no way to continue a run;
+   * the tool then says so rather than implying the run moves on by itself.
+   */
+  onGateResolved?: (run: WorkflowRun, action: 'approve' | 'reject') => boolean;
 }
 
 /**
@@ -129,9 +149,9 @@ const HELP_BY_ACTION: Record<Exclude<Action, 'help'>, string> = {
   abandon:
     'abandon — discard a paused/failed (non-terminal) run. Required: runId, confirm=true. Irreversible: the run becomes cancelled.',
   approve:
-    'approve — approve a paused human gate so the run can continue. Required: runId, confirm=true. Optional: accept, message. On an interactive loop whose gate shows completionSignaled=true: NO message (or accept=true) FINALIZES the node from the already-computed output without re-running; message=<feedback> runs another iteration with it. On other gates, message is just a comment recorded with the approval. Only paused runs with an approval gate.',
+    'approve — approve a paused human gate; the run then continues on its own (no separate resume). Required: runId, confirm=true. Optional: accept, message. On an interactive loop whose gate shows completionSignaled=true: NO message (or accept=true) FINALIZES the node from the already-computed output without re-running; message=<feedback> runs another iteration with it. On other gates, message is just a comment recorded with the approval — pass the user’s own words, since a gate with capture_response reads it as the node’s output. Only paused runs with an approval gate.',
   reject:
-    'reject — reject a paused human gate. Required: runId, confirm=true. Recommended: message (the reason). If the gate has an on-reject prompt the run reworks; otherwise it is cancelled.',
+    'reject — reject a paused human gate. Required: runId, confirm=true. Recommended: message (the reason, in the user’s own words). If the gate has an on-reject prompt the run reworks and continues on its own; otherwise it is cancelled and nothing further runs.',
 };
 
 /**
@@ -357,25 +377,59 @@ async function handleWrite(
       // so a signal-bearing loop completes from its persisted output on resume.
       const feedback = willFinalize ? undefined : message;
       const result = await approveWorkflow(id, feedback);
+      const continues = signalGateResolved(ctx, run, 'approve');
       if (result.type !== 'interactive_loop') {
-        return `Approved ${result.workflowName} (${id.slice(0, 8)}). The run is now set to resume.`;
+        return `Approved ${result.workflowName} (${id.slice(0, 8)}).${continues}`;
       }
       return feedback === undefined
-        ? `Approved ${result.workflowName} (${id.slice(0, 8)}) with no feedback. If the gate paused on a completion signal, the node finalizes from its computed output on resume (no re-run); otherwise the loop runs another iteration.`
-        : `Feedback recorded for ${result.workflowName} (${id.slice(0, 8)}); the loop will run another iteration with it on resume.`;
+        ? `Approved ${result.workflowName} (${id.slice(0, 8)}) with no feedback. If the gate paused on a completion signal, the node finalizes from its computed output (no re-run); otherwise the loop runs another iteration.${continues}`
+        : `Feedback recorded for ${result.workflowName} (${id.slice(0, 8)}); the loop runs another iteration with it.${continues}`;
     }
     case 'reject': {
       const result = await rejectWorkflow(id, message.length > 0 ? message : undefined);
       if (result.cancelled) {
         const suffix = result.maxAttemptsReached ? ' (max attempts reached)' : '';
-        return `Rejected and cancelled ${result.workflowName} (${id.slice(0, 8)})${suffix}.`;
+        return `Rejected and cancelled ${result.workflowName} (${id.slice(0, 8)})${suffix}. Nothing further runs.`;
       }
-      return `Rejected ${result.workflowName} (${id.slice(0, 8)}). It will rework with your feedback when it resumes.`;
+      const continues = signalGateResolved(ctx, run, 'reject');
+      return `Rejected ${result.workflowName} (${id.slice(0, 8)}). It reworks with your feedback.${continues}`;
     }
   }
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
+
+/**
+ * Hand a just-resolved gate to the caller's continuation and describe the
+ * outcome for the agent. Returns the sentence to append to the action's reply:
+ * a promise the run continues when a continuation is wired, and the explicit
+ * manual step when it is not — never silence, which reads as "it's handled".
+ *
+ * A container run is never handed over: `executeWorkflow` refuses a resume it
+ * cannot rewire, so scheduling one would fail the run to say what we can say
+ * here for free (#2565).
+ */
+function signalGateResolved(
+  ctx: ManageRunContext,
+  run: WorkflowRun,
+  action: 'approve' | 'reject'
+): string {
+  if (isContainerRun(run)) {
+    log.info({ runId: run.id, action }, 'manage_run.gate_continuation_container_only_cli');
+    return (
+      ' This run executed inside an isolation container, so it cannot continue from chat — ' +
+      `tell the user to finish it with \`archon workflow resume ${run.id}\` from the CLI in ` +
+      'the same project.'
+    );
+  }
+  const scheduled = ctx.onGateResolved?.(run, action) ?? false;
+  if (!scheduled) {
+    log.info({ runId: run.id, action }, 'manage_run.gate_continuation_unavailable');
+    return ` The run stays paused — it must be resumed separately (\`/workflow resume ${run.id}\`).`;
+  }
+  log.info({ runId: run.id, action }, 'manage_run.gate_continuation_scheduled');
+  return ' The run continues from here — no separate resume needed.';
+}
 
 /**
  * Resolve a run id — the short prefix shown in listings OR a full id — to a run
