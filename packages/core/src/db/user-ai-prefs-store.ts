@@ -45,6 +45,68 @@ export interface UserAiPrefs {
 export type UserTiersPatch = Partial<Record<TierName, RawAliasEntry | null>>;
 export type UserAliasesPatch = Record<string, RawAliasEntry | null>;
 
+/**
+ * AiderDesk's `model:` slot is a case-sensitive AGENT-PROFILE NAME (no '/'
+ * — see `packages/providers/src/community/aiderdesk/profile-name-lookup.md`).
+ * The pre-`1fac9e3` convention was `<providerId>/<modelId>`; stale rows
+ * survived the strict consumer-side split into "UnknownAiderDeskAgentProfileError
+ * fires on every conversation boot". This is the producer-side deduplicator.
+ *
+ * Pure — takes the row JSON and the operator's current
+ * `tiers.small` preset, returns a structural { tiers, rewritten, staleValues }
+ * descriptor. DB-bound normalizers wrap this with persistence.
+ */
+export interface AiderDeskSanitizationResult {
+  tiers: RawTiersConfig;
+  /** Number of stale entries rewritten in place. */
+  rewritten: number;
+  /** Distinct model strings rewritten (informational). */
+  staleValues: string[];
+}
+
+export function sanitizeAiderDeskTiersRow(
+  tiers: RawTiersConfig | undefined,
+  configuredSmallPreset: { provider: string; model: string }
+): AiderDeskSanitizationResult {
+  if (!tiers) return { tiers: {}, rewritten: 0, staleValues: [] };
+  // RawTiersConfig = Partial<Record<TierName, RawAliasEntry>>. Tier-name
+  // validation in `applyPatch` and `getUserAiPrefs` confirms every key is
+  // `small|medium|large`; we widen locally to a string-keyed map for the
+  // rewrite-pass to keep typing honest and mirror `applyPatch`'s pattern.
+  const source = tiers as Record<string, RawAliasEntry | null | undefined>;
+  const out: Record<string, RawAliasEntry> = {};
+  const staleValues: string[] = [];
+  let rewritten = 0;
+  for (const [tier, entry] of Object.entries(source)) {
+    if (!entry) {
+      // Null entries are valid per-tier unsets; we keep them in the
+      // shape-preserving rewrite path. The `unknown` cast is the
+      // minimum-impact way to widen `null | undefined` → RawAliasEntry
+      // without breaking the structural invariant SanitizationResult.
+      out[tier] = entry as unknown as RawAliasEntry;
+      continue;
+    }
+    // Structural invariant: aiderdesk profile names never contain '/'. A '/'
+    // in `model` means a stale pre-`1fac9e3` `<provider>/<model>` literal
+    // pair. Substitute with the operator's current `tiers.small`.
+    const isStaleAiderDesk =
+      entry.provider === 'aiderdesk' &&
+      typeof entry.model === 'string' &&
+      entry.model.includes('/');
+    if (isStaleAiderDesk) {
+      out[tier] = {
+        provider: configuredSmallPreset.provider,
+        model: configuredSmallPreset.model,
+      };
+      staleValues.push(entry.model);
+      rewritten += 1;
+    } else {
+      out[tier] = entry;
+    }
+  }
+  return { tiers: out as RawTiersConfig, rewritten, staleValues };
+}
+
 function parseJsonColumn(userId: string, column: string, raw: string | null): unknown {
   if (!raw) return undefined;
   try {
@@ -185,4 +247,150 @@ export async function setUserDefault(
 export async function clearUserAiPrefs(userId: string): Promise<void> {
   await pool.query('DELETE FROM remote_agent_user_ai_prefs WHERE user_id = $1', [userId]);
   getLog().debug({ userId }, 'db.user_ai_prefs_clear_completed');
+}
+
+/**
+ * Normalize one user's stored `tiers` column so stale AiderDesk literal pairs
+ * (`<providerId>/<modelId>`, the pre-`1fac9e3` convention) cannot reach the
+ * consumer's strict agent-profile lookup. Idempotent — clean rows are a
+ * no-op. The destination preset is the OPERATOR'S CURRENT
+ * `.archon/config.yaml` `tiers.small` (passed in), not a built-in default.
+ *
+ * Returns a structured summary so the CLI script and the unit test can
+ * share semantics without a second DB round-trip.
+ *
+ * `apply: false` (dry-run) reports what WOULD be rewritten without writing.
+ * The default is `apply: false` so a caller cannot accidentally commit;
+ * the CLI script must opt in explicitly.
+ */
+export async function normalizeStaleAiderDeskTiers(
+  userId: string,
+  configuredSmallPreset: { provider: string; model: string },
+  options: { apply?: boolean } = {}
+): Promise<{
+  userId: string;
+  hadRow: boolean;
+  rewritten: number;
+  staleValues: string[];
+  /** True if this call performed the rewrite (apply:true). */
+  wrote: boolean;
+}> {
+  const apply = options.apply ?? false;
+  let result;
+  try {
+    result = await pool.query<UserAiPrefsRow>(
+      'SELECT tiers FROM remote_agent_user_ai_prefs WHERE user_id = $1',
+      [userId]
+    );
+  } catch (err) {
+    getLog().error({ err: err as Error, userId }, 'db.user_ai_prefs_read_failed');
+    throw err;
+  }
+  const row = result.rows[0];
+  if (!row) {
+    return { userId, hadRow: false, rewritten: 0, staleValues: [], wrote: false };
+  }
+  const tiersParsed = parseJsonColumn(userId, 'tiers', row.tiers) as RawTiersConfig | undefined;
+  const sanitized = sanitizeAiderDeskTiersRow(tiersParsed, configuredSmallPreset);
+  if (sanitized.rewritten === 0) {
+    getLog().debug({ userId, hadRow: true }, 'db.user_ai_prefs_aiderdesk_tiers_clean');
+    return { userId, hadRow: true, rewritten: 0, staleValues: [], wrote: false };
+  }
+  if (!apply) {
+    // Dry-run: report what would happen, leave the row untouched.
+    getLog().info(
+      {
+        userId,
+        apply: false,
+        rewritten: sanitized.rewritten,
+        staleValues: sanitized.staleValues,
+      },
+      'db.user_ai_prefs_stale_tiers_dry_run'
+    );
+    return {
+      userId,
+      hadRow: true,
+      rewritten: sanitized.rewritten,
+      staleValues: sanitized.staleValues,
+      wrote: false,
+    };
+  }
+  // Apply: write the sanitized JSON back as TEXT (JSON-as-TEXT column).
+  try {
+    await pool.query(
+      `UPDATE remote_agent_user_ai_prefs
+         SET tiers = $1,
+             updated_at = ${getDialect().now()}
+       WHERE user_id = $2`,
+      [JSON.stringify(sanitized.tiers), userId]
+    );
+  } catch (err) {
+    getLog().error({ err: err as Error, userId }, 'db.user_ai_prefs_write_failed');
+    throw err;
+  }
+  getLog().info(
+    { userId, rewritten: sanitized.rewritten, staleValues: sanitized.staleValues },
+    'db.user_ai_prefs_stale_tiers_normalized'
+  );
+  return {
+    userId,
+    hadRow: true,
+    rewritten: sanitized.rewritten,
+    staleValues: sanitized.staleValues,
+    wrote: true,
+  };
+}
+
+/**
+ * Scan-and-normalize helper used by the CLI script. Iterates every
+ * `remote_agent_user_ai_prefs` row. Read-then-write per row keeps the
+ * transaction surface small and tolerates failures on individual rows.
+ * `apply: false` (default) leaves rows untouched.
+ */
+export async function normalizeAllStaleAiderDeskTiers(
+  configuredSmallPreset: { provider: string; model: string },
+  options: { apply?: boolean } = {}
+): Promise<
+  {
+    userId: string;
+    hadRow: boolean;
+    rewritten: number;
+    staleValues: string[];
+    wrote: boolean;
+    error?: string;
+  }[]
+> {
+  const apply = options.apply ?? false;
+  let result: Awaited<ReturnType<typeof pool.query<{ user_id: string }>>>;
+  try {
+    result = await pool.query<{ user_id: string }>(
+      'SELECT user_id FROM remote_agent_user_ai_prefs'
+    );
+  } catch (err) {
+    getLog().error({ err: err as Error }, 'db.user_ai_prefs_scan_failed');
+    throw err;
+  }
+  const out: {
+    userId: string;
+    hadRow: boolean;
+    rewritten: number;
+    staleValues: string[];
+    wrote: boolean;
+    error?: string;
+  }[] = [];
+  for (const r of result.rows) {
+    try {
+      out.push(await normalizeStaleAiderDeskTiers(r.user_id, configuredSmallPreset, { apply }));
+    } catch (e) {
+      out.push({
+        userId: r.user_id,
+        hadRow: true,
+        rewritten: 0,
+        staleValues: [],
+        wrote: false,
+        error: (e as Error).message,
+      });
+    }
+  }
+  return out;
 }

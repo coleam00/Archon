@@ -88,6 +88,7 @@ import {
   resolveTierWithFallback,
   routePresetEffort,
   type ModelAliasPreset,
+  type RawTiersConfig,
   type TierName,
 } from '@archon/workflows/model-validation';
 
@@ -156,6 +157,89 @@ function resolveModelRequest(
 }
 
 /**
+ * Hard structural invariant (do NOT scroll into a heuristic). AiderDesk's
+ * `model:` slot is documented as a case-sensitive agent-profile NAME
+ * (see `packages/providers/src/community/aiderdesk/profile-name-lookup.md`).
+ * Agent profile names never contain `/`. A name containing `/` is a stale
+ * `<providerId>/<modelId>` literal pair from the pre-`1fac9e3` era — it
+ * cannot reach the catalog and would always throw
+ * `UnknownAiderDeskAgentProfileError` at runtime.
+ *
+ * Returning true is the trigger for title-gen sanitation; returning false
+ * is the fast path that everything else takes. This does NOT look the
+ * string up against any catalog — it is purely textual.
+ */
+export function looksLikeStaleAiderDeskLiteral(
+  provider: string | undefined,
+  model: string | undefined
+): boolean {
+  return (
+    provider === 'aiderdesk' && typeof model === 'string' && model.length > 0 && model.includes('/')
+  );
+}
+
+/**
+ * Title-gen side-call: `resolveModelRequest(aiProfile, 'small', …)` plus a
+ * producer-side safety net for stale per-user row data (#25df78a1).
+ *
+ * We do NOT weaken the consumer. The 4-rule AiderDesk cascade from
+ * `1fac9e3` is gone for good; the strict lookup still throws on miss.
+ * But if `repoTiers`, `userTiers`, or `assistants.<p>.model` has a stale
+ * `/`-shaped literal under `provider:'aiderdesk'` (e.g. the `gemma4:8b-8k`
+ * row that pre-dates the provider split), the consumer would fire on
+ * every title-gen call.
+ *
+ * Sane precedence: substitute in the operator-pin (`configuredSmallPresetFallback`)
+ * ONLY when our structural check fires AND the fallback itself is a clean
+ * profile name. If the operator's preset is also a literal pair (a
+ * misconfiguration we cannot reason about), log once and return the
+ * upstream-resolved value — the consumer's existing try/catch still wins.
+ *
+ * Exported for testing.
+ */
+export function resolveTitleModelRequest(
+  aiProfile: ReturnType<typeof buildAiProfile>,
+  modelRef: string,
+  fallbackProvider: string,
+  configuredSmallPresetFallback: { provider: string; model: string } | undefined
+): ResolvedModelRequest {
+  const upstream = resolveModelRequest(aiProfile, modelRef, fallbackProvider);
+  if (!looksLikeStaleAiderDeskLiteral(upstream.provider, upstream.model)) {
+    return upstream;
+  }
+  if (
+    !configuredSmallPresetFallback ||
+    looksLikeStaleAiderDeskLiteral(
+      configuredSmallPresetFallback.provider,
+      configuredSmallPresetFallback.model
+    )
+  ) {
+    getLog().warn(
+      {
+        resolvedProvider: upstream.provider,
+        resolvedModel: upstream.model,
+        fallback: configuredSmallPresetFallback ?? null,
+      },
+      'orchestrator.aiderdesk_small_tier_fallback_unsanitizable'
+    );
+    return upstream;
+  }
+  getLog().info(
+    {
+      staleModel: upstream.model,
+      replacementProvider: configuredSmallPresetFallback.provider,
+      replacementModel: configuredSmallPresetFallback.model,
+    },
+    'orchestrator.title_model_stale_literal_sanitized'
+  );
+  return {
+    ...upstream,
+    provider: configuredSmallPresetFallback.provider,
+    model: configuredSmallPresetFallback.model,
+  };
+}
+
+/**
  * Resolve the model request for the MAIN chat turn (#1998).
  *
  * Model precedence (chat call-site only — workflows keep resolving `large`):
@@ -215,6 +299,36 @@ export interface TitleRequest {
 }
 
 /**
+ * Compute the operator-pinned `tiers.small` preset from CONFIG first
+ * (operator-supplied, pre-layer). Layering order matters: when a
+ * per-user `remote_agent_user_ai_prefs` row carries a stale literal
+ * pair, the merged `aiProfile.aliases.small` is ITSELF the stale value
+ * — using it as the fallback would be circular. The fallback must come
+ * from the operator's `config.tiers.small` so a stale row cannot defeat
+ * the fallback. Only if the operator did not set `tiers.small` does
+ * the merged profile serve as fallback.
+ *
+ * Returns `undefined` when both sources are unset or contain a stale
+ * literal pair.
+ */
+function resolveTitleSmallPreset(
+  configuredTiers: RawTiersConfig | undefined,
+  aiProfile: ReturnType<typeof buildAiProfile> | undefined
+): { provider: string; model: string } | undefined {
+  // Prefer the operator-supplied repo preset (pre-layer). Stale
+  // per-user rows layered above the repo entry cannot defeat this.
+  const fromConfig = configuredTiers?.small;
+  if (fromConfig?.model && !looksLikeStaleAiderDeskLiteral(fromConfig.provider, fromConfig.model)) {
+    return { provider: fromConfig.provider, model: fromConfig.model };
+  }
+  // Operator didn't set `tiers.small`. Use the merged profile if clean.
+  const merged = aiProfile?.aliases.small;
+  if (!merged?.model) return undefined;
+  if (looksLikeStaleAiderDeskLiteral(merged.provider, merged.model)) return undefined;
+  return { provider: merged.provider, model: merged.model };
+}
+
+/**
  * Resolve provider + request options for conversation-title generation (#1855).
  *
  * Server entry points that fire title generation outside a full chat turn
@@ -255,7 +369,12 @@ export async function resolveTitleRequest(
         repoAliases: config.aliases,
       });
     }
-    const titleRequest = resolveModelRequest(aiProfile, 'small', configuredProviderKey);
+    const titleRequest = resolveTitleModelRequest(
+      aiProfile,
+      'small',
+      configuredProviderKey,
+      resolveTitleSmallPreset(config.tiers, aiProfile)
+    );
     const options: SendQueryOptions = {
       model: titleRequest.model,
       assistantConfig: { ...(config.assistants[titleRequest.provider] ?? {}) },
@@ -1862,7 +1981,12 @@ export async function handleMessage(
     }
 
     if (!conversation.title && !message.startsWith('/')) {
-      const titleRequest = resolveModelRequest(aiProfile, 'small', configuredProviderKey);
+      const titleRequest = resolveTitleModelRequest(
+        aiProfile,
+        'small',
+        configuredProviderKey,
+        resolveTitleSmallPreset(config.tiers, aiProfile)
+      );
       const titleOptions: SendQueryOptions = {
         model: titleRequest.model,
         assistantConfig: { ...(config.assistants[titleRequest.provider] ?? {}) },

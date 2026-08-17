@@ -25,6 +25,9 @@ import {
   setUserAliases,
   setUserDefault,
   clearUserAiPrefs,
+  sanitizeAiderDeskTiersRow,
+  normalizeStaleAiderDeskTiers,
+  type AiderDeskSanitizationResult,
 } from './user-ai-prefs-store';
 
 const USER = 'user-1';
@@ -182,6 +185,167 @@ describe('user-ai-prefs-store', () => {
       const [sql, params] = mockQuery.mock.calls[0] as unknown as [string, unknown[]];
       expect(sql).toContain('DELETE FROM remote_agent_user_ai_prefs');
       expect(params).toEqual([USER]);
+    });
+  });
+
+  // ─── sanitizeAiderDeskTiersRow (#25df78a1): stop stale pre-1fac9e3 literals  ──
+
+  const SMALL = { provider: 'aiderdesk', model: 'Power Tools' };
+
+  describe('sanitizeAiderDeskTiersRow', () => {
+    test('undefined tiers → empty result', () => {
+      expect(sanitizeAiderDeskTiersRow(undefined, SMALL)).toEqual({
+        tiers: {},
+        rewritten: 0,
+        staleValues: [],
+      });
+    });
+
+    test('clean aiderdesk profile names pass through untouched', () => {
+      const clean = {
+        small: { provider: 'aiderdesk', model: 'Power Tools' },
+        medium: { provider: 'aiderdesk', model: 'Aider' },
+        large: { provider: 'aiderdesk', model: 'Poe' },
+      };
+      const result = sanitizeAiderDeskTiersRow(clean, SMALL);
+      expect(result.rewritten).toBe(0);
+      expect(result.staleValues).toEqual([]);
+      expect(result.tiers).toEqual(clean);
+    });
+
+    test('stale `<providerId>/<modelId>` literal is rewritten to configured.samll', () => {
+      // Pre-`1fac9e3` convention; cannot reach the AiderDesk agent-profile
+      // catalog. Replace with the operator's current small preset.
+      const stale = { small: { provider: 'aiderdesk', model: 'ollama/gemma4:8b-8k' } };
+      const result = sanitizeAiderDeskTiersRow(stale, SMALL);
+      expect(result.rewritten).toBe(1);
+      expect(result.staleValues).toEqual(['ollama/gemma4:8b-8k']);
+      expect(result.tiers.small).toEqual({
+        provider: 'aiderdesk',
+        model: 'Power Tools',
+      });
+    });
+
+    test('mixed valid + stale entries: only the stale entries are rewritten', () => {
+      const mixed = {
+        small: { provider: 'aiderdesk', model: 'ollama/internlm/internlm2.5:7b-8k' },
+        large: { provider: 'aiderdesk', model: 'Poe' },
+      };
+      const result = sanitizeAiderDeskTiersRow(mixed, SMALL);
+      expect(result.rewritten).toBe(1);
+      expect(result.staleValues).toEqual(['ollama/internlm/internlm2.5:7b-8k']);
+      expect(result.tiers.small).toEqual(SMALL);
+      expect(result.tiers.large).toEqual({ provider: 'aiderdesk', model: 'Poe' });
+    });
+
+    test('non-aiderdesk providers are NEVER touched (structural, not global)', () => {
+      const foreign = { small: { provider: 'pi', model: 'ollama/whatever-7b' } };
+      const result = sanitizeAiderDeskTiersRow(foreign, SMALL);
+      expect(result.rewritten).toBe(0);
+      expect(result.tiers).toEqual(foreign);
+    });
+
+    test("a clean aiderdesk entry that happens to contain '/' but is a profile-shaped ID is preserved", () => {
+      // Defensive: profile names never contain '/', so if one does, it is by
+      // definition stale. This documents the structural decision (structural
+      // validity, not "looks like inference literal").
+      const weird = { small: { provider: 'aiderdesk', model: 'A/B' } };
+      const result = sanitizeAiderDeskTiersRow(weird, SMALL);
+      expect(result.rewritten).toBe(1);
+      expect(result.staleValues).toEqual(['A/B']);
+      expect(result.tiers.small).toEqual(SMALL);
+    });
+  });
+
+  // ─── normalizeStaleAiderDeskTiers (#25df78a1): DB-bound wrapper ───────────
+
+  describe('normalizeStaleAiderDeskTiers', () => {
+    test('no row → no-op, returns hadRow:false', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+      const result = await normalizeStaleAiderDeskTiers(USER, SMALL);
+      expect(result).toEqual({
+        userId: USER,
+        hadRow: false,
+        rewritten: 0,
+        staleValues: [],
+        wrote: false,
+      });
+    });
+
+    test('clean row → no-op, no UPDATE issued', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          prefsRow({
+            tiers: JSON.stringify({
+              small: { provider: 'aiderdesk', model: 'Power Tools' },
+            }),
+          }),
+        ])
+      );
+      const beforeCalls = mockQuery.mock.calls.length;
+      const result = await normalizeStaleAiderDeskTiers(USER, SMALL);
+      expect(result).toEqual({
+        userId: USER,
+        hadRow: true,
+        rewritten: 0,
+        staleValues: [],
+        wrote: false,
+      });
+      expect(mockQuery.mock.calls.length).toBe(beforeCalls + 1);
+    });
+
+    test('stale row in dry-run (default) → reports but does NOT write', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          prefsRow({
+            tiers: JSON.stringify({
+              small: { provider: 'aiderdesk', model: 'ollama/gemma4:8b-8k' },
+            }),
+          }),
+        ])
+      );
+      const result = await normalizeStaleAiderDeskTiers(USER, SMALL);
+      expect(result.rewritten).toBe(1);
+      expect(result.staleValues).toEqual(['ollama/gemma4:8b-8k']);
+      expect(result.wrote).toBe(false);
+      expect(mockQuery.mock.calls.length).toBe(1);
+    });
+
+    test('stale row with apply:true → SELECT + UPDATE writes the sanitized JSON', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          prefsRow({
+            tiers: JSON.stringify({
+              small: { provider: 'aiderdesk', model: 'ollama/gemma4:8b-8k' },
+            }),
+          }),
+        ])
+      );
+      const result = await normalizeStaleAiderDeskTiers(USER, SMALL, { apply: true });
+      expect(result.rewritten).toBe(1);
+      expect(result.staleValues).toEqual(['ollama/gemma4:8b-8k']);
+      expect(result.wrote).toBe(true);
+      const updateCall = mockQuery.mock.calls[1] as unknown as [string, unknown[]];
+      const [sql, params] = updateCall;
+      expect(sql).toContain('UPDATE remote_agent_user_ai_prefs');
+      expect(sql).toContain('SET tiers = $1');
+      expect(sql).toContain('WHERE user_id = $2');
+      const writtenTiers = JSON.parse(params[0] as string) as Record<string, unknown>;
+      expect(writtenTiers.small).toEqual({ provider: 'aiderdesk', model: 'Power Tools' });
+      expect(params[1]).toBe(USER);
+    });
+
+    test('corrupt JSON column → treated as unset (zero findings, no UPDATE)', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([prefsRow({ tiers: '{not json' })]));
+      const result = await normalizeStaleAiderDeskTiers(USER, SMALL);
+      expect(result).toEqual({
+        userId: USER,
+        hadRow: true,
+        rewritten: 0,
+        staleValues: [],
+        wrote: false,
+      });
+      expect(mockQuery.mock.calls.length).toBe(1);
     });
   });
 });

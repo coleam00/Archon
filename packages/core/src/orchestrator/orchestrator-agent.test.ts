@@ -332,6 +332,8 @@ import {
   handleMessage,
   resolveChatModelRequest,
   resolveTitleRequest,
+  resolveTitleModelRequest,
+  looksLikeStaleAiderDeskLiteral,
 } from './orchestrator-agent';
 import { buildAiProfile } from '@archon/workflows/model-validation';
 
@@ -4873,5 +4875,95 @@ describe('resolveTitleRequest', () => {
     const req = await resolveTitleRequest('codex', 'user-1');
 
     expect(req).toEqual({ provider: 'codex', options: {} });
+  });
+
+  // ─── regression(25df78a1): stale per-user AiderDesk literal-pairs sanitized
+  // The pre-`1fac9e3` convention `<providerId>/<modelId>` survived
+  // `tiers.small: Power Tools` because a per-user ai_prefs row layered above
+  // the repo entry. The producer guard must rewrite to the operator's
+  // current `tiers.small` so title-gen never fires
+  // `UnknownAiderDeskAgentProfileError`.
+
+  test('regression(25df78a1): stale per-user tiers.small.model "ollama/gemma4:8b-8k" for provider:aiderdesk sanitizes to operator tiers.small', async () => {
+    // Operator's repo config: tiers.small = Power Tools (the 1fac9e3 default).
+    mockLoadConfig.mockResolvedValueOnce({
+      assistants: { aiderdesk: {}, claude: {}, codex: {} },
+      tiers: { small: { provider: 'aiderdesk', model: 'Power Tools' } },
+      envVars: {},
+    });
+    // Stale per-user row carries the pre-1fac9e3 literal pair.
+    mockGetUserAiPrefsDb.mockResolvedValueOnce({
+      defaultProvider: 'aiderdesk',
+      tiers: { small: { provider: 'aiderdesk', model: 'ollama/gemma4:8b-8k' } },
+    });
+
+    const req = await resolveTitleRequest('aiderdesk', 'user-stale-1');
+
+    // Provider stays aiderdesk (the small tier's provider); model is the
+    // sanitized profile name — NOT the literal pair.
+    expect(req.provider).toBe('aiderdesk');
+    expect(req.options.model).toBe('Power Tools');
+  });
+
+  test('regression(25df78a1): sane (non-aiderdesk) stale entries with "/" pass through untouched', async () => {
+    // `pi` provider allows `<vendor>/<model>` model ids — we only police
+    // aiderdesk's structural invariant; foreign rows must stay unchanged.
+    mockLoadConfig.mockResolvedValueOnce({
+      assistants: { pi: {}, claude: {}, codex: {} },
+      tiers: { small: { provider: 'pi', model: 'anthropic/claude-haiku-4-5' } },
+      envVars: {},
+    });
+    mockGetUserAiPrefsDb.mockResolvedValueOnce({
+      tiers: { small: { provider: 'pi', model: 'openrouter/qwen3-coder' } },
+    });
+
+    const req = await resolveTitleRequest('pi', 'user-pi-1');
+
+    expect(req.provider).toBe('pi');
+    expect(req.options.model).toBe('openrouter/qwen3-coder');
+  });
+
+  test('regression(25df78a1): resolveTitleModelRequest refreshes the merged aiProfile when the operator preset is clean', () => {
+    // Pure helper test — no loadConfig / no DB. We mirror the live layering
+    // order (built-in < global < repo < user). The KEY is that the helper's
+    // `configuredSmallPresetFallback` argument MUST be the operator-supplied
+    // pre-layer preset (a clean `Power Tools`), NOT the post-layer merged
+    // profile entry which would itself be stale when the per-user row wins.
+    const configuredSmall = { provider: 'aiderdesk', model: 'Power Tools' };
+    const aiProfile = buildAiProfile('aiderdesk', {
+      repoTiers: { small: configuredSmall },
+      userTiers: { small: { provider: 'aiderdesk', model: 'ollama/gemma4:8b-8k' } },
+    });
+
+    const req = resolveTitleModelRequest(aiProfile, 'small', 'aiderdesk', configuredSmall);
+
+    expect(req.provider).toBe('aiderdesk');
+    expect(req.model).toBe('Power Tools');
+    // Structural invariant of the lookup helper.
+    expect(looksLikeStaleAiderDeskLiteral('aiderdesk', 'ollama/gemma4:8b-8k')).toBe(true);
+    expect(looksLikeStaleAiderDeskLiteral('aiderdesk', 'Power Tools')).toBe(false);
+    expect(looksLikeStaleAiderDeskLiteral('aiderdesk', undefined)).toBe(false);
+    expect(looksLikeStaleAiderDeskLiteral('pi', 'openrouter/qwen3-coder')).toBe(false);
+  });
+
+  test('regression(25df78a1): resolveTitleModelRequest passes through profile-shaped models without "/" (NOT a stale literal)', () => {
+    // The structural invariant is purely textual: the helper rewrites any
+    // `model` that contains '/'. Models WITHOUT '/' look like profile names
+    // and must be passed through untouched — even when they happen to also
+    // be stale catalog entries (the consumer-side strict lookup would catch
+    // those at runtime; the producer is not allowed to invent heuristics
+    // that re-introduce the 1fac9e3 cascade). This pins the boundary.
+    const configuredSmall = { provider: 'aiderdesk', model: 'Power Tools' };
+    const aiProfile = buildAiProfile('aiderdesk', {
+      repoTiers: { small: configuredSmall },
+      userTiers: { small: { provider: 'aiderdesk', model: 'gemma4:9b-q4_K_M' } },
+    });
+    expect(aiProfile.aliases['small']?.model).toBe('gemma4:9b-q4_K_M'); // user wins
+
+    const req = resolveTitleModelRequest(aiProfile, 'small', 'aiderdesk', configuredSmall);
+
+    // No `/` ⇒ profile-shaped ⇒ NOT touched by the producer guard. The
+    // consumer's strict lookup is the line of defense.
+    expect(req.model).toBe('gemma4:9b-q4_K_M');
   });
 });
