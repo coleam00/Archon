@@ -98,7 +98,7 @@ function checkRequiredFields(node: BuilderNode): Issue[] {
       // Completion channels (#2563) — a hand-written mirror of the two rules in
       // the engine's `loopControlSchema`, because @archon/web cannot import
       // @archon/workflows. Keep the pair in step; verify by parsing both, not by
-      // reading them.
+      // reading them — `scripts/node-ref-parity.test.ts` does exactly that, in CI.
       //
       // 1. A declared channel must be non-blank. Blank is broken at runtime, not
       //    just untidy: `bash -c "   "` exits 0, and a blank signal matches any

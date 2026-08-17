@@ -53,10 +53,11 @@ describe('validateStructural', () => {
     expect(invalid).toContain('loop.max_iterations');
   });
 
-  // Channel-verdict matrix (#2563). The engine runs the SAME case names against
-  // `loopControlSchema` in @archon/workflows' `schemas.test.ts`. The two encodings
-  // cannot share code (@archon/web must not import @archon/workflows), so matching
-  // names are what makes a future divergence visible. Change one, change both.
+  // Channel-verdict matrix (#2563) — this package's half. The cross-package guard
+  // that actually ENFORCES agreement is `scripts/node-ref-parity.test.ts`, which runs
+  // both encodings over one corpus and compares verdicts in CI; this matrix stays as
+  // the builder's own regression coverage. `schemas.test.ts` in @archon/workflows
+  // mirrors these case names. Change one, change both.
   describe('channel verdict matrix (twin: workflows schemas.test.ts)', () => {
     const cases: Array<
       [string, { until?: string; until_bash?: string; until_field?: string }, boolean]

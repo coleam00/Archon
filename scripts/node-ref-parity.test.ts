@@ -51,6 +51,8 @@ import {
   ATOM_PATTERN,
   parse,
 } from '../packages/web/src/experiments/console/builder/validation/when-grammar';
+import { dagNodeSchema } from '../packages/workflows/src/schemas';
+import { validateStructural } from '../packages/web/src/experiments/console/builder/validation/structural';
 
 const REPO_ROOT = join(import.meta.dir, '..');
 const ENGINE_LOADER = join(REPO_ROOT, 'packages', 'workflows', 'src', 'loader.ts');
@@ -339,6 +341,109 @@ describe('when-atom parity: the builder parses what the engine parses', () => {
       // separates them, and getting it wrong changes the boolean formula the
       // builder writes back through `format()`.
       expect(webGroupShape(expr)).toEqual(engineGroupShape(expr));
+    });
+  }
+});
+
+/**
+ * Loop completion-channel parity: the console builder's copy of the engine's
+ * channel rules must reach the same verdict as `dagNodeSchema` on the same input.
+ *
+ * Both copies carry the instruction "verify agreement by parsing both, never by
+ * reading them" (`packages/workflows/src/schemas/loop.ts`,
+ * `builder/validation/structural.ts`). Until this check they were kept in step by
+ * twin test matrices with matching case NAMES — which is prose, and prose is the
+ * mechanism this file already records failing twice (#2567, #2591). The twins stay
+ * as per-package regression tests; this is what makes them a guard rather than a
+ * convention.
+ *
+ * Why the rules are duplicated at all: `@archon/web` must never import
+ * `@archon/workflows`, and `api.generated.d.ts` is type-only so it cannot carry a
+ * runtime rule — the same constraint as the two grammars above.
+ *
+ * The comparison is BY VERDICT, not by message: the builder reports issues for its
+ * own UI and the engine returns Zod issues, so only "accepted / rejected" is
+ * meaningfully shared. That is exactly the axis that broke in #2591.
+ */
+describe('loop completion-channel parity', () => {
+  /**
+   * `until_field` names a property in the node's `output_format`, and the engine
+   * additionally checks that it is declared, required and boolean — rules the
+   * builder deliberately does not mirror (it has no schema editor). Supplying a
+   * valid schema for those cases keeps this a comparison of the CHANNEL rule, so a
+   * disagreement here means the channel rules drifted, not that the two sides
+   * validate different things.
+   */
+  const OUTPUT_FORMAT = {
+    type: 'object',
+    properties: { done: { type: 'boolean' } },
+    required: ['done'],
+  };
+
+  type Channels = { until?: string; until_bash?: string; until_field?: string };
+
+  const CORPUS: Channels[] = [
+    {},
+    { until: 'COMPLETE' },
+    { until_bash: 'bun run test' },
+    { until_field: 'done' },
+    { until: 'COMPLETE', until_bash: 'bun run test' },
+    { until: 'COMPLETE', until_field: 'done' },
+    { until_bash: 'bun run test', until_field: 'done' },
+    { until: 'COMPLETE', until_bash: 'bun run test', until_field: 'done' },
+    // Blank in each position, beside a valid sibling and alone — the shape that
+    // broke once already: an aggregate-only gate accepted a blank field whenever
+    // another channel was valid, while the builder rejected it.
+    { until: '' },
+    { until: '   ' },
+    { until: '\t' },
+    { until_bash: '' },
+    { until_bash: '   ' },
+    { until_bash: '\n' },
+    { until_field: '' },
+    { until_field: '  ' },
+    { until: '   ', until_bash: 'bun run test' },
+    { until: 'COMPLETE', until_bash: '   ' },
+    { until: 'COMPLETE', until_field: '  ' },
+    { until: '  ', until_field: 'done' },
+    { until: ' ', until_bash: '\t' },
+    // Legitimate values that must NOT be rejected: validation trims to decide, but
+    // never rewrites what it stores, so padding and indentation stay acceptable.
+    { until: ' COMPLETE ' },
+    { until_bash: '  set -e\n  test -f done\n' },
+  ];
+
+  function engineAccepts(channels: Channels): boolean {
+    const needsSchema = channels.until_field !== undefined;
+    return dagNodeSchema.safeParse({
+      id: 'l',
+      ...(needsSchema ? { output_format: OUTPUT_FORMAT } : {}),
+      loop: { prompt: 'iterate', max_iterations: 5, ...channels },
+    }).success;
+  }
+
+  function builderAccepts(channels: Channels): boolean {
+    const issues = validateStructural({
+      name: 'w',
+      description: 'd',
+      meta: {},
+      nodes: [
+        {
+          id: 'l',
+          variant: 'loop',
+          base: {},
+          data: { prompt: 'iterate', max_iterations: 5, fresh_context: false, ...channels },
+        },
+      ],
+    });
+    // Only the channel fields — the builder also reports unrelated required-field
+    // issues, and this check owns the channel rule alone.
+    return !issues.some(issue => issue.path.field?.startsWith('loop.until'));
+  }
+
+  for (const channels of CORPUS) {
+    test(`agrees on ${JSON.stringify(channels)}`, () => {
+      expect(builderAccepts(channels)).toBe(engineAccepts(channels));
     });
   }
 });

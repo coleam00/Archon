@@ -993,10 +993,11 @@ describe('dagNodeSchema — loop completion channel (#2563)', () => {
     expect(result.success).toBe(false);
   });
 
-  // Channel-verdict matrix. `structural.test.ts` in @archon/web runs the SAME case
-  // names against the builder's hand-written mirror of these rules — the two cannot
-  // share code (@archon/web must not import @archon/workflows), so matching names are
-  // what makes a future divergence visible. Change one, change both.
+  // Channel-verdict matrix — this package's half. The cross-package guard that
+  // actually ENFORCES agreement is `scripts/node-ref-parity.test.ts`, which runs both
+  // encodings over one corpus and compares verdicts in CI; this matrix stays as the
+  // engine's own regression coverage. `structural.test.ts` in @archon/web mirrors
+  // these case names. Change one, change both — the guard will say so if you don't.
   describe('channel verdict matrix (twin: builder structural.test.ts)', () => {
     const cases: Array<[string, Record<string, string>, boolean]> = [
       ['neither declared', {}, false],

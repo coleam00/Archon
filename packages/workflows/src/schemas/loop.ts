@@ -57,7 +57,8 @@ const isNonBlank = (value: string): boolean => value.trim().length > 0;
  *    console and saves: no import issue, no warning, the loop just quietly loses a
  *    completion channel. `signal_completes` behaves this way today.
  *
- * Verify agreement by parsing both, never by reading them.
+ * Verify agreement by parsing both, never by reading them —
+ * `scripts/node-ref-parity.test.ts` does exactly that, in CI.
  */
 export const loopControlSchema = z
   .object({
