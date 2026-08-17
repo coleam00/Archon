@@ -13,10 +13,10 @@ Hooks, MCP, skills, tool restrictions, `output_format`, `agents`, and Claude SDK
 | `output_format` | Enforced | Enforced | Best-effort (validated + up to 3 re-asks) | — |
 | `retry` | Supported | Supported | Supported | — |
 | `model` / `provider` per-node | Supported | Supported | Supported | — |
-| `effort` / `thinking` | Supported | Use `modelReasoningEffort` | Supported (maps to thinking level) | — |
+| `effort` / `thinking` | Supported | `effort` supported (translated to `modelReasoningEffort`); no `thinking` | Supported (maps to thinking level) | — |
 | `agents` / `sandbox` / `maxBudgetUsd` / `fallbackModel` | Supported | No | No | — |
 
-Community providers beyond Pi: **OpenCode** supports per-node `mcp`, `skills`, `agents` (configured-agent selection by name — NOT Claude-style inline definitions), and tool restrictions (no `hooks` — Archon's Claude-shaped hook field has no OpenCode translation site; effort/thinking via `opencode.json`, not per-node); **Copilot** supports per-node `mcp`, `skills`, `agents`, tool restrictions, and effort/thinking (no hooks). Hooks are Claude-only. See the five-provider matrix in `parameter-matrix.md` §Providers at a Glance. `sandbox`/`maxBudgetUsd`/`fallbackModel` remain Claude-only.
+Community providers beyond Pi: **OpenCode** supports per-node `mcp`, `skills`, `agents` (configured-agent selection by name — NOT Claude-style inline definitions), and tool restrictions (no `hooks` — Archon's Claude-shaped hook field has no OpenCode translation site; effort/thinking via `opencode.json`, not per-node); **Copilot** supports per-node `mcp`, `skills`, `agents`, tool restrictions, and effort/thinking (no hooks). `effort:` is the one reasoning-depth spelling and reaches Claude, Codex, Pi and Copilot alike. Hooks are Claude-only. See the five-provider matrix in `parameter-matrix.md` §Providers at a Glance. `sandbox`/`maxBudgetUsd`/`fallbackModel` remain Claude-only.
 
 ### Claude vs Codex: How Each Gets MCP and Skills
 

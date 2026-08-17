@@ -755,6 +755,21 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
       'invalid_model_reasoning_effort',
       { valid: modelReasoningEffortSchema.options }
     );
+    if (modelReasoningEffort !== undefined) {
+      // Deprecated by #2556: `effort:` is now the one reasoning-depth spelling
+      // and reaches Codex like every other provider. The field is still
+      // honoured, so say so — an author who adds `effort:` alongside it and
+      // sees no change otherwise has no way to find out why.
+      const message =
+        `Workflow '${raw.name}': 'modelReasoningEffort: ${modelReasoningEffort}' is deprecated — ` +
+        "use 'effort:', which applies on every provider that has a reasoning control and can be set " +
+        `per node. Write 'effort: ${modelReasoningEffort}'. While both are set, ` +
+        "'modelReasoningEffort' still wins on Codex nodes.";
+      parseWarnings.push(message);
+      // Carry the prose, not just the payload: the run path reads this log line
+      // and never reads the warning string (#2213).
+      getLog().warn({ filename, warning: message }, 'workflow_model_reasoning_effort_deprecated');
+    }
     const webSearchMode = parseOptionalField(
       raw.webSearchMode,
       webSearchModeSchema,

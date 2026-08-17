@@ -26,14 +26,18 @@ describe('parseCopilotConfig', () => {
   });
 
   test('drops unknown reasoning effort value', () => {
-    expect(parseCopilotConfig({ modelReasoningEffort: 'minimal' })).toEqual({});
     expect(parseCopilotConfig({ modelReasoningEffort: 'extreme' })).toEqual({});
     expect(parseCopilotConfig({ modelReasoningEffort: 42 })).toEqual({});
   });
 
-  test('normalizes Archon alias `max` to SDK `xhigh`', () => {
+  test('clamps the rungs Archon has and the SDK does not', () => {
+    // Copilot's SDK offers neither end of Archon's ladder, so the outer rungs
+    // land on its strongest and weakest rather than being dropped (#2556).
     expect(parseCopilotConfig({ modelReasoningEffort: 'max' })).toEqual({
       modelReasoningEffort: 'xhigh',
+    });
+    expect(parseCopilotConfig({ modelReasoningEffort: 'minimal' })).toEqual({
+      modelReasoningEffort: 'low',
     });
   });
 

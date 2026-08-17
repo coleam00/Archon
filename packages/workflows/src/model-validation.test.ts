@@ -1,14 +1,22 @@
 import { describe, expect, test } from 'bun:test';
+import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers';
 
 import {
   buildAiProfile,
+  isEffortValidForProvider,
   isLiteralSpec,
   resolveModelSpec,
   resolveTierWithFallback,
   TIER_NAMES,
+  validEffortsForProvider,
   type ModelAliasPreset,
   type ResolvedAiProfile,
 } from './model-validation';
+
+// The effort helpers read `effortControl` off the provider registry, so the
+// registry has to be populated the way a real entrypoint populates it.
+registerBuiltinProviders();
+registerCommunityProviders();
 
 describe('TIER_NAMES constant', () => {
   test('contains exactly small, medium, large', () => {
@@ -521,5 +529,46 @@ describe('isLiteralSpec type guard', () => {
 
   test('returns false for a ModelAliasPreset', () => {
     expect(isLiteralSpec({ provider: 'claude', model: 'opus' })).toBe(false);
+  });
+});
+
+// #2556: one vocabulary, gated by one capability flag. Before this, effort
+// "routed" only on Claude and Codex, each with its own enum, so a tier's
+// `effort` was silently dropped on Pi and Copilot — which do have the control.
+describe('validEffortsForProvider', () => {
+  const LADDER = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+
+  test('returns the one ladder for every provider with a reasoning control', () => {
+    for (const provider of ['claude', 'codex', 'pi', 'copilot']) {
+      expect(validEffortsForProvider(provider)).toEqual(LADDER);
+    }
+  });
+
+  test('returns null for a provider with no reasoning control', () => {
+    // OpenCode configures reasoning in opencode.json, not per request.
+    expect(validEffortsForProvider('opencode')).toBeNull();
+  });
+
+  test('returns null for an unregistered provider rather than throwing', () => {
+    // getProviderCapabilities throws on an unknown id; both write paths call
+    // this before their own registration check would fire.
+    expect(validEffortsForProvider('not-a-provider')).toBeNull();
+  });
+});
+
+describe('isEffortValidForProvider', () => {
+  test('accepts every rung on a provider that has the control', () => {
+    for (const rung of ['minimal', 'low', 'medium', 'high', 'xhigh', 'max']) {
+      expect(isEffortValidForProvider('codex', rung)).toBe(true);
+      expect(isEffortValidForProvider('claude', rung)).toBe(true);
+    }
+  });
+
+  test('rejects a value that is not a rung', () => {
+    expect(isEffortValidForProvider('claude', 'ultra')).toBe(false);
+  });
+
+  test('accepts anything for a provider with no vocabulary to validate against', () => {
+    expect(isEffortValidForProvider('opencode', 'ultra')).toBe(true);
   });
 });

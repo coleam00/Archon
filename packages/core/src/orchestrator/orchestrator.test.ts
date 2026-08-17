@@ -109,6 +109,11 @@ const mockGetProviderCapabilities = mock(() => ({
 mock.module('@archon/providers', () => ({
   getAgentProvider: mockGetAgentProvider,
   getProviderCapabilities: mockGetProviderCapabilities,
+  // `validEffortsForProvider` (@archon/workflows/model-validation) reads the
+  // registry to decide whether a tier's `effort` reaches this provider (#2556).
+  // Without this the REAL implementation runs against an empty registry and
+  // every provider looks unregistered.
+  isRegisteredProvider: mock(() => true),
   getRegisteredProviders: mock(() => []),
   // credentials/delivery (#1955) imports these from '@archon/providers'.
   PI_PROVIDER_ENV_VARS: { anthropic: 'ANTHROPIC_API_KEY', openai: 'OPENAI_API_KEY' },
@@ -872,7 +877,9 @@ describe('orchestrator-agent handleMessage', () => {
         expect.anything(),
         expect.objectContaining({
           model: 'gpt-5.5',
-          assistantConfig: expect.objectContaining({ modelReasoningEffort: 'high' }),
+          // #2556: a tier's `effort` goes on the one nodeConfig channel for
+          // every provider; Codex translates it to modelReasoningEffort itself.
+          nodeConfig: expect.objectContaining({ effort: 'high' }),
         })
       );
       expect(mockGenerateAndSetTitle).toHaveBeenCalledWith(

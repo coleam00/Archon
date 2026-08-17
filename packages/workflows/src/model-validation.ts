@@ -6,14 +6,17 @@
  *   - `@<name>` custom alias → looked up in profile, errors if unknown
  *   - bare literal (anything else) → returned unchanged for SDK pass-through
  *
- * No side effects, no logger, no I/O. The `ResolvedAiProfile` is built once by
+ * No side effects, no logger, no I/O — apart from the provider registry lookup
+ * the effort helpers below need, which is the same static-capability read the
+ * loader and DAG executor already do. The `ResolvedAiProfile` is built once by
  * `buildAiProfile()` from layered config (tier defaults → global tiers → repo
  * tiers → global aliases → repo aliases) and then handed to `resolveModelSpec()`
  * per call.
  */
 
+import { getProviderCapabilities, isRegisteredProvider } from '@archon/providers';
 import tierDefaults from './defaults/tier-defaults.json';
-import type { ThinkingConfig } from './schemas/dag-node';
+import { EFFORT_LEVELS, type ThinkingConfig } from './schemas/dag-node';
 
 /** Reserved tier names — cannot be used as custom alias names */
 export const TIER_NAMES = ['small', 'medium', 'large'] as const;
@@ -225,57 +228,27 @@ export function isLiteralSpec(spec: ResolvedModelSpec): spec is { literal: strin
   return 'literal' in spec;
 }
 
-/** Effort vocabularies per provider. Claude uses the generic node `effort`;
- *  Codex uses `modelReasoningEffort` (distinct enum). */
-export const CLAUDE_EFFORTS: ReadonlySet<string> = new Set(['low', 'medium', 'high', 'max']);
-export const CODEX_REASONING_EFFORTS: ReadonlySet<string> = new Set([
-  'minimal',
-  'low',
-  'medium',
-  'high',
-  'xhigh',
-]);
-
-/** Where a preset's `effort` should land for the resolved provider. */
-export type EffortRouting =
-  | { field: 'effort'; value: string }
-  | { field: 'modelReasoningEffort'; value: string };
-
 /**
- * Route a preset's `effort` to the field the resolved provider understands —
- * Claude's generic node `effort` or Codex's `modelReasoningEffort`. Returns
- * `null` when the value isn't valid for that provider (e.g. a cross-provider
- * mismatch like `effort: 'max'` on Codex); callers MUST surface that rather
- * than silently dropping it. Single source of truth for both the DAG executor
- * and the chat orchestrator.
- */
-export function routePresetEffort(provider: string, effort: string): EffortRouting | null {
-  if (provider === 'claude' && CLAUDE_EFFORTS.has(effort)) {
-    return { field: 'effort', value: effort };
-  }
-  if (provider === 'codex' && CODEX_REASONING_EFFORTS.has(effort)) {
-    return { field: 'modelReasoningEffort', value: effort };
-  }
-  return null;
-}
-
-/**
- * The effort vocabulary for a provider, or `null` if the provider has no known
- * effort concept (Pi/OpenRouter/Copilot/OpenCode — effort doesn't route there).
- * Lets the tier-config write path (route + CLI) validate `effort` UP FRONT
- * instead of letting `routePresetEffort` silently drop an unknown value at run
- * time (so `--effort ultra` errors instead of succeeding with no effect).
+ * The reasoning-depth vocabulary a provider accepts, or `null` when it has no
+ * reasoning control at all (OpenCode configures reasoning in `opencode.json`,
+ * not per request).
+ *
+ * There is one vocabulary now, not one per provider (#2556): every provider
+ * with `effortControl` takes the whole ladder and clamps a rung its SDK lacks
+ * to the nearest one it has. So this answers "does effort reach this provider",
+ * and the ladder answers "is this a rung" — which is what the tier-config write
+ * paths (`PATCH /api/config/tiers`, `archon ai tier set --effort`) need to
+ * reject `--effort ultra` up front instead of accepting a no-op.
  */
 export function validEffortsForProvider(provider: string): readonly string[] | null {
-  if (provider === 'claude') return [...CLAUDE_EFFORTS];
-  if (provider === 'codex') return [...CODEX_REASONING_EFFORTS];
-  return null;
+  if (!isRegisteredProvider(provider)) return null;
+  return getProviderCapabilities(provider).effortControl ? EFFORT_LEVELS : null;
 }
 
 /**
- * True if `effort` is acceptable for `provider`. Providers WITHOUT a known
- * effort vocabulary accept any value (we don't block what we can't validate;
- * it's a no-op for them, not an error).
+ * True if `effort` is acceptable for `provider`. Providers WITHOUT a reasoning
+ * control accept any value (we don't block what we can't validate; it's a no-op
+ * for them, not an error).
  */
 export function isEffortValidForProvider(provider: string, effort: string): boolean {
   const valid = validEffortsForProvider(provider);

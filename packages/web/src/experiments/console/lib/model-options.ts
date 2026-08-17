@@ -99,43 +99,50 @@ export function curatedOptionsForAgent(agentId: string): readonly ModelOption[] 
 }
 
 // ---------------------------------------------------------------------------
-// Effort. Tier/alias `effort` only ROUTES on Claude (node `effort`) and Codex
-// (`modelReasoningEffort`) — `routePresetEffort` in
-// packages/workflows/src/model-validation.ts returns null for everything else,
-// and the PATCH routes validate via `isEffortValidForProvider`. The web
-// package cannot import @archon/workflows, so the vocabularies are mirrored
-// here (same convention as REASONING_EFFORTS in the Defaults panel).
+// Effort. There is ONE reasoning-depth vocabulary (#2556): a tier/alias `effort`
+// reaches every agent whose `capabilities.effortControl` is true, and that agent
+// clamps a rung its SDK lacks to the nearest one it has. So the vocabulary is a
+// constant and the only per-agent question is whether the field applies at all
+// — answered by the capability the providers endpoint already returns, not by a
+// hardcoded agent-id list. The web package cannot import @archon/workflows, so
+// the ladder is mirrored here (same convention as REASONING_EFFORTS in the
+// Defaults panel).
 // ---------------------------------------------------------------------------
 
-/** Mirrors CLAUDE_EFFORTS in packages/workflows/src/model-validation.ts. */
-export const CLAUDE_EFFORT_OPTIONS = ['low', 'medium', 'high', 'max'] as const;
-/** Mirrors CODEX_REASONING_EFFORTS in packages/workflows/src/model-validation.ts. */
-export const CODEX_EFFORT_OPTIONS = ['minimal', 'low', 'medium', 'high', 'xhigh'] as const;
+/** Mirrors `effortLevelSchema` in packages/workflows/src/schemas/dag-node.ts. */
+export const EFFORT_OPTIONS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
 
-export type ClaudeEffort = (typeof CLAUDE_EFFORT_OPTIONS)[number];
-export type CodexEffort = (typeof CODEX_EFFORT_OPTIONS)[number];
-/** Any effort value an agent's vocabulary can produce. */
-export type EffortOption = ClaudeEffort | CodexEffort;
+export type EffortOption = (typeof EFFORT_OPTIONS)[number];
+
+/** The rungs `assistants.codex.modelReasoningEffort` accepts — the Codex SDK's
+ *  own enum, which is NOT the shared ladder: that config key is unchanged by
+ *  #2556 and keeps its vendor vocabulary. */
+export const CODEX_CONFIG_EFFORT_OPTIONS = ['minimal', 'low', 'medium', 'high', 'xhigh'] as const;
 
 /**
- * The effort vocabulary an agent's tier/alias `effort` accepts, or null when
- * effort doesn't route there (Pi/OpenCode/Copilot presets drop it) — null
- * hides the field entirely instead of offering a no-op input.
+ * The effort vocabulary an agent's tier/alias `effort` accepts, or null when the
+ * agent has no reasoning control (OpenCode configures it in `opencode.json`) —
+ * null hides the field entirely instead of offering a no-op input.
  */
-export function effortOptionsForAgent(agentId: string): readonly EffortOption[] | null {
-  if (agentId === 'claude') return CLAUDE_EFFORT_OPTIONS;
-  if (agentId === 'codex') return CODEX_EFFORT_OPTIONS;
-  return null;
+export function effortOptionsForAgent(
+  agentId: string,
+  providers: readonly { id: string; capabilities?: { effortControl?: boolean } }[]
+): readonly EffortOption[] | null {
+  const provider = providers.find(p => p.id === agentId);
+  return provider?.capabilities?.effortControl ? EFFORT_OPTIONS : null;
 }
 
 /**
- * Carry an effort value across a provider switch: keep it when the new agent's
- * vocabulary accepts it (e.g. codex→claude keeps 'high'), clear it otherwise
- * (including agents with no effort concept, where the field is hidden and a
- * stale value would be invisible state).
+ * Carry an effort value across a provider switch: keep it when the new agent
+ * takes effort at all, clear it otherwise (agents with no effort concept hide
+ * the field, where a stale value would be invisible state).
  */
-export function normalizeEffortForAgent(agentId: string, effort: string): EffortOption | '' {
-  const valid = effortOptionsForAgent(agentId);
+export function normalizeEffortForAgent(
+  agentId: string,
+  effort: string,
+  providers: readonly { id: string; capabilities?: { effortControl?: boolean } }[]
+): EffortOption | '' {
+  const valid = effortOptionsForAgent(agentId, providers);
   return valid?.find(v => v === effort) ?? '';
 }
 

@@ -44,7 +44,7 @@ per-node YAML field for that provider; a ❌ means the field is accepted but ign
 | Structured output (`output_format`) | **enforced** | **enforced** | **enforced** | best-effort | best-effort |
 | Env injection (`env:`) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Cost control (`maxBudgetUsd`) | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Effort control (`effort`) | ✅ | ❌ | ❌ | ✅ | ✅ |
+| Effort control (`effort`) | ✅ | ✅ | ❌ | ✅ | ✅ |
 | Thinking control (`thinking`) | ✅ | ❌ | ❌ | ✅ | ✅ |
 | Fallback model (`fallbackModel`) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Sandbox (`sandbox`) | ✅ | ❌ | ❌ | ❌ | ❌ |

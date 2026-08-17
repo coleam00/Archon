@@ -17,6 +17,13 @@ import type { NestedKeySpec } from './dag-node';
 // Shared enum schemas
 // ---------------------------------------------------------------------------
 
+/**
+ * DEPRECATED (#2556). The Codex-only spelling of reasoning depth, kept only to
+ * keep parsing workflows written against it — `effort:` is the one spelling and
+ * reaches Codex too. This is the last provider-specific effort vocabulary left
+ * inside @archon/workflows, and it goes away with the field. Do not use it for
+ * anything new; `effortLevelSchema` in ./dag-node is the live one.
+ */
 export const modelReasoningEffortSchema = z.enum(['minimal', 'low', 'medium', 'high', 'xhigh']);
 
 export type ModelReasoningEffort = z.infer<typeof modelReasoningEffortSchema>;

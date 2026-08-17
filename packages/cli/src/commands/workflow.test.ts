@@ -381,7 +381,7 @@ describe('workflowListCommand', () => {
     expect(() => JSON.parse(output)).not.toThrow();
   });
 
-  it('should include modelReasoningEffort and webSearchMode in JSON output when present', async () => {
+  it('should include effort, modelReasoningEffort and webSearchMode in JSON output when present', async () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [
@@ -390,6 +390,9 @@ describe('workflowListCommand', () => {
           description: 'Planning workflow',
           provider: 'codex',
           model: 'gpt-5.6-sol',
+          // #2556: `effort:` is the one spelling, so it must be visible here —
+          // emitting only the deprecated field taught the wrong one.
+          effort: 'xhigh',
           modelReasoningEffort: 'high',
           webSearchMode: 'live',
         }),
@@ -409,6 +412,7 @@ describe('workflowListCommand', () => {
       description: 'Planning workflow',
       provider: 'codex',
       model: 'gpt-5.6-sol',
+      effort: 'xhigh',
       modelReasoningEffort: 'high',
       webSearchMode: 'live',
     });

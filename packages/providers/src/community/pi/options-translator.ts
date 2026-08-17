@@ -22,36 +22,25 @@ import type { ThinkingLevel } from '@earendil-works/pi-ai';
 type PiTool = ReturnType<typeof createCodingTools>[number];
 
 import type { NodeConfig } from '../../types';
+import { clampEffort } from '../../shared/effort';
 
 // ─── Thinking level ────────────────────────────────────────────────────────
 
 /**
- * Pi's ThinkingLevel = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'.
- * Archon's common surface includes 'off' (from Codex's modelReasoningEffort)
- * and 'max' (from Claude's EffortLevel enum). Map into Pi's vocabulary:
- *  - 'off'    → undefined (no explicit thinkingLevel; Pi's implicit off)
- *  - 'max'    → 'xhigh'  (Archon's EffortLevel doesn't have xhigh)
- *  - others pass through if they're already Pi-native
- *
- * See packages/workflows/src/schemas/dag-node.ts#effortLevelSchema for
- * the Archon schema enum (`low | medium | high | max`). Workflow YAML can
- * only carry Archon-enum values; Pi-native `minimal` / `xhigh` are accepted
- * here for programmatic callers (orchestrator, tests) that bypass the
- * schema validator.
+ * Pi's ThinkingLevel is Archon's ladder without `max`, so `effort: max` clamps
+ * to `xhigh` and every other rung passes through — see `clampEffort`. The `off`
+ * sentinel is handled by the caller, before this runs.
  */
-const PI_NATIVE_LEVELS: ReadonlySet<ThinkingLevel> = new Set<ThinkingLevel>([
+const PI_NATIVE_LEVELS = [
   'minimal',
   'low',
   'medium',
   'high',
   'xhigh',
-]);
+] as const satisfies readonly ThinkingLevel[];
 
 function normalizeToThinkingLevel(v: unknown): ThinkingLevel | undefined {
-  if (typeof v !== 'string') return undefined;
-  if (v === 'max') return 'xhigh';
-  if (PI_NATIVE_LEVELS.has(v as ThinkingLevel)) return v as ThinkingLevel;
-  return undefined;
+  return clampEffort(v, PI_NATIVE_LEVELS);
 }
 
 export interface ResolvedThinkingLevel {

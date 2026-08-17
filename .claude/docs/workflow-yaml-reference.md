@@ -33,9 +33,19 @@ Workflows are YAML files discovered from `.archon/workflows/` (recursively) plus
 - **Codex models**: anything that does NOT match Claude patterns
 - **Validation**: incompatible provider/model fails loading
 
-### `modelReasoningEffort` (optional, Codex only)
+### `effort` (optional)
+- **Type**: `'minimal'` | `'low'` | `'medium'` | `'high'` | `'xhigh'` | `'max'`
+- **Applies to**: every provider with a reasoning control (Claude, Codex, Pi, Copilot).
+  Each clamps a rung its SDK lacks to the nearest one it has (`max` → `xhigh` on
+  Codex/Pi/Copilot; `minimal` → `low` on Claude/Copilot). OpenCode has none.
+- **Also valid per-node**, where it overrides the workflow-level value.
+
+### `modelReasoningEffort` (optional, Codex only) — DEPRECATED
 - **Type**: `'minimal'` | `'low'` | `'medium'` | `'high'` | `'xhigh'`
+- **Use `effort:` instead.** Still honoured, and still wins over `effort:` on Codex
+  nodes while both are set, but it warns at load time and will be removed.
 - **Default**: from `.archon/config.yaml` `assistants.codex.modelReasoningEffort`
+  (that config key is NOT deprecated)
 
 ### `webSearchMode` (optional, Codex only)
 - **Type**: `'disabled'` | `'cached'` | `'live'`

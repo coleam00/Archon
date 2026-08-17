@@ -53,6 +53,7 @@ import { buildArchonMcpServer, ARCHON_TOOL_SERVER } from './native-tools';
 import { createLogger } from '@archon/paths';
 import { loadMcpConfig } from '../mcp/config';
 import { withResumedOutcome, resumedOutcome } from '../shared/resumed';
+import { clampEffort } from '../shared/effort';
 import {
   claudeSkillSearchRoots,
   findInstalledSkillNames,
@@ -66,6 +67,16 @@ function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('provider.claude');
   return cachedLog;
 }
+
+/** The reasoning-depth rungs `Options['effort']` accepts. Typed against the SDK
+ *  so a vocabulary change upstream fails type-check here. */
+const CLAUDE_EFFORTS = [
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+] as const satisfies readonly NonNullable<Options['effort']>[];
 
 /**
  * Content block type for assistant messages
@@ -620,9 +631,19 @@ async function applyNodeConfig(
     getLog().info({ agentIds: Object.keys(nodeConfig.agents) }, 'claude.inline_agents_registered');
   }
 
-  // effort
+  // effort — clamped into the SDK's own vocabulary. Claude has no `minimal`
+  // rung, so `effort: minimal` becomes `low`, its shallowest. Everything else
+  // on Archon's ladder is a Claude rung already, `xhigh` included.
   if (nodeConfig.effort !== undefined) {
-    options.effort = nodeConfig.effort as Options['effort'];
+    const effort = clampEffort(nodeConfig.effort, CLAUDE_EFFORTS);
+    if (effort === undefined) {
+      getLog().warn({ effort: nodeConfig.effort }, 'claude.effort_unrecognized');
+    } else {
+      if (effort !== nodeConfig.effort) {
+        getLog().debug({ declared: nodeConfig.effort, applied: effort }, 'claude.effort_clamped');
+      }
+      options.effort = effort;
+    }
   }
 
   // thinking

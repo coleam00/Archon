@@ -10,7 +10,7 @@ import type {
 } from '../skills';
 import { useEntity, invalidate } from '../store/cache';
 import { K } from '../store/keys';
-import { CODEX_EFFORT_OPTIONS } from '../lib/model-options';
+import { CODEX_CONFIG_EFFORT_OPTIONS } from '../lib/model-options';
 import { useCancelledRef } from '../lib/use-cancelled-ref';
 import { SettingsSection } from './SettingsSection';
 import { SELECT_CLASS_COMPACT, SelectShell } from './SettingsFormPrimitives';
@@ -323,7 +323,7 @@ export function AssistantConfigPanel(): ReactElement {
                           className={SELECT_CLASS_COMPACT}
                         >
                           <option value="">inherit</option>
-                          {CODEX_EFFORT_OPTIONS.map(o => (
+                          {CODEX_CONFIG_EFFORT_OPTIONS.map(o => (
                             <option key={o} value={o}>
                               {o}
                             </option>

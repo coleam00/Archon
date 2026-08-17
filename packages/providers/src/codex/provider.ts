@@ -13,11 +13,14 @@ import {
 import type {
   IAgentProvider,
   SendQueryOptions,
+  NodeConfig,
   MessageChunk,
   TokenUsage,
   ProviderCapabilities,
+  CodexProviderDefaults,
 } from '../types';
-import { parseCodexConfig } from './config';
+import { clampEffort } from '../shared/effort';
+import { CODEX_EFFORTS, parseCodexConfig } from './config';
 import { CODEX_CAPABILITIES } from './capabilities';
 import { resolveCodexBinaryPath } from './binary-resolver';
 import { createLogger } from '@archon/paths';
@@ -74,12 +77,43 @@ async function getCodex(configCodexBinaryPath?: string): Promise<Codex> {
 }
 
 /**
+ * Resolve Codex's `modelReasoningEffort` from Archon's inputs.
+ *
+ * Precedence: `nodeConfig.effort` > `assistants.codex.modelReasoningEffort`
+ * from config.yaml — mirroring Copilot's `resolveReasoning`, so a workflow's
+ * declared depth beats the install default on both providers alike.
+ *
+ * Codex has no `max` rung, so `effort: max` clamps to `xhigh` (see
+ * `clampEffort`). A value that is not on the ladder at all falls back to the
+ * config default rather than being invented; the workflow loader rejects such
+ * values at parse time, so this only guards programmatic callers.
+ */
+function resolveModelReasoningEffort(
+  nodeConfig: NodeConfig | undefined,
+  configured: CodexProviderDefaults['modelReasoningEffort']
+): CodexProviderDefaults['modelReasoningEffort'] {
+  const declared = nodeConfig?.effort;
+  if (declared === undefined) return configured;
+
+  const clamped = clampEffort(declared, CODEX_EFFORTS);
+  if (clamped === undefined) {
+    getLog().warn({ effort: declared }, 'codex.effort_unrecognized');
+    return configured;
+  }
+  if (clamped !== declared) {
+    getLog().debug({ declared, applied: clamped }, 'codex.effort_clamped');
+  }
+  return clamped;
+}
+
+/**
  * Build thread options for Codex SDK
  */
 function buildThreadOptions(
   cwd: string,
   model?: string,
-  assistantConfig?: Record<string, unknown>
+  assistantConfig?: Record<string, unknown>,
+  nodeConfig?: NodeConfig
 ): ThreadOptions {
   const config = parseCodexConfig(assistantConfig ?? {});
   return {
@@ -89,7 +123,7 @@ function buildThreadOptions(
     networkAccessEnabled: true,
     approvalPolicy: 'never',
     model: model ?? config.model,
-    modelReasoningEffort: config.modelReasoningEffort,
+    modelReasoningEffort: resolveModelReasoningEffort(nodeConfig, config.modelReasoningEffort),
     webSearchMode: config.webSearchMode,
     additionalDirectories: config.additionalDirectories,
   };
@@ -917,7 +951,12 @@ export class CodexProvider implements IAgentProvider {
       requestOptions?.env,
       initialConfigOverrides
     );
-    const threadOptions = buildThreadOptions(cwd, requestOptions?.model, assistantConfig);
+    const threadOptions = buildThreadOptions(
+      cwd,
+      requestOptions?.model,
+      assistantConfig,
+      requestOptions?.nodeConfig
+    );
 
     if (requestOptions?.abortSignal?.aborted) {
       throw new Error('Query aborted');

@@ -159,7 +159,7 @@ export function ModelTiersPanel(): ReactElement {
         {TIER_ORDER.map(tier => {
           const row = form[tier];
           const unset = row.provider === '';
-          const effortOptions = effortOptionsForAgent(row.provider);
+          const effortOptions = effortOptionsForAgent(row.provider, providers);
           return (
             <div
               key={tier}
@@ -178,7 +178,7 @@ export function ModelTiersPanel(): ReactElement {
                     const provider = e.target.value;
                     setRow(tier, {
                       provider,
-                      effort: normalizeEffortForAgent(provider, row.effort),
+                      effort: normalizeEffortForAgent(provider, row.effort, providers),
                     });
                   }}
                   className={SELECT_CLASS}

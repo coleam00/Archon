@@ -646,6 +646,54 @@ nodes:
       expect((workflows[0] as Record<string, unknown>).additionalDirectories).toBeUndefined();
     });
 
+    it('should warn that modelReasoningEffort is deprecated while still honouring it', async () => {
+      // #2556: warn-and-honour. The value must survive to the executor — an
+      // author who reads the warning and does nothing must see no change — and
+      // the warning must say that this field still wins over `effort:` on Codex,
+      // or adding `effort:` alongside it looks like a silent no-op.
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      const yaml = `name: deprecated-effort-spelling
+description: Uses the old Codex-only spelling
+provider: codex
+modelReasoningEffort: xhigh
+nodes:
+  - id: test
+    command: test
+`;
+      await writeFile(join(workflowDir, 'deprecated.yaml'), yaml);
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.workflows).toHaveLength(1);
+      expect(result.workflows[0].workflow.modelReasoningEffort).toBe('xhigh');
+
+      const pw = result.workflows[0].parseWarnings ?? [];
+      const deprecation = pw.find(w => w.includes('modelReasoningEffort'));
+      expect(deprecation).toBeDefined();
+      expect(deprecation).toContain('deprecated');
+      expect(deprecation).toContain('effort: xhigh');
+      expect(deprecation).toContain('Codex');
+    });
+
+    it('should not warn about deprecation when modelReasoningEffort is absent', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      const yaml = `name: current-effort-spelling
+description: Uses the one spelling
+provider: codex
+effort: xhigh
+nodes:
+  - id: test
+    command: test
+`;
+      await writeFile(join(workflowDir, 'current.yaml'), yaml);
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.workflows).toHaveLength(1);
+      expect(result.workflows[0].workflow.effort).toBe('xhigh');
+      expect(result.workflows[0].parseWarnings ?? []).toEqual([]);
+    });
+
     it('should round-trip workflow-level effort/thinking/fallbackModel/betas/sandbox', async () => {
       // Regression: these 5 workflow-level fields are declared on
       // workflowBaseSchema and consumed by the DAG executor's workflowLevelOptions

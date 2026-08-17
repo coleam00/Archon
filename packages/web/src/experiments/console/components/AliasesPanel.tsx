@@ -143,7 +143,7 @@ export function AliasesPanel(): ReactElement {
       ) : (
         <div className="flex flex-col gap-[11px]">
           {rows.map((row, i) => {
-            const effortOptions = effortOptionsForAgent(row.provider);
+            const effortOptions = effortOptionsForAgent(row.provider, providers);
             return (
               <div
                 // Index key is intentional: rows are positional edit buffers and
@@ -169,7 +169,7 @@ export function AliasesPanel(): ReactElement {
                       const provider = e.target.value;
                       setRow(i, {
                         provider,
-                        effort: normalizeEffortForAgent(provider, row.effort),
+                        effort: normalizeEffortForAgent(provider, row.effort, providers),
                       });
                     }}
                     aria-label="Provider"

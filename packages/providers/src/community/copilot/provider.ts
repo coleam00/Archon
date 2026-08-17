@@ -34,6 +34,7 @@ import { resolveSkillDirectories } from '../../shared/skills';
 import { augmentPromptForJsonSchema } from '../../shared/structured-output';
 import { COPILOT_CAPABILITIES } from './capabilities';
 import { parseCopilotConfig, type CopilotProviderDefaults } from './config';
+import { clampEffort } from '../../shared/effort';
 import { resolveCopilotBinaryPath } from './binary-resolver';
 import { bridgeSession } from './event-bridge';
 
@@ -109,10 +110,11 @@ function resolveGenericGitHubToken(env: Record<string, string>): string | undefi
 
 // ─── Reasoning ──────────────────────────────────────────────────────────────
 
+/** The reasoning-depth rungs Copilot's SDK accepts, weakest → strongest. */
+const COPILOT_EFFORTS = ['low', 'medium', 'high', 'xhigh'] as const;
+
 function normalizeReasoning(value: unknown): CopilotReasoningEffort | undefined {
-  if (value === 'max') return 'xhigh';
-  if (value === 'low' || value === 'medium' || value === 'high' || value === 'xhigh') return value;
-  return undefined;
+  return clampEffort(value, COPILOT_EFFORTS);
 }
 
 /**
@@ -120,9 +122,9 @@ function normalizeReasoning(value: unknown): CopilotReasoningEffort | undefined 
  * Precedence:
  *   nodeConfig.thinking > nodeConfig.effort > config.modelReasoningEffort
  *
- * Archon's `effort` schema is `'low' | 'medium' | 'high' | 'max'` — we map
- * `'max'` to the SDK's `'xhigh'`. The `'off'` sentinel disables reasoning.
- * The object form of `thinking` (Claude-specific) returns a warning.
+ * Copilot's SDK has neither end of Archon's ladder, so `max` clamps to `xhigh`
+ * and `minimal` to `low` (see `clampEffort`). The `'off'` sentinel disables
+ * reasoning. The object form of `thinking` (Claude-specific) returns a warning.
  */
 function resolveCopilotReasoning(
   nodeConfig: SendQueryOptions['nodeConfig'] | undefined,
@@ -155,7 +157,7 @@ function resolveCopilotReasoning(
     const offender = typeof rawThinking === 'string' ? rawThinking : rawEffort;
     return {
       effort: undefined,
-      warning: `Copilot ignored unknown reasoning level '${String(offender)}'. Valid: low, medium, high, xhigh, max, off.`,
+      warning: `Copilot ignored unknown reasoning level '${String(offender)}'. Valid: minimal, low, medium, high, xhigh, max, off.`,
     };
   }
 

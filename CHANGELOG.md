@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`effort:` is the one way to ask for more reasoning, on every provider that has one.** Reasoning depth had two workflow-level spellings — cross-provider `effort:` and Codex-only `modelReasoningEffort:` — and an author had to know which one their node's provider wanted, even though the provider can be decided by a tier or an `@alias` rather than written in the YAML. Codex now reads the node-level `effort:` field and translates it internally, the way Claude, Pi and Copilot already did, so `effort:` applies everywhere and can be set per node. Its vocabulary widened to `minimal | low | medium | high | xhigh | max` — the union of what the providers accept — and each provider clamps a rung its model does not offer to the nearest one it does (`max` → `xhigh` on Codex/Pi/Copilot, `minimal` → `low` on Claude/Copilot), so `effort: max` means "as deep as this model goes" whichever provider a node resolves to. Two side effects worth knowing: a Claude node can now ask for `xhigh`, which its SDK has supported for a while and Archon never exposed; and a tier or `@alias` carrying `effort` now reaches Pi and Copilot, where it was previously dropped. Workflow-level `modelReasoningEffort:` is deprecated — it still works, still wins over `effort:` on Codex nodes, and now warns at load time. `assistants.<provider>.modelReasoningEffort` in `.archon/config.yaml` is a different setting and is unaffected. (#2556)
+
+### Fixed
+
+- **An explicit `effort:` on a Codex node no longer cancels its tier's reasoning depth.** A node combining a model tier that carries `effort` with its own `effort:` ran with no reasoning effort at all — the explicit value suppressed the tier's, then went to a field Codex did not read. Such a node ran shallower than the same node with the `effort:` line deleted. (#2556)
+
 ## [0.9.0] - 2026-08-17
 
 Workflows become properly composable: a workflow can now declare the arguments it takes and the result it returns, ship as one self-contained folder, and be simulated end to end without contacting a provider. Alongside that, a workflow node's capabilities become what its YAML declares rather than whatever happens to be configured on the operator's machine — see Breaking before upgrading.

@@ -1549,6 +1549,46 @@ describe('ClaudeProvider', () => {
       expect(callArgs.options).not.toHaveProperty('effort');
     });
 
+    // #2556: Archon's ladder is the union of every provider's vocabulary, so a
+    // Claude node can now ask for `xhigh` (the SDK has had it since 0.3.209),
+    // and `minimal` — which Claude has no rung for — lands on its shallowest.
+    test('passes xhigh through and clamps minimal to low', async () => {
+      for (const [declared, applied] of [
+        ['xhigh', 'xhigh'],
+        ['minimal', 'low'],
+        ['max', 'max'],
+      ] as const) {
+        mockQuery.mockClear();
+        mockQuery.mockImplementation(async function* () {
+          yield { type: 'result', session_id: 'sid' };
+        });
+
+        for await (const _ of client.sendQuery('test', '/tmp', undefined, {
+          nodeConfig: { effort: declared },
+        })) {
+          // consume
+        }
+
+        const callArgs = mockQuery.mock.calls[0][0] as { options: Record<string, unknown> };
+        expect(callArgs.options.effort).toBe(applied);
+      }
+    });
+
+    test('omits effort from SDK for a value that is not a rung', async () => {
+      mockQuery.mockImplementation(async function* () {
+        yield { type: 'result', session_id: 'sid' };
+      });
+
+      for await (const _ of client.sendQuery('test', '/tmp', undefined, {
+        nodeConfig: { effort: 'off' },
+      })) {
+        // consume
+      }
+
+      const callArgs = mockQuery.mock.calls[0][0] as { options: Record<string, unknown> };
+      expect(callArgs.options).not.toHaveProperty('effort');
+    });
+
     test('passes thinking object to SDK via nodeConfig', async () => {
       mockQuery.mockImplementation(async function* () {
         yield { type: 'result', session_id: 'sid' };

@@ -2,10 +2,34 @@
  * Typed config parsing for Codex provider defaults.
  * Validates and narrows the opaque assistantConfig to typed fields.
  */
+import type { ModelReasoningEffort } from '@openai/codex-sdk';
 import type { CodexProviderDefaults } from '../types';
 
 // Re-export so consumers can import the type from either location
 export type { CodexProviderDefaults } from '../types';
+
+/**
+ * The reasoning-depth rungs the Codex SDK accepts, as a runtime list.
+ *
+ * `satisfies readonly ModelReasoningEffort[]` is the enforcement `types.ts`
+ * cannot provide: that file is the contract layer and may never import an SDK,
+ * so `CodexProviderDefaults.modelReasoningEffort` has to restate the union by
+ * hand. Pinning the list to the SDK's own type here turns a rename or removal
+ * upstream into a compile error instead of a value the SDK rejects at run time,
+ * and `isCodexEffort` below narrows without a cast — which is what proves the
+ * hand-written union still matches.
+ */
+export const CODEX_EFFORTS = [
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+] as const satisfies readonly ModelReasoningEffort[];
+
+function isCodexEffort(value: unknown): value is ModelReasoningEffort {
+  return typeof value === 'string' && (CODEX_EFFORTS as readonly string[]).includes(value);
+}
 
 /**
  * Parse raw assistantConfig into typed Codex defaults.
@@ -18,13 +42,8 @@ export function parseCodexConfig(raw: Record<string, unknown>): CodexProviderDef
     result.model = raw.model;
   }
 
-  const validEfforts = ['minimal', 'low', 'medium', 'high', 'xhigh'];
-  if (
-    typeof raw.modelReasoningEffort === 'string' &&
-    validEfforts.includes(raw.modelReasoningEffort)
-  ) {
-    result.modelReasoningEffort =
-      raw.modelReasoningEffort as CodexProviderDefaults['modelReasoningEffort'];
+  if (isCodexEffort(raw.modelReasoningEffort)) {
+    result.modelReasoningEffort = raw.modelReasoningEffort;
   }
 
   const validSearchModes = ['disabled', 'cached', 'live'];

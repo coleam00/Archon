@@ -37,6 +37,10 @@ export {
 // Error
 export { UnknownProviderError } from './errors';
 
+// Shared reasoning-depth ladder (cross-provider; @archon/workflows derives its
+// `effortLevelSchema` from EFFORT_LADDER, each provider clamps into its own SDK enum).
+export { EFFORT_LADDER, clampEffort, isEffortRung, type EffortRung } from './shared/effort';
+
 // Shared structured-output helpers (cross-provider; the dag-executor validates
 // every provider's output_format result against the declared schema).
 export {

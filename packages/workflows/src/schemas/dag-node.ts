@@ -11,6 +11,7 @@
  * so a flat schema with superRefine is cleaner than a z.union() with implicit discriminants.
  */
 import { z } from '@hono/zod-openapi';
+import { EFFORT_LADDER } from '@archon/providers/effort';
 import { stepRetryConfigSchema } from './retry';
 import { loopNodeConfigSchema, loopControlSchema, type LoopControl } from './loop';
 import { workflowNodeHooksSchema } from './hooks';
@@ -36,10 +37,20 @@ export const TRIGGER_RULES: readonly TriggerRule[] = triggerRuleSchema.options;
 // Claude SDK option schemas
 // ---------------------------------------------------------------------------
 
-/** Claude Agent SDK effort level — controls reasoning depth. Different from Codex modelReasoningEffort. */
-export const effortLevelSchema = z.enum(['low', 'medium', 'high', 'max']);
+/**
+ * Reasoning depth — the one spelling, on every provider that has the control
+ * (#2556). The vocabulary is the union of the effort-capable SDKs' enums, and
+ * each provider clamps a rung it doesn't offer to the nearest one it does
+ * (`clampEffort` in @archon/providers): `max` → `xhigh` on Codex/Pi/Copilot,
+ * `minimal` → `low` on Claude/Copilot. Derived from `EFFORT_LADDER` rather than
+ * restated, so the YAML enum and the clamp cannot disagree.
+ */
+export const effortLevelSchema = z.enum(EFFORT_LADDER);
 
 export type EffortLevel = z.infer<typeof effortLevelSchema>;
+
+/** Canonical list of effort levels — derived from schema, do not duplicate. */
+export const EFFORT_LEVELS: readonly EffortLevel[] = effortLevelSchema.options;
 
 /**
  * Claude Agent SDK beta header list. Non-empty array of non-empty strings —

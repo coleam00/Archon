@@ -83,7 +83,7 @@ describe('CodexProvider', () => {
         structuredOutput: 'enforced',
         envInjection: true,
         costControl: false,
-        effortControl: false,
+        effortControl: true,
         thinkingControl: false,
         fallbackModel: false,
         sandbox: false,
@@ -1120,6 +1120,80 @@ describe('CodexProvider', () => {
           webSearchMode: 'live',
           additionalDirectories: ['/other/repo'],
         })
+      );
+    });
+
+    // #2556: `effort:` is Archon's one reasoning-depth spelling. Codex reads it
+    // off nodeConfig like every other effort-capable provider and translates it
+    // to the SDK's `modelReasoningEffort` here, instead of the engine having to
+    // know which field Codex wants.
+    test('applies nodeConfig.effort as modelReasoningEffort', async () => {
+      mockRunStreamed.mockResolvedValue({
+        events: (async function* () {
+          yield { type: 'turn.completed', usage: defaultUsage };
+        })(),
+      });
+
+      for await (const _ of client.sendQuery('test prompt', '/workspace', undefined, {
+        nodeConfig: { nodeId: 'n1', effort: 'high' },
+      })) {
+        // consume
+      }
+
+      expect(mockStartThread).toHaveBeenCalledWith(
+        expect.objectContaining({ modelReasoningEffort: 'high' })
+      );
+    });
+
+    test('nodeConfig.effort beats assistants.codex.modelReasoningEffort', async () => {
+      mockRunStreamed.mockResolvedValue({
+        events: (async function* () {
+          yield { type: 'turn.completed', usage: defaultUsage };
+        })(),
+      });
+
+      for await (const _ of client.sendQuery('test prompt', '/workspace', undefined, {
+        assistantConfig: { modelReasoningEffort: 'low' },
+        nodeConfig: { nodeId: 'n1', effort: 'minimal' },
+      })) {
+        // consume
+      }
+
+      expect(mockStartThread).toHaveBeenCalledWith(
+        expect.objectContaining({ modelReasoningEffort: 'minimal' })
+      );
+    });
+
+    test('clamps `effort: max` to the SDK top rung, and falls back to config for a non-rung', async () => {
+      mockRunStreamed.mockResolvedValue({
+        events: (async function* () {
+          yield { type: 'turn.completed', usage: defaultUsage };
+        })(),
+      });
+
+      for await (const _ of client.sendQuery('test prompt', '/workspace', undefined, {
+        nodeConfig: { nodeId: 'n1', effort: 'max' },
+      })) {
+        // consume
+      }
+      expect(mockStartThread).toHaveBeenCalledWith(
+        expect.objectContaining({ modelReasoningEffort: 'xhigh' })
+      );
+
+      mockStartThread.mockClear();
+      mockRunStreamed.mockResolvedValue({
+        events: (async function* () {
+          yield { type: 'turn.completed', usage: defaultUsage };
+        })(),
+      });
+      for await (const _ of client.sendQuery('test prompt', '/workspace', undefined, {
+        assistantConfig: { modelReasoningEffort: 'medium' },
+        nodeConfig: { nodeId: 'n1', effort: 'off' },
+      })) {
+        // consume
+      }
+      expect(mockStartThread).toHaveBeenCalledWith(
+        expect.objectContaining({ modelReasoningEffort: 'medium' })
       );
     });
 
