@@ -126,7 +126,11 @@ These are implementation constraints, not slogans. Apply them by default.
 
 **Test isolation (mock.module pollution):** Bun's `mock.module()` permanently replaces modules in the process-wide cache — `mock.restore()` does NOT undo it ([oven-sh/bun#7823](https://github.com/oven-sh/bun/issues/7823)). To prevent cross-file pollution, packages with conflicting `mock.module()` calls split their tests into separate `bun test` invocations — see each package's `package.json` `test` script for the current splits.
 
-**Do NOT run `bun test` from the repo root** — it discovers all test files across all packages and runs them in one process, causing ~135 mock pollution failures. Always use `bun run test` (which uses `bun --filter '*' --parallel test` for per-package isolation). Note the `--parallel`: all ten package test processes run concurrently, and each one that spawns subprocesses competes for the same cores — which is why subprocess-spawning tests should stay rare and cheap (see #2306).
+**Do NOT run `bun test` from the repo root** — it discovers all test files across all packages and runs them in one process, causing ~135 mock pollution failures. Always use `bun run test` (which uses `bun --filter '*' --parallel test` for per-package isolation).
+
+**`bunfig.toml` is read from the cwd only, in both directions.** `bun --filter` runs each package script from that package's directory, so the root config never applies to a package's tests — hence `@archon/adapters`' own copy for the no-network guard. But the root `test` script ends with `bun test ./scripts/`, which *does* run from the root, so `coverage` and `preload` apply there. Stating only the first half is how #2306 ruled coverage out for the wrong leg.
+
+**A subprocess-spawning test that times out on windows-latest is a cliff, not slowness — find the bound, don't raise the budget (#2306).** Every cause proven so far was a specific bound meeting Bun's 5000 ms default: #2473 was SQLite's `PRAGMA busy_timeout = 5000`, the same number; #2240 was a "fully mocked" test silently opening a real database. Raising the timeout would have buried both, and it disarms the only alarm that catches undeclared I/O. Prefer removing incidental work at the spawn site (#2310 dropped a `tar` spawn for an in-process fixture; #2306 stopped a dry run creating a database). Note `bun test`'s default reporter prints durations only for slow and failing tests — use `--reporter=junit` to get the healthy baseline you need to size the anomaly.
 
 ### Type Checking & Linting
 
