@@ -197,6 +197,12 @@ describe('when-atom parity: the builder parses what the engine parses', () => {
     "$INPUTS.output.x == 'y'",
     "$INPUTS == 'x'",
     "$INPUTS. == 'x'",
+    // A node whose id merely STARTS with the scope name is an ordinary node. Pins the
+    // reserved-id check against the `startsWith('INPUTS')` spelling a hand-written
+    // mirror reaches for, which would reject this one.
+    "$INPUTSX.output.x == 'y'",
+    // The scope name is matched case-sensitively, so this is a node called `inputs`.
+    "$inputs.mode == 'x'",
     // Every operator, in both RHS spellings.
     "$n.output == '5'",
     "$n.output != '5'",
