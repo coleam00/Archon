@@ -649,8 +649,12 @@ nodes:
     it('should warn that modelReasoningEffort is deprecated while still honouring it', async () => {
       // #2556: warn-and-honour. The value must survive to the executor — an
       // author who reads the warning and does nothing must see no change — and
-      // the warning must say that this field still wins over `effort:` on Codex,
-      // or adding `effort:` alongside it looks like a silent no-op.
+      // the warning must state the precedence BY LEVEL. This field outranks a
+      // workflow-level `effort:` but not a node-level one, and the same message
+      // recommends writing `effort:` per node: an unqualified "still wins on
+      // Codex" walks the reader into the silent depth change the deprecation
+      // exists to prevent. That is a prose defect no other test can catch, so it
+      // is pinned here.
       const workflowDir = join(testDir, '.archon', 'workflows');
       await mkdir(workflowDir, { recursive: true });
       const yaml = `name: deprecated-effort-spelling
@@ -672,7 +676,10 @@ nodes:
       expect(deprecation).toBeDefined();
       expect(deprecation).toContain('deprecated');
       expect(deprecation).toContain('effort: xhigh');
-      expect(deprecation).toContain('Codex');
+      // Both halves of the precedence, or the message is misleading in the
+      // direction it is actively recommending.
+      expect(deprecation).toContain("overrides a workflow-level 'effort:' on Codex");
+      expect(deprecation).toContain("node-level 'effort:' overrides it");
     });
 
     it('should not warn about deprecation when modelReasoningEffort is absent', async () => {
@@ -691,6 +698,40 @@ nodes:
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
       expect(result.workflows).toHaveLength(1);
       expect(result.workflows[0].workflow.effort).toBe('xhigh');
+      expect(result.workflows[0].parseWarnings ?? []).toEqual([]);
+    });
+
+    it('should accept the widened effort ladder on NODES, not just at workflow level', async () => {
+      // `effortLevelSchema` backs both the workflow field and the node field, but
+      // only the workflow one was proven against real YAML. The node field is the
+      // headline of #2556 — "effort: works per node on every provider" — and it
+      // crosses `dagNodeSchema.safeParse()`, a boundary no other effort test
+      // touches (the executor and provider suites build objects in memory).
+      // Narrowing the node enum would pass every one of those and fail the WHOLE
+      // workflow to load, not just the field.
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      const yaml = `name: node-effort-rungs
+description: Node-level effort across the full ladder
+provider: codex
+nodes:
+  - id: shallow
+    command: test
+    effort: minimal
+  - id: deep
+    command: test
+    effort: xhigh
+    depends_on: [shallow]
+`;
+      await writeFile(join(workflowDir, 'node-effort.yaml'), yaml);
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toEqual([]);
+      expect(result.workflows).toHaveLength(1);
+
+      const nodes = result.workflows[0].workflow.nodes;
+      expect(nodes.find(n => n.id === 'shallow')?.effort).toBe('minimal');
+      expect(nodes.find(n => n.id === 'deep')?.effort).toBe('xhigh');
       expect(result.workflows[0].parseWarnings ?? []).toEqual([]);
     });
 

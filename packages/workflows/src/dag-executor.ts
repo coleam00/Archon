@@ -119,7 +119,7 @@ import {
   isLiteralSpec,
   isTierName,
   resolveModelSpec,
-  validEffortsForProvider,
+  resolvePresetEffort,
   type ModelAliasPreset,
   type ResolvedAiProfile,
   type TierName,
@@ -267,21 +267,19 @@ function applyPresetOptions(
   // nothing at all (#2556).
   if (preset.effort === undefined || declaredEffort !== undefined) return;
 
-  const valid = validEffortsForProvider(provider);
-  if (valid === null) {
-    // The resolved provider has no reasoning control (e.g. a `tiers:` entry
-    // sets `effort` on an OpenCode tier). Warn rather than silently drop it —
-    // fail-loud per the project's fail-fast guideline.
+  // Shared with the chat orchestrator's `applyPresetToRequestOptions`, so the
+  // same tier cannot mean one depth in a workflow and another in chat. The
+  // classifier returns the reason; each caller keeps its own event namespace.
+  const decision = resolvePresetEffort(provider, preset.effort);
+  if (!decision.ok) {
+    // Warn rather than silently drop it — fail-loud per the project's fail-fast
+    // guideline. `unsupported` means the resolved provider has no reasoning
+    // control at all (e.g. a `tiers:` entry sets `effort` on an OpenCode tier).
     getLog().warn(
-      { provider, effort: preset.effort, nodeId: node.id },
-      'dag.preset_effort_unsupported'
-    );
-    return;
-  }
-  if (!valid.includes(preset.effort)) {
-    getLog().warn(
-      { provider, effort: preset.effort, nodeId: node.id, valid },
-      'dag.preset_effort_unknown'
+      { provider, effort: preset.effort, nodeId: node.id, valid: decision.valid },
+      decision.reason === 'unsupported'
+        ? 'dag.preset_effort_unsupported'
+        : 'dag.preset_effort_unknown'
     );
     return;
   }

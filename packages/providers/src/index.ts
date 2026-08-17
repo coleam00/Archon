@@ -37,9 +37,11 @@ export {
 // Error
 export { UnknownProviderError } from './errors';
 
-// Shared reasoning-depth ladder (cross-provider; @archon/workflows derives its
-// `effortLevelSchema` from EFFORT_LADDER, each provider clamps into its own SDK enum).
-export { EFFORT_LADDER, clampEffort, isEffortRung, type EffortRung } from './shared/effort';
+// The shared reasoning-depth ladder is deliberately NOT re-exported here. It is
+// reachable only as `@archon/providers/effort`, a leaf with zero SDK imports, so
+// a schema or other leaf file can derive from it without dragging in this barrel
+// — which re-exports `registry.ts` and every provider SDK. See EFFORT_LADDER in
+// ./shared/effort.ts.
 
 // Shared structured-output helpers (cross-provider; the dag-executor validates
 // every provider's output_format result against the declared schema).

@@ -64,7 +64,7 @@ Per-node-only (NOT valid at workflow level): `maxBudgetUsd`, `systemPrompt`.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `modelReasoningEffort` | `'minimal'` \| `'low'` \| `'medium'` \| `'high'` \| `'xhigh'` | **DEPRECATED** — use `effort:` above, which reaches Codex and works per-node. Still honoured (and still wins over `effort:` on Codex) but warns at load time |
+| `modelReasoningEffort` | `'minimal'` \| `'low'` \| `'medium'` \| `'high'` \| `'xhigh'` | **DEPRECATED** — use `effort:` above, which reaches Codex and works per-node. Still honoured: on a Codex node it overrides a workflow-level `effort:`, but a node-level `effort:` overrides it. Warns at load time |
 | `webSearchMode` | `'disabled'` \| `'cached'` \| `'live'` | Codex web search behavior. Default: `disabled` |
 | `additionalDirectories` | string[] | Absolute paths Codex can read outside the codebase (shared libraries, docs repos) |
 

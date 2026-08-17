@@ -29,10 +29,17 @@ export function isEffortRung(value: unknown): value is EffortRung {
  * Clamp a declared rung into a provider's supported vocabulary.
  *
  * Returns the value unchanged when the provider supports it, otherwise the
- * nearest supported rung — searching downward first (so `max` → `xhigh`, never
- * a jump past an available rung), then upward (so `minimal` → `low`). Returns
- * `undefined` for anything that is not on the ladder at all; callers own the
- * warning, since each provider surfaces it through its own channel.
+ * closest WEAKER rung it supports, and only if none exists, the closest stronger
+ * one. Down-first is the invariant, not distance: a clamp must never silently
+ * buy more reasoning than the author asked for. So `clampEffort('high', ['low',
+ * 'xhigh'])` is `'low'` — two rungs down — rather than `'xhigh'`, one rung up.
+ * On every real provider vocabulary the two rules coincide, because each is a
+ * contiguous slice missing only the ladder's extremes (`max` → `xhigh`,
+ * `minimal` → `low`); the difference would only appear for a vocabulary with an
+ * interior gap.
+ *
+ * Returns `undefined` for anything that is not on the ladder at all; callers own
+ * the warning, since each provider surfaces it through its own channel.
  */
 export function clampEffort<T extends EffortRung>(
   value: unknown,

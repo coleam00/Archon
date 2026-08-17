@@ -148,8 +148,11 @@ export type AgentDefinition = z.infer<typeof agentDefinitionSchema>;
  * machine's `config.yaml`. Highest-precedence layer: node YAML `pi:` > config
  * `nodes.<id>` > assistant-level `assistants.pi.*`. Structurally identical to the
  * providers-side `PiNodeOverride` (@archon/providers/pi/config) — hand-mirrored
- * because @archon/workflows cannot import runtime values from @archon/providers
- * (only the contract subpath @archon/providers/types).
+ * because that module is not reachable from here. The constraint is SDK-free,
+ * not type-only: @archon/workflows may import runtime values from a leaf subpath
+ * with no SDK dependencies (@archon/providers/types, @archon/providers/effort —
+ * see EFFORT_LADDER at the top of this file), but `pi/config` pulls in the Pi
+ * SDK, so this shape stays mirrored.
  *
  * Pi-only, like Claude's `hooks`/`mcp`/`skills`/`agents`. Other providers ignore
  * it; non-AI node types warn it's ignored (see BASH_NODE_AI_FIELDS).

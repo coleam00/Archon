@@ -254,3 +254,30 @@ export function isEffortValidForProvider(provider: string, effort: string): bool
   const valid = validEffortsForProvider(provider);
   return valid === null || valid.includes(effort);
 }
+
+/** Why a tier/alias preset's `effort` cannot be applied to the resolved provider. */
+export type PresetEffortRejection =
+  | { ok: false; reason: 'unsupported'; valid: null }
+  | { ok: false; reason: 'unknown'; valid: readonly string[] };
+
+/**
+ * Decide whether a tier/alias preset's `effort` can be applied to the resolved
+ * provider — the one gate the DAG executor and the chat orchestrator must agree
+ * on, or the same tier means different reasoning depths in a workflow and in
+ * chat.
+ *
+ * Classifies rather than logs: the two callers keep their own `dag.*` /
+ * `orchestrator.*` event namespaces, which is the only thing that differed
+ * between them.
+ */
+export function resolvePresetEffort(
+  provider: string,
+  effort: string
+): { ok: true } | PresetEffortRejection {
+  const valid = validEffortsForProvider(provider);
+  // The provider has no reasoning control at all (OpenCode configures it in
+  // opencode.json, not per request).
+  if (valid === null) return { ok: false, reason: 'unsupported', valid: null };
+  if (!valid.includes(effort)) return { ok: false, reason: 'unknown', valid };
+  return { ok: true };
+}

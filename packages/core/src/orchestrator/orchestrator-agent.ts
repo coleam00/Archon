@@ -87,7 +87,7 @@ import {
   isTierName,
   resolveModelSpec,
   resolveTierWithFallback,
-  validEffortsForProvider,
+  resolvePresetEffort,
   type ModelAliasPreset,
   type TierName,
 } from '@archon/workflows/model-validation';
@@ -117,17 +117,20 @@ function applyPresetToRequestOptions(
   if (preset.effort === undefined) return;
 
   // One effort channel for every provider (#2556): the preset's rung goes on
-  // nodeConfig and the provider clamps it into its own SDK vocabulary. Must
-  // stay in step with `applyPresetOptions` in the DAG executor, or the same
-  // tier means different depths in chat and in a workflow.
-  const valid = validEffortsForProvider(provider);
-  if (valid === null) {
-    // The provider has no reasoning control — warn instead of silently dropping.
-    getLog().warn({ provider, effort: preset.effort }, 'orchestrator.preset_effort_unsupported');
-    return;
-  }
-  if (!valid.includes(preset.effort)) {
-    getLog().warn({ provider, effort: preset.effort, valid }, 'orchestrator.preset_effort_unknown');
+  // nodeConfig and the provider clamps it into its own SDK vocabulary. The gate
+  // is shared with `applyPresetOptions` in the DAG executor rather than
+  // restated, so the same tier cannot mean different depths in chat and in a
+  // workflow.
+  const decision = resolvePresetEffort(provider, preset.effort);
+  if (!decision.ok) {
+    // `unsupported` = the provider has no reasoning control at all. Warn instead
+    // of silently dropping.
+    getLog().warn(
+      { provider, effort: preset.effort, valid: decision.valid },
+      decision.reason === 'unsupported'
+        ? 'orchestrator.preset_effort_unsupported'
+        : 'orchestrator.preset_effort_unknown'
+    );
     return;
   }
   options.nodeConfig = { ...(options.nodeConfig ?? {}), effort: preset.effort };

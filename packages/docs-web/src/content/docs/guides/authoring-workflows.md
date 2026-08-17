@@ -1749,9 +1749,10 @@ does.
 :::caution[`modelReasoningEffort:` is deprecated]
 Workflow-level `modelReasoningEffort:` was a second, Codex-only spelling of reasoning
 depth. Use [`effort:`](#claude-sdk-advanced-options) instead — it reaches Codex too, and
-it can be set per node. The old field is still honoured and still wins over `effort:` on
-Codex nodes while both are present, but it now emits a deprecation warning at load time
-and will be removed. `assistants.codex.modelReasoningEffort` in `.archon/config.yaml` is
+it can be set per node. The old field is still honoured, and on a Codex node it overrides
+a **workflow-level** `effort:` — but a **node-level** `effort:` overrides it, so moving to
+the per-node form takes effect immediately. It now emits a deprecation warning at load
+time and will be removed. `assistants.codex.modelReasoningEffort` in `.archon/config.yaml` is
 a different setting and is **not** deprecated.
 :::
 
