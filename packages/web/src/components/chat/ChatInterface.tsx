@@ -26,6 +26,7 @@ import type {
   FileAttachment,
   ToolCallDisplay,
   ErrorDisplay,
+  TextEventMeta,
   WorkflowDispatchEvent,
 } from '@/lib/types';
 import { applyOnText } from '@/lib/chat-message-reducer';
@@ -292,15 +293,12 @@ export function ChatInterface({
     return `msg-${String(messageIdCounter.current)}`;
   };
 
-  const onText = useCallback(
-    (content: string, workflowResult?: { workflowName: string; runId: string }): void => {
-      // First AI text received — the thinking placeholder is about to gain content,
-      // so the hydration merge no longer needs the sendInFlight guard.
-      setSendInFlight(false);
-      setMessages(prev => applyOnText(prev, content, undefined, undefined, workflowResult));
-    },
-    []
-  );
+  const onText = useCallback((content: string, meta?: TextEventMeta): void => {
+    // First AI text received — the thinking placeholder is about to gain content,
+    // so the hydration merge no longer needs the sendInFlight guard.
+    setSendInFlight(false);
+    setMessages(prev => applyOnText(prev, content, undefined, undefined, meta));
+  }, []);
 
   const onToolCall = useCallback(
     (name: string, input: Record<string, unknown>, toolCallId?: string): void => {

@@ -935,6 +935,56 @@ describe('LOOP_GROUP_NODE_AI_FIELDS', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// output_format survival through the transform (#2566)
+// ---------------------------------------------------------------------------
+
+describe('dagNodeSchema — output_format survival by node type', () => {
+  /**
+   * The lists above are the loader's WARN sets; this is what the transform actually
+   * emits, which is a different fact and the one the `when:` whole-output rejection
+   * (#2566) reasons from. `output_format` is in the schema's `aiOnly` group, which the
+   * `loop_group` branch spreads and the `loop` branch does not.
+   *
+   * Pinned here because the loader's three rejection messages, the authoring guide and
+   * the constitution's case-law row all ASSERT this asymmetry in prose. Those assertions
+   * are unverifiable by the type checker (they are string literals) and the loader tests
+   * pin only the message wording, not the claim inside it — so before this test the fact
+   * was stated in five places and derived from none. Its history earned it: the claim was
+   * written three times across #2579 and was wrong or imprecise twice.
+   *
+   * If a future change (e.g. #2563's loop structured completion) spreads `aiOnly` in the
+   * `loop` branch, THIS is what fails — and the loader message telling authors that
+   * declaring `output_format` on a loop "would change nothing" has to be revisited.
+   */
+  const outputFormat = { type: 'object', properties: { done: { type: 'boolean' } } };
+
+  function parsedNode(extra: Record<string, unknown>) {
+    const result = dagNodeSchema.safeParse({ id: 'n1', ...extra, output_format: outputFormat });
+    expect(result.success).toBe(true);
+    if (!result.success) throw new Error('unreachable: asserted above');
+    return result.data as { output_format?: unknown };
+  }
+
+  test('a loop node DROPS output_format (aiOnly is not spread)', () => {
+    expect(
+      parsedNode({ loop: { until: 'DONE', max_iterations: 3, prompt: 'go' } }).output_format
+    ).toBeUndefined();
+  });
+
+  test('a loop_group node KEEPS output_format (aiOnly is spread)', () => {
+    const node = parsedNode({
+      loop_group: { until: 'DONE', max_iterations: 3, nodes: [{ id: 'body', prompt: 'x' }] },
+    });
+    expect(node.output_format).toEqual(outputFormat);
+  });
+
+  test('prompt and command nodes KEEP output_format', () => {
+    expect(parsedNode({ prompt: 'go' }).output_format).toEqual(outputFormat);
+    expect(parsedNode({ command: 'some-command' }).output_format).toEqual(outputFormat);
+  });
+});
+
 describe('dagNodeSchema — include', () => {
   test('parses a valid include node (only structural fields survive)', () => {
     const result = dagNodeSchema.safeParse({

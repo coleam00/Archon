@@ -16,6 +16,12 @@ function getLog(): ReturnType<typeof createLogger> {
 // Track whether we've warned about logging failures (warn once per session)
 let logWarningShown = false;
 
+/**
+ * A row in a run's JSONL log. Some variants are historical: nothing has emitted
+ * `'validation'` (with `check`/`result`) since #805 removed its call site along with
+ * sequential execution mode, and its writer is now deleted too. It stays because logs
+ * already on disk contain those rows — keep it when reading, never write a new one.
+ */
 export interface WorkflowEvent {
   type:
     | 'workflow_start'
@@ -129,28 +135,6 @@ export async function logTool(
     type: 'tool',
     tool_name: toolName,
     tool_input: toolInput,
-  });
-}
-
-/**
- * Log validation check result
- */
-export async function logValidation(
-  logDir: string,
-  workflowRunId: string,
-  payload: {
-    check: string;
-    result: 'pass' | 'fail' | 'warn' | 'unknown';
-    error?: string;
-    step?: string;
-  }
-): Promise<void> {
-  await logWorkflowEvent(logDir, workflowRunId, {
-    type: 'validation',
-    check: payload.check,
-    result: payload.result,
-    error: payload.error,
-    step: payload.step,
   });
 }
 

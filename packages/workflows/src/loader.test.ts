@@ -2370,7 +2370,7 @@ nodes:
   - id: implement
     prompt: "Fix this: $classify.output"
     depends_on: [classify]
-    when: "$classify.output == 'BUG'"
+    when: "$classify.output.type == 'BUG'"
 `
       );
 
@@ -2395,7 +2395,7 @@ nodes:
   - id: step2
     prompt: "Based on $step1.output, do step 2"
     depends_on: [step1]
-    when: "$step1.output == 'go'"
+    when: "$step1.output.verdict == 'go'"
 `
       );
 
@@ -2646,6 +2646,392 @@ nodes:
       expect(result.errors).toHaveLength(1);
       expect(result.errors[0].error).toContain('$other-node.output');
       expect(result.workflows).toHaveLength(0);
+    });
+  });
+
+  describe('when: whole-output comparison against an AI producer (#2566)', () => {
+    /** Write one workflow YAML and load it. */
+    async function loadYaml(filename: string, yaml: string) {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      await writeFile(join(workflowDir, filename), yaml);
+      return discoverWorkflows(testDir, { loadDefaults: false });
+    }
+
+    it('rejects a bare $node.output comparison when the producer is a prompt node', async () => {
+      const result = await loadYaml(
+        'ai-whole-output.yaml',
+        `
+name: ai-whole-output
+description: Compares a whole AI reply to a literal
+nodes:
+  - id: analyze
+    prompt: "Analyze the issue"
+  - id: decide
+    prompt: "Decide"
+    depends_on: [analyze]
+    when: "$analyze.output == 'BUG'"
+`
+      );
+      expect(result.workflows).toHaveLength(0);
+      expect(result.errors).toHaveLength(1);
+      const message = result.errors[0].error;
+      expect(message).toContain("compares the whole output of AI node 'analyze'");
+      // The message must name the fix, not just the problem.
+      expect(message).toContain('output_format');
+      expect(message).toContain("$analyze.output.status == 'BUG'");
+    });
+
+    it('rejects it for a command producer — a command file is a prompt in another file', async () => {
+      const result = await loadYaml(
+        'ai-command-output.yaml',
+        `
+name: ai-command-output
+description: Command producer
+nodes:
+  - id: analyze
+    command: analyze-issue
+  - id: decide
+    prompt: "Decide"
+    depends_on: [analyze]
+    when: "$analyze.output == 'BUG'"
+`
+      );
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0].error).toContain("whole output of AI node 'analyze'");
+    });
+
+    it('rejects it for a loop producer', async () => {
+      const result = await loadYaml(
+        'ai-loop-output.yaml',
+        `
+name: ai-loop-output
+description: Loop producer
+nodes:
+  - id: refine
+    loop:
+      prompt: "Refine until done"
+      until: DONE
+      max_iterations: 3
+  - id: decide
+    prompt: "Decide"
+    depends_on: [refine]
+    when: "$refine.output == 'DONE'"
+`
+      );
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0].error).toContain("whole output of AI node 'refine'");
+      // `loop:` and `loop_group:` are both rejected but for DIFFERENT reasons, and the
+      // message must name the right one. On a `loop:` the schema is dropped at parse.
+      expect(result.errors[0].error).toContain("dropped from a 'loop:' node");
+      expect(result.errors[0].error).not.toContain("Declare 'output_format'");
+    });
+
+    it('rejects it for a loop producer even when it declares an output_format', async () => {
+      // `output_format` never reaches a LoopNode: it is in the schema's `aiOnly` group
+      // and the loop branch of the transform does not spread it. So there is nothing to
+      // opt out with, and the message must not pretend otherwise.
+      const result = await loadYaml(
+        'ai-loop-declared-format.yaml',
+        `
+name: ai-loop-declared-format
+description: output_format on a loop node is dropped, so it is not an opt-out
+nodes:
+  - id: refine
+    output_format:
+      type: object
+      properties:
+        status:
+          type: string
+    loop:
+      prompt: "Refine until done"
+      until: DONE
+      max_iterations: 3
+  - id: decide
+    prompt: "Decide"
+    depends_on: [refine]
+    when: "$refine.output == 'DONE'"
+`
+      );
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0].error).toContain("dropped from a 'loop:' node");
+    });
+
+    it('rejects it for a loop_group producer that declares output_format, for its own reason', async () => {
+      // Unlike `loop:`, a loop_group KEEPS `output_format` through the transform — so the
+      // "dropped at parse" reason would be wrong here. The group is still rejected
+      // because its completion returns the last iteration's text, never the JSON.
+      const result = await loadYaml(
+        'ai-loop-group-declared-format.yaml',
+        `
+name: ai-loop-group-declared-format
+description: a loop_group keeps output_format but its output is still iteration text
+nodes:
+  - id: refine
+    output_format:
+      type: object
+      properties:
+        status:
+          type: string
+    loop_group:
+      until: DONE
+      max_iterations: 3
+      nodes:
+        - id: body
+          prompt: "Do a pass"
+  - id: decide
+    prompt: "Decide"
+    depends_on: [refine]
+    when: "$refine.output == 'DONE'"
+`
+      );
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0].error).toContain("last iteration's raw text");
+      expect(result.errors[0].error).not.toContain("dropped from a 'loop:' node");
+    });
+
+    it('rejects it for a loop_group producer', async () => {
+      const result = await loadYaml(
+        'ai-loop-group-output.yaml',
+        `
+name: ai-loop-group-output
+description: Loop group producer
+nodes:
+  - id: refine
+    loop_group:
+      until: DONE
+      max_iterations: 3
+      nodes:
+        - id: body
+          prompt: "Do a pass"
+  - id: decide
+    prompt: "Decide"
+    depends_on: [refine]
+    when: "$refine.output == 'DONE'"
+`
+      );
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0].error).toContain("whole output of AI node 'refine'");
+      expect(result.errors[0].error).toContain("last iteration's raw text");
+    });
+
+    it('rejects it under a numeric operator too', async () => {
+      const result = await loadYaml(
+        'ai-numeric.yaml',
+        `
+name: ai-numeric
+description: Numeric comparison on free-form output
+nodes:
+  - id: score
+    prompt: "Score it"
+  - id: gate
+    prompt: "Gate"
+    depends_on: [score]
+    when: "$score.output > '80'"
+`
+      );
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0].error).toContain("whole output of AI node 'score'");
+    });
+
+    it('rejects it inside a compound expression', async () => {
+      const result = await loadYaml(
+        'ai-compound.yaml',
+        `
+name: ai-compound
+description: Hazard hidden in the second half of an AND
+nodes:
+  - id: flag
+    bash: "echo yes"
+  - id: analyze
+    prompt: "Analyze"
+  - id: decide
+    prompt: "Decide"
+    depends_on: [flag, analyze]
+    when: "$flag.output == 'yes' && $analyze.output == 'BUG'"
+`
+      );
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0].error).toContain("whole output of AI node 'analyze'");
+    });
+
+    it('rejects it from a loop_group body referencing an enclosing AI node', async () => {
+      const result = await loadYaml(
+        'ai-enclosing.yaml',
+        `
+name: ai-enclosing
+description: Body node branching on an outer AI node's whole output
+nodes:
+  - id: analyze
+    prompt: "Analyze"
+  - id: refine
+    depends_on: [analyze]
+    loop_group:
+      until: DONE
+      max_iterations: 3
+      nodes:
+        - id: body
+          prompt: "Do a pass"
+          when: "$analyze.output == 'BUG'"
+`
+      );
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0].error).toContain("whole output of AI node 'analyze'");
+    });
+
+    it('accepts a bash producer — its stdout is author-controlled and exact', async () => {
+      const result = await loadYaml(
+        'bash-whole-output.yaml',
+        `
+name: bash-whole-output
+description: Whole-output equality against a shell producer
+nodes:
+  - id: check
+    bash: "test -f README.md && echo 'true' || echo 'false'"
+  - id: notify
+    prompt: "Notify"
+    depends_on: [check]
+    when: "$check.output == 'true'"
+`
+      );
+      expect(result.errors).toHaveLength(0);
+      expect(result.workflows).toHaveLength(1);
+    });
+
+    it('accepts a script producer', async () => {
+      const result = await loadYaml(
+        'script-whole-output.yaml',
+        `
+name: script-whole-output
+description: Whole-output equality against a script producer
+nodes:
+  - id: check
+    runtime: bun
+    script: "console.log('ok')"
+  - id: notify
+    prompt: "Notify"
+    depends_on: [check]
+    when: "$check.output == 'ok'"
+`
+      );
+      expect(result.errors).toHaveLength(0);
+      expect(result.workflows).toHaveLength(1);
+    });
+
+    it('accepts an AI producer that declares output_format', async () => {
+      const result = await loadYaml(
+        'declared-output-format.yaml',
+        `
+name: declared-output-format
+description: AI producer with a declared schema
+nodes:
+  - id: analyze
+    prompt: "Analyze"
+    output_format:
+      type: object
+      properties:
+        status:
+          type: string
+  - id: decide
+    prompt: "Decide"
+    depends_on: [analyze]
+    when: "$analyze.output == '{}'"
+`
+      );
+      expect(result.errors).toHaveLength(0);
+      expect(result.workflows).toHaveLength(1);
+    });
+
+    it('accepts a field access on an AI producer', async () => {
+      const result = await loadYaml(
+        'field-access.yaml',
+        `
+name: field-access
+description: Field access is the supported pattern
+nodes:
+  - id: analyze
+    prompt: "Analyze"
+  - id: decide
+    prompt: "Decide"
+    depends_on: [analyze]
+    when: "$analyze.output.status == 'BUG'"
+`
+      );
+      expect(result.errors).toHaveLength(0);
+      expect(result.workflows).toHaveLength(1);
+    });
+
+    it('accepts a $INPUTS ref, which names no producer at all', async () => {
+      const result = await loadYaml(
+        'inputs-when.yaml',
+        `
+name: inputs-when
+description: Branching on a caller-supplied input
+inputs:
+  mode:
+    default: fast
+nodes:
+  - id: fast-path
+    prompt: "Go fast"
+    when: "$INPUTS.mode == 'fast'"
+`
+      );
+      expect(result.errors).toHaveLength(0);
+      expect(result.workflows).toHaveLength(1);
+    });
+
+    it('fires on the FLATTENED graph, catching a hazard that only appears after include expansion', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      // The block's sink is an AI node; the caller gates on `$blk.output`, which the
+      // expander rewrites to that sink. Pre-expansion the producer is an `include:`
+      // node (exempt), so only the post-expansion revalidation can catch this.
+      await writeFile(
+        join(workflowDir, 'block.yaml'),
+        `
+name: block
+description: block whose sink is an AI node
+nodes:
+  - id: verdict
+    prompt: "Give a verdict"
+`
+      );
+      const result = await loadYaml(
+        'includes-block.yaml',
+        `
+name: includes-block
+description: gates on an included block's whole output
+nodes:
+  - id: blk
+    include: block
+  - id: act
+    prompt: "Act"
+    depends_on: [blk]
+    when: "$blk.output == 'PASS'"
+`
+      );
+      expect(result.workflows.find(w => w.workflow.name === 'includes-block')).toBeUndefined();
+      const error = result.errors.find(e => e.filename.includes('includes-block'));
+      expect(error?.error).toContain('compares the whole output of AI node');
+    });
+
+    it('leaves an unparseable when: to the executor rather than guessing at load', async () => {
+      const result = await loadYaml(
+        'unparseable-when.yaml',
+        `
+name: unparseable-when
+description: Malformed condition, valid refs
+nodes:
+  - id: analyze
+    prompt: "Analyze"
+  - id: decide
+    prompt: "Decide"
+    depends_on: [analyze]
+    when: "$analyze.output = 'BUG'"
+`
+      );
+      expect(result.errors).toHaveLength(0);
+      expect(result.workflows).toHaveLength(1);
     });
   });
 

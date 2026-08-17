@@ -6,8 +6,8 @@
  * uncontrolled input so half-typed ids don't thrash the graph).
  */
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactElement } from 'react';
+import { NODE_ID_PATTERN } from '@/lib/node-ref';
 import { VARIANT_REGISTRY } from '../variants';
-import { NODE_ID_PATTERN } from '../editor/state';
 import type { BaseFields, BuilderNode } from '../types';
 import { CheckboxField, Field, SelectField, TextField } from './inspector/fields';
 import { PromptFields } from './inspector/PromptFields';

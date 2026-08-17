@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import type { DagFlowNode } from '@/components/workflows/DagNodeComponent';
 import type { Edge } from '@xyflow/react';
 import { hasCycle } from '@/lib/dag-layout';
+import { findOutputRefs } from '@/lib/node-ref';
 
 export interface ValidationIssue {
   severity: 'error' | 'warning' | 'info';
@@ -71,7 +72,11 @@ function getInstantIssues(
   return issues;
 }
 
-function getDebouncedIssues(nodes: DagFlowNode[], edges: Edge[]): ValidationIssue[] {
+/**
+ * Graph-level checks. Exported for direct testing (same posture as
+ * `handleBuilderKeydown` in `useBuilderKeyboard`) — the hook only debounces it.
+ */
+export function getDebouncedIssues(nodes: DagFlowNode[], edges: Edge[]): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   const nodeIds = new Set(nodes.map(n => n.data.id));
 
@@ -135,17 +140,31 @@ function getDebouncedIssues(nodes: DagFlowNode[], edges: Edge[]): ValidationIssu
     });
   }
 
-  // 5. Broken $nodeId.output references
+  // 5. Broken $nodeId.output references. What a reference LOOKS like comes from
+  // `@/lib/node-ref` — the same definition the console builder scans with — so
+  // the two builders can no longer disagree about what a reference IS.
+  //
+  // They can still disagree about WHERE one is looked for, and this scan is the
+  // narrower of the two. It reads `when` — which arrives on `data` via the
+  // `...dn` spread — plus the two bodies `resolveNodeDisplay` synthesizes
+  // (`dag-layout.ts`): `promptText` and `bashScript`. `DagNodeData extends
+  // DagNode`, so a script node's `script` and an approval node's
+  // `approval.message` reach `data` through that same spread — but
+  // `resolveNodeDisplay` has no `script` branch and its `approval` branch
+  // returns no text, so nothing copies them into the fields read here. The
+  // engine loader and the console builder DO validate refs in both. Refs there
+  // therefore go unflagged in this panel and flagged in the console. That gap
+  // predates this change and is left open deliberately: the legacy builder is
+  // slated for deletion, so the honest note is worth more than a wider scan on
+  // doomed code. (The console also strips code fences first; no equivalent here.)
   for (const node of nodes) {
     const textsToScan: string[] = [];
     if (node.data.when) textsToScan.push(node.data.when);
     if (node.data.promptText) textsToScan.push(node.data.promptText);
+    if (node.data.bashScript) textsToScan.push(node.data.bashScript);
 
     for (const text of textsToScan) {
-      const outputRefPattern = /\$(\w+)\.output/g;
-      let match: RegExpExecArray | null;
-      while ((match = outputRefPattern.exec(text)) !== null) {
-        const referencedId = match[1];
+      for (const referencedId of findOutputRefs(text)) {
         if (!nodeIds.has(referencedId)) {
           issues.push({
             severity: 'warning',

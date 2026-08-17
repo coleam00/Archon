@@ -11,7 +11,7 @@ argument-hint: "[focus area]"
 
 # Rulecheck
 
-Launch the rulecheck-agent to autonomously scan and fix CLAUDE.md rule violations.
+Launch the rulecheck-agent to autonomously scan and fix AGENTS.md rule violations.
 
 ## Your Job (Main Agent)
 

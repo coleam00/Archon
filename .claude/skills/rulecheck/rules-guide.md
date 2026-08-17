@@ -1,11 +1,14 @@
 # Rules Guide — Where to Find Project Rules
 
 Reference for the rulecheck agent. Focus on rules that **linters can't enforce** —
-architectural principles, patterns, and conventions from CLAUDE.md.
+architectural principles, patterns, and conventions from AGENTS.md.
 
-## Primary Source: `CLAUDE.md` (Root)
+## Primary Source: `AGENTS.md` (Root)
 
-Read this file thoroughly. Every section contains enforceable rules.
+Read this file thoroughly, but derive checks only from its normative rules —
+sections like `Project Overview` and `Product Direction` are descriptive
+context, not something to enforce. Root `CLAUDE.md` is only a one-line pointer
+to this file — reading that instead gets you nothing.
 
 ### Engineering Principles (each is a concrete rule, not a slogan)
 
@@ -16,6 +19,9 @@ Read this file thoroughly. Every section contains enforceable rules.
 | **YAGNI** | Config keys with no caller, speculative abstractions, feature flags for unplanned features, partial fake support |
 | **DRY + Rule of Three** | Same pattern copy-pasted 3+ times without extraction; OR premature abstractions extracted from only 1-2 uses |
 | **SRP + ISP** | God modules mixing policy/transport/storage, fat interfaces with unrelated methods, modules doing too many things |
+| **No Autonomous Lifecycle Mutation** | Timers or staleness heuristics that mark work started by another process (CLI, adapter, webhook, web UI, cron) as failed/cancelled/abandoned, instead of surfacing the ambiguous state for the user to act on. Retry backoff, subprocess timeouts, and cleanup of already-terminal data are fine |
+| **Natural Language Is Not a Wire Format** | Regexes, keyword lists, or hand-written parsers reconstructing user intent from prose; one fixed action applied to arbitrary prose ("any message here means approve"); a workflow node told to emit a sentinel token for a later node to grep, instead of `output_format` + `when:`, an exit code, or `until_bash`. Loops are the acknowledged gap (#2563): prefer `until_bash` where completion is externally checkable, but a prose `until:` sentinel is still correct for genuine judgment — do not flag it. NOT this rule: classifying third-party output (git stderr, SDK error strings), or repairing a model's own JSON that you then schema-validate |
+| **Workflow Language Constitution** | New YAML surface that computes rather than coordinates, when a script node plus existing wiring could express it today; `when:` grown incrementally with parens, functions, or arithmetic; composition resolved at run time rather than load time; a new per-provider capability added as a node field instead of provider config or a tier alias; an implicit behavior that is undocumented, undefeatable, or not fail-safe. NOT this rule: a `prompt:` node that computes internally — the rule governs the YAML surface, and choosing between a prompt node and a script node is ordinary engineering |
 | **Determinism** | Flaky tests with timing dependencies, network-dependent tests without guardrails |
 | **Reversibility** | Mixed mega-patches, changes with unclear blast radius |
 

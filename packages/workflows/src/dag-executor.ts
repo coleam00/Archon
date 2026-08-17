@@ -6833,9 +6833,14 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
 
           // 2. Evaluate when: condition
           if (node.when !== undefined) {
+            // This run's named inputs are threaded in so `when: "$INPUTS.mode == 'fast'"`
+            // branches on a caller's `with:` value. Without it a sub-run child could READ
+            // `$INPUTS.mode` in a prompt but never branch on it — the ref parsed as a node
+            // called `INPUTS` and failed the node (#2453 defect 1).
             const { result: conditionPasses, parsed: conditionParsed } = evaluateCondition(
               node.when,
-              ctx.nodeOutputs
+              ctx.nodeOutputs,
+              resolveRunInputs(workflowRun)
             );
             if (!conditionParsed) {
               const parseErrMsg = `⚠️ Node '${node.id}': unparseable \`when:\` expression "${node.when}" — node skipped (fail-closed). Check syntax: \`$nodeId.output == 'VALUE'\`, \`$nodeId.output > '5'\`, or compound \`$a.output == 'X' && $b.output != 'Y'\`.`;

@@ -11,7 +11,7 @@
  */
 import { type ChangeEvent, type ReactElement } from 'react';
 import { format, parse } from '../validation';
-import type { AtomNode, WhenAst, WhenOp } from '../types';
+import type { AtomNode, InputAtom, NodeAtom, WhenAst, WhenOp } from '../types';
 
 interface WhenBuilderProps {
   value: string | undefined;
@@ -26,23 +26,22 @@ const SMALL_INPUT =
   'rounded-[7px] border border-border bg-surface px-1.5 py-1 font-mono text-[11.5px] text-text-primary outline-none focus:border-accent-bright/60';
 
 function emptyAtom(firstUpstream: string | undefined): AtomNode {
-  return { nodeId: firstUpstream ?? 'node', op: '==', value: '' };
+  return { kind: 'node', nodeId: firstUpstream ?? 'node', op: '==', value: '' };
 }
 
-function AtomRow({
+/** The node picker + field box, for an atom that reads a node's output. */
+function NodeRefFields({
   atom,
   upstreamIds,
   onChange,
-  onRemove,
 }: {
-  atom: AtomNode;
+  atom: NodeAtom;
   upstreamIds: readonly string[];
   onChange: (next: AtomNode) => void;
-  onRemove: () => void;
 }): ReactElement {
   const known = upstreamIds.includes(atom.nodeId);
   return (
-    <div className="flex items-center gap-1">
+    <>
       <select
         aria-label="Node"
         value={atom.nodeId}
@@ -71,13 +70,71 @@ function AtomRow({
           // (`$node.field`) flag is intentionally not carried over, so the atom
           // re-serializes as the canonical `$node.output.field`. The `bare` RHS
           // spelling (unquoted number/boolean) is preserved as the author wrote it.
-          const next: AtomNode = { nodeId: atom.nodeId, op: atom.op, value: atom.value };
+          const next: NodeAtom = {
+            kind: 'node',
+            nodeId: atom.nodeId,
+            op: atom.op,
+            value: atom.value,
+          };
           if (field.length > 0) next.field = field;
           if (atom.bare === true) next.bare = true;
           onChange(next);
         }}
         className={`${SMALL_INPUT} w-20 min-w-0 flex-1`}
       />
+    </>
+  );
+}
+
+/**
+ * The `$INPUTS.` prefix + name box, for an atom that reads a workflow input.
+ *
+ * An input is not a node, so there is no picker and no upstream-dependency
+ * notion here — the name is whatever the workflow's `inputs:` declares.
+ */
+function InputRefFields({
+  atom,
+  onChange,
+}: {
+  atom: InputAtom;
+  onChange: (next: AtomNode) => void;
+}): ReactElement {
+  return (
+    <>
+      <span className="font-mono text-[11px] text-text-tertiary">$INPUTS.</span>
+      <input
+        aria-label="Input name"
+        type="text"
+        value={atom.name}
+        placeholder="name"
+        spellCheck={false}
+        onChange={(e: ChangeEvent<HTMLInputElement>): void => {
+          onChange({ ...atom, name: e.target.value.trim() });
+        }}
+        className={`${SMALL_INPUT} w-20 min-w-0 flex-1`}
+      />
+    </>
+  );
+}
+
+function AtomRow({
+  atom,
+  upstreamIds,
+  onChange,
+  onRemove,
+}: {
+  atom: AtomNode;
+  upstreamIds: readonly string[];
+  onChange: (next: AtomNode) => void;
+  onRemove: () => void;
+}): ReactElement {
+  return (
+    <div className="flex items-center gap-1">
+      {atom.kind === 'input' ? (
+        <InputRefFields atom={atom} onChange={onChange} />
+      ) : (
+        <NodeRefFields atom={atom} upstreamIds={upstreamIds} onChange={onChange} />
+      )}
       <select
         aria-label="Operator"
         value={atom.op}

@@ -1209,6 +1209,17 @@ export function isCommandNode(node: DagNode): node is CommandNode {
   return 'command' in node && typeof node.command === 'string';
 }
 
+/**
+ * Type guard: check if a DAG node is an inline-prompt node.
+ *
+ * Every other member of the union declares `prompt?: never`, so the presence of a
+ * string `prompt` identifies this variant on its own (a loop's prompt lives at
+ * `loop.prompt`, not here).
+ */
+export function isPromptNode(node: DagNode): node is PromptNode {
+  return 'prompt' in node && typeof node.prompt === 'string';
+}
+
 /** Type guard: check if a DAG node is a bash (shell script) node */
 export function isBashNode(node: DagNode): node is BashNode {
   return 'bash' in node && typeof node.bash === 'string';

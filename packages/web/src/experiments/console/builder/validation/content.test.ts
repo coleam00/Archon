@@ -90,6 +90,31 @@ describe('validateContent', () => {
     expect(flagged).toEqual(['a', 'b', 'l', 's']);
   });
 
+  test('a hyphenated node id resolves as an upstream ref', () => {
+    const issues = validateContent(
+      wf([
+        { id: 'check-reproduction', variant: 'prompt', base: {}, data: { prompt: 'reproduce' } },
+        {
+          id: 'use',
+          variant: 'prompt',
+          base: { depends_on: ['check-reproduction'] },
+          data: { prompt: 'read $check-reproduction.output' },
+        },
+      ])
+    );
+    expect(issues.filter(i => i.rule === 'content.var.unknown')).toEqual([]);
+  });
+
+  test('`$id.outputs` is a ref, matching the engine (which has no word boundary)', () => {
+    // The engine's OUTPUT_REF_SOURCE ends at `.output` with no `\b`, so at run
+    // time `$ghost.outputs` substitutes `$ghost.output` and leaves the `s`.
+    // The builder must therefore flag it too, not treat it as ordinary prose.
+    const issues = validateContent(
+      wf([{ id: 'use', variant: 'prompt', base: {}, data: { prompt: 'read $ghost.outputs' } }])
+    );
+    expect(issues.some(i => i.rule === 'content.var.unknown')).toBe(true);
+  });
+
   test('upstream refs in non-prompt bodies pass', () => {
     const issues = validateContent(
       wf([

@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { applyOnText } from './chat-message-reducer';
+import { applyOnText, startsNewTextBatch } from './chat-message-reducer';
 import type { ChatMessage, ToolCallDisplay } from './types';
 
 // Helpers
@@ -128,7 +128,9 @@ describe('applyOnText — new message (Rule 6)', () => {
 describe('applyOnText — workflow-status boundary (Rules 2 & 3)', () => {
   test('starts a new segment when incoming is workflow-status and current has content', () => {
     const prev: ChatMessage[] = [makeAssistant({ content: 'some existing text' })];
-    const result = applyOnText(prev, '🚀 Workflow started', makeId, NOW);
+    const result = applyOnText(prev, '🚀 Workflow started', makeId, NOW, {
+      category: 'workflow_dispatch_status',
+    });
 
     expect(result).toHaveLength(2);
     expect(result[0].isStreaming).toBe(false);
@@ -137,7 +139,9 @@ describe('applyOnText — workflow-status boundary (Rules 2 & 3)', () => {
   });
 
   test('starts a new segment when current is workflow-status and incoming is regular text', () => {
-    const prev: ChatMessage[] = [makeAssistant({ content: '✅ Workflow done' })];
+    const prev: ChatMessage[] = [
+      makeAssistant({ content: '✅ Workflow done', category: 'workflow_status' }),
+    ];
     const result = applyOnText(prev, 'Regular text now', makeId, NOW);
 
     expect(result).toHaveLength(2);
@@ -146,13 +150,143 @@ describe('applyOnText — workflow-status boundary (Rules 2 & 3)', () => {
   });
 
   test('does not start new segment when incoming is workflow-status and current is empty', () => {
-    // Empty content: the status emoji goes into the empty placeholder
+    // Empty content: the status text goes into the empty placeholder
     const prev: ChatMessage[] = [makeAssistant({ content: '' })];
-    const result = applyOnText(prev, '🚀 Starting', makeId, NOW);
+    const result = applyOnText(prev, '🚀 Starting', makeId, NOW, {
+      category: 'workflow_status',
+    });
 
     // isWorkflowStatus && last.content evaluates to false because last.content === ''
     expect(result).toHaveLength(1);
     expect(result[0].content).toBe('🚀 Starting');
+  });
+
+  test('an empty placeholder adopts the category of the first text that lands in it', () => {
+    // ChatInterface pushes `{ content: '', isStreaming: true }` the moment the
+    // user sends, so a dispatch status is the first text to reach it. Without
+    // adopting the category the placeholder would look like prose, and the
+    // following text would merge into a workflow-status bubble.
+    const placeholder: ChatMessage[] = [makeAssistant({ content: '' })];
+    const filled = applyOnText(placeholder, '🚀 Dispatching workflow', makeId, NOW, {
+      category: 'workflow_dispatch_status',
+    });
+
+    expect(filled).toHaveLength(1);
+    expect(filled[0].category).toBe('workflow_dispatch_status');
+
+    const next = applyOnText(filled, 'agent prose', makeId, NOW);
+    expect(next).toHaveLength(2);
+    expect(next[0].isStreaming).toBe(false);
+    expect(next[1].content).toBe('agent prose');
+  });
+
+  test('consecutive workflow-status messages each get their own bubble', () => {
+    const prev: ChatMessage[] = [
+      makeAssistant({ content: '🚀 Starting', category: 'workflow_status' }),
+    ];
+    const result = applyOnText(prev, '🚀 Dispatching', makeId, NOW, {
+      category: 'workflow_dispatch_status',
+    });
+
+    expect(result).toHaveLength(2);
+    expect(result[0].isStreaming).toBe(false);
+    expect(result[1].category).toBe('workflow_dispatch_status');
+  });
+
+  test('stamps the category on the message it creates so the next event can read it', () => {
+    const result = applyOnText([], 'Starting', makeId, NOW, { category: 'workflow_status' });
+
+    expect(result[0].category).toBe('workflow_status');
+    // …and the stamped category drives the trailing boundary on the next event.
+    const next = applyOnText(result, 'agent prose', makeId, NOW);
+    expect(next).toHaveLength(2);
+    expect(next[1].content).toBe('agent prose');
+    expect(next[1].category).toBeUndefined();
+  });
+
+  test('splits on a workflow-status message that does not start with an emoji', () => {
+    // executor.ts prepends PR-review context before the 🚀 line, so a real
+    // `workflow_status` message can begin with prose. The deleted `^`-anchored
+    // emoji regex missed exactly this; the category does not.
+    const prev: ChatMessage[] = [makeAssistant({ content: 'some existing text' })];
+    const result = applyOnText(
+      prev,
+      'Reviewing PR at commit `abc1234`\n\n🚀 Starting',
+      makeId,
+      NOW,
+      {
+        category: 'workflow_status',
+      }
+    );
+
+    expect(result).toHaveLength(2);
+    expect(result[0].isStreaming).toBe(false);
+    expect(result[1].category).toBe('workflow_status');
+  });
+
+  test('does not split on emoji-prefixed text that carries no category', () => {
+    // Uncategorized `✅` notices (e.g. container write-back) are agent-adjacent
+    // prose to the server, which never segments them — the client now agrees.
+    const prev: ChatMessage[] = [makeAssistant({ content: 'some existing text' })];
+    const result = applyOnText(prev, '✅ Applied to the live folder', makeId, NOW);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].content).toBe('some existing text✅ Applied to the live folder');
+  });
+
+  test('a non-status category is not a status boundary', () => {
+    const prev: ChatMessage[] = [makeAssistant({ content: 'some existing text' })];
+    const result = applyOnText(prev, ' more', makeId, NOW, { category: 'isolation_context' });
+
+    expect(result).toHaveLength(1);
+    expect(result[0].content).toBe('some existing text more');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// useSSE batch boundary — extracted so the 50 ms coalescing window is testable
+// ---------------------------------------------------------------------------
+
+describe('startsNewTextBatch', () => {
+  const runA = { workflowName: 'plan', runId: 'run-a' };
+  const runB = { workflowName: 'plan', runId: 'run-b' };
+
+  test('keeps accumulating while the identity is unchanged', () => {
+    expect(startsNewTextBatch({}, {})).toBe(false);
+    expect(
+      startsNewTextBatch({ category: 'workflow_status' }, { category: 'workflow_status' })
+    ).toBe(false);
+    expect(
+      startsNewTextBatch(
+        { category: 'workflow_result', workflowResult: runA },
+        { category: 'workflow_result', workflowResult: runA }
+      )
+    ).toBe(false);
+  });
+
+  test('breaks when a categorized message follows agent prose', () => {
+    expect(startsNewTextBatch({}, { category: 'workflow_dispatch_status' })).toBe(true);
+  });
+
+  test('breaks when agent prose follows a categorized message', () => {
+    expect(startsNewTextBatch({ category: 'workflow_dispatch_status' }, {})).toBe(true);
+  });
+
+  test('breaks between two results for different runs', () => {
+    // SSETransport replays its buffer on reconnect, so two `workflow_result`
+    // events can land inside one 50 ms window. Merging them would drop a card.
+    expect(
+      startsNewTextBatch(
+        { category: 'workflow_result', workflowResult: runA },
+        { category: 'workflow_result', workflowResult: runB }
+      )
+    ).toBe(true);
+  });
+
+  test('breaks when a result follows text that had none', () => {
+    expect(startsNewTextBatch({}, { category: 'workflow_result', workflowResult: runA })).toBe(
+      true
+    );
   });
 });
 
@@ -164,7 +298,7 @@ describe('applyOnText — workflow-result (Rule 1)', () => {
   const wfResult = { workflowName: 'plan', runId: 'run-1' };
 
   test('creates a non-streaming message for a workflow result', () => {
-    const result = applyOnText([], 'Plan complete', makeId, NOW, wfResult);
+    const result = applyOnText([], 'Plan complete', makeId, NOW, { workflowResult: wfResult });
 
     expect(result).toHaveLength(1);
     expect(result[0].workflowResult).toEqual(wfResult);
@@ -174,7 +308,7 @@ describe('applyOnText — workflow-result (Rule 1)', () => {
 
   test('closes the current streaming message before adding workflow result', () => {
     const prev: ChatMessage[] = [makeAssistant({ content: 'partial' })];
-    const result = applyOnText(prev, 'Done', makeId, NOW, wfResult);
+    const result = applyOnText(prev, 'Done', makeId, NOW, { workflowResult: wfResult });
 
     expect(result).toHaveLength(2);
     expect(result[0].isStreaming).toBe(false);
@@ -185,7 +319,7 @@ describe('applyOnText — workflow-result (Rule 1)', () => {
     const prev: ChatMessage[] = [
       makeAssistant({ content: 'Plan complete', isStreaming: false, workflowResult: wfResult }),
     ];
-    const result = applyOnText(prev, 'Plan complete', makeId, NOW, wfResult);
+    const result = applyOnText(prev, 'Plan complete', makeId, NOW, { workflowResult: wfResult });
 
     // Same runId already in state — no new message added
     expect(result).toHaveLength(1);

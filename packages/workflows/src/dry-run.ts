@@ -417,6 +417,9 @@ async function simulateNode(
   }
   if (node.when) {
     try {
+      // No `inputs` argument: a dry run resolves no `$INPUTS.<name>` on ANY surface
+      // (prompt substitution below throws for it too), so a `when:` referencing one
+      // records a failed node rather than silently branching on a value it never had.
       const condition = evaluateCondition(node.when, outputs);
       if (!condition.parsed) {
         recordSkipped(node, outputs, ctx, 'when_condition_parse_error', iteration);

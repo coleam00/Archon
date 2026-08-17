@@ -404,12 +404,67 @@ when: "$score.output > '80' && $flag.output == 'true'"
 when: "$a.output == 'X' && $b.output == 'Y' || $c.output == 'Z'"
 ```
 
+**Declared inputs** (see [Workflow Signature](#workflow-signature-inputs-returns-and-inputs)):
+```yaml
+when: "$INPUTS.mode == 'fast'"              # branch on a caller's `with:` value
+when: "$INPUTS.mode == 'fast' && $check.output.ok == 'true'"
+```
+
 - `$nodeId.output` references the full output string of a completed node
 - `$nodeId.output.field` accesses a JSON field (for `output_format` nodes)
+- `$INPUTS.<name>` references a declared input supplied by a caller's `with:` (or a direct
+  run's `--input`). A name this run does not carry **fails the node** — it never quietly
+  becomes an empty string. `INPUTS` is a reserved scope: a node cannot be given that id
+  (the loader rejects it), so `$INPUTS.x` always means an input.
 - Invalid or unparseable expressions default to `false` (fail-closed — node is skipped with a warning)
 - Numeric operators fail-closed if either side is not a finite number
 - Parentheses are not supported — use standard AND/OR precedence to structure conditions
 - Skipped nodes propagate their skipped state to dependants
+
+:::danger[You cannot compare a whole AI output to a literal]
+A `when:` that compares the **entire output** of a `prompt:` or `command:` node with no
+`output_format` — or of any `loop:`/`loop_group:` node — against a literal is
+**rejected at load time**:
+
+```yaml
+# REJECTED — $analyze is an AI node with no output_format
+- id: analyze
+  prompt: "Is this a bug or a feature?"
+- id: decide
+  depends_on: [analyze]
+  when: "$analyze.output == 'BUG'"
+```
+
+The model writes `This is a BUG.` and the byte-for-byte comparison is false, so the node
+is skipped with no error and the run finishes looking successful having quietly done less
+than you asked. Declare the shape you are branching on instead:
+
+```yaml
+- id: analyze
+  prompt: "Is this a bug or a feature?"
+  output_format:
+    type: object
+    properties:
+      status: { type: string, enum: [BUG, FEATURE] }
+    required: [status]
+- id: decide
+  depends_on: [analyze]
+  when: "$analyze.output.status == 'BUG'"
+```
+
+Unaffected: `bash:` and `script:` producers keep whole-output comparison
+(`when: "$check.output == 'true'"`) because their stdout is author-controlled and exact by
+construction, and so do `approval:` captures (a human typed them) and `workflow:` sub-run
+results (the callee owns that contract). A field access (`$analyze.output.status`) is
+always allowed.
+
+**`loop:` and `loop_group:` have no opt-out — for two different reasons.** On a `loop:`,
+`output_format` is *dropped when the workflow is parsed*, so declaring one is a no-op. On a
+`loop_group:` it survives, but the group's output is the *last iteration's raw text* and a
+schema never replaces it with the JSON document the way it does on a `prompt:` node. Either
+way, compute the decision in a `bash:`/`script:` node — or an `until_bash` check — and gate
+on that node's output instead.
+:::
 
 ### `$node_id.output` Substitution
 
@@ -1134,6 +1189,46 @@ nodes:
     bash: |
       echo "planning: $INPUTS_PLAN"     # NOT $INPUTS.plan — bash reads the env var
 ```
+
+### `$INPUTS` in `when:` conditions
+
+A node in a `workflow:` sub-run child — or in a workflow started directly with `--input` —
+can **branch** on a declared input, not just read one:
+
+```yaml
+inputs:
+  mode: { default: thorough }
+nodes:
+  - id: quick-pass
+    prompt: "Do the quick pass"
+    when: "$INPUTS.mode == 'fast'"
+  - id: full-pass
+    prompt: "Do the full pass"
+    when: "$INPUTS.mode != 'fast'"
+```
+
+The condition resolves the name against the run's inputs at evaluation time; the value is
+never spliced into the expression, so an input containing a quote or an operator is
+compared as data and can never be re-read as syntax. An `$INPUTS.<name>` the run does not
+carry **fails the node**, with the same message the prompt surface gives
+(`Unknown input '$INPUTS.mdoe'. Did you mean $INPUTS.mode?`) — it never resolves to an
+empty string, because a condition that quietly compares nothing is the silent-branch
+failure the [`when:` section](#when-condition-syntax) warns about.
+
+:::caution[Inside an `include:` block, put `$INPUTS` on the RIGHT of the comparison]
+An include is a **verbatim text** splice at load time, and a `when:` is one of the
+surfaces it rewrites. That makes the right-hand form work and the left-hand form break:
+
+```yaml
+when: "$probe.output == '$INPUTS.mode'"   # ✅ becomes  $probe.output == 'fast'
+when: "$INPUTS.mode == 'fast'"            # ❌ becomes  fast == 'fast'  → unparseable
+```
+
+The second is not a condition any more, so the node is skipped with an unparseable-`when:`
+warning at run time. The left-hand form is a `workflow:`/direct-run feature: those callers
+resolve `$INPUTS` at evaluation time, while an included block is inlined into the caller's
+own run and has no input scope left to resolve against.
+:::
 
 ### Running a workflow that declares inputs
 

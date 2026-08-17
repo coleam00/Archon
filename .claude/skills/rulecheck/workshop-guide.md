@@ -47,7 +47,7 @@ User invokes /rulecheck [focus area]
 ┌──────────────────────────┐
 │  Worktree                │
 │  1. Read memory          │
-│  2. Read CLAUDE.md rules │
+│  2. Read AGENTS.md rules │
 │  3. Deep scan source     │
 │  4. Group violations     │
 │  5. Fix one group        │

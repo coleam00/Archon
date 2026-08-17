@@ -4068,6 +4068,107 @@ nodes:
     expect(prompts.some(p => p.includes('$INPUTS.style'))).toBe(false);
   });
 
+  it("BRANCHES on the child's $INPUTS.<name> in a when: condition (#2453 defect 1)", async () => {
+    // Reading an input in a prompt already worked; branching on one did not — the
+    // ref parsed as a node called `INPUTS` and failed the node.
+    await writeWorkflow(
+      'child-when-inputs',
+      `
+name: child-when-inputs
+description: branches on a declared input
+inputs:
+  mode:
+    default: slow
+nodes:
+  - id: fast-path
+    prompt: "ran the FAST path"
+    when: "$INPUTS.mode == 'fast'"
+  - id: slow-path
+    prompt: "ran the SLOW path"
+    when: "$INPUTS.mode != 'fast'"
+`
+    );
+    await writeWorkflow(
+      'parent-when-inputs',
+      `
+name: parent-when-inputs
+description: supplies the branch selector
+nodes:
+  - id: sub
+    workflow: child-when-inputs
+    with:
+      mode: fast
+`
+    );
+
+    const store = new InMemoryStore();
+    const { deps, prompts } = makeRecordingDeps(store);
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      await discover('parent-when-inputs'),
+      'goal',
+      'conv-db'
+    );
+
+    expect(result.success).toBe(true);
+    expect(prompts.some(p => p.includes('ran the FAST path'))).toBe(true);
+    expect(prompts.some(p => p.includes('ran the SLOW path'))).toBe(false);
+  });
+
+  it('FAILS the node when a when: references an input the run does not carry', async () => {
+    await writeWorkflow(
+      'child-when-unknown-input',
+      `
+name: child-when-unknown-input
+description: branches on a misspelled input
+inputs:
+  mode:
+    default: slow
+nodes:
+  - id: gated
+    prompt: "should never run"
+    when: "$INPUTS.mdoe == 'fast'"
+`
+    );
+    await writeWorkflow(
+      'parent-when-unknown-input',
+      `
+name: parent-when-unknown-input
+description: supplies the declared input
+nodes:
+  - id: sub
+    workflow: child-when-unknown-input
+    with:
+      mode: fast
+`
+    );
+
+    const store = new InMemoryStore();
+    const { deps, prompts } = makeRecordingDeps(store);
+    const platform = makePlatform();
+    const result = await executeWorkflow(
+      deps,
+      platform,
+      'conv-plat',
+      cwd,
+      await discover('parent-when-unknown-input'),
+      'goal',
+      'conv-db'
+    );
+
+    // Loud, not a silent skip: the typo fails the node rather than resolving to ''.
+    expect(result.success).toBe(false);
+    expect(prompts.some(p => p.includes('should never run'))).toBe(false);
+    const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls
+      .map(call => String(call[1]))
+      .join('\n');
+    expect(sent).toContain("Unknown input '$INPUTS.mdoe'");
+    expect(sent).toContain('Did you mean $INPUTS.mode?');
+  });
+
   it('reconstitutes $INPUTS from the child run row on a COLD resume (no parent in the loop)', async () => {
     // The child is resumed directly from its own persisted row — the parent never
     // re-resolves `with:` (its refs may be long out of scope), so a post-gate node

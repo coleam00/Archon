@@ -125,3 +125,42 @@ describe('WebAdapter.sendStructuredEvent — tool_result output bounding', () =>
     expect(appendToolResultCalls[0]![2]).toBe(largeOutput);
   });
 });
+
+describe('WebAdapter.sendMessage — text event category', () => {
+  test('carries the metadata category on the text event', async () => {
+    const { adapter, emitted } = makeAdapter();
+
+    await adapter.sendMessage('conv-1', '🚀 Dispatching workflow: **plan**', {
+      category: 'workflow_dispatch_status',
+      segment: 'new',
+    });
+
+    expect(emitted.length).toBe(1);
+    const parsed = JSON.parse(emitted[0]!) as { type: string; category?: string };
+    expect(parsed.type).toBe('text');
+    expect(parsed.category).toBe('workflow_dispatch_status');
+  });
+
+  test('omits the category key entirely for agent prose', async () => {
+    const { adapter, emitted } = makeAdapter();
+
+    await adapter.sendMessage('conv-1', 'ordinary assistant text');
+
+    expect(emitted.length).toBe(1);
+    const parsed = JSON.parse(emitted[0]!) as Record<string, unknown>;
+    expect('category' in parsed).toBe(false);
+  });
+
+  test('still suppresses structurally-handled categories rather than emitting them', async () => {
+    const { adapter, emitted } = makeAdapter();
+
+    await adapter.sendMessage('conv-1', 'formatted tool call', {
+      category: 'tool_call_formatted',
+    });
+    await adapter.sendMessage('conv-1', '📍 repo @ `branch`', {
+      category: 'isolation_context',
+    });
+
+    expect(emitted.length).toBe(0);
+  });
+});

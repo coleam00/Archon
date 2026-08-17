@@ -1,8 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { ChevronDown, ChevronRight, Search } from 'lucide-react';
 import type { CommandEntry } from '@/lib/api';
-import { categorizeCommands } from '@/lib/command-categories';
-import { cn } from '@/lib/utils';
+import { groupCommandsBySource } from '@/lib/command-groups';
 import { useClickOutside } from '@/hooks/useClickOutside';
 
 interface CommandPickerProps {
@@ -19,7 +18,7 @@ export function CommandPicker({
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(new Set());
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -31,15 +30,15 @@ export function CommandPicker({
     ? commands.filter(cmd => cmd.name.toLowerCase().includes(searchQuery.toLowerCase()))
     : commands;
 
-  const categories = categorizeCommands(filteredCommands);
+  const groups = groupCommandsBySource(filteredCommands);
 
-  function toggleCategory(categoryName: string): void {
-    setCollapsedCategories(prev => {
+  function toggleGroup(groupName: string): void {
+    setCollapsedGroups(prev => {
       const next = new Set(prev);
-      if (next.has(categoryName)) {
-        next.delete(categoryName);
+      if (next.has(groupName)) {
+        next.delete(groupName);
       } else {
-        next.add(categoryName);
+        next.add(groupName);
       }
       return next;
     });
@@ -72,22 +71,22 @@ export function CommandPicker({
         </div>
       </div>
 
-      {/* Categories */}
+      {/* Groups */}
       <div className="flex-1 overflow-y-auto py-1">
-        {categories.length === 0 && (
+        {groups.length === 0 && (
           <div className="px-3 py-4 text-center text-xs text-text-tertiary">No commands found</div>
         )}
 
-        {categories.map(category => {
-          const isCollapsed = collapsedCategories.has(category.name);
+        {groups.map(group => {
+          const isCollapsed = collapsedGroups.has(group.source);
 
           return (
-            <div key={category.name}>
-              {/* Category header */}
+            <div key={group.source}>
+              {/* Group header */}
               <button
                 type="button"
                 onClick={(): void => {
-                  toggleCategory(category.name);
+                  toggleGroup(group.source);
                 }}
                 className="w-full flex items-center gap-1.5 px-3 py-1.5 hover:bg-surface-hover transition-colors cursor-pointer"
               >
@@ -97,14 +96,14 @@ export function CommandPicker({
                   <ChevronDown className="size-3 text-text-tertiary shrink-0" />
                 )}
                 <span className="text-[10px] font-semibold text-text-secondary uppercase tracking-wide">
-                  {category.name}
+                  {group.label}
                 </span>
-                <span className="text-[10px] text-text-tertiary">({category.commands.length})</span>
+                <span className="text-[10px] text-text-tertiary">({group.commands.length})</span>
               </button>
 
               {/* Command list */}
               {!isCollapsed &&
-                category.commands.map(cmd => (
+                group.commands.map(cmd => (
                   <button
                     key={cmd.name}
                     type="button"
@@ -113,18 +112,9 @@ export function CommandPicker({
                     }}
                     className="w-full flex items-center gap-2 px-3 pl-7 py-1.5 hover:bg-surface-hover transition-colors cursor-pointer"
                   >
+                    {/* No source badge: the group header above IS the source. */}
                     <span className="text-xs text-text-primary truncate flex-1 text-left">
                       {cmd.name}
-                    </span>
-                    <span
-                      className={cn(
-                        'text-[9px] font-medium px-1.5 py-0.5 rounded shrink-0',
-                        cmd.source === 'project' && 'bg-node-command/20 text-node-command',
-                        cmd.source === 'global' && 'bg-node-loop/20 text-node-loop',
-                        cmd.source === 'bundled' && 'bg-surface-inset text-text-tertiary'
-                      )}
-                    >
-                      {cmd.source}
                     </span>
                   </button>
                 ))}

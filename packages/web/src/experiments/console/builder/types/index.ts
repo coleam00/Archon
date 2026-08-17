@@ -19,4 +19,4 @@ export type {
   BuilderWorkflow,
 } from './variant';
 export type { Severity, IssueSource, IssuePath, Issue, IssueId } from './issue';
-export type { WhenOp, AtomNode, WhenAst, ParseResult } from './when';
+export type { WhenOp, AtomNode, NodeAtom, InputAtom, WhenAst, ParseResult } from './when';
