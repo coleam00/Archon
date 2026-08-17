@@ -69,10 +69,12 @@ describe('resolvePiThinkingLevel', () => {
     //   4. a positive `toContain` on the true clause — establishes that the true
     //      clause is PRESENT, never that a false one wasn't appended next to it.
     //
-    // (4) is the one that matters, because the original defect WAS an append:
-    // `git show 9b021e3c` has `… in YAML (max → xhigh on Pi; the rest are
+    // (4) is the one that matters, because the original defect WAS an append.
+    // The message once read `… in YAML (max → xhigh on Pi; the rest are
     // Pi-native).` — a parenthetical tacked onto the vocabulary list, not a
-    // replacement. All six of `Pi accepts every rung natively, though max is
+    // replacement. (Quoted rather than cited by SHA: this repo squash-merges,
+    // so a branch commit hash here would be dead on arrival — and a pointer
+    // that rots is the very thing this block is about.) All six of `Pi accepts every rung natively, though max is
     // reduced to xhigh` and its variants pass a `toContain`.
     //
     // Equality has no such gap. It also subsumes what (2) and the diagnosis
