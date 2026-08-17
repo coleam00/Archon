@@ -24,6 +24,7 @@ import {
   buildPromptWithContext,
   detectCreditExhaustion,
   detectCompletionSignal,
+  describeUnmetCompletion,
   stripCompletionTags,
   isInlineScript,
   formatSubprocessFailure,
@@ -1007,5 +1008,36 @@ describe('safeSendMessage', () => {
       );
       expect(result).toBe(false);
     }
+  });
+});
+
+describe('describeUnmetCompletion', () => {
+  // The max-iterations failure message for both loop variants. `loop.until` is
+  // optional (#2563), so this exists to stop the two executors describing the same
+  // loop differently — and to stop either printing `undefined` at the author.
+  it('names the signal when only until is declared', () => {
+    expect(describeUnmetCompletion({ until: 'COMPLETE' })).toBe(
+      "without completion signal 'COMPLETE'"
+    );
+  });
+
+  it('names the check when only until_bash is declared', () => {
+    expect(describeUnmetCompletion({ until_bash: 'bun run test' })).toBe(
+      "without a passing 'until_bash' check"
+    );
+  });
+
+  it('names both when both are declared', () => {
+    expect(describeUnmetCompletion({ until: 'DONE', until_bash: 'test -f x' })).toBe(
+      "without completion signal 'DONE' or a passing 'until_bash' check"
+    );
+  });
+
+  it('never emits the literal "undefined" for a channel-less control', () => {
+    // Unreachable through the schema (it requires at least one channel), but this is
+    // an error message: degrade to something readable rather than assert.
+    const described = describeUnmetCompletion({});
+    expect(described).toBe('without a completion channel');
+    expect(described).not.toContain('undefined');
   });
 });

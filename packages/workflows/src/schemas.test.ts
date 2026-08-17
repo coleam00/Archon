@@ -991,6 +991,24 @@ describe('dagNodeSchema — loop completion channel (#2563)', () => {
     });
     expect(result.success).toBe(false);
   });
+
+  test('whitespace is not a channel, in either field', () => {
+    // Both are degenerate at runtime, not merely untidy: regexes built from a
+    // whitespace `until` match almost any output, and `bash -c "   "` exits 0, so a
+    // whitespace `until_bash` completes on iteration 1. Trimming here also keeps the
+    // rule in step with the console builder's hand-written mirror, which trims.
+    for (const loop of [
+      { prompt: 'iterate', until: '   ', max_iterations: 5 },
+      { prompt: 'iterate', until_bash: '  \t ', max_iterations: 5 },
+      { prompt: 'iterate', until: ' ', until_bash: '\n', max_iterations: 5 },
+    ]) {
+      const result = dagNodeSchema.safeParse({ id: 'ws', loop });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.some(i => i.message.includes('completion channel'))).toBe(true);
+      }
+    }
+  });
 });
 
 describe('LOOP_GROUP_NODE_AI_FIELDS', () => {

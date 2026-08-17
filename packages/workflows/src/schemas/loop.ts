@@ -53,7 +53,17 @@ export const loopControlSchema = z
     // At least one completion channel. Neither field is required on its own, but a
     // loop with neither can only ever end by exhausting max_iterations, which the
     // engine reports as a failure — so it is always an authoring mistake.
-    if (!data.until && !data.until_bash) {
+    //
+    // Trim before deciding. Whitespace is not a channel in either direction: a
+    // whitespace-only `until` would have regexes built from it in
+    // detectCompletionSignal and match almost any output, and `bash -c "   "`
+    // exits 0, so a whitespace-only `until_bash` completes on iteration 1. It also
+    // keeps this rule in step with the console builder's hand-written mirror
+    // (builder/validation/structural.ts), which trims — @archon/web cannot import
+    // @archon/workflows, so the two encodings agree by convention, not by type.
+    const hasUntil = (data.until ?? '').trim().length > 0;
+    const hasUntilBash = (data.until_bash ?? '').trim().length > 0;
+    if (!hasUntil && !hasUntilBash) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message:
