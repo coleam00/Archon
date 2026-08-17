@@ -134,6 +134,53 @@ describe('apply script — C1 whiteout-name traversal', () => {
   });
 });
 
+// The rel/base/dir split uses shell parameter expansion rather than forking
+// sed/basename/dirname per entry (#2558). Those are NOT drop-in equivalents, and
+// the divergences all live in the path-splitting the traversal guards consume:
+// `${rel%/*}` returns rel unchanged when there is no slash where `dirname` returns
+// '.', and `${base#.wh.}` strips one prefix occurrence where `cut -c5-` strips
+// four characters. Every pre-existing apply test that SUCCEEDS operates at the top
+// level, so a wrong `dir` at depth would not have failed any of them. These do.
+// Deliberately no skipIf — Windows is where the fork cost was, so this is exactly
+// where the replacement has to be proven.
+describe('apply script — rel/base/dir splitting', () => {
+  test('a legit whiteout inside a subdirectory deletes exactly that nested file', () => {
+    const { root, upper, dest, ws } = makeDirs();
+    mkdirSync(join(upper, 'sub'), { recursive: true });
+    writeFileSync(join(upper, 'sub', '.wh.gone.txt'), '');
+    mkdirSync(join(dest, 'sub'), { recursive: true });
+    writeFileSync(join(dest, 'sub', 'gone.txt'), 'bye');
+    writeFileSync(join(dest, 'sub', 'stay.txt'), 'keep');
+    writeFileSync(join(dest, 'gone.txt'), 'different file, same basename');
+
+    const { records } = runScript(buildApplyScript(), upper, dest, ws);
+
+    expect(existsSync(join(dest, 'sub', 'gone.txt'))).toBe(false);
+    expect(existsSync(join(dest, 'sub', 'stay.txt'))).toBe(true);
+    // The decisive assertion: a `dir` that came back empty would resolve the
+    // target to top-level 'gone.txt' and delete the wrong file entirely.
+    expect(existsSync(join(dest, 'gone.txt'))).toBe(true);
+    expect(records.some(r => r.tag === 'D' && r.fields[0] === 'sub/gone.txt')).toBe(true);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test('`.wh..wh.x` decodes to `.wh.x` — one prefix stripped, not four characters', () => {
+    // cut -c5- and ${base#.wh.} agree here, and this pins that they keep agreeing:
+    // stripping greedily (##) would decode to 'x' and delete the wrong entry.
+    const { root, upper, dest, ws } = makeDirs();
+    writeFileSync(join(upper, '.wh..wh.x'), '');
+    writeFileSync(join(dest, '.wh.x'), 'the real target');
+    writeFileSync(join(dest, 'x'), 'must survive');
+
+    const { records } = runScript(buildApplyScript(), upper, dest, ws);
+
+    expect(existsSync(join(dest, '.wh.x'))).toBe(false);
+    expect(existsSync(join(dest, 'x'))).toBe(true);
+    expect(records.some(r => r.tag === 'D' && r.fields[0] === '.wh.x')).toBe(true);
+    rmSync(root, { recursive: true, force: true });
+  });
+});
+
 describe('apply script — C2 special files + setuid', () => {
   test('setuid/setgid/sticky bits are stripped from applied files', () => {
     const { root, upper, dest, ws } = makeDirs();

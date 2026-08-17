@@ -259,8 +259,10 @@ valid_name() {
 # or 1 (refuse). Portable (test -L), no realpath.
 safe_parent() {
   _rel="$1"; _cur="$2"; _oldifs="$IFS"; IFS='/'
-  _parent="$(dirname "$_rel")"
-  [ "$_parent" = "." ] && _parent=""
+  case "$_rel" in
+    */*) _parent="\${_rel%/*}" ;;
+    *) _parent="" ;;
+  esac
   for _seg in $_parent; do
     [ -z "$_seg" ] && continue
     case "$_seg" in .|..) IFS="$_oldifs"; return 1 ;; esac
@@ -302,16 +304,23 @@ export function buildSummaryScript(): string {
 [ -d "$UP" ] || exit 0
 cd "$UP"
 find . -mindepth 1 -print0 2>/dev/null | while IFS= read -r -d '' p; do
-  rel="$(printf '%s' "$p" | sed 's#^[.]/##')"
-  base="$(basename "$rel")"
-  dir="$(dirname "$rel")"
-  [ "$dir" = "." ] && dir=""
+  # Builtins, not sed/basename/dirname. These three ran once per entry, and on
+  # Windows resolveBashPath() gives Git-Bash, whose MSYS fork emulation makes a
+  # process creation dear enough that they dominated the runtime (#2558). Note
+  # \${rel%/*} is NOT dirname: with no slash it returns rel unchanged, where
+  # dirname returns '.', so the no-slash case is branched explicitly.
+  rel="\${p#./}"
+  base="\${rel##*/}"
+  case "$rel" in
+    */*) dir="\${rel%/*}" ;;
+    *) dir="" ;;
+  esac
 
   # --- whiteout markers → deletion ---
   is_wh=0; whname=""
   case "$base" in
     .wh..wh..opq) printf 'S\\t%s\\topaque-dir-marker\\0' "$rel"; continue ;;
-    .wh.*) is_wh=1; whname="$(printf '%s' "$base" | cut -c5-)" ;;
+    .wh.*) is_wh=1; whname="\${base#.wh.}" ;;
   esac
   if [ "$is_wh" = "0" ] && [ -c "$UP/$rel" ]; then
     if is_whiteout_char "$UP/$rel"; then is_wh=1; whname="$base"; else printf 'S\\t%s\\tspecial-char-device\\0' "$rel"; continue; fi
@@ -347,16 +356,23 @@ DEST="$OTHER"
 [ -d "$UP" ] || exit 0
 cd "$UP"
 find . -mindepth 1 -print0 2>/dev/null | while IFS= read -r -d '' p; do
-  rel="$(printf '%s' "$p" | sed 's#^[.]/##')"
-  base="$(basename "$rel")"
-  dir="$(dirname "$rel")"
-  [ "$dir" = "." ] && dir=""
+  # Builtins, not sed/basename/dirname. These three ran once per entry, and on
+  # Windows resolveBashPath() gives Git-Bash, whose MSYS fork emulation makes a
+  # process creation dear enough that they dominated the runtime (#2558). Note
+  # \${rel%/*} is NOT dirname: with no slash it returns rel unchanged, where
+  # dirname returns '.', so the no-slash case is branched explicitly.
+  rel="\${p#./}"
+  base="\${rel##*/}"
+  case "$rel" in
+    */*) dir="\${rel%/*}" ;;
+    *) dir="" ;;
+  esac
 
   # --- whiteout markers → deletion ---
   is_wh=0; whname=""
   case "$base" in
     .wh..wh..opq) printf 'S\\t%s\\topaque-dir-marker\\0' "$rel"; continue ;;
-    .wh.*) is_wh=1; whname="$(printf '%s' "$base" | cut -c5-)" ;;
+    .wh.*) is_wh=1; whname="\${base#.wh.}" ;;
   esac
   if [ "$is_wh" = "0" ] && [ -c "$UP/$rel" ]; then
     if is_whiteout_char "$UP/$rel"; then is_wh=1; whname="$base"; else printf 'S\\t%s\\tspecial-char-device\\0' "$rel"; continue; fi
