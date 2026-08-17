@@ -6,7 +6,7 @@ describe('when-grammar parse', () => {
     const r = parse("$classify.output == 'BUG'");
     expect(r.ok).toBe(true);
     if (r.ok) {
-      expect(r.ast.or).toEqual([[{ nodeId: 'classify', op: '==', value: 'BUG' }]]);
+      expect(r.ast.or).toEqual([[{ kind: 'node', nodeId: 'classify', op: '==', value: 'BUG' }]]);
     }
   });
 
@@ -15,6 +15,7 @@ describe('when-grammar parse', () => {
     expect(r.ok).toBe(true);
     if (r.ok) {
       expect(r.ast.or[0][0]).toEqual({
+        kind: 'node',
         nodeId: 'classify',
         field: 'type',
         op: '!=',
@@ -33,6 +34,7 @@ describe('when-grammar parse', () => {
     expect(r.ok).toBe(true);
     if (r.ok) {
       expect(r.ast.or[0][0]).toEqual({
+        kind: 'node',
         nodeId: 'classify-testability',
         field: 'testable',
         op: '==',
@@ -75,6 +77,7 @@ describe('when-grammar parse', () => {
       expect(r.ast.or).toEqual([
         [
           {
+            kind: 'node',
             nodeId: 'build',
             field: 'exit_code',
             op: '==',
@@ -92,6 +95,7 @@ describe('when-grammar parse', () => {
     expect(bool.ok).toBe(true);
     if (bool.ok) {
       expect(bool.ast.or[0][0]).toEqual({
+        kind: 'node',
         nodeId: 'check',
         field: 'passed',
         op: '==',
@@ -104,6 +108,7 @@ describe('when-grammar parse', () => {
     expect(num.ok).toBe(true);
     if (num.ok) {
       expect(num.ast.or[0][0]).toEqual({
+        kind: 'node',
         nodeId: 'score',
         field: 'value',
         op: '>=',
@@ -129,6 +134,68 @@ describe('when-grammar parse', () => {
   });
 });
 
+// `$INPUTS.<name>` is the engine's input scope (#2470), and the builder rejected
+// every one of these conditions until #2588 — a workflow using a declared input in
+// a `when:` validated clean at load and red in the builder.
+describe('when-grammar parse — $INPUTS (engine parity)', () => {
+  test('parses an input atom', () => {
+    const r = parse("$INPUTS.mode == 'fast'");
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.ast.or).toEqual([[{ kind: 'input', name: 'mode', op: '==', value: 'fast' }]]);
+    }
+  });
+
+  test('an input name may be hyphenated', () => {
+    // Input names use the engine's `with:` key grammar, which admits hyphens.
+    const r = parse("$INPUTS.my-input == 'x'");
+    expect(r.ok).toBe(true);
+    if (r.ok)
+      expect(r.ast.or[0][0]).toEqual({ kind: 'input', name: 'my-input', op: '==', value: 'x' });
+  });
+
+  test('binds to the input scope even when the name is `output`', () => {
+    // The input branch is tried first, so this is the input named `output`,
+    // not a node called INPUTS.
+    const r = parse("$INPUTS.output == 'x'");
+    expect(r.ok).toBe(true);
+    if (r.ok)
+      expect(r.ast.or[0][0]).toEqual({ kind: 'input', name: 'output', op: '==', value: 'x' });
+  });
+
+  test('takes a bare RHS like any other atom', () => {
+    const r = parse('$INPUTS.retries >= 3');
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.ast.or[0][0]).toEqual({
+        kind: 'input',
+        name: 'retries',
+        op: '>=',
+        value: '3',
+        bare: true,
+      });
+    }
+  });
+
+  test('rejects a sub-field on an input ref', () => {
+    // The regex backtracks into the node branch with nodeId `INPUTS`; the engine's
+    // parseWhenAtom returns null there and so must the builder.
+    const r = parse("$INPUTS.a.b == 'x'");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain('cannot carry a sub-field');
+  });
+
+  test('rejects a bare $INPUTS with no name', () => {
+    expect(parse("$INPUTS == 'x'").ok).toBe(false);
+  });
+
+  test('composes with node atoms in one expression', () => {
+    const r = parse("$INPUTS.mode == 'fast' && $classify.output.type == 'BUG'");
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.ast.or[0].length).toBe(2);
+  });
+});
+
 describe('when-grammar format', () => {
   test('round-trips parse → format', () => {
     const inputs = [
@@ -141,6 +208,10 @@ describe('when-grammar format', () => {
       "$score.output.value >= -0.5 && $gate.approved == 'yes'",
       // A quoted numeral stays quoted (it is not rewritten to bare).
       "$n.output == '-1'",
+      // Input refs round-trip in both RHS spellings, alone and mixed with nodes.
+      "$INPUTS.mode == 'fast'",
+      '$INPUTS.retries >= 3',
+      "$INPUTS.mode == 'fast' && $classify.output.type == 'BUG'",
     ];
     for (const input of inputs) {
       const r = parse(input);
@@ -150,9 +221,9 @@ describe('when-grammar format', () => {
   });
 
   test('quotes a non-numeric value even if a hand-built atom claims bare', () => {
-    expect(format({ or: [[{ nodeId: 'a', op: '==', value: 'hello', bare: true }]] })).toBe(
-      "$a.output == 'hello'"
-    );
+    expect(
+      format({ or: [[{ kind: 'node', nodeId: 'a', op: '==', value: 'hello', bare: true }]] })
+    ).toBe("$a.output == 'hello'");
   });
 
   test('an empty AST formats to undefined (no when condition)', () => {
@@ -161,7 +232,9 @@ describe('when-grammar format', () => {
   });
 
   test('empty AND-groups are dropped before formatting', () => {
-    expect(format({ or: [[{ nodeId: 'a', op: '==', value: 'X' }], []] })).toBe("$a.output == 'X'");
+    expect(format({ or: [[{ kind: 'node', nodeId: 'a', op: '==', value: 'X' }], []] })).toBe(
+      "$a.output == 'X'"
+    );
   });
 });
 
@@ -169,11 +242,15 @@ describe('when-grammar toDnf', () => {
   test('drops empty AND-groups and preserves structure', () => {
     // The parser never yields an empty group, so feed toDnf an AST that has one.
     const dnf = toDnf({
-      or: [[{ nodeId: 'a', op: '==', value: 'X' }], [], [{ nodeId: 'b', op: '==', value: 'Y' }]],
+      or: [
+        [{ kind: 'node', nodeId: 'a', op: '==', value: 'X' }],
+        [],
+        [{ kind: 'node', nodeId: 'b', op: '==', value: 'Y' }],
+      ],
     });
     expect(dnf.or).toEqual([
-      [{ nodeId: 'a', op: '==', value: 'X' }],
-      [{ nodeId: 'b', op: '==', value: 'Y' }],
+      [{ kind: 'node', nodeId: 'a', op: '==', value: 'X' }],
+      [{ kind: 'node', nodeId: 'b', op: '==', value: 'Y' }],
     ]);
   });
 });

@@ -65,8 +65,15 @@ const PATH_SEGMENT_SOURCE = String.raw`[a-zA-Z_][a-zA-Z0-9_]*`;
  * The input branch is first so `$INPUTS.mode` binds to the input scope. `$INPUTS.a.b`
  * fails that branch (an input name cannot carry a sub-field) and backtracks into the
  * node branch, where {@link parseWhenAtom} rejects the reserved id explicitly.
+ *
+ * Exported for `scripts/node-ref-parity.test.ts`, which compares `.source` against the
+ * web builder's hand-maintained copy of this grammar. Comparing the COMPILED pattern is
+ * what makes that check immune to how either side spells its composition — the previous
+ * text-scraping version broke the moment this constant became a `new RegExp(...)`
+ * concatenation. No engine code outside this module reads it — `parseWhenAtom` is the
+ * API, and callers that reach for the pattern instead are re-implementing it.
  */
-const atomPattern = new RegExp(
+export const WHEN_ATOM_PATTERN = new RegExp(
   '^(?:' +
     String.raw`\$${WHEN_INPUTS_SCOPE}\.(${INPUT_NAME_SOURCE})` +
     '|' +
@@ -135,7 +142,7 @@ export function whenAtoms(expr: string): string[] {
  * node; the loader leaves the atom to that runtime behaviour).
  */
 export function parseWhenAtom(expr: string): WhenAtom | null {
-  const match = atomPattern.exec(expr.trim());
+  const match = WHEN_ATOM_PATTERN.exec(expr.trim());
   if (!match) return null;
 
   const [, inputName, nodeId, segment1, segment2, operator, quotedValue, unquotedValue] = match;

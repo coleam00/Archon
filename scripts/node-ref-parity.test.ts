@@ -11,33 +11,49 @@
  *
  * They live in `scripts/` rather than beside the web modules because this is a
  * cross-package repository invariant, not a unit of `@archon/web` behavior — the
- * same reason the bundled-defaults and capability-matrix checks live here. Every
- * file is read as TEXT, so no package boundary is crossed. `bun run test` ends
+ * same reason the bundled-defaults and capability-matrix checks live here. This
+ * file importing both packages does not breach the rule above: the rule is about
+ * what ships in the web bundle, and nothing here is bundled. `bun run test` ends
  * with `bun test ./scripts/`, so CI enforces it.
  *
- * The drift this catches actually happened: the builder's legacy copy used
- * `\w`, which excludes the hyphen, so it silently validated none of the
- * hyphenated node ids the bundled workflows use (#2567).
+ * The drift this catches actually happened, twice:
+ *   - #2567 — the builder's legacy copy used `\w`, which excludes the hyphen, so
+ *     it silently validated none of the hyphenated node ids the bundled
+ *     workflows use.
+ *   - #2588 — #2579 added a `$INPUTS.<name>` branch to the engine atom, and the
+ *     builder's copy did not follow, so `when: "$INPUTS.mode == 'fast'"` was an
+ *     error in the builder and a clean load in the engine.
+ *
+ * TWO MECHANISMS, deliberately, because the two grammars are spelled differently:
+ *
+ *   - The `$<nodeId>.output` reference is a plain `String.raw` literal on both
+ *     sides, so it is compared as TEXT (see the decoy analysis on `DECL` below).
+ *   - The `when:` atom is COMPOSED from several constants on both sides, so it is
+ *     compared by EXECUTING both modules. Reading a composition as text is what
+ *     broke here: #2570 scraped `const atomPattern = /…/;` out of
+ *     `condition-evaluator.ts`, #2579 moved it to `when-atom.ts` and rebuilt it as
+ *     a `new RegExp(...)` concatenation, and the scraper could only report that it
+ *     had lost its target. Comparing compiled `.source` cannot be broken that way,
+ *     and — unlike any regex over source text — it cannot be fooled by a
+ *     commented-out copy either, because a comment does not execute.
  */
 import { describe, test, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import {
+  WHEN_ATOM_PATTERN,
+  parseWhenAtom,
+  whenAtoms,
+  type WhenAtom,
+} from '../packages/workflows/src/when-atom';
+import {
+  ATOM_PATTERN,
+  parse,
+} from '../packages/web/src/experiments/console/builder/validation/when-grammar';
 
 const REPO_ROOT = join(import.meta.dir, '..');
 const ENGINE_LOADER = join(REPO_ROOT, 'packages', 'workflows', 'src', 'loader.ts');
-const ENGINE_CONDITIONS = join(REPO_ROOT, 'packages', 'workflows', 'src', 'condition-evaluator.ts');
 const WEB_NODE_REF = join(REPO_ROOT, 'packages', 'web', 'src', 'lib', 'node-ref.ts');
-const WEB_WHEN_GRAMMAR = join(
-  REPO_ROOT,
-  'packages',
-  'web',
-  'src',
-  'experiments',
-  'console',
-  'builder',
-  'validation',
-  'when-grammar.ts'
-);
 
 function missing(name: string, file: string): Error {
   return new Error(
@@ -50,7 +66,8 @@ function missing(name: string, file: string): Error {
  * A regex over raw source cannot tell a DECLARATION from a MENTION of one. That
  * is the whole difficulty here, and every layer below is about narrowing the gap
  * — none of them closes it, so treat this as "cheap steps toward reading code",
- * not as a solved problem.
+ * not as a solved problem. (The `when:` checks further down close it by executing
+ * the modules instead; this layer remains only for the plain-literal grammar.)
  *
  * The failure mode is concrete: a commented-out copy holding the CURRENT value,
  * sitting above a live constant that has genuinely drifted. That is an ordinary
@@ -69,7 +86,7 @@ function missing(name: string, file: string): Error {
  * anchor still rejects a mention embedded mid-line in live code, which stripping
  * leaves untouched.
  *
- * Column 0 is safe rather than brittle: all six constants this file extracts are
+ * Column 0 is safe rather than brittle: all three constants this file extracts are
  * top-level, and an indented one would not be. If a future constant is nested,
  * widen deliberately and re-run the decoy matrix — do not reach for `\s*`.
  *
@@ -83,30 +100,14 @@ function stripComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
 }
 
-/**
- * Extract a `const <name> = String.raw`…`` literal, failing loudly if it moved.
- * Also accepts the `new RegExp(String.raw`…`)` wrapper, which is how a composed
- * pattern is spelled.
- */
+/** Extract a `const <name> = String.raw`…`` literal, failing loudly if it moved. */
 function rawConstant(file: string, name: string): string {
   const source = stripComments(readFileSync(file, 'utf8'));
-  const match = new RegExp(
-    String.raw`${DECL} ${name} =\s*(?:new RegExp\(\s*)?String\.raw\x60([^\x60]*)\x60`,
-    'm'
-  ).exec(source);
+  const match = new RegExp(String.raw`${DECL} ${name} =\s*String\.raw\x60([^\x60]*)\x60`, 'm').exec(
+    source
+  );
   if (match?.[1] === undefined) throw missing(name, file);
   return match[1];
-}
-
-/** Extract a `const <name> = /…/;` regex literal, joining a wrapped one back up. */
-function regexConstant(file: string, name: string): string {
-  const source = stripComments(readFileSync(file, 'utf8'));
-  const match = new RegExp(String.raw`${DECL} ${name} =\s*\/([\s\S]*?)\/;`, 'm').exec(source);
-  if (match?.[1] === undefined) throw missing(name, file);
-  return match[1]
-    .split('\n')
-    .map(line => line.trim())
-    .join('');
 }
 
 /** Resolve the `${NAME}` interpolations a composed web pattern is built from. */
@@ -140,18 +141,135 @@ describe('node-ref parity: @archon/web mirrors the engine', () => {
     expect(nodeId.test('check-reproduction')).toBe(true);
     expect(nodeId.test('classify-testability')).toBe(true);
   });
+});
 
-  // The builder's `when:` parser makes the same "mirrors the engine" claim about
-  // a second grammar. It was held by a comment alone; a divergence would let a
-  // condition validate clean in the builder and fail to parse at run time.
-  test("the builder's when-atom pattern is byte-identical to the condition evaluator's", () => {
-    // Engine side is a `/…/` literal; the web side composes a `String.raw`.
-    const engine = regexConstant(ENGINE_CONDITIONS, 'atomPattern');
-    const web = resolveInterpolations(rawConstant(WEB_WHEN_GRAMMAR, 'ATOM_PATTERN'), {
-      NODE_ID_SOURCE: rawConstant(WEB_NODE_REF, 'NODE_ID_SOURCE'),
-      SEGMENT_SOURCE: rawConstant(WEB_WHEN_GRAMMAR, 'SEGMENT_SOURCE'),
-    });
-
-    expect(web).toBe(engine);
+/**
+ * The `when:` atom, compared by running both parsers rather than reading them.
+ *
+ * The two checks below are complementary, and neither subsumes the other:
+ *
+ *   - `.source` identity pins the GRAMMAR, including the parts no corpus entry
+ *     happens to exercise. An alternation branch added to one side only fails
+ *     here immediately, which is exactly what #2588 needed and did not have.
+ *   - the corpus pins the PARSE SEMANTICS around the grammar — the rules that
+ *     live in code after the regex matches. `$INPUTS.a.b` is the standing
+ *     example: both patterns match it (it backtracks into the node branch), and
+ *     only the follow-up reserved-id rejection makes it an error. Identical
+ *     patterns with a missing rejection would pass the first check and fail here.
+ *
+ * Honest limit: the corpus catches a semantic divergence only where it has an
+ * entry. A new rule added after the regex, on one side only, in a case no entry
+ * covers, still slips through — so a change to either parser's post-match rules
+ * should arrive with a corpus entry.
+ */
+describe('when-atom parity: the builder parses what the engine parses', () => {
+  test("the builder's atom pattern is byte-identical to the engine's", () => {
+    expect(ATOM_PATTERN.source).toBe(WHEN_ATOM_PATTERN.source);
+    expect(ATOM_PATTERN.flags).toBe(WHEN_ATOM_PATTERN.flags);
   });
+
+  /**
+   * Every grammar feature, plus both historical regressions. Each entry is
+   * compared for the same accept/reject verdict AND the same decomposition.
+   */
+  const CORPUS: readonly string[] = [
+    // Canonical, field access, and the `$node.field` shorthand.
+    "$classify.output == 'BUG'",
+    "$classify.output.type != 'FEATURE'",
+    '$build.exit_code == 0',
+    "$a.field.sub == 'x'",
+    // #2567: hyphenated ids, which the builder's legacy `\w` copy rejected.
+    "$check-reproduction.output == 'done'",
+    "$classify-testability.output.testable == 'e2e_testable'",
+    // #2588: the `$INPUTS.<name>` scope #2579 added to the engine.
+    "$INPUTS.mode == 'fast'",
+    "$INPUTS.my-input == 'x'",
+    "$INPUTS.output == 'x'",
+    '$INPUTS.retries >= 3',
+    "$INPUTS.a.b == 'x'",
+    // The case that DISCRIMINATES the reserved-id rule from the shorthand rule, and
+    // the only corpus entry that does. `$INPUTS.a.b` backtracks into the node branch
+    // and is then caught by the shorthand-cannot-carry-a-sub-field rule anyway, so it
+    // still agrees with a parser that has forgotten `INPUTS` is reserved. This one
+    // does not: `output` is the canonical segment, so a parser missing that rule
+    // accepts it as a field read on a node called `INPUTS`. Found by deleting the
+    // rule and watching the suite stay green.
+    "$INPUTS.output.x == 'y'",
+    "$INPUTS == 'x'",
+    "$INPUTS. == 'x'",
+    // Every operator, in both RHS spellings.
+    "$n.output == '5'",
+    "$n.output != '5'",
+    "$n.output < '5'",
+    "$n.output > '5'",
+    "$n.output <= '5'",
+    "$n.output >= '5'",
+    '$n.output == true',
+    '$n.output == false',
+    '$score.output.value >= -0.5',
+    "$n.output == ''",
+    // Compound expressions — these also pin the quote-aware splitter, which is
+    // duplicated on both sides just like the atom pattern is.
+    "$a.output == 'X' && $b.output == 'Y'",
+    "$a.output == 'X' || $b.output == 'Y'",
+    "$a.output == 'X' && $b.output == 'Y' || $c.output == 'Z'",
+    "$a.output == 'x && y || z'",
+    "$INPUTS.mode == 'fast' && $classify.output.type == 'BUG'",
+    // Malformed.
+    '',
+    '   ',
+    'garbage',
+    '$a.output ~~ 5',
+    '$a.output == unquoted',
+    '$a.output == yes',
+    '$a.output ==',
+    '$1bad.output == 1',
+    "$a.output == 'X' &&",
+  ];
+
+  /**
+   * The canonical spelling of an atom's left-hand side. Normalizing erases the
+   * spellings the two sides legitimately record differently (the web keeps
+   * `shorthand`/`bare` so it can round-trip an author's text; the engine has no
+   * reason to) and leaves the meaning, which is what must agree.
+   */
+  function engineRef(atom: WhenAtom): string {
+    if (atom.ref.kind === 'input') return `$INPUTS.${atom.ref.name}`;
+    return atom.ref.field === undefined
+      ? `$${atom.ref.nodeId}.output`
+      : `$${atom.ref.nodeId}.output.${atom.ref.field}`;
+  }
+
+  /** `null` means "rejected"; an array means "accepted, and here is what it means". */
+  function engineParse(expr: string): string[] | null {
+    const atoms = whenAtoms(expr).map(parseWhenAtom);
+    if (atoms.some(atom => atom === null)) return null;
+    return atoms.map(atom => {
+      // Narrowed by the `some` guard above; `flatMap` would lose that.
+      if (atom === null) throw new Error('unreachable');
+      return `${engineRef(atom)} ${atom.operator} ${JSON.stringify(atom.expected)}`;
+    });
+  }
+
+  function webParse(expr: string): string[] | null {
+    const result = parse(expr);
+    if (!result.ok) return null;
+    return result.ast.or.flatMap(group =>
+      group.map(atom => {
+        const ref =
+          atom.kind === 'input'
+            ? `$INPUTS.${atom.name}`
+            : atom.field === undefined
+              ? `$${atom.nodeId}.output`
+              : `$${atom.nodeId}.output.${atom.field}`;
+        return `${ref} ${atom.op} ${JSON.stringify(atom.value)}`;
+      })
+    );
+  }
+
+  for (const expr of CORPUS) {
+    test(`agrees on ${JSON.stringify(expr)}`, () => {
+      expect(webParse(expr)).toEqual(engineParse(expr));
+    });
+  }
 });
