@@ -11290,6 +11290,61 @@ describe('executeDagWorkflow -- Claude SDK advanced options', () => {
     expect(assistantConfig?.modelReasoningEffort).toBeUndefined();
     expect(assistantConfig?.webSearchMode).toBeUndefined();
   });
+
+  it('warns when a node in a Codex workflow resolves away to Claude via a tier', async () => {
+    // The mixed-provider direction: the workflow-level provider IS codex, so a check
+    // against the CONFIGURED provider would stay silent. Only the resolved provider
+    // reveals that this node cannot read either field.
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+    const aiProfile = buildAiProfile('codex', {
+      repoTiers: {
+        medium: { provider: 'claude', model: 'sonnet' },
+      },
+    });
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'codex-workflow-node-resolves-to-claude-test',
+        nodes: [{ id: 'step1', command: 'my-cmd', model: 'medium' }],
+        modelReasoningEffort: 'high',
+        webSearchMode: 'live',
+      },
+      workflowRun,
+      'codex',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      aiProfile
+    );
+
+    expect(mockGetAgentProviderDag.mock.calls[0][0]).toBe('claude');
+
+    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
+    const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
+    const warning = messages.find(
+      m => m.includes('modelReasoningEffort') && m.includes('webSearchMode')
+    );
+    expect(warning).toBeDefined();
+
+    const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
+    const assistantConfig = optionsArg?.assistantConfig as Record<string, unknown>;
+    expect(assistantConfig?.modelReasoningEffort).toBeUndefined();
+    expect(assistantConfig?.webSearchMode).toBeUndefined();
+  });
 });
 
 describe('executeDagWorkflow -- cost tracking', () => {
