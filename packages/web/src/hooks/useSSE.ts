@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { startsNewTextBatch } from '@/lib/chat-message-reducer';
 import type {
-  MessageCategory,
   TextEventMeta,
   SSEEvent,
   ErrorDisplay,
@@ -60,23 +60,18 @@ export function useSSE(
   const handlersRef = useRef(handlers);
   handlersRef.current = handlers;
 
-  // Text batching: accumulate text for 50ms before dispatching
+  // Text batching: accumulate text for 50ms before dispatching. The batch is
+  // dispatched as ONE message, so `pendingMetaRef` holds the single identity
+  // (category + finished run) that the buffered text belongs to.
   const textBufferRef = useRef('');
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pendingCategoryRef = useRef<MessageCategory | undefined>(undefined);
-  const pendingWorkflowResultRef = useRef<{ workflowName: string; runId: string } | undefined>(
-    undefined
-  );
+  const pendingMetaRef = useRef<TextEventMeta>({});
 
   const flushText = useCallback((): void => {
     if (textBufferRef.current) {
-      handlersRef.current.onText(textBufferRef.current, {
-        category: pendingCategoryRef.current,
-        workflowResult: pendingWorkflowResultRef.current,
-      });
+      handlersRef.current.onText(textBufferRef.current, pendingMetaRef.current);
       textBufferRef.current = '';
-      pendingCategoryRef.current = undefined;
-      pendingWorkflowResultRef.current = undefined;
+      pendingMetaRef.current = {};
     }
     flushTimerRef.current = null;
   }, []);
@@ -132,31 +127,29 @@ export function useSSE(
         const h = handlersRef.current;
 
         switch (data.type) {
-          case 'text':
-            // One batch carries one category, so a category change is a message
-            // boundary: flush what is buffered before mixing in text of a
-            // different kind. Without this, a workflow-status line batched behind
-            // agent prose would inherit — or overwrite — the wrong category and
-            // lose its own bubble.
-            if (data.category !== pendingCategoryRef.current) {
+          case 'text': {
+            // A batch speaks for one message, so it can carry only one identity:
+            // one category and one finished run. When either changes, flush first.
+            //
+            // Category: without this a workflow-status line batched behind agent
+            // prose would inherit — or overwrite — the wrong category and lose its
+            // own bubble. Run: two `workflow_result` events for different runs can
+            // arrive back-to-back (SSETransport replays its buffer on reconnect),
+            // and merging them would drop one result card and splice the summaries.
+            const incoming: TextEventMeta = {
+              category: data.category,
+              workflowResult: data.workflowResult ?? undefined,
+            };
+            if (startsNewTextBatch(pendingMetaRef.current, incoming)) {
               flushTextNow();
             }
             textBufferRef.current += data.content;
-            pendingCategoryRef.current = data.category;
-            if (
-              'workflowResult' in data &&
-              data.workflowResult &&
-              typeof data.workflowResult === 'object'
-            ) {
-              pendingWorkflowResultRef.current = data.workflowResult as {
-                workflowName: string;
-                runId: string;
-              };
-            }
+            pendingMetaRef.current = incoming;
             if (!flushTimerRef.current) {
               flushTimerRef.current = setTimeout(flushText, 50);
             }
             break;
+          }
           case 'tool_call':
             // Flush buffered text before tool events to ensure text
             // attaches to the correct message (not the previous one)
@@ -235,8 +228,7 @@ export function useSSE(
               flushTimerRef.current = null;
             }
             textBufferRef.current = '';
-            pendingCategoryRef.current = undefined;
-            pendingWorkflowResultRef.current = undefined;
+            pendingMetaRef.current = {};
             h.onRetract?.();
             break;
           case 'heartbeat':

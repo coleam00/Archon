@@ -44,6 +44,8 @@ export interface TextEvent extends BaseSSEEvent {
   isComplete: boolean;
   /** Present only on server-emitted framework messages; absent for agent prose. */
   category?: MessageCategory;
+  /** Present only on `workflow_result` messages — identifies the finished run. */
+  workflowResult?: { workflowName: string; runId: string };
 }
 
 /**
@@ -51,10 +53,7 @@ export interface TextEvent extends BaseSSEEvent {
  * `useSSE` batches text over a 50 ms window, so this describes the flushed
  * segment rather than any single event.
  */
-export interface TextEventMeta {
-  category?: MessageCategory;
-  workflowResult?: { workflowName: string; runId: string };
-}
+export type TextEventMeta = Pick<TextEvent, 'category' | 'workflowResult'>;
 
 // Tool call started
 export interface ToolCallEvent extends BaseSSEEvent {

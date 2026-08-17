@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { applyOnText } from './chat-message-reducer';
+import { applyOnText, startsNewTextBatch } from './chat-message-reducer';
 import type { ChatMessage, ToolCallDisplay } from './types';
 
 // Helpers
@@ -240,6 +240,53 @@ describe('applyOnText — workflow-status boundary (Rules 2 & 3)', () => {
 
     expect(result).toHaveLength(1);
     expect(result[0].content).toBe('some existing text more');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// useSSE batch boundary — extracted so the 50 ms coalescing window is testable
+// ---------------------------------------------------------------------------
+
+describe('startsNewTextBatch', () => {
+  const runA = { workflowName: 'plan', runId: 'run-a' };
+  const runB = { workflowName: 'plan', runId: 'run-b' };
+
+  test('keeps accumulating while the identity is unchanged', () => {
+    expect(startsNewTextBatch({}, {})).toBe(false);
+    expect(
+      startsNewTextBatch({ category: 'workflow_status' }, { category: 'workflow_status' })
+    ).toBe(false);
+    expect(
+      startsNewTextBatch(
+        { category: 'workflow_result', workflowResult: runA },
+        { category: 'workflow_result', workflowResult: runA }
+      )
+    ).toBe(false);
+  });
+
+  test('breaks when a categorized message follows agent prose', () => {
+    expect(startsNewTextBatch({}, { category: 'workflow_dispatch_status' })).toBe(true);
+  });
+
+  test('breaks when agent prose follows a categorized message', () => {
+    expect(startsNewTextBatch({ category: 'workflow_dispatch_status' }, {})).toBe(true);
+  });
+
+  test('breaks between two results for different runs', () => {
+    // SSETransport replays its buffer on reconnect, so two `workflow_result`
+    // events can land inside one 50 ms window. Merging them would drop a card.
+    expect(
+      startsNewTextBatch(
+        { category: 'workflow_result', workflowResult: runA },
+        { category: 'workflow_result', workflowResult: runB }
+      )
+    ).toBe(true);
+  });
+
+  test('breaks when a result follows text that had none', () => {
+    expect(startsNewTextBatch({}, { category: 'workflow_result', workflowResult: runA })).toBe(
+      true
+    );
   });
 });
 

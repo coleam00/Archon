@@ -21,6 +21,26 @@ export function isWorkflowStatusCategory(category: MessageCategory | undefined):
 }
 
 /**
+ * Whether an incoming `text` event must close the batch `useSSE` is currently
+ * accumulating.
+ *
+ * The hook coalesces text over a 50 ms window and hands the result to
+ * `applyOnText` as ONE segment, so a batch can carry only one identity: one
+ * category and one finished run. When either differs, the buffered text belongs
+ * to a different message and has to go out first.
+ *
+ * Extracted from the hook so the decision is unit-testable — `@archon/web` has
+ * no DOM harness and `EventSource` does not exist under Bun, so nothing inside
+ * `useSSE` itself can be exercised directly.
+ */
+export function startsNewTextBatch(buffered: TextEventMeta, incoming: TextEventMeta): boolean {
+  return (
+    buffered.category !== incoming.category ||
+    buffered.workflowResult?.runId !== incoming.workflowResult?.runId
+  );
+}
+
+/**
  * Builds a new streaming assistant message.  The `id` is caller-supplied so
  * that tests can produce stable, deterministic IDs.
  */
