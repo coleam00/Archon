@@ -280,11 +280,14 @@ safe_parent() {
   IFS="$_oldifs"; return 0
 }
 
-# Records are TAB-separated and decoded POSITIONALLY (parseRecords), so a TAB in a
-# filename shifts every later field: a symlink named 'a<TAB>b' decodes as
-# ["L","a","b",target,esc], handing the consumer the target from the name slot and a
-# path where the escape flag belongs — an escaping symlink reaches the approval gate
-# looking safe. Refuse such an entry instead of emitting an undecodable record, and
+# Records are TAB-separated and decoded POSITIONALLY (parseRecords), so a TAB in ANY
+# variable-width field shifts every later one. Both such fields are attacker
+# controlled and both must be checked:
+#   name:   'a<TAB>b'                  -> ["L","a","b",target,esc]
+#   target: 'ok.ts<TAB>../../etc/pw'   -> ["L",name,"ok.ts","../../etc/pw",esc]
+# In the second the consumer reads a benign target and a PATH where the escape flag
+# belongs, so an escaping symlink reaches the approval gate rendered as safe — the
+# name-only check missed it. Refuse rather than emit an undecodable record, and
 # render the TAB as '?' so the refusal itself decodes. Builtins only, no fork.
 has_tab() {
   case "$1" in *"$TAB_CHAR"*) return 0 ;; *) return 1 ;; esac
@@ -355,6 +358,10 @@ find . -mindepth 1 -print0 2>/dev/null | while IFS= read -r -d '' p; do
   # --- symlink (check BEFORE -d/-f so a symlink-to-dir is not misclassified) ---
   if [ -L "$UP/$rel" ]; then
     ltarget="$(readlink "$UP/$rel")"
+    if has_tab "$ltarget"; then
+      printf 'S\\t%s\\tunsafe-record-target\\0' "\${rel//"$TAB_CHAR"/?}"
+      continue
+    fi
     if symlink_escapes "$ltarget"; then esc=1; else esc=0; fi
     printf 'L\\t%s\\t%s\\t%s\\0' "$rel" "$ltarget" "$esc"
     continue
@@ -411,6 +418,10 @@ find . -mindepth 1 -print0 2>/dev/null | while IFS= read -r -d '' p; do
   # --- symlink (check BEFORE -d/-f: a symlink-to-dir must not be treated as a dir) ---
   if [ -L "$UP/$rel" ]; then
     ltarget="$(readlink "$UP/$rel")"
+    if has_tab "$ltarget"; then
+      printf 'S\\t%s\\tunsafe-record-target\\0' "\${rel//"$TAB_CHAR"/?}"
+      continue
+    fi
     if symlink_escapes "$ltarget"; then printf 'S\\t%s\\tescaping-symlink\\0' "$rel"; continue; fi
     if ! safe_parent "$rel" "$DEST"; then printf 'S\\t%s\\tescaping-symlink-path\\0' "$rel"; continue; fi
     mkdir -p "$DEST/$dir" 2>/dev/null || true
