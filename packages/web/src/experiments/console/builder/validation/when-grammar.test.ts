@@ -23,6 +23,24 @@ describe('when-grammar parse', () => {
     }
   });
 
+  test('parses a HYPHENATED node id', () => {
+    // Every other fixture here is hyphen-free, so this is the only case that
+    // catches the node-id slot being filled with the hyphen-free segment
+    // grammar — the natural slip now that ATOM_PATTERN is composed rather than
+    // written out. `archon-validate-pr.yaml` ships exactly this condition, so
+    // the slip would reject a bundled workflow that runs fine in production.
+    const r = parse("$classify-testability.output.testable == 'e2e_testable'");
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.ast.or[0][0]).toEqual({
+        nodeId: 'classify-testability',
+        field: 'testable',
+        op: '==',
+        value: 'e2e_testable',
+      });
+    }
+  });
+
   test('parses all six operators', () => {
     for (const op of ['==', '!=', '<', '>', '<=', '>='] as const) {
       const r = parse(`$n.output ${op} '5'`);

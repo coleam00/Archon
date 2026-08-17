@@ -141,10 +141,21 @@ export function getDebouncedIssues(nodes: DagFlowNode[], edges: Edge[]): Validat
   }
 
   // 5. Broken $nodeId.output references. What a reference LOOKS like comes from
-  // `@/lib/node-ref` — the same definition the console builder scans with — and
-  // `DagNodeData` carries exactly these three text bodies, so every body this
-  // model can express is now covered. (The console additionally strips code
-  // fences before scanning; that refinement has no equivalent surface here.)
+  // `@/lib/node-ref` — the same definition the console builder scans with — so
+  // the two builders can no longer disagree about what a reference IS.
+  //
+  // They can still disagree about WHERE one is looked for, and this scan is the
+  // narrower of the two. It reads the bodies `resolveNodeDisplay` surfaces
+  // (`dag-layout.ts`): `when`, `promptText`, `bashScript`. `DagNodeData extends
+  // DagNode`, so a script node's `script` and an approval node's
+  // `approval.message` do reach `data` through the spread — but
+  // `resolveNodeDisplay` has no `script` branch and its `approval` branch
+  // returns no text, so nothing copies them into the fields read here. The
+  // engine loader and the console builder DO validate refs in both. Refs there
+  // therefore go unflagged in this panel and flagged in the console. That gap
+  // predates this change and is left open deliberately: the legacy builder is
+  // slated for deletion, so the honest note is worth more than a wider scan on
+  // doomed code. (The console also strips code fences first; no equivalent here.)
   for (const node of nodes) {
     const textsToScan: string[] = [];
     if (node.data.when) textsToScan.push(node.data.when);
