@@ -38,12 +38,15 @@
  *      moved and `.initialized` was NOT written
  */
 import { readdir, mkdir, stat, copyFile, rm, writeFile } from 'fs/promises';
+import { existsSync } from 'fs';
 import { join, resolve } from 'path';
 import {
   resolveProjectStorageKey,
   getProjectStoragePaths,
+  getArchonHome,
   type ProjectStorageKey,
 } from '@archon/paths';
+import { getDatabaseType } from '@archon/core/db/connection';
 import * as codebaseDb from '@archon/core/db/codebases';
 
 /**
@@ -114,7 +117,32 @@ interface MigrationTarget {
   climbed: boolean;
 }
 
+/**
+ * True when a registry lookup would have to CREATE the database to discover it
+ * is empty.
+ *
+ * The SQLite adapter connects lazily and applies the full schema on first use,
+ * so reading the codebase registry on a machine that has never run Archon
+ * materialises `archon.db` plus a ~680 KB WAL — from a command whose own output
+ * says `Dry run — nothing was moved`. No database means no registered projects,
+ * which is already the `_cwd` fallback answer, so the read has nothing to tell
+ * us that its side effect does not cost more than.
+ *
+ * Only sound for SQLite. A Postgres registry's contents cannot be inferred from
+ * the local filesystem, so under DATABASE_URL the lookup always runs and an
+ * unreachable database still exits 1 rather than guessing a destination.
+ */
+function registryIsKnownEmpty(): boolean {
+  return getDatabaseType() === 'sqlite' && !existsSync(join(getArchonHome(), 'archon.db'));
+}
+
 async function resolveTarget(cwd: string): Promise<MigrationTarget> {
+  if (registryIsKnownEmpty()) {
+    // Said out loud: a silent fallback to a different destination than the
+    // operator expects is the failure family this script exists to prevent.
+    console.log(`No codebase registry yet — using the _cwd fallback for ${cwd}.`);
+    return { key: { kind: 'cwd', cwd }, anchor: cwd, climbed: false };
+  }
   try {
     const codebase =
       (await codebaseDb.findCodebaseByDefaultCwd(cwd)) ??

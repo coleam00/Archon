@@ -19,6 +19,16 @@
  * happened — on PR #2513 that surfaced as a dry run appearing to move a file.
  * Locals make an orphaned assertion able to describe only its own sandbox, so a
  * timeout reads as a timeout.
+ *
+ * BUDGET: deliberately left at Bun's 5000 ms default, even though these tests
+ * time out on windows-latest at ~5015 ms (#2306). Raising it was considered and
+ * rejected: every spawn here used to create a 704 KB SQLite database — including
+ * a `PRAGMA busy_timeout = 5000` carrier, the exact bound that turned out to be
+ * #2473's real cause — and that creation is now gone. Whether it was also the
+ * cause here is testable only by leaving the alarm armed and seeing whether the
+ * timeouts stop. A larger budget would answer the question by silencing it.
+ * If it does recur, find the specific colliding bound the way #2473 did; do not
+ * reach for the timeout.
  */
 import { describe, test, expect } from 'bun:test';
 import { mkdtemp, mkdir, rm, writeFile, readFile, readdir } from 'fs/promises';
@@ -152,6 +162,11 @@ async function listOrEmpty(dir: string): Promise<string[]> {
   }
 }
 
+/** Names of the SQLite registry files a lazy connect would materialise. */
+async function databaseFiles(archonHome: string): Promise<string[]> {
+  return (await listOrEmpty(archonHome)).filter(name => name.startsWith('archon.db'));
+}
+
 describe('migrate-state-dir', () => {
   test('--apply moves every file, marks the destination, and empties the source', async () =>
     withSandbox(async ctx => {
@@ -257,6 +272,36 @@ describe('migrate-state-dir', () => {
       expect(result.stdout).toContain('re-run with --apply');
       expect(await isMarked(ctx.stateRoot)).toBe(false);
     }));
+
+  // A read-only lookup that CREATES the thing it reads is not read-only. The
+  // SQLite adapter connects lazily and applies the full schema on first use, so
+  // resolving the destination used to materialise archon.db plus a ~680 KB WAL —
+  // from a command whose own output says "nothing was moved" (#2306).
+  describe('the registry lookup does not materialise a database', () => {
+    test('a dry run against a never-used ARCHON_HOME creates no database', async () =>
+      withSandbox(async ctx => {
+        await seedLegacy(ctx, { 'triage-state.json': '{"a":1}' });
+
+        const result = await runMigration(ctx);
+
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain('Dry run — nothing was moved');
+        expect(await databaseFiles(ctx.archonHome)).toEqual([]);
+      }));
+
+    test('--apply creates no database either, and still migrates and marks', async () =>
+      withSandbox(async ctx => {
+        // Scoping the skip to dry runs would put the cold schema apply straight
+        // back on the path every real migration takes.
+        await seedLegacy(ctx, { 'triage-state.json': '{"a":1}' });
+
+        const result = await runMigration(ctx, '--apply');
+
+        expect(result.exitCode).toBe(0);
+        expect(await databaseFiles(ctx.archonHome)).toEqual([]);
+        expect(await listOrEmpty(ctx.stateRoot)).toEqual(['.initialized', 'triage-state.json']);
+      }));
+  });
 
   describe('argument parsing', () => {
     // A migration tool that silently operates on the wrong directory is the
