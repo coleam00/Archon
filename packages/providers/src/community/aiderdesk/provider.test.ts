@@ -1,7 +1,7 @@
+// Mock logger — must be set up before importing any @archon/paths consumer
 import { mock, describe, it, expect, beforeEach, afterEach } from 'bun:test';
 import type { Logger } from 'pino';
 
-// Mock logger — must be set up before importing any @archon/paths consumer
 const mockLogger = {
   fatal: mock(() => undefined),
   error: mock(() => undefined),
@@ -23,7 +23,12 @@ import { AiderDeskProvider, translateProjectDir } from './provider';
 import { AIDERDESK_CAPABILITIES } from './capabilities';
 import { AiderDeskClient, parseSseFrame, type FetchFn } from './client';
 import { AiderDeskApiError } from './errors';
+import {
+  InvalidAiderDeskModelOverrideError,
+  UnknownAiderDeskAgentProfileError,
+} from './errors';
 import type {
+  AiderDeskModel,
   AiderDeskProfile,
   AiderDeskSseEvent,
   AiderDeskTask,
@@ -33,10 +38,9 @@ import type {
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
 /**
- * The 6-agent AiderDesk catalog fixture used by the dual-bind tests. Mirrors
- * the live /api/agent-profiles shape observed in the v2 spec — all 6 agents
- * share `(provider=poe, model=minimax-m3)` so the resolver must rely on
- * `ruleFiles` presence + lex-first `name` as the deterministic tiebreaker.
+ * Build an AiderDesk agent catalog shaped like the live host's 6-agent
+ * profile response. All six agents share `(provider=poe, model=minimax-m3)`
+ * so the resolver must rely on `name` (case-sensitive) for exact match.
  */
 const POE_AGENT_ID = '16059d20-60b9-481a-8685-28cceeb3cfe5';
 const INSPECTOR_AGENT_ID = 'c81d73ef-0000-0000-0000-000000000001';
@@ -50,7 +54,7 @@ const POE_PROFILE: AiderDeskProfile = {
   ruleFiles: ['/home/lfontanez/.aider-desk/agents/poe/rules/archon.md'],
 };
 
-const POC_RESPONSE_AGENTS: AiderDeskProfile[] = [
+const LIVE_CATALOG: AiderDeskProfile[] = [
   POE_PROFILE,
   {
     id: INSPECTOR_AGENT_ID,
@@ -68,30 +72,33 @@ const POC_RESPONSE_AGENTS: AiderDeskProfile[] = [
   },
   {
     id: 'aider-power-tools',
-    name: 'Aider (power-tools)',
+    name: 'Aider with Power Search',
     provider: 'poe',
     model: 'minimax-m3',
     ruleFiles: [],
   },
   { id: 'aider', name: 'Aider', provider: 'poe', model: 'minimax-m3', ruleFiles: [] },
-  { id: 'default', name: '(default)', provider: 'poe', model: 'minimax-m3', ruleFiles: [] },
+  {
+    id: 'default',
+    name: 'Power Tools',
+    provider: 'poe',
+    model: 'minimax-m3',
+    ruleFiles: [],
+  },
 ];
 
-/**
- * Build a mock GET /api/agent-profiles response. The `default` is the
- * lex-first "I just want any agent that matches the model" catalog that
- * existing tests use to keep the resolver on its happy path (rule 2 exact
- * match → Poe). New dual-bind tests pass whatever catalog they want.
- */
-function agentProfilesResponse(agents: AiderDeskProfile[] = [POE_PROFILE]): Response {
+function agentProfilesResponse(agents: AiderDeskProfile[] = LIVE_CATALOG): Response {
   return jsonResponse(agents);
 }
 
-/**
- * Create a mock task full response. Used by tests that load tasks for message
- * inspection (e.g. resume scenarios) — most tests now mock the bind / stream
- * roundtrip directly and skip the messages-roundtrip shape entirely.
- */
+/** Build a synthetic /api/models response. */
+function modelsResponse(models: AiderDeskModel[] = []): Response {
+  return jsonResponse({ models });
+}
+
+/** Build a mock task full response — used by tests that load tasks for message
+ *  inspection (e.g. resume scenarios). Most tests now mock the bind / stream
+ *  roundtrip directly and skip the messages-roundtrip shape entirely. */
 function mockTaskFull(overrides: Partial<AiderDeskTaskFull> = {}): AiderDeskTaskFull {
   return {
     id: 'task-123',
@@ -99,9 +106,9 @@ function mockTaskFull(overrides: Partial<AiderDeskTaskFull> = {}): AiderDeskTask
     state: 'READY_FOR_REVIEW',
     workingMode: 'local',
     currentMode: 'code',
-    mainModel: 'ollama/qwen3-coder:30b',
-    provider: 'ollama',
-    model: 'qwen3-coder:30b',
+    mainModel: null,
+    provider: null,
+    model: null,
     agentProfileId: null,
     reasoningEffort: null,
     thinkingTokens: null,
@@ -165,10 +172,6 @@ async function collectChunks(gen: AsyncGenerator<unknown>): Promise<unknown[]> {
 function sseResponse(events: AiderDeskSseEvent[], contentType = 'text/event-stream'): Response {
   const text = events
     .map(ev => {
-      // Match AiderDesk's wire format: the event type lives on the `event:`
-      // line only — `kind` is NOT inside the data payload. For `task-updated`
-      // the data IS the bare task object (the inner AiderDeskTask fields), so
-      // we unwrap `ev.task` before serialization.
       const name = ev.kind;
       const payload =
         name === 'task-updated'
@@ -199,13 +202,6 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-/**
- * Build a fetch counter / recorder that matches our test fixtures.
- *
- * Each test installs its own dispatcher and we hand-count and assert. This
- * is intentionally NOT a generic mock library — we want the controller path
- * (URL, body, headers) to stay visible and editable.
- */
 type Recorder = {
   fetch: FetchFn;
   calls: Array<{ url: string; init?: RequestInit }>;
@@ -257,116 +253,296 @@ describe('AiderDeskProvider', () => {
     });
   });
 
-  describe('sendQuery', () => {
-    it('yields error result when no model is specified', async () => {
-      const provider = new AiderDeskProvider();
-      const chunks = await collectChunks(provider.sendQuery('hello', '/test', undefined, {}));
+  describe('sendQuery — strict profile-name resolution', () => {
+    /**
+     * Build a single-profile catalog containing only `Aider` so Cases A / B
+     * can assert against a deterministic profile id without consulting the
+     * LIVE_CATALOG tiebreaker rules. The catalog here doesn't need to model
+     * any production shape — it only needs to contain a Profile with
+     * `name === 'Aider'`.
+     */
+    const AIDER_PROFILE: AiderDeskProfile = {
+      id: 'aider-uuid-fixture',
+      name: 'Aider',
+      provider: 'poe',
+      model: 'minimax-m3',
+      ruleFiles: [],
+    };
 
-      const systemChunk = chunks.find((c: any) => c.type === 'system');
-      const resultChunk = chunks.find((c: any) => c.type === 'result');
-      expect(systemChunk).toBeDefined();
-      expect(resultChunk).toBeDefined();
-      expect((resultChunk as any).isError).toBe(true);
-    });
-
-    it('yields error result when model format is invalid', async () => {
-      const provider = new AiderDeskProvider();
-      const chunks = await collectChunks(
-        provider.sendQuery('hello', '/test', undefined, { model: 'invalid-no-slash' })
-      );
-
-      const resultChunk = chunks.find((c: any) => c.type === 'result') as any;
-      expect(resultChunk).toBeDefined();
-      expect(resultChunk.isError).toBe(true);
-      expect(resultChunk.errors[0]).toContain('Invalid model format');
-    });
-
-    it('binds mainModel + agentProfileId on the task before run-prompt', async () => {
-      const freshTask = mockTaskRow({ id: 'task-new', state: 'TODO' });
-      const boundTask = mockTaskRow({
-        id: 'task-new',
-        state: 'TODO',
-        mainModel: 'poe/minimax-m3',
-        currentMode: 'agent',
-      });
-
-      const rec2: Recorder = { calls: [], fetch: undefined as unknown as FetchFn };
+    /**
+     * Case A: `model: 'Aider'` matches a profile by name → sends
+     *   `agentProfileId=<id>`, NO `mainModel` simultaneously
+     *   (`updateBody.mainModel === undefined`). AiderDesk uses the profile
+     *   default model.
+     */
+    it('Case A: model name "Aider" → binds agentProfileId only, omits mainModel', async () => {
+      const bodyRecorder: Array<{ url: string; body?: string }> = [];
       const recFetch: FetchFn = (async (url: string, init?: RequestInit) => {
-        rec2.calls.push({ url: url as string, init });
+        bodyRecorder.push({ url: url as string, body: init?.body as string | undefined });
         const u = url as string;
-        if (u.endsWith('/project/tasks/new')) {
-          return jsonResponse(freshTask);
-        }
+        if (u.endsWith('/project/tasks/new')) return jsonResponse(mockTaskRow());
         if (u.endsWith('/agent-profiles')) {
-          return agentProfilesResponse();
+          return agentProfilesResponse([AIDER_PROFILE]);
         }
+        if (u.endsWith('/models')) return modelsResponse();
         if (u.endsWith('/project/tasks') && init?.method === 'POST') {
-          // Echo the updates back so the provider's updatedTask returns a task.
           const body = init.body ? JSON.parse(init.body as string) : {};
-          return jsonResponse({ ...boundTask, ...body.updates });
+          return jsonResponse({ ...mockTaskRow(), ...body.updates });
         }
         if (u.endsWith('/run-prompt')) {
           return sseResponse([
-            {
-              kind: 'response-chunk',
-              taskId: 'task-new',
-              messageId: 'm1',
-              chunk: 'Hello',
-            },
-            {
-              kind: 'response-completed',
-              taskId: 'task-new',
-              messageId: 'm1',
-              content: 'Hello',
-            },
+            { kind: 'response-completed', taskId: 't', messageId: 'm', content: 'ok' },
             { kind: 'stream-end' },
           ]);
         }
         return new Response('{}', { status: 200 });
       }) as FetchFn;
-      rec2.fetch = recFetch;
 
       const provider = new AiderDeskProvider({ fetchFn: recFetch });
-      const chunks = await collectChunks(
+      await collectChunks(
         provider.sendQuery('hi', '/test', undefined, {
-          model: 'poe/minimax-m3',
+          model: 'Aider',
           env: { AIDERDESK_API_URL: 'http://localhost:24337' },
         })
       );
 
-      // Find the bind call (/project/tasks, the second POST).
-      const bindCall = rec2.calls.find(
-        c => c.url.endsWith('/project/tasks') && c.init?.method === 'POST'
+      const bind = bodyRecorder.find(r => r.url.endsWith('/project/tasks'));
+      expect(bind).toBeDefined();
+      const body = JSON.parse(bind!.body as string);
+      // Case A assertion: agentProfileId set, mainModel OMITTED.
+      expect(body.updates.agentProfileId).toBe('aider-uuid-fixture');
+      expect(body.updates.mainModel).toBeUndefined();
+      expect(body.updates.currentMode).toBe('agent');
+    });
+
+    /**
+     * Case B: `model: 'Aider' + modelOverride: 'poe/minimax-m3'` against the
+     *   AIDER_PROFILE-only catalog → sends BOTH fields. The /api/models
+     *   fetch validates the override.
+     */
+    it('Case B: model name "Aider" + modelOverride → binds BOTH agentProfileId and mainModel', async () => {
+      const bodyRecorder: Array<{ url: string; body?: string }> = [];
+      const recFetch: FetchFn = (async (url: string, init?: RequestInit) => {
+        bodyRecorder.push({ url: url as string, body: init?.body as string | undefined });
+        const u = url as string;
+        if (u.endsWith('/project/tasks/new')) return jsonResponse(mockTaskRow());
+        if (u.endsWith('/agent-profiles')) {
+          return agentProfilesResponse([AIDER_PROFILE]);
+        }
+        if (u.endsWith('/models')) {
+          // Catalog must contain the override for the bind to succeed.
+          return modelsResponse([
+            { id: 'minimax-m3', providerId: 'poe' },
+            { id: 'qwen3-coder:30b', providerId: 'ollama' },
+          ]);
+        }
+        if (u.endsWith('/project/tasks') && init?.method === 'POST') {
+          const body = init.body ? JSON.parse(init.body as string) : {};
+          return jsonResponse({ ...mockTaskRow(), ...body.updates });
+        }
+        if (u.endsWith('/run-prompt')) {
+          return sseResponse([
+            { kind: 'response-completed', taskId: 't', messageId: 'm', content: 'ok' },
+            { kind: 'stream-end' },
+          ]);
+        }
+        return new Response('{}', { status: 200 });
+      }) as FetchFn;
+
+      const provider = new AiderDeskProvider({ fetchFn: recFetch });
+      await collectChunks(
+        provider.sendQuery('hi', '/test', undefined, {
+          model: 'Aider',
+          modelOverride: 'poe/minimax-m3',
+          env: { AIDERDESK_API_URL: 'http://localhost:24337' },
+        })
       );
-      expect(bindCall).toBeDefined();
-      const bindBody = JSON.parse(bindCall!.init!.body as string);
-      expect(bindBody.updates.mainModel).toBe('poe/minimax-m3');
-      expect(bindBody.updates.currentMode).toBe('agent');
-      expect(bindBody.updates.agentProfileId).toBe(POE_AGENT_ID);
-      expect(bindBody.id).toBe('task-new');
 
-      // Verify run-prompt followed.
-      const runPromptCall = rec2.calls.find(c => c.url.endsWith('/run-prompt'));
-      expect(runPromptCall).toBeDefined();
+      const bind = bodyRecorder.find(r => r.url.endsWith('/project/tasks'));
+      expect(bind).toBeDefined();
+      const body = JSON.parse(bind!.body as string);
+      expect(body.updates.agentProfileId).toBe('aider-uuid-fixture');
+      expect(body.updates.mainModel).toBe('poe/minimax-m3');
+    });
 
-      // Verify chunk sequence: assistant 'Hello' + result.
-      const assistantChunks = chunks.filter((c: any) => c.type === 'assistant');
-      expect(assistantChunks.map((c: any) => c.content)).toEqual(['Hello']);
-      const resultChunk = chunks.find((c: any) => c.type === 'result') as any;
-      expect(resultChunk).toBeDefined();
-      expect(resultChunk.sessionId).toBe('task-new');
-      expect(resultChunk.isError).toBe(false);
-      expect(resultChunk.stopReason).toBe('end_turn');
-      expect(resultChunk.resolvedModel?.id).toBe('poe/minimax-m3');
+    /**
+     * Case C: `model: 'NoSuchProfile'` → throws
+     *   `UnknownAiderDeskAgentProfileError`, no SSE stream started.
+     */
+    it('Case C: model name "NoSuchProfile" → throws UnknownAiderDeskAgentProfileError', async () => {
+      let ranPrompt = false;
+      const recFetch: FetchFn = (async (url: string) => {
+        const u = url as string;
+        if (u.endsWith('/agent-profiles')) return agentProfilesResponse(LIVE_CATALOG);
+        if (u.endsWith('/project/tasks/new')) return jsonResponse(mockTaskRow());
+        if (u.endsWith('/run-prompt')) {
+          ranPrompt = true;
+          return sseResponse([]);
+        }
+        return new Response('{}', { status: 200 });
+      }) as FetchFn;
+
+      const provider = new AiderDeskProvider({ fetchFn: recFetch });
+
+      await expect(
+        collectChunks(
+          provider.sendQuery('hi', '/test', undefined, {
+            model: 'NoSuchProfile',
+            env: { AIDERDESK_API_URL: 'http://localhost:24337' },
+          })
+        )
+      ).rejects.toThrow(UnknownAiderDeskAgentProfileError);
+
+      expect(ranPrompt).toBe(false);
+
+      // Inspect the typed error fields.
+      try {
+        await collectChunks(
+          provider.sendQuery('hi', '/test', undefined, {
+            model: 'NoSuchProfile',
+            env: { AIDERDESK_API_URL: 'http://localhost:24337' },
+          })
+        );
+      } catch (error) {
+        expect(error).toBeInstanceOf(UnknownAiderDeskAgentProfileError);
+        const e = error as UnknownAiderDeskAgentProfileError;
+        expect(e.requestedName).toBe('NoSuchProfile');
+        expect(e.knownNames).toContain('Aider');
+        expect(e.knownNames).toContain('Poe');
+        expect(e.knownNames).toContain('Codenomicron');
+      }
+    });
+
+    /**
+     * Case D: `model: 'Aider' + modelOverride: 'garbage'` → throws
+     *   `InvalidAiderDeskModelOverrideError` BEFORE the lookup-OK-then-
+     *   override-validation-FAIL otherwise. We assert that the override is
+     *   validated even when the profile name is valid.
+     */
+    it('Case D: model name valid + modelOverride garbage → throws InvalidAiderDeskModelOverrideError', async () => {
+      const recFetch: FetchFn = (async (url: string) => {
+        const u = url as string;
+        if (u.endsWith('/agent-profiles')) return agentProfilesResponse(LIVE_CATALOG);
+        if (u.endsWith('/models')) {
+          return modelsResponse([{ id: 'minimax-m3', providerId: 'poe' }]);
+        }
+        if (u.endsWith('/project/tasks/new')) return jsonResponse(mockTaskRow());
+        if (u.endsWith('/run-prompt')) return sseResponse([]);
+        return new Response('{}', { status: 200 });
+      }) as FetchFn;
+
+      const provider = new AiderDeskProvider({ fetchFn: recFetch });
+
+      await expect(
+        collectChunks(
+          provider.sendQuery('hi', '/test', undefined, {
+            model: 'Aider',
+            modelOverride: 'poe/unsupported-model',
+            env: { AIDERDESK_API_URL: 'http://localhost:24337' },
+          })
+        )
+      ).rejects.toThrow(InvalidAiderDeskModelOverrideError);
+
+      try {
+        await collectChunks(
+          provider.sendQuery('hi', '/test', undefined, {
+            model: 'Aider',
+            modelOverride: 'poe/unsupported-model',
+            env: { AIDERDESK_API_URL: 'http://localhost:24337' },
+          })
+        );
+      } catch (error) {
+        expect(error).toBeInstanceOf(InvalidAiderDeskModelOverrideError);
+        const e = error as InvalidAiderDeskModelOverrideError;
+        expect(e.model).toBe('poe/unsupported-model');
+        expect(e.knownModels).toEqual(['poe/minimax-m3']);
+      }
+    });
+
+    /**
+     * Case E: missing `model` and no assistant pin → throws
+     *   `UnknownAiderDeskAgentProfileError` with `.requestedName = ''` and
+     *   candidates inferred from the typed fetch mock.
+     */
+    it('Case E: missing model + no assistant pin → throws UnknownAiderDeskAgentProfileError with requestedName=""', async () => {
+      const recFetch: FetchFn = (async (url: string) => {
+        const u = url as string;
+        if (u.endsWith('/agent-profiles')) return agentProfilesResponse(LIVE_CATALOG);
+        if (u.endsWith('/project/tasks/new')) return jsonResponse(mockTaskRow());
+        if (u.endsWith('/run-prompt')) return sseResponse([]);
+        return new Response('{}', { status: 200 });
+      }) as FetchFn;
+
+      const provider = new AiderDeskProvider({ fetchFn: recFetch });
+
+      await expect(
+        collectChunks(
+          provider.sendQuery('hi', '/test', undefined, {
+            env: { AIDERDESK_API_URL: 'http://localhost:24337' },
+          })
+        )
+      ).rejects.toThrow(UnknownAiderDeskAgentProfileError);
+
+      try {
+        await collectChunks(
+          provider.sendQuery('hi', '/test', undefined, {
+            env: { AIDERDESK_API_URL: 'http://localhost:24337' },
+          })
+        );
+      } catch (error) {
+        const e = error as UnknownAiderDeskAgentProfileError;
+        expect(e.requestedName).toBe('');
+        expect(e.knownNames.length).toBe(LIVE_CATALOG.length);
+      }
+    });
+
+    it('assistantConfig.agentProfileId pins the profile UUID and skips catalog fetch', async () => {
+      const bodyRecorder: Array<{ url: string; body?: string }> = [];
+      const recFetch: FetchFn = (async (url: string, init?: RequestInit) => {
+        bodyRecorder.push({ url: url as string, body: init?.body as string | undefined });
+        const u = url as string;
+        if (u.endsWith('/project/tasks/new')) return jsonResponse(mockTaskRow());
+        if (u.endsWith('/project/tasks') && init?.method === 'POST') {
+          const body = init.body ? JSON.parse(init.body as string) : {};
+          return jsonResponse({ ...mockTaskRow(), ...body.updates });
+        }
+        if (u.endsWith('/run-prompt')) {
+          return sseResponse([
+            { kind: 'response-completed', taskId: 't', messageId: 'm', content: 'ok' },
+            { kind: 'stream-end' },
+          ]);
+        }
+        return new Response('{}', { status: 200 });
+      }) as FetchFn;
+
+      const provider = new AiderDeskProvider({ fetchFn: recFetch });
+      await collectChunks(
+        provider.sendQuery('hi', '/test', undefined, {
+          // Even when catalog fetches would otherwise happen, the pin
+          // suppresses them.
+          model: 'Aider',
+          env: { AIDERDESK_API_URL: 'http://localhost:24337' },
+          assistantConfig: { agentProfileId: 'pinned-uuid-1' },
+        })
+      );
+
+      // No catalog fetches.
+      expect(bodyRecorder.some(r => r.url.endsWith('/agent-profiles'))).toBe(false);
+      expect(bodyRecorder.some(r => r.url.endsWith('/models'))).toBe(false);
+
+      const bind = bodyRecorder.find(r => r.url.endsWith('/project/tasks'));
+      const body = JSON.parse(bind!.body as string);
+      expect(body.updates.agentProfileId).toBe('pinned-uuid-1');
+      expect(body.updates.mainModel).toBeUndefined();
     });
 
     it('uses SSE Accept header on /api/run-prompt', async () => {
-      const rec3: Recorder = { calls: [], fetch: undefined as unknown as FetchFn };
       const recFetch: FetchFn = (async (url: string, init?: RequestInit) => {
-        rec3.calls.push({ url: url as string, init });
+        rec.calls.push({ url: url as string, init });
         const u = url as string;
         if (u.endsWith('/project/tasks/new')) return jsonResponse(mockTaskRow());
-        if (u.endsWith('/agent-profiles')) return agentProfilesResponse();
+        if (u.endsWith('/agent-profiles')) return agentProfilesResponse(LIVE_CATALOG);
+        if (u.endsWith('/models')) return modelsResponse();
         if (u.endsWith('/project/tasks')) return jsonResponse(mockTaskRow());
         if (u.endsWith('/run-prompt')) {
           return sseResponse([
@@ -376,28 +552,27 @@ describe('AiderDeskProvider', () => {
         }
         return new Response('{}', { status: 200 });
       }) as FetchFn;
-      rec3.fetch = recFetch;
 
       const provider = new AiderDeskProvider({ fetchFn: recFetch });
       await collectChunks(
         provider.sendQuery('hi', '/test', undefined, {
-          model: 'poe/minimax-m3',
+          model: 'Aider',
           env: { AIDERDESK_API_URL: 'http://localhost:24337' },
         })
       );
 
-      const runPromptCall = rec3.calls.find(c => c.url.endsWith('/run-prompt'));
+      const runPromptCall = rec.calls.find(c => c.url.endsWith('/run-prompt'));
       expect(runPromptCall).toBeDefined();
       const headers = runPromptCall!.init!.headers as Record<string, string>;
       expect(headers.Accept).toBe('text/event-stream');
     });
 
     it('streams response-chunks through assistant MessageChunks', async () => {
-      const rec4: Recorder = { calls: [], fetch: undefined as unknown as FetchFn };
-      const recFetch: FetchFn = (async (url: string, init?: RequestInit) => {
+      const recFetch: FetchFn = (async (url: string) => {
         const u = url as string;
         if (u.endsWith('/project/tasks/new')) return jsonResponse(mockTaskRow());
-        if (u.endsWith('/agent-profiles')) return agentProfilesResponse();
+        if (u.endsWith('/agent-profiles')) return agentProfilesResponse(LIVE_CATALOG);
+        if (u.endsWith('/models')) return modelsResponse();
         if (u.endsWith('/project/tasks')) return jsonResponse(mockTaskRow());
         if (u.endsWith('/run-prompt')) {
           return sseResponse([
@@ -413,7 +588,7 @@ describe('AiderDeskProvider', () => {
       const provider = new AiderDeskProvider({ fetchFn: recFetch });
       const chunks = await collectChunks(
         provider.sendQuery('hi', '/test', undefined, {
-          model: 'poe/minimax-m3',
+          model: 'Aider',
           env: { AIDERDESK_API_URL: 'http://localhost:24337' },
         })
       );
@@ -426,7 +601,8 @@ describe('AiderDeskProvider', () => {
       const recFetch: FetchFn = (async (url: string) => {
         const u = url as string;
         if (u.endsWith('/project/tasks/new')) return jsonResponse(mockTaskRow());
-        if (u.endsWith('/agent-profiles')) return agentProfilesResponse();
+        if (u.endsWith('/agent-profiles')) return agentProfilesResponse(LIVE_CATALOG);
+        if (u.endsWith('/models')) return modelsResponse();
         if (u.endsWith('/project/tasks')) return jsonResponse(mockTaskRow());
         if (u.endsWith('/run-prompt')) {
           return sseResponse([
@@ -445,7 +621,7 @@ describe('AiderDeskProvider', () => {
       const provider = new AiderDeskProvider({ fetchFn: recFetch });
       const chunks = await collectChunks(
         provider.sendQuery('hi', '/test', undefined, {
-          model: 'poe/minimax-m3',
+          model: 'Aider',
           env: { AIDERDESK_API_URL: 'http://localhost:24337' },
         })
       );
@@ -462,7 +638,8 @@ describe('AiderDeskProvider', () => {
       const recFetch: FetchFn = (async (url: string) => {
         const u = url as string;
         if (u.endsWith('/project/tasks/new')) return jsonResponse(mockTaskRow());
-        if (u.endsWith('/agent-profiles')) return agentProfilesResponse();
+        if (u.endsWith('/agent-profiles')) return agentProfilesResponse(LIVE_CATALOG);
+        if (u.endsWith('/models')) return modelsResponse();
         if (u.endsWith('/project/tasks')) return jsonResponse(mockTaskRow());
         if (u.endsWith('/run-prompt')) {
           return sseResponse([
@@ -484,7 +661,7 @@ describe('AiderDeskProvider', () => {
       const provider = new AiderDeskProvider({ fetchFn: recFetch });
       const chunks = await collectChunks(
         provider.sendQuery('hi', '/test', undefined, {
-          model: 'poe/minimax-m3',
+          model: 'Aider',
           env: { AIDERDESK_API_URL: 'http://localhost:24337' },
         })
       );
@@ -500,7 +677,8 @@ describe('AiderDeskProvider', () => {
       const recFetch: FetchFn = (async (url: string) => {
         const u = url as string;
         if (u.endsWith('/project/tasks/new')) return jsonResponse(mockTaskRow());
-        if (u.endsWith('/agent-profiles')) return agentProfilesResponse();
+        if (u.endsWith('/agent-profiles')) return agentProfilesResponse(LIVE_CATALOG);
+        if (u.endsWith('/models')) return modelsResponse();
         if (u.endsWith('/project/tasks')) return jsonResponse(mockTaskRow());
         if (u.endsWith('/run-prompt')) {
           return sseResponse([
@@ -514,7 +692,7 @@ describe('AiderDeskProvider', () => {
       const provider = new AiderDeskProvider({ fetchFn: recFetch });
       const chunks = await collectChunks(
         provider.sendQuery('hi', '/test', undefined, {
-          model: 'poe/minimax-m3',
+          model: 'Aider',
           env: { AIDERDESK_API_URL: 'http://localhost:24337' },
         })
       );
@@ -529,7 +707,8 @@ describe('AiderDeskProvider', () => {
       const recFetch: FetchFn = (async (url: string) => {
         const u = url as string;
         if (u.endsWith('/project/tasks/new')) return jsonResponse(mockTaskRow());
-        if (u.endsWith('/agent-profiles')) return agentProfilesResponse();
+        if (u.endsWith('/agent-profiles')) return agentProfilesResponse(LIVE_CATALOG);
+        if (u.endsWith('/models')) return modelsResponse();
         if (u.endsWith('/project/tasks')) return jsonResponse(mockTaskRow());
         if (u.endsWith('/run-prompt')) {
           return sseResponse([
@@ -548,13 +727,12 @@ describe('AiderDeskProvider', () => {
       const provider = new AiderDeskProvider({ fetchFn: recFetch });
       const chunks = await collectChunks(
         provider.sendQuery('hello', '/test', undefined, {
-          model: 'poe/minimax-m3',
+          model: 'Aider',
           env: { AIDERDESK_API_URL: 'http://localhost:24337' },
         })
       );
 
-      // Should NOT have an assistant 'Hello' chunk — the whole string came
-      // through as a response-completed. Final result still gets `end_turn`.
+      // Final result chunk with end_turn.
       const resultChunk = chunks.find((c: any) => c.type === 'result') as any;
       expect(resultChunk).toBeDefined();
       expect(resultChunk.sessionId).toBe('task-123');
@@ -567,14 +745,11 @@ describe('AiderDeskProvider', () => {
     it('resumes existing task when resumeSessionId is provided', async () => {
       const recFetch: FetchFn = (async (url: string) => {
         const u = url as string;
-        if (u.endsWith('/project/tasks/load') && !u.includes('?projectDir=')) {
-          return jsonResponse(mockTaskFull({ id: 'existing-task-id', state: 'IN_PROGRESS' }));
-        }
-        // Some implementations encode projectDir in the body.
         if (u.endsWith('/project/tasks/load')) {
           return jsonResponse(mockTaskFull({ id: 'existing-task-id', state: 'IN_PROGRESS' }));
         }
-        if (u.endsWith('/agent-profiles')) return agentProfilesResponse();
+        if (u.endsWith('/agent-profiles')) return agentProfilesResponse(LIVE_CATALOG);
+        if (u.endsWith('/models')) return modelsResponse();
         if (u.endsWith('/project/tasks')) return jsonResponse(mockTaskRow());
         if (u.endsWith('/run-prompt')) {
           return sseResponse([
@@ -593,7 +768,7 @@ describe('AiderDeskProvider', () => {
       const provider = new AiderDeskProvider({ fetchFn: recFetch });
       const chunks = await collectChunks(
         provider.sendQuery('continue', '/test', 'existing-task-id', {
-          model: 'poe/minimax-m3',
+          model: 'Aider',
           env: { AIDERDESK_API_URL: 'http://localhost:24337' },
         })
       );
@@ -608,7 +783,8 @@ describe('AiderDeskProvider', () => {
         const u = url as string;
         if (u.endsWith('/project/tasks/load')) return new Response('Not found', { status: 404 });
         if (u.endsWith('/project/tasks/new')) return jsonResponse(mockTaskRow());
-        if (u.endsWith('/agent-profiles')) return agentProfilesResponse();
+        if (u.endsWith('/agent-profiles')) return agentProfilesResponse(LIVE_CATALOG);
+        if (u.endsWith('/models')) return modelsResponse();
         if (u.endsWith('/project/tasks')) return jsonResponse(mockTaskRow());
         if (u.endsWith('/run-prompt')) {
           return sseResponse([
@@ -627,7 +803,7 @@ describe('AiderDeskProvider', () => {
       const provider = new AiderDeskProvider({ fetchFn: recFetch });
       const chunks = await collectChunks(
         provider.sendQuery('hello', '/test', 'bad-task-id', {
-          model: 'poe/minimax-m3',
+          model: 'Aider',
           env: { AIDERDESK_API_URL: 'http://localhost:24337' },
         })
       );
@@ -644,7 +820,8 @@ describe('AiderDeskProvider', () => {
       const recFetch: FetchFn = (async (url: string) => {
         const u = url as string;
         if (u.endsWith('/project/tasks/new')) return jsonResponse(mockTaskRow());
-        if (u.endsWith('/agent-profiles')) return agentProfilesResponse();
+        if (u.endsWith('/agent-profiles')) return agentProfilesResponse(LIVE_CATALOG);
+        if (u.endsWith('/models')) return modelsResponse();
         if (u.endsWith('/project/tasks')) return jsonResponse(mockTaskRow());
         if (u.endsWith('/run-prompt'))
           return new Response('Internal Server Error', { status: 500 });
@@ -654,7 +831,7 @@ describe('AiderDeskProvider', () => {
       const provider = new AiderDeskProvider({ fetchFn: recFetch });
       const chunks = await collectChunks(
         provider.sendQuery('hello', '/test', undefined, {
-          model: 'poe/minimax-m3',
+          model: 'Aider',
           env: { AIDERDESK_API_URL: 'http://localhost:24337' },
         })
       );
@@ -669,13 +846,10 @@ describe('AiderDeskProvider', () => {
       const recFetch: FetchFn = (async (url: string, init?: RequestInit) => {
         const u = url as string;
         if (u.endsWith('/project/tasks/new')) return jsonResponse(mockTaskRow());
-        if (u.endsWith('/agent-profiles')) return agentProfilesResponse();
+        if (u.endsWith('/agent-profiles')) return agentProfilesResponse(LIVE_CATALOG);
+        if (u.endsWith('/models')) return modelsResponse();
         if (u.endsWith('/project/tasks')) return jsonResponse(mockTaskRow());
         if (u.endsWith('/run-prompt')) {
-          // Capture body so we can assert against the augmentation after the
-          // response has been streamed — calling expect inside the closure
-          // throws before runPromptStream can dispatch the response-chunk
-          // and finalize the result chunk with structuredOutput.
           capturedRunPromptBody = (init?.body as string) ?? '';
           return sseResponse([
             {
@@ -693,7 +867,7 @@ describe('AiderDeskProvider', () => {
       const provider = new AiderDeskProvider({ fetchFn: recFetch });
       const chunks = await collectChunks(
         provider.sendQuery('hi', '/test', undefined, {
-          model: 'poe/minimax-m3',
+          model: 'Aider',
           env: { AIDERDESK_API_URL: 'http://localhost:24337' },
           outputFormat: {
             type: 'json_schema',
@@ -703,19 +877,18 @@ describe('AiderDeskProvider', () => {
       );
 
       expect(capturedRunPromptBody).toContain('Respond with ONLY a JSON object');
-      // capturedRunPromptBody is JSON.stringify(init.body) so inner quotes are
-      // escaped — look for the schema property name "answer" in JSON-escape form.
       expect(capturedRunPromptBody).toContain('\\"answer\\"');
 
       const resultChunk = chunks.find((c: any) => c.type === 'result') as any;
       expect(resultChunk.structuredOutput).toEqual({ answer: '42' });
     });
 
-    it('yields result chunk with sessionId even when assistant produced nothing', async () => {
+    it('yields result chunk with sessionId when assistant produced nothing', async () => {
       const recFetch: FetchFn = (async (url: string) => {
         const u = url as string;
         if (u.endsWith('/project/tasks/new')) return jsonResponse(mockTaskRow());
-        if (u.endsWith('/agent-profiles')) return agentProfilesResponse();
+        if (u.endsWith('/agent-profiles')) return agentProfilesResponse(LIVE_CATALOG);
+        if (u.endsWith('/models')) return modelsResponse();
         if (u.endsWith('/project/tasks')) return jsonResponse(mockTaskRow());
         if (u.endsWith('/run-prompt')) {
           return sseResponse([
@@ -729,7 +902,7 @@ describe('AiderDeskProvider', () => {
       const provider = new AiderDeskProvider({ fetchFn: recFetch });
       const chunks = await collectChunks(
         provider.sendQuery('hi', '/test', undefined, {
-          model: 'poe/minimax-m3',
+          model: 'Aider',
           env: { AIDERDESK_API_URL: 'http://localhost:24337' },
         })
       );
@@ -737,299 +910,7 @@ describe('AiderDeskProvider', () => {
       const resultChunk = chunks.find((c: any) => c.type === 'result') as any;
       expect(resultChunk).toBeDefined();
       expect(resultChunk.sessionId).toBe('task-123');
-      // We no longer carry token usage — AiderDesk's REST has no enumerable
-      // per-message usageReport, so we leave the field undefined rather than
-      // pinning defaults to zero. The caller can read structuredOutput if
-      // they want schema-shaped output.
       expect(resultChunk.tokens).toBeUndefined();
-    });
-
-    // ─── Dual-bind resolver tests (v2 spec, Section 6e #1-#6) ───────────────
-
-    it('rule 1: uses assistantConfig.agentProfileId directly and skips catalog fetch', async () => {
-      const bodyRecorder: Array<{ url: string; body?: string }> = [];
-      const recFetch: FetchFn = (async (url: string, init?: RequestInit) => {
-        bodyRecorder.push({ url: url as string, body: init?.body as string | undefined });
-        const u = url as string;
-        if (u.endsWith('/project/tasks/new')) return jsonResponse(mockTaskRow());
-        if (u.endsWith('/project/tasks') && init?.method === 'POST') {
-          const body = init.body ? JSON.parse(init.body as string) : {};
-          return jsonResponse({ ...mockTaskRow(), ...body.updates });
-        }
-        if (u.endsWith('/run-prompt')) {
-          return sseResponse([
-            { kind: 'response-completed', taskId: 't', messageId: 'm', content: 'ok' },
-            { kind: 'stream-end' },
-          ]);
-        }
-        return new Response('{}', { status: 200 });
-      }) as FetchFn;
-
-      const provider = new AiderDeskProvider({ fetchFn: recFetch });
-      await collectChunks(
-        provider.sendQuery('hi', '/test', undefined, {
-          model: 'poe/minimax-m3',
-          env: { AIDERDESK_API_URL: 'http://localhost:24337' },
-          assistantConfig: { agentProfileId: 'pinned-uuid-1' },
-        })
-      );
-
-      // Rule 1: explicit pin → no /agent-profiles call.
-      expect(bodyRecorder.some(r => r.url.endsWith('/agent-profiles'))).toBe(false);
-
-      // The bind body carries agentProfileId directly from the pin.
-      const bind = bodyRecorder.find(r => r.url.endsWith('/project/tasks'));
-      expect(bind).toBeDefined();
-      const body = JSON.parse(bind!.body as string);
-      expect(body.updates.agentProfileId).toBe('pinned-uuid-1');
-      expect(body.updates.mainModel).toBe('poe/minimax-m3');
-    });
-
-    it('rule 2: exact (provider, model) match picks that agent', async () => {
-      const bodyRecorder: Array<{ url: string; body?: string }> = [];
-      const recFetch: FetchFn = (async (url: string, init?: RequestInit) => {
-        bodyRecorder.push({ url: url as string, body: init?.body as string | undefined });
-        const u = url as string;
-        if (u.endsWith('/project/tasks/new')) return jsonResponse(mockTaskRow());
-        if (u.endsWith('/agent-profiles')) {
-          return agentProfilesResponse([
-            { id: 'a1', name: 'Alpha', provider: 'poe', model: 'minimax-m3', ruleFiles: [] },
-            { id: 'a2', name: 'Bravo', provider: 'poe', model: 'minimax-m3', ruleFiles: [] },
-          ]);
-        }
-        if (u.endsWith('/project/tasks') && init?.method === 'POST') {
-          const body = init.body ? JSON.parse(init.body as string) : {};
-          return jsonResponse({ ...mockTaskRow(), ...body.updates });
-        }
-        if (u.endsWith('/run-prompt')) {
-          return sseResponse([
-            { kind: 'response-completed', taskId: 't', messageId: 'm', content: 'ok' },
-            { kind: 'stream-end' },
-          ]);
-        }
-        return new Response('{}', { status: 200 });
-      }) as FetchFn;
-
-      const provider = new AiderDeskProvider({ fetchFn: recFetch });
-      await collectChunks(
-        provider.sendQuery('hi', '/test', undefined, {
-          model: 'poe/minimax-m3',
-          env: { AIDERDESK_API_URL: 'http://localhost:24337' },
-        })
-      );
-
-      const bind = bodyRecorder.find(r => r.url.endsWith('/project/tasks'));
-      expect(bind).toBeDefined();
-      const body = JSON.parse(bind!.body as string);
-      // Lex-first tiebreaker → Alpha wins over Bravo.
-      expect(body.updates.agentProfileId).toBe('a1');
-      expect(body.updates.mainModel).toBe('poe/minimax-m3');
-    });
-
-    it('rule 2 (live catalog): 6 agents all poe/minimax-m3 → ruleFiles-empty sorts LAST', async () => {
-      // Reproduces the live /api/agent-profiles catalog: all 6 agents share
-      // (provider=poe, model=minimax-m3) so exact-match hits them all. The
-      // previous lex-first-by-name tiebreaker selected 'Aider' (the aider CLI
-      // subprocess runtime) — which spawned a child under cwd=/app, failed
-      // EACCES, and closed the SSE stream with no content. The fix makes
-      // ruleFiles-aware agents (Poe, Inspector — both configured Poe-API
-      // clients) sort BEFORE the empty-ruleFiles runtimes, then lex-first
-      // within each tier. Result: Inspector (lex-first among the two
-      // ruleFiles-equipped agents).
-      const bodyRecorder: Array<{ url: string; body?: string }> = [];
-      const recFetch: FetchFn = (async (url: string, init?: RequestInit) => {
-        bodyRecorder.push({ url: url as string, body: init?.body as string | undefined });
-        const u = url as string;
-        if (u.endsWith('/project/tasks/new')) return jsonResponse(mockTaskRow());
-        if (u.endsWith('/agent-profiles')) {
-          return agentProfilesResponse([
-            POE_PROFILE,
-            {
-              id: INSPECTOR_AGENT_ID,
-              name: 'Inspector',
-              provider: 'poe',
-              model: 'minimax-m3',
-              ruleFiles: ['/home/lfontanez/.aider-desk/agents/inspector/rules/archon.md'],
-            },
-            {
-              id: CODENOMICRON_AGENT_ID,
-              name: 'Codenomicron',
-              provider: 'poe',
-              model: 'minimax-m3',
-              ruleFiles: [],
-            },
-            {
-              id: 'aider-power-tools',
-              name: 'Aider (power-tools)',
-              provider: 'poe',
-              model: 'minimax-m3',
-              ruleFiles: [],
-            },
-            { id: 'aider', name: 'Aider', provider: 'poe', model: 'minimax-m3', ruleFiles: [] },
-            {
-              id: 'default',
-              name: '(default)',
-              provider: 'poe',
-              model: 'minimax-m3',
-              ruleFiles: [],
-            },
-          ]);
-        }
-        if (u.endsWith('/project/tasks') && init?.method === 'POST') {
-          const body = init.body ? JSON.parse(init.body as string) : {};
-          return jsonResponse({ ...mockTaskRow(), ...body.updates });
-        }
-        if (u.endsWith('/run-prompt')) {
-          return sseResponse([
-            { kind: 'response-completed', taskId: 't', messageId: 'm', content: 'ok' },
-            { kind: 'stream-end' },
-          ]);
-        }
-        return new Response('{}', { status: 200 });
-      }) as FetchFn;
-
-      const provider = new AiderDeskProvider({ fetchFn: recFetch });
-      await collectChunks(
-        provider.sendQuery('hi', '/test', undefined, {
-          model: 'poe/minimax-m3',
-          env: { AIDERDESK_API_URL: 'http://localhost:24337' },
-        })
-      );
-
-      const bind = bodyRecorder.find(r => r.url.endsWith('/project/tasks'));
-      expect(bind).toBeDefined();
-      const body = JSON.parse(bind!.body as string);
-      // Inspector < Poe lex-first among the two ruleFiles-equipped agents.
-      expect(body.updates.agentProfileId).toBe(INSPECTOR_AGENT_ID);
-      expect(body.updates.mainModel).toBe('poe/minimax-m3');
-    });
-
-    it('rule 3: provider-only match picks ruleFiles-non-empty agent (lex-first)', async () => {
-      const bodyRecorder: Array<{ url: string; body?: string }> = [];
-      const recFetch: FetchFn = (async (url: string, init?: RequestInit) => {
-        bodyRecorder.push({ url: url as string, body: init?.body as string | undefined });
-        const u = url as string;
-        if (u.endsWith('/project/tasks/new')) return jsonResponse(mockTaskRow());
-        if (u.endsWith('/agent-profiles')) {
-          // Catalog has several poe agents but NONE with model=minimax-m3 —
-          // only rule 3 applies. Mix ruleFiles presence to exercise tiebreaker.
-          return agentProfilesResponse([
-            {
-              id: 'no-rules-1',
-              name: 'AiderPowerTools',
-              provider: 'poe',
-              model: 'qwen',
-              ruleFiles: [],
-            },
-            {
-              id: 'no-rules-2',
-              name: 'Codenomicron',
-              provider: 'poe',
-              model: 'gpt5',
-              ruleFiles: [],
-            },
-            {
-              id: 'has-rules-1',
-              name: 'PoeAgent',
-              provider: 'poe',
-              model: 'gpt4',
-              ruleFiles: ['/rules/archon.md'],
-            },
-            {
-              id: 'has-rules-2',
-              name: 'ZetaAgent',
-              provider: 'poe',
-              model: 'gemini',
-              ruleFiles: ['/rules/other.md'],
-            },
-          ]);
-        }
-        if (u.endsWith('/project/tasks') && init?.method === 'POST') {
-          const body = init.body ? JSON.parse(init.body as string) : {};
-          return jsonResponse({ ...mockTaskRow(), ...body.updates });
-        }
-        if (u.endsWith('/run-prompt')) {
-          return sseResponse([
-            { kind: 'response-completed', taskId: 't', messageId: 'm', content: 'ok' },
-            { kind: 'stream-end' },
-          ]);
-        }
-        return new Response('{}', { status: 200 });
-      }) as FetchFn;
-
-      const provider = new AiderDeskProvider({ fetchFn: recFetch });
-      await collectChunks(
-        provider.sendQuery('hi', '/test', undefined, {
-          model: 'poe/minimax-m3',
-          env: { AIDERDESK_API_URL: 'http://localhost:24337' },
-        })
-      );
-
-      const bind = bodyRecorder.find(r => r.url.endsWith('/project/tasks'));
-      expect(bind).toBeDefined();
-      const body = JSON.parse(bind!.body as string);
-      // Both `has-rules-1` and `has-rules-2` have non-empty ruleFiles.
-      // Lex-first on name → PoeAgent comes before ZetaAgent.
-      expect(body.updates.agentProfileId).toBe('has-rules-1');
-      expect(body.updates.mainModel).toBe('poe/minimax-m3');
-    });
-
-    it('rule 4: no provider match → emit warning chunk + bind mainModel only (no agentProfileId)', async () => {
-      const bodyRecorder: Array<{ url: string; body?: string }> = [];
-      const recFetch: FetchFn = (async (url: string, init?: RequestInit) => {
-        bodyRecorder.push({ url: url as string, body: init?.body as string | undefined });
-        const u = url as string;
-        if (u.endsWith('/project/tasks/new')) return jsonResponse(mockTaskRow());
-        if (u.endsWith('/agent-profiles')) {
-          // Catalog has only ollama agents; requested provider is poe → no match.
-          return agentProfilesResponse([
-            {
-              id: 'oll1',
-              name: 'LocalOllama',
-              provider: 'ollama',
-              model: 'qwen3-coder:30b',
-              ruleFiles: [],
-            },
-          ]);
-        }
-        if (u.endsWith('/project/tasks') && init?.method === 'POST') {
-          const body = init.body ? JSON.parse(init.body as string) : {};
-          return jsonResponse({ ...mockTaskRow(), ...body.updates });
-        }
-        if (u.endsWith('/run-prompt')) {
-          return sseResponse([
-            { kind: 'response-completed', taskId: 't', messageId: 'm', content: 'ok' },
-            { kind: 'stream-end' },
-          ]);
-        }
-        return new Response('{}', { status: 200 });
-      }) as FetchFn;
-
-      const provider = new AiderDeskProvider({ fetchFn: recFetch });
-      const chunks = await collectChunks(
-        provider.sendQuery('hi', '/test', undefined, {
-          model: 'poe/minimax-m3',
-          env: { AIDERDESK_API_URL: 'http://localhost:24337' },
-        })
-      );
-
-      // Warning chunk emitted by the resolver.
-      const warning = chunks.find(
-        (c: any) =>
-          c.type === 'system' &&
-          typeof c.content === 'string' &&
-          c.content.includes('No AiderDesk agent profile matches')
-      ) as any;
-      expect(warning).toBeDefined();
-      expect(warning.content).toContain('poe/minimax-m3');
-
-      // BUT updateTask STILL fires (spec: do not skip step 6) and carries
-      // mainModel only — no agentProfileId at all.
-      const bind = bodyRecorder.find(r => r.url.endsWith('/project/tasks'));
-      expect(bind).toBeDefined();
-      const body = JSON.parse(bind!.body as string);
-      expect(body.updates.mainModel).toBe('poe/minimax-m3');
-      expect(body.updates.agentProfileId).toBeUndefined();
     });
 
     it('cache: two sendQuery calls in quick succession → only one GET /agent-profiles', async () => {
@@ -1042,6 +923,7 @@ describe('AiderDeskProvider', () => {
             mockTaskRow({ id: `t-${calls.filter(c => c.endsWith('/project/tasks/new')).length}` })
           );
         if (u.endsWith('/agent-profiles')) return agentProfilesResponse();
+        if (u.endsWith('/models')) return modelsResponse();
         if (u.endsWith('/project/tasks') && init?.method === 'POST') {
           const body = init.body ? JSON.parse(init.body as string) : {};
           return jsonResponse({ ...mockTaskRow(), ...body.updates });
@@ -1058,70 +940,19 @@ describe('AiderDeskProvider', () => {
       const provider = new AiderDeskProvider({ fetchFn: recFetch });
       await collectChunks(
         provider.sendQuery('hi', '/test', undefined, {
-          model: 'poe/minimax-m3',
+          model: 'Aider',
           env: { AIDERDESK_API_URL: 'http://localhost:24337' },
         })
       );
       await collectChunks(
         provider.sendQuery('hi again', '/test', undefined, {
-          model: 'poe/minimax-m3',
+          model: 'Aider',
           env: { AIDERDESK_API_URL: 'http://localhost:24337' },
         })
       );
 
       const profilesCalls = calls.filter(u => u.endsWith('/agent-profiles'));
       expect(profilesCalls.length).toBe(1);
-    });
-
-    it('warning chunk is yielded BEFORE the updateTask call on no-match', async () => {
-      const order: string[] = [];
-      const recFetch: FetchFn = (async (url: string) => {
-        order.push(url as string);
-        const u = url as string;
-        if (u.endsWith('/project/tasks/new')) return jsonResponse(mockTaskRow());
-        if (u.endsWith('/agent-profiles')) {
-          // No poe provider at all → rule 4 path.
-          return agentProfilesResponse([
-            { id: 'oll1', name: 'LocalOllama', provider: 'ollama', model: 'qwen3', ruleFiles: [] },
-          ]);
-        }
-        if (u.endsWith('/project/tasks')) return jsonResponse(mockTaskRow());
-        if (u.endsWith('/run-prompt')) {
-          return sseResponse([
-            { kind: 'response-completed', taskId: 't', messageId: 'm', content: 'ok' },
-            { kind: 'stream-end' },
-          ]);
-        }
-        return new Response('{}', { status: 200 });
-      }) as FetchFn;
-
-      const provider = new AiderDeskProvider({ fetchFn: recFetch });
-      const chunks = await collectChunks(
-        provider.sendQuery('hi', '/test', undefined, {
-          model: 'poe/minimax-m3',
-          env: { AIDERDESK_API_URL: 'http://localhost:24337' },
-        })
-      );
-
-      // The order[] array records fetch call order at the network level.
-      // Inside the resolver the warning chunk is yielded BEFORE updateTask,
-      // so it must appear in the chunks stream BEFORE the run-prompt that
-      // updateTask precedes-by-step but follows in time.
-      const updatesIdx = order.findIndex(u => u.endsWith('/project/tasks') && !u.endsWith('/new'));
-      const profilesIdx = order.findIndex(u => u.endsWith('/agent-profiles'));
-
-      // Sanity: profile fetch happens before the update bind.
-      expect(profilesIdx).toBeGreaterThanOrEqual(0);
-      expect(updatesIdx).toBeGreaterThan(profilesIdx);
-
-      // Warning chunk must be present in the yielded stream.
-      const warningIdx = chunks.findIndex(
-        (c: any) =>
-          c.type === 'system' &&
-          typeof c.content === 'string' &&
-          c.content.includes('No AiderDesk agent profile matches')
-      );
-      expect(warningIdx).toBeGreaterThanOrEqual(0);
     });
   });
 
@@ -1165,8 +996,6 @@ describe('AiderDeskProvider', () => {
 
     it('falls back to event name "message" when event line is missing', () => {
       const ev = parseSseFrame('data: {"kind":"stream-end","extra":1}');
-      // No `event:` line → eventName stays "message", but data is non-empty JSON,
-      // so we route under `unknown` with the eventName "message".
       expect(ev?.kind).toBe('unknown');
       if (ev?.kind === 'unknown') {
         expect(ev.eventName).toBe('message');
@@ -1283,10 +1112,7 @@ describe('AiderDeskProvider', () => {
       const rec6: Recorder = { calls: [], fetch: undefined as unknown as FetchFn };
       const recFetch: FetchFn = (async (url: string, init?: RequestInit) => {
         rec6.calls.push({ url: url as string, init });
-        return jsonResponse([
-          POE_PROFILE,
-          { id: 'a2', name: 'Aider', provider: 'poe', model: 'minimax-m3' },
-        ]);
+        return jsonResponse([POE_PROFILE, { id: 'a2', name: 'Aider', provider: 'poe', model: 'minimax-m3' }]);
       }) as FetchFn;
       rec6.fetch = recFetch;
 
@@ -1308,10 +1134,7 @@ describe('AiderDeskProvider', () => {
 });
 
 describe('translateProjectDir', () => {
-  // Process-env pollution guard: tests 5–6 write to AIDERDESK_PROJECT_DIR_REMAP
-  // for their full duration. The per-test save/restore around this block
-  // prevents bleed-over into the surrounding AiderDeskProvider tests, which
-  // run before/after on the same process.
+  // Process-env pollution guard.
   const ENV_KEY = 'AIDERDESK_PROJECT_DIR_REMAP';
   let savedEnv: string | undefined;
   beforeEach(() => {
@@ -1354,9 +1177,6 @@ describe('translateProjectDir', () => {
   });
 
   it('longest-match wins among multiple conflicting object-form entries', () => {
-    // Two entries whose regexes BOTH match /host/projects/orchestration-home.
-    // Longest key wins (the user described this as "atomic" precedence in
-    // the longest-prefix regex sense — concrete anchors beat loose prefixes).
     const remap = {
       '/host/projects/': '/home/lfontanez/dev/',
       '/host/projects/orchestration-home': '/home/lfontanez/dev/orchestration-home',
@@ -1364,16 +1184,12 @@ describe('translateProjectDir', () => {
     expect(
       translateProjectDir('/host/projects/orchestration-home', { remap, source: 'test' })
     ).toBe('/home/lfontanez/dev/orchestration-home');
-    // A non-overlapping path falls through to the loose-prefix entry.
     expect(translateProjectDir('/host/projects/something-else', { remap, source: 'test' })).toBe(
       '/home/lfontanez/dev/something-else'
     );
   });
 
   it('process.env override beats assistantConfig (precedence.requestOptions.env > process.env > assistantConfig)', async () => {
-    // Set process.env to one map, pass a DIFFERENT assistantConfig map via
-    // the node-level assistantConfig. The wire should carry the process.env
-    // value because process.env sits above assistantConfig in the chain.
     process.env[ENV_KEY] = JSON.stringify({
       '/host/projects/': '/home/lfontanez/dev/from-process-env/',
     });
@@ -1383,7 +1199,8 @@ describe('translateProjectDir', () => {
       rec.calls.push({ url: url as string, init });
       const u = url as string;
       if (u.endsWith('/project/tasks/new')) return jsonResponse(mockTaskRow());
-      if (u.endsWith('/agent-profiles')) return agentProfilesResponse();
+      if (u.endsWith('/agent-profiles')) return agentProfilesResponse(LIVE_CATALOG);
+      if (u.endsWith('/models')) return modelsResponse();
       if (u.endsWith('/project/tasks') && init?.method === 'POST') {
         const body = init.body ? JSON.parse(init.body as string) : {};
         return jsonResponse({ ...mockTaskRow(), ...body.updates });
@@ -1401,7 +1218,7 @@ describe('translateProjectDir', () => {
     const provider = new AiderDeskProvider({ fetchFn: recFetch });
     await collectChunks(
       provider.sendQuery('hi', '/host/projects/orchestration-home', undefined, {
-        model: 'poe/minimax-m3',
+        model: 'Aider',
         env: { AIDERDESK_API_URL: 'http://localhost:24337' },
         assistantConfig: {
           projectDirRemap: { '/host/projects/': '/home/lfontanez/dev/from-assistant-config/' },
@@ -1409,7 +1226,6 @@ describe('translateProjectDir', () => {
       })
     );
 
-    // Every wire call that carries projectDir must use the process.env value.
     const runPromptCall = rec.calls.find(c => c.url.endsWith('/run-prompt'));
     expect(runPromptCall).toBeDefined();
     const runPromptBody = JSON.parse(runPromptCall!.init!.body as string);
@@ -1428,10 +1244,6 @@ describe('translateProjectDir', () => {
   });
 
   it('requestOptions.env override beats both process.env and assistantConfig', async () => {
-    // All three surfaces declared; requestOptions.env must win. This is the
-    // load-bearing case: per-codebase envVars injected at the engine boundary
-    // let a project owner pin its preferred host path without fighting a
-    // global process.env or a stale assistantConfig.
     process.env[ENV_KEY] = JSON.stringify({
       '/host/projects/': '/home/lfontanez/dev/from-process-env/',
     });
@@ -1441,7 +1253,8 @@ describe('translateProjectDir', () => {
       rec.calls.push({ url: url as string, init });
       const u = url as string;
       if (u.endsWith('/project/tasks/new')) return jsonResponse(mockTaskRow());
-      if (u.endsWith('/agent-profiles')) return agentProfilesResponse();
+      if (u.endsWith('/agent-profiles')) return agentProfilesResponse(LIVE_CATALOG);
+      if (u.endsWith('/models')) return modelsResponse();
       if (u.endsWith('/project/tasks') && init?.method === 'POST') {
         const body = init.body ? JSON.parse(init.body as string) : {};
         return jsonResponse({ ...mockTaskRow(), ...body.updates });
@@ -1459,7 +1272,7 @@ describe('translateProjectDir', () => {
     const provider = new AiderDeskProvider({ fetchFn: recFetch });
     await collectChunks(
       provider.sendQuery('hi', '/host/projects/orchestration-home', undefined, {
-        model: 'poe/minimax-m3',
+        model: 'Aider',
         env: {
           AIDERDESK_API_URL: 'http://localhost:24337',
           AIDERDESK_PROJECT_DIR_REMAP: JSON.stringify({
@@ -1481,9 +1294,6 @@ describe('translateProjectDir', () => {
   });
 
   it('malformed JSON in env: identity result + single warn chunk over the SSE stream', async () => {
-    // Garbage that fails JSON.parse — `not json at all` is the simplest case
-    // we can hand-write. The provider must not crash; it must surface a
-    // single descriptive system chunk and continue with the unchanged cwd.
     process.env[ENV_KEY] = 'this is not json {{';
 
     const rec: Recorder = { calls: [], fetch: undefined as unknown as FetchFn };
@@ -1491,7 +1301,8 @@ describe('translateProjectDir', () => {
       rec.calls.push({ url: url as string, init });
       const u = url as string;
       if (u.endsWith('/project/tasks/new')) return jsonResponse(mockTaskRow());
-      if (u.endsWith('/agent-profiles')) return agentProfilesResponse();
+      if (u.endsWith('/agent-profiles')) return agentProfilesResponse(LIVE_CATALOG);
+      if (u.endsWith('/models')) return modelsResponse();
       if (u.endsWith('/project/tasks') && init?.method === 'POST') {
         const body = init.body ? JSON.parse(init.body as string) : {};
         return jsonResponse({ ...mockTaskRow(), ...body.updates });
@@ -1509,14 +1320,11 @@ describe('translateProjectDir', () => {
     const provider = new AiderDeskProvider({ fetchFn: recFetch });
     const chunks = await collectChunks(
       provider.sendQuery('hi', '/host/projects/orchestration-home', undefined, {
-        model: 'poe/minimax-m3',
+        model: 'Aider',
         env: { AIDERDESK_API_URL: 'http://localhost:24337' },
       })
     );
 
-    // Exactly one warn chunk from the malformed-env branch. Implementation
-    // yields it before any AiderDeskClient call, so it's the first non-???
-    // frame the consumer sees.
     const warns = chunks.filter(
       (c: any) =>
         c.type === 'system' &&
@@ -1526,8 +1334,6 @@ describe('translateProjectDir', () => {
     expect(warns.length).toBe(1);
     expect((warns[0] as any).content).toContain('Supported shapes');
 
-    // Identity result: every wire body that carries projectDir uses the raw
-    // cwd untouched (no remap applied).
     const runPromptCall = rec.calls.find(c => c.url.endsWith('/run-prompt'));
     expect(runPromptCall).toBeDefined();
     const runPromptBody = JSON.parse(runPromptCall!.init!.body as string);
@@ -1542,6 +1348,5 @@ describe('translateProjectDir', () => {
 });
 
 // Touch the AiderDeskApiError export so consumers can import-class-check it
-// without leaving a tree-shaking warning. (Some test runners flag unused
-// imports; this is the lightest-footprint signal.)
+// without leaving a tree-shaking warning.
 void AiderDeskApiError;

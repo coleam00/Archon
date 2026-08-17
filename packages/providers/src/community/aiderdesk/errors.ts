@@ -100,3 +100,52 @@ export class AiderDeskApiError extends Error {
     this.name = 'AiderDeskApiError';
   }
 }
+
+/**
+ * Hard failure surface for AiderDesk agent-profile resolution.
+ *
+ * Thrown by the AiderDesk provider when:
+ *  - `requestOptions.model` is unset and no `assistantConfig.agentProfileId` pin exists.
+ *  - `requestOptions.model` IS set but no profile in the catalog carries that exact
+ *    `name` (case-sensitive).
+ *
+ * The provider layer is the SINGLE source of truth for profile existence — the
+ * orchestrator-layer resolution path accepts the model-name string as-is and
+ * delegates. No silent fallback, no project-default substitute, no warning
+ * chunk before an error chunk. The exception carries `requestedName` and
+ * `knownNames` so the UI / dag-executor can render an actionable "did you
+ * mean …?".
+ */
+export class UnknownAiderDeskAgentProfileError extends Error {
+  constructor(
+    public readonly requestedName: string,
+    public readonly knownNames: readonly string[],
+    public readonly candidates: readonly string[] = []
+  ) {
+    super(
+      `Unknown AiderDesk agent profile: '${requestedName}'. ` +
+        `Known names: [${knownNames.join(', ')}].` +
+        (candidates.length ? ` Did you mean: ${candidates.join(', ')}?` : '')
+    );
+    this.name = 'UnknownAiderDeskAgentProfileError';
+  }
+}
+
+/**
+ * Thrown when `modelOverride` is supplied on a SendQueryOptions for AiderDesk
+ * but the override is NOT present in the AiderDesk model catalog
+ * (`GET /api/models`). Caps the displayed known-models list to the first 8 to
+ * avoid noisy error chunks; the full list lives on `knownModels`.
+ */
+export class InvalidAiderDeskModelOverrideError extends Error {
+  constructor(
+    public readonly model: string,
+    public readonly knownModels: readonly string[]
+  ) {
+    super(
+      `Invalid AiderDesk modelOverride: '${model}'. ` +
+        `Known models: ${knownModels.length === 0 ? '[]' : '[' + knownModels.slice(0, 8).join(', ') + (knownModels.length > 8 ? ', …' : '') + ']'}.`
+    );
+    this.name = 'InvalidAiderDeskModelOverrideError';
+  }
+}

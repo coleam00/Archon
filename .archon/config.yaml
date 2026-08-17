@@ -12,18 +12,20 @@ aliases:
     provider: pi
     model: minimax/MiniMax-M3
 
-# Tier presets for the aiderdesk community provider — these resolve when any node
-# references the tier keyword `small` / `medium` / `large`. Without them, the
-# orchestrator's title-resolve path falls back to claude (which has no API key in
-# this container) and stalls the conversation lock. Models live on the host-side
-# Ollama served at shin-blackmamba:11434 (see services/aiderdesk/provider.ts).
+# Tier presets — the orchestrator resolves `small` / `medium` / `large`
+# references in workflow YAMLs into the catalog entry below. Models are
+# AIDERDESK AGENT-PROFILE NAMES (case-sensitive), NOT provider/model
+# literals. The AiderDesk provider looks each name up against
+# `/api/agent-profiles` at request time; an unknown profile throws
+# `UnknownAiderDeskAgentProfileError`. Use `modelOverride` on the
+# workflow node if a specific inference endpoint is needed.
 tiers:
   small:
     provider: aiderdesk
-    model: ollama/gemma4:8b-8k
+    model: Power Tools
   medium:
     provider: aiderdesk
-    model: ollama/richardyoung/gemma-4-coder-abliterated:11b-8k
+    model: Aider
   large:
     provider: aiderdesk
-    model: ollama/hf.co/OBLITERATUS/Gemma-4-B-OBLITERATED:11b-16k
+    model: Poe

@@ -116,6 +116,22 @@ export {
   registerAiderdeskProvider,
   listAiderdeskModels,
   AiderDeskClient,
+  InvalidAiderDeskModelOverrideError,
+  UnknownAiderDeskAgentProfileError,
+  levenshtein,
+  nearestNames,
   type AiderDeskProviderDefaults,
   type AiderDeskModelInfo,
 } from './community/aiderdesk';
+
+// Ollama (built-in) — direct HTTP shim against ${OLLAMA_BASE_URL}/api/chat.
+// Re-exported so `@archon/core` (boot-time catalog validation) and the
+// dag-executor can pull the constructor / registration from the barrel.
+export {
+  OLLAMA_CAPABILITIES,
+  OllamaProvider,
+  OllamaClient,
+  registerOllamaProvider,
+  resolveOllamaBaseUrl,
+  UnknownOllamaModelError,
+} from './ollama';

@@ -10,9 +10,12 @@ export {
   classifyAiderdeskError,
   enrichAiderdeskError,
   errorMessage,
+  InvalidAiderDeskModelOverrideError,
+  UnknownAiderDeskAgentProfileError,
   type AiderDeskRetryableErrorClass,
 } from './errors';
 export { listAiderdeskModels } from './model-catalog';
+export { levenshtein, nearestNames } from './profile-matcher';
 export { AiderDeskProvider } from './provider';
 export { registerAiderdeskProvider } from './registration';
 export {

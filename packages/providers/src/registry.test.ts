@@ -85,7 +85,7 @@ describe('registry', () => {
     test('throws UnknownProviderError for unknown type', () => {
       expect(() => getAgentProvider('unknown')).toThrow(UnknownProviderError);
       expect(() => getAgentProvider('unknown')).toThrow(
-        "Unknown provider: 'unknown'. Available: claude, codex"
+        "Unknown provider: 'unknown'. Available: claude, codex, ollama"
       );
     });
 
@@ -195,25 +195,26 @@ describe('registry', () => {
   });
 
   describe('getRegisteredProviders', () => {
-    test('returns all registered providers', () => {
+    test('returns all registered providers (builtins include ollama)', () => {
       const all = getRegisteredProviders();
-      expect(all.length).toBe(2);
+      expect(all.length).toBe(3);
       const ids = all.map(r => r.id);
       expect(ids).toContain('claude');
       expect(ids).toContain('codex');
+      expect(ids).toContain('ollama');
     });
 
     test('includes community providers after registration', () => {
       registerProvider(makeMockRegistration('my-llm'));
       const all = getRegisteredProviders();
-      expect(all.length).toBe(3);
+      expect(all.length).toBe(4);
     });
   });
 
   describe('getProviderInfoList', () => {
     test('returns API-safe projection without factory', () => {
       const infos = getProviderInfoList();
-      expect(infos.length).toBe(2);
+      expect(infos.length).toBe(3);
       for (const info of infos) {
         expect(info).toHaveProperty('id');
         expect(info).toHaveProperty('displayName');
@@ -242,7 +243,7 @@ describe('registry', () => {
       registerBuiltinProviders();
       registerBuiltinProviders();
       const all = getRegisteredProviders();
-      expect(all.length).toBe(2);
+      expect(all.length).toBe(3);
     });
   });
 
@@ -324,7 +325,7 @@ describe('registry', () => {
       const ids = getRegisteredProviders()
         .map(p => p.id)
         .sort();
-      expect(ids).toEqual(['claude', 'codex', 'pi']);
+      expect(ids).toEqual(['claude', 'codex', 'ollama', 'pi']);
     });
   });
 
@@ -375,7 +376,7 @@ describe('registry', () => {
       const ids = getRegisteredProviders()
         .map(p => p.id)
         .sort();
-      expect(ids).toEqual(['claude', 'codex', 'opencode', 'pi']);
+      expect(ids).toEqual(['claude', 'codex', 'ollama', 'opencode', 'pi']);
     });
   });
 
@@ -424,7 +425,7 @@ describe('registry', () => {
       const ids = getRegisteredProviders()
         .map(p => p.id)
         .sort();
-      expect(ids).toEqual(['claude', 'codex', 'copilot']);
+      expect(ids).toEqual(['claude', 'codex', 'copilot', 'ollama']);
     });
   });
 });

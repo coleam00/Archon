@@ -623,6 +623,16 @@ export interface SendQueryOptions extends AgentRequestOptions {
    * value can never reach a provider that cannot honor it.
    */
   execContext?: ExecutionContext;
+  /**
+   * Optional model override — AiderDesk-only field (today). Sibling of `model`,
+   * carried on the universal request options rather than nested inside
+   * `nodeConfig` so any provider can opt-in to the same forwarding convention
+   * without the workflows layer threading a separate field. For AiderDesk the
+   * path is: `model` identifies the agent-profile NAME; `modelOverride`
+   * optionally pins the inference endpoint passed as `mainModel` on
+   * `updateTask`. Other providers ignore it.
+   */
+  modelOverride?: string;
 }
 
 /**

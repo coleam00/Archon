@@ -4,26 +4,45 @@
  * Architecture:
  * - AiderDesk runs on the host at localhost:24337 (or via Docker bridge gateway
  *   at 172.18.0.1:24337 when Archon runs in a container).
- * - The provider creates/resumes AiderDesk tasks, binds a model with
- *   `POST /api/project/tasks {updates:{mainModel, currentMode, workingMode}}`,
- *   then opens a streaming `POST /api/run-prompt` with `Accept: text/event-stream`
- *   and forwards parsed SSE frames as MessageChunks.
+ * - The provider creates/resumes AiderDesk tasks, binds a name-keyed agent
+ *   profile via `POST /api/project/tasks {updates:{agentProfileId, mainModel,
+ *   currentMode, workingMode}}`, then opens a streaming `POST /api/run-prompt`
+ *   with `Accept: text/event-stream` and forwards parsed SSE frames as
+ *   MessageChunks.
  * - No SDK subprocess — pure HTTP via the injectable AiderDeskClient.
  * - Session resume: AiderDesk tasks persist their conversation; resume by
  *   loading the task ID.
  *
+ * Resolution contract (the new strict profile-key model):
+ *   - `requestOptions.model` is the agent-profile NAME (case-sensitive).
+ *   - `SendQueryOptions.modelOverride` is the OPTIONAL inference-endpoint
+ *     literal passed as `mainModel` on the updateTask body (e.g.
+ *     `poe/minimax-m3`, `ollama/internlm/internlm2.5:7b-8k`). When unset,
+ *     `mainModel` is OMITTED and AiderDesk uses the profile's default model.
+ *   - `assistantConfig.agentProfileId` may hard-pin the profile UUID; it
+ *     wins over the catalog lookup when both are present (operator pin).
+ *   - No match → throw `UnknownAiderDeskAgentProfileError(name, knownNames,
+ *     nearestCandidates)`. NEVER fallback to a default.
+ *
  * sendQuery() flow (bind-then-stream, issue: empty handshake on unbound task):
  *   1. Parse config (defensive, never throws).
  *   2. Resolve API URL (env → Docker detection → localhost).
- *   3. Create or resume an AiderDesk task.
- *   4. BIND mainModel/currentMode/workingMode via /api/project/tasks (this is
- *      the load-bearing step — without it, AiderDesk's project-default agent
- *      hijacks routing and run-prompt returns the empty 14-s handshake).
- *   5. Apply output_format prompt augmentation (best-effort JSON Schema path).
- *   6. Stream SSE frames from /api/run-prompt and dispatch each `kind` onto
+ *   3. Translate cwd → projectDir (translateProjectDir from this same file).
+ *   4. Create or resume an AiderDesk task.
+ *   5. RESOLVE profile: explicit assistantConfig.agentProfileId pin OR case-
+ *      sensitive match against `/api/agent-profiles` by name. NO match →
+ *      throw typed error.
+ *   6. RESOLVE modelOverride (if set): case-sensitive match against
+ *      `/api/models` entries joined as `<providerId>/<id>`. NO match → throw
+ *      typed error.
+ *   7. BIND agentProfileId + (optional) mainModel/currentMode/workingMode via
+ *      /api/project/tasks. For fresh tasks a bind failure is fatal; for resumed
+ *      tasks we tolerate bind failure (the prior run already bound).
+ *   8. Apply output_format prompt augmentation (best-effort JSON Schema path).
+ *   9. Stream SSE frames from /api/run-prompt and dispatch each `kind` onto
  *      the IAProvider chunk shape.
- *   7. Yield final result chunk with sessionId, stopReason, resolved model.
- *   8. Stamp `resumed` via withResumedOutcome for resume reporting.
+ *  10. Yield final result chunk with sessionId, stopReason, resolved model.
+ *  11. Stamp `resumed` via withResumedOutcome for resume reporting.
  */
 import { createLogger } from '@archon/paths';
 import type {
@@ -40,9 +59,16 @@ import {
 import { AIDERDESK_CAPABILITIES } from './capabilities';
 import { parseAiderdeskConfig } from './config';
 import { AiderDeskClient, resolveDefaultApiUrl, type FetchFn } from './client';
-import { classifyAiderdeskError, errorMessage } from './errors';
-import { AiderDeskApiError } from './errors';
+import {
+  AiderDeskApiError,
+  classifyAiderdeskError,
+  errorMessage,
+  InvalidAiderDeskModelOverrideError,
+  UnknownAiderDeskAgentProfileError,
+} from './errors';
+import { nearestNames } from './profile-matcher';
 import type {
+  AiderDeskModel,
   AiderDeskProfile,
   AiderDeskProjectDirRemap,
   AiderDeskTaskState,
@@ -58,27 +84,12 @@ function getLog(): ReturnType<typeof createLogger> {
 const DEFAULT_REQUEST_TIMEOUT_MS = 300_000; // 5 minutes — caps a single stream
 
 /**
- * TTL for the per-instance /api/agent-profiles cache (Section 5 of the v2
- * spec). 60s — long enough to absorb burst traffic inside a single workflow,
- * short enough that newly-registered AiderDesk agents become available with
- * a tolerable delay.
+ * TTL for the per-instance /api/agent-profiles and /api/models caches.
+ * 60s — long enough to absorb burst traffic inside a single workflow, short
+ * enough that newly-registered AiderDesk agents / pulled models become
+ * available with a tolerable delay.
  */
-const AGENT_PROFILES_TTL_MS = 60_000;
-
-/**
- * Parse a model ref in 'provider/model' format.
- * Returns null if the format is invalid.
- */
-function parseModelRef(modelRef: string): { providerId: string; modelId: string } | null {
-  const slashIndex = modelRef.indexOf('/');
-  if (slashIndex <= 0 || slashIndex === modelRef.length - 1) return null;
-
-  const providerId = modelRef.slice(0, slashIndex).trim();
-  const modelId = modelRef.slice(slashIndex + 1).trim();
-  if (!providerId || !modelId) return null;
-
-  return { providerId, modelId };
-}
+const CATALOG_TTL_MS = 60_000;
 
 /**
  * Parse a JSON-shaped `AIDERDESK_PROJECT_DIR_REMAP` env value into a typed
@@ -239,6 +250,16 @@ export function translateProjectDir(
 }
 
 /**
+ * Build the AiderDesk `mainModel` literal form from a `/api/models` entry:
+ * `<providerId>/<id>`. This matches AiderDesk's contract — the `mainModel`
+ * field on the task update is a `<provider>/<model>` literal, never a bare
+ * model id.
+ */
+function joinModelRef(m: AiderDeskModel): string {
+  return `${m.providerId}/${m.id}`;
+}
+
+/**
  * AiderDesk provider implementation.
  *
  * Wraps AiderDesk's REST API to implement the IAgentProvider contract.
@@ -256,6 +277,12 @@ export class AiderDeskProvider implements IAgentProvider {
    * no eviction callback, no manual reset.
    */
   private agentProfilesCache: { agents: AiderDeskProfile[]; fetchedAt: number } | null = null;
+  /**
+   * Per-instance cache of GET /api/models — same TTL + lazy-eval policy as
+   * `agentProfilesCache`. Holds the JOINED `<providerId>/<id>` strings ready
+   * for `mainModel` validation.
+   */
+  private modelsCache: { models: string[]; fetchedAt: number } | null = null;
 
   constructor(options?: { fetchFn?: FetchFn }) {
     this.fetchFn = options?.fetchFn;
@@ -332,40 +359,12 @@ export class AiderDeskProvider implements IAgentProvider {
     const client = new AiderDeskClient({
       apiUrl,
       fetchFn: this.fetchFn,
+      // AiderDesk uses no auth today; the client falls back to env if set.
       apiKey: requestOptions?.env?.AIDERDESK_API_KEY ?? process.env.AIDERDESK_API_KEY,
       timeoutMs: requestTimeoutMs,
     });
 
-    // ── 4. Resolve model ─────────────────────────────────────────────────
-    const modelRef = requestOptions?.model ?? assistantConfig.model;
-    if (!modelRef) {
-      yield {
-        type: 'system',
-        content: '⚠️ No model specified for AiderDesk provider. Set model in config or node.',
-      };
-      yield {
-        type: 'result',
-        isError: true,
-        errors: ['No model specified. Set assistants.aiderdesk.model or node-level model.'],
-      };
-      return;
-    }
-
-    const parsedModel = parseModelRef(modelRef);
-    if (!parsedModel) {
-      yield {
-        type: 'system',
-        content: `⚠️ Invalid model format '${modelRef}'. Expected 'provider/model' (e.g. 'poe/minimax-m3').`,
-      };
-      yield {
-        type: 'result',
-        isError: true,
-        errors: [`Invalid model format: ${modelRef}`],
-      };
-      return;
-    }
-
-    // ── 5. Resolve task (create or resume) ────────────────────────────────
+    // ── 4. Resolve task (create or resume) ────────────────────────────────
     let taskId: string;
     let resumeSucceeded = false;
     let lastSeenTaskState: AiderDeskTaskState | undefined;
@@ -411,89 +410,76 @@ export class AiderDeskProvider implements IAgentProvider {
       return;
     }
 
-    // ── 6. BIND mainModel + agentProfileId BEFORE run-prompt ─────────────
-    // The load-bearing step. Without this, AiderDesk resolves the request to
-    // its project-default agent (on the live host this is Claude with no API
-    // key) and run-prompt returns the near-empty 14-s handshake. We tolerate
-    // bind failure if the task was RESUMED — the resumed task may already
-    // have the model bound by a prior run. Fresh tasks always bind.
+    // ── 5. RESOLVE agent profile ─────────────────────────────────────────
+    // The strict contract: `requestOptions.model` is a profile-name literal.
+    // If absent AND no assistant pin → hard error. If present AND no catalog
+    // hit → hard error with did-you-mean candidates. The exact-match on
+    // profile `.name` is BY DESIGN case-sensitive; the contract is the
+    // operator-facing YAML.
     //
-    // Dual-bind: BOTH `mainModel` (the inference endpoint) AND
-    // `agentProfileId` (the runtime: systemPrompt + tool surface + MCP) must
-    // be set. Binding only `mainModel` falls through to the project-default
-    // agent — the empirical bug we are fixing (workflow run e5859a6a).
+    // The catalog fetch is forced for fresh (non-resume) calls so that every
+    // request sees the current registry. On resume we skip the catalog
+    // entirely when the prior task is bound to a non-empty model — the
+    // resume branch already has its state.
+    let resolvedProfile: AiderDeskProfile | null = null;
     let resolvedAgentId: string | null = null;
 
-    // Rule 1: explicit pin via assistantConfig.
     if (assistantConfig.agentProfileId) {
+      // Explicit pin — skip the catalog fetch entirely (preserved contract).
       resolvedAgentId = assistantConfig.agentProfileId;
-    } else if (!resumeSessionId) {
-      // Rules 2-4: catalog lookup. Skip on resume — the task is already bound
-      // by its prior run.
-      let agents = this.agentProfilesCache?.agents;
-      const now = Date.now();
-      if (
-        !agents ||
-        !this.agentProfilesCache ||
-        now - this.agentProfilesCache.fetchedAt > AGENT_PROFILES_TTL_MS
-      ) {
-        try {
-          agents = await client.listAgentProfiles();
-          this.agentProfilesCache = { agents, fetchedAt: now };
-        } catch (error) {
-          // Catalog fetch failure is non-fatal — log and fall through to a
-          // `mainModel`-only bind (the project default agent, but at least
-          // the right inference endpoint).
-          log.warn(
-            { error: errorMessage(error) },
-            'aiderdesk.agent_profiles_fetch_failed_falling_back_to_main_model_only'
-          );
-          agents = [];
-        }
+    } else {
+      // Catalog lookup — for fresh tasks we always read; for resumed tasks
+      // we still read so an exact-match by name is deterministic (the
+      // resumed task's existing binding does NOT influence name resolution
+      // because the contract says `model` IS the name).
+      const catalogAgents = await this.getCachedAgents(client);
+      const requestedName = requestOptions?.model;
+      if (!requestedName || typeof requestedName !== 'string') {
+        // No name supplied + no pin → hard error.
+        const knownNames = catalogAgents.map(a => a.name);
+        throw new UnknownAiderDeskAgentProfileError(
+          '',
+          knownNames,
+          nearestNames('', knownNames)
+        );
       }
-
-      // Rule 2: exact match on (provider AND model).
-      const exactMatches = agents.filter(
-        a => a.provider === parsedModel.providerId && a.model === parsedModel.modelId
-      );
-      if (exactMatches.length >= 1) {
-        // Match Rule 3's tiebreaker: configured Poe-API runtimes (those with a
-        // rules/ directory present on-disk) sort BEFORE empty-ruleFiles runtimes
-        // (which are CLI subprocess relayers like 'Aider'). Lex-first within each
-        // tier resolves the final ordering deterministically.
-        exactMatches.sort((a, b) => {
-          const aKey = a.ruleFiles?.length === 0 ? 1 : 0;
-          const bKey = b.ruleFiles?.length === 0 ? 1 : 0;
-          if (aKey !== bKey) return aKey - bKey;
-          return a.name.localeCompare(b.name);
-        });
-        resolvedAgentId = exactMatches[0].id;
-      } else {
-        // Rule 3: provider-only match with (ruleFiles-non-empty wins, lex-first).
-        const providerMatches = agents.filter(a => a.provider === parsedModel.providerId);
-        if (providerMatches.length > 0) {
-          providerMatches.sort((a, b) => {
-            const aKey = a.ruleFiles?.length === 0 ? 1 : 0;
-            const bKey = b.ruleFiles?.length === 0 ? 1 : 0;
-            if (aKey !== bKey) return aKey - bKey;
-            return a.name.localeCompare(b.name);
-          });
-          resolvedAgentId = providerMatches[0].id;
-        } else {
-          // Rule 4: no match. Emit warning chunk BEFORE updateTask; the
-          // updateTask call STILL happens with mainModel only (do NOT skip
-          // step 6 — see spec anti-rules).
-          yield {
-            type: 'system',
-            content: `⚠️ No AiderDesk agent profile matches ${parsedModel.providerId}/${parsedModel.modelId}; using AiderDesk project default`,
-          };
-          // resolvedAgentId stays null; updateBody below omits agentProfileId.
-        }
+      const exact = catalogAgents.find(a => a.name === requestedName);
+      if (!exact) {
+        const knownNames = catalogAgents.map(a => a.name);
+        throw new UnknownAiderDeskAgentProfileError(
+          requestedName,
+          knownNames,
+          nearestNames(requestedName, knownNames)
+        );
       }
+      resolvedProfile = exact;
+      resolvedAgentId = exact.id;
     }
 
+    // ── 6. RESOLVE modelOverride (if any) ────────────────────────────────
+    // `modelOverride` is the new sibling field on SendQueryOptions. When set,
+    // it MUST match a `<providerId>/<id>` literal returned by /api/models.
+    // Unset → omit `mainModel` on the updateTask body entirely; AiderDesk
+    // uses the profile's default model.
+    let resolvedMainModel: string | undefined;
+    if (requestOptions?.modelOverride !== undefined) {
+      const override = requestOptions.modelOverride;
+      if (typeof override !== 'string' || override.length === 0) {
+        throw new InvalidAiderDeskModelOverrideError(String(override), []);
+      }
+      const catalogModels = await this.getCachedModels(client);
+      // Strict-match the prefixed `<providerId>/<id>` form — that is what
+      // AiderDesk's `mainModel` field accepts. Bare-id inputs are REJECTED
+      // because the wire ambiguity would silently route to the wrong
+      // provider on the live host.
+      if (!catalogModels.includes(override)) {
+        throw new InvalidAiderDeskModelOverrideError(override, catalogModels);
+      }
+      resolvedMainModel = override;
+    }
+
+    // ── 7. BIND agentProfileId + (optional) mainModel + mode + workingMode
     const updateBody: AiderDeskTaskUpdate = {
-      mainModel: modelRef,
       currentMode: assistantConfig.mode ?? 'agent',
       workingMode: 'local',
       activate: false,
@@ -501,11 +487,19 @@ export class AiderDeskProvider implements IAgentProvider {
     if (resolvedAgentId) {
       updateBody.agentProfileId = resolvedAgentId;
     }
+    if (resolvedMainModel !== undefined) {
+      updateBody.mainModel = resolvedMainModel;
+    }
 
     try {
       await client.updateTask(projectDir, taskId, updateBody);
       log.info(
-        { taskId, model: modelRef, agentProfileId: resolvedAgentId },
+        {
+          taskId,
+          agentProfileId: resolvedAgentId,
+          mainModel: resolvedMainModel,
+          profileName: resolvedProfile?.name ?? '(pin)',
+        },
         'aiderdesk.task_bound'
       );
     } catch (error) {
@@ -533,13 +527,13 @@ export class AiderDeskProvider implements IAgentProvider {
       );
     }
 
-    // ── 7. Optional: structured output augmentation ───────────────────────
+    // ── 8. Optional: structured output augmentation ───────────────────────
     let effectivePrompt = prompt;
     if (requestOptions?.outputFormat?.schema) {
       effectivePrompt = augmentPromptForJsonSchema(prompt, requestOptions.outputFormat.schema);
     }
 
-    // ── 8. Stream SSE frames from /api/run-prompt ────────────────────────
+    // ── 9. Stream SSE frames from /api/run-prompt ────────────────────────
     const mode: 'code' | 'ask' | 'architect' | 'context' | 'agent' =
       assistantConfig.mode ?? 'agent';
 
@@ -625,7 +619,7 @@ export class AiderDeskProvider implements IAgentProvider {
       streamError = error;
     }
 
-    // ── 9. Surface stream failure if any ─────────────────────────────────
+    // ── 10. Surface stream failure if any ─────────────────────────────────
     if (streamError) {
       const isInterrupt = errorMessage(streamError).toLowerCase().includes('interrupted');
       const aborted = abortSignal?.aborted ?? false;
@@ -651,13 +645,13 @@ export class AiderDeskProvider implements IAgentProvider {
       return;
     }
 
-    // ── 10. Parse structured output if declared ──────────────────────────
+    // ── 11. Parse structured output if declared ──────────────────────────
     let structuredOutput: unknown;
     if (requestOptions?.outputFormat?.schema && finalMessage) {
       structuredOutput = tryParseStructuredOutput(finalMessage);
     }
 
-    // ── 11. Yield result chunk ───────────────────────────────────────────
+    // ── 12. Yield result chunk ───────────────────────────────────────────
     const isError =
       lastSeenTaskState === 'INTERRUPTED' || (askedQuestion != null && !askedSystemEmitted);
     const stopReason = askedQuestion
@@ -672,7 +666,11 @@ export class AiderDeskProvider implements IAgentProvider {
       structuredOutput,
       isError,
       stopReason,
-      resolvedModel: { id: modelRef },
+      // Prefer the override as the user-visible model label; fall back to
+      // the catalog profile name when no override was supplied.
+      resolvedModel: {
+        id: resolvedMainModel ?? resolvedProfile?.name ?? '(unbound)',
+      },
     };
 
     // Wrap with withResumedOutcome so the resumed flag is correct on the
@@ -691,5 +689,41 @@ export class AiderDeskProvider implements IAgentProvider {
 
   getCapabilities(): ProviderCapabilities {
     return AIDERDESK_CAPABILITIES;
+  }
+
+  /**
+   * Internal: lazy-fetch the AiderDesk agent-profile catalog with the
+   * 60s-TTL cache. On network failure the catalog would be empty — caller
+   * surfaces that as an UnknownAiderDeskAgentProfileError.
+   */
+  private async getCachedAgents(client: AiderDeskClient): Promise<AiderDeskProfile[]> {
+    const now = Date.now();
+    if (
+      this.agentProfilesCache &&
+      now - this.agentProfilesCache.fetchedAt <= CATALOG_TTL_MS
+    ) {
+      return this.agentProfilesCache.agents;
+    }
+    const agents = await client.listAgentProfiles();
+    this.agentProfilesCache = { agents, fetchedAt: now };
+    return agents;
+  }
+
+  /**
+   * Internal: lazy-fetch the AiderDesk model catalog (joined to prefixed
+   * `<providerId>/<id>` form) with the 60s-TTL cache.
+   */
+  private async getCachedModels(client: AiderDeskClient): Promise<string[]> {
+    const now = Date.now();
+    if (
+      this.modelsCache &&
+      now - this.modelsCache.fetchedAt <= CATALOG_TTL_MS
+    ) {
+      return this.modelsCache.models;
+    }
+    const models = await client.getModels();
+    const joined = models.map(joinModelRef);
+    this.modelsCache = { models: joined, fetchedAt: now };
+    return joined;
   }
 }

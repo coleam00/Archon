@@ -17,6 +17,8 @@ import { ClaudeProvider } from './claude/provider';
 import { CodexProvider } from './codex/provider';
 import { CLAUDE_CAPABILITIES } from './claude/capabilities';
 import { CODEX_CAPABILITIES } from './codex/capabilities';
+import { OLLAMA_CAPABILITIES } from './ollama/capabilities';
+import { OllamaProvider } from './ollama/provider';
 import { registerCopilotProvider } from './community/copilot/registration';
 import { registerOpencodeProvider } from './community/opencode/registration';
 import { registerPiProvider } from './community/pi/registration';
@@ -145,6 +147,15 @@ export function registerBuiltinProviders(): void {
           },
         ],
       },
+    },
+    {
+      id: 'ollama',
+      displayName: 'Ollama (direct)',
+      factory: () => new OllamaProvider(),
+      capabilities: OLLAMA_CAPABILITIES,
+      builtIn: true,
+      // Ollama typically runs unauthenticated on the operator's host.
+      credentials: { kind: 'static', specs: [] },
     },
   ];
 

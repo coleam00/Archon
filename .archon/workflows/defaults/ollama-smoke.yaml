@@ -1,0 +1,41 @@
+name: ollama-smoke
+description: |
+  Round-trip diagnostic — engine → ${OLLAMA_BASE_URL}/api/chat (direct, NO
+  AiderDesk in the path). Probes Ollama's `/api/chat` endpoint with the
+  internlm/internlm2.5:7b-8k model so a single conversation completes in
+  seconds. Use when: confirming Ollama-via-archon's-direct-provider path
+  end-to-end.
+
+provider: ollama
+model: internlm/internlm2.5:7b-8k
+
+inputs:
+  label:
+    required: false
+    default: "(unspecified)"
+
+returns: confirm
+
+nodes:
+  - id: bootstrap
+    bash: |
+      echo "=== CWD binding confirmation ==="
+      echo "pwd  = $(pwd)"
+      echo "=== Top-level files ==="
+      ls -1 2>&1 | head -20
+
+  - id: confirm
+    depends_on: [bootstrap]
+    prompt: |
+      Running against $inputs.label. The bash pre-step printed:
+
+      ---
+
+      $bootstrap.output
+
+      ---
+
+      Reply in ONE line under 200 chars:
+      - confirm you received the cwd + listing
+      - name the model you are running
+      Do NOT chain tools or call sub-systems. Pure text reply only.
