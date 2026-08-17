@@ -42,9 +42,9 @@ Workflows are YAML files discovered from `.archon/workflows/` (recursively) plus
 
 ### `modelReasoningEffort` (optional, Codex only) — DEPRECATED
 - **Type**: `'minimal'` | `'low'` | `'medium'` | `'high'` | `'xhigh'`
-- **Use `effort:` instead.** Still honoured: on a Codex node it overrides a
-  workflow-level `effort:`, but a **node-level** `effort:` overrides it. Warns at
-  load time and will be removed.
+- **Use `effort:` instead.** Still accepted: the loader translates it into
+  `effort:` and warns. If both are declared, `effort:` wins and this one is
+  dropped. Will be removed.
 - **Default**: from `.archon/config.yaml` `assistants.codex.modelReasoningEffort`
   (that config key is NOT deprecated)
 

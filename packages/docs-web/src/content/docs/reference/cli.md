@@ -184,7 +184,7 @@ Discovers flat, one-level grouped, and exact `<pack>/<workflow>/` packaged layou
 | `--cwd <path>` | Target directory (required for most use cases) |
 | `--json` | Output machine-readable JSON instead of formatted text |
 
-With `--json`, outputs `{ "workflows": [...], "errors": [...] }`. Optional fields (`provider`, `model`, `effort`, `modelReasoningEffort`, `webSearchMode`, `parseWarnings`) are omitted when not set on a workflow. Each `parseWarnings` entry is a full warning message naming a key the engine dropped or deprecated, the node it was found on, and what to write instead — see [Unknown keys](/guides/authoring-workflows/#unknown-keys-are-reported-not-rejected).
+With `--json`, outputs `{ "workflows": [...], "errors": [...] }`. Optional fields (`provider`, `model`, `effort`, `webSearchMode`, `parseWarnings`) are omitted when not set on a workflow. A workflow written with the deprecated `modelReasoningEffort:` reports its value as `effort`, which is what it is translated to at load. Each `parseWarnings` entry is a full warning message naming a key the engine dropped or deprecated, the node it was found on, and what to write instead — see [Unknown keys](/guides/authoring-workflows/#unknown-keys-are-reported-not-rejected).
 
 ### `workflow run <name> [message]`
 

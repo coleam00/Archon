@@ -640,21 +640,21 @@ nodes:
       const workflows = result.workflows.map(ws => ws.workflow);
 
       expect(workflows).toHaveLength(1);
-      expect(workflows[0].modelReasoningEffort).toBe('medium');
+      // #2556: translated into `effort:` at load, never carried forward.
+      expect(workflows[0].effort).toBe('medium');
+      expect(workflows[0].modelReasoningEffort).toBeUndefined();
       expect(workflows[0].webSearchMode).toBe('live');
       // The removed field is not carried onto the workflow object.
       expect((workflows[0] as Record<string, unknown>).additionalDirectories).toBeUndefined();
     });
 
-    it('should warn that modelReasoningEffort is deprecated while still honouring it', async () => {
-      // #2556: warn-and-honour. The value must survive to the executor — an
-      // author who reads the warning and does nothing must see no change — and
-      // the warning must state the precedence BY LEVEL. This field outranks a
-      // workflow-level `effort:` but not a node-level one, and the same message
-      // recommends writing `effort:` per node: an unqualified "still wins on
-      // Codex" walks the reader into the silent depth change the deprecation
-      // exists to prevent. That is a prose defect no other test can catch, so it
-      // is pinned here.
+    it('should translate modelReasoningEffort into effort and say so', async () => {
+      // #2556: warn-and-TRANSLATE. The value must survive to the executor — an
+      // author who reads the warning and does nothing must see no change in the
+      // depth their nodes run at — but it survives as `effort:`, the field that
+      // has a node-level counterpart. That is what makes the deprecation
+      // terminal, and what lets a later pass collapse workflow-level config onto
+      // nodes (#1764) without a hole for this field.
       const workflowDir = join(testDir, '.archon', 'workflows');
       await mkdir(workflowDir, { recursive: true });
       const yaml = `name: deprecated-effort-spelling
@@ -669,17 +669,48 @@ nodes:
 
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
       expect(result.workflows).toHaveLength(1);
-      expect(result.workflows[0].workflow.modelReasoningEffort).toBe('xhigh');
+      // The value arrives under the canonical spelling; the deprecated key is gone.
+      expect(result.workflows[0].workflow.effort).toBe('xhigh');
+      expect(result.workflows[0].workflow.modelReasoningEffort).toBeUndefined();
 
       const pw = result.workflows[0].parseWarnings ?? [];
       const deprecation = pw.find(w => w.includes('modelReasoningEffort'));
       expect(deprecation).toBeDefined();
       expect(deprecation).toContain('deprecated');
-      expect(deprecation).toContain('effort: xhigh');
-      // Both halves of the precedence, or the message is misleading in the
-      // direction it is actively recommending.
-      expect(deprecation).toContain("overrides a workflow-level 'effort:' on Codex");
-      expect(deprecation).toContain("node-level 'effort:' overrides it");
+      // The message must name what actually happened, not just what to write —
+      // an author who reads "deprecated" and nothing else cannot tell whether
+      // their value still applies.
+      expect(deprecation).toContain("has been applied as 'effort: xhigh'");
+    });
+
+    it('should ignore modelReasoningEffort when effort is also declared, and say which won', async () => {
+      // The loader cannot know which nodes resolve to Codex, so the deprecated
+      // field's Codex-only precedence is not expressible at load time. `effort:`
+      // wins, and the warning has to say so plainly — silently picking one of
+      // two declared depths is the failure this issue exists to remove.
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      const yaml = `name: both-spellings
+description: Declares both reasoning-depth fields
+provider: codex
+effort: minimal
+modelReasoningEffort: xhigh
+nodes:
+  - id: test
+    command: test
+`;
+      await writeFile(join(workflowDir, 'both.yaml'), yaml);
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.workflows).toHaveLength(1);
+      expect(result.workflows[0].workflow.effort).toBe('minimal');
+      expect(result.workflows[0].workflow.modelReasoningEffort).toBeUndefined();
+
+      const pw = result.workflows[0].parseWarnings ?? [];
+      const deprecation = pw.find(w => w.includes('modelReasoningEffort'));
+      expect(deprecation).toBeDefined();
+      expect(deprecation).toContain('IGNORED');
+      expect(deprecation).toContain('effort: minimal');
     });
 
     it('should not warn about deprecation when modelReasoningEffort is absent', async () => {
@@ -5480,9 +5511,14 @@ describe('workflow-level field parity (#2457)', () => {
     nodes: { yaml: '', present: w => w.nodes?.length === 1 },
     provider: { yaml: 'provider: claude', present: w => w.provider === 'claude' },
     model: { yaml: 'model: sonnet', present: w => w.model === 'sonnet' },
+    // The one field that survives as a DIFFERENT key. #2556 deprecated it and
+    // the loader translates it into `effort:`, so asserting `w.modelReasoningEffort`
+    // would now fail for the right reason. The guard's invariant is "a schema
+    // field must not be silently inert", and translation satisfies it — so the
+    // fixture proves the value arrived, and that the deprecated key did not.
     modelReasoningEffort: {
       yaml: 'modelReasoningEffort: high',
-      present: w => w.modelReasoningEffort === 'high',
+      present: w => w.effort === 'high' && w.modelReasoningEffort === undefined,
     },
     webSearchMode: { yaml: 'webSearchMode: live', present: w => w.webSearchMode === 'live' },
     interactive: { yaml: 'interactive: true', present: w => w.interactive === true },

@@ -53,7 +53,6 @@ import type {
   EffortLevel,
   ThinkingConfig,
   SandboxSettings,
-  ModelReasoningEffort,
   WebSearchMode,
   WorkflowSource,
   WorkflowDefinition,
@@ -339,23 +338,18 @@ export async function loadConfiguredMcpServerNames(
   }
 }
 
-/** Workflow-level provider options. The first five have node-level counterparts and
- *  are resolved as `node.X ?? workflowLevelOptions.X`; the two Codex fields below have
- *  NO node-level equivalent (they are absent from `dagNodeSchema`), so a workflow-level
- *  value is the only value. */
+/** Workflow-level provider options. All have node-level counterparts and are
+ *  resolved as `node.X ?? workflowLevelOptions.X`, except `webSearchMode`, which
+ *  is absent from `dagNodeSchema` — so a workflow-level value is the only value. */
 interface WorkflowLevelOptions {
   effort?: EffortLevel;
   thinking?: ThinkingConfig;
   fallbackModel?: string;
   betas?: string[];
   sandbox?: SandboxSettings;
-  /** DEPRECATED (#2556): Codex-only synonym for `effort:`. Still honoured on a
-   *  Codex node, where it outranks a workflow-level `effort:` so nothing that
-   *  worked stops working; a node-level `effort:` wins over it. Remove with the
-   *  schema field. */
-  modelReasoningEffort?: ModelReasoningEffort;
   /** Codex-only: web-search mode, consumed as `assistantConfig.webSearchMode`.
-   *  Permanently workflow-level-only — decided in #2556. */
+   *  Permanently workflow-level-only — decided in #2556, and the ONLY
+   *  workflow-level field with no per-node counterpart. */
   webSearchMode?: WebSearchMode;
   /** Workflow-level tier keyword (when `workflow.model` is small/medium/large), so
    *  nodes that inherit the workflow model can still surface the `← tier` annotation. */
@@ -1062,28 +1056,18 @@ async function resolveNodeProviderAndModel(
   // Get provider capabilities for capability warnings (static lookup, no instantiation)
   const caps = getProviderCapabilities(provider);
 
-  // Two workflow-level fields are Codex's alone and hang on the RESOLVED
-  // provider, so it is named once here rather than spelled as separate string
-  // comparisons a later change could update apart:
-  //   - `webSearchMode:` — no other provider reads it, and #2556 decided it
-  //     keeps no node-level form. There is deliberately no ProviderCapabilities
-  //     axis for one provider's one field.
-  //   - `modelReasoningEffort:` — deprecated by #2556 as a Codex-only synonym
-  //     for `effort:`, honoured through the deprecation period.
+  // `webSearchMode:` is Codex's alone — no other provider reads it, and #2556
+  // decided it keeps no node-level form, making it the single workflow-level
+  // field with no per-node counterpart. There is deliberately no
+  // ProviderCapabilities axis for one provider's one field.
+  //
+  // Reasoning depth is NOT in this category any more: the loader translates the
+  // deprecated `modelReasoningEffort:` into `effort:`, so the executor sees one
+  // provider-agnostic field and needs no Codex branch for it.
   const isCodex = provider === 'codex';
 
-  // Deprecated (#2556). Ranked above workflow-level `effort:` so no existing
-  // workflow changes what it sends — including the mixed-provider pattern of
-  // `effort:` for Claude nodes plus `modelReasoningEffort:` for Codex ones. A
-  // node-level `effort:` still wins, which is the correction this issue exists
-  // for. Delete this const and its uses when the field is removed.
-  const deprecatedCodexEffort: string | undefined = isCodex
-    ? workflowLevelOptions.modelReasoningEffort
-    : undefined;
-
   // The one reasoning depth this node will run at, before any preset fallback.
-  const declaredEffort: string | undefined =
-    node.effort ?? deprecatedCodexEffort ?? workflowLevelOptions.effort;
+  const declaredEffort: string | undefined = node.effort ?? workflowLevelOptions.effort;
 
   // Runtime backstop for container dispatch: the run-start pre-scan
   // (collectContainerIncompatibleProviders) hand-mirrors this same provider
@@ -1128,17 +1112,12 @@ async function resolveNodeProviderAndModel(
     }
   }
 
-  // `modelReasoningEffort`/`webSearchMode` have no ProviderCapabilities axis, so capChecks
-  // above cannot see them. Surfacing them here reuses the existing loud-mismatch path so a
-  // workflow that declares either one on a node that cannot read them gets the same warning
-  // every other capability mismatch produces, instead of a silent no-op.
-  if (!isCodex) {
-    if (workflowLevelOptions.modelReasoningEffort !== undefined) {
-      unsupported.push('modelReasoningEffort');
-    }
-    if (workflowLevelOptions.webSearchMode !== undefined) {
-      unsupported.push('webSearchMode');
-    }
+  // `webSearchMode` has no ProviderCapabilities axis, so capChecks above cannot
+  // see it. Surfacing it here reuses the existing loud-mismatch path so a
+  // workflow that declares it on a node that cannot read it gets the same
+  // warning every other capability mismatch produces, instead of a silent no-op.
+  if (!isCodex && workflowLevelOptions.webSearchMode !== undefined) {
+    unsupported.push('webSearchMode');
   }
 
   if (unsupported.length > 0) {
@@ -8154,7 +8133,6 @@ export async function executeDagWorkflow(
     fallbackModel: workflow.fallbackModel,
     betas: workflow.betas,
     sandbox: workflow.sandbox,
-    modelReasoningEffort: workflow.modelReasoningEffort,
     webSearchMode: workflow.webSearchMode,
     workflowTier,
   };
