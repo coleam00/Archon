@@ -54,15 +54,20 @@ export function LoopFields({
         />
       )}
       {/* Optional since #2563 — clearing the box drops the field entirely, so a loop
-          driven only by `until bash` carries no prose signal. Mirrors the
-          empty-string-to-undefined handling on `until_bash` below. */}
+          driven only by `until bash` carries no prose signal.
+
+          Both boxes drop a blank value rather than storing it: a leftover space
+          would otherwise survive as `until: " "`, which the engine rejects and which
+          is broken at runtime anyway (a blank signal matches any whitespace-only
+          line, and `bash -c "   "` exits 0). Whitespace INSIDE a value is kept — only
+          an entirely-blank box means "not declared". */}
       <TextField
         label="Until (completion signal, optional with until bash)"
         value={data.until ?? ''}
         mono
         placeholder="COMPLETE"
         onChange={(raw): void => {
-          onChange({ ...data, until: raw.length > 0 ? raw : undefined });
+          onChange({ ...data, until: raw.trim().length > 0 ? raw : undefined });
         }}
       />
       <TextField
@@ -71,7 +76,7 @@ export function LoopFields({
         mono
         placeholder="bun run validate"
         onChange={(raw): void => {
-          onChange({ ...data, until_bash: raw.length > 0 ? raw : undefined });
+          onChange({ ...data, until_bash: raw.trim().length > 0 ? raw : undefined });
         }}
       />
       <NumberField

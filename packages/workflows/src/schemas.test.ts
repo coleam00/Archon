@@ -992,21 +992,84 @@ describe('dagNodeSchema — loop completion channel (#2563)', () => {
     expect(result.success).toBe(false);
   });
 
-  test('whitespace is not a channel, in either field', () => {
-    // Both are degenerate at runtime, not merely untidy: regexes built from a
-    // whitespace `until` match almost any output, and `bash -c "   "` exits 0, so a
-    // whitespace `until_bash` completes on iteration 1. Trimming here also keeps the
-    // rule in step with the console builder's hand-written mirror, which trims.
-    for (const loop of [
-      { prompt: 'iterate', until: '   ', max_iterations: 5 },
-      { prompt: 'iterate', until_bash: '  \t ', max_iterations: 5 },
-      { prompt: 'iterate', until: ' ', until_bash: '\n', max_iterations: 5 },
-    ]) {
-      const result = dagNodeSchema.safeParse({ id: 'ws', loop });
-      expect(result.success).toBe(false);
-      if (!result.success) {
-        expect(result.error.issues.some(i => i.message.includes('completion channel'))).toBe(true);
-      }
+  // Channel-verdict matrix. `structural.test.ts` in @archon/web runs the SAME case
+  // names against the builder's hand-written mirror of these rules — the two cannot
+  // share code (@archon/web must not import @archon/workflows), so matching names are
+  // what makes a future divergence visible. Change one, change both.
+  describe('channel verdict matrix (twin: builder structural.test.ts)', () => {
+    const cases: Array<[string, Record<string, unknown>, boolean]> = [
+      ['neither declared', {}, false],
+      ['until only, real', { until: 'COMPLETE' }, true],
+      ['until_bash only, real', { until_bash: 'bun run test' }, true],
+      ['both real', { until: 'COMPLETE', until_bash: 'bun run test' }, true],
+      ['until blank, no bash', { until: '  ' }, false],
+      ['until blank + real bash', { until: ' ', until_bash: 'bun run test' }, false],
+      ['real until + blank bash', { until: 'COMPLETE', until_bash: '   ' }, false],
+      ['both blank', { until: ' ', until_bash: '\t' }, false],
+      ['until empty string', { until: '' }, false],
+      ['until_bash empty string', { until_bash: '' }, false],
+      ['padded until (legit)', { until: ' COMPLETE ' }, true],
+      ['multiline until_bash (legit)', { until_bash: '  set -e\n  test -f x\n' }, true],
+    ];
+
+    for (const [name, channels, shouldParse] of cases) {
+      test(`${name} -> ${shouldParse ? 'accepted' : 'rejected'}`, () => {
+        const result = dagNodeSchema.safeParse({
+          id: 'l',
+          loop: { prompt: 'iterate', max_iterations: 5, ...channels },
+        });
+        expect(result.success).toBe(shouldParse);
+      });
+    }
+  });
+
+  test('a blank channel is rejected even when its sibling is valid', () => {
+    // The aggregate at-least-one rule only fires when BOTH are blank, so the
+    // per-field checks are what catch these two. Both are broken at runtime, not
+    // merely untidy: `bash -c "   "` exits 0 (completing on iteration 1), and a blank
+    // signal reaches detectCompletionSignal, whose own-line pattern matches any
+    // whitespace-only line the model emits.
+    const blankSignal = dagNodeSchema.safeParse({
+      id: 'a',
+      loop: { prompt: 'p', until: ' ', until_bash: 'bun run test', max_iterations: 5 },
+    });
+    expect(blankSignal.success).toBe(false);
+    if (!blankSignal.success) {
+      expect(blankSignal.error.issues.some(i => i.message.includes("'loop.until' must be"))).toBe(
+        true
+      );
+    }
+
+    const blankCheck = dagNodeSchema.safeParse({
+      id: 'b',
+      loop: { prompt: 'p', until: 'COMPLETE', until_bash: '   ', max_iterations: 5 },
+    });
+    expect(blankCheck.success).toBe(false);
+    if (!blankCheck.success) {
+      expect(
+        blankCheck.error.issues.some(i => i.message.includes("'loop.until_bash' must be"))
+      ).toBe(true);
+    }
+  });
+
+  test('a declared channel is validated but never rewritten', () => {
+    // Trimming for validation is not trimming for storage: `until` is matched
+    // verbatim by detectCompletionSignal and `until_bash` is executed verbatim, so
+    // rewriting either here would silently change what an existing workflow does.
+    const result = dagNodeSchema.safeParse({
+      id: 'verbatim',
+      loop: {
+        prompt: 'p',
+        until: ' COMPLETE ',
+        until_bash: '  set -e\n  test -f x\n',
+        max_iterations: 5,
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const node = result.data as { loop?: { until?: string; until_bash?: string } };
+      expect(node.loop?.until).toBe(' COMPLETE ');
+      expect(node.loop?.until_bash).toBe('  set -e\n  test -f x\n');
     }
   });
 });

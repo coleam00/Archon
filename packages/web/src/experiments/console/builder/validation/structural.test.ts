@@ -53,26 +53,86 @@ describe('validateStructural', () => {
     expect(invalid).toContain('loop.max_iterations');
   });
 
-  test('loop with only until_bash is clean — no signal required (#2563)', () => {
-    const issues = validateStructural(
+  // Channel-verdict matrix (#2563). The engine runs the SAME case names against
+  // `loopControlSchema` in @archon/workflows' `schemas.test.ts`. The two encodings
+  // cannot share code (@archon/web must not import @archon/workflows), so matching
+  // names are what makes a future divergence visible. Change one, change both.
+  describe('channel verdict matrix (twin: workflows schemas.test.ts)', () => {
+    const cases: Array<[string, { until?: string; until_bash?: string }, boolean]> = [
+      ['neither declared', {}, false],
+      ['until only, real', { until: 'COMPLETE' }, true],
+      ['until_bash only, real', { until_bash: 'bun run test' }, true],
+      ['both real', { until: 'COMPLETE', until_bash: 'bun run test' }, true],
+      ['until blank, no bash', { until: '  ' }, false],
+      ['until blank + real bash', { until: ' ', until_bash: 'bun run test' }, false],
+      ['real until + blank bash', { until: 'COMPLETE', until_bash: '   ' }, false],
+      ['both blank', { until: ' ', until_bash: '\t' }, false],
+      ['until empty string', { until: '' }, false],
+      ['until_bash empty string', { until_bash: '' }, false],
+      ['padded until (legit)', { until: ' COMPLETE ' }, true],
+      ['multiline until_bash (legit)', { until_bash: '  set -e\n  test -f x\n' }, true],
+    ];
+
+    for (const [name, channels, shouldBeClean] of cases) {
+      test(`${name} -> ${shouldBeClean ? 'accepted' : 'rejected'}`, () => {
+        const issues = validateStructural(
+          wf([
+            {
+              id: 'l',
+              variant: 'loop',
+              base: {},
+              data: { prompt: 'iterate', max_iterations: 5, fresh_context: false, ...channels },
+            },
+          ])
+        );
+        const channelIssues = issues.filter(i => i.path.field?.startsWith('loop.until'));
+        expect(channelIssues.length === 0).toBe(shouldBeClean);
+      });
+    }
+  });
+
+  test('a blank channel is flagged even when its sibling is valid', () => {
+    // The at-least-one rule only fires when NO channel is declared, so these two
+    // shapes are caught by the per-channel checks. Both are broken at runtime:
+    // `bash -c "   "` exits 0, and a blank signal matches any whitespace-only line.
+    const blankSignal = validateStructural(
       wf([
         {
           id: 'l',
           variant: 'loop',
           base: {},
           data: {
-            prompt: 'fix the tests',
+            prompt: 'p',
             max_iterations: 5,
             fresh_context: false,
+            until: ' ',
             until_bash: 'bun run test',
           },
         },
       ])
     );
-    expect(issues).toEqual([]);
+    expect(blankSignal.some(i => i.path.field === 'loop.until')).toBe(true);
+
+    const blankCheck = validateStructural(
+      wf([
+        {
+          id: 'l',
+          variant: 'loop',
+          base: {},
+          data: {
+            prompt: 'p',
+            max_iterations: 5,
+            fresh_context: false,
+            until: 'COMPLETE',
+            until_bash: '   ',
+          },
+        },
+      ])
+    );
+    expect(blankCheck.some(i => i.path.field === 'loop.until_bash')).toBe(true);
   });
 
-  test('loop with neither until nor until_bash is flagged as missing a channel', () => {
+  test('the missing-channel message names both channels', () => {
     const issues = validateStructural(
       wf([
         {

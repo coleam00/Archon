@@ -95,13 +95,20 @@ function checkRequiredFields(node: BuilderNode): Issue[] {
           missing('loop.command', 'loop requires a command name');
       } else if ((node.data.prompt ?? '').trim().length === 0)
         missing('loop.prompt', 'loop requires a prompt (or a command file)');
-      // Completion channel (mirrors the engine schema since #2563): at least one of
-      // `until` / `until_bash`, not `until` unconditionally. A present-but-blank
-      // `until` is still a violation — that is an unfinished edit, not a deliberate
-      // deterministic-only loop.
+      // Completion channels (#2563) — a hand-written mirror of the two rules in
+      // the engine's `loopControlSchema`, because @archon/web cannot import
+      // @archon/workflows. Keep the pair in step; verify by parsing both, not by
+      // reading them.
+      //
+      // 1. A declared channel must be non-blank. Blank is broken at runtime, not
+      //    just untidy: `bash -c "   "` exits 0, and a blank signal matches any
+      //    whitespace-only line in the model's output.
       if (node.data.until?.trim().length === 0)
-        missing('loop.until', "loop requires a non-empty 'until' signal");
-      else if (node.data.until === undefined && (node.data.until_bash ?? '').trim().length === 0)
+        missing('loop.until', "loop requires a non-blank 'until' signal");
+      if (node.data.until_bash?.trim().length === 0)
+        missing('loop.until_bash', "loop requires a non-blank 'until_bash' check");
+      // 2. At least one channel must be declared at all.
+      if (node.data.until === undefined && node.data.until_bash === undefined)
         missing(
           'loop.until',
           "loop requires a completion channel: an 'until' signal or an 'until_bash' check"
