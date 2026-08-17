@@ -961,6 +961,12 @@ export async function workflowRunCommand(
       ['--container', options.container === true],
       ['--resume', options.resume === true],
       ['--detach', options.detach === true],
+      // The dry-run engine has no `$INPUTS` support at all — it never substitutes
+      // `$INPUTS.<name>` and never sets `INPUTS_<UPPER_SNAKE>` in a code node's env.
+      // Accepting the flag would silently simulate with EMPTY inputs: a bash node
+      // reading `$INPUTS_SCOPE` expands an unset var to '', so the trace reads as a
+      // valid simulation of a run that never happened. Reject rather than mislead.
+      ['--input', options.inputs !== undefined && options.inputs.length > 0],
     ] as const;
     const incompatibleFlag = incompatible.find(([, present]) => present)?.[0];
     if (incompatibleFlag) {

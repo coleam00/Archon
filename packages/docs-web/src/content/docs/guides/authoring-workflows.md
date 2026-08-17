@@ -1059,7 +1059,7 @@ reusable block has an explicit, caller-facing contract instead of relying on pos
 accidents. Two workflow-level fields:
 
 ```yaml
-name: archon-review-block
+name: review-block
 description: Reviews a diff — composes into a parent, and runs on its own
 inputs:
   diff:
@@ -1087,7 +1087,9 @@ nodes:
   inputs](#running-a-workflow-that-declares-inputs)). Whichever channel supplies them, the same
   contract applies: a missing **required** input and an **undeclared** key are both rejected, and
   a declared `default:` fills an omitted input. A workflow with **no** `inputs:` keeps the old
-  lenient behavior (unknown caller keys ignored).
+  lenient behavior: supplied keys **pass through unvalidated** — they are recorded on the run
+  and still resolve as `$INPUTS.<name>` / `INPUTS_<UPPER_SNAKE>`, they are simply never checked
+  against a declaration, because there isn't one.
 - **`returns:`** — the **node id** whose output IS the workflow's result. It selects by id, so
   it works for any node type and even a **non-sink** node (a node other nodes depend on). For an
   `include:` block, `$blk.output` resolves to the `returns:` node; `depends_on: [blk]` still
@@ -1134,10 +1136,10 @@ composes into any number of parents — supply the values at invocation:
 
 ```bash
 # one flag per input; repeat it
-archon workflow run archon-review-block --input diff="$(git diff)" --input style=terse
+archon workflow run review-block --input diff="$(git diff)" --input style=terse
 
 # the trailing message is still $ARGUMENTS, independent of --input
-archon workflow run archon-review-block --input diff=... "focus on the auth changes"
+archon workflow run review-block --input diff=... "focus on the auth changes"
 ```
 
 In the **web console**, a workflow that declares `inputs:` renders a field per input in the run

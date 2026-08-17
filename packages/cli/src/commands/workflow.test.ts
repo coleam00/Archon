@@ -853,6 +853,27 @@ describe('workflowRunCommand — --input declared inputs (#2554)', () => {
     expect(executeWorkflow).not.toHaveBeenCalled();
   });
 
+  it('rejects --input with --dry-run instead of simulating with empty inputs', async () => {
+    // The dry-run engine has no $INPUTS support: a bash node reading $INPUTS_SCOPE would
+    // expand an unset var to '', producing a trace that reads as a valid simulation of a
+    // run that never happened. Every other flag dry-run cannot honor is rejected the same
+    // way, so this closes the one hole in that list.
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const dryRun = await import('@archon/workflows/dry-run');
+    await stubInputWorkflow();
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockClear();
+    (dryRun.dryRunWorkflow as ReturnType<typeof mock>).mockClear();
+
+    await expect(
+      workflowRunCommand('/repo/root', 'review-block', 'go', {
+        dryRun: true,
+        inputs: ['diff=D1'],
+      })
+    ).rejects.toThrow(/--dry-run cannot be combined with --input/);
+
+    expect(dryRun.dryRunWorkflow).not.toHaveBeenCalled();
+  });
+
   it('does not re-gate a --resume of a required-input workflow', async () => {
     // The gate is deliberately skipped on resume: the run row already carries inputs
     // validated at creation, and a resume supplies nothing. A refactor that hoists
