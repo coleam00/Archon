@@ -43,10 +43,9 @@ import { join, resolve } from 'path';
 import {
   resolveProjectStorageKey,
   getProjectStoragePaths,
-  getArchonHome,
   type ProjectStorageKey,
 } from '@archon/paths';
-import { getDatabaseType } from '@archon/core/db/connection';
+import { getDatabaseType, getSqliteDbPath } from '@archon/core/db/connection';
 import * as codebaseDb from '@archon/core/db/codebases';
 
 /**
@@ -131,9 +130,12 @@ interface MigrationTarget {
  * Only sound for SQLite. A Postgres registry's contents cannot be inferred from
  * the local filesystem, so under DATABASE_URL the lookup always runs and an
  * unreachable database still exits 1 rather than guessing a destination.
+ *
+ * The path comes from `getSqliteDbPath()` rather than being rebuilt here, so this
+ * can never end up asking about a different file than the adapter opens.
  */
 function registryIsKnownEmpty(): boolean {
-  return getDatabaseType() === 'sqlite' && !existsSync(join(getArchonHome(), 'archon.db'));
+  return getDatabaseType() === 'sqlite' && !existsSync(getSqliteDbPath());
 }
 
 async function resolveTarget(cwd: string): Promise<MigrationTarget> {

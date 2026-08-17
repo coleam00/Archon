@@ -22,9 +22,11 @@
  *
  * BUDGET: deliberately left at Bun's 5000 ms default, even though these tests
  * time out on windows-latest at ~5015 ms (#2306). Raising it was considered and
- * rejected: every spawn here used to create a 704 KB SQLite database — including
- * a `PRAGMA busy_timeout = 5000` carrier, the exact bound that turned out to be
- * #2473's real cause — and that creation is now gone. Whether it was also the
+ * rejected: every spawn that got as far as resolving a destination used to create
+ * a 704 KB SQLite database — including a `PRAGMA busy_timeout = 5000` carrier, the
+ * exact bound that turned out to be #2473's real cause — and that creation is now
+ * gone. (The five argument-parsing cases never did: `parseArgs` runs at module
+ * load and exits before `resolveTarget` is reached.) Whether it was also the
  * cause here is testable only by leaving the alarm armed and seeing whether the
  * timeouts stop. A larger budget would answer the question by silencing it.
  * If it does recur, find the specific colliding bound the way #2473 did; do not
@@ -51,8 +53,8 @@ interface Sandbox {
  * Create a sandbox, run `body`, and always tear down.
  *
  * `maxRetries` covers the Windows case where a just-exited child still holds a
- * handle inside the sandbox: node's `rm` retries exactly the EBUSY/EPERM/
- * ENOTEMPTY family this hits. On PR #2513 an unretried `rm` threw
+ * handle inside the sandbox: node's `rm` retries on EBUSY, EMFILE, ENFILE,
+ * ENOTEMPTY and EPERM, which covers what this hits. On PR #2513 an unretried `rm` threw
  * `EBUSY … archon-migrate-dhOLl3` from teardown and failed the check. A leaked
  * temp directory is not a test failure, so a final failure warns instead of
  * throwing — but it does warn, so a genuine leak stays visible.
@@ -115,9 +117,19 @@ async function runMigration(ctx: Sandbox, ...args: string[]): Promise<RunResult>
 
 /** Same as `runMigration`, but targets an arbitrary directory via `--cwd`. */
 async function runIn(ctx: Sandbox, cwd: string, ...args: string[]): Promise<RunResult> {
+  return runWithEnv(ctx, {}, cwd, ...args);
+}
+
+/** `runIn` plus extra environment — for exercising the DATABASE_URL dialect branch. */
+async function runWithEnv(
+  ctx: Sandbox,
+  extraEnv: Record<string, string>,
+  cwd: string,
+  ...args: string[]
+): Promise<RunResult> {
   return collect(
     Bun.spawn(['bun', 'run', SCRIPT, '--cwd', cwd, ...args], {
-      env: { ...process.env, ARCHON_HOME: ctx.archonHome, LOG_LEVEL: 'silent' },
+      env: { ...process.env, ARCHON_HOME: ctx.archonHome, LOG_LEVEL: 'silent', ...extraEnv },
       stdout: 'pipe',
       stderr: 'pipe',
     })
@@ -287,6 +299,30 @@ describe('migrate-state-dir', () => {
         expect(result.exitCode).toBe(0);
         expect(result.stdout).toContain('Dry run — nothing was moved');
         expect(await databaseFiles(ctx.archonHome)).toEqual([]);
+      }));
+
+    test('a Postgres registry is never inferred from the local filesystem', async () =>
+      withSandbox(async ctx => {
+        // The skip is sound only for SQLite: a remote registry's contents cannot
+        // be deduced from the absence of a local file. Without the dialect clause
+        // the whole suite still passes while every DATABASE_URL install silently
+        // takes the _cwd fallback — a wrong destination in a script that writes
+        // `.initialized`. Pointing at a closed port is enough to prove the lookup
+        // was attempted; no live Postgres needed, and it costs ~0.1s.
+        await seedLegacy(ctx, { 'triage-state.json': '{"a":1}' });
+
+        const result = await runWithEnv(
+          ctx,
+          { DATABASE_URL: 'postgresql://postgres:postgres@127.0.0.1:1/nope' },
+          ctx.repo,
+          '--apply'
+        );
+
+        expect(result.exitCode).toBe(1);
+        expect(result.stderr).toContain('Could not read the codebase registry');
+        // It refused rather than guessing: nothing moved, nothing marked.
+        expect(await listOrEmpty(ctx.legacyDir)).toEqual(['triage-state.json']);
+        expect(await isMarked(ctx.stateRoot)).toBe(false);
       }));
 
     test('--apply creates no database either, and still migrates and marks', async () =>
