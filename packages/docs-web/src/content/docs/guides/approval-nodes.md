@@ -172,8 +172,9 @@ bun run cli workflow reject <run-id> --reason "Plan needs more test coverage"
 Interactive **loop** gates (`loop:`/`loop_group:` with `interactive: true`) share these
 approve surfaces but add one rule: when the gate paused on an iteration that emitted the
 loop's completion signal (the persisted gate message — `metadata.approval.message`, shown
-by `workflow get --json` and `manage_run` — leads with "✅ Completion signal detected";
-in chat the same line follows the `⏸ Input required` prefix),
+by `workflow get --json` and `manage_run` — leads with "✅ Completion signal detected",
+or "✅ Completion condition met." for a loop that declares no `until` signal; in chat the
+same line follows the `⏸ Input required` prefix),
 approving **without a comment** finalizes the loop node from the already-computed output —
 no extra iteration runs. Approving **with** a comment runs another iteration with your
 comment as `$LOOP_USER_INPUT`. Asking the agent to approve without passing anything on
