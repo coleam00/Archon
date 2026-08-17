@@ -48,23 +48,23 @@ Four commits are the verified working baseline; cite them verbatim — the test
 suite (`@archon/providers` AiderDesk: 61 unit tests green) and the live
 round-trip on 2026-08-17 both pin to this set:
 
-| commit | role |
-| ------ | ---- |
-| `bbaeaac` | **Rule 2 tiebreaker** — picks configured Poe-API runtime when both Poe-API and Poe-Provider are present |
-| `9847d8d` | **dual-bind** agentProfileId+mainModel pre-run so AiderDesk task has both fields populated |
-| `de175bc` | **translateProjectDir** — remap container-only cwd to host-writable dir before talking to AiderDesk |
+| commit    | role                                                                                                              |
+| --------- | ----------------------------------------------------------------------------------------------------------------- |
+| `bbaeaac` | **Rule 2 tiebreaker** — picks configured Poe-API runtime when both Poe-API and Poe-Provider are present           |
+| `9847d8d` | **dual-bind** agentProfileId+mainModel pre-run so AiderDesk task has both fields populated                        |
+| `de175bc` | **translateProjectDir** — remap container-only cwd to host-writable dir before talking to AiderDesk               |
 | `fc3251c` | **.env.example mirror** — AIDERDESK_PROJECT_DIR_REMAP is documented in `.env.example` so fresh installs reproduce |
 
 ## Routing
 
-| Intent | Reference |
-| ------ | --------- |
-| Install the env / set `.env.example` keys | [Setup](#setup) |
-| First run / canonical smoke probe | [E2E probe](#e2e-probe) |
-| Diagnose a failing workflow | [Failure taxonomy](#failure-taxonomy) |
-| Add a new AiderDesk workflow node | [Authoring a new AiderDesk workflow](#authoring-a-new-aiderdesk-workflow) |
-| Extend the provider code (`@archon/providers/aiderdesk`) | [Provider extension checklist](#provider-extension-checklist) |
-| Check the canonical commit refs / live verification | [Commit baseline](#commit-baseline-verified) |
+| Intent                                                   | Reference                                                                 |
+| -------------------------------------------------------- | ------------------------------------------------------------------------- |
+| Install the env / set `.env.example` keys                | [Setup](#setup)                                                           |
+| First run / canonical smoke probe                        | [E2E probe](#e2e-probe)                                                   |
+| Diagnose a failing workflow                              | [Failure taxonomy](#failure-taxonomy)                                     |
+| Add a new AiderDesk workflow node                        | [Authoring a new AiderDesk workflow](#authoring-a-new-aiderdesk-workflow) |
+| Extend the provider code (`@archon/providers/aiderdesk`) | [Provider extension checklist](#provider-extension-checklist)             |
+| Check the canonical commit refs / live verification      | [Commit baseline](#commit-baseline-verified)                              |
 
 > The routing table is the **spec**. The bodies inline below are the **first
 > edition**. Each section is small and pasteable; link to the source file for
@@ -129,6 +129,7 @@ curl -s "http://localhost:8052/api/conversations/$CONV/messages" | tail -20
 ```
 
 **PASS signature** — the last assistant message MUST contain:
+
 - `Hello! … round-trip confirmed …` (assistant greeting)
 - the configured `poe/<model>` model name (e.g. `poe/minimax-m3`) — verifies
   the **Rule 2 tiebreaker** (`bbaeaac`) and the **dual-bind** (`9847d8d`).
@@ -150,16 +151,16 @@ a container-only cwd. See [Failure taxonomy](#failure-taxonomy) row 1.
 
 ## Failure taxonomy
 
-| Symptom | Cause | Fix |
-| ------- | ----- | --- |
-| `dag.node_empty_output` after ~150 s | projectDir handed to AiderDesk was a **container-only path** (`/app`, `/host/projects/<x>`); AiderDesk on the host can't `mkdir` it → empty SSE | Set `AIDERDESK_PROJECT_DIR_REMAP` per [Setup](#setup). Rebuild + re-run. |
-| `dag.node_empty_output` after ~14 s | AiderDesk task was created without **`agentProfileId` AND `mainModel` bound** (one or both blank); provider sent a bare POST to `/api/project/tasks` | Ensure the provider sends BOTH fields via `POST /api/project/tasks/.../update` before `/api/run-prompt` — the **dual-bind** at `9847d8d`. Re-run. |
-| "JavaScript Error in AiderDesk main process" dialog (AiderDesk GUI) | AiderDesk's Node caught an uncaughtException on the **main process** (renderer-surfaceable). 99% of cases in this environment: `mkdir <projectDir>` failed with `EACCES` | Check `~/.config/aider-desk/logs/error-<today>.log` for the `mkdir` line. Route as the row above. |
-| Workflow completes but assistant says Ollama / wrong model | **Rule 2 tiebreaker** picked the Ollama runtime instead of the Poe-API runtime; user requested `poe/<model>` but got `ollama/<something>` | Re-confirm `assistantConfig.providers.poe.api.baseUrl` and `providerId` in `.archon/config.yaml`. The `bbaeaac` fix requires both fields populated. |
-| `run-prompt returns 0 chunks, no SSE frames` (curl-host direct) | **Stale `taskId`** from a host migration or pruned `.aider-desk/tasks/` cleanup; session-resume hit missing files | Pass a fresh `taskId` (drop the `--task-id` resume) and re-run. Don't delete `.aider-desk/tasks/internal/` — that's AiderDesk-managed. |
-| `node_counts: failed: 1` for `e2e-deterministic` "uv binary ENOENT" | Unrelated to AiderDesk. `oven/bun:1.3.11-slim` base image lacks `uv`. The `e2e-deterministic` workflow uses `script-python` nodes. | Install `uv` in the image OR remove the `script-python` node. Out of scope for this skill. |
-| "MCP Client creation failed … spawn uvx/npx ENOENT" cascade (in `error-<date>.log`) | AiderDesk's project-scoped MCP spawn path can't find `npx` / `uvx` on the host PATH; harmless for the AiderDesk→Poe round-trip | Filter out. The cascade does NOT affect `/api/run-prompt` content; it's the project-scoped MCP init. See [Known noise](#known-noise-to-ignore). |
-| Provider sends untranslated `cwd` after a recent code change | A new `client.<method>(cwd, …)` call was added without threading `projectDir` (the translated local) | Inspect the diff for `cwd` literals adjacent to `client.` calls. Replace each with `projectDir`. Add a unit test under `translateProjectDir`'s describe block. |
+| Symptom                                                                             | Cause                                                                                                                                                                    | Fix                                                                                                                                                            |
+| ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `dag.node_empty_output` after ~150 s                                                | projectDir handed to AiderDesk was a **container-only path** (`/app`, `/host/projects/<x>`); AiderDesk on the host can't `mkdir` it → empty SSE                          | Set `AIDERDESK_PROJECT_DIR_REMAP` per [Setup](#setup). Rebuild + re-run.                                                                                       |
+| `dag.node_empty_output` after ~14 s                                                 | AiderDesk task was created without **`agentProfileId` AND `mainModel` bound** (one or both blank); provider sent a bare POST to `/api/project/tasks`                     | Ensure the provider sends BOTH fields via `POST /api/project/tasks/.../update` before `/api/run-prompt` — the **dual-bind** at `9847d8d`. Re-run.              |
+| "JavaScript Error in AiderDesk main process" dialog (AiderDesk GUI)                 | AiderDesk's Node caught an uncaughtException on the **main process** (renderer-surfaceable). 99% of cases in this environment: `mkdir <projectDir>` failed with `EACCES` | Check `~/.config/aider-desk/logs/error-<today>.log` for the `mkdir` line. Route as the row above.                                                              |
+| Workflow completes but assistant says Ollama / wrong model                          | **Rule 2 tiebreaker** picked the Ollama runtime instead of the Poe-API runtime; user requested `poe/<model>` but got `ollama/<something>`                                | Re-confirm `assistantConfig.providers.poe.api.baseUrl` and `providerId` in `.archon/config.yaml`. The `bbaeaac` fix requires both fields populated.            |
+| `run-prompt returns 0 chunks, no SSE frames` (curl-host direct)                     | **Stale `taskId`** from a host migration or pruned `.aider-desk/tasks/` cleanup; session-resume hit missing files                                                        | Pass a fresh `taskId` (drop the `--task-id` resume) and re-run. Don't delete `.aider-desk/tasks/internal/` — that's AiderDesk-managed.                         |
+| `node_counts: failed: 1` for `e2e-deterministic` "uv binary ENOENT"                 | Unrelated to AiderDesk. `oven/bun:1.3.11-slim` base image lacks `uv`. The `e2e-deterministic` workflow uses `script-python` nodes.                                       | Install `uv` in the image OR remove the `script-python` node. Out of scope for this skill.                                                                     |
+| "MCP Client creation failed … spawn uvx/npx ENOENT" cascade (in `error-<date>.log`) | AiderDesk's project-scoped MCP spawn path can't find `npx` / `uvx` on the host PATH; harmless for the AiderDesk→Poe round-trip                                           | Filter out. The cascade does NOT affect `/api/run-prompt` content; it's the project-scoped MCP init. See [Known noise](#known-noise-to-ignore).                |
+| Provider sends untranslated `cwd` after a recent code change                        | A new `client.<method>(cwd, …)` call was added without threading `projectDir` (the translated local)                                                                     | Inspect the diff for `cwd` literals adjacent to `client.` calls. Replace each with `projectDir`. Add a unit test under `translateProjectDir`'s describe block. |
 
 ## translateProjectDir contract
 
@@ -167,9 +168,9 @@ The seam at `packages/providers/src/community/aiderdesk/provider.ts:sendQuery`
 step **1a** is the ONE place the cwd is rewritten. Four rules, deterministic:
 
 1. **Precedence** (top-down highest):
-   - `requestOptions.env.AIDERDESK_PROJECT_DIR_REMAP` *(per-codebase, injected via envVars at engine boundary)*
-   - `process.env.AIDERDESK_PROJECT_DIR_REMAP` *(host-level)*
-   - `assistantConfig.projectDirRemap` *(operator hard pin in `.archon/config.yaml`)*
+   - `requestOptions.env.AIDERDESK_PROJECT_DIR_REMAP` _(per-codebase, injected via envVars at engine boundary)_
+   - `process.env.AIDERDESK_PROJECT_DIR_REMAP` _(host-level)_
+   - `assistantConfig.projectDirRemap` _(operator hard pin in `.archon/config.yaml`)_
    - identity — return `cwd` untouched.
 2. **JSON shapes** — both accepted on every surface:
    - Object form `{"<containerRegex>": "<hostPath>"}` — **longest-key wins** (stable insertion-order tiebreak).
@@ -197,15 +198,15 @@ Reproduced here for copy-paste:
 name: <workflow-name>
 description: <one-liner — say what the workflow proves, not what it does>
 provider: aiderdesk
-model: poe/<poe-hosted-model-id>   # e.g. poe/minimax-m3 (fast smoke), poe/claude-sonnet (prod)
+model: poe/<poe-hosted-model-id> # e.g. poe/minimax-m3 (fast smoke), poe/claude-sonnet (prod)
 
 inputs:
   projectLabel:
     required: false
-    default: "(unspecified repo)"
+    default: '(unspecified repo)'
     description: Human label of the repo under review
 
-returns: confirm   # unless you add a node returning a structured value
+returns: confirm # unless you add a node returning a structured value
 
 nodes:
   - id: bootstrap
@@ -276,12 +277,12 @@ failures, MCP-init cascades) are NOT from your workflow.
 
 ## Commit baseline (verified)
 
-| commit | subject |
-| ------ | ------- |
-| `bbaeaac` | `fix(aiderdesk): Rule 2 tiebreaker picks configured Poe-API runtime` |
-| `9847d8d` | `feat(aiderdesk): dual-bind agentProfileId+mainModel pre-run` |
+| commit    | subject                                                                              |
+| --------- | ------------------------------------------------------------------------------------ |
+| `bbaeaac` | `fix(aiderdesk): Rule 2 tiebreaker picks configured Poe-API runtime`                 |
+| `9847d8d` | `feat(aiderdesk): dual-bind agentProfileId+mainModel pre-run`                        |
 | `de175bc` | `feat(aiderdesk): translate cwd projectDir to host path before talking to AiderDesk` |
-| `fc3251c` | `docs(aiderdesk): mirror AIDERDESK_PROJECT_DIR_REMAP into .env.example` |
+| `fc3251c` | `docs(aiderdesk): mirror AIDERDESK_PROJECT_DIR_REMAP into .env.example`              |
 
 Poe round-trip verified LIVE on **2026-08-17**:
 
@@ -298,6 +299,6 @@ machine-checkable pin: bump it when the baseline moves.
 
 ---
 
-*Mirror of this SKILL.md placed at `~/.aider-desk/skills/aiderdesk-archon-bridge/SKILL.md`
+_Mirror of this SKILL.md placed at `~/.aider-desk/skills/aiderdesk-archon-bridge/SKILL.md`
 so it travels with the AiderDesk home config. The home copy byte-equals this
-file at the time of each commit.*
+file at the time of each commit._

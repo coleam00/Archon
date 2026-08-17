@@ -27,6 +27,12 @@ export function claudeSkillSearchRoots(
   const roots: string[] = [];
   if (options.includeProject !== false) {
     roots.push(join(cwd, '.claude', 'skills'));
+    // Operator-requested bare-`skills/` project-local root (added 2026-08-17).
+    // Same precedence class as `.claude/skills/` because both come from the
+    // active repo; `.claude/skills/` wins first-match ties because it's pushed
+    // first. Duplicate-write contract: `resolveSkillDirectoriesFromRoots`
+    // first-match-wins per name, so listing both roots is idempotent.
+    roots.push(join(cwd, 'skills'));
   }
   if (options.includeUser !== false) {
     const userConfigDir =
@@ -45,12 +51,18 @@ export function claudeSkillSearchRoots(
  * Order (first match wins per name):
  *   1. `<cwd>/.agents/skills/<name>/`     — project-local, agentskills.io standard
  *   2. `<cwd>/.claude/skills/<name>/`     — project-local, Claude convention
- *   3. `~/.agents/skills/<name>/`         — user-global, agentskills.io standard
- *   4. `~/.claude/skills/<name>/`         — user-global, Claude convention
+ *   3. `<cwd>/skills/<name>/`             — project-local, bare-`skills/` root (operator convention, 2026-08-17)
+ *   4. `~/.agents/skills/<name>/`         — user-global, agentskills.io standard
+ *   5. `~/.claude/skills/<name>/`         — user-global, Claude convention
  *
  * Ancestor traversal above cwd is deliberately not done — matches Pi's
  * cwd-bound scope and avoids ambiguity about which repo's skills win when
  * Archon runs out of a subdirectory.
+ *
+ * Duplicate-write contract: `resolveSkillDirectoriesFromRoots` does
+ * first-match-wins per name, so listing `<cwd>/skills/` alongside the dotted
+ * roots is idempotent — if a skill is staged under both, the highest
+ * precedence root wins and the resolver returns one path, not two.
  */
 export function skillSearchRoots(cwd: string): string[] {
   // Prefer `HOME` env var when set — Bun's os.homedir() bypasses `HOME` and
@@ -60,6 +72,7 @@ export function skillSearchRoots(cwd: string): string[] {
   return [
     join(cwd, '.agents', 'skills'),
     join(cwd, '.claude', 'skills'),
+    join(cwd, 'skills'),
     join(home, '.agents', 'skills'),
     join(home, '.claude', 'skills'),
   ];

@@ -3,7 +3,12 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { resolveClaudeSkillDirectories, resolveSkillDirectories } from './skills';
+import {
+  claudeSkillSearchRoots,
+  resolveClaudeSkillDirectories,
+  resolveSkillDirectories,
+  skillSearchRoots,
+} from './skills';
 
 type FakeWorld = {
   root: string;
@@ -138,6 +143,35 @@ describe('resolveSkillDirectories', () => {
     expect(result.paths).toEqual([]);
     expect(result.missing).toEqual(['zeta']);
   });
+
+  test('skillSearchRoots places bare cwd/skills/ at precedence position 3', () => {
+    const roots = skillSearchRoots(fake.cwd);
+    expect(roots).toHaveLength(5);
+    expect(roots[0]).toBe(join(fake.cwd, '.agents', 'skills'));
+    expect(roots[1]).toBe(join(fake.cwd, '.claude', 'skills'));
+    expect(roots[2]).toBe(join(fake.cwd, 'skills'));
+    expect(roots[3]).toBe(join(fake.home, '.agents', 'skills'));
+    expect(roots[4]).toBe(join(fake.home, '.claude', 'skills'));
+  });
+
+  test('resolves a skill staged under cwd/skills (operator convention)', () => {
+    const dir = join(fake.cwd, 'skills', 'bare-root');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'SKILL.md'), '# bare root\n');
+    const result = resolveSkillDirectories(fake.cwd, ['bare-root']);
+    expect(result.paths).toEqual([dir]);
+    expect(result.missing).toEqual([]);
+  });
+
+  test('prefers dotted cwd roots over bare cwd/skills/ for the same name', () => {
+    const dottedDir = fake.stageSkill('cwd', '.claude', 'tied');
+    const bareDir = join(fake.cwd, 'skills', 'tied');
+    mkdirSync(bareDir, { recursive: true });
+    writeFileSync(join(bareDir, 'SKILL.md'), '# bare copy\n');
+    const result = resolveSkillDirectories(fake.cwd, ['tied']);
+    expect(result.paths).toEqual([dottedDir]);
+    expect(result.missing).toEqual([]);
+  });
 });
 
 describe('resolveClaudeSkillDirectories', () => {
@@ -202,5 +236,31 @@ describe('resolveClaudeSkillDirectories', () => {
     expect(
       resolveClaudeSkillDirectories(fake.cwd, ['project-only'], { includeProject: false })
     ).toEqual({ paths: [], missing: ['project-only'] });
+  });
+
+  test('claudeSkillSearchRoots places bare cwd/skills/ right after .claude/skills/', () => {
+    const roots = claudeSkillSearchRoots(fake.cwd);
+    // Default options (includeProject=true, includeUser=true):
+    //   1. <cwd>/.claude/skills
+    //   2. <cwd>/skills           ← NEW (2026-08-17)
+    //   3. <home>/.claude/skills
+    expect(roots).toHaveLength(3);
+    expect(roots[0]).toBe(join(fake.cwd, '.claude', 'skills'));
+    expect(roots[1]).toBe(join(fake.cwd, 'skills'));
+    expect(roots[2]).toBe(join(fake.home, '.claude', 'skills'));
+  });
+
+  test('excludes bare cwd/skills/ when includeProject is false', () => {
+    const roots = claudeSkillSearchRoots(fake.cwd, { includeProject: false });
+    expect(roots).toEqual([join(fake.home, '.claude', 'skills')]);
+  });
+
+  test('resolves a Claude-convention skill under bare cwd/skills/', () => {
+    const bareDir = join(fake.cwd, 'skills', 'claude-bare');
+    mkdirSync(bareDir, { recursive: true });
+    writeFileSync(join(bareDir, 'SKILL.md'), '# claude bare\n');
+    const result = resolveClaudeSkillDirectories(fake.cwd, ['claude-bare']);
+    expect(result.paths).toEqual([bareDir]);
+    expect(result.missing).toEqual([]);
   });
 });

@@ -557,7 +557,7 @@ export class PiProvider implements IAgentProvider {
     if (missingSkills.length > 0) {
       yield {
         type: 'system',
-        content: `⚠️ Pi could not resolve skill names: ${missingSkills.join(', ')}. Searched .agents/skills and .claude/skills (project + user-global). Each must be a directory containing SKILL.md.`,
+        content: `⚠️ Pi could not resolve skill names: ${missingSkills.join(', ')}. Searched .agents/skills, .claude/skills, and bare skills/ (project + user-global). Each must be a directory containing SKILL.md.`,
       };
     }
 

@@ -245,7 +245,7 @@ function applySkills(
   if (missing.length > 0) {
     warnings.push({
       code: 'copilot.skills_missing',
-      message: `Copilot ignored missing skills: ${missing.join(', ')}. Expected a directory with SKILL.md under .agents/skills/ or .claude/skills/ (project or home).`,
+      message: `Copilot ignored missing skills: ${missing.join(', ')}. Expected a directory with SKILL.md under .agents/skills/, .claude/skills/, or bare skills/ (project or home).`,
     });
   }
 
