@@ -65,26 +65,32 @@ describe('resolvePiThinkingLevel', () => {
     for (const rung of ['minimal', 'low', 'medium', 'high', 'xhigh', 'max']) {
       expect(result.warning).toContain(rung);
     }
-    // The rung list alone cannot catch the drift it exists for: those six names
-    // are already in the vocabulary the message prints, so it stayed green while
-    // the parenthetical beside it claimed `max → xhigh on Pi` — the opposite of
-    // what this file's own array does.
+    // Assert the sentence, not a description of it. Three mechanisms have now
+    // failed on this one string, each defeated by the shape of the next defect:
     //
-    // The fix for that was first written as a blacklist of downgrade spellings,
-    // which was miscalibrated in BOTH directions: it rejected the true sentence
-    // `nothing is clamped` (the exact wording ai-assistants.md uses for this
-    // same fact) while passing four false ones, including `Pi downgrades max to
-    // xhigh internally` — a plain-prose restatement of the original bug. A
-    // blacklist can only ever enumerate the wrong claims someone happened to
-    // write before.
+    //   1. a manual sweep — aimed at the phrasing the last round named;
+    //   2. a presence check on the six rung names — already in the message's own
+    //      vocabulary list, so it was green while the clause beside it lied;
+    //   3. a blacklist of downgrade spellings — enumerates the wrong sentences
+    //      someone already wrote, and rejected a TRUE rewording;
+    //   4. a positive `toContain` on the true clause — establishes that the true
+    //      clause is PRESENT, never that a false one wasn't appended next to it.
     //
-    // So assert the TRUE claim positively. Pi accepts the whole ladder; a
-    // message that does not say so is either silent about it or contradicting
-    // it, and both are the defect. The two narrow patterns stay as cheap
-    // belt-and-braces against the historical spellings.
-    expect(result.warning).toContain('accepts every rung natively');
-    expect(result.warning).not.toMatch(/max\s*(→|->|becomes|maps? to)\s*xhigh/i);
-    expect(result.warning).not.toMatch(/xhigh\s+on\s+Pi/i);
+    // (4) is the one that matters, because the original defect WAS an append:
+    // `git show 9b021e3c` has `… in YAML (max → xhigh on Pi; the rest are
+    // Pi-native).` — a parenthetical tacked onto the vocabulary list, not a
+    // replacement. All six of `Pi accepts every rung natively, though max is
+    // reduced to xhigh` and its variants pass a `toContain`.
+    //
+    // Equality has no such gap, and costs a string diff instead of a named
+    // failure. Editing this message means editing this literal — the same
+    // "change as a pair" rule `scripts/node-ref-parity.test.ts` enforces across
+    // the web/engine boundary, which is currently earning its keep by catching a
+    // real drift on dev.
+    expect(result.warning).toBe(
+      'Pi ignored `thinking` (object form is Claude-specific). Use ' +
+        '`effort: minimal|low|medium|high|xhigh|max` in YAML — Pi accepts every rung natively.'
+    );
   });
 
   test('warns on unknown string thinking value', () => {
