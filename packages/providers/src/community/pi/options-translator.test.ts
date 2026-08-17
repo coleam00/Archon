@@ -58,21 +58,14 @@ describe('resolvePiThinkingLevel', () => {
       thinking: { type: 'enabled', budget_tokens: 4000 },
     } as NodeConfig);
     expect(result.level).toBeUndefined();
-    expect(result.warning).toContain('object form is Claude-specific');
-    // The REMEDY half, not just the diagnosis. This clause has drifted every
-    // time the ladder changed — it is operator-facing advice, and advice that
-    // lists the wrong rungs steers authors away from levels Pi supports.
-    for (const rung of ['minimal', 'low', 'medium', 'high', 'xhigh', 'max']) {
-      expect(result.warning).toContain(rung);
-    }
-    // Assert the sentence, not a description of it. Three mechanisms have now
-    // failed on this one string, each defeated by the shape of the next defect:
+    // Assert the sentence, not a description of it. FOUR mechanisms have failed
+    // on this one string, each defeated by the shape of the next defect:
     //
     //   1. a manual sweep — aimed at the phrasing the last round named;
     //   2. a presence check on the six rung names — already in the message's own
     //      vocabulary list, so it was green while the clause beside it lied;
-    //   3. a blacklist of downgrade spellings — enumerates the wrong sentences
-    //      someone already wrote, and rejected a TRUE rewording;
+    //   3. a blacklist of downgrade spellings — enumerates only the wrong
+    //      sentences someone already wrote, and rejected a TRUE rewording;
     //   4. a positive `toContain` on the true clause — establishes that the true
     //      clause is PRESENT, never that a false one wasn't appended next to it.
     //
@@ -82,11 +75,16 @@ describe('resolvePiThinkingLevel', () => {
     // replacement. All six of `Pi accepts every rung natively, though max is
     // reduced to xhigh` and its variants pass a `toContain`.
     //
-    // Equality has no such gap, and costs a string diff instead of a named
-    // failure. Editing this message means editing this literal — the same
-    // "change as a pair" rule `scripts/node-ref-parity.test.ts` enforces across
-    // the web/engine boundary, which is currently earning its keep by catching a
-    // real drift on dev.
+    // Equality has no such gap. It also subsumes what (2) and the diagnosis
+    // check asserted, so both are gone rather than left as decoration — an
+    // assertion that cannot fail while this one passes is not a second opinion.
+    // The cost is a string diff instead of a named failure, and every edit to
+    // the message failing until this literal is updated: the same "change as a
+    // pair" rule `scripts/node-ref-parity.test.ts` enforces across the
+    // web/engine boundary, which caught a real drift there in #2591.
+    //
+    // The history is the argument for equality HERE. It does not generalize to
+    // warning strings that have not earned it.
     expect(result.warning).toBe(
       'Pi ignored `thinking` (object form is Claude-specific). Use ' +
         '`effort: minimal|low|medium|high|xhigh|max` in YAML — Pi accepts every rung natively.'

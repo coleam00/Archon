@@ -4,6 +4,7 @@ import {
   CODEX_MODEL_OPTIONS,
   COPILOT_MODEL_OPTIONS,
   curatedOptionsForAgent,
+  EFFORT_OPTIONS,
   effortOptionsForAgent,
   filterModelOptions,
   findPiModel,
@@ -88,7 +89,11 @@ const PROVIDERS = [
   { id: 'opencode', capabilities: { effortControl: false } },
 ];
 
-const LADDER = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+// The third hand-typed copy of the ladder used to live here. It now derives
+// from the constant under test, so this file cannot pass while disagreeing with
+// it; `scripts/effort-ladder-parity.test.ts` is what ties that constant to the
+// engine's.
+const LADDER = EFFORT_OPTIONS;
 
 describe('effortOptionsForAgent', () => {
   // #2556: one ladder, and the capability — not a hardcoded id list — decides

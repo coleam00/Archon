@@ -6,6 +6,12 @@
     "declarationMap": false,
     "sourceMap": false,
     "types": ["bun-types"],
+    // These tests import web modules to compare them against the engine's
+    // originals. Web code legitimately touches browser globals (`window`,
+    // `HeadersInit`) through its transitive imports, so this project needs DOM
+    // in `lib` to type-check what it deliberately reads. Without it,
+    // `effort-ladder-parity.test.ts` fails on `window` in a file it never calls.
+    "lib": ["ES2022", "DOM"],
     // `node-ref-parity.test.ts` imports the web builder's `when:` grammar to run it
     // against the engine's. That module resolves its own imports through the web
     // package's `@/` alias, so this project needs the same mapping to follow it.
