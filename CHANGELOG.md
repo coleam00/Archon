@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking
+
+- **A plain message at an approval gate no longer approves it.** While a run was paused at a human gate, any message that did not start with `/` was recorded as an approval — so "no, stop, why is it editing the schema?" resolved the gate as approved, stored the objection itself as the approval comment (and as `$gate.output` under `capture_response: true`), and continued doing the thing the user objected to. There was no interpretation step and no natural-language way to reject. The open gate is now given to the chat agent as context for the turn, and the agent resolves it through the same confirm-gated `approve`/`reject` verbs the slash commands drive: a clear approval approves, a clear objection rejects with the user's own words as the reason, and an ambiguous message resolves nothing and gets a question back. Providers without native tools reach the same verbs over the `archon workflow approve|reject` CLI. Resolving a gate now also continues the run on every chat surface — including `/workflow approve` and `/workflow reject`, which previously told you to "type your response in this conversation to resume" and left the run parked. Deterministic behaviour is still available: use the slash commands. (#2565)
+
 ## [0.9.0] - 2026-08-17
 
 Workflows become properly composable: a workflow can now declare the arguments it takes and the result it returns, ship as one self-contained folder, and be simulated end to end without contacting a provider. Alongside that, a workflow node's capabilities become what its YAML declares rather than whatever happens to be configured on the operator's machine — see Breaking before upgrading.

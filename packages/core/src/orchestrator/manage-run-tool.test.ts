@@ -426,6 +426,118 @@ describe('manage_run — destructive confirmation gate', () => {
   });
 });
 
+// Resolving a gate and continuing the run are two halves of one action (#2565).
+// A tool that only resolved would leave every gate the agent decides stranded.
+describe('manage_run — gate continuation', () => {
+  /** `accepts: false` models an orchestrator that already has a run queued. */
+  function makeCtx(accepts = true) {
+    const resolved: { run: WorkflowRun; action: 'approve' | 'reject' }[] = [];
+    return {
+      resolved,
+      ctx: {
+        codebaseId: CODEBASE_ID,
+        onGateResolved: (run: WorkflowRun, action: 'approve' | 'reject') => {
+          resolved.push({ run, action });
+          return accepts;
+        },
+      },
+    };
+  }
+
+  test('approve hands the run to the continuation and says the run moves on', async () => {
+    const run = makeRun({ status: 'paused' });
+    mockFindByPrefix.mockResolvedValue([run]);
+    mockApprove.mockResolvedValue({ workflowName: 'wf', type: 'approval_gate' });
+    const { resolved, ctx } = makeCtx();
+
+    const out = await buildManageRunTool(ctx).handler({
+      action: 'approve',
+      runId: 'r1abcdef',
+      confirm: true,
+    });
+
+    expect(resolved).toEqual([{ run, action: 'approve' }]);
+    expect(out).toContain('continues from here');
+  });
+
+  test('a reject that stages a rework continues; one that cancels does not', async () => {
+    const run = makeRun({ status: 'paused' });
+    mockFindByPrefix.mockResolvedValue([run]);
+    const { resolved, ctx } = makeCtx();
+
+    mockReject.mockResolvedValue({
+      workflowName: 'wf',
+      cancelled: false,
+      maxAttemptsReached: false,
+    });
+    const rework = await buildManageRunTool(ctx).handler({
+      action: 'reject',
+      runId: 'r1abcdef',
+      confirm: true,
+      message: 'redo',
+    });
+    expect(resolved).toEqual([{ run, action: 'reject' }]);
+    expect(rework).toContain('continues from here');
+
+    // A cancelled run is already in its terminal state — nothing to continue.
+    mockReject.mockResolvedValue({
+      workflowName: 'wf',
+      cancelled: true,
+      maxAttemptsReached: false,
+    });
+    const cancelled = await buildManageRunTool(ctx).handler({
+      action: 'reject',
+      runId: 'r1abcdef',
+      confirm: true,
+      message: 'drop it',
+    });
+    expect(resolved).toHaveLength(1);
+    expect(cancelled).toContain('Nothing further runs');
+  });
+
+  test('a preview call resolves nothing, so it never schedules a continuation', async () => {
+    mockFindByPrefix.mockResolvedValue([makeRun({ status: 'paused' })]);
+    const { resolved, ctx } = makeCtx();
+
+    await buildManageRunTool(ctx).handler({ action: 'approve', runId: 'r1abcdef' });
+
+    expect(resolved).toHaveLength(0);
+    expect(mockApprove).not.toHaveBeenCalled();
+  });
+
+  test('a declined continuation is reported as a manual resume, not as silence', async () => {
+    // The orchestrator continues ONE run per turn. A gate it declines must reach
+    // the agent as words, or the run is resolved and stranded with no signal.
+    mockFindByPrefix.mockResolvedValue([makeRun({ status: 'paused' })]);
+    mockApprove.mockResolvedValue({ workflowName: 'wf', type: 'approval_gate' });
+    const { ctx } = makeCtx(false);
+
+    const out = await buildManageRunTool(ctx).handler({
+      action: 'approve',
+      runId: 'r1abcdef',
+      confirm: true,
+    });
+
+    expect(out).toContain('stays paused');
+    expect(out).toContain('/workflow resume r1abcdef-1234');
+  });
+
+  test('without a continuation the tool names the manual resume instead of implying one', async () => {
+    // Silence here would read as "handled" and strand the run invisibly.
+    mockFindByPrefix.mockResolvedValue([makeRun({ status: 'paused' })]);
+    mockApprove.mockResolvedValue({ workflowName: 'wf', type: 'approval_gate' });
+
+    const out = await buildManageRunTool({ codebaseId: CODEBASE_ID }).handler({
+      action: 'approve',
+      runId: 'r1abcdef',
+      confirm: true,
+    });
+
+    expect(out).toContain('stays paused');
+    expect(out).toContain('/workflow resume r1abcdef-1234');
+  });
+});
+
 describe('manage_run — resume (recoverable, no confirm)', () => {
   test('resume validates eligibility without confirm and does not restart the run', async () => {
     mockFindByPrefix.mockResolvedValue([makeRun({ status: 'failed' })]);

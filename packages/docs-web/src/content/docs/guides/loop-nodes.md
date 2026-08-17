@@ -367,10 +367,12 @@ The same rule applies on every approve surface: chat `/workflow approve`, the CL
 endpoint (omit `comment`), the web console ("Accept & complete" with an empty comment
 field), and the `manage_run` chat tool (no `message`, or `accept: true`).
 
-> **Known limitation:** approving via a plain natural-language chat message (not the
-> slash command) always counts as feedback and iterates. To finalize, use
-> `/workflow approve <id>` with no comment, the CLI/web/`manage_run` surfaces above,
-> or `signal_completes`.
+A plain chat message at a loop gate is not itself an approve — the same rule now holds
+at [approval gates](/guides/approval-nodes/#asking-the-chat-agent). Say what you want and
+the agent resolves the gate for you, passing your words through as the feedback; ask a
+question and nothing is resolved. Because your words travel as the approve comment, that
+route iterates. To finalize, use `/workflow approve <id>` with no comment, the CLI/web
+surfaces above, `manage_run` with `accept: true`, or `signal_completes`.
 
 ### `signal_completes` — autonomous completion
 

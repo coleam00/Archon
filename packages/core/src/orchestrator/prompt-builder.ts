@@ -5,6 +5,7 @@
  */
 import type { Codebase, Conversation } from '../types';
 import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
+import { isApprovalContext, isGateResolved } from '@archon/workflows/schemas/workflow-run';
 
 /**
  * Format a single project for the orchestrator prompt.
@@ -63,6 +64,87 @@ export function formatWorkflowContextSection(results: readonly WorkflowResultCon
   }
 
   return section.trimEnd();
+}
+
+/** The paused run a conversation's approval gate belongs to. */
+export interface PausedGateContext {
+  runId: string;
+  workflowName: string;
+  /** The run's raw `metadata.approval` — may be absent or malformed. */
+  approval: unknown;
+}
+
+/**
+ * Format the "there is a human gate waiting in this conversation" section.
+ *
+ * This is the ONLY thing that tells the chat agent a gate is open. It states the
+ * facts of the gate and the decision policy; it does NOT name a tool, because the
+ * verbs reach different providers by different routes (the `manage_run` native
+ * tool on Claude/Pi, the `archon workflow approve|reject` CLI section on the
+ * others). Both routes are described elsewhere in the same prompt.
+ *
+ * Returns '' when there is nothing for the agent to decide — an already-resolved
+ * gate is awaiting resume, not a human.
+ */
+export function formatPausedGateSection(gate: PausedGateContext): string {
+  const header = '## Paused Approval Gate\n\n';
+  const approval = gate.approval;
+
+  if (!isApprovalContext(approval)) {
+    // Paused, but the gate cannot be described. Preserve the explicit-command
+    // guidance the old natural-language branch sent directly to the user.
+    return (
+      header +
+      `Run \`${gate.runId}\` (**${gate.workflowName}**) is paused, but its approval context is ` +
+      'missing or malformed, so the gate cannot be described. Tell the user to resolve it ' +
+      `explicitly with \`/workflow approve ${gate.runId}\` or \`/workflow reject ${gate.runId} <reason>\`.`
+    );
+  }
+
+  if (isGateResolved(approval)) return '';
+
+  if (approval.type === 'child_workflow') {
+    const childRunId = approval.childRunId ?? '<unknown>';
+    return (
+      header +
+      `Run \`${gate.runId}\` (**${gate.workflowName}**) is paused waiting on its sub-run ` +
+      `\`${childRunId}\`, which has a gate of its own. This run has no gate you can resolve — ` +
+      'the decision belongs to the child run, and this one continues on its own once the child ' +
+      'finishes.'
+    );
+  }
+
+  const facts = [
+    `- Run id: \`${gate.runId}\``,
+    `- Workflow: **${gate.workflowName}**`,
+    `- Gate node: \`${approval.nodeId}\``,
+  ];
+  if (approval.type === 'interactive_loop' && typeof approval.iteration === 'number') {
+    facts.push(`- Loop iteration: ${String(approval.iteration)}`);
+  }
+
+  return (
+    header +
+    'A workflow run in this conversation is PAUSED waiting for a human decision. It does not ' +
+    'continue until the gate is resolved.\n\n' +
+    facts.join('\n') +
+    '\n\nWhat the run is asking:\n\n' +
+    `> ${approval.message.replace(/\n/g, '\n> ')}\n\n` +
+    "Read the user's message and judge what it means for THIS gate:\n\n" +
+    '- It clearly approves → resolve the gate as APPROVED, passing their own words verbatim as ' +
+    'the comment (a workflow may read that comment as the gate node’s output).\n' +
+    '- It clearly objects, refuses, or asks to stop → resolve the gate as REJECTED, passing ' +
+    'their own words verbatim as the reason.\n' +
+    '- Anything else — a question, a request for detail, an unrelated message → resolve ' +
+    'NOTHING. Answer them and leave the gate open.\n\n' +
+    'An unambiguous decision from the user IS the human confirmation a gate action needs — ' +
+    'resolve it in the same turn rather than making them repeat themselves. When you are not ' +
+    'sure what they meant, ask: leaving the gate open costs nothing, and resolving it against ' +
+    'their intent cannot be undone.\n\n' +
+    'Resolving the gate also continues the run — there is no separate resume step. The user ' +
+    `can always decide it themselves with \`/workflow approve ${gate.runId} [comment]\` or ` +
+    `\`/workflow reject ${gate.runId} <reason>\`.`
+  );
 }
 
 /**
@@ -236,7 +318,7 @@ Run these from within the project's git repo (any subdirectory works — they re
 - \`archon workflow get <run-id> [--json]\` — one run's status/error (add \`--verbose\` for per-node detail)
 - \`archon workflow status [--json]\` — active runs only (running/paused)
 - \`archon workflow run <workflow> "<message>" --detach\` — start a run in the background (returns immediately)
-- \`archon workflow approve <run-id> [--json]\` / \`archon workflow reject <run-id> [reason] [--json]\` — resolve a paused approval gate
+- \`archon workflow approve <run-id> [comment]\` / \`archon workflow reject <run-id> [reason]\` — resolve a paused approval gate AND continue the run in one step. Add \`--json\` only when you need a machine-readable ack: \`--json\` records the decision WITHOUT continuing, and you must then drive \`archon workflow resume <run-id>\` yourself or the run stays stranded.
 - \`archon workflow resume <run-id>\` — re-run a failed/paused run, skipping completed nodes (run as a background task; \`--json\` validates only)
 - \`archon workflow abandon <run-id> [--json]\` — cancel a non-terminal run
 

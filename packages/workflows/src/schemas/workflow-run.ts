@@ -332,8 +332,9 @@ export interface LoopGateRunMetadata {
 /**
  * True when the run's current approval gate has already been resolved
  * (approved, or rejected with a staged on_reject rework) and the run is
- * paused only while awaiting resume. Guards double-approve/reject and the
- * natural-language approval routing.
+ * paused only while awaiting resume. Guards double-approve/reject, and keeps a
+ * resolved gate out of the chat agent's prompt context (#2565) — it is waiting
+ * on the machine, not on a human.
  */
 export function isGateResolved(approval: ApprovalContext): boolean {
   return approval.resolved === 'approved' || approval.resolved === 'rejected';

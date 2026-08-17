@@ -4,6 +4,7 @@ import {
   formatWorkflowContextSection,
   buildOrchestratorSystemAppend,
   buildRunManagementSection,
+  formatPausedGateSection,
 } from './prompt-builder';
 
 describe('buildRoutingRulesWithProject', () => {
@@ -165,5 +166,104 @@ describe('buildRunManagementSection', () => {
     }
     expect(section).toContain('--json');
     expect(section).toContain('--detach');
+  });
+
+  test('warns that a --json gate decision does not continue the run', () => {
+    // The CLI-pointer path is how tool-less providers resolve a gate (#2565).
+    // `approve --json` records the decision WITHOUT resuming, so an agent that
+    // reflexively adds --json would resolve the gate and strand the run.
+    const section = buildRunManagementSection();
+    expect(section).toContain('stranded');
+    expect(section).toContain('archon workflow resume');
+  });
+});
+
+describe('formatPausedGateSection', () => {
+  const openGate = {
+    runId: 'run-abc',
+    workflowName: 'prd',
+    approval: { type: 'approval', nodeId: 'review', message: 'Approve the plan above.' },
+  };
+
+  test('states the gate facts the agent needs to act on', () => {
+    const section = formatPausedGateSection(openGate);
+
+    expect(section).toContain('## Paused Approval Gate');
+    expect(section).toContain('run-abc');
+    expect(section).toContain('prd');
+    expect(section).toContain('review');
+    expect(section).toContain('Approve the plan above.');
+  });
+
+  test('spells out all three outcomes, including resolving nothing', () => {
+    const section = formatPausedGateSection(openGate);
+
+    expect(section).toContain('APPROVED');
+    expect(section).toContain('REJECTED');
+    // The outcome the old auto-approve branch could not produce at all.
+    expect(section).toContain('resolve NOTHING');
+  });
+
+  test('tells the agent to pass the user’s own words through', () => {
+    // A gate with capture_response reads the comment as the node's output, so a
+    // paraphrase silently rewrites workflow input.
+    expect(formatPausedGateSection(openGate)).toContain('verbatim');
+  });
+
+  test('promises continuation so the agent does not hunt for a resume step', () => {
+    expect(formatPausedGateSection(openGate)).toContain('no separate resume step');
+  });
+
+  test('quotes a multi-line gate message as a single block', () => {
+    const section = formatPausedGateSection({
+      ...openGate,
+      approval: { type: 'approval', nodeId: 'review', message: 'Line one\nLine two' },
+    });
+
+    expect(section).toContain('> Line one\n> Line two');
+  });
+
+  test('names the loop iteration on an interactive-loop gate', () => {
+    const section = formatPausedGateSection({
+      ...openGate,
+      approval: {
+        type: 'interactive_loop',
+        nodeId: 'refine',
+        iteration: 3,
+        message: 'Review the output',
+      },
+    });
+
+    expect(section).toContain('Loop iteration: 3');
+  });
+
+  test('returns nothing for a gate already resolved and awaiting resume', () => {
+    // Resolved gates are waiting on the machine, not on a human — offering them
+    // to the agent invites a second decision the operations reject.
+    expect(
+      formatPausedGateSection({
+        ...openGate,
+        approval: { ...openGate.approval, resolved: 'approved' },
+      })
+    ).toBe('');
+  });
+
+  test('points at the child run when the pause belongs to a sub-run', () => {
+    const section = formatPausedGateSection({
+      ...openGate,
+      approval: { type: 'child_workflow', nodeId: 'child', message: 'blocked', childRunId: 'kid' },
+    });
+
+    expect(section).toContain('kid');
+    expect(section).toContain('no gate you can resolve');
+  });
+
+  test('falls back to the explicit commands when the approval context is unusable', () => {
+    for (const approval of [undefined, null, {}, { nodeId: 'x' }, 'garbage']) {
+      const section = formatPausedGateSection({ ...openGate, approval });
+      expect(section).toContain('missing or malformed');
+      expect(section).toContain('/workflow approve run-abc');
+      expect(section).toContain('/workflow reject run-abc');
+    }
   });
 });

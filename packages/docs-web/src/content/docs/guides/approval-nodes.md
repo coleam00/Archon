@@ -54,11 +54,11 @@ to the user on whatever platform they're using (CLI, Slack, GitHub, etc.). On th
 3. **Wait**: The workflow stays paused until the user takes action. Paused runs
    block the worktree path guard (no other workflow can start on the same path).
 4. **Approve**: The user approves, which writes a `node_completed` event for
-   the approval node and transitions the run to resumable. Natural-language
-   messages, the CLI, the Web UI approve button, and the in-thread **Approve**
-   button posted by the Slack adapter all auto-resume the workflow from the
-   paused gate. (The explicit `/workflow approve <run-id>` slash command also
-   auto-resumes when issued in the originating conversation.)
+   the approval node and transitions the run to resumable. Every approve surface
+   also continues the run: the `/workflow approve <run-id>` slash command, the
+   CLI, the Web UI approve button, the in-thread **Approve** button posted by the
+   Slack adapter, and a chat agent resolving the gate on your behalf after you
+   tell it to.
 5. **Reject**: The user rejects.
    - **Without `on_reject`**: The workflow is cancelled immediately.
    - **With `on_reject`**: The executor runs the `on_reject.prompt` via AI (with
@@ -107,20 +107,49 @@ not `retry`.
 
 ## Approving and Rejecting
 
-### Natural Language (recommended)
-
-Just type your answer in the same conversation. The system detects the paused
-workflow and treats your message as the approval response:
+### Explicit Commands (all platforms)
 
 ```
-User: "Looks good, but add error handling for the edge cases"
-→ System auto-approves, resumes workflow with your message as $gate.output
-  (only if capture_response: true is set)
+/workflow approve <run-id> looks good
+/workflow reject <run-id> needs changes
 ```
 
-This works on all platforms (Web, Slack, Telegram, Discord, GitHub).
+Both resolve the gate **and** continue the run — approving no longer needs a
+follow-up message.
 
-To reject instead, use `/workflow reject <run-id>`.
+### Asking the chat agent
+
+You can also just say what you want in the conversation. The agent reads the open
+gate along with your message and decides:
+
+```
+User: "looks good, ship it"
+→ agent approves the gate; the run continues
+
+User: "no, stop — why is it editing the schema?"
+→ agent rejects the gate with your words as the reason
+
+User: "what would that change?"
+→ agent answers you; the gate stays open and nothing is resolved
+```
+
+The agent passes your own words through as the approval comment or the rejection
+reason, so a gate with `capture_response: true` still receives what you typed.
+
+:::caution[Behaviour change]
+Archon used to record **any** message that did not start with `/` as an approval —
+including an objection, which was stored as the approval comment while the run
+carried on doing the thing you objected to. Typing at a gate no longer approves by
+itself. If your message is ambiguous the agent asks instead of guessing, and
+nothing is resolved until you are explicit.
+
+Two consequences worth knowing:
+
+- Providers without native tool support (Codex, OpenCode, Copilot) resolve the
+  gate by running `archon workflow approve|reject <run-id>` for you instead.
+- If you want a decision recorded with no interpretation at all, use the slash
+  commands above — they are deterministic.
+:::
 
 ### CLI
 
@@ -138,13 +167,6 @@ bun run cli workflow reject <run-id>
 bun run cli workflow reject <run-id> --reason "Plan needs more test coverage"
 ```
 
-### Explicit Commands (all platforms)
-
-```
-/workflow approve <run-id> looks good
-/workflow reject <run-id> needs changes
-```
-
 ### Interactive-loop gates: bare approve finalizes
 
 Interactive **loop** gates (`loop:`/`loop_group:` with `interactive: true`) share these
@@ -154,8 +176,9 @@ by `workflow get --json` and `manage_run` — leads with "✅ Completion signal 
 in chat the same line follows the `⏸ Input required` prefix),
 approving **without a comment** finalizes the loop node from the already-computed output —
 no extra iteration runs. Approving **with** a comment runs another iteration with your
-comment as `$LOOP_USER_INPUT`. Natural-language approval always counts as a comment
-(iterates); use the slash command, CLI, web button, or `manage_run` to finalize. See
+comment as `$LOOP_USER_INPUT`. Asking the agent to approve without passing anything on
+finalizes too; if you want the finalize to be unambiguous, use `/workflow approve <id>`
+with no comment, the CLI, or the web button. See
 [Loop Nodes → `interactive` and `gate_message`](/guides/loop-nodes/#interactive-and-gate_message)
 for the full semantics, `signal_completes`, and the AI-approver steering pattern.
 

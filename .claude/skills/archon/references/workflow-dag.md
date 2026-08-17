@@ -664,9 +664,12 @@ archon workflow reject <run-id> --reason "plan needs more test coverage"
 /workflow approve <run-id> <optional comment>
 /workflow reject <run-id> <optional reason>
 
-# Natural language (all platforms except CLI — auto-detects paused workflow)
+# Asking the chat agent (all platforms except CLI)
 User: "Looks good, proceed"
-# → auto-approves. With capture_response: true, the message becomes $review-gate.output
+# → the agent reads the open gate and approves it; the run continues.
+#   Your words travel through as the comment, so with capture_response: true they
+#   become $review-gate.output. A plain message is NOT an automatic approval —
+#   an objection rejects, and an ambiguous message resolves nothing.
 ```
 
 ### What Does NOT Work on Approval Nodes

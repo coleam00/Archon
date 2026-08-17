@@ -71,6 +71,7 @@ import { IsolationBlockedError } from '@archon/isolation';
 import {
   buildOrchestratorSystemAppend,
   buildRunManagementSection,
+  formatPausedGateSection,
   formatWorkflowContextSection,
 } from './prompt-builder';
 import type { WorkflowResultContext } from './prompt-builder';
@@ -78,9 +79,6 @@ import { reportUnpushedWorkInSource } from './post-message-reminder';
 import * as messageDb from '../db/messages';
 import * as workflowDb from '../db/workflows';
 import { getCodebaseEnvVars } from '../db/env-vars';
-import { approveWorkflow } from '../operations/workflow-operations';
-import { isApprovalContext, isGateResolved } from '@archon/workflows/schemas/workflow-run';
-import type { ApprovalContext } from '@archon/workflows/schemas/workflow-run';
 import {
   buildAiProfile,
   isLiteralSpec,
@@ -1112,6 +1110,110 @@ async function dispatchOrchestratorWorkflow(
   }
 }
 
+/** A human gate the chat agent resolved during a turn, awaiting continuation. */
+interface ResolvedGate {
+  run: WorkflowRun;
+  action: 'approve' | 'reject';
+}
+
+/**
+ * Continue a run whose human gate the chat agent just resolved (#2565).
+ *
+ * A resolution leaves the run `paused` on purpose — `approveWorkflow` and
+ * `rejectWorkflow` record the decision and let the caller decide when to move
+ * (`workflow-operations.ts`). This is chat's "when": the same resume dispatch the
+ * removed natural-language branch performed, now triggered by the agent's
+ * explicit approve/reject verb instead of by "the message did not start with /".
+ * Resolution without continuation would strand the run on every chat surface.
+ *
+ * Never throws — the gate decision is already committed, so a failure here costs
+ * the user a manual `/workflow resume`, not the decision.
+ */
+async function continueResolvedGateRun(
+  platform: IPlatformAdapter,
+  conversationId: string,
+  conversation: Conversation,
+  codebase: Codebase | null,
+  workflowsWithSource: readonly WorkflowWithSource[],
+  run: WorkflowRun,
+  action: 'approve' | 'reject',
+  isolationHints?: HandleMessageContext['isolationHints'],
+  userId?: string
+): Promise<void> {
+  const decision = action === 'approve' ? 'Approved' : 'Rejected';
+  const workflow = findWorkflow(
+    run.workflow_name,
+    workflowsWithSource.map(w => w.workflow)
+  );
+  if (!workflow) {
+    getLog().warn(
+      { conversationId, workflowRunId: run.id, workflowName: run.workflow_name },
+      'orchestrator.gate_continuation_workflow_not_found'
+    );
+    await platform.sendMessage(
+      conversationId,
+      `${decision}, but workflow \`${run.workflow_name}\` was not found, so the run could not ` +
+        'continue. The decision is recorded — use `/workflow list` to check available workflows.'
+    );
+    return;
+  }
+  if (!codebase) {
+    getLog().warn(
+      { conversationId, workflowRunId: run.id },
+      'orchestrator.gate_continuation_no_codebase'
+    );
+    await platform.sendMessage(
+      conversationId,
+      `${decision}, but no project is attached to this conversation, so the run could not ` +
+        `continue. The decision is recorded — use \`/workflow resume ${run.id}\` from the project.`
+    );
+    return;
+  }
+
+  const source = workflowsWithSource.find(w => w.workflow === workflow)?.source;
+  getLog().info(
+    { conversationId, workflowRunId: run.id, workflowName: workflow.name, action },
+    'orchestrator.gate_continuation_started'
+  );
+  try {
+    await platform.sendMessage(conversationId, `▶️ Resuming **${workflow.name}**...`);
+    await dispatchOrchestratorWorkflow(
+      platform,
+      conversationId,
+      conversation,
+      codebase,
+      workflow,
+      run.user_message,
+      isolationHints,
+      userId,
+      source,
+      { resumeRunId: run.id, resumeRun: run }
+    );
+    getLog().info(
+      { conversationId, workflowRunId: run.id, workflowName: workflow.name, action },
+      'orchestrator.gate_continuation_completed'
+    );
+  } catch (error) {
+    const err = toError(error);
+    getLog().error(
+      { err, errorType: err.constructor.name, conversationId, workflowRunId: run.id, action },
+      'orchestrator.gate_continuation_failed'
+    );
+    await platform
+      .sendMessage(
+        conversationId,
+        `${decision}, but resuming **${workflow.name}** failed: ${err.message}. ` +
+          `The decision is recorded — retry with \`/workflow resume ${run.id}\`.`
+      )
+      .catch((sendErr: unknown) => {
+        getLog().warn(
+          { err: toError(sendErr), conversationId },
+          'orchestrator.gate_continuation_notice_failed'
+        );
+      });
+  }
+}
+
 // ─── Session Helpers ────────────────────────────────────────────────────────
 
 async function tryPersistSessionId(
@@ -1264,7 +1366,8 @@ function buildFullPrompt(
   issueContext: string | undefined,
   threadContext: string | undefined,
   attachedFiles?: AttachedFile[],
-  workflowContext?: string
+  workflowContext?: string,
+  pausedGateContext?: string
 ): string {
   const contextSuffix = issueContext ? '\n\n---\n\n## Additional Context\n\n' + issueContext : '';
 
@@ -1277,12 +1380,16 @@ function buildFullPrompt(
       : '';
 
   const workflowContextSuffix = workflowContext ? '\n\n---\n\n' + workflowContext : '';
+  // Placed LAST of the context blocks, immediately before the user's message —
+  // the gate is the thing the message is most likely answering (#2565).
+  const gateSuffix = pausedGateContext ? '\n\n---\n\n' + pausedGateContext : '';
 
   if (threadContext) {
     return (
       '## Thread Context (previous messages)\n\n' +
       threadContext +
       workflowContextSuffix +
+      gateSuffix +
       '\n\n---\n\n## Current Request\n\n' +
       message +
       contextSuffix +
@@ -1291,7 +1398,12 @@ function buildFullPrompt(
   }
 
   return (
-    workflowContextSuffix + '\n\n---\n\n## User Message\n\n' + message + contextSuffix + fileSuffix
+    workflowContextSuffix +
+    gateSuffix +
+    '\n\n---\n\n## User Message\n\n' +
+    message +
+    contextSuffix +
+    fileSuffix
   );
 }
 
@@ -1339,113 +1451,6 @@ export async function handleMessage(
       parentConversationId,
       conversationId
     );
-
-    // Natural-language approval routing — if a workflow is paused in this
-    // conversation awaiting a human gate, treat any non-slash message as the
-    // approval response. A paused run whose gate is already resolved
-    // (metadata.approval.resolved set — approved/rejected and awaiting
-    // auto-resume, #2075) is skipped so the message falls through to normal
-    // routing, matching the pre-#2075 behavior where a staged run no longer
-    // matched the 'paused' query.
-    if (!message.startsWith('/')) {
-      const pausedRun = await workflowDb.getPausedWorkflowRun(conversation.id);
-      const pausedApprovalRaw = pausedRun?.metadata.approval;
-      const gateAlreadyResolved =
-        pausedApprovalRaw !== undefined &&
-        isApprovalContext(pausedApprovalRaw) &&
-        isGateResolved(pausedApprovalRaw);
-      if (pausedRun && !gateAlreadyResolved) {
-        const approvalRaw = pausedRun.metadata.approval;
-        const hasValidApproval =
-          approvalRaw != null &&
-          typeof approvalRaw === 'object' &&
-          'nodeId' in approvalRaw &&
-          typeof (approvalRaw as Record<string, unknown>).nodeId === 'string';
-
-        if (!hasValidApproval) {
-          // Paused run exists but approval context is missing or corrupt —
-          // tell the user so they can use explicit commands instead.
-          await platform.sendMessage(
-            conversationId,
-            'A workflow is paused but its approval context is missing. ' +
-              `Use \`/workflow approve ${pausedRun.id}\` or \`/workflow reject ${pausedRun.id}\`.`
-          );
-          return;
-        }
-
-        const approval = approvalRaw as ApprovalContext;
-        getLog().info(
-          {
-            conversationId,
-            workflowRunId: pausedRun.id,
-            nodeId: approval.nodeId,
-            workflowName: pausedRun.workflow_name,
-          },
-          'orchestrator.natural_language_approval_started'
-        );
-
-        try {
-          // Shared gate logic (events, telemetry, metadata staging) — the run
-          // stays 'paused' with metadata.approval.resolved = 'approved'.
-          await approveWorkflow(pausedRun.id, message);
-
-          // Discover workflow and resume
-          const { workflows: discoveredWorkflows } = await discoverAllWorkflows(conversation);
-          const allWorkflows: WorkflowDefinition[] = discoveredWorkflows.map(w => w.workflow);
-          const workflow = findWorkflow(pausedRun.workflow_name, allWorkflows);
-          const workflowSource = workflow
-            ? discoveredWorkflows.find(w => w.workflow === workflow)?.source
-            : undefined;
-          if (!workflow) {
-            await platform.sendMessage(
-              conversationId,
-              `Approved, but workflow \`${pausedRun.workflow_name}\` not found. ` +
-                'The approval was recorded — use `/workflow list` to check available workflows.'
-            );
-            return;
-          }
-          const codebase = conversation.codebase_id
-            ? await codebaseDb.getCodebase(conversation.codebase_id)
-            : null;
-          if (!codebase) {
-            await platform.sendMessage(
-              conversationId,
-              'Approved, but no project is attached to this conversation. ' +
-                'The approval was recorded — re-run the workflow to resume.'
-            );
-            return;
-          }
-          await platform.sendMessage(conversationId, `▶️ Resuming **${workflow.name}**...`);
-          await dispatchOrchestratorWorkflow(
-            platform,
-            conversationId,
-            conversation,
-            codebase,
-            workflow,
-            pausedRun.user_message,
-            isolationHints,
-            userId,
-            workflowSource,
-            { resumeRunId: pausedRun.id, resumeRun: pausedRun }
-          );
-          getLog().info(
-            { conversationId, workflowRunId: pausedRun.id, workflowName: pausedRun.workflow_name },
-            'orchestrator.natural_language_approval_completed'
-          );
-        } catch (error) {
-          getLog().error(
-            { err: error as Error, workflowRunId: pausedRun.id, conversationId },
-            'orchestrator.natural_language_approval_failed'
-          );
-          await platform.sendMessage(
-            conversationId,
-            `Approval failed: ${(error as Error).message}. ` +
-              `Try again or use \`/workflow approve ${pausedRun.id}\` explicitly.`
-          );
-        }
-        return;
-      }
-    }
 
     // 2. Check for deterministic commands
     if (message.startsWith('/')) {
@@ -1623,12 +1628,39 @@ export async function handleMessage(
       // Non-critical — continue without context
     }
 
+    // A human gate paused in this conversation is CONTEXT for the agent, not a
+    // branch in the router (#2565). Before #2565 any non-slash message here was
+    // recorded as an approval — including an objection — so an interpretation
+    // step never existed. Now the agent reads the gate alongside the message and
+    // resolves it (or doesn't) through the explicit approve/reject verbs it
+    // already has. Best-effort: getPausedWorkflowRun swallows DB errors and
+    // returns null, and a missing section only means the agent isn't told.
+    const pausedGateRun = await workflowDb.getPausedWorkflowRun(conversation.id);
+    const pausedGateContext = pausedGateRun
+      ? formatPausedGateSection({
+          runId: pausedGateRun.id,
+          workflowName: pausedGateRun.workflow_name,
+          approval: pausedGateRun.metadata.approval,
+        }) || undefined
+      : undefined;
+    if (pausedGateContext !== undefined) {
+      getLog().info(
+        {
+          conversationId,
+          workflowRunId: pausedGateRun?.id,
+          workflowName: pausedGateRun?.workflow_name,
+        },
+        'orchestrator.paused_gate_context_injected'
+      );
+    }
+
     const fullPrompt = buildFullPrompt(
       message,
       issueContext,
       threadContext,
       attachedFiles,
-      workflowContext
+      workflowContext,
+      pausedGateContext
     );
     const scopedCodebase =
       conversation.codebase_id !== null
@@ -1845,6 +1877,14 @@ export async function handleMessage(
       'sending_to_ai'
     );
 
+    // Written by the `manage_run` tool when the agent resolves a human gate
+    // during this turn, and acted on once the turn ends (#2565). Resolving a
+    // gate and continuing the run are two halves of one action — the tool
+    // records the intent so its call returns immediately, and the resume runs
+    // here rather than blocking the agent loop on a whole workflow. Held in an
+    // object because a `let` assigned only from a callback narrows to `null`.
+    const gateResolution: { resolved: ResolvedGate | null } = { resolved: null };
+
     // Project-scoped chats get the `manage_run` tool so the agent can see and
     // launch this project's workflow runs. Only when a codebase is scoped and
     // the provider supports in-process native tools (Claude, Pi). The explicit
@@ -1855,6 +1895,14 @@ export async function handleMessage(
       requestOptions.nativeTools = [
         buildManageRunTool({
           codebaseId: scopedCodebaseId,
+          // One continuation per turn: the resume runs in this conversation and
+          // to completion, so a second gate resolved in the same turn is
+          // declined rather than silently dropped (the tool tells the agent).
+          onGateResolved: (run, action) => {
+            if (gateResolution.resolved !== null) return false;
+            gateResolution.resolved = { run, action };
+            return true;
+          },
           startWorkflow: async (workflowName, msg): Promise<string> => {
             let wf: WorkflowDefinition | undefined;
             try {
@@ -1927,6 +1975,21 @@ export async function handleMessage(
         conversation,
         issueContext,
         requestOptions,
+        userId
+      );
+    }
+
+    // The agent resolved a human gate during the turn — now continue the run.
+    if (gateResolution.resolved !== null) {
+      await continueResolvedGateRun(
+        platform,
+        conversationId,
+        conversation,
+        discoveredCodebase ?? null,
+        workflowsWithSource,
+        gateResolution.resolved.run,
+        gateResolution.resolved.action,
+        isolationHints,
         userId
       );
     }
