@@ -248,6 +248,34 @@ describe('apply script — guards pinned on the apply copy', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
+  // The apply-side mirror of the summary's TAB-target guard. Deleting that guard left
+  // the whole suite green, which is this PR's own lesson reproduced inside its own
+  // fix: a guard added to both copies but tested on one. The consequence is an M1
+  // violation rather than an escape — `symlink_escapes` still catches real traversal
+  // on the raw target — but it is the sharp kind. Measured with the guard removed, for
+  // a target `foo<TAB>bar` that contains no `..`:
+  //   summary → S x unsafe-record-target   (approver is told it was skipped)
+  //   apply   → K x, symlink lands in the live root
+  // i.e. the summary lies to the approver about what apply will do.
+  test.skipIf(isWin)('a TAB in a symlink target is refused by the APPLY script too', () => {
+    const { root, upper, dest, ws } = makeDirs();
+    symlinkSync('foo\tbar', join(upper, 'x'));
+
+    const { records } = runScript(buildApplyScript(), upper, dest, ws);
+
+    expect(records).toEqual([{ tag: 'S', fields: ['x', 'unsafe-record-target'] }]);
+    // Nothing reproduced into the destination under any spelling of the name.
+    expect(existsSync(join(dest, 'x'))).toBe(false);
+    let landed = true;
+    try {
+      lstatSync(join(dest, 'x'));
+    } catch {
+      landed = false;
+    }
+    expect(landed).toBe(false);
+    rmSync(root, { recursive: true, force: true });
+  });
+
   // R4: the newline fix had two halves and only the whiteout half was pinned. The
   // other half is safe_parent — `$(dirname)` stripped the trailing newline, so it
   // confined `$DEST/d` while the write went through `$DEST/d\n`. With a dest symlink
@@ -420,6 +448,27 @@ describe('summary script — faithful representation (M1)', () => {
     // (Asserting merely that no `L … '0'` record exists passed before the guard too,
     // because the forged flag was a path rather than '0'.)
     expect(records).toEqual([{ tag: 'S', fields: ['a?b', 'unsafe-record-name'] }]);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  // C1's mirror on the consent surface. The apply script's valid_name refusal is
+  // pinned by two tests; the summary's call site was pinned by none — bypassing it
+  // left the whole suite green. The failure is the inverse of an over-apply: apply
+  // correctly refuses, while the summary tells the approver that `subdir` itself is
+  // about to be deleted. A human asked to approve a deletion that will not happen is
+  // being misinformed just as surely as one shown a deletion that will.
+  test('the summary refuses an unsafe whiteout name rather than reporting a deletion', () => {
+    const { root, upper, dest, ws } = makeDirs();
+    mkdirSync(join(upper, 'subdir'), { recursive: true });
+    writeFileSync(join(upper, 'subdir', '.wh.'), ''); // decodes to the empty name
+    mkdirSync(join(dest, 'subdir'), { recursive: true });
+    writeFileSync(join(dest, 'subdir', 'keepme.txt'), 'precious');
+
+    const { records } = runScript(buildSummaryScript(), upper, dest, ws);
+
+    expect(records.some(r => r.tag === 'S' && r.fields[1] === 'unsafe-whiteout-name')).toBe(true);
+    // Nothing may be presented as a pending deletion — least of all the parent dir.
+    expect(records.some(r => r.tag === 'D')).toBe(false);
     rmSync(root, { recursive: true, force: true });
   });
 
