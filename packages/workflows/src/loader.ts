@@ -54,7 +54,7 @@ import type {
 } from './schemas/workflow';
 import { INPUT_NAME_PATTERN, inputEnvKey } from './schemas/dag-node';
 import { workflowNodeHooksSchema } from './schemas/hooks';
-import { parseWhenAtom, whenAtoms } from './when-atom';
+import { parseWhenAtom, whenAtoms, WHEN_INPUTS_SCOPE } from './when-atom';
 import { z } from '@hono/zod-openapi';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -342,23 +342,28 @@ function parseDagNode(
  * or `null` when it can.
  *
  * Comparing a model's entire reply to an exact string is false the moment it writes a
- * sentence instead of a token — and the node is then skipped with no error. Which
- * remedy to name depends on the producer:
+ * sentence instead of a token — and the node is then skipped with no error. All three
+ * AI producers below are rejected, but for three DIFFERENT reasons, so each gets its own
+ * remedy. Each claim was verified by parsing a node through `dagNodeSchema`, not read off
+ * the field lists:
  *
- *   'schema-capable'  — `prompt:` / `command:`: declaring `output_format` REPLACES the
- *                       node's output text with the validated JSON document
- *                       (`dag-executor.ts`, the structured-output flattening in the
- *                       reask loop), so the fix is to declare one and compare a field —
- *                       and declaring one is also the opt-out, because the whole output
- *                       is then a document the author controls, not prose.
- *   'no-schema-channel' — `loop:` / `loop_group:`: a loop's output is the LAST
- *                       ITERATION'S raw text, and `output_format` does not change that
- *                       (the schema can reach the provider and populate
- *                       `structuredOutput` for `.field` access, but the loop's `output`
- *                       is never flattened to JSON the way a prompt node's is, and the
- *                       loader warns the field as ignored on loop nodes anyway). There
- *                       is no whole-output opt-out to offer, so the message sends the
- *                       decision out of the loop instead.
+ *   'schema-capable' — `prompt:` / `command:`: `output_format` survives the transform,
+ *                      and on a valid structured turn the executor REPLACES the node's
+ *                      output text with the validated JSON document. So declaring one is
+ *                      both the fix (compare a field) and the opt-out (the whole output
+ *                      is then a document the author controls, not prose).
+ *   'loop'           — `loop:`: `output_format` is DROPPED at parse. It belongs to the
+ *                      schema's `aiOnly` group, and the LoopNode branch of the transform
+ *                      does not spread `aiOnly` (it rescues only `pi`), so the field never
+ *                      reaches the node object and can populate nothing. Declaring one is
+ *                      not an opt-out; it is a no-op.
+ *   'loop-group'     — `loop_group:`: `output_format` DOES survive the transform here
+ *                      (the LoopGroupNode branch spreads `aiOnly`), so this is not the
+ *                      same case — but the group's completion returns
+ *                      `output: lastIterationOutput` with no `structuredOutput` and no
+ *                      `declaredFields`, so the whole-output channel is still the last
+ *                      iteration's raw text. Declaring a schema cannot make `$group.output`
+ *                      a JSON document.
  *
  * Everything else keeps whole-output comparison: `bash:`/`script:` stdout is
  * author-controlled and exact by construction, an `approval:` capture is what a human
@@ -368,11 +373,16 @@ function parseDagNode(
  * command file is an inline prompt that lives in another file, so excluding it would
  * leave the same hazard reachable by moving the prompt.
  */
-function freeFormAiProducerKind(node: DagNode): 'schema-capable' | 'no-schema-channel' | null {
-  if (isLoopNode(node) || isLoopGroupNode(node)) return 'no-schema-channel';
+function freeFormAiProducerKind(node: DagNode): 'schema-capable' | 'loop' | 'loop-group' | null {
+  if (isLoopNode(node)) return 'loop';
+  if (isLoopGroupNode(node)) return 'loop-group';
   if (!isPromptNode(node) && !isCommandNode(node)) return null;
   return node.output_format === undefined ? 'schema-capable' : null;
 }
+
+/** The remedy clause for each rejected producer kind (see freeFormAiProducerKind). */
+const GATE_ON_A_SHELL_NODE =
+  "compute the decision in a 'bash:'/'script:' node (or an 'until_bash' check) and gate on that node's output instead";
 
 /**
  * Validate DAG structure: unique IDs, depends_on references exist, no cycles,
@@ -519,7 +529,7 @@ export function validateDagStructure(
         const refNodeId = m[1];
         // `$INPUTS.name` is an input macro. In particular, `$INPUTS.output` also
         // matches the canonical node-ref grammar, so the macro must take precedence.
-        if (refNodeId === 'INPUTS') continue;
+        if (refNodeId === WHEN_INPUTS_SCOPE) continue;
         // Output refs (unlike depends_on) may also reach ENCLOSING-scope nodes: the
         // executor seeds a loop_group iteration's scoped output map with the outer
         // DAG's outputs, so `$outerNode.output` inside a body prompt is valid.
@@ -541,7 +551,7 @@ export function validateDagStructure(
         const field = m[2];
         // `$INPUTS.name` is an include-time macro at load and a run-time input scope in
         // a sub-run — either way it is not a node reference.
-        if (refNodeId === 'INPUTS') continue;
+        if (refNodeId === WHEN_INPUTS_SCOPE) continue;
         if (
           refNodeId !== undefined &&
           !nodesById.has(refNodeId) &&
@@ -572,9 +582,13 @@ export function validateDagStructure(
         const kind = freeFormAiProducerKind(producer);
         if (kind === null) continue;
         const problem = `Node '${node.id}' field 'when' compares the whole output of AI node '${producerId}' to a literal ('${atom.expected}'). That output is free-form prose, so the comparison silently fails and '${node.id}' is skipped.`;
-        return kind === 'schema-capable'
-          ? `${problem} Declare 'output_format' on '${producerId}' and compare a field (e.g. "$${producerId}.output.status ${atom.operator} '${atom.expected}'"), or produce the value from a 'bash:'/'script:' node`
-          : `${problem} A loop node's output is the last iteration's raw text and 'output_format' does not change that, so there is nothing to declare here — compute the decision in a 'bash:'/'script:' node (or an 'until_bash' check) and gate on that node's output instead`;
+        if (kind === 'schema-capable') {
+          return `${problem} Declare 'output_format' on '${producerId}' and compare a field (e.g. "$${producerId}.output.status ${atom.operator} '${atom.expected}'"), or produce the value from a 'bash:'/'script:' node`;
+        }
+        if (kind === 'loop') {
+          return `${problem} 'output_format' is dropped from a 'loop:' node when the workflow is parsed, so declaring one on '${producerId}' would change nothing — ${GATE_ON_A_SHELL_NODE}`;
+        }
+        return `${problem} A 'loop_group:' node's output is the last iteration's raw text — unlike a 'prompt:' node, declaring 'output_format' does not replace it with the JSON document — so ${GATE_ON_A_SHELL_NODE}`;
       }
     }
   }

@@ -24,10 +24,12 @@
 import { INPUT_NAME_SOURCE } from './schemas/dag-node';
 
 /**
- * The reserved scope name for workflow inputs. `INPUTS` is not a usable node id on
- * ANY reference surface — the loader's ref scans already skip it and prompt
- * substitution resolves `$INPUTS.<name>` before node refs — so the parser binds it
- * to the input scope here rather than letting it look like a node called `INPUTS`.
+ * The reserved scope name for workflow inputs, and the one spelling of it — `loader.ts`
+ * imports this rather than re-typing the literal in its ref scans.
+ *
+ * `INPUTS` can never be a node id: `dagNodeSchema.superRefine` rejects it outright
+ * ("node id 'INPUTS' is reserved for the $INPUTS.<name> parameter surface"). So binding
+ * the name to the input scope here cannot shadow a real node — there is none to shadow.
  */
 export const WHEN_INPUTS_SCOPE = 'INPUTS';
 
@@ -145,8 +147,8 @@ export function parseWhenAtom(expr: string): WhenAtom | null {
   }
 
   if (nodeId === undefined || segment1 === undefined) return null;
-  // Reached only by `$INPUTS.<a>.<b>` backtracking out of the input branch. `INPUTS` is
-  // reserved, so this is a malformed input ref, not a node called `INPUTS`.
+  // Reached only by `$INPUTS.<a>.<b>` backtracking out of the input branch. No node can
+  // carry the reserved id, so this is a malformed input ref, not a node reference.
   if (nodeId === WHEN_INPUTS_SCOPE) return null;
 
   // Resolve the effective field, preserving canonical `$node.output[.field]` semantics

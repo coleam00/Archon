@@ -408,8 +408,8 @@ when: "$INPUTS.mode == 'fast' && $check.output.ok == 'true'"
 - `$nodeId.output.field` accesses a JSON field (for `output_format` nodes)
 - `$INPUTS.<name>` references a declared input supplied by a caller's `with:` (or a direct
   run's `--input`). A name this run does not carry **fails the node** — it never quietly
-  becomes an empty string. `INPUTS` is a reserved scope name, so `$INPUTS.x` always means
-  an input and never a node, even if a node happens to be called `INPUTS`.
+  becomes an empty string. `INPUTS` is a reserved scope: a node cannot be given that id
+  (the loader rejects it), so `$INPUTS.x` always means an input.
 - Invalid or unparseable expressions default to `false` (fail-closed — node is skipped with a warning)
 - Numeric operators fail-closed if either side is not a finite number
 - Parentheses are not supported — use standard AND/OR precedence to structure conditions
@@ -452,11 +452,12 @@ construction, and so do `approval:` captures (a human typed them) and `workflow:
 results (the callee owns that contract). A field access (`$analyze.output.status`) is
 always allowed.
 
-**`loop:` and `loop_group:` have no opt-out.** A loop's output is the *last iteration's raw
-text*, and `output_format` does not change that — the schema can still populate
-`$loop.output.field`, but the whole-output channel stays prose (the loader also warns the
-field as ignored on loop nodes). Compute the decision in a `bash:`/`script:` node — or an
-`until_bash` check — and gate on that node's output instead.
+**`loop:` and `loop_group:` have no opt-out — for two different reasons.** On a `loop:`,
+`output_format` is *dropped when the workflow is parsed*, so declaring one is a no-op. On a
+`loop_group:` it survives, but the group's output is the *last iteration's raw text* and a
+schema never replaces it with the JSON document the way it does on a `prompt:` node. Either
+way, compute the decision in a `bash:`/`script:` node — or an `until_bash` check — and gate
+on that node's output instead.
 :::
 
 ### `$node_id.output` Substitution

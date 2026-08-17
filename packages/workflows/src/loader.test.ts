@@ -2565,18 +2565,21 @@ nodes:
       );
       expect(result.errors).toHaveLength(1);
       expect(result.errors[0].error).toContain("whole output of AI node 'refine'");
-      // A loop's whole-output channel is prose regardless of `output_format`, so the
-      // message must NOT send the author to it — it points out of the loop instead.
-      expect(result.errors[0].error).toContain("last iteration's raw text");
+      // `loop:` and `loop_group:` are both rejected but for DIFFERENT reasons, and the
+      // message must name the right one. On a `loop:` the schema is dropped at parse.
+      expect(result.errors[0].error).toContain("dropped from a 'loop:' node");
       expect(result.errors[0].error).not.toContain("Declare 'output_format'");
     });
 
-    it('rejects it for a loop producer even when it declares an (ignored) output_format', async () => {
+    it('rejects it for a loop producer even when it declares an output_format', async () => {
+      // `output_format` never reaches a LoopNode: it is in the schema's `aiOnly` group
+      // and the loop branch of the transform does not spread it. So there is nothing to
+      // opt out with, and the message must not pretend otherwise.
       const result = await loadYaml(
         'ai-loop-declared-format.yaml',
         `
 name: ai-loop-declared-format
-description: output_format on a loop node does nothing, so it is not an opt-out
+description: output_format on a loop node is dropped, so it is not an opt-out
 nodes:
   - id: refine
     output_format:
@@ -2595,7 +2598,40 @@ nodes:
 `
       );
       expect(result.errors).toHaveLength(1);
+      expect(result.errors[0].error).toContain("dropped from a 'loop:' node");
+    });
+
+    it('rejects it for a loop_group producer that declares output_format, for its own reason', async () => {
+      // Unlike `loop:`, a loop_group KEEPS `output_format` through the transform — so the
+      // "dropped at parse" reason would be wrong here. The group is still rejected
+      // because its completion returns the last iteration's text, never the JSON.
+      const result = await loadYaml(
+        'ai-loop-group-declared-format.yaml',
+        `
+name: ai-loop-group-declared-format
+description: a loop_group keeps output_format but its output is still iteration text
+nodes:
+  - id: refine
+    output_format:
+      type: object
+      properties:
+        status:
+          type: string
+    loop_group:
+      until: DONE
+      max_iterations: 3
+      nodes:
+        - id: body
+          prompt: "Do a pass"
+  - id: decide
+    prompt: "Decide"
+    depends_on: [refine]
+    when: "$refine.output == 'DONE'"
+`
+      );
+      expect(result.errors).toHaveLength(1);
       expect(result.errors[0].error).toContain("last iteration's raw text");
+      expect(result.errors[0].error).not.toContain("dropped from a 'loop:' node");
     });
 
     it('rejects it for a loop_group producer', async () => {
@@ -2620,6 +2656,7 @@ nodes:
       );
       expect(result.errors).toHaveLength(1);
       expect(result.errors[0].error).toContain("whole output of AI node 'refine'");
+      expect(result.errors[0].error).toContain("last iteration's raw text");
     });
 
     it('rejects it under a numeric operator too', async () => {
