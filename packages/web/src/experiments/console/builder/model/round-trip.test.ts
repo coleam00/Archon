@@ -25,6 +25,40 @@ describe('round-trip fidelity', () => {
     }
   });
 
+  test('a loop with no until round-trips exactly, and no until key is introduced (#2563)', () => {
+    // Before `until` became optional the builder read it unconditionally, so a
+    // deterministic-only loop threw on `undefined.trim()` in structural validation
+    // and would have exported `until: undefined`.
+    const deterministic: WireWorkflowDefinition = {
+      name: 'deterministic-loop',
+      description: 'Terminates on until_bash alone',
+      nodes: [
+        {
+          id: 'fix',
+          loop: {
+            prompt: 'Fix the failing tests',
+            max_iterations: 5,
+            fresh_context: false,
+            until_bash: 'bun run test',
+          },
+        },
+      ],
+    };
+
+    const { workflow, issues } = fromWorkflowDefinition(deterministic);
+    expect(issues).toEqual([]);
+    const node = workflow.nodes[0];
+    expect(node.variant).toBe('loop');
+    if (node.variant === 'loop') {
+      expect(node.data.until).toBeUndefined();
+      expect(node.data.until_bash).toBe('bun run test');
+    }
+
+    const exported = toWorkflowDefinition(workflow);
+    expect(exported).toEqual(deterministic);
+    expect('until' in (exported.nodes[0].loop ?? {})).toBe(false);
+  });
+
   test('command-backed loop round-trips exactly — command preserved, no prompt key introduced', () => {
     const { workflow, issues } = fromWorkflowDefinition(FIXTURES.loopCommand);
     expect(issues).toEqual([]);

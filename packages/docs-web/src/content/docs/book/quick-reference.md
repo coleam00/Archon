@@ -193,10 +193,10 @@ Defined under `loop:` inside a node:
 |-------|----------|------|-------------|
 | `prompt` | One of `prompt`/`command` | string | Inline AI instructions executed each iteration |
 | `command` | One of `prompt`/`command` | string | Package-local or shared command whose body is the iteration prompt — exactly one of `prompt` or `command` |
-| `until` | Yes | string | Completion signal string — loop ends when AI output contains this |
+| `until` | Unless `until_bash` | string | Completion signal string — loop ends when AI output contains this. Omit it for a deterministic loop: with no signal declared, nothing matches prose |
 | `max_iterations` | Yes | number | Maximum iterations before the node fails |
 | `fresh_context` | No | boolean | Start a new session each iteration (default: false) |
-| `until_bash` | No | string | Shell script run after each iteration; exit 0 signals completion |
+| `until_bash` | Unless `until` | string | Shell script run after each iteration; exit 0 signals completion. Skipped on an iteration whose `until` signal already fired |
 | `interactive` | No | boolean | Pause at a human gate after each iteration for input via `/workflow approve` |
 | `gate_message` | No | string | Message shown at the interactive gate (required when `interactive: true`) |
 | `signal_completes` | No | boolean | Interactive loops only: a detected completion signal completes the node immediately (even on iteration 1) instead of gating (default: false) |
@@ -219,10 +219,10 @@ per iteration (see [Cross-Node Loops](/guides/loop-nodes/#cross-node-loops-with-
 | Field | Required | Type | Description |
 |-------|----------|------|-------------|
 | `nodes` | Yes | node[] | Sub-DAG body re-run in full each iteration. Any node type, including nested `loop_group`. `depends_on` is body-scoped; body ids must not shadow outer ids |
-| `until` | Yes | string | Completion signal — checked in the body's terminal-node output |
+| `until` | Unless `until_bash` | string | Completion signal — checked in the body's terminal-node output. Omit it for a deterministic group |
 | `max_iterations` | Yes | number | Maximum iterations before the node fails |
 | `fresh_context` | No | boolean | `true` starts fresh body AI sessions each iteration (default: false — sessions continue) |
-| `until_bash` | No | string | Shell script run after each iteration; exit 0 signals completion |
+| `until_bash` | Unless `until` | string | Shell script run after each iteration; exit 0 signals completion. Skipped on an iteration whose `until` signal already fired |
 | `interactive` | No | boolean | Pause at a human gate after each non-completing iteration |
 | `gate_message` | No | string | Message shown at the interactive gate |
 | `signal_completes` | No | boolean | Interactive loops only: a detected completion signal completes the group immediately (even on iteration 1) instead of gating (default: false) |

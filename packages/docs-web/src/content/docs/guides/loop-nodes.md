@@ -62,8 +62,23 @@ A loop node iterates its prompt until one of these conditions is met:
 2. **Deterministic bash check** — an `until_bash` script exits with code 0
 3. **Max iterations reached** — the node fails with a clear error
 
+A loop must declare **at least one** of `until` / `until_bash` — neither is required
+on its own. The two are OR'd: whichever fires first ends the loop, and `until_bash`
+is skipped on an iteration whose signal already fired (it cannot change the
+outcome, and skipping it avoids an extra run of a side-effecting script).
+
 Each iteration is a full AI agent invocation with tool access. Between iterations,
 the executor checks for workflow cancellation.
+
+### Choosing a completion channel
+
+| Your completion condition | Declare |
+|---|---|
+| Externally checkable — tests pass, a file exists, a state field flipped | `until_bash` **only**. No prose is matched, so a sentinel the model happens to emit while reasoning about the criteria cannot end the loop early. |
+| A judgment the model makes, shown to a human at a gate | `until` (with `interactive`). The iteration's output is a message a person reads and replies to, so prose is the right medium. |
+| A judgment the model makes, no human in the loop | `until` today. Prefer `until_bash` if you can make the condition checkable — write the decision to a file in a prior step and test it. |
+
+Declaring both is fine and means "either one ends it".
 
 ## Configuration Fields
 
@@ -74,10 +89,11 @@ the executor checks for workflow cancellation.
     # command: <name>       # Alternative to `prompt`: package-local or shared command name,
     #                       # loaded once per run and reused for every iteration.
     #                       # Never combine with `prompt` — the loader rejects both together.
-    until: COMPLETE         # Required. Completion signal string.
+    until: COMPLETE         # Completion signal string. Required unless `until_bash` is set.
     max_iterations: 10      # Required. Hard limit — node fails if exceeded.
     fresh_context: true     # Optional. Default: false.
-    until_bash: "..."       # Optional. Bash script checked after each iteration.
+    until_bash: "..."       # Bash script checked after each iteration; exit 0 = complete.
+                            # Required unless `until` is set — at least one of the two.
     interactive: true       # Optional. Default: false. Pause after each non-completing
                             # iteration for user input via /workflow approve.
     gate_message: "..."     # Required when interactive: true. Message shown to the
@@ -178,11 +194,16 @@ The completion signal string. The executor checks each iteration's output for:
 The `<promise>` tags are automatically stripped from output sent to the user
 and to downstream nodes.
 
+**Optional when `until_bash` is set.** Omit `until` entirely for a loop whose
+completion is deterministic — the executor then never matches prose at all, so the
+signal cannot false-positive on a model that mentions its own exit criterion. A
+loop declaring neither channel is rejected at load time.
+
 ### `max_iterations`
 
-Hard safety limit. If the loop reaches this count without a completion signal,
-the node **fails** (not succeeds). This prevents runaway loops from burning
-tokens indefinitely.
+Hard safety limit. If the loop reaches this count without meeting any declared
+completion channel, the node **fails** (not succeeds). This prevents runaway loops
+from burning tokens indefinitely.
 
 Choose based on the work scope:
 - Simple refinement loops: 3–5
@@ -202,16 +223,21 @@ The first iteration is always fresh regardless of this setting.
 
 ### `until_bash`
 
-Optional bash script executed after each iteration. If it exits with code 0,
-the loop completes — even if the AI didn't output the completion signal.
+Bash script executed after each iteration. If it exits with code 0, the loop
+completes — even if the AI didn't output the completion signal. Optional when
+`until` is set; **on its own it is the whole completion channel**, which is the
+preferred shape whenever the condition is externally checkable:
 
 ```yaml
 loop:
   prompt: "Fix the failing tests"
-  until: ALL_PASS
   max_iterations: 5
-  until_bash: "bun run test"  # Loop ends when tests pass
+  until_bash: "bun run test"  # Loop ends when tests pass. No `until:` — nothing to
+                              # false-positive on, and no dead field to invent.
 ```
+
+`until_bash` runs only on iterations that the `until` signal did not already
+complete, so a loop declaring both never pays for a redundant check.
 
 This is useful for deterministic completion criteria: test suites, lint checks,
 build success. The bash script supports the same variable substitution as
@@ -319,8 +345,23 @@ Combine LLM work with a deterministic completion check:
 ```
 
 The loop ends either when the AI signals completion or when the bash check
-succeeds — whichever comes first. This prevents the AI from falsely claiming
-completion when tests still fail.
+succeeds — whichever comes first.
+
+**The bash check does not veto the signal.** The two channels are OR'd, so an AI
+that emits `TESTS_PASS` while tests still fail ends the loop anyway. If the tests
+are the real exit criterion, say so by dropping `until` and the sentence that
+teaches the model to emit it:
+
+```yaml
+- id: fix-tests
+  loop:
+    prompt: Run the test suite. Read the failures. Fix them one at a time.
+    max_iterations: 8
+    until_bash: "bun run test"
+    fresh_context: false
+```
+
+Now the only way out is a passing suite.
 
 ## Node Features
 
@@ -546,7 +587,8 @@ than silently degrading).
 `loop_group` shares the same iteration-control fields as `loop`:
 [`until`](#until), [`max_iterations`](#max_iterations),
 [`fresh_context`](#fresh_context), [`until_bash`](#until_bash),
-[`interactive`](#interactive-and-gate_message), and `gate_message`. The
+[`interactive`](#interactive-and-gate_message), and `gate_message` — including the
+at-least-one-of `until` / `until_bash` rule and the short-circuit between them. The
 difference is the body: `loop` takes a single `prompt`; `loop_group` takes a
 `nodes` array.
 

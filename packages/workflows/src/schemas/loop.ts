@@ -15,11 +15,23 @@ import { isValidCommandName } from '../command-validation';
  * Shared iteration-control fields for `loop:` and `loop_group:`.
  * Error messages keep the `loop.` qualifier (matching the pre-refactor `loop:`
  * wording, which existing tests assert) — both variants surface the same text.
+ *
+ * The completion gate is **at least one of** `until` / `until_bash` (#2563).
+ * Neither is individually required: a loop whose completion is fully checkable
+ * declares only `until_bash` and then has no prose-matching path at all, so a
+ * sentinel string the model happens to emit while reasoning cannot end it.
  */
 export const loopControlSchema = z
   .object({
-    /** Completion signal string detected in AI output (e.g., "COMPLETE"). */
-    until: z.string().min(1, "loop node requires 'loop.until' (completion signal string)"),
+    /**
+     * Completion signal string detected in AI output (e.g., "COMPLETE").
+     * Optional since #2563 — required only when no other completion channel is
+     * declared (see the at-least-one refinement below).
+     */
+    until: z
+      .string()
+      .min(1, "'loop.until' must be a non-empty completion signal string")
+      .optional(),
     /** Maximum iterations allowed; exceeding this fails the node. */
     max_iterations: z.number().int().positive("'loop.max_iterations' must be a positive integer"),
     /** Whether to start fresh session each iteration (default: false). */
@@ -38,6 +50,19 @@ export const loopControlSchema = z
     signal_completes: z.boolean().optional(),
   })
   .superRefine((data, ctx) => {
+    // At least one completion channel. Neither field is required on its own, but a
+    // loop with neither can only ever end by exhausting max_iterations, which the
+    // engine reports as a failure — so it is always an authoring mistake.
+    if (!data.until && !data.until_bash) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "loop node requires a completion channel: set 'loop.until' (completion signal string) " +
+          "or 'loop.until_bash' (deterministic check, exit 0 = complete)",
+        path: ['until'],
+      });
+    }
+
     if (data.interactive === true && !data.gate_message) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,

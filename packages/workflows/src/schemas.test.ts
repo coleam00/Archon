@@ -880,12 +880,32 @@ describe('dagNodeSchema — loop_group', () => {
     }
   });
 
-  test('loop_group requires until (completion signal)', () => {
+  test('loop_group rejects a body with no completion channel', () => {
     const result = dagNodeSchema.safeParse({
       id: 'grp',
       loop_group: { max_iterations: 3, nodes: [{ id: 'x', prompt: 'x' }] },
     });
     expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some(i => i.message.includes('completion channel'))).toBe(true);
+    }
+  });
+
+  test('loop_group accepts until_bash alone (no prose signal) — #2563', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'grp',
+      loop_group: {
+        max_iterations: 3,
+        until_bash: 'test -f ./done',
+        nodes: [{ id: 'x', bash: 'echo hi' }],
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const grp = result.data as { loop_group?: { until?: string; until_bash?: string } };
+      expect(grp.loop_group?.until).toBeUndefined();
+      expect(grp.loop_group?.until_bash).toBe('test -f ./done');
+    }
   });
 
   test('nested loop_group body parses (loop_group inside loop_group)', () => {
@@ -916,6 +936,60 @@ describe('dagNodeSchema — loop_group', () => {
       expect(isLoopGroupNode(inner as never)).toBe(true);
       expect(inner?.loop_group?.nodes).toHaveLength(1);
     }
+  });
+});
+
+describe('dagNodeSchema — loop completion channel (#2563)', () => {
+  test('a loop declaring only until_bash parses, with no prose signal', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'deterministic',
+      loop: {
+        prompt: 'fix the failing tests',
+        max_iterations: 5,
+        until_bash: 'bun run test',
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const node = result.data as { loop?: { until?: string; until_bash?: string } };
+      expect(node.loop?.until).toBeUndefined();
+      expect(node.loop?.until_bash).toBe('bun run test');
+    }
+  });
+
+  test('a loop declaring only until still parses (unchanged)', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'prose',
+      loop: { prompt: 'iterate', until: 'COMPLETE', max_iterations: 5 },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const node = result.data as { loop?: { until?: string } };
+      expect(node.loop?.until).toBe('COMPLETE');
+    }
+  });
+
+  test('a loop with neither channel is rejected, naming both', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'no-channel',
+      loop: { prompt: 'iterate', max_iterations: 5 },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const issue = result.error.issues.find(i => i.message.includes('completion channel'));
+      expect(issue).toBeDefined();
+      expect(issue?.message).toContain('loop.until');
+      expect(issue?.message).toContain('loop.until_bash');
+      expect(issue?.path).toEqual(['loop', 'until']);
+    }
+  });
+
+  test('an empty-string until is rejected rather than treated as absent', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'blank',
+      loop: { prompt: 'iterate', until: '', max_iterations: 5 },
+    });
+    expect(result.success).toBe(false);
   });
 });
 

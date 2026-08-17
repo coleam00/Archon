@@ -80,7 +80,13 @@ export type BaseFields = Pick<WireDagNode, WireBaseKey>;
 export interface LoopNodeData {
   prompt?: string;
   command?: string;
-  until: string;
+  /**
+   * Prose completion signal. Optional since #2563 — a loop declaring only
+   * `until_bash` has no prose path at all, so the engine requires *at least one*
+   * of the two rather than `until` unconditionally. Structural validation mirrors
+   * that rule; every read here must tolerate `undefined`.
+   */
+  until?: string;
   max_iterations: number;
   fresh_context: boolean;
   until_bash?: string;

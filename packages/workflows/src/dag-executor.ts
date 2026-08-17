@@ -108,6 +108,7 @@ import {
   substituteWorkflowVariables,
   buildPromptWithContext,
   detectCompletionSignal,
+  describeUnmetCompletion,
   stripCompletionTags,
   isInlineScript,
   formatSubprocessFailure,
@@ -3225,15 +3226,22 @@ const GATE_EXCERPT_MAX = 500;
  */
 function buildHonestGateMessage(
   completionDetected: boolean,
-  untilSignal: string,
+  untilSignal: string | undefined,
   lastIterationOutput: string,
   gateMessage: string
 ): string {
   const trimmed = lastIterationOutput.trim();
   const excerpt = trimmed.slice(0, GATE_EXCERPT_MAX);
-  const statusLine = completionDetected
-    ? `✅ Completion signal detected (\`${untilSignal}\`).`
-    : `⚠️ No completion signal (\`${untilSignal}\`) in this iteration.`;
+  // A loop that declared only `until_bash` (#2563) has no signal to name — say what
+  // was actually evaluated rather than printing `undefined` back at the reviewer.
+  const statusLine =
+    untilSignal === undefined
+      ? completionDetected
+        ? '✅ Completion condition met.'
+        : '⚠️ Completion condition not met in this iteration.'
+      : completionDetected
+        ? `✅ Completion signal detected (\`${untilSignal}\`).`
+        : `⚠️ No completion signal (\`${untilSignal}\`) in this iteration.`;
   const excerptBlock = excerpt
     ? `\n\n> ${excerpt}${trimmed.length > GATE_EXCERPT_MAX ? '…' : ''}`
     : '';
@@ -3672,7 +3680,12 @@ async function executeLoopGroupNode(
     // Short-circuit: if the until-signal already detected completion, skip the
     // until_bash subprocess (avoids unnecessary side effects and shell cost) — OR
     // semantics mean the group is already complete.
-    const signalDetected = detectCompletionSignal(iterationOutput, group.until);
+    //
+    // `until` is optional (#2563): a group that declared only `until_bash` has no
+    // prose path at all, so never call detectCompletionSignal with an undefined
+    // signal — its regexes would be built from the empty string and match anything.
+    const signalDetected =
+      group.until !== undefined && detectCompletionSignal(iterationOutput, group.until);
 
     let bashComplete = false;
     if (group.until_bash && !signalDetected) {
@@ -3908,7 +3921,7 @@ async function executeLoopGroupNode(
   }
 
   // Max iterations exceeded.
-  const errorMsg = `Loop-group node '${node.id}' exceeded max iterations (${String(group.max_iterations)}) without completion signal '${group.until}'`;
+  const errorMsg = `Loop-group node '${node.id}' exceeded max iterations (${String(group.max_iterations)}) ${describeUnmetCompletion(group)}`;
   getLog().warn(
     { nodeId: node.id, maxIterations: group.max_iterations, signal: group.until },
     'loop_group_node.max_iterations_reached'
@@ -4881,11 +4894,20 @@ async function executeLoopNode(
     // Check LLM completion signal — the AI decides whether the user approved.
     // For interactive loops, the AI emits the signal when the user explicitly approves
     // (e.g., "approved", "looks good"). The prompt instructs the AI on when to emit it.
-    const signalDetected = detectCompletionSignal(fullOutput, loop.until);
+    //
+    // `until` is optional (#2563): a loop that declared only `until_bash` has no prose
+    // path at all, so never call detectCompletionSignal with an undefined signal — its
+    // regexes would be built from the empty string and match anything.
+    const signalDetected =
+      loop.until !== undefined && detectCompletionSignal(fullOutput, loop.until);
 
-    // Check deterministic bash condition (if configured)
+    // Check deterministic bash condition (if configured). Skipped once the signal
+    // already completed this iteration: completion is an OR, so the outcome cannot
+    // change, and running a side-effecting script an extra time can. This matches
+    // executeLoopGroupNode's identical guard — the two variants disagreed until
+    // #2563; do not "fix" the asymmetry back.
     let bashComplete = false;
-    if (loop.until_bash) {
+    if (loop.until_bash && !signalDetected) {
       // Resolve outside the try so ARCHON_BASH_PATH validation errors bubble up
       // to the caller instead of being swallowed by the per-iteration catch.
       const loopBashPath = resolveBashPath();
@@ -5144,7 +5166,7 @@ async function executeLoopNode(
   }
 
   // Max iterations exceeded
-  const errorMsg = `Loop node '${node.id}' exceeded max iterations (${String(loop.max_iterations)}) without completion signal '${loop.until}'`;
+  const errorMsg = `Loop node '${node.id}' exceeded max iterations (${String(loop.max_iterations)}) ${describeUnmetCompletion(loop)}`;
   getLog().warn(
     { nodeId: node.id, maxIterations: loop.max_iterations, signal: loop.until },
     'loop_node.max_iterations_reached'

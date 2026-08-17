@@ -54,7 +54,7 @@ Organized by what you're trying to do, not by field name. Useful when you know t
 | Route based on upstream output                   | Upstream `output_format: {...}` + downstream `when:`         |
 | Join after mutually-exclusive routes             | `trigger_rule: none_failed_min_one_success` or `one_success` |
 | Run two independent branches in parallel         | Two nodes with no shared `depends_on`                        |
-| Iterate until tests pass                         | `loop: {until_bash: "bun run test", max_iterations: N}`      |
+| Iterate until tests pass                         | `loop: {until_bash: "bun run test", max_iterations: N}` — no `until:`, so nothing matches prose |
 | Iterate a multi-node unit (implement → test → review per cycle) | `loop_group: {nodes: [...], until: ..., max_iterations: N}` |
 | Read the previous iteration's per-node output    | `$LOOP_PREV.<nodeId>.output` (loop_group body) or `$LOOP_PREV_OUTPUT` (loop) |
 | Iterate through a backlog without memory bleed   | `loop: {fresh_context: true}`, state written to `$ARTIFACTS_DIR` |

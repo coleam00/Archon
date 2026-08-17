@@ -3329,7 +3329,7 @@ nodes:
       expect(result.errors[0].error).toContain('loop.prompt');
     });
 
-    it('should reject loop node missing loop.until', async () => {
+    it('should reject a loop node that declares no completion channel', async () => {
       const workflowDir = join(testDir, '.archon', 'workflows');
       await mkdir(workflowDir, { recursive: true });
 
@@ -3348,7 +3348,37 @@ nodes:
 
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
       expect(result.errors.length).toBeGreaterThan(0);
-      expect(result.errors[0].error).toContain('loop.until');
+      expect(result.errors[0].error).toContain('completion channel');
+      expect(result.errors[0].error).toContain('loop.until_bash');
+    });
+
+    it('should load a loop node that declares only until_bash (#2563)', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'loop-deterministic.yaml'),
+        `
+name: loop-deterministic
+description: Deterministic completion, no prose sentinel
+nodes:
+  - id: fix
+    loop:
+      prompt: "Fix the failing tests"
+      max_iterations: 5
+      until_bash: "bun run test"
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(0);
+      const wf = result.workflows[0].workflow;
+      expect(wf.name).toBe('loop-deterministic');
+      expect(isLoopNode(wf.nodes[0])).toBe(true);
+      if (isLoopNode(wf.nodes[0])) {
+        expect(wf.nodes[0].loop.until).toBeUndefined();
+        expect(wf.nodes[0].loop.until_bash).toBe('bun run test');
+      }
     });
 
     it('should reject loop node with invalid max_iterations', async () => {

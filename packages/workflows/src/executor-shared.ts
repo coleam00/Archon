@@ -713,6 +713,27 @@ export function detectCompletionSignal(output: string, signal: string): boolean 
 }
 
 /**
+ * Name the completion channels a loop declared, for the max-iterations failure
+ * message (#2563).
+ *
+ * `loop.until` became optional once `until_bash` alone could end a loop, so a
+ * message hard-coding `without completion signal '<until>'` prints `undefined`
+ * for a deterministic-only loop and names a channel the author never declared.
+ * Both loop variants read this so they can never describe the same loop
+ * differently — the divergence between them is exactly what #2563 asked to fix.
+ *
+ * The schema guarantees at least one channel, so the empty case is unreachable;
+ * it is handled rather than asserted because this is only an error message.
+ */
+export function describeUnmetCompletion(control: { until?: string; until_bash?: string }): string {
+  const channels: string[] = [];
+  if (control.until) channels.push(`completion signal '${control.until}'`);
+  if (control.until_bash) channels.push("a passing 'until_bash' check");
+  if (channels.length === 0) return 'without a completion channel';
+  return `without ${channels.join(' or ')}`;
+}
+
+/**
  * Strip internal completion signal tags before sending to user-facing output.
  * Always strips `<promise>…</promise>` (any content). When `until` is provided,
  * also strips any XML-wrapped form of that signal with matching tag names

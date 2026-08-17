@@ -7036,6 +7036,181 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       expect(mockSendQueryDag.mock.calls[1][2]).toBe('session-1');
     });
 
+    // ─── Completion channels (#2563) ──────────────────────────────────────────
+    //
+    // These three spawn real `bash -c` subprocesses, which the repo keeps rare and
+    // cheap on purpose. There is no way to prove `until_bash` semantics without
+    // running it, and each case runs at most two one-line scripts.
+    //
+    // Shared idiom (from the loop_group until_bash tests): interpolate the counter
+    // path with forward slashes and quotes so the script is valid under git-bash on
+    // Windows, where join() yields backslashes that bash strips as escapes.
+
+    it('completes a loop that declared only until_bash, with no prose signal', async () => {
+      const counterFile = join(testDir, 'until-bash-only-counter');
+      const counterRef = `"${counterFile.replace(/\\/g, '/')}"`;
+
+      let calls = 0;
+      mockSendQueryDag.mockImplementation(function* () {
+        calls++;
+        yield { type: 'assistant', content: `working, pass ${String(calls)}` };
+        yield { type: 'result', sessionId: `s-${String(calls)}` };
+      });
+
+      const mockDeps = createMockDeps();
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun('loop-until-bash-only');
+
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-dag',
+        testDir,
+        {
+          name: 'dag-loop-until-bash-only',
+          nodes: [
+            {
+              id: 'my-loop',
+              loop: {
+                prompt: 'Keep working.',
+                max_iterations: 5,
+                // Bumps a counter and exits 0 only on the second call.
+                until_bash: `n=$(cat ${counterRef} 2>/dev/null || echo 0); n=$((n+1)); echo $n > ${counterRef}; test $n -ge 2`,
+              },
+            },
+          ],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'state'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      expect(calls).toBe(2);
+      expect((await readFile(counterFile, 'utf8')).trim()).toBe('2');
+    });
+
+    it('does not complete a loop with no until when the model emits a sentinel-shaped string', async () => {
+      // The whole point of making `until` optional: with no signal declared there is
+      // no prose path, so a model that happens to emit `<promise>COMPLETE</promise>`
+      // while reasoning about its criteria cannot end the loop early. Only until_bash
+      // can, and it does so on its second call.
+      const counterFile = join(testDir, 'stray-sentinel-counter');
+      const counterRef = `"${counterFile.replace(/\\/g, '/')}"`;
+
+      let calls = 0;
+      mockSendQueryDag.mockImplementation(function* () {
+        calls++;
+        yield {
+          type: 'assistant',
+          content: 'The exit criterion is <promise>COMPLETE</promise>, which I have not met.',
+        };
+        yield { type: 'result', sessionId: `s-${String(calls)}` };
+      });
+
+      const mockDeps = createMockDeps();
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun('loop-stray-sentinel');
+
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-dag',
+        testDir,
+        {
+          name: 'dag-loop-stray-sentinel',
+          nodes: [
+            {
+              id: 'my-loop',
+              loop: {
+                prompt: 'Keep working.',
+                max_iterations: 5,
+                until_bash: `n=$(cat ${counterRef} 2>/dev/null || echo 0); n=$((n+1)); echo $n > ${counterRef}; test $n -ge 2`,
+              },
+            },
+          ],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'state'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      // Two iterations, not one — the sentinel was inert.
+      expect(calls).toBe(2);
+    });
+
+    it('skips until_bash on an iteration whose until signal already fired', async () => {
+      // Parity with executeLoopGroupNode's identical short-circuit (see the
+      // loop_group "EDGE G" test). The variants disagreed until #2563: `loop:` ran
+      // until_bash even after the signal completed the iteration, so a side-effecting
+      // check fired one extra time for no possible change in outcome.
+      const sentinel = join(testDir, 'loop-untilbash-ran');
+      const sentinelRef = `"${sentinel.replace(/\\/g, '/')}"`;
+
+      let calls = 0;
+      mockSendQueryDag.mockImplementation(function* () {
+        calls++;
+        yield { type: 'assistant', content: 'all done\n<promise>DONE</promise>' };
+        yield { type: 'result', sessionId: `s-${String(calls)}` };
+      });
+
+      const mockDeps = createMockDeps();
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun('loop-shortcircuit');
+
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-dag',
+        testDir,
+        {
+          name: 'dag-loop-shortcircuit',
+          nodes: [
+            {
+              id: 'my-loop',
+              loop: {
+                prompt: 'Do work, emit DONE.',
+                until: 'DONE',
+                max_iterations: 3,
+                // Creates the sentinel and exits 0. If the short-circuit works it
+                // never runs, so the file is never created.
+                until_bash: `touch ${sentinelRef}`,
+              },
+            },
+          ],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'state'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      expect(calls).toBe(1);
+      let sentinelExists = true;
+      try {
+        await readFile(sentinel, 'utf8');
+      } catch {
+        sentinelExists = false;
+      }
+      expect(sentinelExists).toBe(false);
+    });
+
     it('strips <promise> tags from platform output', async () => {
       mockSendQueryDag.mockImplementation(function* () {
         yield { type: 'assistant', content: 'Done! <promise>COMPLETE</promise>' };
@@ -14837,7 +15012,9 @@ describe('executeDagWorkflow -- loop_group node', () => {
       {
         id: 'bash-loop',
         loop_group: {
-          until: 'NEVER_EMITTED', // rely on until_bash, not the signal
+          // No `until` at all (#2563). Before that the schema forced a decoy signal
+          // here; a pure-bash body emits no model text, so declaring one described a
+          // channel that could never fire.
           max_iterations: 5,
           fresh_context: false,
           until_bash: `test "$(cat ${counterRef} 2>/dev/null || echo 0)" -ge 2`,

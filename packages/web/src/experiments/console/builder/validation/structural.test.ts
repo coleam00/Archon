@@ -53,6 +53,43 @@ describe('validateStructural', () => {
     expect(invalid).toContain('loop.max_iterations');
   });
 
+  test('loop with only until_bash is clean — no signal required (#2563)', () => {
+    const issues = validateStructural(
+      wf([
+        {
+          id: 'l',
+          variant: 'loop',
+          base: {},
+          data: {
+            prompt: 'fix the tests',
+            max_iterations: 5,
+            fresh_context: false,
+            until_bash: 'bun run test',
+          },
+        },
+      ])
+    );
+    expect(issues).toEqual([]);
+  });
+
+  test('loop with neither until nor until_bash is flagged as missing a channel', () => {
+    const issues = validateStructural(
+      wf([
+        {
+          id: 'l',
+          variant: 'loop',
+          base: {},
+          data: { prompt: 'iterate', max_iterations: 5, fresh_context: false },
+        },
+      ])
+    );
+    const issue = issues.find(
+      i => i.rule === 'structural.field.missing' && i.path.field === 'loop.until'
+    );
+    expect(issue).toBeDefined();
+    expect(issue?.message).toContain('until_bash');
+  });
+
   test('script invalid runtime is flagged', () => {
     const issues = validateStructural(
       wf([

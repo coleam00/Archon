@@ -236,15 +236,17 @@ Each node has exactly ONE of: `command`, `prompt`, `bash`, `script`, `loop`, `lo
   deps: ["pandas>=2.0"]     # Optional, uv only — 'uv run --with <dep>'
 ```
 
-**Loop node** — iterates AI prompt until completion:
+**Loop node** — iterates AI prompt until completion. Declare at least one of
+`until` / `until_bash`; drop `until` when the condition is deterministic, so no
+prose is matched at all:
 ```yaml
 - id: implement
   loop:
     prompt: "Implement next story. When done: <promise>COMPLETE</promise>"
-    until: COMPLETE
+    until: COMPLETE               # Required unless until_bash is set
     max_iterations: 10
     fresh_context: true
-    until_bash: "bun run test"    # Optional: exit 0 = done
+    until_bash: "bun run test"    # Exit 0 = done. Required unless until is set
 ```
 
 **Loop group node** — repeats a multi-node sub-DAG body per iteration (implement → test → review as one repeated cycle):

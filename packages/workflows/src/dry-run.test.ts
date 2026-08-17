@@ -288,6 +288,34 @@ describe('dryRunWorkflow', () => {
     });
     expect(failed.outcome).toBe('failed');
     expect(failed.trace[0]?.reason).toContain('exceeded max iterations (3)');
+    expect(failed.trace[0]?.reason).toContain("completion signal 'DONE'");
+  });
+
+  test('a loop driven only by until_bash simulates as complete, naming the unevaluated channel', async () => {
+    // The simulator executes nothing, so `until_bash` is unobservable (#2563).
+    // Reporting the max-iterations failure a real run would not produce is the worse
+    // lie, so the loop is assumed to complete and the reason says why.
+    const workflow = makeTestWorkflow({
+      name: 'loop-deterministic',
+      nodes: [
+        {
+          id: 'fix',
+          loop: { prompt: 'Fix the tests', max_iterations: 3, until_bash: 'bun run test' },
+        },
+      ],
+    });
+
+    const result = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd: process.cwd(),
+      stubs: { fix: 'no sentinel here' },
+    });
+
+    expect(result.outcome).not.toBe('failed');
+    expect(result.trace[0]).toMatchObject({ state: 'stubbed' });
+    expect(result.trace[0]?.reason).toContain('assumed complete after 1 iteration(s)');
+    expect(result.trace[0]?.reason).toContain('until_bash');
   });
 
   test('simulates loop-group body outputs without leaking iteration state', async () => {

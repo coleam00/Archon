@@ -7,6 +7,7 @@ import { evaluateCondition } from './condition-evaluator';
 import { declaredFieldsFromSchema } from './output-ref';
 import { discoverScriptsForCwd } from './script-discovery';
 import {
+  describeUnmetCompletion,
   detectCompletionSignal,
   isInlineScript,
   loadCommandPrompt,
@@ -301,6 +302,30 @@ function stubFor(node: DagNode, ctx: DryRunContext): DryRunStubValue | undefined
   return stub;
 }
 
+/**
+ * Would this iteration's output end the loop, as far as a dry run can tell?
+ *
+ * The simulator executes nothing, so `until_bash` is unobservable. A loop that
+ * declared only `until_bash` (#2563) is therefore assumed to complete on its first
+ * iteration: reporting the max-iterations failure the real run would not produce is
+ * a worse lie than assuming the deterministic check passes, and the trace reason
+ * names the channel that went unevaluated.
+ */
+function loopIterationCompletes(
+  control: { until?: string; until_bash?: string },
+  output: string
+): boolean {
+  if (control.until === undefined) return true;
+  return detectCompletionSignal(output, control.until);
+}
+
+/** Trace reason for a simulated loop completion — see {@link loopIterationCompletes}. */
+function completionReason(control: { until?: string }, iterations: number): string {
+  return control.until === undefined
+    ? `assumed complete after ${String(iterations)} iteration(s) — 'until_bash' is not executed in a dry run`
+    : `completion signal after ${String(iterations)} iteration(s)`;
+}
+
 async function simulateLoop(
   node: DagNode,
   outputs: Map<string, NodeOutput>,
@@ -328,13 +353,13 @@ async function simulateLoop(
     }
     const hydrated = completedOutput(node, stub);
     previous = hydrated.output;
-    if (detectCompletionSignal(previous, node.loop.until)) {
+    if (loopIterationCompletes(node.loop, previous)) {
       outputs.set(node.id, hydrated);
       ctx.trace.push({
         nodeId: node.id,
         nodeType: 'loop',
         state: 'stubbed',
-        reason: `completion signal after ${String(current)} iteration(s)`,
+        reason: completionReason(node.loop, current),
         resolvedText,
         output: previous,
         ...(iteration ? { iteration } : {}),
@@ -346,7 +371,7 @@ async function simulateLoop(
     node,
     outputs,
     ctx,
-    `Loop exceeded max iterations (${String(node.loop.max_iterations)}) without completion signal '${node.loop.until}'`,
+    `Loop exceeded max iterations (${String(node.loop.max_iterations)}) ${describeUnmetCompletion(node.loop)}`,
     resolvedText,
     iteration
   );
@@ -382,13 +407,13 @@ async function simulateLoopGroup(
       return;
     }
     if (ctx.halted) return;
-    if (detectCompletionSignal(lastOutput, node.loop_group.until)) {
+    if (loopIterationCompletes(node.loop_group, lastOutput)) {
       outputs.set(node.id, { state: 'completed', output: lastOutput });
       ctx.trace.push({
         nodeId: node.id,
         nodeType: 'loop_group',
         state: 'completed',
-        reason: `completion signal after ${String(current)} iteration(s)`,
+        reason: completionReason(node.loop_group, current),
         output: lastOutput,
         ...(iteration ? { iteration } : {}),
       });
@@ -399,7 +424,7 @@ async function simulateLoopGroup(
     node,
     outputs,
     ctx,
-    `Loop group exceeded max iterations (${String(node.loop_group.max_iterations)}) without completion signal '${node.loop_group.until}'`,
+    `Loop group exceeded max iterations (${String(node.loop_group.max_iterations)}) ${describeUnmetCompletion(node.loop_group)}`,
     undefined,
     iteration
   );

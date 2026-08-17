@@ -95,8 +95,17 @@ function checkRequiredFields(node: BuilderNode): Issue[] {
           missing('loop.command', 'loop requires a command name');
       } else if ((node.data.prompt ?? '').trim().length === 0)
         missing('loop.prompt', 'loop requires a prompt (or a command file)');
-      if (node.data.until.trim().length === 0)
-        missing('loop.until', "loop requires an 'until' signal");
+      // Completion channel (mirrors the engine schema since #2563): at least one of
+      // `until` / `until_bash`, not `until` unconditionally. A present-but-blank
+      // `until` is still a violation — that is an unfinished edit, not a deliberate
+      // deterministic-only loop.
+      if (node.data.until?.trim().length === 0)
+        missing('loop.until', "loop requires a non-empty 'until' signal");
+      else if (node.data.until === undefined && (node.data.until_bash ?? '').trim().length === 0)
+        missing(
+          'loop.until',
+          "loop requires a completion channel: an 'until' signal or an 'until_bash' check"
+        );
       if (!Number.isInteger(node.data.max_iterations) || node.data.max_iterations <= 0)
         invalid('loop.max_iterations', 'loop requires a positive integer max_iterations');
       break;

@@ -30,7 +30,12 @@ export function loopFromDag(variantSpecific: Partial<WireDagNode>): LoopNodeData
       : typeof loop.command === 'string'
         ? { command: loop.command }
         : { prompt: '' }),
-    until: loop.until,
+    // `until` is optional on the engine schema since #2563 (a loop may declare only
+    // `until_bash`). Spread rather than assign so an absent signal stays absent
+    // instead of becoming an explicit `undefined` the exporter would re-emit — and
+    // so this compiles against both the current generated wire type and one
+    // regenerated after the schema relaxation.
+    ...ifDefined('until', loop.until),
     max_iterations: loop.max_iterations,
     // Engine default is false but the generated type makes it required, so it is
     // always present on the wire and must be carried verbatim across the round-trip.
@@ -49,7 +54,7 @@ export function loopToDag(data: LoopNodeData): Partial<WireDagNode> {
       // A node with neither (transient editing state) exports `prompt: ''`
       // so the engine's own "requires prompt or command" validation fires.
       ...(data.command !== undefined ? { command: data.command } : { prompt: data.prompt ?? '' }),
-      until: data.until,
+      ...ifDefined('until', data.until),
       max_iterations: data.max_iterations,
       fresh_context: data.fresh_context,
       ...ifDefined('until_bash', data.until_bash),

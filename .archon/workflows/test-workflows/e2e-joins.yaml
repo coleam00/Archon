@@ -57,15 +57,13 @@ nodes:
     bash: echo 'after-skip-ran'
 
   # loop_group terminating on until_bash exit 0 rather than an `until:` signal.
+  # No `until:` at all (#2563): this body is pure bash and emits no model text, so a
+  # prose signal could never fire — declaring one would be dead config, and a live
+  # matcher over output the author does not control.
   - id: countdown
     depends_on: [seed]
     loop_group:
       max_iterations: 5
-      # `until:` is REQUIRED by the schema even when termination is driven entirely
-      # by `until_bash:` (loop.ts:22 — `z.string().min(1)`, while until_bash is
-      # optional). This body is pure bash and emits no model text, so the signal can
-      # never appear: it is dead config the author is forced to write. Filed as a wart.
-      until: __NEVER_SIGNALLED__
       until_bash: 'test "$(wc -l < ./.e2e-joins-counter 2>/dev/null || echo 0)" -ge 3'
       nodes:
         - id: tick
