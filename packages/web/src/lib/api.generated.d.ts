@@ -3294,7 +3294,7 @@ export interface components {
       webSearchMode?: 'disabled' | 'cached' | 'live';
       interactive?: boolean;
       /** @enum {string} */
-      effort?: 'low' | 'medium' | 'high' | 'max';
+      effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
       thinking?:
         | {
             /** @enum {string} */
@@ -3560,7 +3560,7 @@ export interface components {
         };
       };
       /** @enum {string} */
-      effort?: 'low' | 'medium' | 'high' | 'max';
+      effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
       thinking?:
         | {
             /** @enum {string} */

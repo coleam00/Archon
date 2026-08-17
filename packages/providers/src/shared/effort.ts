@@ -5,7 +5,8 @@
  * Archon exposes a single `effort:` field in workflow YAML. Each SDK offers a
  * contiguous slice of the same ladder — Claude has no `minimal`, Codex and Pi
  * have no `max`, Copilot has neither — so a rung the resolved provider doesn't
- * offer is clamped to the nearest one it does, rather than dropped. That keeps
+ * offer is clamped into range rather than dropped (weaker first; see
+ * `clampEffort` for why the direction matters). That keeps
  * `effort: max` meaning "as deep as this model goes" everywhere, which is the
  * point of having one spelling (#2556). The precedent is `parseCopilotConfig`,
  * which has mapped `max` → `xhigh` at the provider boundary since Copilot
