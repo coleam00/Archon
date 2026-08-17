@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import type { DagFlowNode } from '@/components/workflows/DagNodeComponent';
 import type { Edge } from '@xyflow/react';
 import { hasCycle } from '@/lib/dag-layout';
+import { findOutputRefs } from '@/lib/node-ref';
 
 export interface ValidationIssue {
   severity: 'error' | 'warning' | 'info';
@@ -71,7 +72,11 @@ function getInstantIssues(
   return issues;
 }
 
-function getDebouncedIssues(nodes: DagFlowNode[], edges: Edge[]): ValidationIssue[] {
+/**
+ * Graph-level checks. Exported for direct testing (same posture as
+ * `handleBuilderKeydown` in `useBuilderKeyboard`) — the hook only debounces it.
+ */
+export function getDebouncedIssues(nodes: DagFlowNode[], edges: Edge[]): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   const nodeIds = new Set(nodes.map(n => n.data.id));
 
@@ -135,17 +140,19 @@ function getDebouncedIssues(nodes: DagFlowNode[], edges: Edge[]): ValidationIssu
     });
   }
 
-  // 5. Broken $nodeId.output references
+  // 5. Broken $nodeId.output references. What a reference LOOKS like comes from
+  // `@/lib/node-ref` — the same definition the console builder scans with — and
+  // `DagNodeData` carries exactly these three text bodies, so every body this
+  // model can express is now covered. (The console additionally strips code
+  // fences before scanning; that refinement has no equivalent surface here.)
   for (const node of nodes) {
     const textsToScan: string[] = [];
     if (node.data.when) textsToScan.push(node.data.when);
     if (node.data.promptText) textsToScan.push(node.data.promptText);
+    if (node.data.bashScript) textsToScan.push(node.data.bashScript);
 
     for (const text of textsToScan) {
-      const outputRefPattern = /\$(\w+)\.output/g;
-      let match: RegExpExecArray | null;
-      while ((match = outputRefPattern.exec(text)) !== null) {
-        const referencedId = match[1];
+      for (const referencedId of findOutputRefs(text)) {
         if (!nodeIds.has(referencedId)) {
           issues.push({
             severity: 'warning',

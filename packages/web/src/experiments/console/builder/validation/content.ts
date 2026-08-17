@@ -11,7 +11,11 @@
  * (severity `warning`, never `error`) because the builder cannot distinguish an
  * intentional shared-context read from a missing dependency. Declaring the edge
  * silences the warning and makes the ordering guarantee explicit.
+ *
+ * What a reference LOOKS like is not decided here — `@/lib/node-ref` owns that
+ * one definition for the whole package, mirroring the engine's loader scan.
  */
+import { findOutputRefs } from '@/lib/node-ref';
 import type { BuilderNode, BuilderWorkflow, Issue } from '../types';
 import { makeIssue } from './make-issue';
 import { parse } from './when-grammar';
@@ -20,9 +24,6 @@ import { parse } from './when-grammar';
 function stripCode(text: string): string {
   return text.replace(/```[\s\S]*?```/g, ' ').replace(/`[^`]*`/g, ' ');
 }
-
-/** Matches `$nodeId.output` references in body text. */
-const OUTPUT_REF_PATTERN = /\$([a-zA-Z_][a-zA-Z0-9_-]*)\.output\b/g;
 
 /** The text bodies that carry `$nodeId.output` references for a given variant. */
 function textBodies(node: BuilderNode): string[] {
@@ -74,13 +75,7 @@ export function validateContent(workflow: BuilderWorkflow): Issue[] {
 
     // Output-reference scan over the node's text bodies.
     for (const body of textBodies(node)) {
-      const stripped = stripCode(body);
-      const refs = new Set<string>();
-      for (const match of stripped.matchAll(OUTPUT_REF_PATTERN)) {
-        const refId = match[1];
-        if (refId !== undefined) refs.add(refId);
-      }
-      for (const refId of refs) {
+      for (const refId of findOutputRefs(stripCode(body))) {
         if (!upstream.has(refId)) {
           issues.push(
             makeIssue({

@@ -8,6 +8,7 @@
  * state PR-1 deliberately excluded from the data layer: positions, selection,
  * undo history, and the clipboard envelope.
  */
+import { NODE_ID_PATTERN } from '@/lib/node-ref';
 import { VARIANT_REGISTRY } from '../variants';
 import type { BuilderNode, BuilderWorkflow, VariantId } from '../types';
 import { NODE_HEIGHT, NODE_WIDTH, layoutWithDagre } from '../flow/layout';
@@ -40,14 +41,6 @@ export interface NodeSize {
   width: number;
   height: number;
 }
-
-/**
- * Valid node ids — mirrors the engine's id grammar (the `when:` atom pattern
- * in validation/when-grammar.ts): letters/digits/underscore/hyphen, no leading
- * digit. Enforced on rename so an id can never contain the `->` edge-id
- * separator or break `$<id>.output` references.
- */
-export const NODE_ID_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_-]*$/;
 
 export type EditorAction =
   | { type: 'add-node'; variant: VariantId; position: XYPosition; at: number }
@@ -202,6 +195,8 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       if (!ids.has(action.id)) return state;
       const nextId = action.nextId.trim();
       if (nextId.length === 0 || nextId === action.id) return state;
+      // The engine's id grammar (`@/lib/node-ref`), enforced here so a rename can
+      // never introduce the `->` edge-id separator or break `$<id>.output` refs.
       if (!NODE_ID_PATTERN.test(nextId)) return state;
       if (ids.has(nextId)) return state;
       const nodes = state.workflow.nodes.map(node => {

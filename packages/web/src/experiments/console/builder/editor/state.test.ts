@@ -2,7 +2,8 @@ import { describe, test, expect } from 'bun:test';
 import { FIXTURES } from '../fixtures';
 import { fromWorkflowDefinition, toWorkflowDefinition } from '../model';
 import { edgeId } from '../flow/to-flow';
-import { createEditorState, editorReducer, NODE_ID_PATTERN, type EditorState } from './state';
+import { NODE_ID_PATTERN } from '@/lib/node-ref';
+import { createEditorState, editorReducer, type EditorState } from './state';
 
 function mixedState(): EditorState {
   return createEditorState(fromWorkflowDefinition(FIXTURES.mixed).workflow);

@@ -12,11 +12,15 @@
  *
  * No React, no logging — errors surface via the `ParseResult` return value.
  */
+import { NODE_ID_SOURCE } from '@/lib/node-ref';
 import type { AtomNode, ParseResult, WhenAst, WhenOp } from '../types';
+
+/** A path segment (`output`, or a field name) — no hyphen, unlike a node id. */
+const SEGMENT_SOURCE = String.raw`[a-zA-Z_][a-zA-Z0-9_]*`;
 
 /**
  * Single-atom pattern, mirroring the engine's `atomPattern`:
- *   1. nodeId   — `$nodeId` (letters/digits/underscore/hyphen, no leading digit)
+ *   1. nodeId   — `$nodeId`, using the package-wide id grammar (`@/lib/node-ref`)
  *   2. segment1 — first path segment (`output` for canonical refs, else a
  *                 shorthand field name)
  *   3. segment2 — optional second segment (the field name when segment1 is `output`)
@@ -26,8 +30,9 @@ import type { AtomNode, ParseResult, WhenAst, WhenOp } from '../types';
  *
  * Exactly one of groups 5/6 is populated on a successful match.
  */
-const ATOM_PATTERN =
-  /^\$([a-zA-Z_][a-zA-Z0-9_-]*)\.([a-zA-Z_][a-zA-Z0-9_]*)(?:\.([a-zA-Z_][a-zA-Z0-9_]*))?\s*(==|!=|<=|>=|<|>)\s*(?:'([^']*)'|(-?\d+(?:\.\d+)?|true|false))$/;
+const ATOM_PATTERN = new RegExp(
+  String.raw`^\$(${NODE_ID_SOURCE})\.(${SEGMENT_SOURCE})(?:\.(${SEGMENT_SOURCE}))?\s*(==|!=|<=|>=|<|>)\s*(?:'([^']*)'|(-?\d+(?:\.\d+)?|true|false))$`
+);
 
 /** RHS spellings that are valid bare (unquoted) — used by `formatAtom` as a guard. */
 const BARE_VALUE_PATTERN = /^(-?\d+(\.\d+)?|true|false)$/;
