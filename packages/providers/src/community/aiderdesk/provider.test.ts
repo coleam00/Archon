@@ -66,7 +66,13 @@ const POC_RESPONSE_AGENTS: AiderDeskProfile[] = [
     model: 'minimax-m3',
     ruleFiles: [],
   },
-  { id: 'aider-power-tools', name: 'Aider (power-tools)', provider: 'poe', model: 'minimax-m3', ruleFiles: [] },
+  {
+    id: 'aider-power-tools',
+    name: 'Aider (power-tools)',
+    provider: 'poe',
+    model: 'minimax-m3',
+    ruleFiles: [],
+  },
   { id: 'aider', name: 'Aider', provider: 'poe', model: 'minimax-m3', ruleFiles: [] },
   { id: 'default', name: '(default)', provider: 'poe', model: 'minimax-m3', ruleFiles: [] },
 ];
@@ -820,6 +826,84 @@ describe('AiderDeskProvider', () => {
       expect(body.updates.mainModel).toBe('poe/minimax-m3');
     });
 
+    it('rule 2 (live catalog): 6 agents all poe/minimax-m3 → ruleFiles-empty sorts LAST', async () => {
+      // Reproduces the live /api/agent-profiles catalog: all 6 agents share
+      // (provider=poe, model=minimax-m3) so exact-match hits them all. The
+      // previous lex-first-by-name tiebreaker selected 'Aider' (the aider CLI
+      // subprocess runtime) — which spawned a child under cwd=/app, failed
+      // EACCES, and closed the SSE stream with no content. The fix makes
+      // ruleFiles-aware agents (Poe, Inspector — both configured Poe-API
+      // clients) sort BEFORE the empty-ruleFiles runtimes, then lex-first
+      // within each tier. Result: Inspector (lex-first among the two
+      // ruleFiles-equipped agents).
+      const bodyRecorder: Array<{ url: string; body?: string }> = [];
+      const recFetch: FetchFn = (async (url: string, init?: RequestInit) => {
+        bodyRecorder.push({ url: url as string, body: init?.body as string | undefined });
+        const u = url as string;
+        if (u.endsWith('/project/tasks/new')) return jsonResponse(mockTaskRow());
+        if (u.endsWith('/agent-profiles')) {
+          return agentProfilesResponse([
+            POE_PROFILE,
+            {
+              id: INSPECTOR_AGENT_ID,
+              name: 'Inspector',
+              provider: 'poe',
+              model: 'minimax-m3',
+              ruleFiles: ['/home/lfontanez/.aider-desk/agents/inspector/rules/archon.md'],
+            },
+            {
+              id: CODENOMICRON_AGENT_ID,
+              name: 'Codenomicron',
+              provider: 'poe',
+              model: 'minimax-m3',
+              ruleFiles: [],
+            },
+            {
+              id: 'aider-power-tools',
+              name: 'Aider (power-tools)',
+              provider: 'poe',
+              model: 'minimax-m3',
+              ruleFiles: [],
+            },
+            { id: 'aider', name: 'Aider', provider: 'poe', model: 'minimax-m3', ruleFiles: [] },
+            {
+              id: 'default',
+              name: '(default)',
+              provider: 'poe',
+              model: 'minimax-m3',
+              ruleFiles: [],
+            },
+          ]);
+        }
+        if (u.endsWith('/project/tasks') && init?.method === 'POST') {
+          const body = init.body ? JSON.parse(init.body as string) : {};
+          return jsonResponse({ ...mockTaskRow(), ...body.updates });
+        }
+        if (u.endsWith('/run-prompt')) {
+          return sseResponse([
+            { kind: 'response-completed', taskId: 't', messageId: 'm', content: 'ok' },
+            { kind: 'stream-end' },
+          ]);
+        }
+        return new Response('{}', { status: 200 });
+      }) as FetchFn;
+
+      const provider = new AiderDeskProvider({ fetchFn: recFetch });
+      await collectChunks(
+        provider.sendQuery('hi', '/test', undefined, {
+          model: 'poe/minimax-m3',
+          env: { AIDERDESK_API_URL: 'http://localhost:24337' },
+        })
+      );
+
+      const bind = bodyRecorder.find(r => r.url.endsWith('/project/tasks'));
+      expect(bind).toBeDefined();
+      const body = JSON.parse(bind!.body as string);
+      // Inspector < Poe lex-first among the two ruleFiles-equipped agents.
+      expect(body.updates.agentProfileId).toBe(INSPECTOR_AGENT_ID);
+      expect(body.updates.mainModel).toBe('poe/minimax-m3');
+    });
+
     it('rule 3: provider-only match picks ruleFiles-non-empty agent (lex-first)', async () => {
       const bodyRecorder: Array<{ url: string; body?: string }> = [];
       const recFetch: FetchFn = (async (url: string, init?: RequestInit) => {
@@ -830,10 +914,34 @@ describe('AiderDeskProvider', () => {
           // Catalog has several poe agents but NONE with model=minimax-m3 —
           // only rule 3 applies. Mix ruleFiles presence to exercise tiebreaker.
           return agentProfilesResponse([
-            { id: 'no-rules-1', name: 'AiderPowerTools', provider: 'poe', model: 'qwen', ruleFiles: [] },
-            { id: 'no-rules-2', name: 'Codenomicron', provider: 'poe', model: 'gpt5', ruleFiles: [] },
-            { id: 'has-rules-1', name: 'PoeAgent', provider: 'poe', model: 'gpt4', ruleFiles: ['/rules/archon.md'] },
-            { id: 'has-rules-2', name: 'ZetaAgent', provider: 'poe', model: 'gemini', ruleFiles: ['/rules/other.md'] },
+            {
+              id: 'no-rules-1',
+              name: 'AiderPowerTools',
+              provider: 'poe',
+              model: 'qwen',
+              ruleFiles: [],
+            },
+            {
+              id: 'no-rules-2',
+              name: 'Codenomicron',
+              provider: 'poe',
+              model: 'gpt5',
+              ruleFiles: [],
+            },
+            {
+              id: 'has-rules-1',
+              name: 'PoeAgent',
+              provider: 'poe',
+              model: 'gpt4',
+              ruleFiles: ['/rules/archon.md'],
+            },
+            {
+              id: 'has-rules-2',
+              name: 'ZetaAgent',
+              provider: 'poe',
+              model: 'gemini',
+              ruleFiles: ['/rules/other.md'],
+            },
           ]);
         }
         if (u.endsWith('/project/tasks') && init?.method === 'POST') {
@@ -875,7 +983,13 @@ describe('AiderDeskProvider', () => {
         if (u.endsWith('/agent-profiles')) {
           // Catalog has only ollama agents; requested provider is poe → no match.
           return agentProfilesResponse([
-            { id: 'oll1', name: 'LocalOllama', provider: 'ollama', model: 'qwen3-coder:30b', ruleFiles: [] },
+            {
+              id: 'oll1',
+              name: 'LocalOllama',
+              provider: 'ollama',
+              model: 'qwen3-coder:30b',
+              ruleFiles: [],
+            },
           ]);
         }
         if (u.endsWith('/project/tasks') && init?.method === 'POST') {
@@ -901,7 +1015,10 @@ describe('AiderDeskProvider', () => {
 
       // Warning chunk emitted by the resolver.
       const warning = chunks.find(
-        (c: any) => c.type === 'system' && typeof c.content === 'string' && c.content.includes('No AiderDesk agent profile matches')
+        (c: any) =>
+          c.type === 'system' &&
+          typeof c.content === 'string' &&
+          c.content.includes('No AiderDesk agent profile matches')
       ) as any;
       expect(warning).toBeDefined();
       expect(warning.content).toContain('poe/minimax-m3');
@@ -920,7 +1037,10 @@ describe('AiderDeskProvider', () => {
       const recFetch: FetchFn = (async (url: string, init?: RequestInit) => {
         calls.push(url as string);
         const u = url as string;
-        if (u.endsWith('/project/tasks/new')) return jsonResponse(mockTaskRow({ id: `t-${calls.filter(c => c.endsWith('/project/tasks/new')).length}` }));
+        if (u.endsWith('/project/tasks/new'))
+          return jsonResponse(
+            mockTaskRow({ id: `t-${calls.filter(c => c.endsWith('/project/tasks/new')).length}` })
+          );
         if (u.endsWith('/agent-profiles')) return agentProfilesResponse();
         if (u.endsWith('/project/tasks') && init?.method === 'POST') {
           const body = init.body ? JSON.parse(init.body as string) : {};
@@ -996,7 +1116,10 @@ describe('AiderDeskProvider', () => {
 
       // Warning chunk must be present in the yielded stream.
       const warningIdx = chunks.findIndex(
-        (c: any) => c.type === 'system' && typeof c.content === 'string' && c.content.includes('No AiderDesk agent profile matches')
+        (c: any) =>
+          c.type === 'system' &&
+          typeof c.content === 'string' &&
+          c.content.includes('No AiderDesk agent profile matches')
       );
       expect(warningIdx).toBeGreaterThanOrEqual(0);
     });
@@ -1160,7 +1283,10 @@ describe('AiderDeskProvider', () => {
       const rec6: Recorder = { calls: [], fetch: undefined as unknown as FetchFn };
       const recFetch: FetchFn = (async (url: string, init?: RequestInit) => {
         rec6.calls.push({ url: url as string, init });
-        return jsonResponse([POE_PROFILE, { id: 'a2', name: 'Aider', provider: 'poe', model: 'minimax-m3' }]);
+        return jsonResponse([
+          POE_PROFILE,
+          { id: 'a2', name: 'Aider', provider: 'poe', model: 'minimax-m3' },
+        ]);
       }) as FetchFn;
       rec6.fetch = recFetch;
 

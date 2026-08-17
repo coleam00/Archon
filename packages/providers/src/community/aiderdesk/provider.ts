@@ -250,7 +250,16 @@ export class AiderDeskProvider implements IAgentProvider {
         a => a.provider === parsedModel.providerId && a.model === parsedModel.modelId
       );
       if (exactMatches.length >= 1) {
-        exactMatches.sort((a, b) => a.name.localeCompare(b.name));
+        // Match Rule 3's tiebreaker: configured Poe-API runtimes (those with a
+        // rules/ directory present on-disk) sort BEFORE empty-ruleFiles runtimes
+        // (which are CLI subprocess relayers like 'Aider'). Lex-first within each
+        // tier resolves the final ordering deterministically.
+        exactMatches.sort((a, b) => {
+          const aKey = a.ruleFiles?.length === 0 ? 1 : 0;
+          const bKey = b.ruleFiles?.length === 0 ? 1 : 0;
+          if (aKey !== bKey) return aKey - bKey;
+          return a.name.localeCompare(b.name);
+        });
         resolvedAgentId = exactMatches[0].id;
       } else {
         // Rule 3: provider-only match with (ruleFiles-non-empty wins, lex-first).
