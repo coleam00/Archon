@@ -1165,7 +1165,12 @@ async function resolveNodeProviderAndModel(
     pi: node.pi,
     allowed_tools: node.allowed_tools,
     denied_tools: node.denied_tools,
-    effort: declaredEffort,
+    // Dropped for a provider with no reasoning control, matching what the preset
+    // path does two functions up. `capChecks` has already told the author it
+    // will be ignored; writing it anyway would make `node_started` report a
+    // depth that was never applied, and would leave declared and preset effort
+    // behaving oppositely on the same provider.
+    effort: caps.effortControl ? declaredEffort : undefined,
     thinking: node.thinking ?? workflowLevelOptions.thinking,
     sandbox: node.sandbox ?? workflowLevelOptions.sandbox,
     betas: node.betas ?? workflowLevelOptions.betas,

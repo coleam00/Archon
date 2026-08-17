@@ -1503,6 +1503,55 @@ describe('executeDagWorkflow -- tool restrictions', () => {
     expect(nodeStartedCall?.[0].data?.effort).toBeUndefined();
   });
 
+  // CodeRabbit found the other half of the drop the preset test above pins: a
+  // DECLARED effort took the opposite path, warned as unsupported and then
+  // written anyway, so `node_started` reported a depth the provider never
+  // applied. Both paths now drop it.
+  it('drops a declared effort for a provider with no reasoning control', async () => {
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'opencode',
+      getCapabilities: mockCodexCapabilities,
+    }));
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'opencode-declared-effort-test',
+        nodes: [{ id: 'step1', command: 'my-cmd', provider: 'opencode', effort: 'high' }],
+      },
+      workflowRun,
+      'opencode',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
+    const nodeConfig = optionsArg.nodeConfig as Record<string, unknown>;
+    expect(nodeConfig.effort).toBeUndefined();
+
+    // The author is still told — the drop is loud, not silent.
+    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
+    const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
+    expect(messages.find(m => m.includes('effort'))).toBeDefined();
+
+    const createEventCalls = (mockDeps.store.createWorkflowEvent as ReturnType<typeof mock>).mock
+      .calls as Array<[{ event_type: string; data?: Record<string, unknown> }]>;
+    const nodeStartedCall = createEventCalls.find(([arg]) => arg.event_type === 'node_started');
+    expect(nodeStartedCall?.[0].data?.effort).toBeUndefined();
+  });
+
   it('routes Claude tier effort to nodeConfig.effort', async () => {
     const mockDeps = createMockDeps();
     const platform = createMockPlatform();

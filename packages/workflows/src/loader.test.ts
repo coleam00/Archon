@@ -681,6 +681,13 @@ nodes:
       // an author who reads "deprecated" and nothing else cannot tell whether
       // their value still applies.
       expect(deprecation).toContain("has been applied as 'effort: xhigh'");
+      // The scope change must be disclosed, not just the rename. The old field
+      // was Codex-only; `effort:` is not, so a workflow that declares only the
+      // deprecated field now reasons deeper on its Claude/Pi/Copilot nodes too,
+      // where before it affected none of them. Silent is exactly what this
+      // issue exists to remove.
+      expect(deprecation).toContain('EVERY node');
+      expect(deprecation).toContain('non-Codex');
     });
 
     it('should ignore modelReasoningEffort when effort is also declared, and say which won', async () => {
