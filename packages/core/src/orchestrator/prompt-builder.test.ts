@@ -168,6 +168,17 @@ describe('buildRunManagementSection', () => {
     expect(section).toContain('--detach');
   });
 
+  test('tells the CLI-path providers to pass the user’s own words', () => {
+    // Codex/OpenCode/Copilot reach the verbs only through this section — without
+    // the clause they get less instruction density than Claude/Pi, which also see
+    // the manage_run tool help.
+    const section = buildRunManagementSection();
+
+    expect(section).toContain("user's own words");
+    expect(section).toContain('never a summary');
+    expect(section).toContain('on_reject');
+  });
+
   test('warns that a --json gate decision does not continue the run', () => {
     // The CLI-pointer path is how tool-less providers resolve a gate (#2565).
     // `approve --json` records the decision WITHOUT resuming, so an agent that
@@ -202,6 +213,26 @@ describe('formatPausedGateSection', () => {
     expect(section).toContain('REJECTED');
     // The outcome the old auto-approve branch could not produce at all.
     expect(section).toContain('resolve NOTHING');
+  });
+
+  test('demonstrates verbatim-ness with a rejection, not only a rule', () => {
+    // Stating the rule is weaker than showing it, and the rejection reason is the
+    // case where a paraphrase does the most damage — it is what on_reject reworks.
+    const section = formatPausedGateSection(openGate);
+
+    expect(section).toContain('why is it editing the schema?');
+    expect(section).toContain('NOT "the user objected to the schema change"');
+    expect(section).toContain('add error handling for the edge cases');
+  });
+
+  test('names no tool, so the section stays usable by every provider', () => {
+    // Claude/Pi reach the verbs through `manage_run`; Codex/OpenCode/Copilot reach
+    // them through the CLI section. Naming either here advertises the wrong route
+    // to half the providers.
+    const section = formatPausedGateSection(openGate);
+
+    expect(section).not.toContain('manage_run');
+    expect(section).not.toContain('archon workflow');
   });
 
   test('tells the agent to pass the user’s own words through', () => {

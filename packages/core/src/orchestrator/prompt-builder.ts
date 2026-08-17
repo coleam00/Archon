@@ -178,6 +178,16 @@ export function formatPausedGateSection(gate: PausedGateContext): string {
     'their own words verbatim as the reason.\n' +
     '- Anything else — a question, a request for detail, an unrelated message → resolve ' +
     'NOTHING. Answer them and leave the gate open.\n\n' +
+    // Demonstration, not just the rule: the reason a rejection carries is what an
+    // on_reject prompt reworks the code from, so a paraphrase there is a different
+    // artifact from what the user asked for.
+    'The words that travel are the user’s, not your summary:\n\n' +
+    '  User: "no, stop — why is it editing the schema?"\n' +
+    '  → REJECT, reason: "no, stop — why is it editing the schema?"\n' +
+    '    (NOT "the user objected to the schema change" — the reason is what an on_reject\n' +
+    '     prompt reworks from, so a summary reworks the wrong thing.)\n\n' +
+    '  User: "looks good, but add error handling for the edge cases"\n' +
+    '  → APPROVE, comment: "looks good, but add error handling for the edge cases"\n\n' +
     'An unambiguous decision from the user IS the human confirmation a gate action needs — ' +
     'resolve it in the same turn rather than making them repeat themselves. When you are not ' +
     'sure what they meant, ask: leaving the gate open costs nothing, and resolving it against ' +
@@ -358,7 +368,7 @@ Run these from within the project's git repo (any subdirectory works — they re
 - \`archon workflow get <run-id> [--json]\` — one run's status/error (add \`--verbose\` for per-node detail)
 - \`archon workflow status [--json]\` — active runs only (running/paused)
 - \`archon workflow run <workflow> "<message>" --detach\` — start a run in the background (returns immediately)
-- \`archon workflow approve <run-id> [comment]\` / \`archon workflow reject <run-id> [reason]\` — resolve a paused approval gate AND continue the run in one step. Add \`--json\` only when you need a machine-readable ack: \`--json\` records the decision WITHOUT continuing, and you must then drive \`archon workflow resume <run-id>\` yourself or the run stays stranded.
+- \`archon workflow approve <run-id> [comment]\` / \`archon workflow reject <run-id> [reason]\` — resolve a paused approval gate AND continue the run in one step. Pass the user's own words as the comment or reason, never a summary: a workflow may read the comment as the gate node's output, and the reason is what an \`on_reject\` prompt reworks from. Add \`--json\` only when you need a machine-readable ack: \`--json\` records the decision WITHOUT continuing, and you must then drive \`archon workflow resume <run-id>\` yourself or the run stays stranded.
 - \`archon workflow resume <run-id>\` — re-run a failed/paused run, skipping completed nodes (run as a background task; \`--json\` validates only)
 - \`archon workflow abandon <run-id> [--json]\` — cancel a non-terminal run
 
