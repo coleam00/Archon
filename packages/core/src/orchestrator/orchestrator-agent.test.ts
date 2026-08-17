@@ -2061,10 +2061,11 @@ describe('workflow dispatch routing — interactive flag', () => {
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
 
-  test('still reports a deferred input error when the resume race is lost', async () => {
-    // The last exit that can abandon the dispatch after the gate deferred. Losing the
-    // race to another surface means the held error is never re-raised anywhere else, so
-    // it has to ride along here — otherwise an actionable, already-computed error dies.
+  /** Drive the lost-resume-race path with an optional supplied-input map. */
+  async function dispatchLosingResumeRace(
+    platform: ReturnType<typeof makePlatform>,
+    workflowInputs?: Record<string, string>
+  ): Promise<void> {
     // `mock.module` MERGES, so `WorkflowNotResumableError` is the real class here.
     const { WorkflowNotResumableError } = await import('../db/workflows');
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
@@ -2084,13 +2085,39 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockHydrateResumableRun.mockReturnValueOnce(
       Promise.reject(new WorkflowNotResumableError('raced-run-1', 'running'))
     );
+    await handleMessage(
+      platform,
+      'conv-1',
+      '/workflow run test-workflow',
+      workflowInputs ? { workflowInputs } : undefined
+    );
+  }
 
+  test('reports a deferred input error on a lost resume race when values were supplied', async () => {
+    // The last exit that can abandon the dispatch after the gate deferred. The caller
+    // supplied an undeclared key, so the violation is about something they actually did
+    // and is worth surfacing — it is never re-raised anywhere else on this path.
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
+    await dispatchLosingResumeRace(platform, { stlye: 'terse' });
 
     const sent = platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n');
     expect(sent).toContain('already being resumed');
-    expect(sent).toContain("requires input 'diff'");
+    expect(sent).toContain('stlye');
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+  });
+
+  test('stays quiet about the deferred error on a lost race when nothing was supplied', async () => {
+    // With nothing supplied the deferred violation is just "you must supply X", which is
+    // moot when nothing will run. Appending it unconditionally produced nonsense on chat:
+    // a demand to pass `--input`, immediately followed by a note that chat cannot, tacked
+    // onto a message whose first line is already "No action taken".
+    const platform = makePlatform();
+    await dispatchLosingResumeRace(platform);
+
+    const sent = platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n');
+    expect(sent).toContain('already being resumed');
+    expect(sent).not.toContain('--input');
+    expect(sent).not.toContain("requires input 'diff'");
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
 

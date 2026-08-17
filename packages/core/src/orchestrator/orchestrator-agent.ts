@@ -772,12 +772,18 @@ async function dispatchOrchestratorWorkflow(
         codebase.id
       )));
   // Whether this dispatch will CONTINUE existing work rather than create a fresh run
-  // row. Deliberately mirrors the resume branch's own condition below: a candidate that
-  // is neither paused nor the explicitly-targeted run does not continue — it shows the
-  // resume/abandon/force choice and returns. Only a genuine continuation may defer the
+  // row. Deliberately the exact negation of the resume/abandon/force menu's condition
+  // below: a candidate that is neither paused nor the explicitly-targeted run does not
+  // continue — it shows that menu and returns. Only a genuine continuation may defer the
   // signature gate, so an invocation that was never going to continue is still refused
   // immediately, with the specific input error rather than a generic menu, and before
   // isolation resolution can create a worktree.
+  //
+  // It does NOT mirror the other refusal exit below — an explicit resume naming a run
+  // with no `working_path` is now preempted by the gate instead of reaching that check.
+  // That is a behaviour change and it is deliberate: every row-creation site records a
+  // real `working_path`, so a NULL one means a row predating the column, which predates
+  // `inputs:` entirely and therefore cannot reach the gate with a violation to defer.
   const willContinueExistingRun =
     Boolean(resumableRun?.working_path) &&
     (resumableRun?.status === 'paused' || resumableRun?.id === options?.resumeRunId);
@@ -978,7 +984,9 @@ async function dispatchOrchestratorWorkflow(
             // The gate deferred a contract violation because this looked like a
             // continuation; losing the race means it never got surfaced anywhere else.
             // Say it here rather than let an already-computed, actionable error die.
-            (deferredInputError ? `\n\nAlso note: ${deferredInputError.message}` : '')
+            (deferredInputError && options?.inputs && Object.keys(options.inputs).length > 0
+              ? `\n\nAlso note: ${deferredInputError.message}`
+              : '')
         );
         return;
       }
