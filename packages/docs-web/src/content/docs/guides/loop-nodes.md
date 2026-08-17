@@ -201,10 +201,11 @@ The completion signal string. The executor checks each iteration's output for:
 The `<promise>` tags are automatically stripped from output sent to the user
 and to downstream nodes.
 
-**Optional when `until_bash` is set.** Omit `until` entirely for a loop whose
-completion is deterministic — the executor then never matches prose at all, so the
-signal cannot false-positive on a model that mentions its own exit criterion. A
-loop declaring neither channel is rejected at load time.
+**Optional, like every completion channel.** Omit `until` entirely whenever another
+channel decides completion — the executor then never matches prose at all, so the
+signal cannot false-positive on a model that mentions its own exit criterion. What
+the loader requires is that *at least one* channel is declared; a loop with none is
+rejected at load.
 
 ### `max_iterations`
 

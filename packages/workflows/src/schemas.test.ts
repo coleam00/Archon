@@ -970,7 +970,7 @@ describe('dagNodeSchema — loop completion channel (#2563)', () => {
     }
   });
 
-  test('a loop with neither channel is rejected, naming both', () => {
+  test('a loop with no channel is rejected, naming every channel it could declare', () => {
     const result = dagNodeSchema.safeParse({
       id: 'no-channel',
       loop: { prompt: 'iterate', max_iterations: 5 },
@@ -981,6 +981,9 @@ describe('dagNodeSchema — loop completion channel (#2563)', () => {
       expect(issue).toBeDefined();
       expect(issue?.message).toContain('loop.until');
       expect(issue?.message).toContain('loop.until_bash');
+      // A `loop:` has three channels, so the message must offer all three — an
+      // author told about two would not learn the one this PR added exists.
+      expect(issue?.message).toContain('loop.until_field');
       expect(issue?.path).toEqual(['loop', 'until']);
     }
   });

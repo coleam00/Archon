@@ -154,7 +154,7 @@ Chat equivalent: `/workflow reset-sessions <name> [<node-id>]` (auto-scoped to t
 
 ### `archon workflow event emit --run-id <uuid> --type <event-type> [--data <json>]`
 
-Emit a workflow event into the run's audit log (`workflow_events`). **Write-only observability** — it does NOT steer the run: loop completion is decided solely by the `until` signal and `until_bash`, never by emitted events. Used inside loop prompts to record progress markers (e.g. "checkpoint written").
+Emit a workflow event into the run's audit log (`workflow_events`). **Write-only observability** — it does NOT steer the run: loop completion is decided solely by the loop's own declared completion channels, never by emitted events. Used inside loop prompts to record progress markers (e.g. "checkpoint written").
 
 ```bash
 archon workflow event emit --run-id abc123 --type task_activity --data '{"step":"plan"}'
