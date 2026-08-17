@@ -42,7 +42,12 @@ import { parseAiderdeskConfig } from './config';
 import { AiderDeskClient, resolveDefaultApiUrl, type FetchFn } from './client';
 import { classifyAiderdeskError, errorMessage } from './errors';
 import { AiderDeskApiError } from './errors';
-import type { AiderDeskProfile, AiderDeskTaskState, AiderDeskTaskUpdate } from './types';
+import type {
+  AiderDeskProfile,
+  AiderDeskProjectDirRemap,
+  AiderDeskTaskState,
+  AiderDeskTaskUpdate,
+} from './types';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -73,6 +78,164 @@ function parseModelRef(modelRef: string): { providerId: string; modelId: string 
   if (!providerId || !modelId) return null;
 
   return { providerId, modelId };
+}
+
+/**
+ * Parse a JSON-shaped `AIDERDESK_PROJECT_DIR_REMAP` env value into a typed
+ * remap. Validates that the supplied JSON object / array conforms to the
+ * supported shapes (object form `{ "<regex>": "<replacement>" }`, or array
+ * form `Array<{ from, to }>`). On a parse error returns `{ remap: null,
+ * warn: <human-readable chunk text> }` so the caller can yield a single
+ * `system` chunk and continue with the identity mapping — never throw.
+ *
+ *   - Object form: longest-matching KEY wins. Among keys of equal length,
+ *     insertion order is preserved (JS `Object.entries` is well-defined for
+ *     string keys since ES2015).
+ *   - Array form: declaration order; first matching entry wins.
+ *
+ * Keys compile as JavaScript RegExp sources on the way through the matcher,
+ * so operators can write anchors (`^/host/projects/`) to constrain where in
+ * the path the match fires.
+ */
+function parseProjectDirRemapJson(
+  raw: string | undefined
+): { remap: AiderDeskProjectDirRemap | null; warn: string | null } {
+  if (raw == null || raw === '') return { remap: null, warn: null };
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    const truncated = raw.length > 90 ? `${raw.slice(0, 90)}…` : raw;
+    return {
+      remap: null,
+      warn:
+        `⚠️ AiderDesk projectDir-remap env is not valid JSON: ${truncated} ` +
+        `(${reason}). Supported shapes — object: ` +
+        `'{"<regex>":"<replacement>"}', or array: '[{"from":"<regex>","to":"<replacement>"}]'. ` +
+        `Continuing with the identity (no remap) mapping.`,
+    };
+  }
+
+  if (Array.isArray(parsed)) {
+    const out: { from: string; to: string }[] = [];
+    for (const entry of parsed) {
+      if (
+        entry &&
+        typeof entry === 'object' &&
+        typeof (entry as { from?: unknown }).from === 'string' &&
+        typeof (entry as { to?: unknown }).to === 'string'
+      ) {
+        out.push({
+          from: (entry as { from: string }).from,
+          to: (entry as { to: string }).to,
+        });
+      }
+    }
+    return out.length > 0 ? { remap: out, warn: null } : { remap: null, warn: null };
+  }
+
+  if (parsed && typeof parsed === 'object') {
+    const obj = parsed as Record<string, unknown>;
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(obj)) {
+      if (typeof k === 'string' && k.length > 0 && typeof v === 'string') {
+        out[k] = v;
+      }
+    }
+    return Object.keys(out).length > 0
+      ? { remap: out, warn: null }
+      : { remap: null, warn: null };
+  }
+
+  return {
+    remap: null,
+    warn:
+      `⚠️ AiderDesk projectDir-remap env has unsupported top-level type (got ${typeof parsed}); ` +
+      `expected a JSON object '{\"<regex>\":\"<replacement>\"}' or a JSON array '[{\"from\":\"<regex>\",\"to\":\"<replacement>\"}]'. ` +
+      `Continuing with the identity (no remap) mapping.`,
+  };
+}
+
+/**
+ * Apply the resolved projectDir remap to a raw cwd.
+ *
+ * Deterministic + side-effect-free with one exception: emits a structured
+ * `log.debug({ from, to, source }, 'aiderdesk.projectDir_remapped')` whenever
+ * a remap fires, so an operator can grep the archon container log to confirm
+ * the translator took effect (`aiderdesk.projectDir_remapped` is the agreed
+ * marker). The line is emitted at debug-level only — never warn/error/info.
+ *
+ * Returns `cwd` verbatim when no remap is configured, when no entry matches,
+ * or when every candidate entry has an invalid regex (a defensive skip —
+ * matches a malformed YAML/JSON entry would crash the workflow otherwise).
+ *
+ * Precedence of the remap is NOT this function's responsibility — the
+ * provider resolves `requestOptions.env > process.env > assistantConfig`
+ * BEFORE calling here, passing only the effective { remap, source } pair.
+ */
+export function translateProjectDir(
+  cwd: string,
+  opts?: { remap?: AiderDeskProjectDirRemap | null; source?: string }
+): string {
+  const remap = opts?.remap;
+  if (!remap) return cwd;
+
+  const source = opts?.source;
+
+  // Array form: declaration-order, first match wins.
+  if (Array.isArray(remap)) {
+    for (const entry of remap) {
+      if (!entry || typeof entry.from !== 'string' || typeof entry.to !== 'string') {
+        continue;
+      }
+      try {
+        const matcher = new RegExp(entry.from);
+        if (matcher.test(cwd)) {
+          const translated = cwd.replace(new RegExp(entry.from), entry.to);
+          getLog().debug(
+            { from: entry.from, to: entry.to, source },
+            'aiderdesk.projectDir_remapped'
+          );
+          return translated;
+        }
+      } catch {
+        // Bad RegExp source on this entry — silently skip and try the next.
+        continue;
+      }
+    }
+    return cwd;
+  }
+
+  // Object form: longest-matching KEY wins. Length-sort gives that for free;
+  // ties fall back to insertion order via `Array.prototype.sort` stability
+  // (engines that ignore ES2019 stability still preserve insertion order on
+  // equal-length comparisons in practice for `Object.entries`).
+  const entries = Object.entries(remap)
+    .filter(
+      (pair): pair is [string, string] =>
+        typeof pair[0] === 'string' &&
+        pair[0].length > 0 &&
+        typeof pair[1] === 'string'
+    )
+    .sort((a, b) => b[0].length - a[0].length);
+
+  for (const [from, to] of entries) {
+    try {
+      const re = new RegExp(from);
+      if (re.test(cwd)) {
+        const translated = cwd.replace(re, to);
+        getLog().debug({ from, to, source }, 'aiderdesk.projectDir_remapped');
+        return translated;
+      }
+    } catch {
+      // Bad RegExp source on this entry — silently skip and try the next.
+      continue;
+    }
+  }
+
+  return cwd;
 }
 
 /**
@@ -111,6 +274,50 @@ export class AiderDeskProvider implements IAgentProvider {
     const assistantConfig = requestOptions?.assistantConfig
       ? parseAiderdeskConfig(requestOptions.assistantConfig)
       : {};
+
+    // ── 1a. Translate cwd → projectDir ───────────────────────────────────
+    // AiderDesk runs on the HOST filesystem and autodetects every task as
+    // `<projectDir>/.aider-desk/`. When archon runs in a container it binds
+    // the conversation cwd to a CONTAINER-internal path (e.g.
+    // `/host/projects/orchestration-home` through the bind mount, or `/app`
+    // for engine-code-local work) that does not exist on the host — AiderDesk
+    // tries to mkdir there, gets EACCES, and the run-prompt SSE stream
+    // returns content="" (the 14-s empty-handshake signature archon reports
+    // as `dag.node_empty_output`).
+    //
+    // We translate BEFORE any AiderDeskClient call. The effective remap is
+    // resolved at the highest-precedence source first:
+    //   requestOptions.env > process.env > assistantConfig > identity.
+    // Raw env strings are parsed here once; the remap shape can be either
+    // (a) an object `{"<regex>":"<replacement>"}` (longest-key wins) or
+    // (b) an array  `[{"from":"<regex>","to":"<replacement>"}]` (declaration
+    // order, first match wins). Identical shapes inside the YAML-declared
+    // `assistantConfig.projectDirRemap`.
+    const envRemapRaw =
+      requestOptions?.env?.AIDERDESK_PROJECT_DIR_REMAP ??
+      process.env.AIDERDESK_PROJECT_DIR_REMAP;
+    const envRemapParsed = parseProjectDirRemapJson(envRemapRaw);
+    if (envRemapParsed.warn) {
+      // JSON parse failed — surface as exactly one system chunk and continue
+      // with the identity mapping. Workflow MUST not crash on a misconfig.
+      yield { type: 'system', content: envRemapParsed.warn };
+    }
+    const effectiveRemap =
+      envRemapParsed.remap !== null
+        ? envRemapParsed.remap
+        : assistantConfig.projectDirRemap;
+    const remapSource =
+      envRemapParsed.remap !== null
+        ? requestOptions?.env?.AIDERDESK_PROJECT_DIR_REMAP != null
+          ? 'requestOptions.env'
+          : 'process.env'
+        : assistantConfig.projectDirRemap
+          ? 'assistantConfig'
+          : undefined;
+    const projectDir = translateProjectDir(cwd, {
+      remap: effectiveRemap,
+      source: remapSource,
+    });
 
     // ── 2. Resolve API URL ───────────────────────────────────────────────
     const apiUrl =
@@ -166,7 +373,7 @@ export class AiderDeskProvider implements IAgentProvider {
     try {
       if (resumeSessionId) {
         try {
-          const task = await client.loadTask(cwd, resumeSessionId);
+          const task = await client.loadTask(projectDir, resumeSessionId);
           taskId = task.id;
           lastSeenTaskState = task.state;
           resumeSucceeded = true;
@@ -177,12 +384,12 @@ export class AiderDeskProvider implements IAgentProvider {
             type: 'system',
             content: '⚠️ Could not resume AiderDesk session; starting fresh conversation.',
           };
-          const newTask = await client.createTask(cwd);
+          const newTask = await client.createTask(projectDir);
           taskId = newTask.id;
           lastSeenTaskState = newTask.state;
         }
       } else {
-        const newTask = await client.createTask(cwd);
+        const newTask = await client.createTask(projectDir);
         taskId = newTask.id;
         lastSeenTaskState = newTask.state;
         log.info({ taskId }, 'aiderdesk.task_created');
@@ -296,7 +503,7 @@ export class AiderDeskProvider implements IAgentProvider {
     }
 
     try {
-      await client.updateTask(cwd, taskId, updateBody);
+      await client.updateTask(projectDir, taskId, updateBody);
       log.info(
         { taskId, model: modelRef, agentProfileId: resolvedAgentId },
         'aiderdesk.task_bound'
@@ -344,7 +551,7 @@ export class AiderDeskProvider implements IAgentProvider {
 
     try {
       for await (const ev of client.runPromptStream({
-        projectDir: cwd,
+        projectDir,
         taskId,
         prompt: effectivePrompt,
         mode,

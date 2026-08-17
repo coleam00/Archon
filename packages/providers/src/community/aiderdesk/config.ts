@@ -7,13 +7,55 @@
  * never throws, so broken user config can't prevent provider registration
  * or workflow discovery).
  */
-import type { AiderDeskProviderDefaults } from '../../types';
+import type {
+  AiderDeskProjectDirRemap,
+  AiderDeskProviderDefaults,
+} from '../../types';
 
 export type { AiderDeskProviderDefaults };
 
 export type ParsedAiderdeskConfig = AiderDeskProviderDefaults;
 
 const VALID_MODES: ReadonlySet<string> = new Set(['code', 'ask', 'architect', 'context', 'agent']);
+
+/**
+ * Validate the operator-declared `projectDirRemap` shape. Defensive like the
+ * rest of the parser — invalid shapes drop the field rather than throw. We
+ * share the same validation that `translateProjectDir`'s runtime JSON parse
+ * would apply, so a typo in YAML produces an undefined field rather than a
+ * per-turn `parse failed` system chunk.
+ */
+function parseProjectDirRemap(raw: unknown): AiderDeskProjectDirRemap | undefined {
+  if (!raw) return undefined;
+  if (Array.isArray(raw)) {
+    const out: { from: string; to: string }[] = [];
+    for (const entry of raw) {
+      if (
+        entry &&
+        typeof entry === 'object' &&
+        typeof (entry as { from?: unknown }).from === 'string' &&
+        typeof (entry as { to?: unknown }).to === 'string'
+      ) {
+        out.push({
+          from: (entry as { from: string }).from,
+          to: (entry as { to: string }).to,
+        });
+      }
+    }
+    return out.length > 0 ? out : undefined;
+  }
+  if (typeof raw === 'object') {
+    const obj = raw as Record<string, unknown>;
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(obj)) {
+      if (typeof k === 'string' && k.length > 0 && typeof v === 'string') {
+        out[k] = v;
+      }
+    }
+    return Object.keys(out).length > 0 ? out : undefined;
+  }
+  return undefined;
+}
 
 /**
  * Parse raw YAML-derived config into typed AiderDesk defaults.
@@ -51,6 +93,11 @@ export function parseAiderdeskConfig(raw: Record<string, unknown>): ParsedAiderd
 
   if (typeof raw.clearContextAfterRun === 'boolean') {
     result.clearContextAfterRun = raw.clearContextAfterRun;
+  }
+
+  const projectDirRemap = parseProjectDirRemap(raw.projectDirRemap);
+  if (projectDirRemap !== undefined) {
+    result.projectDirRemap = projectDirRemap;
   }
 
   return result;

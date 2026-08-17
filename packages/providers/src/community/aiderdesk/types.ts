@@ -10,6 +10,10 @@
  * and NOT re-exported through @archon/providers/types.
  */
 
+// Re-exported from the contract layer for ergonomics — `provider.ts` imports
+// it from `./types` (its sibling) without dragging in the full types barrel.
+export type { AiderDeskProjectDirRemap } from '../../types';
+
 /** Task state as reported by AiderDesk. Terminal states are the completion signal. */
 export type AiderDeskTaskState =
   | 'TODO'

@@ -156,6 +156,29 @@ export interface OpencodeProviderDefaults {
 }
 
 /**
+ * Project-dir remap declared by the operator in `.archon/config.yaml`.
+ * Two shapes accepted (see `translateProjectDir` for the matching algorithm):
+ *   1. **Object form** — `Record<string,string>` of `{ "<containerPath>": "<hostPath>" }`.
+ *      Treated as path-prefix matches with `/`-boundary safety. Longest matching
+ *      KEY wins when multiple entries could apply to the same cwd.
+ *   2. **Array form** — `{ from: "<regex>"; to: "<replacement>" }[]`. Each `from`
+ *      is a JavaScript RegExp source (compiles via `new RegExp(from)`). Entries
+ *      are evaluated in declaration order and the first match wins.
+ *
+ * Use case: Archon's engine binds the conversation cwd to a CONTAINER path
+ * (e.g. `/host/projects/orchestration-home` through a docker bind mount, or
+ * `/app` for engine-code-local work). AiderDesk runs on the HOST filesystem
+ * where those paths don't exist, so the orchestrator remaps them to host-side
+ * paths before forwarding as `projectDir`. This type is the operator's way to
+ * declare that mapping at the assistant-level; runtime overrides come from
+ * `requestOptions.env.AIDERDESK_PROJECT_DIR_REMAP` and
+ * `process.env.AIDERDESK_PROJECT_DIR_REMAP`.
+ */
+export type AiderDeskProjectDirRemap =
+  | Record<string, string>
+  | Array<{ from: string; to: string }>;
+
+/**
  * Community provider defaults for AiderDesk.
  * AiderDesk wraps a local REST API (localhost:24337) that delegates inference
  * to its own agent infrastructure (which can use Ollama for zero-cost local inference).
@@ -176,6 +199,14 @@ export interface AiderDeskProviderDefaults {
   requestTimeoutMs?: number;
   /** Whether to clear AiderDesk task context after each run. */
   clearContextAfterRun?: boolean;
+  /**
+   * Operator-level hard pin over the cwd→projectDir translation. Highest
+   * precedence after `requestOptions.env.AIDERDESK_PROJECT_DIR_REMAP`. Useful
+   * for marking specific assistants (e.g. `mark-installed-test`) as bound to
+   * a specific host path regardless of the surrounding env config.
+   * See `AiderDeskProjectDirRemap`.
+   */
+  projectDirRemap?: AiderDeskProjectDirRemap;
 }
 
 /** Generic per-provider defaults bag used by config surfaces and UI. */

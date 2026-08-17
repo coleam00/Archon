@@ -1,4 +1,4 @@
-import { mock, describe, it, expect, beforeEach } from 'bun:test';
+import { mock, describe, it, expect, beforeEach, afterEach } from 'bun:test';
 import type { Logger } from 'pino';
 
 // Mock logger — must be set up before importing any @archon/paths consumer
@@ -19,7 +19,7 @@ mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
 }));
 
-import { AiderDeskProvider } from './provider';
+import { AiderDeskProvider, translateProjectDir } from './provider';
 import { AIDERDESK_CAPABILITIES } from './capabilities';
 import { AiderDeskClient, parseSseFrame, type FetchFn } from './client';
 import { AiderDeskApiError } from './errors';
@@ -1304,6 +1304,240 @@ describe('AiderDeskProvider', () => {
       expect(profiles[0].id).toBe(POE_AGENT_ID);
       expect(profiles[0].name).toBe('Poe');
     });
+  });
+});
+
+describe('translateProjectDir', () => {
+  // Process-env pollution guard: tests 5–6 write to AIDERDESK_PROJECT_DIR_REMAP
+  // for their full duration. The per-test save/restore around this block
+  // prevents bleed-over into the surrounding AiderDeskProvider tests, which
+  // run before/after on the same process.
+  const ENV_KEY = 'AIDERDESK_PROJECT_DIR_REMAP';
+  let savedEnv: string | undefined;
+  beforeEach(() => {
+    savedEnv = process.env[ENV_KEY];
+  });
+  afterEach(() => {
+    if (savedEnv === undefined) {
+      delete process.env[ENV_KEY];
+    } else {
+      process.env[ENV_KEY] = savedEnv;
+    }
+  });
+
+  it('identity: no env, no assistantConfig → returns cwd verbatim', () => {
+    expect(translateProjectDir('/host/projects/orchestration-home', { remap: null })).toBe(
+      '/host/projects/orchestration-home'
+    );
+    expect(translateProjectDir('/host/projects/orchestration-home')).toBe(
+      '/host/projects/orchestration-home'
+    );
+  });
+
+  it('exact-match remap: object form key matches cwd exactly → translated', () => {
+    const remap = {
+      '/host/projects/orchestration-home': '/home/lfontanez/dev/orchestration-home',
+    };
+    expect(
+      translateProjectDir('/host/projects/orchestration-home', { remap, source: 'test' })
+    ).toBe('/home/lfontanez/dev/orchestration-home');
+  });
+
+  it('prefix-remap: array form with regex anchor matches → translated', () => {
+    const remap = [{ from: '^/host/projects/', to: '/home/lfontanez/dev/' }];
+    expect(translateProjectDir('/host/projects/orchestration-home', { remap, source: 'test' })).toBe(
+      '/home/lfontanez/dev/orchestration-home'
+    );
+    expect(translateProjectDir('/host/projects/anything-else', { remap, source: 'test' })).toBe(
+      '/home/lfontanez/dev/anything-else'
+    );
+  });
+
+  it('longest-match wins among multiple conflicting object-form entries', () => {
+    // Two entries whose regexes BOTH match /host/projects/orchestration-home.
+    // Longest key wins (the user described this as "atomic" precedence in
+    // the longest-prefix regex sense — concrete anchors beat loose prefixes).
+    const remap = {
+      '/host/projects/': '/home/lfontanez/dev/',
+      '/host/projects/orchestration-home': '/home/lfontanez/dev/orchestration-home',
+    };
+    expect(
+      translateProjectDir('/host/projects/orchestration-home', { remap, source: 'test' })
+    ).toBe('/home/lfontanez/dev/orchestration-home');
+    // A non-overlapping path falls through to the loose-prefix entry.
+    expect(translateProjectDir('/host/projects/something-else', { remap, source: 'test' })).toBe(
+      '/home/lfontanez/dev/something-else'
+    );
+  });
+
+  it('process.env override beats assistantConfig (precedence.requestOptions.env > process.env > assistantConfig)', async () => {
+    // Set process.env to one map, pass a DIFFERENT assistantConfig map via
+    // the node-level assistantConfig. The wire should carry the process.env
+    // value because process.env sits above assistantConfig in the chain.
+    process.env[ENV_KEY] = JSON.stringify({
+      '/host/projects/': '/home/lfontanez/dev/from-process-env/',
+    });
+
+    const rec: Recorder = { calls: [], fetch: undefined as unknown as FetchFn };
+    const recFetch: FetchFn = (async (url: string, init?: RequestInit) => {
+      rec.calls.push({ url: url as string, init });
+      const u = url as string;
+      if (u.endsWith('/project/tasks/new')) return jsonResponse(mockTaskRow());
+      if (u.endsWith('/agent-profiles')) return agentProfilesResponse();
+      if (u.endsWith('/project/tasks') && init?.method === 'POST') {
+        const body = init.body ? JSON.parse(init.body as string) : {};
+        return jsonResponse({ ...mockTaskRow(), ...body.updates });
+      }
+      if (u.endsWith('/run-prompt')) {
+        return sseResponse([
+          { kind: 'response-completed', taskId: 't', messageId: 'm', content: 'ok' },
+          { kind: 'stream-end' },
+        ]);
+      }
+      return new Response('{}', { status: 200 });
+    }) as FetchFn;
+    rec.fetch = recFetch;
+
+    const provider = new AiderDeskProvider({ fetchFn: recFetch });
+    await collectChunks(
+      provider.sendQuery('hi', '/host/projects/orchestration-home', undefined, {
+        model: 'poe/minimax-m3',
+        env: { AIDERDESK_API_URL: 'http://localhost:24337' },
+        assistantConfig: {
+          projectDirRemap: { '/host/projects/': '/home/lfontanez/dev/from-assistant-config/' },
+        },
+      })
+    );
+
+    // Every wire call that carries projectDir must use the process.env value.
+    const runPromptCall = rec.calls.find(c => c.url.endsWith('/run-prompt'));
+    expect(runPromptCall).toBeDefined();
+    const runPromptBody = JSON.parse(runPromptCall!.init!.body as string);
+    expect(runPromptBody.projectDir).toBe(
+      '/home/lfontanez/dev/from-process-env/orchestration-home'
+    );
+
+    const updateCall = rec.calls.find(
+      c => c.url.endsWith('/project/tasks') && c.init?.method === 'POST'
+    );
+    expect(updateCall).toBeDefined();
+    const updateBody = JSON.parse(updateCall!.init!.body as string);
+    expect(updateBody.projectDir).toBe(
+      '/home/lfontanez/dev/from-process-env/orchestration-home'
+    );
+  });
+
+  it('requestOptions.env override beats both process.env and assistantConfig', async () => {
+    // All three surfaces declared; requestOptions.env must win. This is the
+    // load-bearing case: per-codebase envVars injected at the engine boundary
+    // let a project owner pin its preferred host path without fighting a
+    // global process.env or a stale assistantConfig.
+    process.env[ENV_KEY] = JSON.stringify({
+      '/host/projects/': '/home/lfontanez/dev/from-process-env/',
+    });
+
+    const rec: Recorder = { calls: [], fetch: undefined as unknown as FetchFn };
+    const recFetch: FetchFn = (async (url: string, init?: RequestInit) => {
+      rec.calls.push({ url: url as string, init });
+      const u = url as string;
+      if (u.endsWith('/project/tasks/new')) return jsonResponse(mockTaskRow());
+      if (u.endsWith('/agent-profiles')) return agentProfilesResponse();
+      if (u.endsWith('/project/tasks') && init?.method === 'POST') {
+        const body = init.body ? JSON.parse(init.body as string) : {};
+        return jsonResponse({ ...mockTaskRow(), ...body.updates });
+      }
+      if (u.endsWith('/run-prompt')) {
+        return sseResponse([
+          { kind: 'response-completed', taskId: 't', messageId: 'm', content: 'ok' },
+          { kind: 'stream-end' },
+        ]);
+      }
+      return new Response('{}', { status: 200 });
+    }) as FetchFn;
+    rec.fetch = recFetch;
+
+    const provider = new AiderDeskProvider({ fetchFn: recFetch });
+    await collectChunks(
+      provider.sendQuery('hi', '/host/projects/orchestration-home', undefined, {
+        model: 'poe/minimax-m3',
+        env: {
+          AIDERDESK_API_URL: 'http://localhost:24337',
+          AIDERDESK_PROJECT_DIR_REMAP: JSON.stringify({
+            '/host/projects/': '/home/lfontanez/dev/from-request-options-env/',
+          }),
+        },
+        assistantConfig: {
+          projectDirRemap: { '/host/projects/': '/home/lfontanez/dev/from-assistant-config/' },
+        },
+      })
+    );
+
+    const runPromptCall = rec.calls.find(c => c.url.endsWith('/run-prompt'));
+    expect(runPromptCall).toBeDefined();
+    const runPromptBody = JSON.parse(runPromptCall!.init!.body as string);
+    expect(runPromptBody.projectDir).toBe(
+      '/home/lfontanez/dev/from-request-options-env/orchestration-home'
+    );
+  });
+
+  it('malformed JSON in env: identity result + single warn chunk over the SSE stream', async () => {
+    // Garbage that fails JSON.parse — `not json at all` is the simplest case
+    // we can hand-write. The provider must not crash; it must surface a
+    // single descriptive system chunk and continue with the unchanged cwd.
+    process.env[ENV_KEY] = 'this is not json {{';
+
+    const rec: Recorder = { calls: [], fetch: undefined as unknown as FetchFn };
+    const recFetch: FetchFn = (async (url: string, init?: RequestInit) => {
+      rec.calls.push({ url: url as string, init });
+      const u = url as string;
+      if (u.endsWith('/project/tasks/new')) return jsonResponse(mockTaskRow());
+      if (u.endsWith('/agent-profiles')) return agentProfilesResponse();
+      if (u.endsWith('/project/tasks') && init?.method === 'POST') {
+        const body = init.body ? JSON.parse(init.body as string) : {};
+        return jsonResponse({ ...mockTaskRow(), ...body.updates });
+      }
+      if (u.endsWith('/run-prompt')) {
+        return sseResponse([
+          { kind: 'response-completed', taskId: 't', messageId: 'm', content: 'ok' },
+          { kind: 'stream-end' },
+        ]);
+      }
+      return new Response('{}', { status: 200 });
+    }) as FetchFn;
+    rec.fetch = recFetch;
+
+    const provider = new AiderDeskProvider({ fetchFn: recFetch });
+    const chunks = await collectChunks(
+      provider.sendQuery('hi', '/host/projects/orchestration-home', undefined, {
+        model: 'poe/minimax-m3',
+        env: { AIDERDESK_API_URL: 'http://localhost:24337' },
+      })
+    );
+
+    // Exactly one warn chunk from the malformed-env branch. Implementation
+    // yields it before any AiderDeskClient call, so it's the first non-???
+    // frame the consumer sees.
+    const warns = chunks.filter(
+      (c: any) =>
+        c.type === 'system' &&
+        typeof c.content === 'string' &&
+        c.content.includes('AiderDesk projectDir-remap env is not valid JSON')
+    );
+    expect(warns.length).toBe(1);
+    expect((warns[0] as any).content).toContain('Supported shapes');
+
+    // Identity result: every wire body that carries projectDir uses the raw
+    // cwd untouched (no remap applied).
+    const runPromptCall = rec.calls.find(c => c.url.endsWith('/run-prompt'));
+    expect(runPromptCall).toBeDefined();
+    const runPromptBody = JSON.parse(runPromptCall!.init!.body as string);
+    expect(runPromptBody.projectDir).toBe('/host/projects/orchestration-home');
+
+    const updateCall = rec.calls.find(
+      c => c.url.endsWith('/project/tasks') && c.init?.method === 'POST'
+    );
+    const updateBody = JSON.parse(updateCall!.init!.body as string);
+    expect(updateBody.projectDir).toBe('/host/projects/orchestration-home');
   });
 });
 
