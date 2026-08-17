@@ -221,7 +221,8 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
         workflow: workflowName,
         message: context,
         files: files.length > 0 ? files : undefined,
-        inputs: Object.keys(suppliedInputs).length > 0 ? suppliedInputs : undefined,
+        // startRun already treats an empty map as "nothing supplied".
+        inputs: suppliedInputs,
       });
       // Dispatch is fire-and-forget — the orchestrator creates the run row
       // asynchronously. Nudge the runs feed so the new card appears as soon

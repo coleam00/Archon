@@ -154,8 +154,10 @@ export function parseInputAssignments(assignments: readonly string[]): Record<st
     }
     const name = assignment.slice(0, eq);
     if (!INPUT_NAME_PATTERN.test(name)) {
+      // Names the offending NAME, never the whole assignment — the value after `=` is
+      // user content (often a secret) and the name alone identifies which flag to fix.
       throw new WorkflowInputContractError(
-        `Invalid input name '${name}' in '${assignment}': a name must start with a letter or ` +
+        `Invalid input name '${name}': a name must start with a letter or ` +
           'underscore and contain only letters, digits, underscores, and hyphens.'
       );
     }

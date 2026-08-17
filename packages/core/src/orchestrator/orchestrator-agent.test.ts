@@ -1963,6 +1963,71 @@ describe('workflow dispatch routing — interactive flag', () => {
     expect(sent).toContain('stlye');
   });
 
+  test('an IMPLICIT auto-resume of a required-input workflow is not re-gated', async () => {
+    // The dangerous case: a plain `/workflow run <name>` (no resumeRunId/resumeRun) on a
+    // workflow with a paused run. `dispatchOrchestratorWorkflow` auto-detects that run
+    // for every platform, so gating only against an EXPLICIT resume refused a legitimate
+    // continuation — the run row already holds its validated inputs, and a user saying
+    // "run it" again supplies nothing. Reachable from chat and from a repeat
+    // POST /api/workflows/:name/run that reuses a conversation id.
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve(makeWorkflowResult(true, { inputs: { diff: { required: true } } }))
+    );
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve({
+        id: 'implicit-resume-1',
+        workflow_name: 'test-workflow',
+        working_path: '/repos/test-repo/worktrees/paused',
+        parent_conversation_id: 'conv-1',
+        status: 'paused',
+      })
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
+
+    const sent = platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n');
+    expect(sent).not.toContain("requires input 'diff'");
+    expect(mockExecuteWorkflow).toHaveBeenCalled();
+    expect(mockExecuteWorkflow.mock.calls[0][3]).toBe('/repos/test-repo/worktrees/paused');
+  });
+
+  test('tells the caller when supplied inputs could not be applied to an auto-resumed run', async () => {
+    // The resume replays its own row's inputs; values supplied on this call cannot
+    // reach it. Accepting them and silently running something else is the failure this
+    // guards — the caller gets a 200 and no way to tell their values were dropped.
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve(makeWorkflowResult(true, { inputs: { diff: { required: true } } }))
+    );
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve({
+        id: 'implicit-resume-2',
+        workflow_name: 'test-workflow',
+        working_path: '/repos/test-repo/worktrees/paused',
+        parent_conversation_id: 'conv-1',
+        status: 'paused',
+      })
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+      workflowInputs: { diff: 'D-new' },
+    });
+
+    const sent = platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n');
+    expect(sent).toContain('not applied');
+    expect(sent).toContain('diff');
+    expect(sent).toContain('implicit-resume-2');
+    // Names only — a supplied value is user content and must never be echoed back.
+    expect(sent).not.toContain('D-new');
+    // The resume still proceeds; the run holds real work and a worktree.
+    expect(mockExecuteWorkflow).toHaveBeenCalled();
+  });
+
   test('a resume of a required-input workflow is not re-gated', async () => {
     // The row already carries inputs validated at creation; re-gating with nothing
     // supplied would make every such resume impossible — a regression this feature

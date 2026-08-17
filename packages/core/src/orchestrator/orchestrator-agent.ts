@@ -747,35 +747,67 @@ async function dispatchOrchestratorWorkflow(
         })
       : undefined;
 
+  // Resume detection, hoisted above the signature gate ON PURPOSE (#2554).
+  //
+  // This function continues an existing run in TWO ways: an explicit
+  // `/workflow resume <id>` (which arrives as `resumeRunId`/`resumeRun`), and an
+  // IMPLICIT auto-detection that fires for a plain `/workflow run <name>` on every
+  // platform — the lookup that used to live further down, next to the dispatch. The
+  // gate below has to know about both: gating only against the explicit form wrongly
+  // refused a required-input workflow that was merely being continued (the run row
+  // already holds its validated inputs, and the caller supplies nothing when they
+  // just say "run it" again).
+  //
+  // It has to be hoisted rather than the gate pushed down: `validateAndResolveIsolation`
+  // sits between here and the old lookup site and CREATES WORKTREES, so gating after it
+  // would forfeit the pre-cost refusal. This lookup is a single indexed DB read — no
+  // worktree, no clone, no AI — so it is safe to do before gating. Its inputs
+  // (`conversation.id`, `codebase.id`) are parameters and nothing below mutates them.
+  const resumableRun = options?.force
+    ? null
+    : (options?.resumeRun ??
+      (await workflowDb.findResumableRunByParentConversation(
+        workflow.name,
+        conversation.id,
+        codebase.id
+      )));
+  // A candidate with a working path means this dispatch continues existing work rather
+  // than creating a fresh run row — either resuming it, or (for a non-paused one)
+  // showing the user the resume/abandon/force choice.
+  const willContinueExistingRun = Boolean(resumableRun?.working_path);
+
   // Signature gate (#2470, #2554): resolve this invocation's declared inputs from the
   // values its channel supplied — the run route's `inputs` map today; chat platforms
   // supply nothing and so still refuse a required-input workflow here, before any
   // worktree/clone/AI cost. The workflow still lists/loads normally either way.
-  //
-  // Skipped on a resume: the run row already carries the inputs validated when it was
-  // created, and re-gating with nothing supplied would make every resume of a
-  // required-input run impossible.
-  const isResumeDispatch = options?.resumeRunId !== undefined || options?.resumeRun !== undefined;
   let resolvedInputs: Record<string, string> | undefined;
-  if (!isResumeDispatch) {
-    try {
-      resolvedInputs = resolveTopLevelInputs(workflow, options?.inputs);
-    } catch (err) {
-      // Both are user-facing contract violations: a missing required input, and — now
-      // that a caller can supply values — a key the workflow does not declare.
-      if (err instanceof WorkflowMissingInputsError || err instanceof WorkflowInputContractError) {
-        getLog().info(
-          {
-            workflowName: workflow.name,
-            // Names only, never values — a supplied value is user content (logging rules).
-            missing: err instanceof WorkflowMissingInputsError ? err.missing : undefined,
-            suppliedKeys: options?.inputs ? Object.keys(options.inputs) : [],
-          },
-          'workflow.required_inputs_unsatisfiable'
-        );
+  // A contract violation held back because a resume may make it moot. Only the one
+  // branch below that falls through to a FRESH run row (hydration found nothing worth
+  // resuming) still needs it; every other continuation path never reads inputs from
+  // this invocation at all.
+  let deferredInputError: Error | undefined;
+  try {
+    resolvedInputs = resolveTopLevelInputs(workflow, options?.inputs);
+  } catch (err) {
+    // Both are user-facing contract violations: a missing required input, and — now
+    // that a caller can supply values — a key the workflow does not declare.
+    if (err instanceof WorkflowMissingInputsError || err instanceof WorkflowInputContractError) {
+      getLog().info(
+        {
+          workflowName: workflow.name,
+          // Names only, never values — a supplied value is user content (logging rules).
+          missing: err instanceof WorkflowMissingInputsError ? err.missing : undefined,
+          suppliedKeys: options?.inputs ? Object.keys(options.inputs) : [],
+          deferred: willContinueExistingRun,
+        },
+        'workflow.required_inputs_unsatisfiable'
+      );
+      if (!willContinueExistingRun) {
         await platform.sendMessage(conversationId, err.message);
         return;
       }
+      deferredInputError = err;
+    } else {
       throw err;
     }
   }
@@ -867,19 +899,12 @@ async function dispatchOrchestratorWorkflow(
   }
 
   // Dispatch workflow.
-  // Resume detection runs for ALL platforms: check if a prior run for this workflow
-  // is in a resumable state (paused — including approved-awaiting-resume — or failed)
-  // in this conversation+codebase
-  // before dispatching fresh. This ensures chat platforms (slack, telegram, discord,
-  // github) resume after approval gates just like web does.
-  const resumableRun = options?.force
-    ? null
-    : (options?.resumeRun ??
-      (await workflowDb.findResumableRunByParentConversation(
-        workflow.name,
-        conversation.id,
-        codebase.id
-      )));
+  // `resumableRun` was resolved above the signature gate (see the comment there):
+  // resume detection runs for ALL platforms, so a prior run for this workflow in a
+  // resumable state (paused — including approved-awaiting-resume — or failed) in this
+  // conversation+codebase is continued rather than dispatched fresh. This ensures chat
+  // platforms (slack, telegram, discord, github) resume after approval gates just like
+  // web does.
   if (options?.resumeRun && !options.resumeRun.working_path) {
     getLog().warn(
       {
@@ -950,6 +975,23 @@ async function dispatchOrchestratorWorkflow(
       throw err;
     }
     if (prepared) {
+      // A resume replays the inputs stamped on its own row; values supplied on THIS
+      // call cannot reach it (the row already exists, so the executor's stamp never
+      // fires). Say so rather than accepting them and quietly running something else.
+      if (options?.inputs && Object.keys(options.inputs).length > 0) {
+        const ignored = Object.keys(options.inputs).sort().join(', ');
+        getLog().info(
+          { workflowName: workflow.name, resumableRunId: resumableRun.id, ignoredKeys: ignored },
+          'orchestrator.resume_ignored_supplied_inputs'
+        );
+        await platform.sendMessage(
+          conversationId,
+          `▶️ Resuming the paused run of **${workflow.name}** (\`${resumableRun.id}\`), which ` +
+            `keeps the inputs it started with — the values you supplied now (${ignored}) were ` +
+            'not applied. To run fresh with them instead, abandon that run first ' +
+            `(\`/workflow abandon ${resumableRun.id}\`) and re-invoke.`
+        );
+      }
       await executeWorkflow(
         deps,
         platform,
@@ -970,6 +1012,13 @@ async function dispatchOrchestratorWorkflow(
         }
       );
     } else {
+      // Hydration found nothing worth resuming, so this is the ONE continuation path
+      // that creates a fresh run row — which means a contract violation deferred at the
+      // gate is live again and must be surfaced before any AI cost.
+      if (deferredInputError) {
+        await platform.sendMessage(conversationId, deferredInputError.message);
+        return;
+      }
       await platform.sendMessage(
         conversationId,
         `⚠️ Prior run for **${workflow.name}** had no completed nodes; starting fresh in the same worktree.`

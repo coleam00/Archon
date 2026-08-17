@@ -52,6 +52,13 @@ describe('parseInputAssignments (#2554)', () => {
     expect(() => parseInputAssignments(['=api'])).toThrow(/Invalid input name/);
   });
 
+  test('never echoes the value back in a bad-name error', () => {
+    // The message reaches the user's terminal; the name identifies the flag to fix,
+    // while the value after `=` is user content and often a secret.
+    expect(() => parseInputAssignments(['1bad=hunter2'])).toThrow(/'1bad'/);
+    expect(() => parseInputAssignments(['1bad=hunter2'])).not.toThrow(/hunter2/);
+  });
+
   test('rejects a duplicate name rather than silently taking the last', () => {
     expect(() => parseInputAssignments(['scope=api', 'scope=web'])).toThrow(
       /Duplicate input 'scope'/
