@@ -4138,6 +4138,216 @@ nodes:
     expect((await store.getWorkflowRun(child!.id))?.status).toBe('completed');
     expect(prompts.some(p => p.includes('resumed in terse style'))).toBe(true);
   });
+
+  // -------------------------------------------------------------------------
+  // Direct top-level invocation supplying its own inputs (#2554)
+  // -------------------------------------------------------------------------
+
+  it('delivers directly-supplied inputs to BOTH the AI and shell surfaces of a top-level run', async () => {
+    // No parent anywhere: the values come from `opts.inputs` (the CLI's --input / the
+    // run route's `inputs` map) and must reach the same two surfaces a child's do.
+    await writeWorkflow(
+      'direct-inputs',
+      `
+name: direct-inputs
+description: runs on its own with a required input
+inputs:
+  diff:
+    required: true
+  style:
+    default: strict
+nodes:
+  - id: shell
+    bash: echo "diff=$INPUTS_DIFF style=$INPUTS_STYLE"
+  - id: ai
+    prompt: "review $INPUTS.diff in $INPUTS.style style"
+    depends_on: [shell]
+`
+    );
+
+    const store = new InMemoryStore();
+    const { deps, prompts } = makeRecordingDeps(store);
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      await discover('direct-inputs'),
+      'goal',
+      'conv-db',
+      { inputs: { diff: 'D1', style: 'terse' } }
+    );
+
+    expect(result.success).toBe(true);
+    // Shell surface: env vars, never $INPUTS text spliced into shell source.
+    const shellOut = store.events.find(
+      e => e.event_type === 'node_completed' && e.step_name === 'shell'
+    );
+    expect(String(shellOut?.data?.node_output)).toContain('diff=D1 style=terse');
+    // AI surface: substituted text, literal token never reaches the model.
+    expect(prompts.some(p => p.includes('review D1 in terse style'))).toBe(true);
+    expect(prompts.some(p => p.includes('$INPUTS.diff'))).toBe(false);
+  });
+
+  it('persists ONLY the supplied values on a top-level run, letting defaults stay derived', async () => {
+    await writeWorkflow(
+      'direct-persist',
+      `
+name: direct-persist
+description: one supplied input, one defaulted
+inputs:
+  diff:
+    required: true
+  style:
+    default: strict
+nodes:
+  - id: emit
+    bash: echo "style=$INPUTS_STYLE"
+`
+    );
+
+    const store = new InMemoryStore();
+    const result = await executeWorkflow(
+      makeDeps(store),
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      await discover('direct-persist'),
+      'goal',
+      'conv-db',
+      { inputs: { diff: 'D1' } }
+    );
+
+    expect(result.success).toBe(true);
+    const run = [...store.runs.values()].find(r => r.workflow_name === 'direct-persist');
+    // `style` is NOT on the row — freezing a derived default would make the row lie
+    // about what the invocation supplied, and pin a stale default across a resume.
+    expect(run?.metadata?.inputs).toEqual({ diff: 'D1' });
+    // …yet the default still reaches the node, layered under the persisted map.
+    const emitted = store.events.find(e => e.event_type === 'node_completed');
+    expect(String(emitted?.data?.node_output)).toContain('style=strict');
+  });
+
+  it('a supplied value overrides the declared default on a top-level run', async () => {
+    await writeWorkflow(
+      'direct-override',
+      `
+name: direct-override
+description: supplied value beats the declared default
+inputs:
+  style:
+    default: strict
+nodes:
+  - id: emit
+    bash: echo "style=$INPUTS_STYLE"
+`
+    );
+
+    const store = new InMemoryStore();
+    const result = await executeWorkflow(
+      makeDeps(store),
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      await discover('direct-override'),
+      'goal',
+      'conv-db',
+      { inputs: { style: 'terse' } }
+    );
+
+    expect(result.success).toBe(true);
+    const emitted = store.events.find(e => e.event_type === 'node_completed');
+    expect(String(emitted?.data?.node_output)).toContain('style=terse');
+  });
+
+  it('writes no inputs key for a bare top-level run, preserving pre-#2554 behaviour', async () => {
+    await writeWorkflow(
+      'direct-bare',
+      `
+name: direct-bare
+description: defaulted input, nothing supplied
+inputs:
+  style:
+    default: strict
+nodes:
+  - id: emit
+    bash: echo "style=$INPUTS_STYLE"
+`
+    );
+
+    const store = new InMemoryStore();
+    await executeWorkflow(
+      makeDeps(store),
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      await discover('direct-bare'),
+      'goal',
+      'conv-db'
+    );
+
+    const run = [...store.runs.values()].find(r => r.workflow_name === 'direct-bare');
+    expect(run?.metadata?.inputs).toBeUndefined();
+  });
+
+  it('reconstitutes directly-supplied inputs on a COLD resume of a top-level run', async () => {
+    // The invocation channel is gone by resume time — the CLI process exited, the HTTP
+    // request completed. Only the run row can carry the values forward.
+    await writeWorkflow(
+      'direct-cold',
+      `
+name: direct-cold
+description: gated top-level run reading an input AFTER the gate
+interactive: true
+inputs:
+  style:
+    default: strict
+nodes:
+  - id: gate
+    approval:
+      message: "hold"
+  - id: after-gate
+    prompt: "resumed in $INPUTS.style style"
+    depends_on: [gate]
+`
+    );
+
+    const store = new InMemoryStore();
+    const { deps, prompts } = makeRecordingDeps(store);
+    await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      await discover('direct-cold'),
+      'goal',
+      'conv-db',
+      { inputs: { style: 'terse' } }
+    );
+
+    const run = [...store.runs.values()].find(r => r.workflow_name === 'direct-cold');
+    expect(run?.status).toBe('paused');
+    expect(run?.metadata?.inputs).toEqual({ style: 'terse' });
+
+    // Cold path: approve, hydrate from the persisted row alone, re-drive — and pass NO
+    // `inputs` this time, exactly as a resume does.
+    store.approveGate(run!.id);
+    const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(run!.id))!);
+    expect(hydrated).not.toBeNull();
+    await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      await discover('direct-cold'),
+      run!.user_message,
+      'conv-db',
+      { ...hydrated! }
+    );
+
+    expect((await store.getWorkflowRun(run!.id))?.status).toBe('completed');
+    expect(prompts.some(p => p.includes('resumed in terse style'))).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------

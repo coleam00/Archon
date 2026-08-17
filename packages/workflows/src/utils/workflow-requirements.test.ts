@@ -2,9 +2,10 @@ import { describe, test, expect } from 'bun:test';
 import {
   assertWorkflowRequirementsMet,
   WorkflowRequirementError,
-  assertWorkflowInputsSatisfiable,
+  resolveTopLevelInputs,
   WorkflowMissingInputsError,
 } from './workflow-requirements';
+import { WorkflowInputContractError } from '../workflow-inputs';
 
 describe('assertWorkflowRequirementsMet', () => {
   test('passes when there are no requirements', () => {
@@ -34,33 +35,94 @@ describe('assertWorkflowRequirementsMet', () => {
   });
 });
 
-describe('assertWorkflowInputsSatisfiable (#2470)', () => {
-  test('passes with no declared inputs', () => {
-    expect(() => assertWorkflowInputsSatisfiable({})).not.toThrow();
-    expect(() => assertWorkflowInputsSatisfiable({ inputs: {} })).not.toThrow();
+describe('resolveTopLevelInputs (#2470, #2554)', () => {
+  test('returns undefined with no declared inputs and nothing supplied', () => {
+    expect(resolveTopLevelInputs({}, undefined)).toBeUndefined();
+    expect(resolveTopLevelInputs({ inputs: {} }, undefined)).toBeUndefined();
   });
 
   test('passes when all declared inputs are optional or defaulted', () => {
-    expect(() =>
-      assertWorkflowInputsSatisfiable({
-        inputs: { a: { default: 'x' }, b: { description: 'optional' } },
-      })
-    ).not.toThrow();
+    expect(
+      resolveTopLevelInputs(
+        { inputs: { a: { default: 'x' }, b: { description: 'opt' } } },
+        undefined
+      )
+    ).toBeUndefined();
   });
 
-  test('throws naming missing required inputs on a bare top-level run', () => {
+  test('returns ONLY the supplied values — declared defaults stay derived at execution', () => {
+    // `style` has a default, but nothing was supplied for it, so it must not appear here:
+    // persisting a derived default would freeze a snapshot of the workflow's current YAML.
+    expect(
+      resolveTopLevelInputs(
+        { name: 'block', inputs: { diff: { required: true }, style: { default: 'strict' } } },
+        { diff: 'D' }
+      )
+    ).toEqual({ diff: 'D' });
+  });
+
+  test('a required input that IS supplied satisfies the gate — the whole point of #2554', () => {
+    expect(
+      resolveTopLevelInputs(
+        { name: 'block', inputs: { diff: { required: true }, plan: { required: true } } },
+        { diff: 'D', plan: 'P' }
+      )
+    ).toEqual({ diff: 'D', plan: 'P' });
+  });
+
+  test('throws naming missing required inputs, and names the channels that can supply them', () => {
     let thrown: unknown;
     try {
-      assertWorkflowInputsSatisfiable({
-        name: 'block',
-        inputs: { diff: { required: true }, plan: { required: true }, style: { default: 's' } },
-      });
+      resolveTopLevelInputs(
+        {
+          name: 'block',
+          inputs: { diff: { required: true }, plan: { required: true }, style: { default: 's' } },
+        },
+        undefined
+      );
     } catch (err) {
       thrown = err;
     }
     expect(thrown).toBeInstanceOf(WorkflowMissingInputsError);
-    expect((thrown as WorkflowMissingInputsError).missing).toEqual(['diff', 'plan']);
-    expect((thrown as WorkflowMissingInputsError).message).toContain("'diff', 'plan'");
-    expect((thrown as WorkflowMissingInputsError).message).toContain('with:');
+    const err = thrown as WorkflowMissingInputsError;
+    expect(err.missing).toEqual(['diff', 'plan']);
+    expect(err.message).toContain("'diff', 'plan'");
+    expect(err.message).toContain('--input');
+    expect(err.message).toContain('console');
+    // The framing this issue removed: a required-input workflow is NOT uncallable.
+    expect(err.message).not.toContain('reusable block');
+  });
+
+  test('throws when only SOME required inputs are supplied, naming just the missing one', () => {
+    let thrown: unknown;
+    try {
+      resolveTopLevelInputs(
+        { name: 'block', inputs: { diff: { required: true }, plan: { required: true } } },
+        { diff: 'D' }
+      );
+    } catch (err) {
+      thrown = err;
+    }
+    expect((thrown as WorkflowMissingInputsError).missing).toEqual(['plan']);
+  });
+
+  test('rejects an undeclared key the same way a composing `with:` map is rejected', () => {
+    let thrown: unknown;
+    try {
+      resolveTopLevelInputs({ name: 'block', inputs: { style: {} } }, { stlye: 'terse' });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(WorkflowInputContractError);
+    const err = thrown as WorkflowInputContractError;
+    expect(err.undeclared).toEqual(['stlye']);
+    expect(err.message).toContain('stlye');
+    expect(err.message).toContain('style');
+  });
+
+  test('a workflow declaring no inputs keeps Phase-1 passthrough for supplied values', () => {
+    expect(resolveTopLevelInputs({ name: 'legacy' }, { anything: 'goes' })).toEqual({
+      anything: 'goes',
+    });
   });
 });

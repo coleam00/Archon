@@ -10,6 +10,7 @@
  * just encodes the policy so all three behave identically.
  */
 import type { WorkflowRequirement, WorkflowInputSpec } from '../schemas/workflow';
+import { resolveDeclaredInputs, WorkflowInputContractError } from '../workflow-inputs';
 
 /** Minimal shape needed to evaluate requirements — avoids a full WorkflowDefinition dep. */
 export interface RequirementBearingWorkflow {
@@ -53,7 +54,7 @@ export function assertWorkflowRequirementsMet(
 }
 
 // ---------------------------------------------------------------------------
-// Declared-input satisfiability (#2470)
+// Declared-input resolution for a TOP-LEVEL invocation (#2470, #2554)
 // ---------------------------------------------------------------------------
 
 /** Minimal shape needed to evaluate declared inputs — avoids a full WorkflowDefinition dep. */
@@ -63,9 +64,14 @@ export interface InputBearingWorkflow {
 }
 
 /**
- * Thrown when a workflow that declares `required` inputs is invoked at the TOP LEVEL,
- * where no caller `with:` can satisfy them. `message` is user-facing and names the
- * missing inputs plus the two ways to supply them (`include:`/`workflow:` with `with:`).
+ * Thrown when a TOP-LEVEL invocation supplies no value for a workflow's `required`
+ * input. `message` is user-facing and names the missing inputs plus the channels that
+ * can carry them.
+ *
+ * Before #2554 this said the workflow "is a reusable block" that could only be called
+ * from another workflow — that was the defect, not a description of the design. A
+ * workflow is a workflow: it runs on its own when its inputs are supplied, and composes
+ * unchanged.
  */
 export class WorkflowMissingInputsError extends Error {
   constructor(
@@ -73,32 +79,62 @@ export class WorkflowMissingInputsError extends Error {
     public readonly missing: readonly string[]
   ) {
     const names = missing.map(n => `'${n}'`).join(', ');
+    const plural = missing.length === 1 ? '' : 's';
     super(
-      `This workflow declares required input${missing.length === 1 ? '' : 's'} ${names} that only a ` +
-        'caller can supply. It is a reusable block: reference it from another workflow with an ' +
-        '`include:` or `workflow:` node and pass the input(s) via `with:` (e.g. `with: { ' +
-        `${missing[0]}: $someNode.output }\`). No worktree was created and no AI cost was incurred.`
+      `This workflow requires input${plural} ${names}, and none was supplied. Supply ` +
+        `${missing.length === 1 ? 'it' : 'them'} with \`--input ${missing[0]}=<value>\` on the ` +
+        'CLI (repeat the flag per input), or fill the run form in the web console. When ' +
+        'composing this workflow from another, pass the same values via `with:` on the ' +
+        '`include:`/`workflow:` node. Chat platforms cannot supply inputs yet (#2555). ' +
+        'No worktree was created and no AI cost was incurred.'
     );
     this.name = 'WorkflowMissingInputsError';
   }
 }
 
 /**
- * Throw {@link WorkflowMissingInputsError} when a TOP-LEVEL invocation cannot satisfy the
- * workflow's declared `required` inputs (#2470). A `required` input never carries a default
- * (the loader drops that contradiction), so a bare run can never satisfy one — the block is
- * meant to be called via `include:`/`workflow:` `with:`. The workflow still LOADS and LISTS
- * normally (discovery/builder need it visible); only top-level invocation fails, before any
- * worktree/clone/AI cost. A workflow with no declared inputs always passes.
+ * Resolve a TOP-LEVEL invocation's declared inputs from the values its channel supplied
+ * (#2554) — `--input name=value` on the CLI, the `inputs` map on the run route, or the
+ * console's run form.
+ *
+ * Validation delegates to {@link resolveDeclaredInputs}, the same implementation
+ * `include:` and `workflow:` use, so a map accepted when composing is accepted here and
+ * vice versa. Callers run this BEFORE any worktree, clone, run row, or AI call, matching
+ * where the `workflow:` child path resolves its own `with:` map.
+ *
+ * Returns ONLY the caller-supplied entries — never the declared defaults that
+ * `resolveDeclaredInputs` folds in. Defaults stay DERIVED at execution time
+ * (`defaultRunInputs` in executor.ts), so they track the workflow's current YAML instead
+ * of freezing a snapshot into the run row, and a bare run persists exactly nothing and so
+ * behaves byte-for-byte as it did before this feature. The `workflow:` child path
+ * persists the resolved map instead; the effective `$INPUTS` is identical either way
+ * because the executor layers defaults *under* whatever the row carries — the difference
+ * is deliberate, not drift.
+ *
+ * @returns the supplied map, or undefined when nothing was supplied.
+ * @throws WorkflowMissingInputsError when a `required` input has no supplied value.
+ * @throws WorkflowInputContractError when a supplied key is not declared.
  */
-export function assertWorkflowInputsSatisfiable(workflow: InputBearingWorkflow): void {
-  const inputs = workflow.inputs;
-  if (!inputs) return;
-  const missing = Object.entries(inputs)
-    .filter(([, spec]) => spec.required === true)
-    .map(([name]) => name)
-    .sort();
-  if (missing.length > 0) {
-    throw new WorkflowMissingInputsError(workflow.name, missing);
+export function resolveTopLevelInputs(
+  workflow: InputBearingWorkflow,
+  supplied: Readonly<Record<string, string>> | undefined
+): Record<string, string> | undefined {
+  const suppliedMap = { ...supplied };
+  try {
+    resolveDeclaredInputs(
+      suppliedMap,
+      workflow.inputs,
+      `Cannot run workflow '${workflow.name ?? 'unknown'}'`,
+      'it'
+    );
+  } catch (err) {
+    // Re-shape only the missing-required case: its shared message ends in "Pass them
+    // through 'with:'", which is the wrong remediation for a direct run. The undeclared-key
+    // message already reads correctly and lists the declared names, so it propagates as-is.
+    if (err instanceof WorkflowInputContractError && err.missingRequired.length > 0) {
+      throw new WorkflowMissingInputsError(workflow.name, err.missingRequired);
+    }
+    throw err;
   }
+  return Object.keys(suppliedMap).length > 0 ? suppliedMap : undefined;
 }

@@ -539,6 +539,23 @@ export type ExecuteWorkflowOptions = ResumePayload & {
    * fallback). Threaded into the child-spawn closure.
    */
   resolveChildIsolation?: ChildIsolationResolver;
+  /**
+   * Declared inputs supplied by a DIRECT top-level invocation (#2554) — the CLI's
+   * `--input name=value`, the run route's `inputs` map, or the console's run form.
+   * Stamped onto the fresh run row's `metadata.inputs`, the same key a `workflow:`
+   * parent writes for its child, so every existing delivery path (`$INPUTS.<name>` on
+   * AI/prompt surfaces, `INPUTS_<UPPER_SNAKE>` for bash/script) works unchanged and the
+   * values survive a cold resume.
+   *
+   * ALREADY RESOLVED by the invocation gate (`resolveTopLevelInputs`), which validates
+   * against the workflow's declared `inputs:` before any worktree, clone, or AI cost —
+   * like `baseOverride` and `parseWarnings`, this is a caller-resolved value. The
+   * executor does not re-validate: it would run after the cost the gate exists to
+   * prevent, and its message would be shaped for the wrong surface.
+   *
+   * Ignored on a resume: the row already carries the inputs validated at creation.
+   */
+  inputs?: Readonly<Record<string, string>>;
 };
 
 /**
@@ -1145,6 +1162,7 @@ export async function executeWorkflow(
     execContext = { kind: 'host' },
     container: containerCtx,
     resolveChildIsolation,
+    inputs: suppliedInputs,
   } = opts;
 
   // Guard: a container run MUST be resumed with its container rewired (the CLI does
@@ -1369,6 +1387,13 @@ export async function executeWorkflow(
           ...(issueContext ? { github_context: issueContext } : {}),
           ...(execContext.kind === 'container' ? { isolation: 'container' } : {}),
           ...(containerCtx ? { isolation_env_id: containerCtx.envId } : {}),
+          // Declared inputs supplied by a direct top-level invocation (#2554), already
+          // validated by the invocation gate. Written here — inside `if (!workflowRun)` —
+          // so a resume, which arrives with `preCreatedRun` set and never enters this
+          // branch, can never re-stamp or clobber what the original invocation supplied.
+          ...(suppliedInputs && Object.keys(suppliedInputs).length > 0
+            ? { [SUBRUN_METADATA_KEYS.inputs]: { ...suppliedInputs } }
+            : {}),
         },
         parent_conversation_id: parentConversationId,
         user_id: userId,

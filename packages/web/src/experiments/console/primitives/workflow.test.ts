@@ -37,3 +37,35 @@ describe('toWorkflow — parseWarnings (#2213)', () => {
     expect(w.parseWarnings).toEqual([]);
   });
 });
+
+describe('toWorkflow — declared inputs (#2554)', () => {
+  test('flattens the declared map into an ordered list, preserving declaration order', () => {
+    const w = toWorkflow({
+      workflow: {
+        name: 'review-block',
+        inputs: {
+          diff: { required: true, description: 'the diff to review' },
+          style: { default: 'strict' },
+        },
+      },
+      source: 'project',
+    });
+    expect(w.inputs).toEqual([
+      { name: 'diff', required: true, default: null, description: 'the diff to review' },
+      { name: 'style', required: false, default: 'strict', description: null },
+    ]);
+  });
+
+  test('defaults to an empty array when the workflow declares none', () => {
+    // The run card reads `.length` to decide whether to render the form at all.
+    expect(toWorkflow({ workflow: { name: 'plain' }, source: 'project' }).inputs).toEqual([]);
+  });
+
+  test('treats an absent required flag as optional rather than truthy-coercing it', () => {
+    const w = toWorkflow({
+      workflow: { name: 'w', inputs: { a: {}, b: { required: false } } },
+      source: 'project',
+    });
+    expect(w.inputs.map(i => i.required)).toEqual([false, false]);
+  });
+});

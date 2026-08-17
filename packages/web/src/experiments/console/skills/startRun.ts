@@ -22,6 +22,12 @@ export interface StartRunArgs {
   workflow: string;
   message: string;
   files?: File[];
+  /**
+   * Values for the workflow's declared `inputs:` (#2554), keyed by input name.
+   * Omitted names take their declared default; a missing required input is refused by
+   * the server before any worktree, clone, or AI cost.
+   */
+  inputs?: Record<string, string>;
 }
 
 interface CreateConversationResponse {
@@ -33,6 +39,7 @@ export async function startRun({
   workflow,
   message,
   files,
+  inputs,
 }: StartRunArgs): Promise<void> {
   const conv = await requestJson<CreateConversationResponse>('/api/conversations', {
     method: 'POST',
@@ -41,10 +48,16 @@ export async function startRun({
 
   const url = `/api/workflows/${encodeURIComponent(workflow)}/run`;
 
+  const hasInputs = inputs !== undefined && Object.keys(inputs).length > 0;
+
   if (files === undefined || files.length === 0) {
     await requestJson<{ accepted: boolean; status: string }>(url, {
       method: 'POST',
-      body: JSON.stringify({ conversationId: conv.conversationId, message }),
+      body: JSON.stringify({
+        conversationId: conv.conversationId,
+        message,
+        ...(hasInputs ? { inputs } : {}),
+      }),
     });
     return;
   }
@@ -53,6 +66,11 @@ export async function startRun({
   const form = new FormData();
   form.append('conversationId', conv.conversationId);
   form.append('message', message);
+  // A form field can only be a string, so the input map travels JSON-encoded — the
+  // shape the multipart branch of the run route parses.
+  if (hasInputs) {
+    form.append('inputs', JSON.stringify(inputs));
+  }
   for (const file of files) {
     form.append('files', file, file.name);
   }

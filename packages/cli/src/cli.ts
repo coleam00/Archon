@@ -158,6 +158,7 @@ Options:
   --base <branch>            Per-dispatch base override for epic slices (worktree cut-from + PR target)
   --no-worktree              Run on branch directly without worktree isolation
   --folder                   Register the current non-git directory as a folder project and run in place
+  --input <name>=<value>     Supply a declared workflow input; repeat per input (mutually exclusive with --resume)
   --resume                   Resume the most recent failed or paused run of the workflow (mutually exclusive with --branch)
   --dry-run                  Simulate workflow DAG control flow without creating a run or contacting a provider
   --stubs <path>             YAML node-output map for --dry-run
@@ -319,6 +320,8 @@ async function main(): Promise<number> {
         stubs: { type: 'string' },
         'exec-code': { type: 'boolean' },
         'pause-at-gates': { type: 'boolean' },
+        // Repeatable: `--input a=1 --input b=2` yields ['a=1', 'b=2'] (#2554).
+        input: { type: 'string', multiple: true },
       },
       allowPositionals: true,
       strict: false, // Allow unknown flags to pass through
@@ -604,6 +607,8 @@ async function main(): Promise<number> {
               stubsPath,
               execCode: execCodeFlag,
               pauseAtGates: pauseAtGatesFlag,
+              // Raw `name=value` assignments; parsed at the invocation gate (#2554).
+              inputs: values.input as string[] | undefined,
             };
             await workflowRunCommand(effectiveCwd, workflowName, userMessage, options);
             break;

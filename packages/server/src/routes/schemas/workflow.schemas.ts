@@ -226,6 +226,16 @@ export const runWorkflowBodySchema = z
   .object({
     conversationId: z.string(),
     message: z.string(),
+    /**
+     * Values for the workflow's declared `inputs:` (#2554), keyed by input name.
+     * Validated against the declaration before any worktree, clone, or AI cost; a
+     * missing required input or an undeclared key is refused. Omit for a workflow that
+     * declares no inputs, or to take every declared default.
+     *
+     * In a `multipart/form-data` request the same map travels as a single `inputs` form
+     * field holding this object JSON-encoded (form fields can only be strings).
+     */
+    inputs: z.record(z.string(), z.string()).optional(),
   })
   .openapi('RunWorkflowBody');
 

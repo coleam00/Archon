@@ -1,32 +1,52 @@
 /**
- * The declared-input contract (#2470), shared by both call surfaces.
+ * The declared-input contract (#2470, #2554), shared by every call surface.
  *
- * A workflow's `inputs:` block is one contract with two callers:
+ * A workflow's `inputs:` block is one contract with three callers:
  *   - `include:` resolves it at LOAD time (include-expander.ts), splicing values into
  *     `$INPUTS.<name>` before the DAG is ever persisted;
  *   - `workflow:` resolves it at RUN time (executor.ts), persisting the resolved map to
- *     the child's `metadata.inputs`.
+ *     the child's `metadata.inputs`;
+ *   - a DIRECT top-level invocation resolves it at the invocation gate (#2554) —
+ *     `resolveTopLevelInputs` in utils/workflow-requirements.ts — from values supplied
+ *     by the CLI's `--input name=value` or the run route's `inputs` map.
  *
- * They must agree — a `with:` map accepted by one and rejected by the other would make
- * the same block behave differently depending on how it was called. This module is the
- * single implementation both go through, so parity is structural rather than a comment
- * asking two files to stay in sync.
+ * They must agree — a map accepted by one and rejected by another would make the same
+ * workflow behave differently depending on how it was called. This module is the single
+ * implementation they all go through, so parity is structural rather than a comment
+ * asking three files to stay in sync.
  *
- * Semantics (identical on both surfaces): a workflow that declares NO `inputs:` keeps
+ * Semantics (identical on every surface): a workflow that declares NO `inputs:` keeps
  * Phase-1 passthrough (the caller's map is forwarded verbatim). One that declares
  * `inputs:` applies each spec's `default` for an omitted name, rejects an unsupplied
  * `required` input, and rejects a caller key the workflow does not declare.
  */
 import type { WorkflowDefinition } from './schemas/workflow';
+import { INPUT_NAME_PATTERN } from './schemas/dag-node';
 
 /** A workflow's declared `inputs:` block, or undefined when it declares none. */
 export type DeclaredInputs = WorkflowDefinition['inputs'];
 
-/** Thrown when a caller's `with:` map violates the callee's declared contract. */
+/**
+ * Thrown when a caller's supplied map violates the callee's declared contract.
+ *
+ * `undeclared` and `missingRequired` carry the offending names as data so a caller can
+ * re-shape the remediation for its own surface — a direct run must say
+ * `--input name=value`, not "pass it through `with:`" — without parsing the message
+ * string. Exactly one is non-empty for a contract violation; both are empty for the
+ * grammar errors raised by {@link parseInputAssignments}.
+ */
 export class WorkflowInputContractError extends Error {
-  constructor(message: string) {
+  readonly undeclared: readonly string[];
+  readonly missingRequired: readonly string[];
+
+  constructor(
+    message: string,
+    details?: { undeclared?: readonly string[]; missingRequired?: readonly string[] }
+  ) {
     super(message);
     this.name = 'WorkflowInputContractError';
+    this.undeclared = details?.undeclared ?? [];
+    this.missingRequired = details?.missingRequired ?? [];
   }
 }
 
@@ -61,7 +81,8 @@ export function resolveDeclaredInputs(
   const undeclared = Object.keys(supplied).filter(k => !Object.hasOwn(declared, k));
   if (undeclared.length > 0) {
     throw new WorkflowInputContractError(
-      `${context}: ${calleeLabel} does not declare input${undeclared.length === 1 ? '' : 's'} ${quoteNames(undeclared)}. Declared inputs: ${Object.keys(declared).sort().join(', ') || '(none)'}.`
+      `${context}: ${calleeLabel} does not declare input${undeclared.length === 1 ? '' : 's'} ${quoteNames(undeclared)}. Declared inputs: ${Object.keys(declared).sort().join(', ') || '(none)'}.`,
+      { undeclared }
     );
   }
 
@@ -80,7 +101,8 @@ export function resolveDeclaredInputs(
   }
   if (missingRequired.length > 0) {
     throw new WorkflowInputContractError(
-      `${context}: ${calleeLabel} requires input${missingRequired.length === 1 ? '' : 's'} ${quoteNames(missingRequired)}. Pass ${missingRequired.length === 1 ? 'it' : 'them'} through 'with:'.`
+      `${context}: ${calleeLabel} requires input${missingRequired.length === 1 ? '' : 's'} ${quoteNames(missingRequired)}. Pass ${missingRequired.length === 1 ? 'it' : 'them'} through 'with:'.`,
+      { missingRequired }
     );
   }
   return resolved;
@@ -102,4 +124,47 @@ export function defaultRunInputs(declared: DeclaredInputs): Record<string, strin
     if (spec.default !== undefined) defaults[name] = spec.default;
   }
   return Object.keys(defaults).length > 0 ? defaults : undefined;
+}
+
+/**
+ * Parse `name=value` assignments into a supplied-input map (#2554) — the grammar the
+ * CLI's repeatable `--input` flag speaks, kept here so every surface that ever accepts
+ * a textual assignment speaks exactly the same one.
+ *
+ * The split is on the FIRST `=` only: the value is the literal remainder, so
+ * `msg=a=b` yields `a=b`. An empty value (`name=`) is a legitimate empty string. A
+ * duplicate name is rejected rather than silently last-wins — a repeated assignment is
+ * far more likely a mistake than an intent, and quietly picking one is the kind of
+ * behaviour the fail-fast rule exists to prevent.
+ *
+ * Names are validated against the shared {@link INPUT_NAME_PATTERN} rather than a local
+ * copy of the grammar; that constant's docblock explains why a second copy drifts
+ * silently in the dangerous direction.
+ *
+ * @throws WorkflowInputContractError on a missing `=`, an invalid name, or a duplicate.
+ */
+export function parseInputAssignments(assignments: readonly string[]): Record<string, string> {
+  const parsed: Record<string, string> = {};
+  for (const assignment of assignments) {
+    const eq = assignment.indexOf('=');
+    if (eq === -1) {
+      throw new WorkflowInputContractError(
+        `Invalid input assignment '${assignment}': expected 'name=value'.`
+      );
+    }
+    const name = assignment.slice(0, eq);
+    if (!INPUT_NAME_PATTERN.test(name)) {
+      throw new WorkflowInputContractError(
+        `Invalid input name '${name}' in '${assignment}': a name must start with a letter or ` +
+          'underscore and contain only letters, digits, underscores, and hyphens.'
+      );
+    }
+    if (Object.hasOwn(parsed, name)) {
+      throw new WorkflowInputContractError(
+        `Duplicate input '${name}': supply each input at most once.`
+      );
+    }
+    parsed[name] = assignment.slice(eq + 1);
+  }
+  return parsed;
 }

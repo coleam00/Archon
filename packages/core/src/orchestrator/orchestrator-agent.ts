@@ -44,9 +44,10 @@ import { executeWorkflow, hydrateResumableRun } from '@archon/workflows/executor
 import {
   assertWorkflowRequirementsMet,
   WorkflowRequirementError,
-  assertWorkflowInputsSatisfiable,
+  resolveTopLevelInputs,
   WorkflowMissingInputsError,
 } from '@archon/workflows/utils/workflow-requirements';
+import { WorkflowInputContractError } from '@archon/workflows/workflow-inputs';
 import type {
   WorkflowDefinition,
   WorkflowWithSource,
@@ -629,6 +630,13 @@ interface WorkflowDispatchOptions {
    * picker.
    */
   parseWarnings?: readonly string[];
+  /**
+   * Declared inputs supplied by the caller (#2554), already carried this far by
+   * `HandleMessageContext.workflowInputs`. Populated only by the run route; chat
+   * platforms have no channel and leave it unset, so their behaviour is unchanged.
+   * Validated at the dispatch gate before any worktree/clone/AI cost.
+   */
+  inputs?: Readonly<Record<string, string>>;
 }
 
 const FAILED_RUN_PROMPT_PREVIEW_MAX = 160;
@@ -739,21 +747,37 @@ async function dispatchOrchestratorWorkflow(
         })
       : undefined;
 
-  // Signature gate (#2470): a workflow declaring `required` inputs is a reusable block —
-  // only a caller's `with:` satisfies them, so a bare top-level invocation fails here,
-  // before any worktree/clone/AI cost. It still lists/loads normally (builder + discovery).
-  try {
-    assertWorkflowInputsSatisfiable(workflow);
-  } catch (err) {
-    if (err instanceof WorkflowMissingInputsError) {
-      getLog().info(
-        { workflowName: workflow.name, missing: err.missing },
-        'workflow.required_inputs_unsatisfiable'
-      );
-      await platform.sendMessage(conversationId, err.message);
-      return;
+  // Signature gate (#2470, #2554): resolve this invocation's declared inputs from the
+  // values its channel supplied — the run route's `inputs` map today; chat platforms
+  // supply nothing and so still refuse a required-input workflow here, before any
+  // worktree/clone/AI cost. The workflow still lists/loads normally either way.
+  //
+  // Skipped on a resume: the run row already carries the inputs validated when it was
+  // created, and re-gating with nothing supplied would make every resume of a
+  // required-input run impossible.
+  const isResumeDispatch = options?.resumeRunId !== undefined || options?.resumeRun !== undefined;
+  let resolvedInputs: Record<string, string> | undefined;
+  if (!isResumeDispatch) {
+    try {
+      resolvedInputs = resolveTopLevelInputs(workflow, options?.inputs);
+    } catch (err) {
+      // Both are user-facing contract violations: a missing required input, and — now
+      // that a caller can supply values — a key the workflow does not declare.
+      if (err instanceof WorkflowMissingInputsError || err instanceof WorkflowInputContractError) {
+        getLog().info(
+          {
+            workflowName: workflow.name,
+            // Names only, never values — a supplied value is user content (logging rules).
+            missing: err instanceof WorkflowMissingInputsError ? err.missing : undefined,
+            suppliedKeys: options?.inputs ? Object.keys(options.inputs) : [],
+          },
+          'workflow.required_inputs_unsatisfiable'
+        );
+        await platform.sendMessage(conversationId, err.message);
+        return;
+      }
+      throw err;
     }
-    throw err;
   }
 
   // Capability gate: hard-fail before any worktree/clone/AI cost if the
@@ -966,11 +990,16 @@ async function dispatchOrchestratorWorkflow(
           parseWarnings: options?.parseWarnings,
           baseBranch: codebaseBaseBranch,
           resolveChildIsolation,
+          // This branch creates a FRESH run row (the prior run had nothing to resume),
+          // so the supplied inputs still need stamping.
+          inputs: resolvedInputs,
         }
       );
     }
   } else if (platform.getPlatformType() === 'web' && !workflow.interactive) {
-    // Background dispatch: web-only, non-interactive workflows with no resumable run
+    // Background dispatch: web-only, non-interactive workflows with no resumable run.
+    // This is the console's default path, so it is exactly where a console-supplied
+    // input map must not be dropped.
     await dispatchBackgroundWorkflow(
       {
         platform,
@@ -984,6 +1013,7 @@ async function dispatchOrchestratorWorkflow(
         userId,
         source,
         parseWarnings: options?.parseWarnings,
+        inputs: resolvedInputs,
       },
       workflow
     );
@@ -1005,6 +1035,7 @@ async function dispatchOrchestratorWorkflow(
         parseWarnings: options?.parseWarnings,
         baseBranch: codebaseBaseBranch,
         resolveChildIsolation,
+        inputs: resolvedInputs,
       }
     );
   }
@@ -1412,6 +1443,9 @@ export async function handleMessage(
               resumeRunId: result.workflow.resumeRunId,
               resumeRun: result.workflow.resumeRun,
               parseWarnings: result.workflow.parseWarnings,
+              // Declared inputs (#2554) arrive on the request context, not in the
+              // command text — the run route is the only caller that sets them.
+              inputs: context?.workflowInputs,
             }
           );
         }

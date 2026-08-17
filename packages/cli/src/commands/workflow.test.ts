@@ -763,6 +763,113 @@ describe('workflowRunCommand — requires: [github] gate', () => {
   });
 });
 
+describe('workflowRunCommand — --input declared inputs (#2554)', () => {
+  let consoleSpy: ReturnType<typeof spyOn>;
+
+  beforeEach(async () => {
+    consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    (executeWorkflow as ReturnType<typeof mock>).mockClear();
+  });
+
+  afterEach(() => {
+    consoleSpy.mockRestore();
+  });
+
+  /** Stub discovery with one workflow declaring a required + a defaulted input. */
+  async function stubInputWorkflow(): Promise<void> {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [
+        makeTestWorkflowWithSource(
+          {
+            name: 'review-block',
+            inputs: { diff: { required: true }, style: { default: 'strict' } },
+          },
+          'project'
+        ),
+      ],
+      errors: [],
+    });
+  }
+
+  it('runs a required-input workflow when --input supplies the value', async () => {
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    await stubInputWorkflow();
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      workflowRunId: 'run-ok',
+    });
+
+    await workflowRunCommand('/repo/root', 'review-block', 'go', {
+      noWorktree: true,
+      inputs: ['diff=D1'],
+    });
+
+    expect(executeWorkflow).toHaveBeenCalledTimes(1);
+    // Only the supplied value is threaded through; `style` stays a derived default.
+    const opts = (executeWorkflow as ReturnType<typeof mock>).mock.calls[0][7] as {
+      inputs?: Record<string, string>;
+    };
+    expect(opts.inputs).toEqual({ diff: 'D1' });
+  });
+
+  it('still refuses a required-input workflow when nothing is supplied, before any cost', async () => {
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    await stubInputWorkflow();
+
+    await expect(
+      workflowRunCommand('/repo/root', 'review-block', 'go', { noWorktree: true })
+    ).rejects.toThrow(/requires input 'diff'/);
+
+    expect(executeWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('rejects an undeclared --input name before any cost', async () => {
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    await stubInputWorkflow();
+
+    await expect(
+      workflowRunCommand('/repo/root', 'review-block', 'go', {
+        noWorktree: true,
+        inputs: ['diff=D1', 'stlye=terse'],
+      })
+    ).rejects.toThrow(/does not declare input 'stlye'/);
+
+    expect(executeWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('rejects a malformed --input assignment before any cost', async () => {
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    await stubInputWorkflow();
+
+    await expect(
+      workflowRunCommand('/repo/root', 'review-block', 'go', {
+        noWorktree: true,
+        inputs: ['diff'],
+      })
+    ).rejects.toThrow(/expected 'name=value'/);
+
+    expect(executeWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('rejects --input combined with --resume rather than silently ignoring it', async () => {
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    // Flag validation runs after name resolution (as every other flag check does),
+    // so discovery still has to resolve for the conflict to be reached.
+    await stubInputWorkflow();
+
+    await expect(
+      workflowRunCommand('/repo/root', 'review-block', 'go', {
+        resume: true,
+        inputs: ['diff=D1'],
+      })
+    ).rejects.toThrow(/--resume and --input are mutually exclusive/);
+
+    expect(executeWorkflow).not.toHaveBeenCalled();
+  });
+});
+
 describe('workflowRunCommand', () => {
   let consoleSpy: ReturnType<typeof spyOn>;
 
@@ -4362,6 +4469,36 @@ describe('buildDetachedRunCmd', () => {
   // fixture modelled a compiled argv with no argv[1] at all, which is why
   // #2248 (detached child dies with `Unknown command: B:/~BUN/root/...`)
   // shipped green.
+  // `--input` is the first repeatable flag in the tree (#2554). Nothing here handles
+  // repetition specially — argv is forwarded verbatim — so this pins the property a
+  // future change to the argv rebuild could silently break, turning a detached run into
+  // one that starts with its inputs missing instead of failing.
+  it('forwards every repeated --input to the detached child', () => {
+    const cmd = buildDetachedRunCmd(
+      false,
+      '/path/to/bun',
+      [
+        '/path/to/bun',
+        '/abs/cli.ts',
+        'workflow',
+        'run',
+        'review-block',
+        '--input',
+        'diff=D1',
+        '--input',
+        'style=terse',
+        '--detach',
+      ],
+      '/abs/cwd',
+      []
+    );
+
+    expect(cmd.filter(arg => arg === '--input')).toHaveLength(2);
+    expect(cmd).toContain('diff=D1');
+    expect(cmd).toContain('style=terse');
+    expect(cmd).not.toContain('--detach');
+  });
+
   it('binary mode: uses [execPath] only (no duplicated entry arg), drops the Bun SFE virtual argv[1]', () => {
     const cmd = buildDetachedRunCmd(
       true,

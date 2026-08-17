@@ -49,6 +49,7 @@ import { createIsolationStore } from '../db/isolation-environments';
 import { toError } from '../utils/error';
 import { getCodebase } from '../db/codebases';
 import { executeWorkflow } from '@archon/workflows/executor';
+import { SUBRUN_METADATA_KEYS } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowDefinition, WorkflowSource } from '@archon/workflows/schemas/workflow';
 import { createWorkflowDeps } from '../workflows/store-adapter';
 import { createChildWorktreeResolver } from '../workflows/child-isolation-resolver';
@@ -290,6 +291,14 @@ export interface WorkflowRoutingContext {
    * other, independently of the chat notification.
    */
   readonly parseWarnings?: readonly string[];
+  /**
+   * Declared inputs supplied by the caller (#2554), already validated at the dispatch
+   * gate. This path PRE-CREATES the run row (so the UI can fetch it immediately), which
+   * means the executor's own row-creation branch never runs — the values are stamped on
+   * the pre-created row below, and also passed to `executeWorkflow` for the fallback
+   * path where pre-creation failed and the executor creates the row itself.
+   */
+  readonly inputs?: Readonly<Record<string, string>>;
 }
 
 /**
@@ -432,7 +441,15 @@ export async function dispatchBackgroundWorkflow(
       codebase_id: ctx.codebaseId,
       user_message: ctx.originalMessage,
       working_path: workerCwd,
-      metadata: ctx.issueContext ? { github_context: ctx.issueContext } : {},
+      metadata: {
+        ...(ctx.issueContext ? { github_context: ctx.issueContext } : {}),
+        // Declared inputs supplied by this invocation (#2554). Stamped here because the
+        // executor only writes them when IT creates the row, and this path hands it a
+        // pre-created one.
+        ...(ctx.inputs && Object.keys(ctx.inputs).length > 0
+          ? { [SUBRUN_METADATA_KEYS.inputs]: { ...ctx.inputs } }
+          : {}),
+      },
       parent_conversation_id: ctx.conversationDbId,
       user_id: ctx.userId,
     });
@@ -465,6 +482,10 @@ export async function dispatchBackgroundWorkflow(
             parseWarnings: ctx.parseWarnings,
             baseBranch: codebaseBaseBranch,
             resolveChildIsolation,
+            // Only consumed when `preCreatedRun` is undefined (pre-creation failed and
+            // the executor creates the row itself); otherwise the row above already
+            // carries them.
+            inputs: ctx.inputs,
           }
         );
         // Surface workflow output to parent conversation as a result card

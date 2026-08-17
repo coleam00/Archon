@@ -1060,7 +1060,7 @@ accidents. Two workflow-level fields:
 
 ```yaml
 name: archon-review-block
-description: Reusable review block (building block — not for standalone runs)
+description: Reviews a diff — composes into a parent, and runs on its own
 inputs:
   diff:
     required: true
@@ -1081,18 +1081,20 @@ nodes:
 
 - **`inputs:`** — a map of input name → `{ required?, default?, description? }`. `required: true`
   and `default:` are mutually exclusive (a required input has no default; declaring both drops
-  the key at load with a warning). A caller supplies values with `with:` on the `include:` or
-  `workflow:` node that references this workflow. When a block declares `inputs:`, callers are
-  validated: a missing **required** input and an **undeclared** caller key are both load errors,
-  and a declared `default:` fills an omitted input. A workflow with **no** `inputs:` keeps the
-  old lenient behavior (unknown caller keys ignored).
+  the key at load with a warning). Values come from `with:` on the `include:`/`workflow:` node
+  that references this workflow, or — for a direct run — from `--input name=value` on the CLI or
+  the run form in the web console (see [Running a workflow that declares
+  inputs](#running-a-workflow-that-declares-inputs)). Whichever channel supplies them, the same
+  contract applies: a missing **required** input and an **undeclared** key are both rejected, and
+  a declared `default:` fills an omitted input. A workflow with **no** `inputs:` keeps the old
+  lenient behavior (unknown caller keys ignored).
 - **`returns:`** — the **node id** whose output IS the workflow's result. It selects by id, so
   it works for any node type and even a **non-sink** node (a node other nodes depend on). For an
   `include:` block, `$blk.output` resolves to the `returns:` node; `depends_on: [blk]` still
   waits on every terminal node. For a `workflow:` sub-run child, the child's terminal output
   (threaded back as `$node.output`) becomes the `returns:` node's output.
 
-### Binding time: includes resolve at load, sub-runs at runtime
+### Binding time: includes resolve at load, runs at runtime
 
 `$INPUTS.<name>` is delivered by **two deliberately separate paths**, and the difference decides
 which surfaces can read it:
@@ -1101,6 +1103,7 @@ which surfaces can read it:
 |--------|-------------------------|-------------------------------------|--------------------------------|
 | `include:` | **Load time** (the block and command bodies are compiled into the flat DAG) | Yes | **Yes** — resolved command bodies receive the same input binding before execution |
 | `workflow:` sub-run | **Runtime** (values become `$INPUTS` variables on the child run) | Yes | **Yes** — every child node flows through runtime substitution |
+| direct run (`--input` / console form) | **Runtime** — the same path as a sub-run; supplied values are persisted to the run's own metadata, so `$INPUTS` reconstitutes on a cold resume | Yes | **Yes** — every node flows through runtime substitution |
 
 Both composition paths support command-backed prompts; their binding time differs. Includes
 snapshot and bind the resolved command body at load time, while sub-runs resolve inputs at
@@ -1124,12 +1127,44 @@ nodes:
       echo "planning: $INPUTS_PLAN"     # NOT $INPUTS.plan — bash reads the env var
 ```
 
-### Bare runs of a required-input block fail fast
+### Running a workflow that declares inputs
 
-A workflow that declares a **required** input is a reusable block: only a caller's `with:` can
-satisfy it. It still **loads and lists** (the builder and discovery need it visible), but a bare
-**top-level** run fails immediately — before any worktree, clone, or AI cost — naming the missing
-inputs and pointing at `include:`/`workflow:`. Reference it from another workflow instead.
+Declaring `inputs:` does not make a workflow callable-only. The same file runs on its own **and**
+composes into any number of parents — supply the values at invocation:
+
+```bash
+# one flag per input; repeat it
+archon workflow run archon-review-block --input diff="$(git diff)" --input style=terse
+
+# the trailing message is still $ARGUMENTS, independent of --input
+archon workflow run archon-review-block --input diff=... "focus on the auth changes"
+```
+
+In the **web console**, a workflow that declares `inputs:` renders a field per input in the run
+card — description as help text, `default:` as the placeholder, `*` on the required ones. The
+Start button stays disabled, and says which input it is waiting for, until every required field
+has a value.
+
+The grammar is deliberately small:
+
+- `--input name=value` splits on the **first** `=`, so `--input msg=a=b` gives `a=b`.
+- Values are plain strings. `--input name=` supplies a deliberate empty string.
+- Repeat the flag per input; supplying the same name twice is an error, not last-wins.
+- Omit an input to take its `default:`. Omitting one with no default and no `required: true`
+  leaves it unset, and a body referencing it fails at the reference site.
+
+Whatever supplies the values, they go through **one contract** — the same code a caller's `with:`
+map goes through — so a map accepted when composing is accepted here:
+
+- a **required** input with no value is refused, naming it;
+- an **undeclared** key is refused, naming it and listing what the workflow does declare;
+- both refusals happen **before any worktree, clone, or AI cost**;
+- supplied values are recorded on the run, so a resume replays exactly what the run started with.
+
+Chat platforms (Slack, Telegram, Discord, GitHub) have **no** channel for inputs yet: they carry
+only a trigger message, so a required-input workflow invoked there still refuses up front and
+points at the CLI and console. That gap is tracked in
+[#2555](https://github.com/coleam00/Archon/issues/2555).
 
 ---
 
@@ -1339,7 +1374,7 @@ The way to avoid it is to declare what the child does, on the child workflow its
 ```yaml
 # review-block.yaml — reads the repo, writes only to $ARTIFACTS_DIR
 name: review-block
-description: Reviews the diff and writes findings. Building block — not for standalone runs.
+description: Reviews the diff and writes findings. Composes into a parent; also runs on its own.
 mutates_checkout: false      # skips the path lock: N of these coexist in one checkout
 nodes:
   - id: review

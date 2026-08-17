@@ -45,8 +45,9 @@ import { resolveWorkflowName } from '@archon/workflows/router';
 import { executeWorkflow, hydrateResumableRun } from '@archon/workflows/executor';
 import {
   assertWorkflowRequirementsMet,
-  assertWorkflowInputsSatisfiable,
+  resolveTopLevelInputs,
 } from '@archon/workflows/utils/workflow-requirements';
+import { parseInputAssignments } from '@archon/workflows/workflow-inputs';
 import { dryRunWorkflow, formatDryRunTrace, loadDryRunStubs } from '@archon/workflows/dry-run';
 import {
   getWorkflowEventEmitter,
@@ -222,6 +223,14 @@ export interface WorkflowRunOptions {
   execCode?: boolean;
   /** Stop at the first approval gate instead of auto-approving it. */
   pauseAtGates?: boolean;
+  /**
+   * Raw `--input name=value` assignments (#2554), one per occurrence of the flag.
+   * Parsed and validated against the workflow's declared `inputs:` at the invocation
+   * gate — before the `--detach` fork and before any worktree, clone, or AI cost.
+   * Kept as raw strings here so the grammar has exactly one parser
+   * (`parseInputAssignments` in `@archon/workflows`).
+   */
+  inputs?: string[];
 }
 
 /**
@@ -1015,6 +1024,13 @@ export async function workflowRunCommand(
         '  Remove --branch when using --resume.'
     );
   }
+  if (options.resume && options.inputs !== undefined && options.inputs.length > 0) {
+    throw new Error(
+      '--resume and --input are mutually exclusive.\n' +
+        "  A resume replays the original invocation's inputs, recorded on the run.\n" +
+        '  Drop --input to resume, or start a fresh run to supply different values.'
+    );
+  }
 
   // Per-dispatch --base override, normalized once. Wins over repo config + the
   // codebase default for both the worktree cut-from (the provider request's
@@ -1081,10 +1097,21 @@ export async function workflowRunCommand(
   assertNoWorktreeOptionsForFolder(options.folder === true, options);
   assertWorkflowNotWorktreePinnedForFolder(options.folder === true, pinnedEnabled, workflow.name);
 
-  // Signature gate (#2470): a workflow declaring `required` inputs is a reusable block —
-  // only a caller's `with:` can satisfy them, so a bare top-level run fails here, before
-  // the --detach fork and any worktree/clone/AI cost. It still lists/loads normally.
-  assertWorkflowInputsSatisfiable(workflow);
+  // Signature gate (#2470, #2554): resolve this invocation's declared inputs from the
+  // `--input name=value` flags against the workflow's `inputs:` block, here — before the
+  // --detach fork and any worktree/clone/AI cost — so a bad name, a missing required
+  // input, or a malformed assignment costs nothing.
+  //
+  // Skipped on --resume: the resumable run is not resolved until later in this function,
+  // and its inputs were validated when its row was created. Re-gating with nothing
+  // supplied would make every resume of a required-input run impossible.
+  let resolvedInputs: Record<string, string> | undefined;
+  if (!options.resume) {
+    resolvedInputs = resolveTopLevelInputs(
+      workflow,
+      options.inputs ? parseInputAssignments(options.inputs) : undefined
+    );
+  }
 
   // Capability gate: hard-fail before the --detach fork and any worktree/clone/
   // AI cost if the workflow declares `requires: [github]` and the acting CLI
@@ -1912,6 +1939,8 @@ export async function workflowRunCommand(
           execContext,
           container: containerRunCtx,
           resolveChildIsolation,
+          // Fresh run only: a resume (`prepared`) replays the inputs already on its row.
+          inputs: resolvedInputs,
         };
     result = await executeWorkflow(
       deps,
