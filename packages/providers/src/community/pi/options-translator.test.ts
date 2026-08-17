@@ -65,14 +65,26 @@ describe('resolvePiThinkingLevel', () => {
     for (const rung of ['minimal', 'low', 'medium', 'high', 'xhigh', 'max']) {
       expect(result.warning).toContain(rung);
     }
-    // The positive check alone cannot catch the drift it exists for: the six
-    // names are already in the vocabulary list, so it stayed green while the
-    // parenthetical beside it claimed `max → xhigh on Pi` — the opposite of what
-    // this file's own array does. Assert the absence of that claim too. Pi
-    // clamps NOTHING; any downgrade wording here is a defect by construction.
+    // The rung list alone cannot catch the drift it exists for: those six names
+    // are already in the vocabulary the message prints, so it stayed green while
+    // the parenthetical beside it claimed `max → xhigh on Pi` — the opposite of
+    // what this file's own array does.
+    //
+    // The fix for that was first written as a blacklist of downgrade spellings,
+    // which was miscalibrated in BOTH directions: it rejected the true sentence
+    // `nothing is clamped` (the exact wording ai-assistants.md uses for this
+    // same fact) while passing four false ones, including `Pi downgrades max to
+    // xhigh internally` — a plain-prose restatement of the original bug. A
+    // blacklist can only ever enumerate the wrong claims someone happened to
+    // write before.
+    //
+    // So assert the TRUE claim positively. Pi accepts the whole ladder; a
+    // message that does not say so is either silent about it or contradicting
+    // it, and both are the defect. The two narrow patterns stay as cheap
+    // belt-and-braces against the historical spellings.
+    expect(result.warning).toContain('accepts every rung natively');
     expect(result.warning).not.toMatch(/max\s*(→|->|becomes|maps? to)\s*xhigh/i);
     expect(result.warning).not.toMatch(/xhigh\s+on\s+Pi/i);
-    expect(result.warning).not.toMatch(/clamp/i);
   });
 
   test('warns on unknown string thinking value', () => {
