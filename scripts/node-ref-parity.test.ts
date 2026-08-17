@@ -6,14 +6,14 @@
  * `@archon/web` must never import `@archon/workflows` (a server package), and
  * `api.generated.d.ts` is type-only so it cannot carry a runtime value — the
  * same constraint AGENTS.md records for `TRIGGER_RULES`. The web package
- * therefore keeps a deliberate copy of the grammar, and this check is what keeps
- * that copy honest.
+ * therefore keeps deliberate copies of both grammars, and these checks are what
+ * keep those copies honest.
  *
- * It lives in `scripts/` rather than beside the web module because it is a
+ * They live in `scripts/` rather than beside the web modules because this is a
  * cross-package repository invariant, not a unit of `@archon/web` behavior — the
- * same reason the bundled-defaults and capability-matrix checks live here. Both
- * files are read as TEXT, so no package boundary is crossed. `bun run test` runs
- * this directory, so CI enforces it.
+ * same reason the bundled-defaults and capability-matrix checks live here. Every
+ * file is read as TEXT, so no package boundary is crossed. `bun run test` ends
+ * with `bun test ./scripts/`, so CI enforces it.
  *
  * The drift this catches actually happened: the builder's legacy copy used
  * `\w`, which excludes the hyphen, so it silently validated none of the
