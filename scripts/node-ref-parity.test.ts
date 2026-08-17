@@ -47,6 +47,18 @@ function missing(name: string, file: string): Error {
 }
 
 /**
+ * Both extractors anchor the declaration to the start of its line (`^\s*`, `m`).
+ * Without that they take the FIRST textual match, so a commented-out copy holding
+ * the CURRENT value — an ordinary thing to find above a constant someone is
+ * mid-refactor on — shadows a genuinely drifted live one and the whole suite
+ * passes. That was verified, not theorised: unanchored, a dropped hyphen in
+ * `NODE_ID_SOURCE` plus an extra `when:` operator in `atomPattern` left this file
+ * at 3 pass / 0 fail. A guard that can be silently defeated is worse than none,
+ * because it buys confidence in exactly the invariant it fails to check.
+ */
+const DECL = String.raw`^\s*(?:export )?const`;
+
+/**
  * Extract a `const <name> = String.raw`…`` literal, failing loudly if it moved.
  * Also accepts the `new RegExp(String.raw`…`)` wrapper, which is how a composed
  * pattern is spelled.
@@ -54,7 +66,8 @@ function missing(name: string, file: string): Error {
 function rawConstant(file: string, name: string): string {
   const source = readFileSync(file, 'utf8');
   const match = new RegExp(
-    String.raw`const ${name} =\s*(?:new RegExp\(\s*)?String\.raw\x60([^\x60]*)\x60`
+    String.raw`${DECL} ${name} =\s*(?:new RegExp\(\s*)?String\.raw\x60([^\x60]*)\x60`,
+    'm'
   ).exec(source);
   if (match?.[1] === undefined) throw missing(name, file);
   return match[1];
@@ -63,7 +76,7 @@ function rawConstant(file: string, name: string): string {
 /** Extract a `const <name> = /…/;` regex literal, joining a wrapped one back up. */
 function regexConstant(file: string, name: string): string {
   const source = readFileSync(file, 'utf8');
-  const match = new RegExp(String.raw`const ${name} =\s*\/([\s\S]*?)\/;`).exec(source);
+  const match = new RegExp(String.raw`${DECL} ${name} =\s*\/([\s\S]*?)\/;`, 'm').exec(source);
   if (match?.[1] === undefined) throw missing(name, file);
   return match[1]
     .split('\n')
