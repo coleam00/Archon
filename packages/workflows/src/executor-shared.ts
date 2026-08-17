@@ -725,10 +725,15 @@ export function detectCompletionSignal(output: string, signal: string): boolean 
  * The schema guarantees at least one channel, so the empty case is unreachable;
  * it is handled rather than asserted because this is only an error message.
  */
-export function describeUnmetCompletion(control: { until?: string; until_bash?: string }): string {
+export function describeUnmetCompletion(control: {
+  until?: string;
+  until_bash?: string;
+  until_field?: string;
+}): string {
   const channels: string[] = [];
   if (control.until) channels.push(`completion signal '${control.until}'`);
   if (control.until_bash) channels.push("a passing 'until_bash' check");
+  if (control.until_field) channels.push(`'${control.until_field}' ever being true`);
   if (channels.length === 0) return 'without a completion channel';
   return `without ${channels.join(' or ')}`;
 }

@@ -41,6 +41,7 @@ export function loopFromDag(variantSpecific: Partial<WireDagNode>): LoopNodeData
     // always present on the wire and must be carried verbatim across the round-trip.
     fresh_context: loop.fresh_context,
     ...ifDefined('until_bash', loop.until_bash),
+    ...ifDefined('until_field', loop.until_field),
     ...ifDefined('interactive', loop.interactive),
     ...ifDefined('gate_message', loop.gate_message),
   };
@@ -58,6 +59,7 @@ export function loopToDag(data: LoopNodeData): Partial<WireDagNode> {
       max_iterations: data.max_iterations,
       fresh_context: data.fresh_context,
       ...ifDefined('until_bash', data.until_bash),
+      ...ifDefined('until_field', data.until_field),
       ...ifDefined('interactive', data.interactive),
       ...ifDefined('gate_message', data.gate_message),
     },

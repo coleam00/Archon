@@ -3618,7 +3618,7 @@ export interface components {
       prompt?: string;
       bash?: string;
       loop?: {
-        until: string;
+        until?: string;
         max_iterations: number;
         /** @default false */
         fresh_context: boolean;
@@ -3628,9 +3628,10 @@ export interface components {
         signal_completes?: boolean;
         prompt?: string;
         command?: string;
+        until_field?: string;
       };
       loop_group?: {
-        until: string;
+        until?: string;
         max_iterations: number;
         /** @default false */
         fresh_context: boolean;

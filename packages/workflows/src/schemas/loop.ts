@@ -90,28 +90,6 @@ export const loopControlSchema = z
     signal_completes: z.boolean().optional(),
   })
   .superRefine((data, ctx) => {
-    // The across-channels rule: at least one completion channel must be declared.
-    // No single field is required on its own, but a loop with none can only ever end
-    // by exhausting max_iterations, which the engine reports as a failure — so it is
-    // always an authoring mistake.
-    //
-    // This answers a different question from the per-channel `isNonBlank` checks
-    // above ("is anything declared?" vs "is this declared value usable?"), so both
-    // are needed — see the docblock. Blank values are already rejected by the time
-    // this runs, so presence is the only test left here.
-    //
-    // A new channel must be added to this condition too, or a loop declaring only
-    // that channel would be rejected as channel-less.
-    if (data.until === undefined && data.until_bash === undefined) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message:
-          "loop node requires a completion channel: set 'loop.until' (completion signal string) " +
-          "or 'loop.until_bash' (deterministic check, exit 0 = complete)",
-        path: ['until'],
-      });
-    }
-
     if (data.interactive === true && !data.gate_message) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -122,6 +100,40 @@ export const loopControlSchema = z
   });
 
 export type LoopControl = z.infer<typeof loopControlSchema>;
+
+/**
+ * The across-channels rule, applied by each loop variant to its own channel set.
+ *
+ * It lives here rather than on `loopControlSchema` because the two variants no
+ * longer have the same channels: `until_field` (#2563 Part B) is `loop:`-only, so a
+ * shared check would either reject a valid `loop:` or accept a channel-less
+ * `loop_group:`. A parent refinement cannot be relaxed by a child, so the rule
+ * moves down to where the channel set is known.
+ *
+ * Blank values are already rejected per channel by the time this runs, so presence
+ * is the only test left. `declared` is the list of channel names the variant found,
+ * `available` the ones it accepts (for the message).
+ */
+export function addMissingChannelIssue(
+  ctx: z.RefinementCtx,
+  declared: readonly string[],
+  available: readonly { field: string; describe: string }[]
+): void {
+  if (declared.length > 0) return;
+  ctx.addIssue({
+    code: z.ZodIssueCode.custom,
+    message:
+      'loop node requires a completion channel: set ' +
+      available.map(c => `'loop.${c.field}' (${c.describe})`).join(' or '),
+    path: ['until'],
+  });
+}
+
+/** The two channels every loop variant has. */
+export const BASE_COMPLETION_CHANNELS = [
+  { field: 'until', describe: 'completion signal string' },
+  { field: 'until_bash', describe: 'deterministic check, exit 0 = complete' },
+] as const;
 
 /**
  * `loop:` node config — iteration control plus exactly one iteration-prompt source:
@@ -140,8 +152,44 @@ export const loopNodeConfigSchema = loopControlSchema
      * parse-time validation and fail at runtime with a confusing "not found" error.
      */
     command: z.string().trim().min(1, "'loop.command' must be a non-empty string").optional(),
+    /**
+     * Structured completion channel (#2563 Part B): the name of a property in this
+     * node's `output_format` schema whose validated value `true` ends the loop.
+     *
+     * This is the channel for a loop whose completion is a JUDGMENT the model makes
+     * — "am I done?" — with no externally checkable state to test. `until_bash`
+     * covers the checkable case; before this, judgment had only the prose sentinel.
+     *
+     * `loop:` only, and the asymmetry is principled rather than convenient. A
+     * `loop_group:` body node can already declare `output_format` and be read by
+     * `until_bash: '[ "$decide.output.done" = "true" ]'` — node-output refs are
+     * substituted into `until_bash` against the current iteration's outputs, and
+     * booleans render unquoted. The single-prompt `loop:` has no such handle: its
+     * judgment lives in its own AI turn, which has no node id, and `until_bash` runs
+     * after that turn but can only see the PREVIOUS iteration's text. That is the
+     * gap this fills. On a `loop_group:` the key is unknown and warns.
+     *
+     * The named property must be declared in `output_format.properties`, listed in
+     * `output_format.required`, and typed `boolean` — all checked at load time in
+     * `dagNodeSchema`, which can see both the node's `output_format` and this field.
+     */
+    until_field: z
+      .string()
+      .trim()
+      .min(1, "'loop.until_field' must name a property in the node's output_format")
+      .optional(),
   })
   .superRefine((data, ctx) => {
+    // The across-channels rule for `loop:` — three channels, unlike loop_group's two.
+    addMissingChannelIssue(
+      ctx,
+      [data.until, data.until_bash, data.until_field].filter(v => v !== undefined),
+      [
+        ...BASE_COMPLETION_CHANNELS,
+        { field: 'until_field', describe: 'a declared boolean in output_format' },
+      ]
+    );
+
     const hasPrompt = typeof data.prompt === 'string' && data.prompt.length > 0;
     const hasCommand = typeof data.command === 'string' && data.command.length > 0;
 

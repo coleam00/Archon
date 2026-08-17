@@ -243,10 +243,12 @@ prose is matched at all:
 - id: implement
   loop:
     prompt: "Implement next story. When done: <promise>COMPLETE</promise>"
-    until: COMPLETE               # Required unless until_bash is set
+    until: COMPLETE               # Prose signal
     max_iterations: 10
     fresh_context: true
-    until_bash: "bun run test"    # Exit 0 = done. Required unless until is set
+    until_bash: "bun run test"    # Exit 0 = done
+    # until_field: done           # Or: a declared boolean in this node's output_format
+    # At least ONE of until / until_bash / until_field
 ```
 
 **Loop group node** — repeats a multi-node sub-DAG body per iteration (implement → test → review as one repeated cycle):

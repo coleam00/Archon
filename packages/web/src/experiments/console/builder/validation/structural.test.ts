@@ -58,7 +58,9 @@ describe('validateStructural', () => {
   // cannot share code (@archon/web must not import @archon/workflows), so matching
   // names are what makes a future divergence visible. Change one, change both.
   describe('channel verdict matrix (twin: workflows schemas.test.ts)', () => {
-    const cases: Array<[string, { until?: string; until_bash?: string }, boolean]> = [
+    const cases: Array<
+      [string, { until?: string; until_bash?: string; until_field?: string }, boolean]
+    > = [
       ['neither declared', {}, false],
       ['until only, real', { until: 'COMPLETE' }, true],
       ['until_bash only, real', { until_bash: 'bun run test' }, true],
@@ -71,6 +73,10 @@ describe('validateStructural', () => {
       ['until_bash empty string', { until_bash: '' }, false],
       ['padded until (legit)', { until: ' COMPLETE ' }, true],
       ['multiline until_bash (legit)', { until_bash: '  set -e\n  test -f x\n' }, true],
+      // Third channel (#2563 Part B). The engine additionally checks the name
+      // against output_format; the builder only mirrors the channel rules.
+      ['until_field only, real', { until_field: 'done' }, true],
+      ['until_field blank', { until_field: '  ' }, false],
     ];
 
     for (const [name, channels, shouldBeClean] of cases) {

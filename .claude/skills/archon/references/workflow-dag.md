@@ -446,10 +446,12 @@ Loop nodes iterate an AI prompt until a completion condition is met. Use them fo
 - id: my-loop
   loop:
     prompt: "..."              # Required. Sent each iteration
-    until: COMPLETE            # Completion signal. Required unless `until_bash` is set
+    until: COMPLETE            # Prose completion signal
     max_iterations: 10         # Required. Integer >= 1. Fails if exceeded
     fresh_context: true        # Optional. Default: false
-    until_bash: "..."          # Exit 0 = complete. Required unless `until` is set
+    until_bash: "..."          # Exit 0 = complete
+    until_field: done          # Declared boolean in output_format; true = complete
+                               # At least ONE of until / until_bash / until_field
     interactive: true          # Optional. Pauses between iterations for user input
     gate_message: "..."        # Required when interactive: true
 ```
@@ -457,10 +459,11 @@ Loop nodes iterate an AI prompt until a completion condition is met. Use them fo
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `prompt` | string | Yes | Prompt template. Supports all variable substitution (`$ARGUMENTS`, `$nodeId.output`, `$LOOP_USER_INPUT`, etc.) |
-| `until` | string | Unless `until_bash` | Completion signal to detect in AI output. Omit it for a deterministic loop — with no signal declared there is no prose matching at all, so a sentinel the model emits while reasoning cannot end the loop |
+| `until` | string | One channel required | Completion signal to detect in AI output. Omit it for a deterministic or structured loop — with no signal declared there is no prose matching at all, so a sentinel the model emits while reasoning cannot end the loop |
 | `max_iterations` | number | Yes | Hard limit. Node **fails** if exceeded |
 | `fresh_context` | boolean | No | Default `false`. `true` = fresh AI session each iteration |
-| `until_bash` | string | Unless `until` | Shell script run after each iteration. Exit 0 = complete. Skipped on an iteration whose `until` signal already fired. Variable substitution applies; `$nodeId.output` IS shell-quoted here |
+| `until_bash` | string | One channel required | Shell script run after each iteration. Exit 0 = complete. Skipped once a cheaper channel already fired. Variable substitution applies; `$nodeId.output` IS shell-quoted here |
+| `until_field` | string | One channel required | **`loop:` only.** Names a boolean property in the node's `output_format` whose validated `true` ends the loop. Must be declared, in `required`, and typed `boolean` — all checked at load. Use for judgment-based completion instead of a prose sentinel. On `loop_group`, use a body node's `output_format` + `until_bash: '[ "$decide.output.done" = "true" ]'` |
 | `interactive` | boolean | No | Default `false`. `true` = pause after each non-completing iteration for user feedback via `/workflow approve <id> <text>` |
 | `gate_message` | string | **Required when `interactive: true`** | Message shown to the user at each pause. Validated at parse time — a loop with `interactive: true` and no `gate_message` fails to load |
 
@@ -503,8 +506,9 @@ The flow:
 Checked after each iteration:
 1. **AI signal** — `<promise>SIGNAL</promise>` in output (recommended) or plain signal at end
 2. **`until_bash`** — shell script exits 0
+3. **`until_field`** — the validated `output_format` payload has that property `=== true` (`loop:` only)
 
-At least one must be declared; a loop with neither fails to load. Either triggers completion (they are OR'd — `until_bash` cannot veto the signal), and `until_bash` is skipped on an iteration the signal already completed. `<promise>` tags are stripped from output.
+At least one must be declared; a loop with none fails to load. Any of them triggers completion (they are OR'd — `until_bash` cannot veto the signal), and `until_bash` is skipped once a cheaper channel already completed the iteration. `<promise>` tags are stripped from output. With `output_format` declared, the loop's output is the validated JSON, and an invalid payload FAILS the node (after up to 3 re-asks within the iteration on Pi/Copilot) rather than silently iterating again.
 
 ### Session Patterns
 

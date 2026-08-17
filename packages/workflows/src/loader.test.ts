@@ -2235,11 +2235,7 @@ nodes:
       until: "COMPLETE"
       max_iterations: 3
     model: claude-opus-4-6
-    output_format:
-      type: object
-      properties:
-        status:
-          type: string
+    mcp: ./mcp.json
 `
       );
 
@@ -2247,16 +2243,59 @@ nodes:
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
       expect(result.errors).toHaveLength(0);
 
-      // Should warn about output_format but NOT about model
+      // Should warn about mcp but NOT about model
       const warnCalls = (mockLogger.warn as Mock<() => undefined>).mock.calls;
       const aiFieldWarnings = warnCalls.filter(
         call => typeof call[1] === 'string' && call[1].includes('ai_fields_ignored')
       );
       expect(aiFieldWarnings).toHaveLength(1);
       const warnedFields = (aiFieldWarnings[0][0] as { fields: string[] }).fields;
-      expect(warnedFields).toContain('output_format');
+      expect(warnedFields).toContain('mcp');
       expect(warnedFields).not.toContain('model');
       expect(warnedFields).not.toContain('provider');
+    });
+
+    it('should NOT warn about output_format on a loop node (#2563)', async () => {
+      // A loop: node makes its own sendQuery, so the schema is honoured rather than
+      // warned-and-dropped. It stays warned on loop_group, which never calls sendQuery.
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'loop-structured.yaml'),
+        `
+name: loop-structured
+description: Loop with a structured completion channel
+nodes:
+  - id: iterate
+    output_format:
+      type: object
+      properties:
+        done:
+          type: boolean
+      required: [done]
+    loop:
+      prompt: "Do something"
+      max_iterations: 3
+      until_field: done
+`
+      );
+
+      (mockLogger.warn as Mock<() => undefined>).mockClear();
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(0);
+
+      const aiFieldWarnings = (mockLogger.warn as Mock<() => undefined>).mock.calls.filter(
+        call => typeof call[1] === 'string' && call[1].includes('ai_fields_ignored')
+      );
+      expect(aiFieldWarnings).toHaveLength(0);
+
+      const wf = result.workflows[0].workflow;
+      expect(isLoopNode(wf.nodes[0])).toBe(true);
+      if (isLoopNode(wf.nodes[0])) {
+        expect(wf.nodes[0].loop.until_field).toBe('done');
+        expect(wf.nodes[0].output_format).toBeDefined();
+      }
     });
 
     it('should NOT warn about pi: on loop nodes and should preserve it (#2133)', async () => {

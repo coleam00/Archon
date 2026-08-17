@@ -4375,11 +4375,25 @@ async function executeLoopNode(
     const needsFreshSession = loop.fresh_context || i === 1;
     const resumeSessionId = needsFreshSession ? undefined : currentSessionId;
 
-    // Stream AI response for this iteration
+    // Stream AI response for this iteration.
+    //
+    // ── Structured-output attempts (#2563) ──────────────────────────────────
+    // When the node declares `output_format`, an iteration is one or more STREAM
+    // ATTEMPTS: the payload is validated against the schema, and on a best-effort
+    // provider (Pi/Copilot) a miss is re-asked with the schema errors appended, up
+    // to STRUCTURED_OUTPUT_MAX_REASKS. This mirrors executeNodeInternal's contract
+    // exactly, deliberately — a loop should not be the one node type where a
+    // structured miss behaves differently. Exhaustion FAILS the node; it is never
+    // treated as "not complete yet", which would be the silent degradation the
+    // engine refuses everywhere else.
+    //
+    // Without `output_format` there is exactly one attempt and this reads as before.
+    // State the post-attempt code needs is declared out here; state that must start
+    // clean on each attempt is reset at the top of the loop.
     let fullOutput = ''; // raw, for signal detection
     let cleanOutput = ''; // stripped, for platform display
     let iterationIdleTimedOut = false;
-    const iterationAbortController = new AbortController();
+    let iterationAbortController = new AbortController();
     // Mid-stream cancel-check throttle (see the check inside the stream loop).
     // The between-iteration status check just ran, so start the clock at the
     // iteration start. A local timestamp rather than the module-level
@@ -4397,14 +4411,15 @@ async function executeLoopNode(
     // are session-cumulative, so the per-result `+=` accumulation used before
     // would double-count: capture last-seen values (overwrite semantics) and
     // fold them into the loop totals once, after the stream ends.
-    const backgroundTasks = createBackgroundTaskTracker();
+    let backgroundTasks = createBackgroundTaskTracker();
     let iterationCost: number | undefined;
     let iterationTokens: TokenUsage | undefined;
     let iterationNumTurns: number | undefined;
-    // Fold the last-seen per-iteration values into the loop totals exactly
-    // once — called on both the normal exit and the catch path (an SDK-error
-    // result still carries the iteration's cost, which the totals reported
-    // on the failure return must include, matching the old += behavior).
+    // Fold the last-seen per-attempt values into the loop totals exactly once per
+    // ATTEMPT — called on both the normal exit and the catch path (an SDK-error
+    // result still carries the attempt's cost, which the totals reported on the
+    // failure return must include, matching the old += behavior). Reaskedattempts
+    // each fold their own cost, so an exhausted iteration reports what it spent.
     let iterationUsageFolded = false;
     const foldIterationUsage = (): void => {
       if (iterationUsageFolded) return;
@@ -4423,473 +4438,663 @@ async function executeLoopNode(
       }
     };
 
-    try {
-      // Build prompt — substituteWorkflowVariables throws if $BASE_BRANCH referenced but empty
-      // Pass loopUserInput on the first resumed iteration; '' on all others (non-interactive
-      // or subsequent iterations) so $LOOP_USER_INPUT substitutes to empty string explicitly.
-      // $LOOP_PREV_OUTPUT carries the previous iteration's cleaned output and is empty on
-      // the first iteration (no prior output exists). Across an interactive resume, the
-      // executor starts a fresh `lastIterationOutput` variable, so the first iteration of
-      // the resume also receives an empty $LOOP_PREV_OUTPUT.
-      const { prompt: substitutedPrompt } = substituteWorkflowVariables(
-        loopPromptTemplate,
-        workflowRun.id,
-        workflowRun.user_message,
-        artifactsDir,
-        baseBranch,
-        docsDir,
-        issueContext,
-        i === startIteration ? loopUserInput : '',
-        undefined, // rejectionReason
-        i === startIteration ? '' : lastIterationOutput,
-        { stateDir, inputs: resolveRunInputs(workflowRun) }
-      );
-      const finalPrompt = substituteNodeOutputRefs(substitutedPrompt, nodeOutputs);
+    // Structured payload accepted for THIS iteration (validated). Undefined when
+    // the node declares no `output_format`.
+    let iterationPayload: unknown;
+    // Raw structured payload seen on the current attempt, before validation.
+    let attemptStructured: unknown;
+    let reaskAttempt = 0;
+    let reaskErrors: string[] = [];
+    const wantsStructured = resolvedOptions?.outputFormat !== undefined;
+    const maxReasks =
+      wantsStructured &&
+      getProviderCapabilities(workflowProvider).structuredOutput === 'best-effort'
+        ? STRUCTURED_OUTPUT_MAX_REASKS
+        : 0;
 
-      const iterationOptions: SendQueryOptions | undefined = {
-        ...resolvedOptions,
-        abortSignal: iterationAbortController.signal,
-      };
+    attempts: while (true) {
+      // Per-attempt reset. A reask re-runs the stream, so anything the stream
+      // accumulates or aborts must start clean or a prior attempt's prose would
+      // leak into this one's output and signal detection.
+      fullOutput = '';
+      cleanOutput = '';
+      iterationIdleTimedOut = false;
+      streamStopStatus = undefined;
+      attemptStructured = undefined;
+      iterationAbortController = new AbortController();
+      backgroundTasks = createBackgroundTaskTracker();
+      lastStreamStatusCheckAt = Date.now();
+      iterationCost = undefined;
+      iterationTokens = undefined;
+      iterationNumTurns = undefined;
+      iterationUsageFolded = false;
 
-      const generator = aiClient.sendQuery(finalPrompt, cwd, resumeSessionId, iterationOptions);
-      const runningTools = new Map<string, RunningTool>();
-      let anonymousToolSequence = 0;
-      let lastAnonymousToolCallId: string | undefined;
-
-      const effectiveIdleTimeout = node.idle_timeout ?? STEP_IDLE_TIMEOUT_MS;
-
-      for await (const msg of withIdleTimeout(generator, effectiveIdleTimeout, () => {
-        iterationIdleTimedOut = true;
-        getLog().warn(
-          { nodeId: node.id, iteration: i, timeoutMs: effectiveIdleTimeout },
-          'loop_node.idle_timeout_reached'
+      try {
+        // Build prompt — substituteWorkflowVariables throws if $BASE_BRANCH referenced but empty
+        // Pass loopUserInput on the first resumed iteration; '' on all others (non-interactive
+        // or subsequent iterations) so $LOOP_USER_INPUT substitutes to empty string explicitly.
+        // $LOOP_PREV_OUTPUT carries the previous iteration's cleaned output and is empty on
+        // the first iteration (no prior output exists). Across an interactive resume, the
+        // executor starts a fresh `lastIterationOutput` variable, so the first iteration of
+        // the resume also receives an empty $LOOP_PREV_OUTPUT.
+        const { prompt: substitutedPrompt } = substituteWorkflowVariables(
+          loopPromptTemplate,
+          workflowRun.id,
+          workflowRun.user_message,
+          artifactsDir,
+          baseBranch,
+          docsDir,
+          issueContext,
+          i === startIteration ? loopUserInput : '',
+          undefined, // rejectionReason
+          i === startIteration ? '' : lastIterationOutput,
+          { stateDir, inputs: resolveRunInputs(workflowRun) }
         );
-        iterationAbortController.abort();
-      })) {
-        // Mid-stream cancel/pause check (every CANCEL_CHECK_INTERVAL_MS) —
-        // lifted from the AI-node stream loop in executeNodeInternal. Same
-        // posture: `paused` is tolerated (a sibling approval node may pause
-        // the run while this loop streams); only terminal/unknown states
-        // abort the in-flight iteration. Without this, a cancelled run kept
-        // streaming until the iteration finished on its own — and the
-        // post-stream `cancelled` exemption below was unreachable.
-        const tickNow = Date.now();
-        if (tickNow - lastStreamStatusCheckAt > CANCEL_CHECK_INTERVAL_MS) {
-          lastStreamStatusCheckAt = tickNow;
-          try {
-            const streamStatus = await deps.store.getWorkflowRunStatus(workflowRun.id);
-            if (!shouldContinueStreamingForStatus(streamStatus)) {
-              streamStopStatus = streamStatus ?? 'deleted';
-              getLog().info(
+        const basePrompt = substituteNodeOutputRefs(substitutedPrompt, nodeOutputs);
+        // A reask re-runs this iteration's prompt with the schema errors appended, so
+        // the model is told WHAT was wrong rather than silently asked again.
+        const finalPrompt =
+          reaskAttempt === 0
+            ? basePrompt
+            : `${basePrompt}\n\n---\n\nYour previous response did not match the required output schema:\n${reaskErrors.map(e => `- ${e}`).join('\n')}\n\nRespond again with output that satisfies the schema exactly.`;
+
+        const iterationOptions: SendQueryOptions | undefined = {
+          ...resolvedOptions,
+          abortSignal: iterationAbortController.signal,
+        };
+
+        // Reask attempts start a FRESH session (mirrors runStreamPass in
+        // executeNodeInternal) so an invalid turn is not carried forward as context.
+        const generator = aiClient.sendQuery(
+          finalPrompt,
+          cwd,
+          reaskAttempt === 0 ? resumeSessionId : undefined,
+          iterationOptions
+        );
+        const runningTools = new Map<string, RunningTool>();
+        let anonymousToolSequence = 0;
+        let lastAnonymousToolCallId: string | undefined;
+
+        const effectiveIdleTimeout = node.idle_timeout ?? STEP_IDLE_TIMEOUT_MS;
+
+        for await (const msg of withIdleTimeout(generator, effectiveIdleTimeout, () => {
+          iterationIdleTimedOut = true;
+          getLog().warn(
+            { nodeId: node.id, iteration: i, timeoutMs: effectiveIdleTimeout },
+            'loop_node.idle_timeout_reached'
+          );
+          iterationAbortController.abort();
+        })) {
+          // Mid-stream cancel/pause check (every CANCEL_CHECK_INTERVAL_MS) —
+          // lifted from the AI-node stream loop in executeNodeInternal. Same
+          // posture: `paused` is tolerated (a sibling approval node may pause
+          // the run while this loop streams); only terminal/unknown states
+          // abort the in-flight iteration. Without this, a cancelled run kept
+          // streaming until the iteration finished on its own — and the
+          // post-stream `cancelled` exemption below was unreachable.
+          const tickNow = Date.now();
+          if (tickNow - lastStreamStatusCheckAt > CANCEL_CHECK_INTERVAL_MS) {
+            lastStreamStatusCheckAt = tickNow;
+            try {
+              const streamStatus = await deps.store.getWorkflowRunStatus(workflowRun.id);
+              if (!shouldContinueStreamingForStatus(streamStatus)) {
+                streamStopStatus = streamStatus ?? 'deleted';
+                getLog().info(
+                  {
+                    workflowRunId: workflowRun.id,
+                    nodeId: node.id,
+                    iteration: i,
+                    status: streamStopStatus,
+                  },
+                  'loop_node.stop_detected_during_streaming'
+                );
+                iterationAbortController.abort();
+                break;
+              }
+            } catch (statusErr) {
+              getLog().warn(
+                { err: statusErr as Error, workflowRunId: workflowRun.id, nodeId: node.id },
+                'loop_node.status_check_failed'
+              );
+            }
+          }
+
+          if (msg.type === 'assistant') {
+            fullOutput += msg.content;
+            const cleaned = stripCompletionTags(msg.content, loop.until);
+            cleanOutput += cleaned;
+            if (platform.getStreamingMode() === 'stream' && cleaned) {
+              await safeSendMessage(platform, conversationId, cleaned, msgContext);
+            }
+            await logAssistant(logDir, workflowRun.id, msg.content);
+          } else if (msg.type === 'result') {
+            // A terminal result closes every outstanding lifecycle.
+            for (const [toolCallId, prevTool] of runningTools) {
+              getWorkflowEventEmitter().emit({
+                type: 'tool_completed',
+                runId: workflowRun.id,
+                toolName: prevTool.toolName,
+                stepName: node.id,
+                durationMs: Date.now() - prevTool.startedAt,
+                toolCallId,
+                toolOutcome: 'unknown',
+              });
+              deps.store
+                .createWorkflowEvent({
+                  workflow_run_id: workflowRun.id,
+                  event_type: 'tool_completed',
+                  step_name: stepName,
+                  data: {
+                    tool_name: prevTool.toolName,
+                    duration_ms: Date.now() - prevTool.startedAt,
+                    tool_call_id: toolCallId,
+                    tool_outcome: 'unknown',
+                  },
+                })
+                .catch((err: Error) => {
+                  logEventStoreError(err, i);
+                });
+              runningTools.delete(toolCallId);
+            }
+            if (msg.sessionId) currentSessionId = msg.sessionId;
+            // Overwrite, don't accumulate — a later result in the same iteration
+            // (background-task wait, #2083) carries session-cumulative values.
+            if (msg.cost !== undefined) {
+              iterationCost = msg.cost;
+            }
+            if (msg.tokens !== undefined) {
+              // Provider-supplied numbers — see the NaN guard rationale at the
+              // DAG-level accumulator.
+              if (Number.isFinite(msg.tokens.input) && Number.isFinite(msg.tokens.output)) {
+                iterationTokens = { input: msg.tokens.input, output: msg.tokens.output };
+              } else {
+                getLog().warn(
+                  { nodeId: node.id, tokens: msg.tokens },
+                  'loop_node.usage_tokens_non_finite_ignored'
+                );
+              }
+            }
+            if (msg.stopReason !== undefined) loopFinalStopReason = msg.stopReason;
+            if (msg.numTurns !== undefined) {
+              iterationNumTurns = msg.numTurns;
+            }
+            // Unconditional, for the same reason as the AI-node path above: a later
+            // iteration or result chunk that reports no resolved model must clear the
+            // previous one rather than leave it to be recorded as this node's answer.
+            loopResolvedModel = msg.resolvedModel;
+            if (msg.structuredOutput !== undefined) {
+              attemptStructured = msg.structuredOutput;
+            }
+            // Fail the iteration loudly on SDK error results. Previously we broke
+            // silently, producing empty output and continuing to the next iteration —
+            // which made `error_during_execution` on resumed interactive loops look
+            // like a "5-second crash" that kept burning iterations.
+            // Exception: errorSubtype === 'success' is the Claude SDK's marker for a
+            // clean stop_sequence termination (the SDK sets is_error: true alongside
+            // subtype: 'success' to encode "non-default termination, not a failure").
+            // The Claude provider already filters this; the guard here defends
+            // against a third-party IAgentProvider that forwards the SDK pair raw.
+            if (msg.isError && msg.errorSubtype !== 'success') {
+              const subtype = msg.errorSubtype ?? 'unknown';
+              const errorsDetail = msg.errors?.length ? ` — ${msg.errors.join('; ')}` : '';
+              getLog().error(
                 {
-                  workflowRunId: workflowRun.id,
                   nodeId: node.id,
                   iteration: i,
-                  status: streamStopStatus,
+                  errorSubtype: subtype,
+                  errors: msg.errors,
+                  sessionId: msg.sessionId,
+                  stopReason: msg.stopReason,
                 },
-                'loop_node.stop_detected_during_streaming'
+                'loop_node.iteration_sdk_error'
               );
-              iterationAbortController.abort();
-              break;
+              throw new Error(
+                `Loop '${node.id}' iteration ${String(i)} failed: SDK returned ${subtype}${errorsDetail}`
+              );
             }
-          } catch (statusErr) {
+            if (backgroundTasks.shouldBreakOnResult()) {
+              break; // Result is the "I'm done" signal — don't wait for subprocess to exit
+            }
+            // Result with live background Agent tasks (#2083): breaking would
+            // SIGTERM the SDK subprocess and kill them. Keep consuming until the
+            // final result — see the AI-node stream loop for the full rationale.
             getLog().warn(
-              { err: statusErr as Error, workflowRunId: workflowRun.id, nodeId: node.id },
-              'loop_node.status_check_failed'
-            );
-          }
-        }
-
-        if (msg.type === 'assistant') {
-          fullOutput += msg.content;
-          const cleaned = stripCompletionTags(msg.content, loop.until);
-          cleanOutput += cleaned;
-          if (platform.getStreamingMode() === 'stream' && cleaned) {
-            await safeSendMessage(platform, conversationId, cleaned, msgContext);
-          }
-          await logAssistant(logDir, workflowRun.id, msg.content);
-        } else if (msg.type === 'result') {
-          // A terminal result closes every outstanding lifecycle.
-          for (const [toolCallId, prevTool] of runningTools) {
-            getWorkflowEventEmitter().emit({
-              type: 'tool_completed',
-              runId: workflowRun.id,
-              toolName: prevTool.toolName,
-              stepName: node.id,
-              durationMs: Date.now() - prevTool.startedAt,
-              toolCallId,
-              toolOutcome: 'unknown',
-            });
-            deps.store
-              .createWorkflowEvent({
-                workflow_run_id: workflowRun.id,
-                event_type: 'tool_completed',
-                step_name: stepName,
-                data: {
-                  tool_name: prevTool.toolName,
-                  duration_ms: Date.now() - prevTool.startedAt,
-                  tool_call_id: toolCallId,
-                  tool_outcome: 'unknown',
-                },
-              })
-              .catch((err: Error) => {
-                logEventStoreError(err, i);
-              });
-            runningTools.delete(toolCallId);
-          }
-          if (msg.sessionId) currentSessionId = msg.sessionId;
-          // Overwrite, don't accumulate — a later result in the same iteration
-          // (background-task wait, #2083) carries session-cumulative values.
-          if (msg.cost !== undefined) {
-            iterationCost = msg.cost;
-          }
-          if (msg.tokens !== undefined) {
-            // Provider-supplied numbers — see the NaN guard rationale at the
-            // DAG-level accumulator.
-            if (Number.isFinite(msg.tokens.input) && Number.isFinite(msg.tokens.output)) {
-              iterationTokens = { input: msg.tokens.input, output: msg.tokens.output };
-            } else {
-              getLog().warn(
-                { nodeId: node.id, tokens: msg.tokens },
-                'loop_node.usage_tokens_non_finite_ignored'
-              );
-            }
-          }
-          if (msg.stopReason !== undefined) loopFinalStopReason = msg.stopReason;
-          if (msg.numTurns !== undefined) {
-            iterationNumTurns = msg.numTurns;
-          }
-          // Unconditional, for the same reason as the AI-node path above: a later
-          // iteration or result chunk that reports no resolved model must clear the
-          // previous one rather than leave it to be recorded as this node's answer.
-          loopResolvedModel = msg.resolvedModel;
-          if (msg.structuredOutput !== undefined) {
-            lastIterationStructuredOutput = msg.structuredOutput;
-          }
-          // Fail the iteration loudly on SDK error results. Previously we broke
-          // silently, producing empty output and continuing to the next iteration —
-          // which made `error_during_execution` on resumed interactive loops look
-          // like a "5-second crash" that kept burning iterations.
-          // Exception: errorSubtype === 'success' is the Claude SDK's marker for a
-          // clean stop_sequence termination (the SDK sets is_error: true alongside
-          // subtype: 'success' to encode "non-default termination, not a failure").
-          // The Claude provider already filters this; the guard here defends
-          // against a third-party IAgentProvider that forwards the SDK pair raw.
-          if (msg.isError && msg.errorSubtype !== 'success') {
-            const subtype = msg.errorSubtype ?? 'unknown';
-            const errorsDetail = msg.errors?.length ? ` — ${msg.errors.join('; ')}` : '';
-            getLog().error(
               {
                 nodeId: node.id,
                 iteration: i,
-                errorSubtype: subtype,
-                errors: msg.errors,
-                sessionId: msg.sessionId,
-                stopReason: msg.stopReason,
+                taskCount: backgroundTasks.count(),
+                taskIds: backgroundTasks.ids(),
               },
-              'loop_node.iteration_sdk_error'
+              'loop_node.iteration_result_with_live_background_tasks'
             );
-            throw new Error(
-              `Loop '${node.id}' iteration ${String(i)} failed: SDK returned ${subtype}${errorsDetail}`
-            );
-          }
-          if (backgroundTasks.shouldBreakOnResult()) {
-            break; // Result is the "I'm done" signal — don't wait for subprocess to exit
-          }
-          // Result with live background Agent tasks (#2083): breaking would
-          // SIGTERM the SDK subprocess and kill them. Keep consuming until the
-          // final result — see the AI-node stream loop for the full rationale.
-          getLog().warn(
-            {
-              nodeId: node.id,
-              iteration: i,
-              taskCount: backgroundTasks.count(),
-              taskIds: backgroundTasks.ids(),
-            },
-            'loop_node.iteration_result_with_live_background_tasks'
-          );
-          if (backgroundTasks.shouldAnnounceWait()) {
-            await safeSendMessage(
-              platform,
-              conversationId,
-              `⏳ Loop \`${node.id}\` iteration ${String(i)}: turn ended with ${String(backgroundTasks.count())} background agent task(s) still running — waiting for them to finish.`,
-              msgContext
-            );
-          }
-        } else if (msg.type === 'background_tasks') {
-          // Level signal (REPLACE semantics): swap the live set for the payload.
-          backgroundTasks.update(msg.tasks);
-        } else if (msg.type === 'tool' && msg.toolName) {
-          const now = Date.now();
-          const toolCallId = msg.toolCallId ?? `anonymous-${String(++anonymousToolSequence)}`;
+            if (backgroundTasks.shouldAnnounceWait()) {
+              await safeSendMessage(
+                platform,
+                conversationId,
+                `⏳ Loop \`${node.id}\` iteration ${String(i)}: turn ended with ${String(backgroundTasks.count())} background agent task(s) still running — waiting for them to finish.`,
+                msgContext
+              );
+            }
+          } else if (msg.type === 'background_tasks') {
+            // Level signal (REPLACE semantics): swap the live set for the payload.
+            backgroundTasks.update(msg.tasks);
+          } else if (msg.type === 'tool' && msg.toolName) {
+            const now = Date.now();
+            const toolCallId = msg.toolCallId ?? `anonymous-${String(++anonymousToolSequence)}`;
 
-          // Providers without stable IDs report sequential tool calls. Preserve their
-          // legacy boundary while allowing identified calls to overlap.
-          const previousTool = lastAnonymousToolCallId
-            ? runningTools.get(lastAnonymousToolCallId)
-            : undefined;
-          if (previousTool && lastAnonymousToolCallId !== undefined) {
+            // Providers without stable IDs report sequential tool calls. Preserve their
+            // legacy boundary while allowing identified calls to overlap.
+            const previousTool = lastAnonymousToolCallId
+              ? runningTools.get(lastAnonymousToolCallId)
+              : undefined;
+            if (previousTool && lastAnonymousToolCallId !== undefined) {
+              getWorkflowEventEmitter().emit({
+                type: 'tool_completed',
+                runId: workflowRun.id,
+                toolName: previousTool.toolName,
+                stepName: node.id,
+                durationMs: now - previousTool.startedAt,
+                toolCallId: lastAnonymousToolCallId,
+                toolOutcome: 'unknown',
+              });
+              deps.store
+                .createWorkflowEvent({
+                  workflow_run_id: workflowRun.id,
+                  event_type: 'tool_completed',
+                  step_name: stepName,
+                  data: {
+                    tool_name: previousTool.toolName,
+                    duration_ms: now - previousTool.startedAt,
+                    tool_call_id: lastAnonymousToolCallId,
+                    tool_outcome: 'unknown',
+                  },
+                })
+                .catch((err: Error) => {
+                  logEventStoreError(err, i);
+                });
+              runningTools.delete(lastAnonymousToolCallId);
+            }
+            runningTools.set(toolCallId, { toolName: msg.toolName, startedAt: now });
+            if (!msg.toolCallId) lastAnonymousToolCallId = toolCallId;
+
+            // Emit tool_started for the current tool (fire-and-forget)
             getWorkflowEventEmitter().emit({
-              type: 'tool_completed',
+              type: 'tool_started',
               runId: workflowRun.id,
-              toolName: previousTool.toolName,
+              toolName: msg.toolName,
               stepName: node.id,
-              durationMs: now - previousTool.startedAt,
-              toolCallId: lastAnonymousToolCallId,
-              toolOutcome: 'unknown',
+              toolCallId,
             });
+
+            if (platform.getStreamingMode() === 'stream') {
+              const toolMsg = formatToolCall(msg.toolName, msg.toolInput);
+              if (toolMsg) {
+                await safeSendMessage(platform, conversationId, toolMsg, msgContext, {
+                  category: 'tool_call_formatted',
+                } as WorkflowMessageMetadata);
+              }
+              if (platform.sendStructuredEvent) {
+                await platform.sendStructuredEvent(conversationId, msg);
+              }
+            }
+
+            const toolInput: Record<string, unknown> = msg.toolInput
+              ? Object.fromEntries(
+                  Object.entries(msg.toolInput).map(([k, v]) =>
+                    typeof v === 'string' && v.length > 500 ? [k, v.slice(0, 500) + '...'] : [k, v]
+                  )
+                )
+              : {};
+            await logTool(logDir, workflowRun.id, msg.toolName, toolInput);
+
+            // Persist tool_called event
             deps.store
               .createWorkflowEvent({
                 workflow_run_id: workflowRun.id,
-                event_type: 'tool_completed',
+                event_type: 'tool_called',
                 step_name: stepName,
                 data: {
-                  tool_name: previousTool.toolName,
-                  duration_ms: now - previousTool.startedAt,
-                  tool_call_id: lastAnonymousToolCallId,
-                  tool_outcome: 'unknown',
+                  tool_name: msg.toolName,
+                  tool_input: toolInput,
+                  tool_call_id: toolCallId,
                 },
               })
               .catch((err: Error) => {
                 logEventStoreError(err, i);
               });
-            runningTools.delete(lastAnonymousToolCallId);
-          }
-          runningTools.set(toolCallId, { toolName: msg.toolName, startedAt: now });
-          if (!msg.toolCallId) lastAnonymousToolCallId = toolCallId;
-
-          // Emit tool_started for the current tool (fire-and-forget)
-          getWorkflowEventEmitter().emit({
-            type: 'tool_started',
-            runId: workflowRun.id,
-            toolName: msg.toolName,
-            stepName: node.id,
-            toolCallId,
-          });
-
-          if (platform.getStreamingMode() === 'stream') {
-            const toolMsg = formatToolCall(msg.toolName, msg.toolInput);
-            if (toolMsg) {
-              await safeSendMessage(platform, conversationId, toolMsg, msgContext, {
-                category: 'tool_call_formatted',
-              } as WorkflowMessageMetadata);
+          } else if (msg.type === 'tool_result' && msg.toolName) {
+            const now = Date.now();
+            const completedTool = findRunningTool(runningTools, msg.toolName, msg.toolCallId);
+            if (completedTool) {
+              const [completedToolCallId, tool] = completedTool;
+              getWorkflowEventEmitter().emit({
+                type: 'tool_completed',
+                runId: workflowRun.id,
+                toolName: tool.toolName,
+                stepName: node.id,
+                durationMs: now - tool.startedAt,
+                toolCallId: completedToolCallId,
+                ...(msg.toolOutcome !== undefined ? { toolOutcome: msg.toolOutcome } : {}),
+                ...(msg.exitCode !== undefined ? { exitCode: msg.exitCode } : {}),
+              });
+              deps.store
+                .createWorkflowEvent({
+                  workflow_run_id: workflowRun.id,
+                  event_type: 'tool_completed',
+                  step_name: stepName,
+                  data: {
+                    tool_name: tool.toolName,
+                    duration_ms: now - tool.startedAt,
+                    tool_call_id: completedToolCallId,
+                    ...(msg.toolOutcome !== undefined ? { tool_outcome: msg.toolOutcome } : {}),
+                    ...(msg.exitCode !== undefined ? { exit_code: msg.exitCode } : {}),
+                  },
+                })
+                .catch((err: Error) => {
+                  logEventStoreError(err, i);
+                });
+              runningTools.delete(completedToolCallId);
+              if (completedToolCallId === lastAnonymousToolCallId) {
+                lastAnonymousToolCallId = undefined;
+              }
             }
             if (platform.sendStructuredEvent) {
               await platform.sendStructuredEvent(conversationId, msg);
             }
           }
+          // rate_limit chunks: already log.warn'd in claude.ts; not surfaced to SSE per design
+        }
+        foldIterationUsage();
 
-          const toolInput: Record<string, unknown> = msg.toolInput
-            ? Object.fromEntries(
-                Object.entries(msg.toolInput).map(([k, v]) =>
-                  typeof v === 'string' && v.length > 500 ? [k, v.slice(0, 500) + '...'] : [k, v]
-                )
-              )
-            : {};
-          await logTool(logDir, workflowRun.id, msg.toolName, toolInput);
-
-          // Persist tool_called event
-          deps.store
-            .createWorkflowEvent({
-              workflow_run_id: workflowRun.id,
-              event_type: 'tool_called',
-              step_name: stepName,
-              data: {
-                tool_name: msg.toolName,
-                tool_input: toolInput,
-                tool_call_id: toolCallId,
-              },
-            })
-            .catch((err: Error) => {
-              logEventStoreError(err, i);
-            });
-        } else if (msg.type === 'tool_result' && msg.toolName) {
-          const now = Date.now();
-          const completedTool = findRunningTool(runningTools, msg.toolName, msg.toolCallId);
-          if (completedTool) {
-            const [completedToolCallId, tool] = completedTool;
-            getWorkflowEventEmitter().emit({
-              type: 'tool_completed',
-              runId: workflowRun.id,
-              toolName: tool.toolName,
-              stepName: node.id,
-              durationMs: now - tool.startedAt,
-              toolCallId: completedToolCallId,
-              ...(msg.toolOutcome !== undefined ? { toolOutcome: msg.toolOutcome } : {}),
-              ...(msg.exitCode !== undefined ? { exitCode: msg.exitCode } : {}),
-            });
-            deps.store
-              .createWorkflowEvent({
-                workflow_run_id: workflowRun.id,
-                event_type: 'tool_completed',
-                step_name: stepName,
-                data: {
-                  tool_name: tool.toolName,
-                  duration_ms: now - tool.startedAt,
-                  tool_call_id: completedToolCallId,
-                  ...(msg.toolOutcome !== undefined ? { tool_outcome: msg.toolOutcome } : {}),
-                  ...(msg.exitCode !== undefined ? { exit_code: msg.exitCode } : {}),
-                },
-              })
-              .catch((err: Error) => {
-                logEventStoreError(err, i);
-              });
-            runningTools.delete(completedToolCallId);
-            if (completedToolCallId === lastAnonymousToolCallId) {
-              lastAnonymousToolCallId = undefined;
-            }
-          }
-          if (platform.sendStructuredEvent) {
-            await platform.sendStructuredEvent(conversationId, msg);
+        // Stream ended with background tasks still live (idle timeout mid-wait or
+        // subprocess death): their artifacts may be missing — record the
+        // incompleteness (surfaced on the node_completed event) and warn loudly
+        // instead of silently continuing (#2083). Cancellation is exempt from the
+        // user-facing warning (the mid-stream check above returns the node as
+        // failed with its own message just below), but still recorded in the
+        // union — the audit trail should not depend on why the stream ended.
+        if (!backgroundTasks.shouldBreakOnResult()) {
+          const danglingTaskIds = backgroundTasks.ids();
+          for (const id of danglingTaskIds) loopBackgroundTasksIncomplete.add(id);
+          const cancelled = iterationAbortController.signal.aborted && !iterationIdleTimedOut;
+          getLog().warn(
+            {
+              nodeId: node.id,
+              iteration: i,
+              taskIds: danglingTaskIds,
+              idleTimedOut: iterationIdleTimedOut,
+              cancelled,
+            },
+            'loop_node.iteration_stream_ended_with_live_background_tasks'
+          );
+          if (!cancelled) {
+            await safeSendMessage(
+              platform,
+              conversationId,
+              `⚠️ Loop \`${node.id}\` iteration ${String(i)}: the provider stream ended with ${String(backgroundTasks.count())} background agent task(s) still running (${danglingTaskIds.join(', ')}). Their output may be missing.`,
+              msgContext
+            );
           }
         }
-        // rate_limit chunks: already log.warn'd in claude.ts; not surfaced to SSE per design
-      }
-      foldIterationUsage();
 
-      // Stream ended with background tasks still live (idle timeout mid-wait or
-      // subprocess death): their artifacts may be missing — record the
-      // incompleteness (surfaced on the node_completed event) and warn loudly
-      // instead of silently continuing (#2083). Cancellation is exempt from the
-      // user-facing warning (the mid-stream check above returns the node as
-      // failed with its own message just below), but still recorded in the
-      // union — the audit trail should not depend on why the stream ended.
-      if (!backgroundTasks.shouldBreakOnResult()) {
-        const danglingTaskIds = backgroundTasks.ids();
-        for (const id of danglingTaskIds) loopBackgroundTasksIncomplete.add(id);
-        const cancelled = iterationAbortController.signal.aborted && !iterationIdleTimedOut;
-        getLog().warn(
-          {
-            nodeId: node.id,
-            iteration: i,
-            taskIds: danglingTaskIds,
-            idleTimedOut: iterationIdleTimedOut,
-            cancelled,
-          },
-          'loop_node.iteration_stream_ended_with_live_background_tasks'
-        );
-        if (!cancelled) {
+        // Cancelled mid-stream (not idle timeout): stop the node before signal
+        // detection / until_bash / the interactive gate run against a truncated
+        // iteration — mirrors both the AI-node 'Cancelled by user' return and
+        // this loop's own between-iteration stop path.
+        if (iterationAbortController.signal.aborted && !iterationIdleTimedOut) {
+          const effectiveStatus = streamStopStatus ?? 'cancelled';
           await safeSendMessage(
             platform,
             conversationId,
-            `⚠️ Loop \`${node.id}\` iteration ${String(i)}: the provider stream ended with ${String(backgroundTasks.count())} background agent task(s) still running (${danglingTaskIds.join(', ')}). Their output may be missing.`,
+            `Loop node '${node.id}' stopped during iteration ${String(i)} (${effectiveStatus})`,
             msgContext
           );
+          return await failLoopNode(`Workflow ${effectiveStatus}`, {
+            costUsd: loopTotalCostUsd,
+            ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+            loopIterations: i,
+            data: { status: effectiveStatus, iteration: i },
+          });
         }
-      }
-
-      // Cancelled mid-stream (not idle timeout): stop the node before signal
-      // detection / until_bash / the interactive gate run against a truncated
-      // iteration — mirrors both the AI-node 'Cancelled by user' return and
-      // this loop's own between-iteration stop path.
-      if (iterationAbortController.signal.aborted && !iterationIdleTimedOut) {
-        const effectiveStatus = streamStopStatus ?? 'cancelled';
-        await safeSendMessage(
-          platform,
-          conversationId,
-          `Loop node '${node.id}' stopped during iteration ${String(i)} (${effectiveStatus})`,
-          msgContext
-        );
-        return await failLoopNode(`Workflow ${effectiveStatus}`, {
+      } catch (error) {
+        foldIterationUsage();
+        const err = error as Error;
+        const duration = Date.now() - iterationStart;
+        getLog().error({ err, nodeId: node.id, iteration: i }, 'loop_node.iteration_failed');
+        getWorkflowEventEmitter().emit({
+          type: 'loop_iteration_failed',
+          runId: workflowRun.id,
+          nodeId: node.id,
+          iteration: i,
+          error: err.message,
+        });
+        deps.store
+          .createWorkflowEvent({
+            workflow_run_id: workflowRun.id,
+            event_type: 'loop_iteration_failed',
+            step_name: stepName,
+            data: { iteration: i, error: err.message, duration, nodeId: node.id },
+          })
+          .catch((evtErr: Error) => {
+            logEventStoreError(evtErr, i);
+          });
+        return failLoopNode(`Loop iteration ${i} failed: ${err.message}`, {
           costUsd: loopTotalCostUsd,
           ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
           loopIterations: i,
-          data: { status: effectiveStatus, iteration: i },
+          data: { iteration: i },
         });
       }
-    } catch (error) {
-      foldIterationUsage();
-      const err = error as Error;
-      const duration = Date.now() - iterationStart;
-      getLog().error({ err, nodeId: node.id, iteration: i }, 'loop_node.iteration_failed');
-      getWorkflowEventEmitter().emit({
-        type: 'loop_iteration_failed',
-        runId: workflowRun.id,
-        nodeId: node.id,
-        iteration: i,
-        error: err.message,
-      });
-      deps.store
-        .createWorkflowEvent({
-          workflow_run_id: workflowRun.id,
-          event_type: 'loop_iteration_failed',
-          step_name: stepName,
-          data: { iteration: i, error: err.message, duration, nodeId: node.id },
-        })
-        .catch((evtErr: Error) => {
-          logEventStoreError(evtErr, i);
+
+      // Notify on idle timeout
+      if (iterationIdleTimedOut) {
+        await safeSendMessage(
+          platform,
+          conversationId,
+          `Loop node '${node.id}' iteration ${String(i)} completed via idle timeout (no output for ${String((node.idle_timeout ?? STEP_IDLE_TIMEOUT_MS) / 60000)} min)`,
+          msgContext
+        );
+      }
+
+      // Empty assistant output is an iteration failure for AI loops — same
+      // contract as the single-shot AI-node guard in executeNodeInternal. A
+      // provider stream that closed cleanly with zero content typically means
+      // a silent rejection or interruption; left unchecked, an interactive
+      // loop would pause with a blank gate or burn the full max_iterations
+      // budget producing nothing. Idle-timeout exits are exempt — the
+      // notification above has already told the user the iteration completed
+      // via timeout, and flipping that to a failure would contradict it.
+      //
+      // A structured payload is also exempt (#2563), matching executeNodeInternal's
+      // `nodeOutputText === '' && structuredOutput === undefined` guard: with
+      // grammar-constrained decoding the assistant prose is routinely EMPTY because
+      // the whole answer arrived as the payload. Failing that would make every
+      // Claude/Codex structured loop fail on iteration 1.
+      if (!iterationIdleTimedOut && fullOutput.trim() === '' && attemptStructured === undefined) {
+        const iterationDuration = Date.now() - iterationStart;
+        const emptyError =
+          'Loop iteration produced no assistant output. The provider stream closed without yielding content — likely a silent provider rejection or stream interruption.';
+        getLog().error(
+          { nodeId: node.id, iteration: i, durationMs: iterationDuration },
+          'loop_node.iteration_empty_output'
+        );
+        getWorkflowEventEmitter().emit({
+          type: 'loop_iteration_failed',
+          runId: workflowRun.id,
+          nodeId: node.id,
+          iteration: i,
+          error: emptyError,
         });
-      return failLoopNode(`Loop iteration ${i} failed: ${err.message}`, {
-        costUsd: loopTotalCostUsd,
-        ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
-        loopIterations: i,
-        data: { iteration: i },
-      });
-    }
+        deps.store
+          .createWorkflowEvent({
+            workflow_run_id: workflowRun.id,
+            event_type: 'loop_iteration_failed',
+            step_name: stepName,
+            data: {
+              iteration: i,
+              error: emptyError,
+              duration: iterationDuration,
+              nodeId: node.id,
+            },
+          })
+          .catch((evtErr: Error) => {
+            logEventStoreError(evtErr, i);
+          });
+        return failLoopNode(`Loop iteration ${i} failed: ${emptyError}`, {
+          costUsd: loopTotalCostUsd,
+          ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+          loopIterations: i,
+          data: { iteration: i },
+        });
+      }
 
-    // Notify on idle timeout
-    if (iterationIdleTimedOut) {
-      await safeSendMessage(
-        platform,
-        conversationId,
-        `Loop node '${node.id}' iteration ${String(i)} completed via idle timeout (no output for ${String((node.idle_timeout ?? STEP_IDLE_TIMEOUT_MS) / 60000)} min)`,
-        msgContext
-      );
-    }
+      // ── Structured-output gate for this attempt ───────────────────────────
+      // No `output_format` declared: one attempt, nothing to validate.
+      if (!wantsStructured) break attempts;
 
-    // Empty assistant output is an iteration failure for AI loops — same
-    // contract as the single-shot AI-node guard in executeNodeInternal. A
-    // provider stream that closed cleanly with zero content typically means
-    // a silent rejection or interruption; left unchecked, an interactive
-    // loop would pause with a blank gate or burn the full max_iterations
-    // budget producing nothing. Idle-timeout exits are exempt — the
-    // notification above has already told the user the iteration completed
-    // via timeout, and flipping that to a failure would contradict it.
-    if (!iterationIdleTimedOut && fullOutput.trim() === '') {
-      const iterationDuration = Date.now() - iterationStart;
-      const emptyError =
-        'Loop iteration produced no assistant output. The provider stream closed without yielding content — likely a silent provider rejection or stream interruption.';
-      getLog().error(
-        { nodeId: node.id, iteration: i, durationMs: iterationDuration },
-        'loop_node.iteration_empty_output'
-      );
-      getWorkflowEventEmitter().emit({
-        type: 'loop_iteration_failed',
-        runId: workflowRun.id,
-        nodeId: node.id,
-        iteration: i,
-        error: emptyError,
-      });
-      deps.store
-        .createWorkflowEvent({
-          workflow_run_id: workflowRun.id,
-          event_type: 'loop_iteration_failed',
-          step_name: stepName,
-          data: {
-            iteration: i,
-            error: emptyError,
-            duration: iterationDuration,
+      // An idle timeout or a user abort is a genuine failure, not a validation
+      // miss — never spend a reask on it (mirrors executeNodeInternal's canReask).
+      const canReask =
+        reaskAttempt < maxReasks &&
+        !iterationIdleTimedOut &&
+        !iterationAbortController.signal.aborted;
+
+      if (attemptStructured !== undefined) {
+        // Validate against the declared schema for EVERY provider — an SDK-enforced
+        // one still bypasses grammar-constrained decoding on a refusal or a
+        // max_tokens truncation. Fail-SAFE on an uncompilable schema, but say so.
+        let schemaCompileError: string | undefined;
+        const validation = validateStructuredOutput(
+          attemptStructured,
+          node.output_format ?? {},
+          compileMsg => {
+            schemaCompileError = compileMsg;
+          }
+        );
+        if (schemaCompileError !== undefined) {
+          getLog().warn(
+            {
+              nodeId: node.id,
+              workflowRunId: workflowRun.id,
+              iteration: i,
+              compileMsg: schemaCompileError,
+            },
+            'loop_node.structured_output_schema_uncompilable'
+          );
+          await safeSendMessage(
+            platform,
+            conversationId,
+            `⚠️ Loop \`${node.id}\`: its \`output_format\` schema could not be compiled (${schemaCompileError}), so the iteration output was NOT validated against it. Fix the schema to enforce it.`,
+            msgContext
+          );
+        }
+        if (validation.valid) {
+          iterationPayload = attemptStructured;
+          break attempts;
+        }
+        getLog().warn(
+          {
             nodeId: node.id,
+            workflowRunId: workflowRun.id,
+            iteration: i,
+            attempt: reaskAttempt,
+            errors: validation.errors,
           },
-        })
-        .catch((evtErr: Error) => {
-          logEventStoreError(evtErr, i);
-        });
-      return failLoopNode(`Loop iteration ${i} failed: ${emptyError}`, {
-        costUsd: loopTotalCostUsd,
-        ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
-        loopIterations: i,
-        data: { iteration: i },
-      });
+          'loop_node.structured_output_invalid'
+        );
+        if (canReask) {
+          reaskAttempt++;
+          reaskErrors = validation.errors;
+          await safeSendMessage(
+            platform,
+            conversationId,
+            `⚠️ Loop \`${node.id}\` iteration ${String(i)}: structured output failed schema validation, re-asking (${String(reaskAttempt)}/${String(maxReasks)}).`,
+            msgContext
+          );
+          continue attempts;
+        }
+        return await failLoopNode(
+          `Loop node '${node.id}' iteration ${String(i)}: output_format declared but the provider's structured output failed schema validation: ${validation.errors.join('; ')}`,
+          {
+            output: lastIterationOutput,
+            costUsd: loopTotalCostUsd,
+            ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+            loopIterations: i,
+            data: { iteration: i },
+          }
+        );
+      }
+
+      // No structured payload at all (prose / refusal / parse miss / timeout).
+      getLog().warn(
+        { nodeId: node.id, workflowRunId: workflowRun.id, iteration: i },
+        'loop_node.structured_output_missing'
+      );
+      if (canReask) {
+        reaskAttempt++;
+        reaskErrors = ['no JSON object was found in the response'];
+        continue attempts;
+      }
+      // Report the real cause: a timeout produces no payload either, and calling
+      // that "the model replied with prose" would send the author down the wrong path.
+      return await failLoopNode(
+        iterationIdleTimedOut
+          ? `Loop node '${node.id}' iteration ${String(i)}: timed out before producing the required structured output.`
+          : `Loop node '${node.id}' iteration ${String(i)}: output_format declared but the provider returned no schema-valid structured output. The model likely replied with prose, refused, or emitted unparseable JSON.`,
+        {
+          output: lastIterationOutput,
+          costUsd: loopTotalCostUsd,
+          ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+          loopIterations: i,
+          data: { iteration: i },
+        }
+      );
+    }
+
+    // The iteration's accepted payload, serialized. With `output_format` this — not
+    // the prose — is the node's output, so `$loop.output.field`, `$LOOP_PREV_OUTPUT`
+    // and the gate excerpt all read the same validated value (mirrors the AI node).
+    let structuredText: string | undefined;
+    if (iterationPayload !== undefined) {
+      try {
+        structuredText =
+          typeof iterationPayload === 'string'
+            ? iterationPayload
+            : JSON.stringify(iterationPayload);
+      } catch (serializeErr) {
+        const err = serializeErr as Error;
+        return await failLoopNode(
+          `Loop node '${node.id}': failed to serialize structured_output to JSON: ${err.message}`,
+          {
+            costUsd: loopTotalCostUsd,
+            ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+            loopIterations: i,
+            data: { iteration: i },
+          }
+        );
+      }
+      lastIterationStructuredOutput = iterationPayload;
     }
 
     // Batch mode: send accumulated output
-    if (platform.getStreamingMode() === 'batch' && cleanOutput) {
-      await safeSendMessage(platform, conversationId, cleanOutput, msgContext);
+    const batchContent = structuredText ?? cleanOutput;
+    if (platform.getStreamingMode() === 'batch' && batchContent) {
+      await safeSendMessage(platform, conversationId, batchContent, msgContext);
     }
 
     const prevIterationOutput = lastIterationOutput;
-    lastIterationOutput = cleanOutput || fullOutput;
+    lastIterationOutput = structuredText ?? (cleanOutput || fullOutput);
+
+    // ── Completion channels, cheapest first ───────────────────────────────────
+    // `until_field` (#2563): the validated payload's declared boolean. Strict
+    // identity — no truthiness, no "true", no 1. The load-time rules guarantee the
+    // property is declared, required and boolean, so a schema-valid payload always
+    // carries a real boolean here and `false` unambiguously means "keep going".
+    const fieldComplete =
+      loop.until_field !== undefined &&
+      iterationPayload !== null &&
+      typeof iterationPayload === 'object' &&
+      (iterationPayload as Record<string, unknown>)[loop.until_field] === true;
 
     // Check LLM completion signal — the AI decides whether the user approved.
     // For interactive loops, the AI emits the signal when the user explicitly approves
@@ -4898,16 +5103,23 @@ async function executeLoopNode(
     // `until` is optional (#2563): a loop that declared only `until_bash` has no prose
     // path at all, so never call detectCompletionSignal with an undefined signal — its
     // regexes would be built from the empty string and match anything.
+    //
+    // Detection reads the prose AND the serialized payload. With grammar-constrained
+    // decoding the prose is routinely empty, so a loop declaring both `until:` and
+    // `output_format` would otherwise have a signal channel that could never fire —
+    // silently, which is the failure mode this issue exists to remove.
+    const signalHaystack =
+      structuredText === undefined ? fullOutput : `${fullOutput}\n${structuredText}`;
     const signalDetected =
-      loop.until !== undefined && detectCompletionSignal(fullOutput, loop.until);
+      loop.until !== undefined && detectCompletionSignal(signalHaystack, loop.until);
 
-    // Check deterministic bash condition (if configured). Skipped once the signal
-    // already completed this iteration: completion is an OR, so the outcome cannot
-    // change, and running a side-effecting script an extra time can. This matches
-    // executeLoopGroupNode's identical guard — the two variants disagreed until
-    // #2563; do not "fix" the asymmetry back.
+    // Check deterministic bash condition (if configured). Skipped once a cheaper
+    // channel already completed this iteration: completion is an OR, so the outcome
+    // cannot change, and running a side-effecting script an extra time can. This
+    // matches executeLoopGroupNode's identical guard — the two variants disagreed
+    // until #2563; do not "fix" the asymmetry back.
     let bashComplete = false;
-    if (loop.until_bash && !signalDetected) {
+    if (loop.until_bash && !signalDetected && !fieldComplete) {
       // Resolve outside the try so ARCHON_BASH_PATH validation errors bubble up
       // to the caller instead of being swallowed by the per-iteration catch.
       const loopBashPath = resolveBashPath();
@@ -4984,7 +5196,7 @@ async function executeLoopNode(
     }
 
     const duration = Date.now() - iterationStart;
-    const completionDetected = signalDetected || bashComplete;
+    const completionDetected = fieldComplete || signalDetected || bashComplete;
 
     // Emit iteration completed
     getWorkflowEventEmitter().emit({
@@ -5069,6 +5281,11 @@ async function executeLoopNode(
         ...(loopFinalStopReason ? { stopReason: loopFinalStopReason } : {}),
         ...(loopTotalNumTurns !== undefined ? { numTurns: loopTotalNumTurns } : {}),
       });
+      // Declared field set, so a downstream `$loop.output.field` gets the same
+      // strict contract every other producer enforces: a field not in the schema
+      // fails the consumer, a declared-optional absent one resolves to ''. Only
+      // present when `output_format` declares an object with `properties` (#2563).
+      const loopDeclaredFields = declaredFieldsFromSchema(node.output_format);
       return {
         state: 'completed',
         output: lastIterationOutput,
@@ -5079,6 +5296,7 @@ async function executeLoopNode(
         ...(lastIterationStructuredOutput !== undefined
           ? { structuredOutput: lastIterationStructuredOutput }
           : {}),
+        ...(loopDeclaredFields !== undefined ? { declaredFields: loopDeclaredFields } : {}),
       };
     }
 

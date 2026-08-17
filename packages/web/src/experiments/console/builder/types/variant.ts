@@ -90,6 +90,12 @@ export interface LoopNodeData {
   max_iterations: number;
   fresh_context: boolean;
   until_bash?: string;
+  /**
+   * Structured completion channel (#2563): names a declared boolean in the node's
+   * `output_format` (carried as a base field) whose `true` ends the loop. `loop:`
+   * only — a `loop_group` has no such channel.
+   */
+  until_field?: string;
   interactive?: boolean;
   gate_message?: string;
 }
