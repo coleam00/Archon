@@ -40,7 +40,7 @@ export const TRIGGER_RULES: readonly TriggerRule[] = triggerRuleSchema.options;
 /**
  * Reasoning depth — the one spelling, on every provider that has the control
  * (#2556). The vocabulary is the union of the effort-capable SDKs' enums, and
- * each provider clamps a rung it doesn't offer to the nearest one it does
+ * a provider clamps a rung it doesn't offer to the nearest one it does
  * (`clampEffort` in @archon/providers): Pi takes all six, while `max` → `xhigh`
  * on Codex/Copilot and `minimal` → `low` on Claude/Copilot. Derived from `EFFORT_LADDER` rather than
  * restated, so the YAML enum and the clamp cannot disagree.

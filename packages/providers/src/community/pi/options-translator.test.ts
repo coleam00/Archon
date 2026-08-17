@@ -65,6 +65,14 @@ describe('resolvePiThinkingLevel', () => {
     for (const rung of ['minimal', 'low', 'medium', 'high', 'xhigh', 'max']) {
       expect(result.warning).toContain(rung);
     }
+    // The positive check alone cannot catch the drift it exists for: the six
+    // names are already in the vocabulary list, so it stayed green while the
+    // parenthetical beside it claimed `max → xhigh on Pi` — the opposite of what
+    // this file's own array does. Assert the absence of that claim too. Pi
+    // clamps NOTHING; any downgrade wording here is a defect by construction.
+    expect(result.warning).not.toMatch(/max\s*(→|->|becomes|maps? to)\s*xhigh/i);
+    expect(result.warning).not.toMatch(/xhigh\s+on\s+Pi/i);
+    expect(result.warning).not.toMatch(/clamp/i);
   });
 
   test('warns on unknown string thinking value', () => {
