@@ -11291,6 +11291,52 @@ describe('executeDagWorkflow -- Claude SDK advanced options', () => {
     expect(assistantConfig?.webSearchMode).toBeUndefined();
   });
 
+  it('reports modelReasoningEffort in node_started, not the effort Codex ignores', async () => {
+    // A mixed-provider workflow is told by the authoring guide to set `effort:` for its
+    // Claude/Pi nodes and `modelReasoningEffort:` for Codex. nodeConfig.effort is populated
+    // for every provider and only warned about on Codex, never stripped — so the event
+    // stream must not prefer it over the value Codex actually ran at.
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'codex',
+      getCapabilities: mockCodexCapabilities,
+    }));
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'codex-effort-telemetry-test',
+        nodes: [{ id: 'step1', command: 'my-cmd' }],
+        effort: 'max',
+        modelReasoningEffort: 'low',
+      },
+      workflowRun,
+      'codex',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      { ...minimalConfig, assistant: 'codex' }
+    );
+
+    const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
+    const assistantConfig = optionsArg?.assistantConfig as Record<string, unknown>;
+    expect(assistantConfig?.modelReasoningEffort).toBe('low');
+
+    const createEventCalls = (mockDeps.store.createWorkflowEvent as ReturnType<typeof mock>).mock
+      .calls as Array<[{ event_type: string; data?: Record<string, unknown> }]>;
+    const nodeStartedCall = createEventCalls.find(([arg]) => arg.event_type === 'node_started');
+    expect(nodeStartedCall?.[0].data?.effort).toBe('low');
+  });
+
   it('warns when a node in a Codex workflow resolves away to Claude via a tier', async () => {
     // The mixed-provider direction: the workflow-level provider IS codex, so a check
     // against the CONFIGURED provider would stay silent. Only the resolved provider
