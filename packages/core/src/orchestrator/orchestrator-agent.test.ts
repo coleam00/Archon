@@ -2061,6 +2061,39 @@ describe('workflow dispatch routing — interactive flag', () => {
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
 
+  test('still reports a deferred input error when the resume race is lost', async () => {
+    // The last exit that can abandon the dispatch after the gate deferred. Losing the
+    // race to another surface means the held error is never re-raised anywhere else, so
+    // it has to ride along here — otherwise an actionable, already-computed error dies.
+    // `mock.module` MERGES, so `WorkflowNotResumableError` is the real class here.
+    const { WorkflowNotResumableError } = await import('../db/workflows');
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve(makeWorkflowResult(true, { inputs: { diff: { required: true } } }))
+    );
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve({
+        id: 'raced-run-1',
+        workflow_name: 'test-workflow',
+        working_path: '/repos/test-repo/worktrees/paused',
+        parent_conversation_id: 'conv-1',
+        status: 'paused',
+      })
+    );
+    mockHydrateResumableRun.mockReturnValueOnce(
+      Promise.reject(new WorkflowNotResumableError('raced-run-1', 'running'))
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
+
+    const sent = platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n');
+    expect(sent).toContain('already being resumed');
+    expect(sent).toContain("requires input 'diff'");
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+  });
+
   test('refuses immediately when the resumable run is not a continuation candidate', async () => {
     // A FAILED (non-paused) prior run is not continued — the user gets a
     // resume/abandon/force menu. Deferring the gate for that case swallowed the input
