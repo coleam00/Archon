@@ -4629,6 +4629,28 @@ describe('resolveTitleRequest', () => {
     expect(req.options.nodeConfig).toEqual({ effort: 'minimal' });
   });
 
+  // The chat half of the shared `resolvePresetEffort` gate (#2556). Chat and the
+  // DAG executor must agree on when a preset's effort is dropped, or the same
+  // tier means different depths in a workflow and in a chat turn — so the
+  // rejection is pinned on both sides, not just the acceptance.
+  test('drops a tier effort when the resolved provider has no reasoning control', async () => {
+    const providers = await import('@archon/providers');
+    const capsMock = providers.getProviderCapabilities as ReturnType<typeof mock>;
+    capsMock.mockReturnValue({ ...DEFAULT_PROVIDER_CAPS, effortControl: false });
+
+    try {
+      const req = await resolveTitleRequest('codex');
+
+      expect(req.options.model).toBe('gpt-5.5');
+      // The tier still selects the model; only its effort is dropped, and it is
+      // not quietly written onto the other channel either.
+      expect(req.options.nodeConfig?.effort).toBeUndefined();
+      expect(req.options.assistantConfig).toEqual({ model: 'gpt-5.3-codex' });
+    } finally {
+      capsMock.mockReturnValue({ ...DEFAULT_PROVIDER_CAPS });
+    }
+  });
+
   test('a configured small tier wins (including a provider switch)', async () => {
     mockLoadConfig.mockResolvedValueOnce({
       assistants: { claude: {}, codex: { model: 'gpt-5.3-codex' } },

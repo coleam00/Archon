@@ -49,13 +49,21 @@ mock.module('@archon/paths', () => ({
 }));
 
 // --- Bootstrap provider registry (after path mocks, before dag-executor import) ---
-import { registerBuiltinProviders, registerPiProvider, clearRegistry } from '@archon/providers';
+import {
+  registerBuiltinProviders,
+  registerPiProvider,
+  registerOpencodeProvider,
+  clearRegistry,
+} from '@archon/providers';
 clearRegistry();
 registerBuiltinProviders();
 // Pi is a community provider (best-effort structured output) — register it so the
 // reask-loop tests can resolve `getProviderCapabilities('pi')` to 'best-effort'.
 // deps.getAgentProvider is mocked, so the real Pi SDK is never loaded.
 registerPiProvider();
+// OpenCode is the only registered provider with `effortControl: false` — it is what
+// makes `resolvePresetEffort`'s rejection branch reachable at this call site (#2556).
+registerOpencodeProvider();
 
 // --- Imports (after mocks) ---
 import {
@@ -1434,6 +1442,65 @@ describe('executeDagWorkflow -- tool restrictions', () => {
     const nodeConfig = optionsArg.nodeConfig as Record<string, unknown>;
     expect(nodeConfig.effort).toBe('high');
     expect(assistantConfig.modelReasoningEffort).toBeUndefined();
+  });
+
+  // The rejection half of the shared `resolvePresetEffort` gate. Both callers
+  // (here and the chat orchestrator) act on its verdict, and neither proved it
+  // obeyed one — the branch was reachable pre-#2556 too and equally untested.
+  // OpenCode is the only registered provider with `effortControl: false`.
+  it('drops a tier effort for a provider with no reasoning control, and applies nothing', async () => {
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'opencode',
+      getCapabilities: mockCodexCapabilities,
+    }));
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+    const aiProfile = buildAiProfile('claude', {
+      repoTiers: {
+        medium: { provider: 'opencode', model: 'anthropic/claude-sonnet-4-6', effort: 'high' },
+      },
+    });
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'opencode-tier-effort-test',
+        nodes: [{ id: 'step1', command: 'my-cmd', model: 'medium' }],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      aiProfile
+    );
+
+    expect(mockGetAgentProviderDag.mock.calls[0][0]).toBe('opencode');
+    const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
+    const nodeConfig = optionsArg.nodeConfig as Record<string, unknown>;
+    const assistantConfig = optionsArg.assistantConfig as Record<string, unknown>;
+    // Dropped on both channels — not quietly written somewhere the provider ignores.
+    expect(nodeConfig.effort).toBeUndefined();
+    expect(assistantConfig.modelReasoningEffort).toBeUndefined();
+
+    // And the run does not claim a depth it never applied.
+    const createEventCalls = (mockDeps.store.createWorkflowEvent as ReturnType<typeof mock>).mock
+      .calls as Array<[{ event_type: string; data?: Record<string, unknown> }]>;
+    const nodeStartedCall = createEventCalls.find(([arg]) => arg.event_type === 'node_started');
+    expect(nodeStartedCall?.[0].data?.effort).toBeUndefined();
   });
 
   it('routes Claude tier effort to nodeConfig.effort', async () => {

@@ -235,7 +235,7 @@ nodes:
 | `mcp` | string | — | Path to MCP server config JSON file. Claude/Codex/Copilot; Codex adds servers to ambient config rather than replacing it. See [MCP Servers](/guides/mcp-servers/) |
 | `skills` | string[] | — | Exact Claude-native skill selection (omission/`[]` selects none); skill declarations for Pi/Copilot. Codex workflow commands/prompts invoke installed skills explicitly with `$skill-name`; OpenCode does not implement this field. See [Skills](/guides/skills/) |
 | `agents` | object | — | Inline sub-agent definitions keyed by kebab-case ID. Claude only. See [Inline sub-agents](#inline-sub-agents) |
-| `effort` | `'low'`\|`'medium'`\|`'high'`\|`'max'` | — | Reasoning depth. Claude/Pi/Copilot. Also settable at workflow level |
+| `effort` | `'minimal'`\|`'low'`\|`'medium'`\|`'high'`\|`'xhigh'`\|`'max'` | — | Reasoning depth. Every provider with a reasoning control — Claude/Codex/Pi/Copilot — each clamping a rung its model lacks to the nearest one it has. OpenCode configures reasoning in `opencode.json`. Also settable at workflow level |
 | `thinking` | string \| object | — | Thinking mode: `'adaptive'`, `'disabled'`, or `{type:'enabled', budgetTokens:N}`. Claude/Pi/Copilot. Also settable at workflow level |
 | `maxBudgetUsd` | number | — | USD cost cap; node fails if exceeded. Claude only. Per-node only |
 | `systemPrompt` | string | — | Override the default `claude_code` system prompt for this node. Claude only. Per-node only |
@@ -2367,7 +2367,7 @@ Before deploying a workflow:
 11. **`mcp:`** — attach per-node MCP servers via JSON config (Claude/Codex/Copilot; Codex configuration is additive)
 12. **`skills:`** — select exact active skills on Claude and declare skills for Pi/Copilot; Codex workflow bodies use explicit `$skill-name`
 13. **`agents:`** — inline Claude sub-agent definitions invokable via the `Task` tool
-14. **`effort` / `thinking`** — control reasoning depth and thinking mode per node or workflow (Claude/Pi/Copilot)
+14. **`effort`** — reasoning depth per node or workflow, on every provider that has one (Claude/Codex/Pi/Copilot); **`thinking`** — thinking mode (Claude/Pi/Copilot)
 15. **`maxBudgetUsd`** — set a USD cost cap per node; fails with error if exceeded (Claude only)
 16. **`systemPrompt`** — override the default system prompt per node (Claude only)
 17. **`sandbox`** — OS-level filesystem/network restrictions per node or workflow (Claude only)
