@@ -73,6 +73,14 @@ const dryRunResolutionSchema = z.object({
   effortFrom: z.string(),
   /** The workflow file this node was authored in, when it arrived through `include:`. */
   authoredIn: z.string().optional(),
+  /**
+   * Set when the node names one provider while its `model:` ref resolves to another. A
+   * real run warns the user about this and uses the resolved provider; a dry run that
+   * silently omitted it would report the outcome without the reason for it.
+   */
+  providerConflict: z
+    .object({ declared: z.string(), resolved: z.string(), modelRef: z.string() })
+    .optional(),
 });
 export type DryRunResolution = z.infer<typeof dryRunResolutionSchema>;
 
@@ -267,6 +275,7 @@ function resolutionFor(node: DagNode, ctx: DryRunContext): DryRunResolution | un
     modelFrom: resolved.modelOrigin,
     effortFrom: resolved.effortOrigin,
     ...(resolved.authoredIn !== undefined ? { authoredIn: resolved.authoredIn } : {}),
+    ...(resolved.providerConflict ? { providerConflict: resolved.providerConflict } : {}),
   };
 }
 
@@ -806,6 +815,12 @@ export function formatDryRunTrace(result: DryRunResult): string {
         `  runs on: ${r.provider} (${r.providerFrom}) / ${model} (${r.modelFrom})${authored}`
       );
       if (r.effort) lines.push(`  effort: ${r.effort} (${r.effortFrom})`);
+      if (r.providerConflict) {
+        const c = r.providerConflict;
+        lines.push(
+          `  warning: declares provider '${c.declared}' but model '${c.modelRef}' resolves to '${c.resolved}' — using '${c.resolved}'`
+        );
+      }
     }
     if (entry.resolvedText) lines.push(`  resolved: ${entry.resolvedText}`);
     if (entry.output !== undefined) lines.push(`  output: ${entry.output}`);

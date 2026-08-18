@@ -616,6 +616,16 @@ describe('dryRunWorkflow — effective provider/model per node', () => {
     });
   });
 
+  test('reports a provider/model conflict the real run would warn about', async () => {
+    // The node names one provider while its tier ref resolves to another. A real run warns
+    // and uses the resolved one; the dry run reports the outcome AND the reason.
+    const byId = await trace([{ id: 'clash', prompt: 'p', provider: 'claude', model: 'large' }]);
+    expect(byId.get('clash')).toMatchObject({
+      provider: 'codex',
+      providerConflict: { declared: 'claude', resolved: 'codex', modelRef: 'large' },
+    });
+  });
+
   test('non-AI nodes carry no resolution, and the text trace renders the report', async () => {
     const result = await dryRunWorkflow({
       workflow: makeTestWorkflow({

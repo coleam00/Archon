@@ -35,7 +35,9 @@ import type {
   WorkflowDefinition,
   WorkflowLoadError,
   DagNode,
+  DagNodeBase,
   IncludeNode,
+  WorkflowBase,
   WorkflowRequirement,
 } from './schemas';
 import {
@@ -186,7 +188,10 @@ function markComposedNode(node: DagNode, patch: ComposedNodeMeta): void {
  *     to write it. It is a real hole in the invariant, stated in the drop-warning and in
  *     the authoring guide rather than papered over with a node-level field.
  */
-const NODE_AFFECTING_WORKFLOW_FIELDS: readonly (readonly [wfKey: string, nodeKey: string])[] = [
+const NODE_AFFECTING_WORKFLOW_FIELDS: readonly (readonly [
+  wfKey: keyof WorkflowBase,
+  nodeKey: keyof DagNodeBase,
+])[] = [
   ['provider', 'provider'],
   ['model', 'model'],
   ['effort', 'effort'],

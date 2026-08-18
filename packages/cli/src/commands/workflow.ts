@@ -991,14 +991,13 @@ export async function workflowRunCommand(
     const stubs = await loadDryRunStubs(stubsPath);
     // The install's config + AI profile are what make the per-node provider/model report
     // match a real run — tier keywords and `@alias` refs resolve through the same profile
-    // the executor builds. A config that fails to load degrades the report to the default
-    // assistant rather than failing the dry run.
-    let dryRunConfig: Awaited<ReturnType<typeof loadConfig>> | undefined;
-    try {
-      dryRunConfig = await loadConfig(effectiveDiscoveryCwd);
-    } catch (error) {
-      getLog().warn({ err: error as Error }, 'workflow.dry_run_config_load_failed');
-    }
+    // the executor builds.
+    //
+    // NOT wrapped in a catch: `loadConfig` returns defaults when there is no config file,
+    // so a throw means a malformed or unreadable one. Reporting against fabricated
+    // defaults would hand the user a clean-looking trace of a run that cannot happen —
+    // the same fail-fast reasoning the container-policy load below spells out.
+    const dryRunConfig = await loadConfig(effectiveDiscoveryCwd);
     const result = await dryRunWorkflow({
       workflow,
       userMessage,
@@ -1006,15 +1005,11 @@ export async function workflowRunCommand(
       stubs,
       execCode: options.execCode,
       pauseAtGates: options.pauseAtGates,
-      ...(dryRunConfig
-        ? {
-            config: dryRunConfig,
-            aiProfile: buildAiProfile(dryRunConfig.assistant, {
-              repoTiers: dryRunConfig.tiers,
-              repoAliases: dryRunConfig.aliases,
-            }),
-          }
-        : {}),
+      config: dryRunConfig,
+      aiProfile: buildAiProfile(dryRunConfig.assistant, {
+        repoTiers: dryRunConfig.tiers,
+        repoAliases: dryRunConfig.aliases,
+      }),
     });
     if (options.json) {
       await writeJsonLine(result);
