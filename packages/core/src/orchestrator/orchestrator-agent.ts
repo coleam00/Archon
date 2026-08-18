@@ -44,7 +44,6 @@ import { executeWorkflow, hydrateResumableRun } from '@archon/workflows/executor
 import {
   assertWorkflowRequirementsMet,
   WorkflowRequirementError,
-  assertComposedGateDriveable,
   ComposedApprovalGateError,
   resolveTopLevelInputs,
   WorkflowMissingInputsError,
@@ -1073,13 +1072,30 @@ async function dispatchOrchestratorWorkflow(
       );
     }
   } else if (platform.getPlatformType() === 'web' && !workflow.interactive) {
-    // A composed approval gate cannot be presented by a background run (#1764). Refuse
-    // here rather than at load time: whether a run OWNS a gate is only answerable once a
-    // workflow is invoked — load time sees every discovered workflow, including reusable
-    // blocks that compose a gate-bearing block and are never the run owner. This is also
-    // the only surface where it matters; CLI and chat runs present the gate normally.
+    // Background dispatch: web-only, non-interactive workflows with no resumable run.
+    // This is the console's default path, so it is exactly where a console-supplied
+    // input map must not be dropped.
+    //
+    // `dispatchBackgroundWorkflow` refuses a composed approval gate a background run
+    // cannot present (#1764); turn that into a message rather than an unhandled throw.
     try {
-      assertComposedGateDriveable(workflow.nodes);
+      await dispatchBackgroundWorkflow(
+        {
+          platform,
+          conversationId,
+          cwd,
+          originalMessage: userMessage,
+          conversationDbId: conversation.id,
+          codebaseId: codebase.id,
+          availableWorkflows: [workflow],
+          isolationHints,
+          userId,
+          source,
+          parseWarnings: options?.parseWarnings,
+          inputs: resolvedInputs,
+        },
+        workflow
+      );
     } catch (err) {
       if (err instanceof ComposedApprovalGateError) {
         getLog().info(
@@ -1091,27 +1107,6 @@ async function dispatchOrchestratorWorkflow(
       }
       throw err;
     }
-
-    // Background dispatch: web-only, non-interactive workflows with no resumable run.
-    // This is the console's default path, so it is exactly where a console-supplied
-    // input map must not be dropped.
-    await dispatchBackgroundWorkflow(
-      {
-        platform,
-        conversationId,
-        cwd,
-        originalMessage: userMessage,
-        conversationDbId: conversation.id,
-        codebaseId: codebase.id,
-        availableWorkflows: [workflow],
-        isolationHints,
-        userId,
-        source,
-        parseWarnings: options?.parseWarnings,
-        inputs: resolvedInputs,
-      },
-      workflow
-    );
   } else {
     // Fresh foreground execution: web interactive workflows + all chat platforms
     await executeWorkflow(

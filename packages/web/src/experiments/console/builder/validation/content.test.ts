@@ -130,11 +130,56 @@ describe('validateContent', () => {
     expect(issues.filter(i => i.rule === 'content.var.unknown')).toEqual([]);
   });
 
-  test('cancel nodes have no scannable body', () => {
+  test('a cancel body is scanned — the engine rejects a dangling ref there', () => {
+    // `loader.ts` pushes `{ field: 'cancel', text: node.cancel }` into its ref scan, and
+    // the executor substitutes it, so a dangling ref fails the workflow at load. The
+    // builder used to stay silent about it, which is the gap this closes.
     const issues = validateContent(
       wf([{ id: 'c', variant: 'cancel', base: {}, data: { reason: 'stop: $ghost.output' } }])
     );
+    expect(issues.some(i => i.rule === 'content.var.unknown')).toBe(true);
+  });
+
+  test('an upstream ref in a cancel body passes', () => {
+    const issues = validateContent(
+      wf([
+        { id: 'check', variant: 'prompt', base: {}, data: { prompt: 'check' } },
+        {
+          id: 'c',
+          variant: 'cancel',
+          base: { depends_on: ['check'] },
+          data: { reason: 'stop: $check.output' },
+        },
+      ])
+    );
     expect(issues.filter(i => i.rule === 'content.var.unknown')).toEqual([]);
+  });
+
+  test("a loop's until_bash and an approval's on_reject prompt are scanned", () => {
+    const issues = validateContent(
+      wf([
+        {
+          id: 'l',
+          variant: 'loop',
+          base: {},
+          data: {
+            prompt: 'iterate',
+            max_iterations: 3,
+            fresh_context: false,
+            until_bash: 'test "$ghost.output" = ok',
+          },
+        },
+        {
+          id: 'a',
+          variant: 'approval',
+          base: {},
+          data: { message: 'ok?', on_reject: { prompt: 'revise $ghost.output' } },
+        },
+      ])
+    );
+    const flagged = issues.filter(i => i.rule === 'content.var.unknown').map(i => i.path.nodeId);
+    expect(flagged).toContain('l');
+    expect(flagged).toContain('a');
   });
 
   test('valid when expression passes; malformed when errors', () => {

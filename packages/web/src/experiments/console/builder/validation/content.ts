@@ -52,13 +52,18 @@ function variantTextBodies(node: BuilderNode): string[] {
     case 'script':
       return [node.data.script];
     case 'approval':
-      return [node.data.message];
+      // `on_reject.prompt` is an ordinary prompt the engine substitutes and scans.
+      return [node.data.message, ...(node.data.on_reject ? [node.data.on_reject.prompt] : [])];
     case 'loop':
       // A command-backed loop has no inline text to scan — the command file's
       // body is loaded at runtime (same posture as the engine loader's ref scan).
-      return node.data.prompt !== undefined ? [node.data.prompt] : [];
+      // `until_bash` IS inline and is a live ref surface the loader scans.
+      return [
+        ...(node.data.prompt !== undefined ? [node.data.prompt] : []),
+        ...(node.data.until_bash !== undefined ? [node.data.until_bash] : []),
+      ];
     case 'cancel':
-      return [];
+      return [node.data.reason];
   }
 }
 

@@ -89,8 +89,9 @@ export function findComposedApprovalGate(nodes: readonly DagNode[]): ComposedApp
 }
 
 /**
- * Thrown when a run would be dispatched to the background with a composed approval gate
- * in it. `message` is user-facing and names the block, the gate and the fix.
+ * Thrown when a run would be dispatched to the background with a composed approval gate in
+ * it. `message` is user-facing and names the block, the gate and the fix — it reaches the
+ * human directly on the console path, and via the agent's tool result on `manage_run`.
  */
 export class ComposedApprovalGateError extends Error {
   constructor(public readonly gate: ComposedApprovalGate) {
@@ -107,14 +108,18 @@ export class ComposedApprovalGateError extends Error {
 /**
  * Refuse a background dispatch that carries a composed approval gate.
  *
- * Checked HERE rather than at load time, because "does this run own the gate" is only
+ * Checked at INVOCATION rather than at load, because "does this run own the gate" is only
  * answerable once a workflow is invoked. Load time sees every discovered workflow, and a
  * reusable building block that composes a gate-bearing block is never the run owner — the
  * earlier load-time form rejected exactly that, making a valid three-level composition
  * unloadable even when the top-level workflow did declare `interactive: true`.
  *
- * Scoped to background dispatch on purpose: on the CLI and chat platforms the gate is
- * presented and driveable, so there is nothing to refuse.
+ * Scoped to BACKGROUND dispatch, not to a platform. A foreground run presents the gate and
+ * has nothing to refuse; a backgrounded one cannot, whichever platform started it — the
+ * `manage_run` tool backgrounds a workflow from Slack, Telegram and Discord as readily as
+ * from the console. Its single caller is `dispatchBackgroundWorkflow` (@archon/core), so
+ * the rule holds for every entrypoint that backgrounds a run rather than for a list of
+ * callers that has to stay complete.
  */
 export function assertComposedGateDriveable(nodes: readonly DagNode[]): void {
   const gate = findComposedApprovalGate(nodes);

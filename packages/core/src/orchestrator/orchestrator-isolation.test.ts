@@ -7,6 +7,7 @@ import type { IsolationEnvironmentRow } from '@archon/isolation';
 // (or the workflow engine) before the mock.module() calls below take effect.
 import type { WorkflowRoutingContext } from './orchestrator';
 import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
+import { makeTestComposedWorkflow, makeTestWorkflow } from '@archon/workflows/test-utils';
 
 // ─── Mock setup (BEFORE importing module under test) ─────────────────────────
 
@@ -358,6 +359,42 @@ describe('dispatchBackgroundWorkflow', () => {
       makeConversation({ id: 'worker-conv-1', platform_conversation_id: 'web-worker-1' })
     );
     mockGetCodebase.mockResolvedValue(makeCodebase());
+  });
+
+  test('refuses a composed approval gate before creating anything (#1764)', async () => {
+    // Enforced HERE rather than at the callers, because there are two entrypoints that
+    // background a run — the console's default dispatch and the `manage_run` tool's
+    // startWorkflow, which reaches every platform with native tools. A rule enforced per
+    // caller fails open the moment a third appears.
+    const block = makeTestWorkflow({
+      name: 'gate-blk',
+      nodes: [{ id: 'gate', approval: { message: 'Approve?' } }],
+    });
+    const parent = makeTestComposedWorkflow(
+      [block, makeTestWorkflow({ name: 'bg-parent', nodes: [{ id: 'inc', include: 'gate-blk' }] })],
+      'bg-parent'
+    );
+
+    await expect(dispatchBackgroundWorkflow(makeRoutingCtx(), parent)).rejects.toThrow(
+      /composes 'gate-blk'.*approval gate/s
+    );
+
+    // Refused before any side effect — no worker conversation, no run row.
+    expect(mockGetOrCreateConversation).not.toHaveBeenCalled();
+    expect(mockCreateWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  test('a workflow with only its OWN approval gate still dispatches', async () => {
+    // The rule is about a gate written in another file, not about gates.
+    const own = makeTestWorkflow({
+      name: 'own-gate',
+      nodes: [{ id: 'gate', approval: { message: 'Approve?' } }],
+      worktree: { enabled: false },
+    });
+
+    await dispatchBackgroundWorkflow(makeRoutingCtx(), makeTestComposedWorkflow([own], 'own-gate'));
+    expect(mockGetOrCreateConversation).toHaveBeenCalled();
+    await flushBackgroundExecution();
   });
 
   test('worktree.enabled: false skips isolation and runs in the parent cwd', async () => {

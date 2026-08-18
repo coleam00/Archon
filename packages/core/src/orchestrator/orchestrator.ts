@@ -49,6 +49,7 @@ import { createIsolationStore } from '../db/isolation-environments';
 import { toError } from '../utils/error';
 import { getCodebase } from '../db/codebases';
 import { executeWorkflow } from '@archon/workflows/executor';
+import { assertComposedGateDriveable } from '@archon/workflows/utils/workflow-requirements';
 import { SUBRUN_METADATA_KEYS } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowDefinition, WorkflowSource } from '@archon/workflows/schemas/workflow';
 import { createWorkflowDeps } from '../workflows/store-adapter';
@@ -316,6 +317,15 @@ export async function dispatchBackgroundWorkflow(
     prBranch?: string;
   }
 ): Promise<void> {
+  // 0. A backgrounded run cannot present an approval gate inline, and a gate that arrived
+  // through `include:` was written by someone looking at a different file (#1764). Checked
+  // HERE, in the one function that backgrounds a run, rather than at each caller — this has
+  // two entrypoints (the console's default dispatch and the `manage_run` tool's
+  // startWorkflow, which reaches every platform with native tools), and a rule enforced per
+  // caller is a rule that fails open the moment a third appears. Throws before the worker
+  // conversation exists, so a refusal leaves nothing behind.
+  assertComposedGateDriveable(workflow.nodes);
+
   // 1. Generate worker conversation ID
   const workerPlatformId = `web-worker-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
 
