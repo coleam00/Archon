@@ -44,6 +44,8 @@ import { executeWorkflow, hydrateResumableRun } from '@archon/workflows/executor
 import {
   assertWorkflowRequirementsMet,
   WorkflowRequirementError,
+  assertComposedGateDriveable,
+  ComposedApprovalGateError,
   resolveTopLevelInputs,
   WorkflowMissingInputsError,
 } from '@archon/workflows/utils/workflow-requirements';
@@ -1071,6 +1073,25 @@ async function dispatchOrchestratorWorkflow(
       );
     }
   } else if (platform.getPlatformType() === 'web' && !workflow.interactive) {
+    // A composed approval gate cannot be presented by a background run (#1764). Refuse
+    // here rather than at load time: whether a run OWNS a gate is only answerable once a
+    // workflow is invoked — load time sees every discovered workflow, including reusable
+    // blocks that compose a gate-bearing block and are never the run owner. This is also
+    // the only surface where it matters; CLI and chat runs present the gate normally.
+    try {
+      assertComposedGateDriveable(workflow.nodes);
+    } catch (err) {
+      if (err instanceof ComposedApprovalGateError) {
+        getLog().info(
+          { workflowName: workflow.name, conversationId, gate: err.gate },
+          'workflow.composed_gate_undriveable'
+        );
+        await platform.sendMessage(conversationId, err.message);
+        return;
+      }
+      throw err;
+    }
+
     // Background dispatch: web-only, non-interactive workflows with no resumable run.
     // This is the console's default path, so it is exactly where a console-supplied
     // input map must not be dropped.

@@ -2,10 +2,16 @@ import { describe, test, expect } from 'bun:test';
 import {
   assertWorkflowRequirementsMet,
   WorkflowRequirementError,
+  assertComposedGateDriveable,
+  ComposedApprovalGateError,
+  findComposedApprovalGate,
   resolveTopLevelInputs,
   WorkflowMissingInputsError,
 } from './workflow-requirements';
 import { WorkflowInputContractError } from '../workflow-inputs';
+import { expandWorkflowIncludes } from '../include-expander';
+import { dagNodeSchema } from '../schemas';
+import type { WorkflowDefinition } from '../schemas';
 
 describe('assertWorkflowRequirementsMet', () => {
   test('passes when there are no requirements', () => {
@@ -124,5 +130,93 @@ describe('resolveTopLevelInputs (#2470, #2554)', () => {
     expect(resolveTopLevelInputs({ name: 'legacy' }, { anything: 'goes' })).toEqual({
       anything: 'goes',
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Composed approval gates (#1764)
+// ---------------------------------------------------------------------------
+
+describe('assertComposedGateDriveable', () => {
+  const gateBlock = (): WorkflowDefinition => ({
+    name: 'gate-blk',
+    description: 'gate-blk',
+    nodes: [dagNodeSchema.parse({ id: 'gate', approval: { message: 'Approve?' } })],
+  });
+
+  const wf = (name: string, nodes: unknown[], extra: object = {}): WorkflowDefinition =>
+    ({
+      name,
+      description: name,
+      nodes: nodes.map(n => dagNodeSchema.parse(n)),
+      ...extra,
+    }) as WorkflowDefinition;
+
+  function expand(defs: readonly WorkflowDefinition[], name: string): WorkflowDefinition {
+    const { workflows, errors } = expandWorkflowIncludes(new Map(defs.map(d => [d.name, d])));
+    expect(errors).toEqual([]);
+    return workflows.get(name)!;
+  }
+
+  test('refuses a composed gate, naming the block, the gate and the fix', () => {
+    const parent = expand(
+      [gateBlock(), wf('parent', [{ id: 'inc', include: 'gate-blk' }])],
+      'parent'
+    );
+
+    expect(() => assertComposedGateDriveable(parent.nodes)).toThrow(ComposedApprovalGateError);
+    try {
+      assertComposedGateDriveable(parent.nodes);
+    } catch (err) {
+      const gateErr = err as ComposedApprovalGateError;
+      expect(gateErr.gate).toEqual({ nodeId: 'inc__gate', origin: 'gate-blk' });
+      expect(gateErr.message).toContain('gate-blk');
+      expect(gateErr.message).toContain('interactive: true');
+      expect(gateErr.message).toContain("'workflow:' node");
+    }
+  });
+
+  test('a gate reached through a non-interactive intermediate is still refused at the run owner', () => {
+    // The intermediate block is never asked the question — only the invoked workflow is.
+    // Its own lack of `interactive:` neither refuses nor excuses anything.
+    const top = expand(
+      [
+        gateBlock(),
+        wf('mid', [{ id: 'i', include: 'gate-blk' }]),
+        wf('top', [{ id: 'm', include: 'mid' }]),
+      ],
+      'top'
+    );
+    expect(() => assertComposedGateDriveable(top.nodes)).toThrow(ComposedApprovalGateError);
+  });
+
+  test("a workflow's OWN approval node is never refused", () => {
+    const own = wf('own', [{ id: 'gate', approval: { message: 'Approve?' } }]);
+    expect(() => assertComposedGateDriveable(expand([own], 'own').nodes)).not.toThrow();
+  });
+
+  test('finds a composed gate nested inside a loop_group body', () => {
+    const block = wf('lg-blk', [
+      {
+        id: 'group',
+        loop_group: {
+          until: 'DONE',
+          max_iterations: 2,
+          nodes: [{ id: 'gate', approval: { message: 'Approve?' } }],
+        },
+      },
+    ]);
+    const parent = expand([block, wf('parent', [{ id: 'inc', include: 'lg-blk' }])], 'parent');
+    expect(findComposedApprovalGate(parent.nodes)).toEqual({
+      nodeId: 'gate',
+      origin: 'lg-blk',
+    });
+  });
+
+  test('a gate-free composition passes', () => {
+    const block = wf('plain', [{ id: 'work', prompt: 'work' }]);
+    const parent = expand([block, wf('parent', [{ id: 'inc', include: 'plain' }])], 'parent');
+    expect(findComposedApprovalGate(parent.nodes)).toBeNull();
+    expect(() => assertComposedGateDriveable(parent.nodes)).not.toThrow();
   });
 });

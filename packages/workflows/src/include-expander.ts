@@ -721,45 +721,6 @@ function warnDroppedWorkflowLevelFields(includeNode: IncludeNode, child: Workflo
 }
 
 /**
- * A composed approval gate that the top-level workflow cannot drive is a load error.
- *
- * `interactive:` is read off the TOP-LEVEL workflow only (orchestrator-agent.ts), so an
- * approval node that arrives through composition into a non-interactive parent is
- * dispatched to the background on web: the gate still fires and is still resumable from
- * the CLI or chat, but it cannot be driven inline — which is the single thing
- * `interactive:` exists to guarantee. That degradation was silent, and the author who
- * would notice it is the one who wrote the gate, in a different file.
- *
- * A parent's OWN approval node is unaffected: an author looking at one file can see
- * both the gate and the missing `interactive:`.
- */
-function findUndriveableComposedGate(
-  nodes: readonly DagNode[],
-  interactive: boolean
-): string | null {
-  if (interactive) return null;
-  const scan = (list: readonly DagNode[]): string | null => {
-    for (const node of list) {
-      const origin = readComposedMeta(node)?.origin;
-      if (origin !== undefined && isApprovalNode(node)) {
-        return (
-          `Node '${node.id}': composed workflow '${origin}' contains an approval gate, but this ` +
-          "workflow does not declare 'interactive: true'. A composed gate in a background run " +
-          "cannot be approved inline. Add 'interactive: true' to this workflow, or start the " +
-          "block as a separate governed run with a 'workflow:' node instead of 'include:'."
-        );
-      }
-      if (isLoopGroupNode(node)) {
-        const nested = scan(node.loop_group.nodes);
-        if (nested !== null) return nested;
-      }
-    }
-    return null;
-  };
-  return scan(nodes);
-}
-
-/**
  * Compile an included workflow's named AI command bodies into the flat DAG. Composition
  * must prove the child's lexical boundary before parent nodes share one output map, so
  * every canonical ref in a resolved body must name a node in the command node's current or
@@ -978,9 +939,6 @@ export function expandWorkflowIncludes(
     if (structureError) {
       throw new IncludeExpansionError(structureError);
     }
-
-    const gateError = findUndriveableComposedGate(newNodes, collapsed.interactive === true);
-    if (gateError !== null) throw new IncludeExpansionError(gateError);
 
     const dedupedRequires = [...new Set(requires)];
     const result: WorkflowDefinition = {

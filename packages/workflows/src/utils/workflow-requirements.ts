@@ -10,6 +10,9 @@
  * just encodes the policy so all three behave identically.
  */
 import type { WorkflowRequirement, WorkflowInputSpec } from '../schemas/workflow';
+import type { DagNode } from '../schemas/dag-node';
+import { isApprovalNode, isLoopGroupNode } from '../schemas/dag-node';
+import { readComposedMeta } from '../compiled-command';
 import { resolveDeclaredInputs, WorkflowInputContractError } from '../workflow-inputs';
 
 /** Minimal shape needed to evaluate requirements — avoids a full WorkflowDefinition dep. */
@@ -51,6 +54,71 @@ export function assertWorkflowRequirementsMet(
   if (requires.includes('github') && !ctx.githubConnected) {
     throw new WorkflowRequirementError('github');
   }
+}
+
+// ---------------------------------------------------------------------------
+// Composed approval gates (#1764)
+// ---------------------------------------------------------------------------
+
+/** An approval node that arrived through `include:`, and the workflow that declared it. */
+export interface ComposedApprovalGate {
+  /** The namespaced node id in the expanded DAG. */
+  nodeId: string;
+  /** The workflow file the gate was authored in. */
+  origin: string;
+}
+
+/**
+ * Find an approval node that came from a composed workflow, if there is one.
+ *
+ * Composition namespaces node ids but the gate still belongs to another file, so an
+ * author looking at the composing workflow cannot see it. `readComposedMeta().origin` is
+ * stamped at expansion, which is what makes this answerable without re-walking includes.
+ * A workflow's OWN approval nodes are deliberately not reported: one reader, one file.
+ */
+export function findComposedApprovalGate(nodes: readonly DagNode[]): ComposedApprovalGate | null {
+  for (const node of nodes) {
+    const origin = readComposedMeta(node)?.origin;
+    if (origin !== undefined && isApprovalNode(node)) return { nodeId: node.id, origin };
+    if (isLoopGroupNode(node)) {
+      const nested = findComposedApprovalGate(node.loop_group.nodes);
+      if (nested !== null) return nested;
+    }
+  }
+  return null;
+}
+
+/**
+ * Thrown when a run would be dispatched to the background with a composed approval gate
+ * in it. `message` is user-facing and names the block, the gate and the fix.
+ */
+export class ComposedApprovalGateError extends Error {
+  constructor(public readonly gate: ComposedApprovalGate) {
+    super(
+      `This workflow composes '${gate.origin}', which contains an approval gate ('${gate.nodeId}'), ` +
+        "but it does not declare 'interactive: true'. A background run cannot present that gate " +
+        "inline, and the author who wrote it is looking at a different file. Add 'interactive: true' " +
+        "to this workflow, or start the block as its own governed run with a 'workflow:' node."
+    );
+    this.name = 'ComposedApprovalGateError';
+  }
+}
+
+/**
+ * Refuse a background dispatch that carries a composed approval gate.
+ *
+ * Checked HERE rather than at load time, because "does this run own the gate" is only
+ * answerable once a workflow is invoked. Load time sees every discovered workflow, and a
+ * reusable building block that composes a gate-bearing block is never the run owner — the
+ * earlier load-time form rejected exactly that, making a valid three-level composition
+ * unloadable even when the top-level workflow did declare `interactive: true`.
+ *
+ * Scoped to background dispatch on purpose: on the CLI and chat platforms the gate is
+ * presented and driveable, so there is nothing to refuse.
+ */
+export function assertComposedGateDriveable(nodes: readonly DagNode[]): void {
+  const gate = findComposedApprovalGate(nodes);
+  if (gate !== null) throw new ComposedApprovalGateError(gate);
 }
 
 // ---------------------------------------------------------------------------

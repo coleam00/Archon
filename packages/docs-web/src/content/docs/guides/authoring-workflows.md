@@ -1027,10 +1027,13 @@ Two consequences worth knowing:
   `context: shared` on the entry node if you deliberately want the caller's thread to
   continue into the block.
 
-One safety rule has teeth: if a composed workflow contains an `approval:` node, the
-**top-level** workflow must declare `interactive: true`, or the composition is a load error
-naming both. A composed gate in a background run cannot be approved inline, and the author
-who would notice is looking at a different file.
+One safety rule has teeth: if a composed workflow contains an `approval:` node, the workflow
+you **run** must declare `interactive: true` — otherwise the web console refuses to start it
+in the background, naming the block and the gate. A background run cannot present that gate
+inline, and the author who wrote it is looking at a different file. The check applies only
+where it matters: on the CLI and chat platforms the gate is presented normally, and an
+intermediate building block that merely composes a gate-bearing block is never asked — only
+the workflow that owns the run is.
 
 ### How expansion works
 

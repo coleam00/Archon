@@ -1553,34 +1553,41 @@ describe('expandWorkflowIncludes — systemPrompt/agents are node-ref surfaces (
   });
 });
 
-describe('expandWorkflowIncludes — a composed approval gate must be driveable (#1764)', () => {
+describe('expandWorkflowIncludes — composed approval gates are stamped, not rejected (#1764)', () => {
   const gateBlock = (): WorkflowDefinition =>
     wf('gate-blk', [
       { id: 'plan', prompt: 'plan' },
       { id: 'gate', approval: { message: 'Approve?' }, depends_on: ['plan'] },
     ]);
 
-  test('is a load error naming the block and the gate when the parent is not interactive', () => {
+  test('a composed gate carries its origin so invocation can decide', () => {
+    // Expansion records WHERE the gate came from; whether a run can drive it is a
+    // question only the invoked workflow can answer (see assertComposedGateDriveable).
     const parent = wf('parent', [{ id: 'inc', include: 'gate-blk' }]);
     const { workflows, errors } = expandWorkflowIncludes(mapOf(gateBlock(), parent));
 
-    expect(workflows.has('parent')).toBe(false);
-    const message = errors.find(e => e.filename === 'parent')?.error;
-    expect(message).toContain("Node 'inc__gate'");
-    expect(message).toContain("composed workflow 'gate-blk'");
-    expect(message).toContain('interactive: true');
-  });
-
-  test('loads when the top-level workflow declares interactive: true', () => {
-    const parent = { ...wf('parent', [{ id: 'inc', include: 'gate-blk' }]), interactive: true };
-    const { workflows, errors } = expandWorkflowIncludes(mapOf(gateBlock(), parent));
     expect(errors).toHaveLength(0);
-    expect(workflows.get('parent')!.nodes.some(n => n.id === 'inc__gate')).toBe(true);
+    expect(composedOrigin(nodeById(workflows.get('parent')!, 'inc__gate'))).toBe('gate-blk');
   });
 
-  test("a parent's OWN approval node is unaffected", () => {
+  test('a non-interactive INTERMEDIATE block still expands — it is never the run owner', () => {
+    // The regression this replaced: rejecting at every expansion level made a valid
+    // three-level composition unloadable even when the top-level workflow declared
+    // `interactive: true`, because the intermediate block has no reason to declare it.
+    const mid = wf('mid', [{ id: 'i', include: 'gate-blk' }]);
+    const top = { ...wf('top', [{ id: 'm', include: 'mid' }]), interactive: true };
+
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(gateBlock(), mid, top));
+    expect(errors).toHaveLength(0);
+    expect(workflows.has('top')).toBe(true);
+    expect(workflows.has('mid')).toBe(true);
+    // The stamp names the file that authored the gate, three levels down.
+    expect(composedOrigin(nodeById(workflows.get('top')!, 'm__i__gate'))).toBe('gate-blk');
+  });
+
+  test("a parent's OWN approval node carries no composed origin", () => {
     // One file, one reader: the gate and the missing `interactive:` are visible together,
-    // so there is nothing hidden to fail loudly about.
+    // so invocation has nothing to refuse.
     const plain = wf('plain-blk', [{ id: 'work', prompt: 'work' }]);
     const parent = wf('parent', [
       { id: 'inc', include: 'plain-blk' },
@@ -1588,10 +1595,10 @@ describe('expandWorkflowIncludes — a composed approval gate must be driveable 
     ]);
     const { workflows, errors } = expandWorkflowIncludes(mapOf(plain, parent));
     expect(errors).toHaveLength(0);
-    expect(workflows.has('parent')).toBe(true);
+    expect(composedOrigin(nodeById(workflows.get('parent')!, 'gate'))).toBeUndefined();
   });
 
-  test('finds a composed gate nested inside a loop_group body', () => {
+  test('a composed gate nested inside a loop_group body is stamped too', () => {
     const block = wf('lg-gate-blk', [
       {
         id: 'group',
@@ -1603,10 +1610,12 @@ describe('expandWorkflowIncludes — a composed approval gate must be driveable 
       },
     ]);
     const parent = wf('parent', [{ id: 'inc', include: 'lg-gate-blk' }]);
-    const { errors } = expandWorkflowIncludes(mapOf(block, parent));
-    expect(errors.find(e => e.filename === 'parent')?.error).toContain(
-      "composed workflow 'lg-gate-blk'"
-    );
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
+    expect(errors).toHaveLength(0);
+    const group = nodeById(workflows.get('parent')!, 'inc__group') as {
+      loop_group: { nodes: DagNode[] };
+    };
+    expect(composedOrigin(group.loop_group.nodes[0])).toBe('lg-gate-blk');
   });
 });
 
