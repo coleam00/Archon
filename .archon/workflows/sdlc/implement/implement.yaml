@@ -46,25 +46,10 @@ nodes:
           type: string
       required: [done, green, summary]
 
+  # Decline is not success: an AI node that declines its task still exits 0. This
+  # deterministic guard proves work actually happened before anything downstream
+  # spends money or goes public — see scripts/assert-changed.py.
   - id: assert-changed
-    bash: |
-      # Decline is not success: an AI node that declines its task still exits 0.
-      # This is the deterministic check that work actually happened, before anything
-      # downstream spends money or goes public. It reads Archon-owned facts only —
-      # git state against the recorded start SHA — never the project's layout or
-      # toolchain. `.archon/` is excluded: Archon copies the operator's workflow
-      # edits into every run worktree, so those files predate implement.
-      start=$(cat "$ARTIFACTS_DIR/.start-sha")
-      tracked=$(git diff --name-only HEAD -- ':(exclude).archon' | head -1)
-      untracked=$(git ls-files --others --exclude-standard -- ':(exclude).archon' | head -1)
-      head=$(git rev-parse HEAD)
-      if [ -n "$tracked" ] || [ -n "$untracked" ]; then
-        git --no-pager diff --stat HEAD -- ':(exclude).archon' | tail -1
-      elif [ "$head" != "$start" ]; then
-        echo "$(git rev-list --count "$start..HEAD") commit(s) made this run"
-      else
-        echo "implement produced neither a commit nor a working-tree change outside .archon/." >&2
-        echo "If it declined, its summary says why — a run with nothing to show fails rather than reporting success." >&2
-        exit 1
-      fi
+    script: assert-changed
+    runtime: uv
     depends_on: [implement]
