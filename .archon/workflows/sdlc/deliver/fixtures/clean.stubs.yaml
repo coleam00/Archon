@@ -1,0 +1,57 @@
+# Dry-run fixture: the clean path — round 1 is already ready, so fix, round 2,
+# and flag2 all skip by design, and gate-ready fires through all_done on the
+# round-1 marker alone.
+impl__record-start: '{"start":"recorded"}'
+impl__implement:
+  done: true
+  green: true
+  summary: "stub: implemented and green"
+impl__assert-changed: "3 files changed"
+gate-green: '{"gate":"green"}'
+pr__pr: "https://github.com/example/repo/pull/2 (draft)"
+rev1__scope: "target recorded; head sha stubbed"
+rev1__choose:
+  run_tests: "false"
+  run_errors: "false"
+  run_comments: "false"
+  run_types: "false"
+  run_docs: "false"
+  run_simplify: "false"
+  reasoning: "stub: tiny diff"
+rev1__code: "0 findings"
+rev1__seams: "0 findings"
+rev1__tests: "skipped by chooser"
+rev1__errors: "skipped by chooser"
+rev1__comments: "skipped by chooser"
+rev1__types: "skipped by chooser"
+rev1__docs: "skipped by chooser"
+rev1__simplify: "skipped by chooser"
+rev1__synthesize:
+  ready: true
+  findings_summary: "stub: clean on round one"
+flag1: '{"ready":"true"}'
+# fix skips (round 1 ready); round 2 still runs — light re-review of an empty delta.
+rev2__scope: "light mode; empty delta since cursor"
+rev2__choose:
+  run_tests: "false"
+  run_errors: "false"
+  run_comments: "false"
+  run_types: "false"
+  run_docs: "false"
+  run_simplify: "false"
+  reasoning: "stub: empty delta"
+rev2__code: "prior findings stand fixed; 0 new"
+rev2__seams: "0 findings"
+rev2__tests: "skipped by chooser"
+rev2__errors: "skipped by chooser"
+rev2__comments: "skipped by chooser"
+rev2__types: "skipped by chooser"
+rev2__docs: "skipped by chooser"
+rev2__simplify: "skipped by chooser"
+rev2__synthesize:
+  ready: true
+  findings_summary: "stub: still clean"
+flag2: '{"ready":"true"}'
+gate-ready: '{"ready":"true"}'
+await-checks: "no checks configured on this repository — nothing to await"
+flip-ready: "https://github.com/example/repo/pull/2"

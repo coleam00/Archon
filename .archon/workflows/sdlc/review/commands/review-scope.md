@@ -8,7 +8,7 @@ Establish exactly what this review round examines, and write it down for the len
 
 $INPUTS.scope
 
-**Previous round's report** (path; empty on a first review):
+**Previous round's report** (path; empty — or a path that does not exist yet — means this is the first round, full review):
 
 $INPUTS.prior_report
 
