@@ -168,8 +168,10 @@ export function resolveNodeModel(
 }
 
 /**
- * Derive the workflow-level fallbacks from a definition, mirroring the block above
- * `executeDagWorkflow`'s call in executor.ts.
+ * Derive the workflow-level fallbacks from a definition. `executor.ts` calls this and
+ * layers its user-facing warning and the unknown-provider throw on top, exactly as
+ * `resolveNodeProviderAndModel` wraps `resolveNodeModel` one level down — so a dry run
+ * cannot report a different workflow-level scope than the run uses.
  *
  * After the #1764 collapse a discovered workflow carries no node-affecting fields, so
  * this normally reduces to `config.assistant` — but a programmatic caller can still hand

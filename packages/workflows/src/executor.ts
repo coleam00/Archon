@@ -54,8 +54,9 @@ import {
   type SendMessageContext,
 } from './executor-shared';
 import { resolveGithubTokenOverrides } from './utils/github-token-policy';
-import { buildAiProfile, isLiteralSpec, resolveModelSpec } from './model-validation';
-import type { ModelAliasPreset, ResolvedAiProfile } from './model-validation';
+import { buildAiProfile } from './model-validation';
+import type { ResolvedAiProfile } from './model-validation';
+import { assistantModelDefaults, resolveWorkflowModelScope } from './node-model-resolution';
 
 /** The per-user prefs layer as returned by `WorkflowDeps.getUserAiPrefs`. */
 type UserAiPrefsLayer = Awaited<ReturnType<NonNullable<WorkflowDeps['getUserAiPrefs']>>>;
@@ -1289,44 +1290,52 @@ export async function executeWorkflow(
     });
   }
 
-  // Resolve provider and model once (used by all nodes). Literal model strings
-  // keep the existing workflow/provider/config chain; tier and @alias refs use
-  // the resolved preset provider/model so bundled workflows are portable.
-  let resolvedProvider: string = workflow.provider ?? config.assistant;
-  let resolvedModel: string | undefined;
-  let workflowPreset: ModelAliasPreset | undefined;
-  let providerSource = workflow.provider ? 'workflow definition' : 'config';
-  if (workflow.model) {
-    const workflowModelSpec = resolveModelSpec(aiProfile, workflow.model);
-    if (isLiteralSpec(workflowModelSpec)) {
-      resolvedModel = workflowModelSpec.literal;
-    } else {
-      workflowPreset = workflowModelSpec;
-      if (workflow.provider && workflow.provider !== workflowModelSpec.provider) {
-        getLog().warn(
-          {
-            workflowName: workflow.name,
-            configuredProvider: workflow.provider,
-            resolvedProvider: workflowModelSpec.provider,
-            modelRef: workflow.model,
-          },
-          'workflow.model_provider_conflict'
-        );
-        const delivered = await safeSendMessage(
-          platform,
-          conversationId,
-          `Warning: Workflow '${workflow.name}' sets provider '${workflow.provider}' but model '${workflow.model}' resolves to provider '${workflowModelSpec.provider}' — using '${workflowModelSpec.provider}'.`
-        );
-        if (!delivered) {
-          getLog().error(
-            { workflowName: workflow.name, conversationId },
-            'workflow.model_provider_conflict_warning_delivery_failed'
-          );
-        }
-      }
-      resolvedProvider = workflowModelSpec.provider;
-      resolvedModel = workflowModelSpec.model;
-      providerSource = `model preset '${workflow.model}'`;
+  // Resolve the workflow-level provider/model fallbacks once (used by all nodes) through
+  // the SAME pure function the dry run reports from, so `--dry-run` cannot disagree with
+  // what the run does. Everything the pure function must not do — warn the user, throw —
+  // stays here, mirroring how `resolveNodeProviderAndModel` wraps `resolveNodeModel` one
+  // level down.
+  //
+  // Note that a workflow which came through discovery carries NO workflow-level provider
+  // or model: composition collapses them onto its own nodes and removes the layer (#1764),
+  // so this normally resolves to `config.assistant`. It still has to behave correctly for
+  // a programmatic caller that hands over an unexpanded definition.
+  const scope = resolveWorkflowModelScope(
+    workflow,
+    config.assistant,
+    assistantModelDefaults(config),
+    aiProfile
+  );
+  const resolvedProvider = scope.provider;
+  const resolvedModel = scope.model;
+  const workflowPreset = scope.preset;
+  const providerSource =
+    scope.providerOrigin === 'model ref'
+      ? `model preset '${workflow.model ?? ''}'`
+      : scope.providerOrigin === 'workflow'
+        ? 'workflow definition'
+        : 'config';
+
+  if (workflow.provider && workflowPreset && workflow.provider !== workflowPreset.provider) {
+    getLog().warn(
+      {
+        workflowName: workflow.name,
+        configuredProvider: workflow.provider,
+        resolvedProvider: workflowPreset.provider,
+        modelRef: workflow.model,
+      },
+      'workflow.model_provider_conflict'
+    );
+    const delivered = await safeSendMessage(
+      platform,
+      conversationId,
+      `Warning: Workflow '${workflow.name}' sets provider '${workflow.provider}' but model '${workflow.model ?? ''}' resolves to provider '${workflowPreset.provider}' — using '${workflowPreset.provider}'.`
+    );
+    if (!delivered) {
+      getLog().error(
+        { workflowName: workflow.name, conversationId },
+        'workflow.model_provider_conflict_warning_delivery_failed'
+      );
     }
   }
 
@@ -1338,8 +1347,6 @@ export async function executeWorkflow(
           .join(', ')}`
     );
   }
-  const assistantDefaults = config.assistants[resolvedProvider];
-  resolvedModel ??= assistantDefaults?.model as string | undefined;
 
   getLog().info(
     {

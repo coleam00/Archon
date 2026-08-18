@@ -1060,6 +1060,12 @@ async function resolveNodeProviderAndModel(
    * node is engine-synthesised and cannot carry these fields.
    */
   resolveAiText: (text: string) => string,
+  /**
+   * Provider/model conflicts already reported this run. A conflict declared once at
+   * workflow level is collapsed onto every node (#1764), so without de-duplication one
+   * authoring mistake produces one chat message per node.
+   */
+  warnedProviderConflicts: Set<string> | undefined,
   execContext: ExecutionContext = { kind: 'host' }
 ): Promise<{
   provider: string;
@@ -1087,8 +1093,10 @@ async function resolveNodeProviderAndModel(
   );
   const { provider, model, preset: effectivePreset } = resolution;
 
-  if (resolution.providerConflict) {
-    const conflict = resolution.providerConflict;
+  const conflict = resolution.providerConflict;
+  const conflictKey = conflict && `${conflict.declared}|${conflict.resolved}|${conflict.modelRef}`;
+  if (conflict && conflictKey !== undefined && !warnedProviderConflicts?.has(conflictKey)) {
+    warnedProviderConflicts?.add(conflictKey);
     getLog().warn(
       {
         nodeId: node.id,
@@ -3489,7 +3497,9 @@ async function executeLoopGroupNode(
   issueContext?: string,
   stepNamePrefix = '',
   execContext: ExecutionContext = { kind: 'host' },
-  runChildWorkflow?: RunChildWorkflowFn
+  runChildWorkflow?: RunChildWorkflowFn,
+  /** Shared by reference with the enclosing run so a body cannot re-report a conflict. */
+  warnedProviderConflicts: Set<string> = new Set<string>()
 ): Promise<NodeExecutionResult> {
   const group = node.loop_group;
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -3683,6 +3693,7 @@ async function executeLoopGroupNode(
       // Gate on the literal i === 1 (not startIteration): on interactive resume the
       // first processed iteration must continue the restored pre-pause session.
       lastSequentialSession: group.fresh_context || i === 1 ? undefined : loopLastSequentialSession,
+      warnedProviderConflicts,
       totalCostUsd: 0,
       totalTokensIn: 0,
       totalTokensOut: 0,
@@ -5721,6 +5732,8 @@ async function executeApprovalNode(
       // Engine-synthesised from `approval.on_reject.prompt` alone — it carries no
       // systemPrompt/agents, so there is no AI-configuration text to resolve.
       text => text,
+      // Also carries no `model:`, so it cannot raise a provider conflict to de-duplicate.
+      undefined,
       execContext
     );
 
@@ -7025,6 +7038,14 @@ interface RunLayersContext {
   /** Sequential-session threading cursor (mutated by runLayers). Provider-tagged so the
    *  session is only threaded into nodes that resolve to the SAME provider (#1992). */
   lastSequentialSession: SequentialSessionCursor | undefined;
+  /**
+   * Provider/model conflicts already reported to the user this run, keyed
+   * `declared|resolved|modelRef`. A conflict the author wrote once at workflow level is
+   * collapsed onto every node (#1764), so without this one mistake produces one message
+   * per node. Genuinely distinct per-node conflicts still each get their own. Shared by
+   * reference with loop_group body contexts so an iteration cannot re-report.
+   */
+  warnedProviderConflicts: Set<string>;
   /** Run-level usage accumulators (mutated by runLayers; caller reads after). */
   totalCostUsd: number;
   totalTokensIn: number;
@@ -7376,6 +7397,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               aiProfile,
               workflowPreset,
               resolveAiConfigText,
+              ctx.warnedProviderConflicts,
               execContext
             );
 
@@ -7429,6 +7451,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               aiProfile,
               workflowPreset,
               resolveAiConfigText,
+              ctx.warnedProviderConflicts,
               execContext
             );
 
@@ -7454,7 +7477,8 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               issueContext,
               stepNamePrefix,
               execContext,
-              ctx.runChildWorkflow
+              ctx.runChildWorkflow,
+              ctx.warnedProviderConflicts
             );
             return { nodeId: node.id, output };
           }
@@ -7586,6 +7610,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
             aiProfile,
             workflowPreset,
             resolveAiConfigText,
+            ctx.warnedProviderConflicts,
             execContext
           );
 
@@ -8657,6 +8682,7 @@ export async function executeDagWorkflow(
     nodeOutputs,
     priorCompletedNodes,
     lastSequentialSession: undefined,
+    warnedProviderConflicts: new Set<string>(),
     totalCostUsd: 0,
     totalTokensIn: priorTokenUsage?.input ?? 0,
     totalTokensOut: priorTokenUsage?.output ?? 0,

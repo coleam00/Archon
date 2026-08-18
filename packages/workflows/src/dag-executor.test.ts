@@ -20441,3 +20441,84 @@ describe('executeDagWorkflow -- composition governance survives the collapse', (
     expect(store.createWorkflowRun).not.toHaveBeenCalled();
   });
 });
+
+describe('executeDagWorkflow -- a workflow-level provider/model conflict is reported once', () => {
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = join(tmpdir(), `dag-conflict-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    await mkdir(testDir, { recursive: true });
+    mockSendQueryDag.mockClear();
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'ok' };
+      yield { type: 'result', sessionId: 'sid' };
+    });
+  });
+
+  afterEach(async () => {
+    try {
+      await rm(testDir, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup errors
+    }
+  });
+
+  it('sends one message for a conflict the author declared once, not one per node', async () => {
+    // The collapse writes the workflow's `provider` AND its tier `model` onto every node
+    // (#1764), so a single authoring mistake reaches `resolveNodeProviderAndModel` N
+    // times. Before de-duplication that was N identical chat warnings.
+    const { workflows, errors } = expandWorkflowIncludes(
+      new Map([
+        [
+          'conflict',
+          {
+            name: 'conflict',
+            description: 'conflict',
+            provider: 'claude',
+            model: 'large',
+            nodes: [
+              dagNodeSchema.parse({ id: 'a', prompt: 'a' }),
+              dagNodeSchema.parse({ id: 'b', prompt: 'b', depends_on: ['a'] }),
+              dagNodeSchema.parse({ id: 'c', prompt: 'c', depends_on: ['b'] }),
+            ],
+          } as WorkflowDefinition,
+        ],
+      ])
+    );
+    expect(errors).toEqual([]);
+
+    const platform = createMockPlatform();
+    await executeDagWorkflow(
+      createMockDeps(),
+      platform,
+      'conv-conflict',
+      testDir,
+      workflows.get('conflict')!,
+      makeWorkflowRun('conflict-run', { workflow_name: 'conflict' }),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      buildAiProfile('claude', {
+        repoTiers: { large: { provider: 'codex', model: 'gpt-5.6-sol' } },
+      })
+    );
+
+    const conflictMessages = (
+      platform.sendMessage as Mock<(conversationId: string, message: string) => Promise<void>>
+    ).mock.calls
+      .map(c => c[1])
+      .filter(m => typeof m === 'string' && m.includes("resolves to provider 'codex'"));
+    expect(conflictMessages).toHaveLength(1);
+    // All three nodes still RESOLVED to codex — only the reporting is de-duplicated.
+    expect(mockSendQueryDag.mock.calls).toHaveLength(3);
+  });
+});
