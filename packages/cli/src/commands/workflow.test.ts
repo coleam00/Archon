@@ -942,6 +942,24 @@ describe('workflowRunCommand — --input declared inputs (#2554)', () => {
     expect(dryRun.dryRunWorkflow).not.toHaveBeenCalled();
   });
 
+  it('reports the incompatible flag, not an input error, for --dry-run --resume --input', async () => {
+    // The incompatible-flags check must stay ahead of the input gate: with --input no
+    // longer in that list, only ordering keeps the triple reporting the flag conflict.
+    const dryRun = await import('@archon/workflows/dry-run');
+    await stubInputWorkflow();
+    (dryRun.dryRunWorkflow as ReturnType<typeof mock>).mockClear();
+
+    await expect(
+      workflowRunCommand('/repo/root', 'review-block', 'go', {
+        dryRun: true,
+        resume: true,
+        inputs: ['diff=D1'],
+      })
+    ).rejects.toThrow(/--dry-run cannot be combined with --resume/);
+
+    expect(dryRun.dryRunWorkflow).not.toHaveBeenCalled();
+  });
+
   it('rejects an undeclared --input name on a dry run at the gate', async () => {
     const dryRun = await import('@archon/workflows/dry-run');
     await stubInputWorkflow();

@@ -370,8 +370,10 @@ async function executeCodeNode(
     } else {
       return { error: `Node '${node.id}' is not executable code` };
     }
-    // Inputs ride the env bag as `INPUTS_<UPPER_SNAKE>`, never text substitution —
-    // the same delivery a real run's `inputEnvVars` performs (dag-executor.ts).
+    // Run-level inputs ride the env bag as `INPUTS_<UPPER_SNAKE>`, never text
+    // substitution — the run-inputs half of a real run's `inputEnvVars`
+    // (dag-executor.ts). Composed include-block inputs for named scripts are a
+    // real-run-only channel the dry run does not deliver.
     const inputEnv: Record<string, string> = {};
     for (const [name, value] of Object.entries(ctx.inputs ?? {})) {
       inputEnv[inputEnvKey(name)] = value;

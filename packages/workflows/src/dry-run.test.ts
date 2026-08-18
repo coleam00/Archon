@@ -563,6 +563,45 @@ describe('dryRunWorkflow — declared inputs (#2610)', () => {
     expect(result.trace[0]?.resolvedText).toBe('Do X');
   });
 
+  test('merges a supplied input with a defaulted companion — the #2123 bundle shape', async () => {
+    // Multi-key layering is where the merge is observable: `supplied ?? defaults`
+    // (all-or-nothing) would pass every single-key test while dropping 'style' here.
+    const workflow = makeTestWorkflow({
+      name: 'inputs-mixed',
+      inputs: { diff: { required: true }, style: { default: 'strict' } },
+      nodes: [{ id: 'review', prompt: 'Review $INPUTS.diff as $INPUTS.style' }],
+    });
+    const result = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd: process.cwd(),
+      stubs: { review: 'done' },
+      inputs: { diff: 'D1' },
+    });
+
+    expect(result.outcome).toBe('completed');
+    expect(result.trace[0]?.resolvedText).toBe('Review D1 as strict');
+  });
+
+  test('keeps $INPUTS text literal in bash bodies — env vars are the only shell channel', async () => {
+    // shellSafe must keep holding now that ctx.inputs is threaded into resolveText:
+    // substituting user-controlled values into shell source is the injection class
+    // INPUTS_<UPPER_SNAKE> env delivery exists to prevent (#2115).
+    const workflow = makeTestWorkflow({
+      name: 'inputs-shell-literal',
+      inputs: { work: { default: 'W' } },
+      nodes: [{ id: 'code', bash: 'echo $INPUTS.work' }],
+    });
+    const result = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd: process.cwd(),
+      stubs: { code: 'stubbed' },
+    });
+
+    expect(result.trace[0]?.resolvedText).toBe('echo $INPUTS.work');
+  });
+
   test('keeps passthrough semantics for a workflow that declares no inputs', async () => {
     // Parity with a real run: `--input` on a signature-less workflow forwards verbatim.
     const workflow = makeTestWorkflow({
