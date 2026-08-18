@@ -5246,7 +5246,9 @@ nodes:
       const nodes = result.workflows[0].workflow.nodes;
       const group = nodes.find(n => n.id === 'group');
       expect(group?.loop_group).toBeDefined();
-      expect(group?.loop_group?.nodes[0]?.persist_session).toBeUndefined();
+      const body = group?.loop_group?.nodes[0];
+      expect(body).toBeDefined();
+      expect(body?.persist_session).toBeUndefined();
       // The top-level AI node still receives it — only the body is excluded.
       expect(nodes.find(n => n.id === 'after')?.persist_session).toBe(true);
     });

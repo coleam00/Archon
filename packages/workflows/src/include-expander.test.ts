@@ -1665,7 +1665,8 @@ describe('expandWorkflowIncludes — where a workflow-level model: travels (#176
       provider: 'codex',
       model: 'gpt-5.6-sol',
     });
-    expect(nodes[0]?.model).toBeUndefined();
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0].model).toBeUndefined();
   });
 
   test('does NOT travel when the workflow declares a model but no provider — the known divergence', () => {
