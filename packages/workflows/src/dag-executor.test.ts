@@ -58,6 +58,7 @@ import {
   clearRegistry,
   getProviderCapabilities,
 } from '@archon/providers';
+import type { SendQueryOptions } from '@archon/providers';
 clearRegistry();
 registerBuiltinProviders();
 // Pi is a community provider (best-effort structured output) — register it so the
@@ -92,7 +93,7 @@ import type {
   WorkflowRun,
   WorkflowDefinition,
 } from './schemas';
-import { dagNodeSchema } from './schemas';
+import { dagNodeSchema, workflowDefinitionSchema } from './schemas';
 import { discoverWorkflows } from './workflow-discovery';
 import { parseWorkflow } from './loader';
 import { expandWorkflowIncludes } from './include-expander';
@@ -109,6 +110,7 @@ import {
   isLiteralSpec,
   resolveModelSpec,
   type ModelAliasPreset,
+  type RawTiersConfig,
 } from './model-validation';
 
 // --- Mock helpers ---
@@ -19684,12 +19686,12 @@ describe('executeDagWorkflow -- a workflow runs as authored, standalone or compo
   }
 
   function wfDef(name: string, nodes: unknown[], workflowLevel: object = {}): WorkflowDefinition {
-    return {
+    return workflowDefinitionSchema.parse({
       name,
       description: name,
       nodes: nodes.map(n => dagNodeSchema.parse(n)),
       ...workflowLevel,
-    } as WorkflowDefinition;
+    });
   }
 
   const collapseConfig: WorkflowConfig = {
@@ -19711,7 +19713,7 @@ describe('executeDagWorkflow -- a workflow runs as authored, standalone or compo
   async function effectiveConfigs(
     defs: readonly WorkflowDefinition[],
     runName: string,
-    options: { expand?: boolean; profileProvider?: string; tiers?: Record<string, unknown> } = {}
+    options: { expand?: boolean; profileProvider?: string; tiers?: RawTiersConfig } = {}
   ): Promise<Map<string, EffectiveConfig>> {
     let workflow: WorkflowDefinition;
     if (options.expand === false) {
@@ -19723,7 +19725,7 @@ describe('executeDagWorkflow -- a workflow runs as authored, standalone or compo
     }
 
     const aiProfile = buildAiProfile(options.profileProvider ?? collapseConfig.assistant, {
-      ...(options.tiers ? { repoTiers: options.tiers as never } : {}),
+      ...(options.tiers ? { repoTiers: options.tiers } : {}),
     });
 
     // --- mirror of executor.ts's workflow-level resolution ---
@@ -19743,24 +19745,24 @@ describe('executeDagWorkflow -- a workflow runs as authored, standalone or compo
     workflowModel ??= collapseConfig.assistants[workflowProvider]?.model as string | undefined;
     // --- end mirror ---
 
-    const seen: { provider: string; options: Record<string, unknown> }[] = [];
+    const seen: { provider: string; options: SendQueryOptions }[] = [];
     const deps: WorkflowDeps = {
       store: createMockStore(),
-      getAgentProvider: mock((provider: string) => ({
-        sendQuery: mock(function* (
-          _prompt: string,
-          _cwd: string,
-          _resume: unknown,
-          queryOptions: Record<string, unknown>
-        ) {
-          seen.push({ provider, options: queryOptions });
-          yield { type: 'assistant', content: 'ok' };
-          yield { type: 'result', sessionId: `sid-${String(seen.length)}` };
-        }),
-        getType: () => provider,
-        getCapabilities: provider === 'codex' ? mockCodexCapabilities : mockClaudeCapabilities,
-      })) as unknown as WorkflowDeps['getAgentProvider'],
-      loadConfig: mock(() => Promise.resolve(collapseConfig)),
+      getAgentProvider: mock<WorkflowDeps['getAgentProvider']>(
+        (provider): ReturnType<WorkflowDeps['getAgentProvider']> => ({
+          sendQuery: mock<ReturnType<WorkflowDeps['getAgentProvider']>['sendQuery']>(
+            async function* (_prompt, _cwd, _resume, queryOptions) {
+              if (!queryOptions) throw new Error('Expected provider query options');
+              seen.push({ provider, options: queryOptions });
+              yield { type: 'assistant', content: 'ok' };
+              yield { type: 'result', sessionId: `sid-${String(seen.length)}` };
+            }
+          ),
+          getType: (): string => provider,
+          getCapabilities: provider === 'codex' ? mockCodexCapabilities : mockClaudeCapabilities,
+        })
+      ),
+      loadConfig: mock<WorkflowDeps['loadConfig']>(async _cwd => collapseConfig),
     };
 
     await executeDagWorkflow(
@@ -19788,7 +19790,8 @@ describe('executeDagWorkflow -- a workflow runs as authored, standalone or compo
 
     const result = new Map<string, EffectiveConfig>();
     for (const { provider, options: queryOptions } of seen) {
-      const nodeConfig = queryOptions.nodeConfig as Record<string, unknown>;
+      const nodeConfig = queryOptions.nodeConfig;
+      if (!nodeConfig) throw new Error('Expected workflow node configuration');
       const rawId = String(nodeConfig.nodeId);
       const id = rawId.includes('__') ? rawId.slice(rawId.lastIndexOf('__') + 2) : rawId;
       result.set(id, {
@@ -19901,7 +19904,7 @@ describe('executeDagWorkflow -- a workflow runs as authored, standalone or compo
     );
     expect(errors).toEqual([]);
     const expanded = workflows.get('parent')!;
-    const byId = new Map(expanded.nodes.map(n => [n.id, n as Record<string, unknown>]));
+    const byId = new Map(expanded.nodes.map(n => [n.id, n]));
     expect(byId.get('own')?.provider).toBe('claude');
     expect(byId.get('a__run')?.provider).toBe('pi');
     expect(byId.get('b__run')?.provider).toBe('codex');
@@ -19953,14 +19956,11 @@ describe('executeDagWorkflow -- a workflow runs as authored, standalone or compo
     );
     expect(errors).toEqual([]);
     const group = workflows.get('top')!.nodes.find(n => n.id === 'm__in__group')!;
-    expect((group as Record<string, unknown>).provider).toBe('codex');
+    expect(group.provider).toBe('codex');
     // The body node carries the INNER file's provider, not mid's or top's.
-    const body = (group as { loop_group: { nodes: DagNode[] } }).loop_group.nodes[0] as Record<
-      string,
-      unknown
-    >;
-    expect(body.provider).toBe('codex');
-    expect(body.model).toBe('gpt-5.6-sol');
+    const body = group.loop_group?.nodes[0];
+    expect(body?.provider).toBe('codex');
+    expect(body?.model).toBe('gpt-5.6-sol');
   });
 });
 
@@ -19977,7 +19977,7 @@ describe('executeDagWorkflow -- composed-workflow run-time boundaries', () => {
     testDir = join(tmpdir(), `dag-comp-rt-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     await mkdir(testDir, { recursive: true });
     mockSendQueryDag.mockClear();
-    mockSendQueryDag.mockImplementation(function* () {
+    mockSendQueryDag.mockImplementation(async function* () {
       yield { type: 'assistant', content: 'response' };
       yield { type: 'result', sessionId: 'session-1' };
     });
@@ -19992,19 +19992,17 @@ describe('executeDagWorkflow -- composed-workflow run-time boundaries', () => {
   });
 
   function buildWf(name: string, nodes: unknown[], extra: object = {}): WorkflowDefinition {
-    return {
+    return workflowDefinitionSchema.parse({
       name,
       description: name,
       nodes: nodes.map(n => dagNodeSchema.parse(n)),
       ...extra,
-    } as WorkflowDefinition;
+    });
   }
 
   /** The `node_output` a completed node persisted, read from its node_completed event. */
-  function nodeOutputOf(store: IWorkflowStore, stepName: string): string | undefined {
-    const event = (
-      store.createWorkflowEvent as Mock<(e: Record<string, unknown>) => Promise<void>>
-    ).mock.calls
+  function nodeOutputOf(store: MockWorkflowStore, stepName: string): string | undefined {
+    const event = store.createWorkflowEvent.mock.calls
       .map(c => c[0])
       .find(e => e.event_type === 'node_completed' && e.step_name === stepName);
     return (event?.data as { node_output?: string } | undefined)?.node_output;
@@ -20148,12 +20146,10 @@ describe('executeDagWorkflow -- composed-workflow run-time boundaries', () => {
 
     const store = createMockStore();
     const deps = createMockDeps(store);
-    deps.loadConfig = mock(() =>
-      Promise.resolve({
-        ...minimalConfig,
-        envVars: { INPUTS_PLAN: 'from-project-env', ARGUMENTS: 'hijacked' },
-      })
-    ) as WorkflowDeps['loadConfig'];
+    deps.loadConfig = mock<WorkflowDeps['loadConfig']>(async _cwd => ({
+      ...minimalConfig,
+      envVars: { INPUTS_PLAN: 'from-project-env', ARGUMENTS: 'hijacked' },
+    }));
 
     const { workflows, errors } = expandWorkflowIncludes(
       new Map([
@@ -20214,7 +20210,7 @@ describe('executeDagWorkflow -- systemPrompt and agents are runtime substitution
     testDir = join(tmpdir(), `dag-aicfg-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     await mkdir(testDir, { recursive: true });
     mockSendQueryDag.mockClear();
-    mockSendQueryDag.mockImplementation(function* () {
+    mockSendQueryDag.mockImplementation(async function* () {
       yield { type: 'assistant', content: 'response' };
       yield { type: 'result', sessionId: 'session-1' };
     });
@@ -20231,13 +20227,13 @@ describe('executeDagWorkflow -- systemPrompt and agents are runtime substitution
   async function runNodes(
     nodes: unknown[],
     run = makeWorkflowRun('aicfg-run')
-  ): Promise<Record<string, unknown>[]> {
+  ): Promise<SendQueryOptions[]> {
     await executeDagWorkflow(
       createMockDeps(),
       createMockPlatform(),
       'conv-dag',
       testDir,
-      { name: 'aicfg', description: 'aicfg', nodes: nodes.map(n => dagNodeSchema.parse(n)) },
+      { name: 'aicfg', nodes: nodes.map(n => dagNodeSchema.parse(n)) },
       run,
       'claude',
       undefined,
@@ -20248,7 +20244,11 @@ describe('executeDagWorkflow -- systemPrompt and agents are runtime substitution
       'docs/',
       minimalConfig
     );
-    return mockSendQueryDag.mock.calls.map(c => c[3] as Record<string, unknown>);
+    return mockSendQueryDag.mock.calls.map(call => {
+      const options = call[3];
+      if (!options) throw new Error('Expected provider query options');
+      return options;
+    });
   }
 
   it('AC15 — all three surfaces resolve workflow variables and $node.output refs', async () => {
@@ -20271,9 +20271,8 @@ describe('executeDagWorkflow -- systemPrompt and agents are runtime substitution
     const artifacts = join(testDir, 'artifacts');
     const last = options.at(-1)!;
     expect(last.systemPrompt).toBe(`artifacts=${artifacts} upstream=UPSTREAM`);
-    const nodeConfig = last.nodeConfig as { agents: Record<string, Record<string, string>> };
-    expect(nodeConfig.agents.helper.description).toBe('handles UPSTREAM');
-    expect(nodeConfig.agents.helper.prompt).toBe(`work on UPSTREAM in ${artifacts}`);
+    expect(last.nodeConfig?.agents?.helper?.description).toBe('handles UPSTREAM');
+    expect(last.nodeConfig?.agents?.helper?.prompt).toBe(`work on UPSTREAM in ${artifacts}`);
   });
 
   it('AC15 — the node definition is not mutated, so a second pass is not double-substituted', async () => {
@@ -20287,7 +20286,7 @@ describe('executeDagWorkflow -- systemPrompt and agents are runtime substitution
       createMockPlatform(),
       'conv-dag',
       testDir,
-      { name: 'aicfg2', description: 'aicfg2', nodes: [definition] },
+      { name: 'aicfg2', nodes: [definition] },
       makeWorkflowRun('aicfg-run-2'),
       'claude',
       undefined,
@@ -20298,7 +20297,7 @@ describe('executeDagWorkflow -- systemPrompt and agents are runtime substitution
       'docs/',
       minimalConfig
     );
-    expect((definition as Record<string, unknown>).systemPrompt).toBe('dir=$ARTIFACTS_DIR');
+    expect(definition.systemPrompt).toBe('dir=$ARTIFACTS_DIR');
   });
 
   it('AC15 — $INPUTS in a systemPrompt produces the same text standalone as composed', async () => {
@@ -20346,9 +20345,7 @@ describe('executeDagWorkflow -- systemPrompt and agents are runtime substitution
       'docs/',
       minimalConfig
     );
-    expect((mockSendQueryDag.mock.calls.at(-1)![3] as Record<string, unknown>).systemPrompt).toBe(
-      'mode=strict'
-    );
+    expect(mockSendQueryDag.mock.calls.at(-1)?.[3]?.systemPrompt).toBe('mode=strict');
   });
 });
 
@@ -20366,7 +20363,7 @@ describe('executeDagWorkflow -- composition governance survives the collapse', (
     testDir = join(tmpdir(), `dag-gov-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     await mkdir(testDir, { recursive: true });
     mockSendQueryDag.mockClear();
-    mockSendQueryDag.mockImplementation(function* () {
+    mockSendQueryDag.mockImplementation(async function* () {
       yield { type: 'assistant', content: 'response' };
       yield { type: 'result', sessionId: 'session-1' };
     });
@@ -20381,12 +20378,12 @@ describe('executeDagWorkflow -- composition governance survives the collapse', (
   });
 
   function buildWf(name: string, nodes: unknown[], extra: object = {}): WorkflowDefinition {
-    return {
+    return workflowDefinitionSchema.parse({
       name,
       description: name,
       nodes: nodes.map(n => dagNodeSchema.parse(n)),
       ...extra,
-    } as WorkflowDefinition;
+    });
   }
 
   it('AC13 — a run paused BEFORE the collapse resumes with collapsed config afterwards', async () => {
@@ -20420,15 +20417,17 @@ describe('executeDagWorkflow -- composition governance survives the collapse', (
     const seen: string[] = [];
     const deps: WorkflowDeps = {
       store,
-      getAgentProvider: mock((provider: string) => {
-        seen.push(provider);
-        return {
-          sendQuery: mockSendQueryDag,
-          getType: () => provider,
-          getCapabilities: provider === 'codex' ? mockCodexCapabilities : mockClaudeCapabilities,
-        };
-      }) as unknown as WorkflowDeps['getAgentProvider'],
-      loadConfig: mock(() => Promise.resolve(minimalConfig)),
+      getAgentProvider: mock<WorkflowDeps['getAgentProvider']>(
+        (provider): ReturnType<WorkflowDeps['getAgentProvider']> => {
+          seen.push(provider);
+          return {
+            sendQuery: mockSendQueryDag,
+            getType: (): string => provider,
+            getCapabilities: provider === 'codex' ? mockCodexCapabilities : mockClaudeCapabilities,
+          };
+        }
+      ),
+      loadConfig: mock<WorkflowDeps['loadConfig']>(async _cwd => minimalConfig),
     };
 
     await executeDagWorkflow(
@@ -20451,9 +20450,7 @@ describe('executeDagWorkflow -- composition governance survives the collapse', (
       prior
     );
 
-    const events = (
-      store.createWorkflowEvent as Mock<(e: Record<string, unknown>) => Promise<void>>
-    ).mock.calls.map(c => c[0]);
+    const events = store.createWorkflowEvent.mock.calls.map(call => call[0]);
     expect(
       events.some(
         e => e.event_type === 'node_skipped_prior_success' && e.step_name === 'inc__first'
@@ -20502,9 +20499,7 @@ describe('executeDagWorkflow -- composition governance survives the collapse', (
       minimalConfig
     );
 
-    const pauseCalls = (
-      store.pauseWorkflowRun as Mock<(id: string, ctx: Record<string, unknown>) => Promise<void>>
-    ).mock.calls;
+    const pauseCalls = store.pauseWorkflowRun.mock.calls;
     expect(pauseCalls.length).toBe(1);
     // One addressable run: the composition pauses the run that composed it. A `workflow:`
     // node would instead pause a second row the human approves by its own id.
@@ -20523,7 +20518,7 @@ describe('executeDagWorkflow -- a workflow-level provider/model conflict is repo
     testDir = join(tmpdir(), `dag-conflict-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     await mkdir(testDir, { recursive: true });
     mockSendQueryDag.mockClear();
-    mockSendQueryDag.mockImplementation(function* () {
+    mockSendQueryDag.mockImplementation(async function* () {
       yield { type: 'assistant', content: 'ok' };
       yield { type: 'result', sessionId: 'sid' };
     });
@@ -20545,7 +20540,7 @@ describe('executeDagWorkflow -- a workflow-level provider/model conflict is repo
       new Map([
         [
           'conflict',
-          {
+          workflowDefinitionSchema.parse({
             name: 'conflict',
             description: 'conflict',
             provider: 'claude',
@@ -20555,7 +20550,7 @@ describe('executeDagWorkflow -- a workflow-level provider/model conflict is repo
               dagNodeSchema.parse({ id: 'b', prompt: 'b', depends_on: ['a'] }),
               dagNodeSchema.parse({ id: 'c', prompt: 'c', depends_on: ['b'] }),
             ],
-          } as WorkflowDefinition,
+          }),
         ],
       ])
     );
@@ -20586,9 +20581,7 @@ describe('executeDagWorkflow -- a workflow-level provider/model conflict is repo
       })
     );
 
-    const conflictMessages = (
-      platform.sendMessage as Mock<(conversationId: string, message: string) => Promise<void>>
-    ).mock.calls
+    const conflictMessages = platform.sendMessage.mock.calls
       .map(c => c[1])
       .filter(m => typeof m === 'string' && m.includes("resolves to provider 'codex'"));
     expect(conflictMessages).toHaveLength(1);

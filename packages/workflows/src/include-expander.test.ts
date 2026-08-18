@@ -1337,7 +1337,7 @@ describe('expandWorkflowIncludes — determinism', () => {
     // provider does NOT inherit the other provider's model string, matching what the
     // executor does with a workflow-level model today.
     expect(nodeById(expanded, 'b')).toMatchObject({ provider: 'codex' });
-    expect((nodeById(expanded, 'b') as Record<string, unknown>).model).toBeUndefined();
+    expect(nodeById(expanded, 'b')?.model).toBeUndefined();
     // The input is never mutated — discovery hands the same object to display surfaces.
     expect(plain.provider).toBe('pi');
   });
@@ -1665,7 +1665,7 @@ describe('expandWorkflowIncludes — where a workflow-level model: travels (#176
       provider: 'codex',
       model: 'gpt-5.6-sol',
     });
-    expect((nodes[0] as Record<string, unknown>).model).toBeUndefined();
+    expect(nodes[0]?.model).toBeUndefined();
   });
 
   test('does NOT travel when the workflow declares a model but no provider — the known divergence', () => {
@@ -1677,8 +1677,8 @@ describe('expandWorkflowIncludes — where a workflow-level model: travels (#176
       ...wf('w', [{ id: 'n', prompt: 'p', provider: 'codex' }]),
       model: 'large',
     });
-    expect((nodes[0] as Record<string, unknown>).model).toBeUndefined();
-    expect((nodes[0] as Record<string, unknown>).provider).toBe('codex');
+    expect(nodes[0]?.model).toBeUndefined();
+    expect(nodes[0]?.provider).toBe('codex');
   });
 
   test('every other node-affecting field travels regardless of the node provider', () => {

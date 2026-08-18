@@ -5224,7 +5224,7 @@ nodes:
       expect(result.errors).toEqual([]);
       const expanded = result.workflows[0].workflow;
       expect(expanded.persist_sessions).toBeUndefined();
-      const byId = new Map(expanded.nodes.map(n => [n.id, n as Record<string, unknown>]));
+      const byId = new Map(expanded.nodes.map(n => [n.id, n]));
       expect(byId.get('planner')?.persist_session).toBe(true);
       expect(byId.get('shell')?.persist_session).toBeUndefined();
     });
@@ -5244,14 +5244,11 @@ nodes:
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
       expect(result.errors).toEqual([]);
       const nodes = result.workflows[0].workflow.nodes;
-      const group = nodes.find(n => n.id === 'group') as {
-        loop_group: { nodes: Record<string, unknown>[] };
-      };
-      expect(group.loop_group.nodes[0].persist_session).toBeUndefined();
+      const group = nodes.find(n => n.id === 'group');
+      expect(group?.loop_group).toBeDefined();
+      expect(group?.loop_group?.nodes[0]?.persist_session).toBeUndefined();
       // The top-level AI node still receives it — only the body is excluded.
-      expect((nodes.find(n => n.id === 'after') as Record<string, unknown>).persist_session).toBe(
-        true
-      );
+      expect(nodes.find(n => n.id === 'after')?.persist_session).toBe(true);
     });
 
     it('does NOT capability-check non-AI nodes when persist_sessions is workflow-level', async () => {
