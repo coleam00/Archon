@@ -94,11 +94,13 @@ function sourceSelectors(testScript: string | undefined): SelectorParseResult {
 function inspectPackage(packageDirectory: string): InventoryMismatch | undefined {
   const manifestPath = join(packageDirectory, 'package.json');
   const sourceDirectory = join(packageDirectory, 'src');
-  if (!existsSync(manifestPath) || !existsSync(sourceDirectory)) return undefined;
+  if (!existsSync(manifestPath)) return undefined;
 
-  const tests = listFiles(sourceDirectory)
-    .filter((path): boolean => TEST_FILE_PATTERN.test(path))
-    .map((path): string => normalizePath(relative(packageDirectory, path)));
+  const tests = existsSync(sourceDirectory)
+    ? listFiles(sourceDirectory)
+        .filter((path): boolean => TEST_FILE_PATTERN.test(path))
+        .map((path): string => normalizePath(relative(packageDirectory, path)))
+    : [];
 
   const manifest = readPackageManifest(manifestPath);
   const { selectors, unsupportedCommands } = sourceSelectors(manifest.testScript);
