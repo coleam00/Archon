@@ -40,6 +40,7 @@ Archon provides a unified directory and configuration system with:
 │       ├── logs/<run-id>.jsonl     # Workflow execution logs
 │       └── state/                  # $STATE_DIR — cross-run state, shared per project
 ├── workflows/  commands/  scripts/ # Home-scoped ("global") definitions
+├── temp/                           # Ephemeral scratch (per-simulation dry-run dirs; removed when the run ends)
 ├── worktrees/                      # Legacy global worktrees (repos not in workspaces/)
 ├── vendor/codex/                   # Codex native binary (binary builds, user-placed)
 ├── web-dist/<version>/             # Cached web UI dist (archon serve, binary only)

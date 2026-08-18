@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { makeTestWorkflow } from './test-utils';
@@ -229,6 +229,64 @@ describe('dryRunWorkflow', () => {
     });
     expect(failureResult.outcome).toBe('failed');
     expect(failureResult.trace[0]).toMatchObject({ state: 'failed', reason: 'nope' });
+  });
+
+  // #2617 + #2619: exec'd nodes get a pre-created ARTIFACTS_DIR/STATE_DIR under
+  // <ARCHON_HOME>/temp — never inside the simulated repo — removed when the run ends.
+  test('exec-code writes land in an ephemeral ARCHON_HOME temp dir, not the repo', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'archon-dry-run-home-'));
+    const cwd = mkdtempSync(join(tmpdir(), 'archon-dry-run-repo-'));
+    temporaryDirectories.push(home, cwd);
+    const previousHome = process.env.ARCHON_HOME;
+    process.env.ARCHON_HOME = home;
+    try {
+      const workflow = makeTestWorkflow({
+        name: 'hermetic',
+        nodes: [
+          {
+            id: 'code',
+            bash: 'printf data > "$ARTIFACTS_DIR/out.txt"\nprintf s > "$STATE_DIR/s.txt"\ncat "$ARTIFACTS_DIR/out.txt"\necho\necho "$ARTIFACTS_DIR"',
+          },
+        ],
+      });
+      const result = await dryRunWorkflow({ workflow, userMessage: '', cwd, execCode: true });
+
+      expect(result.outcome).toBe('completed');
+      const [written, reportedDir] = (result.trace[0]?.output ?? '').split('\n');
+      expect(written).toBe('data');
+      expect(reportedDir?.startsWith(join(home, 'temp'))).toBe(true);
+      expect(existsSync(join(cwd, '.archon'))).toBe(false);
+      expect(readdirSync(join(home, 'temp'))).toEqual([]);
+    } finally {
+      if (previousHome === undefined) delete process.env.ARCHON_HOME;
+      else process.env.ARCHON_HOME = previousHome;
+    }
+  });
+
+  test('a dry run that executes nothing creates no temp directory', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'archon-dry-run-home-'));
+    temporaryDirectories.push(home);
+    const previousHome = process.env.ARCHON_HOME;
+    process.env.ARCHON_HOME = home;
+    try {
+      const workflow = makeTestWorkflow({
+        name: 'stub-only',
+        nodes: [{ id: 'code', bash: 'printf never-runs' }],
+      });
+      const result = await dryRunWorkflow({
+        workflow,
+        userMessage: '',
+        cwd: process.cwd(),
+        stubs: { code: 'stubbed' },
+        execCode: true,
+      });
+
+      expect(result.outcome).toBe('completed');
+      expect(existsSync(join(home, 'temp'))).toBe(false);
+    } finally {
+      if (previousHome === undefined) delete process.env.ARCHON_HOME;
+      else process.env.ARCHON_HOME = previousHome;
+    }
   });
 
   test('auto-approves or pauses approval gates', async () => {

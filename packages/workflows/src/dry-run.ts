@@ -1,6 +1,9 @@
 /** Side-effect-free workflow DAG simulation with caller-supplied node outputs. */
 import { z } from '@hono/zod-openapi';
 import { execFileAsync, resolveBashPath } from '@archon/git';
+import { createLogger, getArchonTempPath } from '@archon/paths';
+import { randomUUID } from 'node:crypto';
+import { mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { buildTopologicalLayers, checkTriggerRule, substituteNodeOutputRefs } from './dag-executor';
 import { evaluateCondition } from './condition-evaluator';
@@ -38,6 +41,13 @@ import {
   type NodeOutput,
   type WorkflowDefinition,
 } from './schemas';
+
+/** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
+let cachedLog: ReturnType<typeof createLogger> | undefined;
+function getLog(): ReturnType<typeof createLogger> {
+  cachedLog ??= createLogger('workflow.dry-run');
+  return cachedLog;
+}
 
 export const dryRunStubValueSchema = z.union([z.string(), z.record(z.string(), z.unknown())]);
 export const dryRunStubsSchema = z.record(z.string(), dryRunStubValueSchema);
@@ -200,6 +210,14 @@ interface DryRunContext {
    * Undefined when the workflow declares no inputs and the caller supplied none.
    */
   inputs?: Record<string, string>;
+  /**
+   * Per-simulation `$ARTIFACTS_DIR` / `$STATE_DIR`, under a uniquely named root in
+   * `<archonHome>/temp/` — NEVER inside the simulated repository, which holds source
+   * only (#2619). Created lazily before the first `--exec-code` execution (#2617) and
+   * removed when the simulation ends; a pure-stub dry run creates nothing.
+   */
+  artifactsDir: string;
+  stateDir: string;
   execCode: boolean;
   pauseAtGates: boolean;
   trace: DryRunTraceEntry[];
@@ -237,21 +255,19 @@ function resolveText(
   loopPrevOutput = '',
   escapeNodeOutputs = shellSafe
 ): string {
-  const artifactsDir = join(ctx.cwd, '.archon', 'dry-run', 'artifacts');
-  const stateDir = join(ctx.cwd, '.archon', 'dry-run', 'state');
   const docsDir = join(ctx.cwd, 'docs');
   const substituted = substituteWorkflowVariables(
     text,
     'dry-run',
     ctx.userMessage,
-    artifactsDir,
+    ctx.artifactsDir,
     'dry-run-base',
     docsDir,
     undefined,
     undefined,
     undefined,
     loopPrevOutput,
-    { shellSafe, stateDir, ...(ctx.inputs ? { inputs: ctx.inputs } : {}) }
+    { shellSafe, stateDir: ctx.stateDir, ...(ctx.inputs ? { inputs: ctx.inputs } : {}) }
   ).prompt;
   return substituteNodeOutputRefs(substituted, outputs, escapeNodeOutputs);
 }
@@ -378,6 +394,11 @@ async function executeCodeNode(
     for (const [name, value] of Object.entries(ctx.inputs ?? {})) {
       inputEnv[inputEnvKey(name)] = value;
     }
+    // The executor pre-creates the artifacts dir it advertises; the simulator honors
+    // the same contract (#2617). Idempotent, and only reached when code executes, so
+    // a pure-stub dry run creates no directory.
+    await mkdir(ctx.artifactsDir, { recursive: true });
+    await mkdir(ctx.stateDir, { recursive: true });
     const result = await execFileAsync(command, args, {
       cwd: ctx.cwd,
       timeout: node.timeout ?? 300_000,
@@ -386,8 +407,8 @@ async function executeCodeNode(
         ...inputEnv,
         USER_MESSAGE: ctx.userMessage,
         ARGUMENTS: ctx.userMessage,
-        ARTIFACTS_DIR: join(ctx.cwd, '.archon', 'dry-run', 'artifacts'),
-        STATE_DIR: join(ctx.cwd, '.archon', 'dry-run', 'state'),
+        ARTIFACTS_DIR: ctx.artifactsDir,
+        STATE_DIR: ctx.stateDir,
       },
     });
     return { output: result.stdout.replace(/\n$/, '') };
@@ -780,12 +801,15 @@ export async function dryRunWorkflow(options: {
   const declaredDefaults = defaultRunInputs(options.workflow.inputs);
   const inputs =
     declaredDefaults || options.inputs ? { ...declaredDefaults, ...options.inputs } : undefined;
+  const tempRoot = join(getArchonTempPath(), `dry-run-${randomUUID()}`);
   const ctx: DryRunContext = {
     workflow: options.workflow,
     userMessage: options.userMessage,
     cwd: options.cwd,
     stubs: options.stubs ?? {},
     ...(inputs ? { inputs } : {}),
+    artifactsDir: join(tempRoot, 'artifacts'),
+    stateDir: join(tempRoot, 'state'),
     execCode: options.execCode ?? false,
     pauseAtGates: options.pauseAtGates ?? false,
     trace: [],
@@ -801,7 +825,19 @@ export async function dryRunWorkflow(options: {
     ...(options.aiProfile ? { aiProfile: options.aiProfile } : {}),
   };
   const outputs = new Map<string, NodeOutput>();
-  await simulateNodes(options.workflow.nodes, outputs, ctx);
+  try {
+    await simulateNodes(options.workflow.nodes, outputs, ctx);
+  } finally {
+    // Simulations are throwaway: whatever exec'd nodes wrote is discarded with the
+    // per-run root (`force: true` makes the nothing-executed case a no-op). A cleanup
+    // failure must not fail a finished simulation, so it is logged, not thrown.
+    await rm(tempRoot, { recursive: true, force: true }).catch((error: unknown) => {
+      getLog().warn(
+        { tempRoot, error: error instanceof Error ? error.message : String(error) },
+        'dry_run.temp_cleanup_failed'
+      );
+    });
+  }
 
   const dependencies = new Set(options.workflow.nodes.flatMap(node => node.depends_on ?? []));
   const summary = options.workflow.nodes

@@ -150,6 +150,15 @@ export function getArchonWorktreesPath(): string {
 }
 
 /**
+ * Get the ephemeral scratch area (~/.archon/temp/).
+ * Contents are per-process throwaway — each consumer creates a uniquely named
+ * subdirectory and removes it when done (currently: dry-run simulations).
+ */
+export function getArchonTempPath(): string {
+  return join(getArchonHome(), 'temp');
+}
+
+/**
  * Get the global config file path
  */
 export function getArchonConfigPath(): string {

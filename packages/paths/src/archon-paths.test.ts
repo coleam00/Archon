@@ -11,6 +11,7 @@ import {
   isWSL,
   getWSLDistroName,
   getArchonHome,
+  getArchonTempPath,
   getArchonWorkspacesPath,
   ensureArchonWorkspacesPath,
   getArchonWorktreesPath,
@@ -236,6 +237,20 @@ describe('archon-paths', () => {
       delete process.env.ARCHON_DOCKER;
       process.env.ARCHON_HOME = '/custom/archon';
       expect(getArchonWorktreesPath()).toBe(join('/custom/archon', 'worktrees'));
+    });
+  });
+
+  describe('getArchonTempPath', () => {
+    test('returns ~/.archon/temp by default', () => {
+      delete process.env.ARCHON_HOME;
+      delete process.env.ARCHON_DOCKER;
+      expect(getArchonTempPath()).toBe(join(homedir(), '.archon', 'temp'));
+    });
+
+    test('uses ARCHON_HOME when set', () => {
+      delete process.env.ARCHON_DOCKER;
+      process.env.ARCHON_HOME = '/custom/archon';
+      expect(getArchonTempPath()).toBe(join('/custom/archon', 'temp'));
     });
   });
 
