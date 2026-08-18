@@ -156,8 +156,13 @@ describe('Workflow Loader', () => {
       });
 
       // And that reference is a live key in the map the executor looks the script up in.
+      // Stored paths go through `normalizeSep()` (script-discovery.ts), so they are
+      // forward-slash on every OS while `join` is backslash on Windows — normalize the
+      // expected side, matching the `norm` helper in script-discovery.test.ts.
       const scripts = await discoverScriptsForCwd(testDir);
-      expect(scripts.get(composed.script)?.path).toBe(join(blockDir, 'scripts', 'report.ts'));
+      expect(scripts.get(composed.script)?.path).toBe(
+        join(blockDir, 'scripts', 'report.ts').replaceAll('\\', '/')
+      );
     });
 
     it('resolves an included workflow command from its own package before compiling it', async () => {
