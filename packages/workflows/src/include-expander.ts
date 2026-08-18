@@ -285,9 +285,11 @@ function collapseWorkflowScope(raw: WorkflowDefinition): WorkflowDefinition {
   const collapsed: WorkflowDefinition = { ...raw, nodes: raw.nodes.map(cloneNodeForInclude) };
   const scope = collapsed as unknown as Record<string, unknown>;
   pushWorkflowScopeOntoNodes(scope, collapsed.nodes);
-  // Deleted, not set to `undefined`: the drop-warning derives its set from the child's OWN
-  // defined keys, so a key left present with an undefined value would still read as
-  // declared. The key set is this module's const tuple list, never caller input.
+  // Deleted rather than set to `undefined` so the collapsed definition has the shape a
+  // workflow that never declared these would have — it is spread into the expanded result
+  // and serialized by the workflows API, and a present-but-undefined key survives both.
+  // (The drop-warning is indifferent: it already filters `!== undefined`.) The key set is
+  // this module's own const tuple list, never caller input.
   for (const [wfKey] of NODE_AFFECTING_WORKFLOW_FIELDS) {
     // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
     delete scope[wfKey];
@@ -393,10 +395,13 @@ function rewriteNodeOutputRefs(node: DagNode, rename: (id: string) => string): v
  * `$node.output` reference; it deliberately remains unresolved for the executor's existing
  * runtime substitution pass.
  *
- * This walks a SUPERSET of rewriteNodeOutputRefs' field set, and the extra fields are the
- * point. `$INPUTS` has no runtime resolution pass anywhere in the engine — load-time
- * expansion is the ONLY path that resolves it. So the two functions have different
- * fallbacks for a surface they skip:
+ * This walks the same field set as rewriteNodeOutputRefs. It was deliberately a SUPERSET
+ * until #1764 — it added systemPrompt and agents.*, which took include inputs but had no
+ * runtime substitution pass — and that asymmetry is exactly what made a workflow using
+ * `$INPUTS.<name>` in a `systemPrompt:` resolve when composed and stay literal standalone
+ * (#2476). Those fields are ordinary runtime surfaces now, so the two sets agree.
+ *
+ * The asymmetry in FAILURE MODE remains, and is why a missed surface matters more here:
  *
  *   - a surface rewriteNodeOutputRefs misses is only a NAMESPACING miss; the executor's
  *     substituteNodeOutputRefs pass still resolves the ref at run time.
@@ -404,8 +409,9 @@ function rewriteNodeOutputRefs(node: DagNode, rename: (id: string) => string): v
  *     the model as text, and because the field was never visited the name never reaches
  *     `missing` either — so a caller who forgot to supply it gets no load error.
  *
- * Every model-facing string field must be walked for include inputs, whether or not runtime
- * also resolves node outputs there.
+ * Every model-facing string field must be walked for include inputs. A future field that
+ * takes include inputs but is NOT a runtime node-ref surface would reopen the #2476 gap;
+ * it belongs in one of these two functions, not silently in this one alone.
  */
 function applyInputsMacro(node: DagNode, args: Record<string, string>, missing: Set<string>): void {
   const substitute = (text: string): string =>
@@ -695,6 +701,13 @@ const SAFETY_WORKFLOW_KEYS: ReadonlySet<string> = new Set(['mutates_checkout']);
  * future workflow-level field is covered automatically: it either travels (by joining
  * NODE_AFFECTING_WORKFLOW_FIELDS, which deletes it before this runs), is consumed by
  * inlining (NON_DROPPED_WORKFLOW_KEYS), or shows up here.
+ *
+ * One case this does NOT report, by construction: PARTIAL travel. A travelling field is
+ * deleted whether or not it reached every node — `workflowModelTravelsTo` skips a node
+ * that switches provider, and `persist_session` skips a non-AI node or a loop_group body.
+ * Those skips are deliberate and behaviour-preserving (each mirrors a condition the
+ * executor already applied), so there is nothing new to warn about; but do not read this
+ * warning as proof that a field reached everything.
  *
  * `webSearchMode` is the one field that is neither run-owned nor able to travel — it has
  * no node-level counterpart to land on (#2556) — so it is named explicitly rather than

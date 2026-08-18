@@ -157,6 +157,17 @@ function resolveRunInputs(workflowRun: WorkflowRun): Record<string, string> | un
   return readSubrunMetadata(workflowRun.metadata as Record<string, unknown> | undefined).inputs;
 }
 
+/** Everything resolving a composed input value needs; the caller has all of it in scope. */
+interface ShellInputContext {
+  workflowRun: WorkflowRun;
+  artifactsDir: string;
+  stateDir: string;
+  baseBranch: string;
+  docsDir: string;
+  issueContext?: string;
+  nodeOutputs: Map<string, NodeOutput>;
+}
+
 /**
  * Env-var bag delivering named inputs to a bash/script node as `INPUTS_<UPPER_SNAKE>`.
  *
@@ -168,58 +179,37 @@ function resolveRunInputs(workflowRun: WorkflowRun): Record<string, string> | un
  *     NAMED script file has (its source is opaque, so the load-time `$INPUTS` macro that
  *     serves inline bodies can never reach it).
  *
- * Composed values are resolved here rather than at load time because they may hold
- * `$ARTIFACTS_DIR` or a `$node.output` ref that only exists at run time. They are NOT
- * shell-escaped — the env bag is itself the injection-safe channel (#2115), which is why
- * these values never touch the script source.
+ * A composed value gets the same two passes a `workflow:` node's `with:` map does —
+ * workflow variables (NOT shell-safe: these become env values, never shell source) then
+ * `$node.output` refs — resolved here rather than at load because a value may hold
+ * `$ARTIFACTS_DIR` or a ref that only exists at run time. Values are never shell-escaped:
+ * the env bag is itself the injection-safe channel (#2115), which is why they never touch
+ * the script source. Both shell env sites call this one function so the bag and its
+ * ordering cannot diverge between them.
  */
-/**
- * Resolve one composed-input VALUE for env delivery.
- *
- * The same two passes a `workflow:` node's `with:` map goes through: workflow variables
- * (NOT shell-safe — these become env values, never shell source) then `$node.output`
- * refs. Built once per node so both shell env bags stay byte-identical; a third
- * hand-written copy is how the #2115 ordering rationale gets lost.
- */
-function composedInputResolverFor(args: {
-  workflowRun: WorkflowRun;
-  artifactsDir: string;
-  stateDir: string;
-  baseBranch: string;
-  docsDir: string;
-  issueContext?: string;
-  nodeOutputs: Map<string, NodeOutput>;
-}): (raw: string) => string {
-  return raw =>
-    substituteNodeOutputRefs(
-      substituteWorkflowVariables(
-        raw,
-        args.workflowRun.id,
-        args.workflowRun.user_message,
-        args.artifactsDir,
-        args.baseBranch,
-        args.docsDir,
-        args.issueContext,
-        undefined,
-        undefined,
-        undefined,
-        { stateDir: args.stateDir, inputs: resolveRunInputs(args.workflowRun) }
-      ).prompt,
-      args.nodeOutputs
-    );
-}
-
-function inputEnvVars(
-  workflowRun: WorkflowRun,
-  node: DagNode,
-  resolveComposedValue: (raw: string) => string
-): NodeJS.ProcessEnv {
+function inputEnvVars(node: DagNode, ctx: ShellInputContext): NodeJS.ProcessEnv {
+  const runInputs = resolveRunInputs(ctx.workflowRun);
   const env: NodeJS.ProcessEnv = {};
-  for (const [name, value] of Object.entries(resolveRunInputs(workflowRun) ?? {})) {
+  for (const [name, value] of Object.entries(runInputs ?? {})) {
     env[inputEnvKey(name)] = value;
   }
   for (const [name, value] of Object.entries(readComposedMeta(node)?.inputs ?? {})) {
-    env[inputEnvKey(name)] = resolveComposedValue(value);
+    env[inputEnvKey(name)] = substituteNodeOutputRefs(
+      substituteWorkflowVariables(
+        value,
+        ctx.workflowRun.id,
+        ctx.workflowRun.user_message,
+        ctx.artifactsDir,
+        ctx.baseBranch,
+        ctx.docsDir,
+        ctx.issueContext,
+        undefined,
+        undefined,
+        undefined,
+        { stateDir: ctx.stateDir, inputs: runInputs }
+      ).prompt,
+      ctx.nodeOutputs
+    );
   }
   return env;
 }
@@ -2785,15 +2775,6 @@ async function executeBashNode(
   const finalScript = substituteNodeOutputRefs(substitutedScript, nodeOutputs, true, logDir);
 
   const timeout = node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT;
-  const composedInputResolver = composedInputResolverFor({
-    workflowRun,
-    artifactsDir,
-    stateDir,
-    baseBranch,
-    docsDir,
-    issueContext,
-    nodeOutputs,
-  });
   // Archon-managed env only — runSubprocess adds the host env for host runs and
   // delivers ONLY this bag into the container (host process.env never crosses).
   // Configured project env (envVars) spreads FIRST so the engine-reserved keys below
@@ -2808,7 +2789,15 @@ async function executeBashNode(
     // (#2470/#1764). Spread after envVars so a configured project env var can never
     // shadow an input's delivery, and before the engine-reserved keys so those still
     // win (same ordering rationale).
-    ...inputEnvVars(workflowRun, node, composedInputResolver),
+    ...inputEnvVars(node, {
+      workflowRun,
+      artifactsDir,
+      stateDir,
+      baseBranch,
+      docsDir,
+      issueContext,
+      nodeOutputs,
+    }),
     ARTIFACTS_DIR: artifactsDir,
     STATE_DIR: stateDir,
     LOG_DIR: logDir,
@@ -3074,15 +3063,6 @@ async function executeScriptNode(
   await warnOnLiteralUserVars(node, substitutedScript, platform, conversationId, nodeContext);
 
   const timeout = node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT;
-  const composedInputResolver = composedInputResolverFor({
-    workflowRun,
-    artifactsDir,
-    stateDir,
-    baseBranch,
-    docsDir,
-    issueContext,
-    nodeOutputs,
-  });
   // Archon-managed env only — runSubprocess adds the host env for host runs and
   // delivers ONLY this bag into the container (host process.env never crosses).
   // User-controlled values ride env vars (never spliced into source) — the
@@ -3096,7 +3076,15 @@ async function executeScriptNode(
     // Named run and composed-workflow inputs as INPUTS_<UPPER_SNAKE> env vars
     // (#2470/#1764) — same ordering rationale as executeBashNode: after envVars,
     // before the engine-reserved keys.
-    ...inputEnvVars(workflowRun, node, composedInputResolver),
+    ...inputEnvVars(node, {
+      workflowRun,
+      artifactsDir,
+      stateDir,
+      baseBranch,
+      docsDir,
+      issueContext,
+      nodeOutputs,
+    }),
     ARTIFACTS_DIR: artifactsDir,
     STATE_DIR: stateDir,
     LOG_DIR: logDir,
