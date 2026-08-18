@@ -31,6 +31,11 @@ nodes:
         git rev-parse HEAD > "$ARTIFACTS_DIR/.start-sha" &&
         echo '{"start":"recorded"}'
 
+  # Run success ≠ green. The loop completes on `done`, which deliberately includes
+  # a definitive blocked decline (green: false) — so a completed run's status never
+  # certifies the work. Consumers read $implement.output.green; compositions gate on
+  # it deterministically before spending or shipping (deliver does). #2618 tracks
+  # surfacing this as a run-level outcome signal engine-side.
   - id: implement
     loop:
       command: implement

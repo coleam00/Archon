@@ -5,9 +5,11 @@ stages after implement would spend money or go public on nothing. It reads
 Archon-owned facts only -- git state measured against the start SHA recorded
 by the record-start node -- never the project's layout or toolchain.
 
-`.archon/` is excluded deliberately: Archon copies the operator's workflow
-edits into every run worktree, so those files predate implement and are not
-its output.
+Only UNCOMMITTED `.archon/` changes are excluded: Archon copies the operator's
+workflow edits into every run worktree, so pre-existing uncommitted `.archon/`
+files predate implement and are not its output. A commit made during the run
+counts as work even when it only touches `.archon/` -- run-made commits are the
+run's output (implement legitimately edits workflows).
 """
 
 import os
