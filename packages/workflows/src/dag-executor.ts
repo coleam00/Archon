@@ -3482,12 +3482,15 @@ async function executeLoopGroupNode(
   docsDir: string,
   outerNodeOutputs: Map<string, NodeOutput>,
   config: WorkflowConfig,
+  /** Shared by reference with the enclosing run so a body cannot re-report a conflict.
+   *  Positioned among the REQUIRED parameters deliberately: as a trailing optional it
+   *  could be omitted, silently handing the body an isolated Set and quietly undoing the
+   *  de-duplication, with no compiler signal. */
+  warnedProviderConflicts: Set<string>,
   issueContext?: string,
   stepNamePrefix = '',
   execContext: ExecutionContext = { kind: 'host' },
-  runChildWorkflow?: RunChildWorkflowFn,
-  /** Shared by reference with the enclosing run so a body cannot re-report a conflict. */
-  warnedProviderConflicts: Set<string> = new Set<string>()
+  runChildWorkflow?: RunChildWorkflowFn
 ): Promise<NodeExecutionResult> {
   const group = node.loop_group;
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -7462,11 +7465,11 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               docsDir,
               ctx.nodeOutputs,
               config,
+              ctx.warnedProviderConflicts,
               issueContext,
               stepNamePrefix,
               execContext,
-              ctx.runChildWorkflow,
-              ctx.warnedProviderConflicts
+              ctx.runChildWorkflow
             );
             return { nodeId: node.id, output };
           }

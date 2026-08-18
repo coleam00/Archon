@@ -576,6 +576,24 @@ describe('workflowRunCommand — dry-run', () => {
     expect(firstJsonPayload(stdoutSpy)).toBe('DRY RUN TRACE');
   });
 
+  it('fails the dry run when the config is unreadable instead of reporting against defaults', async () => {
+    // `loadConfig` returns defaults when there is no config file, so a throw means a
+    // MALFORMED one. Swallowing it would print a clean-looking trace claiming every node
+    // resolves to the default assistant — a plausible report of a run that cannot happen.
+    const core = await import('@archon/core');
+    const dryRun = await import('@archon/workflows/dry-run');
+    (dryRun.dryRunWorkflow as ReturnType<typeof mock>).mockClear();
+    (core.loadConfig as ReturnType<typeof mock>).mockRejectedValueOnce(
+      new Error('bad yaml at .archon/config.yaml:7')
+    );
+
+    await expect(workflowRunCommand('/test/path', 'plan', 'go', { dryRun: true })).rejects.toThrow(
+      /bad yaml/
+    );
+
+    expect(dryRun.dryRunWorkflow).not.toHaveBeenCalled();
+  });
+
   it('rejects dry-run-only and incompatible lifecycle flags', async () => {
     await expect(
       workflowRunCommand('/test/path', 'plan', '', { stubsPath: 'fixtures.yaml' })

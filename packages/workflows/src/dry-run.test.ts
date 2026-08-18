@@ -6,6 +6,7 @@ import { makeTestWorkflow } from './test-utils';
 import { dryRunWorkflow, formatDryRunTrace, loadDryRunStubs } from './dry-run';
 import type { DryRunResolution } from './dry-run';
 import { buildAiProfile } from './model-validation';
+import { resolveWorkflowModelScope } from './node-model-resolution';
 import { expandWorkflowIncludes } from './include-expander';
 
 const temporaryDirectories: string[] = [];
@@ -645,5 +646,43 @@ describe('dryRunWorkflow — effective provider/model per node', () => {
 
     expect(result.trace.find(e => e.nodeId === 'shell')?.resolution).toBeUndefined();
     expect(formatDryRunTrace(result)).toContain('runs on: codex (node) / codex-default');
+  });
+});
+
+describe('resolveWorkflowModelScope — the origin names the value that won', () => {
+  const assistantModels = { claude: 'claude-default', codex: 'codex-default' };
+  const profile = buildAiProfile('claude', {
+    repoTiers: { large: { provider: 'codex', model: 'gpt-5.6-sol' } },
+  });
+
+  test('a preset outranks a declared provider, and the origin says so', () => {
+    // The workflow declares `provider: claude`, but `model: large` resolves to codex and
+    // the preset's provider is what the run uses (the executor warns about the conflict).
+    // Reporting the origin as 'workflow' would name the value that LOST.
+    const scope = resolveWorkflowModelScope(
+      { provider: 'claude', model: 'large' },
+      'claude',
+      assistantModels,
+      profile
+    );
+    expect(scope.provider).toBe('codex');
+    expect(scope.providerOrigin).toBe('model ref');
+  });
+
+  test('a declared provider with a literal model keeps the workflow origin', () => {
+    const scope = resolveWorkflowModelScope(
+      { provider: 'codex', model: 'gpt-5.6-sol' },
+      'claude',
+      assistantModels,
+      profile
+    );
+    expect(scope.provider).toBe('codex');
+    expect(scope.providerOrigin).toBe('workflow');
+  });
+
+  test('no provider and no model falls back to the default assistant', () => {
+    const scope = resolveWorkflowModelScope({}, 'claude', assistantModels, profile);
+    expect(scope.provider).toBe('claude');
+    expect(scope.providerOrigin).toBe('default assistant');
   });
 });
