@@ -1,0 +1,139 @@
+name: review
+description: |
+  Review a change through parallel specialist lenses and produce one evidence-based
+  verdict. Reviews a PR when given one, otherwise the working diff. Advisory and
+  read-only: it judges, it never edits. Re-reviews are light — given the previous
+  round's report, it verifies prior findings and reviews only the delta since the
+  recorded cursor.
+
+  Use when: changes need judging — "review this PR", "review my changes",
+  "is this ready to merge".
+  NOT for: fixing findings (implement), running the project's checks (validate),
+  or writing code.
+
+model: medium
+
+inputs:
+  scope:
+    default: ""
+    description: >-
+      What to review — a PR number/URL, a branch, or empty for the working diff
+      against the merge-base.
+  prior_report:
+    default: ""
+    description: >-
+      Path to the previous review round's report. When set, this round verifies
+      prior findings first and reviews only the delta since the report's recorded
+      head SHA.
+
+returns: synthesize
+
+nodes:
+  - id: scope
+    command: review-scope
+    context: fresh
+
+  # Chooses which OPTIONAL lenses run, per-diff. code + seams always run and do
+  # not wait on this. Fields are string enums (not booleans) because they feed
+  # `when:` — the proven pattern from the bundled fix-issue workflow.
+  - id: choose
+    command: review-choose
+    model: small
+    context: fresh
+    depends_on: [scope]
+    output_format:
+      type: object
+      properties:
+        run_tests:
+          type: string
+          enum: ["true", "false"]
+        run_errors:
+          type: string
+          enum: ["true", "false"]
+        run_comments:
+          type: string
+          enum: ["true", "false"]
+        run_types:
+          type: string
+          enum: ["true", "false"]
+        run_docs:
+          type: string
+          enum: ["true", "false"]
+        run_simplify:
+          type: string
+          enum: ["true", "false"]
+        reasoning:
+          type: string
+      required:
+        [run_tests, run_errors, run_comments, run_types, run_docs, run_simplify, reasoning]
+
+  # ── Always-on lenses ─────────────────────────────────────────────
+  - id: code
+    command: review-code
+    context: fresh
+    depends_on: [scope]
+
+  - id: seams
+    command: review-seams
+    context: fresh
+    depends_on: [scope]
+
+  # ── Optional lenses, chosen per-diff ─────────────────────────────
+  - id: tests
+    command: review-tests
+    context: fresh
+    depends_on: [choose]
+    when: "$choose.output.run_tests == 'true'"
+
+  - id: errors
+    command: review-errors
+    context: fresh
+    depends_on: [choose]
+    when: "$choose.output.run_errors == 'true'"
+
+  - id: comments
+    command: review-comments
+    context: fresh
+    depends_on: [choose]
+    when: "$choose.output.run_comments == 'true'"
+
+  - id: types
+    command: review-types
+    context: fresh
+    depends_on: [choose]
+    when: "$choose.output.run_types == 'true'"
+
+  - id: docs
+    command: review-docs
+    context: fresh
+    depends_on: [choose]
+    when: "$choose.output.run_docs == 'true'"
+
+  - id: simplify
+    command: review-simplify
+    context: fresh
+    depends_on: [choose]
+    when: "$choose.output.run_simplify == 'true'"
+
+  # all_done, not the default all_success: lenses skipped by the chooser are a
+  # terminal state by design and must not block synthesis. `ready` is a real
+  # boolean — it is the load-bearing field a composing loop terminates on.
+  #
+  # v1 note: adversarial per-finding verification happens inside this node's
+  # prompt. When in-parent runtime fan-out lands (#2512), a verify stage slots in
+  # between the lenses and this node without changing either side's contract —
+  # the findings files are the declared boundary.
+  - id: synthesize
+    command: review-synthesize
+    context: fresh
+    output_type: review-report
+    depends_on: [code, seams, tests, errors, comments, types, docs, simplify]
+    trigger_rule: all_done
+    output_format:
+      type: object
+      properties:
+        ready:
+          type: boolean
+        findings_summary:
+          type: string
+      required: [ready, findings_summary]
