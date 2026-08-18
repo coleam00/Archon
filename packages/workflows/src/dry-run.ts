@@ -22,7 +22,9 @@ import {
 } from './node-model-resolution';
 import type { ResolvedAiProfile } from './model-validation';
 import type { WorkflowConfig } from './deps';
+import { defaultRunInputs } from './workflow-inputs';
 import {
+  inputEnvKey,
   isApprovalNode,
   isBashNode,
   isCancelNode,
@@ -192,6 +194,12 @@ interface DryRunContext {
   userMessage: string;
   cwd: string;
   stubs: DryRunStubs;
+  /**
+   * The run's EFFECTIVE `$INPUTS` map — declared defaults layered under caller-supplied
+   * values, the same merge a real run performs at executor.ts (`defaultRunInputs`).
+   * Undefined when the workflow declares no inputs and the caller supplied none.
+   */
+  inputs?: Record<string, string>;
   execCode: boolean;
   pauseAtGates: boolean;
   trace: DryRunTraceEntry[];
@@ -243,7 +251,7 @@ function resolveText(
     undefined,
     undefined,
     loopPrevOutput,
-    { shellSafe, stateDir }
+    { shellSafe, stateDir, ...(ctx.inputs ? { inputs: ctx.inputs } : {}) }
   ).prompt;
   return substituteNodeOutputRefs(substituted, outputs, escapeNodeOutputs);
 }
@@ -362,11 +370,18 @@ async function executeCodeNode(
     } else {
       return { error: `Node '${node.id}' is not executable code` };
     }
+    // Inputs ride the env bag as `INPUTS_<UPPER_SNAKE>`, never text substitution —
+    // the same delivery a real run's `inputEnvVars` performs (dag-executor.ts).
+    const inputEnv: Record<string, string> = {};
+    for (const [name, value] of Object.entries(ctx.inputs ?? {})) {
+      inputEnv[inputEnvKey(name)] = value;
+    }
     const result = await execFileAsync(command, args, {
       cwd: ctx.cwd,
       timeout: node.timeout ?? 300_000,
       env: {
         ...process.env,
+        ...inputEnv,
         USER_MESSAGE: ctx.userMessage,
         ARGUMENTS: ctx.userMessage,
         ARTIFACTS_DIR: join(ctx.cwd, '.archon', 'dry-run', 'artifacts'),
@@ -583,10 +598,9 @@ async function simulateNode(
   }
   if (node.when) {
     try {
-      // No `inputs` argument: a dry run resolves no `$INPUTS.<name>` on ANY surface
-      // (prompt substitution below throws for it too), so a `when:` referencing one
-      // records a failed node rather than silently branching on a value it never had.
-      const condition = evaluateCondition(node.when, outputs);
+      // `ctx.inputs` mirrors the executor's `resolveRunInputs` (#2610): a `when:`
+      // referencing `$INPUTS.<name>` branches on the same effective map a real run reads.
+      const condition = evaluateCondition(node.when, outputs, ctx.inputs);
       if (!condition.parsed) {
         recordSkipped(node, outputs, ctx, 'when_condition_parse_error', iteration);
         return;
@@ -740,6 +754,14 @@ export async function dryRunWorkflow(options: {
   userMessage: string;
   cwd: string;
   stubs?: DryRunStubs;
+  /**
+   * Caller-SUPPLIED input values, already validated against the workflow's declared
+   * `inputs:` at the invocation gate (`resolveTopLevelInputs`) — the same contract a
+   * real run enforces before any cost. Declared defaults are derived here, not by the
+   * caller, mirroring the executor's split (`defaultRunInputs` at run start), so the
+   * effective `$INPUTS` map cannot diverge between simulation and execution (#2610).
+   */
+  inputs?: Record<string, string>;
   execCode?: boolean;
   pauseAtGates?: boolean;
   /**
@@ -751,11 +773,17 @@ export async function dryRunWorkflow(options: {
   aiProfile?: ResolvedAiProfile;
 }): Promise<DryRunResult> {
   const assistantModels = options.config ? assistantModelDefaults(options.config) : {};
+  // Same layering as the executor: declared defaults under caller-supplied values
+  // (supplied wins). A workflow with no `inputs:` block keeps passthrough semantics.
+  const declaredDefaults = defaultRunInputs(options.workflow.inputs);
+  const inputs =
+    declaredDefaults || options.inputs ? { ...declaredDefaults, ...options.inputs } : undefined;
   const ctx: DryRunContext = {
     workflow: options.workflow,
     userMessage: options.userMessage,
     cwd: options.cwd,
     stubs: options.stubs ?? {},
+    ...(inputs ? { inputs } : {}),
     execCode: options.execCode ?? false,
     pauseAtGates: options.pauseAtGates ?? false,
     trace: [],

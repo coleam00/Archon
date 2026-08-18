@@ -523,6 +523,171 @@ describe('dryRunWorkflow', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Declared inputs (#2610).
+//
+// The simulator resolves `$INPUTS.<name>` from the same effective map a real run
+// builds: declared defaults layered under caller-supplied values, on every surface
+// (prompt/command text, `when:`, exec-code env). The caller passes the gate-validated
+// supplied map; defaults are derived here, mirroring the executor's split.
+// ---------------------------------------------------------------------------
+
+describe('dryRunWorkflow — declared inputs (#2610)', () => {
+  const defaulted = makeTestWorkflow({
+    name: 'inputs-defaulted',
+    inputs: { work: { default: 'W' } },
+    nodes: [{ id: 'impl', prompt: 'Do $INPUTS.work' }],
+  });
+
+  test('applies declared defaults when nothing is supplied', async () => {
+    const result = await dryRunWorkflow({
+      workflow: defaulted,
+      userMessage: '',
+      cwd: process.cwd(),
+      stubs: { impl: 'done' },
+    });
+
+    expect(result.outcome).toBe('completed');
+    expect(result.trace[0]?.resolvedText).toBe('Do W');
+  });
+
+  test('supplied values win over declared defaults', async () => {
+    const result = await dryRunWorkflow({
+      workflow: defaulted,
+      userMessage: '',
+      cwd: process.cwd(),
+      stubs: { impl: 'done' },
+      inputs: { work: 'X' },
+    });
+
+    expect(result.outcome).toBe('completed');
+    expect(result.trace[0]?.resolvedText).toBe('Do X');
+  });
+
+  test('keeps passthrough semantics for a workflow that declares no inputs', async () => {
+    // Parity with a real run: `--input` on a signature-less workflow forwards verbatim.
+    const workflow = makeTestWorkflow({
+      name: 'inputs-passthrough',
+      nodes: [{ id: 'use', prompt: 'Got $INPUTS.a' }],
+    });
+    const result = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd: process.cwd(),
+      stubs: { use: 'done' },
+      inputs: { a: 'b' },
+    });
+
+    expect(result.trace[0]?.resolvedText).toBe('Got b');
+  });
+
+  test('resolves $INPUTS in a loop.command body during simulated iterations', async () => {
+    // The issue's repro shape: a defaulted signature whose loop command references it.
+    const cwd = mkdtempSync(join(tmpdir(), 'archon-dry-run-inputs-'));
+    temporaryDirectories.push(cwd);
+    mkdirSync(join(cwd, '.archon', 'commands'), { recursive: true });
+    writeFileSync(join(cwd, '.archon', 'commands', 'loop-impl.md'), 'Work on $INPUTS.work');
+    const workflow = makeTestWorkflow({
+      name: 'inputs-loop-command',
+      inputs: { work: { default: '' } },
+      nodes: [{ id: 'impl', loop: { command: 'loop-impl', until: 'DONE', max_iterations: 2 } }],
+    });
+
+    const result = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd,
+      stubs: { impl: '<promise>DONE</promise>' },
+      inputs: { work: 'ship it' },
+    });
+
+    expect(result.outcome).toBe('completed');
+    expect(result.trace[0]?.resolvedText).toBe('Work on ship it');
+  });
+
+  test('when: conditions branch on the effective input map', async () => {
+    const workflow = makeTestWorkflow({
+      name: 'inputs-when',
+      inputs: { work: { default: 'W' } },
+      nodes: [{ id: 'gated', prompt: 'go', when: "$INPUTS.work == 'X'" }],
+    });
+
+    const supplied = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd: process.cwd(),
+      stubs: { gated: 'ran' },
+      inputs: { work: 'X' },
+    });
+    expect(supplied.trace[0]?.state).toBe('stubbed');
+
+    const defaultOnly = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd: process.cwd(),
+      stubs: { gated: 'unused' },
+    });
+    expect(defaultOnly.trace[0]).toMatchObject({
+      state: 'skipped',
+      reason: 'when_condition_false',
+    });
+  });
+
+  test('fails an unknown reference with the same message a real run produces', async () => {
+    const workflow = makeTestWorkflow({
+      name: 'inputs-typo',
+      inputs: { work: { default: 'W' } },
+      nodes: [{ id: 'impl', prompt: 'Do $INPUTS.typo' }],
+    });
+    const result = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd: process.cwd(),
+      stubs: { impl: 'unused' },
+    });
+
+    // Read the value before matching: Bun's toMatchObject leaves an asymmetric
+    // matcher behind in the received object, corrupting later reads of the same field.
+    const reason = result.trace[0]?.state === 'failed' ? result.trace[0].reason : '';
+    expect(reason).toContain("Unknown input '$INPUTS.typo'");
+    expect(reason).toContain('$INPUTS.work');
+  });
+
+  test('keeps the no-declared-inputs failure unchanged', async () => {
+    const workflow = makeTestWorkflow({
+      name: 'inputs-none',
+      nodes: [{ id: 'impl', prompt: 'Do $INPUTS.x' }],
+    });
+    const result = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd: process.cwd(),
+      stubs: { impl: 'unused' },
+    });
+
+    expect(result.trace[0]).toMatchObject({
+      state: 'failed',
+      reason: expect.stringContaining('This run has no declared inputs.'),
+    });
+  });
+
+  test('delivers INPUTS_<UPPER_SNAKE> env vars to exec-code nodes', async () => {
+    const workflow = makeTestWorkflow({
+      name: 'inputs-exec',
+      inputs: { work: { default: 'W' } },
+      nodes: [{ id: 'code', bash: 'printf "v=%s" "$INPUTS_WORK"' }],
+    });
+    const result = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd: process.cwd(),
+      execCode: true,
+    });
+
+    expect(result.trace[0]).toMatchObject({ state: 'completed', output: 'v=W' });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Per-node resolution reporting (#1764 Task 3).
 //
 // The answer to "I can't tell what provider this node will run on", and the reason

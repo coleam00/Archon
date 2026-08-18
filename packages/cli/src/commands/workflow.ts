@@ -973,17 +973,21 @@ export async function workflowRunCommand(
       ['--container', options.container === true],
       ['--resume', options.resume === true],
       ['--detach', options.detach === true],
-      // The dry-run engine has no `$INPUTS` support at all — it never substitutes
-      // `$INPUTS.<name>` and never sets `INPUTS_<UPPER_SNAKE>` in a code node's env.
-      // Accepting the flag would silently simulate with EMPTY inputs: a bash node
-      // reading `$INPUTS_SCOPE` expands an unset var to '', so the trace reads as a
-      // valid simulation of a run that never happened. Reject rather than mislead.
-      ['--input', options.inputs !== undefined && options.inputs.length > 0],
     ] as const;
     const incompatibleFlag = incompatible.find(([, present]) => present)?.[0];
     if (incompatibleFlag) {
       throw new Error(`--dry-run cannot be combined with ${incompatibleFlag}.`);
     }
+
+    // The IDENTICAL invocation gate a real run passes through below (#2610): parse
+    // `--input name=value`, validate against the declared `inputs:` contract, and fail
+    // with the same errors (undeclared key, missing required) before any trace output.
+    // Only the supplied entries travel; the simulator derives declared defaults itself,
+    // mirroring the executor's `defaultRunInputs` merge at run start.
+    const dryRunInputs = resolveTopLevelInputs(
+      workflow,
+      options.inputs ? parseInputAssignments(options.inputs) : undefined
+    );
 
     const stubsPath = options.stubsPath
       ? isAbsolute(options.stubsPath)
@@ -1005,6 +1009,7 @@ export async function workflowRunCommand(
       userMessage,
       cwd: effectiveDiscoveryCwd,
       stubs,
+      ...(dryRunInputs ? { inputs: dryRunInputs } : {}),
       execCode: options.execCode,
       pauseAtGates: options.pauseAtGates,
       config: dryRunConfig,

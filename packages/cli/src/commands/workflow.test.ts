@@ -911,23 +911,48 @@ describe('workflowRunCommand — --input declared inputs (#2554)', () => {
     expect(executeWorkflow).not.toHaveBeenCalled();
   });
 
-  it('rejects --input with --dry-run instead of simulating with empty inputs', async () => {
-    // The dry-run engine has no $INPUTS support: a bash node reading $INPUTS_SCOPE would
-    // expand an unset var to '', producing a trace that reads as a valid simulation of a
-    // run that never happened. Every other flag dry-run cannot honor is rejected the same
-    // way, so this closes the one hole in that list.
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+  it('passes gate-resolved inputs to dryRunWorkflow (#2610)', async () => {
+    // Only the SUPPLIED entries travel: the simulator derives declared defaults
+    // itself, mirroring the executor's `defaultRunInputs` merge at run start.
     const dryRun = await import('@archon/workflows/dry-run');
     await stubInputWorkflow();
-    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockClear();
+    (dryRun.dryRunWorkflow as ReturnType<typeof mock>).mockClear();
+
+    await workflowRunCommand('/repo/root', 'review-block', 'go', {
+      dryRun: true,
+      inputs: ['diff=D1'],
+    });
+
+    expect(dryRun.dryRunWorkflow).toHaveBeenCalledTimes(1);
+    const opts = (dryRun.dryRunWorkflow as ReturnType<typeof mock>).mock.calls[0][0] as {
+      inputs?: Record<string, string>;
+    };
+    expect(opts.inputs).toEqual({ diff: 'D1' });
+  });
+
+  it('fails a dry run of a required-input workflow at the gate, like a real run', async () => {
+    const dryRun = await import('@archon/workflows/dry-run');
+    await stubInputWorkflow();
+    (dryRun.dryRunWorkflow as ReturnType<typeof mock>).mockClear();
+
+    await expect(
+      workflowRunCommand('/repo/root', 'review-block', 'go', { dryRun: true })
+    ).rejects.toThrow(/requires input 'diff'/);
+
+    expect(dryRun.dryRunWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('rejects an undeclared --input name on a dry run at the gate', async () => {
+    const dryRun = await import('@archon/workflows/dry-run');
+    await stubInputWorkflow();
     (dryRun.dryRunWorkflow as ReturnType<typeof mock>).mockClear();
 
     await expect(
       workflowRunCommand('/repo/root', 'review-block', 'go', {
         dryRun: true,
-        inputs: ['diff=D1'],
+        inputs: ['diff=D1', 'stlye=terse'],
       })
-    ).rejects.toThrow(/--dry-run cannot be combined with --input/);
+    ).rejects.toThrow(/does not declare input 'stlye'/);
 
     expect(dryRun.dryRunWorkflow).not.toHaveBeenCalled();
   });
