@@ -8735,10 +8735,11 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       expect(warnCalls[0]?.[0]).toEqual(
         expect.objectContaining({ workflowRunId: workflowRun.id, nodeId: 'refine' })
       );
-      const completed = mockDeps.store.createWorkflowEvent.mock.calls.find(
+      const completed = mockDeps.store.createWorkflowEvent.mock.calls.filter(
         ([event]) => event.event_type === 'node_completed' && event.step_name === 'refine'
       );
-      expect(completed?.[0].data).not.toHaveProperty('tokens');
+      expect(completed.length).toBe(1);
+      expect(completed[0][0].data).not.toHaveProperty('tokens');
     });
 
     it('iterates at resume when feedback was given, even on a signal-bearing gate (#2074 C)', async () => {
