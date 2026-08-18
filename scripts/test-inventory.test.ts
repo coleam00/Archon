@@ -17,6 +17,12 @@ interface InventoryMismatch {
   manifestPath: string;
   missingTests: string[];
   staleSelectors: string[];
+  unsupportedCommands: string[];
+}
+
+interface SelectorParseResult {
+  selectors: string[];
+  unsupportedCommands: string[];
 }
 
 const REPO_ROOT = join(import.meta.dir, '..');
@@ -56,20 +62,33 @@ function readPackageManifest(manifestPath: string): {
   };
 }
 
-function sourceSelectors(testScript: string | undefined): string[] {
-  if (testScript === undefined) return [];
+function sourceSelectors(testScript: string | undefined): SelectorParseResult {
+  if (testScript === undefined) return { selectors: [], unsupportedCommands: [] };
 
-  return testScript
-    .split('&&')
-    .flatMap((command): string[] => {
-      const tokens = command.trim().split(/\s+/);
-      const bunTestIndex = tokens.findIndex(
-        (token, index): boolean => token === 'test' && tokens[index - 1] === 'bun'
-      );
-      if (bunTestIndex === -1) return [];
-      return tokens.slice(bunTestIndex + 1).filter((token): boolean => token.startsWith('src/'));
-    })
-    .sort();
+  const selectors: string[] = [];
+  const unsupportedCommands: string[] = [];
+  for (const command of testScript.split('&&')) {
+    const trimmedCommand = command.trim();
+    const tokens = trimmedCommand.split(/\s+/);
+    if (tokens[0] !== 'bun' || tokens[1] !== 'test') {
+      unsupportedCommands.push(trimmedCommand);
+      continue;
+    }
+
+    const args = tokens.slice(2);
+    const firstUnsupported = args.findIndex((token): boolean => !token.startsWith('src/'));
+    const supportedSelectors = firstUnsupported === -1 ? args : args.slice(0, firstUnsupported);
+    selectors.push(...supportedSelectors);
+
+    if (args.length === 0 || firstUnsupported !== -1) {
+      unsupportedCommands.push(trimmedCommand);
+    }
+  }
+
+  return {
+    selectors: selectors.sort(),
+    unsupportedCommands,
+  };
 }
 
 function inspectPackage(packageDirectory: string): InventoryMismatch | undefined {
@@ -80,10 +99,9 @@ function inspectPackage(packageDirectory: string): InventoryMismatch | undefined
   const tests = listFiles(sourceDirectory)
     .filter((path): boolean => TEST_FILE_PATTERN.test(path))
     .map((path): string => normalizePath(relative(packageDirectory, path)));
-  if (tests.length === 0) return undefined;
 
   const manifest = readPackageManifest(manifestPath);
-  const selectors = sourceSelectors(manifest.testScript);
+  const { selectors, unsupportedCommands } = sourceSelectors(manifest.testScript);
   const selectedTests = new Set<string>();
   const staleSelectors: string[] = [];
 
@@ -105,13 +123,20 @@ function inspectPackage(packageDirectory: string): InventoryMismatch | undefined
   }
 
   const missingTests = tests.filter((path): boolean => !selectedTests.has(path));
-  if (missingTests.length === 0 && staleSelectors.length === 0) return undefined;
+  if (
+    missingTests.length === 0 &&
+    staleSelectors.length === 0 &&
+    unsupportedCommands.length === 0
+  ) {
+    return undefined;
+  }
 
   return {
     packageName: manifest.name ?? relative(PACKAGES_DIR, packageDirectory),
     manifestPath: normalizePath(relative(REPO_ROOT, manifestPath)),
     missingTests,
     staleSelectors,
+    unsupportedCommands,
   };
 }
 
@@ -126,6 +151,10 @@ function formatMismatches(mismatches: InventoryMismatch[]): string {
       lines.push('  scripts.test selectors that do not exist:');
       lines.push(...mismatch.staleSelectors.map((path): string => `    - ${path}`));
     }
+    if (mismatch.unsupportedCommands.length > 0) {
+      lines.push('  scripts.test commands outside the supported `bun test <src selectors>` form:');
+      lines.push(...mismatch.unsupportedCommands.map((command): string => `    - ${command}`));
+    }
     return lines;
   });
 
@@ -133,6 +162,7 @@ function formatMismatches(mismatches: InventoryMismatch[]): string {
     'Package test inventory is out of sync.',
     ...details,
     'Add each test to a compatible Bun batch or cover it with a directory selector; remove stale selectors.',
+    'Keep package test commands in the explicit `bun test <src selectors>` form so execution and inventory agree.',
     'Keep separate `bun test` invocations where `mock.module()` factories conflict.',
   ].join('\n');
 }
