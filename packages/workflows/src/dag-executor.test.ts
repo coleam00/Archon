@@ -76,6 +76,7 @@ import {
   collectContainerIncompatibleProviders,
   containerCommandName,
   buildSubprocessDockerArgs,
+  redactSubprocessError,
 } from './dag-executor';
 import { writeNodeArtifact } from './artifacts-index';
 import { getWorkflowEventEmitter, type WorkflowEmitterEvent } from './event-emitter';
@@ -18707,5 +18708,64 @@ describe('executeDagWorkflow -- gate pause vs external transition (#1123)', () =
     );
     expect(events).toContain('node_failed');
     expect(store.failWorkflowRun).toHaveBeenCalled();
+  });
+});
+
+describe('redactSubprocessError — container exec credential scrub', () => {
+  const FAKE = `sk-ant-oat01-${'A1b2C3d4E5'.repeat(4)}`;
+  const argv =
+    `docker exec -w /work -e CLAUDE_CODE_OAUTH_TOKEN=${FAKE} ` +
+    `-e ANTHROPIC_OAUTH_TOKEN=${FAKE} -e BASE_BRANCH=master cid-9 bash -c true`;
+
+  it('scrubs `cmd` when the rejection carries no argv in `message` (maxBuffer overflow)', () => {
+    // A maxBuffer overflow rejects with `message` = 'stdout maxBuffer length
+    // exceeded' — NO argv at all — so the credentials survive solely on `cmd`,
+    // which pino then serializes into the detached-run log. Redacting only the
+    // message-shaped fields leaves this path leaking.
+    const err = Object.assign(new RangeError('stdout maxBuffer length exceeded'), {
+      code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER',
+      cmd: argv,
+      stdout: '',
+      stderr: '',
+    });
+
+    const out = redactSubprocessError(err);
+
+    expect(out.cmd).not.toContain(FAKE);
+    expect(out.cmd).toContain('-e CLAUDE_CODE_OAUTH_TOKEN=[REDACTED]');
+    expect(out.cmd).toContain('-e ANTHROPIC_OAUTH_TOKEN=[REDACTED]');
+    // Non-secret vars stay readable — knowing WHICH vars were passed is the half
+    // that helps diagnose the failure.
+    expect(out.cmd).toContain('-e BASE_BRANCH=master');
+  });
+
+  it('scrubs the argv out of `message` for a non-zero exit', () => {
+    const err = Object.assign(
+      new Error(`Command failed: ${argv}
+boom`),
+      { code: 1, cmd: argv }
+    );
+
+    const out = redactSubprocessError(err);
+
+    expect(out.message).not.toContain(FAKE);
+    expect(out.cmd).not.toContain(FAKE);
+    expect(out.message).toContain('-e CLAUDE_CODE_OAUTH_TOKEN=[REDACTED]');
+  });
+
+  it('mutates in place so callers keep the fields they classify on', () => {
+    const err = Object.assign(new Error(`Command failed: ${argv}`), {
+      code: 1,
+      killed: true,
+      cmd: argv,
+    });
+
+    const out = redactSubprocessError(err) as typeof err;
+
+    // Same object: callers read `killed` (timeout) and `code` (ENOENT/EACCES) off
+    // the rejection, and a fresh Error would turn every timeout into a generic failure.
+    expect(out).toBe(err);
+    expect(out.killed).toBe(true);
+    expect(out.code).toBe(1);
   });
 });

@@ -430,6 +430,42 @@ export const CONTAINER_ENV_DENYLIST: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Value-independent secret shapes, used to scrub text that may embed a credential.
+ *
+ * Lives here, beside the denylist, because the two are the same policy seen from
+ * opposite ends: the denylist decides what is forwarded INTO a container, this
+ * decides what must not survive on the way back OUT. It also has to live in a
+ * package both `@archon/workflows` and `@archon/core` can import — core depends on
+ * workflows, so the reverse import would be circular.
+ *
+ * 1. Issuer-anchored provider tokens.
+ * 2. Any `-e NAME=value` whose NAME ends in a secret-ish word — the value-agnostic
+ *    net, so a credential added later is covered without editing this list.
+ */
+const SECRET_PATTERNS: readonly RegExp[] = [
+  /sk-ant-[A-Za-z0-9_-]{20,}/g,
+  /(-e\s+\w*(?:TOKEN|KEY|SECRET|PASSWORD)=)\S+/gi,
+];
+
+/**
+ * Replace credential-shaped substrings with `[REDACTED]`, keeping the `-e NAME=`
+ * prefix so a redacted command line still shows WHICH variable was passed — the
+ * part that is useful when diagnosing a failure — without its value.
+ */
+export function redactSecrets(input: string): string {
+  let result = input;
+  for (const pattern of SECRET_PATTERNS) {
+    // `replace` passes capture groups before the offset, so a pattern WITHOUT a
+    // group hands us the match offset (a number) as arg 2. Test the type, not
+    // truthiness — treating that offset as a prefix splices it into the output.
+    result = result.replace(pattern, (_match, prefix: unknown) =>
+      typeof prefix === 'string' ? `${prefix}[REDACTED]` : '[REDACTED]'
+    );
+  }
+  return result;
+}
+
+/**
  * Universal request options accepted by all providers.
  * Provider-specific fields go through `nodeConfig` and `assistantConfig` in SendQueryOptions.
  */

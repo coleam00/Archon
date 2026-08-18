@@ -27,7 +27,7 @@ import type {
   ExecutionContext,
   OverlayChangeSummary,
 } from '@archon/providers/types';
-import { CONTAINER_ENV_DENYLIST } from '@archon/providers/types';
+import { CONTAINER_ENV_DENYLIST, redactSecrets } from '@archon/providers/types';
 import type { ContainerRunContext } from './container-context';
 import { WRITEBACK_GATE_NODE_ID } from './container-context';
 import {
@@ -2562,6 +2562,41 @@ export function buildSubprocessDockerArgs(
   return dockerArgs;
 }
 
+/** The shape `execFile` rejects with: argv-bearing fields plus the classifier fields. */
+export type RawSubprocessRejection = Error & {
+  stdout?: string;
+  stderr?: string;
+  cmd?: string;
+};
+
+/**
+ * Scrub credentials from every field of a `docker exec` rejection that can carry
+ * the argv. Container env is delivered as `-e NAME=value`, so the argv IS the
+ * credential set, and callers persist these fields verbatim into the node's error
+ * field, the run's chat message, and the detached-run log.
+ *
+ * Mutates in place rather than returning a fresh Error: callers classify the
+ * rejection by reading `killed` (timeout) and `code`/`message` (ENOENT/EACCES) off
+ * the original object, and a replacement would silently drop those and turn every
+ * timeout into a generic failure.
+ *
+ * `cmd` is not redundant with `message`. It is the ONLY carrier when the rejection
+ * is not a non-zero exit: a maxBuffer overflow rejects with `message` = 'stdout
+ * maxBuffer length exceeded' — no argv at all — so the credentials survive solely
+ * in `cmd`. Pino serializes every enumerable `err` property, so an unredacted `cmd`
+ * writes the token to the detached-run log even when `message` is already clean.
+ *
+ * Exported for the redaction enforcement test.
+ */
+export function redactSubprocessError(e: RawSubprocessRejection): RawSubprocessRejection {
+  e.message = redactSecrets(e.message);
+  if (e.stack) e.stack = redactSecrets(e.stack);
+  if (typeof e.stdout === 'string') e.stdout = redactSecrets(e.stdout);
+  if (typeof e.stderr === 'string') e.stderr = redactSecrets(e.stderr);
+  if (typeof e.cmd === 'string') e.cmd = redactSecrets(e.cmd);
+  return e;
+}
+
 async function runSubprocess(
   execContext: ExecutionContext,
   cmd: string,
@@ -2573,7 +2608,15 @@ async function runSubprocess(
       cwd: options.cwd,
       env: options.env,
     });
-    return execFileAsync('docker', dockerArgs, { timeout: options.timeout });
+    // Env is delivered as `-e NAME=value` argv, and the rejection carries that argv
+    // in both `message` and `cmd` — so a failed exec hands every delivered
+    // credential to callers that persist it verbatim. Sanitize at the throw site:
+    // one wrap covers every downstream reader instead of each remembering to.
+    try {
+      return await execFileAsync('docker', dockerArgs, { timeout: options.timeout });
+    } catch (err) {
+      throw redactSubprocessError(err as RawSubprocessRejection);
+    }
   }
   return execFileAsync(cmd, args, {
     cwd: options.cwd,

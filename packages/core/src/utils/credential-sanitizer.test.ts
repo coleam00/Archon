@@ -81,4 +81,46 @@ describe('credential-sanitizer', () => {
       expect(sanitized.message).toBe('Failed with [REDACTED]');
     });
   });
+
+  // The `run-error-embeds-provider-token` class: execFile's rejection message is the
+  // whole argv, and container env is delivered as `-e NAME=value`, so a failed step
+  // used to persist every credential verbatim into the run DB and the detached log.
+  // The env-var loop can't catch these — provider tokens are decrypted from the
+  // credential store per dispatch and never enter this process's environment.
+  describe('provider tokens in a failed docker exec command line', () => {
+    const FAKE = `sk-ant-oat01-${'A1b2C3d4E5'.repeat(4)}`;
+    const ERROR_TEXT =
+      'Command failed: docker exec -w /work -u 1000 ' +
+      `-e CLAUDE_CODE_OAUTH_TOKEN=${FAKE} -e ANTHROPIC_OAUTH_TOKEN=${FAKE} ` +
+      "-e ARTIFACTS_DIR=/archon-meta/artifacts abc123 bash -c 'bun test'";
+
+    it('redacts the token but keeps the command diagnosable', () => {
+      const out = sanitizeCredentials(ERROR_TEXT);
+
+      expect(out).not.toContain(FAKE);
+      // The flag NAME survives — knowing which var was passed is the useful half
+      expect(out).toContain('-e CLAUDE_CODE_OAUTH_TOKEN=[REDACTED]');
+      expect(out).toContain('-e ANTHROPIC_OAUTH_TOKEN=[REDACTED]');
+      // Non-secret env and the failing command itself are untouched
+      expect(out).toContain('-e ARTIFACTS_DIR=/archon-meta/artifacts');
+      expect(out).toContain("bash -c 'bun test'");
+      expect(out).toContain('docker exec -w /work -u 1000');
+    });
+
+    it('redacts a bare token with no -e flag around it', () => {
+      expect(sanitizeCredentials(`token is ${FAKE} ok`)).toBe('token is [REDACTED] ok');
+    });
+
+    it('redacts a secret-suffixed flag whose value shape is unknown', () => {
+      // The value-agnostic net: a credential added later is covered by its flag name
+      const out = sanitizeCredentials('docker exec -e SOME_API_KEY=hunter2 img sh');
+      expect(out).toContain('-e SOME_API_KEY=[REDACTED]');
+      expect(out).not.toContain('hunter2');
+    });
+
+    it('leaves ordinary failure output alone', () => {
+      const plain = 'Command failed: docker exec -w /work img bun test\n3 tests failed';
+      expect(sanitizeCredentials(plain)).toBe(plain);
+    });
+  });
 });
