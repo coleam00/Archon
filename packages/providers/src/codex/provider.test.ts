@@ -1,7 +1,9 @@
-import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { describe, test, expect, mock, beforeEach, type Mock } from 'bun:test';
 import { mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import type { Codex as SdkCodex, Thread as SdkThread } from '@openai/codex-sdk';
+import type { MessageChunk } from '../types';
 import { createMockLogger } from '../test/mocks/logger';
 
 const mockLogger = createMockLogger();
@@ -10,10 +12,26 @@ mock.module('@archon/paths', () => ({
 }));
 
 /** Default usage matching Codex SDK's Usage type (required on TurnCompletedEvent) */
-const defaultUsage = { input_tokens: 10, cached_input_tokens: 0, output_tokens: 5 };
+const defaultUsage = {
+  input_tokens: 10,
+  cached_input_tokens: 0,
+  output_tokens: 5,
+  reasoning_output_tokens: 0,
+};
+
+type MockRunStreamed = (
+  ...args: Parameters<SdkThread['runStreamed']>
+) => Promise<{ events: AsyncGenerator<unknown, void, unknown> }>;
+type MockThread = { id: string | null; runStreamed: Mock<MockRunStreamed> };
+type MockStartThread = (...args: Parameters<SdkCodex['startThread']>) => MockThread;
+type MockResumeThread = (...args: Parameters<SdkCodex['resumeThread']>) => MockThread;
+type MockCodexConstructor = (...args: ConstructorParameters<typeof SdkCodex>) => {
+  startThread: Mock<MockStartThread>;
+  resumeThread: Mock<MockResumeThread>;
+};
 
 // Create mock runStreamed first (before it's referenced)
-const mockRunStreamed = mock(() =>
+const mockRunStreamed = mock<MockRunStreamed>((_input, _options) =>
   Promise.resolve({
     events: (async function* () {
       yield { type: 'turn.completed', usage: defaultUsage };
@@ -22,17 +40,17 @@ const mockRunStreamed = mock(() =>
 );
 
 // Create a mock thread object factory
-const createMockThread = (id: string) => ({
+const createMockThread = (id: string | null): MockThread => ({
   id,
   runStreamed: mockRunStreamed,
 });
 
 // Create mock functions for Codex SDK that use createMockThread
-const mockStartThread = mock(() => createMockThread('new-thread-id'));
-const mockResumeThread = mock(() => createMockThread('resumed-thread-id'));
+const mockStartThread = mock<MockStartThread>(() => createMockThread('new-thread-id'));
+const mockResumeThread = mock<MockResumeThread>(() => createMockThread('resumed-thread-id'));
 
 // Mock Codex class
-const MockCodex = mock(() => ({
+const MockCodex = mock<MockCodexConstructor>(() => ({
   startThread: mockStartThread,
   resumeThread: mockResumeThread,
 }));
@@ -165,7 +183,7 @@ describe('CodexProvider', () => {
         });
       });
 
-      const chunks = [];
+      const chunks: MessageChunk[] = [];
       try {
         for await (const chunk of client.sendQuery('test prompt', testDir, 'existing-thread', {
           nodeConfig: { nodeId: 'investigate', mcp: 'mcp.json' },
@@ -220,7 +238,7 @@ describe('CodexProvider', () => {
         })(),
       });
 
-      const chunks = [];
+      const chunks: MessageChunk[] = [];
       await expect(
         (async (): Promise<void> => {
           for await (const chunk of client.sendQuery('test prompt', '/workspace', undefined, {
@@ -1308,8 +1326,8 @@ describe('CodexProvider', () => {
       // the forwarding once-listener (covered by separate tests below).
       const call = mockRunStreamed.mock.calls[0];
       expect(call[0]).toBe('test prompt');
-      expect(call[1].signal).toBeInstanceOf(AbortSignal);
-      expect(call[1].signal).not.toBe(controller.signal);
+      expect(call[1]?.signal).toBeInstanceOf(AbortSignal);
+      expect(call[1]?.signal).not.toBe(controller.signal);
     });
 
     test('passes a per-attempt AbortSignal in TurnOptions even when caller provides none', async () => {
@@ -2465,10 +2483,11 @@ describe('sendQuery decomposition behaviors', () => {
       }
     };
 
-    const err = await consumeGenerator().catch((e: unknown) => e as Error);
-    expect(err).toBeInstanceOf(Error);
+    const thrown = await consumeGenerator().catch((error: unknown) => error);
+    expect(thrown).toBeInstanceOf(Error);
+    if (!(thrown instanceof Error)) throw new Error('Expected consumeGenerator to throw');
     // Must contain the enriched classification prefix
-    expect(err.message).toContain('Codex crash');
+    expect(thrown.message).toContain('Codex crash');
   }, 5_000);
 
   test('todo_list dedup state resets between retry attempts', async () => {
@@ -2524,7 +2543,8 @@ describe('sendQuery decomposition behaviors', () => {
     // spawn() captures the signal at its own call) but misleading here.
     const signalsAtCallTime: Array<{ signal: AbortSignal; aborted: boolean }> = [];
     let callCount = 0;
-    mockRunStreamed.mockImplementation((_prompt: unknown, opts: { signal?: AbortSignal }) => {
+    mockRunStreamed.mockImplementation((_prompt, opts) => {
+      if (!opts) throw new Error('Expected per-attempt options');
       const s = opts.signal!;
       signalsAtCallTime.push({ signal: s, aborted: s.aborted });
       callCount++;
@@ -2567,7 +2587,8 @@ describe('sendQuery decomposition behaviors', () => {
     const callerController = new AbortController();
 
     let capturedSignal: AbortSignal | undefined;
-    mockRunStreamed.mockImplementation((_prompt, opts: { signal?: AbortSignal }) => {
+    mockRunStreamed.mockImplementation((_prompt, opts) => {
+      if (!opts) throw new Error('Expected per-attempt options');
       capturedSignal = opts.signal;
       return Promise.resolve({
         events: (async function* () {
@@ -2609,7 +2630,7 @@ describe('sendQuery decomposition behaviors', () => {
   // The fix removes the explicit abort() — the per-attempt controller is short-lived
   // and goes out of scope naturally.
   test('successful attempt does not throw from stale abort cleanup (#1735)', async () => {
-    mockRunStreamed.mockImplementation((_prompt, opts: { signal?: AbortSignal }) => {
+    mockRunStreamed.mockImplementation((_prompt, _opts) => {
       return Promise.resolve({
         events: (async function* () {
           yield {

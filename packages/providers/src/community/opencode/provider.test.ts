@@ -132,6 +132,7 @@ mock.module('@opencode-ai/sdk', () => ({
 }));
 
 import { OpencodeProvider, resetEmbeddedRuntime } from './provider';
+import type { NodeConfig } from '../../types';
 
 /** Default model for tests — satisfies the model-or-agent validation */
 const TEST_MODEL = { model: 'test/mock-model' };
@@ -1306,7 +1307,7 @@ describe('OpencodeProvider', () => {
           // No prompt field
         },
       },
-    };
+    } as unknown as NodeConfig;
 
     const { error } = await consume(
       new OpencodeProvider().sendQuery('fallback node prompt', cwd, undefined, {

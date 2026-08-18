@@ -19,7 +19,6 @@ import {
   readSubrunMetadata,
 } from './schemas';
 import type {
-  WorkflowDefinition,
   DagNode,
   CommandNode,
   PromptNode,
@@ -38,12 +37,6 @@ const commandNode: CommandNode = { id: 'n1', command: 'build' };
 const promptNode: PromptNode = { id: 'n2', prompt: 'Do this inline.' };
 const bashNode: BashNode = { id: 'n3', bash: 'echo hello' };
 const cancelNode: CancelNode = { id: 'n5', cancel: 'Precondition failed' };
-
-const dagWorkflow: WorkflowDefinition = {
-  name: 'dag-workflow',
-  description: 'DAG execution',
-  nodes: [commandNode, promptNode, bashNode],
-};
 
 // ---------------------------------------------------------------------------
 // isBashNode

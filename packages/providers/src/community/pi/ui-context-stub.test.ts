@@ -29,6 +29,10 @@ describe('createArchonUIBridge', () => {
 });
 
 describe('createArchonUIContext', () => {
+  function assistantContent(chunk: MessageChunk | undefined): string | undefined {
+    return chunk?.type === 'assistant' ? chunk.content : undefined;
+  }
+
   function mk() {
     const bridge = createArchonUIBridge();
     const chunks: MessageChunk[] = [];
@@ -51,15 +55,15 @@ describe('createArchonUIContext', () => {
   test('notify defaults to info when type omitted', () => {
     const { ui, chunks } = mk();
     ui.notify('bare message');
-    expect(chunks[0]?.content).toBe('\n[pi extension ℹ️] bare message\n');
+    expect(assistantContent(chunks[0])).toBe('\n[pi extension ℹ️] bare message\n');
   });
 
   test('notify("warning") and notify("error") use distinct glyphs', () => {
     const { ui, chunks } = mk();
     ui.notify('soft', 'warning');
     ui.notify('hard', 'error');
-    expect(chunks[0]?.content).toBe('\n[pi extension ⚠️] soft\n');
-    expect(chunks[1]?.content).toBe('\n[pi extension ❌] hard\n');
+    expect(assistantContent(chunks[0])).toBe('\n[pi extension ⚠️] soft\n');
+    expect(assistantContent(chunks[1])).toBe('\n[pi extension ❌] hard\n');
   });
 
   test('select resolves to undefined (no operator to answer)', async () => {

@@ -101,6 +101,12 @@ describe('bundled-defaults', () => {
 
     it('packaged bundle metadata is internally consistent', () => {
       for (const [workflow, owner] of Object.entries(BUNDLED_WORKFLOW_OWNERS)) {
+        if (!owner?.pack || !owner.workflow) throw new Error(`Missing owner for ${workflow}`);
+        const resourceOwner = {
+          source: 'bundled' as const,
+          pack: owner.pack,
+          workflow: owner.workflow,
+        };
         expect(BUNDLED_WORKFLOWS[workflow]).toBeDefined();
         expect(owner.pack.length).toBeGreaterThan(0);
         expect(owner.workflow.length).toBeGreaterThan(0);
@@ -115,7 +121,7 @@ describe('bundled-defaults', () => {
         if (existsSync(commandDir)) {
           for (const entry of readdirSync(commandDir).filter(entry => entry.endsWith('.md'))) {
             const localName = entry.slice(0, -'.md'.length);
-            const key = formatPackagedResourceReference({ source: 'bundled', ...owner }, localName);
+            const key = formatPackagedResourceReference(resourceOwner, localName);
             expect(BUNDLED_COMMANDS[key]).toBe(
               readFileSync(join(commandDir, entry), 'utf-8').replace(/\r\n/g, '\n')
             );

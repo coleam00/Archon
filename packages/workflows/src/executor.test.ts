@@ -22,8 +22,12 @@ const mockLogger = {
 };
 // Telemetry is fire-and-forget; mock as no-ops so the executor can call them.
 // Hoisted so tests can assert on the completion call (outcome / exit reason).
-const mockCaptureWorkflowInvoked = mock(() => {});
-const mockCaptureWorkflowCompleted = mock(() => {});
+const mockCaptureWorkflowInvoked = mock<typeof import('@archon/paths').captureWorkflowInvoked>(
+  _props => {}
+);
+const mockCaptureWorkflowCompleted = mock<typeof import('@archon/paths').captureWorkflowCompleted>(
+  _props => {}
+);
 /**
  * Deterministic stand-ins for the shared identity→paths resolver (#2200). They
  * mirror the real branch order and layout, so `resolveProjectPaths` is exercised
@@ -113,7 +117,8 @@ mock.module('@archon/git', () => ({
 }));
 
 // --- Mock dag-executor ---
-const mockExecuteDagWorkflow = mock(async (): Promise<string | undefined> => undefined);
+type ExecuteDagWorkflow = typeof import('./dag-executor').executeDagWorkflow;
+const mockExecuteDagWorkflow = mock<ExecuteDagWorkflow>(async () => undefined);
 mock.module('./dag-executor', () => ({
   executeDagWorkflow: mockExecuteDagWorkflow,
   // Passthrough for the sub-run outcome mapper (#2121) — executor.ts imports it;
@@ -180,6 +185,15 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     resumeWorkflowRun: mock(async () => makeRun()),
     getCodebase: mock(async () => null),
     getCodebaseEnvVars: mock(async () => ({})),
+    updateWorkflowActivity: mock(async () => {}),
+    completeWorkflowRun: mock(async () => {}),
+    pauseWorkflowRun: mock(async () => {}),
+    claimWriteback: mock(async () => ({ claimed: true })),
+    releaseWritebackClaim: mock(async () => {}),
+    cancelWorkflowRun: mock(async () => ({ cancelled: false })),
+    getWorkflowNodeSession: mock(async () => null),
+    upsertWorkflowNodeSession: mock(async () => {}),
+    deleteWorkflowNodeSessions: mock(async () => ({ deleted: 0 })),
     ...overrides,
   };
 }
@@ -225,9 +239,18 @@ function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
     id: 'run-123',
     workflow_name: 'test-workflow',
     conversation_id: 'conv-1',
+    parent_conversation_id: null,
+    codebase_id: null,
     status: 'running',
-    started_at: new Date().toISOString(),
+    user_message: 'test message',
     metadata: {},
+    started_at: new Date(),
+    completed_at: null,
+    last_activity_at: null,
+    working_path: null,
+    user_id: null,
+    parent_run_id: null,
+    output_root: null,
     ...overrides,
   };
 }
@@ -241,7 +264,7 @@ describe('executeWorkflow', () => {
     mockEmitter.emit.mockClear();
     mockGetDefaultBranch.mockClear();
     mockGetDefaultBranch.mockImplementation(async () => 'main');
-    mockExecuteDagWorkflow.mockImplementation(async (): Promise<string | undefined> => undefined);
+    mockExecuteDagWorkflow.mockImplementation(async () => undefined);
   });
 
   // -------------------------------------------------------------------------
@@ -267,6 +290,7 @@ describe('executeWorkflow', () => {
         { preCreatedRun, priorCompletedNodes: new Map([['node1', 'out']]) }
       );
       expect(result.success).toBe(false);
+      if (result.success) throw new Error('Expected missing-container-context failure');
       expect(result.error).toMatch(/executed inside an isolation container/);
       expect(failSpy).toHaveBeenCalledTimes(1);
       // The DAG is never entered — the guard returns before any execution.
@@ -344,6 +368,7 @@ describe('executeWorkflow', () => {
         'db-conv-1'
       );
       expect(result.success).toBe(false);
+      if (result.success) throw new Error('Expected workflow guard failure');
       expect(result.error).toContain('Database error');
       // Blocked before the execution window — keep-awake must never have fired.
       expect(keepAwake.activeCount()).toBe(0);
@@ -353,7 +378,7 @@ describe('executeWorkflow', () => {
       const activeRun = makeRun({
         id: 'other-run-456',
         status: 'running',
-        started_at: new Date().toISOString(), // Recent — not stale
+        started_at: new Date(), // Recent — not stale
       });
       const store = makeStore({
         getActiveWorkflowRunByPath: mock(async () => activeRun),
@@ -369,6 +394,7 @@ describe('executeWorkflow', () => {
         'db-conv-1'
       );
       expect(result.success).toBe(false);
+      if (result.success) throw new Error('Expected active-workflow rejection');
       expect(result.error).toContain('already active');
     });
 
@@ -431,7 +457,10 @@ describe('executeWorkflow', () => {
       // The guard runs AFTER workflowRun is finalized so we always have
       // a self-ID. Without these args, the dispatch's own row would match
       // and falsely trigger the guard.
-      const selfRun = makeRun({ id: 'self-run-789', started_at: '2026-04-14T10:00:00.000Z' });
+      const selfRun = makeRun({
+        id: 'self-run-789',
+        started_at: new Date('2026-04-14T10:00:00.000Z'),
+      });
       const getActiveSpy = mock(async () => null);
       const store = makeStore({
         createWorkflowRun: mock(async () => selfRun),
@@ -486,9 +515,11 @@ describe('executeWorkflow', () => {
         id: 'abc12345-rest-of-uuid',
         workflow_name: 'archon-implement',
         status: 'running',
-        started_at: new Date(Date.now() - 125000).toISOString(), // 2m 5s ago
+        started_at: new Date(Date.now() - 125000), // 2m 5s ago
       });
-      const sendMessageSpy = mock(async () => {});
+      const sendMessageSpy = mock<IWorkflowPlatform['sendMessage']>(
+        async (_conversationId, _message, _metadata) => {}
+      );
       const platform = {
         sendMessage: sendMessageSpy,
         getPlatformType: mock(() => 'test' as const),
@@ -553,6 +584,7 @@ describe('executeWorkflow', () => {
         'db-conv-1'
       );
       expect(result.success).toBe(false);
+      if (result.success) throw new Error('Expected checkout-lock rejection');
       expect(result.error).toContain('already active');
     });
 
@@ -583,6 +615,7 @@ describe('executeWorkflow', () => {
 
       // Cleanup failure must not mask the "in use" outcome.
       expect(result.success).toBe(false);
+      if (result.success) throw new Error('Expected checkout-lock rejection');
       expect(result.error).toContain('already active');
     });
   });
@@ -675,7 +708,7 @@ describe('executeWorkflow', () => {
 
   describe('workflow_started configuration snapshot', () => {
     it('persists the resolved configuration and top-level platform origin', async () => {
-      const createEventSpy = mock(async () => {});
+      const createEventSpy = mock<IWorkflowStore['createWorkflowEvent']>(async _data => {});
       const store = makeStore({
         createWorkflowRun: mock(async () =>
           makeRun({
@@ -739,7 +772,7 @@ describe('executeWorkflow', () => {
     });
 
     it('persists explicit nulls for an in-place run without a model or user', async () => {
-      const createEventSpy = mock(async () => {});
+      const createEventSpy = mock<IWorkflowStore['createWorkflowEvent']>(async _data => {});
       const store = makeStore({
         createWorkflowRun: mock(async () =>
           makeRun({ user_message: 'folder input', user_id: null, parent_run_id: null })
@@ -772,7 +805,7 @@ describe('executeWorkflow', () => {
     });
 
     it('classifies a container execution ahead of a worktree context', async () => {
-      const createEventSpy = mock(async () => {});
+      const createEventSpy = mock<IWorkflowStore['createWorkflowEvent']>(async _data => {});
       const store = makeStore({
         createWorkflowRun: mock(async () =>
           makeRun({ user_message: 'container input', user_id: null, parent_run_id: null })
@@ -802,7 +835,7 @@ describe('executeWorkflow', () => {
     });
 
     it('uses persisted child-run attribution and input instead of caller values', async () => {
-      const createEventSpy = mock(async () => {});
+      const createEventSpy = mock<IWorkflowStore['createWorkflowEvent']>(async _data => {});
       const preCreatedRun = makeRun({
         id: 'child-run',
         user_message: 'persisted child input',
@@ -843,7 +876,7 @@ describe('executeWorkflow', () => {
       // Recorded HERE rather than at the chat dispatch site so the finding does
       // not depend on a notification being deliverable — and so CLI- and
       // REST-started runs, which have no conversation to post into, get it too.
-      const createEventSpy = mock(async () => {});
+      const createEventSpy = mock<IWorkflowStore['createWorkflowEvent']>(async _data => {});
       const store = makeStore({ createWorkflowEvent: createEventSpy });
 
       await executeWorkflow(
@@ -867,7 +900,7 @@ describe('executeWorkflow', () => {
     });
 
     it('records nothing for a clean workflow', async () => {
-      const createEventSpy = mock(async () => {});
+      const createEventSpy = mock<IWorkflowStore['createWorkflowEvent']>(async _data => {});
       const store = makeStore({ createWorkflowEvent: createEventSpy });
 
       await executeWorkflow(
@@ -891,7 +924,7 @@ describe('executeWorkflow', () => {
       // The engine's record must not be coupled to platform delivery in any
       // way — this is the whole reason the event exists rather than relying on
       // the best-effort chat message.
-      const createEventSpy = mock(async () => {});
+      const createEventSpy = mock<IWorkflowStore['createWorkflowEvent']>(async _data => {});
       const store = makeStore({ createWorkflowEvent: createEventSpy });
       const brokenPlatform = {
         sendMessage: mock(() => Promise.reject(new Error('platform down'))),
@@ -1244,7 +1277,7 @@ describe('executeWorkflow', () => {
         'db-conv-1'
       );
       expect(result.success).toBe(true);
-      if (result.success) {
+      if (result.success && !('paused' in result)) {
         expect(result.summary).toBe('This is the workflow summary');
       }
     });
@@ -1263,7 +1296,7 @@ describe('executeWorkflow', () => {
         'db-conv-1'
       );
       expect(result.success).toBe(true);
-      if (result.success) {
+      if (result.success && !('paused' in result)) {
         expect(result.summary).toBeUndefined();
       }
     });
@@ -1543,9 +1576,11 @@ describe('executeWorkflow', () => {
         id: 'paused-run-id',
         workflow_name: 'archon-implement',
         status: 'paused',
-        started_at: new Date(Date.now() - 10000).toISOString(),
+        started_at: new Date(Date.now() - 10000),
       });
-      const sendMessageSpy = mock(async () => {});
+      const sendMessageSpy = mock<IWorkflowPlatform['sendMessage']>(
+        async (_conversationId, _message, _metadata) => {}
+      );
       const platform = {
         sendMessage: sendMessageSpy,
         getPlatformType: mock(() => 'test' as const),
@@ -1569,9 +1604,11 @@ describe('executeWorkflow', () => {
         id: 'pending-run',
         workflow_name: 'archon-implement',
         status: 'pending',
-        started_at: new Date(Date.now() - 500).toISOString(),
+        started_at: new Date(Date.now() - 500),
       });
-      const sendMessageSpy = mock(async () => {});
+      const sendMessageSpy = mock<IWorkflowPlatform['sendMessage']>(
+        async (_conversationId, _message, _metadata) => {}
+      );
       const platform = {
         sendMessage: sendMessageSpy,
         getPlatformType: mock(() => 'test' as const),
@@ -1590,9 +1627,11 @@ describe('executeWorkflow', () => {
         id: 'running-run',
         workflow_name: 'archon-implement',
         status: 'running',
-        started_at: new Date(Date.now() - 60000).toISOString(),
+        started_at: new Date(Date.now() - 60000),
       });
-      const sendMessageSpy = mock(async () => {});
+      const sendMessageSpy = mock<IWorkflowPlatform['sendMessage']>(
+        async (_conversationId, _message, _metadata) => {}
+      );
       const platform = {
         sendMessage: sendMessageSpy,
         getPlatformType: mock(() => 'test' as const),

@@ -1,6 +1,6 @@
 import { describe, test, expect, spyOn, beforeEach, afterEach } from 'bun:test';
 import { join } from 'path';
-import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'fs';
+import { mkdirSync, writeFileSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import {
   isNewerVersion,

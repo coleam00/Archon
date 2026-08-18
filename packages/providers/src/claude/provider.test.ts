@@ -2,6 +2,7 @@ import { describe, test, expect, mock, beforeEach, afterEach, spyOn } from 'bun:
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { Options, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
 import { createMockLogger } from '../test/mocks/logger';
 
 const mockLogger = createMockLogger();
@@ -9,8 +10,11 @@ mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
 }));
 
-// Create mock query function
-const mockQuery = mock(async function* () {
+type MockQuery = (...args: Parameters<typeof sdkQuery>) => AsyncGenerator<unknown, void, unknown>;
+
+// Keep the SDK input signature while allowing tests to exercise malformed and
+// forward-compatible events at the provider's runtime validation boundary.
+const mockQuery = mock<MockQuery>(async function* (_params) {
   // Empty generator by default
 });
 
@@ -1183,11 +1187,9 @@ describe('ClaudeProvider', () => {
     }, 5_000);
 
     test('captures all stderr output for diagnostics', async () => {
-      mockQuery.mockImplementation(async function* (args: {
-        options: { stderr?: (data: string) => void };
-      }) {
+      mockQuery.mockImplementation(async function* (args) {
         // Simulate non-error stderr output followed by crash
-        if (args.options.stderr) {
+        if (args.options?.stderr) {
           args.options.stderr('Spawning Claude Code process: node cli.js');
           args.options.stderr('AJV validation: schema loaded');
           args.options.stderr('startup diagnostic: ready');
@@ -1202,12 +1204,13 @@ describe('ClaudeProvider', () => {
       };
 
       // Use rejects so assertions always execute
-      const err = await consumeGenerator().catch((e: unknown) => e as Error);
-      expect(err).toBeInstanceOf(Error);
+      const thrown = await consumeGenerator().catch((error: unknown) => error);
+      expect(thrown).toBeInstanceOf(Error);
+      if (!(thrown instanceof Error)) throw new Error('Expected consumeGenerator to throw');
       // The error should contain stderr context from ALL captured lines
-      expect(err.message).toContain('stderr:');
-      expect(err.message).toContain('AJV validation');
-      expect(err.message).toContain('startup diagnostic');
+      expect(thrown.message).toContain('stderr:');
+      expect(thrown.message).toContain('AJV validation');
+      expect(thrown.message).toContain('startup diagnostic');
     }, 5_000);
 
     test('passes settingSources from assistantConfig', async () => {
@@ -1914,10 +1917,8 @@ describe('sendQuery decomposition behaviors', () => {
   }, 5_000);
 
   test('enriched error (with stderr) is thrown at retry exhaustion, not raw error', async () => {
-    mockQuery.mockImplementation(async function* (args: {
-      options: { stderr?: (data: string) => void };
-    }) {
-      if (args.options.stderr) {
+    mockQuery.mockImplementation(async function* (args) {
+      if (args.options?.stderr) {
         args.options.stderr('diagnostic: something broke');
       }
       throw new Error('process exited with code 1');
@@ -1929,34 +1930,44 @@ describe('sendQuery decomposition behaviors', () => {
       }
     };
 
-    const err = await consumeGenerator().catch((e: unknown) => e as Error);
-    expect(err).toBeInstanceOf(Error);
+    const thrown = await consumeGenerator().catch((error: unknown) => error);
+    expect(thrown).toBeInstanceOf(Error);
+    if (!(thrown instanceof Error)) throw new Error('Expected consumeGenerator to throw');
     // Must contain stderr context, not just the raw error
-    expect(err.message).toContain('stderr:');
-    expect(err.message).toContain('diagnostic: something broke');
+    expect(thrown.message).toContain('stderr:');
+    expect(thrown.message).toContain('diagnostic: something broke');
   }, 5_000);
 
   test('PostToolUse hooks preserve success, failure, and interruption outcomes', async () => {
-    mockQuery.mockImplementation(async function* (args: {
-      options: {
-        hooks?: Record<string, Array<{ hooks: Array<(input: unknown) => Promise<unknown>> }>>;
-      };
-    }) {
-      const successHook = args.options.hooks?.PostToolUse?.[0]?.hooks?.[0];
-      const failureHook = args.options.hooks?.PostToolUseFailure?.[0]?.hooks?.[0];
-      await successHook?.({ tool_name: 'Read', tool_use_id: 'success-id', tool_response: 'ok' });
-      await failureHook?.({
-        tool_name: 'Bash',
-        tool_use_id: 'error-id',
-        error: 'exit 1',
-        is_interrupt: false,
-      });
-      await failureHook?.({
-        tool_name: 'Task',
-        tool_use_id: 'interrupt-id',
-        error: 'stopped',
-        is_interrupt: true,
-      });
+    mockQuery.mockImplementation(async function* (args) {
+      const successHook = args.options?.hooks?.PostToolUse?.[0]?.hooks?.[0];
+      const failureHook = args.options?.hooks?.PostToolUseFailure?.[0]?.hooks?.[0];
+      const hookOptions = { signal: new AbortController().signal };
+      await successHook?.(
+        { tool_name: 'Read', tool_use_id: 'success-id', tool_response: 'ok' } as never,
+        'success-id',
+        hookOptions
+      );
+      await failureHook?.(
+        {
+          tool_name: 'Bash',
+          tool_use_id: 'error-id',
+          error: 'exit 1',
+          is_interrupt: false,
+        } as never,
+        'error-id',
+        hookOptions
+      );
+      await failureHook?.(
+        {
+          tool_name: 'Task',
+          tool_use_id: 'interrupt-id',
+          error: 'stopped',
+          is_interrupt: true,
+        } as never,
+        'interrupt-id',
+        hookOptions
+      );
       yield { type: 'assistant', message: { content: [{ type: 'text', text: 'done' }] } };
     });
 
@@ -1989,14 +2000,14 @@ describe('sendQuery decomposition behaviors', () => {
   });
 
   test('terminal tool result queue drain preserves hook outcome', async () => {
-    mockQuery.mockImplementation(async function* (args: {
-      options: {
-        hooks?: Record<string, Array<{ hooks: Array<(input: unknown) => Promise<unknown>> }>>;
-      };
-    }) {
+    mockQuery.mockImplementation(async function* (args) {
       yield { type: 'assistant', message: { content: [{ type: 'text', text: 'done' }] } };
-      const successHook = args.options.hooks?.PostToolUse?.[0]?.hooks?.[0];
-      await successHook?.({ tool_name: 'Read', tool_use_id: 'late-id', tool_response: 'ok' });
+      const successHook = args.options?.hooks?.PostToolUse?.[0]?.hooks?.[0];
+      await successHook?.(
+        { tool_name: 'Read', tool_use_id: 'late-id', tool_response: 'ok' } as never,
+        'late-id',
+        { signal: new AbortController().signal }
+      );
     });
 
     const chunks = [];
@@ -2012,21 +2023,21 @@ describe('sendQuery decomposition behaviors', () => {
   });
 
   test('PostToolUse hook handles circular reference without crashing', async () => {
-    mockQuery.mockImplementation(async function* (args: {
-      options: {
-        hooks?: Record<string, Array<{ hooks: Array<(input: unknown) => Promise<unknown>> }>>;
-      };
-    }) {
+    mockQuery.mockImplementation(async function* (args) {
       // Simulate a tool use that triggers the PostToolUse hook with circular data
-      const hooks = args.options.hooks?.PostToolUse;
+      const hooks = args.options?.hooks?.PostToolUse;
       if (hooks?.[0]?.hooks?.[0]) {
         const circular: Record<string, unknown> = { key: 'val' };
         circular.self = circular; // circular reference
-        await hooks[0].hooks[0]({
-          tool_name: 'TestTool',
-          tool_use_id: 'tc-circ',
-          tool_response: circular,
-        });
+        await hooks[0].hooks[0](
+          {
+            tool_name: 'TestTool',
+            tool_use_id: 'tc-circ',
+            tool_response: circular,
+          } as never,
+          'tc-circ',
+          { signal: new AbortController().signal }
+        );
       }
       yield {
         type: 'assistant',

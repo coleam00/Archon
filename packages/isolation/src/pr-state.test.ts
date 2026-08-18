@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach, mock } from 'bun:test';
+import { describe, test, expect, mock } from 'bun:test';
 
 const mockLogger = {
   fatal: mock(() => undefined),
@@ -29,9 +29,10 @@ mock.module('@archon/git', () => ({
 }));
 
 import { getPrState, type PrState } from './pr-state';
+import { toBranchName, toRepoPath } from '@archon/git';
 
-const REPO = '/workspace/repo';
-const BRANCH = 'feature-branch';
+const REPO = toRepoPath('/workspace/repo');
+const BRANCH = toBranchName('feature-branch');
 
 function setupGhResponse(remoteUrl: string, ghStdout: string | Error): void {
   mockExecFileAsync.mockReset();

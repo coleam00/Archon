@@ -625,11 +625,15 @@ describe('new capture functions are fire-and-forget no-throw', () => {
     delete process.env.CI;
     delete process.env.POSTHOG_API_KEY;
     const bodies: (string | Blob)[] = [];
-    const fetchSpy = spyOn(globalThis, 'fetch').mockImplementation((_url, options) => {
-      const body = (options as { body?: unknown } | undefined)?.body;
-      if (typeof body === 'string' || body instanceof Blob) bodies.push(body);
-      return Promise.resolve(new Response('{"status":"ok"}', { status: 200 }));
-    });
+    const fetchImpl = Object.assign(
+      (_url: Parameters<typeof fetch>[0], options?: Parameters<typeof fetch>[1]) => {
+        const body = (options as { body?: unknown } | undefined)?.body;
+        if (typeof body === 'string' || body instanceof Blob) bodies.push(body);
+        return Promise.resolve(new Response('{"status":"ok"}', { status: 200 }));
+      },
+      { preconnect: (): void => undefined }
+    );
+    const fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(fetchImpl);
     try {
       captureArchonStarted({
         surface: 'server',
@@ -682,11 +686,15 @@ describe('new capture functions are fire-and-forget no-throw', () => {
     delete process.env.CI;
     delete process.env.POSTHOG_API_KEY;
     const bodies: (string | Blob)[] = [];
-    const fetchSpy = spyOn(globalThis, 'fetch').mockImplementation((_url, options) => {
-      const body = (options as { body?: unknown } | undefined)?.body;
-      if (typeof body === 'string' || body instanceof Blob) bodies.push(body);
-      return Promise.resolve(new Response('{"status":"ok"}', { status: 200 }));
-    });
+    const fetchImpl = Object.assign(
+      (_url: Parameters<typeof fetch>[0], options?: Parameters<typeof fetch>[1]) => {
+        const body = (options as { body?: unknown } | undefined)?.body;
+        if (typeof body === 'string' || body instanceof Blob) bodies.push(body);
+        return Promise.resolve(new Response('{"status":"ok"}', { status: 200 }));
+      },
+      { preconnect: (): void => undefined }
+    );
+    const fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(fetchImpl);
     try {
       captureChatTurn({
         platform: 'web',

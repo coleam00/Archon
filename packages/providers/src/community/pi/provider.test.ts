@@ -35,7 +35,7 @@ type FakeEvent = AgentSessionEvent;
 let capturedListener: ((event: FakeEvent) => void) | undefined;
 
 const scriptedEvents: FakeEvent[] = [];
-const mockPrompt = mock(async () => {
+const mockPrompt = mock(async (_prompt: string) => {
   for (const ev of scriptedEvents) capturedListener?.(ev);
 });
 const mockAbort = mock(async () => undefined);
@@ -65,11 +65,19 @@ const mockSession = {
   sessionId: 'mock-session-uuid',
 };
 
-const mockCreateAgentSession = mock(async (_options?: unknown) => ({
-  session: mockSession,
-  extensionsResult: { extensions: [], errors: [], runtime: {} },
-  modelFallbackMessage: undefined,
-}));
+type MockSessionResult = {
+  session: typeof mockSession;
+  extensionsResult: { extensions: never[]; errors: never[]; runtime: Record<string, never> };
+  modelFallbackMessage: string | undefined;
+};
+
+const mockCreateAgentSession = mock(
+  async (_options?: unknown): Promise<MockSessionResult> => ({
+    session: mockSession,
+    extensionsResult: { extensions: [], errors: [], runtime: {} },
+    modelFallbackMessage: undefined,
+  })
+);
 
 // Per-test state backing the AuthStorage mock. `fileCreds` emulates what's
 // in ~/.pi/agent/auth.json; `runtimeOverrides` emulates env-var passthrough
@@ -99,9 +107,17 @@ const mockModelRegistryFind = mock((provider: string, modelId: string) => {
   if (provider === 'nonexistent') return undefined;
   return { id: modelId, provider, name: `${provider}/${modelId}` };
 });
-const mockModelRegistryCreate = mock(() => ({
-  find: mockModelRegistryFind,
-}));
+type MockModelRegistry = {
+  find: (
+    provider: string,
+    modelId: string
+  ) => { id: string; provider: string; name: string } | undefined;
+};
+const mockModelRegistryCreate = mock(
+  (): MockModelRegistry => ({
+    find: mockModelRegistryFind,
+  })
+);
 
 // SessionManager mocks. Each returns a tagged session-manager stub so tests
 // can assert whether resume resolved to an existing session or fell through
@@ -112,7 +128,7 @@ const mockSessionList = mock(
   async (_cwd: string) => [] as { id: string; path: string; cwd: string }[]
 );
 
-const mockSettingsManagerDrainErrors = mock(() => []);
+const mockSettingsManagerDrainErrors = mock((): { scope: string; error: Error }[] => []);
 const mockSettingsManagerGetGlobalSettings = mock(() => ({}));
 const mockSettingsManagerGetProjectSettings = mock(() => ({}));
 const mockSettingsManagerCreate = mock(() => ({
@@ -215,6 +231,10 @@ function resetScript(events: FakeEvent[]): void {
   scriptedEvents.push(...events);
 }
 
+function readEnv(name: string): string | undefined {
+  return process.env[name];
+}
+
 // ─── Test suite ─────────────────────────────────────────────────────────
 
 describe('PiProvider', () => {
@@ -294,14 +314,14 @@ describe('PiProvider', () => {
     delete process.env.PI_PACKAGE_DIR;
     expect(process.env.PI_PACKAGE_DIR).toBeUndefined();
     await consume(new PiProvider().sendQuery('hi', '/tmp'));
-    expect(process.env.PI_PACKAGE_DIR).toBeDefined();
-    expect(process.env.PI_PACKAGE_DIR).toContain('archon-pi-shim');
+    expect(readEnv('PI_PACKAGE_DIR')).toBeDefined();
+    expect(readEnv('PI_PACKAGE_DIR')).toContain('archon-pi-shim');
 
     // Stub contents are load-bearing: Pi reads `version` to populate its
     // user-agent and `piConfig` (even when empty) to opt into the defaults
     // path instead of erroring on missing config. Asserting on shape so a
     // regression here surfaces in the test suite, not in a Pi runtime crash.
-    const shimDir = process.env.PI_PACKAGE_DIR;
+    const shimDir = readEnv('PI_PACKAGE_DIR');
     expect(shimDir).toBe(join(tmpdir(), 'archon-pi-shim'));
     const stub = JSON.parse(readFileSync(join(shimDir!, 'package.json'), 'utf8')) as {
       name: string;
@@ -476,9 +496,14 @@ describe('PiProvider', () => {
     resetScript([
       {
         type: 'agent_end',
+        willRetry: false,
         messages: [
           {
             role: 'assistant',
+            api: 'test',
+            provider: 'test',
+            model: 'test',
+            timestamp: 0,
             usage: {
               input: 1,
               output: 1,
@@ -552,9 +577,14 @@ describe('PiProvider', () => {
     resetScript([
       {
         type: 'agent_end',
+        willRetry: false,
         messages: [
           {
             role: 'assistant',
+            api: 'test',
+            provider: 'test',
+            model: 'test',
+            timestamp: 0,
             usage: {
               input: 1,
               output: 1,
@@ -590,9 +620,14 @@ describe('PiProvider', () => {
     resetScript([
       {
         type: 'agent_end',
+        willRetry: false,
         messages: [
           {
             role: 'assistant',
+            api: 'test',
+            provider: 'test',
+            model: 'test',
+            timestamp: 0,
             usage: {
               input: 1,
               output: 1,
@@ -624,9 +659,14 @@ describe('PiProvider', () => {
     resetScript([
       {
         type: 'agent_end',
+        willRetry: false,
         messages: [
           {
             role: 'assistant',
+            api: 'test',
+            provider: 'test',
+            model: 'test',
+            timestamp: 0,
             usage: {
               input: 1,
               output: 1,
@@ -655,9 +695,14 @@ describe('PiProvider', () => {
     resetScript([
       {
         type: 'agent_end',
+        willRetry: false,
         messages: [
           {
             role: 'assistant',
+            api: 'test',
+            provider: 'test',
+            model: 'test',
+            timestamp: 0,
             usage: {
               input: 1,
               output: 1,
@@ -691,9 +736,14 @@ describe('PiProvider', () => {
     resetScript([
       {
         type: 'agent_end',
+        willRetry: false,
         messages: [
           {
             role: 'assistant',
+            api: 'test',
+            provider: 'test',
+            model: 'test',
+            timestamp: 0,
             usage: {
               input: 1,
               output: 1,
@@ -722,24 +772,34 @@ describe('PiProvider', () => {
     resetScript([
       {
         type: 'message_update',
-        message: { role: 'assistant' },
-        assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: 'Hello', partial: {} },
+        message: { role: 'assistant' } as never,
+        assistantMessageEvent: {
+          type: 'text_delta',
+          contentIndex: 0,
+          delta: 'Hello',
+          partial: {} as never,
+        },
       },
       {
         type: 'message_update',
-        message: { role: 'assistant' },
+        message: { role: 'assistant' } as never,
         assistantMessageEvent: {
           type: 'text_delta',
           contentIndex: 0,
           delta: ' world',
-          partial: {},
+          partial: {} as never,
         },
       },
       {
         type: 'agent_end',
+        willRetry: false,
         messages: [
           {
             role: 'assistant',
+            api: 'test',
+            provider: 'test',
+            model: 'test',
+            timestamp: 0,
             usage: {
               input: 1,
               output: 2,
@@ -788,9 +848,14 @@ describe('PiProvider', () => {
       },
       {
         type: 'agent_end',
+        willRetry: false,
         messages: [
           {
             role: 'assistant',
+            api: 'test',
+            provider: 'test',
+            model: 'test',
+            timestamp: 0,
             usage: {
               input: 1,
               output: 1,
@@ -833,9 +898,14 @@ describe('PiProvider', () => {
     resetScript([
       {
         type: 'agent_end',
+        willRetry: false,
         messages: [
           {
             role: 'assistant',
+            api: 'test',
+            provider: 'test',
+            model: 'test',
+            timestamp: 0,
             usage: {
               input: 1,
               output: 1,
@@ -881,9 +951,14 @@ describe('PiProvider', () => {
     resetScript([
       {
         type: 'agent_end',
+        willRetry: false,
         messages: [
           {
             role: 'assistant',
+            api: 'test',
+            provider: 'test',
+            model: 'test',
+            timestamp: 0,
             usage: {
               input: 1,
               output: 1,
@@ -942,9 +1017,14 @@ describe('PiProvider', () => {
     resetScript([
       {
         type: 'agent_end',
+        willRetry: false,
         messages: [
           {
             role: 'assistant',
+            api: 'test',
+            provider: 'test',
+            model: 'test',
+            timestamp: 0,
             usage: {
               input: 1,
               output: 1,
@@ -974,9 +1054,14 @@ describe('PiProvider', () => {
     return [
       {
         type: 'agent_end',
+        willRetry: false,
         messages: [
           {
             role: 'assistant',
+            api: 'test',
+            provider: 'test',
+            model: 'test',
+            timestamp: 0,
             usage: {
               input: 1,
               output: 1,
@@ -1605,9 +1690,14 @@ describe('PiProvider', () => {
       controller.abort();
       capturedListener?.({
         type: 'agent_end',
+        willRetry: false,
         messages: [
           {
             role: 'assistant',
+            api: 'test',
+            provider: 'test',
+            model: 'test',
+            timestamp: 0,
             usage: {
               input: 1,
               output: 1,
@@ -2088,8 +2178,8 @@ describe('PiProvider', () => {
         })
       );
 
-      expect(process.env.PI_TEST_ONE).toBe('one');
-      expect(process.env.PI_TEST_TWO).toBe('two');
+      expect(readEnv('PI_TEST_ONE')).toBe('one');
+      expect(readEnv('PI_TEST_TWO')).toBe('two');
     } finally {
       delete process.env.PI_TEST_ONE;
       delete process.env.PI_TEST_TWO;

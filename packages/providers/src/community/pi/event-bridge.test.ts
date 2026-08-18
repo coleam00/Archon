@@ -160,7 +160,7 @@ describe('buildResultChunk', () => {
       type: 'result',
       isError: true,
       errorSubtype: 'missing_assistant_message',
-    };
+    } as const;
     expect(buildResultChunk([])).toEqual(expected);
     expect(buildResultChunk([{ role: 'user', content: [] }])).toEqual(expected);
   });
@@ -382,6 +382,7 @@ describe('mapPiEvent', () => {
     };
     const chunks = mapPiEvent({
       type: 'agent_end',
+      willRetry: false,
       messages: [{ role: 'assistant', usage, stopReason: 'stop', content: [] } as never],
     });
     expect(chunks).toHaveLength(1);

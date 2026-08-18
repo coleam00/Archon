@@ -20,17 +20,18 @@ function makeSpawnOptions(over: Partial<SpawnOptions> = {}): SpawnOptions {
 
 /** Fake ChildProcess with real streams + a recording kill(). */
 function fakeChild(): ChildProcess & { killSignals: string[] } {
-  const emitter = new EventEmitter() as ChildProcess & { killSignals: string[] };
-  emitter.stdin = new PassThrough() as unknown as ChildProcess['stdin'];
-  emitter.stdout = new PassThrough() as unknown as ChildProcess['stdout'];
-  emitter.killed = false;
-  emitter.exitCode = null;
-  emitter.killSignals = [];
-  emitter.kill = ((signal?: NodeJS.Signals) => {
-    emitter.killSignals.push(signal ?? 'SIGTERM');
-    return true;
-  }) as ChildProcess['kill'];
-  return emitter;
+  const killSignals: string[] = [];
+  return Object.assign(new EventEmitter(), {
+    stdin: new PassThrough(),
+    stdout: new PassThrough(),
+    killed: false,
+    exitCode: null,
+    killSignals,
+    kill: (signal?: NodeJS.Signals) => {
+      killSignals.push(signal ?? 'SIGTERM');
+      return true;
+    },
+  }) as unknown as ChildProcess & { killSignals: string[] };
 }
 
 /** Recording spawner returning a fresh fake child per call. */
@@ -45,7 +46,7 @@ function recordingSpawner(): Spawner & {
     const child = fakeChild();
     children.push(child);
     return child;
-  }) as Spawner & { calls: typeof calls; children: ChildProcess[] };
+  }) as unknown as Spawner & { calls: typeof calls; children: ChildProcess[] };
   fn.calls = calls;
   fn.children = children;
   return fn;

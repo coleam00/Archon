@@ -4,5 +4,5 @@
     "noEmit": true
   },
   "include": ["src/**/*", "src/defaults/text-imports.d.ts"],
-  "exclude": ["node_modules", "dist", "**/*.test.ts"]
+  "exclude": ["node_modules", "dist"]
 }

@@ -6,13 +6,14 @@ import { tmpdir } from 'os';
 const isWindows = process.platform === 'win32';
 
 // Inline mock logger to suppress noisy output during tests
+type MockLog = (data: unknown, message?: string, ...args: unknown[]) => undefined;
 const mockLogger = {
-  fatal: mock(() => undefined),
-  error: mock(() => undefined),
-  warn: mock(() => undefined),
-  info: mock(() => undefined),
-  debug: mock(() => undefined),
-  trace: mock(() => undefined),
+  fatal: mock<MockLog>(() => undefined),
+  error: mock<MockLog>(() => undefined),
+  warn: mock<MockLog>(() => undefined),
+  info: mock<MockLog>(() => undefined),
+  debug: mock<MockLog>(() => undefined),
+  trace: mock<MockLog>(() => undefined),
   child: mock(function () {
     return mockLogger;
   }),
@@ -2181,7 +2182,7 @@ nodes:
 `
       );
 
-      (mockLogger.warn as Mock<() => undefined>).mockClear();
+      mockLogger.warn.mockClear();
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
       expect(result.errors).toHaveLength(0);
       expect(result.workflows).toHaveLength(1);
@@ -2190,7 +2191,7 @@ nodes:
       expect(isLoopNode(node)).toBe(true);
 
       // model and provider should NOT trigger a warning
-      const warnCalls = (mockLogger.warn as Mock<() => undefined>).mock.calls;
+      const warnCalls = mockLogger.warn.mock.calls;
       const aiFieldWarnings = warnCalls.filter(
         call => typeof call[1] === 'string' && call[1].includes('ai_fields_ignored')
       );
@@ -2217,12 +2218,12 @@ nodes:
 `
       );
 
-      (mockLogger.warn as Mock<() => undefined>).mockClear();
+      mockLogger.warn.mockClear();
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
       expect(result.errors).toHaveLength(0);
 
       // Should warn about mcp but NOT about model
-      const warnCalls = (mockLogger.warn as Mock<() => undefined>).mock.calls;
+      const warnCalls = mockLogger.warn.mock.calls;
       const aiFieldWarnings = warnCalls.filter(
         call => typeof call[1] === 'string' && call[1].includes('ai_fields_ignored')
       );
@@ -2259,11 +2260,11 @@ nodes:
 `
       );
 
-      (mockLogger.warn as Mock<() => undefined>).mockClear();
+      mockLogger.warn.mockClear();
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
       expect(result.errors).toHaveLength(0);
 
-      const aiFieldWarnings = (mockLogger.warn as Mock<() => undefined>).mock.calls.filter(
+      const aiFieldWarnings = mockLogger.warn.mock.calls.filter(
         call => typeof call[1] === 'string' && call[1].includes('ai_fields_ignored')
       );
       expect(aiFieldWarnings).toHaveLength(0);
@@ -2302,7 +2303,7 @@ nodes:
 `
       );
 
-      (mockLogger.warn as Mock<() => undefined>).mockClear();
+      mockLogger.warn.mockClear();
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
       expect(result.errors).toHaveLength(0);
       expect(result.workflows).toHaveLength(1);
@@ -2314,7 +2315,7 @@ nodes:
         extensionFlags: { plan: false },
       });
 
-      const warnCalls = (mockLogger.warn as Mock<() => undefined>).mock.calls;
+      const warnCalls = mockLogger.warn.mock.calls;
       const aiFieldWarnings = warnCalls.filter(
         call => typeof call[1] === 'string' && call[1].includes('ai_fields_ignored')
       );
@@ -5043,7 +5044,9 @@ nodes:
           ? (repeat.loop as typeof repeat.loop & LoopWithCompiledCommand)[COMPILED_LOOP_COMMAND]
           : undefined;
       expect(compiled?.prompt).toBe('Review production.');
-      expect(repeat && 'loop' in repeat ? repeat.loop.command : undefined).toBe('loop-review');
+      expect(repeat && 'loop' in repeat && repeat.loop ? repeat.loop.command : undefined).toBe(
+        'loop-review'
+      );
     });
   });
 
@@ -5276,6 +5279,9 @@ nodes:
           thinkingControl: false,
           fallbackModel: false,
           sandbox: false,
+          settingSources: false,
+          nativeTools: false,
+          containerExec: false,
         },
         factory: () => ({
           getType: () => 'no-resume-skip-test',
@@ -5293,6 +5299,9 @@ nodes:
             thinkingControl: false,
             fallbackModel: false,
             sandbox: false,
+            settingSources: false,
+            nativeTools: false,
+            containerExec: false,
           }),
           // eslint-disable-next-line require-yield
           async *sendQuery() {
@@ -5339,6 +5348,9 @@ nodes:
           thinkingControl: false,
           fallbackModel: false,
           sandbox: false,
+          settingSources: false,
+          nativeTools: false,
+          containerExec: false,
         },
         factory: () => ({
           getType: () => 'no-resume-test',
@@ -5356,6 +5368,9 @@ nodes:
             thinkingControl: false,
             fallbackModel: false,
             sandbox: false,
+            settingSources: false,
+            nativeTools: false,
+            containerExec: false,
           }),
           // eslint-disable-next-line require-yield
           async *sendQuery() {

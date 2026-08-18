@@ -7,7 +7,7 @@ mock.module('@archon/paths', () => ({
 
 import type { SessionEvent } from '@github/copilot-sdk';
 
-import type { MessageChunk, TokenUsage } from '../../types';
+import type { TokenUsage } from '../../types';
 import {
   AsyncQueue,
   mapCopilotEvent,

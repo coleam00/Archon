@@ -92,6 +92,8 @@ import { executeWorkflow } from './executor';
 function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
   return {
     getActiveWorkflowRunByPath: mock(async () => null),
+    findChildRuns: mock(async () => []),
+    getRunAncestry: mock(async () => []),
     failOrphanedRuns: mock(async () => ({ count: 0 })),
     createWorkflowRun: mock(async () => makeRun()),
     updateWorkflowRun: mock(async () => {}),
@@ -107,6 +109,15 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     resumeWorkflowRun: mock(async () => makeRun()),
     getCodebase: mock(async () => null),
     getCodebaseEnvVars: mock(async () => ({})),
+    updateWorkflowActivity: mock(async () => {}),
+    completeWorkflowRun: mock(async () => {}),
+    pauseWorkflowRun: mock(async () => {}),
+    claimWriteback: mock(async () => ({ claimed: true })),
+    releaseWritebackClaim: mock(async () => {}),
+    cancelWorkflowRun: mock(async () => ({ cancelled: false })),
+    getWorkflowNodeSession: mock(async () => null),
+    upsertWorkflowNodeSession: mock(async () => {}),
+    deleteWorkflowNodeSessions: mock(async () => ({ deleted: 0 })),
     ...overrides,
   };
 }
@@ -150,9 +161,18 @@ function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
     id: 'run-123',
     workflow_name: 'test-workflow',
     conversation_id: 'conv-1',
+    parent_conversation_id: null,
+    codebase_id: null,
     status: 'running',
-    started_at: new Date().toISOString(),
+    user_message: 'test',
     metadata: {},
+    started_at: new Date(),
+    completed_at: null,
+    last_activity_at: null,
+    working_path: null,
+    user_id: null,
+    parent_run_id: null,
+    output_root: null,
     ...overrides,
   };
 }
@@ -201,7 +221,7 @@ describe('executeWorkflow preamble', () => {
 
   describe('concurrent run guard', () => {
     it('should block new workflow when a running workflow exists on the same path', async () => {
-      const recentTime = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+      const recentTime = new Date(Date.now() - 5 * 60 * 1000);
       const activeRun = makeRun({
         id: 'active-workflow-id',
         workflow_name: 'active-workflow',
@@ -227,6 +247,7 @@ describe('executeWorkflow preamble', () => {
       );
 
       expect(result.success).toBe(false);
+      if (result.success) throw new Error('Expected active-workflow rejection');
       expect(result.error).toContain('already active');
 
       // Actionable rejection message was sent (mentions worktree-in-use,
@@ -290,7 +311,7 @@ describe('executeWorkflow preamble', () => {
         makeWorkflow(),
         'test message',
         'db-conv-456',
-        'codebase-789'
+        { codebaseId: 'codebase-789' }
       );
 
       const activeCheckCalls = (store.getActiveWorkflowRunByPath as ReturnType<typeof mock>).mock
@@ -320,6 +341,7 @@ describe('executeWorkflow preamble', () => {
       );
 
       expect(result.success).toBe(false);
+      if (result.success) throw new Error('Expected active-workflow lookup failure');
       expect(result.error).toContain('Database error');
 
       // The row is created BEFORE the guard runs (so the guard can exclude

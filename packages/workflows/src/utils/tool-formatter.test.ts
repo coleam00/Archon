@@ -1,3 +1,4 @@
+import { describe, expect, test } from 'bun:test';
 import { formatToolCall, formatThinking } from './tool-formatter';
 
 describe('tool-formatter', () => {

@@ -2,7 +2,9 @@ import { describe, test, expect, mock, beforeEach } from 'bun:test';
 
 // Mock fs/promises before importing the module under test
 const mockReaddir = mock(async (_path: string): Promise<string[]> => []);
-const mockStat = mock(async (_path: string) => ({ isDirectory: () => false }));
+const mockStat = mock(
+  async (_path: string): Promise<{ isDirectory: () => boolean }> => ({ isDirectory: () => false })
+);
 
 mock.module('fs/promises', () => ({
   access: mock(async () => undefined),

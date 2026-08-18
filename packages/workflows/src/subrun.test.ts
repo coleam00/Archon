@@ -104,6 +104,7 @@ class InMemoryStore implements IWorkflowStore {
       working_path: data.working_path ?? null,
       user_id: data.user_id ?? null,
       parent_run_id: data.parent_run_id ?? null,
+      output_root: null,
     };
     this.runs.set(id, row);
     return Promise.resolve(this.clone(row));
@@ -1002,8 +1003,9 @@ nodes:
     expect(result.success).toBe(false);
     const child = [...store.runs.values()].find(r => r.workflow_name === 'child-plain');
     expect(child).toBeDefined();
+    if (!child) throw new Error('Expected child run');
     // The child must be TERMINAL — not a 'pending'/'running' zombie holding the lock.
-    expect(['cancelled', 'failed']).toContain(child?.status);
+    expect(['cancelled', 'failed']).toContain(child.status);
     const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'parent-plain');
     expect(parentRun?.status).toBe('failed');
   });
@@ -1196,9 +1198,11 @@ nodes:
     expect(result.success).toBe(true);
     // The resolver was invoked once, for the `sub` node, carrying the parent run.
     expect(calls).toHaveLength(1);
+    if (!calls[0]) throw new Error('Expected resolver call');
     expect(calls[0].nodeId).toBe('sub');
     const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'parent-iso');
-    expect(calls[0].parentRun.id).toBe(parentRun?.id);
+    if (!parentRun) throw new Error('Expected parent run');
+    expect(calls[0].parentRun.id).toBe(parentRun.id);
     // The child ran in the resolver's worktree cwd — NOT the parent's checkout.
     const child = [...store.runs.values()].find(r => r.workflow_name === 'child-iso');
     expect(child?.status).toBe('completed');
@@ -1802,8 +1806,9 @@ nodes:
     // each in its OWN worktree (distinct working paths, none the parent's checkout).
     const children = [...store.runs.values()].filter(r => r.workflow_name === 'fan-child');
     expect(children).toHaveLength(3);
+    if (!parentRun) throw new Error('Expected parent run');
     for (const c of children) {
-      expect(c.parent_run_id).toBe(parentRun?.id);
+      expect(c.parent_run_id).toBe(parentRun.id);
       expect((c.metadata as Record<string, unknown>).parent_node_id).toBe('work');
       expect(c.status).toBe('completed');
       expect(c.working_path).not.toBe(cwd);
@@ -3355,7 +3360,7 @@ nodes:
 
     const wf = await discover('parent-forward-ref');
     const issues = await validateWorkflowResources(wf, cwd);
-    const errors = issues.filter(i => i.severity === 'error');
+    const errors = issues.filter(i => i.level === 'error');
     expect(errors).toHaveLength(0);
   });
 

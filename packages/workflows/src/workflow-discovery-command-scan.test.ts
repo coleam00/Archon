@@ -62,13 +62,12 @@ describe('discoverWorkflows — nested included command compilation', () => {
     expect(result.errors.filter(error => error.filename === 'parent.yaml')).toHaveLength(0);
     const parent = result.workflows.find(item => item.workflow.name === 'parent')?.workflow;
     const group = parent?.nodes.find(node => node.id === 'inc__group');
-    const repeat = group && 'loop_group' in group ? group.loop_group.nodes[0] : undefined;
-    const compiled =
-      repeat && 'loop' in repeat
-        ? (repeat.loop as typeof repeat.loop & LoopWithCompiledCommand)[COMPILED_LOOP_COMMAND]
-        : undefined;
+    const repeat = group?.loop_group?.nodes[0];
+    const compiled = repeat?.loop
+      ? (repeat.loop as typeof repeat.loop & LoopWithCompiledCommand)[COMPILED_LOOP_COMMAND]
+      : undefined;
     expect(compiled?.prompt).toBe('Read $inc__seed.output and continue.');
-    expect(repeat && 'loop' in repeat ? repeat.loop.command : undefined).toBe('nested-command');
+    expect(repeat?.loop?.command).toBe('nested-command');
   });
 
   test('rejects a command-body caller ref even when the parent has the same node id', async () => {

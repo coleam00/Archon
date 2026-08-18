@@ -15,7 +15,7 @@ import { registerPiProvider } from './community/pi/registration';
 import { registerCopilotProvider } from './community/copilot/registration';
 import { registerOpencodeProvider } from './community/opencode/registration';
 import { UnknownProviderError } from './errors';
-import type { ProviderRegistration, IAgentProvider, ProviderCapabilities } from './types';
+import type { ProviderRegistration, IAgentProvider } from './types';
 
 /** Minimal mock provider for testing registration. */
 function makeMockProvider(id: string): IAgentProvider {
@@ -37,6 +37,7 @@ function makeMockProvider(id: string): IAgentProvider {
       sandbox: false,
       nativeTools: false,
       containerExec: false,
+      settingSources: false,
     }),
     async *sendQuery() {
       yield { type: 'result' as const };

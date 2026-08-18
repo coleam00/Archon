@@ -68,9 +68,14 @@ function createMockStore(): IWorkflowStore {
         completed_at: null,
         last_activity_at: null,
         working_path: null,
+        user_id: null,
+        parent_run_id: null,
+        output_root: null,
       })
     ),
     getWorkflowRun: mock(() => Promise.resolve(null)),
+    findChildRuns: mock(() => Promise.resolve([])),
+    getRunAncestry: mock(() => Promise.resolve([])),
     getActiveWorkflowRunByPath: mock(() => Promise.resolve(null)),
     failOrphanedRuns: mock(() => Promise.resolve({ count: 0 })),
     findResumableRun: mock(() => Promise.resolve(null)),
@@ -88,6 +93,9 @@ function createMockStore(): IWorkflowStore {
         completed_at: null,
         last_activity_at: null,
         working_path: null,
+        user_id: null,
+        parent_run_id: null,
+        output_root: null,
       })
     ),
     updateWorkflowRun: mock(() => Promise.resolve()),
@@ -96,7 +104,9 @@ function createMockStore(): IWorkflowStore {
     completeWorkflowRun: mock(() => Promise.resolve()),
     failWorkflowRun: mock(() => Promise.resolve()),
     pauseWorkflowRun: mock(() => Promise.resolve()),
-    cancelWorkflowRun: mock(() => Promise.resolve()),
+    claimWriteback: mock(() => Promise.resolve({ claimed: true })),
+    releaseWritebackClaim: mock(() => Promise.resolve()),
+    cancelWorkflowRun: mock(() => Promise.resolve({ cancelled: false })),
     createWorkflowEvent: mock(() => Promise.resolve()),
     getDagResumeSnapshot: mock(() =>
       Promise.resolve({
@@ -106,17 +116,40 @@ function createMockStore(): IWorkflowStore {
     ),
     getCodebase: mock(() => Promise.resolve(null)),
     getCodebaseEnvVars: mock(() => Promise.resolve({})),
+    getWorkflowNodeSession: mock(() => Promise.resolve(null)),
+    upsertWorkflowNodeSession: mock(() => Promise.resolve()),
+    deleteWorkflowNodeSessions: mock(() => Promise.resolve({ deleted: 0 })),
   };
 }
 
-const mockSendQuery = mock(function* () {
-  yield { type: 'assistant', content: 'AI response' };
-  yield { type: 'result', sessionId: 'session-id' };
-});
+const mockSendQuery = mock<ReturnType<WorkflowDeps['getAgentProvider']>['sendQuery']>(
+  async function* (_prompt, _cwd, _resumeSessionId, _options) {
+    yield { type: 'assistant', content: 'AI response' };
+    yield { type: 'result', sessionId: 'session-id' };
+  }
+);
 
-const mockGetAgentProvider = mock(() => ({
+const mockGetAgentProvider = mock<WorkflowDeps['getAgentProvider']>(_provider => ({
   sendQuery: mockSendQuery,
   getType: () => 'claude',
+  getCapabilities: () => ({
+    sessionResume: true,
+    mcp: true,
+    hooks: true,
+    skills: true,
+    agents: true,
+    toolRestrictions: true,
+    structuredOutput: 'enforced' as const,
+    envInjection: true,
+    costControl: true,
+    effortControl: true,
+    thinkingControl: true,
+    fallbackModel: true,
+    sandbox: true,
+    settingSources: true,
+    nativeTools: true,
+    containerExec: true,
+  }),
 }));
 
 function createMockDeps(): WorkflowDeps {
@@ -157,6 +190,9 @@ function makeWorkflowRun(id: string): WorkflowRun {
     completed_at: null,
     last_activity_at: null,
     working_path: null,
+    user_id: null,
+    parent_run_id: null,
+    output_root: null,
   };
 }
 

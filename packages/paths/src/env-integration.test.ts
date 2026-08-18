@@ -314,7 +314,7 @@ describe('env isolation integration', () => {
 
     // Simulate managed env merge (what dag-executor does via requestOptions.env)
     const managedEnv = { MANAGED_SECRET: 'from-db', ELEVENLABS_API_KEY: 'el-managed' };
-    const finalEnv = { ...subprocessEnv, ...managedEnv };
+    const finalEnv: NodeJS.ProcessEnv = { ...subprocessEnv, ...managedEnv };
 
     // CWD keys still stripped
     expect(finalEnv.ANTHROPIC_API_KEY).toBeUndefined();

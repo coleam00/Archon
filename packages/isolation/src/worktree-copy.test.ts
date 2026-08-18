@@ -8,7 +8,6 @@ import {
   copyWorktreeFile,
   copyWorktreeFiles,
   isPathWithinRoot,
-  type CopyFileEntry,
 } from '@archon/isolation';
 
 describe('worktree-copy', () => {
