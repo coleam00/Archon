@@ -5226,6 +5226,31 @@ nodes:
       expect(byId.get('shell')?.persist_session).toBeUndefined();
     });
 
+    it('does NOT collapse persist_sessions into a loop_group body', async () => {
+      // A body runs in a context the executor builds with `workflowPersistSessions: false`,
+      // so the workflow-level default has never reached it. `nodeUsesPersistedScope` reads
+      // the NODE value first, so pushing it here would override that deliberate false and
+      // grant a body cross-run persistence it never had — and could trip the runtime
+      // sessionResume guard on a provider that lacks it.
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      await writeFile(
+        join(workflowDir, 'lg-persist.yaml'),
+        `name: lg-persist\ndescription: t\nprovider: claude\npersist_sessions: true\nnodes:\n  - id: group\n    loop_group:\n      until: DONE\n      max_iterations: 2\n      nodes:\n        - id: body\n          prompt: p\n  - id: after\n    prompt: p\n`
+      );
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toEqual([]);
+      const nodes = result.workflows[0].workflow.nodes;
+      const group = nodes.find(n => n.id === 'group') as {
+        loop_group: { nodes: Record<string, unknown>[] };
+      };
+      expect(group.loop_group.nodes[0].persist_session).toBeUndefined();
+      // The top-level AI node still receives it — only the body is excluded.
+      expect((nodes.find(n => n.id === 'after') as Record<string, unknown>).persist_session).toBe(
+        true
+      );
+    });
+
     it('does NOT capability-check non-AI nodes when persist_sessions is workflow-level', async () => {
       // Regression for CodeRabbit #7: workflow-level persist_sessions: true with a bash
       // node would falsely trigger the capability check on a provider that can't even

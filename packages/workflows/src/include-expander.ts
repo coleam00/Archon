@@ -218,8 +218,21 @@ function workflowModelTravelsTo(scope: Record<string, unknown>, node: DagNode): 
   return nodeProvider === undefined || nodeProvider === scope.provider;
 }
 
-/** Write a workflow's own node-affecting config onto its own nodes, where absent. */
-function pushWorkflowScopeOntoNodes(scope: Record<string, unknown>, nodes: DagNode[]): void {
+/**
+ * Write a workflow's own node-affecting config onto its own nodes, where absent.
+ *
+ * `insideLoopGroup` marks the recursion into a `loop_group` body. A body is NOT simply a
+ * nested node list: the executor builds it its own context with `workflowPersistSessions:
+ * false` (dag-executor.ts), so a workflow-level `persist_sessions: true` has never reached
+ * a body node. Pushing it there would make the collapse *grant* cross-run session
+ * persistence a body never had — and `nodeUsesPersistedScope` reads the node value first,
+ * so the executor's deliberate `false` would be overridden rather than consulted.
+ */
+function pushWorkflowScopeOntoNodes(
+  scope: Record<string, unknown>,
+  nodes: DagNode[],
+  insideLoopGroup = false
+): void {
   for (const node of nodes) {
     // An include node carries no execution surface of its own — its target's nodes are
     // collapsed against THEIR file, and inlining happens after this pass.
@@ -230,14 +243,15 @@ function pushWorkflowScopeOntoNodes(scope: Record<string, unknown>, nodes: DagNo
         if (value === undefined) continue;
         if (target[nodeKey] !== undefined) continue; // the node's own value always wins
         if (nodeKey === 'model' && !workflowModelTravelsTo(scope, node)) continue;
-        // `persist_session` only means something on a node that takes an AI turn and
-        // can resume one; annotating a bash node would make the loader's capability
-        // gate and the executor's scope predicate disagree about the same workflow.
-        if (nodeKey === 'persist_session' && !isPersistableNode(node)) continue;
+        // `persist_session` only means something on a node that takes an AI turn and can
+        // resume one, and never inside a loop_group body (see the docblock above).
+        if (nodeKey === 'persist_session' && (insideLoopGroup || !isPersistableNode(node))) {
+          continue;
+        }
         target[nodeKey] = value;
       }
     }
-    if (isLoopGroupNode(node)) pushWorkflowScopeOntoNodes(scope, node.loop_group.nodes);
+    if (isLoopGroupNode(node)) pushWorkflowScopeOntoNodes(scope, node.loop_group.nodes, true);
   }
 }
 
