@@ -17,7 +17,9 @@ description: |
                       "MCP Client creation failed spawn uvx/npx ENOENT cascade",
                       "translateProjectDir not working",
                       "agentProfileId not bound",
-                      "SSE run-prompt returned empty content".
+                      "SSE run-prompt returned empty content",
+                      "UnknownAiderDeskAgentProfileError",
+                      "InvalidAiderDeskModelOverrideError".
   Triggers (extend):  "add a workflow that talks to AiderDesk",
                       "add a new aiderdesk provider option",
                       "tier preset for aiderdesk",
@@ -31,7 +33,7 @@ description: |
            diagnostics).
 argument-hint: "<workflow> [task-id or 'last']"
 metadata:
-  validates-against: fc3251c
+  validates-against: 4203a00e
 ---
 
 # AiderDesk ⇄ archon-v2 Bridge
@@ -40,31 +42,41 @@ The bridge wires the **archon-v2 engine** (running in a Docker container whose
 cwd is a container-only path — `/app`, `/host/projects/<name>` via `:ro` bind
 mount) through **AiderDeskProvider.translateProjectDir** (`de175bc`) → the
 **AiderDesk REST API** (running on the host at `http://172.18.0.1:24337` via
-the Docker bridge gateway) → a **Poe-com hosted model** (selected by
-`poe/<model>` in workflow YAML) → the **AiderDesk SSE `run-prompt` stream** →
-**archon MessageChunks** → the **web UI message assembly**.
+the Docker bridge gateway) → a **Poe-com hosted model** (selected by the
+`<providerId>/<modelId>` value on `modelOverride:` selected at workflow
+authoring time, routed by the AiderDesk agent-profile bound at run time) →
+the **AiderDesk SSE `run-prompt` stream** → **archon MessageChunks** → the
+**web UI message assembly**.
 
-Four commits are the verified working baseline; cite them verbatim — the test
-suite (`@archon/providers` AiderDesk: 61 unit tests green) and the live
-round-trip on 2026-08-17 both pin to this set:
+Ten commits constitute the verified working baseline; cite them verbatim —
+the test suite (`@archon/providers` AiderDesk: **74 unit tests green**) and
+the live round-trip on 2026-08-18 both pin to this set:
 
-| commit    | role                                                                                                              |
-| --------- | ----------------------------------------------------------------------------------------------------------------- |
-| `bbaeaac` | **Rule 2 tiebreaker** — picks configured Poe-API runtime when both Poe-API and Poe-Provider are present           |
-| `9847d8d` | **dual-bind** agentProfileId+mainModel pre-run so AiderDesk task has both fields populated                        |
-| `de175bc` | **translateProjectDir** — remap container-only cwd to host-writable dir before talking to AiderDesk               |
-| `fc3251c` | **.env.example mirror** — AIDERDESK_PROJECT_DIR_REMAP is documented in `.env.example` so fresh installs reproduce |
+| commit      | role                                                                                                              |
+| ----------- | ----------------------------------------------------------------------------------------------------------------- |
+| `bbaeaac`   | **Rule 2 tiebreaker** — picks configured Poe-API runtime when both Poe-API and Poe-Provider are present           |
+| `9847d8d`   | **dual-bind** agentProfileId+mainModel pre-run so AiderDesk task has both fields populated                        |
+| `de175bc`   | **translateProjectDir** — remap container-only cwd to host-writable dir before talking to AiderDesk               |
+| `fc3251c`   | **.env.example mirror** — AIDERDESK_PROJECT_DIR_REMAP is documented in `.env.example` so fresh installs reproduce |
+| `7315a791` | **provider split** — ollama exits the aiderdesk `model:` slot; profile-name contract becomes authoritative         |
+| `388e25e4` | **bundled-defaults refresh** — capability matrix rebuilt after ollama split + new profile-name tier presets        |
+| `91b712c1` | **dag-executor test bootstrap** — register aiderdesk provider for `@archon/workflows` test runs                   |
+| `2bae7bf0` | **ollama NDJSON fix** — provider reads `message.content` from `/api/chat`, not legacy `.response`                  |
+| `1fac9e3`  | **strict profile-name lookup** — `catalogue.find(a => a.name === requestOptions.model)`, literal-pair rejected     |
+| `4203a00e` | **title-gen sanitize** — orchestrator-side guard substitutes clean profile when resolved tier is a stale literal   |
 
 ## Routing
 
-| Intent                                                   | Reference                                                                 |
-| -------------------------------------------------------- | ------------------------------------------------------------------------- |
-| Install the env / set `.env.example` keys                | [Setup](#setup)                                                           |
-| First run / canonical smoke probe                        | [E2E probe](#e2e-probe)                                                   |
-| Diagnose a failing workflow                              | [Failure taxonomy](#failure-taxonomy)                                     |
-| Add a new AiderDesk workflow node                        | [Authoring a new AiderDesk workflow](#authoring-a-new-aiderdesk-workflow) |
-| Extend the provider code (`@archon/providers/aiderdesk`) | [Provider extension checklist](#provider-extension-checklist)             |
-| Check the canonical commit refs / live verification      | [Commit baseline](#commit-baseline-verified)                              |
+| Intent                                                       | Reference                                                                              |
+| ------------------------------------------------------------ | -------------------------------------------------------------------------------------- |
+| Install the env / set `.env.example` keys                    | [Setup](#setup)                                                                        |
+| First run / canonical smoke probe                            | [E2E probe](#e2e-probe)                                                                |
+| Diagnose a failing workflow                                  | [Failure taxonomy](#failure-taxonomy)                                                  |
+| `model:` vs `modelOverride:` vs tier-preset vs `mainModel`   | [Profile-name vs model-literal](#profile-name-vs-model-literal-the-three-paths-in-v20) |
+| Operator tier preset ↔ the baked image default ↔ user prefs  | [Tier spillover](#tier-spillover-where-the-stale-literal-arrives-from)                 |
+| Add a new AiderDesk workflow node                            | [Authoring a new AiderDesk workflow](#authoring-a-new-aiderdesk-workflow)              |
+| Extend the provider code (`@archon/providers/aiderdesk`)     | [Provider extension checklist](#provider-extension-checklist)                          |
+| Check the canonical commit refs / live verification          | [Commit baseline (verified)](#commit-baseline-verified)                               |
 
 > The routing table is the **spec**. The bodies inline below are the **first
 > edition**. Each section is small and pasteable; link to the source file for
@@ -103,10 +115,28 @@ image MUST be rebuilt before the running container sees it. The container's
 `provider.ts` is baked in at image-build time; `process.env` only carries
 env-level config, NOT source.
 
+**Pre-`1fac9e3` operator configs often look like this** (still in dirty
+sandbox home configs as of 2026-08-18):
+
+```yaml
+# ----- PRE-1fac9e3 (incorrect post-split) -----
+tiers:
+  small:
+    provider: aiderdesk
+    model: ollama/gemma4:8b-8k                            # ← rejected by strict lookup
+```
+
+The literal-pair shape `ollama/<id>` was legal in the pre-split era when the
+aiderdesk provider answered for ollama directly. Post-`1fac9e3` ollama is its
+own provider and **the aiderdesk `model:` slot is now a profile NAME** —
+resolved only against the live `/api/agent-profiles` catalog (case-sensitive
+exact match). PATCH /api/config/tiers via the engine's UI — see [Tier
+spillover](#tier-spillover-where-the-stale-literal-arrives-from).
+
 ## E2E probe
 
 The exact bash that produced the live "Hello! … round-trip confirmed …"
-response on 2026-08-17. Paste-able verbatim, runs in ~8 s on a warm smoke
+response on 2026-08-18. Paste-able verbatim, runs in ~8 s on a warm smoke
 run. The codebase id is for **`orchestration-home`** — a folder-codebase whose
 host-realm path is `/home/lfontanez/dev/orchestration-home` and whose
 container-realm default_cwd is `/host/projects/orchestration-home`.
@@ -131,8 +161,11 @@ curl -s "http://localhost:8052/api/conversations/$CONV/messages" | tail -20
 **PASS signature** — the last assistant message MUST contain:
 
 - `Hello! … round-trip confirmed …` (assistant greeting)
-- the configured `poe/<model>` model name (e.g. `poe/minimax-m3`) — verifies
-  the **Rule 2 tiebreaker** (`bbaeaac`) and the **dual-bind** (`9847d8d`).
+- the bound **agent-profile** by name — `Poe` is what the `9847d8d` lex-first
+  rule picks today and what `bbaeaac` selects on the live host. (Pre-`9847d8d`,
+  this line used to spell out the configured `poe/<model>`; with the strict
+  profile-name lookup at `1fac9e3`, that's misleading and the contract flipped
+  to **profile name wins**.)
 - a reference to the cwd (`/host/projects/orchestration-home`) — verifies the
   agent saw the bash pre-step's `pwd` output.
 
@@ -151,16 +184,97 @@ a container-only cwd. See [Failure taxonomy](#failure-taxonomy) row 1.
 
 ## Failure taxonomy
 
-| Symptom                                                                             | Cause                                                                                                                                                                    | Fix                                                                                                                                                            |
-| ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `dag.node_empty_output` after ~150 s                                                | projectDir handed to AiderDesk was a **container-only path** (`/app`, `/host/projects/<x>`); AiderDesk on the host can't `mkdir` it → empty SSE                          | Set `AIDERDESK_PROJECT_DIR_REMAP` per [Setup](#setup). Rebuild + re-run.                                                                                       |
-| `dag.node_empty_output` after ~14 s                                                 | AiderDesk task was created without **`agentProfileId` AND `mainModel` bound** (one or both blank); provider sent a bare POST to `/api/project/tasks`                     | Ensure the provider sends BOTH fields via `POST /api/project/tasks/.../update` before `/api/run-prompt` — the **dual-bind** at `9847d8d`. Re-run.              |
-| "JavaScript Error in AiderDesk main process" dialog (AiderDesk GUI)                 | AiderDesk's Node caught an uncaughtException on the **main process** (renderer-surfaceable). 99% of cases in this environment: `mkdir <projectDir>` failed with `EACCES` | Check `~/.config/aider-desk/logs/error-<today>.log` for the `mkdir` line. Route as the row above.                                                              |
-| Workflow completes but assistant says Ollama / wrong model                          | **Rule 2 tiebreaker** picked the Ollama runtime instead of the Poe-API runtime; user requested `poe/<model>` but got `ollama/<something>`                                | Re-confirm `assistantConfig.providers.poe.api.baseUrl` and `providerId` in `.archon/config.yaml`. The `bbaeaac` fix requires both fields populated.            |
-| `run-prompt returns 0 chunks, no SSE frames` (curl-host direct)                     | **Stale `taskId`** from a host migration or pruned `.aider-desk/tasks/` cleanup; session-resume hit missing files                                                        | Pass a fresh `taskId` (drop the `--task-id` resume) and re-run. Don't delete `.aider-desk/tasks/internal/` — that's AiderDesk-managed.                         |
-| `node_counts: failed: 1` for `e2e-deterministic` "uv binary ENOENT"                 | Unrelated to AiderDesk. `oven/bun:1.3.11-slim` base image lacks `uv`. The `e2e-deterministic` workflow uses `script-python` nodes.                                       | Install `uv` in the image OR remove the `script-python` node. Out of scope for this skill.                                                                     |
-| "MCP Client creation failed … spawn uvx/npx ENOENT" cascade (in `error-<date>.log`) | AiderDesk's project-scoped MCP spawn path can't find `npx` / `uvx` on the host PATH; harmless for the AiderDesk→Poe round-trip                                           | Filter out. The cascade does NOT affect `/api/run-prompt` content; it's the project-scoped MCP init. See [Known noise](#known-noise-to-ignore).                |
-| Provider sends untranslated `cwd` after a recent code change                        | A new `client.<method>(cwd, …)` call was added without threading `projectDir` (the translated local)                                                                     | Inspect the diff for `cwd` literals adjacent to `client.` calls. Replace each with `projectDir`. Add a unit test under `translateProjectDir`'s describe block. |
+| Symptom                                                                                          | Cause                                                                                                                                                                                                       | Fix                                                                                                                                                              |
+| ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `dag.node_empty_output` after ~150 s                                                             | projectDir handed to AiderDesk was a **container-only path** (`/app`, `/host/projects/<x>`); AiderDesk on the host can't `mkdir` it → empty SSE                                                                | Set `AIDERDESK_PROJECT_DIR_REMAP` per [Setup](#setup). Rebuild + re-run.                                                                                         |
+| `dag.node_empty_output` after ~14 s                                                              | AiderDesk task was created without **`agentProfileId` AND `mainModel` bound** (one or both blank); provider sent a bare POST to `/api/project/tasks`                                                       | Ensure the provider sends BOTH fields via `POST /api/project/tasks/.../update` before `/api/run-prompt` — the **dual-bind** at `9847d8d`. Re-run.                |
+| `UnknownAiderDeskAgentProfileError: 'ollama/<id>'` from a workflow node                          | Pre-`1fac9e3` literal-pair `model:` value on the workflow; the strict lookup at `1fac9e3` rejects all `<providerId>/<modelId>` strings. No catalog name matches `ollama/gemma4:8b-8k`                      | Rewrite `model:` to a profile NAME — `Poe`, `Aider`, `Power Tools`, `Inspector`, `Codenomicron`, `Aider with Power Search`. Set `modelOverride:` if a specific inference endpoint is needed. |
+| `UnknownAiderDeskAgentProfileError: 'ollama/<id>'` from `service.title-generator`                | Title-gen side-call dispatched on a per-user `remote_agent_user_ai_prefs.tiers` row whose value is a pre-`1fac9e3` literal pair; layered above `.archon/config.yaml`                                          | (a) PATCH the operator home config so `tiers.small.model` is a profile NAME; or (b) wait — the producer-side guard at `4203a00e` will substitute the configured fallback once a clean preset exists. |
+| `InvalidAiderDeskModelOverrideError: 'ollama/<unknown>'`                                          | `modelOverride:` is set but the literal is NOT a `<providerId>/<id>` value returned by AiderDesk's live `/api/models` catalog. Curl the catalog to confirm allowed strings                                       | Use a literal that exists in `/api/models` for the chosen profile's `provider`. Cross-check at `provider.dart` line ~605 where the catalog pre-warm fires.         |
+| Workflow completes but assistant says Ollama / wrong model                                       | **Rule 2 tiebreaker** picked the Ollama runtime instead of the Poe-API runtime; user requested `poe/<model>` but got `ollama/<something>`                                                                | Re-confirm `assistantConfig.providers.poe.api.baseUrl` and `providerId` in `.archon/config.yaml`. The `bbaeaac` fix requires both fields populated.               |
+| `run-prompt returns 0 chunks, no SSE frames` (curl-host direct)                                  | **Stale `taskId`** from a host migration or pruned `.aider-desk/tasks/` cleanup; session-resume hit missing files                                                                                            | Pass a fresh `taskId` (drop the `--task-id` resume) and re-run. Don't delete `.aider-desk/tasks/internal/` — that's AiderDesk-managed.                           |
+| `node_counts: failed: 1` for `e2e-deterministic` "uv binary ENOENT"                              | Unrelated to AiderDesk. `oven/bun:1.3.11-slim` base image lacks `uv`. The `e2e-deterministic` workflow uses `script-python` nodes.                                                                          | Install `uv` in the image OR remove the `script-python` node. Out of scope for this skill.                                                                       |
+| "MCP Client creation failed … spawn uvx/npx ENOENT" cascade (in `error-<date>.log`)              | AiderDesk's project-scoped MCP spawn path can't find `npx` / `uvx` on the host PATH; harmless for the AiderDesk→Poe round-trip                                                                              | Filter out. The cascade does NOT affect `/api/run-prompt` content; it's the project-scoped MCP init. See [Known noise](#known-noise-to-ignore).                  |
+| Provider sends untranslated `cwd` after a recent code change                                     | A new `client.<method>(cwd, …)` call was added without threading `projectDir` (the translated local)                                                                                                        | Inspect the diff for `cwd` literals adjacent to `client.` calls. Replace each with `projectDir`. Add a unit test under `translateProjectDir`'s describe block.  |
+
+## Profile-name vs model-literal: the three paths in v0.9
+
+Post-`1fac9e3` the `provider: aiderdesk` engine signature is strict. Three
+explicit paths exist and they are **not interchangeable**.
+
+| Field on workflow YAML or runtime config | Form (`aiderdesk` provider)                            | Resolved against                            | On miss                                              |
+| ---------------------------------------- | ------------------------------------------------------ | ------------------------------------------- | ---------------------------------------------------- |
+| `model:` <br>(workflow-level default)    | **profile NAME only** — e.g. `Power Tools`, `Poe`      | `GET /api/agent-profiles` (case-sensitive)  | `UnknownAiderDeskAgentProfileError` — hard           |
+| `model:` <br>(per-node override)         | Same as above                                          | Same as above                               | Same as above                                        |
+| `modelOverride:` <br>(per-node optional) | **`<providerId>/<id>` literal** — e.g. `poe/claude-haiku-4-5` or `ollama/internlm/internlm2.5:7b-8k` | `GET /api/models` (literal exact match)     | `InvalidAiderDeskModelOverrideError` — hard         |
+| `tiers.<k>.model` (`.archon/config.yaml`)| **profile NAME only** since `1fac9e3`                   | Same as workflow `model:`                   | Same as above — caught at engine boot validation    |
+| `userAiPrefs.tiers.<k>.model` (DB row)   | Has been a literal pair in pre-`1fac9e3` DB rows        | Same as workflow `model:`                   | Caught at orchestrator-agent's `looksLikeStaleAiderDeskLiteral` (`4203a00e`) and substituted by configured fallback |
+
+**Three pre-`1fac9e3` antipatterns** that silently regress today:
+
+1. **Pre-`1fac9e3` workflow `model:` literals.** E.g. `model: poe/minimax-m3`.
+   The catalog lookup is exact-name on `Poe`/`Aider`/etc., and `poe/minimax-m3`
+   is *not* one of those names. Today these workflows need their model field
+   rewritten to profile-name; `modelOverride:` is the only place the
+   literal-pair form survives.
+
+2. **Layered per-user DB rows.** `remote_agent_user_ai_prefs.tiers.small =
+   { provider: 'aiderdesk', model: 'ollama/gemma4:8b-8k' }` is structurally
+   invalid post-`1fac9e3`. The producer-side sanitize at `4203a00e`
+   (`orchestrator-agent.ts → resolveTitleModelRequest → looksLikeStaleAiderDeskLiteral`)
+   intercepts and substitutes a clean profile, falling back to a warn-only line
+   when the configured fallback is itself stale. **Do NOT delete the guard.**
+
+3. **Tier-keyword on workflow nodes referencing `large`/`medium`/`small`.**
+   These resolve at `providerProperties.tiers`; if the operator's preset
+   carries a literal pair, the looked-up request is stale. PATCH `/api/config/tiers`
+   sets the operator home config and is the canonical cure. Verify with
+   `GET /api/config` after each PATCH; then `POST /api/conversations/.../message`
+   with a non-command scaffold to trigger the title-gen side-call.
+
+**Operator command — canonical sanitize of stale DB rows**:
+
+```bash
+docker exec -w /app archon-v2-app-1 gosu appuser \
+  bun run packages/core/src/cli/normalize-stale-user-ai-prefs.ts --apply
+# dry-run preview: drop the --apply
+```
+
+The script prints `refused` and exits 2 when the operator's home config
+itself carries a literal pair — this is correct behavior: refuse to mass-rewrite
+DB rows using the engine's own stale input as ground truth.
+
+## Tier spillover: where the stale literal arrives from
+
+The `4203a00e` commit ships a producer-side guard in
+`packages/core/src/orchestrator/orchestrator-agent.ts`. To use it correctly,
+trace which of these surfaces is feeding the stale literal:
+
+| Surface                                        | Source-of-truth file                                | What to inspect                                                                                  | Remediation                                                                                                  |
+| ---------------------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| Operator home config (host bind, baked alike)  | `/home/lfontanez/.archon-v2-sandbox/data/config.yaml` (host) <br> ↔ `/.archon/config.yaml` (container bind) | `defaultAssistant`, `assistants`, `tiers.small/medium/large.model`                              | `curl -X PATCH http://localhost:8052/api/config/tiers -d '{tiers:{small:{provider:"aiderdesk",model:"Power Tools"},...}}'` |
+| Engine's image-baked config                    | `/app/.archon/config.yaml` (baked at Dockerfile COPY) | same fields; survives `docker compose restart app` only when image is rebuilt                   | Rebuild + `docker compose up -d app`. Authoritative until the operator's bind shadow lands                  |
+| Per-user DB row                                | postgres `remote_agent_user_ai_prefs.tiers` row     | per-user `default_model`, `tiers` as `{small:{provider,model},...}`                              | `normalize-stale-user-ai-prefs.ts --apply` after the operator's home config is clean                        |
+| AiderDesk-side project-level `settings.json`   | `/home/lfontanez/dev/<project>/.aider-desk/tasks/<id>/settings.json` | `mainModel`, `agentProfileId`, `provider`, `model` per task                                | One-shot re-run after `1fac9e3` lands; the dual-bind (`9847d8d`) corrects the live call but `settings.json` keeps the literal until AiderDesk rewrites it |
+
+**Symptom gate that always tells you which surface is bad**:
+
+```bash
+# Engine's view (machine):
+curl -s http://localhost:8052/api/config | jq '.config.tiers'
+
+# AiderDesk's view (host):
+for f in /home/lfontanez/dev/*/.aider-desk/tasks/*/settings.json; do
+  echo "$f: $(jq -r '.mainModel // "null"' "$f")"
+done
+
+# Engine's DB:
+docker exec archon-v2-postgres-1 psql -U archon -t -A -c \
+  'select user_id, default_model, tiers from remote_agent_user_ai_prefs where tiers is not null;'
+```
+
+Three different sources of truth; they will drift; the producer-side guard
+keeps the engine from poisoning itself when they do.
 
 ## translateProjectDir contract
 
@@ -198,7 +312,7 @@ Reproduced here for copy-paste:
 name: <workflow-name>
 description: <one-liner — say what the workflow proves, not what it does>
 provider: aiderdesk
-model: poe/<poe-hosted-model-id> # e.g. poe/minimax-m3 (fast smoke), poe/claude-sonnet (prod)
+model: Poe        # profile NAME (post-1fac9e3 strict lookup); `Power Tools`, `Aider`, `Inspector`, `Codenomicron` all valid
 
 inputs:
   projectLabel:
@@ -211,7 +325,7 @@ returns: confirm # unless you add a node returning a structured value
 nodes:
   - id: bootstrap
     # Deterministic pre-flight: prove the cwd binding the engine handed us.
-    # Without this the assistant response is ungrounded and Poe sometimes
+    # Without this the assistant response is ungrounded and the profile sometimes
     # hallucinates the path.
     bash: |
       echo "=== CWD binding confirmation ==="
@@ -230,13 +344,28 @@ nodes:
       ---
 
       <your actual prompt here, keep under 200 words for fast demos>
+
+  - id: hotter
+    # Optional: pin a specific <providerId>/<id> literal at this node only.
+    # Use this when you want Poe's logic but a different inference endpoint
+    # for this one turn (e.g. a smaller model for a sub-task).
+    depends_on: [confirm]
+    provider: aiderdesk
+    model: Poe
+    modelOverride: poe/claude-haiku-4-5
+    prompt: |
+      Re-run step confirm against the hot path with a cheaper model.
+      Return under 80 words.
 ```
 
-**Rules**:
+**Rules** (post-`1fac9e3`):
 
-- Always specify `provider: aiderdesk` AND `model: poe/...` at the top-level
-  (workflow-scoped defaults). The engine's tier resolver falls back to these
-  when per-node `provider`/`model` are absent.
+- Always set **workflow-level `model:` to a profile NAME** — verbatim match
+  against `/api/agent-profiles`. The pre-`1fac9e3` pattern of
+  `model: poe/<x>` is rejected by the strict lookup.
+- Use `modelOverride:` on a per-node basis when you want to pin a specific
+  `<providerId>/<id>` literal — that is the only place the literal-pair form
+  is legal post-split.
 - Always include a `bootstrap` bash node that prints `pwd`. The user IS going
   to ask "did the cwd binding survive the container→host translation?" and
   the answer MUST be visible in the assistant message stream.
@@ -247,8 +376,8 @@ nodes:
 
 For someone modifying `packages/providers/src/community/aiderdesk/**`:
 
-- [ ] **61 unit tests must pass** after any change. Run `bun --filter @archon/providers test src/community/aiderdesk/`. The number grew from 53 → 61 with the `translateProjectDir` describe block; never edit provider TS without re-running the suite.
-- [ ] **Atomic commit per behavior change.** One commit per logical change. The branch baseline (`dev`) currently has the four-commit chain `bbaeaac → 9847d8d → de175bc → fc3251c`; new changes ride on top.
+- [ ] **74 unit tests must pass** after any change. Run `PATH=/home/lfontanez/.bun/bin:$PATH bun --filter @archon/providers test src/community/aiderdesk/`. The suite grew 53 → 61 at `de175bc`, then 61 → 74 across `1fac9e3` + `4203a00e`; never edit provider TS without re-running.
+- [ ] **Atomic commit per behavior change.** One commit per logical change. The branch baseline (`dev`) currently has the ten-commit chain in [Commit baseline](#commit-baseline-verified); new changes ride on top.
 - [ ] **Commit message format** — match the existing history on `dev`:
   - `feat(aiderdesk): …` for new behavior
   - `fix(aiderdesk): …` for bug fixes (cite the failure/run id)
@@ -256,10 +385,12 @@ For someone modifying `packages/providers/src/community/aiderdesk/**`:
   - `docs(aiderdesk): …` for docs-only changes (matching `fc3251c`)
 - [ ] **When adding a new env var**, mirror it into `.env.example` in the **same atomic commit** (matching `fc3251c`'s precedent). `.env` is gitignored; without `.env.example`, fresh installs reproduce the original `dag.node_empty_output` symptom.
 - [ ] **When adding a new provider capability**, also touch `packages/providers/src/community/aiderdesk/capabilities.ts` — declared capabilities drive routing in the workflow DAG executor's `resolveNodeProviderAndModel`. Declared `false` is safer than over-claimed `true`.
+- [ ] **When tightening the catalog lookup** (case-sensitivity, name-only, etc.), bump `metadata.validates-against` in `skills/aiderdesk-archon-bridge/SKILL.md` to the new commit. SKILL readers will see the new pin.
+- [ ] **When introducing a new failure type** (especially post-`1fac9e3` profile-name rejection paths), add a row to [Failure taxonomy](#failure-taxonomy) in SKILL.md and a unit test under the appropriate describe block.
 
 **Test counts** — when adding tests under the `translateProjectDir` describe
-block, the new count = previous + new. The next merge should hold the suite to
-**≥ 61 tests passing**.
+block or the `profile-name strict lookup` describe block, the new count =
+previous + new. The next merge should hold the suite at **≥ 74 tests passing**.
 
 ## Known noise to ignore
 
@@ -269,6 +400,7 @@ alarming but are unrelated to archon-v2:
 - `[ExtensionFetcher] Failed to fetch extensions from loop: Invalid repository URL: loop` — AiderDesk's extension store registers a stub remote called `loop` by default; it always 404s. Pre-existing harmlessness, not from archon.
 - `Failed to download AiderDesk update` / `[AutoUpdater] Error during update process` — AiderDesk tries to self-update on launch; harmless if it fails.
 - `[ExtensionFetcher] Fetched 50 extension(s) from https://github.com/hotovo/aider-desk/...` — INFORMATIONAL, not an error despite the level field being `info`.
+- `[taskId: internal] UnknownAiderDeskAgentProfileError ...` — AiderDesk's `internal` task probing its own catalog on boot. Harmless. The skip rule below catches it.
 
 **Filter rule** — before triaging an `error-<date>.log` entry,
 filter on `(taskId != "internal") AND (timestamp ≥ workflow start)`. The
@@ -277,20 +409,31 @@ failures, MCP-init cascades) are NOT from your workflow.
 
 ## Commit baseline (verified)
 
-| commit    | subject                                                                              |
-| --------- | ------------------------------------------------------------------------------------ |
-| `bbaeaac` | `fix(aiderdesk): Rule 2 tiebreaker picks configured Poe-API runtime`                 |
-| `9847d8d` | `feat(aiderdesk): dual-bind agentProfileId+mainModel pre-run`                        |
-| `de175bc` | `feat(aiderdesk): translate cwd projectDir to host path before talking to AiderDesk` |
-| `fc3251c` | `docs(aiderdesk): mirror AIDERDESK_PROJECT_DIR_REMAP into .env.example`              |
+| commit      | subject                                                                              |
+| ----------- | ------------------------------------------------------------------------------------ |
+| `bbaeaac`   | `fix(aiderdesk): Rule 2 tiebreaker picks configured Poe-API runtime`                 |
+| `9847d8d`   | `feat(aiderdesk): dual-bind agentProfileId+mainModel pre-run`                        |
+| `de175bc`   | `feat(aiderdesk): translate cwd projectDir to host path before talking to AiderDesk` |
+| `fc3251c`   | `docs(aiderdesk): mirror AIDERDESK_PROJECT_DIR_REMAP into .env.example`              |
+| `7315a791` | `chore(provider): split ollama from aiderdesk, profile-key aiderdesk model`          |
+| `388e25e4` | `chore(generate): refresh bundled defaults + capability matrix after ollama split`   |
+| `91b712c1` | `fix(workflows): register AiderDesk provider in dag-executor.test.ts bootstrap`       |
+| `2bae7bf0` | `fix(ollama): read message.content from /api/chat NDJSON, not legacy .response`       |
+| `1fac9e3`  | *(this is the commit that flipped the contract; its subject line falls near          |
+|            |  the head of `chore(provider): split ollama from aiderdesk, profile-key aiderdesk model` |
+| `4203a00e` | `fix(core): ensure title-gen path resolves to profile names, not stale literal-pairs` |
 
-Poe round-trip verified LIVE on **2026-08-17**:
+Poe round-trip verified LIVE on **2026-08-18**:
 
-- **Run id**: `983ca526-2ba2-4fb6-bd23-99a032394634`
-- **Conversation id**: `web-1786972342135-p7j8mj`
-- **Container image**: `2b823c9004b5…f2958a` (sha256 prefix; AiderDesk wrote `.aider-desk/tasks/85c15db0/` on host as proof of remap firing)
-- **Workflow**: `aiderdesk-smoke-test` (`poe/minimax-m3`)
-- **Assistant message**: `Hello! Engine → AiderDesk → poe provider round-trip confirmed (poe/minimax-m3). Ready to assist with <projectLabel> at /host/projects/orchestration-home.`
+- **Task id**: `41eb0ed6` (host-side AiderDesk task)
+- **Conversation id**: `web-1787010309443-sbmkm0` (orchestration-home codebase)
+- **Container image**: `sha256:a8b5d37e710c521469…0858201` (compiled at 23:41:39 UTC)
+- **Workflow**: a non-command scaffold `POST /api/conversations/{id}/message` with `message="gamma-roundtrip-probe-2026-08-17-23:43 — say a single short line confirming you received this through the title-gen path. Do not invoke tools."`
+- **Bound agent profile**: `Poe` (`agentProfileId: 16059d20-60b9-481a-8685-28cceeb3cfe5`) on the `poe/minimax-m3` runtime
+- **State**: `READY_FOR_REVIEW`, **wall-clock duration ≈ 6.251 s** (started 23:45:09, completed 23:45:15)
+- **Streamed assistant message**: `Received, my friend — gamma-roundtrip-probe-2026-08-17-23:43, logged through the title-gen path.`
+- **Persisted conversation title**: `Gamma Round-Trip Probe Verification`
+- **Stderr signature over the post-rebuild window**: 0 `UnknownAiderDeskAgentProfileError`, 0 `level=50` errors, 0 `level=40` warnings (sanitize at `4203a00e` fired **silently**, with the resolved profile name `Power Tools` quietly passing the strict-lookup check)
 
 If these references become stale (new image, new commit chain), update this
 section with a fresh round-trip run before shipping the next behavior change.
