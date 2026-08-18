@@ -107,6 +107,7 @@ describe('core schemas', () => {
       default_cwd: '/home/user/projects/my-project',
       default_branch: 'main',
       ai_assistant_type: 'claude',
+      kind: 'repo',
       commands: { plan: { path: '/cmds/plan.md', description: 'Plan' } },
       created_at: new Date(),
       updated_at: new Date(),
@@ -233,6 +234,8 @@ describe('core schemas', () => {
       last_activity_at: new Date(),
       working_path: null,
       user_id: null,
+      parent_run_id: null,
+      output_root: null,
       // dashboard extensions
       codebase_name: 'my-repo',
       platform_type: 'web',
