@@ -207,11 +207,21 @@ const NODE_AFFECTING_WORKFLOW_FIELDS: readonly (readonly [wfKey: string, nodeKey
  * onto such a node unconditionally would hand `gpt-5.6-sol` to Claude — a behaviour change
  * dressed up as a no-op.
  *
- * When the workflow declares no `provider:` its effective provider is `config.assistant`,
- * which load time cannot see. A node that names a provider explicitly is then treated as
- * naming a DIFFERENT one, which is the fail-safe direction: the cost is that such a node
- * falls back to its own provider's configured default instead of the workflow's model in
- * the one case where the two happened to agree.
+ * When the workflow declares no `provider:`, its effective provider is decided at RUN time
+ * — by `config.assistant`, or by the provider a tier/`@alias` `model:` resolves to under
+ * the acting user's own prefs. Load time can see none of that, so a node that names a
+ * provider explicitly is treated as naming a DIFFERENT one. That is the fail-safe
+ * direction (never hand one provider's model string to another), and it is a real, if
+ * narrow, divergence from the pre-collapse chain:
+ *
+ *   workflow: { model: large }            # tier resolves to codex at run time
+ *   node:     { provider: codex }         # names that same provider explicitly
+ *
+ * The old chain compared the node against the RESOLVED workflow provider, matched, and
+ * passed the tier's model down. The collapse cannot, so this node falls back to codex's
+ * configured default model instead. Resolving tiers here is not the fix — it would freeze
+ * per-user model preferences at discovery time, which is worse. Move the `model:` onto the
+ * node if you need it there. Zero nodes across the 58 workflows in this repo hit it.
  */
 function workflowModelTravelsTo(scope: Record<string, unknown>, node: DagNode): boolean {
   const nodeProvider = (node as unknown as Record<string, unknown>).provider;

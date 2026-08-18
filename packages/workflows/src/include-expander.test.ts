@@ -1638,3 +1638,72 @@ describe('expandWorkflowIncludes — requires: unions instead of dropping (#1764
     expect(workflows.get('parent')!.requires).toBeUndefined();
   });
 });
+
+describe('expandWorkflowIncludes — where a workflow-level model: travels (#1764)', () => {
+  const collapse = (w: WorkflowDefinition): DagNode[] =>
+    expandWorkflowIncludes(mapOf(w)).workflows.get(w.name)!.nodes;
+
+  test('travels to a node that declares no provider of its own', () => {
+    const nodes = collapse({
+      ...wf('w', [{ id: 'n', prompt: 'p' }]),
+      provider: 'codex',
+      model: 'gpt-5.6-sol',
+    });
+    expect(nodes[0]).toMatchObject({ provider: 'codex', model: 'gpt-5.6-sol' });
+  });
+
+  test('travels to a node that redundantly re-declares the SAME provider', () => {
+    // The branch a regression would most plausibly drop, and a common authoring habit.
+    const nodes = collapse({
+      ...wf('w', [{ id: 'n', prompt: 'p', provider: 'codex' }]),
+      provider: 'codex',
+      model: 'gpt-5.6-sol',
+    });
+    expect(nodes[0]).toMatchObject({ provider: 'codex', model: 'gpt-5.6-sol' });
+  });
+
+  test('does NOT travel to a node that switches provider', () => {
+    const nodes = collapse({
+      ...wf('w', [{ id: 'n', prompt: 'p', provider: 'claude' }]),
+      provider: 'codex',
+      model: 'gpt-5.6-sol',
+    });
+    expect((nodes[0] as Record<string, unknown>).model).toBeUndefined();
+  });
+
+  test('does NOT travel when the workflow declares a model but no provider — the known divergence', () => {
+    // Pinned deliberately: the pre-collapse chain compared the node against the RESOLVED
+    // workflow provider, so a tier resolving to `codex` DID reach a `provider: codex`
+    // node. Load time cannot resolve tiers (they depend on the acting user's prefs), so
+    // the model stays behind and the node uses its own provider's configured default.
+    const nodes = collapse({
+      ...wf('w', [{ id: 'n', prompt: 'p', provider: 'codex' }]),
+      model: 'large',
+    });
+    expect((nodes[0] as Record<string, unknown>).model).toBeUndefined();
+    expect((nodes[0] as Record<string, unknown>).provider).toBe('codex');
+  });
+
+  test('every other node-affecting field travels regardless of the node provider', () => {
+    // `model` alone carries a provider condition, because it alone is a provider-specific
+    // string the executor already refused to inherit across providers. `effort`/`thinking`/
+    // `sandbox`/`betas`/`fallbackModel` had no such condition before the collapse and must
+    // not gain one, or the collapse stops being behaviour-preserving.
+    const nodes = collapse({
+      ...wf('w', [{ id: 'n', prompt: 'p', provider: 'claude' }]),
+      provider: 'codex',
+      effort: 'high',
+      thinking: { type: 'enabled', budgetTokens: 4000 },
+      sandbox: { enabled: true },
+      betas: ['beta-x'],
+      fallbackModel: 'fallback-1',
+    });
+    expect(nodes[0]).toMatchObject({
+      effort: 'high',
+      thinking: { type: 'enabled', budgetTokens: 4000 },
+      sandbox: { enabled: true },
+      betas: ['beta-x'],
+      fallbackModel: 'fallback-1',
+    });
+  });
+});
