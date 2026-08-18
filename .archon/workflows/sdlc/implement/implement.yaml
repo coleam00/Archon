@@ -25,8 +25,11 @@ nodes:
     bash: |
       # The anchor assert-changed measures against: proves work happened THIS run,
       # independent of how far the branch was already ahead when the run started.
-      git rev-parse HEAD > "$ARTIFACTS_DIR/.start-sha"
-      echo '{"start":"recorded"}'
+      # Chained with && so a failed write fails the node instead of echoing success
+      # (a bash line's failure does not abort the script without set -e).
+      mkdir -p "$ARTIFACTS_DIR" &&
+        git rev-parse HEAD > "$ARTIFACTS_DIR/.start-sha" &&
+        echo '{"start":"recorded"}'
 
   - id: implement
     loop:
