@@ -253,7 +253,19 @@ The stub file must contain one YAML mapping. Each value is either a string or an
 
 By default, bash and script nodes are never executed. `--exec-code` is an explicit opt-in for trusted local workflow code and is the only dry-run mode that can cause code-level side effects. Approval nodes auto-complete unless `--pause-at-gates` is set. Runtime `workflow:` sub-runs are reported as unsupported instead of being launched. Dry-run is incompatible with lifecycle and isolation flags such as `--branch`, `--no-worktree`, `--folder`, `--container`, `--resume`, and `--detach`.
 
-The ordered trace records each node as completed, stubbed, skipped, failed, or paused, including its reason, resolved text, safe output, and final outcome. This validates deterministic engine wiring; it does not validate model reasoning. It adds no workflow-YAML language surface and follows the [workflow language constitution](/reference/workflow-language-constitution/): YAML coordinates, code computes, and agents judge.
+The ordered trace records each node as completed, stubbed, skipped, failed, or paused, including its reason, resolved text, safe output, and final outcome.
+
+Every node that takes an AI turn also reports **which provider and model it will run on, and where each value came from** — the same resolution the executor performs, not a second implementation of it. This is how you answer "what will this node actually run on" for a workflow that composes others, since a composed workflow runs with the configuration its own file declares:
+
+```text
+STUBBED   review__scope (prompt)
+  runs on: codex (node) / gpt-5.6-sol (node) [from review-block]
+  effort: high (node)
+```
+
+The origin in parentheses is one of `node`, `model ref` (a tier keyword or `@alias`), `workflow`, `assistant config`, or `default assistant`. `[from <name>]` names the workflow file a composed node was authored in. A node whose declared `provider:` disagrees with the provider its `model:` ref resolves to also reports the warning a real run would emit. `--json` carries the same values under each trace entry's `resolution` object.
+
+This validates deterministic engine wiring; it does not validate model reasoning. It adds no workflow-YAML language surface and follows the [workflow language constitution](/reference/workflow-language-constitution/): YAML coordinates, code computes, and agents judge.
 
 **Default (no flags):**
 - Creates worktree with auto-generated branch (`archon/task-<workflow>-<timestamp>`)

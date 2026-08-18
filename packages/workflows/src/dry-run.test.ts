@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { makeTestWorkflow } from './test-utils';
 import { dryRunWorkflow, formatDryRunTrace, loadDryRunStubs } from './dry-run';
+import type { DryRunResolution } from './dry-run';
 import { buildAiProfile } from './model-validation';
 import { expandWorkflowIncludes } from './include-expander';
 
@@ -538,7 +539,7 @@ describe('dryRunWorkflow — effective provider/model per node', () => {
     repoTiers: { large: { provider: 'codex', model: 'gpt-5.6-sol', effort: 'xhigh' } },
   });
 
-  async function trace(nodes: unknown[]) {
+  async function trace(nodes: unknown[]): Promise<Map<string, DryRunResolution | undefined>> {
     const result = await dryRunWorkflow({
       workflow: makeTestWorkflow({ name: 'resolve', nodes }),
       userMessage: 'go',

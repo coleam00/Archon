@@ -5,6 +5,7 @@ import type { WorkflowDefinition, DagNode } from './schemas';
 import {
   COMPILED_LOOP_COMMAND,
   COMPOSED_NODE,
+  type ComposedNodeMeta,
   type LoopWithCompiledCommand,
   type NodeWithComposedMeta,
 } from './compiled-command';
@@ -30,7 +31,7 @@ function nodeById(w: WorkflowDefinition, id: string): DagNode | undefined {
   return w.nodes.find(n => n.id === id);
 }
 
-function composedMeta(node: DagNode | undefined) {
+function composedMeta(node: DagNode | undefined): ComposedNodeMeta | undefined {
   return node === undefined ? undefined : (node as DagNode & NodeWithComposedMeta)[COMPOSED_NODE];
 }
 

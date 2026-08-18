@@ -836,18 +836,20 @@ export async function workflowListCommand(cwd: string, json?: boolean): Promise<
       // onto the nodes and removes them (#1764), so the listing reports what the author
       // wrote. `webSearchMode` is the one that stays on the definition — it has no
       // per-node form to collapse onto.
-      workflows: workflowEntries.map(({ workflow: w, parseWarnings, declared }) => {
-        const entry: WorkflowJsonEntry = {
-          name: w.name,
-          description: w.description,
-        };
-        if (declared?.provider !== undefined) entry.provider = declared.provider;
-        if (declared?.model !== undefined) entry.model = declared.model;
-        if (declared?.effort !== undefined) entry.effort = declared.effort;
-        if (w.webSearchMode !== undefined) entry.webSearchMode = w.webSearchMode;
-        if (parseWarnings && parseWarnings.length > 0) entry.parseWarnings = [...parseWarnings];
-        return entry;
-      }),
+      workflows: workflowEntries.map(
+        ({ workflow: w, parseWarnings, declared }): WorkflowJsonEntry => {
+          const entry: WorkflowJsonEntry = {
+            name: w.name,
+            description: w.description,
+          };
+          if (declared?.provider !== undefined) entry.provider = declared.provider;
+          if (declared?.model !== undefined) entry.model = declared.model;
+          if (declared?.effort !== undefined) entry.effort = declared.effort;
+          if (w.webSearchMode !== undefined) entry.webSearchMode = w.webSearchMode;
+          if (parseWarnings && parseWarnings.length > 0) entry.parseWarnings = [...parseWarnings];
+          return entry;
+        }
+      ),
       errors: errors.map(e => ({
         filename: e.filename,
         error: e.error,

@@ -14,6 +14,8 @@ Archon substitutes variables in command files, inline prompts, bash scripts, and
 
 These variables are substituted by the workflow executor in all node types (`command:`, `prompt:`, `bash:`, `script:`, `loop:`, `loop_group:`, and a `workflow:` node's `input:` field — which behaves like a `prompt:` body, not a bash-escaped one).
 
+They are also substituted in a node's **AI-configuration text** — `systemPrompt:` and each entry's `agents.<id>.prompt` / `agents.<id>.description`. These go straight to the provider, so they receive the same two passes a `prompt:` does: workflow variables first, then `$nodeId.output` refs. A dangling `$nodeId.output` in any of the three is a load error, exactly as it is in a prompt.
+
 | Variable | Resolves to | Notes |
 |----------|-------------|-------|
 | `$ARGUMENTS` | The user's input message that triggered the workflow | Primary way to pass user input to commands |
@@ -174,6 +176,8 @@ Positional arguments (`$1` through `$9`) are **not** supported in any context �
 | `$LOOP_PREV_OUTPUT` | Yes (loop nodes) | No | No |
 | `$LOOP_PREV.<nodeId>.output` | Yes (loop_group body nodes) | No | No |
 | `$nodeId.output` | Yes (DAG nodes) | No | Yes |
+
+Workflow variables and `$nodeId.output` refs both resolve in `systemPrompt:` and `agents.*.prompt` / `agents.*.description` on any AI node.
 
 ## Authentication Environment Variables
 
