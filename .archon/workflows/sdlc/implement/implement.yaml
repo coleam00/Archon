@@ -1,0 +1,70 @@
+name: implement
+description: |
+  Implement a change and keep working until it is complete and the project's own
+  checks pass. Commits as it goes; opens no PR. The input is anything intent-shaped:
+  a plan (path or inline), review findings, a CI failure to fix, or a plain
+  description of what to build.
+
+  Use when: the work is already decided and needs building — "implement this plan",
+  "apply these review findings", "build what this describes", "fix this CI failure".
+  NOT for: deciding what to build, reviewing changes, or opening a PR.
+
+model: large
+
+inputs:
+  work:
+    default: ""
+    description: >-
+      What to implement — a plan path, review findings, a CI failure, or a plain
+      description. When empty, the run's trigger message is the work.
+
+returns: implement
+
+nodes:
+  - id: record-start
+    bash: |
+      # The anchor assert-changed measures against: proves work happened THIS run,
+      # independent of how far the branch was already ahead when the run started.
+      git rev-parse HEAD > "$ARTIFACTS_DIR/.start-sha"
+      echo '{"start":"recorded"}'
+
+  - id: implement
+    loop:
+      command: implement
+      until_field: done
+      max_iterations: 5
+    depends_on: [record-start]
+    output_type: implementation
+    output_format:
+      type: object
+      properties:
+        done:
+          type: boolean
+        green:
+          type: boolean
+        summary:
+          type: string
+      required: [done, green, summary]
+
+  - id: assert-changed
+    bash: |
+      # Decline is not success: an AI node that declines its task still exits 0.
+      # This is the deterministic check that work actually happened, before anything
+      # downstream spends money or goes public. It reads Archon-owned facts only —
+      # git state against the recorded start SHA — never the project's layout or
+      # toolchain. `.archon/` is excluded: Archon copies the operator's workflow
+      # edits into every run worktree, so those files predate implement.
+      start=$(cat "$ARTIFACTS_DIR/.start-sha")
+      tracked=$(git diff --name-only HEAD -- ':(exclude).archon' | head -1)
+      untracked=$(git ls-files --others --exclude-standard -- ':(exclude).archon' | head -1)
+      head=$(git rev-parse HEAD)
+      if [ -n "$tracked" ] || [ -n "$untracked" ]; then
+        git --no-pager diff --stat HEAD -- ':(exclude).archon' | tail -1
+      elif [ "$head" != "$start" ]; then
+        echo "$(git rev-list --count "$start..HEAD") commit(s) made this run"
+      else
+        echo "implement produced neither a commit nor a working-tree change outside .archon/." >&2
+        echo "If it declined, its summary says why — a run with nothing to show fails rather than reporting success." >&2
+        exit 1
+      fi
+    depends_on: [implement]

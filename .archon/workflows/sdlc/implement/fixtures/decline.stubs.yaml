@@ -1,0 +1,5 @@
+# Dry-run fixture: the decline path — the guard seen RED (run with --exec-code).
+# implement is stubbed as a decline (done, not green, no changes made); record-start
+# and assert-changed execute for real, so assert-changed must fail the run: a run
+# with nothing to show fails rather than reporting success.
+implement: '{"done": true, "green": false, "summary": "stub: declined — the plan file this run was pointed at does not exist"}'

@@ -1,0 +1,5 @@
+# Dry-run fixture: the green path. Fully stubbed — proves the DAG wiring,
+# input binding, and until_field completion without executing anything.
+record-start: '{"start":"recorded"}'
+implement: '{"done": true, "green": true, "summary": "stub: work complete, checks green"}'
+assert-changed: "1 file changed"
