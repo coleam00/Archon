@@ -6,6 +6,9 @@ description: |
   round's report, it verifies prior findings and reviews only the delta since the
   recorded cursor.
 
+  When reviewing a PR, the final synthesized report is posted to it as one
+  canonical comment, edited in place on re-review.
+
   Use when: changes need judging — "review this PR", "review my changes",
   "is this ready to merge".
   NOT for: fixing findings (implement), running the project's checks (validate),
@@ -117,7 +120,17 @@ nodes:
 
   # all_done, not the default all_success: lenses skipped by the chooser are a
   # terminal state by design and must not block synthesis. `ready` is a real
-  # boolean — it is the load-bearing field a composing loop terminates on.
+  # boolean — it is the load-bearing field a composing loop terminates on. The
+  # output_format here is ONLY that loop signal: the findings channel is the
+  # complete lens files under $ARTIFACTS_DIR/review/, never truncated at this
+  # seam, and the full report is written there and posted to the PR.
+  #
+  # Intended shape (not expressible today): synthesis returning INTO the scope
+  # node's session, which already holds the whole diff. The engine resets the
+  # sequential-session cursor at every parallel layer (dag-executor.ts:7109) and
+  # has no resume-session-of-node handle, so synthesize starts fresh and is
+  # instructed to re-read the diff itself. Logged as an engine gap on the
+  # rewrite watch-list.
   #
   # v1 note: adversarial per-finding verification happens inside this node's
   # prompt. When in-parent runtime fan-out lands (#2512), a verify stage slots in

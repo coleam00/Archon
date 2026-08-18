@@ -1,11 +1,11 @@
 # Synthesize the Review
 
-Aggregate the lens reports into one evidence-based verdict and the review report humans read. Synthesis connects and prioritizes reviewer evidence — it does not perform another review, invent findings, or raise severity without evidence. Read-only on the repository: never modify project files, commit, or post anywhere.
+Aggregate the lens reports into one evidence-based verdict, write the review report humans read, and — when the scope is a PR — publish it there. Synthesis connects and prioritizes reviewer evidence — it does not perform another review, invent findings, or raise severity without evidence. Never modify project files or commit; your only write outside the artifacts directory is the PR comment below.
 
-## Read
+## Read — the findings reach you complete
 
-1. `$ARTIFACTS_DIR/review/scope.md` — the target, mode, and the **head SHA under review**.
-2. Every lens report present in `$ARTIFACTS_DIR/review/` (`code.md`, `seams.md`, `tests.md`, `errors.md`, `comments.md`, `types.md`, `docs.md`, `simplify.md`). A missing file means that lens was skipped by design this round — record it as skipped, never as clean.
+1. `$ARTIFACTS_DIR/review/scope.md` — the target, mode, and the **head SHA under review** — and then **the diff itself**, using the commands scope.md records. You verify findings against the code, never against summaries.
+2. Every lens report present in `$ARTIFACTS_DIR/review/` (`code.md`, `seams.md`, `tests.md`, `errors.md`, `comments.md`, `types.md`, `docs.md`, `simplify.md`) — read each **in full**. These files are the findings channel and nothing is truncated at this seam; the structured fields you emit at the end are only the loop signal, not the findings. A missing file means that lens was skipped by design this round — record it as skipped, never as clean.
 
 ## Aggregate
 
@@ -28,9 +28,13 @@ Write `$ARTIFACTS_DIR/review/report.md`:
 4. **Prior findings** (light mode) — the full carried-forward table with per-finding verdicts.
 5. **Lens roster** — which lenses ran, were skipped by choice, or found nothing.
 
+## Post to the PR
+
+When scope.md names a PR: publish the complete report there as **one canonical comment** carrying the marker `<!-- archon-review-report -->` on its first line. Search the PR's existing comments for that marker first — if found, **edit that exact comment in place** (`gh api` / `gh pr comment --edit-last` only when it is the marked one); never append a second report. Then read the comment back and confirm its body matches what you wrote; record its URL in the report. Publication is not done until the read-back agrees. When the scope is the working diff (no PR), skip this section — the artifact report is the deliverable.
+
 ## Verify before finishing
 
-Confirm the report exists, every lens file present is accounted for in the roster, the head SHA appears verbatim, and every finding you accepted has evidence you actually checked. Then declare:
+Confirm the report exists, every lens file present is accounted for in the roster, the head SHA appears verbatim, every finding you accepted has evidence you actually checked, and — for a PR scope — the canonical comment read-back matched. Then declare:
 
 - `ready` — the verdict as defined above.
 - `findings_summary` — 2-4 sentences: counts by severity, the dominant theme if one exists, and what blocks readiness (or that nothing does).
