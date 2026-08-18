@@ -17,7 +17,7 @@ import * as git from '@archon/git';
 
 // --- Mock logger (MUST come before imports of modules under test) ---
 
-const mockLogFn = mock((_data: unknown, _message?: string) => {});
+const mockLogFn = mock((_data: unknown, _message?: string): void => {});
 const mockLogger = {
   info: mockLogFn,
   warn: mockLogFn,
@@ -56,6 +56,7 @@ import {
   registerPiProvider,
   registerOpencodeProvider,
   clearRegistry,
+  getProviderCapabilities,
 } from '@archon/providers';
 clearRegistry();
 registerBuiltinProviders();
@@ -203,27 +204,9 @@ const mockClaudeCapabilities = () => ({
   nativeTools: true,
   containerExec: true,
 });
-/** Limited capabilities for Codex mock */
-const mockCodexCapabilities = () => ({
-  sessionResume: true,
-  mcp: true,
-  hooks: false,
-  skills: true,
-  agents: false,
-  toolRestrictions: false,
-  structuredOutput: 'enforced' as const,
-  envInjection: true,
-  costControl: false,
-  // Codex takes the node-level `effort:` field and translates it to the SDK's
-  // modelReasoningEffort internally (#2556) — mirrors CODEX_CAPABILITIES.
-  effortControl: true,
-  thinkingControl: false,
-  fallbackModel: false,
-  sandbox: false,
-  settingSources: false,
-  nativeTools: true,
-  containerExec: false,
-});
+/** Canonical capabilities for Codex-backed test nodes. */
+const mockCodexCapabilities = (): ReturnType<typeof getProviderCapabilities> =>
+  getProviderCapabilities('codex');
 
 /** Mock AI sendQuery generator */
 const mockSendQueryDag = mock<ReturnType<WorkflowDeps['getAgentProvider']>['sendQuery']>(

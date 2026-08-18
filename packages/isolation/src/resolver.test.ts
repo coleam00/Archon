@@ -701,7 +701,7 @@ describe('IsolationResolver', () => {
     const resolver = createResolver({
       provider: {
         ...makeMockProvider(),
-        create: async (request: IsolationRequest) => {
+        create: async (request: IsolationRequest): Promise<IsolatedEnvironment> => {
           capturedRequests.push(request);
           return {
             id: '/worktrees/new-branch',
@@ -736,7 +736,7 @@ describe('IsolationResolver', () => {
     const resolver = createResolver({
       provider: {
         ...makeMockProvider(),
-        create: async (request: IsolationRequest) => {
+        create: async (request: IsolationRequest): Promise<IsolatedEnvironment> => {
           capturedRequests.push(request);
           return {
             id: '/worktrees/new-branch',
@@ -774,7 +774,7 @@ describe('IsolationResolver', () => {
     const resolver = createResolver({
       provider: {
         ...makeMockProvider(),
-        create: async (request: IsolationRequest) => {
+        create: async (request: IsolationRequest): Promise<IsolatedEnvironment> => {
           capturedRequests.push(request);
           return {
             id: '/worktrees/new-branch',

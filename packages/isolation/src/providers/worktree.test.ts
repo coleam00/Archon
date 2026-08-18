@@ -69,11 +69,11 @@ let getDefaultRemoteSpy: Mock<typeof git.getDefaultRemote>;
 let syncWorkspaceSpy: Mock<typeof git.syncWorkspace>;
 
 // Mock fs.promises.access for destroy() existence check
-const mockAccess = mock((_path?: unknown) => Promise.resolve());
+const mockAccess = mock((_path?: unknown): Promise<void> => Promise.resolve());
 const mockReadFile = mock(
   (_path?: unknown): Promise<string> => Promise.reject(new Error('ENOENT'))
 );
-const mockRm = mock((_path?: unknown) => Promise.resolve());
+const mockRm = mock((_path?: unknown): Promise<void> => Promise.resolve());
 mock.module('node:fs/promises', () => ({
   access: mockAccess,
   readFile: mockReadFile,
@@ -93,7 +93,9 @@ describe('WorktreeProvider', () => {
   let getCanonicalRepoPathSpy: Mock<typeof git.getCanonicalRepoPath>;
 
   beforeEach(() => {
-    mockConfigLoader = async () => ({ baseBranch: git.toBranchName('main') });
+    mockConfigLoader = async (): Promise<{ baseBranch: git.BranchName }> => ({
+      baseBranch: git.toBranchName('main'),
+    });
     provider = new WorktreeProvider(mockConfigLoader);
     execSpy = spyOn(git, 'execFileAsync');
     mkdirSpy = spyOn(git, 'mkdirAsync');
@@ -115,7 +117,7 @@ describe('WorktreeProvider', () => {
     // Most paths exist by default (directoryExists checks for destroy etc.),
     // but .gitmodules is absent by default — most repos don't use submodules,
     // and default-on submodule init must skip cleanly in that case.
-    mockAccess.mockImplementation(async (path: unknown) => {
+    mockAccess.mockImplementation(async (path: unknown): Promise<void> => {
       if (typeof path === 'string' && path.endsWith('.gitmodules')) {
         const err = new Error('ENOENT') as NodeJS.ErrnoException;
         err.code = 'ENOENT';

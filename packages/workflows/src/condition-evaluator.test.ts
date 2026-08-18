@@ -2,7 +2,7 @@ import { describe, it, expect, mock } from 'bun:test';
 
 // --- Mock logger (MUST come before imports of modules under test) ---
 
-const mockLogFn = mock((_data: unknown, _message?: string) => {});
+const mockLogFn = mock((_data: unknown, _message?: string): void => {});
 const mockLogger = {
   info: mockLogFn,
   warn: mockLogFn,

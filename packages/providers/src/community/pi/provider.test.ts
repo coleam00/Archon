@@ -3,7 +3,13 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
-import type { AgentSessionEvent } from '@earendil-works/pi-coding-agent';
+import type {
+  AgentSessionEvent,
+  CreateAgentSessionOptions,
+  CreateAgentSessionResult,
+  ModelRegistry,
+} from '@earendil-works/pi-coding-agent';
+import type { Api, Model } from '@earendil-works/pi-ai';
 
 // Typed against the real registration shape (config: ProviderConfig) so the
 // mock runtime drifts loudly, not silently, if the SDK/type changes — same
@@ -35,7 +41,7 @@ type FakeEvent = AgentSessionEvent;
 let capturedListener: ((event: FakeEvent) => void) | undefined;
 
 const scriptedEvents: FakeEvent[] = [];
-const mockPrompt = mock(async (_prompt: string) => {
+const mockPrompt = mock(async (_prompt: string): Promise<void> => {
   for (const ev of scriptedEvents) capturedListener?.(ev);
 });
 const mockAbort = mock(async () => undefined);
@@ -65,18 +71,19 @@ const mockSession = {
   sessionId: 'mock-session-uuid',
 };
 
-type MockSessionResult = {
-  session: typeof mockSession;
-  extensionsResult: { extensions: never[]; errors: never[]; runtime: Record<string, never> };
-  modelFallbackMessage: string | undefined;
-};
-
-const mockCreateAgentSession = mock(
-  async (_options?: unknown): Promise<MockSessionResult> => ({
+function createMockSessionResult(modelFallbackMessage?: string): CreateAgentSessionResult {
+  return {
     session: mockSession,
     extensionsResult: { extensions: [], errors: [], runtime: {} },
-    modelFallbackMessage: undefined,
-  })
+    modelFallbackMessage,
+  } as unknown as CreateAgentSessionResult;
+}
+
+const mockCreateAgentSession = mock<
+  typeof import('@earendil-works/pi-coding-agent').createAgentSession
+>(
+  async (_options?: CreateAgentSessionOptions): Promise<CreateAgentSessionResult> =>
+    createMockSessionResult()
 );
 
 // Per-test state backing the AuthStorage mock. `fileCreds` emulates what's
@@ -103,18 +110,32 @@ const mockAuthCreate = mock(() => ({
   getApiKey: mockGetApiKey,
 }));
 
-const mockModelRegistryFind = mock((provider: string, modelId: string) => {
+function createMockModel(provider: string, modelId: string): Model<Api> {
+  return {
+    id: modelId,
+    provider,
+    name: `${provider}/${modelId}`,
+    api: 'openai-completions',
+    baseUrl: 'https://example.invalid',
+    reasoning: false,
+    input: ['text'],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: 8_192,
+  };
+}
+
+const mockModelRegistryFind = mock<ModelRegistry['find']>((provider, modelId) => {
   if (provider === 'nonexistent') return undefined;
-  return { id: modelId, provider, name: `${provider}/${modelId}` };
+  return createMockModel(provider, modelId);
 });
-type MockModelRegistry = {
-  find: (
-    provider: string,
-    modelId: string
-  ) => { id: string; provider: string; name: string } | undefined;
-};
-const mockModelRegistryCreate = mock(
-  (): MockModelRegistry => ({
+type MockModelRegistry = Pick<ModelRegistry, 'find'> &
+  Partial<Pick<ModelRegistry, 'getError' | 'registerProvider'>>;
+type MockModelRegistryCreate = (
+  ...args: Parameters<typeof import('@earendil-works/pi-coding-agent').ModelRegistry.create>
+) => MockModelRegistry;
+const mockModelRegistryCreate = mock<MockModelRegistryCreate>(
+  (_authStorage): MockModelRegistry => ({
     find: mockModelRegistryFind,
   })
 );
@@ -551,11 +572,9 @@ describe('PiProvider', () => {
     // Phase 1: model not in static catalog (extension provider path).
     // Phase 2: extension registers the model during bindExtensions() and find() succeeds.
     mockModelRegistryFind.mockImplementationOnce(() => undefined);
-    mockModelRegistryFind.mockImplementationOnce(() => ({
-      id: 'custom-model',
-      provider: 'extension-provider',
-      name: 'extension-provider/custom-model',
-    }));
+    mockModelRegistryFind.mockImplementationOnce(() =>
+      createMockModel('extension-provider', 'custom-model')
+    );
     resetScript(scriptedAgentEnd());
 
     const { error } = await consume(
@@ -1724,11 +1743,10 @@ describe('PiProvider', () => {
 
   test('modelFallbackMessage yields a system chunk before the agent runs', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
-    mockCreateAgentSession.mockImplementationOnce(async () => ({
-      session: mockSession,
-      extensionsResult: { extensions: [], errors: [], runtime: {} },
-      modelFallbackMessage: 'Requested sonnet-5 not available, using haiku.',
-    }));
+    mockCreateAgentSession.mockImplementationOnce(
+      async (): Promise<CreateAgentSessionResult> =>
+        createMockSessionResult('Requested sonnet-5 not available, using haiku.')
+    );
     resetScript(scriptedAgentEnd());
 
     const { chunks } = await consume(
@@ -2485,22 +2503,17 @@ describe('PiProvider', () => {
      * registered into it — like the real one, whose static catalog does not
      * contain extension providers such as 'cursor'.
      */
-    function fakeExtensionAwareRegistry(): {
-      registered: Map<string, unknown>;
-      find: (
-        provider: string,
-        modelId: string
-      ) => { id: string; provider: string; name: string } | undefined;
-      registerProvider: (name: string, config: unknown) => void;
+    type ExtensionProviderConfig = Parameters<ModelRegistry['registerProvider']>[1];
+
+    function fakeExtensionAwareRegistry(): MockModelRegistry & {
+      registered: Map<string, ExtensionProviderConfig>;
     } {
-      const registered = new Map<string, unknown>();
+      const registered = new Map<string, ExtensionProviderConfig>();
       return {
         registered,
         find: (provider: string, modelId: string) =>
-          registered.has(provider)
-            ? { id: modelId, provider, name: `${provider}/${modelId}` }
-            : undefined,
-        registerProvider: (name: string, config: unknown) => {
+          registered.has(provider) ? createMockModel(provider, modelId) : undefined,
+        registerProvider: (name: string, config: ExtensionProviderConfig): void => {
           registered.set(name, config);
         },
       };
@@ -2512,20 +2525,17 @@ describe('PiProvider', () => {
      * registry, then clear it (the SDK reassigns to []).
      */
     function drainQueueOnceIntoSessionRegistry(): void {
-      mockCreateAgentSession.mockImplementationOnce(async (options?: unknown) => {
-        const { modelRegistry } = options as {
-          modelRegistry: { registerProvider: (name: string, config: unknown) => void };
-        };
-        for (const { name, config } of mockLoaderRuntime.pendingProviderRegistrations) {
-          modelRegistry.registerProvider(name, config);
+      mockCreateAgentSession.mockImplementationOnce(
+        async (options?: CreateAgentSessionOptions): Promise<CreateAgentSessionResult> => {
+          const modelRegistry = options?.modelRegistry;
+          if (!modelRegistry) throw new Error('Expected a model registry');
+          for (const { name, config } of mockLoaderRuntime.pendingProviderRegistrations) {
+            modelRegistry.registerProvider(name, config);
+          }
+          mockLoaderRuntime.pendingProviderRegistrations = [];
+          return createMockSessionResult();
         }
-        mockLoaderRuntime.pendingProviderRegistrations = [];
-        return {
-          session: mockSession,
-          extensionsResult: { extensions: [], errors: [], runtime: {} },
-          modelFallbackMessage: undefined,
-        };
-      });
+      );
     }
 
     test('extension-registered model resolves on the 2nd+ sendQuery (the issue #2064 scenario)', async () => {

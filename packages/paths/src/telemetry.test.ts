@@ -626,7 +626,10 @@ describe('new capture functions are fire-and-forget no-throw', () => {
     delete process.env.POSTHOG_API_KEY;
     const bodies: (string | Blob)[] = [];
     const fetchImpl = Object.assign(
-      (_url: Parameters<typeof fetch>[0], options?: Parameters<typeof fetch>[1]) => {
+      (
+        _url: Parameters<typeof fetch>[0],
+        options?: Parameters<typeof fetch>[1]
+      ): Promise<Response> => {
         const body = (options as { body?: unknown } | undefined)?.body;
         if (typeof body === 'string' || body instanceof Blob) bodies.push(body);
         return Promise.resolve(new Response('{"status":"ok"}', { status: 200 }));
@@ -687,7 +690,10 @@ describe('new capture functions are fire-and-forget no-throw', () => {
     delete process.env.POSTHOG_API_KEY;
     const bodies: (string | Blob)[] = [];
     const fetchImpl = Object.assign(
-      (_url: Parameters<typeof fetch>[0], options?: Parameters<typeof fetch>[1]) => {
+      (
+        _url: Parameters<typeof fetch>[0],
+        options?: Parameters<typeof fetch>[1]
+      ): Promise<Response> => {
         const body = (options as { body?: unknown } | undefined)?.body;
         if (typeof body === 'string' || body instanceof Blob) bodies.push(body);
         return Promise.resolve(new Response('{"status":"ok"}', { status: 200 }));
