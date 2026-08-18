@@ -485,7 +485,12 @@ export function validateDagStructure(
   //   1. this scan (loader validateDagStructure) — validates refs,
   //   2. rewriteNodeOutputRefs (include-expander.ts) — renames refs on inline,
   //   3. the substituteNodeOutputRefs call sites (dag-executor.ts) — resolves refs at run,
-  // Adding a substituted field to one means updating all three. Included loop-command
+  //   4. the console builder's `baseTextBodies`/`variantTextBodies`
+  //      (@archon/web .../builder/validation/content.ts) — warns while the author edits,
+  //      before this scan ever runs. It is a separate package and cannot import from here,
+  //      so it is the copy most likely to fall behind; a miss there is a silent UX gap
+  //      rather than a wrong run, since (1) still rejects the workflow.
+  // Adding a substituted field to one means updating all four. Included loop-command
   // bodies are validated separately while materialized, then rewritten by (2).
   //
   // applyInputsMacro (include-expander.ts) walks the same set. It used to be a deliberate

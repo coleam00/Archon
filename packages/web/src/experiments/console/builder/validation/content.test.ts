@@ -164,3 +164,56 @@ describe('validateContent', () => {
     expect(bad.some(i => i.rule === 'content.when.parse')).toBe(true);
   });
 });
+
+describe('validateContent — base-field AI text is scanned too (#1764/#2476)', () => {
+  test('a non-upstream ref in systemPrompt warns', () => {
+    // The engine hard-rejects this at load, so the builder must not be silent about it
+    // while the author is still editing.
+    const issues = validateContent(
+      wf([
+        { id: 'classify', variant: 'prompt', base: {}, data: { prompt: 'classify it' } },
+        {
+          id: 'use',
+          variant: 'prompt',
+          base: { systemPrompt: 'Context: $classify.output' },
+          data: { prompt: 'go' },
+        },
+      ])
+    );
+    expect(issues.some(i => i.rule === 'content.var.unknown')).toBe(true);
+  });
+
+  test('a non-upstream ref in an agent prompt or description warns', () => {
+    const issues = validateContent(
+      wf([
+        { id: 'classify', variant: 'prompt', base: {}, data: { prompt: 'classify it' } },
+        {
+          id: 'use',
+          variant: 'prompt',
+          base: {
+            agents: {
+              helper: { description: 'reads $classify.output', prompt: 'act on it' },
+            },
+          },
+          data: { prompt: 'go' },
+        },
+      ])
+    );
+    expect(issues.some(i => i.rule === 'content.var.unknown')).toBe(true);
+  });
+
+  test('an upstream ref in systemPrompt passes', () => {
+    const issues = validateContent(
+      wf([
+        { id: 'classify', variant: 'prompt', base: {}, data: { prompt: 'classify it' } },
+        {
+          id: 'use',
+          variant: 'prompt',
+          base: { depends_on: ['classify'], systemPrompt: 'Context: $classify.output' },
+          data: { prompt: 'go' },
+        },
+      ])
+    );
+    expect(issues.filter(i => i.rule === 'content.var.unknown')).toEqual([]);
+  });
+});
