@@ -6,7 +6,11 @@ import { appendFileSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { WorkflowEmitterEvent } from '@archon/workflows/event-emitter';
-import { makeTestWorkflow, makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
+import {
+  makeTestComposedWorkflow,
+  makeTestWorkflow,
+  makeTestWorkflowWithSource,
+} from '@archon/workflows/test-utils';
 import type { WorkflowEventRow } from '@archon/core/schemas/workflow-event';
 import {
   workflowListCommand,
@@ -645,6 +649,40 @@ describe('workflowRunCommand — requires: [github] gate', () => {
     ).rejects.toThrow(/connected github identity/i);
 
     // Hard-blocked before any worktree/AI cost — executeWorkflow never ran.
+    expect(executeWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('blocks a parent whose requirement came only from a COMPOSED block', async () => {
+    // The parent declares no `requires:` of its own — the requirement unions upward from
+    // the block during expansion (#1764). Without that union this refusal never happens
+    // and the run fails mid-block instead, inside a file the parent cannot inspect.
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { isPerUserGitHubEnabled, getDecryptedAccessToken } = await import('@archon/core');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const composed = makeTestComposedWorkflow(
+      [
+        makeTestWorkflow({
+          name: 'gh-block',
+          requires: ['github'],
+          nodes: [{ id: 'work', prompt: 'work' }],
+        }),
+        makeTestWorkflow({ name: 'composes-gh', nodes: [{ id: 'sub', include: 'gh-block' }] }),
+      ],
+      'composes-gh'
+    );
+    // The union is what the gate reads — assert it before relying on it.
+    expect(composed.requires).toEqual(['github']);
+
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [{ workflow: composed, source: 'project' }],
+      errors: [],
+    });
+    (isPerUserGitHubEnabled as ReturnType<typeof mock>).mockReturnValueOnce(true);
+    (getDecryptedAccessToken as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+
+    await expect(
+      workflowRunCommand('/repo/root', 'composes-gh', 'go', { noWorktree: true })
+    ).rejects.toThrow(/connected github identity/i);
     expect(executeWorkflow).not.toHaveBeenCalled();
   });
 

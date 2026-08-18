@@ -146,6 +146,35 @@ describe('GET /api/workflows', () => {
     expect(Array.isArray(body.errors)).toBe(true);
   });
 
+  test('reports the workflow-level provider/model the AUTHOR declared', async () => {
+    // Composition collapses those fields onto the nodes and removes them from the
+    // definition (#1764), so the list response layers the declared values back on. Without
+    // that, every console workflow card silently loses its provider/model badge.
+    const app = createTestApp();
+    registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+    mockDiscoverWorkflows.mockImplementationOnce(async () => ({
+      workflows: [
+        makeTestWorkflowWithSource(
+          { name: 'deploy', description: 'Deploy app', provider: 'codex', model: 'gpt-5.6-sol' },
+          'bundled'
+        ),
+      ],
+      errors: [],
+    }));
+
+    const response = await app.request('/api/workflows');
+    const body = (await response.json()) as {
+      workflows: { workflow: { provider?: string; model?: string; nodes: unknown[] } }[];
+    };
+
+    expect(body.workflows[0].workflow.provider).toBe('codex');
+    expect(body.workflows[0].workflow.model).toBe('gpt-5.6-sol');
+    // The EXPANDED node graph is what ships alongside it — the declared values are layered
+    // over the definition, they do not replace it.
+    expect(Array.isArray(body.workflows[0].workflow.nodes)).toBe(true);
+  });
+
   test('falls back to null cwd when no cwd query and no codebases registered', async () => {
     const app = createTestApp();
     registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);

@@ -58,3 +58,24 @@ export function makeTestWorkflowWithSource(
     ...(Object.keys(declared).length > 0 ? { declared } : {}),
   };
 }
+
+/**
+ * Expand a set of in-memory workflows exactly as discovery does, and return one by name.
+ *
+ * For tests OUTSIDE this package that need a genuinely composed workflow — the expander
+ * itself is not a public export, and composition is where several cross-package contracts
+ * are decided (unioned `requires:`, collapsed node config, the composed-node stamp).
+ * Throws on an expansion error so a broken fixture fails loudly at its own line.
+ */
+export function makeTestComposedWorkflow(
+  defs: readonly WorkflowDefinition[],
+  name: string
+): WorkflowDefinition {
+  const { workflows, errors } = expandWorkflowIncludes(new Map(defs.map(d => [d.name, d])));
+  if (errors.length > 0) {
+    throw new Error(`makeTestComposedWorkflow: expansion failed: ${JSON.stringify(errors)}`);
+  }
+  const expanded = workflows.get(name);
+  if (!expanded) throw new Error(`makeTestComposedWorkflow: no workflow named '${name}'`);
+  return expanded;
+}
