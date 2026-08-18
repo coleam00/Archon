@@ -13,6 +13,7 @@
  * │   ├── artifacts/runs/{workflow-id}/  # Workflow artifacts (NEVER in git)
  * │   ├── logs/{workflow-id}.jsonl       # Workflow execution logs
  * │   └── state/                         # $STATE_DIR — cross-run state, shared per project
+ * ├── temp/                              # Ephemeral scratch (per-simulation dry-run dirs)
  * ├── worktrees/                         # Legacy global worktrees (for repos not in workspaces/)
  * └── config.yaml                        # Global config
  *
