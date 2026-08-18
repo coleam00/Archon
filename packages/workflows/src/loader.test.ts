@@ -41,6 +41,26 @@ import { workflowDefinitionSchema } from './schemas/workflow';
 import type { WorkflowDefinition } from './schemas/workflow';
 import * as bundledDefaults from './defaults/bundled-defaults';
 import { parsePackagedResourceReference } from './packaged-workflow';
+import { discoverScriptsForCwd } from './script-discovery';
+
+/**
+ * Parse one workflow YAML directly.
+ *
+ * These assertions are about what `parseWorkflow` PRODUCES. Routing them through
+ * `discoverWorkflows` also ran include expansion, which since #1764 collapses a
+ * workflow's node-affecting config onto its own nodes and removes the workflow-level
+ * layer — so a `provider:`/`model:`/`effort:` assertion made on a discovered workflow
+ * was testing the expander, not the parser it named.
+ */
+function parseWorkflowYaml(
+  yaml: string,
+  filename = 'test.yaml'
+): { workflow: WorkflowDefinition; warnings: string[] } {
+  const result = parseWorkflow(yaml, filename);
+  expect(result.error).toBeNull();
+  if (result.workflow === null) throw new Error('expected a parsed workflow');
+  return { workflow: result.workflow, warnings: result.warnings };
+}
 
 describe('Workflow Loader', () => {
   let testDir: string;
@@ -103,6 +123,41 @@ describe('Workflow Loader', () => {
         owner: { source: 'project', pack: 'team-kit', workflow: 'ship-it' },
         name: 'publish',
       });
+    });
+
+    it("a composed block's named script still resolves to its OWN pack after composition", async () => {
+      // The packaged-ownership claim at the boundary that matters: the script name a
+      // composed node carries has to resolve to the file in the BLOCK's pack, not to a
+      // same-named script in the parent's. Composition into a different pack is the case
+      // (#1764 Task 11 / #2528) — a bare basename would silently pick the wrong program.
+      const parentDir = join(testDir, '.archon', 'workflows', 'product', 'parent');
+      const blockDir = join(testDir, '.archon', 'workflows', 'shared', 'report-block');
+      await mkdir(join(parentDir, 'scripts'), { recursive: true });
+      await mkdir(join(blockDir, 'scripts'), { recursive: true });
+      await writeFile(
+        join(parentDir, 'parent.yaml'),
+        `name: script-parent\ndescription: parent\nnodes:\n  - id: rep\n    include: report-block\n`
+      );
+      await writeFile(
+        join(blockDir, 'block.yaml'),
+        `name: report-block\ndescription: block\nnodes:\n  - id: run\n    script: report\n    runtime: bun\n`
+      );
+      // Same basename in both packs — only the qualified reference tells them apart.
+      await writeFile(join(parentDir, 'scripts', 'report.ts'), 'console.log("parent");\n');
+      await writeFile(join(blockDir, 'scripts', 'report.ts'), 'console.log("block");\n');
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toEqual([]);
+      const parent = result.workflows.find(w => w.workflow.name === 'script-parent')?.workflow;
+      const composed = parent?.nodes.find(n => n.id === 'rep__run') as { script: string };
+      expect(parsePackagedResourceReference(composed.script)).toEqual({
+        owner: { source: 'project', pack: 'shared', workflow: 'report-block' },
+        name: 'report',
+      });
+
+      // And that reference is a live key in the map the executor looks the script up in.
+      const scripts = await discoverScriptsForCwd(testDir);
+      expect(scripts.get(composed.script)?.path).toBe(join(blockDir, 'scripts', 'report.ts'));
     });
 
     it('resolves an included workflow command from its own package before compiling it', async () => {
@@ -465,11 +520,8 @@ describe('Workflow Loader', () => {
       expect(result.workflows[0].workflow.mutates_checkout).toBeUndefined();
     });
 
-    it('should parse valid DAG workflow YAML', async () => {
-      const workflowDir = join(testDir, '.archon', 'workflows');
-      await mkdir(workflowDir, { recursive: true });
-
-      const validYaml = `name: test-workflow
+    it('should parse valid DAG workflow YAML', () => {
+      const { workflow } = parseWorkflowYaml(`name: test-workflow
 description: A test workflow
 provider: claude
 nodes:
@@ -478,19 +530,14 @@ nodes:
   - id: implement
     command: implement
     depends_on: [plan]
-`;
-      await writeFile(join(workflowDir, 'test.yaml'), validYaml);
+`);
 
-      const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      const workflows = result.workflows.map(ws => ws.workflow);
-
-      expect(workflows).toHaveLength(1);
-      expect(workflows[0].name).toBe('test-workflow');
-      expect(workflows[0].description).toBe('A test workflow');
-      expect(workflows[0].provider).toBe('claude');
-      expect(workflows[0].nodes).toHaveLength(2);
-      expect(workflows[0].nodes[0].id).toBe('plan');
-      expect(workflows[0].nodes[1].id).toBe('implement');
+      expect(workflow.name).toBe('test-workflow');
+      expect(workflow.description).toBe('A test workflow');
+      expect(workflow.provider).toBe('claude');
+      expect(workflow.nodes).toHaveLength(2);
+      expect(workflow.nodes[0].id).toBe('plan');
+      expect(workflow.nodes[1].id).toBe('implement');
     });
 
     it('should return empty array for YAML missing name', async () => {
@@ -588,40 +635,28 @@ nodes:
       expect(result.errors[0].error).toContain("Unknown provider 'claud'");
     });
 
-    it('should accept any model string with a known provider (SDK validates at run time)', async () => {
+    it('should accept any model string with a known provider (SDK validates at run time)', () => {
       // Whatever the user wrote in `model:` passes through to the SDK; the
       // SDK is the source of truth for what model strings exist. Errors
       // surface at run time, not load time.
-      const workflowDir = join(testDir, '.archon', 'workflows');
-      await mkdir(workflowDir, { recursive: true });
-
-      const yaml = `name: any-model
+      const { workflow } = parseWorkflowYaml(`name: any-model
 description: Any model string with a known provider
 provider: claude
 model: claude-opus-4-7[1m]
 nodes:
   - id: test
     command: test
-`;
-      await writeFile(join(workflowDir, 'any-model.yaml'), yaml);
+`);
 
-      const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      const workflows = result.workflows.map(ws => ws.workflow);
-
-      expect(result.errors).toHaveLength(0);
-      expect(workflows).toHaveLength(1);
-      expect(workflows[0].provider).toBe('claude');
-      expect(workflows[0].model).toBe('claude-opus-4-7[1m]');
+      expect(workflow.provider).toBe('claude');
+      expect(workflow.model).toBe('claude-opus-4-7[1m]');
     });
 
-    it('should parse codex options fields (and ignore the removed additionalDirectories field)', async () => {
-      const workflowDir = join(testDir, '.archon', 'workflows');
-      await mkdir(workflowDir, { recursive: true });
-
+    it('should parse codex options fields (and ignore the removed additionalDirectories field)', () => {
       // additionalDirectories was a dead workflow-level field (parsed but never
       // consumed by the DAG executor) — it has been removed. A YAML that still
       // declares it must load fine, with the field simply ignored.
-      const yaml = `name: codex-options
+      const { workflow } = parseWorkflowYaml(`name: codex-options
 description: Codex options are parsed
 provider: codex
 model: gpt-5.6-sol
@@ -633,48 +668,37 @@ additionalDirectories:
 nodes:
   - id: test
     command: test
-`;
-      await writeFile(join(workflowDir, 'options.yaml'), yaml);
+`);
 
-      const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      const workflows = result.workflows.map(ws => ws.workflow);
-
-      expect(workflows).toHaveLength(1);
       // #2556: translated into `effort:` at load, never carried forward.
-      expect(workflows[0].effort).toBe('medium');
-      expect(workflows[0].modelReasoningEffort).toBeUndefined();
-      expect(workflows[0].webSearchMode).toBe('live');
+      expect(workflow.effort).toBe('medium');
+      expect(workflow.modelReasoningEffort).toBeUndefined();
+      expect(workflow.webSearchMode).toBe('live');
       // The removed field is not carried onto the workflow object.
-      expect((workflows[0] as Record<string, unknown>).additionalDirectories).toBeUndefined();
+      expect((workflow as Record<string, unknown>).additionalDirectories).toBeUndefined();
     });
 
-    it('should translate modelReasoningEffort into effort and say so', async () => {
+    it('should translate modelReasoningEffort into effort and say so', () => {
       // #2556: warn-and-TRANSLATE. The value must survive to the executor — an
       // author who reads the warning and does nothing must see no change in the
       // depth their nodes run at — but it survives as `effort:`, the field that
       // has a node-level counterpart. That is what makes the deprecation
       // terminal, and what lets a later pass collapse workflow-level config onto
       // nodes (#1764) without a hole for this field.
-      const workflowDir = join(testDir, '.archon', 'workflows');
-      await mkdir(workflowDir, { recursive: true });
-      const yaml = `name: deprecated-effort-spelling
+      const { workflow, warnings } = parseWorkflowYaml(`name: deprecated-effort-spelling
 description: Uses the old Codex-only spelling
 provider: codex
 modelReasoningEffort: xhigh
 nodes:
   - id: test
     command: test
-`;
-      await writeFile(join(workflowDir, 'deprecated.yaml'), yaml);
+`);
 
-      const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      expect(result.workflows).toHaveLength(1);
       // The value arrives under the canonical spelling; the deprecated key is gone.
-      expect(result.workflows[0].workflow.effort).toBe('xhigh');
-      expect(result.workflows[0].workflow.modelReasoningEffort).toBeUndefined();
+      expect(workflow.effort).toBe('xhigh');
+      expect(workflow.modelReasoningEffort).toBeUndefined();
 
-      const pw = result.workflows[0].parseWarnings ?? [];
-      const deprecation = pw.find(w => w.includes('modelReasoningEffort'));
+      const deprecation = warnings.find(w => w.includes('modelReasoningEffort'));
       expect(deprecation).toBeDefined();
       expect(deprecation).toContain('deprecated');
       // The message must name what actually happened, not just what to write —
@@ -690,7 +714,7 @@ nodes:
       expect(deprecation).toContain('non-Codex');
     });
 
-    it('translates for a NON-Codex workflow too — the widening, pinned', async () => {
+    it('translates for a NON-Codex workflow too — the widening, pinned', () => {
       // R22's cost, as behavior rather than a sentence. The deprecated field was
       // Codex-gated in the executor: on a Claude workflow it applied to nothing
       // and warned. Translation is provider-blind (the loader cannot know which
@@ -698,35 +722,27 @@ nodes:
       // disclosed — and a plausible "fix" would be to re-add a Codex gate here,
       // which would silently restore the two-field hole #1764 Task 1 needs gone.
       // This test is what makes that regression fail.
-      const workflowDir = join(testDir, '.archon', 'workflows');
-      await mkdir(workflowDir, { recursive: true });
-      const yaml = `name: deprecated-on-claude
+      const { workflow } = parseWorkflowYaml(`name: deprecated-on-claude
 description: Codex-only spelling on a Claude workflow
 provider: claude
 modelReasoningEffort: high
 nodes:
   - id: test
     command: test
-`;
-      await writeFile(join(workflowDir, 'claude-deprecated.yaml'), yaml);
+`);
 
-      const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      expect(result.workflows).toHaveLength(1);
-      const w = result.workflows[0].workflow;
-      expect(w.provider).toBe('claude');
+      expect(workflow.provider).toBe('claude');
       // Applied, not dropped, and under the canonical spelling.
-      expect(w.effort).toBe('high');
-      expect(w.modelReasoningEffort).toBeUndefined();
+      expect(workflow.effort).toBe('high');
+      expect(workflow.modelReasoningEffort).toBeUndefined();
     });
 
-    it('should ignore modelReasoningEffort when effort is also declared, and say which won', async () => {
+    it('should ignore modelReasoningEffort when effort is also declared, and say which won', () => {
       // The loader cannot know which nodes resolve to Codex, so the deprecated
       // field's Codex-only precedence is not expressible at load time. `effort:`
       // wins, and the warning has to say so plainly — silently picking one of
       // two declared depths is the failure this issue exists to remove.
-      const workflowDir = join(testDir, '.archon', 'workflows');
-      await mkdir(workflowDir, { recursive: true });
-      const yaml = `name: both-spellings
+      const { workflow, warnings } = parseWorkflowYaml(`name: both-spellings
 description: Declares both reasoning-depth fields
 provider: codex
 effort: minimal
@@ -734,38 +750,29 @@ modelReasoningEffort: xhigh
 nodes:
   - id: test
     command: test
-`;
-      await writeFile(join(workflowDir, 'both.yaml'), yaml);
+`);
 
-      const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      expect(result.workflows).toHaveLength(1);
-      expect(result.workflows[0].workflow.effort).toBe('minimal');
-      expect(result.workflows[0].workflow.modelReasoningEffort).toBeUndefined();
+      expect(workflow.effort).toBe('minimal');
+      expect(workflow.modelReasoningEffort).toBeUndefined();
 
-      const pw = result.workflows[0].parseWarnings ?? [];
-      const deprecation = pw.find(w => w.includes('modelReasoningEffort'));
+      const deprecation = warnings.find(w => w.includes('modelReasoningEffort'));
       expect(deprecation).toBeDefined();
       expect(deprecation).toContain('IGNORED');
       expect(deprecation).toContain('effort: minimal');
     });
 
-    it('should not warn about deprecation when modelReasoningEffort is absent', async () => {
-      const workflowDir = join(testDir, '.archon', 'workflows');
-      await mkdir(workflowDir, { recursive: true });
-      const yaml = `name: current-effort-spelling
+    it('should not warn about deprecation when modelReasoningEffort is absent', () => {
+      const { workflow, warnings } = parseWorkflowYaml(`name: current-effort-spelling
 description: Uses the one spelling
 provider: codex
 effort: xhigh
 nodes:
   - id: test
     command: test
-`;
-      await writeFile(join(workflowDir, 'current.yaml'), yaml);
+`);
 
-      const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      expect(result.workflows).toHaveLength(1);
-      expect(result.workflows[0].workflow.effort).toBe('xhigh');
-      expect(result.workflows[0].parseWarnings ?? []).toEqual([]);
+      expect(workflow.effort).toBe('xhigh');
+      expect(warnings).toEqual([]);
     });
 
     it('should accept the widened effort ladder on NODES, not just at workflow level', async () => {
@@ -802,7 +809,7 @@ nodes:
       expect(result.workflows[0].parseWarnings ?? []).toEqual([]);
     });
 
-    it('should round-trip workflow-level effort/thinking/fallbackModel/betas/sandbox', async () => {
+    it('should round-trip workflow-level effort/thinking/fallbackModel/betas/sandbox', () => {
       // Regression: these 5 workflow-level fields are declared on
       // workflowBaseSchema and consumed by the DAG executor's workflowLevelOptions
       // (the object literal at the top of executeDagWorkflow), but the loader's
@@ -811,9 +818,7 @@ nodes:
       // value never inherited them. See `dag-executor.test.ts`
       // "forwards workflow-level effort to node when no per-node override" — that
       // test passes because it bypasses the loader.
-      const workflowDir = join(testDir, '.archon', 'workflows');
-      await mkdir(workflowDir, { recursive: true });
-      const yaml = `name: defaults
+      const wf = parseWorkflowYaml(`name: defaults
 description: workflow-level fallback options
 provider: claude
 effort: high
@@ -829,16 +834,7 @@ sandbox:
 nodes:
   - id: only
     prompt: p
-`;
-      await writeFile(join(workflowDir, 'defaults.yaml'), yaml);
-      const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      const wf = result.workflows[0].workflow as {
-        effort?: unknown;
-        thinking?: unknown;
-        fallbackModel?: unknown;
-        betas?: unknown;
-        sandbox?: unknown;
-      };
+`).workflow;
       expect(wf.effort).toBe('high');
       expect(wf.thinking).toEqual({ type: 'enabled', budgetTokens: 4000 });
       expect(wf.fallbackModel).toBe('claude-haiku-4-5');
@@ -899,46 +895,34 @@ nodes:
       expect(events).toContain('invalid_workflow_sandbox_value_ignored');
     });
 
-    it('should accept the thinking string shorthand at the workflow level', async () => {
+    it('should accept the thinking string shorthand at the workflow level', () => {
       // thinkingConfigSchema preprocesses 'enabled' → { type: 'enabled' }. The
       // round-trip test covers the object form; this covers the shorthand path.
-      const workflowDir = join(testDir, '.archon', 'workflows');
-      await mkdir(workflowDir, { recursive: true });
-      const yaml = `name: thinking-shorthand
+      const wf = parseWorkflowYaml(`name: thinking-shorthand
 description: thinking as a bare string
 thinking: enabled
 nodes:
   - id: only
     prompt: p
-`;
-      await writeFile(join(workflowDir, 'ts.yaml'), yaml);
-      const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      const wf = result.workflows[0].workflow as { thinking?: unknown };
+`).workflow;
       expect(wf.thinking).toEqual({ type: 'enabled' });
     });
 
-    it('should trim surrounding whitespace from workflow-level fallbackModel', async () => {
+    it('should trim surrounding whitespace from workflow-level fallbackModel', () => {
       // The inline trim (rather than safeParse) exists specifically so a stray
       // surrounding space is normalised rather than rejected.
-      const workflowDir = join(testDir, '.archon', 'workflows');
-      await mkdir(workflowDir, { recursive: true });
-      const yaml = `name: fm-trim
+      const wf = parseWorkflowYaml(`name: fm-trim
 description: fallbackModel with whitespace
 fallbackModel: '  claude-haiku-4-5  '
 nodes:
   - id: only
     prompt: p
-`;
-      await writeFile(join(workflowDir, 'fm.yaml'), yaml);
-      const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      const wf = result.workflows[0].workflow as { fallbackModel?: unknown };
+`).workflow;
       expect(wf.fallbackModel).toBe('claude-haiku-4-5');
     });
 
-    it('should trim and filter empty strings out of workflow-level betas', async () => {
-      const workflowDir = join(testDir, '.archon', 'workflows');
-      await mkdir(workflowDir, { recursive: true });
-      const yaml = `name: beta-trim
+    it('should trim and filter empty strings out of workflow-level betas', () => {
+      const wf = parseWorkflowYaml(`name: beta-trim
 description: betas with whitespace
 betas:
   - '  alpha  '
@@ -947,10 +931,7 @@ betas:
 nodes:
   - id: only
     prompt: p
-`;
-      await writeFile(join(workflowDir, 't.yaml'), yaml);
-      const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      const wf = result.workflows[0].workflow as { betas?: unknown };
+`).workflow;
       expect(wf.betas).toEqual(['alpha', 'beta']);
     });
   });
@@ -1144,11 +1125,8 @@ nodes:
       expect(workflows).toHaveLength(0);
     });
 
-    it('should handle workflow with all optional fields', async () => {
-      const workflowDir = join(testDir, '.archon', 'workflows');
-      await mkdir(workflowDir, { recursive: true });
-
-      const fullWorkflow = `name: full-workflow
+    it('should handle workflow with all optional fields', () => {
+      const { workflow } = parseWorkflowYaml(`name: full-workflow
 description: A workflow with all fields
 provider: codex
 model: gpt-4
@@ -1158,15 +1136,10 @@ nodes:
   - id: step-two
     command: step-two
     depends_on: [step-one]
-`;
-      await writeFile(join(workflowDir, 'full.yaml'), fullWorkflow);
+`);
 
-      const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      const workflows = result.workflows.map(ws => ws.workflow);
-
-      expect(workflows).toHaveLength(1);
-      expect(workflows[0].provider).toBe('codex');
-      expect(workflows[0].model).toBe('gpt-4');
+      expect(workflow.provider).toBe('codex');
+      expect(workflow.model).toBe('gpt-4');
     });
 
     it('should handle empty workflow directory', async () => {
@@ -4128,6 +4101,28 @@ nodes:
       expect(err?.error).toContain("references unknown node '$ghost.output'");
     });
 
+    it.each([
+      ['systemPrompt', '    systemPrompt: "context $ghost.output"'],
+      [
+        'agents.*.prompt',
+        '    agents:\n      helper:\n        description: d\n        prompt: "use $ghost.output"',
+      ],
+      [
+        'agents.*.description',
+        '    agents:\n      helper:\n        description: "reads $ghost.output"\n        prompt: p',
+      ],
+    ])('catches a dangling $node.output ref in %s', async (field, snippet) => {
+      // These three are runtime substitution surfaces since #1764, so a dangling ref has
+      // to fail at load like every other one — before it reaches the provider as text.
+      const name = `bad-${field.replace(/[^a-z]/gi, '')}`;
+      const result = await loadOne(
+        name,
+        `name: ${name}\ndescription: dangling ref in ${field}\nnodes:\n  - id: use\n    prompt: go\n${snippet}\n`
+      );
+      const err = result.errors.find(e => e.filename === `${name}.yaml`);
+      expect(err?.error).toContain("references unknown node '$ghost.output'");
+    });
+
     it("accepts 'with:' on a workflow node (#2470)", async () => {
       const result = await loadOne(
         'with-accept',
@@ -4668,7 +4663,28 @@ nodes:
       expect(err?.error).toContain('not found');
     });
 
-    it('should warn when an included block drops meaningful workflow-level fields', async () => {
+    it("rejects 'mutates_checkout' on an include node, naming workflow level and workflow:", async () => {
+      // The one launch-only option the schema cannot see — it is workflow-level, so Zod
+      // strips it before superRefine runs (#1764 Task 8).
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      await writeFile(
+        join(workflowDir, 'mc-block.yaml'),
+        `name: mc-block\ndescription: b\nnodes:\n  - id: work\n    prompt: work\n`
+      );
+      await writeFile(
+        join(workflowDir, 'mc-parent.yaml'),
+        `name: mc-parent\ndescription: p\nnodes:\n  - id: sub\n    include: mc-block\n    mutates_checkout: false\n`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      const err = result.errors.find(e => e.filename === 'mc-parent.yaml');
+      expect(err?.error).toContain("'mutates_checkout' is not supported on an include node");
+      expect(err?.error).toContain("'workflow:' node");
+      expect(result.workflows.some(w => w.workflow.name === 'mc-parent')).toBe(false);
+    });
+
+    it('warns only about the RUN-owned fields a composed workflow cannot carry', async () => {
       const workflowDir = join(testDir, '.archon', 'workflows');
       await mkdir(workflowDir, { recursive: true });
 
@@ -4676,9 +4692,12 @@ nodes:
         join(workflowDir, 'gated-block.yaml'),
         `
 name: gated-block
-description: A block that declares workflow-level fields (dropped on inline)
+description: A block whose node config travels but whose run config cannot
 provider: claude
 requires: [github]
+interactive: true
+worktree:
+  enabled: true
 nodes:
   - id: work
     prompt: "do the work"
@@ -4713,18 +4732,42 @@ nodes:
         safetyNote?: string;
       };
       expect(payload.include).toBe('sub');
-      expect(payload.droppedFields).toContain('provider');
-      expect(payload.droppedFields).toContain('requires');
+      // Run-owned: whoever starts the run decides these, so the composed file's
+      // values cannot apply and the author gets told.
+      expect(payload.droppedFields).toContain('interactive');
+      expect(payload.droppedFields).toContain('worktree');
+      // Node-affecting: `provider` travelled onto the block's own nodes (#1764), so
+      // reporting it as dropped would now be a lie.
+      expect(payload.droppedFields).not.toContain('provider');
+      // `requires:` is unioned into the composing workflow's gate, not dropped.
+      expect(payload.droppedFields).not.toContain('requires');
+      expect(payload.requiresNote).toBeUndefined();
       // The always-present-but-undefined keys parseWorkflow emits are filtered out, so a
       // generic key derivation must NOT report them as dropped.
       expect(payload.droppedFields).not.toContain('model');
-      expect(payload.droppedFields).not.toContain('interactive');
-      // requires:[github] gets its explicit callout; no safety fields here.
-      expect(payload.requiresNote).toContain('github');
       expect(payload.safetyNote).toBeUndefined();
     });
 
-    it('should warn — with a safety callout — when a block drops mutates_checkout and sandbox', async () => {
+    it("unions a composed block's requires: into the composing workflow", async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      await writeFile(
+        join(workflowDir, 'gh-block.yaml'),
+        `name: gh-block\ndescription: needs github\nrequires: [github]\nnodes:\n  - id: work\n    prompt: work\n`
+      );
+      await writeFile(
+        join(workflowDir, 'gh-parent.yaml'),
+        `name: gh-parent\ndescription: composes it\nnodes:\n  - id: sub\n    include: gh-block\n`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      const parent = result.workflows.find(w => w.workflow.name === 'gh-parent');
+      // The capability gate reads this, so a user without GitHub connected is refused at
+      // invocation instead of failing mid-run inside a block the parent cannot inspect.
+      expect(parent?.workflow.requires).toEqual(['github']);
+    });
+
+    it('should warn — with a safety callout — when a block drops mutates_checkout', async () => {
       const workflowDir = join(testDir, '.archon', 'workflows');
       await mkdir(workflowDir, { recursive: true });
 
@@ -4732,8 +4775,9 @@ nodes:
         join(workflowDir, 'safety-block.yaml'),
         `
 name: safety-block
-description: A block declaring isolation/concurrency-safety fields
+description: A block declaring concurrency-safety and a field that cannot travel
 mutates_checkout: false
+webSearchMode: live
 sandbox:
   enabled: true
 nodes:
@@ -4761,12 +4805,26 @@ nodes:
           (c[0] as { include?: string }).include === 'safety-sub'
       );
       expect(call).toBeDefined();
-      const payload = call![0] as { droppedFields: string[]; safetyNote?: string };
+      const payload = call![0] as {
+        droppedFields: string[];
+        safetyNote?: string;
+        webSearchModeNote?: string;
+      };
       expect(payload.droppedFields).toContain('mutates_checkout');
-      expect(payload.droppedFields).toContain('sandbox');
-      // Explicit safety callout naming BOTH.
       expect(payload.safetyNote).toContain('mutates_checkout');
-      expect(payload.safetyNote).toContain('sandbox');
+      // `sandbox:` is node-affecting and now travels onto the block's own nodes.
+      expect(payload.droppedFields).not.toContain('sandbox');
+      const work = result.workflows
+        .find(w => w.workflow.name === 'safety-parent')
+        ?.workflow.nodes.find(n => n.id === 'safety-sub__work') as
+        | Record<string, unknown>
+        | undefined;
+      expect(work?.sandbox).toEqual({ enabled: true });
+      // `webSearchMode:` is the one node-affecting field with no per-node landing spot,
+      // so it genuinely cannot travel — named explicitly rather than left to read as a
+      // run-level decision it is not.
+      expect(payload.droppedFields).toContain('webSearchMode');
+      expect(payload.webSearchModeNote).toContain('no per-node form');
     });
 
     it('should compile a block command file and namespace a local sibling ref', async () => {
@@ -5135,16 +5193,32 @@ nodes:
       expect('persist_session' in node ? node.persist_session : undefined).toBe(true);
     });
 
-    it('parses persist_sessions: true at workflow root', async () => {
+    it('parses persist_sessions: true at workflow root', () => {
+      const { workflow } = parseWorkflowYaml(
+        `name: t\ndescription: t\nprovider: claude\npersist_sessions: true\nnodes:\n  - id: planner\n    prompt: p\n`
+      );
+      expect(workflow.persist_sessions).toBe(true);
+    });
+
+    it('collapses persist_sessions onto AI nodes only, so composition preserves it', async () => {
+      // The workflow-level default is what the executor's `nodeUsesPersistedScope`
+      // reads for a node with no `persist_session:` of its own. Once composition
+      // removes the workflow-level layer (#1764) the default has to have landed on
+      // the nodes that can use it — and NOT on the ones that cannot, or the loader's
+      // capability gate and the executor's predicate disagree about the same file.
       const workflowDir = join(testDir, '.archon', 'workflows');
       await mkdir(workflowDir, { recursive: true });
-      const yaml = `name: t\ndescription: t\nprovider: claude\npersist_sessions: true\nnodes:\n  - id: planner\n    prompt: p\n`;
-      await writeFile(join(workflowDir, 't.yaml'), yaml);
+      await writeFile(
+        join(workflowDir, 'persist.yaml'),
+        `name: persist-collapse\ndescription: t\nprovider: claude\npersist_sessions: true\nnodes:\n  - id: planner\n    prompt: p\n  - id: shell\n    bash: echo hi\n`
+      );
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
       expect(result.errors).toEqual([]);
-      expect(
-        (result.workflows[0].workflow as { persist_sessions?: boolean }).persist_sessions
-      ).toBe(true);
+      const expanded = result.workflows[0].workflow;
+      expect(expanded.persist_sessions).toBeUndefined();
+      const byId = new Map(expanded.nodes.map(n => [n.id, n as Record<string, unknown>]));
+      expect(byId.get('planner')?.persist_session).toBe(true);
+      expect(byId.get('shell')?.persist_session).toBeUndefined();
     });
 
     it('does NOT capability-check non-AI nodes when persist_sessions is workflow-level', async () => {

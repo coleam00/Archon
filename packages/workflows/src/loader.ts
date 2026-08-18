@@ -301,6 +301,18 @@ function parseDagNode(
 
   const node = result.data;
 
+  // `mutates_checkout:` on an include node is the fourth launch-only option (#1764), and
+  // the only one the schema cannot see: it is workflow-level, so Zod strips it before
+  // superRefine runs. An author writes it on an `include:` believing the block declares
+  // its own concurrency safety; composition has one checkout and one run, so the
+  // declaration belongs to the composing workflow or to a genuinely separate sub-run.
+  if (isIncludeNode(node) && (raw as Record<string, unknown>).mutates_checkout !== undefined) {
+    errors.push(
+      `Node '${id}': 'mutates_checkout' is not supported on an include node: a composed block shares the run's single checkout, so concurrency safety is the composing workflow's to declare. Set it at workflow level, or use a 'workflow:' node when you want a separate governed run.`
+    );
+    return null;
+  }
+
   collectUnknownNodeKeys(raw, id, `Node '${id}'`, warnings);
 
   // Warn about AI-specific fields on non-AI nodes (runtime behavior, not schema errors)
@@ -463,10 +475,11 @@ export function validateDagStructure(
 
   // Check $nodeId.output references across every public YAML field the executor substitutes at
   // runtime: when:, and the text surfaces that flow through substituteNodeOutputRefs
-  // (prompt, bash, script, approval.message/on_reject.prompt, cancel, loop.prompt,
-  // loop.until_bash, loop_group.until_bash, workflow.input/with/fan_out.items). A dangling
-  // ref in any of them can bind the wrong flat-DAG output or fail at run time, so all must
-  // be validated here.
+  // (prompt, systemPrompt, agents.*.prompt/description, bash, script,
+  // approval.message/on_reject.prompt, cancel, loop.prompt, loop.until_bash,
+  // loop_group.until_bash, workflow.input/with/fan_out.items). A dangling ref in any of
+  // them can bind the wrong flat-DAG output or fail at run time, so all must be validated
+  // here.
   //
   // KEEP IN SYNC (public runtime node-ref surfaces):
   //   1. this scan (loader validateDagStructure) — validates refs,
@@ -474,8 +487,14 @@ export function validateDagStructure(
   //   3. the substituteNodeOutputRefs call sites (dag-executor.ts) — resolves refs at run,
   // Adding a substituted field to one means updating all three. Included loop-command
   // bodies are validated separately while materialized, then rewritten by (2).
-  // applyInputsMacro is intentionally a superset because some AI configuration strings
-  // accept include inputs without being runtime node-ref surfaces.
+  //
+  // applyInputsMacro (include-expander.ts) walks the same set. It used to be a deliberate
+  // SUPERSET, because systemPrompt / agents.*.prompt / agents.*.description accepted
+  // include inputs without being runtime node-ref surfaces — which meant a workflow using
+  // `$INPUTS.<name>` in a systemPrompt resolved when composed and stayed literal when run
+  // standalone (#2476). Those three became runtime surfaces in #1764, so the two sets now
+  // agree; a future field that accepts include inputs but not node refs would reopen the
+  // gap and belongs in only one of them.
   //
   // Runtime substitution is syntax-agnostic: canonical refs inside Markdown fences and
   // inline code are live too. Validation therefore scans every surface verbatim.
@@ -485,6 +504,18 @@ export function validateDagStructure(
     const sources: { field: string; text: string }[] = [];
     if ('prompt' in node && typeof node.prompt === 'string') {
       sources.push({ field: 'prompt', text: node.prompt });
+    }
+    // Node-level AI configuration, valid on every AI node mode — pushed outside the mode
+    // chain like `when:`. Substituted at run time since #1764, so a dangling ref here
+    // fails at load rather than reaching the provider as literal text.
+    if (node.systemPrompt !== undefined) {
+      sources.push({ field: 'systemPrompt', text: node.systemPrompt });
+    }
+    if (node.agents !== undefined) {
+      for (const [agentId, agent] of Object.entries(node.agents)) {
+        sources.push({ field: `agents.${agentId}.prompt`, text: agent.prompt });
+        sources.push({ field: `agents.${agentId}.description`, text: agent.description });
+      }
     }
     if (isBashNode(node)) sources.push({ field: 'bash', text: node.bash });
     if (isScriptNode(node)) sources.push({ field: 'script', text: node.script });

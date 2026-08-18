@@ -1383,6 +1383,29 @@ describe('dagNodeSchema — include', () => {
   });
 });
 
+describe('dagNodeSchema — launch-only options on an include node (#1764)', () => {
+  test.each([
+    ['isolation', { isolation: 'worktree' }],
+    ['fan_out', { fan_out: { items: '$list.output' } }],
+    ['input', { input: 'do the thing' }],
+  ])('rejects %s, naming the option and pointing at workflow:', (field, extra) => {
+    const result = dagNodeSchema.safeParse({ id: 'review', include: 'blk', ...extra });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const message = result.error.issues.map(i => i.message).join(' | ');
+      expect(message).toContain(`'${field}' is not supported on an include node`);
+      expect(message).toContain("'workflow:' node");
+    }
+  });
+
+  test('a merely-meaningless AI field on an include node still only warns', () => {
+    // The distinction the rejection above rests on: `model:` says nothing composition
+    // has to refuse, it is simply unread. INCLUDE_NODE_IGNORED_FIELDS keeps warning.
+    const result = dagNodeSchema.safeParse({ id: 'review', include: 'blk', model: 'opus' });
+    expect(result.success).toBe(true);
+  });
+});
+
 describe('INCLUDE_NODE_IGNORED_FIELDS', () => {
   test('is a superset of BASH_NODE_AI_FIELDS plus exec-only fields', () => {
     for (const f of BASH_NODE_AI_FIELDS) {

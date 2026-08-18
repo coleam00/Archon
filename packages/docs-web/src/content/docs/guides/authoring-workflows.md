@@ -205,8 +205,8 @@ nodes:
 | `loop_group` | object | Multi-node sub-DAG body repeated per iteration until a completion signal. See [Cross-Node Loops](/guides/loop-nodes/#cross-node-loops-with-loop_group) |
 | `approval` | object | Pauses workflow for human review. See [Approval Nodes](/guides/approval-nodes/) |
 | `cancel` | string | Terminates the workflow run with a reason string. Uses existing cancellation plumbing — in-flight parallel nodes are stopped |
-| `include` | string | Name of another workflow whose nodes are inlined into this DAG at load time as a namespaced sub-DAG. See [Reusing a Shared Sub-DAG](#reusing-a-shared-sub-dag-with-include) |
-| `workflow` | string | Name of another workflow to run as a governed **child sub-run** at execution time — its own run record, gates, artifacts, and cost. Optional `input` (untyped data string → child's `$ARGUMENTS`) **or** `with:` (named inputs → child's `$INPUTS.<name>`; mutually exclusive with `input`), `isolation` (`'inherit'` \| `'worktree'`), and `fan_out` (one child per item of a runtime list; optional `as:` names the per-item `$INPUTS` channel). See [Composing a Governed Sub-Run](#composing-a-governed-sub-run-with-workflow) and [Workflow Signature](#workflow-signature-inputs-returns-and-inputs) |
+| `include` | string | Name of another workflow whose nodes are inlined into this DAG at load time as a namespaced sub-DAG. See [Composing Another Workflow](#composing-another-workflow-with-include) |
+| `workflow` | string | Name of another workflow to run as a governed **child sub-run** at execution time — its own run record, gates, artifacts, and cost. Optional `input` (untyped data string → child's `$ARGUMENTS`) **or** `with:` (named inputs → child's `$INPUTS.<name>`; mutually exclusive with `input`), `isolation` (`'inherit'` \| `'worktree'`), and `fan_out` (one child per item of a runtime list; optional `as:` names the per-item `$INPUTS` channel). See [Launching a Separate Governed Run](#launching-a-separate-governed-run-with-workflow) and [Workflow Signature](#workflow-signature-inputs-returns-and-inputs) |
 
 **Common fields** — apply to all node types:
 
@@ -971,12 +971,19 @@ worktree is destroyed at cleanup. Three sanctioned ways to get content into git 
    it in the repo at all: the artifact routes (`GET /api/runs/:runId/artifacts`) and
    `output_type` sidecars address a run's output by run id and by type.
 
-## Reusing a Shared Sub-DAG with `include:`
+## Composing Another Workflow with `include:`
 
-An `include:` node inlines another workflow's nodes into the current DAG. This lets you
-factor a shared block of nodes (for example a multi-step review flow) into its own workflow
-file and reference it from many workflows, instead of copy-pasting the nodes and letting the
-copies drift apart.
+An `include:` node runs another workflow's nodes as part of this one. This lets you factor a
+shared block of nodes (for example a multi-step review flow) into its own workflow file and
+reference it from many workflows, instead of copy-pasting the nodes and letting the copies
+drift apart.
+
+**A node runs with the configuration its own workflow file declares; the run owns isolation,
+interactivity and evidence policy.** That one sentence is the whole rule. A composed workflow
+that declares `provider: codex` / `model: large` / `effort: high` runs on exactly those,
+whichever workflow composed it — and a composed workflow that declares nothing resolves from
+your config, tier presets and personal AI preferences at run time, exactly as it would on its
+own. The composing workflow contributes ordering and gates; it does not reach inside.
 
 ```yaml
 nodes:
@@ -995,10 +1002,35 @@ nodes:
 
 The include target (`archon-review-block` here) is an ordinary workflow file discovered by
 name, honoring the usual precedence (`bundled` < `~/.archon/workflows/` < repo
-`.archon/workflows/`). Only its `nodes:` are inlined — the included file's workflow-level
-fields (`provider`, `model`, `worktree`, `persist_sessions`, `requires`, …) are ignored; the
-including workflow's defaults govern the inlined nodes. If an included node needs a specific
-provider or model, set it **per-node** — per-node fields survive inlining verbatim.
+`.archon/workflows/`).
+
+### What travels, and what belongs to the run
+
+At load time each workflow's **node-affecting** configuration is written onto its own nodes
+and then removed from the definition, so nothing can fall back to an outer file's values:
+
+| Field | Composed behaviour |
+|---|---|
+| `provider`, `model`, `effort`, `thinking`, `fallbackModel`, `betas`, `sandbox`, `persist_sessions` | **Travel** with the workflow, onto its own nodes. A node's own value always wins. |
+| `requires` | **Unions** into the composing workflow, so a missing capability refuses the run at invocation instead of failing mid-block. |
+| `inputs`, `returns` | **Consumed** by composition — `inputs:` validates the caller's `with:`, `returns:` selects `$includeId.output`. |
+| `interactive`, `worktree`, `container`, `evidence_policy`, `mutates_checkout` | **Run-owned.** Whoever starts the run decides these; a composed file's values are dropped with a load-time warning. Declare them on the top-level workflow. |
+| `webSearchMode` | **Dropped, and this one is a real gap.** It is the only workflow-level field with no per-node counterpart, so there is nowhere for it to travel. Set it on the top-level workflow — where it then applies to every node in the run. |
+
+Two consequences worth knowing:
+
+- **A composition can span providers.** Parent on Claude, one composed block on Pi, another
+  on Codex, all in one run — each resolves independently. `archon workflow run <name>
+  --dry-run` prints each node's effective provider and model and where the value came from.
+- **A composed workflow's entry node starts a fresh session**, exactly as it would if you
+  ran that file on its own, even when the preceding node used the same provider. Set
+  `context: shared` on the entry node if you deliberately want the caller's thread to
+  continue into the block.
+
+One safety rule has teeth: if a composed workflow contains an `approval:` node, the
+**top-level** workflow must declare `interactive: true`, or the composition is a load error
+naming both. A composed gate in a background run cannot be approved inline, and the author
+who would notice is looking at a different file.
 
 ### How expansion works
 
@@ -1092,10 +1124,25 @@ Canonical references are live even inside Markdown code fences and inline code b
 substitution is syntax-agnostic.
 
 Named `script:` files are different: they are opaque programs, not prompt templates. Archon
-does not scan or rewrite their source. An `include:` may bind `$INPUTS` in the YAML `script:`
-selector, but flattening does not inject those values into the selected program's environment.
-The documented `INPUTS_<UPPER_SNAKE>` environment variables apply to `workflow:` sub-runs,
-whose concrete inputs are persisted in child-run metadata.
+does not scan or rewrite their source, so it delivers a composed workflow's declared inputs to
+them the same way it delivers everything else user-controlled — as environment variables.
+Every `bash:` and `script:` node in a composed workflow receives that workflow's resolved
+inputs as `INPUTS_<UPPER_SNAKE>` (hyphens fold to underscores, so `base-branch` arrives as
+`INPUTS_BASE_BRANCH`), whether the body is inline or a named file:
+
+```bash
+# inside the composed workflow's own script, named or inline
+echo "reviewing $INPUTS_PLAN against $INPUTS_BASE_BRANCH"
+```
+
+The names are the ones the node's **own** workflow declared, at any nesting depth: a block
+three files deep still reads its own input names, not the caller's. Values are delivered
+through the environment and never spliced into the source, so a value containing shell
+metacharacters is data, not syntax. The load-time `$INPUTS.<name>` macro still substitutes
+into inline `bash:`/`script:` bodies as before — both channels work.
+
+`workflow:` sub-runs deliver the same `INPUTS_<UPPER_SNAKE>` variables, from inputs persisted
+in the child's run metadata.
 
 ### Non-goals (Phase 1)
 
@@ -1105,7 +1152,8 @@ whose concrete inputs are persisted in child-run metadata.
 - **Literal targets only.** `include:` takes a literal workflow name — no
   `include: $something` and no cross-repo includes.
 - **Not inside a `loop_group` body.** An include node nested in a `loop_group` body is
-  rejected at load time.
+  rejected at load time — and so is a `workflow:` node, which surprises people in both
+  directions. Neither keyword may appear in a loop-group body today.
 - **Depth-capped and cycle-checked.** Includes may nest up to 3 levels deep; cycles
   (`A` includes `B` includes `A`) and over-deep chains are load errors that drop only the
   offending workflow — other workflows still load.
@@ -1284,12 +1332,34 @@ points at the CLI and console. That gap is tracked in
 
 ---
 
-## Composing a Governed Sub-Run with `workflow:`
+## Launching a Separate Governed Run with `workflow:`
 
 A `workflow:` node runs another workflow as a **child sub-run** — a genuinely separate
 `workflow_runs` record with its own artifacts directory, its own approval gates, its own
 cost line, and its own audit trail. The child's terminal output threads back into the
 parent as `$<nodeId>.output`, exactly like any other node.
+
+### Choosing between `include:` and `workflow:`
+
+Both run another workflow as authored. They differ in how many *governance objects* exist,
+and three differences are the ones an author actually feels:
+
+| | `include:` — composition | `workflow:` — a separate launch |
+|---|---|---|
+| **The gate** | One run, one id. A human approves the run that composed the block. | Two runs. The human approves the **child** by its own run id; the parent stays paused and auto-resumes when the child finishes. |
+| **Command-body freshness** | The block's `command:` bodies are snapshotted at discovery, so a resumed run survives the file being deleted or edited. | The child re-reads its command bodies live when it starts. |
+| **`interactive:`** | One posture for the whole run — the top-level workflow's. A composed `approval:` node therefore requires `interactive: true` there. | The child has its own posture, independent of the parent's. |
+
+Reach for `include:` when you want one run made of reusable parts — the common case. Reach
+for `workflow:` when a human needs to approve, inspect or abandon one delegated unit
+**independently of its siblings and of its caller**, or when you want N runtime copies of
+one workflow (`fan_out:`). That independence is the one thing a single flat DAG cannot
+express, which is why both keywords exist.
+
+Because a composed block has no run of its own, the launch-only options are load errors on
+an `include:` node rather than silent no-ops: `isolation:`, `fan_out:`, `input:`, and
+`mutates_checkout:` each fail with a message naming the option and pointing here. A merely
+unread field (an AI option on an include node, say) still only warns.
 
 ```yaml
 nodes:

@@ -24,6 +24,7 @@ import type {
   WorkflowLoadResult,
   WorkflowWithSource,
   WorkflowSource,
+  DeclaredWorkflowConfig,
 } from './schemas';
 import { isIncludeNode } from './schemas';
 import * as archonPaths from '@archon/paths';
@@ -636,12 +637,21 @@ export async function discoverWorkflows(
       if (duplicateNames.has(workflow.name)) continue; // dropped as a duplicate-name collision
       const expanded = expandedByName.get(workflow.name);
       if (!expanded) continue; // expansion failed for this workflow — drop it
+      // Expansion collapses workflow-level node config onto the nodes and removes it
+      // (#1764), so the RAW parse is the only place left that knows what the author
+      // wrote. Captured here, where both forms are in hand, for display surfaces.
+      const declared: DeclaredWorkflowConfig = {
+        ...(workflow.provider !== undefined ? { provider: workflow.provider } : {}),
+        ...(workflow.model !== undefined ? { model: workflow.model } : {}),
+        ...(workflow.effort !== undefined ? { effort: workflow.effort } : {}),
+      };
       result.push({
         workflow: expanded,
         source,
         // Omitted rather than empty, matching the `errors` field on the same
         // surfaces: presence alone is the signal.
         ...(parseWarnings && parseWarnings.length > 0 ? { parseWarnings } : {}),
+        ...(Object.keys(declared).length > 0 ? { declared } : {}),
       });
     }
     return result;

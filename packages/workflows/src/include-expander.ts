@@ -31,7 +31,13 @@
  * silently break every rewritten `$id.output` reference. `__` is inside the legal
  * id character class, so `$review__scope.output` substitutes correctly.
  */
-import type { WorkflowDefinition, WorkflowLoadError, DagNode, IncludeNode } from './schemas';
+import type {
+  WorkflowDefinition,
+  WorkflowLoadError,
+  DagNode,
+  IncludeNode,
+  WorkflowRequirement,
+} from './schemas';
 import {
   isIncludeNode,
   isCommandNode,
@@ -42,6 +48,7 @@ import {
   isBashNode,
   isScriptNode,
   isWorkflowNode,
+  isPersistableNode,
   INPUT_NAME_SOURCE,
 } from './schemas';
 import { createLogger } from '@archon/paths';
@@ -49,10 +56,14 @@ import { validateDagStructure } from './loader';
 import { resolveDeclaredInputs } from './workflow-inputs';
 import {
   COMPILED_LOOP_COMMAND,
+  COMPOSED_NODE,
   isIncludeCommandReadError,
+  readComposedMeta,
+  type ComposedNodeMeta,
   type CompiledLoopCommand,
   type IncludeCommandContent,
   type LoopWithCompiledCommand,
+  type NodeWithComposedMeta,
 } from './compiled-command';
 
 /**
@@ -127,6 +138,139 @@ function applyWhenRefRename(text: string, rename: (id: string) => string): strin
 /** Internal signal for a per-workflow expansion failure (resilient: drop one, keep the rest). */
 class IncludeExpansionError extends Error {}
 
+// ---------------------------------------------------------------------------
+// Composed-node metadata (#1764)
+// ---------------------------------------------------------------------------
+
+/**
+ * Record where a node was authored, and what it was authored with. WRITE-ONCE per
+ * field: the innermost workflow that inlined this node already said the true thing,
+ * and an outer level re-stating it would replace one file's answer with another's.
+ * `blockEntry` is the exception — it is idempotently true, and a node can legitimately
+ * be the entry of two nested blocks at once.
+ */
+function markComposedNode(node: DagNode, patch: ComposedNodeMeta): void {
+  const target = node as DagNode & NodeWithComposedMeta;
+  const existing = target[COMPOSED_NODE];
+  if (existing === undefined) {
+    target[COMPOSED_NODE] = { ...patch };
+  } else if (patch.blockEntry === true) {
+    existing.blockEntry = true;
+  }
+  // A loop_group body node was authored in the same file and reads the same inputs, so
+  // it carries the same record — minus `blockEntry`, which is a position in the OUTER
+  // graph and means nothing inside a body.
+  if (isLoopGroupNode(node)) {
+    const inherited: ComposedNodeMeta = {
+      origin: patch.origin,
+      ...(patch.inputs !== undefined ? { inputs: patch.inputs } : {}),
+    };
+    for (const body of node.loop_group.nodes) markComposedNode(body, inherited);
+  }
+}
+
+/**
+ * Workflow-level fields that describe how a workflow's OWN NODES execute, paired with
+ * the node-level field each lands on. Every one has a node-level equivalent the DAG
+ * executor reads FIRST (`node.X ?? workflowLevelOptions.X`), so writing the value onto
+ * the node is equivalent to the workflow-level path — which is what lets the
+ * workflow-level layer be REMOVED afterwards (see `collapseWorkflowScope`).
+ *
+ * Absent on purpose:
+ *   - Run-owned fields (`interactive`, `worktree`, `container`, `evidence_policy`,
+ *     `mutates_checkout`) — decisions belonging to whoever started the run, not to the
+ *     file that happens to hold a node. These stay workflow-level and are warned about
+ *     when a composed workflow declares them.
+ *   - `webSearchMode` — node-affecting in spirit but the ONE workflow-level field with
+ *     no node-level counterpart (#2556 settled that it keeps none), so there is nowhere
+ *     to write it. It is a real hole in the invariant, stated in the drop-warning and in
+ *     the authoring guide rather than papered over with a node-level field.
+ */
+const NODE_AFFECTING_WORKFLOW_FIELDS: readonly (readonly [wfKey: string, nodeKey: string])[] = [
+  ['provider', 'provider'],
+  ['model', 'model'],
+  ['effort', 'effort'],
+  ['thinking', 'thinking'],
+  ['fallbackModel', 'fallbackModel'],
+  ['betas', 'betas'],
+  ['sandbox', 'sandbox'],
+  // The workflow-level default is plural; the node-level field is singular.
+  ['persist_sessions', 'persist_session'],
+];
+
+/**
+ * `model:` travels only to nodes that will run on the workflow's OWN provider.
+ *
+ * The executor applies a workflow-level model as `node.model ?? (provider ===
+ * workflowProvider ? workflowModel : <that provider's configured default>)`, so a node
+ * switching provider never inherits the other provider's model string. Copying the model
+ * onto such a node unconditionally would hand `gpt-5.6-sol` to Claude — a behaviour change
+ * dressed up as a no-op.
+ *
+ * When the workflow declares no `provider:` its effective provider is `config.assistant`,
+ * which load time cannot see. A node that names a provider explicitly is then treated as
+ * naming a DIFFERENT one, which is the fail-safe direction: the cost is that such a node
+ * falls back to its own provider's configured default instead of the workflow's model in
+ * the one case where the two happened to agree.
+ */
+function workflowModelTravelsTo(scope: Record<string, unknown>, node: DagNode): boolean {
+  const nodeProvider = (node as unknown as Record<string, unknown>).provider;
+  return nodeProvider === undefined || nodeProvider === scope.provider;
+}
+
+/** Write a workflow's own node-affecting config onto its own nodes, where absent. */
+function pushWorkflowScopeOntoNodes(scope: Record<string, unknown>, nodes: DagNode[]): void {
+  for (const node of nodes) {
+    // An include node carries no execution surface of its own — its target's nodes are
+    // collapsed against THEIR file, and inlining happens after this pass.
+    if (!isIncludeNode(node)) {
+      const target = node as unknown as Record<string, unknown>;
+      for (const [wfKey, nodeKey] of NODE_AFFECTING_WORKFLOW_FIELDS) {
+        const value = scope[wfKey];
+        if (value === undefined) continue;
+        if (target[nodeKey] !== undefined) continue; // the node's own value always wins
+        if (nodeKey === 'model' && !workflowModelTravelsTo(scope, node)) continue;
+        // `persist_session` only means something on a node that takes an AI turn and
+        // can resume one; annotating a bash node would make the loader's capability
+        // gate and the executor's scope predicate disagree about the same workflow.
+        if (nodeKey === 'persist_session' && !isPersistableNode(node)) continue;
+        target[nodeKey] = value;
+      }
+    }
+    if (isLoopGroupNode(node)) pushWorkflowScopeOntoNodes(scope, node.loop_group.nodes);
+  }
+}
+
+/**
+ * Collapse a workflow's node-affecting scope onto its own nodes and REMOVE that scope
+ * from the definition — the load-time transform behind "a workflow runs as authored"
+ * (#1764).
+ *
+ * The removal is the load-bearing half, not a tidy-up. Push-down alone leaves a node
+ * that declares nothing free to fall back to `workflowLevelOptions`, which after
+ * inlining belongs to whichever file composed it — so a block declaring no provider at
+ * all (the `archon-review-block` shape) still runs on the parent's. With the layer gone
+ * such a node resolves from config, tier presets and user prefs at run time, exactly as
+ * it would standalone.
+ *
+ * Runs on EVERY workflow, not only composed ones: a workflow must not behave differently
+ * depending on whether it happens to contain an `include:`. That is why the old
+ * byte-for-byte fast path for include-free workflows had to go.
+ */
+function collapseWorkflowScope(raw: WorkflowDefinition): WorkflowDefinition {
+  const collapsed: WorkflowDefinition = { ...raw, nodes: raw.nodes.map(cloneNodeForInclude) };
+  const scope = collapsed as unknown as Record<string, unknown>;
+  pushWorkflowScopeOntoNodes(scope, collapsed.nodes);
+  // Deleted, not set to `undefined`: the drop-warning derives its set from the child's OWN
+  // defined keys, so a key left present with an undefined value would still read as
+  // declared. The key set is this module's const tuple list, never caller input.
+  for (const [wfKey] of NODE_AFFECTING_WORKFLOW_FIELDS) {
+    // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
+    delete scope[wfKey];
+  }
+  return collapsed;
+}
+
 /**
  * Rewrite node-output references in a node's text-bearing fields via `rename`.
  * Mutates the (already-cloned) node in place. Recurses into loop_group bodies so a
@@ -149,15 +293,37 @@ class IncludeExpansionError extends Error {}
  * dag-executor.ts. Included loop-command bodies are validated separately during command
  * materialization, then their compiled prompts pass through this rewrite.
  *
- * applyInputsMacro is a SUPERSET of these node-ref surfaces, not a mirror: it additionally walks
- * systemPrompt and agents fields. Those fields accept include inputs but do not receive
- * node-output substitution at runtime, so they are not node-reference surfaces.
+ * applyInputsMacro walks the same field set. It used to be a deliberate SUPERSET — adding
+ * systemPrompt and agents, which took include inputs but no runtime substitution — and that
+ * asymmetry is what made a workflow using `$INPUTS.<name>` in a `systemPrompt:` resolve when
+ * composed and stay literal when run standalone (#2476). Those fields receive runtime
+ * substitution since #1764, so they are ordinary node-ref surfaces and are walked here too.
  */
 function rewriteNodeOutputRefs(node: DagNode, rename: (id: string) => string): void {
   const code = (text: string): string => applyOutputRefRename(text, rename);
   const whenExpr = (text: string): string => applyWhenRefRename(text, rename);
 
   if (node.when !== undefined) node.when = whenExpr(node.when);
+
+  // The composed-input stamp holds caller-supplied VALUES, which are live code/expression
+  // ref surfaces exactly like `workflow.with` above it — a value naming a node of the
+  // level now being inlined has to follow that node's rename. Walked outside the mode
+  // chain because any node type can carry a stamp.
+  const stamped = readComposedMeta(node)?.inputs;
+  if (stamped !== undefined) {
+    for (const [key, value] of Object.entries(stamped)) stamped[key] = code(value);
+  }
+
+  // Node-level AI configuration is a runtime ref surface too (#2476/#1764): the executor
+  // substitutes `$node.output` into these before the provider sees them, so an included
+  // block's refs must be namespaced here or they point at the pre-flatten id.
+  if (node.systemPrompt !== undefined) node.systemPrompt = code(node.systemPrompt);
+  if (node.agents !== undefined) {
+    for (const agent of Object.values(node.agents)) {
+      agent.prompt = code(agent.prompt);
+      agent.description = code(agent.description);
+    }
+  }
 
   if (isLoopNode(node)) {
     if (node.loop.prompt !== undefined) node.loop.prompt = code(node.loop.prompt);
@@ -214,9 +380,8 @@ function rewriteNodeOutputRefs(node: DagNode, rename: (id: string) => string): v
  *     the model as text, and because the field was never visited the name never reaches
  *     `missing` either — so a caller who forgot to supply it gets no load error.
  *
- * That is why systemPrompt / agents.*.prompt / agents.*.description are walked here even
- * though they are not node-output reference surfaces. Every model-facing string field must
- * be walked for include inputs, whether or not runtime also resolves node outputs there.
+ * Every model-facing string field must be walked for include inputs, whether or not runtime
+ * also resolves node outputs there.
  */
 function applyInputsMacro(node: DagNode, args: Record<string, string>, missing: Set<string>): void {
   const substitute = (text: string): string =>
@@ -235,6 +400,14 @@ function applyInputsMacro(node: DagNode, args: Record<string, string>, missing: 
     });
 
   if (node.when !== undefined) node.when = substitute(node.when);
+
+  // An inherited stamp's values may reference THIS level's inputs — `with: { plan:
+  // '$INPUTS.topic' }` one file down. Without this walk the stamp keeps the literal
+  // `$INPUTS.topic` and the composed script receives the token instead of the value.
+  const stamped = readComposedMeta(node)?.inputs;
+  if (stamped !== undefined) {
+    for (const [key, value] of Object.entries(stamped)) stamped[key] = substitute(value);
+  }
 
   // Base AI-turn fields — valid on every AI node mode (command / prompt / loop_group), so
   // they are walked outside the mode chain, like `when:`. Both go straight to the provider
@@ -318,11 +491,17 @@ function resolveIncludeInputs(
   }
 }
 
-/** structuredClone intentionally drops symbol keys; retain the engine-private compiled
- * loop metadata while cloning a reusable child for another include level. */
+/** structuredClone intentionally drops symbol keys; retain every engine-private
+ * per-node payload (compiled loop commands, the composition record) while cloning a
+ * reusable child for another include level. A payload missed here works at one nesting
+ * level and silently vanishes at two. */
 function cloneNodeForInclude(node: DagNode): DagNode {
   const clone = structuredClone(node);
-  const preserveCompiledLoops = (source: DagNode, target: DagNode): void => {
+  const preserveEngineMetadata = (source: DagNode, target: DagNode): void => {
+    const meta = readComposedMeta(source);
+    if (meta !== undefined) {
+      (target as DagNode & NodeWithComposedMeta)[COMPOSED_NODE] = structuredClone(meta);
+    }
     if (isLoopNode(source) && isLoopNode(target)) {
       const compiled = (source.loop as typeof source.loop & LoopWithCompiledCommand)[
         COMPILED_LOOP_COMMAND
@@ -335,11 +514,11 @@ function cloneNodeForInclude(node: DagNode): DagNode {
     if (isLoopGroupNode(source) && isLoopGroupNode(target)) {
       for (const [index, sourceChild] of source.loop_group.nodes.entries()) {
         const targetChild = target.loop_group.nodes[index];
-        if (targetChild !== undefined) preserveCompiledLoops(sourceChild, targetChild);
+        if (targetChild !== undefined) preserveEngineMetadata(sourceChild, targetChild);
       }
     }
   };
-  preserveCompiledLoops(node, clone);
+  preserveEngineMetadata(node, clone);
   return clone;
 }
 
@@ -392,6 +571,15 @@ function inlineInclude(
     // when the included block also has a node named `gather`.
     rewriteNodeOutputRefs(clone, rename);
     applyInputsMacro(clone, resolvedInputs, missingInputs);
+    // Stamped AFTER both passes, for the same reason the caller's values are inserted
+    // after the rename: these are the CALLER's strings, so they stay parent-scoped here
+    // and are walked by the next level out, not by this one. Each node gets its own copy
+    // so one node's rewrite cannot reach another's.
+    markComposedNode(clone, {
+      origin: child.name,
+      ...(Object.keys(resolvedInputs).length > 0 ? { inputs: { ...resolvedInputs } } : {}),
+      ...(wasEntry ? { blockEntry: true as const } : {}),
+    });
     clone.id = prefix + cn.id;
 
     if (wasEntry) {
@@ -466,19 +654,27 @@ const NON_DROPPED_WORKFLOW_KEYS: ReadonlySet<string> = new Set([
   // misleading.
   'returns',
   'inputs',
+  // #1764: unioned into the composing workflow's own requirement set, not dropped.
+  'requires',
 ]);
 
 /** Isolation/concurrency-safety fields — a silent drop of these is the most dangerous. */
-const SAFETY_WORKFLOW_KEYS: ReadonlySet<string> = new Set(['mutates_checkout', 'sandbox']);
+const SAFETY_WORKFLOW_KEYS: ReadonlySet<string> = new Set(['mutates_checkout']);
 
 /**
- * The included file's workflow-level fields are dropped (only its `nodes:` are inlined) —
- * emit a one-line load-time WARN so authors get a signal, since a silently-dropped
- * `requires`/`provider`/`mutates_checkout`/`sandbox`/… can change behavior under a
- * different parent. The dropped set is DERIVED from the child's own defined keys (not a
- * hand-maintained list) so any future workflow-level field is covered automatically —
- * parseWorkflow emits provider/model/webSearchMode/interactive as
- * always-present keys, so undefined values are filtered out.
+ * What remains of the included file's workflow-level configuration after the collapse is
+ * RUN-owned: isolation, interactivity, evidence policy, concurrency safety. Those are
+ * decisions belonging to whoever started the run, so a composed workflow cannot carry
+ * them — emit a one-line load-time WARN so the author who wrote them gets a signal.
+ *
+ * The set is DERIVED from the child's own defined keys rather than hand-maintained, so a
+ * future workflow-level field is covered automatically: it either travels (by joining
+ * NODE_AFFECTING_WORKFLOW_FIELDS, which deletes it before this runs), is consumed by
+ * inlining (NON_DROPPED_WORKFLOW_KEYS), or shows up here.
+ *
+ * `webSearchMode` is the one field that is neither run-owned nor able to travel — it has
+ * no node-level counterpart to land on (#2556) — so it is named explicitly rather than
+ * left to read as a run-level decision it is not.
  */
 function warnDroppedWorkflowLevelFields(includeNode: IncludeNode, child: WorkflowDefinition): void {
   const childRecord = child as Record<string, unknown>;
@@ -494,20 +690,59 @@ function warnDroppedWorkflowLevelFields(includeNode: IncludeNode, child: Workflo
       include: includeNode.id,
       target: child.name,
       droppedFields,
-      ...(child.requires?.includes('github')
+      ...(child.webSearchMode !== undefined
         ? {
-            requiresNote:
-              "requires:['github'] is dropped by inlining — declare it on the PARENT workflow if the block needs GitHub identity",
+            webSearchModeNote:
+              'webSearchMode: has no per-node form, so it cannot travel with a composed workflow — set it on the TOP-LEVEL workflow if the block relies on it (it then applies to every node in the run)',
           }
         : {}),
       ...(safetyDropped.length > 0
         ? {
-            safetyNote: `${safetyDropped.join(' and ')} affect isolation/concurrency safety — set them on the PARENT workflow if the block relies on them`,
+            safetyNote: `${safetyDropped.join(' and ')} affect isolation/concurrency safety and belong to the RUN — set them on the TOP-LEVEL workflow if the block relies on them`,
           }
         : {}),
     },
     'include.workflow_level_fields_dropped'
   );
+}
+
+/**
+ * A composed approval gate that the top-level workflow cannot drive is a load error.
+ *
+ * `interactive:` is read off the TOP-LEVEL workflow only (orchestrator-agent.ts), so an
+ * approval node that arrives through composition into a non-interactive parent is
+ * dispatched to the background on web: the gate still fires and is still resumable from
+ * the CLI or chat, but it cannot be driven inline — which is the single thing
+ * `interactive:` exists to guarantee. That degradation was silent, and the author who
+ * would notice it is the one who wrote the gate, in a different file.
+ *
+ * A parent's OWN approval node is unaffected: an author looking at one file can see
+ * both the gate and the missing `interactive:`.
+ */
+function findUndriveableComposedGate(
+  nodes: readonly DagNode[],
+  interactive: boolean
+): string | null {
+  if (interactive) return null;
+  const scan = (list: readonly DagNode[]): string | null => {
+    for (const node of list) {
+      const origin = readComposedMeta(node)?.origin;
+      if (origin !== undefined && isApprovalNode(node)) {
+        return (
+          `Node '${node.id}': composed workflow '${origin}' contains an approval gate, but this ` +
+          "workflow does not declare 'interactive: true'. A composed gate in a background run " +
+          "cannot be approved inline. Add 'interactive: true' to this workflow, or start the " +
+          "block as a separate governed run with a 'workflow:' node instead of 'include:'."
+        );
+      }
+      if (isLoopGroupNode(node)) {
+        const nested = scan(node.loop_group.nodes);
+        if (nested !== null) return nested;
+      }
+    }
+    return null;
+  };
+  return scan(nodes);
 }
 
 /**
@@ -665,19 +900,29 @@ export function expandWorkflowIncludes(
       throw new IncludeExpansionError(`include target '${name}' not found`);
     }
 
-    // Fast path: a workflow with no include nodes passes through byte-for-byte
-    // (never cloned, never re-validated — it already passed structure validation at
-    // parse time). Includers deep-clone its nodes when inlining, so this is safe.
-    if (!raw.nodes.some(isIncludeNode)) {
-      memo.set(name, raw);
-      return raw;
+    // Collapse this workflow's own node-affecting scope onto its own nodes BEFORE
+    // anything is inlined, so each node carries what its AUTHOR declared and the
+    // workflow-level layer is gone by the time a parent's could reach it. This replaces
+    // the old byte-for-byte fast path for include-free workflows — every workflow is
+    // cloned now, deliberately: the alternative is a workflow that behaves differently
+    // depending on whether it happens to contain an `include:`.
+    const collapsed = collapseWorkflowScope(raw);
+
+    if (!collapsed.nodes.some(isIncludeNode)) {
+      memo.set(name, collapsed);
+      return collapsed;
     }
 
     const newNodes: DagNode[] = [];
     const sinksByIncludeId = new Map<string, string[]>();
     const primarySinkByIncludeId = new Map<string, string>();
+    // Capability requirements union UPWARD (#1764): a composed workflow's `requires:` is
+    // a fact about what its nodes need, not a choice the composing run makes. Dropping it
+    // turned a clean pre-cost refusal into a mid-run failure inside a block the parent
+    // cannot inspect. A union can only make a run refuse EARLIER.
+    const requires: WorkflowRequirement[] = [...(collapsed.requires ?? [])];
 
-    for (const node of raw.nodes) {
+    for (const node of collapsed.nodes) {
       if (isIncludeNode(node)) {
         let child: WorkflowDefinition;
         try {
@@ -689,12 +934,16 @@ export function expandWorkflowIncludes(
           throw e;
         }
         warnDroppedWorkflowLevelFields(node, child);
+        requires.push(...(child.requires ?? []));
         const inlined = inlineInclude(node, child, commandContents ?? new Map());
         sinksByIncludeId.set(node.id, inlined.sinks);
         primarySinkByIncludeId.set(node.id, inlined.primarySink);
         newNodes.push(...inlined.namespaced);
       } else {
-        newNodes.push(structuredClone(node));
+        // Already a private clone — `collapseWorkflowScope` cloned every node before
+        // writing this workflow's config onto it, so the second pass below can mutate
+        // it without reaching the raw parsed definition discovery still holds.
+        newNodes.push(node);
       }
     }
 
@@ -716,14 +965,19 @@ export function expandWorkflowIncludes(
       throw new IncludeExpansionError(structureError);
     }
 
+    const gateError = findUndriveableComposedGate(newNodes, collapsed.interactive === true);
+    if (gateError !== null) throw new IncludeExpansionError(gateError);
+
+    const dedupedRequires = [...new Set(requires)];
     const result: WorkflowDefinition = {
-      ...raw,
+      ...collapsed,
       nodes: newNodes,
       // `returns:` may name an include directive that no longer exists after flattening.
       // Rebind it to the same primary sink used for `$includeId.output`; ordinary node ids
       // pass through unchanged. Without this, a nested reusable workflow can finish with a
       // dangling return id even though every node-level reference was rewritten correctly.
-      ...(raw.returns !== undefined ? { returns: renameIncludeRef(raw.returns) } : {}),
+      ...(collapsed.returns !== undefined ? { returns: renameIncludeRef(collapsed.returns) } : {}),
+      ...(dedupedRequires.length > 0 ? { requires: dedupedRequires } : {}),
     };
     memo.set(name, result);
     return result;

@@ -54,6 +54,7 @@ import {
   type WorkflowEmitterEvent,
 } from '@archon/workflows/event-emitter';
 import type {
+  DeclaredWorkflowConfig,
   WorkflowDefinition,
   WorkflowLoadResult,
   WorkflowSource,
@@ -594,17 +595,20 @@ async function assertCliWorkflowRequirementsMet(workflow: WorkflowDefinition): P
  * of falling back to a stale conversation default.
  */
 function resolveTitleAssistantType(
-  workflow: WorkflowDefinition,
+  declared: DeclaredWorkflowConfig | undefined,
   defaultAssistant: string | undefined,
   conversationAssistant: string | undefined
 ): string {
-  // Per CLAUDE.md, provider is resolved via an explicit chain:
-  // node.provider ?? workflow.provider ?? config.assistant. Model never
-  // influences provider selection — vendor SDKs add new model names faster
-  // than we can keep a mapping in sync.
+  // Reads what the AUTHOR declared, not the expanded definition: expansion collapses
+  // workflow-level config onto the nodes and removes it (#1764), so the expanded object
+  // has no `provider` and every Codex workflow would be labelled with the fallback.
+  //
+  // The top-level file's own `provider:` is the right answer even though a composition
+  // can span providers — no single label is fully true then, and the file the user
+  // invoked is the honest one. Model never influences provider selection: vendor SDKs
+  // add model names faster than a mapping could track.
   const fallbackAssistant = defaultAssistant ?? conversationAssistant ?? 'claude';
-  if (workflow.provider) return workflow.provider;
-  return fallbackAssistant;
+  return declared?.provider ?? fallbackAssistant;
 }
 
 /**
@@ -828,14 +832,18 @@ export async function workflowListCommand(cwd: string, json?: boolean): Promise<
 
   if (json) {
     const output = {
-      workflows: workflowEntries.map(({ workflow: w, parseWarnings }) => {
+      // `declared` rather than the expanded workflow: composition collapses these fields
+      // onto the nodes and removes them (#1764), so the listing reports what the author
+      // wrote. `webSearchMode` is the one that stays on the definition — it has no
+      // per-node form to collapse onto.
+      workflows: workflowEntries.map(({ workflow: w, parseWarnings, declared }) => {
         const entry: WorkflowJsonEntry = {
           name: w.name,
           description: w.description,
         };
-        if (w.provider !== undefined) entry.provider = w.provider;
-        if (w.model !== undefined) entry.model = w.model;
-        if (w.effort !== undefined) entry.effort = w.effort;
+        if (declared?.provider !== undefined) entry.provider = declared.provider;
+        if (declared?.model !== undefined) entry.model = declared.model;
+        if (declared?.effort !== undefined) entry.effort = declared.effort;
         if (w.webSearchMode !== undefined) entry.webSearchMode = w.webSearchMode;
         if (parseWarnings && parseWarnings.length > 0) entry.parseWarnings = [...parseWarnings];
         return entry;
@@ -861,11 +869,11 @@ export async function workflowListCommand(cwd: string, json?: boolean): Promise<
   if (workflowEntries.length > 0) {
     console.log(`\nFound ${workflowEntries.length} workflow(s):\n`);
 
-    for (const { workflow, parseWarnings } of workflowEntries) {
+    for (const { workflow, parseWarnings, declared } of workflowEntries) {
       console.log(`  ${workflow.name}`);
       console.log(`    ${workflow.description}`);
-      if (workflow.provider) {
-        console.log(`    Provider: ${workflow.provider}`);
+      if (declared?.provider) {
+        console.log(`    Provider: ${declared.provider}`);
       }
       for (const warning of parseWarnings ?? []) {
         console.log(`    Warning: ${warning}`);
@@ -981,6 +989,16 @@ export async function workflowRunCommand(
         : join(effectiveDiscoveryCwd, options.stubsPath)
       : undefined;
     const stubs = await loadDryRunStubs(stubsPath);
+    // The install's config + AI profile are what make the per-node provider/model report
+    // match a real run — tier keywords and `@alias` refs resolve through the same profile
+    // the executor builds. A config that fails to load degrades the report to the default
+    // assistant rather than failing the dry run.
+    let dryRunConfig: Awaited<ReturnType<typeof loadConfig>> | undefined;
+    try {
+      dryRunConfig = await loadConfig(effectiveDiscoveryCwd);
+    } catch (error) {
+      getLog().warn({ err: error as Error }, 'workflow.dry_run_config_load_failed');
+    }
     const result = await dryRunWorkflow({
       workflow,
       userMessage,
@@ -988,6 +1006,15 @@ export async function workflowRunCommand(
       stubs,
       execCode: options.execCode,
       pauseAtGates: options.pauseAtGates,
+      ...(dryRunConfig
+        ? {
+            config: dryRunConfig,
+            aiProfile: buildAiProfile(dryRunConfig.assistant, {
+              repoTiers: dryRunConfig.tiers,
+              repoAliases: dryRunConfig.aliases,
+            }),
+          }
+        : {}),
     });
     if (options.json) {
       await writeJsonLine(result);
@@ -1720,7 +1747,7 @@ export async function workflowRunCommand(
 
     try {
       const titleAssistantType = resolveTitleAssistantType(
-        workflow,
+        workflowEntry?.declared,
         workflowConfig?.assistant,
         conversation.ai_assistant_type
       );

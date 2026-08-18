@@ -58,7 +58,7 @@ Use `--no-worktree` only for tasks that don't modify code — questions, explora
 
 ### Worktrees from sub-runs
 
-A workflow can run another workflow as a governed child run. Those children normally share the parent's checkout, but a workflow author can give one its own worktree by writing `isolation: worktree` on the node — see [Composing a Governed Sub-Run](/guides/authoring-workflows/#composing-a-governed-sub-run-with-workflow).
+A workflow can run another workflow as a governed child run. Those children normally share the parent's checkout, but a workflow author can give one its own worktree by writing `isolation: worktree` on the node — see [Launching a Separate Governed Run](/guides/authoring-workflows/#launching-a-separate-governed-run-with-workflow).
 
 That's the second way a worktree gets created, and it's why `archon isolation list` sometimes shows branches you didn't name yourself, like `archon/task-3f9a1c2b-refactor-module-6fd3f873-child-0` — the parent run, the node that spawned the child, and which child it was. They're ordinary worktrees: `cleanup` and `complete` treat them exactly like any other, and like any other they stick around after the run so you can inspect or land the work.
 

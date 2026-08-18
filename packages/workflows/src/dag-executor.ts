@@ -87,7 +87,12 @@ import {
 } from './output-ref';
 import { buildTruncationMarker } from './utils/output-truncation';
 import { writeNodeArtifact, readNodeArtifacts } from './artifacts-index';
-import { COMPILED_LOOP_COMMAND, type LoopWithCompiledCommand } from './compiled-command';
+import {
+  COMPILED_LOOP_COMMAND,
+  readComposedMeta,
+  type LoopWithCompiledCommand,
+} from './compiled-command';
+import { assistantModelDefaults, resolveNodeModel } from './node-model-resolution';
 import {
   logNodeStart,
   logNodeComplete,
@@ -152,12 +157,70 @@ function resolveRunInputs(workflowRun: WorkflowRun): Record<string, string> | un
   return readSubrunMetadata(workflowRun.metadata as Record<string, unknown> | undefined).inputs;
 }
 
-/** Env-var bag delivering this run's named inputs to bash/script sub-run nodes (#2470). */
-function inputEnvVars(workflowRun: WorkflowRun): NodeJS.ProcessEnv {
-  const inputs = resolveRunInputs(workflowRun);
-  if (!inputs) return {};
+/**
+ * Env-var bag delivering named inputs to a bash/script node as `INPUTS_<UPPER_SNAKE>`.
+ *
+ * Two sources, in precedence order:
+ *   - the RUN's own inputs (#2470) — a `workflow:` sub-run child carries them in metadata.
+ *   - the node's COMPOSED inputs (#1764) — the contract-resolved `inputs:` of the workflow
+ *     this node was authored in, stamped at expansion when it arrived through `include:`.
+ *     These win: a node's own file is the nearer contract, and it is the only channel a
+ *     NAMED script file has (its source is opaque, so the load-time `$INPUTS` macro that
+ *     serves inline bodies can never reach it).
+ *
+ * Composed values are resolved here rather than at load time because they may hold
+ * `$ARTIFACTS_DIR` or a `$node.output` ref that only exists at run time. They are NOT
+ * shell-escaped — the env bag is itself the injection-safe channel (#2115), which is why
+ * these values never touch the script source.
+ */
+/**
+ * Resolve one composed-input VALUE for env delivery.
+ *
+ * The same two passes a `workflow:` node's `with:` map goes through: workflow variables
+ * (NOT shell-safe — these become env values, never shell source) then `$node.output`
+ * refs. Built once per node so both shell env bags stay byte-identical; a third
+ * hand-written copy is how the #2115 ordering rationale gets lost.
+ */
+function composedInputResolverFor(args: {
+  workflowRun: WorkflowRun;
+  artifactsDir: string;
+  stateDir: string;
+  baseBranch: string;
+  docsDir: string;
+  issueContext?: string;
+  nodeOutputs: Map<string, NodeOutput>;
+}): (raw: string) => string {
+  return raw =>
+    substituteNodeOutputRefs(
+      substituteWorkflowVariables(
+        raw,
+        args.workflowRun.id,
+        args.workflowRun.user_message,
+        args.artifactsDir,
+        args.baseBranch,
+        args.docsDir,
+        args.issueContext,
+        undefined,
+        undefined,
+        undefined,
+        { stateDir: args.stateDir, inputs: resolveRunInputs(args.workflowRun) }
+      ).prompt,
+      args.nodeOutputs
+    );
+}
+
+function inputEnvVars(
+  workflowRun: WorkflowRun,
+  node: DagNode,
+  resolveComposedValue: (raw: string) => string
+): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
-  for (const [name, value] of Object.entries(inputs)) env[inputEnvKey(name)] = value;
+  for (const [name, value] of Object.entries(resolveRunInputs(workflowRun) ?? {})) {
+    env[inputEnvKey(name)] = value;
+  }
+  for (const [name, value] of Object.entries(readComposedMeta(node)?.inputs ?? {})) {
+    env[inputEnvKey(name)] = resolveComposedValue(value);
+  }
   return env;
 }
 
@@ -773,9 +836,10 @@ function shellQuoteOrFile(
  *
  * KEEP IN SYNC: public YAML call sites, the loader's validateDagStructure scan, and
  * rewriteNodeOutputRefs must cover the same runtime node-ref surfaces. Included
- * loop-command bodies are validated separately during materialization. applyInputsMacro is
- * intentionally a superset because some AI configuration strings accept include inputs
- * without receiving runtime node-output substitution.
+ * loop-command bodies are validated separately during materialization. applyInputsMacro
+ * walks the same set since #1764 — `systemPrompt` and `agents.*` used to accept include
+ * inputs without receiving runtime substitution, which made one file behave differently
+ * composed and standalone (#2476); they are ordinary runtime surfaces now.
  *
  * @param escapedForBash - When true, wraps substituted values in single quotes so
  *   they are safe to embed in bash scripts passed to `bash -c`. Set true only for
@@ -986,8 +1050,16 @@ async function resolveNodeProviderAndModel(
   workflowRunId: string,
   _cwd: string,
   workflowLevelOptions: WorkflowLevelOptions,
-  aiProfile?: ResolvedAiProfile,
-  workflowPreset?: ModelAliasPreset,
+  aiProfile: ResolvedAiProfile | undefined,
+  workflowPreset: ModelAliasPreset | undefined,
+  /**
+   * Resolve workflow variables and `$node.output` refs in the node's AI-configuration
+   * text (#2476/#1764). Required rather than optional so a new call site has to decide:
+   * omitting it silently ships `$ARTIFACTS_DIR` and `$plan.output` to the provider as
+   * literal text, which is the defect this closes. Pass `text => text` only where the
+   * node is engine-synthesised and cannot carry these fields.
+   */
+  resolveAiText: (text: string) => string,
   execContext: ExecutionContext = { kind: 'host' }
 ): Promise<{
   provider: string;
@@ -996,46 +1068,47 @@ async function resolveNodeProviderAndModel(
   tier?: TierName;
   effort?: string;
 }> {
-  const configuredProvider: string = node.provider ?? workflowProvider;
-  let provider: string = configuredProvider;
-  let preset: ModelAliasPreset | undefined;
-  let model: string | undefined;
+  // The chain itself lives in node-model-resolution.ts so `workflow dry-run` reports the
+  // same answer this produces (#1764). Everything below is the part a dry run must NOT
+  // do: warn the user, throw, and build provider options.
+  const resolution = resolveNodeModel(
+    node,
+    {
+      provider: workflowProvider,
+      model: workflowModel,
+      preset: workflowPreset,
+      tier: workflowLevelOptions.workflowTier,
+      effort: workflowLevelOptions.effort,
+      // Only used to LABEL an inherited provider in a dry run; the executor discards it.
+      providerOrigin: 'workflow',
+    },
+    assistantModelDefaults(config),
+    aiProfile
+  );
+  const { provider, model, preset: effectivePreset } = resolution;
 
-  if (node.model) {
-    if (aiProfile) {
-      const modelSpec = resolveModelSpec(aiProfile, node.model);
-      if (isLiteralSpec(modelSpec)) {
-        model = modelSpec.literal;
-      } else {
-        preset = modelSpec;
-        provider = modelSpec.provider;
-        model = modelSpec.model;
-        if (node.provider && node.provider !== provider) {
-          getLog().warn(
-            {
-              nodeId: node.id,
-              configuredProvider: node.provider,
-              resolvedProvider: provider,
-              modelRef: node.model,
-            },
-            'dag.model_provider_conflict'
-          );
-          const delivered = await safeSendMessage(
-            platform,
-            conversationId,
-            `Warning: Node '${node.id}' sets provider '${node.provider}' but model '${node.model}' resolves to provider '${provider}' — using '${provider}'.`,
-            { workflowId: workflowRunId, nodeName: node.id }
-          );
-          if (!delivered) {
-            getLog().error(
-              { nodeId: node.id, workflowRunId },
-              'dag.model_provider_conflict_warning_delivery_failed'
-            );
-          }
-        }
-      }
-    } else {
-      model = node.model;
+  if (resolution.providerConflict) {
+    const conflict = resolution.providerConflict;
+    getLog().warn(
+      {
+        nodeId: node.id,
+        configuredProvider: conflict.declared,
+        resolvedProvider: conflict.resolved,
+        modelRef: conflict.modelRef,
+      },
+      'dag.model_provider_conflict'
+    );
+    const delivered = await safeSendMessage(
+      platform,
+      conversationId,
+      `Warning: Node '${node.id}' sets provider '${conflict.declared}' but model '${conflict.modelRef}' resolves to provider '${conflict.resolved}' — using '${conflict.resolved}'.`,
+      { workflowId: workflowRunId, nodeName: node.id }
+    );
+    if (!delivered) {
+      getLog().error(
+        { nodeId: node.id, workflowRunId },
+        'dag.model_provider_conflict_warning_delivery_failed'
+      );
     }
   }
 
@@ -1047,14 +1120,6 @@ async function resolveNodeProviderAndModel(
           .join(', ')}`
     );
   }
-
-  const providerAssistantConfig = config.assistants[provider];
-  model ??=
-    provider === workflowProvider
-      ? workflowModel
-      : (providerAssistantConfig?.model as string | undefined);
-  const effectivePreset =
-    preset ?? (!node.model && provider === workflowProvider ? workflowPreset : undefined);
 
   // Get provider capabilities for capability warnings (static lookup, no instantiation)
   const caps = getProviderCapabilities(provider);
@@ -1070,7 +1135,7 @@ async function resolveNodeProviderAndModel(
   const isCodex = provider === 'codex';
 
   // The one reasoning depth this node will run at, before any preset fallback.
-  const declaredEffort: string | undefined = node.effort ?? workflowLevelOptions.effort;
+  const declaredEffort = resolution.declaredEffort;
 
   // Runtime backstop for container dispatch: the run-start pre-scan
   // (collectContainerIncompatibleProviders) hand-mirrors this same provider
@@ -1148,7 +1213,24 @@ async function resolveNodeProviderAndModel(
   if (config.envVars && Object.keys(config.envVars).length > 0) {
     baseOptions.env = config.envVars;
   }
-  if (node.systemPrompt !== undefined) baseOptions.systemPrompt = node.systemPrompt;
+  // Resolved, never mutated in place: the node object is the shared definition and a loop
+  // or a resume would otherwise substitute into an already-substituted string.
+  const systemPrompt =
+    node.systemPrompt !== undefined ? resolveAiText(node.systemPrompt) : undefined;
+  const agents =
+    node.agents !== undefined
+      ? Object.fromEntries(
+          Object.entries(node.agents).map(([id, agent]) => [
+            id,
+            {
+              ...agent,
+              prompt: resolveAiText(agent.prompt),
+              description: resolveAiText(agent.description),
+            },
+          ])
+        )
+      : undefined;
+  if (systemPrompt !== undefined) baseOptions.systemPrompt = systemPrompt;
   if (node.maxBudgetUsd !== undefined) baseOptions.maxBudgetUsd = node.maxBudgetUsd;
   const fb = node.fallbackModel ?? workflowLevelOptions.fallbackModel;
   if (fb) baseOptions.fallbackModel = fb;
@@ -1162,7 +1244,7 @@ async function resolveNodeProviderAndModel(
     mcp: node.mcp,
     hooks: node.hooks,
     skills: node.skills,
-    agents: node.agents,
+    agents,
     // Portable per-node Pi extension posture (#2133) — Pi provider reads it as
     // the highest-precedence override; ignored by other providers.
     pi: node.pi,
@@ -1179,7 +1261,7 @@ async function resolveNodeProviderAndModel(
     betas: node.betas ?? workflowLevelOptions.betas,
     output_format: node.output_format,
     maxBudgetUsd: node.maxBudgetUsd,
-    systemPrompt: node.systemPrompt,
+    systemPrompt,
     fallbackModel: fb,
     settingSources: node.settingSources,
   };
@@ -1226,14 +1308,7 @@ async function resolveNodeProviderAndModel(
   // string (e.g. "opus"). Surface `tier` when the ref was a tier keyword — from
   // the node's own `model`, or (when the node inherits the workflow-level model)
   // from the workflow tier, mirroring the effectivePreset inheritance condition.
-  const tier: 'small' | 'medium' | 'large' | undefined =
-    node.model && isTierName(node.model)
-      ? node.model
-      : !node.model && provider === workflowProvider
-        ? workflowLevelOptions.workflowTier
-        : undefined;
-
-  return { provider, model, options, tier, effort: resolvedEffort };
+  return { provider, model, options, tier: resolution.tier, effort: resolvedEffort };
 }
 
 /** Evaluate trigger rule for a node given its upstream states */
@@ -2702,6 +2777,15 @@ async function executeBashNode(
   const finalScript = substituteNodeOutputRefs(substitutedScript, nodeOutputs, true, logDir);
 
   const timeout = node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT;
+  const composedInputResolver = composedInputResolverFor({
+    workflowRun,
+    artifactsDir,
+    stateDir,
+    baseBranch,
+    docsDir,
+    issueContext,
+    nodeOutputs,
+  });
   // Archon-managed env only — runSubprocess adds the host env for host runs and
   // delivers ONLY this bag into the container (host process.env never crosses).
   // Configured project env (envVars) spreads FIRST so the engine-reserved keys below
@@ -2712,10 +2796,11 @@ async function executeBashNode(
   // host token via runSubprocess's process.env layering — the scrub is unaffected.
   const subprocessEnv: NodeJS.ProcessEnv = {
     ...(envVars ?? {}),
-    // Named sub-run inputs as INPUTS_<UPPER_SNAKE> env vars (#2470). Spread after
-    // envVars so a configured project env var can never shadow an input's delivery,
-    // and before the engine-reserved keys so those still win (same ordering rationale).
-    ...inputEnvVars(workflowRun),
+    // Named run and composed-workflow inputs as INPUTS_<UPPER_SNAKE> env vars
+    // (#2470/#1764). Spread after envVars so a configured project env var can never
+    // shadow an input's delivery, and before the engine-reserved keys so those still
+    // win (same ordering rationale).
+    ...inputEnvVars(workflowRun, node, composedInputResolver),
     ARTIFACTS_DIR: artifactsDir,
     STATE_DIR: stateDir,
     LOG_DIR: logDir,
@@ -2981,6 +3066,15 @@ async function executeScriptNode(
   await warnOnLiteralUserVars(node, substitutedScript, platform, conversationId, nodeContext);
 
   const timeout = node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT;
+  const composedInputResolver = composedInputResolverFor({
+    workflowRun,
+    artifactsDir,
+    stateDir,
+    baseBranch,
+    docsDir,
+    issueContext,
+    nodeOutputs,
+  });
   // Archon-managed env only — runSubprocess adds the host env for host runs and
   // delivers ONLY this bag into the container (host process.env never crosses).
   // User-controlled values ride env vars (never spliced into source) — the
@@ -2991,9 +3085,10 @@ async function executeScriptNode(
   // and still override the ambient host token via runSubprocess (scrub unaffected).
   const subprocessEnv: NodeJS.ProcessEnv = {
     ...(envVars ?? {}),
-    // Named sub-run inputs as INPUTS_<UPPER_SNAKE> env vars (#2470) — same ordering
-    // rationale as executeBashNode: after envVars, before the engine-reserved keys.
-    ...inputEnvVars(workflowRun),
+    // Named run and composed-workflow inputs as INPUTS_<UPPER_SNAKE> env vars
+    // (#2470/#1764) — same ordering rationale as executeBashNode: after envVars,
+    // before the engine-reserved keys.
+    ...inputEnvVars(workflowRun, node, composedInputResolver),
     ARTIFACTS_DIR: artifactsDir,
     STATE_DIR: stateDir,
     LOG_DIR: logDir,
@@ -5623,6 +5718,9 @@ async function executeApprovalNode(
       workflowLevelOptions,
       aiProfile,
       workflowPreset,
+      // Engine-synthesised from `approval.on_reject.prompt` alone — it carries no
+      // systemPrompt/agents, so there is no AI-configuration text to resolve.
+      text => text,
       execContext
     );
 
@@ -7019,6 +7117,27 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
             );
           }
 
+          // `systemPrompt:` and `agents.*` go straight to the provider, so they get the
+          // same two substitution passes a `prompt:` does (#2476). Inside a loop_group
+          // body this reads the body's scoped `nodeOutputs`, matching every other surface.
+          const resolveAiConfigText = (text: string): string =>
+            substituteNodeOutputRefs(
+              substituteWorkflowVariables(
+                text,
+                workflowRun.id,
+                workflowRun.user_message,
+                artifactsDir,
+                baseBranch,
+                docsDir,
+                issueContext,
+                undefined,
+                undefined,
+                undefined,
+                { stateDir, inputs: resolveRunInputs(workflowRun) }
+              ).prompt,
+              ctx.nodeOutputs
+            );
+
           // 0. Skip if this node completed successfully in a prior run (resume path).
           // `always_run: true` opts the node out of resume caching — re-execute even
           // when the prior run completed it.
@@ -7256,6 +7375,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               workflowLevelOptions,
               aiProfile,
               workflowPreset,
+              resolveAiConfigText,
               execContext
             );
 
@@ -7308,6 +7428,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               workflowLevelOptions,
               aiProfile,
               workflowPreset,
+              resolveAiConfigText,
               execContext
             );
 
@@ -7464,6 +7585,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
             workflowLevelOptions,
             aiProfile,
             workflowPreset,
+            resolveAiConfigText,
             execContext
           );
 
@@ -7475,7 +7597,18 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
           // that created it, so the cursor is threaded only into nodes that resolve to the
           // SAME provider — on a provider change the node starts fresh instead of failing
           // (Claude) or silently cold-falling-back (Codex) on a foreign session id.
-          const isFreshSequential = isParallelLayer || node.context === 'fresh';
+          //
+          // A composed workflow's ENTRY node is the third fresh case (#1764). Standalone,
+          // that node runs first and has no cursor to inherit; composed, it would silently
+          // pick up the session of whatever the parent ran before it — the same file
+          // behaving differently depending on who composed it. The boundary is where a
+          // different file's history begins, so the cursor is cleared for the same reason
+          // a parallel layer clears it. `context: 'shared'` is the individual opt-out for
+          // an author who genuinely wants the parent's thread to continue into the block.
+          const composedBlockEntry =
+            readComposedMeta(node)?.blockEntry === true && node.context !== 'shared';
+          const isFreshSequential =
+            isParallelLayer || node.context === 'fresh' || composedBlockEntry;
           const cursor = ctx.lastSequentialSession;
           let resumeSessionId: string | undefined;
           if (isFreshSequential || cursor === undefined) {

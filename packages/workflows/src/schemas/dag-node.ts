@@ -919,22 +919,53 @@ export const dagNodeSchema = dagNodeFlatSchema
     // injected — never a silent shared-checkout fallback. On every OTHER node type
     // `isolation:` is meaningless (only a `workflow:` node spawns a child run) and
     // would be silently dropped — reject it fail-fast, mirroring the `with:` guard.
-    if (!hasWorkflow && data.isolation !== undefined) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "'isolation' is only supported on workflow (sub-run) nodes.",
-        path: ['isolation'],
-      });
-    }
-    // Dynamic fan-out (slice 2, PR-C) is meaningful ONLY on a `workflow:` node — it
-    // multiplies a child sub-run. On any other node type it would be silently dropped,
-    // so reject it fail-fast (mirrors the `isolation` guard above).
-    if (!hasWorkflow && data.fan_out !== undefined) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "'fan_out' is only supported on workflow (sub-run) nodes.",
-        path: ['fan_out'],
-      });
+    //
+    // On an `include:` node specifically these options are not merely meaningless, they
+    // express a LAUNCH intent composition cannot honour (#1764): an author who writes
+    // `isolation: worktree` on an include believes the block got its own checkout, and it
+    // did not. So the message names the option, why composition cannot honour it, and the
+    // keyword that can — rather than the generic "only on workflow nodes" line.
+    const LAUNCH_ONLY_ON_INCLUDE: readonly (readonly [keyof typeof data, string])[] = [
+      [
+        'isolation',
+        'a composed block runs inside the run that composed it, so it has no checkout of its own to isolate',
+      ],
+      [
+        'fan_out',
+        'composition inlines a fixed set of nodes at load time, so there is nothing to multiply per item',
+      ],
+      [
+        'input',
+        "a composed block reads named values as $INPUTS.<name>, supplied through 'with:' — there is no separate $ARGUMENTS for it",
+      ],
+    ];
+    if (hasInclude) {
+      for (const [field, why] of LAUNCH_ONLY_ON_INCLUDE) {
+        if (data[field] === undefined) continue;
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `'${field}' is not supported on an include node: ${why}. Use a 'workflow:' node instead when you want a separate governed run.`,
+          path: [field],
+        });
+      }
+    } else if (!hasWorkflow) {
+      if (data.isolation !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "'isolation' is only supported on workflow (sub-run) nodes.",
+          path: ['isolation'],
+        });
+      }
+      // Dynamic fan-out (slice 2, PR-C) is meaningful ONLY on a `workflow:` node — it
+      // multiplies a child sub-run. On any other node type it would be silently dropped,
+      // so reject it fail-fast (mirrors the `isolation` guard above).
+      if (data.fan_out !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "'fan_out' is only supported on workflow (sub-run) nodes.",
+          path: ['fan_out'],
+        });
+      }
     }
     // `first_success` racing is REJECTED, not deferred — the earlier deferral is dead. A
     // winner aborting and cancelling its losers is one child's outcome ending its siblings',

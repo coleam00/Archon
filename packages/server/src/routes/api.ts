@@ -3192,7 +3192,11 @@ export function registerApiRoutes(
 
       return c.json({
         workflows: result.workflows.map(ws => ({
-          workflow: ws.workflow,
+          // Display shows what the AUTHOR wrote. Composition collapses workflow-level
+          // node config onto the nodes and removes it (#1764), so the declared values are
+          // layered back over the definition for this listing only — the console reads
+          // `workflow.provider` to label a card, and execution never reads this response.
+          workflow: { ...ws.workflow, ...ws.declared },
           source: ws.source,
           // Keys the engine dropped from this YAML (#2213) — the console is the
           // surface most authors edit workflows on, so it has to carry them.

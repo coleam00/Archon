@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { makeTestWorkflow } from './test-utils';
 import { dryRunWorkflow, formatDryRunTrace, loadDryRunStubs } from './dry-run';
+import { buildAiProfile } from './model-validation';
+import { expandWorkflowIncludes } from './include-expander';
 
 const temporaryDirectories: string[] = [];
 
@@ -515,5 +517,122 @@ describe('dryRunWorkflow', () => {
 
     expect(formatDryRunTrace(result)).toContain('STUBBED   node (prompt)');
     expect(formatDryRunTrace(result)).toContain('Outcome: completed');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Per-node resolution reporting (#1764 Task 3).
+//
+// The answer to "I can't tell what provider this node will run on", and the reason
+// requiring provider+model on every node was rejected: legibility instead of redundancy.
+// ---------------------------------------------------------------------------
+
+describe('dryRunWorkflow — effective provider/model per node', () => {
+  const config = {
+    assistant: 'claude',
+    assistants: { claude: { model: 'claude-default' }, codex: { model: 'codex-default' } },
+    commands: {},
+    defaults: { loadDefaultCommands: false, loadDefaultWorkflows: false },
+  };
+  const aiProfile = buildAiProfile('claude', {
+    repoTiers: { large: { provider: 'codex', model: 'gpt-5.6-sol', effort: 'xhigh' } },
+  });
+
+  async function trace(nodes: unknown[]) {
+    const result = await dryRunWorkflow({
+      workflow: makeTestWorkflow({ name: 'resolve', nodes }),
+      userMessage: 'go',
+      cwd: process.cwd(),
+      stubs: Object.fromEntries((nodes as { id: string }[]).map(n => [n.id, 'ok'])),
+      config,
+      aiProfile,
+    });
+    return new Map(result.trace.map(e => [e.nodeId, e.resolution]));
+  }
+
+  test('reports a node-declared provider/model, and the config fallback for one that declares nothing', async () => {
+    const byId = await trace([
+      { id: 'bare', prompt: 'p' },
+      { id: 'own', prompt: 'p', provider: 'codex' },
+    ]);
+
+    expect(byId.get('bare')).toMatchObject({
+      provider: 'claude',
+      model: 'claude-default',
+      providerFrom: 'default assistant',
+    });
+    expect(byId.get('own')).toMatchObject({
+      provider: 'codex',
+      model: 'codex-default',
+      providerFrom: 'node',
+      modelFrom: 'assistant config',
+    });
+  });
+
+  test('reports a tier keyword resolved through the profile, with its effort', async () => {
+    const byId = await trace([{ id: 'tiered', prompt: 'p', model: 'large' }]);
+    expect(byId.get('tiered')).toMatchObject({
+      provider: 'codex',
+      model: 'gpt-5.6-sol',
+      providerFrom: 'model ref',
+      modelFrom: 'model ref',
+      effort: 'xhigh',
+      effortFrom: 'model ref',
+    });
+  });
+
+  test('names the workflow a composed node was authored in', async () => {
+    const block = makeTestWorkflow({
+      name: 'blk',
+      provider: 'codex',
+      nodes: [{ id: 'work', prompt: 'p' }],
+    });
+    const parent = makeTestWorkflow({
+      name: 'parent',
+      nodes: [{ id: 'inc', include: 'blk' }],
+    });
+    const { workflows } = expandWorkflowIncludes(
+      new Map([
+        ['blk', block],
+        ['parent', parent],
+      ])
+    );
+
+    const result = await dryRunWorkflow({
+      workflow: workflows.get('parent')!,
+      userMessage: 'go',
+      cwd: process.cwd(),
+      stubs: { inc__work: 'ok' },
+      config,
+      aiProfile,
+    });
+
+    // After the collapse the value lives ON the node, so `providerFrom` is 'node' —
+    // `authoredIn` is what tells the reader which file put it there.
+    expect(result.trace[0].resolution).toMatchObject({
+      provider: 'codex',
+      providerFrom: 'node',
+      authoredIn: 'blk',
+    });
+  });
+
+  test('non-AI nodes carry no resolution, and the text trace renders the report', async () => {
+    const result = await dryRunWorkflow({
+      workflow: makeTestWorkflow({
+        name: 'mixed',
+        nodes: [
+          { id: 'shell', bash: 'echo hi' },
+          { id: 'think', prompt: 'p', provider: 'codex' },
+        ],
+      }),
+      userMessage: 'go',
+      cwd: process.cwd(),
+      stubs: { shell: 'hi', think: 'ok' },
+      config,
+      aiProfile,
+    });
+
+    expect(result.trace.find(e => e.nodeId === 'shell')?.resolution).toBeUndefined();
+    expect(formatDryRunTrace(result)).toContain('runs on: codex (node) / codex-default');
   });
 });
