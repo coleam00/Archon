@@ -1061,7 +1061,7 @@ describe('ClaudeProvider', () => {
 
       // Must not throw at resolution time.
       for await (const _ of client.sendQuery('test', '/workspace', undefined, {
-        execContext: { kind: 'container', containerId: 'c-1' },
+        execContext: { kind: 'container', containerId: 'c-1', containerName: 'archon-c-1' },
       })) {
         // consume
       }
@@ -2454,7 +2454,7 @@ describe('sendQuery decomposition behaviors', () => {
       try {
         for await (const _ of client.sendQuery('test', workflowCwd, undefined, {
           env: { CLAUDE_CONFIG_DIR: configDir },
-          execContext: { kind: 'container', containerId: 'c-1' },
+          execContext: { kind: 'container', containerId: 'c-1', containerName: 'archon-c-1' },
           nodeConfig: { nodeId: 'container-skill', skills: ['user-only'] },
         })) {
           // consume
@@ -2476,7 +2476,7 @@ describe('sendQuery decomposition behaviors', () => {
       stageClaudeSkill('container-project-skill');
 
       for await (const _ of client.sendQuery('test', workflowCwd, undefined, {
-        execContext: { kind: 'container', containerId: 'c-1' },
+        execContext: { kind: 'container', containerId: 'c-1', containerName: 'archon-c-1' },
         nodeConfig: { nodeId: 'container-project', skills: ['container-project-skill'] },
       })) {
         // consume
