@@ -28,7 +28,7 @@ Determine the base branch from evidence, in order: an existing PR for this branc
 
 ## 4. Push and create
 
-Push with upstream tracking (`git push -u origin HEAD`). If the push is rejected or the remote diverged, stop and report — never rebase or force-push here. Create the PR against the resolved base, honoring draft mode, with the prepared title and body.
+Push with upstream tracking (`git push -u origin HEAD`). If the push is rejected or the remote diverged, stop and report — never rebase or force-push here. Create the PR against the resolved base, honoring draft mode, with the prepared title and body. Pin every PR command to the origin remote's repository (`--repo <owner>/<repo>`, derived from `git remote get-url origin`) — in a clone of a fork, the CLI's default resolution targets the fork's upstream parent, publishing the diff against a repository the author never chose.
 
 ## 5. Verify by reading back
 

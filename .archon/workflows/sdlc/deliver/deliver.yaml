@@ -168,8 +168,11 @@ nodes:
         # Mark the PR itself, not just the comment: the run ends here, so the
         # draft carries a visible needs-fixes label until a later delivery
         # clears it. Best-effort — labeling must not mask the real failure.
-        gh label create needs-fixes --color D93F0B --description "Automated review found blocking findings" 2>/dev/null || true
-        gh pr edit --add-label needs-fixes 2>/dev/null || true
+        # --repo pins to the origin remote (#2226): gh's default resolution in
+        # a fork clone targets the upstream parent instead.
+        ORIGIN_REPO=$(git remote get-url origin | sed -E 's#^.*[:/]([^/]+/[^/]+)$#\1#; s#\.git$##')
+        gh label create needs-fixes --repo "$ORIGIN_REPO" --color D93F0B --description "Automated review found blocking findings" 2>/dev/null || true
+        gh pr edit --repo "$ORIGIN_REPO" --add-label needs-fixes 2>/dev/null || true
         echo "review is not ready after two rounds and a fix pass — open findings remain in $ARTIFACTS_DIR/review/report.md and on the PR comment." >&2
         exit 1
       fi
@@ -203,13 +206,15 @@ nodes:
 
   - id: flip-ready
     bash: |
-      gh pr edit --remove-label needs-fixes 2>/dev/null || true
-      gh pr ready
-      draft=$(gh pr view --json isDraft --jq .isDraft)
+      # --repo pins to the origin remote (#2226) — see gate-ready.
+      ORIGIN_REPO=$(git remote get-url origin | sed -E 's#^.*[:/]([^/]+/[^/]+)$#\1#; s#\.git$##')
+      gh pr edit --repo "$ORIGIN_REPO" --remove-label needs-fixes 2>/dev/null || true
+      gh pr ready --repo "$ORIGIN_REPO"
+      draft=$(gh pr view --repo "$ORIGIN_REPO" --json isDraft --jq .isDraft)
       if [ "$draft" = "false" ]; then
-        gh pr view --json url --jq .url
+        gh pr view --repo "$ORIGIN_REPO" --json url --jq .url
       else
-        echo "flip-ready: PR still reports draft after gh pr ready" >&2
+        echo "flip-ready: PR still reports draft after the ready flip" >&2
         exit 1
       fi
     depends_on: [await-checks]
