@@ -5,15 +5,19 @@
  * Full integration tests would require mocking the database and commands.
  */
 import { describe, it, expect } from 'bun:test';
+import { Database } from 'bun:sqlite';
 import { parseArgs } from 'util';
 import * as git from '@archon/git';
 import { spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+const CLI_ENTRY = join(import.meta.dir, 'cli.ts');
+
 describe('CLI help output', () => {
   it('lists the workflow resume command', () => {
-    const result = spawnSync(process.execPath, [join(import.meta.dir, 'cli.ts'), '--help'], {
+    const result = spawnSync(process.execPath, [CLI_ENTRY, '--help'], {
       encoding: 'utf8',
     });
 
@@ -24,7 +28,7 @@ describe('CLI help output', () => {
   });
 
   it('documents workflow dry-run flags', () => {
-    const result = spawnSync(process.execPath, [join(import.meta.dir, 'cli.ts'), '--help'], {
+    const result = spawnSync(process.execPath, [CLI_ENTRY, '--help'], {
       encoding: 'utf8',
     });
 
@@ -67,6 +71,90 @@ describe('workflow get arguments', () => {
     );
     expect(result.stdout).toBe('');
   });
+});
+
+describe('CLI workflow event dispatch', () => {
+  it('resolves a run prefix using the registered effective cwd', () => {
+    const scratch = mkdtempSync(join(tmpdir(), 'archon-cli-event-'));
+    const archonHome = join(scratch, 'home');
+    const repoDir = join(scratch, 'repo');
+    mkdirSync(archonHome, { recursive: true });
+    mkdirSync(repoDir, { recursive: true });
+
+    try {
+      expect(spawnSync('git', ['init', '-q', '.'], { cwd: repoDir }).status).toBe(0);
+
+      const env = {
+        ...process.env,
+        ARCHON_HOME: archonHome,
+        ARCHON_TELEMETRY_DISABLED: '1',
+      };
+      const initialize = spawnSync(
+        process.execPath,
+        [CLI_ENTRY, 'workflow', 'status', '--cwd', repoDir],
+        { env, encoding: 'utf8' }
+      );
+      expect({ status: initialize.status, stderr: initialize.stderr }).toEqual({
+        status: 0,
+        stderr: '',
+      });
+
+      const fullRunId = '0b1ee8da-1111-2222-3333-444455556666';
+      const database = new Database(join(archonHome, 'archon.db'));
+      try {
+        database.run(
+          'INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES (?, ?, ?)',
+          ['codebase-1', 'fixture', realpathSync(repoDir)]
+        );
+        database.run(
+          'INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id, codebase_id) VALUES (?, ?, ?, ?)',
+          ['conversation-1', 'cli', 'cli-fixture', 'codebase-1']
+        );
+        database.run(
+          'INSERT INTO remote_agent_workflow_runs (id, conversation_id, codebase_id, workflow_name, user_message) VALUES (?, ?, ?, ?, ?)',
+          [fullRunId, 'conversation-1', 'codebase-1', 'fixture', 'test']
+        );
+      } finally {
+        database.close();
+      }
+
+      const emitted = spawnSync(
+        process.execPath,
+        [
+          CLI_ENTRY,
+          'workflow',
+          'event',
+          'emit',
+          '--run-id',
+          fullRunId.slice(0, 8),
+          '--type',
+          'workflow_started',
+          '--cwd',
+          repoDir,
+        ],
+        { env, encoding: 'utf8' }
+      );
+      expect({ status: emitted.status, stderr: emitted.stderr }).toEqual({ status: 0, stderr: '' });
+
+      const verify = new Database(join(archonHome, 'archon.db'), { readonly: true });
+      try {
+        const event = verify
+          .query<
+            { workflow_run_id: string; event_type: string },
+            []
+          >('SELECT workflow_run_id, event_type FROM remote_agent_workflow_events')
+          .get();
+        expect(event).toEqual({
+          workflow_run_id: fullRunId,
+          event_type: 'workflow_started',
+        });
+      } finally {
+        verify.close();
+      }
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  }, 30_000);
 });
 
 // Test the argument parsing logic used in cli.ts
