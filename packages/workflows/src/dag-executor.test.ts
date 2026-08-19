@@ -225,6 +225,7 @@ const mockClaudeCapabilities = () => ({
   settingSources: true,
   nativeTools: true,
   containerExec: true,
+  sessionFork: true,
 });
 /** Canonical capabilities for Codex-backed test nodes. */
 const mockCodexCapabilities = (): ReturnType<typeof getProviderCapabilities> =>
@@ -19507,7 +19508,9 @@ describe('executeDagWorkflow -- provider-boundary session threading (#1992)', ()
   });
 
   it("context: 'shared' on a parallel-layer node overrides the fresh default and resumes the prior sequential session", async () => {
-    mockSendQueryDag.mockImplementation(function* (prompt: string): Generator<MessageChunk> {
+    mockSendQueryDag.mockImplementation(async function* (
+      prompt: string
+    ): AsyncGenerator<MessageChunk> {
       if (prompt.includes('First')) {
         yield { type: 'assistant', content: 'first done' };
         yield { type: 'result', sessionId: 'sess-a' };
@@ -19555,7 +19558,9 @@ describe('executeDagWorkflow -- provider-boundary session threading (#1992)', ()
   });
 
   it("fails a node before dispatch when 2+ context: 'shared' siblings share a provider without session-fork support", async () => {
-    mockSendQueryDag.mockImplementation(function* (prompt: string): Generator<MessageChunk> {
+    mockSendQueryDag.mockImplementation(async function* (
+      prompt: string
+    ): AsyncGenerator<MessageChunk> {
       yield { type: 'assistant', content: 'done' };
       yield { type: 'result', sessionId: prompt.includes('First') ? 'sess-a' : 'sess-x' };
     });
@@ -19600,7 +19605,9 @@ describe('executeDagWorkflow -- provider-boundary session threading (#1992)', ()
     // Only one 'shared' sibling in the layer — an ordinary fork-on-resume, safe on
     // every provider regardless of sessionFork (the risk is concurrent resume of the
     // SAME session id, which requires 2+ shared siblings).
-    mockSendQueryDag.mockImplementation(function* (prompt: string): Generator<MessageChunk> {
+    mockSendQueryDag.mockImplementation(async function* (
+      prompt: string
+    ): AsyncGenerator<MessageChunk> {
       yield { type: 'assistant', content: 'done' };
       yield { type: 'result', sessionId: prompt.includes('First') ? 'sess-a' : 'sess-x' };
     });

@@ -5335,6 +5335,7 @@ nodes:
           settingSources: false,
           nativeTools: false,
           containerExec: false,
+          sessionFork: false,
         },
         factory: () => ({
           getType: () => 'no-resume-skip-test',
@@ -5355,6 +5356,7 @@ nodes:
             settingSources: false,
             nativeTools: false,
             containerExec: false,
+            sessionFork: false,
           }),
           // eslint-disable-next-line require-yield
           async *sendQuery() {
@@ -5404,6 +5406,7 @@ nodes:
           settingSources: false,
           nativeTools: false,
           containerExec: false,
+          sessionFork: false,
         },
         factory: () => ({
           getType: () => 'no-resume-test',
@@ -5424,6 +5427,7 @@ nodes:
             settingSources: false,
             nativeTools: false,
             containerExec: false,
+            sessionFork: false,
           }),
           // eslint-disable-next-line require-yield
           async *sendQuery() {
