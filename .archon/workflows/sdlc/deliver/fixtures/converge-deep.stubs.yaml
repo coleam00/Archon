@@ -1,5 +1,7 @@
-# Dry-run fixture: the DEEP converge path — both review rounds find blockers,
-# the second fix round clears them, validation gates, the run flips the PR.
+# Dry-run fixture: the DEEP converge path — both discovery review rounds find
+# blockers, the second fix clears them, code-scoped closure verifies the delta,
+# validation gates, and the run flips the PR. Run with --exec-code: the three
+# readiness flags and gate-ready execute for real, proving the marker join.
 impl__record-start: '{"start":"recorded"}'
 impl__implement:
   done: true
@@ -29,7 +31,6 @@ rev1__simplify: "skipped by chooser"
 rev1__synthesize:
   ready: false
   findings_summary: "stub: 3 Important findings open"
-flag1: '{"ready":"false"}'
 fix__record-start: '{"start":"recorded"}'
 fix__implement:
   done: true
@@ -57,16 +58,16 @@ rev2__simplify: "skipped by chooser"
 rev2__synthesize:
   ready: false
   findings_summary: "stub: two tail findings open"
-flag2: '{"ready":"false"}'
 fix2__record-start: '{"start":"recorded"}'
 fix2__implement:
   done: true
   green: true
-  summary: "stub: tail findings fixed, pushed, comment bookkeeping appended"
+  summary: "stub: tail findings fixed and pushed"
 fix2__record-green: '{"green":"recorded"}'
 fix2__assert-changed: "2 files changed"
-flag3: '{"ready":"true"}' 
-gate-ready: '{"ready":"true"}'
+rev3:
+  ready: true
+  findings_summary: "stub: prior blockers fixed; correction delta is clean"
 validate__validate:
   green: true
   summary: "stub: full gate green"

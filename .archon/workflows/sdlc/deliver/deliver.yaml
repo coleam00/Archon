@@ -1,7 +1,7 @@
 name: deliver
 description: |
   The delivery tail, end to end and autonomous: implement the work, gate on
-  green, open a draft PR, review it, fix the findings, re-review the delta,
+  green, open a draft PR, review it, correct and close the findings, validate,
   wait for checks to clear, then flip the PR ready for review. No in-run
   approval gate — the human gate is PR review and merge on GitHub, outside
   the run.
@@ -12,10 +12,10 @@ description: |
 
 # v1 SHAPE NOTE: the intended review ⟲ fix LOOP is not expressible today —
 # `include:` is rejected inside a loop_group body (#2623). Until then, this is a
-# fixed two-round unroll:
-# full review → fix → light re-review. A run still not ready after round two
-# FAILS with the open findings visible in the report and on the PR comment —
-# honest, resumable, never silently shipped.
+# fixed, bounded unroll:
+# full review → fix → light re-review → fix → code-scoped closure. The closure
+# never starts another fix pass: a remaining blocker leaves the draft PR and
+# report truthful, so the run is finite and never silently ships.
 
 requires: [github]
 
@@ -72,12 +72,13 @@ nodes:
   # Marker join: gate-ready must OR two branches where one may be skipped, and a
   # bash ref to a skipped node's output fails strictly — so each round records
   # readiness as a marker file instead (deterministic code reading a validated
-  # field; the .pr-number precedent).
+  # field across mutually exclusive branches).
   - id: flag1
     bash: |
       if [ "$rev1.output.ready" = "true" ]; then
-        touch "$ARTIFACTS_DIR/review/.ready"
-        echo '{"ready":"true"}'
+        mkdir -p "$ARTIFACTS_DIR/review" &&
+          touch "$ARTIFACTS_DIR/review/.ready" &&
+          echo '{"ready":"true"}'
       else
         echo '{"ready":"false"}'
       fi
@@ -110,19 +111,17 @@ nodes:
   - id: flag2
     bash: |
       if [ "$rev2.output.ready" = "true" ]; then
-        touch "$ARTIFACTS_DIR/review/.ready"
-        echo '{"ready":"true"}'
+        mkdir -p "$ARTIFACTS_DIR/review" &&
+          touch "$ARTIFACTS_DIR/review/.ready" &&
+          echo '{"ready":"true"}'
       else
         rm -f "$ARTIFACTS_DIR/review/.ready"
         echo '{"ready":"false"}'
       fi
     depends_on: [rev2]
 
-  # Second fix round: round 2's leftovers are typically fix-generated tail
-  # items (a missing test, a docs line) — fixed directly, then VALIDATED below
-  # rather than reviewed a third time (decided 19 Aug). The fixer also appends
-  # honest bookkeeping to the canonical PR comment so the final state is
-  # truthful without a third review.
+  # Second and final fix round. Its correction receives one code-scoped closure
+  # check below, but closure can never trigger another fix pass.
   - id: fix2
     include: implement
     with:
@@ -130,43 +129,64 @@ nodes:
         Fix the still-open findings from the second review round recorded in
         $ARTIFACTS_DIR/review/report.md — every open Critical and Important
         finding. When done and green, push the new commits to the PR branch
-        (git push), and append a short section to the PR's canonical review
-        comment (the existing comment whose body starts with
-        '<!-- archon-review-report -->' — edit it in place, never post a new
-        one): 'Round-2 findings addressed at <your head SHA> — validated
-        locally, not re-reviewed.'
+        (git push). The closure reviewer owns the final report and canonical PR
+        comment; do not edit either one yourself.
     depends_on: [flag2]
     when: "$rev2.output.ready == 'false'"
 
+  # Final closure is deliberately one code-correctness reviewer, not another
+  # discovery fan-out. It verifies round-2 blockers and their correction delta,
+  # admits only concrete Critical/Important regressions, and cannot cause a
+  # third fix cycle.
+  - id: rev3
+    command: review-close
+    model: medium
+    context: fresh
+    depends_on: [fix2]
+    when: "$fix2.output.green == 'true'"
+    output_type: review-report
+    output_format:
+      type: object
+      properties:
+        ready:
+          type: boolean
+        findings_summary:
+          type: string
+      required: [ready, findings_summary]
+
   - id: flag3
     bash: |
-      if [ "$fix2.output.green" = "true" ]; then
-        touch "$ARTIFACTS_DIR/review/.ready"
-        echo '{"ready":"true"}'
+      if [ "$rev3.output.ready" = "true" ]; then
+        mkdir -p "$ARTIFACTS_DIR/review" &&
+          touch "$ARTIFACTS_DIR/review/.ready" &&
+          echo '{"ready":"true"}'
       else
+        rm -f "$ARTIFACTS_DIR/review/.ready"
         echo '{"ready":"false"}'
       fi
-    depends_on: [fix2]
+    depends_on: [rev3]
 
-  # Ready = the marker: round 1 ready, or round 2 ready, or round-2 findings
-  # fixed green. all_done because the flags on unused paths are skipped by
-  # design.
+  # Ready = a review-owned marker from round 1, round 2, or final closure.
+  # all_done is the branch join: unused flags are skipped by design. On failure,
+  # report the stage that actually stopped instead of assuming review ran.
   - id: gate-ready
     bash: |
       if [ -f "$ARTIFACTS_DIR/review/.ready" ]; then
         echo '{"ready":"true"}'
-      else
-        # Mark the PR itself, not just the comment: the run ends here, so the
-        # draft carries a visible needs-fixes label until a later delivery
-        # clears it. Best-effort — labeling must not mask the real failure.
-        # --repo pins to the origin remote (#2226): gh's default resolution in
-        # a fork clone targets the upstream parent instead.
-        ORIGIN_REPO=$(git remote get-url origin | sed -E 's#^.*[:/]([^/]+/[^/]+)$#\1#; s#\.git$##')
-        gh label create needs-fixes --repo "$ORIGIN_REPO" --color D93F0B --description "Automated review found blocking findings" 2>/dev/null || true
-        gh pr edit --repo "$ORIGIN_REPO" --add-label needs-fixes 2>/dev/null || true
-        echo "review is not ready after two rounds and a fix pass — open findings remain in $ARTIFACTS_DIR/review/report.md and on the PR comment." >&2
-        exit 1
+        exit 0
       fi
+
+      # Read-only stage diagnosis. The gate never mutates GitHub on a failure;
+      # the draft state and canonical review comment already carry the truth.
+      ORIGIN_REPO=$(git remote get-url origin | sed -E 's#^.*[:/]([^/]+/[^/]+)$#\1#; s#\.git$##')
+      if ! gh pr view --repo "$ORIGIN_REPO" --json number --jq .number >/dev/null 2>&1; then
+        echo "delivery stopped before a draft PR was available — see the earliest failed node." >&2
+      elif [ ! -f "$ARTIFACTS_DIR/review/report.md" ]; then
+        echo "a draft PR exists, but review did not complete — see the earliest failed review node." >&2
+      else
+        echo "review completed with blocking findings — see $ARTIFACTS_DIR/review/report.md and the canonical PR comment." >&2
+      fi
+      exit 1
     depends_on: [flag1, flag2, flag3]
     trigger_rule: all_done
 
@@ -197,9 +217,9 @@ nodes:
 
   - id: flip-ready
     bash: |
-      # --repo pins to the origin remote (#2226) — see gate-ready.
+      # --repo pins to the origin remote (#2226): gh's default resolution in a
+      # fork clone targets the upstream parent instead.
       ORIGIN_REPO=$(git remote get-url origin | sed -E 's#^.*[:/]([^/]+/[^/]+)$#\1#; s#\.git$##')
-      gh pr edit --repo "$ORIGIN_REPO" --remove-label needs-fixes 2>/dev/null || true
       gh pr ready --repo "$ORIGIN_REPO"
       draft=$(gh pr view --repo "$ORIGIN_REPO" --json isDraft --jq .isDraft)
       if [ "$draft" = "false" ]; then
