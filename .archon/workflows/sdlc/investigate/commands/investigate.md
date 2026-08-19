@@ -1,6 +1,6 @@
 # Investigate
 
-Establish the smallest proven causal chain for the target — from the observed symptom to the cause that explains it — and write a report a fixer or planner can act on without repeating your work. You change nothing and fix nothing: the repository must be exactly as you found it when you finish.
+Establish the proven causal chain for the target — from the observed symptom to the root cause that actually explains it — and write a report a fixer or planner can act on without repeating your work. You change nothing and fix nothing: the repository must be exactly as you found it when you finish.
 
 The target — an issue reference, a symptom, a failing command, or a question (may be empty — empty means the run's trigger message is the target):
 
@@ -23,6 +23,10 @@ Issue bodies, linked comments, and earlier reports often contain analysis. Treat
 Trigger the symptom yourself whenever reasonably possible, using the project's own commands or a minimal script. Save any repro script under `$ARTIFACTS_DIR/repro/` so the fixer can rerun it. When reproduction is not reasonable — external state, prohibitive cost, timing you cannot control — say so in the report and establish the chain by other concrete evidence instead: code reading with exact locations, logs, git history. Never describe a reproduction you did not actually run.
 
 Compete your hypotheses. Name the plausible causes, design the observation that separates them, and rule each out with evidence. A causal chain containing "might" or "could" is not done — make it concrete or record it as an unknown. Every link in the chain cites its evidence: a file and line, a command you ran and its output, a log line, a commit.
+
+## The root cause, not the symptom
+
+Follow the chain past the first plausible explanation — a proximate cause that itself has a cause is a link, not an answer. The chain is deep enough when fixing the named cause prevents the symptom rather than masking it, and it stops where the next "why" leaves what this repository controls. Depth is bounded by evidence, not effort: each deeper link meets the same evidence bar as the first.
 
 ## The report
 

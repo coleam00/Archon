@@ -1,9 +1,10 @@
 name: investigate
 description: |
-  Establish the smallest proven causal chain for a bug, unexplained behavior, or
-  open question, and write an evidence-backed report a fixer or planner can act
-  on without repeating the work. Advisory: it reads, reproduces, and reports —
-  the repository is left exactly as it was found.
+  Establish the proven causal chain for a bug, unexplained behavior, or open
+  question — to the root cause whose fix prevents the symptom, never the first
+  plausible explanation — and write an evidence-backed report a fixer or
+  planner can act on without repeating the work. Advisory: it reads,
+  reproduces, and reports — the repository is left exactly as it was found.
 
   Use when: the cause is not yet known — "investigate this issue", "why does
   this fail", "root-cause this before we fix it".
