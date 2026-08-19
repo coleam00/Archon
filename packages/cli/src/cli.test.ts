@@ -9,7 +9,7 @@ import { Database } from 'bun:sqlite';
 import { parseArgs } from 'util';
 import * as git from '@archon/git';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -83,6 +83,11 @@ describe('CLI workflow event dispatch', () => {
 
     try {
       expect(spawnSync('git', ['init', '-q', '.'], { cwd: repoDir }).status).toBe(0);
+      const repoRoot = spawnSync('git', ['rev-parse', '--show-toplevel'], {
+        cwd: repoDir,
+        encoding: 'utf8',
+      });
+      expect(repoRoot.status).toBe(0);
 
       const env = {
         ...process.env,
@@ -104,7 +109,7 @@ describe('CLI workflow event dispatch', () => {
       try {
         database.run(
           'INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES (?, ?, ?)',
-          ['codebase-1', 'fixture', realpathSync(repoDir)]
+          ['codebase-1', 'fixture', repoRoot.stdout.trim()]
         );
         database.run(
           'INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id, codebase_id) VALUES (?, ?, ?, ?)',
