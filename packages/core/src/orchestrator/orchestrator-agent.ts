@@ -1351,6 +1351,13 @@ async function runDefaultWorkflow(
     'orchestrator.default_workflow_started'
   );
   try {
+    // Thread through the same parseWarnings a manual `/workflow run` would
+    // show (see the `result.workflow.parseWarnings` call site below) —
+    // without this, a workflow reached only via `defaultWorkflows:` dispatch
+    // would silently hide warnings about YAML keys the engine dropped,
+    // exactly the "warnings appear valid" risk CodeRabbit's review flagged
+    // for this PR.
+    const resolvedEntry = discovered.find(w => w.workflow.name === workflow.name);
     await handleWorkflowRunCommand(
       platform,
       conversationId,
@@ -1358,7 +1365,8 @@ async function runDefaultWorkflow(
       workflow,
       message,
       isolationHints,
-      userId
+      userId,
+      { parseWarnings: resolvedEntry?.parseWarnings }
     );
   } catch (error) {
     // Re-thrown, not swallowed — `handleMessage`'s catch is what tells the

@@ -2499,6 +2499,43 @@ describe('paused approval gate routing', () => {
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
 
+  // A workflow reached via defaultWorkflows: dispatch must surface the same
+  // parseWarnings a manual `/workflow run` would (see the "mirrors parse
+  // warnings" tests below) — runDefaultWorkflow used to drop them entirely.
+  test('a dispatched default workflow surfaces its own parse warnings', async () => {
+    const codebase = makeApprovalCodebase();
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeConversation({ codebase_id: 'codebase-1', cwd: '/repos/test-repo' }))
+    );
+    mockGetCodebase.mockImplementation(() => Promise.resolve(codebase));
+    mockListCodebases.mockImplementation(() => Promise.resolve([codebase]));
+    mockLoadConfig.mockImplementationOnce(() =>
+      Promise.resolve({
+        assistants: { claude: {}, codex: {} },
+        envVars: {},
+        defaultWorkflows: { 'test-repo': 'intake-workflow' },
+      })
+    );
+    mockDiscoverWorkflowsWithConfig.mockImplementation(() =>
+      Promise.resolve({
+        workflows: [
+          makeTestWorkflowWithSource({ name: 'intake-workflow' }, 'project', [
+            "Node 'plan': unknown key 'interactive' will be ignored.",
+          ]),
+        ],
+        errors: [],
+      })
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'log this receipt');
+
+    expect(platform.sendMessage).toHaveBeenCalledWith(
+      'conv-1',
+      expect.stringContaining("unknown key 'interactive' will be ignored")
+    );
+  });
+
   // ── The removed behaviour: prose no longer decides the gate ────────────────
 
   test('an approving-sounding message no longer resolves the gate by itself', async () => {

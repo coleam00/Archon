@@ -132,6 +132,70 @@ touch only `packages/workflows/`; this branch's changes are scoped entirely to
 and docs — no file overlap, so `git rebase origin/dev` fast-forwarded cleanly. Full re-validation
 below.
 
+## Fix (2026-08-19, cont'd) — dispatched workflows were silently hiding their own parse warnings
+
+CodeRabbit's initial walkthrough on this PR flagged a **Moderate merge risk** (not one of the
+three numbered review threads above, so it never got a "confirmed addressed" reply): "Mapped
+workflows can run while hiding warnings about ignored YAML configuration, making configuration
+mistakes appear valid." That risk was real and had never actually been fixed.
+
+`runDefaultWorkflow()` (`orchestrator-agent.ts`) discovers workflows via `discoverAllWorkflows()`,
+which returns `WorkflowWithSource[]` entries carrying `parseWarnings?`. It mapped that array down
+to bare `WorkflowDefinition`s (`available = discovered.map(w => w.workflow)`) before calling
+`resolveWorkflowName()`, then called `handleWorkflowRunCommand()` with no 8th `options` argument
+at all. Compare to the manual `/workflow run <name>` path, which threads
+`result.workflow.parseWarnings` through to the same function (see the "mirrors parse warnings"
+tests). Net effect: a workflow with keys the engine silently drops (`#2213`) would warn the user
+when run via `/workflow run`, but say nothing at all when reached only through `defaultWorkflows:`
+dispatch — the exact "configuration mistakes appear valid" failure mode CodeRabbit named.
+
+Fixed: `runDefaultWorkflow` now looks up the resolved workflow's own discovery entry
+(`discovered.find(w => w.workflow.name === workflow.name)`) and passes its `parseWarnings` through
+to `handleWorkflowRunCommand`. New regression test in `orchestrator-agent.test.ts` ("a dispatched
+default workflow surfaces its own parse warnings") — verified it fails without the fix. Suite is
+now 237/237 (up from 236).
+
+Also found and fixed while re-auditing this PR's CodeRabbit findings: the "docs: restore
+project-to-defaultWorkflow-mapping .docs" commit had reintroduced the pre-fix `/\w+`
+slash-command language into `prd.md`/`issue.md`/`pr.md` (this file) that CodeRabbit's Minor
+finding above already got fixed in `configuration.md` — the restore evidently pulled an older
+version of these three files. Corrected all three back to "starts with `/`, including a bare
+`/`", matching `resolveDispatch()` and its own test.
+
+## Rebase (2026-08-19, cont'd)
+
+Rebased onto `dev` at `d558cd08` (5 commits ahead of this branch's previous base, `240d3a27`:
+`feat(workflows): allow reusable blocks inside loop groups (#2623)` and its follow-up fixes,
+all scoped to `packages/workflows/`) — **zero conflicts**, no file overlap with this branch's
+`packages/core/` changes.
+
+Full CONTRIBUTING.md validation sweep re-run post-rebase (2026-08-19, cont'd):
+
+- `check:bundled`, `check:bundled-skill`, `check:bundled-schema`, `check:pi-vendor-map`,
+  `check:capability-matrix`: **PASS**.
+- `type-check`: **PASS** — all 10 packages, 0 errors.
+- `lint --max-warnings 0`: **PASS** — 0 warnings.
+- `format:check`: **PASS**.
+- `bun run test:install` fails immediately on this Windows host — a host-platform gate, not a
+  test result; skipped per CONTRIBUTING.md, as before.
+- `bun run test` (root): `--parallel` SIGINT'd several packages the instant `@archon/cli`'s
+  known pre-existing `serve.test.ts` tar-path failure exited non-zero — re-ran `core`,
+  `adapters`, `server`, `isolation`, `providers`, and `workflows` individually to get real
+  verdicts (same pattern as every prior rebase in this history):
+  - `@archon/core`: **0 fail**, 526+ tests across every isolated invocation, including
+    `dispatch.test.ts` (21/21) and `orchestrator-agent.test.ts` (**237/237**, up from 236 with
+    this session's new regression test).
+  - `@archon/adapters`, `@archon/server`, `@archon/isolation`: **0 fail**.
+  - `@archon/providers`, `@archon/workflows`: 1 fail each — both the same pre-existing,
+    deterministic Windows-host `EPERM` symlink failures tracked since the first rebase
+    (`claude/binary-resolver.test.ts`'s `pathKind` test; `load-command-prompt.test.ts`'s
+    symlinked-home-command test). Unchanged root cause, unrelated to this branch.
+  - `@archon/cli`: 2 fail — the same pre-existing `tar` path-quoting bug in `serve.test.ts`.
+  - `@archon/web`, `@archon/paths`, `@archon/git`: **0 fail** (ran to completion before the
+    SIGINT, per the log).
+- All test runs were on **Windows**, not the Linux CI platform. A CI run is still the
+  authoritative gate.
+
 ## Validation Evidence (required)
 
 Commands and result summary (re-run post-rebase, 2026-08-13):
