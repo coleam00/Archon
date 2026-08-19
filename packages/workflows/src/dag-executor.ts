@@ -7240,6 +7240,14 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
   for (let layerIdx = 0; layerIdx < layers.length; layerIdx++) {
     const layer = layers[layerIdx];
     const isParallelLayer = layer.length > 1;
+    // Two or more siblings resuming the SAME upstream session concurrently is only
+    // safe on a provider whose forkSession genuinely copies the session (Claude).
+    // A single shared sibling is an ordinary fork-on-resume, safe on every provider —
+    // the risk is specific to CONCURRENT resume of one session id, which only exists
+    // when 2+ nodes in this layer both opt in.
+    const sharedSiblingCount = isParallelLayer
+      ? layer.filter(n => n.context === 'shared').length
+      : 0;
 
     // Execute all nodes in the layer concurrently. `sessionProvider` is the resolved
     // provider that produced `output.sessionId` — set only by the session-producing
@@ -7749,6 +7757,29 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
             ctx.warnedProviderConflicts,
             execContext
           );
+
+          // Concurrent-fork guard: 2+ context:'shared' siblings in this layer will all
+          // resume the SAME upstream session id at the same time. Only a provider whose
+          // forkSession genuinely copies the session (sessionFork capability) can do that
+          // safely — one that ignores the flag can interleave/corrupt the shared session,
+          // and one that discards it silently drops the shared context the author asked
+          // for. Fails before dispatch rather than warning: this exact combination (a
+          // parallel layer with multiple context:'shared' nodes) is new in this change,
+          // so there is no existing workflow whose behavior this could regress.
+          if (
+            isParallelLayer &&
+            node.context === 'shared' &&
+            sharedSiblingCount > 1 &&
+            !getProviderCapabilities(provider).sessionFork
+          ) {
+            throw new Error(
+              `Node '${node.id}' uses context: 'shared' alongside ${sharedSiblingCount - 1} ` +
+                `other shared sibling(s) in the same parallel layer, but provider '${provider}' ` +
+                'cannot safely fork a session for concurrent use (sessionFork capability). ' +
+                'Use provider claude for these nodes, or give each node its own context (drop ' +
+                "'shared' from all but one)."
+            );
+          }
 
           // 5. Determine session — parallel or context:fresh → always fresh
           // Parallel layers default to fresh sessions; explicit 'fresh' context also forces

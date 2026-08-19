@@ -66,6 +66,7 @@ const AXES: readonly { key: keyof ProviderCapabilities; label: string }[] = [
   { key: 'settingSources', label: 'Setting sources (`settingSources`)' },
   { key: 'nativeTools', label: 'In-process native tools' },
   { key: 'containerExec', label: 'Container exec (folder-project container backend)' },
+  { key: 'sessionFork', label: "Session fork (concurrent parallel-layer `context: 'shared'`)" },
 ];
 
 /**
