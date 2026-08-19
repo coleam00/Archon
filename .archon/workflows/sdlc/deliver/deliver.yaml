@@ -119,9 +119,39 @@ nodes:
     depends_on: [rev2]
     when: "$rev1.output.ready == 'false'"
 
-  # Ready = the marker: round 1's verdict, overridden by round 2 wherever
-  # round 2 ran. all_done because flag2 is skipped by design on the ready-first
-  # path.
+  # Second fix round: round 2's leftovers are typically fix-generated tail
+  # items (a missing test, a docs line) — fixed directly, then VALIDATED below
+  # rather than reviewed a third time (decided 19 Aug). The fixer also appends
+  # honest bookkeeping to the canonical PR comment so the final state is
+  # truthful without a third review.
+  - id: fix2
+    include: implement
+    with:
+      work: >-
+        Fix the still-open findings from the second review round recorded in
+        $ARTIFACTS_DIR/review/report.md — every open Critical and Important
+        finding. When done and green, push the new commits to the PR branch
+        (git push), and append a short section to the PR's canonical review
+        comment (the existing comment whose body starts with
+        '<!-- archon-review-report -->' — edit it in place, never post a new
+        one): 'Round-2 findings addressed at <your head SHA> — validated
+        locally, not re-reviewed.'
+    depends_on: [flag2]
+    when: "$rev2.output.ready == 'false'"
+
+  - id: flag3
+    bash: |
+      if [ "$fix2.output.green" = "true" ]; then
+        touch "$ARTIFACTS_DIR/review/.ready"
+        echo '{"ready":"true"}'
+      else
+        echo '{"ready":"false"}'
+      fi
+    depends_on: [fix2]
+
+  # Ready = the marker: round 1 ready, or round 2 ready, or round-2 findings
+  # fixed green. all_done because the flags on unused paths are skipped by
+  # design.
   - id: gate-ready
     bash: |
       if [ -f "$ARTIFACTS_DIR/review/.ready" ]; then
@@ -132,11 +162,28 @@ nodes:
         # clears it. Best-effort — labeling must not mask the real failure.
         gh label create needs-fixes --color D93F0B --description "Automated review found blocking findings" 2>/dev/null || true
         gh pr edit --add-label needs-fixes 2>/dev/null || true
-        echo "review is not ready after two rounds — open Critical/Important findings remain in $ARTIFACTS_DIR/review/report.md and on the PR comment." >&2
+        echo "review is not ready after two rounds and a fix pass — open findings remain in $ARTIFACTS_DIR/review/report.md and on the PR comment." >&2
         exit 1
       fi
-    depends_on: [flag1, flag2]
+    depends_on: [flag1, flag2, flag3]
     trigger_rule: all_done
+
+  # Final local gate, ALWAYS run: the project's own checks via the validate
+  # package. Uniform on every path — and when CI is maintainer-gated (fork
+  # PRs), this is the only validation before the flip.
+  - id: validate
+    include: validate
+    depends_on: [gate-ready]
+
+  - id: gate-validated
+    bash: |
+      if [ "$validate.output.green" = "true" ]; then
+        echo '{"validated":"true"}'
+      else
+        echo "local validation failed after review — see the validation report in the run artifacts." >&2
+        exit 1
+      fi
+    depends_on: [validate]
 
   # Explicit 60-minute bound: without `timeout:` the engine kills a script node
   # at its 120 s default (R5) — far under a normal 5-10 minute CI run.
@@ -144,7 +191,7 @@ nodes:
     script: await-checks
     runtime: uv
     timeout: 3600000
-    depends_on: [gate-ready]
+    depends_on: [gate-validated]
 
   - id: flip-ready
     bash: |

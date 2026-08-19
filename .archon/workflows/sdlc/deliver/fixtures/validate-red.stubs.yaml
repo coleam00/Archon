@@ -1,5 +1,6 @@
-# Dry-run fixture: the converge path — round 1 finds blocking issues, fix runs,
-# round 2 (light) is ready, the run flips the PR. Fully stubbed wiring proof.
+# Dry-run fixture: the validate-RED path — review is clean but the project
+# gate fails, so the run fails at gate-validated (the new gate seen red).
+# Run with --exec-code: gate-validated must EXECUTE to be seen red.
 impl__record-start: '{"start":"recorded"}'
 impl__implement:
   done: true
@@ -8,36 +9,30 @@ impl__implement:
 impl__record-green: '{"green":"recorded"}'
 impl__assert-changed: "3 files changed"
 gate-green: '{"gate":"green"}'
-pr__pr: "https://github.com/example/repo/pull/1 (draft)"
+pr__pr: "https://github.com/example/repo/pull/2 (draft)"
 rev1__scope: "target recorded; head sha stubbed"
 rev1__choose:
-  run_tests: "true"
-  run_errors: "true"
+  run_tests: "false"
+  run_errors: "false"
   run_comments: "false"
   run_types: "false"
   run_docs: "false"
   run_simplify: "false"
-  reasoning: "stub"
-rev1__code: "2 findings (Important)"
+  reasoning: "stub: tiny diff"
+rev1__code: "0 findings"
 rev1__seams: "0 findings"
-rev1__tests: "1 finding (Important)"
-rev1__errors: "0 findings"
+rev1__tests: "skipped by chooser"
+rev1__errors: "skipped by chooser"
 rev1__comments: "skipped by chooser"
 rev1__types: "skipped by chooser"
 rev1__docs: "skipped by chooser"
 rev1__simplify: "skipped by chooser"
 rev1__synthesize:
-  ready: false
-  findings_summary: "stub: 3 Important findings open"
-flag1: '{"ready":"false"}'
-fix__record-start: '{"start":"recorded"}'
-fix__implement:
-  done: true
-  green: true
-  summary: "stub: findings fixed, pushed"
-fix__record-green: '{"green":"recorded"}'
-fix__assert-changed: "2 files changed"
-rev2__scope: "light mode; delta since cursor"
+  ready: true
+  findings_summary: "stub: clean on round one"
+flag1: '{"ready":"true"}'
+# fix skips (round 1 ready); round 2 still runs — light re-review of an empty delta.
+rev2__scope: "light mode; empty delta since cursor"
 rev2__choose:
   run_tests: "false"
   run_errors: "false"
@@ -45,8 +40,8 @@ rev2__choose:
   run_types: "false"
   run_docs: "false"
   run_simplify: "false"
-  reasoning: "stub: delta is small"
-rev2__code: "prior findings fixed; 0 new"
+  reasoning: "stub: empty delta"
+rev2__code: "prior findings stand fixed; 0 new"
 rev2__seams: "0 findings"
 rev2__tests: "skipped by chooser"
 rev2__errors: "skipped by chooser"
@@ -56,12 +51,11 @@ rev2__docs: "skipped by chooser"
 rev2__simplify: "skipped by chooser"
 rev2__synthesize:
   ready: true
-  findings_summary: "stub: no open Critical/Important"
+  findings_summary: "stub: still clean"
 flag2: '{"ready":"true"}'
 gate-ready: '{"ready":"true"}'
 validate__validate:
-  green: true
-  summary: "stub: full gate green"
-gate-validated: '{"validated":"true"}'
-await-checks: "all 2 check(s) green"
-flip-ready: "https://github.com/example/repo/pull/1"
+  green: false
+  summary: "stub: tests failed — 3 red"
+await-checks: "no checks configured on this repository — nothing to await"
+flip-ready: "https://github.com/example/repo/pull/2"

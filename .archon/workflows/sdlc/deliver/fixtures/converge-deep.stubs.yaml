@@ -1,5 +1,5 @@
-# Dry-run fixture: the converge path — round 1 finds blocking issues, fix runs,
-# round 2 (light) is ready, the run flips the PR. Fully stubbed wiring proof.
+# Dry-run fixture: the DEEP converge path — both review rounds find blockers,
+# the second fix round clears them, validation gates, the run flips the PR.
 impl__record-start: '{"start":"recorded"}'
 impl__implement:
   done: true
@@ -55,9 +55,17 @@ rev2__types: "skipped by chooser"
 rev2__docs: "skipped by chooser"
 rev2__simplify: "skipped by chooser"
 rev2__synthesize:
-  ready: true
-  findings_summary: "stub: no open Critical/Important"
-flag2: '{"ready":"true"}'
+  ready: false
+  findings_summary: "stub: two tail findings open"
+flag2: '{"ready":"false"}'
+fix2__record-start: '{"start":"recorded"}'
+fix2__implement:
+  done: true
+  green: true
+  summary: "stub: tail findings fixed, pushed, comment bookkeeping appended"
+fix2__record-green: '{"green":"recorded"}'
+fix2__assert-changed: "2 files changed"
+flag3: '{"ready":"true"}' 
 gate-ready: '{"ready":"true"}'
 validate__validate:
   green: true

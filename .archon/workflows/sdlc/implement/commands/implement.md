@@ -30,7 +30,7 @@ Either way, it may be:
 
 ## Not your job
 
-Do not open or comment on a pull request. Do not push unless the work item explicitly directs it. Do not review beyond validating your own work. Do not fix unrelated debt you notice — note it in the report instead. Do not merge or rebase.
+Do not open pull requests. Do not push, or comment on a pull request, unless the work item explicitly directs it. Do not review beyond validating your own work. Do not fix unrelated debt you notice — note it in the report instead. Do not merge or rebase.
 
 ## If you cannot do the work
 
