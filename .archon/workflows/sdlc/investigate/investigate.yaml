@@ -10,7 +10,7 @@ description: |
   this fail", "root-cause this before we fix it".
   NOT for: deciding how to build the fix (plan), or building it (implement).
 
-model: large
+model: medium
 
 inputs:
   target:
