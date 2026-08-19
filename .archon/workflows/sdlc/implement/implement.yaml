@@ -57,7 +57,14 @@ nodes:
   # Decline is not success: an AI node that declines its task still exits 0. This
   # deterministic guard proves work actually happened before anything downstream
   # spends money or goes public — see scripts/assert-changed.py.
+  # One-line bridge: named scripts cannot read node outputs, so the loop's green
+  # verdict travels to the guard as an artifact.
+  - id: record-green
+    bash: |
+      printf '%s' "$implement.output.green" > "$ARTIFACTS_DIR/.green" && echo '{"green":"recorded"}'
+    depends_on: [implement]
+
   - id: assert-changed
     script: assert-changed
     runtime: uv
-    depends_on: [implement]
+    depends_on: [record-green]

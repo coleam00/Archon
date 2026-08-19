@@ -7,4 +7,5 @@ implement:
   done: true
   green: true
   summary: "stub: work complete, checks green"
+record-green: '{"green":"recorded"}'
 assert-changed: "1 file changed"

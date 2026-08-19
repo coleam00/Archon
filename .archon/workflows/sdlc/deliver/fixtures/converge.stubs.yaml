@@ -5,6 +5,7 @@ impl__implement:
   done: true
   green: true
   summary: "stub: implemented and green"
+impl__record-green: '{"green":"recorded"}'
 impl__assert-changed: "3 files changed"
 gate-green: '{"gate":"green"}'
 pr__pr: "https://github.com/example/repo/pull/1 (draft)"
@@ -34,6 +35,7 @@ fix__implement:
   done: true
   green: true
   summary: "stub: findings fixed, pushed"
+fix__record-green: '{"green":"recorded"}'
 fix__assert-changed: "2 files changed"
 rev2__scope: "light mode; delta since cursor"
 rev2__choose:
