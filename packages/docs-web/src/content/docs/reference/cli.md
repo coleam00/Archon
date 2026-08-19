@@ -485,12 +485,14 @@ archon workflow event emit --run-id <run-id> --type <event-type> [--data <json>]
 ```
 
 `<run-id>` accepts either the full ID or an unambiguous prefix from `workflow runs`.
+A prefix resolves only from the originating registered project's directory, including
+its worktrees; use the full ID elsewhere.
 
 **Flags:**
 
 | Flag | Required | Description |
 |------|----------|-------------|
-| `--run-id` | Yes | Full workflow run ID or an unambiguous prefix |
+| `--run-id` | Yes | Full workflow run ID, or an unambiguous prefix used from the originating registered project's directory or one of its worktrees; use the full ID elsewhere |
 | `--type` | Yes | Event type (e.g., `ralph_story_started`, `node_completed`) |
 | `--data` | No | JSON string attached to the event. Invalid JSON prints a warning and is ignored. |
 

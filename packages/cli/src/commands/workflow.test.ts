@@ -3995,6 +3995,16 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
     expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
   });
 
+  it('rejects an event prefix outside a registered project before creating an event', async () => {
+    const codebaseDb = await import('@archon/core/db/codebases');
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+
+    await expect(
+      workflowEventEmitCommand('deadbeef', 'workflow_started', undefined, '/unregistered')
+    ).rejects.toThrow("Cannot resolve run id prefix 'deadbeef' outside a registered project.");
+    expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
+  });
+
   it('rejects an ambiguous event prefix before creating an event', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     const codebaseDb = await import('@archon/core/db/codebases');
