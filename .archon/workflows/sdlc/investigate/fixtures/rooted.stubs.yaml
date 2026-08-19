@@ -1,0 +1,8 @@
+# Dry-run fixture: the rooted path. Fully stubbed — proves the DAG wiring and
+# that the verdict fields bind. Structured stubs are YAML mappings (they hydrate
+# structuredOutput); plain-string stubs stay strings.
+record-state: '{"state":"recorded"}'
+investigate:
+  rooted: true
+  summary: "stub: cause established — full report at investigation.md"
+assert-intact: '{"intact":"true"}'

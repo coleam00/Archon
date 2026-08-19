@@ -1,0 +1,7 @@
+# Dry-run fixture: the inconclusive path. rooted:false is a VALID outcome —
+# the run must COMPLETE (consumers gate on the field), never fail on honesty.
+record-state: '{"state":"recorded"}'
+investigate:
+  rooted: false
+  summary: "stub: two hypotheses survive — the report names what would separate them"
+assert-intact: '{"intact":"true"}'

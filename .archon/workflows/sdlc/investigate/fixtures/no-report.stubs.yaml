@@ -1,0 +1,7 @@
+# Dry-run fixture: the guard seen RED (run with --exec-code). investigate is
+# stubbed as a pleasant verdict but writes no investigation.md; record-state and
+# assert-intact execute for real, so assert-intact must fail the run: a summary
+# without a report fails rather than reporting success.
+investigate:
+  rooted: true
+  summary: "stub: claims success but produced no report artifact"

@@ -1,0 +1,71 @@
+name: plan
+description: |
+  Turn decided intent — a feature request, an investigation report, an idea —
+  into an implementable plan: the approach chosen with alternatives rejected for
+  stated reasons, the work broken into verifiable steps, and the validation that
+  proves it. Advisory: it reads and reports — the repository is left exactly as
+  it was found.
+
+  Use when: what to build is known but how is not yet decided — "plan this
+  feature", "turn this investigation into a plan", "how should we build this".
+  NOT for: root-causing a bug (investigate), or building the plan (implement).
+
+model: large
+
+inputs:
+  work:
+    default: ""
+    description: >-
+      What to plan — a feature description, an issue reference, or a goal. When
+      empty, the run's trigger message is the work.
+  report:
+    default: ""
+    description: >-
+      Optional path to a prior investigation report to build on — its claims are
+      verified, not trusted. Empty means no prior report.
+
+returns: plan
+
+nodes:
+  - id: record-state
+    bash: |
+      # Snapshot the working tree so assert-intact can prove planning left it
+      # untouched. Chained with && so a failed write fails the node instead of
+      # echoing success.
+      mkdir -p "$ARTIFACTS_DIR" &&
+        git status --porcelain > "$ARTIFACTS_DIR/.tree-state" &&
+        echo '{"state":"recorded"}'
+
+  # Blocked is a valid outcome, not a failure: ready:false naming exactly what
+  # is missing beats a plan built on guesses. Consumers gate on
+  # $plan.output.ready before building.
+  - id: plan
+    command: plan
+    depends_on: [record-state]
+    output_type: implementation-plan
+    output_format:
+      type: object
+      properties:
+        ready:
+          type: boolean
+        summary:
+          type: string
+      required: [ready, summary]
+
+  # Deterministic on both promises: a pleasant summary is not a plan, and an
+  # advisory run must not mutate the checkout (advisory agents resetting user
+  # work is a lived failure mode, not a hypothetical).
+  - id: assert-intact
+    bash: |
+      if [ ! -s "$ARTIFACTS_DIR/plan.md" ]; then
+        echo "assert-intact: the run completed but wrote no plan.md — a summary is not a plan." >&2
+        exit 1
+      fi
+      git status --porcelain > "$ARTIFACTS_DIR/.tree-state-after"
+      if ! diff -q "$ARTIFACTS_DIR/.tree-state" "$ARTIFACTS_DIR/.tree-state-after" > /dev/null 2>&1; then
+        echo "assert-intact: the working tree changed during an advisory run:" >&2
+        diff "$ARTIFACTS_DIR/.tree-state" "$ARTIFACTS_DIR/.tree-state-after" >&2 || true
+        exit 1
+      fi
+      echo '{"intact":"true"}'
+    depends_on: [plan]
