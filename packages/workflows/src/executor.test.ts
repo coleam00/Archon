@@ -1277,9 +1277,10 @@ describe('executeWorkflow', () => {
         'db-conv-1'
       );
       expect(result.success).toBe(true);
-      if (result.success && !('paused' in result)) {
-        expect(result.summary).toBe('This is the workflow summary');
+      if (!result.success || 'paused' in result) {
+        throw new Error('Expected completed workflow result');
       }
+      expect(result.summary).toBe('This is the workflow summary');
     });
 
     it('passes undefined summary when executeDagWorkflow returns undefined', async () => {
@@ -1296,9 +1297,10 @@ describe('executeWorkflow', () => {
         'db-conv-1'
       );
       expect(result.success).toBe(true);
-      if (result.success && !('paused' in result)) {
-        expect(result.summary).toBeUndefined();
+      if (!result.success || 'paused' in result) {
+        throw new Error('Expected completed workflow result');
       }
+      expect(result.summary).toBeUndefined();
     });
   });
 
