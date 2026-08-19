@@ -1268,7 +1268,26 @@ async function resolveConversationDispatch(
   }
 
   const codebase = await codebaseDb.getCodebase(conversation.codebase_id);
-  return resolveDispatch(message, codebase?.name, defaultWorkflows, defaultWorkflowBypass);
+  const decision = resolveDispatch(
+    message,
+    codebase?.name,
+    defaultWorkflows,
+    defaultWorkflowBypass
+  );
+
+  // An open human gate outranks the dispatch table: the reply is meant to
+  // resolve the gate (or talk to the agent about it), not start a fresh
+  // intake run. The gate itself is re-read later and handed to the agent as
+  // prompt context (#2565) — this check only decides whether dispatch fires
+  // at all. Checked ONLY when the table lookup above already decided to
+  // dispatch, so a conversation with no mapped project, or a message the
+  // bypass rules already routed to chat, never pays this extra DB read.
+  if (decision.kind === 'workflow') {
+    const openGateRun = await workflowDb.getPausedWorkflowRun(conversation.id);
+    if (openGateRun) return { kind: 'chat', message };
+  }
+
+  return decision;
 }
 
 /**
@@ -1598,17 +1617,18 @@ export async function handleMessage(
     // 2. Convention-based default-workflow dispatch. A conversation bound to
     // a project listed in `defaultWorkflows:` sends every plain message
     // straight to that project's workflow, bypassing the AI router. A
-    // configured bypass prefix, or ANY slash command — recognized or not —
-    // escapes a single message back to normal routing instead, posting an
-    // in-thread notice first so the bypass is never silent.
+    // configured bypass prefix, ANY slash command — recognized or not — or an
+    // open human gate on this conversation (checked inside
+    // resolveConversationDispatch) escapes a single message back to normal
+    // routing instead; the slash/bypass cases post an in-thread notice first
+    // so those bypasses are never silent.
     //
     // Placed BEFORE the deterministic-command check (step 3) on purpose: a
     // recognized command like `/workflow list` returns early from that block,
     // so if dispatch ran after it, the notice would never fire for exactly
     // the slash commands most likely to be typed in a dispatched project.
-    // Placed after the paused-approval branch so an open gate still wins, and
-    // before message persistence so a dispatched turn creates no orphan user
-    // row — exactly how a manual `/workflow run` behaves.
+    // Placed before message persistence so a dispatched turn creates no
+    // orphan user row — exactly how a manual `/workflow run` behaves.
     const dispatchDecision = await resolveConversationDispatch(conversation, message);
     if (dispatchDecision.kind === 'chat' && dispatchDecision.notice) {
       await platform.sendMessage(conversationId, dispatchDecision.notice);

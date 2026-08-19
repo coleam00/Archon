@@ -130,7 +130,7 @@ defaultWorkflows:
 Applies only inside a conversation whose project is listed. Within a listed project, in order:
 
 1. **A configured `defaultWorkflowBypass` prefix at the start of the message** escapes to normal AI chat for that one message. Archon posts `Bypass sigil '<prefix>' detected, bypassing default workflow: <workflow>` first, and the prefix is consumed so the AI sees the bare question.
-2. **A slash command** (e.g. `/status`, or any unrecognized `/word...`) also escapes to normal AI chat. Archon posts `Command (slash) detected, bypassing default workflow: <workflow>` first.
+2. **A slash command** — any message starting with `/`, including a bare `/`, recognized or not — also escapes to normal AI chat. Archon posts `Command (slash) detected, bypassing default workflow: <workflow>` first.
 3. **Otherwise**, the listed project's workflow runs directly with the message as its input — the AI router is skipped.
 
 Projects not listed, and conversations with no project bound, are unaffected — normal AI routing, byte for byte. An open approval gate still takes precedence: a reply in a paused thread answers the gate, not the dispatch table. An unresolvable or ambiguous workflow name is reported in-thread and nothing runs — it never silently falls through to the AI router. Project keys match exactly first, then case-insensitively. Like all global config, `~/.archon/config.yaml` is cached for the life of the server process — restart Archon after editing `defaultWorkflows:`.

@@ -2473,6 +2473,32 @@ describe('paused approval gate routing', () => {
     capsMock.mockReturnValue({ ...DEFAULT_PROVIDER_CAPS });
   });
 
+  // ── Interaction with defaultWorkflows: dispatch (#2541 CodeRabbit finding) ──
+
+  test('an open approval gate suppresses default-workflow dispatch', async () => {
+    arrangeGatedChat();
+    // Bind the gated conversation's project to a defaultWorkflows: mapping.
+    // Without the gate-precedence fix, this reply would be intercepted by
+    // resolveConversationDispatch and routed to runDefaultWorkflow instead of
+    // reaching the AI turn that carries the paused gate as context.
+    mockLoadConfig.mockImplementationOnce(() =>
+      Promise.resolve({
+        assistants: { claude: {}, codex: {} },
+        envVars: {},
+        defaultWorkflows: { 'test-repo': 'intake-workflow' },
+      })
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'log this receipt');
+
+    // Dispatch must not fire while a gate is open: the AI turn runs (proving
+    // the message fell through to chat) and no workflow was started via the
+    // default-dispatch path.
+    expect(mockSendQuery).toHaveBeenCalled();
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+  });
+
   // ── The removed behaviour: prose no longer decides the gate ────────────────
 
   test('an approving-sounding message no longer resolves the gate by itself', async () => {
