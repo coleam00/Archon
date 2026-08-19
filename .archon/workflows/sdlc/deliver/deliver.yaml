@@ -11,10 +11,8 @@ description: |
   NOT for: deciding what to build, or merging (always human).
 
 # v1 SHAPE NOTE: the intended review ⟲ fix LOOP is not expressible today —
-# `include:` is rejected inside a loop_group body (the #2129 v1 exclusion), and
-# loop_group.until_bash cannot reference body nodes (loader.ts:564-586 validates
-# it against the outer scope only). Both are watch-listed pending the
-# engine-vs-authoring decision. Until then, this is a fixed two-round unroll:
+# `include:` is rejected inside a loop_group body (#2623). Until then, this is a
+# fixed two-round unroll:
 # full review → fix → light re-review. A run still not ready after round two
 # FAILS with the open findings visible in the report and on the PR comment —
 # honest, resumable, never silently shipped.
@@ -109,12 +107,6 @@ nodes:
       prior_report: "$ARTIFACTS_DIR/review/report.md"
     depends_on: [fix]
 
-  # #2622 firewall (ledgered): when rev2's block is skip-cascaded, its internal
-  # all_done synthesize still fires on the dead block and COMPLETES — which
-  # satisfies flag2's dependency and would resurrect the flow. The when: below
-  # is what stops that: flag2 only consumes rev2 on the path where rev2
-  # legitimately ran. One wasted synthesize call remains on the skip path until
-  # the engine fix lands.
   - id: flag2
     bash: |
       if [ "$rev2.output.ready" = "true" ]; then
@@ -125,7 +117,6 @@ nodes:
         echo '{"ready":"false"}'
       fi
     depends_on: [rev2]
-    when: "$rev1.output.ready == 'false'"
 
   # Second fix round: round 2's leftovers are typically fix-generated tail
   # items (a missing test, a docs line) — fixed directly, then VALIDATED below

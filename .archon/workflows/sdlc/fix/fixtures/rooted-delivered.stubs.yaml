@@ -3,11 +3,6 @@
 # the dry-run engine auto-defaults every node it can and names the ones it
 # cannot; this file stubs exactly those plus the verdict fields that steer
 # branches. Structured stubs are YAML mappings (they hydrate structuredOutput).
-#
-# CURRENTLY RED — this fixture is #2629's acceptance test. It fails at
-# deliver__impl__implement ("Unknown input '$INPUTS.work'") because nested
-# include drops the middle workflow's input binding. It goes green exactly
-# when that fix lands; do not "fix" this fixture around it.
 inv__record-state: '{"state":"recorded"}'
 inv__investigate:
   rooted: true
@@ -16,7 +11,12 @@ inv__assert-intact: '{"intact":"true"}'
 gate-rooted: '{"gate":"rooted"}'
 deliver__gate-validated: '{"validated":"true"}'
 deliver__impl__record-start: '{"start":"recorded"}'
+deliver__impl__record-green: '{"green":"recorded"}'
+deliver__impl__assert-changed: "3 files changed"
+deliver__gate-green: '{"gate":"green"}'
+deliver__pr__pr: "https://github.com/example/repo/pull/2 (draft)"
 deliver__await-checks: "all checks passed"
+deliver__flip-ready: "https://github.com/example/repo/pull/2"
 deliver__flag1: '{"ready":"true"}'
 deliver__validate__validate:
   green: true
@@ -25,10 +25,18 @@ deliver__impl__implement:
   done: true
   green: true
   summary: "stub: fix built per the investigation, checks green"
+deliver__rev1__scope: "target recorded; head sha stubbed"
+deliver__rev1__choose:
+  run_tests: "false"
+  run_errors: "false"
+  run_comments: "false"
+  run_types: "false"
+  run_docs: "false"
+  run_simplify: "false"
+  reasoning: "stub: focused diff"
+deliver__rev1__code: "0 findings"
+deliver__rev1__seams: "0 findings"
 deliver__rev1__synthesize:
   ready: true
   findings_summary: "stub: no open findings"
-deliver__rev2__synthesize:
-  ready: true
-  findings_summary: "stub: dead-block synthesize (#2622) — flag2's when: refuses it"
 deliver__gate-ready: '{"ready":"true"}'

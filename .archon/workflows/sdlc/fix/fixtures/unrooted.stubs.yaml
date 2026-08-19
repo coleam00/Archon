@@ -1,11 +1,8 @@
 # Dry-run fixture: the spend gate seen RED (run with --exec-code). The
 # investigation is stubbed as unrooted; gate-rooted executes for real and must
 # fail the run — an unrooted cause never reaches the delivery tail's spend.
-#
-# The trace also shows trailing failures INSIDE the dead deliver block (both
-# rev synthesizes reachable, gate-ready executing its failure branch): that is
-# the #2622 all_done escape cascading — evidence, not fixture breakage. The
-# proof this fixture owns is gate-rooted's red.
+# The composed delivery block stays skipped; the proof this fixture owns is
+# gate-rooted's red.
 inv__record-state: '{"state":"recorded"}'
 inv__investigate:
   rooted: false

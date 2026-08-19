@@ -1,9 +1,3 @@
-# BLOCKED on #2629 (ledgered): nested include loses the middle workflow's input
-# binding — deliver's inner `$INPUTS.work` reference survives composition and
-# fails at run time against this workflow's namespace. The chain loads, expands,
-# and gates correctly; fixtures/rooted-delivered.stubs.yaml is the acceptance
-# test that goes green exactly when #2629 lands. Until then, chain manually:
-# run investigate, then deliver with the report path in its work input.
 name: fix
 description: |
   Root-cause first, then deliver: investigate the target, refuse to spend on an
