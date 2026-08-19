@@ -208,7 +208,8 @@ packages/cli/
 │ workflow.ts  workflowEventEmitCommand(..., cwd)                   │
 │              Resolve an unambiguous run-id prefix                 │
 │              createWorkflowStore().createWorkflowEvent(...)       │
-│              Non-throwing (fire-and-forget)                       │
+│              Persistence is non-throwing (fire-and-forget)        │
+│              Run-ID resolution may fail                           │
 └──────────────────────────────────────────────────────────────────┘
 ```
 

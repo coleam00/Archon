@@ -2593,16 +2593,32 @@ const FULL_RUN_ID_RE =
  * codebase, a unique match resolves, and an ambiguous prefix errors.
  *
  * Full UUIDs skip resolution entirely — exact lookup is global, so full ids
- * keep working from any directory. When `cwd` is omitted, the cwd is not a
- * registered project, or the prefix matches nothing in this project, the
- * argument passes through unchanged so the downstream exact lookup keeps its
- * existing error surface (intentional fallback: it preserves behavior for
- * runs of other projects and non-UUID ids rather than guessing).
+ * keep working from any directory. Worktree paths are normalized to their
+ * canonical checkout before project lookup. By default, an omitted or
+ * unregistered cwd and an unmatched prefix pass through unchanged so the
+ * downstream exact lookup keeps its existing error surface. Callers without a
+ * downstream lookup can require a match instead.
  */
-async function resolveRunIdArg(runId: string, cwd?: string): Promise<string> {
-  if (cwd === undefined || FULL_RUN_ID_RE.test(runId)) return runId;
-  const codebase = await codebaseDb.findCodebaseByDefaultCwd(cwd);
-  if (!codebase) return runId;
+async function resolveRunIdArg(
+  runId: string,
+  cwd?: string,
+  requirePrefixMatch = false
+): Promise<string> {
+  if (FULL_RUN_ID_RE.test(runId)) return runId;
+  if (cwd === undefined) {
+    if (requirePrefixMatch) {
+      throw new Error(`Cannot resolve run id prefix '${runId}' without a project directory.`);
+    }
+    return runId;
+  }
+  const canonicalCwd = await git.getCanonicalRepoPath(cwd);
+  const codebase = await codebaseDb.findCodebaseByDefaultCwd(canonicalCwd);
+  if (!codebase) {
+    if (requirePrefixMatch) {
+      throw new Error(`Cannot resolve run id prefix '${runId}' outside a registered project.`);
+    }
+    return runId;
+  }
   const matches = await workflowDb.findWorkflowRunsByIdPrefix(runId, codebase.id);
   if (matches.length > 1) {
     const candidates = matches.map(match => `  ${match.id}`).join('\n');
@@ -2610,7 +2626,13 @@ async function resolveRunIdArg(runId: string, cwd?: string): Promise<string> {
       `Run id '${runId}' matches more than one run in this project:\n${candidates}\nUse more characters or the full id.`
     );
   }
-  return matches[0]?.id ?? runId;
+  if (matches.length === 0) {
+    if (requirePrefixMatch) {
+      throw new Error(`No workflow run matches prefix '${runId}' in this project.`);
+    }
+    return runId;
+  }
+  return matches[0].id;
 }
 
 async function resolveDiscoveryCwdForCodebase(
@@ -3069,7 +3091,7 @@ export async function workflowEventEmitCommand(
   data?: Record<string, unknown>,
   cwd?: string
 ): Promise<void> {
-  const resolvedId = await resolveRunIdArg(runId, cwd);
+  const resolvedId = await resolveRunIdArg(runId, cwd, true);
   const store = createWorkflowStore();
   await store.createWorkflowEvent({
     workflow_run_id: resolvedId,

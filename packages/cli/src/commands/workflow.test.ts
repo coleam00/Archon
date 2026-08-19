@@ -160,6 +160,7 @@ mock.module('@archon/workflows/event-emitter', () => ({
 
 mock.module('@archon/git', () => ({
   findRepoRoot: mock(() => Promise.resolve(null)),
+  getCanonicalRepoPath: mock((path: string) => Promise.resolve(path)),
   getRemoteUrl: mock(() => Promise.resolve(null)),
   checkout: mock(() => Promise.resolve()),
   toRepoPath: mock((path: string) => path),
@@ -3951,6 +3952,64 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
     expect(consoleSpy).toHaveBeenCalledWith(
       `Event submitted (best-effort): workflow_started for run ${FULL_ID}`
     );
+  });
+
+  it('resolves an event prefix from a workspace-scoped worktree', async () => {
+    const git = await import('@archon/git');
+    const workflowDb = await import('@archon/core/db/workflows');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    (git.getCanonicalRepoPath as ReturnType<typeof mock>).mockResolvedValueOnce('/canonical/repo');
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(
+      CODEBASE
+    );
+    (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockResolvedValueOnce([
+      { id: FULL_ID },
+    ]);
+
+    await workflowEventEmitCommand(
+      '0b1ee8da',
+      'workflow_started',
+      undefined,
+      '/home/test/.archon/workspaces/owner/proj/worktrees/archon/task-2611'
+    );
+
+    expect(codebaseDb.findCodebaseByDefaultCwd).toHaveBeenCalledWith('/canonical/repo');
+    expect(mockCreateWorkflowEvent).toHaveBeenCalledWith({
+      workflow_run_id: FULL_ID,
+      event_type: 'workflow_started',
+      data: undefined,
+    });
+  });
+
+  it('rejects an unmatched event prefix before creating an event', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(
+      CODEBASE
+    );
+    (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockResolvedValueOnce([]);
+
+    await expect(
+      workflowEventEmitCommand('deadbeef', 'workflow_started', undefined, '/repo')
+    ).rejects.toThrow("No workflow run matches prefix 'deadbeef' in this project.");
+    expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
+  });
+
+  it('rejects an ambiguous event prefix before creating an event', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(
+      CODEBASE
+    );
+    (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockResolvedValueOnce([
+      { id: '0b1ee8da-1111-2222-3333-444455556666' },
+      { id: '0b1ee8da-9999-8888-7777-666655554444' },
+    ]);
+
+    await expect(
+      workflowEventEmitCommand('0b1ee8da', 'workflow_started', undefined, '/repo')
+    ).rejects.toThrow('matches more than one run');
+    expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
   });
 
   it('skips resolution when no cwd is provided (exact lookup only)', async () => {
