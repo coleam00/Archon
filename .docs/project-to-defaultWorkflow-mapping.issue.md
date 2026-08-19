@@ -41,7 +41,7 @@ Two escape hatches, both of which post an in-thread notice before falling throug
 bypass must never be silent:
 
 1. A configured `defaultWorkflowBypass` prefix at the start of the message.
-2. A slash command (`/word...`).
+2. A slash command (any message starting with `/`, including a bare `/`).
 
 `defaultWorkflowBypass` has **no built-in default** — if it's unset or blank, only a slash
 command can escape a mapped project.

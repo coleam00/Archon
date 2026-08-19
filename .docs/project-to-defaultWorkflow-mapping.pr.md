@@ -198,17 +198,20 @@ What was personally validated beyond CI:
   is stripped, with leading whitespace on both the message and the configured value
   normalized; a bypass value with nothing after it passes the original message through
   rather than an empty prompt; slash commands bypass with a notice, including with no bypass
-  configured; a bare `/` does not count as a slash command; project keys match
-  case-insensitively; malformed/blank table values are ignored.
+  configured; a bare `/` also counts as a slash command; a slash-command pattern occurring
+  mid-message does NOT bypass — only a leading command does (anchored per the CodeRabbit fix
+  below); project keys match case-insensitively; malformed/blank table values are ignored.
 - Baseline comparison for the one non-pre-existing-looking failure (`ConversationLockManager`)
   via isolated single-file re-run, confirming it passes 9/9 outside parallel contention.
-- **Live end-to-end, since updated:** validated against a real Slack workspace and a real
-  registered project. Confirmed working: mapped-project dispatch to the project's default
-  workflow; the bypass-sigil escape (notice posted, prefix stripped, message fell through to
-  normal AI chat); the slash-command escape, including the unanchored mid-sentence case
-  ("what do you know about /workflow list"). `defaultWorkflowBypass:` was round-tripped
-  through a real `~/.archon/config.yaml` on disk as part of this, not just the in-memory
-  merge path.
+- **Live end-to-end:** validated against a real Slack workspace and a real registered
+  project. Confirmed working: mapped-project dispatch to the project's default workflow; the
+  bypass-sigil escape (notice posted, prefix stripped, message fell through to normal AI
+  chat); the leading slash-command escape (e.g. `/workflow list`). `defaultWorkflowBypass:`
+  was round-tripped through a real `~/.archon/config.yaml` on disk as part of this, not just
+  the in-memory merge path. The mid-sentence case (a message like "what do you know about
+  /workflow list") was live-tested BEFORE the CodeRabbit anchoring fix, when it still
+  bypassed; after anchoring it correctly dispatches through the workflow instead, per the
+  unit tests above — not independently re-verified live post-fix.
 
 **⚠️ WARN — environment prerequisite hit during live testing (Windows):** dispatching to a
 workflow that creates a worktree failed with `error: unable to create file ...: Filename too

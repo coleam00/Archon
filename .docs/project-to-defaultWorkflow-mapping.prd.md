@@ -39,8 +39,8 @@ Everywhere else, nothing changes. In order:
 
 1. **Bypass sigil detected** → let Archon handle the message normally (AI router), but first
    post: `Bypass sigil '{bypassSigil}' detected, bypassing default workflow: {workflow}`
-2. **Slash command detected** (message matches `/\w+`) → let Archon handle it normally, but
-   first post: `Command (slash) detected, bypassing default workflow: {workflow}`
+2. **Slash command detected** (message starts with `/`, including a bare `/`) → let Archon
+   handle it normally, but first post: `Command (slash) detected, bypassing default workflow: {workflow}`
 3. **Otherwise** → run `{workflow}` directly, with the message as its input. AI router is
    skipped.
 
@@ -114,15 +114,15 @@ successful hand-off logs `orchestrator.default_workflow_started` /
 
 ## 6. Edge Cases
 
-| Case                                                     | Behavior                                                                        |
-| -------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| Project not in `defaultWorkflows`                        | Untouched — normal AI routing                                                   |
-| `defaultWorkflowBypass` unset or blank                   | Bypass sigil rule never fires; slash commands still bypass                      |
-| Configured bypass value has leading whitespace (`' * '`) | Normalized to match `'* '` — leading whitespace on the config value is ignored  |
-| Configured workflow name doesn't resolve                 | Reported in-thread, nothing runs — never silently falls through to the AI       |
-| Open approval gate in the thread                         | Gate wins; reply answers the gate, not the default workflow                     |
-| Bare slash with no word characters (`/`)                 | Does not count as a slash command — `/\w+` requires at least one word character |
-| Project key casing mismatch                              | Falls back to case-insensitive match                                            |
+| Case                                                     | Behavior                                                                       |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| Project not in `defaultWorkflows`                        | Untouched — normal AI routing                                                  |
+| `defaultWorkflowBypass` unset or blank                   | Bypass sigil rule never fires; slash commands still bypass                     |
+| Configured bypass value has leading whitespace (`' * '`) | Normalized to match `'* '` — leading whitespace on the config value is ignored |
+| Configured workflow name doesn't resolve                 | Reported in-thread, nothing runs — never silently falls through to the AI      |
+| Open approval gate in the thread                         | Gate wins; reply answers the gate, not the default workflow                    |
+| Bare slash with no word characters (`/`)                 | Still counts as a slash command — any leading `/` bypasses, recognized or not  |
+| Project key casing mismatch                              | Falls back to case-insensitive match                                           |
 
 ## 7. Testing
 
