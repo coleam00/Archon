@@ -49,7 +49,23 @@ describe('workflow status arguments', () => {
       'Usage: archon workflow status [--json] [--verbose] [--events]'
     );
     expect(result.stderr).toContain('archon workflow get <run-id>');
-    expect(result.stdout).not.toContain('Active workflows');
+    expect(result.stdout).toBe('');
+  });
+});
+
+describe('workflow get arguments', () => {
+  it('rejects extra positional arguments', () => {
+    const result = spawnSync(
+      process.execPath,
+      [join(import.meta.dir, 'cli.ts'), 'workflow', 'get', 'abc123', 'accidental-extra'],
+      { encoding: 'utf8' }
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      'Usage: archon workflow get <run-id> [--json] [--verbose] [--events]'
+    );
+    expect(result.stdout).toBe('');
   });
 });
 

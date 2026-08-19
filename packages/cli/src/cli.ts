@@ -631,7 +631,7 @@ async function main(): Promise<number> {
 
           case 'get': {
             const getRunId = positionals[2];
-            if (!getRunId) {
+            if (!getRunId || positionals[3] !== undefined) {
               console.error('Usage: archon workflow get <run-id> [--json] [--verbose] [--events]');
               return 1;
             }
