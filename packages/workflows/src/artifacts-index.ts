@@ -3,6 +3,9 @@ import { join } from 'node:path';
 import { createLogger } from '@archon/paths';
 import { nodeArtifactSchema, type NodeArtifact } from './schemas/node-artifact';
 
+const artifactOwnerSchema = nodeArtifactSchema.pick({ nodeId: true, iterations: true });
+type ArtifactOwner = Pick<NodeArtifact, 'nodeId' | 'iterations'>;
+
 /** Lazy logger (deferred so test mocks can intercept createLogger). */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -28,36 +31,26 @@ function safeSegment(id: string): string {
  * `writeNodeArtifact` — a missing or corrupt prior file is treated as "no known
  * owner" so the write proceeds (and overwrites the unusable file).
  */
-async function readArtifactOwner(
-  metaPath: string
-): Promise<Pick<NodeArtifact, 'nodeId' | 'iteration'> | undefined> {
+async function readArtifactOwner(metaPath: string): Promise<ArtifactOwner | undefined> {
   try {
-    const parsed = JSON.parse(await readFile(metaPath, 'utf8')) as {
-      nodeId?: unknown;
-      iteration?: unknown;
-    };
-    if (typeof parsed.nodeId !== 'string') return undefined;
-    if (
-      parsed.iteration !== undefined &&
-      (!Number.isInteger(parsed.iteration) || (parsed.iteration as number) < 1)
-    ) {
-      return undefined;
-    }
-    return {
-      nodeId: parsed.nodeId,
-      ...(parsed.iteration !== undefined ? { iteration: parsed.iteration as number } : {}),
-    };
+    const parsed = artifactOwnerSchema.safeParse(JSON.parse(await readFile(metaPath, 'utf8')));
+    return parsed.success ? parsed.data : undefined;
   } catch {
     return undefined;
   }
 }
 
+function sameIterations(left: number[] | undefined, right: number[] | undefined): boolean {
+  if (left === undefined || right === undefined) return left === right;
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
 /**
  * Write a node's typed output artifact: the output text to `nodes/<id>.md`
- * and its metadata to `nodes/<id>.meta.json`. A loop_group body artifact adds
- * `.iteration-<n>` to both filenames. Per-producer files (no shared index): the
- * index is derived on read by globbing, so separate nodes and loop iterations
- * never overwrite one another's metadata.
+ * and its metadata to `nodes/<id>.meta.json`. A loop_group body artifact adds its
+ * full coordinate as `.iteration-<outer>-...-<inner>` to both filenames.
+ * Per-producer files (no shared index): the index is derived on read by globbing,
+ * so separate nodes and loop executions never overwrite one another's metadata.
  * Writes are issued sequentially after each layer settles — there is no in-run
  * write contention; the per-node layout is what isolates one node from the next.
  *
@@ -74,7 +67,9 @@ export async function writeNodeArtifact(
   await mkdir(nodesDir, { recursive: true });
   const safeId = safeSegment(params.nodeId);
   const artifactId =
-    params.iteration === undefined ? safeId : `${safeId}.iteration-${String(params.iteration)}`;
+    params.iterations === undefined
+      ? safeId
+      : `${safeId}.iteration-${params.iterations.map(String).join('-')}`;
   const metaPath = join(nodesDir, `${artifactId}.meta.json`);
 
   // Collision guard: producer identities are unique per workflow iteration, so
@@ -85,7 +80,8 @@ export async function writeNodeArtifact(
   const priorOwner = await readArtifactOwner(metaPath);
   if (
     priorOwner !== undefined &&
-    (priorOwner.nodeId !== params.nodeId || priorOwner.iteration !== params.iteration)
+    (priorOwner.nodeId !== params.nodeId ||
+      !sameIterations(priorOwner.iterations, params.iterations))
   ) {
     throw new Error(
       `node artifact id collision: '${params.nodeId}' and '${priorOwner.nodeId}' both map to filename segment '${artifactId}'`
@@ -96,7 +92,7 @@ export async function writeNodeArtifact(
   await writeFile(join(artifactsDir, relPath), outputText, 'utf8');
   const meta: NodeArtifact = {
     nodeId: params.nodeId,
-    ...(params.iteration !== undefined ? { iteration: params.iteration } : {}),
+    ...(params.iterations !== undefined ? { iterations: params.iterations } : {}),
     outputType: params.outputType,
     path: relPath,
     runId: params.runId,

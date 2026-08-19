@@ -887,7 +887,7 @@ When a node sets `output_type`, the executor writes a typed sidecar after the no
 - `$ARTIFACTS_DIR/nodes/<id>.md` — the node's output text
 - `$ARTIFACTS_DIR/nodes/<id>.meta.json` — metadata (`outputType`, `runId`, `producedAt`, `size`, and `sessionId` when available)
 
-For a node inside a `loop_group`, `<id>` is the namespaced producer identity and the filenames add `.iteration-<n>` (for example, `refine_draft.iteration-2.md`). Its metadata records `nodeId: "refine.draft"` and `iteration: 2`, preserving every iteration as a distinct governed output, including across an interactive resume. Top-level node filenames and metadata are unchanged.
+For a node inside a `loop_group`, `<id>` is the namespaced producer identity and the filenames add the full iteration coordinate as `.iteration-<outer>-...-<inner>`. For example, `refine_draft.iteration-2.md` records `nodeId: "refine.draft"` and `iterations: [2]`; a nested artifact such as `outer_inner_leaf.iteration-2-1.md` records `iterations: [2, 1]`. This preserves every execution as a distinct governed output, including across nested groups and interactive resume. Top-level node filenames and metadata are unchanged.
 
 This works on **every** node type (`bash`/`script` produce typed outputs too, just without a `sessionId`). The write is **best-effort** — if it fails, the node still succeeds and a warning is logged; the typed sidecar may simply be absent. `output_type` is an open set of labels (`plan`, `findings`, `code`, `summary`, …) — pick a convention and keep casing consistent, since lookup is case-sensitive.
 

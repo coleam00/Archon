@@ -4,16 +4,16 @@ import { z } from '@hono/zod-openapi';
  * Metadata for a node's typed output artifact, written when a node declares
  * `output_type`. Persisted as `nodes/<id>.meta.json` alongside the output file
  * `nodes/<id>.md` inside the run's artifacts dir; loop_group body artifacts add
- * an iteration suffix. Other nodes and later runs can locate a prior output by
- * type instead of guessing filenames.
+ * their complete iteration coordinate as a suffix. Other nodes and later runs
+ * can locate a prior output by type instead of guessing filenames.
  *
  * Distinct from `artifactTypeSchema` (the workflow-event artifact kinds:
  * pr/commit/file_created/…) — this describes a node's on-disk output file.
  */
 export const nodeArtifactSchema = z.object({
   nodeId: z.string(),
-  /** 1-based loop_group iteration for a body-node artifact. Omitted for top-level nodes. */
-  iteration: z.number().int().positive().optional(),
+  /** 1-based iteration coordinate from outermost to innermost loop_group. */
+  iterations: z.array(z.number().int().positive()).min(1).optional(),
   outputType: z.string().min(1),
   /** Path to the output file, relative to the artifacts dir (e.g. `nodes/plan.md`). */
   path: z.string(),

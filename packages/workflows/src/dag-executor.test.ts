@@ -15281,7 +15281,89 @@ describe('executeDagWorkflow -- typed artifacts (output_type)', () => {
       ) as Record<string, unknown>;
       expect(meta).toMatchObject({
         nodeId: 'refine.draft',
-        iteration,
+        iterations: [iteration],
+        outputType: 'draft',
+        path: join('nodes', `${artifactId}.md`),
+      });
+    }
+  });
+
+  it('nested loop_group body output_type preserves the full iteration coordinate', async () => {
+    let calls = 0;
+    mockSendQueryDag.mockImplementation(async function* () {
+      calls++;
+      const content =
+        calls === 2
+          ? 'outer iteration 2, inner iteration 1\nINNER_DONE\nOUTER_DONE'
+          : 'outer iteration 1, inner iteration 1\nINNER_DONE';
+      yield { type: 'assistant', content };
+      yield { type: 'result', sessionId: `nested-loop-session-${String(calls)}` };
+    });
+
+    const artifactsDir = join(testDir, 'artifacts');
+    await executeDagWorkflow(
+      createMockDeps(),
+      createMockPlatform(),
+      'conv-dag',
+      testDir,
+      {
+        name: 'typed-nested-loop-body',
+        nodes: [
+          {
+            id: 'outer',
+            loop_group: {
+              until: 'OUTER_DONE',
+              max_iterations: 2,
+              fresh_context: true,
+              nodes: [
+                {
+                  id: 'inner',
+                  loop_group: {
+                    until: 'INNER_DONE',
+                    max_iterations: 1,
+                    fresh_context: true,
+                    nodes: [
+                      {
+                        id: 'leaf',
+                        prompt: 'produce nested output',
+                        output_type: 'draft',
+                        depends_on: [],
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      },
+      makeWorkflowRun(),
+      'claude',
+      undefined,
+      artifactsDir,
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(calls).toBe(2);
+    for (let outerIteration = 1; outerIteration <= 2; outerIteration++) {
+      const artifactId = `outer_inner_leaf.iteration-${String(outerIteration)}-1`;
+      const expectedOutput =
+        outerIteration === 2
+          ? 'outer iteration 2, inner iteration 1\nINNER_DONE\nOUTER_DONE'
+          : 'outer iteration 1, inner iteration 1\nINNER_DONE';
+      expect(await readFile(join(artifactsDir, 'nodes', `${artifactId}.md`), 'utf8')).toBe(
+        expectedOutput
+      );
+      const meta = JSON.parse(
+        await readFile(join(artifactsDir, 'nodes', `${artifactId}.meta.json`), 'utf8')
+      ) as Record<string, unknown>;
+      expect(meta).toMatchObject({
+        nodeId: 'outer.inner.leaf',
+        iterations: [outerIteration, 1],
         outputType: 'draft',
         path: join('nodes', `${artifactId}.md`),
       });

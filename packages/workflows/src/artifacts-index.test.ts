@@ -54,12 +54,12 @@ describe('artifacts-index', () => {
     expect('sessionId' in meta).toBe(false);
   });
 
-  test('writeNodeArtifact includes a loop iteration in the artifact identity', async () => {
+  test('writeNodeArtifact includes a loop iteration coordinate in the artifact identity', async () => {
     const meta = await writeNodeArtifact(
       dir,
       {
         nodeId: 'refine.draft',
-        iteration: 2,
+        iterations: [2, 3],
         outputType: 'draft',
         runId: 'r',
         producedAt: '2026-06-03T00:00:00.000Z',
@@ -69,10 +69,10 @@ describe('artifacts-index', () => {
 
     expect(meta).toMatchObject({
       nodeId: 'refine.draft',
-      iteration: 2,
-      path: join('nodes', 'refine_draft.iteration-2.md'),
+      iterations: [2, 3],
+      path: join('nodes', 'refine_draft.iteration-2-3.md'),
     });
-    expect(await readFile(join(dir, 'nodes', 'refine_draft.iteration-2.md'), 'utf8')).toBe(
+    expect(await readFile(join(dir, 'nodes', 'refine_draft.iteration-2-3.md'), 'utf8')).toBe(
       'iteration two'
     );
     expect(await readNodeArtifacts(dir)).toEqual([meta]);

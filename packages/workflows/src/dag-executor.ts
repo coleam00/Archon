@@ -3570,6 +3570,8 @@ async function executeLoopGroupNode(
    *  could be omitted, silently handing the body an isolated Set and quietly undoing the
    *  de-duplication, with no compiler signal. */
   warnedProviderConflicts: Set<string>,
+  /** Iteration coordinate of enclosing loop_groups, outermost first. */
+  enclosingIterations: readonly number[],
   issueContext?: string,
   stepNamePrefix = '',
   execContext: ExecutionContext = { kind: 'host' },
@@ -3774,6 +3776,7 @@ async function executeLoopGroupNode(
       totalLoopIterations: 0,
       stepNamePrefix: bodyStepNamePrefix,
       iteration: i,
+      iterations: [...enclosingIterations, i],
       // Deliver this iteration's approval-gate free-text to body script: nodes via env
       // (never spliced into source — #2115); matches applyLoopPrevToBodyNode's skip.
       bodyLoopUserInput: userInputForIter,
@@ -7186,6 +7189,8 @@ interface RunLayersContext {
    * so multi-iteration runs are disaggregatable in the persisted event log (#2090).
    */
   iteration?: number;
+  /** Full loop_group coordinate, outermost first; omitted for the top-level DAG. */
+  iterations?: readonly number[];
   /**
    * Per-iteration `$LOOP_USER_INPUT` free-text for loop_group body `script:` nodes,
    * delivered into the subprocess as an env var (never spliced into TS/Python source —
@@ -7234,6 +7239,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
     priorCompletedNodes,
     stepNamePrefix,
     iteration,
+    iterations,
   } = ctx;
   // nodeOutputs + accumulators + lastSequentialSession are mutated in place on `ctx`.
 
@@ -7615,6 +7621,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               ctx.nodeOutputs,
               config,
               ctx.warnedProviderConflicts,
+              ctx.iterations ?? [],
               issueContext,
               stepNamePrefix,
               execContext,
@@ -8073,10 +8080,10 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
         if (output.state === 'completed' && completedNode?.output_type) {
           const meta = {
             // A loop_group body node executes repeatedly, so its artifact identity
-            // includes the same composed group prefix as lifecycle events plus the
-            // current iteration. Top-level nodes keep their existing raw identity.
-            nodeId: iteration === undefined ? nodeId : stepNamePrefix + nodeId,
-            ...(iteration !== undefined ? { iteration } : {}),
+            // includes the composed group prefix and complete nested coordinate.
+            // Top-level nodes keep their existing raw identity.
+            nodeId: iterations === undefined ? nodeId : stepNamePrefix + nodeId,
+            ...(iterations !== undefined ? { iterations: [...iterations] } : {}),
             outputType: completedNode.output_type,
             runId: workflowRun.id,
             producedAt: new Date().toISOString(),
