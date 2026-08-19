@@ -222,6 +222,13 @@ const DEFAULT_CONFIG_CONTENT = `# Archon Global Configuration
 # Concurrency settings
 # concurrency:
 #   maxConversations: 10
+
+# Per-project default workflow (global only).
+# Every non-slash message in a conversation bound to a listed project runs
+# that workflow instead of the AI router.
+# defaultWorkflows:
+#   githubName/githubRepo: assignedWorkflow   # <registered project name>: <workflow name>
+# defaultWorkflowBypass: '* '   # optional; bypasses the default workflow for one message
 `;
 
 /**
@@ -513,6 +520,16 @@ function mergeGlobalConfig(defaults: MergedConfig, global: GlobalConfig): Merged
   // Container backend defaults (folder projects)
   if (global.container) {
     result.container = { ...global.container };
+  }
+
+  // Project → default-workflow table. Global-only by design (the keys are
+  // install-level project names), so there is no matching branch in
+  // mergeRepoConfig.
+  if (global.defaultWorkflows) {
+    result.defaultWorkflows = { ...global.defaultWorkflows };
+  }
+  if (global.defaultWorkflowBypass !== undefined) {
+    result.defaultWorkflowBypass = global.defaultWorkflowBypass;
   }
 
   return result;

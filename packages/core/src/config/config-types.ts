@@ -178,6 +178,32 @@ export interface GlobalConfig {
    * overrides these per-field.
    */
   container?: ContainerConfig;
+
+  /**
+   * Per-project default workflow: `<registered project>: <workflow name>`.
+   *
+   * Every non-slash message in a conversation bound to a listed project goes
+   * straight to that workflow, bypassing the AI router. Global-only: keys
+   * are install-level project names (the ones used with
+   * `/register-project <name>` and `/setproject <name>`), which a repo's own
+   * config cannot know, and folder projects have no repo to hold a config
+   * file at all.
+   *
+   * @example
+   * defaultWorkflows:
+   *   acme/support-inbox: intake-workflow
+   */
+  defaultWorkflows?: Record<string, string>;
+
+  /**
+   * Prefix that bypasses `defaultWorkflows:` for a single message, falling
+   * through to normal AI chat instead. There is no built-in default — unset
+   * or blank means only a slash command can bypass.
+   *
+   * @example
+   * defaultWorkflowBypass: '* '
+   */
+  defaultWorkflowBypass?: string;
 }
 
 /**
@@ -419,6 +445,18 @@ export interface MergedConfig {
    * config is consumed (CLI folder branch). Undefined when nothing is configured.
    */
   container?: ContainerConfig;
+  /**
+   * Project → default-workflow table, passed through from global config.
+   * Undefined when nothing is configured (the common case). Global-only by
+   * design, so there is no repo-level merge for it.
+   */
+  defaultWorkflows?: Record<string, string>;
+  /**
+   * Bypass prefix for `defaultWorkflows:`, passed through from global config.
+   * Undefined when nothing is configured — there is no built-in default.
+   * Global-only by design, so there is no repo-level merge for it.
+   */
+  defaultWorkflowBypass?: string;
 }
 
 /**

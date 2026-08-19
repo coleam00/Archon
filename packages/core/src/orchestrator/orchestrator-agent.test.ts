@@ -1274,7 +1274,10 @@ describe('discoverAllWorkflows — remote sync', () => {
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
     mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
     mockGetCodebaseEnvVars.mockResolvedValueOnce({ DB_SECRET: 'db-value' });
-    mockLoadConfig.mockResolvedValueOnce({
+    // Persistent, not one-time: the default-workflow dispatch check now reads
+    // loadConfig() once before workflow discovery does, so a `...Once` mock
+    // here would be consumed by the wrong call.
+    mockLoadConfig.mockResolvedValue({
       assistants: { claude: {}, codex: {} },
       envVars: { FILE_SECRET: 'file-value' },
     });
@@ -1306,7 +1309,8 @@ describe('discoverAllWorkflows — remote sync', () => {
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
     mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
     mockGetCodebaseEnvVars.mockRejectedValueOnce(new Error('db unavailable'));
-    mockLoadConfig.mockResolvedValueOnce({
+    // Persistent, not one-time — see the identical note above.
+    mockLoadConfig.mockResolvedValue({
       assistants: { claude: {}, codex: {} },
       envVars: { FILE_SECRET: 'file-value' },
     });
@@ -2467,6 +2471,69 @@ describe('paused approval gate routing', () => {
     // `effortControl` went missing for `resolveTitleRequest` once already
     // (#2556), and this block reintroduced it on merge.
     capsMock.mockReturnValue({ ...DEFAULT_PROVIDER_CAPS });
+  });
+
+  // ── Interaction with defaultWorkflows: dispatch (#2541 CodeRabbit finding) ──
+
+  test('an open approval gate suppresses default-workflow dispatch', async () => {
+    arrangeGatedChat();
+    // Bind the gated conversation's project to a defaultWorkflows: mapping.
+    // Without the gate-precedence fix, this reply would be intercepted by
+    // resolveConversationDispatch and routed to runDefaultWorkflow instead of
+    // reaching the AI turn that carries the paused gate as context.
+    mockLoadConfig.mockImplementationOnce(() =>
+      Promise.resolve({
+        assistants: { claude: {}, codex: {} },
+        envVars: {},
+        defaultWorkflows: { 'test-repo': 'intake-workflow' },
+      })
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'log this receipt');
+
+    // Dispatch must not fire while a gate is open: the AI turn runs (proving
+    // the message fell through to chat) and no workflow was started via the
+    // default-dispatch path.
+    expect(mockSendQuery).toHaveBeenCalled();
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+  });
+
+  // A workflow reached via defaultWorkflows: dispatch must surface the same
+  // parseWarnings a manual `/workflow run` would (see the "mirrors parse
+  // warnings" tests below) — runDefaultWorkflow used to drop them entirely.
+  test('a dispatched default workflow surfaces its own parse warnings', async () => {
+    const codebase = makeApprovalCodebase();
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeConversation({ codebase_id: 'codebase-1', cwd: '/repos/test-repo' }))
+    );
+    mockGetCodebase.mockImplementation(() => Promise.resolve(codebase));
+    mockListCodebases.mockImplementation(() => Promise.resolve([codebase]));
+    mockLoadConfig.mockImplementationOnce(() =>
+      Promise.resolve({
+        assistants: { claude: {}, codex: {} },
+        envVars: {},
+        defaultWorkflows: { 'test-repo': 'intake-workflow' },
+      })
+    );
+    mockDiscoverWorkflowsWithConfig.mockImplementation(() =>
+      Promise.resolve({
+        workflows: [
+          makeTestWorkflowWithSource({ name: 'intake-workflow' }, 'project', [
+            "Node 'plan': unknown key 'interactive' will be ignored.",
+          ]),
+        ],
+        errors: [],
+      })
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'log this receipt');
+
+    expect(platform.sendMessage).toHaveBeenCalledWith(
+      'conv-1',
+      expect.stringContaining("unknown key 'interactive' will be ignored")
+    );
   });
 
   // ── The removed behaviour: prose no longer decides the gate ────────────────

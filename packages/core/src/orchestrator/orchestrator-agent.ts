@@ -27,6 +27,7 @@ import { toError } from '../utils/error';
 import { safeDeactivateSession } from '../state/session-transitions';
 import { getAgentProvider, getProviderCapabilities } from '@archon/providers';
 import { buildManageRunTool } from './manage-run-tool';
+import { resolveDispatch, type DispatchDecision } from './dispatch';
 import { getArchonWorkspacesPath, ensureArchonWorkspacesPath } from '@archon/paths';
 import { syncArchonToWorktree } from '../utils/worktree-sync';
 import {
@@ -1244,6 +1245,145 @@ async function continueResolvedGateRun(
   }
 }
 
+// ─── Default-Workflow Dispatch ──────────────────────────────────────────────
+
+/**
+ * Decide what the global `defaultWorkflows:` table means for this
+ * conversation's next message.
+ *
+ * An unscoped conversation costs nothing; an install with no
+ * `defaultWorkflows:` configured (the common case) costs one memoized
+ * global-config read and never touches the database. `loadConfig()` is
+ * called without a repo path on purpose — `defaultWorkflows:` is global-only.
+ */
+async function resolveConversationDispatch(
+  conversation: Conversation,
+  message: string
+): Promise<DispatchDecision> {
+  if (!conversation.codebase_id) return { kind: 'chat', message };
+
+  const { defaultWorkflows, defaultWorkflowBypass } = await loadConfig();
+  if (!defaultWorkflows || Object.keys(defaultWorkflows).length === 0) {
+    return { kind: 'chat', message };
+  }
+
+  const codebase = await codebaseDb.getCodebase(conversation.codebase_id);
+  const decision = resolveDispatch(
+    message,
+    codebase?.name,
+    defaultWorkflows,
+    defaultWorkflowBypass
+  );
+
+  // An open human gate outranks the dispatch table: the reply is meant to
+  // resolve the gate (or talk to the agent about it), not start a fresh
+  // intake run. The gate itself is re-read later and handed to the agent as
+  // prompt context (#2565) — this check only decides whether dispatch fires
+  // at all. Checked ONLY when the table lookup above already decided to
+  // dispatch, so a conversation with no mapped project, or a message the
+  // bypass rules already routed to chat, never pays this extra DB read.
+  if (decision.kind === 'workflow') {
+    const openGateRun = await workflowDb.getPausedWorkflowRun(conversation.id);
+    if (openGateRun) return { kind: 'chat', message };
+  }
+
+  return decision;
+}
+
+/**
+ * Run the default workflow that a `defaultWorkflows:` entry names.
+ *
+ * A configured-but-unresolvable workflow is reported to the user and the
+ * message is dropped — never quietly forwarded to the AI router.
+ *
+ * Execution reuses `handleWorkflowRunCommand`, the same path `/workflow run`
+ * takes, so isolation resolution, `requires:` gates, and resume detection all
+ * behave identically however the workflow was chosen.
+ */
+async function runDefaultWorkflow(
+  platform: IPlatformAdapter,
+  conversationId: string,
+  conversation: Conversation,
+  workflowName: string,
+  message: string,
+  isolationHints: HandleMessageContext['isolationHints'],
+  userId: string | undefined
+): Promise<void> {
+  const { workflows: discovered } = await discoverAllWorkflows(conversation);
+  const available = discovered.map(w => w.workflow);
+
+  let workflow: WorkflowDefinition | undefined;
+  try {
+    workflow = resolveWorkflowName(workflowName, available);
+  } catch (error) {
+    // resolveWorkflowName throws only on ambiguity (a fuzzy tier matched more
+    // than one workflow). Report the ambiguity verbatim — it names the
+    // candidates, which is exactly what the operator needs to fix the mapping.
+    getLog().error(
+      { err: error as Error, conversationId, workflowName },
+      'orchestrator.default_workflow_ambiguous'
+    );
+    await platform.sendMessage(
+      conversationId,
+      `⚠️ This project's default workflow \`${workflowName}\` (\`defaultWorkflows:\` in ` +
+        `\`~/.archon/config.yaml\`) is ambiguous: ${(error as Error).message}\n\n` +
+        'Nothing was run. Use the exact workflow name, or check `/workflow list`.'
+    );
+    return;
+  }
+
+  if (!workflow) {
+    getLog().error(
+      { conversationId, workflowName, availableCount: available.length },
+      'orchestrator.default_workflow_not_found'
+    );
+    await platform.sendMessage(
+      conversationId,
+      `⚠️ This project's default workflow \`${workflowName}\` (\`defaultWorkflows:\` in ` +
+        '`~/.archon/config.yaml`) was not found.\n\n' +
+        'Nothing was run. Fix the mapping, or check `/workflow list`.'
+    );
+    return;
+  }
+
+  getLog().info(
+    { conversationId, workflowName: workflow.name, codebaseId: conversation.codebase_id },
+    'orchestrator.default_workflow_started'
+  );
+  try {
+    // Thread through the same parseWarnings a manual `/workflow run` would
+    // show (see the `result.workflow.parseWarnings` call site below) —
+    // without this, a workflow reached only via `defaultWorkflows:` dispatch
+    // would silently hide warnings about YAML keys the engine dropped,
+    // exactly the "warnings appear valid" risk CodeRabbit's review flagged
+    // for this PR.
+    const resolvedEntry = discovered.find(w => w.workflow.name === workflow.name);
+    await handleWorkflowRunCommand(
+      platform,
+      conversationId,
+      conversation,
+      workflow,
+      message,
+      isolationHints,
+      userId,
+      { parseWarnings: resolvedEntry?.parseWarnings }
+    );
+  } catch (error) {
+    // Re-thrown, not swallowed — `handleMessage`'s catch is what tells the
+    // user. Logged here anyway because this is the only frame that can name
+    // the workflow the mapping chose.
+    getLog().error(
+      { err: toError(error), conversationId, workflowName: workflow.name },
+      'orchestrator.default_workflow_failed'
+    );
+    throw error;
+  }
+  getLog().info(
+    { conversationId, workflowName: workflow.name },
+    'orchestrator.default_workflow_completed'
+  );
+}
+
 // ─── Session Helpers ────────────────────────────────────────────────────────
 
 async function tryPersistSessionId(
@@ -1482,7 +1622,44 @@ export async function handleMessage(
       conversationId
     );
 
-    // 2. Check for deterministic commands
+    // 2. Convention-based default-workflow dispatch. A conversation bound to
+    // a project listed in `defaultWorkflows:` sends every plain message
+    // straight to that project's workflow, bypassing the AI router. A
+    // configured bypass prefix, ANY slash command — recognized or not — or an
+    // open human gate on this conversation (checked inside
+    // resolveConversationDispatch) escapes a single message back to normal
+    // routing instead; the slash/bypass cases post an in-thread notice first
+    // so those bypasses are never silent.
+    //
+    // Placed BEFORE the deterministic-command check (step 3) on purpose: a
+    // recognized command like `/workflow list` returns early from that block,
+    // so if dispatch ran after it, the notice would never fire for exactly
+    // the slash commands most likely to be typed in a dispatched project.
+    // Placed before message persistence so a dispatched turn creates no
+    // orphan user row — exactly how a manual `/workflow run` behaves.
+    const dispatchDecision = await resolveConversationDispatch(conversation, message);
+    if (dispatchDecision.kind === 'chat' && dispatchDecision.notice) {
+      await platform.sendMessage(conversationId, dispatchDecision.notice);
+    }
+    if (dispatchDecision.kind === 'workflow') {
+      await runDefaultWorkflow(
+        platform,
+        conversationId,
+        conversation,
+        dispatchDecision.workflowName,
+        dispatchDecision.message,
+        isolationHints,
+        userId
+      );
+      return;
+    }
+    // From here on `message` is the ROUTED text: byte-for-byte the inbound
+    // message, except in a dispatched project where a bypass prefix was
+    // consumed. The deterministic-command check below reads this same
+    // reassigned `message`, so a stripped sigil is honored there too.
+    message = dispatchDecision.message;
+
+    // 3. Check for deterministic commands
     if (message.startsWith('/')) {
       const { command } = commandHandler.parseCommand(message);
       const deterministicCommands = [
@@ -1578,7 +1755,7 @@ export async function handleMessage(
         });
     }
 
-    // 3. Load codebases, discover workflows, build prompt
+    // 4. Load codebases, discover workflows, build prompt
     const codebases = await codebaseDb.listCodebases();
     const {
       workflows: workflowsWithSource,
@@ -1715,7 +1892,7 @@ export async function handleMessage(
       cwd = await ensureArchonWorkspacesPath();
     }
 
-    // 4. Update activity and get/create session
+    // 5. Update activity and get/create session
     await db.touchConversation(conversation.id);
     let session = await sessionDb.getActiveSession(conversation.id);
     if (!session) {
@@ -1906,7 +2083,7 @@ export async function handleMessage(
       );
     }
 
-    // 5. Send to AI provider
+    // 6. Send to AI provider
     const aiClient = getAgentProvider(providerKey);
     getLog().debug(
       { assistantType: conversation.ai_assistant_type, resolvedAssistantType: providerKey },

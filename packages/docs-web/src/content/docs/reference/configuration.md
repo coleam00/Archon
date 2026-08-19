@@ -96,6 +96,11 @@ paths:
 concurrency:
   maxConversations: 10
 
+# Per-project default workflow (global only) — see "Default workflow dispatch" below
+defaultWorkflows:
+  acme/support-inbox: intake-workflow # <registered project name>: <workflow name>
+defaultWorkflowBypass: '* ' # optional; bypasses the default workflow for one message
+
 # Model tiers — optional cross-provider presets used by bundled workflows,
 # custom workflows, direct chat (`large`), and title generation (`small`).
 tiers:
@@ -110,6 +115,40 @@ aliases:
 ```
 
 The `tiers:` block above is no longer hand-edit-only -- you can also set the `small`/`medium`/`large` presets from the console **AI Settings** -> **Model Tiers** panel, or from the CLI with [`archon ai tier set`](/reference/cli/#ai). Connecting your own provider API key or subscription is covered in [Per-user credentials and AI Settings](/getting-started/ai-assistants/#per-user-credentials-and-ai-settings).
+
+### Default workflow dispatch (`defaultWorkflows`)
+
+Makes a project **convention-based**: every plain message in a conversation bound to that project runs one specific workflow directly, instead of asking the AI router to pick. Useful for integration projects where the thread is an intake channel, not a conversation.
+
+Valid on **global** `~/.archon/config.yaml` only — the keys are install-level project names (the ones used with `/register-project <name> <path>` and `/setproject <name>`), which a project's own repo config cannot know, and folder projects have no repo to hold a config file at all:
+
+```yaml
+defaultWorkflows:
+  acme/support-inbox: intake-workflow # <registered project name>: <workflow name>
+```
+
+Applies only inside a conversation whose project is listed. Within a listed project, in order:
+
+1. **A configured `defaultWorkflowBypass` prefix at the start of the message** escapes to normal AI chat for that one message. Archon posts `Bypass sigil '<prefix>' detected, bypassing default workflow: <workflow>` first, and the prefix is consumed so the AI sees the bare question.
+2. **A slash command** — any message starting with `/`, including a bare `/`, recognized or not — also escapes to normal AI chat. Archon posts `Command (slash) detected, bypassing default workflow: <workflow>` first.
+3. **Otherwise**, the listed project's workflow runs directly with the message as its input — the AI router is skipped.
+
+Projects not listed, and conversations with no project bound, are unaffected — normal AI routing, byte for byte. An open approval gate still takes precedence: a reply in a paused thread answers the gate, not the dispatch table. An unresolvable or ambiguous workflow name is reported in-thread and nothing runs — it never silently falls through to the AI router. Project keys match exactly first, then case-insensitively. Like all global config, `~/.archon/config.yaml` is cached for the life of the server process — restart Archon after editing `defaultWorkflows:`.
+
+#### Bypass prefix (`defaultWorkflowBypass`)
+
+Optional. There is **no built-in default** — if unset or blank, only a slash command can bypass the default workflow.
+
+```yaml
+defaultWorkflows:
+  acme/support-inbox: intake-workflow
+
+defaultWorkflowBypass: '* ' # now `* what's in it` escapes
+```
+
+- Any string works — `'* '`, `'>> '`, `'ai: '`. Leading whitespace on the configured value is ignored (`' * '` and `'* '` behave identically); trailing whitespace is significant and kept as-is, since a separator is usually what makes a prefix deliberate rather than accidental.
+- Matching is case-sensitive and only matches a *leading* prefix (after stripping the message's own leading whitespace) — `did it work* really` still dispatches.
+- An empty or whitespace-only value is ignored, falling back to "unset" rather than matching every message.
 
 ## Repository Configuration
 
