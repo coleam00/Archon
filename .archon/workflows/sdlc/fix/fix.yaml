@@ -1,15 +1,16 @@
 name: fix
 description: |
-  Root-cause first, then deliver: investigate the target, refuse to spend on an
-  unrooted cause, and hand the proven chain to the delivery tail — implement,
-  review, fix rounds, validate, through to a ready-to-merge PR. One governed
-  run, one artifact store: the report the fixer implements from is the one this
-  run wrote.
+  Ground an issue or request against the current repository before spending on
+  it, then take the least speculative path: investigate an unknown cause, plan
+  an undecided shape, deliver an implementation-ready work order, or stop when
+  no work remains. Actionable paths converge on the reviewed delivery tail.
+  One governed run, one artifact store, no inherited issue assumptions.
 
-  Use when: a bug or failure should become a fixed, reviewed PR — "fix this
-  issue", "root-cause and fix this".
-  NOT for: causes you already understand (deliver directly), or work that needs
-  design decisions first (plan, then deliver).
+  Use when: a GitHub issue or request should be taken from current-truth check
+  through to a reviewed PR — "fix this issue", "implement issue #123", "take
+  this work item to a PR".
+  NOT for: bypassing triage with already-prepared work (deliver directly),
+  reviewing an existing PR, or merging.
 
 requires: [github]
 
@@ -17,16 +18,29 @@ inputs:
   target:
     default: ""
     description: >-
-      What to fix — an issue reference, a symptom, or a failing command. When
-      empty, the run's trigger message is the target.
+      What to take through the pipeline — an issue, document, plan, report, or
+      free-form request. When empty, the run's trigger message is the target.
 
-returns: deliver
+returns: outcome
 
 nodes:
+  # The source is history, not a work order. Triage checks it against current
+  # code and direction before deciding which kind of reasoning is still owed.
+  - id: triage
+    include: triage
+    with:
+      target: "$INPUTS.target"
+
   - id: inv
     include: investigate
     with:
-      target: "$INPUTS.target"
+      target: >-
+        Investigate the unresolved causal question recorded in
+        $ARTIFACTS_DIR/triage.md. Read that assessment first; its confirmed facts
+        are context, while its unknowns are the investigation target. Original
+        work item: $INPUTS.target
+    depends_on: [triage]
+    when: "$triage.output.route == 'investigate'"
 
   # Deterministic spend gate: an unrooted investigation ends the run here —
   # honest and resumable, with the report's named gaps in the run artifacts —
@@ -41,12 +55,60 @@ nodes:
       fi
     depends_on: [inv]
 
+  - id: planned
+    include: plan
+    with:
+      work: >-
+        Plan the current work item from $ARTIFACTS_DIR/triage.md. Read that
+        assessment first, preserve its verified outcome and constraints, and
+        decide the implementation questions it identified. Original work item:
+        $INPUTS.target
+    depends_on: [triage]
+    when: "$triage.output.route == 'plan'"
+
+  # A blocked plan is an honest completion of the advisory primitive, but it is
+  # not permission to start implementation.
+  - id: gate-planned
+    bash: |
+      if [ "$planned.output.ready" = "true" ]; then
+        echo '{"gate":"planned"}'
+      else
+        echo "planning is not ready — plan.md names the missing decision. Refusing to build on an unresolved shape." >&2
+        exit 1
+      fi
+    depends_on: [planned]
+
   - id: deliver
     include: deliver
     with:
       work: >-
-        Fix the root cause established by this run's investigation, recorded at
-        $ARTIFACTS_DIR/investigation.md — read it in full; its fix boundary and
-        verification sections are the work order. The target being fixed:
+        Deliver the work prepared by this run. Read $ARTIFACTS_DIR/triage.md
+        first. When present, plan.md or investigation.md is the detailed work
+        order and must be read in full; triage.md records which path produced it
+        and which source assumptions were corrected. On the direct route,
+        triage.md itself is the verified work order. Original work item:
         $INPUTS.target
-    depends_on: [gate-rooted]
+    depends_on: [triage, gate-rooted, gate-planned]
+    trigger_rule: none_failed_min_one_success
+    when: "$triage.output.route != 'no_action'"
+
+  # One return for the composition's two legitimate outcomes: an honestly
+  # stopped item, or a verified ready PR. No model call is needed to restate it.
+  - id: outcome
+    bash: |
+      route=$triage.output.route
+      summary=$triage.output.summary
+      if [ "$route" = "no_action" ]; then
+        printf '%s\n' "$summary"
+        exit 0
+      fi
+
+      ORIGIN_REPO=$(git remote get-url origin | sed -E 's#^.*[:/]([^/]+/[^/]+)$#\1#; s#\.git$##')
+      url=$(gh pr view --repo "$ORIGIN_REPO" --json isDraft,url --jq 'select(.isDraft == false) | .url' 2>/dev/null || true)
+      if [ -z "$url" ]; then
+        echo "outcome: delivery did not finish with a ready pull request." >&2
+        exit 1
+      fi
+      printf '%s\n' "$url"
+    depends_on: [triage, gate-rooted, gate-planned, deliver]
+    trigger_rule: none_failed_min_one_success

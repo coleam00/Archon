@@ -1,0 +1,19 @@
+# Sparse dry-run fixture: triage finds a design decision, the resulting plan is
+# ready, and the shared delivery tail completes. Run with --default-stubs.
+triage__triage:
+  route: plan
+  summary: "stub: desired outcome is current; implementation shape needs a decision"
+planned__plan:
+  ready: true
+  summary: "stub: approach chosen and plan ready"
+deliver__impl__implement:
+  done: true
+  green: true
+  summary: "stub: planned work implemented and green"
+deliver__rev1__synthesize:
+  ready: true
+  findings_summary: "stub: no open findings"
+deliver__validate__validate:
+  green: true
+  summary: "stub: project gate green"
+outcome: "https://github.com/example/repo/pull/3"
