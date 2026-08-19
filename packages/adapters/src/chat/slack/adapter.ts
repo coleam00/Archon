@@ -37,6 +37,9 @@ export interface SlackMessageRef {
 /** Cap on the in-memory triggering-message map to prevent unbounded growth. */
 const MAX_TRACKED_TRIGGERS = 1000;
 
+/** Cooldown window after a `conversations.info` `missing_scope` failure before retrying. */
+const CHANNEL_SCOPE_MISSING_COOLDOWN_MS = 5 * 60 * 1000;
+
 export class SlackAdapter implements IPlatformAdapter {
   private app: App;
   private streamingMode: 'stream' | 'batch';
@@ -58,6 +61,30 @@ export class SlackAdapter implements IPlatformAdapter {
    * `missing_scope` is a permanent misconfiguration, not a per-user incident.
    */
   private missingScopeLogged = false;
+  /**
+   * Cache of Slack channelId → channel name resolved via `conversations.info`.
+   * In-memory only; cleared on adapter restart. Only ever populated when the
+   * caller opts in (config `adapters.slack.resolveChannelNames`) — see
+   * `fetchChannelName()`. Per-channel negative results are NOT cached (same
+   * reasoning as `displayNameCache`), EXCEPT `missing_scope`, which is
+   * account-wide and cooled down via `channelScopeMissingUntil` instead.
+   */
+  private channelNameCache = new Map<string, string>();
+  /**
+   * Tripped the first time conversations.info returns `missing_scope`.
+   * Mirrors `missingScopeLogged` for users.info — `channels:read` is a
+   * separate, independently-grantable scope, so its own once-per-lifetime WARN.
+   */
+  private channelScopeMissingLogged = false;
+  /**
+   * Epoch ms until which `fetchChannelName()` skips the `conversations.info`
+   * call outright after a `missing_scope` failure, instead of retrying on
+   * every inbound message. Bounded (not permanent) so an operator who grants
+   * the scope mid-flight still recovers without an adapter restart — same
+   * trade-off as `missingScopeLogged`'s "still attempt the API call" comment,
+   * just rate-limited to once per cooldown window instead of once per message.
+   */
+  private channelScopeMissingUntil = 0;
 
   constructor(botToken: string, appToken: string, mode: 'stream' | 'batch' = 'batch') {
     this.app = new App({
@@ -323,6 +350,54 @@ export class SlackAdapter implements IPlatformAdapter {
         }
       } else {
         getLog().warn({ errMessage, slackUserId, slackErrorCode }, 'slack.users_info_failed');
+      }
+      return undefined;
+    }
+  }
+
+  /**
+   * Resolve a Slack channel id to its display name via `conversations.info`.
+   * Cached in-memory per adapter lifetime. Returns undefined on any failure —
+   * callers treat a missing name the same as one never requested (channelRef's
+   * `channelName` stays unset).
+   *
+   * Only call this when the caller has confirmed the caller opts in (config
+   * `adapters.slack.resolveChannelNames`) — conversations.info is a rate-limited
+   * API call, so it is never invoked unconditionally per message.
+   *
+   * Requires bot token scope `channels:read` (public channels); private
+   * channels additionally need `groups:read`. Missing scope is a permanent
+   * misconfiguration, WARNed once; other failures log per-occurrence.
+   */
+  async fetchChannelName(channelId: string): Promise<string | undefined> {
+    if (!channelId) return undefined;
+    const cached = this.channelNameCache.get(channelId);
+    if (cached !== undefined) return cached;
+    // Within the cooldown window, skip the API call entirely rather than
+    // re-hitting a scope that's known to be missing on every inbound message.
+    if (Date.now() < this.channelScopeMissingUntil) return undefined;
+
+    try {
+      const result = await this.app.client.conversations.info({ channel: channelId });
+      const name = result.channel?.name;
+      if (name) {
+        this.channelNameCache.set(channelId, name);
+      }
+      return name;
+    } catch (error) {
+      const err = error as Error & { data?: { error?: string } };
+      const slackErrorCode = err.data?.error;
+      // Strip err.data from the log — same PII/workspace-metadata concern as
+      // users.info failures above.
+      const errMessage = err.message;
+      if (slackErrorCode === 'missing_scope') {
+        this.channelScopeMissingUntil = Date.now() + CHANNEL_SCOPE_MISSING_COOLDOWN_MS;
+        if (!this.channelScopeMissingLogged) {
+          this.channelScopeMissingLogged = true;
+          getLog().warn({ scope: 'channels:read' }, 'slack.conversations_info_missing_scope');
+        }
+      } else {
+        getLog().warn({ errMessage, channelId, slackErrorCode }, 'slack.conversations_info_failed');
       }
       return undefined;
     }

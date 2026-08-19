@@ -50,6 +50,29 @@ export interface WorkflowMessageMetadata {
   workflowResult?: { workflowName: string; runId: string };
 }
 
+/**
+ * Identifies which adapter and channel a message originated from.
+ *
+ * channelId is NOT always equal to conversationId:
+ *  - Slack: event.channel (conversationId is the composite `channel:threadTs`)
+ *  - Discord: the channel ID (conversationId is the THREAD id for threaded messages)
+ *  - Telegram: same as conversationId (chat.id) — the chat IS the channel
+ *  - GitHub/GitLab/Gitea: `owner/repo` (conversationId adds `#number`)
+ *  - Web/CLI: same as conversationId — no distinct channel concept today
+ *
+ * Fully optional wherever it appears — adapters populate it opportunistically;
+ * absence changes nothing downstream (empty-string variable substitution, no
+ * env vars, no extra log fields, no system-prompt section).
+ */
+export interface ChannelReference {
+  /** Registered adapter id — same value as IPlatformAdapter.getPlatformType() */
+  adapter: string;
+  /** Adapter-specific channel identifier. See field-level notes above. */
+  channelId: string;
+  /** Populated only when available without an extra network call. */
+  channelName?: string;
+}
+
 // ---------------------------------------------------------------------------
 // Narrow platform interface (subset of IPlatformAdapter)
 // ---------------------------------------------------------------------------

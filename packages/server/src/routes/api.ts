@@ -2293,6 +2293,7 @@ export function registerApiRoutes(
       try {
         await handleMessage(webAdapter, conversationId, message, {
           isolationHints: { workflowType: 'thread', workflowId: conversationId },
+          channelRef: { adapter: 'web', channelId: conversationId },
           ...extraContext,
         });
       } catch (error) {

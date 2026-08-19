@@ -7,7 +7,12 @@
  */
 import { readFile } from 'fs/promises';
 import { dirname, join } from 'path';
-import type { IWorkflowPlatform, WorkflowDeps, WorkflowMessageMetadata } from './deps';
+import type {
+  IWorkflowPlatform,
+  WorkflowDeps,
+  WorkflowMessageMetadata,
+  ChannelReference,
+} from './deps';
 import * as archonPaths from '@archon/paths';
 import { BUNDLED_COMMANDS, isBinaryBuild } from './defaults/bundled-defaults';
 import { createLogger } from '@archon/paths';
@@ -515,6 +520,10 @@ export const CONTEXT_VAR_PATTERN_STR =
  * - $INPUTS.<name> - Named sub-run inputs (#2470), supplied by a caller's `with:` on a
  *   `workflow:` node. Resolved from `options.inputs` in the non-shell branch only; an
  *   unknown name THROWS. Shell (bash/script) nodes read `INPUTS_<UPPER_SNAKE>` env vars.
+ * - $ADAPTER, $CHANNEL_ID, $CHANNEL_NAME - Which adapter/channel triggered this run
+ *   (from ChannelReference), empty string when absent. Externally-supplied platform
+ *   data, so — like $USER_MESSAGE — these are skipped under shellSafe (delivered via
+ *   subprocess env vars instead; see ADAPTER/CHANNEL_ID/CHANNEL_NAME).
  *
  * When issueContext is undefined, context variables are replaced with empty string
  * to avoid sending literal "$CONTEXT" to the AI.
@@ -530,7 +539,12 @@ export function substituteWorkflowVariables(
   loopUserInput?: string,
   rejectionReason?: string,
   loopPrevOutput?: string,
-  options?: { shellSafe?: boolean; stateDir?: string; inputs?: Record<string, string> }
+  options?: {
+    shellSafe?: boolean;
+    stateDir?: string;
+    inputs?: Record<string, string>;
+    channelRef?: ChannelReference;
+  }
 ): { prompt: string; contextSubstituted: boolean } {
   // Fail fast if the prompt references $BASE_BRANCH but no base branch could be resolved
   if (!baseBranch && prompt.includes('$BASE_BRANCH')) {
@@ -573,7 +587,10 @@ export function substituteWorkflowVariables(
       .replace(/\$ARGUMENTS/g, userMessage)
       .replace(/\$LOOP_USER_INPUT/g, loopUserInput ?? '')
       .replace(/\$REJECTION_REASON/g, rejectionReason ?? '')
-      .replace(/\$LOOP_PREV_OUTPUT/g, loopPrevOutput ?? '');
+      .replace(/\$LOOP_PREV_OUTPUT/g, loopPrevOutput ?? '')
+      .replace(/\$ADAPTER/g, options?.channelRef?.adapter ?? '')
+      .replace(/\$CHANNEL_ID/g, options?.channelRef?.channelId ?? '')
+      .replace(/\$CHANNEL_NAME/g, options?.channelRef?.channelName ?? '');
 
     // $INPUTS.<name> — named sub-run inputs (#2470). Substituted ONLY in the non-shell
     // branch: a sub-run's input value can derive from AI output (e.g. `with: {plan:
@@ -645,7 +662,12 @@ export function buildPromptWithContext(
   docsDir: string,
   issueContext: string | undefined,
   logLabel: string,
-  options?: { shellSafe?: boolean; stateDir?: string; inputs?: Record<string, string> }
+  options?: {
+    shellSafe?: boolean;
+    stateDir?: string;
+    inputs?: Record<string, string>;
+    channelRef?: ChannelReference;
+  }
 ): string {
   const { prompt, contextSubstituted } = substituteWorkflowVariables(
     template,

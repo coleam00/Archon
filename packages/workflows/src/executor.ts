@@ -4,7 +4,7 @@
 import { mkdir, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { dirname } from 'path';
-import type { IWorkflowPlatform, WorkflowMessageMetadata } from './deps';
+import type { IWorkflowPlatform, WorkflowMessageMetadata, ChannelReference } from './deps';
 import type { WorkflowDeps, WorkflowConfig } from './deps';
 import * as archonPaths from '@archon/paths';
 import { createLogger, captureWorkflowInvoked, captureWorkflowCompleted } from '@archon/paths';
@@ -26,6 +26,7 @@ import {
   isRunBlockedOnChild,
   SUBRUN_METADATA_KEYS,
   readSubrunMetadata,
+  readChannelRefFromMetadata,
 } from './schemas';
 import { executeDagWorkflow, childOutcomeFromRun } from './dag-executor';
 import type { RunChildWorkflowArgs, ChildWorkflowOutcome, PriorRunUsage } from './dag-executor';
@@ -516,6 +517,14 @@ export type ExecuteWorkflowOptions = ResumePayload & {
    */
   userId?: string;
   /**
+   * Which adapter and channel triggered this run. Threaded to `$ADAPTER` /
+   * `$CHANNEL_ID` / `$CHANNEL_NAME` prompt substitution, `ADAPTER` /
+   * `CHANNEL_ID` / `CHANNEL_NAME` env vars for bash:/script: nodes, and
+   * recorded on `WorkflowRun.metadata`. Optional — absence is a no-op on
+   * all three surfaces.
+   */
+  channelRef?: ChannelReference;
+  /**
    * Execution context resolved by the isolation seam: `{ kind: 'host' }` (default)
    * runs on the Archon host; `{ kind: 'container', … }` (folder-project container
    * backend, Phase B) runs provider turns and subprocesses inside the prepared
@@ -678,6 +687,7 @@ async function runChildWorkflow(
     itemHash,
     resumeFailedChild,
     inputs,
+    channelRef,
   } = args;
 
   // Every failure below returns a `{ status: 'failed' }` outcome (never throws);
@@ -844,13 +854,13 @@ async function runChildWorkflow(
     if (resumeFailedChild) {
       const hydrated = await hydrateResumableRun(deps, resumeFailedChild);
       if (hydrated) {
-        childOpts = { ...hydrated, codebaseId, resolveChildIsolation };
+        childOpts = { ...hydrated, codebaseId, resolveChildIsolation, channelRef };
         childRunId = hydrated.preCreatedRun.id;
       } else {
         // Failed child with no completed nodes — flip it back to running and re-run
         // from the top (nothing to skip).
         const preCreatedRun = await deps.store.resumeWorkflowRun(resumeFailedChild.id);
-        childOpts = { preCreatedRun, codebaseId, resolveChildIsolation };
+        childOpts = { preCreatedRun, codebaseId, resolveChildIsolation, channelRef };
         childRunId = preCreatedRun.id;
       }
     } else {
@@ -891,9 +901,10 @@ async function runChildWorkflow(
                 branch_name: childIsolationEnv.branchName,
               }
             : {}),
+          ...(channelRef ? { channel_ref: channelRef } : {}),
         },
       });
-      childOpts = { preCreatedRun: childRun, codebaseId, resolveChildIsolation };
+      childOpts = { preCreatedRun: childRun, codebaseId, resolveChildIsolation, channelRef };
       childRunId = childRun.id;
     }
   } catch (err) {
@@ -1097,6 +1108,12 @@ async function maybeResumeParentRun(
     'workflow.parent_auto_resume_started'
   );
   try {
+    // Restore the channel context the parent was originally invoked with (#2545
+    // CodeRabbit finding): a resume has no live triggering message to read
+    // channelRef from, so it must come back from the metadata `channel_ref`
+    // stamped at run creation — otherwise $ADAPTER/$CHANNEL_ID/$CHANNEL_NAME and
+    // subprocess env vars go empty for every node after this auto-resume point.
+    const channelRef = readChannelRefFromMetadata(parent.metadata);
     await executeWorkflow(
       deps,
       platform,
@@ -1109,6 +1126,7 @@ async function maybeResumeParentRun(
         ...hydrated,
         codebaseId: parent.codebase_id ?? undefined,
         resolveChildIsolation,
+        channelRef,
       }
     );
   } catch (err) {
@@ -1160,6 +1178,7 @@ export async function executeWorkflow(
     priorCompletedNodes,
     priorUsage,
     userId,
+    channelRef,
     source,
     parseWarnings,
     baseBranch: callerBaseBranch,
@@ -1396,6 +1415,7 @@ export async function executeWorkflow(
         // path passes to `backend.resumeEnv()` (Phase C).
         metadata: {
           ...(issueContext ? { github_context: issueContext } : {}),
+          ...(channelRef ? { channel_ref: channelRef } : {}),
           ...(execContext.kind === 'container' ? { isolation: 'container' } : {}),
           ...(containerCtx ? { isolation_env_id: containerCtx.envId } : {}),
           // Declared inputs supplied by a direct top-level invocation (#2554), already
@@ -1915,7 +1935,8 @@ export async function executeWorkflow(
       // `isolation: 'worktree'` child gets its own worktree cwd.
       (childArgs: RunChildWorkflowArgs): Promise<ChildWorkflowOutcome> =>
         runChildWorkflow(deps, platform, childArgs, resolveChildIsolation),
-      dagPriorUsage
+      dagPriorUsage,
+      channelRef
     );
 
     // executeDagWorkflow throws on fatal errors; check DB status for result

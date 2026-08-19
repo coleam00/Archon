@@ -52,6 +52,7 @@ import { executeWorkflow } from '@archon/workflows/executor';
 import { assertComposedGateDriveable } from '@archon/workflows/utils/workflow-requirements';
 import { SUBRUN_METADATA_KEYS } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowDefinition, WorkflowSource } from '@archon/workflows/schemas/workflow';
+import type { ChannelReference } from '@archon/workflows/deps';
 import { createWorkflowDeps } from '../workflows/store-adapter';
 import { createChildWorktreeResolver } from '../workflows/child-isolation-resolver';
 import {
@@ -281,6 +282,11 @@ export interface WorkflowRoutingContext {
    */
   readonly userId?: string;
   /**
+   * Which adapter and channel triggered this dispatch. Forwarded to
+   * executeWorkflow() the same way userId/source are.
+   */
+  readonly channelRef?: ChannelReference;
+  /**
    * Discovery source of the workflow — telemetry only (bundled workflows
    * report their real name, custom ones report "custom"). Optional; defaults
    * to the privacy-safe "custom" treatment when not provided.
@@ -488,6 +494,7 @@ export async function dispatchBackgroundWorkflow(
             parentConversationId: ctx.conversationDbId,
             preCreatedRun,
             userId: ctx.userId,
+            channelRef: ctx.channelRef,
             source: ctx.source,
             parseWarnings: ctx.parseWarnings,
             baseBranch: codebaseBaseBranch,

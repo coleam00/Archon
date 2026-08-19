@@ -190,8 +190,10 @@ export class TelegramAdapter implements IPlatformAdapter {
             ? [from.first_name, from.last_name].filter(Boolean).join(' ')
             : undefined;
         const displayName = fullName ?? from?.username ?? undefined;
+        // Group/supergroup/channel chats have a title; private chats don't.
+        const chatTitle = ctx.chat && 'title' in ctx.chat ? ctx.chat.title : undefined;
         // Fire-and-forget - errors handled by caller
-        void this.messageHandler({ conversationId, message, userId, displayName });
+        void this.messageHandler({ conversationId, message, userId, displayName, chatTitle });
       } else {
         // Intentional: message dropped silently if handler not registered yet.
         // In production the server always calls onMessage() before start(); this

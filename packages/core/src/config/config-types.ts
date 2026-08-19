@@ -105,6 +105,31 @@ export interface ContainerConfig {
   enabled?: boolean;
 }
 
+/**
+ * Per-adapter behavior toggles, keyed by adapter id (same value as
+ * `IPlatformAdapter.getPlatformType()`, e.g. 'slack', 'discord', 'telegram').
+ */
+export interface AdapterConfig {
+  /**
+   * Resolve this adapter's channel display name into
+   * `ChannelReference.channelName`.
+   *
+   * Off by default, even for adapters that could populate the name for free
+   * (Discord/Telegram) — a channel name can reveal a client or project
+   * identity, and it flows into the AI system prompt, structured logs, and
+   * workflow `$CHANNEL_NAME`/env vars, so surfacing it is an explicit opt-in
+   * rather than an automatic freebie.
+   * @default false
+   */
+  resolveChannelNames?: boolean;
+}
+
+export interface AdaptersConfig {
+  slack?: AdapterConfig;
+  discord?: AdapterConfig;
+  telegram?: AdapterConfig;
+}
+
 export interface GlobalConfig {
   /**
    * Bot display name (shown in messages)
@@ -178,6 +203,13 @@ export interface GlobalConfig {
    * overrides these per-field.
    */
   container?: ContainerConfig;
+
+  /**
+   * Platform adapter behavior toggles. Global-only (not on RepoConfig) —
+   * adapters are process-wide singletons wired once at server startup, same
+   * reasoning as `streaming` above.
+   */
+  adapters?: AdaptersConfig;
 }
 
 /**
@@ -419,6 +451,11 @@ export interface MergedConfig {
    * config is consumed (CLI folder branch). Undefined when nothing is configured.
    */
   container?: ContainerConfig;
+  /**
+   * Merged platform adapter toggles (global only — see `GlobalConfig.adapters`).
+   * Undefined when nothing is configured (no adapter populates channelName).
+   */
+  adapters?: AdaptersConfig;
 }
 
 /**

@@ -3,6 +3,8 @@
  */
 import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import type { ChannelReference } from '@archon/workflows/deps';
+export type { ChannelReference };
 
 // MessageChunk + TokenUsage are used by IPlatformAdapter below.
 import type { MessageChunk, TokenUsage } from '@archon/providers/types';
@@ -64,6 +66,12 @@ export interface HandleMessageContext {
    * (#2555 tracks giving them one).
    */
   readonly workflowInputs?: Readonly<Record<string, string>>;
+  /**
+   * Which adapter and channel this message came from. Populated by the
+   * adapter wiring (e.g. packages/server/src/index.ts) when constructing the
+   * call into handleMessage(). Optional — absence changes nothing downstream.
+   */
+  readonly channelRef?: ChannelReference;
 }
 
 export interface CommandResult {

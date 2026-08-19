@@ -187,6 +187,16 @@ export class DiscordAdapter implements IPlatformAdapter {
   }
 
   /**
+   * Channel name for the message's immediate channel (or thread), when
+   * discord.js already has it resolved from its own cache. `undefined` for
+   * DM channels and any channel type without a `name` field — no extra API
+   * call is made.
+   */
+  getChannelName(message: Message): string | undefined {
+    return 'name' in message.channel ? (message.channel.name ?? undefined) : undefined;
+  }
+
+  /**
    * Ensure responses go to a thread, creating one if needed.
    * If the message is already in a thread, returns the thread ID.
    * If the message is in a channel, creates a thread from it.

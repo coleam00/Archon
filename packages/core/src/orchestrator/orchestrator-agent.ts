@@ -72,6 +72,7 @@ import { IsolationBlockedError } from '@archon/isolation';
 import {
   buildOrchestratorSystemAppend,
   buildRunManagementSection,
+  buildChannelReferenceSection,
   formatPausedGateSection,
   formatWorkflowContextSection,
 } from './prompt-builder';
@@ -723,6 +724,7 @@ async function dispatchOrchestratorWorkflow(
   userMessage: string,
   isolationHints?: HandleMessageContext['isolationHints'],
   userId?: string,
+  channelRef?: HandleMessageContext['channelRef'],
   /**
    * Discovery source of the workflow — telemetry only (bundled workflows
    * report their real name, custom ones report "custom"). Optional: callers
@@ -1030,6 +1032,7 @@ async function dispatchOrchestratorWorkflow(
           codebaseId: codebase.id,
           parentConversationId: conversation.id,
           userId,
+          channelRef,
           source,
           parseWarnings: options?.parseWarnings,
           baseBranch: codebaseBaseBranch,
@@ -1061,6 +1064,7 @@ async function dispatchOrchestratorWorkflow(
           codebaseId: codebase.id,
           parentConversationId: conversation.id,
           userId,
+          channelRef,
           source,
           parseWarnings: options?.parseWarnings,
           baseBranch: codebaseBaseBranch,
@@ -1090,6 +1094,7 @@ async function dispatchOrchestratorWorkflow(
           availableWorkflows: [workflow],
           isolationHints,
           userId,
+          channelRef,
           source,
           parseWarnings: options?.parseWarnings,
           inputs: resolvedInputs,
@@ -1121,6 +1126,7 @@ async function dispatchOrchestratorWorkflow(
         codebaseId: codebase.id,
         parentConversationId: conversation.id,
         userId,
+        channelRef,
         source,
         parseWarnings: options?.parseWarnings,
         baseBranch: codebaseBaseBranch,
@@ -1161,7 +1167,8 @@ async function continueResolvedGateRun(
   run: WorkflowRun,
   action: 'approve' | 'reject',
   isolationHints?: HandleMessageContext['isolationHints'],
-  userId?: string
+  userId?: string,
+  channelRef?: HandleMessageContext['channelRef']
 ): Promise<void> {
   const decision = action === 'approve' ? 'Approved' : 'Rejected';
   const notify = async (text: string): Promise<void> => {
@@ -1217,6 +1224,7 @@ async function continueResolvedGateRun(
         run.user_message,
         isolationHints,
         userId,
+        channelRef,
         source,
         { resumeRunId: run.id, resumeRun: run }
       );
@@ -1458,9 +1466,23 @@ export async function handleMessage(
     isolationHints,
     attachedFiles,
     userId,
+    channelRef,
   } = context ?? {};
   try {
-    getLog().debug({ conversationId, userId }, 'orchestrator_message_received');
+    getLog().debug(
+      {
+        conversationId,
+        userId,
+        ...(channelRef
+          ? {
+              adapter: channelRef.adapter,
+              channelId: channelRef.channelId,
+              channelName: channelRef.channelName,
+            }
+          : {}),
+      },
+      'orchestrator_message_received'
+    );
 
     // 1. Get/create conversation and inherit thread context.
     // userId is recorded on the conversation row only on first creation —
@@ -1552,7 +1574,8 @@ export async function handleMessage(
               // Declared inputs (#2554) arrive on the request context, not in the
               // command text — the run route is the only caller that sets them.
               inputs: context?.workflowInputs,
-            }
+            },
+            channelRef
           );
         }
         return;
@@ -1851,6 +1874,11 @@ export async function handleMessage(
     // Claude supports the preset object for prompt caching; other providers
     // need a plain string (Pi coerces non-string to undefined, Codex ignores it).
     let systemAppend = buildOrchestratorSystemAppend(conversation, codebases, workflows);
+    // Unconditional (any provider, any scope) — unlike the run-management section
+    // below, this is a one-line informational fact every provider can consume.
+    if (channelRef) {
+      systemAppend += `\n\n${buildChannelReferenceSection(channelRef)}`;
+    }
     // Capabilities are only consulted for project-scoped chats (both the native tool
     // and the CLI pointer are scoped features), so look them up lazily — this also
     // avoids a registry lookup (and a throw for an unregistered provider) on the
@@ -1961,6 +1989,7 @@ export async function handleMessage(
                   codebaseId: scopedCodebaseId,
                   availableWorkflows: workflows,
                   userId,
+                  channelRef,
                 },
                 wf
               );
@@ -2002,7 +2031,8 @@ export async function handleMessage(
           conversation,
           issueContext,
           requestOptions,
-          userId
+          userId,
+          channelRef
         );
       } else {
         await handleBatchMode(
@@ -2019,7 +2049,8 @@ export async function handleMessage(
           conversation,
           issueContext,
           requestOptions,
-          userId
+          userId,
+          channelRef
         );
       }
     } finally {
@@ -2033,7 +2064,8 @@ export async function handleMessage(
           gateResolution.resolved.run,
           gateResolution.resolved.action,
           isolationHints,
-          userId
+          userId,
+          channelRef
         );
       }
     }
@@ -2087,7 +2119,8 @@ async function handleStreamMode(
   conversation: Conversation,
   issueContext?: string,
   requestOptions?: SendQueryOptions,
-  userId?: string
+  userId?: string,
+  channelRef?: HandleMessageContext['channelRef']
 ): Promise<void> {
   const turnStartedAt = Date.now();
   const allMessages: string[] = [];
@@ -2247,7 +2280,8 @@ async function handleStreamMode(
       originalMessage,
       isolationHints,
       issueContext,
-      userId
+      userId,
+      channelRef
     );
     return;
   }
@@ -2317,7 +2351,8 @@ async function handleBatchMode(
   conversation: Conversation,
   issueContext?: string,
   requestOptions?: SendQueryOptions,
-  userId?: string
+  userId?: string,
+  channelRef?: HandleMessageContext['channelRef']
 ): Promise<void> {
   const turnStartedAt = Date.now();
   const allChunks: { type: string; content: string }[] = [];
@@ -2508,7 +2543,8 @@ async function handleBatchMode(
       originalMessage,
       isolationHints,
       issueContext,
-      userId
+      userId,
+      channelRef
     );
     return;
   }
@@ -2594,7 +2630,8 @@ async function handleWorkflowInvocationResult(
   originalMessage: string,
   isolationHints: HandleMessageContext['isolationHints'],
   issueContext?: string,
-  userId?: string
+  userId?: string,
+  channelRef?: HandleMessageContext['channelRef']
 ): Promise<void> {
   const { workflowName, projectName, remainingMessage } = invocation;
 
@@ -2634,6 +2671,7 @@ async function handleWorkflowInvocationResult(
       workflowPrompt,
       isolationHints,
       userId,
+      channelRef,
       workflowEntry?.source,
       { parseWarnings: workflowEntry?.parseWarnings }
     );
@@ -2960,7 +2998,8 @@ async function handleWorkflowRunCommand(
   userMessage: string,
   isolationHints?: HandleMessageContext['isolationHints'],
   userId?: string,
-  options?: WorkflowDispatchOptions
+  options?: WorkflowDispatchOptions,
+  channelRef?: HandleMessageContext['channelRef']
 ): Promise<void> {
   // Check if conversation has a project
   if (conversation.codebase_id) {
@@ -2982,6 +3021,7 @@ async function handleWorkflowRunCommand(
       userMessage,
       isolationHints,
       userId,
+      channelRef,
       undefined,
       options
     );
@@ -3062,6 +3102,7 @@ async function handleWorkflowRunCommand(
       userMessage,
       isolationHints,
       userId,
+      channelRef,
       resolvedEntry?.source,
       // Warnings must describe the workflow that will EXECUTE. This branch
       // RE-RESOLVES the workflow against the single project's discovery, which

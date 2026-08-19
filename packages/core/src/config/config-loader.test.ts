@@ -280,6 +280,25 @@ recommendedWorkflows: "archon-plan"
       expect(config.assistants.codex).toEqual({});
       expect(config.streaming.telegram).toBe('stream');
       expect(config.concurrency.maxConversations).toBe(10);
+      // adapters is unset by default — no adapter populates channelName
+      // unless the operator opts in.
+      expect(config.adapters?.slack?.resolveChannelNames).toBeUndefined();
+    });
+
+    test('merges adapters.<id>.resolveChannelNames from global config', async () => {
+      mockFsReadFile.mockResolvedValue(`
+adapters:
+  slack:
+    resolveChannelNames: true
+  discord:
+    resolveChannelNames: false
+`);
+
+      const config = await loadConfig();
+
+      expect(config.adapters?.slack?.resolveChannelNames).toBe(true);
+      expect(config.adapters?.discord?.resolveChannelNames).toBe(false);
+      expect(config.adapters?.telegram?.resolveChannelNames).toBeUndefined();
     });
 
     test('env var DEFAULT_AI_ASSISTANT is a fallback — config file assistant wins', async () => {

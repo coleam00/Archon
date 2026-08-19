@@ -573,6 +573,15 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
               parentConversationId,
               isolationHints: { workflowType: 'thread', workflowId: conversationId },
               userId,
+              channelRef: {
+                adapter: 'discord',
+                channelId: message.channelId,
+                // Free lookup (discord.js's own cache) but still config-gated —
+                // see adapters.<id>.resolveChannelNames in config-loader.ts for why.
+                channelName: config.adapters?.discord?.resolveChannelNames
+                  ? discordAdapter.getChannelName(message)
+                  : undefined,
+              },
             });
           })
           .catch(createMessageErrorHandler('Discord', discordAdapter, conversationId));
@@ -642,6 +651,12 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         // the adapter's users.info enrichment (cached per slackUserId).
         const userId = await resolveUserId('slack', event.user, event.displayName);
 
+        // conversations.info is a rate-limited API call — only pay for it
+        // (and only cache the result) when the operator opted in.
+        const channelName = config.adapters?.slack?.resolveChannelNames
+          ? await slackAdapter.fetchChannelName(event.channel)
+          : undefined;
+
         // Fire-and-forget: handler returns immediately, processing happens async
         lockManager
           .acquireLock(conversationId, async () => {
@@ -650,6 +665,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
               parentConversationId,
               isolationHints: { workflowType: 'thread', workflowId: conversationId },
               userId,
+              channelRef: { adapter: 'slack', channelId: event.channel, channelName },
             });
           })
           .catch(createMessageErrorHandler('Slack', slackAdapter, conversationId));
@@ -933,7 +949,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
 
     // Register message handler (auth is handled internally by adapter)
     telegramAdapter.onMessage(
-      async ({ conversationId, message, userId: telegramUserId, displayName }) => {
+      async ({ conversationId, message, userId: telegramUserId, displayName, chatTitle }) => {
         // Resolve Telegram user id (numeric) → Archon user UUID.
         const userId = await resolveUserId('telegram', telegramUserId, displayName);
 
@@ -943,6 +959,13 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
             await handleMessage(telegramAdapter, conversationId, message, {
               isolationHints: { workflowType: 'thread', workflowId: conversationId },
               userId,
+              channelRef: {
+                adapter: 'telegram',
+                channelId: conversationId,
+                // chatTitle is free (already on ctx.chat) but still config-gated —
+                // see adapters.<id>.resolveChannelNames in config-loader.ts for why.
+                channelName: config.adapters?.telegram?.resolveChannelNames ? chatTitle : undefined,
+              },
             });
           })
           .catch(createMessageErrorHandler('Telegram', telegramAdapter, conversationId));
