@@ -774,14 +774,14 @@ async function main(): Promise<number> {
             const eventType = values.type as string | undefined;
             if (!runId) {
               console.error(
-                'Usage: archon workflow event emit --run-id <uuid> --type <event-type>'
+                'Usage: archon workflow event emit --run-id <run-id> --type <event-type>'
               );
               console.error('Error: --run-id is required');
               return 1;
             }
             if (!eventType) {
               console.error(
-                'Usage: archon workflow event emit --run-id <uuid> --type <event-type>'
+                'Usage: archon workflow event emit --run-id <run-id> --type <event-type>'
               );
               console.error('Error: --type is required');
               return 1;
@@ -802,7 +802,7 @@ async function main(): Promise<number> {
                 );
               }
             }
-            await workflowEventEmitCommand(runId, eventType, eventData);
+            await workflowEventEmitCommand(runId, eventType, eventData, effectiveCwd);
             break;
           }
 

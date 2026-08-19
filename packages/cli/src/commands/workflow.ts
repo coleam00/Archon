@@ -2605,8 +2605,9 @@ async function resolveRunIdArg(runId: string, cwd?: string): Promise<string> {
   if (!codebase) return runId;
   const matches = await workflowDb.findWorkflowRunsByIdPrefix(runId, codebase.id);
   if (matches.length > 1) {
+    const candidates = matches.map(match => `  ${match.id}`).join('\n');
     throw new Error(
-      `Run id '${runId}' matches more than one run in this project — use more characters or the full id (from 'archon workflow runs --json').`
+      `Run id '${runId}' matches more than one run in this project:\n${candidates}\nUse more characters or the full id.`
     );
   }
   return matches[0]?.id ?? runId;
@@ -3055,7 +3056,8 @@ export async function workflowCleanupCommand(days: number): Promise<void> {
 
 /**
  * Emit a workflow event directly to the database.
- * Non-throwing: mirrors the fire-and-forget contract of createWorkflowEvent.
+ * Event persistence mirrors createWorkflowEvent's fire-and-forget contract;
+ * run-id resolution can still fail before the event reaches the store.
  */
 export function isValidEventType(value: string): value is WorkflowEventType {
   return (WORKFLOW_EVENT_TYPES as readonly string[]).includes(value);
@@ -3064,17 +3066,19 @@ export function isValidEventType(value: string): value is WorkflowEventType {
 export async function workflowEventEmitCommand(
   runId: string,
   eventType: WorkflowEventType,
-  data?: Record<string, unknown>
+  data?: Record<string, unknown>,
+  cwd?: string
 ): Promise<void> {
+  const resolvedId = await resolveRunIdArg(runId, cwd);
   const store = createWorkflowStore();
   await store.createWorkflowEvent({
-    workflow_run_id: runId,
+    workflow_run_id: resolvedId,
     event_type: eventType,
     data,
   });
   // createWorkflowEvent is non-throwing (fire-and-forget) — the event may not
   // have been persisted if the DB was unavailable. Check server logs if missing.
-  console.log(`Event submitted (best-effort): ${eventType} for run ${runId}`);
+  console.log(`Event submitted (best-effort): ${eventType} for run ${resolvedId}`);
 }
 
 // ─── Marketplace commands ────────────────────────────────────────────────────

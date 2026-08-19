@@ -481,18 +481,20 @@ to filter by node, since this is a destructive command.
 Emit a workflow event directly to the database. Primarily used inside workflow loop prompts to record story-level lifecycle events.
 
 ```bash
-archon workflow event emit --run-id <uuid> --type <event-type> [--data <json>]
+archon workflow event emit --run-id <run-id> --type <event-type> [--data <json>]
 ```
+
+`<run-id>` accepts either the full ID or an unambiguous prefix from `workflow runs`.
 
 **Flags:**
 
 | Flag | Required | Description |
 |------|----------|-------------|
-| `--run-id` | Yes | UUID of the workflow run |
+| `--run-id` | Yes | Full workflow run ID or an unambiguous prefix |
 | `--type` | Yes | Event type (e.g., `ralph_story_started`, `node_completed`) |
 | `--data` | No | JSON string attached to the event. Invalid JSON prints a warning and is ignored. |
 
-Exit code: 0 on success, 1 when `--run-id`, `--type` is missing, or `--type` is not a valid event type. Event persistence is best-effort (non-throwing) -- check server logs if events appear missing.
+Exit code: 0 on submission, 1 when a required argument is missing, the event type is invalid, or run-ID prefix resolution fails. Event persistence is best-effort (non-throwing) -- check server logs if events appear missing.
 
 ### `isolation list`
 
