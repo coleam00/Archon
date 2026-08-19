@@ -3603,8 +3603,30 @@ async function executeLoopGroupNode(
   // Detect interactive loop resume (mirrors executeLoopNode).
   const rawApproval = workflowRun.metadata?.approval;
   const loopGateMeta = isApprovalContext(rawApproval) ? rawApproval : undefined;
-  const isLoopResume = loopGateMeta?.type === 'interactive_loop' && loopGateMeta.nodeId === node.id;
-  const startIteration = isLoopResume ? (loopGateMeta.iteration ?? 0) + 1 : 1;
+  const resumeIterations =
+    Array.isArray(loopGateMeta?.iterations) &&
+    loopGateMeta.iterations.every(iteration => Number.isInteger(iteration) && iteration > 0)
+      ? loopGateMeta.iterations
+      : undefined;
+  const isInteractiveResume = loopGateMeta?.type === 'interactive_loop';
+  // New pauses carry the complete path. The nodeId fallback preserves top-level and
+  // legacy resume behavior, whose metadata predates nested coordinates.
+  const isLoopResume =
+    isInteractiveResume &&
+    (loopGateMeta.loopNodePath !== undefined
+      ? loopGateMeta.loopNodePath === stepName
+      : loopGateMeta.nodeId === node.id);
+  const isEnclosingLoopResume =
+    isInteractiveResume &&
+    loopGateMeta.loopNodePath !== undefined &&
+    loopGateMeta.loopNodePath.startsWith(`${stepName}.`) &&
+    resumeIterations !== undefined;
+  const resumeIteration = resumeIterations?.[enclosingIterations.length];
+  const startIteration = isLoopResume
+    ? (resumeIteration ?? loopGateMeta.iteration ?? 0) + 1
+    : isEnclosingLoopResume
+      ? (resumeIteration ?? 1)
+      : 1;
   const loopGateRunMeta = (workflowRun.metadata ?? {}) as LoopGateRunMetadata;
   const loopUserInput = isLoopResume ? (loopGateRunMeta.loop_user_input ?? '') : '';
 
@@ -3803,6 +3825,18 @@ async function executeLoopGroupNode(
       loopTotalTokens = {
         input: (loopTotalTokens?.input ?? 0) + iterCtx.totalTokensIn,
         output: (loopTotalTokens?.output ?? 0) + iterCtx.totalTokensOut,
+      };
+    }
+    // A gate inside this group's body owns the pause. Stop every enclosing group at
+    // the same iteration; resume metadata will re-enter this coordinate and then the
+    // exact nested group will advance past its gated iteration.
+    if (postBodyStatus === 'paused') {
+      return {
+        state: 'completed',
+        output: lastIterationOutput,
+        costUsd: loopTotalCostUsd,
+        ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+        loopIterations: i,
       };
     }
 
@@ -4088,6 +4122,8 @@ async function executeLoopGroupNode(
         message: honestMessage,
         type: 'interactive_loop',
         iteration: i,
+        loopNodePath: stepName,
+        iterations: [...enclosingIterations, i],
         // Persist the body's session cursor so a resumed fresh_context: false loop
         // continues the pre-pause conversation (restored into the cursor on resume).
         // The provider tag rides along so the restore never threads the session into

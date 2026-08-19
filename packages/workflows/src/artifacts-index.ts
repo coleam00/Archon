@@ -6,6 +6,21 @@ import { nodeArtifactSchema, type NodeArtifact } from './schemas/node-artifact';
 const artifactOwnerSchema = nodeArtifactSchema.pick({ nodeId: true, iterations: true });
 type ArtifactOwner = Pick<NodeArtifact, 'nodeId' | 'iterations'>;
 
+/** Upgrade the persisted scalar coordinate written before nested loop support. */
+function normalizePersistedArtifact(value: unknown): unknown {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return value;
+  const artifact = value as Record<string, unknown>;
+  if (
+    artifact.iterations === undefined &&
+    typeof artifact.iteration === 'number' &&
+    Number.isInteger(artifact.iteration) &&
+    artifact.iteration > 0
+  ) {
+    return { ...artifact, iterations: [artifact.iteration] };
+  }
+  return value;
+}
+
 /** Lazy logger (deferred so test mocks can intercept createLogger). */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -33,7 +48,9 @@ function safeSegment(id: string): string {
  */
 async function readArtifactOwner(metaPath: string): Promise<ArtifactOwner | undefined> {
   try {
-    const parsed = artifactOwnerSchema.safeParse(JSON.parse(await readFile(metaPath, 'utf8')));
+    const parsed = artifactOwnerSchema.safeParse(
+      normalizePersistedArtifact(JSON.parse(await readFile(metaPath, 'utf8')))
+    );
     return parsed.success ? parsed.data : undefined;
   } catch {
     return undefined;
@@ -128,7 +145,9 @@ export async function readNodeArtifacts(artifactsDir: string): Promise<NodeArtif
     if (!file.endsWith('.meta.json')) continue;
     const full = join(nodesDir, file);
     try {
-      const parsed = nodeArtifactSchema.safeParse(JSON.parse(await readFile(full, 'utf8')));
+      const parsed = nodeArtifactSchema.safeParse(
+        normalizePersistedArtifact(JSON.parse(await readFile(full, 'utf8')))
+      );
       if (parsed.success) {
         out.push(parsed.data);
       } else {

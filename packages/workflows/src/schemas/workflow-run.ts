@@ -228,6 +228,10 @@ export interface ApprovalContext {
   childRunId?: string;
   /** Current loop iteration when paused (interactive loops only). */
   iteration?: number;
+  /** Complete namespaced loop_group path for nested interactive-loop resume. */
+  loopNodePath?: string;
+  /** Complete loop_group coordinate at the gate, outermost first. */
+  iterations?: number[];
   /**
    * Session ID to restore on resume (interactive loops only). Gate pauses write an
    * EXPLICIT null (never omit the key) when there is no session to restore — same

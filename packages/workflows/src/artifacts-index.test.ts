@@ -78,6 +78,46 @@ describe('artifacts-index', () => {
     expect(await readNodeArtifacts(dir)).toEqual([meta]);
   });
 
+  test('legacy scalar loop metadata remains readable and can be rewritten', async () => {
+    const nodesDir = join(dir, 'nodes');
+    await mkdir(nodesDir, { recursive: true });
+    await writeFile(join(nodesDir, 'refine_draft.iteration-2.md'), 'legacy draft', 'utf8');
+    await writeFile(
+      join(nodesDir, 'refine_draft.iteration-2.meta.json'),
+      JSON.stringify({
+        nodeId: 'refine.draft',
+        iteration: 2,
+        outputType: 'draft',
+        path: join('nodes', 'refine_draft.iteration-2.md'),
+        runId: 'r',
+        producedAt: '2026-06-03T00:00:00.000Z',
+        size: 12,
+      }),
+      'utf8'
+    );
+
+    expect(await readNodeArtifacts(dir)).toEqual([
+      expect.objectContaining({ nodeId: 'refine.draft', iterations: [2] }),
+    ]);
+
+    await expect(
+      writeNodeArtifact(
+        dir,
+        {
+          nodeId: 'refine.draft',
+          iterations: [2],
+          outputType: 'draft',
+          runId: 'r',
+          producedAt: '2026-06-03T01:00:00.000Z',
+        },
+        'current draft'
+      )
+    ).resolves.toMatchObject({ iterations: [2] });
+    expect(await readFile(join(nodesDir, 'refine_draft.iteration-2.md'), 'utf8')).toBe(
+      'current draft'
+    );
+  });
+
   test('readNodeArtifacts returns [] for a dir with no artifacts yet', async () => {
     expect(await readNodeArtifacts(dir)).toEqual([]);
   });

@@ -15370,6 +15370,207 @@ describe('executeDagWorkflow -- typed artifacts (output_type)', () => {
     }
   });
 
+  it('three nested loop_groups preserve every artifact coordinate', async () => {
+    mockSendQueryDag.mockImplementationOnce(async function* () {
+      yield { type: 'assistant', content: 'LEVEL_3_DONE\nLEVEL_2_DONE\nLEVEL_1_DONE' };
+      yield { type: 'result', sessionId: 'three-level-session' };
+    });
+
+    const artifactsDir = join(testDir, 'artifacts');
+    await executeDagWorkflow(
+      createMockDeps(),
+      createMockPlatform(),
+      'conv-dag',
+      testDir,
+      {
+        name: 'typed-three-level-loop-body',
+        nodes: [
+          {
+            id: 'level1',
+            loop_group: {
+              until: 'LEVEL_1_DONE',
+              max_iterations: 1,
+              fresh_context: true,
+              nodes: [
+                {
+                  id: 'level2',
+                  loop_group: {
+                    until: 'LEVEL_2_DONE',
+                    max_iterations: 1,
+                    fresh_context: true,
+                    nodes: [
+                      {
+                        id: 'level3',
+                        loop_group: {
+                          until: 'LEVEL_3_DONE',
+                          max_iterations: 1,
+                          fresh_context: true,
+                          nodes: [
+                            {
+                              id: 'leaf',
+                              prompt: 'produce deeply nested output',
+                              output_type: 'draft',
+                              depends_on: [],
+                            },
+                          ],
+                        },
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      },
+      makeWorkflowRun(),
+      'claude',
+      undefined,
+      artifactsDir,
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const artifactId = 'level1_level2_level3_leaf.iteration-1-1-1';
+    expect(await readFile(join(artifactsDir, 'nodes', `${artifactId}.md`), 'utf8')).toBe(
+      'LEVEL_3_DONE\nLEVEL_2_DONE\nLEVEL_1_DONE'
+    );
+    const meta = JSON.parse(
+      await readFile(join(artifactsDir, 'nodes', `${artifactId}.meta.json`), 'utf8')
+    ) as Record<string, unknown>;
+    expect(meta).toMatchObject({
+      nodeId: 'level1.level2.level3.leaf',
+      iterations: [1, 1, 1],
+      outputType: 'draft',
+      path: join('nodes', `${artifactId}.md`),
+    });
+  });
+
+  it('nested interactive loop_group resume preserves the enclosing iteration coordinate', async () => {
+    const artifactsDir = join(testDir, 'artifacts');
+    const workflow = {
+      name: 'typed-nested-interactive-resume',
+      nodes: [
+        {
+          id: 'outer',
+          loop_group: {
+            until: 'OUTER_DONE',
+            max_iterations: 2,
+            fresh_context: true,
+            nodes: [
+              {
+                id: 'inner',
+                loop_group: {
+                  until: 'INNER_DONE',
+                  max_iterations: 2,
+                  fresh_context: true,
+                  interactive: true,
+                  signal_completes: true,
+                  gate_message: 'Review inner output.',
+                  nodes: [
+                    {
+                      id: 'leaf',
+                      prompt: 'produce nested output',
+                      output_type: 'draft',
+                      depends_on: [],
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        },
+      ] as DagNode[],
+    };
+
+    let status: WorkflowRun['status'] = 'running';
+    const firstStore = createMockStore();
+    firstStore.getWorkflowRunStatus.mockImplementation(async () => status);
+    firstStore.pauseWorkflowRun.mockImplementation(async () => {
+      status = 'paused';
+    });
+    mockSendQueryDag
+      .mockImplementationOnce(async function* () {
+        yield { type: 'assistant', content: 'outer iteration 1\nINNER_DONE' };
+        yield { type: 'result', sessionId: 'nested-resume-session-1' };
+      })
+      .mockImplementationOnce(async function* () {
+        yield { type: 'assistant', content: 'outer iteration 2, inner iteration 1' };
+        yield { type: 'result', sessionId: 'nested-resume-session-2' };
+      });
+
+    await executeDagWorkflow(
+      createMockDeps(firstStore),
+      createMockPlatform(),
+      'conv-dag',
+      testDir,
+      workflow,
+      makeWorkflowRun('nested-interactive-run'),
+      'claude',
+      undefined,
+      artifactsDir,
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(mockSendQueryDag.mock.calls.length).toBe(2);
+    const pauseContext = firstStore.pauseWorkflowRun.mock.calls[0][1];
+    expect(pauseContext).toMatchObject({
+      type: 'interactive_loop',
+      nodeId: 'inner',
+      loopNodePath: 'outer.inner',
+      iteration: 1,
+      iterations: [2, 1],
+    });
+
+    mockSendQueryDag.mockImplementationOnce(async function* () {
+      yield {
+        type: 'assistant',
+        content: 'outer iteration 2, inner iteration 2\nINNER_DONE\nOUTER_DONE',
+      };
+      yield { type: 'result', sessionId: 'nested-resume-session-3' };
+    });
+    await executeDagWorkflow(
+      createMockDeps(),
+      createMockPlatform(),
+      'conv-dag',
+      testDir,
+      workflow,
+      makeWorkflowRun('nested-interactive-run', {
+        metadata: {
+          approval: pauseContext,
+          loop_user_input: 'approved',
+        },
+      }),
+      'claude',
+      undefined,
+      artifactsDir,
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(mockSendQueryDag.mock.calls.length).toBe(3);
+    expect(
+      await readFile(join(artifactsDir, 'nodes', 'outer_inner_leaf.iteration-2-2.md'), 'utf8')
+    ).toContain('OUTER_DONE');
+    const resumedMeta = JSON.parse(
+      await readFile(
+        join(artifactsDir, 'nodes', 'outer_inner_leaf.iteration-2-2.meta.json'),
+        'utf8'
+      )
+    ) as Record<string, unknown>;
+    expect(resumedMeta.iterations).toEqual([2, 2]);
+  });
+
   it('loop_group resume leaves completed iteration artifacts unchanged', async () => {
     const artifactsDir = join(testDir, 'artifacts');
     const workflow = {
