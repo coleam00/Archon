@@ -36,6 +36,23 @@ describe('CLI help output', () => {
   });
 });
 
+describe('workflow status arguments', () => {
+  it('rejects a run id and points to workflow get', () => {
+    const result = spawnSync(
+      process.execPath,
+      [join(import.meta.dir, 'cli.ts'), 'workflow', 'status', 'abc123'],
+      { encoding: 'utf8' }
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      'Usage: archon workflow status [--json] [--verbose] [--events]'
+    );
+    expect(result.stderr).toContain('archon workflow get <run-id>');
+    expect(result.stdout).not.toContain('Active workflows');
+  });
+});
+
 // Test the argument parsing logic used in cli.ts
 describe('CLI argument parsing', () => {
   // Mirror the actual parseArgs options from cli.ts

@@ -615,6 +615,13 @@ async function main(): Promise<number> {
           }
 
           case 'status':
+            if (positionals[2] !== undefined) {
+              console.error(
+                'Usage: archon workflow status [--json] [--verbose] [--events]\n' +
+                  'To show a single run, use: archon workflow get <run-id>'
+              );
+              return 1;
+            }
             await workflowStatusCommand(
               jsonFlag,
               values.verbose as boolean | undefined,
