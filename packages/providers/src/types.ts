@@ -638,6 +638,20 @@ export interface ProviderCapabilities {
    * community providers set `false` until they implement their in-container path.
    */
   containerExec: boolean;
+  /**
+   * Whether `AgentRequestOptions.forkSession: true` actually creates an
+   * independent copy of the resumed session rather than mutating the source
+   * session in place or discarding it and starting fresh. `true` only for
+   * Claude (the SDK's genuine session fork). Required for two or more
+   * parallel-layer `context: 'shared'` siblings to safely resume the SAME
+   * upstream session concurrently — the dag-executor fails such a node
+   * before dispatch when its resolved provider has this `false`, since
+   * concurrent resume on a provider that ignores the flag (Codex, Pi,
+   * OpenCode) can interleave/corrupt the shared session, and one that
+   * discards it (Copilot) silently drops the shared context the author
+   * asked for.
+   */
+  sessionFork: boolean;
 }
 
 /**

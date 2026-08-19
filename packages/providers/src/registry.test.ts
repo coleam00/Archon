@@ -38,6 +38,7 @@ function makeMockProvider(id: string): IAgentProvider {
       nativeTools: false,
       containerExec: false,
       settingSources: false,
+      sessionFork: false,
     }),
     async *sendQuery() {
       yield { type: 'result' as const };

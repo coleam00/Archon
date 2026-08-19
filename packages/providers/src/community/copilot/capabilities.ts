@@ -28,4 +28,5 @@ export const COPILOT_CAPABILITIES: ProviderCapabilities = {
   settingSources: false, // Claude Agent SDK-only knob (which setting sources the agent loads)
   nativeTools: false,
   containerExec: false, // no in-container spawn path yet (fail-fast source of truth)
+  sessionFork: false, // no fork API — forkSession creates a brand-new empty session instead
 };

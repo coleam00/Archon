@@ -51,6 +51,7 @@ per-node YAML field for that provider; a ❌ means the field is accepted but ign
 | Setting sources (`settingSources`) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | In-process native tools | ✅ | ❌ | ❌ | ✅ | ❌ |
 | Container exec (folder-project container backend) | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Session fork (concurrent parallel-layer `context: 'shared'`) | ✅ | ❌ | ❌ | ❌ | ❌ |
 
 ## Caveats
 

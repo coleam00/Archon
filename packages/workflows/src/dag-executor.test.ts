@@ -58,7 +58,7 @@ import {
   clearRegistry,
   getProviderCapabilities,
 } from '@archon/providers';
-import type { SendQueryOptions } from '@archon/providers';
+import type { SendQueryOptions, MessageChunk } from '@archon/providers';
 clearRegistry();
 registerBuiltinProviders();
 // Pi is a community provider (best-effort structured output) — register it so the
@@ -225,6 +225,7 @@ const mockClaudeCapabilities = () => ({
   settingSources: true,
   nativeTools: true,
   containerExec: true,
+  sessionFork: true,
 });
 /** Canonical capabilities for Codex-backed test nodes. */
 const mockCodexCapabilities = (): ReturnType<typeof getProviderCapabilities> =>
@@ -19504,6 +19505,136 @@ describe('executeDagWorkflow -- provider-boundary session threading (#1992)', ()
     expect('sessionProvider' in pauseCtx).toBe(true);
     expect(pauseCtx.sessionId).toBeNull();
     expect(pauseCtx.sessionProvider).toBeNull();
+  });
+
+  it("context: 'shared' on a parallel-layer node overrides the fresh default and resumes the prior sequential session", async () => {
+    mockSendQueryDag.mockImplementation(async function* (
+      prompt: string
+    ): AsyncGenerator<MessageChunk> {
+      if (prompt.includes('First')) {
+        yield { type: 'assistant', content: 'first done' };
+        yield { type: 'result', sessionId: 'sess-a' };
+      } else if (prompt.includes('Shared')) {
+        yield { type: 'assistant', content: 'shared done' };
+        yield { type: 'result', sessionId: 'sess-shared' };
+      } else if (prompt.includes('Plain')) {
+        yield { type: 'assistant', content: 'plain done' };
+        yield { type: 'result', sessionId: 'sess-plain' };
+      } else {
+        yield { type: 'assistant', content: 'after done' };
+        yield { type: 'result', sessionId: 'sess-after' };
+      }
+    });
+
+    await runWorkflow(
+      'conv-parallel-shared',
+      {
+        name: 'dag-parallel-shared-context',
+        nodes: [
+          { id: 'a', prompt: 'First step' },
+          { id: 'shared', prompt: 'Shared step', depends_on: ['a'], context: 'shared' },
+          { id: 'plain', prompt: 'Plain step', depends_on: ['a'] },
+          { id: 'after', prompt: 'After step', depends_on: ['shared', 'plain'] },
+        ],
+      },
+      makeWorkflowRun('parallel-shared-context-run')
+    );
+
+    expect(mockSendQueryDag.mock.calls.length).toBe(4);
+    const resumeIdByPrompt = new Map<string, string | undefined>(
+      mockSendQueryDag.mock.calls.map((call): [string, string | undefined] => [
+        call[0] as string,
+        call[2] as string | undefined,
+      ])
+    );
+    expect(resumeIdByPrompt.get('First step')).toBeUndefined();
+    // Explicit 'shared' overrides the parallel-layer fresh default.
+    expect(resumeIdByPrompt.get('Shared step')).toBe('sess-a');
+    // A sibling without the override still defaults to fresh in a parallel layer.
+    expect(resumeIdByPrompt.get('Plain step')).toBeUndefined();
+    // The sequential-session cursor reset (moved to after layer dispatch) still
+    // takes effect before the next layer: a node after the parallel layer starts fresh.
+    expect(resumeIdByPrompt.get('After step')).toBeUndefined();
+  });
+
+  it("fails a node before dispatch when 2+ context: 'shared' siblings share a provider without session-fork support", async () => {
+    mockSendQueryDag.mockImplementation(async function* (
+      prompt: string
+    ): AsyncGenerator<MessageChunk> {
+      yield { type: 'assistant', content: 'done' };
+      yield { type: 'result', sessionId: prompt.includes('First') ? 'sess-a' : 'sess-x' };
+    });
+
+    const mockDeps = await runWorkflow(
+      'conv-parallel-shared-unsafe',
+      {
+        name: 'dag-parallel-shared-context-unsafe',
+        nodes: [
+          { id: 'a', prompt: 'First step' },
+          {
+            id: 'shared1',
+            prompt: 'Shared one',
+            depends_on: ['a'],
+            context: 'shared',
+            provider: 'codex',
+          },
+          {
+            id: 'shared2',
+            prompt: 'Shared two',
+            depends_on: ['a'],
+            context: 'shared',
+            provider: 'codex',
+          },
+        ],
+      },
+      makeWorkflowRun('parallel-shared-unsafe-run')
+    );
+
+    const failedEvents = (mockDeps.store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls
+      .map(call => call[0] as { event_type: string; data?: { error?: string } })
+      .filter(e => e.event_type === 'node_failed');
+
+    // Both shared siblings resolve to codex (no sessionFork) — both fail, independently.
+    expect(failedEvents.length).toBe(2);
+    for (const evt of failedEvents) {
+      expect(evt.data?.error).toContain('cannot safely fork a session for concurrent use');
+    }
+  });
+
+  it("does NOT fail a lone context: 'shared' node even on a provider without session-fork support", async () => {
+    // Only one 'shared' sibling in the layer — an ordinary fork-on-resume, safe on
+    // every provider regardless of sessionFork (the risk is concurrent resume of the
+    // SAME session id, which requires 2+ shared siblings).
+    mockSendQueryDag.mockImplementation(async function* (
+      prompt: string
+    ): AsyncGenerator<MessageChunk> {
+      yield { type: 'assistant', content: 'done' };
+      yield { type: 'result', sessionId: prompt.includes('First') ? 'sess-a' : 'sess-x' };
+    });
+
+    const mockDeps = await runWorkflow(
+      'conv-parallel-shared-lone',
+      {
+        name: 'dag-parallel-shared-context-lone',
+        nodes: [
+          { id: 'a', prompt: 'First step' },
+          {
+            id: 'shared1',
+            prompt: 'Shared one',
+            depends_on: ['a'],
+            context: 'shared',
+            provider: 'codex',
+          },
+          { id: 'plain', prompt: 'Plain step', depends_on: ['a'] },
+        ],
+      },
+      makeWorkflowRun('parallel-shared-lone-run')
+    );
+
+    const failedEvents = (mockDeps.store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls
+      .map(call => call[0] as { event_type: string })
+      .filter(e => e.event_type === 'node_failed');
+    expect(failedEvents.length).toBe(0);
   });
 });
 

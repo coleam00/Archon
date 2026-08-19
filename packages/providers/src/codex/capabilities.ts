@@ -24,4 +24,5 @@ export const CODEX_CAPABILITIES: ProviderCapabilities = {
   settingSources: false, // Claude Agent SDK-only knob (which setting sources the agent loads)
   nativeTools: false,
   containerExec: false, // no in-container spawn path yet (fail-fast source of truth)
+  sessionFork: false, // ignores forkSession entirely — resumes/continues the same thread
 };
