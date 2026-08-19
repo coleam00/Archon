@@ -27,6 +27,12 @@ inputs:
     description: >-
       What to deliver — a plan path, findings, or a description. Empty means
       the run's trigger message is the work.
+  prior_report:
+    default: ""
+    description: >-
+      Cross-run review continuity: the previous delivery run's review report
+      path. Round 1 then verifies prior findings (rejections included) instead
+      of relitigating them from scratch. Empty on a first delivery.
 
 returns: pr
 
@@ -55,12 +61,14 @@ nodes:
       draft: "true"
     depends_on: [gate-green]
 
-  # Round 1: full review of the PR.
+  # Round 1: reviews the PR — full on a first delivery, light continuation when
+  # the caller passes the previous run's report (adjudications carry across
+  # runs instead of being relitigated).
   - id: rev1
     include: review
     with:
       scope: ""
-      prior_report: ""
+      prior_report: "$INPUTS.prior_report"
     depends_on: [pr]
 
   # Marker join: gate-ready must OR two branches where one may be skipped, and a
