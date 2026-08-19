@@ -136,6 +136,7 @@ export {
   isRunBlockedOnChild,
   SUBRUN_METADATA_KEYS,
   readSubrunMetadata,
+  readChannelRefFromMetadata,
 } from './workflow-run';
 export type {
   WorkflowRunStatus,

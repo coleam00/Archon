@@ -396,6 +396,32 @@ export function isContainerRun(run: { metadata?: Record<string, unknown> }): boo
   return run.metadata?.isolation === 'container';
 }
 
+/**
+ * Reads the `channel_ref` a run's metadata was created with (persisted by
+ * `executeWorkflow` at run-creation time — see `channel_ref` in `executor.ts`).
+ * Structurally shaped like `ChannelReference` (`../deps`) without importing it, to
+ * avoid a schemas -> deps import cycle. Used by the child-workflow auto-resume hook
+ * (`maybeResumeParentRun`, @archon/workflows) to restore the parent's original
+ * channel context, since a resume carries no live triggering message to read it from.
+ * Reads defensively from possibly-malformed metadata.
+ */
+export function readChannelRefFromMetadata(
+  metadata: Record<string, unknown> | undefined
+): { adapter: string; channelId: string; channelName?: string } | undefined {
+  const val = metadata?.channel_ref;
+  if (
+    typeof val === 'object' &&
+    val !== null &&
+    typeof (val as Record<string, unknown>).adapter === 'string' &&
+    typeof (val as Record<string, unknown>).channelId === 'string' &&
+    (typeof (val as Record<string, unknown>).channelName === 'string' ||
+      (val as Record<string, unknown>).channelName === undefined)
+  ) {
+    return val as { adapter: string; channelId: string; channelName?: string };
+  }
+  return undefined;
+}
+
 // ---------------------------------------------------------------------------
 // ArtifactType
 // ---------------------------------------------------------------------------

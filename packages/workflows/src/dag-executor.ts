@@ -169,6 +169,7 @@ interface ShellInputContext {
   docsDir: string;
   issueContext?: string;
   nodeOutputs: Map<string, NodeOutput>;
+  channelRef?: ChannelReference;
 }
 
 /**
@@ -209,7 +210,7 @@ function inputEnvVars(node: DagNode, ctx: ShellInputContext): NodeJS.ProcessEnv 
         undefined,
         undefined,
         undefined,
-        { stateDir: ctx.stateDir, inputs: runInputs }
+        { stateDir: ctx.stateDir, inputs: runInputs, channelRef: ctx.channelRef }
       ).prompt,
       ctx.nodeOutputs
     );
@@ -2891,6 +2892,7 @@ async function executeBashNode(
       docsDir,
       issueContext,
       nodeOutputs,
+      channelRef,
     }),
     ARTIFACTS_DIR: artifactsDir,
     STATE_DIR: stateDir,
@@ -3180,6 +3182,7 @@ async function executeScriptNode(
       docsDir,
       issueContext,
       nodeOutputs,
+      channelRef,
     }),
     ARTIFACTS_DIR: artifactsDir,
     STATE_DIR: stateDir,

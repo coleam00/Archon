@@ -26,6 +26,7 @@ import {
   isRunBlockedOnChild,
   SUBRUN_METADATA_KEYS,
   readSubrunMetadata,
+  readChannelRefFromMetadata,
 } from './schemas';
 import { executeDagWorkflow, childOutcomeFromRun } from './dag-executor';
 import type { RunChildWorkflowArgs, ChildWorkflowOutcome, PriorRunUsage } from './dag-executor';
@@ -1107,6 +1108,12 @@ async function maybeResumeParentRun(
     'workflow.parent_auto_resume_started'
   );
   try {
+    // Restore the channel context the parent was originally invoked with (#2545
+    // CodeRabbit finding): a resume has no live triggering message to read
+    // channelRef from, so it must come back from the metadata `channel_ref`
+    // stamped at run creation — otherwise $ADAPTER/$CHANNEL_ID/$CHANNEL_NAME and
+    // subprocess env vars go empty for every node after this auto-resume point.
+    const channelRef = readChannelRefFromMetadata(parent.metadata);
     await executeWorkflow(
       deps,
       platform,
@@ -1119,6 +1126,7 @@ async function maybeResumeParentRun(
         ...hydrated,
         codebaseId: parent.codebase_id ?? undefined,
         resolveChildIsolation,
+        channelRef,
       }
     );
   } catch (err) {
