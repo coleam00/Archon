@@ -17,6 +17,10 @@ $ARGUMENTS
 3. Run what applies, in the project's own order where one is documented: type checks, lint, tests, build. Honor any documented aggregate gate (a `validate`/`check` script) over reassembling its pieces by hand.
 4. Capture each command and its outcome as you go.
 
+## The object under validation is the tracked tree
+
+An Archon run injects its own scaffolding into the checkout — the `.archon/` copy, and on some launch paths untracked workflow packages. That is run machinery, not the change under validation, and repository gates that inspect git state (untracked-file refusals, cleanliness checks) will trip on it. When a check fails **only** because of untracked files under `.archon/` that the run itself injected: quarantine them for the gate's duration (move them aside, run the gate, restore them — always restore, even on failure), note the quarantine in your report, and judge the gate's real result. Never quarantine tracked files, or anything the change under validation actually touches.
+
 ## Not your job
 
 Do not modify source files, fix failures, commit, push, or touch pull requests. Do not skip a failing check to make the verdict green. Do not re-run a flaky-looking check more than once without saying so.
