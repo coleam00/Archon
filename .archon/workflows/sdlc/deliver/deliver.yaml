@@ -88,49 +88,67 @@ nodes:
     depends_on: [flag1]
     when: "$rev1.output.ready == 'false'"
 
-  # Round 2 ALWAYS runs (none_failed_min_one_success: flag1 supplies the
-  # success; a skipped fix doesn't block, a failed fix does). When round 1 was
-  # already ready, this is a light re-review of an empty delta — a few small
-  # calls to re-verify, not waste. Deliberately NOT skip-gated: a composed
-  # block's internal all_done node escapes a block-level skip (watch-listed
-  # composition finding), so no block in this workflow is ever left half-dead.
+  # Round 2 runs ONLY when round 1 found blockers and fix applied work — a
+  # ready round 1 ends the review; there is nothing new to re-review. The
+  # marker join stays because a skipped rev2 cannot be referenced directly (a
+  # bash ref to a skipped node's output fails strictly). When rev2 RUNS it OWNS
+  # the marker — sets it on ready, clears it otherwise — so on the path where
+  # the re-review exists, it is the final authority (no round-1 bypass, R3).
   - id: rev2
     include: review
     with:
       scope: ""
       prior_report: "$ARTIFACTS_DIR/review/report.md"
-    depends_on: [flag1, fix]
-    trigger_rule: none_failed_min_one_success
+    depends_on: [fix]
 
+  # #2622 firewall (ledgered): when rev2's block is skip-cascaded, its internal
+  # all_done synthesize still fires on the dead block and COMPLETES — which
+  # satisfies flag2's dependency and would resurrect the flow. The when: below
+  # is what stops that: flag2 only consumes rev2 on the path where rev2
+  # legitimately ran. One wasted synthesize call remains on the skip path until
+  # the engine fix lands.
   - id: flag2
     bash: |
       if [ "$rev2.output.ready" = "true" ]; then
         touch "$ARTIFACTS_DIR/review/.ready"
         echo '{"ready":"true"}'
       else
+        rm -f "$ARTIFACTS_DIR/review/.ready"
         echo '{"ready":"false"}'
       fi
     depends_on: [rev2]
+    when: "$rev1.output.ready == 'false'"
 
-  # Ready = a round said so (the marker). Round 2 always runs, so flag2 always
-  # reports.
+  # Ready = the marker: round 1's verdict, overridden by round 2 wherever
+  # round 2 ran. all_done because flag2 is skipped by design on the ready-first
+  # path.
   - id: gate-ready
     bash: |
       if [ -f "$ARTIFACTS_DIR/review/.ready" ]; then
         echo '{"ready":"true"}'
       else
+        # Mark the PR itself, not just the comment: the run ends here, so the
+        # draft carries a visible needs-fixes label until a later delivery
+        # clears it. Best-effort — labeling must not mask the real failure.
+        gh label create needs-fixes --color D93F0B --description "Automated review found blocking findings" 2>/dev/null || true
+        gh pr edit --add-label needs-fixes 2>/dev/null || true
         echo "review is not ready after two rounds — open Critical/Important findings remain in $ARTIFACTS_DIR/review/report.md and on the PR comment." >&2
         exit 1
       fi
-    depends_on: [flag2]
+    depends_on: [flag1, flag2]
+    trigger_rule: all_done
 
+  # Explicit 60-minute bound: without `timeout:` the engine kills a script node
+  # at its 120 s default (R5) — far under a normal 5-10 minute CI run.
   - id: await-checks
     script: await-checks
     runtime: uv
+    timeout: 3600000
     depends_on: [gate-ready]
 
   - id: flip-ready
     bash: |
+      gh pr edit --remove-label needs-fixes 2>/dev/null || true
       gh pr ready
       draft=$(gh pr view --json isDraft --jq .isDraft)
       if [ "$draft" = "false" ]; then
