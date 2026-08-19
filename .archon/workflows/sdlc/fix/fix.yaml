@@ -1,0 +1,58 @@
+# BLOCKED on #2629 (ledgered): nested include loses the middle workflow's input
+# binding — deliver's inner `$INPUTS.work` reference survives composition and
+# fails at run time against this workflow's namespace. The chain loads, expands,
+# and gates correctly; fixtures/rooted-delivered.stubs.yaml is the acceptance
+# test that goes green exactly when #2629 lands. Until then, chain manually:
+# run investigate, then deliver with the report path in its work input.
+name: fix
+description: |
+  Root-cause first, then deliver: investigate the target, refuse to spend on an
+  unrooted cause, and hand the proven chain to the delivery tail — implement,
+  review, fix rounds, validate, through to a ready-to-merge PR. One governed
+  run, one artifact store: the report the fixer implements from is the one this
+  run wrote.
+
+  Use when: a bug or failure should become a fixed, reviewed PR — "fix this
+  issue", "root-cause and fix this".
+  NOT for: causes you already understand (deliver directly), or work that needs
+  design decisions first (plan, then deliver).
+
+requires: [github]
+
+inputs:
+  target:
+    default: ""
+    description: >-
+      What to fix — an issue reference, a symptom, or a failing command. When
+      empty, the run's trigger message is the target.
+
+returns: deliver
+
+nodes:
+  - id: inv
+    include: investigate
+    with:
+      target: "$INPUTS.target"
+
+  # Deterministic spend gate: an unrooted investigation ends the run here —
+  # honest and resumable, with the report's named gaps in the run artifacts —
+  # instead of paying for an implementation built on a guess.
+  - id: gate-rooted
+    bash: |
+      if [ "$inv.output.rooted" = "true" ]; then
+        echo '{"gate":"rooted"}'
+      else
+        echo "investigation is not rooted — the report names the gaps. Refusing to build on a guess." >&2
+        exit 1
+      fi
+    depends_on: [inv]
+
+  - id: deliver
+    include: deliver
+    with:
+      work: >-
+        Fix the root cause established by this run's investigation, recorded at
+        $ARTIFACTS_DIR/investigation.md — read it in full; its fix boundary and
+        verification sections are the work order. The target being fixed:
+        $INPUTS.target
+    depends_on: [gate-rooted]
