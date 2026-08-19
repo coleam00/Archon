@@ -220,7 +220,7 @@ nodes:
 | `idle_timeout` | number | — | Kill node if idle for this many milliseconds |
 | `retry` | object | — | Per-node retry configuration. See [Retry Configuration](#retry-configuration) |
 | `always_run` | boolean | `false` | Opt out of resume caching: re-run this node on resume even if a prior run completed it. See [Opting Out of Resume Caching](#opting-out-of-resume-caching) |
-| `output_type` | string | — | Semantic label for this node's output (e.g. `'plan'`, `'findings'`, `'code'`). When set, the executor writes `$ARTIFACTS_DIR/nodes/<id>.md` + `<id>.meta.json` after the node completes (best-effort) so later nodes and runs can locate output by type instead of guessing filenames. See [The Artifact Chain](#the-artifact-chain) |
+| `output_type` | string | — | Semantic label for this node's output (e.g. `'plan'`, `'findings'`, `'code'`). When set, the executor writes `$ARTIFACTS_DIR/nodes/<id>.md` + `<id>.meta.json` after the node completes (best-effort) so later nodes and runs can locate output by type instead of guessing filenames. A `loop_group` body node retains a suffixed sidecar for each iteration. See [The Artifact Chain](#the-artifact-chain) |
 
 **AI node options** — apply to `command` and `prompt` nodes:
 
@@ -886,6 +886,8 @@ When a node sets `output_type`, the executor writes a typed sidecar after the no
 
 - `$ARTIFACTS_DIR/nodes/<id>.md` — the node's output text
 - `$ARTIFACTS_DIR/nodes/<id>.meta.json` — metadata (`outputType`, `runId`, `producedAt`, `size`, and `sessionId` when available)
+
+For a node inside a `loop_group`, `<id>` is the namespaced producer identity and the filenames add `.iteration-<n>` (for example, `refine_draft.iteration-2.md`). Its metadata records `nodeId: "refine.draft"` and `iteration: 2`, preserving every iteration as a distinct governed output, including across an interactive resume. Top-level node filenames and metadata are unchanged.
 
 This works on **every** node type (`bash`/`script` produce typed outputs too, just without a `sessionId`). The write is **best-effort** — if it fails, the node still succeeds and a warning is logged; the typed sidecar may simply be absent. `output_type` is an open set of labels (`plan`, `findings`, `code`, `summary`, …) — pick a convention and keep casing consistent, since lookup is case-sensitive.
 

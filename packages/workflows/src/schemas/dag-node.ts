@@ -262,9 +262,10 @@ export const dagNodeBaseSchema = z.object({
   // Declares the semantic type of this node's output (e.g. 'plan', 'findings',
   // 'code', 'summary' — an open set). When set, the executor writes a typed
   // sidecar artifact (`nodes/<id>.md` + `<id>.meta.json`) after the node
-  // completes, so other nodes and later runs can locate output by type instead
-  // of guessing filenames. Valid on every node type (bash/script produce typed
-  // outputs too) — not an AI-only field.
+  // completes; loop_group body nodes retain one suffixed sidecar per iteration.
+  // Other nodes and later runs can locate output by type instead of guessing
+  // filenames. Valid on every node type (bash/script produce typed outputs too)
+  // — not an AI-only field.
   output_type: z.string().min(1).optional(),
 });
 

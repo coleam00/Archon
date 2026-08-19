@@ -15227,6 +15227,152 @@ describe('executeDagWorkflow -- typed artifacts (output_type)', () => {
     }
     expect(wrote).toBe(false);
   });
+
+  it('loop_group body output_type preserves a namespaced artifact for every iteration', async () => {
+    let calls = 0;
+    mockSendQueryDag.mockImplementation(async function* () {
+      calls++;
+      const content = calls === 3 ? 'iteration 3\nDONE' : `iteration ${String(calls)}`;
+      yield { type: 'assistant', content };
+      yield { type: 'result', sessionId: `loop-session-${String(calls)}` };
+    });
+
+    const artifactsDir = join(testDir, 'artifacts');
+    await executeDagWorkflow(
+      createMockDeps(),
+      createMockPlatform(),
+      'conv-dag',
+      testDir,
+      {
+        name: 'typed-loop-body',
+        nodes: [
+          {
+            id: 'refine',
+            loop_group: {
+              until: 'DONE',
+              max_iterations: 3,
+              fresh_context: false,
+              nodes: [
+                { id: 'draft', prompt: 'produce a draft', output_type: 'draft', depends_on: [] },
+              ],
+            },
+          },
+        ],
+      },
+      makeWorkflowRun(),
+      'claude',
+      undefined,
+      artifactsDir,
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(calls).toBe(3);
+    for (let iteration = 1; iteration <= 3; iteration++) {
+      const artifactId = `refine_draft.iteration-${String(iteration)}`;
+      expect(await readFile(join(artifactsDir, 'nodes', `${artifactId}.md`), 'utf8')).toBe(
+        iteration === 3 ? 'iteration 3\nDONE' : `iteration ${String(iteration)}`
+      );
+      const meta = JSON.parse(
+        await readFile(join(artifactsDir, 'nodes', `${artifactId}.meta.json`), 'utf8')
+      ) as Record<string, unknown>;
+      expect(meta).toMatchObject({
+        nodeId: 'refine.draft',
+        iteration,
+        outputType: 'draft',
+        path: join('nodes', `${artifactId}.md`),
+      });
+    }
+  });
+
+  it('loop_group resume leaves completed iteration artifacts unchanged', async () => {
+    const artifactsDir = join(testDir, 'artifacts');
+    const workflow = {
+      name: 'typed-loop-resume',
+      nodes: [
+        {
+          id: 'refine',
+          loop_group: {
+            until: 'APPROVED',
+            max_iterations: 3,
+            fresh_context: false,
+            interactive: true,
+            nodes: [
+              { id: 'draft', prompt: 'produce a draft', output_type: 'draft', depends_on: [] },
+            ],
+          },
+        },
+      ] as DagNode[],
+    };
+
+    mockSendQueryDag.mockImplementationOnce(async function* () {
+      yield { type: 'assistant', content: 'iteration 1 draft' };
+      yield { type: 'result', sessionId: 'loop-session-1' };
+    });
+    const firstDeps = createMockDeps();
+    await executeDagWorkflow(
+      firstDeps,
+      createMockPlatform(),
+      'conv-dag',
+      testDir,
+      workflow,
+      makeWorkflowRun(),
+      'claude',
+      undefined,
+      artifactsDir,
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+    const firstArtifactPath = join(artifactsDir, 'nodes', 'refine_draft.iteration-1.md');
+    const firstMetaPath = join(artifactsDir, 'nodes', 'refine_draft.iteration-1.meta.json');
+    const firstArtifact = await readFile(firstArtifactPath, 'utf8');
+    const firstMeta = await readFile(firstMetaPath, 'utf8');
+
+    mockSendQueryDag.mockImplementationOnce(async function* () {
+      yield { type: 'assistant', content: 'iteration 2 approved\nAPPROVED' };
+      yield { type: 'result', sessionId: 'loop-session-2' };
+    });
+    await executeDagWorkflow(
+      createMockDeps(),
+      createMockPlatform(),
+      'conv-dag',
+      testDir,
+      workflow,
+      makeWorkflowRun('dag-test-run-id', {
+        metadata: {
+          approval: {
+            type: 'interactive_loop',
+            nodeId: 'refine',
+            iteration: 1,
+            sessionId: 'loop-session-1',
+            sessionProvider: 'claude',
+            message: 'Review.',
+          },
+          loop_user_input: 'approved',
+        },
+      }),
+      'claude',
+      undefined,
+      artifactsDir,
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(await readFile(firstArtifactPath, 'utf8')).toBe(firstArtifact);
+    expect(await readFile(firstMetaPath, 'utf8')).toBe(firstMeta);
+    expect(await readFile(join(artifactsDir, 'nodes', 'refine_draft.iteration-2.md'), 'utf8')).toBe(
+      'iteration 2 approved\nAPPROVED'
+    );
+  });
 });
 
 describe('executeDagWorkflow -- persist_session', () => {

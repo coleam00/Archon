@@ -23,15 +23,30 @@ function safeSegment(id: string): string {
 }
 
 /**
- * Read the `nodeId` recorded in an existing `.meta.json`, or `undefined` if the
- * file is missing or unreadable. Used only by the collision guard in
+ * Read the producer identity recorded in an existing `.meta.json`, or `undefined`
+ * if the file is missing or unreadable. Used only by the collision guard in
  * `writeNodeArtifact` — a missing or corrupt prior file is treated as "no known
  * owner" so the write proceeds (and overwrites the unusable file).
  */
-async function readArtifactNodeId(metaPath: string): Promise<string | undefined> {
+async function readArtifactOwner(
+  metaPath: string
+): Promise<Pick<NodeArtifact, 'nodeId' | 'iteration'> | undefined> {
   try {
-    const parsed = JSON.parse(await readFile(metaPath, 'utf8')) as { nodeId?: unknown };
-    return typeof parsed.nodeId === 'string' ? parsed.nodeId : undefined;
+    const parsed = JSON.parse(await readFile(metaPath, 'utf8')) as {
+      nodeId?: unknown;
+      iteration?: unknown;
+    };
+    if (typeof parsed.nodeId !== 'string') return undefined;
+    if (
+      parsed.iteration !== undefined &&
+      (!Number.isInteger(parsed.iteration) || (parsed.iteration as number) < 1)
+    ) {
+      return undefined;
+    }
+    return {
+      nodeId: parsed.nodeId,
+      ...(parsed.iteration !== undefined ? { iteration: parsed.iteration as number } : {}),
+    };
   } catch {
     return undefined;
   }
@@ -39,9 +54,10 @@ async function readArtifactNodeId(metaPath: string): Promise<string | undefined>
 
 /**
  * Write a node's typed output artifact: the output text to `nodes/<id>.md`
- * and its metadata to `nodes/<id>.meta.json`. Per-node files (no shared index):
- * the index is derived on read by globbing, so a node's output is addressable by
- * id and separate nodes / separate runs never overwrite one another's metadata.
+ * and its metadata to `nodes/<id>.meta.json`. A loop_group body artifact adds
+ * `.iteration-<n>` to both filenames. Per-producer files (no shared index): the
+ * index is derived on read by globbing, so separate nodes and loop iterations
+ * never overwrite one another's metadata.
  * Writes are issued sequentially after each layer settles — there is no in-run
  * write contention; the per-node layout is what isolates one node from the next.
  *
@@ -57,24 +73,30 @@ export async function writeNodeArtifact(
   const nodesDir = join(artifactsDir, NODES_SUBDIR);
   await mkdir(nodesDir, { recursive: true });
   const safeId = safeSegment(params.nodeId);
-  const metaPath = join(nodesDir, `${safeId}.meta.json`);
+  const artifactId =
+    params.iteration === undefined ? safeId : `${safeId}.iteration-${String(params.iteration)}`;
+  const metaPath = join(nodesDir, `${artifactId}.meta.json`);
 
-  // Collision guard: node ids are unique per workflow, so an existing metadata
-  // file under this safe segment naming a *different* node means safeSegment()
-  // collapsed two distinct ids (e.g. `a.b` and `a_b`) onto one filename. Fail
+  // Collision guard: producer identities are unique per workflow iteration, so
+  // existing metadata naming a different producer means safeSegment() collapsed
+  // two distinct ids (e.g. `a.b` and `a_b`) onto one filename. Fail
   // loudly — the best-effort caller logs it — instead of silently overwriting the
   // first node's artifact. First writer wins; the second is logged, not lost-silent.
-  const priorNodeId = await readArtifactNodeId(metaPath);
-  if (priorNodeId !== undefined && priorNodeId !== params.nodeId) {
+  const priorOwner = await readArtifactOwner(metaPath);
+  if (
+    priorOwner !== undefined &&
+    (priorOwner.nodeId !== params.nodeId || priorOwner.iteration !== params.iteration)
+  ) {
     throw new Error(
-      `node artifact id collision: '${params.nodeId}' and '${priorNodeId}' both map to filename segment '${safeId}'`
+      `node artifact id collision: '${params.nodeId}' and '${priorOwner.nodeId}' both map to filename segment '${artifactId}'`
     );
   }
 
-  const relPath = join(NODES_SUBDIR, `${safeId}.md`);
+  const relPath = join(NODES_SUBDIR, `${artifactId}.md`);
   await writeFile(join(artifactsDir, relPath), outputText, 'utf8');
   const meta: NodeArtifact = {
     nodeId: params.nodeId,
+    ...(params.iteration !== undefined ? { iteration: params.iteration } : {}),
     outputType: params.outputType,
     path: relPath,
     runId: params.runId,

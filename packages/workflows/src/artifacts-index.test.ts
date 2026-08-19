@@ -54,6 +54,30 @@ describe('artifacts-index', () => {
     expect('sessionId' in meta).toBe(false);
   });
 
+  test('writeNodeArtifact includes a loop iteration in the artifact identity', async () => {
+    const meta = await writeNodeArtifact(
+      dir,
+      {
+        nodeId: 'refine.draft',
+        iteration: 2,
+        outputType: 'draft',
+        runId: 'r',
+        producedAt: '2026-06-03T00:00:00.000Z',
+      },
+      'iteration two'
+    );
+
+    expect(meta).toMatchObject({
+      nodeId: 'refine.draft',
+      iteration: 2,
+      path: join('nodes', 'refine_draft.iteration-2.md'),
+    });
+    expect(await readFile(join(dir, 'nodes', 'refine_draft.iteration-2.md'), 'utf8')).toBe(
+      'iteration two'
+    );
+    expect(await readNodeArtifacts(dir)).toEqual([meta]);
+  });
+
   test('readNodeArtifacts returns [] for a dir with no artifacts yet', async () => {
     expect(await readNodeArtifacts(dir)).toEqual([]);
   });

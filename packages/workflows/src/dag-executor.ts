@@ -8072,7 +8072,11 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
         const completedNode = nodeById.get(nodeId);
         if (output.state === 'completed' && completedNode?.output_type) {
           const meta = {
-            nodeId,
+            // A loop_group body node executes repeatedly, so its artifact identity
+            // includes the same composed group prefix as lifecycle events plus the
+            // current iteration. Top-level nodes keep their existing raw identity.
+            nodeId: iteration === undefined ? nodeId : stepNamePrefix + nodeId,
+            ...(iteration !== undefined ? { iteration } : {}),
             outputType: completedNode.output_type,
             runId: workflowRun.id,
             producedAt: new Date().toISOString(),
