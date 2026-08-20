@@ -6660,9 +6660,10 @@ async function executeFanOutWorkflowNode(
         event_type: 'node_failed',
         step_name: stepName,
         // `data.fan_out` carries the ordered child report when the failure happened AFTER
-        // every slot settled (the `all_success` join), so the same observability that the
-        // completed path gets is available on `node_failed` too (#2451). Early failures
-        // (items/with resolution, gate, preflight) have no children yet → no report.
+        // every slot settled (the `all_success` join and the post-settle gate-rejected
+        // backstop), so the same observability that the completed path gets is available on
+        // `node_failed` too (#2451). Early failures (items/with resolution, preflight, and the
+        // mid-flight gate cancel that fires before slots settle) have no children yet → no report.
         data: { error, type: 'workflow', ...(report !== undefined ? { fan_out: report } : {}) },
       })
       .catch((err: Error) => {
@@ -7146,7 +7147,10 @@ async function executeFanOutWorkflowNode(
       }
     const msg = fanOutAutonomousGateMessage(node, pausedChildRunId, pausedIdx);
     await notify(`⏸→❌ **Fan-out gate rejected** (node \`${node.id}\`): ${msg}`);
-    return failResult(msg, totalCostUsd, totalTokens);
+    // Every slot has settled to a terminal/cancelled state by this post-settle backstop, so
+    // carry the ordered report — a gate-rejected fan-out is exactly where an operator wants
+    // the per-child breakdown, matching the all_success failure path (#2451).
+    return failResult(msg, totalCostUsd, totalTokens, report);
   }
 
   // A slot "did not complete" when it never ran, or ran to a non-completed terminal state.

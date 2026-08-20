@@ -2561,9 +2561,18 @@ nodes:
     const store = new InMemoryStore();
     const deps = makeDeps(store);
     const parent = await discover('fan-never-alldone');
+    // Capture platform messages: the persisted report and the notify warning are separate
+    // code paths, so asserting only the record leaves the #2451 silent-green regression
+    // undetected — hold the messages to prove the warning actually fires.
+    const messages: string[] = [];
+    const platform = makePlatform();
+    platform.sendMessage = mock((_conversationId: string, text: string) => {
+      messages.push(text);
+      return Promise.resolve();
+    }) as unknown as IWorkflowPlatform['sendMessage'];
     const result = await executeWorkflow(
       deps,
-      makePlatform(),
+      platform,
       'conv-plat',
       cwd,
       parent,
@@ -2576,6 +2585,14 @@ nodes:
     expect(parentRun?.status).toBe('completed');
     // No child run rows exist for a target that never resolves.
     expect(await store.findChildRuns(parentRun!.id)).toHaveLength(0);
+
+    // #2451 headline behavior: exactly one "completed with failures" warning fires, carrying
+    // the tally and the `archon workflow get` pointer — the trace the silent-green bug lacked.
+    const warnings = messages.filter(m => m.includes('Fan-out completed with failures'));
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('node `work`');
+    expect(warnings[0]).toContain(`archon workflow get ${parentRun!.id}`);
+    expect(warnings[0]).toContain('did not complete');
 
     const workCompleted = store.events.find(
       e => e.event_type === 'node_completed' && e.step_name === 'work'
@@ -3143,6 +3160,16 @@ nodes:
     expect(String(nodeFailed?.data?.error)).toContain('autonomously');
     expect(String(nodeFailed?.data?.error)).toContain('#2180');
     expect(String(nodeFailed?.data?.error)).toMatch(/child \d+ \(run [\w-]+\)/);
+    // #2451 (M1): the post-settle gate-rejected backstop carries the ordered child report on
+    // node_failed too — a gate-rejected fan-out is exactly where the per-slot breakdown is
+    // wanted, matching the all_success failure path. Without the fix this was dropped to null.
+    const gateReport = parseFanOutReport(nodeFailed?.data?.fan_out);
+    expect(gateReport).not.toBeNull();
+    const gatedSlot = gateReport?.children.find(c => c.kind === 'cancelled_by_engine');
+    expect(gatedSlot).toBeDefined();
+    if (gatedSlot?.kind === 'cancelled_by_engine') {
+      expect(gatedSlot.reason).toBe('fan_out_gate');
+    }
   });
 
   it('a running fan-out child found on resume fails the node WITHOUT cancelling it (C1)', async () => {

@@ -59,4 +59,44 @@ describe('deriveNodeStatuses — fan-out tally forwarding (#2451)', () => {
     expect(withStatus.every(n => n.status === 'pending')).toBe(true);
     expect(withStatus.every(n => n.fanOut === null)).toBe(true);
   });
+
+  // M3 (#2451): on resume a completed fan-out node re-emits `node_skipped_prior_success`
+  // with NO fan_out payload. The prior-tally retention branch must keep the earlier tally so
+  // the amber-attention badge survives — a naive `e.fanOut?.tally ?? null` would drop it.
+  test('retains a prior fan-out tally when a later resume-skip transition carries none', () => {
+    const events = [
+      toRunEvent(raw({ event_type: 'node_completed', step_name: 'plan', data: { name: 'plan' } })),
+      toRunEvent(
+        raw({
+          event_type: 'node_completed',
+          step_name: 'spread',
+          data: {
+            name: 'spread',
+            node_output: '[]',
+            fan_out: {
+              children: [
+                { kind: 'completed', index: 0, childRunId: 'a' },
+                { kind: 'never_ran', index: 1, reason: 'unresolved_target', error: 'x' },
+                { kind: 'never_ran', index: 2, reason: 'unresolved_target', error: 'x' },
+              ],
+            },
+          },
+        })
+      ),
+      // Resume re-emits the fan-out node as skipped-prior-success with no report.
+      toRunEvent(
+        raw({
+          event_type: 'node_skipped_prior_success',
+          step_name: 'spread',
+          data: { name: 'spread' },
+        })
+      ),
+    ];
+    const withStatus = deriveNodeStatuses(nodes, events);
+    const spread = withStatus.find(n => n.id === 'spread');
+    // Latest transition wins for status, but the tally is retained from the earlier event.
+    expect(spread?.status).toBe('skipped');
+    expect(spread?.fanOut?.notCompleted).toBe(2);
+    expect(spread?.fanOut?.total).toBe(3);
+  });
 });
