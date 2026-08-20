@@ -1,8 +1,11 @@
 /**
  * Unit tests for Slack adapter
  */
-import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test';
 import type { Mock } from 'bun:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 // Mock logger to suppress noisy output during tests
 const mockLogger = {
@@ -615,6 +618,107 @@ describe('SlackAdapter', () => {
       const second = await adapter.fetchDisplayName('U_RETRY');
       expect(second).toBe('Eventually');
       expect(mockUsersInfo).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('downloadAttachments', () => {
+    let adapter: SlackAdapter;
+    let originalFetch: typeof fetch;
+    // getArchonHome() is not mocked (see the @archon/paths mock above) — it
+    // reads process.env.ARCHON_HOME at call time, so a successful download
+    // test writes real files under it. Point it at a fresh temp dir per test
+    // and remove that dir afterward, rather than leaving upload artifacts in
+    // the developer's/CI's actual Archon home.
+    let tempHome: string;
+    let originalArchonHome: string | undefined;
+
+    beforeEach(() => {
+      adapter = new SlackAdapter('xoxb-fake-token', 'xapp-fake');
+      originalFetch = globalThis.fetch;
+      globalThis.fetch = mock(() =>
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-length': '4' }),
+          arrayBuffer: () => Promise.resolve(new ArrayBuffer(4)),
+          body: new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new Uint8Array(4));
+              controller.close();
+            },
+          }),
+        } as unknown as Response)
+      ) as unknown as typeof fetch;
+      originalArchonHome = process.env.ARCHON_HOME;
+      tempHome = mkdtempSync(join(tmpdir(), 'slack-adapter-test-'));
+      process.env.ARCHON_HOME = tempHome;
+    });
+
+    afterEach(() => {
+      globalThis.fetch = originalFetch;
+      if (originalArchonHome === undefined) {
+        delete process.env.ARCHON_HOME;
+      } else {
+        process.env.ARCHON_HOME = originalArchonHome;
+      }
+      rmSync(tempHome, { recursive: true, force: true });
+    });
+
+    test('returns empty result when there are no files', async () => {
+      const result = await adapter.downloadAttachments(undefined, 'conv-1');
+      expect(result).toEqual({ files: [], uploadDir: '', skipped: [] });
+    });
+
+    test('downloads a file with the bot token as a Bearer Authorization header', async () => {
+      const result = await adapter.downloadAttachments(
+        [
+          {
+            id: 'F1',
+            name: 'report.pdf',
+            mimetype: 'application/pdf',
+            url_private_download: 'https://files.slack.com/files-pri/T1-F1/report.pdf',
+            size: 4,
+          },
+        ],
+        'conv-1'
+      );
+
+      expect(result.files).toHaveLength(1);
+      expect(result.files[0].name).toBe('report.pdf');
+      const fetchCall = (globalThis.fetch as Mock<typeof fetch>).mock.calls[0];
+      expect(fetchCall[0]).toBe('https://files.slack.com/files-pri/T1-F1/report.pdf');
+      expect((fetchCall[1] as RequestInit).headers).toEqual({
+        Authorization: 'Bearer xoxb-fake-token',
+      });
+    });
+
+    test('rejects a non-slack.com host without ever calling fetch (bot token protection)', async () => {
+      const fetchSpy = mock(() => Promise.reject(new Error('should not be called')));
+      globalThis.fetch = fetchSpy as unknown as typeof fetch;
+
+      const result = await adapter.downloadAttachments(
+        [
+          {
+            id: 'F1',
+            name: 'evil.pdf',
+            url_private_download: 'https://evil.example.com/report.pdf',
+          },
+        ],
+        'conv-1'
+      );
+
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(result.skipped).toEqual([{ name: 'evil.pdf', reason: 'untrusted_url' }]);
+    });
+
+    test('a file with no url_private_download is skipped, not silently dropped from the count', async () => {
+      const result = await adapter.downloadAttachments(
+        [{ id: 'F1', name: 'no-url.pdf' }],
+        'conv-1'
+      );
+
+      expect(result.files).toEqual([]);
+      expect(result.skipped).toEqual([{ name: 'no-url.pdf', reason: 'download_failed' }]);
     });
   });
 });

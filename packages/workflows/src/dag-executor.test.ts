@@ -21372,7 +21372,7 @@ describe('collectContainerIncompatibleProviders', () => {
 });
 
 describe('buildSubprocessDockerArgs — bash/script env isolation', () => {
-  const CTX = { kind: 'container' as const, containerId: 'cid-9' };
+  const CTX = { kind: 'container' as const, containerId: 'cid-9', containerName: 'archon-cid-9' };
 
   it('delivers the Archon-managed env via -e flags only and runs at the same cwd', () => {
     const args = buildSubprocessDockerArgs(CTX, 'bash', ['-c', 'echo hi'], {
@@ -21436,7 +21436,11 @@ describe('buildSubprocessDockerArgs — bash/script env isolation', () => {
 // ---------------------------------------------------------------------------
 
 describe('executeDagWorkflow -- container write-back gate', () => {
-  const CONTAINER_EXEC = { kind: 'container' as const, containerId: 'cid-1' };
+  const CONTAINER_EXEC = {
+    kind: 'container' as const,
+    containerId: 'cid-1',
+    containerName: 'archon-cid-1',
+  };
   const wbTestDir = join(tmpdir(), `dag-wb-test-${Date.now()}`);
 
   function makeWritebackBackend(over?: Partial<Record<string, unknown>>) {

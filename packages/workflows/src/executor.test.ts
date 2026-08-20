@@ -90,6 +90,9 @@ mock.module('@archon/paths', () => ({
   resolveRepoProjectIdentity: mock(() => null),
   getRunArtifactsPath: mock(() => '/tmp/artifacts'),
   getProjectLogsPath: mock(() => '/tmp/logs'),
+  // WS is this suite's fake ARCHON_HOME (see comment above) — containerAwareAttachments
+  // calls the real getArchonHome() for container executions, so it must resolve here too.
+  getArchonHome: mock((): string => WS),
   getProjectArtifactsPath: mock(() => '/tmp/artifacts-root'),
   resolveProjectStorageKey: mock(fakeResolveProjectStorageKey),
   getProjectStoragePaths: mock(fakeGetProjectStoragePaths),
@@ -323,7 +326,7 @@ describe('executeWorkflow', () => {
           preCreatedRun,
           priorCompletedNodes: new Map([['node1', 'out']]),
           priorUsage: { tokens: { input: 40, output: 4 }, costUsd: 0.5 },
-          execContext: { kind: 'container', containerId: 'cid' },
+          execContext: { kind: 'container', containerId: 'cid', containerName: 'archon-cid' },
           container: { envId: 'env-x', writeBack: 'approve', backend },
         }
       );
@@ -828,7 +831,11 @@ describe('executeWorkflow', () => {
         'container input',
         'db-conv-1',
         {
-          execContext: { kind: 'container', containerId: 'container-1' },
+          execContext: {
+            kind: 'container',
+            containerId: 'container-1',
+            containerName: 'archon-container-1',
+          },
           isolationContext: { branchName: 'feature/snapshot' },
         }
       );
@@ -1465,7 +1472,11 @@ describe('executeWorkflow', () => {
 
       // The config passed to executeDagWorkflow (arg index 12) should have merged envVars
       const configArg = mockExecuteDagWorkflow.mock.calls[0]?.[13] as WorkflowConfig | undefined;
-      expect(configArg?.envVars).toEqual({ FILE_KEY: 'file_val', DB_KEY: 'db_val' });
+      expect(configArg?.envVars).toEqual({
+        FILE_KEY: 'file_val',
+        DB_KEY: 'db_val',
+        ARCHON_ATTACHMENTS: '[]',
+      });
     });
 
     it('does not call getCodebaseEnvVars when no codebaseId', async () => {
@@ -1484,6 +1495,107 @@ describe('executeWorkflow', () => {
       );
 
       expect(store.getCodebaseEnvVars).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('ARCHON_ATTACHMENTS env var', () => {
+    it('populates ARCHON_ATTACHMENTS with the provided attachments', async () => {
+      const deps = makeDeps(makeStore());
+      const attachments = [
+        { path: '/tmp/note.pdf', name: 'note.pdf', mimeType: 'application/pdf', size: 1234 },
+      ];
+
+      await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'test message',
+        'db-conv-1',
+        { attachments }
+      );
+
+      const configArg = mockExecuteDagWorkflow.mock.calls[0]?.[13] as WorkflowConfig | undefined;
+      expect(configArg?.envVars?.ARCHON_ATTACHMENTS).toBe(JSON.stringify(attachments));
+    });
+
+    it('always sets ARCHON_ATTACHMENTS to "[]" when there are no attachments', async () => {
+      const deps = makeDeps(makeStore());
+
+      await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'test message',
+        'db-conv-1'
+        // no attachments
+      );
+
+      const configArg = mockExecuteDagWorkflow.mock.calls[0]?.[13] as WorkflowConfig | undefined;
+      expect(configArg?.envVars?.ARCHON_ATTACHMENTS).toBe('[]');
+    });
+
+    it('clears a reused container staging directory even when the new run has no attachments', async (): Promise<void> => {
+      const { mkdirSync, writeFileSync, existsSync, rmSync } = await import('node:fs');
+      const stagingDir = join(WS, 'artifacts', 'attachments-staging', 'archon-reused');
+      mkdirSync(stagingDir, { recursive: true });
+      writeFileSync(join(stagingDir, '0-stale-from-previous-run.txt'), 'leftover');
+
+      try {
+        const deps = makeDeps(makeStore());
+
+        await executeWorkflow(
+          deps,
+          makePlatform(),
+          'conv-1',
+          '/tmp',
+          makeWorkflow(),
+          'test message',
+          'db-conv-1',
+          {
+            // No attachments — mirrors a resumed/reused container whose
+            // triggering message this time carries none.
+            execContext: { kind: 'container', containerId: 'cid', containerName: 'archon-reused' },
+          }
+        );
+
+        const configArg = mockExecuteDagWorkflow.mock.calls[0]?.[13] as WorkflowConfig | undefined;
+        expect(configArg?.envVars?.ARCHON_ATTACHMENTS).toBe('[]');
+        expect(existsSync(join(stagingDir, '0-stale-from-previous-run.txt'))).toBe(false);
+      } finally {
+        rmSync(stagingDir, { recursive: true, force: true });
+      }
+    });
+
+    it('is not shadowed by a stale operator-set env var of the same name', async () => {
+      const deps = makeDeps(makeStore());
+      (deps.loadConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+        assistant: 'claude' as const,
+        assistants: { claude: {}, codex: {} },
+        baseBranch: '',
+        commands: { folder: '' },
+        envVars: { ARCHON_ATTACHMENTS: 'stale-operator-value' },
+      });
+      const attachments = [
+        { path: '/tmp/note.pdf', name: 'note.pdf', mimeType: 'application/pdf', size: 1234 },
+      ];
+
+      await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'test message',
+        'db-conv-1',
+        { attachments }
+      );
+
+      const configArg = mockExecuteDagWorkflow.mock.calls[0]?.[13] as WorkflowConfig | undefined;
+      expect(configArg?.envVars?.ARCHON_ATTACHMENTS).toBe(JSON.stringify(attachments));
     });
   });
 

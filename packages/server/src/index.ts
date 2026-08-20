@@ -68,6 +68,8 @@ import {
   DiscordAdapter,
   SlackAdapter,
   SlackWorkflowBridge,
+  cleanupAttachments,
+  formatSkippedAttachmentsNotice,
 } from '@archon/adapters';
 import { GiteaAdapter } from '@archon/adapters/community/forge/gitea';
 import { GitLabAdapter } from '@archon/adapters/community/forge/gitlab';
@@ -528,8 +530,10 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         // Get initial conversation ID
         let conversationId = discordAdapter.getConversationId(message);
 
-        // Skip if no content
-        if (!message.content) return;
+        // Skip only if there's neither content nor an attachment — a
+        // file-only message must still reach the handler.
+        const hasAttachments = message.attachments.size > 0;
+        if (!message.content && !hasAttachments) return;
 
         // Check if bot was mentioned (required for activation unless
         // DISCORD_REQUIRE_MENTION=false opts out of the gate)
@@ -541,10 +545,34 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
 
         // Strip the bot mention from the message
         const content = discordAdapter.stripBotMention(message);
-        if (!content) return; // Message was only a mention with no content
+        if (!content && !hasAttachments) return; // Message was only a mention with no content
 
         // Ensure we're responding in a thread - creates one if needed
         conversationId = await discordAdapter.ensureThread(conversationId, message);
+
+        // Download any file attachments up front (network I/O; doesn't need the lock).
+        const {
+          files: attachedFiles,
+          uploadDir,
+          skipped: skippedAttachments,
+        } = await discordAdapter.downloadAttachments(message, conversationId);
+
+        // Tell the user about anything that did not make it through, BEFORE
+        // the reply lands, so a dropped file reads as a known limit rather
+        // than Archon ignoring the attachment. Never block the message on this.
+        const skipNotice = formatSkippedAttachmentsNotice(skippedAttachments);
+        if (skipNotice) {
+          await discordAdapter.sendMessage(conversationId, skipNotice).catch((err: unknown) => {
+            getLog().warn(
+              { err, conversationId, skipped: skippedAttachments.length },
+              'discord.attachment_skip_notice_failed'
+            );
+          });
+        }
+        // Every attachment failed/was skipped and there's no text either — the
+        // skip notice already told the user; starting a blank chat run on top
+        // of that would be a second, pointless response.
+        if (!content && attachedFiles.length === 0) return;
 
         // Check for thread context (now we're guaranteed to be in a thread if applicable)
         let threadContext: string | undefined;
@@ -565,7 +593,11 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         // displayName is already display-quality on Discord (no extra API call needed).
         const userId = await resolveUserId('discord', platformUserId, displayName);
 
-        // Fire-and-forget: handler returns immediately, processing happens async
+        // Fire-and-forget: handler returns immediately, processing happens async.
+        // Cleanup lives on this OUTER chain (not inside the lock callback's own
+        // finally) so it still runs if acquireLock itself rejects before ever
+        // invoking the callback (e.g. a saturated concurrency queue) — otherwise
+        // the download directory would never be removed.
         lockManager
           .acquireLock(conversationId, async () => {
             await handleMessage(discordAdapter, conversationId, content, {
@@ -573,9 +605,19 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
               parentConversationId,
               isolationHints: { workflowType: 'thread', workflowId: conversationId },
               userId,
+              ...(attachedFiles.length > 0 ? { attachedFiles } : {}),
             });
           })
-          .catch(createMessageErrorHandler('Discord', discordAdapter, conversationId));
+          .catch(createMessageErrorHandler('Discord', discordAdapter, conversationId))
+          .finally(() => {
+            // Clean up downloaded attachments AFTER handleMessage completes so
+            // the AI subprocess has had a chance to read them. Discord always
+            // dispatches through the foreground/awaited branch (never
+            // background fire-and-forget), so there is no cleanup race here.
+            if (attachedFiles.length > 0) {
+              void cleanupAttachments(uploadDir);
+            }
+          });
       });
 
       // Don't let a Discord login failure (bad token, missing privileged
@@ -616,12 +658,37 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       slackAdapter.onMessage(async event => {
         const conversationId = slackAdapter.getConversationId(event);
 
-        // Skip if no text
-        if (!event.text) return;
+        // Strip the bot mention from the message. An attachment-only message
+        // (no text at all, or only a mention) still needs to reach the
+        // handler when it carries files — text-emptiness alone is no longer
+        // grounds to drop it.
+        const content = event.text ? slackAdapter.stripBotMention(event.text) : '';
+        const hasAttachments = Boolean(event.files && event.files.length > 0);
+        if (!content && !hasAttachments) return;
 
-        // Strip the bot mention from the message
-        const content = slackAdapter.stripBotMention(event.text);
-        if (!content) return; // Message was only a mention with no content
+        // Download any file attachments up front (network I/O; doesn't need the lock).
+        const {
+          files: attachedFiles,
+          uploadDir,
+          skipped: skippedAttachments,
+        } = await slackAdapter.downloadAttachments(event.files, conversationId);
+
+        // Tell the user about anything that did not make it through, BEFORE
+        // the reply lands, so a dropped file reads as a known limit rather
+        // than Archon ignoring the attachment. Never block the message on this.
+        const skipNotice = formatSkippedAttachmentsNotice(skippedAttachments);
+        if (skipNotice) {
+          await slackAdapter.sendMessage(conversationId, skipNotice).catch((err: unknown) => {
+            getLog().warn(
+              { err, conversationId, skipped: skippedAttachments.length },
+              'slack.attachment_skip_notice_failed'
+            );
+          });
+        }
+        // Every attachment failed/was skipped and there's no text either — the
+        // skip notice already told the user; starting a blank chat run on top
+        // of that would be a second, pointless response.
+        if (!content && attachedFiles.length === 0) return;
 
         // Check for thread context
         let threadContext: string | undefined;
@@ -642,7 +709,11 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         // the adapter's users.info enrichment (cached per slackUserId).
         const userId = await resolveUserId('slack', event.user, event.displayName);
 
-        // Fire-and-forget: handler returns immediately, processing happens async
+        // Fire-and-forget: handler returns immediately, processing happens async.
+        // Cleanup lives on this OUTER chain (not inside the lock callback's own
+        // finally) so it still runs if acquireLock itself rejects before ever
+        // invoking the callback (e.g. a saturated concurrency queue) — otherwise
+        // the download directory would never be removed.
         lockManager
           .acquireLock(conversationId, async () => {
             await handleMessage(slackAdapter, conversationId, content, {
@@ -650,9 +721,19 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
               parentConversationId,
               isolationHints: { workflowType: 'thread', workflowId: conversationId },
               userId,
+              ...(attachedFiles.length > 0 ? { attachedFiles } : {}),
             });
           })
-          .catch(createMessageErrorHandler('Slack', slackAdapter, conversationId));
+          .catch(createMessageErrorHandler('Slack', slackAdapter, conversationId))
+          .finally(() => {
+            // Clean up downloaded attachments AFTER handleMessage completes so
+            // the AI subprocess has had a chance to read them. Slack always
+            // dispatches through the foreground/awaited branch (never
+            // background fire-and-forget), so there is no cleanup race here.
+            if (attachedFiles.length > 0) {
+              void cleanupAttachments(uploadDir);
+            }
+          });
       });
 
       // Attach the workflow bridge BEFORE app.start(): Bolt's Socket Mode
@@ -933,19 +1014,68 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
 
     // Register message handler (auth is handled internally by adapter)
     telegramAdapter.onMessage(
-      async ({ conversationId, message, userId: telegramUserId, displayName }) => {
+      async ({
+        conversationId,
+        message,
+        userId: telegramUserId,
+        displayName,
+        document,
+        photo,
+        unsupportedMediaLabel,
+      }) => {
         // Resolve Telegram user id (numeric) → Archon user UUID.
         const userId = await resolveUserId('telegram', telegramUserId, displayName);
 
-        // Fire-and-forget: handler returns immediately, processing happens async
+        // Download any file attachment up front (network I/O; doesn't need the lock).
+        const {
+          files: attachedFiles,
+          uploadDir,
+          skipped: skippedAttachments,
+        } = await telegramAdapter.downloadAttachments(
+          { document, photo, unsupportedMediaLabel },
+          conversationId
+        );
+
+        // Tell the user about anything that did not make it through, BEFORE
+        // the reply lands, so a dropped file reads as a known limit rather
+        // than Archon ignoring the attachment. Never block the message on this.
+        const skipNotice = formatSkippedAttachmentsNotice(skippedAttachments);
+        if (skipNotice) {
+          await telegramAdapter.sendMessage(conversationId, skipNotice).catch((err: unknown) => {
+            getLog().warn(
+              { err, conversationId, skipped: skippedAttachments.length },
+              'telegram.attachment_skip_notice_failed'
+            );
+          });
+        }
+        // Every attachment failed/was skipped and there's no text either — the
+        // skip notice already told the user; starting a blank chat run on top
+        // of that would be a second, pointless response.
+        if (!message && attachedFiles.length === 0) return;
+
+        // Fire-and-forget: handler returns immediately, processing happens async.
+        // Cleanup lives on this OUTER chain (not inside the lock callback's own
+        // finally) so it still runs if acquireLock itself rejects before ever
+        // invoking the callback (e.g. a saturated concurrency queue) — otherwise
+        // the download directory would never be removed.
         lockManager
           .acquireLock(conversationId, async () => {
             await handleMessage(telegramAdapter, conversationId, message, {
               isolationHints: { workflowType: 'thread', workflowId: conversationId },
               userId,
+              ...(attachedFiles.length > 0 ? { attachedFiles } : {}),
             });
           })
-          .catch(createMessageErrorHandler('Telegram', telegramAdapter, conversationId));
+          .catch(createMessageErrorHandler('Telegram', telegramAdapter, conversationId))
+          .finally(() => {
+            // Clean up downloaded attachments AFTER handleMessage completes so
+            // the AI subprocess has had a chance to read them. Telegram always
+            // dispatches through the foreground/awaited branch (never
+            // background fire-and-forget), so there is no cleanup race here.
+            if (attachedFiles.length > 0) {
+              void cleanupAttachments(uploadDir);
+            }
+          });
       }
     );
 

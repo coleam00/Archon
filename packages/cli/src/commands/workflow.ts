@@ -44,6 +44,7 @@ import { findCodebaseForCheckoutPath } from '@archon/core/services/codebase-chec
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { resolveWorkflowName } from '@archon/workflows/router';
 import { executeWorkflow, hydrateResumableRun } from '@archon/workflows/executor';
+import type { WorkflowAttachment } from '@archon/workflows/executor';
 import {
   assertWorkflowRequirementsMet,
   resolveTopLevelInputs,
@@ -242,6 +243,16 @@ export interface WorkflowRunOptions {
    * (`parseInputAssignments` in `@archon/workflows`).
    */
   inputs?: string[];
+  /**
+   * Files attached to the message that triggered this run (`--attachments`,
+   * a JSON array of `{ path, name, mimeType, size }`), forwarded to
+   * `executeWorkflow`. Primarily for an AI agent's own Bash tool invoking
+   * this CLI on behalf of a chat message it saw attachments on (e.g. a
+   * `command:`/`prompt:` workflow node with no `manage_run` tool available) —
+   * not intended for interactive human CLI use. Not forwarded on `--resume`,
+   * matching every other dispatch path in the codebase.
+   */
+  attachments?: WorkflowAttachment[];
 }
 
 /**
@@ -1235,6 +1246,15 @@ export async function workflowRunCommand(
     if (options.conversationId === undefined) {
       extraArgs.push('--conversation-id', childConversationId);
     }
+    // Explicitly re-forward attachments rather than relying on them surviving
+    // inside `process.argv` (which `spawnDetachedWorkflowRun` also reuses) —
+    // that's true only when `options.attachments` came from a literal
+    // `--attachments` flag on THIS invocation, not when a caller sets it
+    // programmatically. Passed as one argv array element (never shell
+    // interpolation), so no escaping is needed for its JSON content.
+    if (options.attachments !== undefined) {
+      extraArgs.push('--attachments', JSON.stringify(options.attachments));
+    }
 
     const logPath = await spawnDetachedWorkflowRun(cwd, childConversationId, extraArgs);
 
@@ -2014,6 +2034,7 @@ export async function workflowRunCommand(
           resolveChildIsolation,
           // Fresh run only: a resume (`prepared`) replays the inputs already on its row.
           inputs: resolvedInputs,
+          attachments: options.attachments,
         };
     result = await executeWorkflow(
       deps,

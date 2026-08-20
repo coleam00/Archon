@@ -5,8 +5,11 @@
  * Mocking internal modules with mock.module() causes test isolation issues
  * since the mock persists across test files.
  */
-import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test';
 import type { Mock } from 'bun:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 // Mock logger to suppress noisy output during tests
 const mockLogger = {
@@ -317,6 +320,119 @@ describe('TelegramAdapter', () => {
 
       await expect(adapter.start({ retryDelayMs: 0 })).rejects.toThrow('409');
       expect(mockStart).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  describe('downloadAttachments', () => {
+    let adapter: TelegramAdapter;
+    let mockGetFile: Mock<(fileId: string) => Promise<{ file_id: string; file_path?: string }>>;
+    let originalFetch: typeof fetch;
+    // getArchonHome() is not mocked (see the @archon/paths mock above) — it
+    // reads process.env.ARCHON_HOME at call time, so a successful download
+    // test writes real files under it. Point it at a fresh temp dir per test
+    // and remove that dir afterward, rather than leaving upload artifacts in
+    // the developer's/CI's actual Archon home.
+    let tempHome: string;
+    let originalArchonHome: string | undefined;
+
+    beforeEach(() => {
+      adapter = new TelegramAdapter('fake-token-for-testing');
+      mockGetFile = mock((fileId: string) =>
+        Promise.resolve({ file_id: fileId, file_path: `documents/${fileId}.pdf` })
+      );
+      (adapter.getBot().api as unknown as { getFile: typeof mockGetFile }).getFile = mockGetFile;
+      originalFetch = globalThis.fetch;
+      globalThis.fetch = mock(() =>
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-length': '4' }),
+          arrayBuffer: () => Promise.resolve(new ArrayBuffer(4)),
+          body: new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new Uint8Array(4));
+              controller.close();
+            },
+          }),
+        } as unknown as Response)
+      ) as unknown as typeof fetch;
+      originalArchonHome = process.env.ARCHON_HOME;
+      tempHome = mkdtempSync(join(tmpdir(), 'telegram-adapter-test-'));
+      process.env.ARCHON_HOME = tempHome;
+    });
+
+    afterEach(() => {
+      globalThis.fetch = originalFetch;
+      if (originalArchonHome === undefined) {
+        delete process.env.ARCHON_HOME;
+      } else {
+        process.env.ARCHON_HOME = originalArchonHome;
+      }
+      rmSync(tempHome, { recursive: true, force: true });
+    });
+
+    test('returns empty result when the message has no document or photo', async () => {
+      const result = await adapter.downloadAttachments({}, 'conv-1');
+      expect(result).toEqual({ files: [], uploadDir: '', skipped: [] });
+      expect(mockGetFile).not.toHaveBeenCalled();
+    });
+
+    test('resolves a document via getFile() and constructs the api.telegram.org URL', async () => {
+      const result = await adapter.downloadAttachments(
+        {
+          document: {
+            file_id: 'DOC1',
+            file_unique_id: 'u1',
+            file_name: 'report.pdf',
+            mime_type: 'application/pdf',
+            file_size: 4,
+          },
+        },
+        'conv-1'
+      );
+
+      expect(mockGetFile).toHaveBeenCalledWith('DOC1');
+      expect(result.files).toHaveLength(1);
+      expect(result.files[0].name).toBe('report.pdf');
+      expect(result.files[0].mimeType).toBe('application/pdf');
+      const fetchCall = (globalThis.fetch as Mock<typeof fetch>).mock.calls[0][0] as string;
+      expect(fetchCall).toBe(
+        'https://api.telegram.org/file/botfake-token-for-testing/documents/DOC1.pdf'
+      );
+    });
+
+    test('downloads only the largest PhotoSize when multiple resolutions are present', async () => {
+      await adapter.downloadAttachments(
+        {
+          photo: [
+            { file_id: 'SMALL', file_unique_id: 's', width: 90, height: 90, file_size: 1 },
+            { file_id: 'LARGE', file_unique_id: 'l', width: 1280, height: 1280, file_size: 4 },
+          ],
+        },
+        'conv-1'
+      );
+
+      expect(mockGetFile).toHaveBeenCalledTimes(1);
+      expect(mockGetFile).toHaveBeenCalledWith('LARGE');
+    });
+
+    test('a getFile() failure is reported as a skipped attachment, not a thrown error', async () => {
+      mockGetFile.mockRejectedValueOnce(new Error('Telegram API error'));
+
+      const result = await adapter.downloadAttachments(
+        {
+          document: {
+            file_id: 'DOC1',
+            file_unique_id: 'u1',
+            file_name: 'report.pdf',
+            file_size: 4,
+          },
+        },
+        'conv-1'
+      );
+
+      expect(result.files).toEqual([]);
+      expect(result.skipped).toEqual([{ name: 'report.pdf', reason: 'download_failed' }]);
     });
   });
 });

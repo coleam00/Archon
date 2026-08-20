@@ -18,7 +18,7 @@ describe('buildRequestSubprocessEnv — container env isolation', () => {
 
   test('container run EXCLUDES host process.env (canary absent), keeps managed creds', () => {
     const env = buildRequestSubprocessEnv({
-      execContext: { kind: 'container', containerId: 'c1' },
+      execContext: { kind: 'container', containerId: 'c1', containerName: 'archon-c1' },
       env: { ANTHROPIC_API_KEY: 'sk-managed', CODEBASE_VAR: 'x' },
     });
     expect(env[CANARY]).toBeUndefined(); // host secret did NOT cross the boundary
@@ -35,7 +35,7 @@ describe('buildRequestSubprocessEnv — container env isolation', () => {
 
   test('container run mirrors CLAUDE_API_KEY -> ANTHROPIC_API_KEY', () => {
     const env = buildRequestSubprocessEnv({
-      execContext: { kind: 'container', containerId: 'c1' },
+      execContext: { kind: 'container', containerId: 'c1', containerName: 'archon-c1' },
       env: { CLAUDE_API_KEY: 'sk-claude' },
     });
     expect(env.ANTHROPIC_API_KEY).toBe('sk-claude');

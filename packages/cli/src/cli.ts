@@ -55,6 +55,7 @@ import {
   isValidEventType,
 } from './commands/workflow';
 import { WORKFLOW_EVENT_TYPES } from '@archon/workflows/store';
+import { workflowAttachmentSchema, type WorkflowAttachment } from '@archon/workflows/executor';
 import {
   isolationListCommand,
   isolationCleanupCommand,
@@ -326,6 +327,7 @@ async function main(): Promise<number> {
         'pause-at-gates': { type: 'boolean' },
         // Repeatable: `--input a=1 --input b=2` yields ['a=1', 'b=2'] (#2554).
         input: { type: 'string', multiple: true },
+        attachments: { type: 'string' },
       },
       allowPositionals: true,
       strict: false, // Allow unknown flags to pass through
@@ -592,6 +594,28 @@ async function main(): Promise<number> {
               );
               return 1;
             }
+            const attachmentsFlag = values.attachments as string | undefined;
+            let attachments: WorkflowAttachment[] | undefined;
+            if (attachmentsFlag !== undefined) {
+              try {
+                const parsed: unknown = JSON.parse(attachmentsFlag);
+                if (!Array.isArray(parsed)) {
+                  throw new Error('--attachments must be a JSON array');
+                }
+                attachments = parsed.map((entry: unknown, index: number) => {
+                  const result = workflowAttachmentSchema.safeParse(entry);
+                  if (!result.success) {
+                    throw new Error(`entry ${String(index)}: ${result.error.message}`);
+                  }
+                  return result.data;
+                });
+              } catch (error) {
+                console.error(
+                  `Error: --attachments must be a JSON array of {path, name, mimeType, size}: ${(error as Error).message}`
+                );
+                return 1;
+              }
+            }
             const options = {
               branchName,
               fromBranch,
@@ -617,6 +641,7 @@ async function main(): Promise<number> {
               pauseAtGates: pauseAtGatesFlag,
               // Raw `name=value` assignments; parsed at the invocation gate (#2554).
               inputs: values.input as string[] | undefined,
+              attachments,
             };
             await workflowRunCommand(effectiveCwd, workflowName, userMessage, options);
             break;

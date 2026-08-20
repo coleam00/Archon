@@ -3,11 +3,16 @@
  * Handles message sending with 4096 character limit splitting
  */
 import { Bot, Context } from 'grammy';
-import type { IPlatformAdapter, MessageMetadata } from '@archon/core';
+import type { Document, PhotoSize } from 'grammy/types';
+import type { AttachedFile, IPlatformAdapter, MessageMetadata } from '@archon/core';
 import { createLogger } from '@archon/paths';
 import { parseAllowedUserIds, isUserAuthorized } from './auth';
 import { convertToTelegramMarkdown, stripMarkdown } from './markdown';
 import { splitIntoParagraphChunks } from '../../utils/message-splitting';
+import {
+  downloadAttachments as downloadAttachmentsCore,
+  type SkippedAttachment,
+} from '../../utils/attachment-download';
 import type { TelegramMessageContext } from './types';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -19,8 +24,27 @@ function getLog(): ReturnType<typeof createLogger> {
 
 const MAX_LENGTH = 4096;
 
+/**
+ * Guards against a malformed file URL ever reaching `fetch()`: the URL is
+ * always constructed by this adapter from `api.telegram.org` + a
+ * Telegram-API-returned `file_path`, so this is defense-in-depth rather than
+ * a response to an untrusted input — kept for symmetry with the other
+ * adapters' `isTrustedUrl` checks and as a backstop against a future change
+ * that starts sourcing the URL from elsewhere.
+ */
+function isTrustedTelegramDownloadUrl(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  return parsed.protocol === 'https:' && parsed.hostname === 'api.telegram.org';
+}
+
 export class TelegramAdapter implements IPlatformAdapter {
   private bot: Bot;
+  private token: string;
   private streamingMode: 'stream' | 'batch';
   private allowedUserIds: number[];
   private messageHandler: ((ctx: TelegramMessageContext) => Promise<void>) | null = null;
@@ -28,6 +52,7 @@ export class TelegramAdapter implements IPlatformAdapter {
   constructor(token: string, mode: 'stream' | 'batch' = 'stream') {
     // grammY does not impose a handler timeout by default (unlike Telegraf's 90s limit)
     this.bot = new Bot(token);
+    this.token = token;
     this.streamingMode = mode;
 
     // Parse Telegram user whitelist (optional - empty = open access)
@@ -136,6 +161,89 @@ export class TelegramAdapter implements IPlatformAdapter {
   }
 
   /**
+   * Download a message's Telegram file attachment(s) to disk, producing
+   * `AttachedFile[]` in the same shape the Web upload endpoint uses.
+   * Telegram (unlike Slack) never hands out a ready-to-fetch URL on the
+   * inbound event — each `file_id` must first be resolved via `getFile()`
+   * to a `file_path`, from which the download URL is constructed. Only the
+   * largest `PhotoSize` is downloaded when a photo is present (Telegram
+   * sends the same photo at multiple resolutions).
+   */
+  async downloadAttachments(
+    attachment: {
+      document?: Document;
+      photo?: PhotoSize[];
+      unsupportedMediaLabel?: string;
+    },
+    conversationId: string
+  ): Promise<{ files: AttachedFile[]; uploadDir: string; skipped: SkippedAttachment[] }> {
+    // Reported immediately — there is no file to fetch for these types, only
+    // a notice that the message carried something this feature can't download.
+    const unsupportedSkipped: SkippedAttachment[] = attachment.unsupportedMediaLabel
+      ? [{ name: attachment.unsupportedMediaLabel, reason: 'unsupported_type' }]
+      : [];
+    const refs: { fileId: string; name: string; mimeType?: string; size?: number }[] = [];
+    if (attachment.document) {
+      refs.push({
+        fileId: attachment.document.file_id,
+        name: attachment.document.file_name ?? attachment.document.file_id,
+        mimeType: attachment.document.mime_type,
+        size: attachment.document.file_size,
+      });
+    }
+    if (attachment.photo && attachment.photo.length > 0) {
+      const largest = attachment.photo[attachment.photo.length - 1];
+      refs.push({
+        fileId: largest.file_id,
+        name: `${largest.file_id}.jpg`,
+        mimeType: 'image/jpeg',
+        size: largest.file_size,
+      });
+    }
+    if (refs.length === 0) {
+      return { files: [], uploadDir: '', skipped: unsupportedSkipped };
+    }
+
+    const candidates: {
+      url: string;
+      name: string;
+      id: string;
+      mimeType?: string;
+      size?: number;
+    }[] = [];
+    const preSkipped: SkippedAttachment[] = [];
+    for (const ref of refs) {
+      try {
+        const file = await this.bot.api.getFile(ref.fileId);
+        if (!file.file_path) {
+          preSkipped.push({ name: ref.name, reason: 'download_failed' });
+          continue;
+        }
+        candidates.push({
+          url: `https://api.telegram.org/file/bot${this.token}/${file.file_path}`,
+          name: ref.name,
+          id: ref.fileId,
+          mimeType: ref.mimeType,
+          size: ref.size ?? file.file_size,
+        });
+      } catch (error) {
+        getLog().warn(
+          { err: error as Error, conversationId, fileId: ref.fileId },
+          'telegram.attachment_getfile_failed'
+        );
+        preSkipped.push({ name: ref.name, reason: 'download_failed' });
+      }
+    }
+
+    const result = await downloadAttachmentsCore(candidates, {
+      platform: 'telegram',
+      conversationId,
+      isTrustedUrl: isTrustedTelegramDownloadUrl,
+    });
+    return { ...result, skipped: [...result.skipped, ...preSkipped, ...unsupportedSkipped] };
+  }
+
+  /**
    * Extract conversation ID from Telegram context
    */
   getConversationId(ctx: Context): string {
@@ -167,10 +275,34 @@ export class TelegramAdapter implements IPlatformAdapter {
    * Makes up to 3 attempts on 409 Conflict (stale getUpdates connection).
    */
   async start(options?: { retryDelayMs?: number }): Promise<void> {
-    // Register message handler before launch
-    this.bot.on('message:text', ctx => {
-      const message = ctx.message.text;
-      if (!message) return;
+    // Register message handler before launch. Broadened from 'message:text' to
+    // 'message' so a document/photo sent WITHOUT a caption (no .text, no
+    // .caption) still reaches the handler instead of being silently dropped —
+    // an attachment-only message is exactly the case this feature exists for.
+    this.bot.on('message', ctx => {
+      const document = ctx.message.document;
+      const photo = ctx.message.photo;
+      const message = ctx.message.text ?? ctx.message.caption ?? '';
+      // Media types this feature does not download. Detected (not silently
+      // dropped) so an attachment-only message of one of these types still
+      // reaches the handler and gets the shared "not supported" notice,
+      // instead of the message vanishing with no reply at all.
+      const unsupportedMediaLabel = ctx.message.video
+        ? 'video'
+        : ctx.message.voice
+          ? 'voice message'
+          : ctx.message.audio
+            ? 'audio'
+            : ctx.message.animation
+              ? 'animation'
+              : ctx.message.video_note
+                ? 'video note'
+                : ctx.message.sticker
+                  ? 'sticker'
+                  : undefined;
+      const hasAttachment =
+        Boolean(document) || Boolean(photo && photo.length > 0) || Boolean(unsupportedMediaLabel);
+      if (!message && !hasAttachment) return;
 
       // Authorization check - verify sender is in whitelist
       const userId = ctx.from?.id;
@@ -191,7 +323,15 @@ export class TelegramAdapter implements IPlatformAdapter {
             : undefined;
         const displayName = fullName ?? from?.username ?? undefined;
         // Fire-and-forget - errors handled by caller
-        void this.messageHandler({ conversationId, message, userId, displayName });
+        void this.messageHandler({
+          conversationId,
+          message,
+          userId,
+          displayName,
+          document,
+          photo,
+          unsupportedMediaLabel,
+        });
       } else {
         // Intentional: message dropped silently if handler not registered yet.
         // In production the server always calls onMessage() before start(); this

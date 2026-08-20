@@ -5,7 +5,7 @@ import type { ChildProcess } from 'child_process';
 import type { SpawnOptions } from '@anthropic-ai/claude-agent-sdk';
 import { buildDockerExecArgs, buildContainerSpawn, type Spawner } from './container-spawn';
 
-const CTX = { kind: 'container' as const, containerId: 'cid-123' };
+const CTX = { kind: 'container' as const, containerId: 'cid-123', containerName: 'archon-cid-123' };
 
 function makeSpawnOptions(over: Partial<SpawnOptions> = {}): SpawnOptions {
   return {

@@ -7,3 +7,11 @@ export { GitHubAdapter } from './forge/github';
 
 // Community adapters
 export { DiscordAdapter } from './community/chat/discord';
+
+// Shared attachment-download pipeline (Slack, Telegram, Discord)
+export { cleanupAttachments, formatSkippedAttachmentsNotice } from './utils/attachment-download';
+export type {
+  DownloadableAttachment,
+  SkippedAttachment,
+  SkippedAttachmentReason,
+} from './utils/attachment-download';

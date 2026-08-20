@@ -3,7 +3,7 @@
  * Handles message sending with markdown block formatting for AI responses
  */
 import { App, LogLevel, type SlashCommand } from '@slack/bolt';
-import type { IPlatformAdapter, MessageMetadata } from '@archon/core';
+import type { AttachedFile, IPlatformAdapter, MessageMetadata } from '@archon/core';
 import {
   isPerUserGitHubEnabled,
   connectGithubForUser,
@@ -16,8 +16,13 @@ import { createLogger } from '@archon/paths';
 import { isSlackUserAuthorized } from './auth';
 import { parseAllowedUserIds } from './auth';
 import { splitIntoParagraphChunks } from '../../utils/message-splitting';
+import {
+  downloadAttachments as downloadAttachmentsCore,
+  MAX_ATTACHMENTS_PER_MESSAGE,
+  type SkippedAttachment,
+} from '../../utils/attachment-download';
 import { formatCostFooter } from './blocks';
-import type { SlackMessageEvent } from './types';
+import type { SlackFileRef, SlackMessageEvent } from './types';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -27,6 +32,26 @@ function getLog(): ReturnType<typeof createLogger> {
 }
 
 const MAX_MARKDOWN_BLOCK_LENGTH = 12000; // Slack markdown block limit
+
+/**
+ * Guards the bot token: `url_private_download` comes from the inbound Slack
+ * event payload, not a fixed Archon-owned constant, so it must be proven to
+ * point at Slack's own file host before the Authorization header built from
+ * it is attached to a request. Requires HTTPS and a `slack.com` (or
+ * subdomain) host.
+ */
+function isTrustedSlackDownloadUrl(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  return (
+    parsed.protocol === 'https:' &&
+    (parsed.hostname === 'slack.com' || parsed.hostname.endsWith('.slack.com'))
+  );
+}
 
 /** Slack channel + message ts pair used for reactions and edits. */
 export interface SlackMessageRef {
@@ -58,6 +83,7 @@ export class SlackAdapter implements IPlatformAdapter {
    * `missing_scope` is a permanent misconfiguration, not a per-user incident.
    */
   private missingScopeLogged = false;
+  private botToken: string;
 
   constructor(botToken: string, appToken: string, mode: 'stream' | 'batch' = 'batch') {
     this.app = new App({
@@ -66,6 +92,7 @@ export class SlackAdapter implements IPlatformAdapter {
       appToken: appToken,
       logLevel: LogLevel.INFO,
     });
+    this.botToken = botToken;
     this.streamingMode = mode;
 
     // Parse Slack user whitelist (optional - empty = open access)
@@ -329,6 +356,63 @@ export class SlackAdapter implements IPlatformAdapter {
   }
 
   /**
+   * Download a message's Slack file attachments to disk, producing
+   * `AttachedFile[]` in the same shape the Web upload endpoint uses.
+   * Delegates the download/validate/save mechanics to the shared
+   * `attachment-download` pipeline; this method owns only what's
+   * Slack-specific — mapping `SlackFileRef` to a candidate URL + auth
+   * header, and proving that URL actually points at Slack before the bot
+   * token is attached to it.
+   *
+   * Requires bot token scope `files:read`. Caller is responsible for
+   * deleting `uploadDir` after the AI has had a chance to read the files
+   * (see `cleanupAttachments()`).
+   */
+  async downloadAttachments(
+    files: SlackFileRef[] | undefined,
+    conversationId: string
+  ): Promise<{ files: AttachedFile[]; uploadDir: string; skipped: SkippedAttachment[] }> {
+    if (!files || files.length === 0) {
+      return { files: [], uploadDir: '', skipped: [] };
+    }
+    // Cap the SOURCE list first — the per-message count limit applies to every
+    // attached file, not just the ones that happen to have a download URL.
+    // Capping only `candidates` (post-filter) would let an undownloadable file
+    // ahead of the limit silently bump a valid file past it and into
+    // `download_failed` obscurity instead of the correct `too_many`.
+    const withinCap = files.slice(0, MAX_ATTACHMENTS_PER_MESSAGE);
+    const overCap = files.slice(MAX_ATTACHMENTS_PER_MESSAGE);
+    const candidates = withinCap
+      .filter((f): f is SlackFileRef & { url_private_download: string } =>
+        Boolean(f.url_private_download)
+      )
+      .map(f => ({
+        url: f.url_private_download,
+        authorization: `Bearer ${this.botToken}`,
+        name: f.name ?? f.id,
+        id: f.id,
+        mimeType: f.mimetype,
+        size: f.size,
+      }));
+    // Files with no download URL at all can never be fetched — report them
+    // as skipped up front rather than silently dropping them from the count.
+    const undownloadable = withinCap.filter(f => !f.url_private_download);
+    const result = await downloadAttachmentsCore(candidates, {
+      platform: 'slack',
+      conversationId,
+      isTrustedUrl: isTrustedSlackDownloadUrl,
+    });
+    return {
+      ...result,
+      skipped: [
+        ...result.skipped,
+        ...undownloadable.map(f => ({ name: f.name ?? f.id, reason: 'download_failed' as const })),
+        ...overCap.map(f => ({ name: f.name ?? f.id, reason: 'too_many' as const })),
+      ],
+    };
+  }
+
+  /**
    * Get conversation ID from Slack event
    * For threads: returns "channel:thread_ts" to maintain thread context
    * For non-threads: returns channel ID only
@@ -407,6 +491,7 @@ export class SlackAdapter implements IPlatformAdapter {
           ts: event.ts,
           thread_ts: event.thread_ts,
           displayName,
+          files: (event as { files?: SlackFileRef[] }).files,
         };
         this.trackTrigger(this.getConversationId(messageEvent), {
           channel: event.channel,
@@ -440,15 +525,21 @@ export class SlackAdapter implements IPlatformAdapter {
         return;
       }
 
-      if (this.messageHandler && 'text' in event && event.text) {
+      const files = (event as { files?: SlackFileRef[] }).files;
+      const text = 'text' in event ? (event.text ?? '') : '';
+      // A message that's just an attached file (no text) must still reach
+      // the handler — otherwise attachment-only DMs are silently dropped,
+      // which is exactly the gap this feature exists to close.
+      if (this.messageHandler && (text || (files && files.length > 0))) {
         const displayName = userId ? await this.fetchDisplayName(userId) : undefined;
         const messageEvent: SlackMessageEvent = {
-          text: event.text,
+          text,
           user: userId ?? '',
           channel: event.channel,
           ts: event.ts,
           thread_ts: 'thread_ts' in event ? event.thread_ts : undefined,
           displayName,
+          files,
         };
         this.trackTrigger(this.getConversationId(messageEvent), {
           channel: event.channel,

@@ -2,7 +2,9 @@
  * Orchestrator - Main conversation handler
  * Routes slash commands and AI messages appropriately
  */
-import { readFile as fsReadFile, access as fsAccess } from 'fs/promises';
+import { readFile as fsReadFile, access as fsAccess, copyFile, mkdir, rm } from 'fs/promises';
+import { join, basename } from 'path';
+import { randomUUID } from 'crypto';
 
 // Wrapper function for reading files - allows mocking without polluting fs/promises globally
 export async function readCommandFile(path: string): Promise<string> {
@@ -22,7 +24,7 @@ export async function commandFileExists(path: string): Promise<boolean> {
     throw new Error(`Cannot access command file at ${path}: ${err.message}`);
   }
 }
-import { createLogger } from '@archon/paths';
+import { createLogger, getArchonHome } from '@archon/paths';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -36,6 +38,7 @@ import {
   Codebase,
   ConversationNotFoundError,
   isWebAdapter,
+  type AttachedFile,
 } from '../types';
 import type { IsolationHints, IsolationEnvironmentRow } from '@archon/isolation';
 import {
@@ -300,6 +303,11 @@ export interface WorkflowRoutingContext {
    * path where pre-creation failed and the executor creates the row itself.
    */
   readonly inputs?: Readonly<Record<string, string>>;
+  /**
+   * Files attached to the triggering message, forwarded to `executeWorkflow`
+   * as `ExecuteWorkflowOptions.attachments`.
+   */
+  readonly attachments?: readonly AttachedFile[];
 }
 
 /**
@@ -469,6 +477,44 @@ export async function dispatchBackgroundWorkflow(
     // Non-fatal: executeWorkflow will create its own row as fallback
   }
 
+  // 7b. Attachments: the calling adapter (server/index.ts) downloads files to a
+  // per-MESSAGE directory and deletes it once handleMessage() returns — but this
+  // whole function returns long before the fire-and-forget block below settles,
+  // so that delete can race a still-running bash:/script: node reading
+  // ARCHON_ATTACHMENTS. Copying into a directory this dispatch OWNS (cleaned up
+  // in the finally below, only after executeWorkflow truly finishes) decouples
+  // the background run's attachment lifetime from the triggering message's.
+  let backgroundUploadDir = '';
+  let backgroundAttachments: readonly AttachedFile[] | undefined = ctx.attachments;
+  if (ctx.attachments && ctx.attachments.length > 0) {
+    try {
+      backgroundUploadDir = join(
+        getArchonHome(),
+        'artifacts',
+        'uploads',
+        `bg-${workerConv.id}-${randomUUID()}`
+      );
+      await mkdir(backgroundUploadDir, { recursive: true, mode: 0o700 });
+      backgroundAttachments = await Promise.all(
+        ctx.attachments.map(async (file, index) => {
+          const destPath = join(backgroundUploadDir, `${String(index)}_${basename(file.path)}`);
+          await copyFile(file.path, destPath);
+          return { ...file, path: destPath };
+        })
+      );
+    } catch (error) {
+      const err = toError(error);
+      getLog().error(
+        { err, workflowName: workflow.name, workerConversationId: workerPlatformId },
+        'background_workflow_attachment_copy_failed'
+      );
+      // Non-fatal: the background run proceeds without attachments rather than
+      // failing dispatch entirely over a copy error.
+      backgroundUploadDir = '';
+      backgroundAttachments = undefined;
+    }
+  }
+
   // 8. Fire-and-forget: run workflow in background
   void (async (): Promise<void> => {
     try {
@@ -496,6 +542,7 @@ export async function dispatchBackgroundWorkflow(
             // the executor creates the row itself); otherwise the row above already
             // carries them.
             inputs: ctx.inputs,
+            attachments: backgroundAttachments,
           }
         );
         // Surface workflow output to parent conversation as a result card
@@ -576,6 +623,19 @@ export async function dispatchBackgroundWorkflow(
         if (webAdapter) {
           webAdapter.removeOutputCallback(workerPlatformId);
           await webAdapter.emitLockEvent(workerPlatformId, false);
+        }
+        // Only now — after executeWorkflow has truly settled, not when this
+        // dispatch function returned — is it safe to remove the attachment
+        // copy this run owned exclusively.
+        if (backgroundUploadDir) {
+          await rm(backgroundUploadDir, { recursive: true, force: true }).catch(
+            (cleanupErr: unknown) => {
+              getLog().warn(
+                { err: toError(cleanupErr), backgroundUploadDir },
+                'background_workflow_attachment_cleanup_failed'
+              );
+            }
+          );
         }
       }
     } catch (outerError) {

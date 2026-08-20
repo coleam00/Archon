@@ -337,6 +337,12 @@ export type SystemPromptInput = string | string[] | SystemPromptPreset;
  *    container backend). The provider spawns its CLI via `docker exec` and
  *    receives only the Archon-managed env bag; `containerId` identifies the
  *    running container and `execUser` optionally pins the in-container uid/user.
+ *    `containerName` is the stable, human-readable handle (`archon-<resourceId>`,
+ *    known before `docker run` returns a `containerId`) — `@archon/workflows`
+ *    uses it to key a per-container attachment staging directory so a container
+ *    can only ever see attachments staged for its OWN run, never another run's
+ *    or another conversation's files (see `containerAwareAttachments` in
+ *    executor.ts and `runContainerInMode` in the container backend).
  *
  * Plain data with zero SDK / `@archon/*` dependencies, so this contract layer
  * (which forbids cross-package imports) can own it while `@archon/isolation`
@@ -347,7 +353,7 @@ export type SystemPromptInput = string | string[] | SystemPromptPreset;
  */
 export type ExecutionContext =
   | { kind: 'host' }
-  | { kind: 'container'; containerId: string; execUser?: string };
+  | { kind: 'container'; containerId: string; containerName: string; execUser?: string };
 
 /**
  * Container write-back contract (folder-project container backend, Phase C).

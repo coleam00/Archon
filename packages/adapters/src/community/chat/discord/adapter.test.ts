@@ -1,8 +1,11 @@
 /**
  * Unit tests for Discord adapter
  */
-import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test';
 import type { Mock } from 'bun:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 // Mock logger to suppress noisy output during tests
 const mockLogger = {
@@ -820,6 +823,111 @@ describe('DiscordAdapter', () => {
 
       const callArgs = mockStartThread.mock.calls[0][0] as { name: string };
       expect(callArgs.name).toBe('Bot Response');
+    });
+  });
+
+  describe('downloadAttachments', () => {
+    let adapter: DiscordAdapter;
+    let originalFetch: typeof fetch;
+    // getArchonHome() is not mocked (see the @archon/paths mock above) — it
+    // reads process.env.ARCHON_HOME at call time, so a successful download
+    // test writes real files under it. Point it at a fresh temp dir per test
+    // and remove that dir afterward, rather than leaving upload artifacts in
+    // the developer's/CI's actual Archon home.
+    let tempHome: string;
+    let originalArchonHome: string | undefined;
+
+    beforeEach(() => {
+      adapter = new DiscordAdapter('fake-token-for-testing');
+      originalFetch = globalThis.fetch;
+      globalThis.fetch = mock(() =>
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-length': '4' }),
+          arrayBuffer: () => Promise.resolve(new ArrayBuffer(4)),
+          body: new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new Uint8Array(4));
+              controller.close();
+            },
+          }),
+        } as unknown as Response)
+      ) as unknown as typeof fetch;
+      originalArchonHome = process.env.ARCHON_HOME;
+      tempHome = mkdtempSync(join(tmpdir(), 'discord-adapter-test-'));
+      process.env.ARCHON_HOME = tempHome;
+    });
+
+    afterEach(() => {
+      globalThis.fetch = originalFetch;
+      if (originalArchonHome === undefined) {
+        delete process.env.ARCHON_HOME;
+      } else {
+        process.env.ARCHON_HOME = originalArchonHome;
+      }
+      rmSync(tempHome, { recursive: true, force: true });
+    });
+
+    function makeMessageWithAttachments(
+      attachments: {
+        id: string;
+        name: string;
+        url: string;
+        contentType: string | null;
+        size: number;
+      }[]
+    ): import('discord.js').Message {
+      return {
+        attachments: new Map(attachments.map(a => [a.id, a])),
+      } as unknown as import('discord.js').Message;
+    }
+
+    test('returns empty result when the message has no attachments', async () => {
+      const message = makeMessageWithAttachments([]);
+      const result = await adapter.downloadAttachments(message, 'conv-1');
+      expect(result).toEqual({ files: [], uploadDir: '', skipped: [] });
+    });
+
+    test('downloads attachments directly from the CDN URL, no auth header', async () => {
+      const message = makeMessageWithAttachments([
+        {
+          id: 'A1',
+          name: 'photo.png',
+          url: 'https://cdn.discordapp.com/attachments/1/2/photo.png',
+          contentType: 'image/png',
+          size: 4,
+        },
+      ]);
+
+      const result = await adapter.downloadAttachments(message, 'conv-1');
+
+      expect(result.files).toHaveLength(1);
+      expect(result.files[0].name).toBe('photo.png');
+      expect(result.files[0].mimeType).toBe('image/png');
+      const fetchCall = (globalThis.fetch as Mock<typeof fetch>).mock.calls[0];
+      expect(fetchCall[0]).toBe('https://cdn.discordapp.com/attachments/1/2/photo.png');
+      expect((fetchCall[1] as RequestInit | undefined)?.headers).toBeUndefined();
+    });
+
+    test('rejects a URL not on a Discord CDN host without ever calling fetch', async () => {
+      const fetchSpy = mock(() => Promise.reject(new Error('should not be called')));
+      globalThis.fetch = fetchSpy as unknown as typeof fetch;
+
+      const message = makeMessageWithAttachments([
+        {
+          id: 'A1',
+          name: 'evil.png',
+          url: 'https://evil.example.com/photo.png',
+          contentType: 'image/png',
+          size: 4,
+        },
+      ]);
+
+      const result = await adapter.downloadAttachments(message, 'conv-1');
+
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(result.skipped).toEqual([{ name: 'evil.png', reason: 'untrusted_url' }]);
     });
   });
 });

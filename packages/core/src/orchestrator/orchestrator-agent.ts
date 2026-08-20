@@ -641,6 +641,12 @@ interface WorkflowDispatchOptions {
    * Validated at the dispatch gate before any worktree/clone/AI cost.
    */
   inputs?: Readonly<Record<string, string>>;
+  /**
+   * Files attached to the triggering message, forwarded to `executeWorkflow`
+   * as `ExecuteWorkflowOptions.attachments`. Not set on resume paths — resume
+   * doesn't restore attachments any more than it restores AI session context.
+   */
+  attachments?: readonly AttachedFile[];
 }
 
 const FAILED_RUN_PROMPT_PREVIEW_MAX = 160;
@@ -705,6 +711,47 @@ function buildFailedRunResumePrompt(
     `${baseCommand} --force "${escapedMessage}"`,
     '```',
   ].join('\n');
+}
+
+/**
+ * Quote `value` as a single POSIX shell argument. Attachment fields (name,
+ * mimeType, path) are not guaranteed injection-safe at the source — e.g. an
+ * uploaded file's Content-Type header can carry a stray `'` through the
+ * upload endpoint's MIME normalization — so the JSON embedded in the note
+ * below must be safe to paste verbatim into a shell command even if the AI
+ * follows the "copy it exactly as given" instruction literally.
+ */
+function shellSingleQuote(value: string): string {
+  const escaped = value.split("'").join(String.raw`'\''`);
+  return `'${escaped}'`;
+}
+
+/**
+ * Appends an "Attached Files" section (with a ready-to-use `--attachments`
+ * JSON snippet for the CLI) to a workflow's triggering message when
+ * attachments are present. `command:`/`prompt:` workflow nodes have no
+ * access to `ARCHON_ATTACHMENTS` (subprocess-only, for `bash:`/`script:`
+ * nodes) — this is how an AI agent running INSIDE a dispatched workflow
+ * (e.g. `archon-assist`, which has no `manage_run` tool available) learns a
+ * file's actual path well enough to forward it to a nested
+ * `archon workflow run ... --attachments` invocation via its own Bash tool.
+ * No-op (returns `userMessage` unchanged) when there are no attachments.
+ */
+export function appendAttachmentsNote(
+  userMessage: string,
+  attachments?: readonly AttachedFile[]
+): string {
+  if (!attachments || attachments.length === 0) return userMessage;
+  const fileLines = attachments
+    .map(f => `- ${f.name} (${f.mimeType}, ${String(f.size)} bytes): ${f.path}`)
+    .join('\n');
+  return (
+    userMessage +
+    '\n\n---\n\n## Attached Files\n\n' +
+    fileLines +
+    '\n\nTo forward these to a nested `archon workflow run` command via Bash, pass:\n' +
+    `--attachments ${shellSingleQuote(JSON.stringify(attachments))}`
+  );
 }
 
 /**
@@ -1084,7 +1131,7 @@ async function dispatchOrchestratorWorkflow(
           platform,
           conversationId,
           cwd,
-          originalMessage: userMessage,
+          originalMessage: appendAttachmentsNote(userMessage, options?.attachments),
           conversationDbId: conversation.id,
           codebaseId: codebase.id,
           availableWorkflows: [workflow],
@@ -1093,6 +1140,7 @@ async function dispatchOrchestratorWorkflow(
           source,
           parseWarnings: options?.parseWarnings,
           inputs: resolvedInputs,
+          attachments: options?.attachments,
         },
         workflow
       );
@@ -1115,7 +1163,7 @@ async function dispatchOrchestratorWorkflow(
       conversationId,
       cwd,
       workflow,
-      userMessage,
+      appendAttachmentsNote(userMessage, options?.attachments),
       conversation.id,
       {
         codebaseId: codebase.id,
@@ -1126,6 +1174,7 @@ async function dispatchOrchestratorWorkflow(
         baseBranch: codebaseBaseBranch,
         resolveChildIsolation,
         inputs: resolvedInputs,
+        attachments: options?.attachments,
       }
     );
   }
@@ -1557,6 +1606,7 @@ export async function handleMessage(
               // Declared inputs (#2554) arrive on the request context, not in the
               // command text — the run route is the only caller that sets them.
               inputs: context?.workflowInputs,
+              attachments: attachedFiles,
             }
           );
         }
@@ -1966,6 +2016,7 @@ export async function handleMessage(
                   codebaseId: scopedCodebaseId,
                   availableWorkflows: workflows,
                   userId,
+                  attachments: attachedFiles,
                 },
                 wf
               );
@@ -2007,7 +2058,8 @@ export async function handleMessage(
           conversation,
           issueContext,
           requestOptions,
-          userId
+          userId,
+          attachedFiles
         );
       } else {
         await handleBatchMode(
@@ -2024,7 +2076,8 @@ export async function handleMessage(
           conversation,
           issueContext,
           requestOptions,
-          userId
+          userId,
+          attachedFiles
         );
       }
     } finally {
@@ -2092,7 +2145,8 @@ async function handleStreamMode(
   conversation: Conversation,
   issueContext?: string,
   requestOptions?: SendQueryOptions,
-  userId?: string
+  userId?: string,
+  attachedFiles?: AttachedFile[]
 ): Promise<void> {
   const turnStartedAt = Date.now();
   const allMessages: string[] = [];
@@ -2252,7 +2306,8 @@ async function handleStreamMode(
       originalMessage,
       isolationHints,
       issueContext,
-      userId
+      userId,
+      attachedFiles
     );
     return;
   }
@@ -2322,7 +2377,8 @@ async function handleBatchMode(
   conversation: Conversation,
   issueContext?: string,
   requestOptions?: SendQueryOptions,
-  userId?: string
+  userId?: string,
+  attachedFiles?: AttachedFile[]
 ): Promise<void> {
   const turnStartedAt = Date.now();
   const allChunks: { type: string; content: string }[] = [];
@@ -2513,7 +2569,8 @@ async function handleBatchMode(
       originalMessage,
       isolationHints,
       issueContext,
-      userId
+      userId,
+      attachedFiles
     );
     return;
   }
@@ -2599,7 +2656,8 @@ async function handleWorkflowInvocationResult(
   originalMessage: string,
   isolationHints: HandleMessageContext['isolationHints'],
   issueContext?: string,
-  userId?: string
+  userId?: string,
+  attachedFiles?: AttachedFile[]
 ): Promise<void> {
   const { workflowName, projectName, remainingMessage } = invocation;
 
@@ -2640,7 +2698,7 @@ async function handleWorkflowInvocationResult(
       isolationHints,
       userId,
       workflowEntry?.source,
-      { parseWarnings: workflowEntry?.parseWarnings }
+      { parseWarnings: workflowEntry?.parseWarnings, attachments: attachedFiles }
     );
     return;
   }
