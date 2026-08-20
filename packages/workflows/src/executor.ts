@@ -912,6 +912,15 @@ async function runChildWorkflow(
       childRunId = childRun.id;
     }
   } catch (err) {
+    // The resume path (hydrate / resumeWorkflowRun) operates on an EXISTING child row,
+    // so a throw here is a POST-row failure — `ranFailed(childRunId, …)`, not `never_ran`.
+    // Only the fresh-spawn path (createWorkflowRun) fails before any row exists.
+    if (resumeFailedChild) {
+      return ranFailed(
+        resumeFailedChild.id,
+        `Failed to resume sub-run '${childWorkflowName}': ${(err as Error).message}`
+      );
+    }
     return neverRan(
       'blocked_before_spawn',
       `Failed to create sub-run '${childWorkflowName}': ${(err as Error).message}`

@@ -3886,6 +3886,81 @@ describe('workflowGetCommand', () => {
     expect(parsed.fanOut).toEqual([]);
     expect(code).toBe(0);
   });
+
+  it('keeps the last terminal fan-out event per step_name (resumed node)', async () => {
+    // A resumed fan-out node writes a SECOND terminal event for the same step_name. The
+    // summary must reflect the later event, not the earlier one — events arrive from
+    // listWorkflowEvents already ordered ascending (created_at / event_order / id), so the
+    // last one in the list wins. An earlier failed report must NOT shadow the later success.
+    const EARLIER_FAILED_EVENT = {
+      id: 'fo-early',
+      workflow_run_id: 'run-resumed',
+      event_type: 'node_failed',
+      step_name: 'spread',
+      step_index: 1,
+      data: {
+        type: 'workflow',
+        fan_out: {
+          children: [
+            { kind: 'failed', index: 0, childRunId: 'child-a', error: 'first attempt' },
+            { kind: 'never_ran', index: 1, reason: 'unresolved_target', error: 'nope' },
+          ],
+        },
+      },
+      created_at: '2026-08-03T10:00:00.000Z',
+      event_order: 1,
+    };
+    const LATER_COMPLETED_EVENT = {
+      id: 'fo-late',
+      workflow_run_id: 'run-resumed',
+      event_type: 'node_completed',
+      step_name: 'spread',
+      step_index: 1,
+      data: {
+        type: 'workflow',
+        fan_out: {
+          children: [
+            { kind: 'completed', index: 0, childRunId: 'child-a2' },
+            { kind: 'completed', index: 1, childRunId: 'child-b2' },
+          ],
+        },
+      },
+      created_at: '2026-08-03T10:05:00.000Z',
+      event_order: 2,
+    };
+
+    const workflowDb = await import('@archon/core/db/workflows');
+    const eventsDb = await import('@archon/core/db/workflow-events');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-resumed',
+      workflow_name: 'fanner',
+      status: 'completed',
+      working_path: '/tmp/wt',
+      started_at: new Date(),
+      metadata: {},
+    });
+    (eventsDb.listWorkflowEvents as ReturnType<typeof mock>).mockResolvedValueOnce([
+      EARLIER_FAILED_EVENT,
+      LATER_COMPLETED_EVENT,
+    ]);
+
+    const code = await workflowGetCommand('run-resumed', true);
+
+    const parsed = JSON.parse(firstJsonPayload(stdoutSpy)) as {
+      fanOut: Array<{
+        nodeId: string;
+        status: string;
+        tally: { notCompleted: number };
+        children: Array<{ kind: string }>;
+      }>;
+    };
+    // Deduped to a single entry, reflecting the LATER (completed) event.
+    expect(parsed.fanOut).toHaveLength(1);
+    expect(parsed.fanOut[0].status).toBe('completed');
+    expect(parsed.fanOut[0].tally.notCompleted).toBe(0);
+    expect(parsed.fanOut[0].children.every(c => c.kind === 'completed')).toBe(true);
+    expect(code).toBe(0);
+  });
 });
 
 describe('run-id prefix resolution (short ids from `workflow runs`)', () => {

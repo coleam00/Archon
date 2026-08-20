@@ -58,7 +58,7 @@ describe('fan-out-report: dispositions + tally', () => {
 });
 
 describe('fan-out-report: schema rejects unrepresentable states', () => {
-  it('never_ran cannot carry a childRunId (extra key rejected by strict variant)', () => {
+  it('never_ran cannot carry a childRunId (extra key stripped by zod)', () => {
     const withId = {
       kind: 'never_ran',
       index: 0,

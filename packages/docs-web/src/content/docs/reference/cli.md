@@ -413,15 +413,19 @@ prints a `Fan-out (<node>):` block — **even without `--verbose`** — summaris
 child outcomes. A clean fan-out shows `all N children completed`; a fan-out with slots
 that failed, were cancelled, or never ran shows a tally
 (`1 of 3 children did not complete (2 completed, 1 failed)`) followed by the indexed
-non-completed child lines (capped at 20, then `+N more`). "Never ran" covers slots that
-never produced a child run — an unresolved `workflow:` target, a spawn blocked by the
-preflight, or a slot that threw before spawning.
+non-completed child lines (capped at 20, then `+N more`). "Never ran" is a disposition
+*within* a fan-out report — a slot that never produced a child run, either an unresolved
+`workflow:` target or a slot that threw before spawning. A shared-checkout preflight
+failure is different: it fails the whole node before any children spawn, so it produces
+no report and no `never_ran` slots.
 
-`--json` carries the same information as a top-level `fanOut` array (one entry per
-fan-out node, each with its `tally` and per-child `children` dispositions), present on
-both the plain and `--verbose` JSON shapes so an agent can detect a partly-failed
-fan-out without opting into the full event/node payload. `fanOut` is `null` only when
-the underlying event query failed, and an empty array when the run has no fan-out node.
+`--json` carries the same information as a top-level `fanOut` array, which is
+report-backed: one entry per terminal fan-out event that carries a valid report, each
+with its `tally` and per-child `children` dispositions, present on both the plain and
+`--verbose` JSON shapes so an agent can detect a partly-failed fan-out without opting
+into the full event/node payload. `fanOut` is an empty array when no such report exists
+(no fan-out node, or a fan-out node that failed before producing a report), and `null`
+only when the underlying event query failed.
 
 ### `workflow resume`
 

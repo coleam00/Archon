@@ -972,6 +972,86 @@ nodes:
     );
   });
 
+  it('a throw while RESUMING a failed child is ranFailed, not never_ran (#2657 review)', async () => {
+    // The resume path re-drives an EXISTING child row. If the hydrate/resume itself throws,
+    // the child row already exists, so the outcome must be `ran`+`failed` ("Failed to resume
+    // sub-run"), NOT `never_ran`+"Failed to create sub-run" — the latter reason is reserved for
+    // the fresh-spawn path where no row was ever created. Pre-fix the catch classified every
+    // throw here as never_ran, mislabelling a real post-row failure.
+    await writeWorkflow(
+      'child-always-fails',
+      `
+name: child-always-fails
+description: always fails on the first pass
+nodes:
+  - id: attempt
+    bash: "exit 3"
+`
+    );
+    await writeWorkflow(
+      'parent-resume-throw',
+      `
+name: parent-resume-throw
+description: parent whose child resume throws
+nodes:
+  - id: sub
+    workflow: child-always-fails
+    input: "x"
+`
+    );
+
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    const parent = await discover('parent-resume-throw');
+
+    const r1 = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parent,
+      'goal',
+      'conv-db'
+    );
+    expect(r1.success).toBe(false);
+    const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'parent-resume-throw');
+    const child = [...store.runs.values()].find(r => r.workflow_name === 'child-always-fails');
+    expect(child?.status).toBe('failed');
+
+    // Make ONLY the child's resume throw; the parent-level resume in the harness still works.
+    const realResume = store.resumeWorkflowRun.bind(store);
+    store.resumeWorkflowRun = (id: string): Promise<WorkflowRun> => {
+      if (id === child!.id) throw new Error('resume boom');
+      return realResume(id);
+    };
+
+    const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(parentRun!.id))!);
+    const resumeOpts = hydrated ?? {
+      preCreatedRun: await store.resumeWorkflowRun(parentRun!.id),
+    };
+    const r2 = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parent,
+      'goal',
+      'conv-db',
+      { ...resumeOpts }
+    );
+    expect(r2.success).toBe(false);
+
+    // The first `sub` node_failed is from r1 (the original child failure); the resume emits a
+    // second one carrying the classified outcome — assert on the LAST.
+    const subFailures = store.events.filter(
+      e => e.event_type === 'node_failed' && e.step_name === 'sub'
+    );
+    const subFailed = subFailures.at(-1);
+    // ranFailed → "Failed to resume", never the never_ran "Failed to create" reason.
+    expect(String(subFailed?.data?.error)).toContain('Failed to resume sub-run');
+    expect(String(subFailed?.data?.error)).not.toContain('Failed to create sub-run');
+  });
+
   it('a throw during the child spawn does NOT leave a non-terminal zombie child (I1)', async () => {
     await writeWorkflow(
       'child-plain',
@@ -2566,7 +2646,7 @@ nodes:
     // undetected — hold the messages to prove the warning actually fires.
     const messages: string[] = [];
     const platform = makePlatform();
-    platform.sendMessage = mock((_conversationId: string, text: string) => {
+    platform.sendMessage = mock((_conversationId: string, text: string): Promise<void> => {
       messages.push(text);
       return Promise.resolve();
     }) as unknown as IWorkflowPlatform['sendMessage'];
@@ -2716,7 +2796,7 @@ nodes:
       e =>
         e.event_type === 'node_failed' &&
         e.step_name === 'work' &&
-        String(e.data?.error).includes('share the parent checkout')
+        String(e.data?.error).includes('would run at once in the parent checkout')
     );
     expect(preflightFail).toBeUndefined();
 
