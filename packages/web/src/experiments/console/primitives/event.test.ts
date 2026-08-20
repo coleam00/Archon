@@ -63,6 +63,60 @@ describe('toRunEvent — node transitions', () => {
     expect(e.durationMs).toBeNull();
     expect(e.outputPreview).toBeNull();
     expect(e.costUsd).toBeNull();
+    expect(e.fanOut).toBeNull();
+  });
+
+  test('node_completed parses data.fan_out into a fan-out report (#2451)', () => {
+    const e = toRunEvent(
+      raw({
+        event_type: 'node_completed',
+        data: {
+          node_output: '["ok",{"error":"x","status":"failed"}]',
+          fan_out: {
+            children: [
+              { kind: 'completed', index: 0, childRunId: 'child-a' },
+              { kind: 'never_ran', index: 1, reason: 'unresolved_target', error: 'no such wf' },
+            ],
+          },
+        },
+      })
+    );
+    if (e.kind !== 'node_transition') throw new Error('unreachable');
+    expect(e.fanOut).not.toBeNull();
+    expect(e.fanOut?.children).toHaveLength(2);
+    expect(e.fanOut?.tally.neverRan).toBe(1);
+    expect(e.fanOut?.tally.notCompleted).toBe(1);
+  });
+
+  test('node_failed carries the fan-out report (all_success failure)', () => {
+    const e = toRunEvent(
+      raw({
+        event_type: 'node_failed',
+        data: {
+          error: 'fan_out node failed',
+          fan_out: {
+            children: [{ kind: 'never_ran', index: 0, reason: 'unresolved_target', error: 'x' }],
+          },
+        },
+      })
+    );
+    if (e.kind !== 'node_transition') throw new Error('unreachable');
+    expect(e.transition).toBe('failed');
+    expect(e.fanOut?.tally.neverRan).toBe(1);
+  });
+
+  test('legacy fan_out: true on node_completed parses to null (no report)', () => {
+    const e = toRunEvent(raw({ event_type: 'node_completed', data: { fan_out: true } }));
+    if (e.kind !== 'node_transition') throw new Error('unreachable');
+    expect(e.fanOut).toBeNull();
+  });
+
+  test('a garbage fan_out payload parses to null (never throws)', () => {
+    const e = toRunEvent(
+      raw({ event_type: 'node_completed', data: { fan_out: { children: 'nope' } } })
+    );
+    if (e.kind !== 'node_transition') throw new Error('unreachable');
+    expect(e.fanOut).toBeNull();
   });
 
   test('node_skipped carries when_condition reason + expr', () => {
@@ -326,6 +380,33 @@ describe('foldNodeRuns', () => {
       numTurns: 3,
       stopReason: 'end_turn',
     });
+  });
+
+  test('a fan-out node carries its report on the folded run (#2451)', () => {
+    const runs = foldNodeRuns([
+      node('spread', 'node_started', { created_at: at('0') }),
+      node('spread', 'node_completed', {
+        created_at: at('5'),
+        data: {
+          node_output: '[]',
+          fan_out: {
+            children: [
+              { kind: 'completed', index: 0, childRunId: 'a' },
+              { kind: 'failed', index: 1, childRunId: 'b', error: 'boom' },
+            ],
+          },
+        },
+      }),
+    ]);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.status).toBe('completed');
+    expect(runs[0]?.fanOut?.tally.failed).toBe(1);
+    expect(runs[0]?.fanOut?.tally.notCompleted).toBe(1);
+  });
+
+  test('a non-fan-out node folds to null fanOut', () => {
+    const runs = foldNodeRuns([node('plan', 'node_completed', { data: { node_output: 'x' } })]);
+    expect(runs[0]?.fanOut).toBeNull();
   });
 
   test('completed then resume node_skipped_prior_success folds to ONE completed run (dedup)', () => {

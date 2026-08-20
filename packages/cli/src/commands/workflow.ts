@@ -69,6 +69,12 @@ import type {
 import { workflowRunStatusSchema, isApprovalContext } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun, WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
 import {
+  parseFanOutReport,
+  formatFanOutTally,
+  formatChildDispositionLine,
+} from '@archon/workflows/schemas/fan-out-report';
+import type { ChildDisposition, FanOutTally } from '@archon/workflows/schemas/fan-out-report';
+import {
   approveWorkflow,
   rejectWorkflow,
   resumeWorkflow as resumeWorkflowOp,
@@ -2293,6 +2299,66 @@ async function fetchVerboseEvents(
   }
 }
 
+/** One fan-out node's parsed report, keyed by its step name (#2451). */
+interface CliFanOutSummary {
+  nodeId: string;
+  status: 'completed' | 'failed';
+  tally: FanOutTally;
+  children: ChildDisposition[];
+}
+
+/**
+ * Parse every terminal fan-out event on a run into a per-node summary (#2451). A fan-out
+ * wrapper writes its child report on `node_completed` (join satisfied) or `node_failed`
+ * (all_success failed after every slot settled); legacy `fan_out: true` rows and non-fan-out
+ * events parse to `null` and are skipped. Last terminal event per node wins (a resumed node).
+ * An empty result means "no fan-out node produced a report" — distinct from `null` (the caller
+ * uses `null` for an event-fetch failure).
+ */
+function summarizeRunFanOut(events: readonly WorkflowEventRow[]): CliFanOutSummary[] {
+  const byNode = new Map<string, CliFanOutSummary>();
+  for (const event of events) {
+    if (event.event_type !== 'node_completed' && event.event_type !== 'node_failed') continue;
+    if (event.step_name === null) continue;
+    const report = parseFanOutReport((event.data as Record<string, unknown> | null)?.fan_out);
+    if (!report) continue;
+    byNode.set(event.step_name, {
+      nodeId: event.step_name,
+      status: event.event_type === 'node_completed' ? 'completed' : 'failed',
+      tally: report.tally,
+      children: report.children,
+    });
+  }
+  return [...byNode.values()];
+}
+
+/** Max indexed child lines printed inline before a `+N more` (matches the console divider). */
+const FAN_OUT_CHILD_LINE_CAP = 20;
+
+/**
+ * Print the human `Fan-out:` block for a run's fan-out nodes (#2451). A clean fan-out shows a
+ * one-line positive summary; a node with slots that did not complete shows the tally plus the
+ * indexed non-completed child lines (capped). Prints nothing when there are no fan-out nodes.
+ */
+function printFanOutBlock(summaries: readonly CliFanOutSummary[]): void {
+  for (const summary of summaries) {
+    if (summary.tally.notCompleted === 0) {
+      console.log(
+        `  Fan-out (${summary.nodeId}): all ${String(summary.tally.total)} children completed`
+      );
+      continue;
+    }
+    console.log(`  Fan-out (${summary.nodeId}): ${formatFanOutTally(summary.tally)}`);
+    const notCompleted = summary.children.filter(c => c.kind !== 'completed');
+    for (const child of notCompleted.slice(0, FAN_OUT_CHILD_LINE_CAP)) {
+      console.log(`    ${formatChildDispositionLine(child)}`);
+    }
+    if (notCompleted.length > FAN_OUT_CHILD_LINE_CAP) {
+      console.log(`    +${String(notCompleted.length - FAN_OUT_CHILD_LINE_CAP)} more`);
+    }
+  }
+}
+
 /**
  * Render per-node summaries for a run's events as an indented "Nodes:" block.
  * Shared by `workflow status --verbose` and `workflow get --verbose`.
@@ -2427,29 +2493,32 @@ export async function workflowGetCommand(
     return 1;
   }
 
-  // getWorkflowRun returns the base WorkflowRun (no current_step_name) — derive
-  // per-node detail from the event log, and only when verbose is requested.
-  let events: WorkflowEventRow[] | undefined;
-  let eventsFailed = false;
-  if (verbose) {
-    const fetched = await fetchVerboseEvents(run.id);
-    events = fetched.events;
-    eventsFailed = fetched.failed;
-  }
+  // getWorkflowRun returns the base WorkflowRun (no current_step_name) — derive per-node
+  // detail from the event log. The events are now fetched UNCONDITIONALLY (not just for
+  // --verbose) so the fan-out block (#2451) surfaces on a plain `get`. `--verbose` still
+  // gates the fuller per-node "Nodes:" block below.
+  const fetched = await fetchVerboseEvents(run.id);
+  const events = fetched.events;
+  const eventsFailed = fetched.failed;
+  // `fanOut: null` = the event query FAILED (do not read a missing block as clean);
+  // `[]` = the query succeeded but no fan-out node produced a report.
+  const fanOut = eventsFailed ? null : summarizeRunFanOut(events);
 
   if (json) {
     if (!verbose) {
-      await writeJsonLine(run);
+      // fanOut rides even the non-verbose JSON so an agent gets the child report without
+      // opting into the full event/node payload.
+      await writeJsonLine({ ...run, fanOut });
       return 0;
     }
 
-    const verboseEvents = events ?? [];
-    const parseWarnings = readParseWarningEvents(verboseEvents);
+    const parseWarnings = readParseWarningEvents(events);
     const output = rawEvents
-      ? { ...run, events: verboseEvents }
+      ? { ...run, events, fanOut }
       : {
           ...run,
-          nodes: buildNodeSummaries(verboseEvents),
+          nodes: buildNodeSummaries(events),
+          fanOut,
           // Keys the engine dropped from this run's YAML (#2213). Surfaced as a
           // named field rather than leaving the caller to scan raw events.
           ...(parseWarnings.length > 0 ? { parseWarnings } : {}),
@@ -2481,10 +2550,15 @@ export async function workflowGetCommand(
   if (runError) {
     console.log(`  Error:  ${runError}`);
   }
-  if (events) {
-    if (eventsFailed) {
-      console.log('  (node events unavailable — see logs)');
-    }
+  if (eventsFailed) {
+    console.log('  (node events unavailable — see logs)');
+  }
+  // Fan-out block: printed even WITHOUT --verbose (#2451) — a fan-out node whose children
+  // did not all complete is otherwise invisible in the plain run summary.
+  if (fanOut !== null && fanOut.length > 0) {
+    printFanOutBlock(fanOut);
+  }
+  if (verbose && !eventsFailed) {
     const parseWarnings = readParseWarningEvents(events);
     if (parseWarnings.length > 0) {
       console.log(`  Ignored keys (${String(parseWarnings.length)}):`);

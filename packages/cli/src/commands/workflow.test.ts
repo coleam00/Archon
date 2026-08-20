@@ -3768,6 +3768,124 @@ describe('workflowGetCommand', () => {
     const parsed = JSON.parse(firstJsonPayload(stdoutSpy)) as { events: unknown[] };
     expect(parsed.events).toEqual([]);
   });
+
+  // #2451 — the fan-out observability block.
+  const FAN_OUT_COMPLETED_EVENT = {
+    id: 'fo1',
+    workflow_run_id: 'run-fo',
+    event_type: 'node_completed',
+    step_name: 'spread',
+    step_index: 1,
+    data: {
+      node_output: '["ok",{"error":"x","status":"failed"},{"error":"y","status":"failed"}]',
+      type: 'workflow',
+      fan_out: {
+        children: [
+          { kind: 'completed', index: 0, childRunId: 'child-a' },
+          { kind: 'failed', index: 1, childRunId: 'child-b', error: 'DAG failed' },
+          { kind: 'never_ran', index: 2, reason: 'unresolved_target', error: 'Unknown workflow' },
+        ],
+      },
+    },
+    created_at: new Date().toISOString(),
+  };
+
+  it('prints the Fan-out tally block WITHOUT --verbose (human)', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const eventsDb = await import('@archon/core/db/workflow-events');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-fo',
+      workflow_name: 'fanner',
+      status: 'completed',
+      working_path: '/tmp/wt',
+      started_at: new Date(),
+      metadata: {},
+    });
+    (eventsDb.listWorkflowEvents as ReturnType<typeof mock>).mockResolvedValueOnce([
+      FAN_OUT_COMPLETED_EVENT,
+    ]);
+
+    // No --verbose.
+    const code = await workflowGetCommand('run-fo');
+
+    const calls = consoleSpy.mock.calls.map((c: unknown[]) => String(c[0]));
+    expect(calls.some(c => c.includes('Fan-out (spread)'))).toBe(true);
+    expect(calls.some(c => c.includes('2 of 3 children did not complete'))).toBe(true);
+    // The indexed non-completed child lines are present; the completed slot is omitted.
+    expect(calls.some(c => c.includes('[1] failed'))).toBe(true);
+    expect(calls.some(c => c.includes('[2] never ran'))).toBe(true);
+    expect(code).toBe(0);
+  });
+
+  it('includes fanOut in --json WITHOUT --verbose', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const eventsDb = await import('@archon/core/db/workflow-events');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-fo',
+      workflow_name: 'fanner',
+      status: 'completed',
+      working_path: '/tmp/wt',
+      started_at: new Date(),
+      metadata: {},
+    });
+    (eventsDb.listWorkflowEvents as ReturnType<typeof mock>).mockResolvedValueOnce([
+      FAN_OUT_COMPLETED_EVENT,
+    ]);
+
+    const code = await workflowGetCommand('run-fo', true);
+
+    const parsed = JSON.parse(firstJsonPayload(stdoutSpy)) as {
+      fanOut: Array<{ nodeId: string; tally: { notCompleted: number }; children: unknown[] }>;
+    };
+    expect(parsed.fanOut).toHaveLength(1);
+    expect(parsed.fanOut[0].nodeId).toBe('spread');
+    expect(parsed.fanOut[0].tally.notCompleted).toBe(2);
+    expect(parsed.fanOut[0].children).toHaveLength(3);
+    expect(code).toBe(0);
+  });
+
+  it('sets fanOut: null (not []) when the event query fails', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const eventsDb = await import('@archon/core/db/workflow-events');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-fo',
+      workflow_name: 'fanner',
+      status: 'completed',
+      working_path: '/tmp/wt',
+      started_at: new Date(),
+      metadata: {},
+    });
+    (eventsDb.listWorkflowEvents as ReturnType<typeof mock>).mockRejectedValueOnce(
+      new Error('events unavailable')
+    );
+
+    const code = await workflowGetCommand('run-fo', true);
+
+    const parsed = JSON.parse(firstJsonPayload(stdoutSpy)) as { fanOut: unknown };
+    // null = event fetch failed; a consumer must NOT read a missing block as clean.
+    expect(parsed.fanOut).toBeNull();
+    expect(code).toBe(0);
+  });
+
+  it('emits fanOut: [] when a run has no fan-out node', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const eventsDb = await import('@archon/core/db/workflow-events');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-plain',
+      workflow_name: 'plain',
+      status: 'completed',
+      working_path: '/tmp/wt',
+      started_at: new Date(),
+      metadata: {},
+    });
+    (eventsDb.listWorkflowEvents as ReturnType<typeof mock>).mockResolvedValueOnce([]);
+
+    const code = await workflowGetCommand('run-plain', true);
+
+    const parsed = JSON.parse(firstJsonPayload(stdoutSpy)) as { fanOut: unknown[] };
+    expect(parsed.fanOut).toEqual([]);
+    expect(code).toBe(0);
+  });
 });
 
 describe('run-id prefix resolution (short ids from `workflow runs`)', () => {

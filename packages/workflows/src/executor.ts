@@ -27,6 +27,8 @@ import {
   isRunBlockedOnChild,
   SUBRUN_METADATA_KEYS,
   readSubrunMetadata,
+  neverRan,
+  ranFailed,
 } from './schemas';
 import { executeDagWorkflow, childOutcomeFromRun } from './dag-executor';
 import type { RunChildWorkflowArgs, ChildWorkflowOutcome, PriorRunUsage } from './dag-executor';
@@ -690,13 +692,10 @@ async function runChildWorkflow(
     inputs,
   } = args;
 
-  // Every failure below returns a `{ status: 'failed' }` outcome (never throws);
-  // `childRunId` defaults to '' for failures before a child row exists.
-  const failOutcome = (error: string, childRunId = ''): ChildWorkflowOutcome => ({
-    childRunId,
-    status: 'failed',
-    error,
-  });
+  // Every failure below returns a non-completed outcome (never throws). A failure BEFORE a
+  // child run row exists is `never_ran` (#2451) — the slot has no id at all — with a machine
+  // reason (`unresolved_target` for a bad `workflow:` name, `blocked_before_spawn` for a guard
+  // that fired before the row). A failure AFTER the row exists is `ranFailed(childRunId, …)`.
 
   // 1. Resolve the child workflow by NAME (static target — constitution guardrail).
   //    Resolution runs BEFORE the cycle check so a case-variant / suffix / substring
@@ -719,12 +718,13 @@ async function runChildWorkflow(
     );
   } catch (err) {
     // resolveWorkflowName throws only on ambiguity.
-    return failOutcome(
+    return neverRan(
+      'blocked_before_spawn',
       `Failed to resolve sub-run '${childWorkflowName}': ${(err as Error).message}`
     );
   }
   if (!childWorkflow) {
-    return failOutcome(`Unknown sub-run workflow '${childWorkflowName}'.`);
+    return neverRan('unresolved_target', `Unknown sub-run workflow '${childWorkflowName}'.`);
   }
 
   // 2. Cycle guard + depth cap (D9), compared against the RESOLVED canonical name.
@@ -734,17 +734,20 @@ async function runChildWorkflow(
   try {
     ancestry = [parentRun, ...(await deps.store.getRunAncestry(parentRun.id))];
   } catch (err) {
-    return failOutcome(
+    return neverRan(
+      'blocked_before_spawn',
       `Failed to resolve run ancestry for sub-run guard: ${(err as Error).message}`
     );
   }
   if (ancestry.some(a => a.workflow_name === childWorkflow.name)) {
-    return failOutcome(
+    return neverRan(
+      'blocked_before_spawn',
       `Sub-run cycle detected: '${childWorkflow.name}' is already an ancestor of this run.`
     );
   }
   if (ancestry.length >= CHILD_WORKFLOW_DEPTH_CAP) {
-    return failOutcome(
+    return neverRan(
+      'blocked_before_spawn',
       `Sub-run depth cap (${String(CHILD_WORKFLOW_DEPTH_CAP)}) exceeded nesting '${childWorkflow.name}'.`
     );
   }
@@ -766,7 +769,7 @@ async function runChildWorkflow(
     );
     childInputs = Object.keys(resolved).length > 0 ? resolved : undefined;
   } catch (err) {
-    return failOutcome((err as Error).message);
+    return neverRan('blocked_before_spawn', (err as Error).message);
   }
 
   // 3. Resolve the child's execution cwd (slice 2, PR-A). `isolation: 'worktree'`
@@ -795,10 +798,10 @@ async function runChildWorkflow(
     // deep ENOENT mid-run; fail fast with the same guidance the top-level CLI resume
     // gives (workflow.ts resume precedent).
     if (priorPath && !existsSync(priorPath)) {
-      return failOutcome(
+      return ranFailed(
+        resumeFailedChild.id,
         `Cannot resume sub-run '${childWorkflowName}': its working path no longer exists ` +
-          `(${priorPath}). The worktree may have been cleaned up — start a fresh run.`,
-        resumeFailedChild.id
+          `(${priorPath}). The worktree may have been cleaned up — start a fresh run.`
       );
     }
     // `working_path` is nullable in the schema, and falling back to the parent's
@@ -808,16 +811,17 @@ async function runChildWorkflow(
     // created with a real path, see the createWorkflowRun call below), so this is
     // defense-in-depth: fail loudly rather than resume somewhere the author didn't ask for.
     if (!priorPath) {
-      return failOutcome(
+      return ranFailed(
+        resumeFailedChild.id,
         `Cannot resume sub-run '${childWorkflowName}': its run row has no recorded working ` +
-          'path, so the checkout it ran in is unknown — start a fresh run.',
-        resumeFailedChild.id
+          'path, so the checkout it ran in is unknown — start a fresh run.'
       );
     }
     childCwd = priorPath;
   } else if (isolation === 'worktree') {
     if (!resolveChildIsolation) {
-      return failOutcome(
+      return neverRan(
+        'blocked_before_spawn',
         `isolation: 'worktree' on sub-run '${childWorkflowName}' requires an injected ` +
           'child-isolation resolver (available for git-repo codebases run via the CLI or ' +
           "orchestrator). Remove the isolation or use 'inherit' (shared checkout)."
@@ -834,7 +838,8 @@ async function runChildWorkflow(
     } catch (err) {
       // The resolver already classified + logged the failure (child-isolation-resolver);
       // prepend the sub-run context for the node-facing outcome.
-      return failOutcome(
+      return neverRan(
+        'blocked_before_spawn',
         `Failed to create isolated worktree for sub-run '${childWorkflowName}': ${(err as Error).message}`
       );
     }
@@ -907,7 +912,8 @@ async function runChildWorkflow(
       childRunId = childRun.id;
     }
   } catch (err) {
-    return failOutcome(
+    return neverRan(
+      'blocked_before_spawn',
       `Failed to create sub-run '${childWorkflowName}': ${(err as Error).message}`
     );
   }
@@ -931,7 +937,7 @@ async function runChildWorkflow(
     //    tokens). Works for synchronous completion AND a child paused at its gate.
     const finalChild = await deps.store.getWorkflowRun(childRunId);
     if (!finalChild) {
-      return failOutcome('Child run row disappeared after execution.', childRunId);
+      return ranFailed(childRunId, 'Child run row disappeared after execution.');
     }
     return childOutcomeFromRun(finalChild);
   } catch (err) {
@@ -951,9 +957,9 @@ async function runChildWorkflow(
     await deps.store.cancelWorkflowRun(childRunId).catch((cancelErr: unknown) => {
       getLog().error({ err: cancelErr as Error, childRunId }, 'workflow.child_setup_cancel_failed');
     });
-    return failOutcome(
-      `Sub-run '${childWorkflowName}' errored: ${(err as Error).message}`,
-      childRunId
+    return ranFailed(
+      childRunId,
+      `Sub-run '${childWorkflowName}' errored: ${(err as Error).message}`
     );
   }
 }

@@ -1,6 +1,14 @@
 import type { ReactElement } from 'react';
 import { formatElapsed, formatRelativeToBaseline, formatClock } from '../lib/format';
 import { useStreamContext } from '../lib/stream-context';
+import {
+  formatFanOutTally,
+  formatChildDispositionLine,
+  type FanOutReport,
+} from '../primitives/fan-out';
+
+/** Max indexed child lines rendered inline before a `+N more` summary (#2451). */
+const FAN_OUT_CHILD_LINE_CAP = 20;
 
 interface NodeDividerProps {
   /** `step_name` — the scroll-anchor target for the graph panel. */
@@ -21,6 +29,8 @@ interface NodeDividerProps {
   skipExpr?: string | null;
   /** When true, surface skip reason / stop reason inline. */
   showDetail?: boolean;
+  /** Fan-out child report for a `workflow:` fan-out node (#2451); null otherwise. */
+  fanOut?: FanOutReport | null;
 }
 
 const STATUS_LABEL: Record<NodeDividerProps['status'], string> = {
@@ -58,6 +68,7 @@ export function NodeDivider({
   skipReason,
   skipExpr,
   showDetail = false,
+  fanOut = null,
 }: NodeDividerProps): ReactElement {
   const { runStartedAt } = useStreamContext();
   const displayed = formatRelativeToBaseline(timestamp, runStartedAt);
@@ -88,6 +99,13 @@ export function NodeDivider({
     skipReason !== null &&
     skipReason !== undefined &&
     skipReason.length > 0;
+
+  // Fan-out attention (#2451): a `workflow:` fan-out node whose children did not all complete
+  // shows the tally + the indexed non-completed child lines. A clean fan-out (notCompleted 0)
+  // renders nothing extra — the node already reads "completed".
+  const fanOutAttention = fanOut !== null && fanOut.tally.notCompleted > 0 ? fanOut : null;
+  const notCompletedChildren = fanOutAttention?.children.filter(c => c.kind !== 'completed') ?? [];
+  const fanOutOverflow = Math.max(0, notCompletedChildren.length - FAN_OUT_CHILD_LINE_CAP);
 
   // One divider per node now, so the scroll-anchor id is always present and
   // keyed by nodeId (matches the graph panel's getElementById target).
@@ -137,6 +155,17 @@ export function NodeDivider({
               <span className="text-text-secondary">{skipExpr}</span>
             </>
           ) : null}
+        </div>
+      ) : null}
+      {fanOutAttention !== null ? (
+        <div className="ml-[68px] flex flex-col gap-0.5 font-mono text-[10px] text-text-tertiary">
+          <span className="text-warning">{formatFanOutTally(fanOutAttention.tally)}</span>
+          {notCompletedChildren.slice(0, FAN_OUT_CHILD_LINE_CAP).map(child => (
+            <span key={child.index} className="text-text-secondary">
+              {formatChildDispositionLine(child)}
+            </span>
+          ))}
+          {fanOutOverflow > 0 ? <span>{`+${String(fanOutOverflow)} more`}</span> : null}
         </div>
       ) : null}
     </div>

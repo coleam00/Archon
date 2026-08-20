@@ -7,6 +7,8 @@
  * event schema so EventStream rendering can switch on `kind` only.
  */
 
+import { parseFanOutReport, type FanOutReport } from './fan-out';
+
 export type RunEventKind =
   | 'text'
   | 'tool_call'
@@ -64,6 +66,13 @@ export interface NodeTransitionEvent extends RunEventBase {
   costUsd: number | null;
   stopReason: string | null;
   numTurns: number | null;
+  /**
+   * Fan-out child report (#2451). Populated on the `completed` / `failed` transition of a
+   * `workflow:` fan-out node, parsed from `data.fan_out`; `null` on every other event, on a
+   * non-fan-out node, and on legacy `fan_out: true` rows. The tally rides along, derived at
+   * parse — see `primitives/fan-out.ts`.
+   */
+  fanOut: FanOutReport | null;
 }
 
 export interface ApprovalEvent extends RunEventBase {
@@ -182,6 +191,9 @@ export function toRunEvent(raw: RawWorkflowEvent): RunEvent {
       costUsd: readNumberOrNull(data, 'cost_usd'),
       stopReason: readStringOrNull(data, 'stop_reason'),
       numTurns: readNumberOrNull(data, 'num_turns'),
+      // A fan-out wrapper writes its child report on the terminal event; legacy `true` and
+      // non-fan-out nodes parse to null (#2451).
+      fanOut: parseFanOutReport(data.fan_out),
     };
   }
 
@@ -379,6 +391,12 @@ export interface NodeRun {
   stopReason: string | null;
   skipReason: string | null;
   skipExpr: string | null;
+  /**
+   * Fan-out child report for a `workflow:` fan-out node (#2451), read from its terminal
+   * transition (`completed` or `failed`). Null for every non-fan-out node. Drives the log
+   * divider's tally + indexed child lines.
+   */
+  fanOut: FanOutReport | null;
 }
 
 /**
@@ -435,6 +453,9 @@ export function foldNodeRuns(events: RunEvent[]): NodeRun[] {
       stopReason: completed?.stopReason ?? null,
       skipReason: skipped?.skipReason ?? null,
       skipExpr: skipped?.skipExpr ?? null,
+      // The fan-out report rides whichever terminal transition carried it (all_done →
+      // completed, all_success failure → failed).
+      fanOut: completed?.fanOut ?? failed?.fanOut ?? null,
     });
   }
   return runs.sort((a, b) => new Date(a.startedAt).getTime() - new Date(b.startedAt).getTime());

@@ -165,6 +165,37 @@ export type { WorkflowRunNodeSession } from './workflow-run-node-session';
 export { nodeArtifactSchema, nodeArtifactLoopFrameSchema } from './node-artifact';
 export type { NodeArtifact, NodeArtifactLoopFrame } from './node-artifact';
 
+// Fan-out child outcome observability (#2451)
+export {
+  FAN_OUT_EXCERPT_MAX_CHARS,
+  fanOutExcerpt,
+  childNeverRanReasonSchema,
+  fanOutEngineCancelReasonSchema,
+  childDispositionSchema,
+  fanOutReportPayloadSchema,
+  tallyChildDispositions,
+  parseFanOutReport,
+  formatFanOutHeadline,
+  formatFanOutBreakdown,
+  formatFanOutTally,
+  neverRan,
+  ranFailed,
+  toChildDisposition,
+  buildFanOutReportPayload,
+  formatChildDispositionLine,
+} from './fan-out-report';
+export type {
+  ChildNeverRanReason,
+  FanOutEngineCancelReason,
+  ChildDisposition,
+  FanOutReportPayload,
+  FanOutTally,
+  FanOutReport,
+  ChildRanOutcome,
+  ChildNeverRanOutcome,
+  ChildWorkflowOutcome,
+} from './fan-out-report';
+
 // Result types (non-schema hand-written types)
 export type {
   LoadCommandResult,

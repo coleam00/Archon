@@ -58,6 +58,8 @@ import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
 import type { IWorkflowStore } from './store';
 import type { WorkflowRun } from './schemas/workflow-run';
 import type { WorkflowDefinition } from './schemas/workflow';
+import { parseFanOutReport, toChildDisposition } from './schemas/fan-out-report';
+import { childOutcomeFromRun } from './dag-executor';
 import type {
   ChildIsolationResolver,
   ChildIsolationRequest,
@@ -2513,6 +2515,196 @@ nodes:
     expect(aggregate[2]).toBe('ok:c');
     // The failed middle child is represented as an error object, not dropped.
     expect(aggregate[1]).toMatchObject({ status: 'failed' });
+
+    // #2451: data.fan_out now carries the ordered wire report (not the legacy boolean).
+    // The success-shaped failure is the whole point — assert the RECORD, not just success.
+    const report = parseFanOutReport(workCompleted?.data?.fan_out);
+    expect(report).not.toBeNull();
+    expect(report?.children.map(c => c.kind)).toEqual(['completed', 'failed', 'completed']);
+    expect(report?.children.map(c => c.index)).toEqual([0, 1, 2]);
+    expect(report?.tally.failed).toBe(1);
+    expect(report?.tally.notCompleted).toBe(1);
+    // The failed slot ran, so it has a real child run id.
+    const failedSlot = report?.children[1];
+    expect(failedSlot?.kind).toBe('failed');
+    if (failedSlot?.kind === 'failed') {
+      expect(failedSlot.childRunId.length).toBeGreaterThan(0);
+      const failChild = [...store.runs.values()].find(r => r.id === failedSlot.childRunId);
+      expect(failChild?.workflow_name).toBe('fan-child-cond');
+    }
+  });
+
+  // #2451 test #2: an unknown fan_out target under all_done COMPLETES — the never-ran slots
+  // are data, not a node failure. Asserting completion alone proves nothing (the bug was a
+  // green run); assert the never_ran report. max_parallel: 1 keeps the shared-checkout
+  // preflight out of the picture, isolating the unresolved-target behavior.
+  it('all_done: an unknown fan_out target completes with three never_ran slots (max_parallel 1)', async () => {
+    await writeWorkflow(
+      'fan-never-alldone',
+      `
+name: fan-never-alldone
+description: fan out over a target that does not resolve
+nodes:
+  - id: plan
+    bash: |
+      printf '%s' '["a","b","c"]'
+  - id: work
+    workflow: does-not-exist-typo
+    depends_on: [plan]
+    fan_out:
+      items: "$plan.output"
+      max_parallel: 1
+      join: all_done
+`
+    );
+
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    const parent = await discover('fan-never-alldone');
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parent,
+      'goal',
+      'conv-db'
+    );
+
+    expect(result.success).toBe(true);
+    const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'fan-never-alldone');
+    expect(parentRun?.status).toBe('completed');
+    // No child run rows exist for a target that never resolves.
+    expect(await store.findChildRuns(parentRun!.id)).toHaveLength(0);
+
+    const workCompleted = store.events.find(
+      e => e.event_type === 'node_completed' && e.step_name === 'work'
+    );
+    const report = parseFanOutReport(workCompleted?.data?.fan_out);
+    expect(report).not.toBeNull();
+    expect(report?.tally.total).toBe(3);
+    expect(report?.tally.neverRan).toBe(3);
+    expect(report?.tally.notCompleted).toBe(3);
+    for (const child of report?.children ?? []) {
+      expect(child.kind).toBe('never_ran');
+      if (child.kind === 'never_ran') {
+        expect(child.reason).toBe('unresolved_target');
+        expect(child.error).toContain('Unknown sub-run workflow');
+        expect('childRunId' in child).toBe(false);
+      }
+    }
+    // The aggregate string is byte-identical to the pre-#2451 shape: never-ran still encodes
+    // as { error, status: 'failed' } so $spread.output consumers do not change.
+    const aggregate = JSON.parse(String(workCompleted?.data?.node_output)) as unknown[];
+    expect(aggregate).toHaveLength(3);
+    expect(aggregate[0]).toMatchObject({ status: 'failed' });
+  });
+
+  // #2451 test #3: the SAME unknown target under all_success still FAILS the node — and the
+  // node_failed event carries the identical children report the completed path would get.
+  it('all_success: an unknown fan_out target fails the node, node_failed carries the report', async () => {
+    await writeWorkflow(
+      'fan-never-allsuccess',
+      `
+name: fan-never-allsuccess
+description: fan out over an unresolved target under all_success
+nodes:
+  - id: plan
+    bash: |
+      printf '%s' '["a","b","c"]'
+  - id: work
+    workflow: does-not-exist-typo
+    depends_on: [plan]
+    fan_out:
+      items: "$plan.output"
+      max_parallel: 1
+      join: all_success
+`
+    );
+
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    const parent = await discover('fan-never-allsuccess');
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parent,
+      'goal',
+      'conv-db'
+    );
+
+    expect(result.success).toBe(false);
+    const parentRun = [...store.runs.values()].find(
+      r => r.workflow_name === 'fan-never-allsuccess'
+    );
+    expect(parentRun?.status).toBe('failed');
+
+    const nodeFailed = store.events.find(
+      e => e.event_type === 'node_failed' && e.step_name === 'work'
+    );
+    const report = parseFanOutReport(nodeFailed?.data?.fan_out);
+    expect(report).not.toBeNull();
+    expect(report?.tally.neverRan).toBe(3);
+    expect(report?.children.every(c => c.kind === 'never_ran')).toBe(true);
+  });
+
+  // #2451 test #4: the preflight fix. Before, an unknown target with max_parallel > 1 hit the
+  // shared-checkout preflight and FAILED the node with a checkout-safety message (the rejected
+  // original fix). Now the checkout preflight only runs when the child DEFINITION resolves, so
+  // an unresolved target completes under all_done with three never_ran slots.
+  it('all_done: an unknown fan_out target with max_parallel 2 completes (preflight does not fail it)', async () => {
+    await writeWorkflow(
+      'fan-never-parallel',
+      `
+name: fan-never-parallel
+description: unresolved target, concurrent — must not fail on the preflight
+nodes:
+  - id: plan
+    bash: |
+      printf '%s' '["a","b","c"]'
+  - id: work
+    workflow: does-not-exist-typo
+    depends_on: [plan]
+    fan_out:
+      items: "$plan.output"
+      max_parallel: 2
+      join: all_done
+`
+    );
+
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    const parent = await discover('fan-never-parallel');
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parent,
+      'goal',
+      'conv-db'
+    );
+
+    expect(result.success).toBe(true);
+    const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'fan-never-parallel');
+    expect(parentRun?.status).toBe('completed');
+
+    const workCompleted = store.events.find(
+      e => e.event_type === 'node_completed' && e.step_name === 'work'
+    );
+    // The node_failed for the OLD preflight message must not exist.
+    const preflightFail = store.events.find(
+      e =>
+        e.event_type === 'node_failed' &&
+        e.step_name === 'work' &&
+        String(e.data?.error).includes('share the parent checkout')
+    );
+    expect(preflightFail).toBeUndefined();
+
+    const report = parseFanOutReport(workCompleted?.data?.fan_out);
+    expect(report?.tally.neverRan).toBe(3);
   });
 
   it('bounds concurrency to max_parallel (sliding window over the children)', async () => {
@@ -2937,6 +3129,13 @@ nodes:
       expect(c.status).toBe('cancelled');
       expect((c.metadata as Record<string, unknown>).cancelled_reason).toBe('fan_out_gate');
     }
+    // #2451 test #5: an engine-tagged gate cancel maps to `cancelled_by_engine` / `fan_out_gate`
+    // when reduced to a wire disposition (round-tripped through the real cancelled child row).
+    const gateDisposition = toChildDisposition(childOutcomeFromRun(children[0]), 0);
+    expect(gateDisposition.kind).toBe('cancelled_by_engine');
+    if (gateDisposition.kind === 'cancelled_by_engine') {
+      expect(gateDisposition.reason).toBe('fan_out_gate');
+    }
     const nodeFailed = store.events.find(
       e => e.event_type === 'node_failed' && e.step_name === 'work'
     );
@@ -3084,6 +3283,12 @@ nodes:
     expect((orphanAfter?.metadata as Record<string, unknown>).cancelled_reason).toBe(
       'fan_out_orphan'
     );
+    // #2451 test #6: an orphan cancel round-trips to `cancelled_by_engine` / `fan_out_orphan`.
+    const orphanDisposition = toChildDisposition(childOutcomeFromRun(orphanAfter!), 5);
+    expect(orphanDisposition.kind).toBe('cancelled_by_engine');
+    if (orphanDisposition.kind === 'cancelled_by_engine') {
+      expect(orphanDisposition.reason).toBe('fan_out_orphan');
+    }
   });
 
   it('a fan-out-cancelled gate child is re-driven on resume once the gate is removed (C2)', async () => {
@@ -3267,6 +3472,15 @@ nodes:
     const childAafter = await store.getWorkflowRun(childA!.id);
     expect(childAafter?.status).toBe('cancelled');
     expect((childAafter?.metadata as Record<string, unknown>).cancelled_reason).toBeUndefined();
+
+    // #2451 test #7: an untagged cancel (no engine cancelled_reason) records as
+    // `cancelled_out_of_band` on the node_failed report — NOT cancelled_by_engine.
+    const nodeFailed2 = [...store.events]
+      .reverse()
+      .find(e => e.event_type === 'node_failed' && e.step_name === 'work');
+    const report = parseFanOutReport(nodeFailed2?.data?.fan_out);
+    expect(report).not.toBeNull();
+    expect(report?.children[0]?.kind).toBe('cancelled_out_of_band');
     // Exactly one row for index 0 — never re-driven.
     expect(
       [...store.runs.values()].filter(

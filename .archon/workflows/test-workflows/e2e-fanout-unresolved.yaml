@@ -1,0 +1,14 @@
+name: e2e-fanout-unresolved
+description: |
+  REPRO for #2451 — fan_out to a name that does not exist, max_parallel: 1 so the
+  #2180 shared-checkout preflight does not fail the node first. Under join: all_done
+  the wrapper currently completes green with zero child rows.
+mutates_checkout: false
+
+nodes:
+  - id: spread
+    workflow: does-not-exist-typo
+    fan_out:
+      items: '["a", "b", "c"]'
+      max_parallel: 1
+      join: all_done

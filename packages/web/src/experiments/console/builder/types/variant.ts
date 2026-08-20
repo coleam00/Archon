@@ -13,11 +13,14 @@ import type { WorkflowNodeKind } from '../../primitives/workflow-graph';
 import type { WireDagNode, WireWorkflowDefinition } from './wire';
 
 /**
- * The seven representable node variants — an alias of the console's
- * `WorkflowNodeKind` primitive so the builder and the graph renderer share one
- * union (the builder does not redefine the kinds).
+ * The seven representable node variants — the console's `WorkflowNodeKind` primitive minus
+ * `'workflow'`. The graph renderer learned `'workflow'` (a `workflow:` sub-run / fan-out node)
+ * for #2451 attention rendering, but the visual builder does not yet author that node type, so
+ * it is explicitly excluded here rather than left as an unhandled variant. A `workflow:` node
+ * loaded into the builder falls through to the same fallback it always did (it was never a
+ * builder variant). Widen this to the full union only when a `workflow` variant is built.
  */
-export type VariantId = WorkflowNodeKind;
+export type VariantId = Exclude<WorkflowNodeKind, 'workflow'>;
 
 // ---------------------------------------------------------------------------
 // Base fields — shared across every variant (the wire base keys minus `id`)

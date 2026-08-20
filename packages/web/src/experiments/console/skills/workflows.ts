@@ -18,6 +18,7 @@ interface RawNode {
   approval?: unknown;
   loop?: unknown;
   script?: unknown;
+  workflow?: string;
 }
 
 /**
@@ -63,6 +64,9 @@ function nodeKind(n: RawNode): WorkflowGraphNode['kind'] {
   if (n.bash !== undefined) return 'bash';
   if (n.command !== undefined) return 'command';
   if (n.script !== undefined) return 'script';
+  // A `workflow:` sub-run / fan-out node — classified before the prompt fallback so a fan-out
+  // wrapper (e.g. `spread`) no longer renders as a plain prompt dot (#2451).
+  if (n.workflow !== undefined) return 'workflow';
   return 'prompt';
 }
 
