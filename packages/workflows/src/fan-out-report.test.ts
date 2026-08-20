@@ -2,6 +2,7 @@ import { describe, it, expect } from 'bun:test';
 
 import {
   FAN_OUT_EXCERPT_MAX_CHARS,
+  FAN_OUT_ATTENTION_LINE_CAP,
   fanOutExcerpt,
   childDispositionSchema,
   fanOutReportPayloadSchema,
@@ -15,6 +16,7 @@ import {
   toChildDisposition,
   buildFanOutReportPayload,
   formatChildDispositionLine,
+  toFanOutView,
 } from './schemas/fan-out-report';
 import type { ChildDisposition, ChildWorkflowOutcome } from './schemas/fan-out-report';
 
@@ -288,5 +290,52 @@ describe('fan-out-report: formatting', () => {
         error: 'DAG failed',
       })
     ).toBe('[1] failed · deadbeef · DAG failed');
+  });
+});
+
+describe('fan-out-report: toFanOutView', () => {
+  it('returns null for missing, legacy, and malformed data.fan_out', () => {
+    expect(toFanOutView(undefined)).toBeNull();
+    expect(toFanOutView(null)).toBeNull();
+    expect(toFanOutView({})).toBeNull();
+    expect(toFanOutView({ fan_out: true })).toBeNull();
+    expect(toFanOutView({ fan_out: { children: 'nope' } })).toBeNull();
+  });
+
+  it('builds tally + display strings from event data', () => {
+    const view = toFanOutView({
+      fan_out: {
+        children: [
+          { kind: 'completed', index: 0, childRunId: 'child-a' },
+          { kind: 'never_ran', index: 1, reason: 'unresolved_target', error: 'no such wf' },
+        ],
+      },
+    });
+    expect(view).not.toBeNull();
+    expect(view?.tally).toEqual({
+      total: 2,
+      completed: 1,
+      failed: 0,
+      cancelledByEngine: 0,
+      cancelledOutOfBand: 0,
+      neverRan: 1,
+      notCompleted: 1,
+    });
+    expect(view?.headline).toBe('1 of 2 children did not complete');
+    expect(view?.tallyText).toBe('1 of 2 children did not complete (1 completed, 1 never ran)');
+    expect(view?.attentionLines).toEqual(['[1] never ran · no such wf']);
+    expect(view?.overflowCount).toBe(0);
+  });
+
+  it('caps attention lines and reports overflow', () => {
+    const children = Array.from({ length: FAN_OUT_ATTENTION_LINE_CAP + 3 }, (_, index) => ({
+      kind: 'never_ran' as const,
+      index,
+      reason: 'unresolved_target' as const,
+      error: 'x',
+    }));
+    const view = toFanOutView({ fan_out: { children } });
+    expect(view?.attentionLines).toHaveLength(FAN_OUT_ATTENTION_LINE_CAP);
+    expect(view?.overflowCount).toBe(3);
   });
 });

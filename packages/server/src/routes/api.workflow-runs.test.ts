@@ -1101,6 +1101,50 @@ describe('GET /api/workflows/runs/:runId', () => {
     expect(body.events[2]?.event_type).toBe('tool_called');
   });
 
+  test('attaches fan_out_view parsed from data.fan_out (#2451)', async () => {
+    mockGetWorkflowRun.mockImplementationOnce(async () => MOCK_RUNNING_RUN);
+    mockListWorkflowEvents.mockImplementationOnce(async () => [
+      {
+        id: 'evt-fan',
+        workflow_run_id: 'run-uuid-1',
+        event_type: 'node_completed',
+        step_index: 0,
+        step_name: 'spread',
+        data: {
+          name: 'spread',
+          fan_out: {
+            children: [
+              { kind: 'completed', index: 0, childRunId: 'child-a' },
+              { kind: 'never_ran', index: 1, reason: 'unresolved_target', error: 'no such wf' },
+            ],
+          },
+        },
+        created_at: NOW,
+      },
+    ]);
+    mockGetConversationById.mockImplementationOnce(async () => ({
+      id: 'conv-uuid-1',
+      platform_conversation_id: 'web-conv-abc',
+    }));
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-uuid-1');
+    expect(response.status).toBe(200);
+
+    const body = (await response.json()) as {
+      events: Array<{
+        fan_out_view: {
+          tally: { neverRan: number; notCompleted: number };
+          tallyText: string;
+          attentionLines: string[];
+        } | null;
+      }>;
+    };
+    expect(body.events[0]?.fan_out_view?.tally.neverRan).toBe(1);
+    expect(body.events[0]?.fan_out_view?.tally.notCompleted).toBe(1);
+    expect(body.events[0]?.fan_out_view?.attentionLines).toEqual(['[1] never ran · no such wf']);
+  });
+
   test('returns 404 when run not found', async () => {
     mockGetWorkflowRun.mockImplementationOnce(async () => null);
 

@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'bun:test';
 import { deriveNodeStatuses, type WorkflowGraphNode } from './workflow-graph';
-import { toRunEvent } from './event';
+import { toRunEvent, type FanOutView } from './event';
 
 type Raw = Parameters<typeof toRunEvent>[0];
 
@@ -13,6 +13,24 @@ function raw(over: Partial<Raw> & { event_type: string }): Raw {
     data: {},
     created_at: '2026-06-05T10:00:00Z',
     ...over,
+  };
+}
+
+function sampleView(): FanOutView {
+  return {
+    tally: {
+      total: 3,
+      completed: 1,
+      failed: 0,
+      cancelledByEngine: 0,
+      cancelledOutOfBand: 0,
+      neverRan: 2,
+      notCompleted: 2,
+    },
+    headline: '2 of 3 children did not complete',
+    tallyText: '2 of 3 children did not complete (1 completed, 2 never ran)',
+    attentionLines: ['[1] never ran · x', '[2] never ran · x'],
+    overflowCount: 0,
   };
 }
 
@@ -29,17 +47,8 @@ describe('deriveNodeStatuses — fan-out tally forwarding (#2451)', () => {
         raw({
           event_type: 'node_completed',
           step_name: 'spread',
-          data: {
-            name: 'spread',
-            node_output: '[]',
-            fan_out: {
-              children: [
-                { kind: 'completed', index: 0, childRunId: 'a' },
-                { kind: 'never_ran', index: 1, reason: 'unresolved_target', error: 'x' },
-                { kind: 'never_ran', index: 2, reason: 'unresolved_target', error: 'x' },
-              ],
-            },
-          },
+          data: { name: 'spread', node_output: '[]' },
+          fan_out_view: sampleView(),
         })
       ),
     ];
@@ -61,7 +70,7 @@ describe('deriveNodeStatuses — fan-out tally forwarding (#2451)', () => {
   });
 
   // M3 (#2451): on resume a completed fan-out node re-emits `node_skipped_prior_success`
-  // with NO fan_out payload. The prior-tally retention branch must keep the earlier tally so
+  // with NO fan-out view. The prior-tally retention branch must keep the earlier tally so
   // the amber-attention badge survives — a naive `e.fanOut?.tally ?? null` would drop it.
   test('retains a prior fan-out tally when a later resume-skip transition carries none', () => {
     const events = [
@@ -70,20 +79,10 @@ describe('deriveNodeStatuses — fan-out tally forwarding (#2451)', () => {
         raw({
           event_type: 'node_completed',
           step_name: 'spread',
-          data: {
-            name: 'spread',
-            node_output: '[]',
-            fan_out: {
-              children: [
-                { kind: 'completed', index: 0, childRunId: 'a' },
-                { kind: 'never_ran', index: 1, reason: 'unresolved_target', error: 'x' },
-                { kind: 'never_ran', index: 2, reason: 'unresolved_target', error: 'x' },
-              ],
-            },
-          },
+          data: { name: 'spread', node_output: '[]' },
+          fan_out_view: sampleView(),
         })
       ),
-      // Resume re-emits the fan-out node as skipped-prior-success with no report.
       toRunEvent(
         raw({
           event_type: 'node_skipped_prior_success',
@@ -94,7 +93,6 @@ describe('deriveNodeStatuses — fan-out tally forwarding (#2451)', () => {
     ];
     const withStatus = deriveNodeStatuses(nodes, events);
     const spread = withStatus.find(n => n.id === 'spread');
-    // Latest transition wins for status, but the tally is retained from the earlier event.
     expect(spread?.status).toBe('skipped');
     expect(spread?.fanOut?.notCompleted).toBe(2);
     expect(spread?.fanOut?.total).toBe(3);

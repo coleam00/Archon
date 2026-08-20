@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { toRunEvent, countTerminalNodes, foldNodeRuns } from './event';
+import { toRunEvent, countTerminalNodes, foldNodeRuns, type FanOutView } from './event';
 
 type Raw = Parameters<typeof toRunEvent>[0];
 
@@ -11,6 +11,25 @@ function raw(over: Partial<Raw> & { event_type: string }): Raw {
     step_name: 'node-a',
     data: {},
     created_at: '2026-06-05T10:00:00Z',
+    ...over,
+  };
+}
+
+function sampleView(over: Partial<FanOutView> = {}): FanOutView {
+  return {
+    tally: {
+      total: 2,
+      completed: 1,
+      failed: 0,
+      cancelledByEngine: 0,
+      cancelledOutOfBand: 0,
+      neverRan: 1,
+      notCompleted: 1,
+    },
+    headline: '1 of 2 children did not complete',
+    tallyText: '1 of 2 children did not complete (1 completed, 1 never ran)',
+    attentionLines: ['[1] never ran · no such wf'],
+    overflowCount: 0,
     ...over,
   };
 }
@@ -66,38 +85,36 @@ describe('toRunEvent — node transitions', () => {
     expect(e.fanOut).toBeNull();
   });
 
-  test('node_completed parses data.fan_out into a fan-out report (#2451)', () => {
+  test('node_completed reads fan_out_view from the API (#2451)', () => {
+    const view = sampleView();
     const e = toRunEvent(
       raw({
         event_type: 'node_completed',
-        data: {
-          node_output: '["ok",{"error":"x","status":"failed"}]',
-          fan_out: {
-            children: [
-              { kind: 'completed', index: 0, childRunId: 'child-a' },
-              { kind: 'never_ran', index: 1, reason: 'unresolved_target', error: 'no such wf' },
-            ],
-          },
-        },
+        data: { node_output: '["ok"]' },
+        fan_out_view: view,
       })
     );
     if (e.kind !== 'node_transition') throw new Error('unreachable');
-    expect(e.fanOut).not.toBeNull();
-    expect(e.fanOut?.children).toHaveLength(2);
-    expect(e.fanOut?.tally.neverRan).toBe(1);
-    expect(e.fanOut?.tally.notCompleted).toBe(1);
+    expect(e.fanOut).toEqual(view);
   });
 
-  test('node_failed carries the fan-out report (all_success failure)', () => {
+  test('node_failed carries fan_out_view (all_success failure)', () => {
+    const view = sampleView({
+      tally: {
+        total: 1,
+        completed: 0,
+        failed: 0,
+        cancelledByEngine: 0,
+        cancelledOutOfBand: 0,
+        neverRan: 1,
+        notCompleted: 1,
+      },
+    });
     const e = toRunEvent(
       raw({
         event_type: 'node_failed',
-        data: {
-          error: 'fan_out node failed',
-          fan_out: {
-            children: [{ kind: 'never_ran', index: 0, reason: 'unresolved_target', error: 'x' }],
-          },
-        },
+        data: { error: 'fan_out node failed' },
+        fan_out_view: view,
       })
     );
     if (e.kind !== 'node_transition') throw new Error('unreachable');
@@ -105,15 +122,16 @@ describe('toRunEvent — node transitions', () => {
     expect(e.fanOut?.tally.neverRan).toBe(1);
   });
 
-  test('legacy fan_out: true on node_completed parses to null (no report)', () => {
-    const e = toRunEvent(raw({ event_type: 'node_completed', data: { fan_out: true } }));
-    if (e.kind !== 'node_transition') throw new Error('unreachable');
-    expect(e.fanOut).toBeNull();
-  });
-
-  test('a garbage fan_out payload parses to null (never throws)', () => {
+  test('does not re-parse data.fan_out — only fan_out_view is read', () => {
     const e = toRunEvent(
-      raw({ event_type: 'node_completed', data: { fan_out: { children: 'nope' } } })
+      raw({
+        event_type: 'node_completed',
+        data: {
+          fan_out: {
+            children: [{ kind: 'never_ran', index: 0, reason: 'unresolved_target', error: 'x' }],
+          },
+        },
+      })
     );
     if (e.kind !== 'node_transition') throw new Error('unreachable');
     expect(e.fanOut).toBeNull();
@@ -343,7 +361,11 @@ describe('foldNodeRuns', () => {
   const node = (
     nodeId: string | null,
     eventType: string,
-    over: { created_at?: string; data?: Record<string, unknown> } = {}
+    over: {
+      created_at?: string;
+      data?: Record<string, unknown>;
+      fan_out_view?: FanOutView | null;
+    } = {}
   ) => toRunEvent(raw({ event_type: eventType, step_name: nodeId, ...over }));
 
   test('empty events → no runs', () => {
@@ -383,19 +405,23 @@ describe('foldNodeRuns', () => {
   });
 
   test('a fan-out node carries its report on the folded run (#2451)', () => {
+    const view = sampleView({
+      tally: {
+        total: 2,
+        completed: 1,
+        failed: 1,
+        cancelledByEngine: 0,
+        cancelledOutOfBand: 0,
+        neverRan: 0,
+        notCompleted: 1,
+      },
+    });
     const runs = foldNodeRuns([
       node('spread', 'node_started', { created_at: at('0') }),
       node('spread', 'node_completed', {
         created_at: at('5'),
-        data: {
-          node_output: '[]',
-          fan_out: {
-            children: [
-              { kind: 'completed', index: 0, childRunId: 'a' },
-              { kind: 'failed', index: 1, childRunId: 'b', error: 'boom' },
-            ],
-          },
-        },
+        data: { node_output: '[]' },
+        fan_out_view: view,
       }),
     ]);
     expect(runs).toHaveLength(1);

@@ -23,16 +23,17 @@ import type { TokenUsage } from '@archon/providers/types';
  *    JSON field.
  *
  * `$node.output` (the aggregate array consumed by `$spread.output`) is unchanged; this is a
- * second, separate key. `@archon/web` cannot import this module — the console mirrors the
- * parse/tally/format in `primitives/fan-out.ts` (two-way file pointer below).
- *
- * Mirror pointer: packages/web/src/experiments/console/primitives/fan-out.ts
+ * second, separate key. Clients must not re-parse the blob: {@link toFanOutView} is the
+ * read-time DTO the HTTP API attaches as `fan_out_view`.
  */
 
 /** Max length for error/reason excerpts persisted on the wire. The full error stays on the
  *  child run row when a row exists; a `never_ran` slot has no row, so its `error` is the
  *  only copy — still bounded here to keep the event payload small. */
 export const FAN_OUT_EXCERPT_MAX_CHARS = 240;
+
+/** Max indexed non-completed child lines included on {@link FanOutView.attentionLines}. */
+export const FAN_OUT_ATTENTION_LINE_CAP = 20;
 
 /** Truncate a wire-bound error/reason string to a bounded excerpt (`…` suffix when cut). */
 export function fanOutExcerpt(text: string, max = FAN_OUT_EXCERPT_MAX_CHARS): string {
@@ -119,16 +120,17 @@ export const fanOutReportPayloadSchema = z.object({
 export type FanOutReportPayload = z.infer<typeof fanOutReportPayloadSchema>;
 
 /** Derived counts over a fan-out's dispositions. Never stored — computed at parse. */
-export interface FanOutTally {
-  total: number;
-  completed: number;
-  failed: number;
-  cancelledByEngine: number;
-  cancelledOutOfBand: number;
-  neverRan: number;
+export const fanOutTallySchema = z.object({
+  total: z.number().int().nonnegative(),
+  completed: z.number().int().nonnegative(),
+  failed: z.number().int().nonnegative(),
+  cancelledByEngine: z.number().int().nonnegative(),
+  cancelledOutOfBand: z.number().int().nonnegative(),
+  neverRan: z.number().int().nonnegative(),
   /** `total - completed` — every slot that did not reach `completed`. */
-  notCompleted: number;
-}
+  notCompleted: z.number().int().nonnegative(),
+});
+export type FanOutTally = z.infer<typeof fanOutTallySchema>;
 
 /**
  * Derive the tally from the ordered dispositions. The `switch` is exhaustive on `kind`; a
@@ -350,4 +352,38 @@ export function formatChildDispositionLine(child: ChildDisposition): string {
       throw new Error(`Unhandled child disposition: ${JSON.stringify(exhaustiveCheck)}`);
     }
   }
+}
+
+/**
+ * Read-time DTO for HTTP clients. Derived from `data.fan_out` — never persisted.
+ * Tally and display strings live here so `@archon/web` does not re-parse the blob.
+ */
+export const fanOutViewSchema = z.object({
+  tally: fanOutTallySchema,
+  headline: z.string(),
+  tallyText: z.string(),
+  attentionLines: z.array(z.string()),
+  overflowCount: z.number().int().nonnegative(),
+});
+export type FanOutView = z.infer<typeof fanOutViewSchema>;
+
+/**
+ * Build the API view from a workflow event's `data` bag, or `null` when `data.fan_out`
+ * is missing, legacy `true`, or malformed.
+ */
+export function toFanOutView(eventData: unknown): FanOutView | null {
+  if (typeof eventData !== 'object' || eventData === null) return null;
+  const report = parseFanOutReport((eventData as Record<string, unknown>).fan_out);
+  if (report === null) return null;
+  const attention = report.children.filter(child => child.kind !== 'completed');
+  const overflowCount = Math.max(0, attention.length - FAN_OUT_ATTENTION_LINE_CAP);
+  return {
+    tally: report.tally,
+    headline: formatFanOutHeadline(report.tally),
+    tallyText: formatFanOutTally(report.tally),
+    attentionLines: attention
+      .slice(0, FAN_OUT_ATTENTION_LINE_CAP)
+      .map(child => formatChildDispositionLine(child)),
+    overflowCount,
+  };
 }

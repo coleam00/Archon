@@ -3798,6 +3798,22 @@ export interface components {
       /** Format: date-time */
       created_at: string;
       event_order?: number | null;
+      fan_out_view: components['schemas']['FanOutView'] | null;
+    };
+    FanOutView: {
+      tally: {
+        total: number;
+        completed: number;
+        failed: number;
+        cancelledByEngine: number;
+        cancelledOutOfBand: number;
+        neverRan: number;
+        notCompleted: number;
+      };
+      headline: string;
+      tallyText: string;
+      attentionLines: string[];
+      overflowCount: number;
     };
     ValidateWorkflowResponse: {
       valid: boolean;

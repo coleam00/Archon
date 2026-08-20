@@ -7,7 +7,9 @@
  * event schema so EventStream rendering can switch on `kind` only.
  */
 
-import { parseFanOutReport, type FanOutReport } from './fan-out';
+import type { components } from '@/lib/api.generated';
+
+export type FanOutView = components['schemas']['FanOutView'];
 
 export type RunEventKind =
   | 'text'
@@ -67,12 +69,11 @@ export interface NodeTransitionEvent extends RunEventBase {
   stopReason: string | null;
   numTurns: number | null;
   /**
-   * Fan-out child report (#2451). Populated on the `completed` / `failed` transition of a
-   * `workflow:` fan-out node, parsed from `data.fan_out`; `null` on every other event, on a
-   * non-fan-out node, and on legacy `fan_out: true` rows. The tally rides along, derived at
-   * parse — see `primitives/fan-out.ts`.
+   * Fan-out child report (#2451). Attached by the API as `fan_out_view` on the
+   * `completed` / `failed` transition of a `workflow:` fan-out node. Null on every
+   * other event, on a non-fan-out node, and on legacy `fan_out: true` rows.
    */
-  fanOut: FanOutReport | null;
+  fanOut: FanOutView | null;
 }
 
 export interface ApprovalEvent extends RunEventBase {
@@ -120,6 +121,7 @@ interface RawWorkflowEvent {
   step_name: string | null;
   data: Record<string, unknown>;
   created_at: string;
+  fan_out_view?: FanOutView | null;
 }
 
 function readString(obj: Record<string, unknown>, key: string): string {
@@ -191,9 +193,8 @@ export function toRunEvent(raw: RawWorkflowEvent): RunEvent {
       costUsd: readNumberOrNull(data, 'cost_usd'),
       stopReason: readStringOrNull(data, 'stop_reason'),
       numTurns: readNumberOrNull(data, 'num_turns'),
-      // A fan-out wrapper writes its child report on the terminal event; legacy `true` and
-      // non-fan-out nodes parse to null (#2451).
-      fanOut: parseFanOutReport(data.fan_out),
+      // The API attaches the parsed view; the console does not re-parse `data.fan_out`.
+      fanOut: raw.fan_out_view ?? null,
     };
   }
 
@@ -396,7 +397,7 @@ export interface NodeRun {
    * transition (`completed` or `failed`). Null for every non-fan-out node. Drives the log
    * divider's tally + indexed child lines.
    */
-  fanOut: FanOutReport | null;
+  fanOut: FanOutView | null;
 }
 
 /**

@@ -4,7 +4,6 @@ import { LiveDot } from './LiveDot';
 import { OriginBadge } from './OriginBadge';
 import type { Run } from '../primitives/run';
 import { foldNodeRuns, type RunEvent } from '../primitives/event';
-import { summarizeRunFanOut } from '../primitives/fan-out';
 import { shortRunId, formatElapsed, elapsedSince, formatCost } from '../lib/format';
 import { useIsDocker, useIdeEnv, openInIde } from '../lib/health';
 import { statusLabel, statusTextClass } from '../lib/run-status';
@@ -41,10 +40,18 @@ export function RunDetailHeader({
   // Fan-out qualifier (#2451): "N of M children did not complete" next to the status pill,
   // summed across every fan-out node on the run. NOT a new DAG state — the run stays
   // Completed; the qualifier says "did not complete", never relabelling a slot as failed.
-  const fanOutSummary = useMemo(
-    () => summarizeRunFanOut(foldNodeRuns(events).map(r => r.fanOut)),
-    [events]
-  );
+  const fanOutSummary = useMemo(() => {
+    let notCompleted = 0;
+    let total = 0;
+    let seen = false;
+    for (const r of foldNodeRuns(events)) {
+      if (r.fanOut === null) continue;
+      seen = true;
+      notCompleted += r.fanOut.tally.notCompleted;
+      total += r.fanOut.tally.total;
+    }
+    return seen ? { notCompleted, total } : null;
+  }, [events]);
   const isPaused = run.status === 'paused';
   const isRunning = run.status === 'running';
   const isDocker = useIsDocker();

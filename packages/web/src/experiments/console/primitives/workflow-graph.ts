@@ -4,6 +4,8 @@
  * production API; we only care about id + dependencies + kind + status.
  */
 
+import type { RunEvent, FanOutView } from './event';
+
 export type WorkflowNodeKind =
   | 'prompt'
   | 'command'
@@ -33,11 +35,8 @@ export interface WorkflowGraphNodeWithStatus extends WorkflowGraphNode {
    * status) and a `completed/total` badge when `notCompleted > 0` — lifecycle stays
    * `completed`.
    */
-  fanOut: FanOutTally | null;
+  fanOut: FanOutView['tally'] | null;
 }
-
-import type { RunEvent } from './event';
-import type { FanOutTally } from './fan-out';
 
 /**
  * Derive each node's current status by walking run events in order.
@@ -51,7 +50,7 @@ export function deriveNodeStatuses(
 ): WorkflowGraphNodeWithStatus[] {
   const byNode = new Map<
     string,
-    { status: WorkflowNodeStatus; durationMs: number | null; fanOut: FanOutTally | null }
+    { status: WorkflowNodeStatus; durationMs: number | null; fanOut: FanOutView['tally'] | null }
   >();
   for (const e of events) {
     if (e.kind !== 'node_transition') continue;
