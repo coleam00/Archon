@@ -1,5 +1,6 @@
-# Sparse guard fixture: run with --default-stubs --exec-code. The real planning
-# gate must fail, so unresolved product intent never reaches delivery.
+# Sparse guard fixture: run with --default-stubs --exec-code. A plan that still
+# needs a human decision completes honestly, while the delivery tail is skipped
+# and the real outcome node points to plan.md.
 triage__record-state: '{"state":"recorded"}'
 triage__triage:
   route: plan

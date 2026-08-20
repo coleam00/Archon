@@ -42,18 +42,19 @@ nodes:
     depends_on: [triage]
     when: "$triage.output.route == 'investigate'"
 
-  # Deterministic spend gate: an unrooted investigation ends the run here —
-  # honest and resumable, with the report's named gaps in the run artifacts —
-  # instead of paying for an implementation built on a guess.
+  # These three route markers form one join into delivery. Expected negative
+  # judgments skip their marker; contract failures inside the advisory package
+  # still fail normally. That keeps "not ready to build" distinct from "the
+  # workflow failed to execute" without weakening the spend boundary.
+  - id: gate-direct
+    bash: echo '{"gate":"direct"}'
+    depends_on: [triage]
+    when: "$triage.output.route == 'deliver'"
+
   - id: gate-rooted
-    bash: |
-      if [ "$inv.output.rooted" = "true" ]; then
-        echo '{"gate":"rooted"}'
-      else
-        echo "investigation is not rooted — the report names the gaps. Refusing to build on a guess." >&2
-        exit 1
-      fi
+    bash: echo '{"gate":"rooted"}'
     depends_on: [inv]
+    when: "$inv.output.rooted == 'true'"
 
   - id: planned
     include: plan
@@ -66,17 +67,10 @@ nodes:
     depends_on: [triage]
     when: "$triage.output.route == 'plan'"
 
-  # A blocked plan is an honest completion of the advisory primitive, but it is
-  # not permission to start implementation.
   - id: gate-planned
-    bash: |
-      if [ "$planned.output.ready" = "true" ]; then
-        echo '{"gate":"planned"}'
-      else
-        echo "planning is not ready — plan.md names the missing decision. Refusing to build on an unresolved shape." >&2
-        exit 1
-      fi
+    bash: echo '{"gate":"planned"}'
     depends_on: [planned]
+    when: "$planned.output.ready == 'true'"
 
   - id: deliver
     include: deliver
@@ -88,19 +82,32 @@ nodes:
         and which source assumptions were corrected. On the direct route,
         triage.md itself is the verified work order. Original work item:
         $INPUTS.target
-    depends_on: [triage, gate-rooted, gate-planned]
+    depends_on: [gate-direct, gate-rooted, gate-planned]
     trigger_rule: none_failed_min_one_success
-    when: "$triage.output.route != 'no_action'"
 
-  # One return for the composition's two legitimate outcomes: an honestly
-  # stopped item, or a verified ready PR. No model call is needed to restate it.
+  # One return for every legitimate terminal result. Negative advisory verdicts
+  # complete with the report that explains them; delivery is still accepted
+  # only when this run established readiness and GitHub confirms the PR state.
   - id: outcome
     bash: |
       route=$triage.output.route
       summary=$triage.output.summary
       if [ "$route" = "no_action" ]; then
-        printf '%s\n' "$summary"
+        printf 'No delivery needed: %s\nReport: %s/triage.md\n' "$summary" "$ARTIFACTS_DIR"
         exit 0
+      fi
+
+      if [ ! -f "$ARTIFACTS_DIR/review/.ready" ]; then
+        case "$route" in
+          investigate)
+            printf 'No delivery started: the investigation did not establish a safe fix boundary.\nReport: %s/investigation.md\n' "$ARTIFACTS_DIR"
+            exit 0
+            ;;
+          plan)
+            printf 'No delivery started: planning left a material decision unresolved.\nReport: %s/plan.md\n' "$ARTIFACTS_DIR"
+            exit 0
+            ;;
+        esac
       fi
 
       ORIGIN_REPO=$(git remote get-url origin | sed -E 's#^.*[:/]([^/]+/[^/]+)$#\1#; s#\.git$##')
@@ -110,5 +117,5 @@ nodes:
         exit 1
       fi
       printf '%s\n' "$url"
-    depends_on: [triage, gate-rooted, gate-planned, deliver]
+    depends_on: [triage, inv, planned, gate-direct, gate-rooted, gate-planned, deliver]
     trigger_rule: none_failed_min_one_success

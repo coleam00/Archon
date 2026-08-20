@@ -1,8 +1,6 @@
-# Dry-run fixture: the spend gate seen RED (run with --exec-code). The
-# investigation is stubbed as unrooted; gate-rooted executes for real and must
-# fail the run — an unrooted cause never reaches the delivery tail's spend.
-# The composed delivery block stays skipped; the proof this fixture owns is
-# gate-rooted's red.
+# Dry-run fixture: an honest inconclusive investigation is a valid terminal
+# result (run with --default-stubs --exec-code). gate-rooted and the complete
+# delivery tail stay skipped, while the real outcome node points to the report.
 triage__record-state: '{"state":"recorded"}'
 triage__triage:
   route: investigate

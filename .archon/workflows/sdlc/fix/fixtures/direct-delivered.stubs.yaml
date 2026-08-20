@@ -4,6 +4,7 @@
 triage__triage:
   route: deliver
   summary: "stub: current code confirms a complete work order"
+gate-direct: '{"gate":"direct"}'
 deliver__impl__implement:
   done: true
   green: true
