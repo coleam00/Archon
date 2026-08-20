@@ -1,7 +1,8 @@
-# Dry-run fixture: the initial review finds blockers, one correction runs green,
-# its light review is ready, and the run flips the PR. `until_bash` is not
-# executed by dry-run, so the simulator honestly assumes completion after this
-# structurally exercised iteration; real multi-iteration convergence is dogfood.
+# Dry-run fixture: the initial review and first recheck both retain blockers.
+# Run with --exec-code: the two latch writers and gate-ready execute for real,
+# proving lifecycle completion cannot bypass a not-ready review. Dry-run cannot
+# execute the group's until_bash; it assumes one iteration and the outer gate
+# must still fail because no reviewer published the readiness latch.
 impl__record-start: '{"start":"recorded"}'
 impl__implement:
   done: true
@@ -14,29 +15,28 @@ pr__pr: "https://github.com/example/repo/pull/1 (draft)"
 review__scope: "target recorded; head sha stubbed"
 review__choose:
   run_tests: "true"
-  run_errors: "true"
+  run_errors: "false"
   run_comments: "false"
   run_types: "false"
   run_docs: "false"
   run_simplify: "false"
   reasoning: "stub"
-review__code: "2 findings (Important)"
+review__code: "1 finding (Important)"
 review__seams: "0 findings"
 review__tests: "1 finding (Important)"
-review__errors: "0 findings"
+review__errors: "skipped by chooser"
 review__comments: "skipped by chooser"
 review__types: "skipped by chooser"
 review__docs: "skipped by chooser"
 review__simplify: "skipped by chooser"
 review__synthesize:
   ready: false
-  findings_summary: "stub: 3 Important findings open"
-initial-ready: '{"ready":"false"}'
+  findings_summary: "stub: 2 Important findings open"
 fix__record-start: '{"start":"recorded"}'
 fix__implement:
   done: true
   green: true
-  summary: "stub: findings fixed, pushed"
+  summary: "stub: first correction green"
 fix__record-green: '{"green":"recorded"}'
 fix__assert-changed: "2 files changed"
 gate-correction-green: '{"gate":"green"}'
@@ -49,7 +49,7 @@ recheck__choose:
   run_docs: "false"
   run_simplify: "false"
   reasoning: "stub: delta is small"
-recheck__code: "prior findings fixed; 0 new"
+recheck__code: "1 Important finding remains"
 recheck__seams: "0 findings"
 recheck__tests: "skipped by chooser"
 recheck__errors: "skipped by chooser"
@@ -58,13 +58,8 @@ recheck__types: "skipped by chooser"
 recheck__docs: "skipped by chooser"
 recheck__simplify: "skipped by chooser"
 recheck__synthesize:
-  ready: true
-  findings_summary: "stub: no open Critical/Important"
-iteration-ready: '{"ready":"true"}'
-gate-ready: '{"ready":"true"}'
+  ready: false
+  findings_summary: "stub: one Important finding remains"
 validate__validate:
   green: true
-  summary: "stub: full gate green"
-gate-validated: '{"validated":"true"}'
-await-checks: "all 2 check(s) green"
-flip-ready: "https://github.com/example/repo/pull/1"
+  summary: "stub: should stay unreachable"

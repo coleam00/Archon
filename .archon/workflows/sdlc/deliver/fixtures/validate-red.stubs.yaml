@@ -1,4 +1,4 @@
-# Dry-run fixture: the validate-RED path — review is clean but the project
+# Dry-run fixture: the validate-RED path — initial review is clean but the project
 # gate fails, so the run fails at gate-validated (the new gate seen red).
 # Run with --exec-code: gate-validated must EXECUTE to be seen red.
 impl__record-start: '{"start":"recorded"}'
@@ -10,8 +10,8 @@ impl__record-green: '{"green":"recorded"}'
 impl__assert-changed: "3 files changed"
 gate-green: '{"gate":"green"}'
 pr__pr: "https://github.com/example/repo/pull/2 (draft)"
-rev1__scope: "target recorded; head sha stubbed"
-rev1__choose:
+review__scope: "target recorded; head sha stubbed"
+review__choose:
   run_tests: "false"
   run_errors: "false"
   run_comments: "false"
@@ -19,18 +19,18 @@ rev1__choose:
   run_docs: "false"
   run_simplify: "false"
   reasoning: "stub: tiny diff"
-rev1__code: "0 findings"
-rev1__seams: "0 findings"
-rev1__tests: "skipped by chooser"
-rev1__errors: "skipped by chooser"
-rev1__comments: "skipped by chooser"
-rev1__types: "skipped by chooser"
-rev1__docs: "skipped by chooser"
-rev1__simplify: "skipped by chooser"
-rev1__synthesize:
+review__code: "0 findings"
+review__seams: "0 findings"
+review__tests: "skipped by chooser"
+review__errors: "skipped by chooser"
+review__comments: "skipped by chooser"
+review__types: "skipped by chooser"
+review__docs: "skipped by chooser"
+review__simplify: "skipped by chooser"
+review__synthesize:
   ready: true
-  findings_summary: "stub: clean on round one"
-flag1: '{"ready":"true"}'
+  findings_summary: "stub: clean on initial review"
+initial-ready: '{"ready":"true"}'
 gate-ready: '{"ready":"true"}'
 validate__validate:
   green: false

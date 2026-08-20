@@ -1,5 +1,5 @@
 # Dry-run fixture: the full chain — rooted investigation flows through the
-# spend gate into the delivery tail, review round 1 ready, PR flips. SPARSE:
+# spend gate into the delivery tail, initial review ready, PR flips. SPARSE:
 # the dry-run engine auto-defaults every node it can and names the ones it
 # cannot; this file stubs exactly those plus the verdict fields that steer
 # branches. Structured stubs are YAML mappings (they hydrate structuredOutput).
@@ -22,7 +22,7 @@ deliver__gate-green: '{"gate":"green"}'
 deliver__pr__pr: "https://github.com/example/repo/pull/2 (draft)"
 deliver__await-checks: "all checks passed"
 deliver__flip-ready: "https://github.com/example/repo/pull/2"
-deliver__flag1: '{"ready":"true"}'
+deliver__initial-ready: '{"ready":"true"}'
 deliver__validate__validate:
   green: true
   summary: "stub: project gate green"
@@ -30,8 +30,8 @@ deliver__impl__implement:
   done: true
   green: true
   summary: "stub: fix built per the investigation, checks green"
-deliver__rev1__scope: "target recorded; head sha stubbed"
-deliver__rev1__choose:
+deliver__review__scope: "target recorded; head sha stubbed"
+deliver__review__choose:
   run_tests: "false"
   run_errors: "false"
   run_comments: "false"
@@ -39,9 +39,9 @@ deliver__rev1__choose:
   run_docs: "false"
   run_simplify: "false"
   reasoning: "stub: focused diff"
-deliver__rev1__code: "0 findings"
-deliver__rev1__seams: "0 findings"
-deliver__rev1__synthesize:
+deliver__review__code: "0 findings"
+deliver__review__seams: "0 findings"
+deliver__review__synthesize:
   ready: true
   findings_summary: "stub: no open findings"
 deliver__gate-ready: '{"ready":"true"}'

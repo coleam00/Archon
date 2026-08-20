@@ -10,7 +10,7 @@ deliver__impl__implement:
   done: true
   green: true
   summary: "stub: planned work implemented and green"
-deliver__rev1__synthesize:
+deliver__review__synthesize:
   ready: true
   findings_summary: "stub: no open findings"
 deliver__validate__validate:

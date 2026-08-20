@@ -10,12 +10,10 @@ description: |
   "deliver this plan", "take this to a PR", "build and ship this".
   NOT for: deciding what to build, or merging (always human).
 
-# v1 SHAPE NOTE: the intended review ⟲ fix LOOP is not expressible today —
-# `include:` is rejected inside a loop_group body (#2623). Until then, this is a
-# fixed, bounded unroll:
-# full review → fix → light re-review → fix → code-scoped closure. The closure
-# never starts another fix pass: a remaining blocker leaves the draft PR and
-# report truthful, so the run is finite and never silently ships.
+# Review establishes the first verdict. When blockers remain, a bounded static
+# body repeats fix → light review, so every correction is independently checked
+# and a clean review stops immediately. Exhausting the bound fails truthfully
+# with the PR still draft and the canonical report carrying the open findings.
 
 requires: [github]
 
@@ -59,116 +57,84 @@ nodes:
       draft: "true"
     depends_on: [gate-green]
 
-  # Round 1: reviews the PR — full on a first delivery, light continuation when
+  # Initial review: full on a first delivery, light continuation when
   # the caller passes the previous run's report (adjudications carry across
   # runs instead of being relitigated).
-  - id: rev1
+  - id: review
     include: review
     with:
       scope: ""
       prior_report: "$INPUTS.prior_report"
     depends_on: [pr]
 
-  # Marker join: gate-ready must OR two branches where one may be skipped, and a
-  # bash ref to a skipped node's output fails strictly — so each round records
-  # readiness as a marker file instead (deterministic code reading a validated
-  # field across mutually exclusive branches).
-  - id: flag1
+  # The outer join cannot read a skipped loop output strictly, so both the
+  # initial-ready path and the correction loop publish the same one-bit latch.
+  - id: initial-ready
     bash: |
-      if [ "$rev1.output.ready" = "true" ]; then
+      if [ "$review.output.ready" = "true" ]; then
         mkdir -p "$ARTIFACTS_DIR/review" &&
           touch "$ARTIFACTS_DIR/review/.ready" &&
           echo '{"ready":"true"}'
       else
-        echo '{"ready":"false"}'
+        rm -f "$ARTIFACTS_DIR/review/.ready" &&
+          echo '{"ready":"false"}'
       fi
-    depends_on: [rev1]
+    depends_on: [review]
 
-  # Fix: implement in findings mode — commits and pushes to the PR branch.
-  - id: fix
-    include: implement
-    with:
-      work: >-
-        Fix the review findings recorded in $ARTIFACTS_DIR/review/report.md —
-        every open Critical and Important finding. When done and green, push
-        the new commits to the PR branch (git push).
-    depends_on: [flag1]
-    when: "$rev1.output.ready == 'false'"
+  # A ready initial review skips this block. Otherwise each iteration corrects
+  # the current canonical findings, proves the correction is green, then runs a
+  # fresh light review over the delta. Three iterations means three real fix
+  # opportunities and three confirming reviews — never an unreviewed final fix.
+  - id: corrections
+    depends_on: [initial-ready]
+    when: "$review.output.ready == 'false'"
+    loop_group:
+      until_bash: test "$recheck.output.ready" = "true"
+      max_iterations: 3
+      fresh_context: true
+      nodes:
+        - id: fix
+          include: implement
+          with:
+            work: >-
+              Fix every open Critical and Important finding recorded in
+              $ARTIFACTS_DIR/review/report.md. When the correction is green,
+              push its commits to the existing PR branch (git push). Do not
+              change the PR's draft state or edit the canonical review comment;
+              the following review owns that public verdict.
 
-  # Round 2 runs ONLY when round 1 found blockers and fix applied work — a
-  # ready round 1 ends the review; there is nothing new to re-review. The
-  # marker join stays because a skipped rev2 cannot be referenced directly (a
-  # bash ref to a skipped node's output fails strictly). When rev2 RUNS it OWNS
-  # the marker — sets it on ready, clears it otherwise — so on the path where
-  # the re-review exists, it is the final authority (no round-1 bypass, R3).
-  - id: rev2
-    include: review
-    with:
-      scope: ""
-      prior_report: "$ARTIFACTS_DIR/review/report.md"
-    depends_on: [fix]
+        - id: gate-correction-green
+          bash: |
+            if [ "$fix.output.green" = "true" ]; then
+              echo '{"gate":"green"}'
+            else
+              echo "correction finished but is not green — refusing to spend a review on red work." >&2
+              exit 1
+            fi
+          depends_on: [fix]
 
-  - id: flag2
-    bash: |
-      if [ "$rev2.output.ready" = "true" ]; then
-        mkdir -p "$ARTIFACTS_DIR/review" &&
-          touch "$ARTIFACTS_DIR/review/.ready" &&
-          echo '{"ready":"true"}'
-      else
-        rm -f "$ARTIFACTS_DIR/review/.ready"
-        echo '{"ready":"false"}'
-      fi
-    depends_on: [rev2]
+        - id: recheck
+          include: review
+          with:
+            scope: ""
+            prior_report: "$ARTIFACTS_DIR/review/report.md"
+          depends_on: [gate-correction-green]
 
-  # Second and final fix round. Its correction receives one code-scoped closure
-  # check below, but closure can never trigger another fix pass.
-  - id: fix2
-    include: implement
-    with:
-      work: >-
-        Fix the still-open findings from the second review round recorded in
-        $ARTIFACTS_DIR/review/report.md — every open Critical and Important
-        finding. When done and green, push the new commits to the PR branch
-        (git push). The closure reviewer owns the final report and canonical PR
-        comment; do not edit either one yourself.
-    depends_on: [flag2]
-    when: "$rev2.output.ready == 'false'"
+        - id: iteration-ready
+          bash: |
+            if [ "$recheck.output.ready" = "true" ]; then
+              mkdir -p "$ARTIFACTS_DIR/review" &&
+                touch "$ARTIFACTS_DIR/review/.ready" &&
+                echo '{"ready":"true"}'
+            else
+              rm -f "$ARTIFACTS_DIR/review/.ready" &&
+                echo '{"ready":"false"}'
+            fi
+          depends_on: [recheck]
 
-  # Final closure is deliberately one code-correctness reviewer, not another
-  # discovery fan-out. It verifies round-2 blockers and their correction delta,
-  # admits only concrete Critical/Important regressions, and cannot cause a
-  # third fix cycle.
-  - id: rev3
-    command: review-close
-    model: medium
-    context: fresh
-    depends_on: [fix2]
-    when: "$fix2.output.green == 'true'"
-    output_type: review-report
-    output_format:
-      type: object
-      properties:
-        ready:
-          type: boolean
-        findings_summary:
-          type: string
-      required: [ready, findings_summary]
-
-  - id: flag3
-    bash: |
-      if [ "$rev3.output.ready" = "true" ]; then
-        mkdir -p "$ARTIFACTS_DIR/review" &&
-          touch "$ARTIFACTS_DIR/review/.ready" &&
-          echo '{"ready":"true"}'
-      else
-        rm -f "$ARTIFACTS_DIR/review/.ready"
-        echo '{"ready":"false"}'
-      fi
-    depends_on: [rev3]
-
-  # Ready = a review-owned marker from round 1, round 2, or final closure.
-  # all_done is the branch join: unused flags are skipped by design. On failure,
-  # report the stage that actually stopped instead of assuming review ran.
+  # all_done joins the mutually exclusive initial-ready and correction paths.
+  # The latch is review-owned on both paths; lifecycle success alone never
+  # certifies readiness. On failure, diagnose the stage that actually stopped.
   - id: gate-ready
     bash: |
       if [ -f "$ARTIFACTS_DIR/review/.ready" ]; then
@@ -187,7 +153,7 @@ nodes:
         echo "review completed with blocking findings — see $ARTIFACTS_DIR/review/report.md and the canonical PR comment." >&2
       fi
       exit 1
-    depends_on: [flag1, flag2, flag3]
+    depends_on: [initial-ready, corrections]
     trigger_rule: all_done
 
   # Final local gate, ALWAYS run: the project's own checks via the validate
