@@ -35,7 +35,7 @@ import {
   readTierNoticeState,
   markTierNoticeShown,
 } from '@archon/paths';
-import { isAbsolute, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import { mkdirSync, openSync, closeSync, readFileSync, writeSync } from 'node:fs';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createWorkflowDeps } from '@archon/core/workflows/store-adapter';
@@ -3261,6 +3261,11 @@ interface GitHubContentItem {
   path: string;
 }
 
+interface GitHubDirectoryFile {
+  sourcePath: string;
+  relativePath: string[];
+}
+
 /** Fetch directory listing from GitHub Contents API at a pinned SHA. */
 async function fetchGitHubDirectory(
   owner: string,
@@ -3284,6 +3289,36 @@ async function fetchGitHubDirectory(
     throw new Error(`Expected directory listing from ${url}, got a single file`);
   }
   return data as GitHubContentItem[];
+}
+
+/** Recursively collect safe files while preserving their source-relative paths. */
+async function fetchGitHubDirectoryFiles(
+  owner: string,
+  repo: string,
+  path: string,
+  sha: string,
+  relativePath: string[] = []
+): Promise<GitHubDirectoryFile[]> {
+  const items = await fetchGitHubDirectory(owner, repo, path, sha);
+  const files: GitHubDirectoryFile[] = [];
+
+  for (const item of items) {
+    if (!isSafePathComponent(item.name)) {
+      console.log(`  Skipped (unsafe path component): ${item.name}`);
+      continue;
+    }
+
+    const itemRelativePath = [...relativePath, item.name];
+    if (item.type === 'file') {
+      files.push({ sourcePath: item.path, relativePath: itemRelativePath });
+    } else if (item.type === 'dir') {
+      files.push(
+        ...(await fetchGitHubDirectoryFiles(owner, repo, item.path, sha, itemRelativePath))
+      );
+    }
+  }
+
+  return files;
 }
 
 /** Download a file from raw.githubusercontent.com at a pinned SHA. */
@@ -3426,32 +3461,28 @@ async function installDirectory(
       continue;
     }
 
-    const subItems = await fetchGitHubDirectory(owner, repo, subdir.path, entry.sha);
-    const files = subItems.filter(f => f.type === 'file');
+    const files = await fetchGitHubDirectoryFiles(owner, repo, subdir.path, entry.sha);
 
     let targetDir: string;
     if (subdir.name === 'commands') {
       targetDir = join(archonDir, 'commands');
     } else if (subdir.name === 'scripts') {
       targetDir = join(archonDir, 'scripts');
+    } else if (subdir.name === 'skills') {
+      targetDir = join(dirname(archonDir), '.claude', 'skills');
     } else {
-      // Other subdirs (e.g. skills) go under .archon/<dirname>
+      // Other supporting directories retain their name under .archon/.
       targetDir = join(archonDir, subdir.name);
     }
 
-    mkdirSync(targetDir, { recursive: true });
-
     for (const file of files) {
-      if (!isSafePathComponent(file.name)) {
-        console.log(`  Skipped (unsafe filename): ${file.name}`);
-        continue;
-      }
-      const destFile = join(targetDir, file.name);
+      const destFile = join(targetDir, ...file.relativePath);
       if (existsSync(destFile) && !force) {
         console.log(`  Skipped (exists): ${destFile}`);
         continue;
       }
-      const content = await downloadRawFile(owner, repo, file.path, entry.sha);
+      mkdirSync(dirname(destFile), { recursive: true });
+      const content = await downloadRawFile(owner, repo, file.sourcePath, entry.sha);
       writeFileSync(destFile, content);
       console.log(`  Installed: ${destFile}`);
       installedCount++;

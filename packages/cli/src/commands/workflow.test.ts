@@ -2,7 +2,15 @@
  * Tests for workflow commands
  */
 import { describe, it, expect, beforeEach, afterEach, spyOn, mock, jest } from 'bun:test';
-import { appendFileSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { WorkflowEmitterEvent } from '@archon/workflows/event-emitter';
@@ -25,6 +33,7 @@ import {
   workflowEventEmitCommand,
   workflowCleanupCommand,
   workflowResetSessionsCommand,
+  workflowInstallCommand,
   buildDetachedRunCmd,
   maybePrintTierNotice,
   resolveContainerBackendConfig,
@@ -169,8 +178,10 @@ class MockCanonicalRepoPathUnavailableError extends Error {
   }
 }
 
+let mockFindRepoRoot: string | null = null;
+
 mock.module('@archon/git', () => ({
-  findRepoRoot: mock(() => Promise.resolve(null)),
+  findRepoRoot: mock(() => Promise.resolve(mockFindRepoRoot)),
   getCanonicalRepoPath: mock((path: string) => Promise.resolve(path)),
   getGitCheckoutIdentity: mock((path: string) =>
     Promise.resolve({
@@ -6927,5 +6938,129 @@ describe('resolveContainerBackendConfig', () => {
   it('rejects a non-integer / non-positive pidsLimit', () => {
     expect(() => resolveContainerBackendConfig({ pidsLimit: 10.5 })).toThrow(/positive integer/);
     expect(() => resolveContainerBackendConfig({ pidsLimit: 0 })).toThrow(/positive integer/);
+  });
+});
+
+describe('workflowInstallCommand directory packages', () => {
+  const sha = 'a'.repeat(40);
+  const sourceRoot = 'integrations/archon/public-x-research';
+  let repoRoot: string;
+  let fetchSpy: ReturnType<typeof spyOn>;
+  let consoleSpy: ReturnType<typeof spyOn>;
+
+  beforeEach(() => {
+    repoRoot = mkdtempSync(join(tmpdir(), 'archon-marketplace-install-'));
+    mockFindRepoRoot = repoRoot;
+    consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(
+      (input: RequestInfo | URL): Promise<Response> => {
+        const url = String(input);
+        if (url === 'https://archon.diy/workflows.json') {
+          return Promise.resolve(
+            Response.json([
+              {
+                slug: 'public-x-research',
+                name: 'Public X Research',
+                author: 'kriptoburak',
+                description: 'Build a cited brief from bounded public X data.',
+                sourceUrl: `https://github.com/kriptoburak/xquik-dev-x-twitter-scraper/tree/${sha}/${sourceRoot}`,
+                sha,
+                tags: ['automation'],
+                archonVersionCompat: '>=0.9.0',
+              },
+            ])
+          );
+        }
+        if (url.includes(`/contents/${sourceRoot}?ref=${sha}`)) {
+          return Promise.resolve(
+            Response.json([
+              {
+                name: 'public-x-research.yaml',
+                type: 'file',
+                download_url: null,
+                path: `${sourceRoot}/public-x-research.yaml`,
+              },
+              {
+                name: 'skills',
+                type: 'dir',
+                download_url: null,
+                path: `${sourceRoot}/skills`,
+              },
+            ])
+          );
+        }
+        if (url.includes(`/contents/${sourceRoot}/skills?ref=${sha}`)) {
+          return Promise.resolve(
+            Response.json([
+              {
+                name: 'xquik-social-research',
+                type: 'dir',
+                download_url: null,
+                path: `${sourceRoot}/skills/xquik-social-research`,
+              },
+              {
+                name: '..',
+                type: 'dir',
+                download_url: null,
+                path: 'outside',
+              },
+            ])
+          );
+        }
+        if (url.includes(`/contents/${sourceRoot}/skills/xquik-social-research?ref=${sha}`)) {
+          return Promise.resolve(
+            Response.json([
+              {
+                name: 'SKILL.md',
+                type: 'file',
+                download_url: null,
+                path: `${sourceRoot}/skills/xquik-social-research/SKILL.md`,
+              },
+            ])
+          );
+        }
+        if (url.endsWith(`${sourceRoot}/public-x-research.yaml`)) {
+          return Promise.resolve(new Response('name: public-x-research\nnodes: []\n'));
+        }
+        if (url.endsWith(`${sourceRoot}/skills/xquik-social-research/SKILL.md`)) {
+          return Promise.resolve(new Response('# Xquik social research\n'));
+        }
+        return Promise.resolve(new Response('not found', { status: 404 }));
+      }
+    );
+  });
+
+  afterEach(() => {
+    fetchSpy.mockRestore();
+    consoleSpy.mockRestore();
+    mockFindRepoRoot = null;
+    rmSync(repoRoot, { recursive: true, force: true });
+  });
+
+  it('preserves nested Skill paths from a directory package', async () => {
+    await workflowInstallCommand('public-x-research', repoRoot);
+
+    expect(readFileSync(join(repoRoot, '.archon/workflows/public-x-research.yaml'), 'utf8')).toBe(
+      'name: public-x-research\nnodes: []\n'
+    );
+    expect(
+      readFileSync(join(repoRoot, '.claude/skills/xquik-social-research/SKILL.md'), 'utf8')
+    ).toBe('# Xquik social research\n');
+    expect(fetchSpy.mock.calls.some(([input]) => String(input).includes('/contents/outside'))).toBe(
+      false
+    );
+  });
+
+  it('preserves an existing nested file unless force is set', async () => {
+    const skillPath = join(repoRoot, '.claude/skills/xquik-social-research/SKILL.md');
+    mkdirSync(join(skillPath, '..'), { recursive: true });
+    writeFileSync(skillPath, 'local skill\n');
+
+    await workflowInstallCommand('public-x-research', repoRoot);
+    expect(readFileSync(skillPath, 'utf8')).toBe('local skill\n');
+
+    await workflowInstallCommand('public-x-research', repoRoot, true);
+    expect(readFileSync(skillPath, 'utf8')).toBe('# Xquik social research\n');
+    expect(existsSync(join(repoRoot, '.claude/skills/xquik-social-research'))).toBe(true);
   });
 });

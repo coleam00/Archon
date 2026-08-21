@@ -100,7 +100,7 @@ my-workflow/
 │   └── helper.md
 ├── scripts/           # → installed to .archon/scripts/
 │   └── analyze.ts
-└── skills/            # → installed to .archon/skills/
+└── skills/            # → installed to .claude/skills/
     └── my-skill/
 ```
 
