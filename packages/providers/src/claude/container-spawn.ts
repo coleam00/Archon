@@ -24,7 +24,7 @@ import { spawn, type ChildProcess } from 'child_process';
 import { randomUUID } from 'crypto';
 import type { SpawnOptions, SpawnedProcess } from '@anthropic-ai/claude-agent-sdk';
 import type { ExecutionContext } from '../types';
-import { CONTAINER_ENV_DENYLIST } from '../types';
+import { CONTAINER_ENV_DENYLIST, remapContainerPath } from '../types';
 import { createLogger } from '@archon/paths';
 
 /**
@@ -77,10 +77,13 @@ export function buildDockerExecArgs(
 ): string[] {
   const args = ['exec', '-i'];
   if (execContext.execUser) args.push('-u', execContext.execUser);
-  if (options.cwd) args.push('-w', options.cwd);
+  // Prefer the in-container workdir (a container whose mount ≠ host cwd, e.g. our
+  // WSL sandbox at /work); fall back to the host cwd for the same-path model.
+  const workdir = execContext.workdir ?? options.cwd;
+  if (workdir) args.push('-w', workdir);
   for (const [key, value] of Object.entries(options.env)) {
     if (value === undefined || CONTAINER_ENV_DENYLIST.has(key)) continue;
-    args.push('-e', `${key}=${value}`);
+    args.push('-e', `${key}=${remapContainerPath(value, execContext.pathMap)}`);
   }
   args.push(
     execContext.containerId,
