@@ -3393,6 +3393,7 @@ export async function workflowInstallCommand(
   }
 }
 
+/** Install a marketplace entry into the current repository. */
 async function installWorkflow(slug: string, cwd: string, force?: boolean): Promise<void> {
   const entries = await fetchMarketplace();
   const entry = entries.find(e => e.slug === slug);
@@ -3440,6 +3441,7 @@ async function installWorkflow(slug: string, cwd: string, force?: boolean): Prom
   console.log(`Run with: archon workflow run ${slug} "<message>"`);
 }
 
+/** Install one pinned marketplace workflow file. */
 async function installSingleFile(
   entry: MarketplaceEntryJson,
   slug: string,
@@ -3468,6 +3470,7 @@ async function installSingleFile(
   console.log(`Installed '${entry.name}' to ${destPath}`);
 }
 
+/** Preflight and install a pinned marketplace directory package. */
 async function installDirectory(
   entry: MarketplaceEntryJson,
   slug: string,
