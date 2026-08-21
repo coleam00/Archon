@@ -29,3 +29,4 @@ Point your AI assistant at these URLs for accurate, up-to-date documentation:
 - [`/llms.txt`](https://archon.diy/llms.txt) -- Index of all documentation pages
 - [`/llms-full.txt`](https://archon.diy/llms-full.txt) -- Full documentation in a single file
 - [`/llms-small.txt`](https://archon.diy/llms-small.txt) -- Trimmed documentation variant
+- `/<page-path>.md` -- Raw markdown for any documentation page (e.g., [`/getting-started/installation.md`](https://archon.diy/getting-started/installation.md))
