@@ -69,6 +69,8 @@ nodes:
 
   # The outer join cannot read a skipped loop output strictly, so both the
   # initial-ready path and the correction loop publish the same one-bit latch.
+  # Workaround, same class as implement's .green bridge: reading a value across
+  # a skipped path is #2637's value-transport gap. Comes out when #2637 lands.
   - id: initial-ready
     bash: |
       if [ "$review.output.ready" = "true" ]; then
