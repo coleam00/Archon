@@ -8,6 +8,9 @@ Bound inputs (`with:` bindings, canonical text in env):
 - INPUTS_ROUTE / INPUTS_SUMMARY: triage's verdict.
 - INPUTS_DELIVERED: deliver's returned output, or "null" when the deliver
   branch was skipped (no_action, or an advisory stop upstream of the gates).
+- INPUTS_GATE_PASSED_{DIRECT,ROOTED,PLANNED}: the spend gates' outputs, "null"
+  when a gate was skipped. A passed gate with null delivered means delivery
+  STARTED and died mid-flight — never claim the advisory stopped it.
 """
 
 import os
@@ -26,6 +29,24 @@ def main() -> int:
         return 0
 
     if delivered == "null":
+        gate_passed = any(
+            os.environ.get(k, "null") != "null"
+            for k in (
+                "INPUTS_GATE_PASSED_DIRECT",
+                "INPUTS_GATE_PASSED_ROOTED",
+                "INPUTS_GATE_PASSED_PLANNED",
+            )
+        )
+        if gate_passed:
+            # The advisory work cleared its gate; delivery then died mid-flight.
+            # Attributing this to the advisory would be false (run a1da7249:
+            # rooted:true, implement produced nothing, assert-changed refused).
+            print(
+                "outcome: delivery started but did not complete — see the run's "
+                "earliest failed delivery node.",
+                file=sys.stderr,
+            )
+            return 1
         if route == "investigate":
             print(
                 "No delivery started: the investigation did not establish a safe "

@@ -98,3 +98,9 @@ nodes:
       route: "$triage.output.route"
       summary: "$triage.output.summary"
       delivered: { from: "$deliver.output", if_skipped: null }
+      # A passed spend gate with no delivered output means delivery STARTED and
+      # died mid-flight — a different fact from an advisory stop, and the report
+      # must not claim the advisory refused (seen wrong on run a1da7249, #2402).
+      gate_passed_direct: { from: "$gate-direct.output", if_skipped: null }
+      gate_passed_rooted: { from: "$gate-rooted.output", if_skipped: null }
+      gate_passed_planned: { from: "$gate-planned.output", if_skipped: null }
