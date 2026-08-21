@@ -1135,14 +1135,18 @@ describe('GET /api/workflows/runs/:runId', () => {
       events: Array<{
         fan_out_view: {
           tally: { neverRan: number; notCompleted: number };
-          tallyText: string;
-          attentionLines: string[];
+          children: unknown[];
+          overflowCount: number;
         } | null;
       }>;
     };
     expect(body.events[0]?.fan_out_view?.tally.neverRan).toBe(1);
     expect(body.events[0]?.fan_out_view?.tally.notCompleted).toBe(1);
-    expect(body.events[0]?.fan_out_view?.attentionLines).toEqual(['[1] never ran · no such wf']);
+    expect(body.events[0]?.fan_out_view?.children).toEqual([
+      { kind: 'completed', index: 0, childRunId: 'child-a' },
+      { kind: 'never_ran', index: 1, reason: 'unresolved_target', error: 'no such wf' },
+    ]);
+    expect(body.events[0]?.fan_out_view?.overflowCount).toBe(0);
   });
 
   test('returns 404 when run not found', async () => {

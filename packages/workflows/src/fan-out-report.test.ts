@@ -2,7 +2,7 @@ import { describe, it, expect } from 'bun:test';
 
 import {
   FAN_OUT_EXCERPT_MAX_CHARS,
-  FAN_OUT_ATTENTION_LINE_CAP,
+  FAN_OUT_CHILDREN_MAX,
   fanOutExcerpt,
   childDispositionSchema,
   fanOutReportPayloadSchema,
@@ -127,6 +127,7 @@ describe('fan-out-report: parseFanOutReport', () => {
     expect(report).not.toBeNull();
     expect(report?.tally.total).toBe(0);
     expect(report?.tally.notCompleted).toBe(0);
+    expect(report?.overflowCount).toBe(0);
   });
 });
 
@@ -209,6 +210,26 @@ describe('fan-out-report: toChildDisposition', () => {
     const payload = buildFanOutReportPayload(outcomes);
     expect(payload.children.map(c => c.index)).toEqual([0, 1, 2]);
     expect(payload.children.map(c => c.kind)).toEqual(['completed', 'never_ran', 'failed']);
+    expect(payload.overflowCount).toBeUndefined();
+  });
+
+  it(`keeps non-completed children first when truncating past ${String(FAN_OUT_CHILDREN_MAX)}`, () => {
+    const outcomes: ChildWorkflowOutcome[] = Array.from(
+      { length: FAN_OUT_CHILDREN_MAX + 3 },
+      (_, i) =>
+        i < 2
+          ? neverRan('unresolved_target', `missing-${String(i)}`)
+          : ({ kind: 'ran', childRunId: `run-${String(i)}`, status: 'completed' } as const)
+    );
+    const payload = buildFanOutReportPayload(outcomes);
+    expect(payload.children).toHaveLength(FAN_OUT_CHILDREN_MAX);
+    expect(payload.overflowCount).toBe(3);
+    expect(payload.children.filter(c => c.kind === 'never_ran')).toHaveLength(2);
+    const parsed = parseFanOutReport(payload);
+    expect(parsed?.tally.total).toBe(FAN_OUT_CHILDREN_MAX + 3);
+    expect(parsed?.tally.neverRan).toBe(2);
+    expect(parsed?.tally.completed).toBe(FAN_OUT_CHILDREN_MAX + 1);
+    expect(parsed?.overflowCount).toBe(3);
   });
 });
 
@@ -302,7 +323,7 @@ describe('fan-out-report: toFanOutView', () => {
     expect(toFanOutView({ fan_out: { children: 'nope' } })).toBeNull();
   });
 
-  it('builds tally + display strings from event data', () => {
+  it('returns structured children + derived tally', () => {
     const view = toFanOutView({
       fan_out: {
         children: [
@@ -321,21 +342,8 @@ describe('fan-out-report: toFanOutView', () => {
       neverRan: 1,
       notCompleted: 1,
     });
-    expect(view?.headline).toBe('1 of 2 children did not complete');
-    expect(view?.tallyText).toBe('1 of 2 children did not complete (1 completed, 1 never ran)');
-    expect(view?.attentionLines).toEqual(['[1] never ran · no such wf']);
     expect(view?.overflowCount).toBe(0);
-  });
-
-  it('caps attention lines and reports overflow', () => {
-    const children = Array.from({ length: FAN_OUT_ATTENTION_LINE_CAP + 3 }, (_, index) => ({
-      kind: 'never_ran' as const,
-      index,
-      reason: 'unresolved_target' as const,
-      error: 'x',
-    }));
-    const view = toFanOutView({ fan_out: { children } });
-    expect(view?.attentionLines).toHaveLength(FAN_OUT_ATTENTION_LINE_CAP);
-    expect(view?.overflowCount).toBe(3);
+    expect(view?.children).toHaveLength(2);
+    expect(view?.children[1]).toMatchObject({ kind: 'never_ran', error: 'no such wf' });
   });
 });

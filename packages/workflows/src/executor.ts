@@ -27,9 +27,8 @@ import {
   isRunBlockedOnChild,
   SUBRUN_METADATA_KEYS,
   readSubrunMetadata,
-  neverRan,
-  ranFailed,
 } from './schemas';
+import { neverRan, ranFailed } from './schemas/fan-out-report';
 import { executeDagWorkflow, childOutcomeFromRun } from './dag-executor';
 import type { RunChildWorkflowArgs, ChildWorkflowOutcome, PriorRunUsage } from './dag-executor';
 import { discoverWorkflowsWithConfig } from './workflow-discovery';

@@ -2666,9 +2666,9 @@ nodes:
     // No child run rows exist for a target that never resolves.
     expect(await store.findChildRuns(parentRun!.id)).toHaveLength(0);
 
-    // #2451 headline behavior: exactly one "completed with failures" warning fires, carrying
+    // #2451 headline behavior: exactly one warning fires, carrying
     // the tally and the `archon workflow get` pointer — the trace the silent-green bug lacked.
-    const warnings = messages.filter(m => m.includes('Fan-out completed with failures'));
+    const warnings = messages.filter(m => m.includes('**Fan-out**'));
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain('node `work`');
     expect(warnings[0]).toContain(`archon workflow get ${parentRun!.id}`);
@@ -2695,6 +2695,79 @@ nodes:
     const aggregate = JSON.parse(String(workCompleted?.data?.node_output)) as unknown[];
     expect(aggregate).toHaveLength(3);
     expect(aggregate[0]).toMatchObject({ status: 'failed' });
+  });
+
+  // #2451: a thrown lookup (ambiguous name) must fail closed — not skip the shared-checkout
+  // preflight as if the target were merely unknown. Unknown names become never_ran; throws
+  // fail the node before any child is spawned.
+  it('all_done: an ambiguous fan_out target fails closed (does not skip the checkout guard)', async () => {
+    await writeWorkflow(
+      'archon-review',
+      `
+name: archon-review
+description: one of two suffix matches for "review"
+nodes:
+  - id: run
+    bash: |
+      printf 'ok'
+`
+    );
+    await writeWorkflow(
+      'custom-review',
+      `
+name: custom-review
+description: the other suffix match for "review"
+nodes:
+  - id: run
+    bash: |
+      printf 'ok'
+`
+    );
+    await writeWorkflow(
+      'fan-ambiguous',
+      `
+name: fan-ambiguous
+description: fan out over an ambiguous target name
+nodes:
+  - id: plan
+    bash: |
+      printf '%s' '["a","b"]'
+  - id: work
+    workflow: review
+    depends_on: [plan]
+    fan_out:
+      items: "$plan.output"
+      max_parallel: 2
+      join: all_done
+`
+    );
+
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    const parent = await discover('fan-ambiguous');
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parent,
+      'goal',
+      'conv-db'
+    );
+
+    expect(result.success).toBe(false);
+    const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'fan-ambiguous');
+    expect(parentRun?.status).toBe('failed');
+    expect(await store.findChildRuns(parentRun!.id)).toHaveLength(0);
+    const nodeFailed = store.events.find(
+      e => e.event_type === 'node_failed' && e.step_name === 'work'
+    );
+    expect(String(nodeFailed?.data?.error)).toContain('could not resolve');
+    expect(String(nodeFailed?.data?.error)).toContain('Ambiguous');
+    const workCompleted = store.events.find(
+      e => e.event_type === 'node_completed' && e.step_name === 'work'
+    );
+    expect(workCompleted).toBeUndefined();
   });
 
   // #2451 test #3: the SAME unknown target under all_success still FAILS the node — and the

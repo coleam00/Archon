@@ -165,29 +165,8 @@ export type { WorkflowRunNodeSession } from './workflow-run-node-session';
 export { nodeArtifactSchema, nodeArtifactLoopFrameSchema } from './node-artifact';
 export type { NodeArtifact, NodeArtifactLoopFrame } from './node-artifact';
 
-// Fan-out child outcome observability (#2451)
-export {
-  FAN_OUT_EXCERPT_MAX_CHARS,
-  FAN_OUT_ATTENTION_LINE_CAP,
-  fanOutExcerpt,
-  childNeverRanReasonSchema,
-  fanOutEngineCancelReasonSchema,
-  childDispositionSchema,
-  fanOutReportPayloadSchema,
-  fanOutTallySchema,
-  tallyChildDispositions,
-  parseFanOutReport,
-  formatFanOutHeadline,
-  formatFanOutBreakdown,
-  formatFanOutTally,
-  neverRan,
-  ranFailed,
-  toChildDisposition,
-  buildFanOutReportPayload,
-  formatChildDispositionLine,
-  fanOutViewSchema,
-  toFanOutView,
-} from './fan-out-report';
+// Fan-out child outcome observability (#2451). Import from `./fan-out-report` or the
+// `@archon/workflows/schemas/fan-out-report` subpath — not this barrel.
 export type {
   ChildNeverRanReason,
   FanOutEngineCancelReason,

@@ -62,9 +62,6 @@ import type {
   WorkflowRunOutcome,
   NodeArtifactLoopFrame,
   WorkflowRunNodeSession,
-  ChildWorkflowOutcome,
-  ChildRanOutcome,
-  FanOutReportPayload,
 } from './schemas';
 import {
   isBashNode,
@@ -80,11 +77,20 @@ import {
   isApprovalContext,
   inputEnvKey,
   isNodeContextResume,
+} from './schemas';
+import {
   neverRan,
   buildFanOutReportPayload,
-  tallyChildDispositions,
+  parseFanOutReport,
   formatFanOutTally,
-} from './schemas';
+  fanOutEngineCancelReasonSchema,
+} from './schemas/fan-out-report';
+import type {
+  FanOutEngineCancelReason,
+  ChildWorkflowOutcome,
+  ChildRanOutcome,
+  FanOutReportPayload,
+} from './schemas/fan-out-report';
 import { formatToolCall } from './utils/tool-formatter';
 import { createLogger, captureWorkflowCompleted } from '@archon/paths';
 import type { WorkflowErrorClass, WorkflowNodeType } from '@archon/paths';
@@ -453,7 +459,7 @@ export interface PriorRunUsage {
 // `schemas/fan-out-report.ts` (#2451) alongside the wire `ChildDisposition` record and the
 // parse/tally/format helpers. Re-exported here so existing importers (executor.ts) keep
 // resolving it from dag-executor.
-export type { ChildWorkflowOutcome } from './schemas';
+export type { ChildWorkflowOutcome } from './schemas/fan-out-report';
 
 /** Arguments for starting (or resuming a failed) child sub-run. */
 export interface RunChildWorkflowArgs {
@@ -6415,16 +6421,10 @@ async function executeWorkflowNode(
  * never re-driven, so the parent would fail every resume with no way back. Delete it only
  * once no resumable run can predate the change.
  */
-type FanOutCancelReason = 'fan_out_gate' | 'fan_out_sibling' | 'fan_out_orphan';
-const FAN_OUT_RECOVERABLE_CANCEL_REASONS: ReadonlySet<string> = new Set<FanOutCancelReason>([
-  'fan_out_gate',
-  'fan_out_sibling',
-  // Every reason above is engine-owned, so every one belongs here — `fan_out_orphan` was
-  // missing, which read an orphan the engine cancelled as a USER cancel. Items shrinking
-  // and then growing back left those slots permanently cancelled: dead under all_done, and
-  // an unrecoverable node failure on every resume under all_success.
-  'fan_out_orphan',
-]);
+type FanOutCancelReason = FanOutEngineCancelReason;
+const FAN_OUT_RECOVERABLE_CANCEL_REASONS: ReadonlySet<string> = new Set<FanOutCancelReason>(
+  fanOutEngineCancelReasonSchema.options
+);
 
 /**
  * A `running`/`pending` child found on re-entry is ambiguous: a crash-orphan of a prior
@@ -6536,17 +6536,14 @@ function fanOutSharedCheckoutMessage(node: WorkflowNode, concurrency: number): s
  * path-lock cascade the engine cannot recover from, so "we could not check" must not read
  * the same as "we checked and it is fine" — that is the silent fallback the engineering
  * principles forbid. An unknown or ambiguous name reaches here without any exception being
- * thrown, so this is not a rare path.
- *
- * The caller still must not report a COLLISION on this branch: the author's actual problem
- * is the unresolvable target, and pointing them at `mutates_checkout` would send them to
- * the wrong file. It fails closed with a message about the resolution instead.
+ * thrown, so this is not a rare path. Ambiguity and discovery failures throw and become
+ * `{ error }` so the caller can fail closed instead of skipping the checkout guard.
  */
 async function resolveFanOutChildDefinition(
   deps: WorkflowDeps,
   cwd: string,
   targetName: string
-): Promise<{ definition: WorkflowDefinition } | { unresolved: string }> {
+): Promise<{ definition: WorkflowDefinition } | { notFound: string } | { error: string }> {
   try {
     const { workflows } = await discoverWorkflowsWithConfig(cwd, deps.loadConfig);
     const definition = resolveWorkflowName(
@@ -6557,9 +6554,9 @@ async function resolveFanOutChildDefinition(
     // ambiguity, so the undefined branch is ordinary rather than exceptional.
     return definition
       ? { definition }
-      : { unresolved: `no workflow named '${targetName}' was found` };
+      : { notFound: `no workflow named '${targetName}' was found` };
   } catch (err) {
-    return { unresolved: (err as Error).message };
+    return { error: (err as Error).message };
   }
 }
 
@@ -6977,13 +6974,24 @@ async function executeFanOutWorkflowNode(
   const plannedConcurrency = Math.min(fanOut.max_parallel, pendingCount);
   if (node.isolation !== 'worktree' && plannedConcurrency > 1) {
     const resolved = await resolveFanOutChildDefinition(deps, cwd, node.workflow);
-    // #2451: an UNRESOLVED target no longer fails the node here. The old branch reintroduced
-    // the rejected original fix — a 3-item default-`max_parallel` typo failed the whole node
-    // with a checkout-safety message. Unresolved names now flow through `runChildWorkflow`
-    // → `never_ran` → the join (`all_done` completes with the never-ran report; `all_success`
-    // still fails). The shared-checkout preflight only fires when the child DEFINITION
-    // resolves — the only case where a real `mutates_checkout` collision can exist.
-    if (!('unresolved' in resolved) && resolved.definition.mutates_checkout !== false) {
+    // Unknown names skip this guard and become `never_ran` under the join. A thrown
+    // discovery/ambiguity error fails closed here — we do not know `mutates_checkout`,
+    // so we must not spawn `max_parallel` children on the shared checkout.
+    if ('error' in resolved) {
+      const msg = `fan_out node '${node.id}': could not resolve '${node.workflow}' — ${resolved.error}`;
+      getLog().warn(
+        {
+          parentRunId: parentRun.id,
+          nodeId: node.id,
+          childWorkflow: node.workflow,
+          error: resolved.error,
+        },
+        'workflow.fan_out_preflight_resolve_failed'
+      );
+      await notify(`❌ **Fan-out blocked** (node \`${node.id}\`): ${msg}`);
+      return failResult(msg);
+    }
+    if (!('notFound' in resolved) && resolved.definition.mutates_checkout !== false) {
       const msg = fanOutSharedCheckoutMessage(node, plannedConcurrency);
       getLog().warn(
         {
@@ -7105,6 +7113,15 @@ async function executeFanOutWorkflowNode(
   // node_completed (join satisfied) and the all_success node_failed. Derived from the same
   // outcomes the join reduces over. Tally is derived at parse, not stored.
   const report = buildFanOutReportPayload(outcomes);
+  const tally = parseFanOutReport(report)?.tally ?? {
+    total: 0,
+    completed: 0,
+    failed: 0,
+    cancelledByEngine: 0,
+    cancelledOutOfBand: 0,
+    neverRan: 0,
+    notCompleted: 0,
+  };
 
   // I3: parity with the 1:1 asCompleted path — a completed child with no terminal output
   // threads '' but is indistinguishable downstream from an intentional empty result, so
@@ -7218,10 +7235,13 @@ async function executeFanOutWorkflowNode(
   // success-shaped failure this issue is about. Emit exactly one notify() warning per
   // fan-out node — the "unmistakable trace" (the never-ran typo case is otherwise SILENT) —
   // pointing at `workflow get` for the per-slot detail. Not a status change.
-  const tally = tallyChildDispositions(report.children);
   if (tally.notCompleted > 0) {
+    getLog().warn(
+      { parentRunId: parentRun.id, nodeId: node.id, tally },
+      'workflow.fan_out_completed_with_unfinished_children'
+    );
     await notify(
-      `⚠️ **Fan-out completed with failures** (node \`${node.id}\`): ${formatFanOutTally(tally)}. ` +
+      `⚠️ **Fan-out** (node \`${node.id}\`): ${formatFanOutTally(tally)}. ` +
         `Run \`archon workflow get ${parentRun.id}\` for the per-child detail.`
     );
   }

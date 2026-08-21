@@ -23,8 +23,8 @@ import type { TokenUsage } from '@archon/providers/types';
  *    JSON field.
  *
  * `$node.output` (the aggregate array consumed by `$spread.output`) is unchanged; this is a
- * second, separate key. Clients must not re-parse the blob: {@link toFanOutView} is the
- * read-time DTO the HTTP API attaches as `fan_out_view`.
+ * second, separate key. {@link toFanOutView} is the read-time DTO the HTTP API attaches as
+ * `fan_out_view`: structured `{ children, tally, overflowCount }`, not pre-rendered strings.
  */
 
 /** Max length for error/reason excerpts persisted on the wire. The full error stays on the
@@ -32,8 +32,11 @@ import type { TokenUsage } from '@archon/providers/types';
  *  only copy — still bounded here to keep the event payload small. */
 export const FAN_OUT_EXCERPT_MAX_CHARS = 240;
 
-/** Max indexed non-completed child lines included on {@link FanOutView.attentionLines}. */
+/** Max indexed non-completed child lines the CLI (and console) print before `+N more`. */
 export const FAN_OUT_ATTENTION_LINE_CAP = 20;
+
+/** Max child dispositions persisted on `data.fan_out`. Non-completed slots are kept first. */
+export const FAN_OUT_CHILDREN_MAX = 500;
 
 /** Truncate a wire-bound error/reason string to a bounded excerpt (`…` suffix when cut). */
 export function fanOutExcerpt(text: string, max = FAN_OUT_EXCERPT_MAX_CHARS): string {
@@ -74,8 +77,9 @@ const childIndexSchema = z.number().int().nonnegative();
 
 /**
  * One fan-out slot's persisted disposition (the wire record). Discriminated on `kind`.
- * Ordered by index in the `children` array, whose length always equals the item count.
- * `never_ran` has NO `childRunId` field — that slot produced no run.
+ * Ordered by index in the `children` array. When the item list exceeds
+ * {@link FAN_OUT_CHILDREN_MAX}, non-completed slots are kept first and `overflowCount`
+ * records how many slots were omitted (typically completed ones).
  */
 export const childDispositionSchema = z.discriminatedUnion('kind', [
   z.object({
@@ -111,11 +115,13 @@ export const childDispositionSchema = z.discriminatedUnion('kind', [
 export type ChildDisposition = z.infer<typeof childDispositionSchema>;
 
 /**
- * The persisted payload of `data.fan_out`. Only `{ children }` is stored — the tally is
- * derived at parse. `length === item count`, item order.
+ * The persisted payload of `data.fan_out`. `{ children }` is stored; `overflowCount` is
+ * present only when the item list exceeded {@link FAN_OUT_CHILDREN_MAX}. The tally is derived
+ * at parse (omitted completed slots are added back via `overflowCount`).
  */
 export const fanOutReportPayloadSchema = z.object({
-  children: z.array(childDispositionSchema),
+  children: z.array(childDispositionSchema).max(FAN_OUT_CHILDREN_MAX),
+  overflowCount: z.number().int().nonnegative().optional(),
 });
 export type FanOutReportPayload = z.infer<typeof fanOutReportPayloadSchema>;
 
@@ -178,6 +184,7 @@ export function tallyChildDispositions(children: readonly ChildDisposition[]): F
 export interface FanOutReport {
   children: ChildDisposition[];
   tally: FanOutTally;
+  overflowCount: number;
 }
 
 /**
@@ -187,10 +194,30 @@ export interface FanOutReport {
  * also `null`. A `null` therefore means "no report", never "empty report" — an empty fan-out
  * is a valid `{ children: [] }`.
  */
+function tallyPersisted(children: readonly ChildDisposition[], overflowCount: number): FanOutTally {
+  const tally = tallyChildDispositions(children);
+  if (overflowCount === 0) return tally;
+  tally.total += overflowCount;
+  const storedAllAttention =
+    children.length > 0 && children.every(child => child.kind !== 'completed');
+  if (storedAllAttention) {
+    tally.notCompleted += overflowCount;
+  } else {
+    tally.completed += overflowCount;
+    tally.notCompleted = tally.total - tally.completed;
+  }
+  return tally;
+}
+
 export function parseFanOutReport(raw: unknown): FanOutReport | null {
   const parsed = fanOutReportPayloadSchema.safeParse(raw);
   if (!parsed.success) return null;
-  return { children: parsed.data.children, tally: tallyChildDispositions(parsed.data.children) };
+  const overflowCount = parsed.data.overflowCount ?? 0;
+  return {
+    children: parsed.data.children,
+    tally: tallyPersisted(parsed.data.children, overflowCount),
+    overflowCount,
+  };
 }
 
 /** The short headline used by the run header and the notify prefix. */
@@ -330,7 +357,19 @@ export function toChildDisposition(outcome: ChildWorkflowOutcome, index: number)
 export function buildFanOutReportPayload(
   outcomes: readonly ChildWorkflowOutcome[]
 ): FanOutReportPayload {
-  return { children: outcomes.map((outcome, index) => toChildDisposition(outcome, index)) };
+  const children = outcomes.map((outcome, index) => toChildDisposition(outcome, index));
+  if (children.length <= FAN_OUT_CHILDREN_MAX) {
+    return { children };
+  }
+  const attention = children.filter(child => child.kind !== 'completed');
+  if (attention.length >= FAN_OUT_CHILDREN_MAX) {
+    const kept = [...attention].sort((a, b) => a.index - b.index).slice(0, FAN_OUT_CHILDREN_MAX);
+    return { children: kept, overflowCount: children.length - kept.length };
+  }
+  const room = FAN_OUT_CHILDREN_MAX - attention.length;
+  const keptCompleted = children.filter(child => child.kind === 'completed').slice(0, room);
+  const kept = [...attention, ...keptCompleted].sort((a, b) => a.index - b.index);
+  return { children: kept, overflowCount: children.length - kept.length };
 }
 
 /** Format one indexed child line for the CLI/console divider (specific cancel reason). */
@@ -356,13 +395,11 @@ export function formatChildDispositionLine(child: ChildDisposition): string {
 
 /**
  * Read-time DTO for HTTP clients. Derived from `data.fan_out` — never persisted.
- * Tally and display strings live here so `@archon/web` does not re-parse the blob.
+ * Structured children so `@archon/web` can render without importing this package.
  */
 export const fanOutViewSchema = z.object({
+  children: z.array(childDispositionSchema),
   tally: fanOutTallySchema,
-  headline: z.string(),
-  tallyText: z.string(),
-  attentionLines: z.array(z.string()),
   overflowCount: z.number().int().nonnegative(),
 });
 export type FanOutView = z.infer<typeof fanOutViewSchema>;
@@ -375,15 +412,9 @@ export function toFanOutView(eventData: unknown): FanOutView | null {
   if (typeof eventData !== 'object' || eventData === null) return null;
   const report = parseFanOutReport((eventData as Record<string, unknown>).fan_out);
   if (report === null) return null;
-  const attention = report.children.filter(child => child.kind !== 'completed');
-  const overflowCount = Math.max(0, attention.length - FAN_OUT_ATTENTION_LINE_CAP);
   return {
+    children: report.children,
     tally: report.tally,
-    headline: formatFanOutHeadline(report.tally),
-    tallyText: formatFanOutTally(report.tally),
-    attentionLines: attention
-      .slice(0, FAN_OUT_ATTENTION_LINE_CAP)
-      .map(child => formatChildDispositionLine(child)),
-    overflowCount,
+    overflowCount: report.overflowCount,
   };
 }

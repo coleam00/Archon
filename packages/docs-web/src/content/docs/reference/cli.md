@@ -417,15 +417,9 @@ non-completed child lines (capped at 20, then `+N more`). "Never ran" is a dispo
 *within* a fan-out report — a slot that never produced a child run, either an unresolved
 `workflow:` target or a slot that threw before spawning. A shared-checkout preflight
 failure is different: it fails the whole node before any children spawn, so it produces
-no report and no `never_ran` slots.
-
-`--json` carries the same information as a top-level `fanOut` array, which is
-report-backed: one entry per terminal fan-out event that carries a valid report, each
-with its `tally` and per-child `children` dispositions, present on both the plain and
-`--verbose` JSON shapes so an agent can detect a partly-failed fan-out without opting
-into the full event/node payload. `fanOut` is an empty array when no such report exists
-(no fan-out node, or a fan-out node that failed before producing a report), and `null`
-only when the underlying event query failed.
+no report and no `never_ran` slots. `--json` does not add a separate `fanOut` field;
+the same report is on `GET /api/workflows/runs/:id` as `fan_out_view` on the node's
+terminal event.
 
 ### `workflow resume`
 

@@ -17,6 +17,10 @@ function raw(over: Partial<Raw> & { event_type: string }): Raw {
 
 function sampleView(over: Partial<FanOutView> = {}): FanOutView {
   return {
+    children: [
+      { kind: 'completed', index: 0, childRunId: 'child-a' },
+      { kind: 'never_ran', index: 1, reason: 'unresolved_target', error: 'no such wf' },
+    ],
     tally: {
       total: 2,
       completed: 1,
@@ -26,9 +30,6 @@ function sampleView(over: Partial<FanOutView> = {}): FanOutView {
       neverRan: 1,
       notCompleted: 1,
     },
-    headline: '1 of 2 children did not complete',
-    tallyText: '1 of 2 children did not complete (1 completed, 1 never ran)',
-    attentionLines: ['[1] never ran · no such wf'],
     overflowCount: 0,
     ...over,
   };

@@ -3801,6 +3801,37 @@ export interface components {
       fan_out_view: components['schemas']['FanOutView'] | null;
     };
     FanOutView: {
+      children: Array<
+        | {
+            kind: 'completed';
+            index: number;
+            childRunId: string;
+          }
+        | {
+            kind: 'failed';
+            index: number;
+            childRunId: string;
+            error: string;
+          }
+        | {
+            kind: 'cancelled_by_engine';
+            index: number;
+            childRunId: string;
+            reason: 'fan_out_gate' | 'fan_out_orphan' | 'fan_out_sibling';
+          }
+        | {
+            kind: 'cancelled_out_of_band';
+            index: number;
+            childRunId: string;
+            error?: string;
+          }
+        | {
+            kind: 'never_ran';
+            index: number;
+            reason: 'unresolved_target' | 'blocked_before_spawn' | 'slot_threw';
+            error: string;
+          }
+      >;
       tally: {
         total: number;
         completed: number;
@@ -3810,9 +3841,6 @@ export interface components {
         neverRan: number;
         notCompleted: number;
       };
-      headline: string;
-      tallyText: string;
-      attentionLines: string[];
       overflowCount: number;
     };
     ValidateWorkflowResponse: {

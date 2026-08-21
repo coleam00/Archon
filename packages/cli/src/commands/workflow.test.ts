@@ -3817,76 +3817,6 @@ describe('workflowGetCommand', () => {
     expect(code).toBe(0);
   });
 
-  it('includes fanOut in --json WITHOUT --verbose', async () => {
-    const workflowDb = await import('@archon/core/db/workflows');
-    const eventsDb = await import('@archon/core/db/workflow-events');
-    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
-      id: 'run-fo',
-      workflow_name: 'fanner',
-      status: 'completed',
-      working_path: '/tmp/wt',
-      started_at: new Date(),
-      metadata: {},
-    });
-    (eventsDb.listWorkflowEvents as ReturnType<typeof mock>).mockResolvedValueOnce([
-      FAN_OUT_COMPLETED_EVENT,
-    ]);
-
-    const code = await workflowGetCommand('run-fo', true);
-
-    const parsed = JSON.parse(firstJsonPayload(stdoutSpy)) as {
-      fanOut: Array<{ nodeId: string; tally: { notCompleted: number }; children: unknown[] }>;
-    };
-    expect(parsed.fanOut).toHaveLength(1);
-    expect(parsed.fanOut[0].nodeId).toBe('spread');
-    expect(parsed.fanOut[0].tally.notCompleted).toBe(2);
-    expect(parsed.fanOut[0].children).toHaveLength(3);
-    expect(code).toBe(0);
-  });
-
-  it('sets fanOut: null (not []) when the event query fails', async () => {
-    const workflowDb = await import('@archon/core/db/workflows');
-    const eventsDb = await import('@archon/core/db/workflow-events');
-    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
-      id: 'run-fo',
-      workflow_name: 'fanner',
-      status: 'completed',
-      working_path: '/tmp/wt',
-      started_at: new Date(),
-      metadata: {},
-    });
-    (eventsDb.listWorkflowEvents as ReturnType<typeof mock>).mockRejectedValueOnce(
-      new Error('events unavailable')
-    );
-
-    const code = await workflowGetCommand('run-fo', true);
-
-    const parsed = JSON.parse(firstJsonPayload(stdoutSpy)) as { fanOut: unknown };
-    // null = event fetch failed; a consumer must NOT read a missing block as clean.
-    expect(parsed.fanOut).toBeNull();
-    expect(code).toBe(0);
-  });
-
-  it('emits fanOut: [] when a run has no fan-out node', async () => {
-    const workflowDb = await import('@archon/core/db/workflows');
-    const eventsDb = await import('@archon/core/db/workflow-events');
-    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
-      id: 'run-plain',
-      workflow_name: 'plain',
-      status: 'completed',
-      working_path: '/tmp/wt',
-      started_at: new Date(),
-      metadata: {},
-    });
-    (eventsDb.listWorkflowEvents as ReturnType<typeof mock>).mockResolvedValueOnce([]);
-
-    const code = await workflowGetCommand('run-plain', true);
-
-    const parsed = JSON.parse(firstJsonPayload(stdoutSpy)) as { fanOut: unknown[] };
-    expect(parsed.fanOut).toEqual([]);
-    expect(code).toBe(0);
-  });
-
   it('keeps the last terminal fan-out event per step_name (resumed node)', async () => {
     // A resumed fan-out node writes a SECOND terminal event for the same step_name. The
     // summary must reflect the later event, not the earlier one — events arrive from
@@ -3944,21 +3874,11 @@ describe('workflowGetCommand', () => {
       LATER_COMPLETED_EVENT,
     ]);
 
-    const code = await workflowGetCommand('run-resumed', true);
+    const code = await workflowGetCommand('run-resumed');
 
-    const parsed = JSON.parse(firstJsonPayload(stdoutSpy)) as {
-      fanOut: Array<{
-        nodeId: string;
-        status: string;
-        tally: { notCompleted: number };
-        children: Array<{ kind: string }>;
-      }>;
-    };
-    // Deduped to a single entry, reflecting the LATER (completed) event.
-    expect(parsed.fanOut).toHaveLength(1);
-    expect(parsed.fanOut[0].status).toBe('completed');
-    expect(parsed.fanOut[0].tally.notCompleted).toBe(0);
-    expect(parsed.fanOut[0].children.every(c => c.kind === 'completed')).toBe(true);
+    const calls = consoleSpy.mock.calls.map((c: unknown[]) => String(c[0]));
+    expect(calls.some(c => c.includes('Fan-out (spread): all 2 children completed'))).toBe(true);
+    expect(calls.some(c => c.includes('first attempt'))).toBe(false);
     expect(code).toBe(0);
   });
 });

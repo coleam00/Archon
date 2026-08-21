@@ -72,6 +72,7 @@ import {
   parseFanOutReport,
   formatFanOutTally,
   formatChildDispositionLine,
+  FAN_OUT_ATTENTION_LINE_CAP,
 } from '@archon/workflows/schemas/fan-out-report';
 import type { ChildDisposition, FanOutTally } from '@archon/workflows/schemas/fan-out-report';
 import {
@@ -2332,9 +2333,6 @@ function summarizeRunFanOut(events: readonly WorkflowEventRow[]): CliFanOutSumma
   return [...byNode.values()];
 }
 
-/** Max indexed child lines printed inline before a `+N more` (matches the console divider). */
-const FAN_OUT_CHILD_LINE_CAP = 20;
-
 /**
  * Print the human `Fan-out:` block for a run's fan-out nodes (#2451). A clean fan-out shows a
  * one-line positive summary; a node with slots that did not complete shows the tally plus the
@@ -2350,11 +2348,11 @@ function printFanOutBlock(summaries: readonly CliFanOutSummary[]): void {
     }
     console.log(`  Fan-out (${summary.nodeId}): ${formatFanOutTally(summary.tally)}`);
     const notCompleted = summary.children.filter(c => c.kind !== 'completed');
-    for (const child of notCompleted.slice(0, FAN_OUT_CHILD_LINE_CAP)) {
+    for (const child of notCompleted.slice(0, FAN_OUT_ATTENTION_LINE_CAP)) {
       console.log(`    ${formatChildDispositionLine(child)}`);
     }
-    if (notCompleted.length > FAN_OUT_CHILD_LINE_CAP) {
-      console.log(`    +${String(notCompleted.length - FAN_OUT_CHILD_LINE_CAP)} more`);
+    if (notCompleted.length > FAN_OUT_ATTENTION_LINE_CAP) {
+      console.log(`    +${String(notCompleted.length - FAN_OUT_ATTENTION_LINE_CAP)} more`);
     }
   }
 }
@@ -2493,32 +2491,26 @@ export async function workflowGetCommand(
     return 1;
   }
 
-  // getWorkflowRun returns the base WorkflowRun (no current_step_name) — derive per-node
-  // detail from the event log. The events are now fetched UNCONDITIONALLY (not just for
-  // --verbose) so the fan-out block (#2451) surfaces on a plain `get`. `--verbose` still
-  // gates the fuller per-node "Nodes:" block below.
+  // Human `get` always loads events so the Fan-out: block can surface without `--verbose`.
+  // `--json` without `--verbose` skips that scan — agents that need the child report use
+  // `GET /api/workflows/runs/:id` (`fan_out_view` on the event) or `--json --verbose`.
+  if (json && !verbose) {
+    await writeJsonLine({ ...run });
+    return 0;
+  }
+
   const fetched = await fetchVerboseEvents(run.id);
   const events = fetched.events;
   const eventsFailed = fetched.failed;
-  // `fanOut: null` = the event query FAILED (do not read a missing block as clean);
-  // `[]` = the query succeeded but no fan-out node produced a report.
   const fanOut = eventsFailed ? null : summarizeRunFanOut(events);
 
   if (json) {
-    if (!verbose) {
-      // fanOut rides even the non-verbose JSON so an agent gets the child report without
-      // opting into the full event/node payload.
-      await writeJsonLine({ ...run, fanOut });
-      return 0;
-    }
-
     const parseWarnings = readParseWarningEvents(events);
     const output = rawEvents
-      ? { ...run, events, fanOut }
+      ? { ...run, events }
       : {
           ...run,
           nodes: buildNodeSummaries(events),
-          fanOut,
           // Keys the engine dropped from this run's YAML (#2213). Surfaced as a
           // named field rather than leaving the caller to scan raw events.
           ...(parseWarnings.length > 0 ? { parseWarnings } : {}),

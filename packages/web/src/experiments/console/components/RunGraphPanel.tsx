@@ -166,8 +166,6 @@ function kindGlyph(k: WorkflowNodeKind): string {
       return '/';
     case 'script':
       return '⧉';
-    case 'workflow':
-      return '⋔';
     case 'prompt':
       return '·';
   }
@@ -265,40 +263,21 @@ function GraphNode({ node, onClick }: GraphNodeProps): ReactElement {
   const running = node.status === 'running';
   const failed = node.status === 'failed';
   const dimmed = node.status === 'pending' || node.status === 'skipped';
-  // Fan-out attention (#2451): a `completed` fan-out node whose children did not all complete
-  // gets AMBER attention + a `completed/total` badge — never a red `failed` status. Lifecycle
-  // stays `completed`; the amber is attention, not a new DAG state.
-  const attention = node.fanOut !== null && node.fanOut.notCompleted > 0 ? node.fanOut : null;
   const style: CSSProperties = {
     left: node.x,
     top: node.y,
     width: NODE_W,
     height: NODE_H,
-    backgroundColor:
-      attention !== null && !failed
-        ? 'color-mix(in oklch, var(--warning), transparent 92%)'
-        : statusFill(node.status),
-    borderColor:
-      attention !== null && !failed
-        ? 'color-mix(in oklch, var(--warning), transparent 45%)'
-        : statusBorder(node.status),
-    boxShadow: failed
-      ? '0 0 0 3px color-mix(in oklch, var(--error), transparent 94%)'
-      : attention !== null
-        ? '0 0 0 3px color-mix(in oklch, var(--warning), transparent 90%)'
-        : undefined,
+    backgroundColor: statusFill(node.status),
+    borderColor: statusBorder(node.status),
+    boxShadow: failed ? '0 0 0 3px color-mix(in oklch, var(--error), transparent 94%)' : undefined,
   };
-
-  const attentionTitle =
-    attention !== null
-      ? ` · ${String(attention.notCompleted)} of ${String(attention.total)} children did not complete`
-      : '';
 
   return (
     <button
       type="button"
       onClick={onClick}
-      title={`${node.id} · ${node.kind} · ${node.status}${attentionTitle}`}
+      title={`${node.id} · ${node.kind} · ${node.status}`}
       className={`absolute flex items-center gap-2.5 overflow-hidden rounded-[9px] border px-3.5 text-left transition-colors hover:brightness-110 ${
         running ? 'animate-pulse' : ''
       } ${dimmed ? 'opacity-60' : ''}`}
@@ -306,9 +285,7 @@ function GraphNode({ node, onClick }: GraphNodeProps): ReactElement {
     >
       <span
         aria-hidden
-        className={`shrink-0 font-mono text-[15px] font-bold leading-none ${
-          attention !== null && !failed ? 'text-warning' : statusGlyphClass(node.status)
-        }`}
+        className={`shrink-0 font-mono text-[15px] font-bold leading-none ${statusGlyphClass(node.status)}`}
       >
         {kindGlyph(node.kind)}
       </span>
@@ -319,14 +296,6 @@ function GraphNode({ node, onClick }: GraphNodeProps): ReactElement {
       >
         {node.id}
       </span>
-      {attention !== null ? (
-        <span
-          aria-hidden
-          className="shrink-0 rounded-full bg-warning/15 px-1.5 py-0.5 font-mono text-[10px] font-semibold tabular-nums text-warning"
-        >
-          {`${String(attention.completed)}/${String(attention.total)}`}
-        </span>
-      ) : null}
     </button>
   );
 }
