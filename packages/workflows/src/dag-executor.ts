@@ -78,6 +78,19 @@ import {
   inputEnvKey,
   isNodeContextResume,
 } from './schemas';
+import {
+  neverRan,
+  buildFanOutReportPayload,
+  parseFanOutReport,
+  formatFanOutTally,
+  fanOutEngineCancelReasonSchema,
+} from './schemas/fan-out-report';
+import type {
+  FanOutEngineCancelReason,
+  ChildWorkflowOutcome,
+  ChildRanOutcome,
+  FanOutReportPayload,
+} from './schemas/fan-out-report';
 import { formatToolCall } from './utils/tool-formatter';
 import { createLogger, captureWorkflowCompleted } from '@archon/paths';
 import type { WorkflowErrorClass, WorkflowNodeType } from '@archon/paths';
@@ -442,17 +455,11 @@ export interface PriorRunUsage {
   costUsd: number;
 }
 
-/** Terminal (or paused) outcome of a child sub-run, as consumed by a `workflow:` node. */
-export interface ChildWorkflowOutcome {
-  childRunId: string;
-  status: 'completed' | 'paused' | 'failed' | 'cancelled';
-  /** Child's terminal output (its first sink node's output), threaded as `$<id>.output`. */
-  output?: string;
-  /** Child run's total cost, rolled up into the parent node's costUsd (D8). */
-  costUsd?: number;
-  tokens?: TokenUsage;
-  error?: string;
-}
+// `ChildWorkflowOutcome` (the two-variant `ran` / `never_ran` union) now lives in
+// `schemas/fan-out-report.ts` (#2451) alongside the wire `ChildDisposition` record and the
+// parse/tally/format helpers. Re-exported here so existing importers (executor.ts) keep
+// resolving it from dag-executor.
+export type { ChildWorkflowOutcome } from './schemas/fan-out-report';
 
 /** Arguments for starting (or resuming a failed) child sub-run. */
 export interface RunChildWorkflowArgs {
@@ -517,7 +524,7 @@ export type RunChildWorkflowFn = (args: RunChildWorkflowArgs) => Promise<ChildWo
  * already-terminal child) read the same source — and a child that burned tokens and
  * then failed or was cancelled still reports what it spent.
  */
-export function childOutcomeFromRun(run: WorkflowRun): ChildWorkflowOutcome {
+export function childOutcomeFromRun(run: WorkflowRun): ChildRanOutcome {
   if (run.status === 'running' || run.status === 'pending') {
     // Fail fast instead of a blind narrowing cast: every caller must hand this a
     // settled (terminal or paused) run. A non-settled status slipping through
@@ -534,13 +541,18 @@ export function childOutcomeFromRun(run: WorkflowRun): ChildWorkflowOutcome {
     input !== undefined || output !== undefined
       ? { input: input ?? 0, output: output ?? 0 }
       : undefined;
+  const cancelledReason = typeof md.cancelled_reason === 'string' ? md.cancelled_reason : undefined;
   return {
+    kind: 'ran',
     childRunId: run.id,
     status: run.status,
     output: typeof md.summary === 'string' ? md.summary : undefined,
     costUsd: typeof md.total_cost_usd === 'number' ? md.total_cost_usd : undefined,
     tokens,
     error: typeof md.error === 'string' ? md.error : undefined,
+    // Carried so a `cancelled` child maps to `cancelled_by_engine` (fan-out-tagged) vs
+    // `cancelled_out_of_band` (user cancel / untagged path-lock loss) in the wire record.
+    ...(cancelledReason !== undefined ? { cancelledReason } : {}),
   };
 }
 
@@ -6200,7 +6212,7 @@ async function executeWorkflowNode(
   // writes node_completed HERE — and ONLY on true completion, never on the paused
   // branch — so the resume snapshot skips a truly-finished sub-run on resume
   // but re-runs one still blocked on its child.
-  const asCompleted = (outcome: ChildWorkflowOutcome): NodeExecutionResult => {
+  const asCompleted = (outcome: ChildRanOutcome): NodeExecutionResult => {
     if (outcome.output === undefined) {
       // A completed child with no non-blank terminal output threads '' into
       // $<node>.output — legal, but indistinguishable downstream from an
@@ -6303,6 +6315,12 @@ async function executeWorkflowNode(
   };
 
   const interpret = async (outcome: ChildWorkflowOutcome): Promise<NodeExecutionResult> => {
+    // A 1:1 `workflow:` child that never produced a run row (unknown target, blocked guard)
+    // fails the node exactly as the pre-#2451 unknown-target failure did — nothing ran, so no
+    // cost/tokens. The two-variant split just makes the empty-id state unrepresentable.
+    if (outcome.kind === 'never_ran') {
+      return failResult(outcome.error);
+    }
     switch (outcome.status) {
       case 'completed':
         return asCompleted(outcome);
@@ -6403,16 +6421,10 @@ async function executeWorkflowNode(
  * never re-driven, so the parent would fail every resume with no way back. Delete it only
  * once no resumable run can predate the change.
  */
-type FanOutCancelReason = 'fan_out_gate' | 'fan_out_sibling' | 'fan_out_orphan';
-const FAN_OUT_RECOVERABLE_CANCEL_REASONS: ReadonlySet<string> = new Set<FanOutCancelReason>([
-  'fan_out_gate',
-  'fan_out_sibling',
-  // Every reason above is engine-owned, so every one belongs here — `fan_out_orphan` was
-  // missing, which read an orphan the engine cancelled as a USER cancel. Items shrinking
-  // and then growing back left those slots permanently cancelled: dead under all_done, and
-  // an unrecoverable node failure on every resume under all_success.
-  'fan_out_orphan',
-]);
+type FanOutCancelReason = FanOutEngineCancelReason;
+const FAN_OUT_RECOVERABLE_CANCEL_REASONS: ReadonlySet<string> = new Set<FanOutCancelReason>(
+  fanOutEngineCancelReasonSchema.options
+);
 
 /**
  * A `running`/`pending` child found on re-entry is ambiguous: a crash-orphan of a prior
@@ -6524,17 +6536,14 @@ function fanOutSharedCheckoutMessage(node: WorkflowNode, concurrency: number): s
  * path-lock cascade the engine cannot recover from, so "we could not check" must not read
  * the same as "we checked and it is fine" — that is the silent fallback the engineering
  * principles forbid. An unknown or ambiguous name reaches here without any exception being
- * thrown, so this is not a rare path.
- *
- * The caller still must not report a COLLISION on this branch: the author's actual problem
- * is the unresolvable target, and pointing them at `mutates_checkout` would send them to
- * the wrong file. It fails closed with a message about the resolution instead.
+ * thrown, so this is not a rare path. Ambiguity and discovery failures throw and become
+ * `{ error }` so the caller can fail closed instead of skipping the checkout guard.
  */
 async function resolveFanOutChildDefinition(
   deps: WorkflowDeps,
   cwd: string,
   targetName: string
-): Promise<{ definition: WorkflowDefinition } | { unresolved: string }> {
+): Promise<{ definition: WorkflowDefinition } | { notFound: string } | { error: string }> {
   try {
     const { workflows } = await discoverWorkflowsWithConfig(cwd, deps.loadConfig);
     const definition = resolveWorkflowName(
@@ -6545,9 +6554,9 @@ async function resolveFanOutChildDefinition(
     // ambiguity, so the undefined branch is ordinary rather than exceptional.
     return definition
       ? { definition }
-      : { unresolved: `no workflow named '${targetName}' was found` };
+      : { notFound: `no workflow named '${targetName}' was found` };
   } catch (err) {
-    return { unresolved: (err as Error).message };
+    return { error: (err as Error).message };
   }
 }
 
@@ -6565,6 +6574,7 @@ function sumFanOutCost(outcomes: readonly ChildWorkflowOutcome[]): number | unde
   let sum = 0;
   let any = false;
   for (const o of outcomes) {
+    if (o.kind !== 'ran') continue;
     if (o.costUsd !== undefined && Number.isFinite(o.costUsd)) {
       sum += o.costUsd;
       any = true;
@@ -6582,6 +6592,7 @@ function sumFanOutTokens(outcomes: readonly ChildWorkflowOutcome[]): TokenUsage 
   let output = 0;
   let any = false;
   for (const o of outcomes) {
+    if (o.kind !== 'ran') continue;
     if (o.tokens !== undefined) {
       if (Number.isFinite(o.tokens.input)) input += o.tokens.input;
       if (Number.isFinite(o.tokens.output)) output += o.tokens.output;
@@ -6637,14 +6648,20 @@ async function executeFanOutWorkflowNode(
   const failResult = (
     error: string,
     costUsd?: number,
-    tokens?: TokenUsage
+    tokens?: TokenUsage,
+    report?: FanOutReportPayload
   ): NodeExecutionResult => {
     deps.store
       .createWorkflowEvent({
         workflow_run_id: parentRun.id,
         event_type: 'node_failed',
         step_name: stepName,
-        data: { error, type: 'workflow' },
+        // `data.fan_out` carries the ordered child report when the failure happened AFTER
+        // every slot settled (the `all_success` join and the post-settle gate-rejected
+        // backstop), so the same observability that the completed path gets is available on
+        // `node_failed` too (#2451). Early failures (items/with resolution, preflight, and the
+        // mid-flight gate cancel that fires before slots settle) have no children yet → no report.
+        data: { error, type: 'workflow', ...(report !== undefined ? { fan_out: report } : {}) },
       })
       .catch((err: Error) => {
         getLog().error(
@@ -6671,7 +6688,12 @@ async function executeFanOutWorkflowNode(
   // node_completed writer (mirrors executeWorkflowNode.asCompleted) — written ONLY when
   // the join is satisfied, so getCompletedDagNodeOutputs skips a finished fan-out node
   // on resume but re-runs an unfinished one (which re-inspects children by child_index).
-  const writeCompleted = (output: string, costUsd?: number, tokens?: TokenUsage): void => {
+  const writeCompleted = (
+    output: string,
+    report: FanOutReportPayload,
+    costUsd?: number,
+    tokens?: TokenUsage
+  ): void => {
     deps.store
       .createWorkflowEvent({
         workflow_run_id: parentRun.id,
@@ -6680,7 +6702,11 @@ async function executeFanOutWorkflowNode(
         data: {
           node_output: output,
           type: 'workflow',
-          fan_out: true,
+          // The ordered child report (#2451). Replaces the unread boolean `fan_out: true`;
+          // legacy `true` rows parse to `null` (no migration). Only `{ children }` is
+          // persisted — the tally is derived at parse. `node_output` (the aggregate
+          // consumed by `$<id>.output`) is a SEPARATE key and byte-identical to before.
+          fan_out: report,
           ...(costUsd !== undefined ? { cost_usd: costUsd } : {}),
           // Both usage keys are what survives resume: getDagResumeSnapshot rebuilds a
           // run's cumulative usage by summing `data.tokens` and `data.cost_usd` off
@@ -6805,7 +6831,7 @@ async function executeFanOutWorkflowNode(
   // 2. Empty array → a valid zero-width expansion (#977 acceptance): complete with '[]'.
   if (items.length === 0) {
     getLog().info({ parentRunId: parentRun.id, nodeId: node.id }, 'workflow.fan_out_empty');
-    writeCompleted('[]', undefined);
+    writeCompleted('[]', { children: [] });
     return { state: 'completed', output: '[]' };
   }
 
@@ -6948,32 +6974,24 @@ async function executeFanOutWorkflowNode(
   const plannedConcurrency = Math.min(fanOut.max_parallel, pendingCount);
   if (node.isolation !== 'worktree' && plannedConcurrency > 1) {
     const resolved = await resolveFanOutChildDefinition(deps, cwd, node.workflow);
-    if ('unresolved' in resolved) {
-      // Fail CLOSED. Skipping the check here would let the path-lock cascade through
-      // unguarded on the strength of a lookup that did not happen, and the spawn is about
-      // to fail on this same unresolvable target anyway — so the only thing failing open
-      // buys is a worse message. Names the resolution problem, not a collision the author
-      // cannot yet act on.
-      const msg =
-        `fan_out node '${node.id}': cannot verify that ${String(plannedConcurrency)} concurrent ` +
-        `children are safe to share the parent checkout, because '${node.workflow}' could not ` +
-        `be resolved — ${resolved.unresolved}. Fix the target name; if the children really do ` +
-        'run side by side in one checkout, the workflow must also declare ' +
-        '`mutates_checkout: false`.';
+    // Unknown names skip this guard and become `never_ran` under the join. A thrown
+    // discovery/ambiguity error fails closed here — we do not know `mutates_checkout`,
+    // so we must not spawn `max_parallel` children on the shared checkout.
+    if ('error' in resolved) {
+      const msg = `fan_out node '${node.id}': could not resolve '${node.workflow}' — ${resolved.error}`;
       getLog().warn(
         {
           parentRunId: parentRun.id,
           nodeId: node.id,
           childWorkflow: node.workflow,
-          plannedConcurrency,
-          reason: resolved.unresolved,
+          error: resolved.error,
         },
-        'workflow.fan_out_preflight_unresolved'
+        'workflow.fan_out_preflight_resolve_failed'
       );
       await notify(`❌ **Fan-out blocked** (node \`${node.id}\`): ${msg}`);
       return failResult(msg);
     }
-    if (resolved.definition.mutates_checkout !== false) {
+    if (!('notFound' in resolved) && resolved.definition.mutates_checkout !== false) {
       const msg = fanOutSharedCheckoutMessage(node, plannedConcurrency);
       getLog().warn(
         {
@@ -7073,30 +7091,43 @@ async function executeFanOutWorkflowNode(
       // paused child's own state, it is the same cancel the gate path (#2180/#2438) applies
       // at the join a moment later, and every sibling still runs to its own terminal state.
       // All it changes is that the lock is released before the next child starts.
-      if (outcome.status === 'paused') await cancelChild(outcome.childRunId, 'fan_out_gate');
+      if (outcome.kind === 'ran' && outcome.status === 'paused')
+        await cancelChild(outcome.childRunId, 'fan_out_gate');
       return outcome;
     }
   );
 
   // mapWithLimit never rejects here (runChild honors the never-throws contract), but be
-  // defensive: a rejected slot becomes a synthetic failed outcome.
+  // defensive: a rejected slot becomes a synthetic `never_ran` outcome (no run row was
+  // produced, so `slot_threw` — not a fake empty-id failure).
   const outcomes: ChildWorkflowOutcome[] = settled.map((r, i) =>
     r.status === 'fulfilled'
       ? r.value
-      : {
-          childRunId: '',
-          status: 'failed',
-          error: `fan-out child ${String(i)} threw: ${String(r.reason)}`,
-        }
+      : neverRan('slot_threw', `fan-out child ${String(i)} threw: ${String(r.reason)}`)
   );
 
   const totalCostUsd = sumFanOutCost(outcomes);
   const totalTokens = sumFanOutTokens(outcomes);
 
+  // Ordered wire report (#2451) — one disposition per slot, item order, persisted on both
+  // node_completed (join satisfied) and the all_success node_failed. Derived from the same
+  // outcomes the join reduces over. Tally is derived at parse, not stored.
+  const report = buildFanOutReportPayload(outcomes);
+  const tally = parseFanOutReport(report)?.tally ?? {
+    total: 0,
+    completed: 0,
+    failed: 0,
+    cancelledByEngine: 0,
+    cancelledOutOfBand: 0,
+    neverRan: 0,
+    notCompleted: 0,
+  };
+
   // I3: parity with the 1:1 asCompleted path — a completed child with no terminal output
   // threads '' but is indistinguishable downstream from an intentional empty result, so
-  // leave a trace. Used by both join reducers.
+  // leave a trace. Used by both join reducers. `never_ran` slots have no output.
   const childOutput = (o: ChildWorkflowOutcome, index: number): string => {
+    if (o.kind !== 'ran') return '';
     if (o.status === 'completed' && o.output === undefined) {
       getLog().warn(
         { parentRunId: parentRun.id, nodeId: node.id, childRunId: o.childRunId, childIndex: index },
@@ -7123,37 +7154,59 @@ async function executeFanOutWorkflowNode(
   //    the pause was observed. This pass is the idempotent backstop: it covers a paused
   //    outcome that did not come from this attempt's spawn loop (a synthetic outcome from a
   //    rejected slot), and re-cancelling an already-cancelled row is a no-op.
-  const pausedIdx = outcomes.findIndex(o => o.status === 'paused');
+  const pausedIdx = outcomes.findIndex(o => o.kind === 'ran' && o.status === 'paused');
   if (pausedIdx !== -1) {
+    let pausedChildRunId = '';
     for (const o of outcomes)
-      if (o.status === 'paused') await cancelChild(o.childRunId, 'fan_out_gate');
-    const msg = fanOutAutonomousGateMessage(node, outcomes[pausedIdx].childRunId, pausedIdx);
+      if (o.kind === 'ran' && o.status === 'paused') {
+        pausedChildRunId ||= o.childRunId;
+        await cancelChild(o.childRunId, 'fan_out_gate');
+      }
+    const msg = fanOutAutonomousGateMessage(node, pausedChildRunId, pausedIdx);
     await notify(`⏸→❌ **Fan-out gate rejected** (node \`${node.id}\`): ${msg}`);
-    return failResult(msg, totalCostUsd, totalTokens);
+    // Every slot has settled to a terminal/cancelled state by this post-settle backstop, so
+    // carry the ordered report — a gate-rejected fan-out is exactly where an operator wants
+    // the per-child breakdown, matching the all_success failure path (#2451).
+    return failResult(msg, totalCostUsd, totalTokens, report);
   }
+
+  // A slot "did not complete" when it never ran, or ran to a non-completed terminal state.
+  const isNotCompleted = (o: ChildWorkflowOutcome): boolean =>
+    o.kind === 'never_ran' || o.status !== 'completed';
+  // A short "<state> — <error>" label for the first offending slot (all_success message).
+  const outcomeLabel = (o: ChildWorkflowOutcome): { state: string; ref: string; error?: string } =>
+    o.kind === 'never_ran'
+      ? { state: 'never ran', ref: '', error: o.error }
+      : {
+          state: o.status,
+          ref: o.childRunId ? ` (run ${o.childRunId.slice(0, 8)})` : '',
+          error: o.error,
+        };
 
   // 8. Join.
   if (fanOut.join === 'all_success') {
     // Every child ran to its own terminal state, so the lowest-index non-completed outcome
     // IS the causal one — nothing here is a casualty of another child's failure.
-    const firstBad = outcomes.findIndex(o => o.status !== 'completed');
+    const firstBad = outcomes.findIndex(isNotCompleted);
     if (firstBad !== -1) {
-      const bad = outcomes[firstBad];
-      const ref = bad.childRunId ? ` (run ${bad.childRunId.slice(0, 8)})` : '';
+      const bad = outcomeLabel(outcomes[firstBad]);
       await notify(
-        `❌ **Fan-out failed** (node \`${node.id}\`): child ${String(firstBad)}${ref} ${bad.status}` +
+        `❌ **Fan-out failed** (node \`${node.id}\`): child ${String(firstBad)}${bad.ref} ${bad.state}` +
           (bad.error ? ` — ${bad.error}` : '')
       );
+      // Carry the full ordered report on node_failed too, so the same observability the
+      // completed path gets is present when all_success fails (#2451).
       return failResult(
-        `fan_out node '${node.id}' (join: all_success): child ${String(firstBad)}${ref} ${bad.status}` +
+        `fan_out node '${node.id}' (join: all_success): child ${String(firstBad)}${bad.ref} ${bad.state}` +
           (bad.error ? `: ${bad.error}` : ''),
         totalCostUsd,
-        totalTokens
+        totalTokens,
+        report
       );
     }
     // All completed → aggregate the child outputs in item order (JSON array string).
     const aggregate = JSON.stringify(outcomes.map((o, i) => childOutput(o, i)));
-    writeCompleted(aggregate, totalCostUsd, totalTokens);
+    writeCompleted(aggregate, report, totalCostUsd, totalTokens);
     return {
       state: 'completed',
       output: aggregate,
@@ -7162,17 +7215,37 @@ async function executeFanOutWorkflowNode(
     };
   }
 
-  // join: all_done — node succeeds once all children are terminal; a failed/cancelled
+  // join: all_done — node succeeds once all children are terminal; a failed/cancelled/never-ran
   // entry is represented as a { error, status } object in the aggregate array (so a
   // collector can reconcile partial results). Never fails the node on a partial failure.
+  // A `never_ran` slot still encodes as { error, status: 'failed' } here — byte-identical to
+  // the pre-#2451 shape (the wire report on `data.fan_out` is the new, richer channel).
   const aggregate = JSON.stringify(
     outcomes.map((o, i) =>
-      o.status === 'completed'
+      o.kind === 'ran' && o.status === 'completed'
         ? childOutput(o, i)
-        : { error: o.error ?? `child ${o.status}`, status: o.status }
+        : o.kind === 'never_ran'
+          ? { error: o.error, status: 'failed' }
+          : { error: o.error ?? `child ${o.status}`, status: o.status }
     )
   );
-  writeCompleted(aggregate, totalCostUsd, totalTokens);
+  writeCompleted(aggregate, report, totalCostUsd, totalTokens);
+
+  // #2451: an all_done fan-out that completed with slots that did not complete is the
+  // success-shaped failure this issue is about. Emit exactly one notify() warning per
+  // fan-out node — the "unmistakable trace" (the never-ran typo case is otherwise SILENT) —
+  // pointing at `workflow get` for the per-slot detail. Not a status change.
+  if (tally.notCompleted > 0) {
+    getLog().warn(
+      { parentRunId: parentRun.id, nodeId: node.id, tally },
+      'workflow.fan_out_completed_with_unfinished_children'
+    );
+    await notify(
+      `⚠️ **Fan-out** (node \`${node.id}\`): ${formatFanOutTally(tally)}. ` +
+        `Run \`archon workflow get ${parentRun.id}\` for the per-child detail.`
+    );
+  }
+
   return {
     state: 'completed',
     output: aggregate,

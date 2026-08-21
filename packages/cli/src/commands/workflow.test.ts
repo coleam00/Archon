@@ -3768,6 +3768,119 @@ describe('workflowGetCommand', () => {
     const parsed = JSON.parse(firstJsonPayload(stdoutSpy)) as { events: unknown[] };
     expect(parsed.events).toEqual([]);
   });
+
+  // #2451 — the fan-out observability block.
+  const FAN_OUT_COMPLETED_EVENT = {
+    id: 'fo1',
+    workflow_run_id: 'run-fo',
+    event_type: 'node_completed',
+    step_name: 'spread',
+    step_index: 1,
+    data: {
+      node_output: '["ok",{"error":"x","status":"failed"},{"error":"y","status":"failed"}]',
+      type: 'workflow',
+      fan_out: {
+        children: [
+          { kind: 'completed', index: 0, childRunId: 'child-a' },
+          { kind: 'failed', index: 1, childRunId: 'child-b', error: 'DAG failed' },
+          { kind: 'never_ran', index: 2, reason: 'unresolved_target', error: 'Unknown workflow' },
+        ],
+      },
+    },
+    created_at: new Date().toISOString(),
+  };
+
+  it('prints the Fan-out tally block WITHOUT --verbose (human)', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const eventsDb = await import('@archon/core/db/workflow-events');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-fo',
+      workflow_name: 'fanner',
+      status: 'completed',
+      working_path: '/tmp/wt',
+      started_at: new Date(),
+      metadata: {},
+    });
+    (eventsDb.listWorkflowEvents as ReturnType<typeof mock>).mockResolvedValueOnce([
+      FAN_OUT_COMPLETED_EVENT,
+    ]);
+
+    // No --verbose.
+    const code = await workflowGetCommand('run-fo');
+
+    const calls = consoleSpy.mock.calls.map((c: unknown[]) => String(c[0]));
+    expect(calls.some(c => c.includes('Fan-out (spread)'))).toBe(true);
+    expect(calls.some(c => c.includes('2 of 3 children did not complete'))).toBe(true);
+    // The indexed non-completed child lines are present; the completed slot is omitted.
+    expect(calls.some(c => c.includes('[1] failed'))).toBe(true);
+    expect(calls.some(c => c.includes('[2] never ran'))).toBe(true);
+    expect(code).toBe(0);
+  });
+
+  it('keeps the last terminal fan-out event per step_name (resumed node)', async () => {
+    // A resumed fan-out node writes a SECOND terminal event for the same step_name. The
+    // summary must reflect the later event, not the earlier one — events arrive from
+    // listWorkflowEvents already ordered ascending (created_at / event_order / id), so the
+    // last one in the list wins. An earlier failed report must NOT shadow the later success.
+    const EARLIER_FAILED_EVENT = {
+      id: 'fo-early',
+      workflow_run_id: 'run-resumed',
+      event_type: 'node_failed',
+      step_name: 'spread',
+      step_index: 1,
+      data: {
+        type: 'workflow',
+        fan_out: {
+          children: [
+            { kind: 'failed', index: 0, childRunId: 'child-a', error: 'first attempt' },
+            { kind: 'never_ran', index: 1, reason: 'unresolved_target', error: 'nope' },
+          ],
+        },
+      },
+      created_at: '2026-08-03T10:00:00.000Z',
+      event_order: 1,
+    };
+    const LATER_COMPLETED_EVENT = {
+      id: 'fo-late',
+      workflow_run_id: 'run-resumed',
+      event_type: 'node_completed',
+      step_name: 'spread',
+      step_index: 1,
+      data: {
+        type: 'workflow',
+        fan_out: {
+          children: [
+            { kind: 'completed', index: 0, childRunId: 'child-a2' },
+            { kind: 'completed', index: 1, childRunId: 'child-b2' },
+          ],
+        },
+      },
+      created_at: '2026-08-03T10:05:00.000Z',
+      event_order: 2,
+    };
+
+    const workflowDb = await import('@archon/core/db/workflows');
+    const eventsDb = await import('@archon/core/db/workflow-events');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-resumed',
+      workflow_name: 'fanner',
+      status: 'completed',
+      working_path: '/tmp/wt',
+      started_at: new Date(),
+      metadata: {},
+    });
+    (eventsDb.listWorkflowEvents as ReturnType<typeof mock>).mockResolvedValueOnce([
+      EARLIER_FAILED_EVENT,
+      LATER_COMPLETED_EVENT,
+    ]);
+
+    const code = await workflowGetCommand('run-resumed');
+
+    const calls = consoleSpy.mock.calls.map((c: unknown[]) => String(c[0]));
+    expect(calls.some(c => c.includes('Fan-out (spread): all 2 children completed'))).toBe(true);
+    expect(calls.some(c => c.includes('first attempt'))).toBe(false);
+    expect(code).toBe(0);
+  });
 });
 
 describe('run-id prefix resolution (short ids from `workflow runs`)', () => {

@@ -1,8 +1,9 @@
-import { useEffect, useState, type ReactElement } from 'react';
+import { useEffect, useMemo, useState, type ReactElement } from 'react';
 import { Link } from 'react-router';
 import { LiveDot } from './LiveDot';
 import { OriginBadge } from './OriginBadge';
 import type { Run } from '../primitives/run';
+import { foldNodeRuns, type RunEvent } from '../primitives/event';
 import { shortRunId, formatElapsed, elapsedSince, formatCost } from '../lib/format';
 import { useIsDocker, useIdeEnv, openInIde } from '../lib/health';
 import { statusLabel, statusTextClass } from '../lib/run-status';
@@ -11,6 +12,8 @@ interface RunDetailHeaderProps {
   run: Run;
   projectName: string;
   projectId: string;
+  /** Run events — used to derive the fan-out "N of M children did not complete" qualifier. */
+  events: RunEvent[];
 }
 
 function useLiveElapsed(run: Run): string {
@@ -31,8 +34,24 @@ export function RunDetailHeader({
   run,
   projectName,
   projectId,
+  events,
 }: RunDetailHeaderProps): ReactElement {
   const elapsed = useLiveElapsed(run);
+  // Fan-out qualifier (#2451): "N of M children did not complete" next to the status pill,
+  // summed across every fan-out node on the run. NOT a new DAG state — the run stays
+  // Completed; the qualifier says "did not complete", never relabelling a slot as failed.
+  const fanOutSummary = useMemo(() => {
+    let notCompleted = 0;
+    let total = 0;
+    let seen = false;
+    for (const r of foldNodeRuns(events)) {
+      if (r.fanOut === null) continue;
+      seen = true;
+      notCompleted += r.fanOut.tally.notCompleted;
+      total += r.fanOut.tally.total;
+    }
+    return seen ? { notCompleted, total } : null;
+  }, [events]);
   const isPaused = run.status === 'paused';
   const isRunning = run.status === 'running';
   const isDocker = useIsDocker();
@@ -104,6 +123,14 @@ export function RunDetailHeader({
         >
           {statusLabel[run.status]}
         </span>
+        {fanOutSummary !== null && fanOutSummary.notCompleted > 0 ? (
+          <span
+            className="font-mono text-[11px] text-warning"
+            title="A fan-out node completed with children that did not run, failed, or were cancelled"
+          >
+            {`${String(fanOutSummary.notCompleted)} of ${String(fanOutSummary.total)} children did not complete`}
+          </span>
+        ) : null}
       </div>
 
       {/* Workflow name */}

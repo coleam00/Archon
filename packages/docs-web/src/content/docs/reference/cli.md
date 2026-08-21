@@ -408,6 +408,19 @@ recorded).
 Add `--events` to `--json --verbose` to return raw `events` rows instead of `nodes` for
 debugging. Raw events are not the recommended integration surface.
 
+**Fan-out summary (#2451):** when a run contains a `fan_out:` node, `workflow get`
+prints a `Fan-out (<node>):` block — **even without `--verbose`** — summarising the
+child outcomes. A clean fan-out shows `all N children completed`; a fan-out with slots
+that failed, were cancelled, or never ran shows a tally
+(`1 of 3 children did not complete (2 completed, 1 failed)`) followed by the indexed
+non-completed child lines (capped at 20, then `+N more`). "Never ran" is a disposition
+*within* a fan-out report — a slot that never produced a child run, either an unresolved
+`workflow:` target or a slot that threw before spawning. A shared-checkout preflight
+failure is different: it fails the whole node before any children spawn, so it produces
+no report and no `never_ran` slots. `--json` does not add a separate `fanOut` field;
+the same report is on `GET /api/workflows/runs/:id` as `fan_out_view` on the node's
+terminal event.
+
 ### `workflow resume`
 
 Resume a failed or paused workflow run. Re-executes the workflow, automatically skipping nodes that completed in the prior run.

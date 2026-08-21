@@ -1764,7 +1764,14 @@ the join, after you had already paid for them.
 
 So the default treats **failure as data**. Every terminal outcome reaches the aggregate,
 failed ones as `{ error, status }` in their slot, and the node succeeds. What to do about
-the gaps is then an ordinary decision made by an ordinary node:
+the gaps is then an ordinary decision made by an ordinary node.
+
+The per-child **why** is not in `$<id>.output` (that aggregate stays `{ error, status }`
+for any slot that did not complete). It is on the node's event as `data.fan_out` and on
+`archon workflow get` as a `Fan-out:` block: completed vs failed vs cancelled vs never
+ran, with a tally in the console run header. An unknown `workflow:` name is `never_ran`
+under `all_done` — the parent still succeeds, loudly. A thrown lookup (ambiguous name,
+broken discovery) is different: the node fails closed before any child is spawned.
 
 ```yaml
   - id: triage-each
@@ -1873,6 +1880,9 @@ The check runs at **spawn** time, not load time: the child target resolves when 
 executes (that is deliberate — it's what lets a workflow generate another workflow and then
 run it), so `archon validate workflows` cannot see the child's `mutates_checkout`. What it
 can guarantee is that you find out before any child exists and before any money is spent.
+The refusal only fires when the child **definition** resolves. An unknown name skips this
+guard and becomes `never_ran` under the join; a thrown lookup still fails the node rather
+than skipping the guard.
 
 #### Gates: around a fan-out, never inside one
 

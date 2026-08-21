@@ -7,6 +7,7 @@ import {
   workflowRunSchema as engineWorkflowRunSchema,
   workflowRunOutcomeSchema as engineWorkflowRunOutcomeSchema,
 } from '@archon/workflows/schemas/workflow-run';
+import { fanOutViewSchema as engineFanOutViewSchema } from '@archon/workflows/schemas/fan-out-report';
 import { workflowEventRowSchema } from '@archon/core/schemas/workflow-event';
 import { dashboardWorkflowRunSchema as coreDashboardWorkflowRunSchema } from '@archon/core/schemas/workflow-run';
 
@@ -132,10 +133,18 @@ export const workflowRunListResponseSchema = z
   .object({ runs: z.array(workflowRunSchema) })
   .openapi('WorkflowRunListResponse');
 
+/** Read-time fan-out child report attached to a workflow event. */
+export const fanOutViewSchema = engineFanOutViewSchema.openapi('FanOutView');
+
 /** A workflow event record (wire shape). */
 export const workflowEventSchema = workflowEventRowSchema
   .extend({
     created_at: z.string().datetime(),
+    /**
+     * Parsed fan-out child report (#2451). Null when this event is not a fan-out
+     * terminal, or when `data.fan_out` is missing / legacy / malformed.
+     */
+    fan_out_view: fanOutViewSchema.nullable(),
   })
   .openapi('WorkflowEvent');
 

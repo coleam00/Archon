@@ -18,6 +18,7 @@ interface RawNode {
   approval?: unknown;
   loop?: unknown;
   script?: unknown;
+  workflow?: string;
 }
 
 /**

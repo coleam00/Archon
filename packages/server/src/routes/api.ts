@@ -98,6 +98,8 @@ import {
   isGateResolved,
 } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import { toFanOutView } from '@archon/workflows/schemas/fan-out-report';
+import type { WorkflowEventRow } from '@archon/core/schemas/workflow-event';
 import type { MessageRow } from '@archon/core/schemas/message';
 import type { DashboardWorkflowRun } from '@archon/core/schemas/workflow-run';
 import { findMarkdownFilesRecursive } from '@archon/core/utils/commands';
@@ -2530,6 +2532,12 @@ export function registerApiRoutes(
     };
   }
 
+  function toApiWorkflowEvent(row: WorkflowEventRow): WorkflowEventRow & {
+    fan_out_view: ReturnType<typeof toFanOutView>;
+  } {
+    return { ...row, fan_out_view: toFanOutView(row.data) };
+  }
+
   function toApiDashboardWorkflowRun(row: DashboardWorkflowRun): ApiDashboardWorkflowRun {
     return {
       ...row,
@@ -3851,7 +3859,7 @@ export function registerApiRoutes(
           parent_platform_id: parentPlatformId,
           conversation_platform_id: conversationPlatformId ?? null,
         },
-        events,
+        events: events.map(toApiWorkflowEvent),
       });
     } catch (error) {
       getLog().error({ err: error }, 'get_workflow_run_failed');

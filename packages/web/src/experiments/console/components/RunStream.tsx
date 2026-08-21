@@ -322,6 +322,7 @@ export function RunStream({
               skipReason={entry.node.skipReason}
               skipExpr={entry.node.skipExpr}
               showDetail={entry.showDetail}
+              fanOut={entry.node.fanOut}
             />
           );
         }

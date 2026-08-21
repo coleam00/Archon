@@ -4,6 +4,8 @@
  * production API; we only care about id + dependencies + kind + status.
  */
 
+import type { RunEvent } from './event';
+
 export type WorkflowNodeKind =
   | 'prompt'
   | 'command'
@@ -25,8 +27,6 @@ export interface WorkflowGraphNodeWithStatus extends WorkflowGraphNode {
   status: WorkflowNodeStatus;
   durationMs: number | null;
 }
-
-import type { RunEvent } from './event';
 
 /**
  * Derive each node's current status by walking run events in order.

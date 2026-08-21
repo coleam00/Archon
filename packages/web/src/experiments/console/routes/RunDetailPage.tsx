@@ -378,7 +378,12 @@ export function RunDetailPage(): ReactElement {
   return (
     <StreamContextProvider value={{ runStartedAt: run.startedAt }}>
       <section className="flex h-full flex-col">
-        <RunDetailHeader run={run} projectId={projectId} projectName={project?.name ?? projectId} />
+        <RunDetailHeader
+          run={run}
+          projectId={projectId}
+          projectName={project?.name ?? projectId}
+          events={events}
+        />
 
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           {view === 'log' ? (
