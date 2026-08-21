@@ -33,6 +33,7 @@ import {
   getWorkflowStatus,
   resumeWorkflow,
   abandonWorkflow,
+  abandonResumableRunsForConversation,
   resetWorkflowNodeSessions,
 } from '../operations/workflow-operations';
 import { safeDeactivateSession } from '../state/session-transitions';
@@ -1286,18 +1287,69 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
     }
 
     case 'reset': {
+      // /reset is an explicit "start fresh" intent, and deactivating the AI
+      // session alone does not deliver it: the execution binding (cwd +
+      // isolation env) survives, and so does every resumable run, so the next
+      // message can continue an old run on an old worktree instead of starting
+      // over. This clears all three.
+      //
+      // `codebase_id` is deliberately PRESERVED. The resulting row —
+      // {codebase_id: <kept>, cwd: null, isolation_env_id: null} — is byte-for-
+      // byte what /setproject already writes, so this is a well-trodden state,
+      // not a novel one. Detaching the project is /setproject none's job.
       const session = await sessionDb.getActiveSession(conversation.id);
       if (session) {
         await safeDeactivateSession(session.id, 'reset');
-        return {
-          success: true,
-          message:
-            'Session cleared. Starting fresh on next message.\n\nCodebase configuration preserved.',
-        };
       }
+
+      // Two independent effects, two independent try blocks. Sharing one would
+      // mean that a binding-clear failure AFTER a successful abandon swallows
+      // the count and reports only the failure — precisely the case where the
+      // user most needs to know that N runs were already cancelled.
+      let abandoned = 0;
+      let abandonFailures = 0;
+      let abandonError: string | null = null;
+      try {
+        ({ abandoned, failures: abandonFailures } = await abandonResumableRunsForConversation(
+          conversation.id
+        ));
+      } catch (error) {
+        const err = error as Error;
+        getLog().error({ err, conversationId: conversation.id }, 'cmd.reset_abandon_failed');
+        abandonError = err.message;
+      }
+
+      let bindingCleared = true;
+      let bindingError: string | null = null;
+      try {
+        await db.updateConversation(conversation.id, { cwd: null, isolation_env_id: null });
+      } catch (error) {
+        const err = error as Error;
+        getLog().error({ err, conversationId: conversation.id }, 'cmd.reset_clear_binding_failed');
+        bindingCleared = false;
+        bindingError = err.message;
+      }
+
+      const parts = [session ? 'Session cleared.' : 'No active session.'];
+      parts.push(
+        bindingCleared
+          ? 'Cleared workspace binding (worktree + isolation env).'
+          : `Could not clear the workspace binding: ${bindingError ?? 'unknown error'}`
+      );
+      if (abandoned > 0) parts.push(`Abandoned ${String(abandoned)} resumable run(s).`);
+      if (abandonFailures > 0) {
+        parts.push(
+          `⚠️ ${String(abandonFailures)} run(s) could not be abandoned — check /workflow status.`
+        );
+      }
+      if (abandonError !== null) {
+        parts.push(`⚠️ Could not look up resumable runs: ${abandonError}`);
+      }
+      parts.push('Project attachment preserved — next message starts fresh.');
+
       return {
-        success: true,
-        message: 'No active session to reset.',
+        success: bindingCleared && abandonError === null,
+        message: parts.join(' '),
       };
     }
 

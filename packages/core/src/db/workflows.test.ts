@@ -31,6 +31,7 @@ import {
   updateWorkflowActivity,
   findResumableRun,
   findResumableRunByParentConversation,
+  findResumableRunIdsForConversation,
   resumeWorkflowRun,
   pauseWorkflowRun,
   cancelWorkflowRun,
@@ -749,6 +750,50 @@ describe('workflows database', () => {
 
       await expect(findResumableRunByParentConversation('piv', 'conv-1', 'cb')).rejects.toThrow(
         'Failed to find resumable run by parent conversation: Connection refused'
+      );
+    });
+  });
+
+  describe('findResumableRunIdsForConversation', () => {
+    test('matches the conversation and its worker conversations', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([{ id: 'run-1' }, { id: 'run-2' }]));
+
+      const result = await findResumableRunIdsForConversation('conv-1');
+
+      expect(result).toEqual(['run-1', 'run-2']);
+      const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(query).toContain('conversation_id = $1');
+      expect(query).toContain('parent_conversation_id = $2');
+      expect(query).toContain('ORDER BY started_at DESC');
+      expect(query).not.toMatch(/--.*\$\d/); // #999 guard: $N in SQL comments breaks convertPlaceholders
+      expect(params).toEqual(['conv-1', 'conv-1']);
+    });
+
+    test('never matches live pending or running work', async () => {
+      // The load-bearing assertion. `pending`/`running` may belong to another
+      // process entirely (a CLI run, a webhook dispatch); neither resume lookup
+      // can return them, so cancelling them buys nothing and destroys live work.
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+
+      await findResumableRunIdsForConversation('conv-1');
+
+      const [query] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(query).toContain("status IN ('paused', 'failed')");
+      expect(query).not.toContain("'running'");
+      expect(query).not.toContain("'pending'");
+    });
+
+    test('returns an empty array when nothing is resumable', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+
+      expect(await findResumableRunIdsForConversation('conv-1')).toEqual([]);
+    });
+
+    test('throws on database error', async () => {
+      mockQuery.mockRejectedValueOnce(new Error('Connection refused'));
+
+      await expect(findResumableRunIdsForConversation('conv-1')).rejects.toThrow(
+        'Failed to find resumable runs for conversation: Connection refused'
       );
     });
   });

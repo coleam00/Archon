@@ -277,6 +277,63 @@ export async function abandonWorkflow(runId: string): Promise<AbandonWorkflowRes
   return { run, cascadeFailures, blockedParentRunId };
 }
 
+export interface AbandonConversationRunsResult {
+  /** Runs this call actually took to 'cancelled'. */
+  abandoned: number;
+  /**
+   * Runs that could not be abandoned (already terminal by the time we got to
+   * them, or a DB failure). Non-zero means part of the set may still be alive.
+   */
+  failures: number;
+}
+
+/**
+ * Abandon every RESUMABLE run belonging to a conversation.
+ *
+ * Backs `/reset`: with these gone, the resume lookups find nothing, so the next
+ * message starts fresh instead of continuing a stale run.
+ *
+ * Routes through `abandonWorkflow` per run rather than issuing one bulk UPDATE.
+ * That op is where abandon semantics live for EVERY surface (CLI, web API, chat,
+ * manage_run, Slack-cancel) — the CAS guard, the sub-run cascade, and the
+ * immediate container + upper-volume reclaim. A bulk UPDATE here would be a
+ * sixth abandon surface that silently skips all three.
+ *
+ * Only 'paused'/'failed' rows are selected (see
+ * findResumableRunIdsForConversation): live `pending`/`running` work is never
+ * touched, since it may belong to a different process altogether.
+ *
+ * Best-effort per run: a row can go terminal between the SELECT and the abandon,
+ * which makes `abandonWorkflow` throw. That is counted, not propagated — one
+ * racing run must not abort the whole reset.
+ */
+export async function abandonResumableRunsForConversation(
+  conversationId: string
+): Promise<AbandonConversationRunsResult> {
+  const runIds = await workflowDb.findResumableRunIdsForConversation(conversationId);
+  let abandoned = 0;
+  let failures = 0;
+  for (const runId of runIds) {
+    try {
+      await abandonWorkflow(runId);
+      abandoned++;
+    } catch (err) {
+      getLog().warn(
+        { err, runId, conversationId },
+        'operations.workflow_abandon_for_conversation_failed'
+      );
+      failures++;
+    }
+  }
+  if (abandoned > 0 || failures > 0) {
+    getLog().info(
+      { conversationId, abandoned, failures },
+      'operations.workflow_abandon_for_conversation_completed'
+    );
+  }
+  return { abandoned, failures };
+}
+
 /**
  * Approve a paused workflow run.
  *

@@ -451,6 +451,45 @@ export async function getPausedWorkflowRun(conversationId: string): Promise<Work
 }
 
 /**
+ * Ids of every RESUMABLE run belonging to a conversation, newest first.
+ *
+ * Used by `/reset` to give the user a real escape hatch: after these are
+ * abandoned, the resume lookups find nothing, so the next dispatch starts fresh
+ * instead of continuing a stale run.
+ *
+ * The status set is exactly what the two resume lookups can return —
+ * findResumableRunByParentConversation ('failed'/'paused') and
+ * getPausedWorkflowRun ('paused'). `pending` and `running` are deliberately NOT
+ * matched: neither lookup can ever return them, so leaving them alone cannot
+ * cause the stale continuation this exists to prevent, while cancelling them
+ * would stop live work that may belong to another process entirely (a CLI run,
+ * a webhook-triggered run, a scheduled dispatch).
+ *
+ * `workflow:` sub-runs inherit the parent's `conversation_id` AND
+ * `parent_conversation_id` unchanged at every nesting level
+ * (packages/workflows/src/executor.ts, child run creation), so this predicate
+ * already covers the whole sub-run tree without a `parent_run_id` walk.
+ */
+export async function findResumableRunIdsForConversation(
+  conversationId: string
+): Promise<string[]> {
+  try {
+    const result = await pool.query<{ id: string }>(
+      `SELECT id FROM remote_agent_workflow_runs
+       WHERE (conversation_id = $1 OR parent_conversation_id = $2)
+         AND status IN ('paused', 'failed')
+       ORDER BY started_at DESC`,
+      [conversationId, conversationId]
+    );
+    return result.rows.map(r => r.id);
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, conversationId }, 'db.workflow_run_find_resumable_for_conv_failed');
+    throw new Error(`Failed to find resumable runs for conversation: ${err.message}`);
+  }
+}
+
+/**
  * Find the workflow run currently holding the lock on `workingPath`.
  *
  * The lock is held by any row in `(running, paused)` or `pending` younger
