@@ -125,12 +125,10 @@ nodes:
   # complete lens files under $ARTIFACTS_DIR/review/, never truncated at this
   # seam, and the full report is written there and posted to the PR.
   #
-  # Intended shape (not expressible today): synthesis returning INTO the scope
-  # node's session, which already holds the whole diff. The engine resets the
-  # sequential-session cursor at every parallel layer (dag-executor.ts:7109) and
-  # has no resume-session-of-node handle, so synthesize starts fresh and is
-  # instructed to re-read the diff itself. Logged as an engine gap on the
-  # rewrite watch-list.
+  # Synthesis starts fresh and re-reads the diff. Returning into the scope
+  # node's session is not portable across the bundle's supported providers:
+  # Claude Code, Codex, and Pi. Bundled defaults stay on that shared capability
+  # floor even where the configured provider can resume a named upstream session.
   #
   # v1 note: adversarial per-finding verification happens inside this node's
   # prompt. When in-parent runtime fan-out lands (#2512), a verify stage slots in
