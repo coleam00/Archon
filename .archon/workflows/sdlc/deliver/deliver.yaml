@@ -121,6 +121,18 @@ nodes:
       review_ready: { from: "$review.output.ready", if_skipped: false }
       corrections: { from: "$corrections.output", if_skipped: null }
 
+  # Correction rounds change the diff after `pr` wrote the description, so
+  # concrete claims in the body can be falsified by the very fixes the review
+  # demanded. One resync, once readiness is certified — never per iteration
+  # (that would be repeated public writes describing diffs the next iteration
+  # falsifies). Skipped when the initial review was already ready: the diff
+  # never changed after the body was written.
+  - id: sync-pr-body
+    command: sync-pr-body
+    model: medium
+    depends_on: [gate-ready]
+    when: "$review.output.ready == 'false'"
+
   # Final local gate, ALWAYS run: the project's own checks via the validate
   # package. Uniform on every path — and when CI is maintainer-gated (fork
   # PRs), this is the only validation before the flip.
@@ -166,4 +178,10 @@ nodes:
         echo "flip-ready: PR still reports draft after the ready flip" >&2
         exit 1
       fi
-    depends_on: [await-checks]
+    # Waits on sync-pr-body explicitly: on a repo with no CI, await-checks
+    # returns immediately and the flip could otherwise beat the resync. The
+    # trigger rule lets a SKIPPED resync (initial review was ready) pass while
+    # a FAILED resync still blocks the flip — a public surface we could not
+    # correct is a reason not to go ready.
+    depends_on: [await-checks, sync-pr-body]
+    trigger_rule: none_failed_min_one_success

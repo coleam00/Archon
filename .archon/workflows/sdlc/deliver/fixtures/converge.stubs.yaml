@@ -59,6 +59,7 @@ recheck__synthesize:
   findings_summary: "stub: no open Critical/Important"
 # gate-ready is deliberately unstubbed: under --exec-code the real script runs,
 # proving the $corrections.output whole-ref binding on a completed loop_group.
+sync-pr-body: "body resynced: corrected the claims the correction round falsified"
 validate__validate:
   green: true
   summary: "stub: full gate green"
