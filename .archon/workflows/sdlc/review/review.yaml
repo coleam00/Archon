@@ -30,6 +30,7 @@ inputs:
       head SHA.
 
 returns: synthesize
+outcome_field: ready
 
 nodes:
   - id: scope

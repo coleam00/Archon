@@ -19,6 +19,7 @@ inputs:
       description. When empty, the run's trigger message is the work.
 
 returns: implement
+outcome_field: green
 
 nodes:
   - id: record-start
@@ -34,8 +35,8 @@ nodes:
   # Run success ≠ green. The loop completes on `done`, which deliberately includes
   # a definitive blocked decline (green: false) — so a completed run's status never
   # certifies the work. Consumers read $implement.output.green; compositions gate on
-  # it deterministically before spending or shipping (deliver does). #2618 tracks
-  # surfacing this as a run-level outcome signal engine-side.
+  # it deterministically before spending or shipping (deliver does), and the
+  # workflow's outcome_field records it as the run's authored outcome.
   - id: implement
     loop:
       command: implement

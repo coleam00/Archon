@@ -19,6 +19,7 @@ inputs:
       Empty means the project's full applicable gate.
 
 returns: validate
+outcome_field: green
 
 nodes:
   - id: validate

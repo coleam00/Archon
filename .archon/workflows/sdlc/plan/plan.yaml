@@ -24,7 +24,10 @@ inputs:
       Optional path to a prior investigation report to build on — its claims are
       verified, not trusted. Empty means no prior report.
 
+# ready:false is a valid completion (see the plan node): the run succeeds with
+# an authored outcome of false — lifecycle status and work outcome are separate facts.
 returns: plan
+outcome_field: ready
 
 nodes:
   - id: record-state

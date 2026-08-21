@@ -19,7 +19,10 @@ inputs:
       What to investigate — an issue reference, a symptom, a failing command, or
       a question. When empty, the run's trigger message is the target.
 
+# rooted:false is a valid completion (see the investigate node): the run succeeds
+# with an authored outcome of false — lifecycle status and work outcome are separate facts.
 returns: investigate
+outcome_field: rooted
 
 nodes:
   - id: record-state
