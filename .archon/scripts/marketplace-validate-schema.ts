@@ -2,6 +2,12 @@
 /**
  * Validates all .yaml files in $ARTIFACTS_DIR/source/ against the Archon workflow schema.
  * Output: JSON to stdout: { valid: boolean, files: FileResult[] }
+ *
+ * Thin CLI wrapper: reads files off disk, then delegates the actual schema
+ * check to `validateMarketplaceWorkflowFiles` (packages/workflows/src/marketplace-checks.ts)
+ * — the SAME function `preflight.ts` calls in-process for the Marketplace
+ * Submission flow's pre-flight gate, so there is zero drift between what CI
+ * enforces here and what a Submit blocks on before any write.
  */
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { resolve, relative } from 'node:path';
@@ -9,8 +15,8 @@ import { resolve, relative } from 'node:path';
 // .archon/scripts/ doesn't reliably honor the @archon/workflows/loader subpath
 // export in CI. Direct file import avoids the resolution gap.
 import { setLogLevel } from '../../packages/paths/src/logger.ts';
-import { parseWorkflow } from '../../packages/workflows/src/loader.ts';
 import { registerBuiltinProviders, registerCommunityProviders } from '../../packages/providers/src/registry.ts';
+import { validateMarketplaceWorkflowFiles } from '../../packages/workflows/src/marketplace-checks.ts';
 
 // Silence the loader's Pino warnings (workflow_missing_description, etc).
 // parseWorkflow logs to stdout by default; the decide node substitutes our
@@ -25,22 +31,6 @@ setLogLevel('fatal');
 // "Unknown provider" error.
 registerBuiltinProviders();
 registerCommunityProviders();
-
-/**
- * Decide whether a YAML file is shaped like an Archon workflow definition
- * (top-level `nodes:` block). Marketplace directory submissions commonly
- * include non-workflow YAML like brand.yaml, config.yaml, or template
- * scaffolds — those should not be validated against the workflow schema.
- */
-function looksLikeWorkflow(yamlContent: string): boolean {
-  return /^nodes\s*:/m.test(yamlContent);
-}
-
-interface FileResult {
-  name: string;
-  valid: boolean;
-  errors: string[];
-}
 
 const artifactsDir = process.env['ARTIFACTS_DIR'] ?? '';
 if (!artifactsDir) {
@@ -67,39 +57,15 @@ function findYamlFiles(dir: string): string[] {
   return found;
 }
 
-const yamlFiles = findYamlFiles(sourceDir);
+const yamlFiles = findYamlFiles(sourceDir).map(fullPath => ({
+  name: relative(sourceDir, fullPath),
+  content: readFileSync(fullPath, 'utf8'),
+}));
 
-if (yamlFiles.length === 0) {
-  console.log(JSON.stringify({ valid: true, files: [], note: 'no yaml files found' }));
-  process.exit(0);
-}
-
-// Pre-filter to only workflow-shaped YAMLs. Directory submissions commonly
-// ship non-workflow YAML alongside the workflow (brand metadata, Archon
-// per-repo config, template scaffolds). Validating those as workflows
-// produces false-positive errors and tanks legitimate submissions.
-const workflowFiles = yamlFiles.filter((p) => looksLikeWorkflow(readFileSync(p, 'utf8')));
-
-if (workflowFiles.length === 0) {
-  console.log(JSON.stringify({ valid: true, files: [], note: 'no workflow yaml files (no top-level nodes:)' }));
-  process.exit(0);
-}
-
-const results: FileResult[] = [];
-
-for (const fullPath of workflowFiles) {
-  const relName = relative(sourceDir, fullPath);
-  const content = readFileSync(fullPath, 'utf8');
-  const result = parseWorkflow(content, relName);
-  if (result.workflow === null) {
-    results.push({ name: relName, valid: false, errors: [result.error.error] });
-  } else {
-    results.push({ name: relName, valid: true, errors: [] });
-  }
-}
-
-const allValid = results.every((r) => r.valid);
-console.log(JSON.stringify({ valid: allValid, files: results }));
+const result = validateMarketplaceWorkflowFiles(yamlFiles);
+// JSON.stringify omits the `note` key entirely when it's undefined (the
+// "real results" case), matching the original script's exact output shape.
+console.log(JSON.stringify(result));
 // Always exit 0 — the decide node reads `valid` from the JSON output and
 // routes to `request_changes` if false. Exit 1 here would crash the DAG
 // before decide/act can post a useful review comment to the PR.

@@ -67,4 +67,10 @@ The `builder/` subtree (Archon Studio workflow builder): PR-1 (data layer —
 types, variant registry, round-trip model, validation) and PR-2 (the canvas UI)
 are merged; PR-3 wires connected mode (`/console/builder[/:name]`, project
 picker, load/save/rename/delete through the workflow API, dirty + nav guard,
-bundled Save-as) and is in review. See `builder/README.md`.
+bundled Save-as) and is in review. PR-4 stacks on PR-3 and adds Marketplace
+Submission — a `Submit` affordance that bundles a saved workflow and opens a
+PR against the community marketplace registry. PR-4 is the one place this
+"pure web" surface deliberately crosses into new **server** territory (a
+publish service + `POST /api/marketplace/submit`); the builder client itself
+stays inside the isolation contract above — it only calls one skill verb. See
+`builder/README.md` and `builder/docs/adr/0001-marketplace-submission-is-server-assisted.md`.
