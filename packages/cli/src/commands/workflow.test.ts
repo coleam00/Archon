@@ -6947,10 +6947,12 @@ describe('workflowInstallCommand directory packages', () => {
   let repoRoot: string;
   let fetchSpy: ReturnType<typeof spyOn>;
   let consoleSpy: ReturnType<typeof spyOn>;
+  let directoryMode: 'normal' | 'deep' | 'wide';
 
   beforeEach(() => {
     repoRoot = mkdtempSync(join(tmpdir(), 'archon-marketplace-install-'));
     mockFindRepoRoot = repoRoot;
+    directoryMode = 'normal';
     consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
     fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(
       (input: RequestInfo | URL): Promise<Response> => {
@@ -6972,6 +6974,22 @@ describe('workflowInstallCommand directory packages', () => {
           );
         }
         if (url.includes(`/contents/${sourceRoot}?ref=${sha}`)) {
+          const supportingDirectories =
+            directoryMode === 'wide'
+              ? Array.from({ length: 50 }, (_, index) => ({
+                  name: `support-${String(index)}`,
+                  type: 'dir',
+                  download_url: null,
+                  path: `${sourceRoot}/support-${String(index)}`,
+                }))
+              : [
+                  {
+                    name: 'skills',
+                    type: 'dir',
+                    download_url: null,
+                    path: `${sourceRoot}/skills`,
+                  },
+                ];
           return Promise.resolve(
             Response.json([
               {
@@ -6980,14 +6998,12 @@ describe('workflowInstallCommand directory packages', () => {
                 download_url: null,
                 path: `${sourceRoot}/public-x-research.yaml`,
               },
-              {
-                name: 'skills',
-                type: 'dir',
-                download_url: null,
-                path: `${sourceRoot}/skills`,
-              },
+              ...supportingDirectories,
             ])
           );
+        }
+        if (directoryMode === 'wide' && url.includes(`/contents/${sourceRoot}/support-`)) {
+          return Promise.resolve(Response.json([]));
         }
         if (url.includes(`/contents/${sourceRoot}/skills?ref=${sha}`)) {
           return Promise.resolve(
@@ -7008,6 +7024,18 @@ describe('workflowInstallCommand directory packages', () => {
           );
         }
         if (url.includes(`/contents/${sourceRoot}/skills/xquik-social-research?ref=${sha}`)) {
+          if (directoryMode === 'deep') {
+            return Promise.resolve(
+              Response.json([
+                {
+                  name: 'next',
+                  type: 'dir',
+                  download_url: null,
+                  path: `${sourceRoot}/skills/xquik-social-research/next`,
+                },
+              ])
+            );
+          }
           return Promise.resolve(
             Response.json([
               {
@@ -7015,6 +7043,22 @@ describe('workflowInstallCommand directory packages', () => {
                 type: 'file',
                 download_url: null,
                 path: `${sourceRoot}/skills/xquik-social-research/SKILL.md`,
+              },
+            ])
+          );
+        }
+        if (
+          directoryMode === 'deep' &&
+          url.includes(`/contents/${sourceRoot}/skills/xquik-social-research/`)
+        ) {
+          const path = url.split('/contents/')[1]?.split('?ref=')[0];
+          return Promise.resolve(
+            Response.json([
+              {
+                name: 'next',
+                type: 'dir',
+                download_url: null,
+                path: `${path}/next`,
               },
             ])
           );
@@ -7062,5 +7106,23 @@ describe('workflowInstallCommand directory packages', () => {
     await workflowInstallCommand('public-x-research', repoRoot, true);
     expect(readFileSync(skillPath, 'utf8')).toBe('# Xquik social research\n');
     expect(existsSync(join(repoRoot, '.claude/skills/xquik-social-research'))).toBe(true);
+  });
+
+  it('rejects directory packages deeper than the traversal limit before writing', async () => {
+    directoryMode = 'deep';
+
+    await expect(workflowInstallCommand('public-x-research', repoRoot)).rejects.toThrow(
+      'maximum depth of 8'
+    );
+    expect(existsSync(join(repoRoot, '.archon/workflows/public-x-research.yaml'))).toBe(false);
+  });
+
+  it('rejects directory packages beyond the request limit before writing', async () => {
+    directoryMode = 'wide';
+
+    await expect(workflowInstallCommand('public-x-research', repoRoot)).rejects.toThrow(
+      '50 request limit'
+    );
+    expect(existsSync(join(repoRoot, '.archon/workflows/public-x-research.yaml'))).toBe(false);
   });
 });

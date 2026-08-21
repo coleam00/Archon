@@ -3266,6 +3266,13 @@ interface GitHubDirectoryFile {
   relativePath: string[];
 }
 
+interface GitHubDirectoryTraversal {
+  requests: number;
+}
+
+const MAX_GITHUB_DIRECTORY_DEPTH = 8;
+const MAX_GITHUB_DIRECTORY_REQUESTS = 50;
+
 /** Fetch directory listing from GitHub Contents API at a pinned SHA. */
 async function fetchGitHubDirectory(
   owner: string,
@@ -3297,8 +3304,21 @@ async function fetchGitHubDirectoryFiles(
   repo: string,
   path: string,
   sha: string,
-  relativePath: string[] = []
+  relativePath: string[],
+  depth: number,
+  traversal: GitHubDirectoryTraversal
 ): Promise<GitHubDirectoryFile[]> {
+  if (depth > MAX_GITHUB_DIRECTORY_DEPTH) {
+    throw new Error(
+      `GitHub directory package exceeds the maximum depth of ${String(MAX_GITHUB_DIRECTORY_DEPTH)}`
+    );
+  }
+  if (traversal.requests >= MAX_GITHUB_DIRECTORY_REQUESTS) {
+    throw new Error(
+      `GitHub directory package exceeds the ${String(MAX_GITHUB_DIRECTORY_REQUESTS)} request limit`
+    );
+  }
+  traversal.requests++;
   const items = await fetchGitHubDirectory(owner, repo, path, sha);
   const files: GitHubDirectoryFile[] = [];
 
@@ -3313,7 +3333,15 @@ async function fetchGitHubDirectoryFiles(
       files.push({ sourcePath: item.path, relativePath: itemRelativePath });
     } else if (item.type === 'dir') {
       files.push(
-        ...(await fetchGitHubDirectoryFiles(owner, repo, item.path, sha, itemRelativePath))
+        ...(await fetchGitHubDirectoryFiles(
+          owner,
+          repo,
+          item.path,
+          sha,
+          itemRelativePath,
+          depth + 1,
+          traversal
+        ))
       );
     }
   }
@@ -3376,7 +3404,16 @@ export async function workflowInstallCommand(
   const archonDir = join(repoRoot, '.archon');
 
   if (isDirectoryUrl(entry.sourceUrl)) {
-    await installDirectory(entry, slug, archonDir, force, existsSync, mkdirSync, writeFileSync);
+    await installDirectory(
+      entry,
+      slug,
+      archonDir,
+      repoRoot,
+      force,
+      existsSync,
+      mkdirSync,
+      writeFileSync
+    );
   } else {
     await installSingleFile(entry, slug, archonDir, force, existsSync, mkdirSync, writeFileSync);
   }
@@ -3416,6 +3453,7 @@ async function installDirectory(
   entry: MarketplaceEntryJson,
   slug: string,
   archonDir: string,
+  repoRoot: string,
   force: boolean | undefined,
   existsSync: (p: string) => boolean,
   mkdirSync: (p: string, opts: { recursive: boolean }) => void,
@@ -3445,15 +3483,10 @@ async function installDirectory(
     );
   }
 
-  // Install the main workflow YAML
-  const mainContent = await downloadRawFile(owner, repo, mainYaml.path, entry.sha);
-  mkdirSync(workflowsDir, { recursive: true });
-  writeFileSync(destWorkflow, mainContent);
-  console.log(`  Workflow: ${destWorkflow}`);
-
-  // Install supporting files by convention
+  // Collect every directory listing before writing so traversal limits fail atomically.
   const subdirs = items.filter(f => f.type === 'dir');
-  let installedCount = 1;
+  const traversal = { requests: 1 };
+  const supportingFiles: { files: GitHubDirectoryFile[]; targetDir: string }[] = [];
 
   for (const subdir of subdirs) {
     if (!isSafePathComponent(subdir.name)) {
@@ -3461,20 +3494,31 @@ async function installDirectory(
       continue;
     }
 
-    const files = await fetchGitHubDirectoryFiles(owner, repo, subdir.path, entry.sha);
-
     let targetDir: string;
     if (subdir.name === 'commands') {
       targetDir = join(archonDir, 'commands');
     } else if (subdir.name === 'scripts') {
       targetDir = join(archonDir, 'scripts');
     } else if (subdir.name === 'skills') {
-      targetDir = join(dirname(archonDir), '.claude', 'skills');
+      targetDir = join(repoRoot, '.claude', 'skills');
     } else {
       // Other supporting directories retain their name under .archon/.
       targetDir = join(archonDir, subdir.name);
     }
 
+    supportingFiles.push({
+      files: await fetchGitHubDirectoryFiles(owner, repo, subdir.path, entry.sha, [], 1, traversal),
+      targetDir,
+    });
+  }
+
+  const mainContent = await downloadRawFile(owner, repo, mainYaml.path, entry.sha);
+  mkdirSync(workflowsDir, { recursive: true });
+  writeFileSync(destWorkflow, mainContent);
+  console.log(`  Workflow: ${destWorkflow}`);
+
+  let installedCount = 1;
+  for (const { files, targetDir } of supportingFiles) {
     for (const file of files) {
       const destFile = join(targetDir, ...file.relativePath);
       if (existsSync(destFile) && !force) {
