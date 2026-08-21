@@ -215,4 +215,16 @@ export const marketplaceEntries: MarketplaceEntry[] = [
     tags: ['automation', 'development'],
     archonVersionCompat: '>=0.5.0',
   },
+  {
+    slug: 'public-x-research',
+    name: 'Public X Research',
+    author: 'kriptoburak',
+    description:
+      'Search bounded public X or Twitter data and produce a cited Markdown brief. Preserves source IDs, links, timestamps, and research limits through an environment-backed Xquik MCP connection.',
+    sourceUrl:
+      'https://github.com/kriptoburak/xquik-dev-x-twitter-scraper/tree/18794ff416d8881e9f553000e102eb963ce6d89f/integrations/archon/public-x-research',
+    sha: '18794ff416d8881e9f553000e102eb963ce6d89f',
+    tags: ['automation'],
+    archonVersionCompat: '>=0.9.0',
+  },
 ];
