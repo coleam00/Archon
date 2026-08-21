@@ -6,7 +6,6 @@ impl__implement:
   done: true
   green: true
   summary: "stub: implemented and green"
-impl__record-green: '{"green":"recorded"}'
 impl__assert-changed: "3 files changed"
 gate-green: '{"gate":"green"}'
 pr__pr: "https://github.com/example/repo/pull/2 (draft)"
@@ -30,8 +29,8 @@ review__simplify: "skipped by chooser"
 review__synthesize:
   ready: true
   findings_summary: "stub: clean on initial review"
-initial-ready: '{"ready":"true"}'
-gate-ready: '{"ready":"true"}'
+# gate-ready is deliberately unstubbed: under --exec-code the real script runs,
+# proving the review_ready binding and the corrections if_skipped default.
 validate__validate:
   green: false
   summary: "stub: tests failed — 3 red"

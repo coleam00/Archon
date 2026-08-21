@@ -43,8 +43,9 @@ def try_git(*args: str) -> str | None:
 def main() -> int:
     artifacts = Path(os.environ["ARTIFACTS_DIR"])
     start = (artifacts / ".start-sha").read_text().strip()
-    green_file = artifacts / ".green"
-    green = green_file.read_text().strip() if green_file.exists() else ""
+    # The loop's green verdict, bound by the workflow (`with: green:`) and
+    # delivered as canonical boolean text ("true"/"false").
+    green = os.environ.get("INPUTS_GREEN", "").strip()
 
     tracked = git("diff", "--name-only", "HEAD", "--", EXCLUDE)
     untracked = git("ls-files", "--others", "--exclude-standard", "--", EXCLUDE)

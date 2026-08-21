@@ -16,13 +16,11 @@ inv__assert-intact: '{"intact":"true"}'
 gate-rooted: '{"gate":"rooted"}'
 deliver__gate-validated: '{"validated":"true"}'
 deliver__impl__record-start: '{"start":"recorded"}'
-deliver__impl__record-green: '{"green":"recorded"}'
 deliver__impl__assert-changed: "3 files changed"
 deliver__gate-green: '{"gate":"green"}'
 deliver__pr__pr: "https://github.com/example/repo/pull/2 (draft)"
 deliver__await-checks: "all checks passed"
 deliver__flip-ready: "https://github.com/example/repo/pull/2"
-deliver__initial-ready: '{"ready":"true"}'
 deliver__validate__validate:
   green: true
   summary: "stub: project gate green"

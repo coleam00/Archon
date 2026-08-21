@@ -67,28 +67,12 @@ nodes:
       prior_report: "$INPUTS.prior_report"
     depends_on: [pr]
 
-  # The outer join cannot read a skipped loop output strictly, so both the
-  # initial-ready path and the correction loop publish the same one-bit latch.
-  # Workaround, same class as implement's .green bridge: reading a value across
-  # a skipped path is #2637's value-transport gap. Comes out when #2637 lands.
-  - id: initial-ready
-    bash: |
-      if [ "$review.output.ready" = "true" ]; then
-        mkdir -p "$ARTIFACTS_DIR/review" &&
-          touch "$ARTIFACTS_DIR/review/.ready" &&
-          echo '{"ready":"true"}'
-      else
-        rm -f "$ARTIFACTS_DIR/review/.ready" &&
-          echo '{"ready":"false"}'
-      fi
-    depends_on: [review]
-
   # A ready initial review skips this block. Otherwise each iteration corrects
   # the current canonical findings, proves the correction is green, then runs a
   # fresh light review over the delta. Three iterations means three real fix
   # opportunities and three confirming reviews — never an unreviewed final fix.
   - id: corrections
-    depends_on: [initial-ready]
+    depends_on: [review]
     when: "$review.output.ready == 'false'"
     loop_group:
       until_bash: test "$recheck.output.ready" = "true"
@@ -122,41 +106,20 @@ nodes:
             prior_report: "$ARTIFACTS_DIR/review/report.md"
           depends_on: [gate-correction-green]
 
-        - id: iteration-ready
-          bash: |
-            if [ "$recheck.output.ready" = "true" ]; then
-              mkdir -p "$ARTIFACTS_DIR/review" &&
-                touch "$ARTIFACTS_DIR/review/.ready" &&
-                echo '{"ready":"true"}'
-            else
-              rm -f "$ARTIFACTS_DIR/review/.ready" &&
-                echo '{"ready":"false"}'
-            fi
-          depends_on: [recheck]
-
-  # all_done joins the mutually exclusive initial-ready and correction paths.
-  # The latch is review-owned on both paths; lifecycle success alone never
-  # certifies readiness. On failure, diagnose the stage that actually stopped.
+  # all_done joins the mutually exclusive paths as bound values (#2637): the
+  # initial review's verdict directly, and the correction loop's output with an
+  # if_skipped default. A completed loop implies readiness — until_bash on the
+  # recheck verdict is its only success exit — while a failed loop (bound
+  # exhausted) or a failed review surfaces as a binding-resolution failure on
+  # this node, so lifecycle success alone never certifies readiness.
   - id: gate-ready
-    bash: |
-      if [ -f "$ARTIFACTS_DIR/review/.ready" ]; then
-        echo '{"ready":"true"}'
-        exit 0
-      fi
-
-      # Read-only stage diagnosis. The gate never mutates GitHub on a failure;
-      # the draft state and canonical review comment already carry the truth.
-      ORIGIN_REPO=$(git remote get-url origin | sed -E 's#^.*[:/]([^/]+/[^/]+)$#\1#; s#\.git$##')
-      if ! gh pr view --repo "$ORIGIN_REPO" --json number --jq .number >/dev/null 2>&1; then
-        echo "delivery stopped before a draft PR was available — see the earliest failed node." >&2
-      elif [ ! -f "$ARTIFACTS_DIR/review/report.md" ]; then
-        echo "a draft PR exists, but review did not complete — see the earliest failed review node." >&2
-      else
-        echo "review completed with blocking findings — see $ARTIFACTS_DIR/review/report.md and the canonical PR comment." >&2
-      fi
-      exit 1
-    depends_on: [initial-ready, corrections]
+    script: gate-ready
+    runtime: uv
+    depends_on: [review, corrections]
     trigger_rule: all_done
+    with:
+      review_ready: { from: "$review.output.ready", if_skipped: false }
+      corrections: { from: "$corrections.output", if_skipped: null }
 
   # Final local gate, ALWAYS run: the project's own checks via the validate
   # package. Uniform on every path — and when CI is maintainer-gated (fork

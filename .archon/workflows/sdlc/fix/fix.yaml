@@ -87,35 +87,14 @@ nodes:
 
   # One return for every legitimate terminal result. Negative advisory verdicts
   # complete with the report that explains them; delivery is still accepted
-  # only when this run established readiness and GitHub confirms the PR state.
+  # only when the deliver branch actually ran (bound with if_skipped, #2637)
+  # and GitHub confirms the PR state — see scripts/outcome.py.
   - id: outcome
-    bash: |
-      route=$triage.output.route
-      summary=$triage.output.summary
-      if [ "$route" = "no_action" ]; then
-        printf 'No delivery needed: %s\nReport: %s/triage.md\n' "$summary" "$ARTIFACTS_DIR"
-        exit 0
-      fi
-
-      if [ ! -f "$ARTIFACTS_DIR/review/.ready" ]; then
-        case "$route" in
-          investigate)
-            printf 'No delivery started: the investigation did not establish a safe fix boundary.\nReport: %s/investigation.md\n' "$ARTIFACTS_DIR"
-            exit 0
-            ;;
-          plan)
-            printf 'No delivery started: planning left a material decision unresolved.\nReport: %s/plan.md\n' "$ARTIFACTS_DIR"
-            exit 0
-            ;;
-        esac
-      fi
-
-      ORIGIN_REPO=$(git remote get-url origin | sed -E 's#^.*[:/]([^/]+/[^/]+)$#\1#; s#\.git$##')
-      url=$(gh pr view --repo "$ORIGIN_REPO" --json isDraft,url --jq 'select(.isDraft == false) | .url' 2>/dev/null || true)
-      if [ -z "$url" ]; then
-        echo "outcome: delivery did not finish with a ready pull request." >&2
-        exit 1
-      fi
-      printf '%s\n' "$url"
+    script: outcome
+    runtime: uv
     depends_on: [triage, inv, planned, gate-direct, gate-rooted, gate-planned, deliver]
     trigger_rule: none_failed_min_one_success
+    with:
+      route: "$triage.output.route"
+      summary: "$triage.output.summary"
+      delivered: { from: "$deliver.output", if_skipped: null }

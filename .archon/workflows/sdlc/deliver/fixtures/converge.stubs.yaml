@@ -7,7 +7,6 @@ impl__implement:
   done: true
   green: true
   summary: "stub: implemented and green"
-impl__record-green: '{"green":"recorded"}'
 impl__assert-changed: "3 files changed"
 gate-green: '{"gate":"green"}'
 pr__pr: "https://github.com/example/repo/pull/1 (draft)"
@@ -31,13 +30,11 @@ review__simplify: "skipped by chooser"
 review__synthesize:
   ready: false
   findings_summary: "stub: 3 Important findings open"
-initial-ready: '{"ready":"false"}'
 fix__record-start: '{"start":"recorded"}'
 fix__implement:
   done: true
   green: true
   summary: "stub: findings fixed, pushed"
-fix__record-green: '{"green":"recorded"}'
 fix__assert-changed: "2 files changed"
 gate-correction-green: '{"gate":"green"}'
 recheck__scope: "light mode; delta since cursor"
@@ -60,8 +57,8 @@ recheck__simplify: "skipped by chooser"
 recheck__synthesize:
   ready: true
   findings_summary: "stub: no open Critical/Important"
-iteration-ready: '{"ready":"true"}'
-gate-ready: '{"ready":"true"}'
+# gate-ready is deliberately unstubbed: under --exec-code the real script runs,
+# proving the $corrections.output whole-ref binding on a completed loop_group.
 validate__validate:
   green: true
   summary: "stub: full gate green"
