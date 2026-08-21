@@ -3272,6 +3272,7 @@ interface GitHubDirectoryTraversal {
 
 const MAX_GITHUB_DIRECTORY_DEPTH = 8;
 const MAX_GITHUB_DIRECTORY_REQUESTS = 50;
+const MAX_GITHUB_CONTENTS_ITEMS = 1000;
 
 /** Fetch directory listing from GitHub Contents API at a pinned SHA. */
 async function fetchGitHubDirectory(
@@ -3294,6 +3295,11 @@ async function fetchGitHubDirectory(
   const data: unknown = await res.json();
   if (!Array.isArray(data)) {
     throw new Error(`Expected directory listing from ${url}, got a single file`);
+  }
+  if (data.length >= MAX_GITHUB_CONTENTS_ITEMS) {
+    throw new Error(
+      `GitHub directory listing reached the ${String(MAX_GITHUB_CONTENTS_ITEMS)}-item Contents API limit`
+    );
   }
   return data as GitHubContentItem[];
 }

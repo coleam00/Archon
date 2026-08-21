@@ -6947,7 +6947,7 @@ describe('workflowInstallCommand directory packages', () => {
   let repoRoot: string;
   let fetchSpy: ReturnType<typeof spyOn>;
   let consoleSpy: ReturnType<typeof spyOn>;
-  let directoryMode: 'normal' | 'deep' | 'wide';
+  let directoryMode: 'normal' | 'deep' | 'wide' | 'oversized';
 
   beforeEach(() => {
     repoRoot = mkdtempSync(join(tmpdir(), 'archon-marketplace-install-'));
@@ -7007,6 +7007,18 @@ describe('workflowInstallCommand directory packages', () => {
           return Promise.resolve(Response.json([]));
         }
         if (url.includes(`/contents/${sourceRoot}/skills?ref=${sha}`)) {
+          if (directoryMode === 'oversized') {
+            return Promise.resolve(
+              Response.json(
+                Array.from({ length: 1000 }, (_, index) => ({
+                  name: `file-${String(index)}.md`,
+                  type: 'file',
+                  download_url: null,
+                  path: `${sourceRoot}/skills/file-${String(index)}.md`,
+                }))
+              )
+            );
+          }
           return Promise.resolve(
             Response.json([
               {
@@ -7132,6 +7144,15 @@ describe('workflowInstallCommand directory packages', () => {
 
     await expect(workflowInstallCommand('public-x-research', repoRoot)).rejects.toThrow(
       '50 request limit'
+    );
+    expect(existsSync(join(repoRoot, '.archon/workflows/public-x-research.yaml'))).toBe(false);
+  });
+
+  it('rejects a listing at the GitHub Contents API item limit before writing', async () => {
+    directoryMode = 'oversized';
+
+    await expect(workflowInstallCommand('public-x-research', repoRoot)).rejects.toThrow(
+      '1000-item Contents API limit'
     );
     expect(existsSync(join(repoRoot, '.archon/workflows/public-x-research.yaml'))).toBe(false);
   });
