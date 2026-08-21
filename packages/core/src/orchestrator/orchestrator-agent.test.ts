@@ -4108,6 +4108,170 @@ describe('handleMessage — /setproject dispatch', () => {
     expect(mockUpdateConversation).not.toHaveBeenCalled();
     expect(platform.sendMessage).toHaveBeenCalledWith('conv-1', expect.stringContaining('Usage'));
   });
+
+  // ─── clear-to-neutral (/setproject none) ────────────────────────────────────
+
+  test('/setproject none clears the project scope on the DB conversation id', async () => {
+    // Same regression guard as the rebind path: the write must target
+    // conversation.id, never the platform conversation id (Telegram chat ids and
+    // GitHub owner/repo#n are not the conversations-table primary key).
+    mockGetOrCreateConversation.mockImplementation(() =>
+      Promise.resolve(
+        makeConversation({
+          id: 'db-conv-clear',
+          platform_type: 'telegram',
+          platform_conversation_id: '40865006',
+          codebase_id: 'cb-old',
+          cwd: '/old/worktree',
+        })
+      )
+    );
+    mockParseCommand.mockReturnValue({ command: 'setproject', args: ['none'] });
+
+    const platform = makePlatform();
+    await handleMessage(platform, '40865006', '/setproject none');
+
+    expect(mockUpdateConversation).toHaveBeenCalledWith('db-conv-clear', {
+      codebase_id: null,
+      cwd: null,
+      isolation_env_id: null,
+    });
+    expect(platform.sendMessage).toHaveBeenCalledWith(
+      '40865006',
+      expect.stringContaining('neutral')
+    );
+  });
+
+  test('/setproject none deactivates the active AI session before clearing', async () => {
+    // Without this the stale assistant_session_id survives the detach and is
+    // resumed against the now-neutral cwd — on Claude that throws, and since the
+    // turn throws, tryPersistSessionId never clears it: the conversation wedges.
+    mockGetOrCreateConversation.mockImplementation(() =>
+      Promise.resolve(makeConversation({ id: 'db-conv-clear', codebase_id: 'cb-old' }))
+    );
+    mockGetActiveSession.mockImplementation(() =>
+      Promise.resolve({ id: 'session-123', conversation_id: 'db-conv-clear', active: true })
+    );
+    mockParseCommand.mockReturnValue({ command: 'setproject', args: ['none'] });
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/setproject none');
+
+    expect(mockDeactivateSession).toHaveBeenCalledWith('session-123', 'project-changed');
+    expect(mockUpdateConversation).toHaveBeenCalledWith('db-conv-clear', {
+      codebase_id: null,
+      cwd: null,
+      isolation_env_id: null,
+    });
+  });
+
+  test('/setproject CLEAR clears regardless of case', async () => {
+    mockGetOrCreateConversation.mockImplementation(() =>
+      Promise.resolve(makeConversation({ id: 'db-conv-clear', codebase_id: 'cb-old' }))
+    );
+    mockParseCommand.mockReturnValue({ command: 'setproject', args: ['CLEAR'] });
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/setproject CLEAR');
+
+    expect(mockUpdateConversation).toHaveBeenCalledWith('db-conv-clear', {
+      codebase_id: null,
+      cwd: null,
+      isolation_env_id: null,
+    });
+  });
+
+  test('/setproject - clears (documented alias, otherwise silently regressable)', async () => {
+    mockGetOrCreateConversation.mockImplementation(() =>
+      Promise.resolve(makeConversation({ id: 'db-conv-clear', codebase_id: 'cb-old' }))
+    );
+    mockParseCommand.mockReturnValue({ command: 'setproject', args: ['-'] });
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/setproject -');
+
+    expect(mockUpdateConversation).toHaveBeenCalledWith('db-conv-clear', {
+      codebase_id: null,
+      cwd: null,
+      isolation_env_id: null,
+    });
+  });
+
+  test('clears with zero projects registered (returns before listCodebases)', async () => {
+    // Detaching must not be breakable by an empty or broken project list —
+    // that is exactly when a user most wants out.
+    mockGetOrCreateConversation.mockImplementation(() =>
+      Promise.resolve(makeConversation({ id: 'db-conv-clear', codebase_id: 'cb-old' }))
+    );
+    mockListCodebases.mockImplementation(() => Promise.reject(new Error('db down')));
+    mockParseCommand.mockReturnValue({ command: 'setproject', args: ['none'] });
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/setproject none');
+
+    expect(mockListCodebases).not.toHaveBeenCalled();
+    expect(mockUpdateConversation).toHaveBeenCalledWith('db-conv-clear', {
+      codebase_id: null,
+      cwd: null,
+      isolation_env_id: null,
+    });
+  });
+
+  test('multi-token argument falls through to name resolution, not the clear path', async () => {
+    // The single-token gate is what keeps `/setproject none of your business`
+    // a (failing) project lookup rather than a silent detach.
+    mockListCodebases.mockImplementation(() => Promise.resolve([makeCodebase('project-a')]));
+    mockParseCommand.mockReturnValue({
+      command: 'setproject',
+      args: ['none', 'of', 'your', 'business'],
+    });
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/setproject none of your business');
+
+    expect(mockUpdateConversation).not.toHaveBeenCalled();
+    const msg = (platform.sendMessage as ReturnType<typeof mock>).mock.calls[0]?.[1] as string;
+    expect(msg).toContain('none of your business');
+  });
+
+  test('notes the detached worktree when clearing an isolation-bound conversation', async () => {
+    mockGetOrCreateConversation.mockImplementation(() =>
+      Promise.resolve(
+        makeConversation({
+          id: 'db-conv-clear-wt',
+          codebase_id: 'cb-old',
+          cwd: '/old/worktree',
+          isolation_env_id: 'env-old',
+        })
+      )
+    );
+    mockParseCommand.mockReturnValue({ command: 'setproject', args: ['none'] });
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/setproject none');
+
+    const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls
+      .map(c => String(c[1]))
+      .join('\n');
+    expect(sent).toContain('neutral');
+    expect(sent).toContain('previous worktree was detached');
+  });
+
+  test('omits the worktree note when clearing a conversation with no isolation env', async () => {
+    mockGetOrCreateConversation.mockImplementation(() =>
+      Promise.resolve(makeConversation({ id: 'db-conv-clear', codebase_id: 'cb-old' }))
+    );
+    mockParseCommand.mockReturnValue({ command: 'setproject', args: ['none'] });
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/setproject none');
+
+    const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls
+      .map(c => String(c[1]))
+      .join('\n');
+    expect(sent).toContain('neutral');
+    expect(sent).not.toContain('previous worktree');
+  });
 });
 
 // ─── handleMessage — /update-project dispatch (issue #2085) ───────────────────
