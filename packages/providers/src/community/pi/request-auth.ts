@@ -61,7 +61,7 @@ export async function withCustomProviderRequestEnv<T extends RuntimeAuthBoundary
 
   // A stored credential owns the provider — don't overlay request env on it.
   const stored = await runtime.listCredentials();
-  if (stored.some((entry) => entry.providerId === provider)) {
+  if (stored.some(entry => entry.providerId === provider)) {
     return runtime;
   }
 
@@ -92,7 +92,11 @@ export async function withCustomProviderRequestEnv<T extends RuntimeAuthBoundary
   const overrides = {
     getAuth: async (
       providerOrModel: unknown,
-      requestOverrides?: { apiKey?: string; env?: Record<string, string>; minOAuthValidityMs?: number }
+      requestOverrides?: {
+        apiKey?: string;
+        env?: Record<string, string>;
+        minOAuthValidityMs?: number;
+      }
     ): Promise<RuntimeAuthResolution | undefined> => {
       const providerId =
         typeof providerOrModel === 'string'
@@ -133,7 +137,7 @@ export async function withCustomProviderRequestEnv<T extends RuntimeAuthBoundary
       const value = Reflect.get(target, prop, receiver);
       return typeof value === 'function' ? value.bind(target) : value;
     },
-  }) as T;
+  });
 }
 
 /**
