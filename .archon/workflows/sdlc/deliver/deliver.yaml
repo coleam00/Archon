@@ -149,12 +149,19 @@ nodes:
   - id: flip-ready
     bash: |
       # --repo pins to the origin remote (#2226): gh's default resolution in a
-      # fork clone targets the upstream parent instead.
+      # fork clone targets the upstream parent instead. With --repo, gh disables
+      # branch inference and REQUIRES an explicit selector — omitting it is a
+      # usage error, seen red on run 925f6c43's resume.
       ORIGIN_REPO=$(git remote get-url origin | sed -E 's#^.*[:/]([^/]+/[^/]+)$#\1#; s#\.git$##')
-      gh pr ready --repo "$ORIGIN_REPO"
-      draft=$(gh pr view --repo "$ORIGIN_REPO" --json isDraft --jq .isDraft)
+      BRANCH=$(git branch --show-current)
+      if [ -z "$BRANCH" ]; then
+        echo "flip-ready: detached HEAD — cannot resolve the PR branch." >&2
+        exit 1
+      fi
+      gh pr ready "$BRANCH" --repo "$ORIGIN_REPO"
+      draft=$(gh pr view "$BRANCH" --repo "$ORIGIN_REPO" --json isDraft --jq .isDraft)
       if [ "$draft" = "false" ]; then
-        gh pr view --repo "$ORIGIN_REPO" --json url --jq .url
+        gh pr view "$BRANCH" --repo "$ORIGIN_REPO" --json url --jq .url
       else
         echo "flip-ready: PR still reports draft after the ready flip" >&2
         exit 1

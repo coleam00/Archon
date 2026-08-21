@@ -54,11 +54,23 @@ def main() -> int:
     origin_repo = "/".join(
         remote.removesuffix(".git").replace(":", "/").rstrip("/").split("/")[-2:]
     )
+    # With --repo, gh disables branch inference and requires an explicit
+    # selector (seen red on run 925f6c43); pass the current branch.
+    branch = subprocess.run(
+        ["git", "branch", "--show-current"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    if not branch:
+        print("outcome: detached HEAD — cannot resolve the PR branch.", file=sys.stderr)
+        return 1
     proc = subprocess.run(
         [
             "gh",
             "pr",
             "view",
+            branch,
             "--repo",
             origin_repo,
             "--json",
