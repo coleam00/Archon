@@ -3375,6 +3375,19 @@ export async function workflowInstallCommand(
   cwd: string,
   force?: boolean
 ): Promise<void> {
+  try {
+    await installWorkflow(slug, cwd, force);
+  } catch (error) {
+    const err = error as Error;
+    getLog().error(
+      { error: err.message, errorType: err.constructor.name, err, slug },
+      'cli.workflow_install_failed'
+    );
+    throw err;
+  }
+}
+
+async function installWorkflow(slug: string, cwd: string, force?: boolean): Promise<void> {
   const entries = await fetchMarketplace();
   const entry = entries.find(e => e.slug === slug);
 

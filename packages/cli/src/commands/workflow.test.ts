@@ -6953,6 +6953,7 @@ describe('workflowInstallCommand directory packages', () => {
     repoRoot = mkdtempSync(join(tmpdir(), 'archon-marketplace-install-'));
     mockFindRepoRoot = repoRoot;
     directoryMode = 'normal';
+    mockLogger.error.mockClear();
     consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
     fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(
       (input: RequestInfo | URL): Promise<Response> => {
@@ -7115,6 +7116,15 @@ describe('workflowInstallCommand directory packages', () => {
       'maximum depth of 8'
     );
     expect(existsSync(join(repoRoot, '.archon/workflows/public-x-research.yaml'))).toBe(false);
+    expect(mockLogger.error).toHaveBeenCalledWith(
+      {
+        error: 'GitHub directory package exceeds the maximum depth of 8',
+        errorType: 'Error',
+        err: expect.any(Error),
+        slug: 'public-x-research',
+      },
+      'cli.workflow_install_failed'
+    );
   });
 
   it('rejects directory packages beyond the request limit before writing', async () => {
