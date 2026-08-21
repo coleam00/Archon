@@ -41,6 +41,13 @@ import {
   buildNodeSummaries,
 } from './workflow';
 
+interface GitHubContentResponseFixture {
+  name: string;
+  type: 'file' | 'dir';
+  download_url: null;
+  path: string;
+}
+
 const mockLogger = {
   fatal: mock(() => undefined),
   error: mock(() => undefined),
@@ -6977,12 +6984,15 @@ describe('workflowInstallCommand directory packages', () => {
         if (url.includes(`/contents/${sourceRoot}?ref=${sha}`)) {
           const supportingDirectories =
             directoryMode === 'wide'
-              ? Array.from({ length: 50 }, (_, index) => ({
-                  name: `support-${String(index)}`,
-                  type: 'dir',
-                  download_url: null,
-                  path: `${sourceRoot}/support-${String(index)}`,
-                }))
+              ? Array.from(
+                  { length: 50 },
+                  (_: unknown, index: number): GitHubContentResponseFixture => ({
+                    name: `support-${String(index)}`,
+                    type: 'dir',
+                    download_url: null,
+                    path: `${sourceRoot}/support-${String(index)}`,
+                  })
+                )
               : [
                   {
                     name: 'skills',
@@ -7010,12 +7020,15 @@ describe('workflowInstallCommand directory packages', () => {
           if (directoryMode === 'oversized') {
             return Promise.resolve(
               Response.json(
-                Array.from({ length: 1000 }, (_, index) => ({
-                  name: `file-${String(index)}.md`,
-                  type: 'file',
-                  download_url: null,
-                  path: `${sourceRoot}/skills/file-${String(index)}.md`,
-                }))
+                Array.from(
+                  { length: 1000 },
+                  (_: unknown, index: number): GitHubContentResponseFixture => ({
+                    name: `file-${String(index)}.md`,
+                    type: 'file',
+                    download_url: null,
+                    path: `${sourceRoot}/skills/file-${String(index)}.md`,
+                  })
+                )
               )
             );
           }
@@ -7150,10 +7163,14 @@ describe('workflowInstallCommand directory packages', () => {
 
   it('rejects a listing at the GitHub Contents API item limit before writing', async () => {
     directoryMode = 'oversized';
+    const existingSkillPath = join(repoRoot, '.claude/skills/xquik-social-research/SKILL.md');
+    mkdirSync(join(existingSkillPath, '..'), { recursive: true });
+    writeFileSync(existingSkillPath, 'existing skill\n');
 
     await expect(workflowInstallCommand('public-x-research', repoRoot)).rejects.toThrow(
       '1000-item Contents API limit'
     );
+    expect(readFileSync(existingSkillPath, 'utf8')).toBe('existing skill\n');
     expect(existsSync(join(repoRoot, '.archon/workflows/public-x-research.yaml'))).toBe(false);
   });
 });
