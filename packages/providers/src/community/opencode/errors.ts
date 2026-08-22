@@ -1,5 +1,21 @@
-const RATE_LIMIT_PATTERNS = ['rate limit', 'too many requests', '429', 'overloaded'];
-const AUTH_PATTERNS = ['unauthorized', 'authentication', 'invalid token', '401', '403', 'api key'];
+// Deliberately excludes a bare '429': that digit can appear in unrelated text
+// (a port, a byte count, a millisecond duration) on this classifier's sole
+// call site (the retry loop's catch in provider.ts:181) — same "bare digits
+// aren't enough signal" reasoning as AUTH_PATTERNS below (#2715, mirror of
+// #2509 R11). A false 'rate_limit' classification wastes a subprocess
+// retry/backoff cycle before the correct terminal message is shown, but
+// (unlike a false 'auth' hit) does not deny the retry outright.
+const RATE_LIMIT_PATTERNS = ['rate limit', 'too many requests', 'overloaded'];
+// Deliberately excludes bare '401'/'403': those digits can appear in
+// unrelated text (a port, a byte offset, a millisecond duration) on this
+// classifier's sole call site (the retry loop's catch in provider.ts:181),
+// which covers every error thrown mid-turn — the most common failure
+// surface in this file. A false 'auth' classification here both misroutes
+// the user-facing message (enrichOpencodeError prefixes the error with
+// `OpenCode auth:` unconditionally) and forces `shouldRetry: false` at
+// provider.ts:182-186, denying a transient failure its retry (#2715,
+// mirror of #2509 R7 / Claude AUTH_PATTERNS).
+const AUTH_PATTERNS = ['unauthorized', 'authentication', 'invalid token', 'api key'];
 const CRASH_PATTERNS = [
   'server disconnected',
   'disposed',

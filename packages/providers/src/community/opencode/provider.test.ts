@@ -132,6 +132,7 @@ mock.module('@opencode-ai/sdk', () => ({
 }));
 
 import { OpencodeProvider, resetEmbeddedRuntime } from './provider';
+import { classifyOpencodeError } from './errors';
 import type { NodeConfig } from '../../types';
 
 /** Default model for tests — satisfies the model-or-agent validation */
@@ -1435,5 +1436,57 @@ describe('OpencodeProvider', () => {
     expect(error?.message).toContain(
       "Invalid OpenCode agent model ref for 'bad-agent': 'invalid-no-slash-format'"
     );
+  });
+});
+
+describe('classifyOpencodeError (#2715)', () => {
+  // AUTH_PATTERNS is this classifier's sole gate to 'auth', and 'auth' is what
+  // makes enrichOpencodeError wrap a message as `OpenCode auth:` — a prefix
+  // every error-formatter trusts unconditionally. A bare "401"/"403" used to
+  // be enough to classify as 'auth', so any mid-turn error whose text merely
+  // contained those digits (a port, a timeout in ms) was misrouted to
+  // "OpenCode auth: ..." and had its retry disabled at provider.ts:182-186.
+  test('does not classify a bare "401"/"403" substring as auth', () => {
+    expect(classifyOpencodeError(new Error('connect ECONNREFUSED 127.0.0.1:401'), false)).not.toBe(
+      'auth'
+    );
+    expect(classifyOpencodeError(new Error('timeout after 401ms'), false)).not.toBe('auth');
+    expect(classifyOpencodeError(new Error('proxy responded with 403'), false)).not.toBe('auth');
+  });
+
+  test('still classifies genuine auth signals as auth', () => {
+    expect(classifyOpencodeError(new Error('Unauthorized'), false)).toBe('auth');
+    expect(classifyOpencodeError(new Error('authentication failed'), false)).toBe('auth');
+    expect(classifyOpencodeError(new Error('invalid token provided'), false)).toBe('auth');
+    expect(classifyOpencodeError(new Error('provided api key is rejected'), false)).toBe('auth');
+    // Real-world provider shape: a 401 co-occurring with the word "Unauthorized" —
+    // the word carries the signal, not the digits.
+    expect(
+      classifyOpencodeError(new Error('exceeded retry limit, last status: 401 Unauthorized'), false)
+    ).toBe('auth');
+  });
+
+  // RATE_LIMIT_PATTERNS used to admit bare '429', with the same substring scan
+  // pitfall as AUTH_PATTERNS — a port like 127.0.0.1:4291 or a timeout in ms
+  // like "operation timed out after 4293ms" was misrouted to 'rate_limit',
+  // wasting one retry/backoff cycle before the correct terminal message.
+  test('does not classify a bare "429" substring as rate_limit (#2509 R11 mirror)', () => {
+    expect(classifyOpencodeError(new Error('connect ECONNREFUSED 127.0.0.1:4291'), false)).not.toBe(
+      'rate_limit'
+    );
+    expect(
+      classifyOpencodeError(
+        new Error('operation timed out after 4293ms while establishing connection'),
+        false
+      )
+    ).not.toBe('rate_limit');
+  });
+
+  test('still classifies genuine rate-limit signals as rate_limit', () => {
+    expect(classifyOpencodeError(new Error('rate limit exceeded'), false)).toBe('rate_limit');
+    expect(classifyOpencodeError(new Error('too many requests, please slow down'), false)).toBe(
+      'rate_limit'
+    );
+    expect(classifyOpencodeError(new Error('server overloaded'), false)).toBe('rate_limit');
   });
 });

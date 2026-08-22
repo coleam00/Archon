@@ -23,7 +23,7 @@ mock.module('@anthropic-ai/claude-agent-sdk', () => ({
   query: mockQuery,
 }));
 
-import { ClaudeProvider, shouldPassNoEnvFile } from './provider';
+import { ClaudeProvider, classifySubprocessError, shouldPassNoEnvFile } from './provider';
 import * as claudeModule from './provider';
 import * as binaryResolver from './binary-resolver';
 
@@ -3103,5 +3103,65 @@ describe('API error surfaced as text (#1797)', () => {
     expect(chunks.filter(c => c.type === 'assistant')).toHaveLength(0);
     // billing_error classifies as auth → non-retryable
     expect(mockQuery).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('classifySubprocessError (#2715)', () => {
+  // AUTH_PATTERNS is this classifier's sole gate to 'auth', and 'auth' is what
+  // makes classifyAndEnrichError wrap a message as `Claude Code auth error:` —
+  // the prefix error-formatter.ts trusts unconditionally. A bare "401"/"403"
+  // used to be enough to classify as 'auth', so any mid-turn error whose text
+  // merely contained those digits (a port, a timeout in ms) was misrouted to
+  // "run /login" and had its retry disabled at :1353-1357.
+  test('does not classify a bare "401"/"403" substring as auth', () => {
+    expect(classifySubprocessError('connect ECONNREFUSED 127.0.0.1:401', '')).not.toBe('auth');
+    expect(classifySubprocessError('timeout after 401ms', '')).not.toBe('auth');
+    expect(classifySubprocessError('proxy responded with 403', '')).not.toBe('auth');
+  });
+
+  test('still classifies genuine auth signals as auth', () => {
+    expect(classifySubprocessError('Unauthorized', '')).toBe('auth');
+    expect(classifySubprocessError('authentication failed', '')).toBe('auth');
+    expect(classifySubprocessError('invalid token provided', '')).toBe('auth');
+    expect(classifySubprocessError('Your credit balance is too low to access the API', '')).toBe(
+      'auth'
+    );
+    // Real-world provider shape: a 401 co-occurring with the word "Unauthorized" —
+    // the word carries the signal, not the digits.
+    expect(classifySubprocessError('exceeded retry limit, last status: 401 Unauthorized', '')).toBe(
+      'auth'
+    );
+  });
+
+  test('resolves a crash-pattern message carrying a stray digit to the retryable "crash" class, not silently to "unknown"', () => {
+    // Not classifying as 'auth' isn't sufficient on its own — shouldRetry =
+    // errorClass === 'rate_limit' || errorClass === 'crash', so a crash-shaped
+    // message must specifically land on 'crash' (retryable), not fall through
+    // to 'unknown' (also non-retryable), or a future reordering of
+    // SUBPROCESS_CRASH_PATTERNS/AUTH_PATTERNS could silently regress retry
+    // eligibility without any test catching it.
+    expect(classifySubprocessError('exited with code 401', '')).toBe('crash');
+  });
+
+  // RATE_LIMIT_PATTERNS used to admit bare '429', with the same substring scan
+  // pitfall as AUTH_PATTERNS above — a port like 127.0.0.1:4291 or a timeout
+  // in ms like "operation timed out after 4293ms" was misrouted to
+  // 'rate_limit', wasting one retry/backoff cycle before the correct terminal
+  // message. The Codex classifier got the same fix in PR #2702 (regression
+  // test at codex/provider.test.ts:2707-2712); the Claude side ports that
+  // contract here (#2715, #2509 R11 mirror).
+  test('does not classify a bare "429" substring as rate_limit', () => {
+    expect(classifySubprocessError('connect ECONNREFUSED 127.0.0.1:4291', '')).not.toBe(
+      'rate_limit'
+    );
+    expect(
+      classifySubprocessError('operation timed out after 4293ms while establishing connection', '')
+    ).not.toBe('rate_limit');
+  });
+
+  test('still classifies genuine rate-limit signals as rate_limit', () => {
+    expect(classifySubprocessError('rate limit exceeded', '')).toBe('rate_limit');
+    expect(classifySubprocessError('too many requests, please slow down', '')).toBe('rate_limit');
+    expect(classifySubprocessError('server overloaded', '')).toBe('rate_limit');
   });
 });

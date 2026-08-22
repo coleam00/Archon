@@ -226,10 +226,17 @@ export function buildRequestSubprocessEnv(
 const MAX_SUBPROCESS_RETRIES = 3;
 const RETRY_BASE_DELAY_MS = 2000;
 
+// Deliberately excludes a bare '429': that digit can appear in unrelated text
+// (a port, a byte count, a millisecond duration) on this classifier's sole
+// call site (the retry-loop catch in classifyAndEnrichError, :1325), which
+// covers every error thrown mid-turn — same "bare digits aren't enough
+// signal" reasoning as AUTH_PATTERNS below (#2715, mirror of #2509 R11
+// applied to Codex in PR #2702). A false 'rate_limit' classification wastes
+// a subprocess retry/backoff cycle before the correct terminal message is
+// shown, but (unlike a false 'auth' hit) does not deny the retry outright.
 const RATE_LIMIT_PATTERNS = [
   'rate limit',
   'too many requests',
-  '429',
   'overloaded',
   // "API Error: 400 due to tool use concurrency issues" — transient server-side
   // rejection of concurrent tool calls; retrying after backoff succeeds (#1341).
@@ -263,14 +270,16 @@ const UNTYPED_TRANSIENT_PATTERNS: readonly string[] = [
   'tool use concurrency',
 ];
 
-const AUTH_PATTERNS = [
-  'credit balance',
-  'unauthorized',
-  'authentication',
-  'invalid token',
-  '401',
-  '403',
-];
+// Deliberately excludes bare '401'/'403': those digits can appear in
+// unrelated text (a port, a byte offset, a millisecond duration) on this
+// classifier's sole call site (the retry-loop catch in
+// classifyAndEnrichError, :1322), which covers every error thrown mid-turn —
+// the most common failure surface in this file. A false 'auth' classification
+// here both misroutes the user-facing message (`error-formatter.ts` trusts
+// `Claude Code auth error:` unconditionally at :97-99) and forces
+// `shouldRetry: false` at :1353-1357, denying a transient failure its retry
+// (#2715, mirror of #2509 R7 applied to Codex in PR #2702).
+const AUTH_PATTERNS = ['credit balance', 'unauthorized', 'authentication', 'invalid token'];
 const SUBPROCESS_CRASH_PATTERNS = ['exited with code', 'killed', 'signal', 'operation aborted'];
 
 /**
@@ -286,7 +295,8 @@ const SUBPROCESS_CRASH_PATTERNS = ['exited with code', 'killed', 'signal', 'oper
  */
 const SPAWN_FAILURE_PATTERNS = ['failed to launch', 'enoent'];
 
-function classifySubprocessError(
+/** Exported for direct unit testing — see provider.test.ts (#2715). */
+export function classifySubprocessError(
   errorMessage: string,
   stderrOutput: string
 ): 'rate_limit' | 'auth' | 'crash' | 'unknown' {
