@@ -294,10 +294,11 @@ export async function isolationCompleteCommand(
 
       // Check 4: commits that would become unreachable after branch deletion
       let remote = 'origin';
+      let uniqueCommitCount: number | undefined;
       try {
         const repoConfig = await loadRepoConfig(env.codebase_default_cwd);
         remote = repoConfig.worktree?.remote?.trim() || remote;
-        const uniqueCommitCount = await getUniqueCommitCount(
+        uniqueCommitCount = await getUniqueCommitCount(
           toRepoPath(env.codebase_default_cwd),
           toBranchName(branch),
           remote
@@ -314,6 +315,9 @@ export async function isolationCompleteCommand(
         // against proceed on any git failure — permissions, a corrupt ref, a
         // timeout. An unnecessary blocker costs the operator one --force; a
         // wrong skip costs them the commits.
+        // uniqueCommitCount stays undefined so check 5 below cannot mistake
+        // "unverified" for "verified zero" — this check's own blocker already
+        // covers the unverifiable case.
         blockers.push(
           `could not determine unique commits (${err.message}) — refusing to delete unverified`
         );
@@ -332,9 +336,13 @@ export async function isolationCompleteCommand(
         }
       } catch (error) {
         const err = error as Error;
-        // origin/<branch> doesn't exist means branch was never pushed
+        // origin/<branch> doesn't exist means branch was never pushed. That is
+        // only a loss risk if the branch carries commits of its own — check 4
+        // already computed that count; reuse it instead of guessing from here.
         if (err.message.includes('unknown revision') || err.message.includes('bad revision')) {
-          blockers.push('branch has never been pushed to remote');
+          if (uniqueCommitCount !== undefined && uniqueCommitCount > 0) {
+            blockers.push('branch has never been pushed to remote');
+          }
         } else {
           getLog().warn({ err, branch }, 'isolation.complete_unpushed_check_failed');
         }
