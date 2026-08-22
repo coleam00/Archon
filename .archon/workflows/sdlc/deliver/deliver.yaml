@@ -141,7 +141,9 @@ nodes:
   # if_skipped default. A completed loop implies readiness — until_bash on the
   # recheck verdict is its only success exit — while a failed loop (bound
   # exhausted) or a failed review surfaces as a binding-resolution failure on
-  # this node, so lifecycle success alone never certifies readiness.
+  # this node, so lifecycle success alone never certifies readiness. The
+  # failed-producer -> failed-binding rule is engine-enforced (#2696/#2710);
+  # if_skipped covers only skipped/pending producers, never failed ones.
   - id: gate-ready
     script: gate-ready
     runtime: uv
