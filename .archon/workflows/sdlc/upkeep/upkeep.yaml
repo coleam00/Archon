@@ -1,0 +1,138 @@
+name: upkeep
+description: |
+  Keep one dependency current: ground the update request against the repository
+  as it exists (locked version, blast radius, breaking changes that touch real
+  usage), then either stop with the reason or take the bump through the full
+  reviewed delivery tail. One governed run; the assessment is the work order.
+
+  Use when: a dependency or security advisory should become a reviewed,
+  ready-to-merge PR — "update sharp", "address the undici advisory",
+  "bump X to latest".
+  NOT for: sweeping every outdated dependency at once (one target per run),
+  or deciding fork-vs-replace questions (that is a human decision the
+  assessment will surface, not make).
+
+requires: [github]
+
+inputs:
+  target:
+    default: ""
+    description: >-
+      The update to assess — a dependency name, version, or advisory. When
+      empty, the run's trigger message is the target.
+  tests:
+    default: false
+    description: Enable the review's test-coverage lens.
+  errors:
+    default: false
+    description: Enable the review's silent-failure lens.
+  comments:
+    default: false
+    description: Enable the review's comment-accuracy lens.
+  types:
+    default: false
+    description: Enable the review's type-design lens.
+  docs:
+    default: false
+    description: Enable the review's docs-impact lens.
+  simplify:
+    default: false
+    description: Enable the review's simplification lens (suggestions only).
+
+returns: outcome
+
+nodes:
+  # The assessment stage is advisory and inline (not a composed package): the
+  # record/judge/verify triad appears here for the second time after triage —
+  # rule of three says extract on the third package that needs it, not now.
+  - id: record-state
+    bash: |
+      # Assess is advisory. Snapshot the tree so assert-intact can prove it
+      # left the operator's checkout untouched.
+      mkdir -p "$ARTIFACTS_DIR" &&
+        git status --porcelain > "$ARTIFACTS_DIR/.tree-state" &&
+        echo '{"state":"recorded"}'
+
+  - id: assess
+    command: assess
+    depends_on: [record-state]
+    model: medium
+    output_type: dependency-assessment
+    output_format:
+      type: object
+      properties:
+        action:
+          type: string
+          enum: [update, no_action]
+        summary:
+          type: string
+      required: [action, summary]
+
+  - id: assert-intact
+    bash: |
+      if [ ! -s "$ARTIFACTS_DIR/upkeep-assessment.md" ]; then
+        echo "assert-intact: the run completed but wrote no upkeep-assessment.md — a verdict without evidence is not an assessment." >&2
+        exit 1
+      fi
+      git status --porcelain > "$ARTIFACTS_DIR/.tree-state-after"
+      if ! diff -q "$ARTIFACTS_DIR/.tree-state" "$ARTIFACTS_DIR/.tree-state-after" > /dev/null 2>&1; then
+        echo "assert-intact: the working tree changed during an advisory assessment:" >&2
+        diff "$ARTIFACTS_DIR/.tree-state" "$ARTIFACTS_DIR/.tree-state-after" >&2 || true
+        exit 1
+      fi
+      echo '{"intact":"true"}'
+    depends_on: [assess]
+
+  # Spend gate: a no_action assessment skips everything paid or public below.
+  # An expected negative is a completed run with the assessment as its result.
+  - id: gate-update
+    bash: echo '{"gate":"update"}'
+    depends_on: [assert-intact]
+    when: "$assess.output.action == 'update'"
+
+  # The work order authorizes exactly the lockfile change implement's default
+  # forbids: implement.md's "never update a lockfile" exists to stop incidental
+  # churn, and the target dependency IS the work here — so the order re-scopes
+  # that rule explicitly (non-goals are transferable by the work item) while
+  # keeping it in force for every other dependency.
+  - id: deliver
+    include: deliver
+    with:
+      tests: "$INPUTS.tests"
+      errors: "$INPUTS.errors"
+      comments: "$INPUTS.comments"
+      types: "$INPUTS.types"
+      docs: "$INPUTS.docs"
+      simplify: "$INPUTS.simplify"
+      work: >-
+        Apply the dependency update specified in
+        $ARTIFACTS_DIR/upkeep-assessment.md. Read that file in full first — it
+        is the verified work order, and you know nothing about this update
+        beyond it and the repository itself. Follow its update order: use the
+        project's own package manager, change the manifest only as the
+        assessment directs, and update the lockfile for the TARGET dependency
+        only — this work item explicitly authorizes that lockfile change; the
+        no-lockfile-updates default still applies to every other dependency, so
+        keep churn minimal and never downgrade anything unrelated. Fix what the
+        bump breaks, validate with the project's own checks, and if reality
+        contradicts the assessment (version unavailable, an unlisted peer
+        conflict), stop honestly with green false and the contradiction in your
+        summary rather than improvising a different version. Original request:
+        $INPUTS.target
+    depends_on: [gate-update]
+
+  # One return for every legitimate terminal result: a no_action assessment
+  # completes with its report path; a delivered update is accepted only when
+  # the deliver branch actually ran (if_skipped binding, #2637) and GitHub
+  # confirms a ready PR. A passed gate with no delivered output means delivery
+  # died mid-flight — outcome must never attribute that to the assessment.
+  - id: outcome
+    script: outcome
+    runtime: uv
+    depends_on: [assess, assert-intact, gate-update, deliver]
+    trigger_rule: none_failed_min_one_success
+    with:
+      action: "$assess.output.action"
+      summary: "$assess.output.summary"
+      delivered: { from: "$deliver.output", if_skipped: null }
+      gate_passed: { from: "$gate-update.output", if_skipped: null }
