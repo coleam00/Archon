@@ -4102,6 +4102,148 @@ nodes:
       expect(pw.some(w => w.includes('does not reference'))).toBe(false);
     });
 
+    it('checks EVERY gate in a body, not just the first (review fix)', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      // 'first-gate' is not terminal (has a dependent, 'work'). 'second-gate' IS
+      // the body's true terminal sink, but until_bash never references it. Before
+      // the fix, `.find()` stopped at 'first-gate' and 'second-gate' was never
+      // checked at all — its completion-not-referenced footgun went undetected.
+      await writeFile(
+        join(workflowDir, 'loop-group-multiple-gates.yaml'),
+        `
+name: loop-group-multiple-gates
+description: Two gates in one body — each needs its own verdict
+interactive: true
+nodes:
+  - id: grp
+    loop_group:
+      until_bash: "exit 0"
+      max_iterations: 3
+      nodes:
+        - id: first-gate
+          approval:
+            message: "Start?"
+        - id: work
+          depends_on: [first-gate]
+          prompt: "do work"
+        - id: second-gate
+          depends_on: [work]
+          approval:
+            message: "Continue?"
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      const pw = result.workflows[0].parseWarnings ?? [];
+      expect(pw).toHaveLength(2);
+      expect(pw.some(w => w.includes("Node 'first-gate'") && w.includes('terminal sink'))).toBe(
+        true
+      );
+      expect(
+        pw.some(w => w.includes("Node 'second-gate'") && w.includes('does not reference'))
+      ).toBe(true);
+    });
+
+    it("counts an include: directive's own depends_on when computing terminal-sink status (review fix)", async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'block.yaml'),
+        `
+name: block
+description: Reusable step
+nodes:
+  - id: step
+    prompt: do the reusable thing
+`
+      );
+      // 'check' has a dependent — the included 'review' node — so it is NOT the
+      // body's terminal sink. Before the fix, an include directive's own
+      // depends_on was excluded from the dependency set, so 'check' was silently
+      // misclassified as terminal (no warning at all, and a factually wrong
+      // "sole terminal sink" verdict).
+      await writeFile(
+        join(workflowDir, 'loop-group-gate-include-dependent.yaml'),
+        `
+name: loop-group-gate-include-dependent
+description: A downstream include node depends on the gate
+interactive: true
+nodes:
+  - id: grp
+    loop_group:
+      until_bash: "exit 0"
+      max_iterations: 3
+      nodes:
+        - id: check
+          approval:
+            message: "Continue?"
+        - id: review
+          include: block
+          depends_on: [check]
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      // 'block.yaml' is itself a discoverable workflow, so it's also in
+      // result.workflows — select by name rather than assuming index 0.
+      const target = result.workflows.find(
+        w => w.workflow.name === 'loop-group-gate-include-dependent'
+      );
+      const pw = target?.parseWarnings ?? [];
+      expect(pw.some(w => w.includes("Node 'check'") && w.includes('terminal sink'))).toBe(true);
+    });
+
+    it('counts an include: directive as a co-terminal sink (review fix)', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'block.yaml'),
+        `
+name: block
+description: Reusable step
+nodes:
+  - id: step
+    prompt: do the reusable thing
+`
+      );
+      // 'independent-include' has no dependents and nothing depends on it — a
+      // second, genuine terminal sink alongside the gate. Before the fix, include
+      // directives were excluded from the sink set entirely, so this second sink
+      // was invisible and 'check' was wrongly treated as the sole terminal node.
+      await writeFile(
+        join(workflowDir, 'loop-group-gate-include-co-terminal.yaml'),
+        `
+name: loop-group-gate-include-co-terminal
+description: An independent include node is a second terminal sink
+interactive: true
+nodes:
+  - id: grp
+    loop_group:
+      until_bash: "exit 0"
+      max_iterations: 3
+      nodes:
+        - id: check
+          approval:
+            message: "Continue?"
+        - id: independent-include
+          include: block
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      // 'block.yaml' is itself a discoverable workflow, so it's also in
+      // result.workflows — select by name rather than assuming index 0.
+      const target = result.workflows.find(
+        w => w.workflow.name === 'loop-group-gate-include-co-terminal'
+      );
+      const pw = target?.parseWarnings ?? [];
+      expect(pw.some(w => w.includes("Node 'check'") && w.includes('terminal sink'))).toBe(true);
+    });
+
     it('should accept a well-formed loop_group', async () => {
       const workflowDir = join(testDir, '.archon', 'workflows');
       await mkdir(workflowDir, { recursive: true });

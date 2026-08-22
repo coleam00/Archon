@@ -467,22 +467,29 @@ function collectGateAndLoopDeprecationWarnings(
   // mechanism, which predates and is unrelated to this pattern but is equally
   // unable to stop the loop from this position.
   if (isLoopGroupNode(node)) {
-    const bodyDependedOn = new Set(
-      node.loop_group.nodes.flatMap(n => (isIncludeDirective(n) ? [] : (n.depends_on ?? [])))
-    );
-    const gateInBody = node.loop_group.nodes.find(n => !isIncludeDirective(n) && isGateNode(n));
-    if (gateInBody && !isIncludeDirective(gateInBody)) {
-      const bodySinks = node.loop_group.nodes.filter(
-        n => !isIncludeDirective(n) && !bodyDependedOn.has(n.id)
-      );
-      if (bodyDependedOn.has(gateInBody.id) || bodySinks.length > 1) {
+    // Every body entry — including an unexpanded `include:` directive, which has
+    // the identical `depends_on` shape (both extend dagNodeBaseSchema) and is a
+    // real graph participant here, not yet inlined — contributes to and can BE a
+    // terminal sink. Excluding it would silently misclassify a gate a downstream
+    // include node depends on as "terminal", and miss an include node that is
+    // itself a second, co-terminal sink.
+    const bodyDependedOn = new Set(node.loop_group.nodes.flatMap(n => n.depends_on ?? []));
+    const bodySinks = node.loop_group.nodes.filter(n => !bodyDependedOn.has(n.id));
+    // Every gate in the body, not just the first: a body may legitimately contain
+    // more than one (e.g. an "approve to start" gate followed by work followed by
+    // a "review the result" gate) — only ONE can validly be the sole terminal sink,
+    // but each needs its own placement/completion-reference verdict, not just the
+    // first one found.
+    const gatesInBody = node.loop_group.nodes.filter(n => !isIncludeDirective(n) && isGateNode(n));
+    for (const gate of gatesInBody) {
+      if (bodyDependedOn.has(gate.id) || bodySinks.length > 1) {
         const message =
-          `Node '${gateInBody.id}': a gate node inside a loop_group body must be the ` +
+          `Node '${gate.id}': a gate node inside a loop_group body must be the ` +
           "body's sole terminal sink to pause the enclosing loop (#2707 step 3) — this " +
           'gate is not, so it will not stop loop iteration. Move it to the end of the ' +
           'body with nothing else depending on it, and no other node left un-depended-on.';
         warnings.push(message);
-        getLog().warn({ id: gateInBody.id, warning: message }, 'loop_group_gate_not_terminal_sink');
+        getLog().warn({ id: gate.id, warning: message }, 'loop_group_gate_not_terminal_sink');
       } else {
         // Gate is validly the sole terminal sink. Design A (#2707 step 3) is
         // deliberately unopinionated about what a decision means — the group's own
@@ -497,12 +504,12 @@ function collectGateAndLoopDeprecationWarnings(
         const untilBashRefsGate =
           untilBash !== undefined &&
           Array.from(untilBash.matchAll(new RegExp(OUTPUT_REF_SOURCE, 'g'))).some(
-            m => m[1] === gateInBody.id
+            m => m[1] === gate.id
           );
         if (!untilBashRefsGate) {
-          const gateRef = `$${gateInBody.id}.output`;
+          const gateRef = `$${gate.id}.output`;
           const message =
-            `Node '${gateInBody.id}': this gate is the loop_group's terminal sink, but ` +
+            `Node '${gate.id}': this gate is the loop_group's terminal sink, but ` +
             `'loop_group.until_bash' does not reference '${gateRef}' — the human's ` +
             'decision is captured but never consulted for completion, so the loop only ' +
             `ends via max_iterations. Declare 'until_bash' checking '${gateRef}.decision' ` +
@@ -510,7 +517,7 @@ function collectGateAndLoopDeprecationWarnings(
             'drives completion (#2707 step 3).';
           warnings.push(message);
           getLog().warn(
-            { id: gateInBody.id, warning: message },
+            { id: gate.id, warning: message },
             'loop_group_gate_completion_not_referenced'
           );
         }
