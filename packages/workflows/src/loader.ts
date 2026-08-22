@@ -433,6 +433,98 @@ function collectGateAndLoopDeprecationWarnings(
     getLog().warn({ id, warning: message }, 'node_loop_interactive_deprecated');
   }
 
+  // The prose `until:` completion channel is deprecated for EVERY loop/loop_group,
+  // not only interactive ones (#2707 step 3, "What gets deleted"): its one stated
+  // reason to exist — "the iteration output is a message a human reads at an
+  // interactive gate" (#2563) — evaporates once that human interaction is a gate
+  // node with structured decision output rather than a prose sentinel. `until_bash`
+  // and (loop: only) `until_field` are the declared, structured replacements. This
+  // keeps running exactly as before; only the guidance is new.
+  if (isLoopNode(node) && node.loop.until !== undefined) {
+    const message =
+      `Node '${id}': the prose 'loop.until' completion signal is deprecated. Declare ` +
+      "'loop.until_bash' (deterministic check) or 'loop.until_field' (a declared boolean " +
+      'in output_format) instead (#2707 step 3). Continue using it for now.';
+    warnings.push(message);
+    getLog().warn({ id, warning: message }, 'node_loop_until_deprecated');
+  } else if (isLoopGroupNode(node) && node.loop_group.until !== undefined) {
+    const message =
+      `Node '${id}': the prose 'loop_group.until' completion signal is deprecated. ` +
+      "Declare 'loop_group.until_bash' instead — it can read a body node's structured " +
+      'output (e.g. \'test "$body-node.output.field" = true\') (#2707 step 3). Continue ' +
+      'using it for now.';
+    warnings.push(message);
+    getLog().warn({ id, warning: message }, 'node_loop_group_until_deprecated');
+  }
+
+  // A gate node inside a loop_group body only pauses the enclosing loop when it is
+  // the body's SOLE terminal sink (#2707 step 3, target-model decision (b)) — a
+  // mid-body or co-terminal gate has no defined resume semantics and silently does
+  // not stop iteration (mid-body resume-to-node is deferred to #2708). This is
+  // guidance for the new authoring pattern, not a rejection: the file keeps loading
+  // either way, matching the grow-then-deprecate posture used throughout this
+  // function — including for a gate placed here via the legacy `on_reject`
+  // mechanism, which predates and is unrelated to this pattern but is equally
+  // unable to stop the loop from this position.
+  if (isLoopGroupNode(node)) {
+    // Every body entry — including an unexpanded `include:` directive, which has
+    // the identical `depends_on` shape (both extend dagNodeBaseSchema) and is a
+    // real graph participant here, not yet inlined — contributes to and can BE a
+    // terminal sink. Excluding it would silently misclassify a gate a downstream
+    // include node depends on as "terminal", and miss an include node that is
+    // itself a second, co-terminal sink.
+    const bodyDependedOn = new Set(node.loop_group.nodes.flatMap(n => n.depends_on ?? []));
+    const bodySinks = node.loop_group.nodes.filter(n => !bodyDependedOn.has(n.id));
+    // Every gate in the body, not just the first: a body may legitimately contain
+    // more than one (e.g. an "approve to start" gate followed by work followed by
+    // a "review the result" gate) — only ONE can validly be the sole terminal sink,
+    // but each needs its own placement/completion-reference verdict, not just the
+    // first one found.
+    const gatesInBody = node.loop_group.nodes.filter(n => !isIncludeDirective(n) && isGateNode(n));
+    for (const gate of gatesInBody) {
+      if (bodyDependedOn.has(gate.id) || bodySinks.length > 1) {
+        const message =
+          `Node '${gate.id}': a gate node inside a loop_group body must be the ` +
+          "body's sole terminal sink to pause the enclosing loop (#2707 step 3) — this " +
+          'gate is not, so it will not stop loop iteration. Move it to the end of the ' +
+          'body with nothing else depending on it, and no other node left un-depended-on.';
+        warnings.push(message);
+        getLog().warn({ id: gate.id, warning: message }, 'loop_group_gate_not_terminal_sink');
+      } else {
+        // Gate is validly the sole terminal sink. Design A (#2707 step 3) is
+        // deliberately unopinionated about what a decision means — the group's own
+        // 'until_bash' is the completion channel, and it either reads the gate's
+        // '$<gateId>.output.decision'/'.text' or it doesn't. If it doesn't, the
+        // human's answer is captured (every resolution still writes node_completed)
+        // but never consulted for completion — the loop just runs to max_iterations,
+        // silently ignoring every response. Structural check (does the until_bash
+        // string reference the gate's node id), not prose-sniffing — no judgment
+        // about what the check DOES with it, only whether it looks at it at all.
+        const untilBash = node.loop_group.until_bash;
+        const untilBashRefsGate =
+          untilBash !== undefined &&
+          Array.from(untilBash.matchAll(new RegExp(OUTPUT_REF_SOURCE, 'g'))).some(
+            m => m[1] === gate.id
+          );
+        if (!untilBashRefsGate) {
+          const gateRef = `$${gate.id}.output`;
+          const message =
+            `Node '${gate.id}': this gate is the loop_group's terminal sink, but ` +
+            `'loop_group.until_bash' does not reference '${gateRef}' — the human's ` +
+            'decision is captured but never consulted for completion, so the loop only ' +
+            `ends via max_iterations. Declare 'until_bash' checking '${gateRef}.decision' ` +
+            `(e.g. '[ "${gateRef}.decision" = "approve" ]') so the gate's answer actually ` +
+            'drives completion (#2707 step 3).';
+          warnings.push(message);
+          getLog().warn(
+            { id: gate.id, warning: message },
+            'loop_group_gate_completion_not_referenced'
+          );
+        }
+      }
+    }
+  }
+
   // Recurse into a loop_group body — mirrors collectUnknownNodeKeys's own body
   // recursion. Resolved and raw body arrays share index order (Zod arrays
   // preserve it), so they're zipped by position rather than by id.
