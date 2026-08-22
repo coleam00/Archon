@@ -392,6 +392,58 @@ describe('PiProvider', () => {
     expect(error?.message).toContain('Pi provider requires a model');
   });
 
+  test('falls back to the operator Pi default (settings.json) when no model is configured', async () => {
+    // With no node/config model, Archon composes the operator's Pi default
+    // (defaultProvider/defaultModel) so no vendor model is hardcoded — e.g. a
+    // litellm-only setup boots on its own configured default model.
+    process.env.GEMINI_API_KEY = 'sk-test';
+    mockSettingsManagerGetGlobalSettings.mockImplementation(() => ({
+      defaultProvider: 'google',
+      defaultModel: 'gemini-2.5-pro',
+    }));
+    resetScript(scriptedAgentEnd());
+
+    // No `model` in the request options — must resolve from settings.
+    const { error } = await consume(new PiProvider().sendQuery('hi', '/tmp'));
+
+    expect(error).toBeUndefined();
+    expect(mockLogger.info).toHaveBeenCalledWith(
+      { modelRef: 'google/gemini-2.5-pro' },
+      'pi.model_defaulted_from_settings'
+    );
+    expect(mockModelRegistryFind).toHaveBeenCalledWith('google', 'gemini-2.5-pro');
+  });
+
+  test('still throws when no model and settings default is incomplete (provider without model)', async () => {
+    // A partial default (provider set but no model, or vice versa) must NOT
+    // silently resolve — fail fast with the actionable "requires a model" error.
+    mockSettingsManagerGetGlobalSettings.mockImplementation(() => ({
+      defaultProvider: 'google',
+    }));
+    const { error } = await consume(new PiProvider().sendQuery('hi', '/tmp'));
+    expect(error?.message).toContain('Pi provider requires a model');
+    expect(mockLogger.info).not.toHaveBeenCalledWith(
+      expect.anything(),
+      'pi.model_defaulted_from_settings'
+    );
+  });
+
+  test('drains and logs settings errors when falling through the missing-model path', async () => {
+    // A malformed/unreadable settings.json is recorded via drainErrors() (not
+    // thrown) and yields empty defaults. The error must be surfaced, not
+    // swallowed behind the "requires a model" throw below.
+    mockSettingsManagerGetGlobalSettings.mockImplementation(() => ({}));
+    mockSettingsManagerDrainErrors.mockImplementation(() => [
+      { scope: 'global', error: new Error('bad settings.json') },
+    ]);
+    const { error } = await consume(new PiProvider().sendQuery('hi', '/tmp'));
+    expect(error?.message).toContain('Pi provider requires a model');
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ scope: 'global' }),
+      'pi.settings_default_model_read_error'
+    );
+  });
+
   test('throws when model ref is malformed', async () => {
     const { error } = await consume(
       new PiProvider().sendQuery('hi', '/tmp', undefined, { model: 'sonnet' })
