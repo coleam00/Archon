@@ -6069,51 +6069,56 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
   });
 
   it('persists script output at or below the byte cap unchanged without truncation metadata', async () => {
-    const store = createMockStore();
-    const mockDeps = createMockDeps(store);
-    const workflowRun = makeWorkflowRun('script-output-below-cap');
+    for (const [nodeId, byteCount] of [
+      ['below-cap', 32_767],
+      ['exact-cap', 32_768],
+    ] as const) {
+      const store = createMockStore();
+      const mockDeps = createMockDeps(store);
+      const workflowRun = makeWorkflowRun(`script-output-${nodeId}`);
 
-    await executeDagWorkflow(
-      mockDeps,
-      createMockPlatform(),
-      'conv-script-below-cap',
-      testDir,
-      {
-        name: 'script-output-below-cap',
-        nodes: [
-          {
-            id: 'below-cap',
-            kind: 'exec',
-            runtime: 'bun',
-            script: 'console.log("x".repeat(32767))',
-          },
-        ],
-      },
-      workflowRun,
-      'claude',
-      undefined,
-      join(testDir, 'artifacts'),
-      join(testDir, 'state'),
-      join(testDir, 'logs'),
-      'main',
-      'docs/',
-      minimalConfig
-    );
+      await executeDagWorkflow(
+        mockDeps,
+        createMockPlatform(),
+        `conv-script-${nodeId}`,
+        testDir,
+        {
+          name: `script-output-${nodeId}`,
+          nodes: [
+            {
+              id: nodeId,
+              kind: 'exec',
+              runtime: 'bun',
+              script: `console.log("x".repeat(${String(byteCount)}))`,
+            },
+          ],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'state'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
 
-    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
-    const completedEvent = eventCalls.find(
-      (call: unknown[]) =>
-        (call[0] as { event_type: string }).event_type === 'node_completed' &&
-        (call[0] as { step_name: string }).step_name === 'below-cap'
-    );
-    const data = (
-      completedEvent![0] as {
-        data: Record<string, unknown> & { node_output: string };
-      }
-    ).data;
-    expect(data.node_output).toBe('x'.repeat(32767));
-    expect(data.node_output_truncated).toBeUndefined();
-    expect(data.node_output_original_bytes).toBeUndefined();
+      const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+      const completedEvent = eventCalls.find(
+        (call: unknown[]) =>
+          (call[0] as { event_type: string }).event_type === 'node_completed' &&
+          (call[0] as { step_name: string }).step_name === nodeId
+      );
+      const data = (
+        completedEvent![0] as {
+          data: Record<string, unknown> & { node_output: string };
+        }
+      ).data;
+      expect(data.node_output).toBe('x'.repeat(byteCount));
+      expect(data.node_output_truncated).toBeUndefined();
+      expect(data.node_output_original_bytes).toBeUndefined();
+    }
   });
 
   it('keeps a persisted UTF-8 preview valid when the byte cap splits a code point', async () => {

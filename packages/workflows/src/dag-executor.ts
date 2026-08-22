@@ -3307,8 +3307,10 @@ async function executeBashNode(
   stepNamePrefix = '',
   iteration?: number,
   // Per-iteration $LOOP_USER_INPUT free-text for loop_group body bash nodes, delivered via
-  // env (never spliced into source — #2115). '' for top-level bash nodes and non-first
-  // iterations (mirrors executeScriptNode, #2725).
+  // env — the channel a braced ${LOOP_USER_INPUT} read or a nested subprocess needs. An
+  // unbraced $LOOP_USER_INPUT literal is separately shell-quoted and spliced into the
+  // script source by applyLoopPrevToBodyNode before this function ever runs (#2725).
+  // '' for top-level bash nodes and non-first iterations (mirrors executeScriptNode).
   loopUserInput = '',
   execContext: ExecutionContext = { kind: 'host' }
 ): Promise<NodeOutput> {
@@ -3584,8 +3586,10 @@ async function executeScriptNode(
   stepNamePrefix = '',
   iteration?: number,
   // Per-iteration $LOOP_USER_INPUT free-text for loop_group body scripts, delivered via
-  // env (never spliced into source — #2115). '' for top-level scripts and non-first
-  // iterations (mirrors executeBashNode, which delivers loop input via quoted splice).
+  // env — TS/Python source can't be safely shell-quoted the way bash can, so unlike bash
+  // this is the ONLY delivery channel here (#2115). '' for top-level scripts and non-first
+  // iterations (executeBashNode also delivers this via env now, alongside its separate
+  // splice path for an unbraced $LOOP_USER_INPUT literal — #2725).
   loopUserInput = '',
   execContext: ExecutionContext = { kind: 'host' },
   /** Roots named scripts resolve under; always supplied from RunLayersContext. */
@@ -4369,8 +4373,10 @@ async function executeLoopGroupNode(
       totalLoopIterations: 0,
       stepNamePrefix: bodyStepNamePrefix,
       loopGroupPath: [...enclosingLoopGroupPath, { groupId: node.id, iteration: i }],
-      // Deliver this iteration's approval-gate free-text to body script: nodes via env
-      // (never spliced into source — #2115); matches applyLoopPrevToBodyNode's skip.
+      // Deliver this iteration's approval-gate free-text to body bash:/script: nodes via
+      // env (#2115/#2725) — script's only channel, and bash's channel for a braced
+      // ${LOOP_USER_INPUT} read or a nested subprocess; an unbraced bash literal is
+      // separately spliced by applyLoopPrevToBodyNode above.
       bodyLoopUserInput: userInputForIter,
     };
     await runLayers(iterCtx);
@@ -8057,10 +8063,13 @@ interface RunLayersContext {
   /** Complete runtime loop_group lineage for typed body artifacts; empty at top level. */
   loopGroupPath: NodeArtifactLoopFrame[];
   /**
-   * Per-iteration `$LOOP_USER_INPUT` free-text for loop_group body `script:` nodes,
-   * delivered into the subprocess as an env var (never spliced into TS/Python source —
-   * #2115). Only non-empty on the first resumed iteration of an interactive group;
-   * undefined for the top-level DAG (top-level scripts have no loop user input).
+   * Per-iteration `$LOOP_USER_INPUT` free-text for loop_group body `bash:`/`script:` nodes,
+   * delivered into the subprocess as an env var (#2115/#2725) — TS/Python source can't be
+   * shell-quoted the way bash can, so this is script's only channel; for bash it covers a
+   * braced `${LOOP_USER_INPUT}` read or a nested subprocess (an unbraced literal is
+   * separately spliced into the bash source by `applyLoopPrevToBodyNode`). Only non-empty
+   * on the first resumed iteration of an interactive group; undefined for the top-level
+   * DAG (top-level nodes have no loop user input).
    */
   bodyLoopUserInput?: string;
 }
