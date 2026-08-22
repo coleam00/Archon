@@ -738,10 +738,10 @@ Two distinct cases:
 - **Interactive-gate resume** (`/workflow approve <id>`): the loop continues
   with the **next** iteration's whole body. With `fresh_context: false`, the
   body's AI session continues from where it paused (the session cursor is
-  persisted across the gate). `$LOOP_PREV.*` refs, however, resolve to an empty
-  string on the first resumed iteration — the prior iteration's body-output
-  snapshot is **not** carried across the gate (same caveat as
-  [`$LOOP_PREV_OUTPUT`](#retry-on-failure-with-loop_prev_output)).
+  persisted across the gate). `$LOOP_PREV.*` refs on the first resumed
+  iteration resolve to the prior iteration's real body outputs, restored from
+  the persisted run history — the same as an un-paused next iteration would
+  have seen.
 - **Failure resume** (`/workflow resume <id>` after a crash/failure): there is
   no persisted iteration cursor — the loop_group node restarts from
   **iteration 1**. Per-body-node resume granularity is not supported in v1.
@@ -758,8 +758,6 @@ Two distinct cases:
 - Per-body-node resume (skip-to-failed-body-node) — the whole iteration re-runs.
 - `$LOOP_PREV.<id>.output[N]` history indexing — only the immediately prior
   iteration is reachable.
-- `$LOOP_PREV.*` across an interactive pause/resume boundary — resolves to an
-  empty string on the resumed iteration.
 
 Nested `loop_group` inside a `loop_group` body is supported by construction
 (the body is a normal `nodes` array), but is not hardened in v1.

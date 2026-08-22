@@ -22564,12 +22564,13 @@ describe('executeDagWorkflow -- loop_group node', () => {
     expect(pauseCalls2.length).toBe(0);
   });
 
-  it('INTERACTIVE resume: $LOOP_PREV is NOT preserved across the pause/resume boundary (v1 known limitation)', async () => {
-    // v1 behavior: on interactive resume, loopPrevOutputs resets to undefined (the prior
-    // process's body-output snapshot is not persisted in ApprovalContext). So the resumed
-    // iteration's $LOOP_PREV.<bodyNode>.output resolves to '' — NOT to the paused run's
-    // iteration-1 output. This test locks the current behavior; persisting $LOOP_PREV
-    // across resume is a tracked follow-up (CodeRabbit finding #5).
+  it('INTERACTIVE resume: $LOOP_PREV resolves to the prior iteration real body output (#2748)', async () => {
+    // On interactive resume, executeLoopGroupNode is a fresh call whose local
+    // loopPrevOutputs starts undefined — but the paused run's iteration-1 body output
+    // was already persisted as a `refine.work` node_completed row. The resumed
+    // executeDagWorkflow call re-derives loopPrevOutputs from that persisted row (via
+    // outerNodeOutputs, pre-populated from the priorCompletedNodes snapshot passed in
+    // below), so $LOOP_PREV.<bodyNode>.output resolves to the real prior output, not ''.
     mockSendQueryDag.mockImplementationOnce(async function* () {
       yield { type: 'assistant', content: 'iter1 body output XYZ' };
       yield { type: 'result', sessionId: 'lg-prev-sess-1' };
@@ -22626,7 +22627,11 @@ describe('executeDagWorkflow -- loop_group node', () => {
     const iter1Prompt = mockSendQueryDag.mock.calls[0][0] as string;
     expect(iter1Prompt).toContain('PREV=<<>>');
 
-    // ---- Resume: iteration 2.
+    // ---- Resume: iteration 2. priorCompletedNodes carries the persisted iteration-1
+    // body row (the `refine.work` node_completed row a real DB would return from
+    // getDagResumeSnapshot) — this is what a real resume threads in via
+    // hydrateResumableRun before calling executeDagWorkflow.
+    const priorCompletedNodes = new Map([['refine.work', { output: 'iter1 body output XYZ' }]]);
     mockSendQueryDag.mockImplementationOnce(async function* () {
       yield { type: 'assistant', content: 'final\nAPPROVED' };
       yield { type: 'result', sessionId: 'lg-prev-sess-2' };
@@ -22656,15 +22661,158 @@ describe('executeDagWorkflow -- loop_group node', () => {
       join(testDir, 'logs'),
       'main',
       'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      priorCompletedNodes
+    );
+
+    // Resumed iteration 2: $LOOP_PREV resolves to the real persisted iteration-1 output.
+    const resumePrompt = mockSendQueryDag.mock.calls[1][0] as string;
+    expect(resumePrompt).toContain('PREV=<<iter1 body output XYZ>>');
+    expect(resumePrompt).toContain('USER=ok');
+  });
+
+  it('INTERACTIVE resume: $LOOP_PREV resolves an oversized (>32KB) prior body output via the spill path (#2748)', async () => {
+    // Mirrors 'reads oversized $LOOP_PREV output from the run-owned spill directory'
+    // (same file, in-process case) but crosses a real pause/resume boundary: a bash
+    // body node spills a real oversized output on iteration 1, the group pauses, then
+    // a SEPARATE resumed executeDagWorkflow call — seeded with priorCompletedNodes the
+    // way a real resume threads it in via hydrateResumableRun — reads
+    // $LOOP_PREV.work.output back and proves the full byte length survived the pause.
+    const artifactsDir = join(testDir, 'lg-prev-large-artifacts');
+    const logDir = join(testDir, 'lg-prev-large-logs');
+    const paddingBytes = 40_000;
+    const freshStore = createMockStore();
+
+    const freshWorkflow = {
+      name: 'lg-resume-prev-large',
+      nodes: [
+        {
+          id: 'refine',
+          kind: 'loop_group',
+          loop_group: {
+            until: 'DONE',
+            max_iterations: 5,
+            fresh_context: false,
+            interactive: true,
+            gate_message: 'Review.',
+            nodes: [
+              {
+                id: 'work',
+                kind: 'exec',
+                runtime: 'sh',
+                script: `head -c ${String(paddingBytes)} /dev/zero | tr "\\0" x`,
+                depends_on: [],
+              },
+            ],
+          },
+          depends_on: [],
+        },
+      ] as DagNode[],
+    };
+
+    await executeDagWorkflow(
+      createMockDeps(freshStore),
+      createMockPlatform(),
+      'conv-lg-large',
+      testDir,
+      freshWorkflow,
+      makeWorkflowRun('lg-prev-large-fresh'),
+      'claude',
+      undefined,
+      artifactsDir,
+      join(testDir, 'state'),
+      logDir,
+      'main',
+      'docs/',
       minimalConfig
     );
 
-    // Resumed iteration 2: $LOOP_PREV is '' (v1 does not persist the prior body snapshot
-    // across resume), NOT 'iter1 body output XYZ'.
-    const resumePrompt = mockSendQueryDag.mock.calls[1][0] as string;
-    expect(resumePrompt).toContain('PREV=<<>>');
-    expect(resumePrompt).not.toContain('iter1 body output XYZ');
-    expect(resumePrompt).toContain('USER=ok');
+    const freshEventCalls = (freshStore.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    const bodyEvent = freshEventCalls.find(
+      (call: unknown[]) =>
+        (call[0] as { event_type: string }).event_type === 'node_completed' &&
+        (call[0] as { step_name: string }).step_name === 'refine.work'
+    );
+    expect(bodyEvent).toBeDefined();
+    if (!bodyEvent) throw new Error('Expected refine.work to complete on the fresh pass');
+    const bodyData = bodyEvent[0].data as {
+      node_output_truncated: boolean;
+      node_output_spill_path: string;
+    };
+    expect(bodyData.node_output_truncated).toBe(true);
+    const spilledFullOutput = await readFile(bodyData.node_output_spill_path, 'utf8');
+    expect(spilledFullOutput.length).toBe(paddingBytes);
+
+    // The group paused after iteration 1 (interactive: true, no 'DONE' signal yet).
+    const pauseCalls = (freshStore.pauseWorkflowRun as Mock<IWorkflowStore['pauseWorkflowRun']>)
+      .mock.calls;
+    expect(pauseCalls.length).toBe(1);
+
+    // ---- Resume: seed priorCompletedNodes with the REAL spilled bytes (not a
+    // hand-authored string) and prove the resumed body script sees the full value.
+    const priorCompletedNodes = new Map([['refine.work', { output: spilledFullOutput }]]);
+    const resumedWorkflow = {
+      name: 'lg-resume-prev-large',
+      nodes: [
+        {
+          id: 'refine',
+          kind: 'loop_group',
+          loop_group: {
+            until: 'DONE',
+            max_iterations: 5,
+            fresh_context: false,
+            interactive: true,
+            gate_message: 'Review.',
+            nodes: [
+              {
+                id: 'work',
+                kind: 'exec',
+                runtime: 'sh',
+                script: 'previous=$LOOP_PREV.work.output; printf "%s\\nDONE\\n" "${#previous}"',
+                depends_on: [],
+              },
+            ],
+          },
+          depends_on: [],
+        },
+      ] as DagNode[],
+    };
+    const result = await executeDagWorkflow(
+      createMockDeps(createMockStore()),
+      createMockPlatform(),
+      'conv-lg-large-resume',
+      testDir,
+      resumedWorkflow,
+      makeWorkflowRun('lg-prev-large-resume', {
+        metadata: {
+          approval: {
+            type: 'interactive_loop',
+            nodeId: 'refine',
+            iteration: 1,
+            message: 'Review.',
+          },
+          loop_user_input: '',
+        },
+      }),
+      'claude',
+      undefined,
+      artifactsDir,
+      join(testDir, 'state'),
+      logDir,
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      priorCompletedNodes
+    );
+
+    // The resumed body script measured $LOOP_PREV.work.output's length as the FULL
+    // padding size — proving the real spilled bytes (not a truncated preview) survived
+    // the pause/resume boundary.
+    expect(result).toContain(String(paddingBytes));
   });
 
   // --- Dimension 3: cost/token accumulation across iterations ---

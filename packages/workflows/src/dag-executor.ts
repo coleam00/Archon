@@ -4279,6 +4279,22 @@ async function executeLoopGroupNode(
   }
 
   let loopPrevOutputs: Map<string, NodeOutput> | undefined; // undefined on iteration 1
+  // Restore the body-output snapshot $LOOP_PREV.* reads, for the resumed iteration
+  // (#2748). The pause boundary discards this function's local state, but the last
+  // iteration's direct body-node outputs already survive as persisted
+  // `<groupId>.<bodyId>` node_completed rows — `outerNodeOutputs` was ALREADY
+  // pre-populated from them (executeDagWorkflow's resume pre-population, itself
+  // sourced from getDagResumeSnapshot's #2726/#2732 bounded-rows + spill/rehydrate
+  // read), keyed by that full step name. Re-key to the bare body id so
+  // substituteLoopPrevRefs finds them exactly as it would mid-loop.
+  if (isLoopResume) {
+    const restoredLoopPrevOutputs = new Map<string, NodeOutput>();
+    for (const id of directBodyIds) {
+      const prior = outerNodeOutputs.get(bodyStepNamePrefix + id);
+      if (prior) restoredLoopPrevOutputs.set(id, prior);
+    }
+    if (restoredLoopPrevOutputs.size > 0) loopPrevOutputs = restoredLoopPrevOutputs;
+  }
   let lastIterationOutput = '';
   // The terminal sink's structured payload for the same iteration (#2637) — tracked
   // beside the text so the group's completed NodeOutput carries the logical value
