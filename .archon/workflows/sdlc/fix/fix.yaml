@@ -20,6 +20,24 @@ inputs:
     description: >-
       What to take through the pipeline — an issue, document, plan, report, or
       free-form request. When empty, the run's trigger message is the target.
+  tests:
+    default: false
+    description: Enable the review's test-coverage lens.
+  errors:
+    default: false
+    description: Enable the review's silent-failure lens.
+  comments:
+    default: false
+    description: Enable the review's comment-accuracy lens.
+  types:
+    default: false
+    description: Enable the review's type-design lens.
+  docs:
+    default: false
+    description: Enable the review's docs-impact lens.
+  simplify:
+    default: false
+    description: Enable the review's simplification lens (suggestions only).
 
 returns: outcome
 
@@ -75,6 +93,12 @@ nodes:
   - id: deliver
     include: deliver
     with:
+      tests: "$INPUTS.tests"
+      errors: "$INPUTS.errors"
+      comments: "$INPUTS.comments"
+      types: "$INPUTS.types"
+      docs: "$INPUTS.docs"
+      simplify: "$INPUTS.simplify"
       work: >-
         Deliver the work prepared by this run. Read $ARTIFACTS_DIR/triage.md
         first. When present, plan.md or investigation.md is the detailed work

@@ -29,14 +29,6 @@ deliver__impl__implement:
   green: true
   summary: "stub: fix built per the investigation, checks green"
 deliver__review__scope: "target recorded; head sha stubbed"
-deliver__review__choose:
-  run_tests: "false"
-  run_errors: "false"
-  run_comments: "false"
-  run_types: "false"
-  run_docs: "false"
-  run_simplify: "false"
-  reasoning: "stub: focused diff"
 deliver__review__code: "0 findings"
 deliver__review__seams: "0 findings"
 deliver__review__synthesize:

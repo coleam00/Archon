@@ -10,22 +10,8 @@ impl__assert-changed: "3 files changed"
 gate-green: '{"gate":"green"}'
 pr__pr: "https://github.com/example/repo/pull/2 (draft)"
 review__scope: "target recorded; head sha stubbed"
-review__choose:
-  run_tests: "false"
-  run_errors: "false"
-  run_comments: "false"
-  run_types: "false"
-  run_docs: "false"
-  run_simplify: "false"
-  reasoning: "stub: tiny diff"
 review__code: "0 findings"
 review__seams: "0 findings"
-review__tests: "skipped by chooser"
-review__errors: "skipped by chooser"
-review__comments: "skipped by chooser"
-review__types: "skipped by chooser"
-review__docs: "skipped by chooser"
-review__simplify: "skipped by chooser"
 review__synthesize:
   ready: true
   findings_summary: "stub: clean on initial review"

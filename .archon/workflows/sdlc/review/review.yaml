@@ -1,7 +1,8 @@
 name: review
 description: |
   Review a change through parallel specialist lenses and produce one evidence-based
-  verdict. Reviews a PR when given one, otherwise the working diff. Advisory and
+  verdict. The code and seams lenses always run; the other lenses are opt-in
+  inputs the operator enables per run. Reviews a PR when given one, otherwise the working diff. Advisory and
   read-only: it judges, it never edits. Re-reviews are light — given the previous
   round's report, it verifies prior findings and reviews only the delta since the
   recorded cursor.
@@ -28,6 +29,24 @@ inputs:
       Path to the previous review round's report. When set, this round verifies
       prior findings first and reviews only the delta since the report's recorded
       head SHA.
+  tests:
+    default: false
+    description: Run the test-coverage lens.
+  errors:
+    default: false
+    description: Run the silent-failure lens.
+  comments:
+    default: false
+    description: Run the comment-accuracy lens.
+  types:
+    default: false
+    description: Run the type-design lens.
+  docs:
+    default: false
+    description: Run the docs-impact lens.
+  simplify:
+    default: false
+    description: Run the simplification lens (suggestions only, never blocks).
 
 returns: synthesize
 outcome_field: ready
@@ -37,94 +56,86 @@ nodes:
     command: review-scope
     context: fresh
 
-  # Chooses which OPTIONAL lenses run, per-diff. code + seams always run and do
-  # not wait on this. Fields are string enums (not booleans) because they feed
-  # `when:` — the proven pattern from the bundled fix-issue workflow.
-  - id: choose
-    command: review-choose
-    model: small
-    context: fresh
-    depends_on: [scope]
-    output_format:
-      type: object
-      properties:
-        run_tests:
-          type: string
-          enum: ["true", "false"]
-        run_errors:
-          type: string
-          enum: ["true", "false"]
-        run_comments:
-          type: string
-          enum: ["true", "false"]
-        run_types:
-          type: string
-          enum: ["true", "false"]
-        run_docs:
-          type: string
-          enum: ["true", "false"]
-        run_simplify:
-          type: string
-          enum: ["true", "false"]
-        reasoning:
-          type: string
-      required:
-        [run_tests, run_errors, run_comments, run_types, run_docs, run_simplify, reasoning]
-
   # ── Always-on lenses ─────────────────────────────────────────────
   - id: code
     command: review-code
     context: fresh
     depends_on: [scope]
+    retry:
+      max_attempts: 2
+      delay_ms: 20000
 
   - id: seams
     command: review-seams
     context: fresh
     depends_on: [scope]
+    retry:
+      max_attempts: 2
+      delay_ms: 20000
 
-  # ── Optional lenses, chosen per-diff ─────────────────────────────
+  # ── Optional lenses, operator-enabled via inputs ─────────────────
   - id: tests
     command: review-tests
     context: fresh
-    depends_on: [choose]
-    when: "$choose.output.run_tests == 'true'"
+    depends_on: [scope]
+    when: "$INPUTS.tests == 'true'"
+    retry:
+      max_attempts: 2
+      delay_ms: 20000
 
   - id: errors
     command: review-errors
     context: fresh
-    depends_on: [choose]
-    when: "$choose.output.run_errors == 'true'"
+    depends_on: [scope]
+    when: "$INPUTS.errors == 'true'"
+    retry:
+      max_attempts: 2
+      delay_ms: 20000
 
   - id: comments
     command: review-comments
     context: fresh
-    depends_on: [choose]
-    when: "$choose.output.run_comments == 'true'"
+    depends_on: [scope]
+    when: "$INPUTS.comments == 'true'"
+    retry:
+      max_attempts: 2
+      delay_ms: 20000
 
   - id: types
     command: review-types
     context: fresh
-    depends_on: [choose]
-    when: "$choose.output.run_types == 'true'"
+    depends_on: [scope]
+    when: "$INPUTS.types == 'true'"
+    retry:
+      max_attempts: 2
+      delay_ms: 20000
 
   - id: docs
     command: review-docs
     context: fresh
-    depends_on: [choose]
-    when: "$choose.output.run_docs == 'true'"
+    depends_on: [scope]
+    when: "$INPUTS.docs == 'true'"
+    retry:
+      max_attempts: 2
+      delay_ms: 20000
 
   - id: simplify
     command: review-simplify
     context: fresh
-    depends_on: [choose]
-    when: "$choose.output.run_simplify == 'true'"
+    depends_on: [scope]
+    when: "$INPUTS.simplify == 'true'"
+    retry:
+      max_attempts: 2
+      delay_ms: 20000
 
-  # all_done, not the default all_success: lenses skipped by the chooser are a
-  # terminal state by design and must not block synthesis. `ready` is a real
-  # boolean — it is the load-bearing field a composing loop terminates on. The
-  # output_format here is ONLY that loop signal: the findings channel is the
-  # complete lens files under $ARTIFACTS_DIR/review/, never truncated at this
-  # seam, and the full report is written there and posted to the PR.
+  # all_done so an input-disabled lens (skipped) never blocks synthesis. A lens
+  # that FAILED — retries exhausted, e.g. a provider stream dying mid-review
+  # (run ae71ab1e) — must not kill the run either: synthesize detects the missing
+  # report for an ENABLED lens and forces ready:false naming the gap, so
+  # degradation is disclosed, never silent, and the correction loop's recheck is
+  # the retry. `ready` is a real boolean — the load-bearing field a composing
+  # loop terminates on; the findings channel is the complete lens files under
+  # $ARTIFACTS_DIR/review/, never truncated at this seam.
   #
   # Synthesis starts fresh and re-reads the diff. Returning into the scope
   # node's session is not portable across the bundle's supported providers:
@@ -135,16 +146,12 @@ nodes:
   # prompt. When in-parent runtime fan-out lands (#2512), a verify stage slots in
   # between the lenses and this node without changing either side's contract —
   # the findings files are the declared boundary.
-  # none_failed_min_one_success, not all_done: a chooser-skipped lens must not
-  # block synthesis, but a FAILED lens (e.g. a provider stream dying mid-review,
-  # seen on run ae71ab1e) must fail the review rather than silently verdict on
-  # thinner evidence — a resume re-runs just the failed lens.
   - id: synthesize
     command: review-synthesize
     context: fresh
     output_type: review-report
     depends_on: [code, seams, tests, errors, comments, types, docs, simplify]
-    trigger_rule: none_failed_min_one_success
+    trigger_rule: all_done
     output_format:
       type: object
       properties:

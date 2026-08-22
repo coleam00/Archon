@@ -5,7 +5,9 @@ Aggregate the lens reports into one evidence-based verdict, write the review rep
 ## Read — the findings reach you complete
 
 1. `$ARTIFACTS_DIR/review/scope.md` — the target, mode, and the **head SHA under review** — and then **the diff itself**, using the commands scope.md records. You verify findings against the code, never against summaries.
-2. Every lens report present in `$ARTIFACTS_DIR/review/` (`code.md`, `seams.md`, `tests.md`, `errors.md`, `comments.md`, `types.md`, `docs.md`, `simplify.md`) — read each **in full**. These files are the findings channel and nothing is truncated at this seam; the structured fields you emit at the end are only the loop signal, not the findings. A missing file means that lens was skipped by design this round — record it as skipped, never as clean.
+2. Every lens report present in `$ARTIFACTS_DIR/review/` (`code.md`, `seams.md`, `tests.md`, `errors.md`, `comments.md`, `types.md`, `docs.md`, `simplify.md`) — read each **in full**. These files are the findings channel and nothing is truncated at this seam; the structured fields you emit at the end are only the loop signal, not the findings.
+
+The lenses ENABLED this round: `code` and `seams` always, plus the optional lenses whose input is true — tests=$INPUTS.tests, errors=$INPUTS.errors, comments=$INPUTS.comments, types=$INPUTS.types, docs=$INPUTS.docs, simplify=$INPUTS.simplify. A missing file for a DISABLED lens is by design — record it as disabled, never as clean. A missing or empty file for an ENABLED lens means that lens **failed to report**: the review is missing evidence it was asked for — record the gap and apply the verdict rule below.
 
 ## Aggregate
 
@@ -16,7 +18,7 @@ Aggregate the lens reports into one evidence-based verdict, write the review rep
 
 ## Verdict
 
-`ready: true` exactly when there are **no open Critical or Important findings**. "Nothing left to say" is not the bar — open Suggestions do not hold `ready` back, and a round that ran fewer lenses says so rather than implying a fuller clearance.
+`ready: true` exactly when there are **no open Critical or Important findings AND every enabled lens delivered its report**. An enabled lens with no report forces `ready: false` with the gap named — a review missing evidence it was asked for can refuse readiness, never certify it. "Nothing left to say" is not the bar — open Suggestions do not hold `ready` back, and a round that ran fewer lenses says so rather than implying a fuller clearance.
 
 ## Write the report
 
@@ -26,7 +28,7 @@ Write `$ARTIFACTS_DIR/review/report.md`:
 2. **Reviewed head SHA** — from scope.md, stated exactly (this is the next round's cursor).
 3. **Findings** — by severity, each with ID, claim, `file:line` evidence, and the smallest correction; then rejected findings with the disproving evidence; then Suggestions.
 4. **Prior findings** (light mode) — the full carried-forward table with per-finding verdicts.
-5. **Lens roster** — which lenses ran, were skipped by choice, or found nothing.
+5. **Lens roster** — which lenses ran, were disabled, failed to report, or found nothing. A lens that failed to report gets an explicit directive: it must run **in full** next round, not in delta mode — the next round's reviewers read this report first.
 
 ## Post to the PR
 

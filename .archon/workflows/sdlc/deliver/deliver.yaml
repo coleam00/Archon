@@ -29,6 +29,24 @@ inputs:
       Cross-run review continuity: the previous delivery run's review report
       path. Round 1 then verifies prior findings (rejections included) instead
       of relitigating them from scratch. Empty on a first delivery.
+  tests:
+    default: false
+    description: Enable the review's test-coverage lens.
+  errors:
+    default: false
+    description: Enable the review's silent-failure lens.
+  comments:
+    default: false
+    description: Enable the review's comment-accuracy lens.
+  types:
+    default: false
+    description: Enable the review's type-design lens.
+  docs:
+    default: false
+    description: Enable the review's docs-impact lens.
+  simplify:
+    default: false
+    description: Enable the review's simplification lens (suggestions only).
 
 returns: pr
 
@@ -65,6 +83,12 @@ nodes:
     with:
       scope: ""
       prior_report: "$INPUTS.prior_report"
+      tests: "$INPUTS.tests"
+      errors: "$INPUTS.errors"
+      comments: "$INPUTS.comments"
+      types: "$INPUTS.types"
+      docs: "$INPUTS.docs"
+      simplify: "$INPUTS.simplify"
     depends_on: [pr]
 
   # A ready initial review skips this block. Otherwise each iteration corrects
@@ -104,6 +128,12 @@ nodes:
           with:
             scope: ""
             prior_report: "$ARTIFACTS_DIR/review/report.md"
+            tests: "$INPUTS.tests"
+            errors: "$INPUTS.errors"
+            comments: "$INPUTS.comments"
+            types: "$INPUTS.types"
+            docs: "$INPUTS.docs"
+            simplify: "$INPUTS.simplify"
           depends_on: [gate-correction-green]
 
   # all_done joins the mutually exclusive paths as bound values (#2637): the

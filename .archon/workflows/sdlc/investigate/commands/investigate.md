@@ -34,6 +34,14 @@ Compete only the hypotheses that remain plausible after grounding the symptom. D
 
 Follow the chain past the first plausible explanation — a proximate cause that itself has a cause is a link, not an answer. The chain is deep enough when fixing the named cause prevents the symptom rather than masking it, and it stops where the next "why" leaves what this repository controls. Depth is bounded by evidence, not effort: each deeper link meets the same evidence bar as the first.
 
+## From proven cause to a decided fix
+
+An investigation ends implementation-ready, in this same session: the verified chain in your context is exactly what deciding the fix needs, and a later planner would have to re-earn all of it. Once the chain is proven:
+
+- Weigh the plausible fix options against the boundary you established. Name each option, its blast radius, and why the chosen one wins — a rejected option with its reason stops the fixer from relitigating it.
+- Decide the fix: ordered steps anchored to concrete files, functions, and existing tests; the validation that proves it; and what the change must NOT touch.
+- An engineering decision is yours to make — make it. A product decision — two coherent directions whose choice belongs to the owner — is a stop: name the decision precisely and declare `rooted: false`. A proven cause with an undecided fix is not a safe fix boundary yet.
+
 ## The report
 
 Write `$ARTIFACTS_DIR/investigation.md`:
@@ -41,7 +49,7 @@ Write `$ARTIFACTS_DIR/investigation.md`:
 - **Symptom** — the observable wrong behavior, precisely.
 - **Causal chain** — symptom back to cause, each link with its evidence.
 - **Reproduction** — the exact commands and output, or why it was not reasonably reproducible.
-- **Fix boundary** — where the fix belongs, the smallest correction that addresses the cause, and what the fix must NOT touch.
+- **Implementation plan** — the chosen fix as ordered steps with concrete anchors, the options weighed and why the winner won, the smallest correction that addresses the cause, and what the fix must NOT touch.
 - **Verification** — the test or check that proves the fix, and what would have caught this earlier.
 - **Blast radius** — what else the cause affects.
 - **Ruled out** — each hypothesis tested and the evidence that killed it.
@@ -55,7 +63,7 @@ Do not modify source files, commit, branch, push, open or comment on pull reques
 
 ## Declare the verdict
 
-- `rooted` — true only when the causal chain is proven end to end. False when anything load-bearing remains unknown — the report is still written, with the gaps named. An honest inconclusive beats a confident guess.
+- `rooted` — true only when the causal chain is proven end to end AND the implementation plan is decided. False when anything load-bearing remains unknown, or when the fix hinges on a product decision that is not yours to make — the report is still written, with the gap or the decision named. An honest inconclusive beats a confident guess.
 - `summary` — a few sentences: the cause (or the decisive gap), and that the full report is at `$ARTIFACTS_DIR/investigation.md`.
 
 Before declaring, re-read the report: confirm every cited location exists in the current code, every command you cite actually ran in this session, no unresolved gap was disguised by extra breadth, and `git status` matches what you started with.
