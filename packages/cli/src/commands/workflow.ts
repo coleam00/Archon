@@ -3305,6 +3305,11 @@ export async function workflowRejectCommand(
     return;
   }
 
+  // An empty or omitted reason still needs a meaningful value on the new-mode
+  // structured-output path (#2740) — rejectWorkflow's own internal default
+  // only covers the audit event and legacy rework/cancel path.
+  const rejectText = reason && reason.length > 0 ? reason : 'Rejected';
+
   // JSON mode records the rejection and returns a structured ack WITHOUT the
   // inline auto-resume (an on_reject rework executes the workflow and streams
   // to stdout, corrupting the JSON contract). When `cancelled` is false the run
@@ -3312,7 +3317,6 @@ export async function workflowRejectCommand(
   if (json) {
     try {
       const resolvedId = await resolveRunIdArg(runId, cwd);
-      const rejectText = reason && reason.length > 0 ? reason : 'Rejected';
       const result = await rejectWorkflow(resolvedId, rejectText);
       await writeJsonLine({
         ok: true,
@@ -3330,7 +3334,6 @@ export async function workflowRejectCommand(
   }
 
   const resolvedId = await resolveRunIdArg(runId, cwd);
-  const rejectText = reason && reason.length > 0 ? reason : 'Rejected';
   const result = await rejectWorkflow(resolvedId, rejectText);
 
   if (result.cancelled) {
