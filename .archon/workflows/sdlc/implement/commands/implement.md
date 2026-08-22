@@ -27,6 +27,7 @@ Either way, it may be:
 6. Validate with the project's own checks: discover them from the repository itself (package scripts, task runners, CI config, contributor docs) and run what applies — types, lint, tests, build. Never invent a generic command the project doesn't define.
 7. Commit as you go: one commit per coherent outcome, staged by name (never `git add -A`), message written the way a human explains an outcome. No AI attribution, no generated-by footers. Never commit scratch files or anything under `$ARTIFACTS_DIR`.
 8. Keep comments and documentation truthful when behavior changes.
+9. Match the surrounding code's comment density — most changes need few or no new comments. Write a comment only for a constraint the code cannot show; never to narrate what a line does, justify the change, or answer a reviewer. A comment that references the review, the fix process, or "the regression this prevents" belongs in the commit message or the report, not the code.
 
 ## Not your job
 
