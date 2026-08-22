@@ -1,0 +1,162 @@
+name: review
+description: |
+  Review a change through parallel specialist lenses and produce one evidence-based
+  verdict. The code and seams lenses always run; the other lenses are opt-in
+  inputs the operator enables per run. Reviews a PR when given one, otherwise the working diff. Advisory and
+  read-only: it judges, it never edits. Re-reviews are light — given the previous
+  round's report, it verifies prior findings and reviews only the delta since the
+  recorded cursor.
+
+  When reviewing a PR, the final synthesized report is posted to it as one
+  canonical comment, edited in place on re-review.
+
+  Use when: changes need judging — "review this PR", "review my changes",
+  "is this ready to merge".
+  NOT for: fixing findings (implement), running the project's checks (validate),
+  or writing code.
+
+model: medium
+
+inputs:
+  scope:
+    default: ""
+    description: >-
+      What to review — a PR number/URL, a branch, or empty for the working diff
+      against the merge-base.
+  prior_report:
+    default: ""
+    description: >-
+      Path to the previous review round's report. When set, this round verifies
+      prior findings first and reviews only the delta since the report's recorded
+      head SHA.
+  tests:
+    default: false
+    description: Run the test-coverage lens.
+  errors:
+    default: false
+    description: Run the silent-failure lens.
+  comments:
+    default: false
+    description: Run the comment-accuracy lens.
+  types:
+    default: false
+    description: Run the type-design lens.
+  docs:
+    default: false
+    description: Run the docs-impact lens.
+  simplify:
+    default: false
+    description: Run the simplification lens (suggestions only, never blocks).
+
+returns: synthesize
+outcome_field: ready
+
+nodes:
+  - id: scope
+    command: review-scope
+    context: fresh
+
+  # ── Always-on lenses ─────────────────────────────────────────────
+  - id: code
+    command: review-code
+    context: fresh
+    depends_on: [scope]
+    retry:
+      max_attempts: 2
+      delay_ms: 20000
+
+  - id: seams
+    command: review-seams
+    context: fresh
+    depends_on: [scope]
+    retry:
+      max_attempts: 2
+      delay_ms: 20000
+
+  # ── Optional lenses, operator-enabled via inputs ─────────────────
+  - id: tests
+    command: review-tests
+    context: fresh
+    depends_on: [scope]
+    when: "$INPUTS.tests == 'true'"
+    retry:
+      max_attempts: 2
+      delay_ms: 20000
+
+  - id: errors
+    command: review-errors
+    context: fresh
+    depends_on: [scope]
+    when: "$INPUTS.errors == 'true'"
+    retry:
+      max_attempts: 2
+      delay_ms: 20000
+
+  - id: comments
+    command: review-comments
+    context: fresh
+    depends_on: [scope]
+    when: "$INPUTS.comments == 'true'"
+    retry:
+      max_attempts: 2
+      delay_ms: 20000
+
+  - id: types
+    command: review-types
+    context: fresh
+    depends_on: [scope]
+    when: "$INPUTS.types == 'true'"
+    retry:
+      max_attempts: 2
+      delay_ms: 20000
+
+  - id: docs
+    command: review-docs
+    context: fresh
+    depends_on: [scope]
+    when: "$INPUTS.docs == 'true'"
+    retry:
+      max_attempts: 2
+      delay_ms: 20000
+
+  - id: simplify
+    command: review-simplify
+    context: fresh
+    depends_on: [scope]
+    when: "$INPUTS.simplify == 'true'"
+    retry:
+      max_attempts: 2
+      delay_ms: 20000
+
+  # all_done so an input-disabled lens (skipped) never blocks synthesis. A lens
+  # that FAILED — retries exhausted, e.g. a provider stream dying mid-review
+  # (run ae71ab1e) — must not kill the run either: synthesize detects the missing
+  # report for an ENABLED lens and forces ready:false naming the gap, so
+  # degradation is disclosed, never silent, and the correction loop's recheck is
+  # the retry. `ready` is a real boolean — the load-bearing field a composing
+  # loop terminates on; the findings channel is the complete lens files under
+  # $ARTIFACTS_DIR/review/, never truncated at this seam.
+  #
+  # Synthesis starts fresh and re-reads the diff. Returning into the scope
+  # node's session is not portable across the bundle's supported providers:
+  # Claude Code, Codex, and Pi. Bundled defaults stay on that shared capability
+  # floor even where the configured provider can resume a named upstream session.
+  #
+  # v1 note: adversarial per-finding verification happens inside this node's
+  # prompt. When in-parent runtime fan-out lands (#2512), a verify stage slots in
+  # between the lenses and this node without changing either side's contract —
+  # the findings files are the declared boundary.
+  - id: synthesize
+    command: review-synthesize
+    context: fresh
+    output_type: review-report
+    depends_on: [code, seams, tests, errors, comments, types, docs, simplify]
+    trigger_rule: all_done
+    output_format:
+      type: object
+      properties:
+        ready:
+          type: boolean
+        findings_summary:
+          type: string
+      required: [ready, findings_summary]

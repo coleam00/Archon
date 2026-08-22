@@ -83,11 +83,16 @@ describe('bundled-defaults', () => {
       // regardless of the checkout's line-ending policy. Match that here.
       const readLF = (path: string): string => readFileSync(path, 'utf-8').replace(/\r\n/g, '\n');
 
+      // Packaged (pack-owned) entries live under .archon/workflows/<pack>/<workflow>/,
+      // not the flat defaults directories — their content parity is proven by
+      // 'packaged bundle metadata is internally consistent' below.
       for (const [name, content] of Object.entries(BUNDLED_COMMANDS)) {
+        if (parsePackagedResourceReference(name) !== null) continue;
         const diskContent = readLF(join(COMMANDS_DIR, `${name}.md`));
         expect(content).toBe(diskContent);
       }
       for (const [name, content] of Object.entries(BUNDLED_WORKFLOWS)) {
+        if (BUNDLED_WORKFLOW_OWNERS[name] !== undefined) continue;
         // Workflows may be .yaml or .yml — prefer .yaml, fall back.
         let diskContent: string;
         try {

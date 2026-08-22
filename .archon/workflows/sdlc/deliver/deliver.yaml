@@ -1,0 +1,219 @@
+name: deliver
+description: |
+  The delivery tail, end to end and autonomous: implement the work, gate on
+  green, open a draft PR, review it, correct and close the findings, validate,
+  wait for checks to clear, then flip the PR ready for review. No in-run
+  approval gate — the human gate is PR review and merge on GitHub, outside
+  the run.
+
+  Use when: decided work should become a reviewed, ready-to-merge PR —
+  "deliver this plan", "take this to a PR", "build and ship this".
+  NOT for: deciding what to build, or merging (always human).
+
+# Review establishes the first verdict. When blockers remain, a bounded static
+# body repeats fix → light review, so every correction is independently checked
+# and a clean review stops immediately. Exhausting the bound fails truthfully
+# with the PR still draft and the canonical report carrying the open findings.
+
+requires: [github]
+
+inputs:
+  work:
+    default: ""
+    description: >-
+      What to deliver — a plan path, findings, or a description. Empty means
+      the run's trigger message is the work.
+  prior_report:
+    default: ""
+    description: >-
+      Cross-run review continuity: the previous delivery run's review report
+      path. Round 1 then verifies prior findings (rejections included) instead
+      of relitigating them from scratch. Empty on a first delivery.
+  tests:
+    default: false
+    description: Enable the review's test-coverage lens.
+  errors:
+    default: false
+    description: Enable the review's silent-failure lens.
+  comments:
+    default: false
+    description: Enable the review's comment-accuracy lens.
+  types:
+    default: false
+    description: Enable the review's type-design lens.
+  docs:
+    default: false
+    description: Enable the review's docs-impact lens.
+  simplify:
+    default: false
+    description: Enable the review's simplification lens (suggestions only).
+
+returns: pr
+
+nodes:
+  - id: impl
+    include: implement
+    with:
+      work: "$INPUTS.work"
+
+  # R3's gate: run success never certifies green — this does, deterministically,
+  # before anything public happens. Strict field access: a missing field fails
+  # the node rather than passing the gate.
+  - id: gate-green
+    bash: |
+      if [ "$impl.output.green" = "true" ]; then
+        echo '{"gate":"green"}'
+      else
+        echo "implement finished but not green — its summary says why. Refusing to open a PR on red work." >&2
+        exit 1
+      fi
+    depends_on: [impl]
+
+  - id: pr
+    include: pr
+    with:
+      draft: "true"
+    depends_on: [gate-green]
+
+  # Initial review: full on a first delivery, light continuation when
+  # the caller passes the previous run's report (adjudications carry across
+  # runs instead of being relitigated).
+  - id: review
+    include: review
+    with:
+      scope: ""
+      prior_report: "$INPUTS.prior_report"
+      tests: "$INPUTS.tests"
+      errors: "$INPUTS.errors"
+      comments: "$INPUTS.comments"
+      types: "$INPUTS.types"
+      docs: "$INPUTS.docs"
+      simplify: "$INPUTS.simplify"
+    depends_on: [pr]
+
+  # A ready initial review skips this block. Otherwise each iteration corrects
+  # the current canonical findings, proves the correction is green, then runs a
+  # fresh light review over the delta. Three iterations means three real fix
+  # opportunities and three confirming reviews — never an unreviewed final fix.
+  - id: corrections
+    depends_on: [review]
+    when: "$review.output.ready == 'false'"
+    loop_group:
+      until_bash: test "$recheck.output.ready" = "true"
+      max_iterations: 3
+      fresh_context: true
+      nodes:
+        - id: fix
+          include: implement
+          with:
+            work: >-
+              Fix every open Critical and Important finding recorded in
+              $ARTIFACTS_DIR/review/report.md. When the correction is green,
+              push its commits to the existing PR branch (git push). Do not
+              change the PR's draft state or edit the canonical review comment;
+              the following review owns that public verdict.
+
+        - id: gate-correction-green
+          bash: |
+            if [ "$fix.output.green" = "true" ]; then
+              echo '{"gate":"green"}'
+            else
+              echo "correction finished but is not green — refusing to spend a review on red work." >&2
+              exit 1
+            fi
+          depends_on: [fix]
+
+        - id: recheck
+          include: review
+          with:
+            scope: ""
+            prior_report: "$ARTIFACTS_DIR/review/report.md"
+            tests: "$INPUTS.tests"
+            errors: "$INPUTS.errors"
+            comments: "$INPUTS.comments"
+            types: "$INPUTS.types"
+            docs: "$INPUTS.docs"
+            simplify: "$INPUTS.simplify"
+          depends_on: [gate-correction-green]
+
+  # all_done joins the mutually exclusive paths as bound values (#2637): the
+  # initial review's verdict directly, and the correction loop's output with an
+  # if_skipped default. A completed loop implies readiness — until_bash on the
+  # recheck verdict is its only success exit — while a failed loop (bound
+  # exhausted) or a failed review surfaces as a binding-resolution failure on
+  # this node, so lifecycle success alone never certifies readiness. The
+  # failed-producer -> failed-binding rule is engine-enforced (#2696/#2710);
+  # if_skipped covers only skipped/pending producers, never failed ones.
+  - id: gate-ready
+    script: gate-ready
+    runtime: uv
+    depends_on: [review, corrections]
+    trigger_rule: all_done
+    with:
+      review_ready: { from: "$review.output.ready", if_skipped: false }
+      corrections: { from: "$corrections.output", if_skipped: null }
+
+  # Correction rounds change the diff after `pr` wrote the description, so
+  # concrete claims in the body can be falsified by the very fixes the review
+  # demanded. One resync, once readiness is certified — never per iteration
+  # (that would be repeated public writes describing diffs the next iteration
+  # falsifies). Skipped when the initial review was already ready: the diff
+  # never changed after the body was written.
+  - id: sync-pr-body
+    command: sync-pr-body
+    model: medium
+    depends_on: [gate-ready]
+    when: "$review.output.ready == 'false'"
+
+  # Final local gate, ALWAYS run: the project's own checks via the validate
+  # package. Uniform on every path — and when CI is maintainer-gated (fork
+  # PRs), this is the only validation before the flip.
+  - id: validate
+    include: validate
+    depends_on: [gate-ready]
+
+  - id: gate-validated
+    bash: |
+      if [ "$validate.output.green" = "true" ]; then
+        echo '{"validated":"true"}'
+      else
+        echo "local validation failed after review — see the validation report in the run artifacts." >&2
+        exit 1
+      fi
+    depends_on: [validate]
+
+  # Explicit 60-minute bound: without `timeout:` the engine kills a script node
+  # at its 120 s default (R5) — far under a normal 5-10 minute CI run.
+  - id: await-checks
+    script: await-checks
+    runtime: uv
+    timeout: 3600000
+    depends_on: [gate-validated]
+
+  - id: flip-ready
+    bash: |
+      # --repo pins to the origin remote (#2226): gh's default resolution in a
+      # fork clone targets the upstream parent instead. With --repo, gh disables
+      # branch inference and REQUIRES an explicit selector — omitting it is a
+      # usage error, seen red on run 925f6c43's resume.
+      ORIGIN_REPO=$(git remote get-url origin | sed -E 's#^.*[:/]([^/]+/[^/]+)$#\1#; s#\.git$##')
+      BRANCH=$(git branch --show-current)
+      if [ -z "$BRANCH" ]; then
+        echo "flip-ready: detached HEAD — cannot resolve the PR branch." >&2
+        exit 1
+      fi
+      gh pr ready "$BRANCH" --repo "$ORIGIN_REPO"
+      draft=$(gh pr view "$BRANCH" --repo "$ORIGIN_REPO" --json isDraft --jq .isDraft)
+      if [ "$draft" = "false" ]; then
+        gh pr view "$BRANCH" --repo "$ORIGIN_REPO" --json url --jq .url
+      else
+        echo "flip-ready: PR still reports draft after the ready flip" >&2
+        exit 1
+      fi
+    # Waits on sync-pr-body explicitly: on a repo with no CI, await-checks
+    # returns immediately and the flip could otherwise beat the resync. The
+    # trigger rule lets a SKIPPED resync (initial review was ready) pass while
+    # a FAILED resync still blocks the flip — a public surface we could not
+    # correct is a reason not to go ready.
+    depends_on: [await-checks, sync-pr-body]
+    trigger_rule: none_failed_min_one_success

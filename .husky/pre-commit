@@ -1,1 +1,9 @@
 bun x lint-staged
+
+# Regenerate the embedded bundle AFTER lint-staged, so prettier-normalized
+# bytes are what gets embedded (a stale bundle shipped to CI on 2026-08-22
+# because generation ran before the hook's prettier pass).
+if git diff --cached --name-only | grep -qE "^\.archon/(workflows|commands|scripts)/"; then
+  bun run generate:bundled
+  git add packages/workflows/src/defaults/bundled-defaults.generated.ts
+fi

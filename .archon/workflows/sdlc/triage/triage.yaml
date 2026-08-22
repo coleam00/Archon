@@ -1,0 +1,60 @@
+name: triage
+description: |
+  Ground one work item against the current repository before deciding what kind
+  of work it needs. Reconciles tracker history, current code, moved branches,
+  stale assumptions, and explicit direction; then routes to investigate, plan,
+  deliver, or no action. Advisory: it leaves the checkout unchanged.
+
+  Use when: an issue, plan, report, or request may be stale or may prescribe an
+  unverified solution — "triage this issue", "what does this need next", "is
+  this ready to build".
+  NOT for: performing the investigation, writing the plan, or delivering work.
+
+model: medium
+
+inputs:
+  target:
+    default: ""
+    description: >-
+      What to triage — an issue, document, plan, report, or free-form request.
+      When empty, the run's trigger message is the target.
+
+returns: triage
+
+nodes:
+  - id: record-state
+    bash: |
+      # Triage is advisory. Snapshot the tree so the final guard can prove it
+      # left the operator's checkout untouched.
+      mkdir -p "$ARTIFACTS_DIR" &&
+        git status --porcelain > "$ARTIFACTS_DIR/.tree-state" &&
+        echo '{"state":"recorded"}'
+
+  - id: triage
+    command: triage
+    depends_on: [record-state]
+    output_type: work-triage
+    output_format:
+      type: object
+      properties:
+        route:
+          type: string
+          enum: [investigate, plan, deliver, no_action]
+        summary:
+          type: string
+      required: [route, summary]
+
+  - id: assert-intact
+    bash: |
+      if [ ! -s "$ARTIFACTS_DIR/triage.md" ]; then
+        echo "assert-intact: the run completed but wrote no triage.md — a route without evidence is not a triage." >&2
+        exit 1
+      fi
+      git status --porcelain > "$ARTIFACTS_DIR/.tree-state-after"
+      if ! diff -q "$ARTIFACTS_DIR/.tree-state" "$ARTIFACTS_DIR/.tree-state-after" > /dev/null 2>&1; then
+        echo "assert-intact: the working tree changed during an advisory run:" >&2
+        diff "$ARTIFACTS_DIR/.tree-state" "$ARTIFACTS_DIR/.tree-state-after" >&2 || true
+        exit 1
+      fi
+      echo '{"intact":"true"}'
+    depends_on: [triage]

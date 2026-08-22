@@ -1,0 +1,24 @@
+# Dry-run fixture: the validate-RED path — initial review is clean but the project
+# gate fails, so the run fails at gate-validated (the new gate seen red).
+# Run with --exec-code: gate-validated must EXECUTE to be seen red.
+impl__record-start: '{"start":"recorded"}'
+impl__implement:
+  done: true
+  green: true
+  summary: "stub: implemented and green"
+impl__assert-changed: "3 files changed"
+gate-green: '{"gate":"green"}'
+pr__pr: "https://github.com/example/repo/pull/2 (draft)"
+review__scope: "target recorded; head sha stubbed"
+review__code: "0 findings"
+review__seams: "0 findings"
+review__synthesize:
+  ready: true
+  findings_summary: "stub: clean on initial review"
+# gate-ready is deliberately unstubbed: under --exec-code the real script runs,
+# proving the review_ready binding and the corrections if_skipped default.
+validate__validate:
+  green: false
+  summary: "stub: tests failed — 3 red"
+await-checks: "no checks configured on this repository — nothing to await"
+flip-ready: "https://github.com/example/repo/pull/2"

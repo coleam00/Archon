@@ -1,0 +1,38 @@
+# Dry-run fixture: the full chain — rooted investigation flows through the
+# spend gate into the delivery tail, initial review ready, PR flips. SPARSE:
+# the dry-run engine auto-defaults every node it can and names the ones it
+# cannot; this file stubs exactly those plus the verdict fields that steer
+# branches. Structured stubs are YAML mappings (they hydrate structuredOutput).
+triage__record-state: '{"state":"recorded"}'
+triage__triage:
+  route: investigate
+  summary: "stub: current evidence leaves the causal chain unresolved"
+triage__assert-intact: '{"intact":"true"}'
+inv__record-state: '{"state":"recorded"}'
+inv__investigate:
+  rooted: true
+  summary: "stub: cause established — report at investigation.md"
+inv__assert-intact: '{"intact":"true"}'
+gate-rooted: '{"gate":"rooted"}'
+deliver__gate-validated: '{"validated":"true"}'
+deliver__impl__record-start: '{"start":"recorded"}'
+deliver__impl__assert-changed: "3 files changed"
+deliver__gate-green: '{"gate":"green"}'
+deliver__pr__pr: "https://github.com/example/repo/pull/2 (draft)"
+deliver__await-checks: "all checks passed"
+deliver__flip-ready: "https://github.com/example/repo/pull/2"
+deliver__validate__validate:
+  green: true
+  summary: "stub: project gate green"
+deliver__impl__implement:
+  done: true
+  green: true
+  summary: "stub: fix built per the investigation, checks green"
+deliver__review__scope: "target recorded; head sha stubbed"
+deliver__review__code: "0 findings"
+deliver__review__seams: "0 findings"
+deliver__review__synthesize:
+  ready: true
+  findings_summary: "stub: no open findings"
+deliver__gate-ready: '{"ready":"true"}'
+outcome: "https://github.com/example/repo/pull/2"

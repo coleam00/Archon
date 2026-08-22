@@ -1,0 +1,40 @@
+# Dry-run fixture: the initial review finds blockers, one correction runs green,
+# its light review is ready, and the run flips the PR. `until_bash` is not
+# executed by dry-run, so the simulator honestly assumes completion after this
+# structurally exercised iteration; real multi-iteration convergence is dogfood.
+impl__record-start: '{"start":"recorded"}'
+impl__implement:
+  done: true
+  green: true
+  summary: "stub: implemented and green"
+impl__assert-changed: "3 files changed"
+gate-green: '{"gate":"green"}'
+pr__pr: "https://github.com/example/repo/pull/1 (draft)"
+review__scope: "target recorded; head sha stubbed"
+review__code: "2 findings (Important)"
+review__seams: "0 findings"
+review__synthesize:
+  ready: false
+  findings_summary: "stub: 3 Important findings open"
+fix__record-start: '{"start":"recorded"}'
+fix__implement:
+  done: true
+  green: true
+  summary: "stub: findings fixed, pushed"
+fix__assert-changed: "2 files changed"
+gate-correction-green: '{"gate":"green"}'
+recheck__scope: "light mode; delta since cursor"
+recheck__code: "prior findings fixed; 0 new"
+recheck__seams: "0 findings"
+recheck__synthesize:
+  ready: true
+  findings_summary: "stub: no open Critical/Important"
+# gate-ready is deliberately unstubbed: under --exec-code the real script runs,
+# proving the $corrections.output whole-ref binding on a completed loop_group.
+sync-pr-body: "body resynced: corrected the claims the correction round falsified"
+validate__validate:
+  green: true
+  summary: "stub: full gate green"
+gate-validated: '{"validated":"true"}'
+await-checks: "all 2 check(s) green"
+flip-ready: "https://github.com/example/repo/pull/1"

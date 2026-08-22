@@ -1,0 +1,6 @@
+# Guard fixture: run with --exec-code. The triage verdict is stubbed, but no
+# triage.md exists, so assert-intact must execute and fail.
+record-state: '{"state":"recorded"}'
+triage:
+  route: plan
+  summary: "stub: design choices remain"
