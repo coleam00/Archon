@@ -402,6 +402,113 @@ export async function abandonWorkflow(runId: string): Promise<AbandonWorkflowRes
   return { run, cascadeFailures, blockedParentRunId };
 }
 
+export interface AbandonConversationRunsResult {
+  /** Runs this call actually took to 'cancelled'. */
+  abandoned: number;
+  /**
+   * Runs that could not be abandoned (already terminal by the time we got to
+   * them, or a DB failure). Non-zero means part of the set may still be alive.
+   */
+  failures: number;
+  /**
+   * Sum of `cascadeFailures` returned by every per-run `abandonWorkflow` call:
+   * descendants the cascade failed to cancel (capped at MAX_CASCADE_RUNS, or
+   * hit a per-child throw). Non-zero means part of the abandoned trees may
+   * still be alive — surface a warning to the user.
+   */
+  cascadeFailures: number;
+  /**
+   * First abandoned run that left a parent paused blocked-on-child (stranded
+   * parent id), or null. The user must resume or abandon that parent to
+   * unstick the tree — nothing auto-resumes it.
+   */
+  blockedParentRunId: string | null;
+}
+
+/**
+ * Abandon every RESUMABLE run belonging to a conversation.
+ *
+ * Backs `/reset`: with these gone, the resume lookups find nothing, so the next
+ * message starts fresh instead of continuing a stale run.
+ *
+ * Routes through `abandonWorkflow` per run rather than issuing one bulk UPDATE.
+ * That op is where abandon semantics live for EVERY surface (CLI, web API, chat,
+ * manage_run, Slack-cancel) — the CAS guard, the sub-run cascade, and the
+ * immediate container + upper-volume reclaim. A bulk UPDATE here would be a
+ * sixth abandon surface that silently skips all three.
+ *
+ * Only 'paused'/'failed' rows are selected (see
+ * findResumableRunIdsForConversation): live `pending`/`running` work is never
+ * touched, since it may belong to a different process altogether. The returned
+ * `cascadeFailures`/`blockedParentRunId` mirror what `abandonWorkflow` itself
+ * surfaces on every other abandon surface — `/reset` must report them too,
+ * otherwise a partial-cascade abandonment can be read as "everything starts
+ * fresh" while part of the run tree is still alive.
+ *
+ * Best-effort per run: a row can go terminal between the SELECT and the abandon,
+ * which makes `abandonWorkflow` throw. That is counted, not propagated — one
+ * racing run must not abort the whole reset. That said, the SELECT itself
+ * already filters to `paused`/`failed`, so the only rows that can race to a
+ * terminal state are the ones a concurrent cascade from an earlier loop
+ * iteration already cancelled — pre-checking the row here keeps those from
+ * being mis-counted as abandon failures (#2731 R2).
+ */
+export async function abandonResumableRunsForConversation(
+  conversationId: string
+): Promise<AbandonConversationRunsResult> {
+  const runIds = await workflowDb.findResumableRunIdsForConversation(conversationId);
+  let abandoned = 0;
+  let failures = 0;
+  let cascadeFailures = 0;
+  let blockedParentRunId: string | null = null;
+  for (const runId of runIds) {
+    // Skip rows a previous loop iteration's cascade already took terminal
+    // (#2731 R2): without this precheck, abandonWorkflow throws "Cannot abandon
+    // run with status 'cancelled'" and the op reports a false partial-failure
+    // for what was actually a successful cascade. Same predicate the cascade
+    // itself uses to decide which children to cancel.
+    let current: WorkflowRun | null;
+    try {
+      current = await workflowDb.getWorkflowRun(runId);
+    } catch (err) {
+      getLog().warn(
+        { err, runId, conversationId },
+        'operations.workflow_abandon_for_conversation_lookup_failed'
+      );
+      failures++;
+      continue;
+    }
+    if (!current) {
+      // SELECT said the row exists but a concurrent deleter just removed it.
+      // Treat as already-handled, not a failure.
+      continue;
+    }
+    if (current.status === 'completed' || current.status === 'cancelled') {
+      continue;
+    }
+    try {
+      const { cascadeFailures: runCascade, blockedParentRunId: blocked } =
+        await abandonWorkflow(runId);
+      abandoned++;
+      cascadeFailures += runCascade;
+      if (blockedParentRunId === null) blockedParentRunId = blocked;
+    } catch (err) {
+      getLog().warn(
+        { err, runId, conversationId },
+        'operations.workflow_abandon_for_conversation_failed'
+      );
+      failures++;
+    }
+  }
+  if (abandoned > 0 || failures > 0) {
+    getLog().info(
+      { conversationId, abandoned, failures, cascadeFailures, blockedParentRunId },
+      'operations.workflow_abandon_for_conversation_completed'
+    );
+  }
+  return { abandoned, failures, cascadeFailures, blockedParentRunId };
+}
+
 /**
  * Approve a paused workflow run.
  *

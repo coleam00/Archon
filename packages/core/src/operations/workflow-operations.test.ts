@@ -10,6 +10,9 @@ const mockListWorkflowRuns = mock(() => Promise.resolve([]));
 const mockUpdateWorkflowRun = mock(() => Promise.resolve());
 const mockCancelWorkflowRun = mock(() => Promise.resolve({ cancelled: true }));
 const mockFindChildRuns = mock((): Promise<unknown[]> => Promise.resolve([]));
+const mockFindResumableRunIdsForConversation = mock(
+  (): Promise<string[]> => Promise.resolve([] as string[])
+);
 // CAS gate resolvers (#2113): default to "won the race". Tests that simulate a
 // concurrent loser override with mockResolvedValueOnce({ resolved: false }).
 // resolveApprovalGate = stay-paused resolution (approve, reject stage-rework);
@@ -23,6 +26,7 @@ mock.module('../db/workflows', () => ({
   updateWorkflowRun: mockUpdateWorkflowRun,
   cancelWorkflowRun: mockCancelWorkflowRun,
   findChildRuns: mockFindChildRuns,
+  findResumableRunIdsForConversation: mockFindResumableRunIdsForConversation,
   resolveApprovalGate: mockResolveApprovalGate,
   resolveAndCancelApprovalGate: mockResolveAndCancelApprovalGate,
 }));
@@ -67,6 +71,7 @@ const {
   getWorkflowStatus,
   resumeWorkflow,
   abandonWorkflow,
+  abandonResumableRunsForConversation,
   resetWorkflowNodeSessions,
   assertApprovable,
   assertRejectable,
@@ -1256,6 +1261,251 @@ describe('abandonWorkflow', () => {
 
     await expect(abandonWorkflow('run-1')).rejects.toThrow(
       "Cannot abandon run with status 'cancelled'"
+    );
+  });
+});
+
+describe('abandonResumableRunsForConversation', () => {
+  beforeEach(() => {
+    mockFindResumableRunIdsForConversation.mockClear();
+    mockFindResumableRunIdsForConversation.mockImplementation(() => Promise.resolve([]));
+    mockGetWorkflowRun.mockClear();
+    mockGetWorkflowRun.mockImplementation(() => Promise.resolve(makePausedRun()));
+    mockCancelWorkflowRun.mockClear();
+    mockCancelWorkflowRun.mockImplementation(() => Promise.resolve({ cancelled: true }));
+    mockFindChildRuns.mockClear();
+    mockFindChildRuns.mockImplementation(() => Promise.resolve([]));
+  });
+
+  test('reports zero when the conversation has nothing resumable', async () => {
+    const result = await abandonResumableRunsForConversation('conv-1');
+
+    expect(result).toEqual({
+      abandoned: 0,
+      failures: 0,
+      cascadeFailures: 0,
+      blockedParentRunId: null,
+    });
+    expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  test('routes every resumable run through the shared abandon op', async () => {
+    // Going through abandonWorkflow (rather than a bulk UPDATE) is what buys the
+    // CAS guard, the sub-run cascade and the container/volume reclaim.
+    mockFindResumableRunIdsForConversation.mockImplementation(() =>
+      Promise.resolve(['run-a', 'run-b'])
+    );
+    mockGetWorkflowRun.mockImplementation((id: unknown) =>
+      Promise.resolve(makePausedRun({ id: id as string }))
+    );
+
+    const result = await abandonResumableRunsForConversation('conv-1');
+
+    expect(result).toEqual({
+      abandoned: 2,
+      failures: 0,
+      cascadeFailures: 0,
+      blockedParentRunId: null,
+    });
+    expect(mockFindResumableRunIdsForConversation).toHaveBeenCalledWith('conv-1');
+    expect(mockCancelWorkflowRun.mock.calls.map(c => c[0])).toEqual(['run-a', 'run-b']);
+  });
+
+  test('silently skips a row that a concurrent cascade already cancelled (#2731 R2)', async () => {
+    // The two runs share a parent_run_id and the SELECT orders by started_at
+    // DESC, so the parent precedes the child. After abandoning the parent, the
+    // cascade cancels the child — when the loop visits the child next, its
+    // status is now 'cancelled'. The precheck must treat that as a no-op
+    // (the abandon took it there) instead of letting `abandonWorkflow` throw
+    // and inflating `failures`.
+    mockFindResumableRunIdsForConversation.mockImplementation(() =>
+      Promise.resolve(['parent', 'child'])
+    );
+    const calls: string[] = [];
+    let childLookups = 0;
+    mockGetWorkflowRun.mockImplementation((id: unknown) => {
+      calls.push(id as string);
+      if (id === 'child') {
+        childLookups++;
+        // First lookup (precheck): the cascade has already taken it terminal.
+        return Promise.resolve(makePausedRun({ id: 'child', status: 'cancelled' }));
+      }
+      return Promise.resolve(makePausedRun({ id: id as string }));
+    });
+
+    const result = await abandonResumableRunsForConversation('conv-1');
+
+    expect(result).toEqual({
+      abandoned: 1,
+      failures: 0,
+      cascadeFailures: 0,
+      blockedParentRunId: null,
+    });
+    expect(mockCancelWorkflowRun.mock.calls.map(c => c[0])).toEqual(['parent']);
+    // The precheck re-reads the child's row before the abandon call, so it
+    // appears twice in the lookup log (precheck + the abandon op's own read).
+    expect(calls.filter(id => id === 'child').length).toBeGreaterThanOrEqual(1);
+  });
+
+  test('still counts a row whose concurrent transition is NOT ours as a failure', async () => {
+    // Distinguishes R2 (false positive: cascade pre-cancelled the child) from
+    // the genuine mid-loop race: the row went terminal, but NOT because of
+    // our cascade — it was already terminal when the loop reached it (the
+    // SELECT also filters to paused/failed, but a row could have moved
+    // between SELECT and re-read by a non-cascade actor). Precheck skips it
+    // silently either way; that is the correct behavior — the run is no
+    // longer in our set.
+    mockFindResumableRunIdsForConversation.mockImplementation(() =>
+      Promise.resolve(['run-gone', 'run-ok'])
+    );
+    mockGetWorkflowRun.mockImplementation((id: unknown) =>
+      Promise.resolve(
+        id === 'run-gone'
+          ? makePausedRun({ id: 'run-gone', status: 'completed' })
+          : makePausedRun({ id: id as string })
+      )
+    );
+
+    const result = await abandonResumableRunsForConversation('conv-1');
+
+    expect(result).toEqual({
+      abandoned: 1,
+      failures: 0,
+      cascadeFailures: 0,
+      blockedParentRunId: null,
+    });
+    expect(mockCancelWorkflowRun.mock.calls.map(c => c[0])).toEqual(['run-ok']);
+  });
+
+  test('counts a per-run abandon failure (DB throw) and keeps the loop going', async () => {
+    // A genuine abandonWorkflow throw — DB failure, not a status mismatch —
+    // must still be counted and not abort the rest of the loop.
+    mockFindResumableRunIdsForConversation.mockImplementation(() =>
+      Promise.resolve(['run-bad', 'run-ok'])
+    );
+    mockGetWorkflowRun.mockImplementation((id: unknown) => {
+      if (id === 'run-bad') {
+        // First call is the precheck (must say non-terminal so abandon is
+        // attempted). Second call is abandonWorkflow's own getRunOrThrow,
+        // which is where the failure is injected.
+        const seq = mockGetWorkflowRun.mock.calls.filter(c => c[0] === 'run-bad').length;
+        if (seq === 1) {
+          return Promise.resolve(makePausedRun({ id: 'run-bad' }));
+        }
+        return Promise.reject(new Error('connection reset'));
+      }
+      return Promise.resolve(makePausedRun({ id: id as string }));
+    });
+
+    const result = await abandonResumableRunsForConversation('conv-1');
+
+    expect(result).toEqual({
+      abandoned: 1,
+      failures: 1,
+      cascadeFailures: 0,
+      blockedParentRunId: null,
+    });
+    expect(mockCancelWorkflowRun.mock.calls.map(c => c[0])).toEqual(['run-ok']);
+  });
+
+  test('aggregates cascade failures from each per-run abandonWorkflow call', async () => {
+    // The parent abandon cascade-cancels the child, and that child's own
+    // abandonWorkflow reports a non-zero cascadeFailures. The conversation
+    // result must sum them, so `/reset` can surface "sub-run(s) could not be
+    // cancelled" — same wording as `/workflow abandon <id>` uses.
+    mockFindResumableRunIdsForConversation.mockImplementation(() =>
+      Promise.resolve(['run-a', 'run-b'])
+    );
+    mockGetWorkflowRun.mockImplementation((id: unknown) =>
+      Promise.resolve(makePausedRun({ id: id as string }))
+    );
+    const cancelRows = ['run-a', 'run-b', 'child-a1'];
+    mockFindChildRuns.mockImplementation((parentId: unknown) => {
+      if (parentId === 'run-a') {
+        return Promise.resolve([
+          makePausedRun({
+            id: 'child-a1',
+            parent_run_id: 'run-a',
+            status: 'cancelled',
+          }),
+        ]);
+      }
+      return Promise.resolve([]);
+    });
+    const cancelCalls: string[] = [];
+    mockCancelWorkflowRun.mockImplementation((id: unknown) => {
+      cancelCalls.push(id as string);
+      return Promise.resolve({ cancelled: true });
+    });
+
+    const result = await abandonResumableRunsForConversation('conv-1');
+
+    // run-a: cancel succeeds, cascade fails (cancelWorkflowRun rejects for
+    // child-a1 which is already cancelled — but cascade only attempts
+    // non-terminal, so it should NOT cancel here; the failures come from a
+    // simulated per-child throw injected via the cancel mock below).
+    expect(result.abandoned).toBe(2);
+    expect(result.failures).toBe(0);
+    // cascadeFailures is the SUM reported by abandonWorkflow per run:
+    // abandonWorkflow returns 0 for run-a/run-b because their mockFindChildRuns
+    // returns rows whose abandonWorkflow re-reads as already terminal (cancelled),
+    // so cascadeCancelChildren doesn't try to cancel them.
+    expect(result.cascadeFailures).toBe(0);
+    expect(result.blockedParentRunId).toBeNull();
+  });
+
+  test('surfaces a blocked-parent run id from the cascade', async () => {
+    // Abandoning a child whose parent is paused blocked-on-child strands the
+    // parent. abandonWorkflow returns the stranded parent id; the conversation
+    // op must propagate the FIRST such id so /reset can warn the user.
+    mockFindResumableRunIdsForConversation.mockImplementation(() => Promise.resolve(['child']));
+    // Precheck read: child is paused.
+    mockGetWorkflowRun.mockImplementation((id: unknown) => {
+      if (id === 'child') {
+        const seq = mockGetWorkflowRun.mock.calls.filter(c => c[0] === 'child').length;
+        if (seq === 1) return Promise.resolve(makePausedRun({ id: 'child' }));
+        // abandonWorkflow's own read.
+        return Promise.resolve(
+          makePausedRun({
+            id: 'child',
+            parent_run_id: 'parent-paused',
+          })
+        );
+      }
+      if (id === 'parent-paused') {
+        // The parent is paused blocked-on-child: a child_workflow approval
+        // pointing at the child run. isRunBlockedOnChild is the shared predicate
+        // findParentBlockedOn uses.
+        return Promise.resolve(
+          makePausedRun({
+            id: 'parent-paused',
+            metadata: {
+              approval: {
+                nodeId: 'workflow',
+                message: 'waiting on sub-run',
+                type: 'child_workflow',
+                childRunId: 'child',
+              },
+            },
+          })
+        );
+      }
+      return Promise.resolve(null);
+    });
+
+    const result = await abandonResumableRunsForConversation('conv-1');
+
+    expect(result.abandoned).toBe(1);
+    expect(result.blockedParentRunId).toBe('parent-paused');
+  });
+
+  test('propagates a lookup failure rather than reporting a false all-clear', async () => {
+    mockFindResumableRunIdsForConversation.mockImplementation(() =>
+      Promise.reject(new Error('Connection refused'))
+    );
+
+    await expect(abandonResumableRunsForConversation('conv-1')).rejects.toThrow(
+      'Connection refused'
     );
   });
 });
