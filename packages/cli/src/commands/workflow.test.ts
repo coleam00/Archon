@@ -6525,6 +6525,114 @@ describe('workflowRejectCommand', () => {
     expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Rejected and cancelled'));
   });
 
+  it('plain mode: rejecting with no reason defaults structured output text to "Rejected" (#2740)', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-new-mode',
+      workflow_name: 'new-mode-wf',
+      status: 'paused',
+      user_message: 'build it',
+      working_path: '/repo',
+      codebase_id: null,
+      metadata: {
+        approval: {
+          type: 'approval',
+          nodeId: 'gate',
+          message: 'Approve?',
+          decisions: [{ id: 'approve' }, { id: 'reject' }],
+          decisionsAuthored: true,
+        },
+      },
+    });
+
+    try {
+      await workflowRejectCommand('run-new-mode');
+    } catch {
+      // A new-mode reject stays resumable and auto-resumes inline; the
+      // downstream workflowRunCommand failure (no workflow discovered in this
+      // unit test's fake cwd) is acceptable here — this test only cares about
+      // what was recorded before that point.
+    }
+
+    // No `reason` argument at all — the CLI must default it to 'Rejected'
+    // before it reaches rejectWorkflow, otherwise the new-mode structured
+    // output (#2707) records an empty string instead (#2740).
+    const structuredOutput = { decision: 'reject', text: 'Rejected' };
+    expect(workflowDb.resolveApprovalGate).toHaveBeenCalledWith(
+      'run-new-mode',
+      {
+        approval: {
+          type: 'approval',
+          nodeId: 'gate',
+          message: 'Approve?',
+          decisions: [{ id: 'approve' }, { id: 'reject' }],
+          decisionsAuthored: true,
+          resolved: 'rejected',
+        },
+      },
+      [
+        {
+          event_type: 'node_completed',
+          step_name: 'gate',
+          data: {
+            node_output: JSON.stringify(structuredOutput),
+            approval_decision: 'rejected',
+            structured_output: structuredOutput,
+          },
+        },
+        {
+          event_type: 'approval_received',
+          step_name: 'gate',
+          data: { decision: 'rejected', reason: 'Rejected' },
+        },
+      ]
+    );
+  });
+
+  it('--json mode: rejecting with no reason defaults structured output text to "Rejected" (#2740)', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const jsonStdoutSpy = spyOnJsonStdout();
+
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-new-mode-json',
+      workflow_name: 'new-mode-wf',
+      status: 'paused',
+      user_message: 'build it',
+      working_path: '/repo',
+      codebase_id: null,
+      metadata: {
+        approval: {
+          type: 'approval',
+          nodeId: 'gate',
+          message: 'Approve?',
+          decisions: [{ id: 'approve' }, { id: 'reject' }],
+          decisionsAuthored: true,
+        },
+      },
+    });
+
+    await workflowRejectCommand('run-new-mode-json', undefined, true);
+
+    const structuredOutput = { decision: 'reject', text: 'Rejected' };
+    expect(workflowDb.resolveApprovalGate).toHaveBeenCalledWith(
+      'run-new-mode-json',
+      expect.objectContaining({
+        approval: expect.objectContaining({ resolved: 'rejected' }),
+      }),
+      expect.arrayContaining([
+        expect.objectContaining({
+          event_type: 'node_completed',
+          step_name: 'gate',
+          data: expect.objectContaining({ structured_output: structuredOutput }),
+        }),
+      ])
+    );
+    const parsed = JSON.parse(firstJsonPayload(jsonStdoutSpy)) as Record<string, unknown>;
+    expect(parsed).toMatchObject({ ok: true, runId: 'run-new-mode-json', action: 'reject' });
+    jsonStdoutSpy.mockRestore();
+  });
+
   it('updates metadata and auto-resumes when on_reject configured and under limit', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
 
