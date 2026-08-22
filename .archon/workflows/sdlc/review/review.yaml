@@ -135,12 +135,16 @@ nodes:
   # prompt. When in-parent runtime fan-out lands (#2512), a verify stage slots in
   # between the lenses and this node without changing either side's contract —
   # the findings files are the declared boundary.
+  # none_failed_min_one_success, not all_done: a chooser-skipped lens must not
+  # block synthesis, but a FAILED lens (e.g. a provider stream dying mid-review,
+  # seen on run ae71ab1e) must fail the review rather than silently verdict on
+  # thinner evidence — a resume re-runs just the failed lens.
   - id: synthesize
     command: review-synthesize
     context: fresh
     output_type: review-report
     depends_on: [code, seams, tests, errors, comments, types, docs, simplify]
-    trigger_rule: all_done
+    trigger_rule: none_failed_min_one_success
     output_format:
       type: object
       properties:
