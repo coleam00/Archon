@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -6,6 +6,7 @@ import { createLogger } from '@archon/paths';
 // Type-only import — erased by TS, so it does NOT trigger Pi's config.js
 // package.json read at module load (see the header note below). Used only to
 // annotate the per-call ResourceLoader local.
+import type { Api } from '@earendil-works/pi-ai';
 import type { DefaultResourceLoader } from '@earendil-works/pi-coding-agent';
 
 import type {
@@ -223,6 +224,75 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
+/**
+ * One model as persisted in Pi's on-disk model store (`models-store.json`).
+ * A prior successful extension discovery writes these; we read them back to
+ * resolve a model deterministically when the extension's async registration
+ * races Pi's reload() (see `readExtensionModelFromStore` callsite + the
+ * `PI-LITELLM-RACE` note in KNOWN-ISSUES).
+ */
+interface StoredPiModel {
+  id: string;
+  name?: string;
+  reasoning?: boolean;
+  input?: ('text' | 'image')[];
+  cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
+  contextWindow: number;
+  maxTokens: number;
+  compat?: unknown;
+  api?: string;
+  baseUrl?: string;
+}
+
+/**
+ * Read a single model for `provider`/`modelId` from Pi's on-disk model-store
+ * cache. Returns undefined on any read/parse error or a cache miss — callers
+ * treat that as "not cached" and fall through to the normal not-found error.
+ */
+function readExtensionModelFromStore(
+  agentDir: string,
+  provider: string,
+  modelId: string
+): StoredPiModel | undefined {
+  try {
+    const raw = readFileSync(join(agentDir, 'models-store.json'), 'utf8');
+    const store = JSON.parse(raw) as Record<string, { models?: StoredPiModel[] } | undefined>;
+    return store[provider]?.models?.find(m => m.id === modelId);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Map a stored model into the `ProviderConfigInput.models[]` shape expected by
+ *  `ModelRegistry.registerProvider`. */
+function toProviderModelInput(m: StoredPiModel): {
+  id: string;
+  name: string;
+  reasoning: boolean;
+  input: ('text' | 'image')[];
+  cost: StoredPiModel['cost'];
+  contextWindow: number;
+  maxTokens: number;
+  api?: Api;
+  baseUrl?: string;
+  compat?: never;
+} {
+  return {
+    id: m.id,
+    name: m.name ?? m.id,
+    reasoning: m.reasoning ?? false,
+    input: m.input ?? ['text'],
+    cost: m.cost,
+    contextWindow: m.contextWindow,
+    maxTokens: m.maxTokens,
+    // `api` in the store is a plain string; the SDK's Api union covers the
+    // values it writes, so this narrowing is safe for a value it produced.
+    ...(m.api ? { api: m.api as Api } : {}),
+    ...(m.baseUrl ? { baseUrl: m.baseUrl } : {}),
+    ...(m.compat ? { compat: m.compat as never } : {}),
+  };
+}
+
 // Structured-output prompt augmentation is shared across providers. Import
 // once for local use and re-export so existing callers and tests keep their
 // import path stable; new providers should import from `../../shared/structured-output`.
@@ -375,14 +445,14 @@ export class PiProvider implements IAgentProvider {
       );
     }
 
-    // 2. Build AuthStorage + ModelRegistry. Both read on every sendQuery —
+    // 2. Build ModelRuntime + ModelRegistry. Both read on every sendQuery —
     //    user edits to auth.json or models.json take effect without restart.
-    //    ModelRegistry.create() is mutable: extension providers can call registerProvider()
-    //    on it during bindExtensions() to add their models (phase 2 resolution).
+    //    ModelRegistry wraps the runtime and is mutable: extension providers can
+    //    call registerProvider() on it during bindExtensions() (phase 2 resolution).
     const envVarName = PI_PROVIDER_ENV_VARS[parsed.provider];
     const oauthVarName = PI_OAUTH_ENV_VARS[parsed.provider];
-    let authStorage: ReturnType<typeof piCodingAgent.AuthStorage.create>;
-    let modelRegistry: ReturnType<typeof piCodingAgent.ModelRegistry.create>;
+    let modelRuntime: Awaited<ReturnType<typeof piCodingAgent.ModelRuntime.create>>;
+    let modelRegistry: InstanceType<typeof piCodingAgent.ModelRegistry>;
     try {
       // Archon delivers per-user credentials (API keys + subscriptions) as a
       // per-run auth.json and points us at it via ARCHON_PI_AUTH_PATH — using an
@@ -394,16 +464,29 @@ export class PiProvider implements IAgentProvider {
       const archonAuthPath =
         (requestOptions?.env?.ARCHON_PI_AUTH_PATH ?? process.env.ARCHON_PI_AUTH_PATH)?.trim() ||
         undefined;
-      authStorage = piCodingAgent.AuthStorage.create(archonAuthPath);
+      // 0.83.0: ModelRuntime.create({ authPath }) replaces AuthStorage.create();
+      // ModelRegistry is now constructed from the runtime (was ModelRegistry.create(authStorage)).
+      modelRuntime = await piCodingAgent.ModelRuntime.create(
+        archonAuthPath ? { authPath: archonAuthPath } : undefined
+      );
+      // #2654 credential boundary (ported to the 0.83 seam): a custom provider
+      // (no Archon env-var shortcut) may resolve its models.json config
+      // (baseUrl/apiKey/headers) from request/project env, but must never read
+      // Archon-injected protected credentials. Pre-0.83 monkey-patched
+      // AuthStorage.getProviderEnv/hasAuth — objects the 0.83 migration deletes;
+      // instead we wrap ModelRuntime so getAuth({ env }) overlays the
+      // credential-filtered request env and hasConfiguredAuth reports it. The
+      // wrapped runtime feeds both the ModelRegistry and the agent session, so
+      // the boundary holds for status checks and the actual model request.
       if (!envVarName) {
-        authStorage = withCustomProviderRequestEnv(
-          authStorage,
+        modelRuntime = await withCustomProviderRequestEnv(
+          modelRuntime,
           parsed.provider,
           requestOptions?.env,
           requestOptions?.protectedEnvKeys
         );
       }
-      modelRegistry = piCodingAgent.ModelRegistry.create(authStorage);
+      modelRegistry = new piCodingAgent.ModelRegistry(modelRuntime);
     } catch (err) {
       const e = err as Error;
       getLog().error({ err: e, piProvider: parsed.provider }, 'pi.auth_storage_init_failed');
@@ -445,7 +528,8 @@ export class PiProvider implements IAgentProvider {
       name ? (requestOptions?.env?.[name] ?? process.env[name]) : undefined;
     const envOverride = readEnvOverride(oauthVarName) ?? readEnvOverride(envVarName);
     if (envOverride) {
-      authStorage.setRuntimeApiKey(parsed.provider, envOverride);
+      // 0.83.0: setRuntimeApiKey moved to ModelRuntime and is async.
+      await modelRuntime.setRuntimeApiKey(parsed.provider, envOverride);
     }
 
     // Auth validation deferred for extension providers — they manage credentials
@@ -455,14 +539,17 @@ export class PiProvider implements IAgentProvider {
     // detection in step 4c; for 'anthropic' we resolve even when the model is
     // deferred to extensions (AuthStorage reads are cheap and side-effect-free)
     // so a catalog miss can never skip the OAuth-safe default prompt.
-    let resolvedKey: Awaited<ReturnType<typeof authStorage.getApiKey>> | undefined;
+    let resolvedKey: Awaited<ReturnType<typeof modelRegistry.getApiKeyForProvider>> | undefined;
     let hasResolvedAuth = false;
     if (model && !envVarName) {
-      // This is deliberately status-only: Pi resolves models.json request auth
-      // when it sends, and command-backed values must execute only once there.
+      // Custom provider (#2654): status-only check via the request-env-bounded
+      // runtime. Pi resolves models.json request auth when it sends, and
+      // command-backed values must execute only once there.
       hasResolvedAuth = modelRegistry.hasConfiguredAuth(model);
     } else if (model || parsed.provider === 'anthropic') {
-      resolvedKey = await authStorage.getApiKey(parsed.provider);
+      // 0.83.0: AuthStorage.getApiKey → ModelRegistry.getApiKeyForProvider
+      // (same contract: resolves auth.json + runtime overrides to a bearer string).
+      resolvedKey = await modelRegistry.getApiKeyForProvider(parsed.provider);
       hasResolvedAuth = Boolean(resolvedKey);
     }
     if (model) {
@@ -758,8 +845,7 @@ export class PiProvider implements IAgentProvider {
       // createAgentSession accepts this — the model will be set via
       // session.setModel() after bindExtensions() resolves it (step 4g).
       ...(model ? { model } : {}),
-      authStorage,
-      modelRegistry,
+      modelRuntime,
       sessionManager,
       settingsManager,
       resourceLoader,
@@ -790,11 +876,31 @@ export class PiProvider implements IAgentProvider {
     //     below — extensions read flags inside their session_start handler.
     //     `extensionFlags` is the per-node resolved map (assistant-level flags
     //     shallow-merged with `nodes.<nodeId>.extensionFlags`, node wins).
-    if (enableExtensions && extensionFlags) {
+    if (enableExtensions) {
       const runner = session.extensionRunner;
       if (runner) {
-        for (const [name, value] of Object.entries(extensionFlags)) {
-          runner.setFlagValue(name, value);
+        // Pi 0.83 stale-ctx guard vs. our #1877 shared-loader reuse. On
+        // dispose(), AgentSession calls runner.invalidate(), which sets
+        // staleMessage on the SHARED ExtensionRuntime — the single object every
+        // extension's captured `pi` ctx delegates through
+        // (runner.invalidate -> runtime.invalidate). Because the #1877 workaround
+        // reuses ONE reloaded loader, and thus ONE runtime, across every session
+        // for a (cwd, systemPrompt, skillPaths) key (a 2nd reload() deadlocks),
+        // the first turn's dispose would poison that runtime and every later turn
+        // or DAG node would throw "This extension ctx is stale after session
+        // replacement or reload". The runner is per-session and discarded right
+        // after dispose; the shared runtime must stay live for the next session —
+        // so suppress this session's ctx invalidation. reload() still runs
+        // exactly once; only the invalidate propagation is neutered.
+        runner.invalidate = (): void => {
+          // no-op: suppress this session's ctx invalidation so dispose() cannot
+          // poison the shared runtime (see the note above).
+        };
+
+        if (extensionFlags) {
+          for (const [name, value] of Object.entries(extensionFlags)) {
+            runner.setFlagValue(name, value);
+          }
         }
       }
     }
@@ -813,7 +919,79 @@ export class PiProvider implements IAgentProvider {
     // 4g. [LOOKUP-2] Re-check the registry after bindExtensions() for extension-registered models.
     //     Safe to call session.setModel() here — no prompt has been sent yet.
     if (!model) {
+      // Extension providers (e.g. a litellm proxy) register during
+      // bindExtensions() and discover their MODELS asynchronously — the SDK
+      // does NOT await that discovery, so a plain find() races it. Give it one
+      // awaited, network-backed refresh (which runs the extension's own
+      // discovery via ModelRuntime) then re-find.
+      // Bound the network-backed discovery: a slow or unreachable extension
+      // backend must not hang sendQuery. On timeout (or any error) we degrade
+      // directly to the deterministic store-cache fallback below. The refresh
+      // promise may keep running in the background harmlessly — we just stop
+      // waiting on it.
+      const REFRESH_TIMEOUT_MS = 10_000;
+      let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+      const refreshLogCtx = { piProvider: parsed.provider, modelId: parsed.modelId };
+      getLog().debug(refreshLogCtx, 'pi.model_discovery_refresh_started');
+      try {
+        await Promise.race([
+          (async (): Promise<void> => {
+            await modelRuntime.refresh({ allowNetwork: true });
+            await modelRegistry.refresh();
+          })(),
+          new Promise<never>((_, reject) => {
+            refreshTimer = setTimeout(() => {
+              reject(new Error(`Pi model discovery refresh exceeded ${REFRESH_TIMEOUT_MS}ms`));
+            }, REFRESH_TIMEOUT_MS);
+          }),
+        ]);
+        getLog().debug(refreshLogCtx, 'pi.model_discovery_refresh_completed');
+      } catch (err) {
+        getLog().debug({ ...refreshLogCtx, err }, 'pi.model_discovery_refresh_failed');
+      } finally {
+        if (refreshTimer) clearTimeout(refreshTimer);
+      }
       model = modelRegistry.find(parsed.provider, parsed.modelId);
+
+      // DETERMINISTIC FALLBACK for the extension registration/discovery race
+      // (KNOWN-ISSUES → PI-LITELLM-RACE; see also the resource-loader snapshot
+      // note). Pi's own on-disk model store reliably caches every model a prior
+      // discovery found, so when the timing-dependent extension path misses,
+      // register the provider directly from that cache. This removes the
+      // flakiness for any already-discovered model of ANY extension provider
+      // (litellm, kiro, …) — not just litellm — with no dependency on the
+      // extension's async timing.
+      if (!model) {
+        const stored = readExtensionModelFromStore(
+          piCodingAgent.getAgentDir(),
+          parsed.provider,
+          parsed.modelId
+        );
+        if (stored) {
+          try {
+            const apiKey = await modelRegistry.getApiKeyForProvider(parsed.provider);
+            modelRegistry.registerProvider(parsed.provider, {
+              ...(stored.baseUrl ? { baseUrl: stored.baseUrl } : {}),
+              ...(apiKey ? { apiKey } : {}),
+              ...(stored.api ? { api: stored.api as Api } : {}),
+              models: [toProviderModelInput(stored)],
+            });
+            await modelRegistry.refresh();
+            model = modelRegistry.find(parsed.provider, parsed.modelId);
+            if (model) {
+              getLog().info(
+                { piProvider: parsed.provider, modelId: parsed.modelId },
+                'pi.model_resolved_from_store_cache'
+              );
+            }
+          } catch (err) {
+            getLog().warn(
+              { err, piProvider: parsed.provider, modelId: parsed.modelId },
+              'pi.model_store_fallback_failed'
+            );
+          }
+        }
+      }
       if (!model) {
         session.dispose();
         throw new Error(

@@ -43,9 +43,11 @@ export async function listPiModels(): Promise<PiModelInfo[]> {
   try {
     ensurePiPackageDirShim();
     const piCodingAgent = await import('@earendil-works/pi-coding-agent');
-    const authStorage = piCodingAgent.AuthStorage.create();
-    const registry = piCodingAgent.ModelRegistry.create(authStorage);
-    cachedCatalog = registry.getAll().map(m => ({
+    // 0.83.0: AuthStorage.create() + ModelRegistry.create(authStorage) →
+    // ModelRuntime.create() + new ModelRegistry(runtime).
+    const modelRuntime = await piCodingAgent.ModelRuntime.create();
+    const registry = new piCodingAgent.ModelRegistry(modelRuntime);
+    const catalog: PiModelInfo[] = registry.getAll().map(m => ({
       ref: `${m.provider}/${m.id}`,
       provider: m.provider,
       id: m.id,
@@ -54,7 +56,8 @@ export async function listPiModels(): Promise<PiModelInfo[]> {
       cost: { input: m.cost.input, output: m.cost.output },
       contextWindow: m.contextWindow,
     }));
-    return cachedCatalog;
+    cachedCatalog = catalog;
+    return catalog;
   } catch (err) {
     // Intentional fallback: the catalog is a hint, not a dependency.
     getLog().warn({ err: err as Error }, 'pi.model_catalog_list_failed');
