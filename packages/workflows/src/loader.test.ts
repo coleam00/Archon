@@ -3999,6 +3999,109 @@ nodes:
       expect(result.errors[0].error).toContain('unknown node');
     });
 
+    // --- gate placement inside a loop_group body (#2707 step 3) -------------------
+    // Guidance only (parseWarnings), not a load error — a mid-body/co-terminal gate
+    // predates this pattern (e.g. via the legacy `on_reject` mechanism) and must keep
+    // loading; see the '#2707 step 1 gate/loop deprecation warnings' describe block
+    // below for the equivalent warning-content assertions.
+
+    it('should accept the canonical Design A gate-terminated loop_group, with no warning', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'loop-group-gate-terminal.yaml'),
+        `
+name: loop-group-gate-terminal
+description: A gate as the body's sole terminal sink, completion reading its decision
+interactive: true
+nodes:
+  - id: grp
+    loop_group:
+      until_bash: '[ "$check.output.decision" = "approve" ]'
+      max_iterations: 3
+      nodes:
+        - id: work
+          prompt: "do work"
+        - id: check
+          depends_on: [work]
+          approval:
+            message: "Continue?"
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(0);
+      expect(result.workflows).toHaveLength(1);
+      expect(result.workflows[0].parseWarnings ?? []).toEqual([]);
+    });
+
+    it("warns when a gate-terminated loop_group's until_bash does not reference the gate", async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'loop-group-gate-completion-not-referenced.yaml'),
+        `
+name: loop-group-gate-completion-not-referenced
+description: A gate-terminated body whose completion channel ignores the gate
+interactive: true
+nodes:
+  - id: grp
+    loop_group:
+      until_bash: "exit 0"
+      max_iterations: 3
+      nodes:
+        - id: work
+          prompt: "do work"
+        - id: check
+          depends_on: [work]
+          approval:
+            message: "Continue?"
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(0);
+      const pw = result.workflows[0].parseWarnings ?? [];
+      expect(pw).toHaveLength(1);
+      expect(pw[0]).toContain("Node 'check'");
+      expect(pw[0]).toContain('does not reference');
+      expect(pw[0]).toContain('$check.output');
+    });
+
+    it('does NOT warn about completion-not-referenced when the gate is not the terminal sink (avoids piling on)', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'loop-group-gate-mid-body-no-pileup.yaml'),
+        `
+name: loop-group-gate-mid-body-no-pileup
+description: A non-terminal gate — only the placement warning should fire
+interactive: true
+nodes:
+  - id: grp
+    loop_group:
+      until_bash: "exit 0"
+      max_iterations: 3
+      nodes:
+        - id: check
+          approval:
+            message: "Continue?"
+        - id: after
+          depends_on: [check]
+          prompt: "do more work"
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      const pw = result.workflows[0].parseWarnings ?? [];
+      expect(pw).toHaveLength(1);
+      expect(pw[0]).toContain('terminal sink');
+      expect(pw.some(w => w.includes('does not reference'))).toBe(false);
+    });
+
     it('should accept a well-formed loop_group', async () => {
       const workflowDir = join(testDir, '.archon', 'workflows');
       await mkdir(workflowDir, { recursive: true });
@@ -6126,7 +6229,7 @@ nodes:
         'nodes:',
         '  - id: refine',
         '    loop_group:',
-        '      until: DONE',
+        '      until_bash: "exit 0"',
         '      max_iterations: 3',
         '      nodes:',
         '        - id: check',
@@ -6147,7 +6250,7 @@ nodes:
         'nodes:',
         '  - id: refine',
         '    loop_group:',
-        '      until: DONE',
+        '      until_bash: "exit 0"',
         '      max_iterations: 3',
         '      max_attempts: 4', // not a loop control field
         '      nodes:',
@@ -6204,15 +6307,16 @@ nodes:
         '        max_attempts: 2',
       ]);
       // Every key used here IS valid — none should trip the unknown-key check
-      // this describe block covers. `loop.interactive`/`on_reject` are also
-      // deliberately deprecated (#2707 step 1), so this fixture now
-      // legitimately produces THOSE warnings too — asserted separately below,
-      // not conflated with "unknown key" false positives. `capture_response`
-      // combined with `on_reject` (no `decisions:` authored) is still fully
-      // functional (R4 fix), so it does NOT warn here.
+      // this describe block covers. `loop.interactive`/`on_reject`/the prose
+      // `until:` channel are also deliberately deprecated (#2707 steps 1 and 3),
+      // so this fixture now legitimately produces THOSE warnings too — asserted
+      // separately below, not conflated with "unknown key" false positives.
+      // `capture_response` combined with `on_reject` (no `decisions:` authored)
+      // is still fully functional (R4 fix), so it does NOT warn here.
       expect(pw.some(w => w.includes('unknown key'))).toBe(false);
       expect(pw).toEqual([
         "Node 'refine': node-level loop 'interactive:' is deprecated. A future release re-expresses the interactive loop as a gate + loop_group composition (#2707 step 3). Continue using it for now.",
+        "Node 'refine': the prose 'loop_group.until' completion signal is deprecated. Declare 'loop_group.until_bash' instead — it can read a body node's structured output (e.g. 'test \"$body-node.output.field\" = true') (#2707 step 3). Continue using it for now.",
         "Node 'gate': 'approval.on_reject' is deprecated. Declare 'approval.decisions' and wire a rework node with \"when: \\\"$gate.output.decision == 'reject'\\\"\" instead (loop it with loop_group if it should iterate). This gate keeps running via the legacy mechanism until migrated.",
       ]);
     });
@@ -6402,6 +6506,15 @@ nodes:
       // Remove from this list once #2123's defaults rewrite migrates them.
       'archon-interactive-prd',
       'archon-piv-loop',
+      // #2707 step 3: these bundled workflows declare the now-deprecated prose
+      // 'until:' completion channel on a loop/loop_group — still fully
+      // functional (grow-then-deprecate); the warning is expected, not a false
+      // positive. Remove from this list once #2123's defaults rewrite migrates
+      // them to 'until_bash'/'until_field'.
+      'archon-adversarial-dev',
+      'archon-test-loop-dag',
+      'archon-ralph-dag',
+      't1-fix-issue',
     ]);
 
     it('warns only on workflows already known to carry unknown keys', async () => {
@@ -6501,7 +6614,7 @@ nodes:
         '  - id: iterate',
         '    loop:',
         '      prompt: work',
-        '      until: DONE',
+        '      until_bash: "exit 0"',
         '      max_iterations: 5',
         '      interactive: true',
         '      gate_message: continue?',
@@ -6512,7 +6625,9 @@ nodes:
 
     it('warns on a gate/interactive loop_group nested inside a loop_group body', async () => {
       // Exercises the recursion into loop_group.nodes — the outer group is
-      // clean, only the inner body nodes carry deprecated fields.
+      // clean, only the inner body nodes carry deprecated fields. 'inner-gate' also
+      // has a dependent ('inner-loop'), so it additionally trips the terminal-sink
+      // placement warning below — three warnings on one gate/loop pair, not two.
       const pw = await warningsFor([
         'name: test',
         'description: test',
@@ -6520,7 +6635,7 @@ nodes:
         'nodes:',
         '  - id: outer',
         '    loop_group:',
-        '      until: DONE',
+        '      until_bash: "exit 0"',
         '      max_iterations: 2',
         '      nodes:',
         '        - id: inner-gate',
@@ -6531,15 +6646,125 @@ nodes:
         '        - id: inner-loop',
         '          loop:',
         '            prompt: work',
-        '            until: DONE',
+        '            until_bash: "exit 0"',
         '            max_iterations: 5',
         '            interactive: true',
         '            gate_message: continue?',
         '          depends_on: [inner-gate]',
       ]);
-      expect(pw).toHaveLength(2);
+      expect(pw).toHaveLength(3);
       expect(pw.some(w => w.includes("Node 'inner-gate'") && w.includes('on_reject'))).toBe(true);
       expect(pw.some(w => w.includes("Node 'inner-loop'") && w.includes('interactive'))).toBe(true);
+      expect(pw.some(w => w.includes("Node 'inner-gate'") && w.includes('terminal sink'))).toBe(
+        true
+      );
+    });
+
+    it('warns on a gate node with a dependent inside a loop_group body (not a terminal sink)', async () => {
+      const pw = await warningsFor([
+        'name: test',
+        'description: test',
+        'interactive: true',
+        'nodes:',
+        '  - id: grp',
+        '    loop_group:',
+        '      until_bash: "exit 0"',
+        '      max_iterations: 3',
+        '      nodes:',
+        '        - id: check',
+        '          approval:',
+        '            message: ok?',
+        '        - id: after',
+        '          depends_on: [check]',
+        '          prompt: do more work',
+      ]);
+      expect(pw).toHaveLength(1);
+      expect(pw[0]).toContain("Node 'check'");
+      expect(pw[0]).toContain('terminal sink');
+    });
+
+    it('warns on a gate node sharing terminal-sink status with another body node', async () => {
+      const pw = await warningsFor([
+        'name: test',
+        'description: test',
+        'interactive: true',
+        'nodes:',
+        '  - id: grp',
+        '    loop_group:',
+        '      until_bash: "exit 0"',
+        '      max_iterations: 3',
+        '      nodes:',
+        '        - id: check',
+        '          approval:',
+        '            message: ok?',
+        '        - id: also-terminal',
+        '          prompt: an independent branch',
+      ]);
+      expect(pw).toHaveLength(1);
+      expect(pw[0]).toContain("Node 'check'");
+      expect(pw[0]).toContain('terminal sink');
+    });
+
+    it('warns on the prose until: channel on a loop node', async () => {
+      const pw = await warningsFor([
+        'name: test',
+        'description: test',
+        'nodes:',
+        '  - id: iterate',
+        '    loop:',
+        '      prompt: work',
+        '      until: DONE',
+        '      max_iterations: 5',
+      ]);
+      expect(pw).toHaveLength(1);
+      expect(pw[0]).toContain(
+        "Node 'iterate': the prose 'loop.until' completion signal is deprecated"
+      );
+      expect(pw[0]).toContain('until_bash');
+      expect(pw[0]).toContain('until_field');
+    });
+
+    it('warns on the prose until: channel on a loop_group node, with loop_group-specific guidance (no until_field)', async () => {
+      const pw = await warningsFor([
+        'name: test',
+        'description: test',
+        'nodes:',
+        '  - id: grp',
+        '    loop_group:',
+        '      until: DONE',
+        '      max_iterations: 3',
+        '      nodes:',
+        '        - id: work',
+        '          prompt: do work',
+      ]);
+      expect(pw).toHaveLength(1);
+      expect(pw[0]).toContain(
+        "Node 'grp': the prose 'loop_group.until' completion signal is deprecated"
+      );
+      expect(pw[0]).toContain('loop_group.until_bash');
+      expect(pw[0]).not.toContain('until_field');
+    });
+
+    it('does NOT warn on until_bash or until_field alone', async () => {
+      const pw = await warningsFor([
+        'name: test',
+        'description: test',
+        'nodes:',
+        '  - id: iterate',
+        '    loop:',
+        '      prompt: work',
+        '      until_bash: "exit 0"',
+        '      max_iterations: 5',
+        '  - id: grp',
+        '    depends_on: [iterate]',
+        '    loop_group:',
+        '      until_bash: "exit 0"',
+        '      max_iterations: 3',
+        '      nodes:',
+        '        - id: work',
+        '          prompt: do work',
+      ]);
+      expect(pw).toEqual([]);
     });
 
     it('warns on a typo inside a decisions: entry (R5 fix — array typo protection)', async () => {
