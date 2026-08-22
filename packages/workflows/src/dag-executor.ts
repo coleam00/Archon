@@ -3239,8 +3239,8 @@ async function runSubprocess(
  *  instead of inlined as bash -c arguments, to avoid silent data corruption. */
 const NODE_OUTPUT_FILE_THRESHOLD = 32_768;
 
-/** Maximum UTF-8 bytes retained for successful bash stdout in workflow events. */
-const PERSISTED_BASH_OUTPUT_MAX_BYTES = 32 * 1024;
+/** Maximum UTF-8 bytes retained for successful bash/script stdout in workflow events. */
+const PERSISTED_NODE_OUTPUT_MAX_BYTES = 32 * 1024;
 
 function utf8SequenceLength(leadByte: number): number {
   if (leadByte < 0x80) return 1;
@@ -3249,19 +3249,21 @@ function utf8SequenceLength(leadByte: number): number {
   return 4;
 }
 
-function formatPersistedBashOutput(output: string): {
+/** Shared by executeBashNode and executeScriptNode — both persist deterministic
+ *  node stdout through this same UTF-8-safe cap (#2726). */
+function formatPersistedNodeOutput(output: string): {
   nodeOutput: string;
   truncated: boolean;
   originalBytes?: number;
 } {
   const outputBytes = Buffer.from(output, 'utf8');
-  if (outputBytes.byteLength <= PERSISTED_BASH_OUTPUT_MAX_BYTES) {
+  if (outputBytes.byteLength <= PERSISTED_NODE_OUTPUT_MAX_BYTES) {
     return { nodeOutput: output, truncated: false };
   }
 
   const marker = buildTruncationMarker(outputBytes.byteLength);
   const markerBytes = Buffer.byteLength(marker, 'utf8');
-  let headEnd = PERSISTED_BASH_OUTPUT_MAX_BYTES - markerBytes;
+  let headEnd = PERSISTED_NODE_OUTPUT_MAX_BYTES - markerBytes;
 
   // The byte cap can land inside a multi-byte code point. Inspect the final
   // sequence in the prefix and drop it when it is incomplete before decoding.
@@ -3304,6 +3306,10 @@ async function executeBashNode(
   envVars?: Record<string, string>,
   stepNamePrefix = '',
   iteration?: number,
+  // Per-iteration $LOOP_USER_INPUT free-text for loop_group body bash nodes, delivered via
+  // env (never spliced into source — #2115). '' for top-level bash nodes and non-first
+  // iterations (mirrors executeScriptNode, #2725).
+  loopUserInput = '',
   execContext: ExecutionContext = { kind: 'host' }
 ): Promise<NodeOutput> {
   const nodeStartTime = Date.now();
@@ -3387,7 +3393,7 @@ async function executeBashNode(
     BASE_BRANCH: baseBranch,
     USER_MESSAGE: workflowRun.user_message,
     ARGUMENTS: workflowRun.user_message,
-    LOOP_USER_INPUT: '',
+    LOOP_USER_INPUT: loopUserInput,
     LOOP_PREV_OUTPUT: '',
     REJECTION_REASON: '',
     CONTEXT: issueContext ?? '',
@@ -3420,7 +3426,7 @@ async function executeBashNode(
     getLog().info({ nodeId: node.id, durationMs: duration }, 'dag_node_completed');
     await logNodeComplete(logDir, workflowRun.id, node.id, '<bash>', { durationMs: duration });
 
-    const persistedOutput = formatPersistedBashOutput(output);
+    const persistedOutput = formatPersistedNodeOutput(output);
 
     deps.store
       .createWorkflowEvent({
@@ -3810,12 +3816,25 @@ async function executeScriptNode(
     getLog().info({ nodeId: node.id, durationMs: duration }, 'dag_node_completed');
     await logNodeComplete(logDir, workflowRun.id, node.id, '<script>', { durationMs: duration });
 
+    const persistedOutput = formatPersistedNodeOutput(output);
+
     deps.store
       .createWorkflowEvent({
         workflow_run_id: workflowRun.id,
         event_type: 'node_completed',
         step_name: stepName,
-        data: { duration_ms: duration, type: 'script', node_output: output, ...iterationData },
+        data: {
+          duration_ms: duration,
+          type: 'script',
+          node_output: persistedOutput.nodeOutput,
+          ...(persistedOutput.truncated
+            ? {
+                node_output_truncated: true,
+                node_output_original_bytes: persistedOutput.originalBytes,
+              }
+            : {}),
+          ...iterationData,
+        },
       })
       .catch((err: Error) => {
         getLog().error(
@@ -8554,6 +8573,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                       config.envVars,
                       stepNamePrefix,
                       iteration,
+                      ctx.bodyLoopUserInput ?? '',
                       execContext
                     )
                 );

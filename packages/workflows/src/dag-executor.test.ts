@@ -6015,6 +6015,107 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
     // complete cross-process output requires a separately managed artifact.
   });
 
+  it('caps over-limit persisted script output with a marker and byte metadata (#2726)', async () => {
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const workflowRun = makeWorkflowRun('script-output-over-cap');
+
+    await executeDagWorkflow(
+      mockDeps,
+      createMockPlatform(),
+      'conv-script-over-cap',
+      testDir,
+      {
+        name: 'script-output-over-cap',
+        nodes: [
+          {
+            id: 'over-cap',
+            kind: 'exec',
+            runtime: 'bun',
+            script: 'console.log("x".repeat(32769))',
+          },
+        ],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    const completedEvent = eventCalls.find(
+      (call: unknown[]) =>
+        (call[0] as { event_type: string }).event_type === 'node_completed' &&
+        (call[0] as { step_name: string }).step_name === 'over-cap'
+    );
+    const data = (
+      completedEvent![0] as {
+        data: {
+          node_output: string;
+          node_output_truncated: boolean;
+          node_output_original_bytes: number;
+        };
+      }
+    ).data;
+    expect(Buffer.byteLength(data.node_output, 'utf8')).toBeLessThanOrEqual(32_768);
+    expect(data.node_output).toEndWith('\n\n… [truncated; original output was 32769 bytes]');
+    expect(data.node_output_truncated).toBe(true);
+    expect(data.node_output_original_bytes).toBe(32_769);
+  });
+
+  it('persists script output at or below the byte cap unchanged without truncation metadata', async () => {
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const workflowRun = makeWorkflowRun('script-output-below-cap');
+
+    await executeDagWorkflow(
+      mockDeps,
+      createMockPlatform(),
+      'conv-script-below-cap',
+      testDir,
+      {
+        name: 'script-output-below-cap',
+        nodes: [
+          {
+            id: 'below-cap',
+            kind: 'exec',
+            runtime: 'bun',
+            script: 'console.log("x".repeat(32767))',
+          },
+        ],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    const completedEvent = eventCalls.find(
+      (call: unknown[]) =>
+        (call[0] as { event_type: string }).event_type === 'node_completed' &&
+        (call[0] as { step_name: string }).step_name === 'below-cap'
+    );
+    const data = (
+      completedEvent![0] as {
+        data: Record<string, unknown> & { node_output: string };
+      }
+    ).data;
+    expect(data.node_output).toBe('x'.repeat(32767));
+    expect(data.node_output_truncated).toBeUndefined();
+    expect(data.node_output_original_bytes).toBeUndefined();
+  });
+
   it('keeps a persisted UTF-8 preview valid when the byte cap splits a code point', async () => {
     const store = createMockStore();
     const mockDeps = createMockDeps(store);
@@ -19730,6 +19831,84 @@ describe('executeDagWorkflow -- loop_group node', () => {
       expect(scriptCall?.[1][2]).not.toContain('process.exit');
       // The per-iteration feedback reaches the script through the environment.
       expect(scriptCall?.[2].env.LOOP_USER_INPUT).toBe(injection);
+    } finally {
+      execSpy.mockRestore();
+    }
+  });
+
+  it('delivers $LOOP_USER_INPUT to a resumed body bash node via env (#2725)', async () => {
+    // A `${VAR}` (braced) reference is NOT matched by applyLoopPrevToBodyNode's literal
+    // `$LOOP_USER_INPUT` splice — bash resolves it from the subprocess environment at
+    // runtime instead, so this specifically proves the env-delivery channel this fix adds
+    // (a plain unbraced `$LOOP_USER_INPUT` reference was already spliced pre-fix and is
+    // not a regression risk here).
+    const feedback = 'looks good, ship it';
+    const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'DONE\n', stderr: '' });
+    try {
+      const mockDeps = createMockDeps();
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun('lg-userinput-bash', {
+        metadata: {
+          approval: {
+            type: 'interactive_loop',
+            nodeId: 'grp',
+            iteration: 0,
+            message: 'Review and provide feedback.',
+          },
+          loop_user_input: feedback,
+          loop_feedback_given: true,
+        },
+      });
+
+      const nodes: DagNode[] = [
+        {
+          id: 'grp',
+          kind: 'loop_group',
+          loop_group: {
+            until: 'DONE',
+            max_iterations: 3,
+            fresh_context: true,
+            interactive: true,
+            gate_message: 'Review and provide feedback.',
+            nodes: [
+              {
+                id: 'emit',
+                kind: 'exec',
+                script: 'echo "${LOOP_USER_INPUT}"; echo DONE',
+                runtime: 'sh',
+                depends_on: [],
+              },
+            ],
+          },
+          depends_on: [],
+        },
+      ];
+
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-lg-userinput-bash',
+        testDir,
+        { name: 'lg-userinput-bash', nodes },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'state'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      const bashCall = execSpy.mock.calls.find(
+        c => (c[0] as string) === git.resolveBashPath() && (c[1] as string[])[0] === '-c'
+      ) as [string, string[], { env: NodeJS.ProcessEnv }] | undefined;
+      expect(bashCall).toBeDefined();
+      // The braced reference is left untouched by the source-splice pass...
+      expect(bashCall?.[1][1]).toBe('echo "${LOOP_USER_INPUT}"; echo DONE');
+      // ...so the subprocess environment is the only channel that can deliver it.
+      expect(bashCall?.[2].env.LOOP_USER_INPUT).toBe(feedback);
     } finally {
       execSpy.mockRestore();
     }
