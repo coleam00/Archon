@@ -354,6 +354,10 @@ describe('SlackWorkflowBridge', () => {
     });
 
     expect(mockRejectWorkflow).toHaveBeenCalledTimes(1);
+    // The reject button has no text-entry affordance, so it can never supply a
+    // reason — the bridge must default it to 'Rejected' itself (#2740),
+    // otherwise a new-mode gate's structured output.text records ''.
+    expect(mockRejectWorkflow).toHaveBeenCalledWith('r1', 'Rejected');
     const text = (updated[0]?.blocks?.[0] as { text?: { text?: string } } | undefined)?.text?.text;
     expect(text).toContain('Rejected');
     expect(text).toContain('will retry');
