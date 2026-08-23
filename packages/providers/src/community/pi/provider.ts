@@ -19,7 +19,7 @@ import type {
 import { PI_CAPABILITIES } from './capabilities';
 import { parsePiConfig, resolvePiExtensionSettings } from './config';
 import { parsePiModelRef } from './model-ref';
-import { withCustomProviderRequestEnv } from './request-auth';
+import { buildCustomProviderModelsPath } from './request-auth';
 import { withResumedOutcome, resumedOutcome } from '../../shared/resumed';
 
 // IMPORTANT: Do NOT add static `import { ... } from '@earendil-works/*'` here,
@@ -395,19 +395,30 @@ export class PiProvider implements IAgentProvider {
       const archonAuthPath =
         (requestOptions?.env?.ARCHON_PI_AUTH_PATH ?? process.env.ARCHON_PI_AUTH_PATH)?.trim() ||
         undefined;
+      // For custom (non-built-in) Pi providers, build a per-call `models.json`
+      // with `${VAR}` references substituted against the per-call env. The
+      // SDK's session-auth path resolves `${VAR}` from `process.env`, which
+      // Archon deliberately keeps empty (per-call secrets ride on
+      // `requestOptions.env`); pre-substituting into a per-call file closes
+      // the seam (see `./request-auth.ts` for the full rationale).
+      const customProviderModelsPath = !envVarName
+        ? buildCustomProviderModelsPath({
+            provider: parsed.provider,
+            requestEnv: requestOptions?.env,
+            protectedEnvKeys: requestOptions?.protectedEnvKeys,
+          })
+        : undefined;
       // pi-coding-agent 0.84.0 folded AuthStorage + ModelRegistry into a single
       // ModelRuntime; ModelRegistry is now a thin facade constructed from a
       // runtime. authPath still feeds the file-backed CredentialStore inside
       // ModelRuntime — the per-user auth.json path is honoured the same way.
-      modelRuntime = await piCodingAgent.ModelRuntime.create({ authPath: archonAuthPath });
+      // modelsPath follows the same per-call pattern for custom providers'
+      // `${VAR}` substitution.
+      modelRuntime = await piCodingAgent.ModelRuntime.create({
+        authPath: archonAuthPath,
+        ...(customProviderModelsPath ? { modelsPath: customProviderModelsPath } : {}),
+      });
       modelRegistry = new piCodingAgent.ModelRegistry(modelRuntime);
-      if (!envVarName) {
-        modelRegistry = withCustomProviderRequestEnv(modelRegistry, modelRuntime, {
-          provider: parsed.provider,
-          requestEnv: requestOptions?.env,
-          protectedEnvKeys: requestOptions?.protectedEnvKeys,
-        });
-      }
     } catch (err) {
       const e = err as Error;
       getLog().error({ err: e, piProvider: parsed.provider }, 'pi.auth_storage_init_failed');
@@ -776,8 +787,9 @@ export class PiProvider implements IAgentProvider {
       // pi 0.84.0+: createAgentSession no longer accepts authStorage +
       // modelRegistry separately; pass the modelRuntime and the SDK builds its
       // own internal registry facade. The runtime we pass is the one already
-      // scoped with `setRuntimeApiKey` calls above, so it carries our
-      // request-only env overrides without further wiring.
+      // scoped with `setRuntimeApiKey` calls above, and for custom providers
+      // it was built against a per-call `modelsPath` with `${VAR}` references
+      // pre-substituted (see step 2 above) — no further per-call wiring.
       modelRuntime,
       sessionManager,
       settingsManager,

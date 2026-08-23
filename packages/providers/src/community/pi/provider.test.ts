@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -493,41 +493,143 @@ describe('PiProvider', () => {
     expect(mockModelRegistryConstruct).toHaveBeenCalledWith(runtimeInstance);
   });
 
-  test('custom provider receives request env without acting-user provider credentials', async () => {
-    // pi 0.84.0+: the wrapper around the registry forwards every method to
-    // the underlying registry except `getApiKeyAndHeaders` (and the
-    // status-only `hasConfiguredAuth`) for the scoped provider. The scoped
-    // registry builds its own env dict; the underlying runtime is reused
-    // (its identity is checked below to prove the wiring didn't accidentally
-    // create a second runtime).
-    resetScript(scriptedAgentEnd());
-
-    await consume(
-      new PiProvider().sendQuery('hi', '/tmp', undefined, {
-        model: 'mygw/demo',
-        env: {
-          MYGW_API_KEY: 'request-secret',
-          ANTHROPIC_API_KEY: 'acting-user-secret',
+  test('custom provider: per-call models.json carries substituted ${VAR} values', async () => {
+    // pi 0.84.0+ — the wrapper around the registry was dropped (it plugged
+    // into a surface the SDK no longer consults during session auth; see
+    // `request-auth.ts` for the full rationale). The replacement writes a
+    // per-call `models.json` with `${VAR}` references substituted against
+    // `requestOptions.env` and passes it as `modelsPath` to
+    // `ModelRuntime.create`. The SDK then reads the literal at session-auth
+    // time — no `process.env` fallback can fire, so the
+    // `credentialless-custom-provider + per-call-secret` contract holds.
+    // Regression for the review R1 finding (PR #2757).
+    const userModelsDir = mkdtempSync(join(tmpdir(), 'archon-pi-test-user-models-'));
+    const userModelsPath = join(userModelsDir, 'models.json');
+    writeFileSync(
+      userModelsPath,
+      JSON.stringify({
+        providers: {
+          mygw: {
+            baseUrl: 'https://gateway.example/v1',
+            api: 'openai-completions',
+            apiKey: 'prefix-${MYGW_API_KEY}',
+            headers: { 'X-Project': '${MYGW_PROJECT}' },
+            models: [{ id: 'demo' }],
+          },
         },
-        protectedEnvKeys: ['ANTHROPIC_API_KEY'],
       })
     );
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = userModelsDir;
 
-    const requestRuntime = mockModelRegistryConstruct.mock.calls[0]?.[0];
-    const fileRuntime = await mockModelRuntimeCreate.mock.results[0]?.value;
-    expect(requestRuntime).toBe(fileRuntime);
+    resetScript(scriptedAgentEnd());
+    try {
+      await consume(
+        new PiProvider().sendQuery('hi', '/tmp', undefined, {
+          model: 'mygw/demo',
+          env: {
+            MYGW_API_KEY: 'request-secret',
+            MYGW_PROJECT: 'project-123',
+            // ANTHROPIC_API_KEY is protected; a `${ANTHROPIC_API_KEY}` reference
+            // in the user models.json must NEVER be substituted into the
+            // per-call file. The current provider entry doesn't reference it,
+            // so the protected-keys contract is a no-op for this test —
+            // covered separately in request-auth.test.ts.
+            ANTHROPIC_API_KEY: 'acting-user-secret',
+          },
+          protectedEnvKeys: ['ANTHROPIC_API_KEY'],
+        })
+      );
 
-    // The wrapped registry delegates the scoped provider's auth lookup to
-    // the runtime with the request-scoped env — but the test never actually
-    // resolves a credential for `mygw`, so the underlying registry's
-    // hasConfiguredAuth is what gets exercised. The wrapper, however, calls
-    // into the underlying `getApiKeyAndHeaders` ONLY when we look up a key;
-    // since the test verifies scope behavior, `getApiKeyAndHeaders` should
-    // not be touched in this early-fail-fast path.
-    const requestRegistry = mockModelRegistryConstruct.mock.results[0]?.value as
-      | MockModelRegistry
-      | undefined;
-    expect(requestRegistry?.getApiKeyAndHeaders).not.toHaveBeenCalled();
+      // The runtime was created with a per-call modelsPath (the substituted
+      // file), NOT the user's models.json — the SDK then reads the literal
+      // substituted values directly without falling through to process.env.
+      expect(mockModelRuntimeCreate).toHaveBeenCalledTimes(1);
+      const createArgs = mockModelRuntimeCreate.mock.calls[0]?.[0] as
+        | { authPath?: string; modelsPath?: string }
+        | undefined;
+      expect(createArgs?.modelsPath).toBeDefined();
+      expect(createArgs?.modelsPath).not.toBe(userModelsPath);
+      // The per-call file carries the substituted literals.
+      expect(existsSync(createArgs!.modelsPath as string)).toBe(true);
+      const perCallModels = JSON.parse(readFileSync(createArgs!.modelsPath as string, 'utf-8')) as {
+        providers: Record<
+          string,
+          {
+            apiKey: string;
+            headers: Record<string, string>;
+            models: { id: string }[];
+            baseUrl: string;
+          }
+        >;
+      };
+      expect(perCallModels.providers.mygw.apiKey).toBe('prefix-request-secret');
+      expect(perCallModels.providers.mygw.headers).toEqual({ 'X-Project': 'project-123' });
+      expect(perCallModels.providers.mygw.models).toEqual([{ id: 'demo' }]);
+      expect(perCallModels.providers.mygw.baseUrl).toBe('https://gateway.example/v1');
+
+      // The wrapped registry is gone — no `getApiKeyAndHeaders` override on
+      // the per-call registry.
+      const requestRegistry = mockModelRegistryConstruct.mock.results[0]?.value as
+        | MockModelRegistry
+        | undefined;
+      // The mock registry IS the runtime's view — assert it has the standard
+      // methods (and not a wrapping that introduces overrides).
+      expect(requestRegistry?.getApiKeyAndHeaders).toBeDefined();
+      // The test never resolves a credential for `mygw`, so the SDK-side
+      // auth path isn't reached. The mock registry's getApiKeyAndHeaders is
+      // the bare mock — it should NOT have been called by anything in the
+      // provider's pre-session path (the substitution happens at models.json
+      // load time, before the session even constructs).
+      expect(requestRegistry?.getApiKeyAndHeaders).not.toHaveBeenCalled();
+    } finally {
+      rmSync(userModelsDir, { recursive: true, force: true });
+      if (previousAgentDir === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      }
+    }
+  });
+
+  test('custom provider: no ${VAR} references leaves modelsPath unset', async () => {
+    // When the user's `models.json` entry has no template references, no
+    // per-call file is needed — the SDK's default `modelsPath` lookup handles
+    // the literal apiKey directly.
+    const userModelsDir = mkdtempSync(join(tmpdir(), 'archon-pi-test-user-models-literal-'));
+    writeFileSync(
+      join(userModelsDir, 'models.json'),
+      JSON.stringify({
+        providers: { mygw: { baseUrl: 'https://gateway.example/v1', apiKey: 'literal-key' } },
+      })
+    );
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = userModelsDir;
+
+    resetScript(scriptedAgentEnd());
+    try {
+      await consume(
+        new PiProvider().sendQuery('hi', '/tmp', undefined, {
+          model: 'mygw/demo',
+          env: { MYGW_API_KEY: 'unused-because-no-template' },
+          protectedEnvKeys: [],
+        })
+      );
+
+      expect(mockModelRuntimeCreate).toHaveBeenCalledTimes(1);
+      const createArgs = mockModelRuntimeCreate.mock.calls[0]?.[0] as
+        | { modelsPath?: string }
+        | undefined;
+      // No substitution was applicable → no per-call modelsPath passed.
+      expect(createArgs?.modelsPath).toBeUndefined();
+    } finally {
+      rmSync(userModelsDir, { recursive: true, force: true });
+      if (previousAgentDir === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      }
+    }
   });
 
   test('ModelRuntime.create reads ARCHON_PI_AUTH_PATH from requestOptions.env (per-user channel)', async () => {

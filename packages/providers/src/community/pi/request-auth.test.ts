@@ -1,93 +1,16 @@
-import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { withCustomProviderRequestEnv } from './request-auth';
+import { buildCustomProviderModelsPath } from './request-auth';
 
-// pi 0.84.0+ ships `ModelRuntime` (the prior `AuthStorage.inMemory` factory
-// was a `getCredential`-only surface; `ModelRuntime.create()` now drives
-// credential lifecycle). We exercise the wrapper's two overridden methods
-// (`getApiKeyAndHeaders`, `hasConfiguredAuth`) against a minimal hand-rolled
-// runtime + registry pair — the test asserts the wrapper's contract, not
-// the SDK's. The wrapper consults `registry.hasConfiguredAuth(model)` to
-// decide whether the scoped provider has a STORED credential and skips
-// the request-env override when it does (matches the pre-0.84 behavior
-// where the stored credential's own `env` block always won over the
-// per-request scope).
-
-interface FakeRuntime {
-  getAuth: (
-    provider: string,
-    options?: { env?: Record<string, string> }
-  ) => Promise<
-    | {
-        auth: { apiKey?: string; headers?: Record<string, string>; baseUrl?: string };
-        env?: Record<string, string>;
-      }
-    | undefined
-  >;
-}
-
-interface FakeRegistry {
-  hasConfiguredAuth(model: { provider: string }): boolean;
-  getApiKeyAndHeaders(model: { provider: string; id: string }): Promise<{
-    ok: boolean;
-    apiKey?: string;
-    env?: Record<string, string>;
-    error?: string;
-  }>;
-}
-
-/** Per-test mutable state: the apiKey template written to models.json. */
-let currentApiKeyTemplate: string | undefined;
-/** Per-test: env that the (faked) ModelRuntime reads credentials from. */
-let fileEnv: Record<string, string> = {};
-
-function makeRuntime(): FakeRuntime {
-  return {
-    getAuth: async (_provider, options) => {
-      // The (faked) ModelRuntime reads the stored credential from `fileEnv`
-      // and substitutes the apiKey template's `${VAR}` references using
-      // `options.env` if supplied (mirroring the SDK's behavior). If a
-      // stored credential's `env` block exists, its keys WIN over the
-      // override env — only keys NOT in the credential's env fall back to
-      // the override. The wrapper's contract is: when `hasConfiguredAuth`
-      // returns true, the request env is NOT merged (the stored env wins
-      // entirely); when false, the request env IS used (the credentialless
-      // provider config path).
-      //
-      // CRITICAL: preserve the throwing-getter semantics on the override
-      // env. The wrapper builds `providerEnv` with non-enumerable throwing
-      // properties for protected keys (Object.defineProperty). A naive
-      // `{...env}` spread WOULD mask those getters behind primitive values,
-      // losing the security contract the test verifies.
-      const stored = { ...fileEnv };
-      const overrideEnv = options?.env;
-      if (!currentApiKeyTemplate) return undefined;
-      const substituted = currentApiKeyTemplate.replace(/\$\{?([A-Z_]+)\}?/g, (_match, name) => {
-        // Stored env first; override env only consulted if the key isn't in
-        // stored. Reading the override env goes through `in`/`[]` so the
-        // throwing getter fires if the property is a throwing one.
-        if (name in stored) return stored[name];
-        if (overrideEnv && name in overrideEnv) return overrideEnv[name];
-        return '';
-      });
-      // Mirror the SDK's contract: `resolution.env` is the merged
-      // credential+ambient context. Build the merged env here (override on
-      // top of stored, but reading keys through `in`/`[]` so the throwing
-      // getter fires for protected keys).
-      const mergedEnv: Record<string, string> = {};
-      for (const k of Object.keys(stored)) mergedEnv[k] = stored[k];
-      if (overrideEnv) {
-        for (const k of Object.keys(overrideEnv)) {
-          if (!(k in mergedEnv)) mergedEnv[k] = overrideEnv[k];
-        }
-      }
-      return { auth: { apiKey: substituted }, env: mergedEnv };
-    },
-  };
-}
+// pi 0.84.0+ ships `ModelRuntime.create({ modelsPath })` as the documented
+// seam for changing the `models.json` location. The test exercises the
+// pre-substitution step that writes a per-call `models.json` against a
+// stubbed user models.json (the same shape Pi's `ModelConfig.load` reads).
+// We assert the contract — substitution semantics, protected-env handling,
+// missing-file / missing-provider fallthrough — not the SDK's.
 
 const createdDirs: string[] = [];
 const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -97,22 +20,6 @@ const originalGhToken = process.env.GH_TOKEN;
 const originalGithubToken = process.env.GITHUB_TOKEN;
 const originalCopilotToken = process.env.COPILOT_GITHUB_TOKEN;
 
-function createAgentDir(apiKey?: string, headers?: Record<string, string>): string {
-  const dir = mkdtempSync(join(tmpdir(), 'archon-pi-models-'));
-  const provider: Record<string, unknown> = {
-    baseUrl: 'https://gateway.example/v1',
-    api: 'openai-completions',
-    models: [{ id: 'demo' }],
-  };
-  if (apiKey !== undefined) provider.apiKey = apiKey;
-  if (headers !== undefined) provider.headers = headers;
-  writeFileSync(join(dir, 'models.json'), JSON.stringify({ providers: { mygw: provider } }));
-  createdDirs.push(dir);
-  process.env.PI_CODING_AGENT_DIR = dir;
-  currentApiKeyTemplate = apiKey;
-  return dir;
-}
-
 function restoreEnv(name: string, value: string | undefined): void {
   if (value === undefined) {
     delete process.env[name];
@@ -121,7 +28,32 @@ function restoreEnv(name: string, value: string | undefined): void {
   }
 }
 
-describe('withCustomProviderRequestEnv', () => {
+function createUserModelsDir(apiKeyTemplate?: string, headers?: Record<string, string>): string {
+  const dir = mkdtempSync(join(tmpdir(), 'archon-pi-user-models-'));
+  const provider: Record<string, unknown> = {
+    baseUrl: 'https://gateway.example/v1',
+    api: 'openai-completions',
+    models: [{ id: 'demo' }],
+  };
+  if (apiKeyTemplate !== undefined) provider.apiKey = apiKeyTemplate;
+  if (headers !== undefined) provider.headers = headers;
+  writeFileSync(join(dir, 'models.json'), JSON.stringify({ providers: { mygw: provider } }));
+  createdDirs.push(dir);
+  process.env.PI_CODING_AGENT_DIR = dir;
+  return dir;
+}
+
+function readModelsJson(path: string): { providers: Record<string, Record<string, unknown>> } {
+  return JSON.parse(readFileSync(path, 'utf-8')) as {
+    providers: Record<string, Record<string, unknown>>;
+  };
+}
+
+describe('buildCustomProviderModelsPath', () => {
+  beforeEach(() => {
+    process.env.PI_CODING_AGENT_DIR = '/nonexistent';
+  });
+
   afterEach(() => {
     for (const dir of createdDirs.splice(0)) {
       rmSync(dir, { recursive: true, force: true });
@@ -132,49 +64,162 @@ describe('withCustomProviderRequestEnv', () => {
     restoreEnv('GH_TOKEN', originalGhToken);
     restoreEnv('GITHUB_TOKEN', originalGithubToken);
     restoreEnv('COPILOT_GITHUB_TOKEN', originalCopilotToken);
-    currentApiKeyTemplate = undefined;
-    fileEnv = {};
   });
 
-  test('lets Pi resolve custom provider config from request/project env', async () => {
-    createAgentDir('prefix-${MYGW_API_KEY}', { 'X-Project': '$MYGW_PROJECT' });
-    fileEnv = {}; // no stored credential — the request env is the only source
-    const runtime = makeRuntime();
-    const registry: FakeRegistry = {
-      hasConfiguredAuth: () => false,
-      getApiKeyAndHeaders: async () => ({ ok: true, apiKey: 'from-base' }),
-    };
-    const wrapped = withCustomProviderRequestEnv(
-      registry as unknown as never,
-      runtime as unknown as never,
-      {
-        provider: 'mygw',
-        requestEnv: {
-          MYGW_API_KEY: 'request-secret',
-          MYGW_PROJECT: 'project-123',
-        },
-        protectedEnvKeys: [],
-      }
-    ) as unknown as FakeRegistry;
-
-    // hasConfiguredAuth: scoped provider with non-empty request-env sees true.
-    expect(wrapped.hasConfiguredAuth({ provider: 'mygw' })).toBe(true);
-    // Non-scoped provider: falls through to the base registry.
-    expect(wrapped.hasConfiguredAuth({ provider: 'anthropic' })).toBe(false);
-    // getApiKeyAndHeaders: scoped provider sees the request-env resolution.
-    expect(await wrapped.getApiKeyAndHeaders({ provider: 'mygw', id: 'demo' })).toEqual({
-      ok: true,
-      apiKey: 'prefix-request-secret',
-      env: {
+  test('substitutes ${VAR} in apiKey and headers against requestEnv', () => {
+    createUserModelsDir('prefix-${MYGW_API_KEY}', { 'X-Project': '${MYGW_PROJECT}' });
+    const result = buildCustomProviderModelsPath({
+      provider: 'mygw',
+      requestEnv: {
         MYGW_API_KEY: 'request-secret',
         MYGW_PROJECT: 'project-123',
       },
+      protectedEnvKeys: [],
     });
-    // Non-scoped provider: base registry behavior (unchanged).
-    expect(await wrapped.getApiKeyAndHeaders({ provider: 'anthropic', id: 'claude' })).toEqual({
-      ok: true,
-      apiKey: 'from-base',
+    expect(result).toBeDefined();
+    expect(result).toContain('archon-pi-models');
+    expect(existsSync(result as string)).toBe(true);
+    const written = readModelsJson(result as string);
+    expect(written.providers.mygw.apiKey).toBe('prefix-request-secret');
+    expect(written.providers.mygw.headers).toEqual({ 'X-Project': 'project-123' });
+    // Untouched fields preserved.
+    expect(written.providers.mygw.baseUrl).toBe('https://gateway.example/v1');
+    expect(written.providers.mygw.api).toBe('openai-completions');
+    expect(written.providers.mygw.models).toEqual([{ id: 'demo' }]);
+  });
+
+  test('returns undefined when requestEnv is undefined', () => {
+    createUserModelsDir('prefix-${MYGW_API_KEY}');
+    const result = buildCustomProviderModelsPath({
+      provider: 'mygw',
+      requestEnv: undefined,
+      protectedEnvKeys: [],
     });
+    expect(result).toBeUndefined();
+  });
+
+  test('returns undefined when user models.json does not exist', () => {
+    process.env.PI_CODING_AGENT_DIR = '/definitely/does/not/exist';
+    const result = buildCustomProviderModelsPath({
+      provider: 'mygw',
+      requestEnv: { MYGW_API_KEY: 'request-secret' },
+      protectedEnvKeys: [],
+    });
+    expect(result).toBeUndefined();
+  });
+
+  test('returns undefined when provider is not in models.json', () => {
+    createUserModelsDir('prefix-${MYGW_API_KEY}');
+    const result = buildCustomProviderModelsPath({
+      provider: 'nonexistent',
+      requestEnv: { MYGW_API_KEY: 'request-secret' },
+      protectedEnvKeys: [],
+    });
+    expect(result).toBeUndefined();
+  });
+
+  test('returns undefined when apiKey has no template references and no header templates', () => {
+    // Literal apiKey + no headers — nothing to substitute, so writing a
+    // per-call file gains nothing; the SDK's default lookup handles it.
+    createUserModelsDir('literal-key');
+    const result = buildCustomProviderModelsPath({
+      provider: 'mygw',
+      requestEnv: { MYGW_API_KEY: 'request-secret' },
+      protectedEnvKeys: [],
+    });
+    expect(result).toBeUndefined();
+  });
+
+  test('does not substitute protected ${VAR} references', () => {
+    createUserModelsDir('${GH_TOKEN}');
+    const result = buildCustomProviderModelsPath({
+      provider: 'mygw',
+      requestEnv: { GH_TOKEN: 'acting-user-secret' },
+      protectedEnvKeys: ['GH_TOKEN'],
+    });
+    // No substitution happened (the protected reference was skipped, leaving
+    // nothing to write), so the per-call file is NOT produced — the SDK's
+    // default `modelsPath` lookup will load the user's `models.json` with
+    // `${GH_TOKEN}` intact, and Pi's own resolveConfigValue surfaces the
+    // standard "no value for env var" error at request time.
+    expect(result).toBeUndefined();
+  });
+
+  test('does not substitute ${VAR} references absent from requestEnv', () => {
+    createUserModelsDir('prefix-${MYGW_API_KEY}');
+    const result = buildCustomProviderModelsPath({
+      provider: 'mygw',
+      requestEnv: { OTHER_VAR: 'some-value' },
+      protectedEnvKeys: [],
+    });
+    // Missing-reference path: leave template unchanged; SDK surface its
+    // own "Failed to resolve from environment variable" error.
+    expect(result).toBeUndefined();
+  });
+
+  test('handles $$ escape (literal $)', () => {
+    createUserModelsDir('price=$$5.00 ${MYGW_API_KEY}');
+    const result = buildCustomProviderModelsPath({
+      provider: 'mygw',
+      requestEnv: { MYGW_API_KEY: 'token-1' },
+      protectedEnvKeys: [],
+    });
+    expect(result).toBeDefined();
+    const written = readModelsJson(result as string);
+    expect(written.providers.mygw.apiKey).toBe('price=$5.00 token-1');
+  });
+
+  test('handles $! escape (literal !)', () => {
+    createUserModelsDir('!bang ${MYGW_API_KEY}');
+    const result = buildCustomProviderModelsPath({
+      provider: 'mygw',
+      requestEnv: { MYGW_API_KEY: 'token-2' },
+      protectedEnvKeys: [],
+    });
+    expect(result).toBeDefined();
+    const written = readModelsJson(result as string);
+    expect(written.providers.mygw.apiKey).toBe('!bang token-2');
+  });
+
+  test('handles ${VAR} brace form', () => {
+    createUserModelsDir('${MYGW_API_KEY}-suffix');
+    const result = buildCustomProviderModelsPath({
+      provider: 'mygw',
+      requestEnv: { MYGW_API_KEY: 'token-3' },
+      protectedEnvKeys: [],
+    });
+    expect(result).toBeDefined();
+    const written = readModelsJson(result as string);
+    expect(written.providers.mygw.apiKey).toBe('token-3-suffix');
+  });
+
+  test('substitutes mixed literal+env header values, leaves non-template headers alone', () => {
+    createUserModelsDir('key-${MYGW_API_KEY}', {
+      'X-Project': '${MYGW_PROJECT}',
+      'X-Static': 'literal-value',
+    });
+    const result = buildCustomProviderModelsPath({
+      provider: 'mygw',
+      requestEnv: { MYGW_API_KEY: 'token-4', MYGW_PROJECT: 'proj-x' },
+      protectedEnvKeys: [],
+    });
+    expect(result).toBeDefined();
+    const written = readModelsJson(result as string);
+    expect(written.providers.mygw.apiKey).toBe('key-token-4');
+    expect(written.providers.mygw.headers).toEqual({
+      'X-Project': 'proj-x',
+      'X-Static': 'literal-value',
+    });
+  });
+
+  test('returns undefined when only non-string header values are present', () => {
+    createUserModelsDir('literal-key', { 'X-Project': 42 as unknown as string });
+    const result = buildCustomProviderModelsPath({
+      provider: 'mygw',
+      requestEnv: { MYGW_API_KEY: 'ignored' },
+      protectedEnvKeys: [],
+    });
+    expect(result).toBeUndefined();
   });
 
   test.each([
@@ -183,98 +228,157 @@ describe('withCustomProviderRequestEnv', () => {
     'GH_TOKEN',
     'GITHUB_TOKEN',
     'COPILOT_GITHUB_TOKEN',
-  ])(
-    'does not expose protected %s to custom provider config or process fallback',
-    credentialEnvKey => {
-      createAgentDir(`$${credentialEnvKey}`);
-      fileEnv = {};
-      const runtime = makeRuntime();
-      const registry: FakeRegistry = {
-        hasConfiguredAuth: () => false,
-        getApiKeyAndHeaders: async () => ({ ok: true, apiKey: 'from-base' }),
-      };
-      const wrapped = withCustomProviderRequestEnv(
-        registry as unknown as never,
-        runtime as unknown as never,
-        {
-          provider: 'mygw',
-          requestEnv: { [credentialEnvKey]: 'acting-user-secret' },
-          protectedEnvKeys: [credentialEnvKey],
-        }
-      ) as unknown as FakeRegistry;
-
-      // getApiKeyAndHeaders must surface the throwing-getter error as the
-      // `ok: false` payload so Pi's downstream code path treats it as a
-      // config-protected access (matching the pre-0.84 behavior).
-      return wrapped.getApiKeyAndHeaders({ provider: 'mygw', id: 'demo' }).then(result => {
-        expect(result).toEqual({
-          ok: false,
-          error: `Custom Pi provider 'mygw' cannot access protected environment variable '${credentialEnvKey}'`,
-        });
-      });
-    }
-  );
-
-  test('does not replace stored custom-provider auth or its provider env', async () => {
-    // When the provider has BOTH a stored credential env AND a request env,
-    // the stored credential's `env` block must win (the regression that
-    // the assessment called out — request env must NEVER downgrade a stored
-    // OAuth credential's own env keys).
-    createAgentDir('$MYGW_API_KEY');
-    fileEnv = { MYGW_API_KEY: 'stored-secret' }; // stored credential env wins
-    const storedApiKey = 'stored-secret';
-    const runtime = makeRuntime();
-    const registry: FakeRegistry = {
-      hasConfiguredAuth: () => true,
-      getApiKeyAndHeaders: async () => ({ ok: true, apiKey: 'from-base', env: {} }),
-    };
-    const wrapped = withCustomProviderRequestEnv(
-      registry as unknown as never,
-      runtime as unknown as never,
-      {
-        provider: 'mygw',
-        requestEnv: { MYGW_API_KEY: 'request-secret' },
-        protectedEnvKeys: [],
-      }
-    ) as unknown as FakeRegistry;
-
-    // hasConfiguredAuth stays true (base registry says so).
-    expect(wrapped.hasConfiguredAuth({ provider: 'mygw' })).toBe(true);
-    // Resolution uses the stored credential — apiKey is `stored-secret`
-    // (NOT the request env's `request-secret`).
-    const result = await wrapped.getApiKeyAndHeaders({ provider: 'mygw', id: 'demo' });
-    expect(result.ok).toBe(true);
-    expect(result.apiKey).toBe(storedApiKey);
+  ])('does not expose protected %s to custom provider config', credentialEnvKey => {
+    createUserModelsDir(`$${credentialEnvKey}`);
+    const result = buildCustomProviderModelsPath({
+      provider: 'mygw',
+      requestEnv: { [credentialEnvKey]: 'acting-user-secret' },
+      protectedEnvKeys: [credentialEnvKey],
+    });
+    // Per the security contract, protected `${VAR}` references are NEVER
+    // substituted into the per-call file. The user models.json stays
+    // untouched; Pi's own resolveConfigValue surfaces the standard
+    // "no value for env var" error at request time (or succeeds if the
+    // var happens to be in process.env, which Archon keeps empty).
+    expect(result).toBeUndefined();
   });
 
-  test('keeps credentialless custom providers valid', async () => {
-    // provider has no `apiKey` in models.json — Pi's resolve path returns
-    // `undefined` from `runtime.getAuth`, the wrapper falls back to the base
-    // registry's compatibility fallback. The custom provider remains
-    // resolvable.
-    createAgentDir();
-    fileEnv = {};
-    const runtime = makeRuntime();
-    const registry: FakeRegistry = {
-      hasConfiguredAuth: () => false,
-      getApiKeyAndHeaders: async () => ({ ok: true, apiKey: 'from-base' }),
-    };
-    const wrapped = withCustomProviderRequestEnv(
-      registry as unknown as never,
-      runtime as unknown as never,
-      {
-        provider: 'mygw',
-        requestEnv: { PROJECT_SETTING: 'value' },
-        protectedEnvKeys: [],
-      }
-    ) as unknown as FakeRegistry;
+  test('honours PI_CODING_AGENT_DIR override for the user models.json path', () => {
+    const customDir = mkdtempSync(join(tmpdir(), 'archon-pi-user-models-custom-'));
+    writeFileSync(
+      join(customDir, 'models.json'),
+      JSON.stringify({ providers: { mygw: { apiKey: 'prefix-${MYGW_API_KEY}' } } })
+    );
+    createdDirs.push(customDir);
+    process.env.PI_CODING_AGENT_DIR = customDir;
 
-    expect(wrapped.hasConfiguredAuth({ provider: 'mygw' })).toBe(true);
-    // The runtime returns undefined for `mygw` (no apiKey template), so the
-    // wrapper falls back to the base registry's getApiKeyAndHeaders.
-    expect(await wrapped.getApiKeyAndHeaders({ provider: 'mygw', id: 'demo' })).toEqual({
-      ok: true,
-      apiKey: 'from-base',
+    const result = buildCustomProviderModelsPath({
+      provider: 'mygw',
+      requestEnv: { MYGW_API_KEY: 'overridden-token' },
+      protectedEnvKeys: [],
     });
+    expect(result).toBeDefined();
+    const written = readModelsJson(result as string);
+    expect(written.providers.mygw.apiKey).toBe('prefix-overridden-token');
+  });
+
+  test('tolerates a user models.json with multiple providers (only targets the scoped one)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'archon-pi-user-models-multi-'));
+    createdDirs.push(dir);
+    writeFileSync(
+      join(dir, 'models.json'),
+      JSON.stringify({
+        providers: {
+          mygw: { apiKey: 'prefix-${MYGW_API_KEY}', api: 'openai-completions' },
+          other: { apiKey: 'literal-other' },
+        },
+      })
+    );
+    process.env.PI_CODING_AGENT_DIR = dir;
+
+    const result = buildCustomProviderModelsPath({
+      provider: 'mygw',
+      requestEnv: { MYGW_API_KEY: 'tok' },
+      protectedEnvKeys: [],
+    });
+    expect(result).toBeDefined();
+    const written = readModelsJson(result as string);
+    expect(Object.keys(written.providers)).toEqual(['mygw']);
+    expect(written.providers.mygw.apiKey).toBe('prefix-tok');
+  });
+
+  test('returns undefined when user models.json is invalid JSON', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'archon-pi-user-models-broken-'));
+    createdDirs.push(dir);
+    writeFileSync(join(dir, 'models.json'), '{not-valid-json');
+    process.env.PI_CODING_AGENT_DIR = dir;
+
+    const result = buildCustomProviderModelsPath({
+      provider: 'mygw',
+      requestEnv: { MYGW_API_KEY: 'tok' },
+      protectedEnvKeys: [],
+    });
+    expect(result).toBeUndefined();
+  });
+
+  test('handles malformed ${VAR (no closing brace) by leaving template literal', () => {
+    // The SDK's parser treats an unterminated `${` as a literal `$`. Mirror
+    // that behaviour here so we never disagree with the SDK on what a
+    // template string means.
+    createUserModelsDir('prefix-${UNCLOSED');
+    const result = buildCustomProviderModelsPath({
+      provider: 'mygw',
+      requestEnv: { UNCLOSED: 'value' },
+      protectedEnvKeys: [],
+    });
+    // The literal `$` is in the apiKey, so `value.includes('$')` returns
+    // true and we enter the parser; the parser keeps `$` literal, no env
+    // references resolve, and we return undefined (no substitution
+    // produced). Either outcome is acceptable as long as the SDK agrees.
+    // Confirm we don't crash and don't produce a substituted value.
+    if (result !== undefined) {
+      const written = readModelsJson(result);
+      expect(written.providers.mygw.apiKey).toBe('prefix-${UNCLOSED');
+    }
+  });
+
+  test('handles ${1badname} (non-identifier) by treating as literal', () => {
+    // The SDK's parser only treats `${IDENT}` (valid JS identifier) as an
+    // env reference; anything else stays literal. Mirror that.
+    createUserModelsDir('${1bad}');
+    const result = buildCustomProviderModelsPath({
+      provider: 'mygw',
+      requestEnv: { '1bad': 'value' },
+      protectedEnvKeys: [],
+    });
+    if (result !== undefined) {
+      const written = readModelsJson(result);
+      expect(written.providers.mygw.apiKey).toBe('${1bad}');
+    }
+  });
+
+  test('handles trailing $ in template', () => {
+    createUserModelsDir('end-with-dollar$');
+    const result = buildCustomProviderModelsPath({
+      provider: 'mygw',
+      requestEnv: { MYGW_API_KEY: 'tok' },
+      protectedEnvKeys: [],
+    });
+    // Trailing `$` with no following character → literal `$`.
+    if (result !== undefined) {
+      const written = readModelsJson(result);
+      expect(written.providers.mygw.apiKey).toBe('end-with-dollar$');
+    }
+  });
+
+  test('returns undefined when user models.json has no providers key', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'archon-pi-user-models-noprov-'));
+    createdDirs.push(dir);
+    writeFileSync(join(dir, 'models.json'), JSON.stringify({ unrelated: 'value' }));
+    process.env.PI_CODING_AGENT_DIR = dir;
+
+    const result = buildCustomProviderModelsPath({
+      provider: 'mygw',
+      requestEnv: { MYGW_API_KEY: 'tok' },
+      protectedEnvKeys: [],
+    });
+    expect(result).toBeUndefined();
+  });
+
+  test('returns undefined when scoped provider entry is not an object', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'archon-pi-user-models-nonobj-'));
+    createdDirs.push(dir);
+    writeFileSync(
+      join(dir, 'models.json'),
+      JSON.stringify({ providers: { mygw: 'not-an-object' } })
+    );
+    process.env.PI_CODING_AGENT_DIR = dir;
+
+    const result = buildCustomProviderModelsPath({
+      provider: 'mygw',
+      requestEnv: { MYGW_API_KEY: 'tok' },
+      protectedEnvKeys: [],
+    });
+    expect(result).toBeUndefined();
   });
 });
