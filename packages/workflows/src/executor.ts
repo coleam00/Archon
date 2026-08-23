@@ -1365,17 +1365,28 @@ async function runChildWorkflow(
   // 5. Run the child in-process (reuses the whole lifecycle) in its resolved cwd
   //    (its own worktree when isolated, else the parent's checkout). Its terminal
   //    output + cost + tokens land in the child run metadata on completion.
+  //
+  //    Wrapped in `withCapturedSource` so the staged capture above is reclaimed by
+  //    the wrap's `finally` if `executeWorkflow`'s move-into-artifacts rename fails
+  //    (#2690 recursive path). `failOutcome` already covers early-refusal paths
+  //    before this point; the rename failure inside the recursive call is the one
+  //    path the wrap is the only thing that can see — `executeWorkflow` returns
+  //    `{success: false}` from that branch rather than throwing, so without the
+  //    wrap the staged directory sits for the hourly age sweep.
   try {
-    await executeWorkflow(
-      deps,
-      platform,
-      conversationId,
-      childCwd,
-      childWorkflow,
-      input,
-      conversationDbId,
-      childOpts
-    );
+    await withCapturedSource(async owner => {
+      owner.hold(childSource);
+      await executeWorkflow(
+        deps,
+        platform,
+        conversationId,
+        childCwd,
+        childWorkflow,
+        input,
+        conversationDbId,
+        { ...childOpts, capturedSourceOwner: owner }
+      );
+    });
 
     // 6. Read the child back for the node-facing outcome (status + summary + cost +
     //    tokens). Works for synchronous completion AND a child paused at its gate.

@@ -12,7 +12,7 @@
  * which does (mock.module is process-global and irreversible).
  */
 import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test';
-import { mkdir, writeFile, rm, cp } from 'fs/promises';
+import { mkdir, writeFile, rm, cp, readdir } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -44,6 +44,65 @@ mock.module('@archon/paths', () => ({
 mock.module('@archon/git', () => ({
   getDefaultBranch: mock(async () => 'main'),
   toRepoPath: mock((p: string) => p),
+}));
+
+// --- Mock fs/promises.rename so a single test can force the rename the recursive
+//     executeWorkflow performs (moving the staged capture under the child's
+//     artifacts directory) to throw. The wrap's `finally` is the only thing that
+//     can reclaim that staged capture when the rename fails — without the fix
+//     in runChildWorkflow, the staged tree leaks until the hourly age-based
+//     sweep reaps it (review R1). Every other fs/promises function delegates
+//     to the real implementation so other tests are unaffected.
+//
+//     The forced failure targets ONLY the move-out-of-staging rename: source
+//     lives under `staged-source/`, destination does NOT. `captureWorkflowSource`
+//     also does a rename (staged-source/<uuid>.partial -> staged-source/<uuid>)
+//     and that one must keep working, otherwise `prepareWorkflowSource` itself
+//     throws before runChildWorkflow reaches the recursive call. ---
+const realFsPromises = await import('fs/promises');
+let forceRenameFailure = false;
+const passthroughRename = realFsPromises.rename;
+mock.module('fs/promises', () => ({
+  access: realFsPromises.access,
+  appendFile: realFsPromises.appendFile,
+  chmod: realFsPromises.chmod,
+  chown: realFsPromises.chown,
+  copyFile: realFsPromises.copyFile,
+  cp: realFsPromises.cp,
+  lchmod: realFsPromises.lchmod,
+  lchown: realFsPromises.lchown,
+  link: realFsPromises.link,
+  lstat: realFsPromises.lstat,
+  lutimes: realFsPromises.lutimes,
+  mkdir: realFsPromises.mkdir,
+  mkdtemp: realFsPromises.mkdtemp,
+  open: realFsPromises.open,
+  opendir: realFsPromises.opendir,
+  readdir: realFsPromises.readdir,
+  readFile: realFsPromises.readFile,
+  readlink: realFsPromises.readlink,
+  realpath: realFsPromises.realpath,
+  rename: async (src: string, dst: string): Promise<void> => {
+    if (
+      forceRenameFailure &&
+      src.includes(`${'staged-source'}/`) &&
+      !dst.includes(`${'staged-source'}/`)
+    ) {
+      throw new Error(`forced rename failure for test: ${src} -> ${dst}`);
+    }
+    return passthroughRename(src, dst);
+  },
+  rm: realFsPromises.rm,
+  rmdir: realFsPromises.rmdir,
+  stat: realFsPromises.stat,
+  statfs: realFsPromises.statfs,
+  symlink: realFsPromises.symlink,
+  truncate: realFsPromises.truncate,
+  unlink: realFsPromises.unlink,
+  utimes: realFsPromises.utimes,
+  watch: realFsPromises.watch,
+  writeFile: realFsPromises.writeFile,
+  constants: realFsPromises.constants,
 }));
 
 // --- Bootstrap provider registry (load-time isRegisteredProvider checks) ---
@@ -5415,5 +5474,105 @@ nodes:
         e.step_name === 'work'
     );
     expect(replayed?.data?.structured_output).toEqual([{ v: 'alpha' }, { v: 'beta' }]);
+  });
+});
+
+/**
+ * Regression for the recursive `workflow:` sub-run path inside runChildWorkflow
+ * (review R1). The wrap the new `capturedSourceOwner` field introduced in
+ * #2690 only fires when the field is wired on the child opts. The top-level
+ * entry points do; the recursive call from runChildWorkflow did not, so a
+ * rename failure inside the child re-leaked the staged capture that the
+ * field's docblock says the wrap's `finally` reclaims.
+ *
+ * The forced rename is what makes this a real regression test: without the
+ * wrap, the staged directory under ARCHON_HOME/staged-source/ survives the
+ * parent run and would only be reaped by the 6-hour age sweep. With the wrap,
+ * it is gone as soon as the recursive executeWorkflow returns.
+ */
+describe('sub-run staged capture is reclaimed when the recursive rename fails (#2690 R1)', () => {
+  let cwd: string;
+  const originalArchonHome = process.env.ARCHON_HOME;
+
+  async function writeWorkflow(name: string, yaml: string): Promise<void> {
+    await writeFile(join(cwd, '.archon', 'workflows', `${name}.yaml`), yaml);
+  }
+
+  async function discover(name: string): Promise<WorkflowDefinition> {
+    const result = await discoverWorkflows(cwd, { loadDefaults: false });
+    const wf = result.workflows.find(w => w.workflow.name === name);
+    if (!wf) throw new Error(`workflow ${name} not found: ${JSON.stringify(result.errors)}`);
+    return wf.workflow;
+  }
+
+  beforeEach(async () => {
+    cwd = join(tmpdir(), `subrun-rename-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    await mkdir(join(cwd, '.archon', 'workflows'), { recursive: true });
+    process.env.ARCHON_HOME = join(cwd, 'home');
+  });
+
+  afterEach(async () => {
+    await rm(cwd, { recursive: true, force: true }).catch(() => {});
+    if (originalArchonHome === undefined) delete process.env.ARCHON_HOME;
+    else process.env.ARCHON_HOME = originalArchonHome;
+    forceRenameFailure = false;
+  });
+
+  it('reclaims the child staged capture when the recursive rename fails', async () => {
+    await writeWorkflow(
+      'child-rename-fail',
+      `
+name: child-rename-fail
+description: child whose staged capture rename will be forced to fail
+nodes:
+  - id: work
+    prompt: do work for $ARGUMENTS
+`
+    );
+    await writeWorkflow(
+      'parent-rename-fail',
+      `
+name: parent-rename-fail
+description: parent whose sub-run rename will be forced to fail
+nodes:
+  - id: sub
+    workflow: child-rename-fail
+    input: the-goal
+`
+    );
+
+    forceRenameFailure = true;
+    const store = new InMemoryStore();
+    try {
+      const parent = await discover('parent-rename-fail');
+      // The recursive executeWorkflow takes the rename-failure branch and returns
+      // {success: false}; runChildWorkflow reads the child back as failed and the
+      // `sub` node surfaces that. The parent's run is failed for the same reason.
+      const result = await executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv-plat',
+        cwd,
+        parent,
+        'goal',
+        'conv-db'
+      );
+      expect(result.success).toBe(false);
+
+      const child = [...store.runs.values()].find(r => r.workflow_name === 'child-rename-fail');
+      expect(child).toBeDefined();
+      expect(child?.status).toBe('failed');
+
+      // The assertion that proves the fix. Without the wrap around the recursive
+      // call, the child's UUID-named directory under ARCHON_HOME/staged-source/
+      // survives the parent run and only the hourly age sweep reclaims it. With
+      // the wrap, the wrap's `finally` reclaims the staged tree the moment
+      // executeWorkflow returns.
+      const stagedDir = join(cwd, 'home', 'staged-source');
+      const stagedEntries = await readdir(stagedDir).catch(() => [] as string[]);
+      expect(stagedEntries).toEqual([]);
+    } finally {
+      forceRenameFailure = false;
+    }
   });
 });
