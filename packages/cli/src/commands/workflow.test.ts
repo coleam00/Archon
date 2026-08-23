@@ -2,7 +2,15 @@
  * Tests for workflow commands
  */
 import { describe, it, expect, beforeEach, afterEach, spyOn, mock, jest } from 'bun:test';
-import { appendFileSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { WorkflowEmitterEvent } from '@archon/workflows/event-emitter';
@@ -26,12 +34,20 @@ import {
   workflowEventEmitCommand,
   workflowCleanupCommand,
   workflowResetSessionsCommand,
+  workflowInstallCommand,
   buildDetachedRunCmd,
   maybePrintTierNotice,
   resolveContainerBackendConfig,
   hasUnresolvedWriteback,
   buildNodeSummaries,
 } from './workflow';
+
+interface GitHubContentResponseFixture {
+  name: string;
+  type: 'file' | 'dir';
+  download_url: null;
+  path: string;
+}
 
 const mockLogger = {
   fatal: mock(() => undefined),
@@ -228,8 +244,10 @@ class MockCanonicalRepoPathUnavailableError extends Error {
   }
 }
 
+let mockFindRepoRoot: string | null = null;
+
 mock.module('@archon/git', () => ({
-  findRepoRoot: mock(() => Promise.resolve(null)),
+  findRepoRoot: mock(() => Promise.resolve(mockFindRepoRoot)),
   getCanonicalRepoPath: mock((path: string) => Promise.resolve(path)),
   getGitCheckoutIdentity: mock((path: string) =>
     Promise.resolve({
@@ -7896,5 +7914,232 @@ describe('resolveContainerBackendConfig', () => {
   it('rejects a non-integer / non-positive pidsLimit', () => {
     expect(() => resolveContainerBackendConfig({ pidsLimit: 10.5 })).toThrow(/positive integer/);
     expect(() => resolveContainerBackendConfig({ pidsLimit: 0 })).toThrow(/positive integer/);
+  });
+});
+
+describe('workflowInstallCommand directory packages', () => {
+  const sha = 'a'.repeat(40);
+  const sourceRoot = 'integrations/archon/public-x-research';
+  let repoRoot: string;
+  let fetchSpy: ReturnType<typeof spyOn>;
+  let consoleSpy: ReturnType<typeof spyOn>;
+  let directoryMode: 'normal' | 'deep' | 'wide' | 'oversized';
+
+  beforeEach(() => {
+    repoRoot = mkdtempSync(join(tmpdir(), 'archon-marketplace-install-'));
+    mockFindRepoRoot = repoRoot;
+    directoryMode = 'normal';
+    mockLogger.error.mockClear();
+    consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(
+      (input: RequestInfo | URL): Promise<Response> => {
+        const url = String(input);
+        if (url === 'https://archon.diy/workflows.json') {
+          return Promise.resolve(
+            Response.json([
+              {
+                slug: 'public-x-research',
+                name: 'Public X Research',
+                author: 'kriptoburak',
+                description: 'Build a cited brief from bounded public X data.',
+                sourceUrl: `https://github.com/kriptoburak/xquik-dev-x-twitter-scraper/tree/${sha}/${sourceRoot}`,
+                sha,
+                tags: ['automation'],
+                archonVersionCompat: '>=0.9.0',
+              },
+            ])
+          );
+        }
+        if (url.includes(`/contents/${sourceRoot}?ref=${sha}`)) {
+          const supportingDirectories =
+            directoryMode === 'wide'
+              ? Array.from(
+                  { length: 50 },
+                  (_: unknown, index: number): GitHubContentResponseFixture => ({
+                    name: `support-${String(index)}`,
+                    type: 'dir',
+                    download_url: null,
+                    path: `${sourceRoot}/support-${String(index)}`,
+                  })
+                )
+              : [
+                  {
+                    name: 'skills',
+                    type: 'dir',
+                    download_url: null,
+                    path: `${sourceRoot}/skills`,
+                  },
+                ];
+          return Promise.resolve(
+            Response.json([
+              {
+                name: 'public-x-research.yaml',
+                type: 'file',
+                download_url: null,
+                path: `${sourceRoot}/public-x-research.yaml`,
+              },
+              ...supportingDirectories,
+            ])
+          );
+        }
+        if (directoryMode === 'wide' && url.includes(`/contents/${sourceRoot}/support-`)) {
+          return Promise.resolve(Response.json([]));
+        }
+        if (url.includes(`/contents/${sourceRoot}/skills?ref=${sha}`)) {
+          if (directoryMode === 'oversized') {
+            return Promise.resolve(
+              Response.json(
+                Array.from(
+                  { length: 1000 },
+                  (_: unknown, index: number): GitHubContentResponseFixture => ({
+                    name: `file-${String(index)}.md`,
+                    type: 'file',
+                    download_url: null,
+                    path: `${sourceRoot}/skills/file-${String(index)}.md`,
+                  })
+                )
+              )
+            );
+          }
+          return Promise.resolve(
+            Response.json([
+              {
+                name: 'xquik-social-research',
+                type: 'dir',
+                download_url: null,
+                path: `${sourceRoot}/skills/xquik-social-research`,
+              },
+              {
+                name: '..',
+                type: 'dir',
+                download_url: null,
+                path: 'outside',
+              },
+            ])
+          );
+        }
+        if (url.includes(`/contents/${sourceRoot}/skills/xquik-social-research?ref=${sha}`)) {
+          if (directoryMode === 'deep') {
+            return Promise.resolve(
+              Response.json([
+                {
+                  name: 'next',
+                  type: 'dir',
+                  download_url: null,
+                  path: `${sourceRoot}/skills/xquik-social-research/next`,
+                },
+              ])
+            );
+          }
+          return Promise.resolve(
+            Response.json([
+              {
+                name: 'SKILL.md',
+                type: 'file',
+                download_url: null,
+                path: `${sourceRoot}/skills/xquik-social-research/SKILL.md`,
+              },
+            ])
+          );
+        }
+        if (
+          directoryMode === 'deep' &&
+          url.includes(`/contents/${sourceRoot}/skills/xquik-social-research/`)
+        ) {
+          const path = url.split('/contents/')[1]?.split('?ref=')[0];
+          return Promise.resolve(
+            Response.json([
+              {
+                name: 'next',
+                type: 'dir',
+                download_url: null,
+                path: `${path}/next`,
+              },
+            ])
+          );
+        }
+        if (url.endsWith(`${sourceRoot}/public-x-research.yaml`)) {
+          return Promise.resolve(new Response('name: public-x-research\nnodes: []\n'));
+        }
+        if (url.endsWith(`${sourceRoot}/skills/xquik-social-research/SKILL.md`)) {
+          return Promise.resolve(new Response('# Xquik social research\n'));
+        }
+        return Promise.resolve(new Response('not found', { status: 404 }));
+      }
+    );
+  });
+
+  afterEach(() => {
+    fetchSpy.mockRestore();
+    consoleSpy.mockRestore();
+    mockFindRepoRoot = null;
+    rmSync(repoRoot, { recursive: true, force: true });
+  });
+
+  it('preserves nested Skill paths from a directory package', async () => {
+    await workflowInstallCommand('public-x-research', repoRoot);
+
+    expect(readFileSync(join(repoRoot, '.archon/workflows/public-x-research.yaml'), 'utf8')).toBe(
+      'name: public-x-research\nnodes: []\n'
+    );
+    expect(
+      readFileSync(join(repoRoot, '.claude/skills/xquik-social-research/SKILL.md'), 'utf8')
+    ).toBe('# Xquik social research\n');
+    expect(fetchSpy.mock.calls.some(([input]) => String(input).includes('/contents/outside'))).toBe(
+      false
+    );
+  });
+
+  it('preserves an existing nested file unless force is set', async () => {
+    const skillPath = join(repoRoot, '.claude/skills/xquik-social-research/SKILL.md');
+    mkdirSync(join(skillPath, '..'), { recursive: true });
+    writeFileSync(skillPath, 'local skill\n');
+
+    await workflowInstallCommand('public-x-research', repoRoot);
+    expect(readFileSync(skillPath, 'utf8')).toBe('local skill\n');
+
+    await workflowInstallCommand('public-x-research', repoRoot, true);
+    expect(readFileSync(skillPath, 'utf8')).toBe('# Xquik social research\n');
+    expect(existsSync(join(repoRoot, '.claude/skills/xquik-social-research'))).toBe(true);
+  });
+
+  it('rejects directory packages deeper than the traversal limit before writing', async () => {
+    directoryMode = 'deep';
+
+    await expect(workflowInstallCommand('public-x-research', repoRoot)).rejects.toThrow(
+      'maximum depth of 8'
+    );
+    expect(existsSync(join(repoRoot, '.archon/workflows/public-x-research.yaml'))).toBe(false);
+    expect(mockLogger.error).toHaveBeenCalledWith(
+      {
+        error: 'GitHub directory package exceeds the maximum depth of 8',
+        errorType: 'Error',
+        err: expect.any(Error),
+        slug: 'public-x-research',
+      },
+      'cli.workflow_install_failed'
+    );
+  });
+
+  it('rejects directory packages beyond the request limit before writing', async () => {
+    directoryMode = 'wide';
+
+    await expect(workflowInstallCommand('public-x-research', repoRoot)).rejects.toThrow(
+      '50 request limit'
+    );
+    expect(existsSync(join(repoRoot, '.archon/workflows/public-x-research.yaml'))).toBe(false);
+  });
+
+  it('rejects a listing at the GitHub Contents API item limit before writing', async () => {
+    directoryMode = 'oversized';
+    const existingSkillPath = join(repoRoot, '.claude/skills/xquik-social-research/SKILL.md');
+    mkdirSync(join(existingSkillPath, '..'), { recursive: true });
+    writeFileSync(existingSkillPath, 'existing skill\n');
+
+    await expect(workflowInstallCommand('public-x-research', repoRoot)).rejects.toThrow(
+      '1000-item Contents API limit'
+    );
+    expect(readFileSync(existingSkillPath, 'utf8')).toBe('existing skill\n');
+    expect(existsSync(join(repoRoot, '.archon/workflows/public-x-research.yaml'))).toBe(false);
   });
 });
