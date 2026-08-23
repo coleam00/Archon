@@ -153,7 +153,19 @@ mock.module('@archon/workflows/workflow-discovery', () => ({
 }));
 // Resolves to a paused result so dispatchBackgroundWorkflow's fire-and-forget
 // tail is a no-op (no result card is surfaced to the parent conversation).
-const mockExecuteWorkflow = mock(() => Promise.resolve({ paused: true }));
+// Mirrors the real executor's adopt site (#2690): rename happens, then the wrap's
+// `capturedSourceOwner.adopt()` is called. For a continuation (no `preparedSource`)
+// the executor takes the legacy branch and does not adopt, so the wrap reclaims.
+const mockExecuteWorkflow = mock((...args: unknown[]) => {
+  const opts = args[7] as
+    | {
+        preparedSource?: unknown;
+        capturedSourceOwner?: { adopt: () => void };
+      }
+    | undefined;
+  if (opts?.preparedSource) opts.capturedSourceOwner?.adopt();
+  return Promise.resolve({ paused: true });
+});
 /** Ownership calls the dispatch path makes on its capture, in order. */
 const capturedSourceOwnerCalls: string[] = [];
 

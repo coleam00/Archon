@@ -545,8 +545,9 @@ async function dispatchBackgroundWorkflowOwned(
   void (async (): Promise<void> => {
     try {
       try {
-        // Handing the capture to a run: it owns the bytes and their lifetime now.
-        if (preparedSource) owner.adopt();
+        // The wrap owns the capture until `executeWorkflow`'s rename succeeds; the
+        // executor adopts for us there (see #2690). Until then a rename failure leaves
+        // the staged directory un-adopted so the wrap reclaims it on the way out.
         const result = await executeWorkflow(
           workflowDeps,
           ctx.platform,
@@ -567,6 +568,7 @@ async function dispatchBackgroundWorkflowOwned(
             baseBranch: codebaseBaseBranch,
             resolveChildIsolation,
             preparedSource,
+            capturedSourceOwner: owner,
             // Only consumed when `preCreatedRun` is undefined (pre-creation failed and
             // the executor creates the row itself); otherwise the row above already
             // carries them.

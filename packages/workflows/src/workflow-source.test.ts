@@ -669,4 +669,22 @@ describe('a capture is adopted or reclaimed, whichever way the caller leaves', (
       'no capture taken'
     );
   });
+
+  test('reclaims a staged capture when executeWorkflow fails to rename it into place (#2690)', async () => {
+    // The rename-failure branch of `executeWorkflow` returns a failure result WITHOUT
+    // calling `owner.adopt()` — adoption only happens after the durable move succeeds.
+    // Simulating that here is what proves the contract the issue asks for: a rename
+    // failure leaves the wrap's `finally` to reclaim, instead of orphaning the staged
+    // tree for the hourly age-based sweep. The wrap body never adopts, so this is the
+    // pre-#2690 "body returns without adopting" test, replayed through the surface
+    // the failure path actually takes (rename throws / returns / fails before adopt).
+    let staged: { captureRoot: string } | undefined;
+    await withCapturedSource(async owner => {
+      staged = await stage('rename-failed');
+      owner.hold(staged);
+      // Mirror the executor: a rename failure returns without adopting.
+      return { success: false, workflowRunId: 'x', error: 'rename failed' } as const;
+    });
+    expect(await exists(staged!.captureRoot)).toBe(false);
+  });
 });

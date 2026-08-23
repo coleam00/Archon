@@ -40,7 +40,24 @@ const mockGetDefaultRemote = mock(() => Promise.resolve('origin' as string | nul
 const mockLoadRepoConfig = mock(() => Promise.resolve({} as Record<string, unknown>));
 const mockGetOrCreateConversation = mock(() => Promise.resolve(null as unknown));
 const mockGetCodebase = mock(() => Promise.resolve(null as unknown));
-const mockExecuteWorkflow = mock(() => Promise.resolve());
+// Simulates the rename-then-adopt order real `executeWorkflow` runs (#2690): adoption
+// happens INSIDE the executor at the rename success site, not from the caller. The
+// rename (and therefore the adopt) only runs for a non-continuation with a prepared
+// source — a continuation re-uses the capture its own row recorded and never re-adopts
+// here. Tests that observe `capturedSourceOwnerCalls` see the wrap finally behave the
+// same way the real one would.
+const mockExecuteWorkflow = mock((...args: unknown[]) => {
+  const opts = args[7] as
+    | {
+        preparedSource?: unknown;
+        capturedSourceOwner?: { adopt: () => void };
+      }
+    | undefined;
+  if (opts?.preparedSource) {
+    opts.capturedSourceOwner?.adopt();
+  }
+  return Promise.resolve();
+});
 const mockHandleCommand = mock(() =>
   Promise.resolve({ success: true, message: 'ok', workflow: undefined })
 );

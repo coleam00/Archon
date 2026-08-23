@@ -632,6 +632,16 @@ export type ExecuteWorkflowOptions = ResumePayload & {
    * Ignored on a resume: the run resolves the source it recorded at start.
    */
   preparedSource?: PreparedWorkflowSource;
+  /**
+   * The owner's adopt/hold handle from the surrounding `withCapturedSource`. When set,
+   * `executeWorkflow` calls `adopt()` itself — at the rename success site — so a rename
+   * failure leaves the staged directory un-adopted and the wrap's `finally` reclaims
+   * it. Optional: omitting it preserves the legacy behavior where callers own adoption
+   * (used by `executeWorkflow` paths that move the staged capture themselves, and by
+   * tests that mock `executeWorkflow`). Never set by callers that did not wrap
+   * themselves in `withCapturedSource`.
+   */
+  capturedSourceOwner?: CapturedSourceOwner;
 };
 
 /**
@@ -731,7 +741,14 @@ export interface CapturedSourceOwner {
    * would leave the real one behind while looking like it cleaned up.
    */
   hold: (prepared: Pick<PreparedWorkflowSource, 'captureRoot'>) => void;
-  /** A run now owns the bytes and their lifetime; stop tracking them. */
+  /**
+   * A run now owns the bytes and their lifetime; stop tracking them. Called by the
+   * caller from `executeWorkflow`'s rename success site (via
+   * `ExecuteWorkflowOptions.capturedSourceOwner`) once the staged capture has been moved
+   * under the run's artifacts directory. Earlier call sites — before the rename — could
+   * leave the staged directory orphaned when the rename itself failed (#2690); adoption
+   * at the rename site means a failed move leaves the wrap's `finally` to reclaim.
+   */
   adopt: () => void;
 }
 
@@ -2267,6 +2284,12 @@ export async function executeWorkflow(
         await rm(finalCaptureRoot, { recursive: true, force: true });
         await rename(preparedSource.captureRoot, finalCaptureRoot);
       }
+      // The staged capture is now under the run's artifacts directory — the run owns
+      // the bytes from this point on. Adopting here (not earlier, at the call site) is
+      // what closes the race in #2690: a rename failure above returns without reaching
+      // this line, so the wrap's `finally` reclaims the staged directory instead of
+      // leaving it to the hourly age-based sweep.
+      opts.capturedSourceOwner?.adopt();
     } catch (error) {
       return await failRunOnSource(
         `Could not move this run's captured workflow source into place: ${(error as Error).message}`

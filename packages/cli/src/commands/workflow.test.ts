@@ -127,7 +127,19 @@ mock.module('@archon/workflows/workflow-discovery', () => ({
 const capturedSourceOwnerCalls: string[] = [];
 
 mock.module('@archon/workflows/executor', () => ({
-  executeWorkflow: mock(() => Promise.resolve({ success: true, workflowRunId: 'test-run-id' })),
+  // Mirrors the real executor's adopt site (#2690): rename happens, then the wrap's
+  // `capturedSourceOwner.adopt()` is called. For a continuation (no `preparedSource`)
+  // the executor takes the legacy branch and does not adopt, so the wrap reclaims.
+  executeWorkflow: mock((...args: unknown[]) => {
+    const opts = args[7] as
+      | {
+          preparedSource?: unknown;
+          capturedSourceOwner?: { adopt: () => void };
+        }
+      | undefined;
+    if (opts?.preparedSource) opts.capturedSourceOwner?.adopt();
+    return Promise.resolve({ success: true, workflowRunId: 'test-run-id' });
+  }),
   hydrateResumableRun: mock(() => Promise.resolve(null)),
   withCapturedSource: mock(
     (
@@ -1323,7 +1335,9 @@ describe('workflowRunCommand — continuation and capture ownership (#2646)', ()
   it('hands the capture to the run that starts, and keeps holding it when none does', async () => {
     // The wrapper only protects anything if the run path actually calls its owner. Assert
     // both edges: a dropped `adopt()` deletes a live run's source, and a missing `hold()`
-    // strands a full frozen tree under staged-source on every refusal.
+    // strands a full frozen tree under staged-source on every refusal. Under #2690 the
+    // run path passes `capturedSourceOwner` through and the (mocked) executor adopts;
+    // the implementation override below mirrors that.
     const { executeWorkflow } = await import('@archon/workflows/executor');
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
 
@@ -1331,9 +1345,15 @@ describe('workflowRunCommand — continuation and capture ownership (#2646)', ()
       workflows: [makeTestWorkflowWithSource({ name: 'assist' })],
       errors: [],
     });
-    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
-      success: true,
-      workflowRunId: 'run-ok',
+    (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce((...args: unknown[]) => {
+      const opts = args[7] as
+        | {
+            preparedSource?: unknown;
+            capturedSourceOwner?: { adopt: () => void };
+          }
+        | undefined;
+      if (opts?.preparedSource) opts.capturedSourceOwner?.adopt();
+      return Promise.resolve({ success: true, workflowRunId: 'run-ok' });
     });
 
     await workflowRunCommand('/repo/root', 'assist', 'go', { noWorktree: true });

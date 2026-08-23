@@ -1004,9 +1004,6 @@ async function runWorkflowWithOwnedSource(
   const isContinuation = options.resume === true || continuationRun !== undefined;
 
   let preparedSource: PreparedWorkflowSource | undefined;
-  // Mirrors the owner's own flag, readable from the signal handler — which exits the
-  // process rather than returning, so it cannot consult the owner's closure.
-  let sourceAdopted = false;
   if (!isContinuation && !options.dryRun && !options.stubsInitPath) {
     try {
       preparedSource = await prepareWorkflowSource(createWorkflowDeps(), {
@@ -2065,9 +2062,10 @@ async function runWorkflowWithOwnedSource(
       // the forced exit below never returns up the stack, so the ownership `finally` —
       // whose whole premise is "whichever way we leave" — never runs. Ctrl-C during
       // isolation resolution or worktree creation would otherwise strand a complete
-      // frozen tree.
+      // frozen tree. `rm -rf` on the now-renamed capture root is a no-op once
+      // `executeWorkflow` has adopted it, so no separate guard is needed (#2690).
       .then(async () => {
-        if (preparedSource && !sourceAdopted) {
+        if (preparedSource) {
           await disposeWorkflowSource(preparedSource).catch(() => undefined);
         }
       })
@@ -2218,12 +2216,12 @@ async function runWorkflowWithOwnedSource(
           // The frozen source this run executes, captured before the workflow was even
           // selected. A resume ignores it and loads the source recorded on its own row.
           preparedSource,
+          // The wrap owns the capture until `executeWorkflow`'s rename succeeds; the
+          // executor adopts for us there (see #2690). Until then a rename failure
+          // leaves the staged directory un-adopted so the wrap reclaims it on the
+          // way out.
+          capturedSourceOwner: owner,
         };
-    // Handing the capture to a run: it now owns the bytes and their lifetime.
-    if (preparedSource) {
-      owner.adopt();
-      sourceAdopted = true;
-    }
     result = await executeWorkflow(
       deps,
       adapter,
