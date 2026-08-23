@@ -295,6 +295,14 @@ export async function startOAuth(userId: string, providerId: string): Promise<St
   sessions.set(sessionId, session);
 
   // Kick off the login WITHOUT awaiting — it blocks on the callbacks/deferred.
+  // The Archon-owned openai flow returns `OpenAiOAuthCredentials` (no `type:
+  // "oauth"` tag — it carries the OpenAI-specific `id_token` the Codex CLI
+  // requires, #1924); pi-ai 0.84+ now types `OAuthCredential` with a strict
+  // `type: "oauth"` discriminator so the two shapes no longer overlap. Both
+  // paths feed into `persistProviderOAuth` which accepts
+  // `Record<string, unknown>` (delivery.ts), so the join is intentionally
+  // widened here with an explicit cast — the bridge does not depend on
+  // `type: "oauth"` for downstream branching.
   const loginPromise: Promise<PiOAuthCredentials> = piProvider
     ? piProvider.login({
         onAuth: (info: OAuthAuthInfo) => {
@@ -320,7 +328,7 @@ export async function startOAuth(userId: string, providerId: string): Promise<St
         },
         signal: session.abort.signal,
       })
-    : runOpenAiManualLogin(session);
+    : (runOpenAiManualLogin(session) as unknown as Promise<PiOAuthCredentials>);
   session.settled = loginPromise
     .then(async (creds: PiOAuthCredentials) => {
       await persistProviderOAuth(userId, provider, creds);

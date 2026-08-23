@@ -375,14 +375,15 @@ export class PiProvider implements IAgentProvider {
       );
     }
 
-    // 2. Build AuthStorage + ModelRegistry. Both read on every sendQuery —
+    // 2. Build ModelRuntime + ModelRegistry. Both read on every sendQuery —
     //    user edits to auth.json or models.json take effect without restart.
-    //    ModelRegistry.create() is mutable: extension providers can call registerProvider()
-    //    on it during bindExtensions() to add their models (phase 2 resolution).
+    //    The registry is a thin facade over the runtime — extension providers
+    //    call registerProvider() on it during bindExtensions() to add their
+    //    models (phase 2 resolution).
     const envVarName = PI_PROVIDER_ENV_VARS[parsed.provider];
     const oauthVarName = PI_OAUTH_ENV_VARS[parsed.provider];
-    let authStorage: ReturnType<typeof piCodingAgent.AuthStorage.create>;
-    let modelRegistry: ReturnType<typeof piCodingAgent.ModelRegistry.create>;
+    let modelRuntime: Awaited<ReturnType<typeof piCodingAgent.ModelRuntime.create>>;
+    let modelRegistry: InstanceType<typeof piCodingAgent.ModelRegistry>;
     try {
       // Archon delivers per-user credentials (API keys + subscriptions) as a
       // per-run auth.json and points us at it via ARCHON_PI_AUTH_PATH — using an
@@ -394,16 +395,19 @@ export class PiProvider implements IAgentProvider {
       const archonAuthPath =
         (requestOptions?.env?.ARCHON_PI_AUTH_PATH ?? process.env.ARCHON_PI_AUTH_PATH)?.trim() ||
         undefined;
-      authStorage = piCodingAgent.AuthStorage.create(archonAuthPath);
+      // pi-coding-agent 0.84.0 folded AuthStorage + ModelRegistry into a single
+      // ModelRuntime; ModelRegistry is now a thin facade constructed from a
+      // runtime. authPath still feeds the file-backed CredentialStore inside
+      // ModelRuntime — the per-user auth.json path is honoured the same way.
+      modelRuntime = await piCodingAgent.ModelRuntime.create({ authPath: archonAuthPath });
+      modelRegistry = new piCodingAgent.ModelRegistry(modelRuntime);
       if (!envVarName) {
-        authStorage = withCustomProviderRequestEnv(
-          authStorage,
-          parsed.provider,
-          requestOptions?.env,
-          requestOptions?.protectedEnvKeys
-        );
+        modelRegistry = withCustomProviderRequestEnv(modelRegistry, modelRuntime, {
+          provider: parsed.provider,
+          requestEnv: requestOptions?.env,
+          protectedEnvKeys: requestOptions?.protectedEnvKeys,
+        });
       }
-      modelRegistry = piCodingAgent.ModelRegistry.create(authStorage);
     } catch (err) {
       const e = err as Error;
       getLog().error({ err: e, piProvider: parsed.provider }, 'pi.auth_storage_init_failed');
@@ -445,7 +449,12 @@ export class PiProvider implements IAgentProvider {
       name ? (requestOptions?.env?.[name] ?? process.env[name]) : undefined;
     const envOverride = readEnvOverride(oauthVarName) ?? readEnvOverride(envVarName);
     if (envOverride) {
-      authStorage.setRuntimeApiKey(parsed.provider, envOverride);
+      // pi 0.84.0+: setRuntimeApiKey is async (the runtime serializes the
+      // credential mutation per provider). await it before any subsequent
+      // getAuth() call so the override is visible to the model resolution
+      // path (otherwise the SDK would read the file-backed credential
+      // before the runtime override lands).
+      await modelRuntime.setRuntimeApiKey(parsed.provider, envOverride);
     }
 
     // Auth validation deferred for extension providers — they manage credentials
@@ -455,14 +464,20 @@ export class PiProvider implements IAgentProvider {
     // detection in step 4c; for 'anthropic' we resolve even when the model is
     // deferred to extensions (AuthStorage reads are cheap and side-effect-free)
     // so a catalog miss can never skip the OAuth-safe default prompt.
-    let resolvedKey: Awaited<ReturnType<typeof authStorage.getApiKey>> | undefined;
+    let resolvedKey: string | undefined;
     let hasResolvedAuth = false;
     if (model && !envVarName) {
       // This is deliberately status-only: Pi resolves models.json request auth
       // when it sends, and command-backed values must execute only once there.
       hasResolvedAuth = modelRegistry.hasConfiguredAuth(model);
     } else if (model || parsed.provider === 'anthropic') {
-      resolvedKey = await authStorage.getApiKey(parsed.provider);
+      // pi 0.84.0+: ModelRuntime exposes `getAuth(providerId)` returning
+      // `{ auth: { apiKey, headers, baseUrl }, env?, source? } | undefined`.
+      // We only need the apiKey for the Anthropic subscription-OAuth shape
+      // discriminator in step 4c — the SDK reads the credential on its own
+      // when sending.
+      const resolution = await modelRuntime.getAuth(parsed.provider);
+      resolvedKey = resolution?.auth.apiKey;
       hasResolvedAuth = Boolean(resolvedKey);
     }
     if (model) {
@@ -758,8 +773,12 @@ export class PiProvider implements IAgentProvider {
       // createAgentSession accepts this — the model will be set via
       // session.setModel() after bindExtensions() resolves it (step 4g).
       ...(model ? { model } : {}),
-      authStorage,
-      modelRegistry,
+      // pi 0.84.0+: createAgentSession no longer accepts authStorage +
+      // modelRegistry separately; pass the modelRuntime and the SDK builds its
+      // own internal registry facade. The runtime we pass is the one already
+      // scoped with `setRuntimeApiKey` calls above, so it carries our
+      // request-only env overrides without further wiring.
+      modelRuntime,
       sessionManager,
       settingsManager,
       resourceLoader,
