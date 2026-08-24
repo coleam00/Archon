@@ -1,4 +1,12 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -738,6 +746,116 @@ describe('PiProvider', () => {
         delete process.env.PI_CODING_AGENT_DIR;
       } else {
         process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      }
+    }
+  });
+
+  test('custom provider: filesystem error from buildCustomProviderModelsPath is classified as Pi auth storage init failed', async () => {
+    // Round-3 review (R1): the R2 cleanup fix correctly removed the silent
+    // swallow around mkdirSync/writeFileSync so FS errors now throw, but the
+    // throw site (buildCustomProviderModelsPath inside request-auth.ts) sits
+    // ABOVE the try block in provider.ts that wraps ModelRuntime.create
+    // errors as 'Pi auth storage init failed: …'. An EACCES/ENOSPC on the
+    // per-call tmpdir would propagate raw and bypass the classification the
+    // request-auth.ts doc comment promises. The fix moves the assignment
+    // inside the try; this test exercises the FS-error path against a real
+    // read-only tmpdir and asserts the framed error reaches the caller.
+    //
+    // Force the failure by pointing TMPDIR at a real, pre-populated dir
+    // chmod'd to 0o555. The shim's archon-pi-shim/package.json is
+    // pre-created so ensurePiPackageDirShim() succeeds (the if-guard on
+    // existsSync short-circuits the mkdirSync), but
+    // buildCustomProviderModelsPath's mkdirSync(archon-pi-models) fails with
+    // EACCES — exactly the production failure shape on a host with a
+    // read-only or misconfigured tmpdir.
+    const readOnlyTmp = mkdtempSync(join(tmpdir(), 'archon-pi-test-tmp-ro-'));
+    const roShimDir = join(readOnlyTmp, 'archon-pi-shim');
+    mkdirSync(roShimDir, { recursive: true });
+    writeFileSync(
+      join(roShimDir, 'package.json'),
+      JSON.stringify({ name: 'archon-pi-shim', version: '0.0.0', piConfig: {} })
+    );
+    chmodSync(readOnlyTmp, 0o555); // r-x for all, no write — mkdirSync fails with EACCES
+
+    // The user models.json lives at a SEPARATE dir (PI_CODING_AGENT_DIR) so
+    // the per-call substitution still triggers — only the per-call write
+    // fails.
+    const userModelsDir = mkdtempSync(join(tmpdir(), 'archon-pi-test-user-models-fserror-'));
+    writeFileSync(
+      join(userModelsDir, 'models.json'),
+      JSON.stringify({
+        providers: {
+          mygw: {
+            baseUrl: 'https://gateway.example/v1',
+            api: 'openai-completions',
+            apiKey: 'prefix-${MYGW_API_KEY}',
+            models: [{ id: 'demo' }],
+          },
+        },
+      })
+    );
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    const previousTmpDir = process.env.TMPDIR;
+    const previousTmp = process.env.TMP;
+    const previousTemp = process.env.TEMP;
+    process.env.PI_CODING_AGENT_DIR = userModelsDir;
+    // Set all three env vars node:os reads so the override holds regardless
+    // of which one the host happens to define.
+    process.env.TMPDIR = readOnlyTmp;
+    process.env.TMP = readOnlyTmp;
+    process.env.TEMP = readOnlyTmp;
+
+    try {
+      const { error } = await consume(
+        new PiProvider().sendQuery('hi', '/tmp', undefined, {
+          model: 'mygw/demo',
+          env: { MYGW_API_KEY: 'request-secret' },
+          protectedEnvKeys: [],
+        })
+      );
+      // The throw from mkdirSync inside buildCustomProviderModelsPath now
+      // reaches the provider's catch and is framed as 'Pi auth storage
+      // init failed: …' — same shape as the ModelRuntime.create throw test
+      // above, so orchestrator pattern-matchers that key on this prefix see
+      // the FS error too. Raw 'EACCES: permission denied, mkdir …' must NOT
+      // leak through.
+      expect(error).toBeDefined();
+      expect(error?.message).toContain('Pi auth storage init failed');
+      expect(error?.message).toMatch(/EACCES|permission denied/);
+      expect(error?.message).toContain('~/.pi/agent/auth.json');
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        expect.objectContaining({ piProvider: 'mygw' }),
+        'pi.auth_storage_init_failed'
+      );
+      // buildCustomProviderModelsPath threw before the file existed, so
+      // ModelRuntime.create was never reached — the cleanup `finally`'s
+      // `if (customProviderModelsPath)` guard short-circuits, no rmSync
+      // runs. Verify by checking the runtime mock was never invoked.
+      expect(mockModelRuntimeCreate).not.toHaveBeenCalled();
+    } finally {
+      // Restore write perms on the read-only tmpdir so cleanup can rmrf.
+      chmodSync(readOnlyTmp, 0o755);
+      rmSync(readOnlyTmp, { recursive: true, force: true });
+      rmSync(userModelsDir, { recursive: true, force: true });
+      if (previousAgentDir === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      }
+      if (previousTmpDir === undefined) {
+        delete process.env.TMPDIR;
+      } else {
+        process.env.TMPDIR = previousTmpDir;
+      }
+      if (previousTmp === undefined) {
+        delete process.env.TMP;
+      } else {
+        process.env.TMP = previousTmp;
+      }
+      if (previousTemp === undefined) {
+        delete process.env.TEMP;
+      } else {
+        process.env.TEMP = previousTemp;
       }
     }
   });

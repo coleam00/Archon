@@ -390,16 +390,21 @@ export class PiProvider implements IAgentProvider {
     // Archon deliberately keeps empty (per-call secrets ride on
     // `requestOptions.env`); pre-substituting into a per-call file closes
     // the seam (see `./request-auth.ts` for the full rationale). Declared
-    // before the try so the cleanup `finally` below can unlink the file
-    // whether `ModelRuntime.create` succeeds or throws.
-    const customProviderModelsPath = !envVarName
-      ? buildCustomProviderModelsPath({
-          provider: parsed.provider,
-          requestEnv: requestOptions?.env,
-          protectedEnvKeys: requestOptions?.protectedEnvKeys,
-        })
-      : undefined;
+    // as `let` so the assignment sits INSIDE the try below — that way a
+    // `mkdirSync`/`writeFileSync`/`chmodSync` throw is framed as
+    // `'Pi auth storage init failed: …'` (matching the contract the
+    // `request-auth.ts` doc comment promises), and the cleanup `finally`
+    // can still see the value to unlink the file if `ModelRuntime.create`
+    // throws after the substitution succeeded.
+    let customProviderModelsPath: string | undefined;
     try {
+      customProviderModelsPath = !envVarName
+        ? buildCustomProviderModelsPath({
+            provider: parsed.provider,
+            requestEnv: requestOptions?.env,
+            protectedEnvKeys: requestOptions?.protectedEnvKeys,
+          })
+        : undefined;
       // Archon delivers per-user credentials (API keys + subscriptions) as a
       // per-run auth.json and points us at it via ARCHON_PI_AUTH_PATH — using an
       // explicit authPath (not PI_CODING_AGENT_DIR) so the user's models.json /
