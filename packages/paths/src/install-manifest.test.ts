@@ -7,6 +7,8 @@ import {
   readdirSync,
   realpathSync,
   rmSync,
+  statSync,
+  utimesSync,
   writeFileSync,
 } from 'fs';
 import { tmpdir } from 'os';
@@ -73,10 +75,14 @@ describe('compiled install manifest', () => {
     const manifest: InstallManifest = { binary: realpathSync(binary), version: '1.2.3' };
     const original = JSON.stringify(manifest);
     writeFileSync(manifestPath(), original);
+    const preservedTime = new Date('2000-01-01T00:00:00.000Z');
+    utimesSync(manifestPath(), preservedTime, preservedTime);
+    const originalMtime = statSync(manifestPath()).mtimeMs;
 
     refreshCompiledInstallManifest(true, binary, '1.2.3');
 
     expect(readFileSync(manifestPath(), 'utf8')).toBe(original);
+    expect(statSync(manifestPath()).mtimeMs).toBe(originalMtime);
   });
 
   test('replaces the manifest when the binary or version changes', () => {
