@@ -101,6 +101,11 @@ import type {
   ChildIsolationResult,
 } from './child-isolation';
 
+// A run in one of these statuses still holds the ancestor-aware path lock; this
+// must stay in lockstep with the production collision check in dag-executor.ts.
+const holdsPathLock = (status: WorkflowRun['status']): boolean =>
+  status === 'pending' || status === 'running' || status === 'paused';
+
 // ---------------------------------------------------------------------------
 // Stateful in-memory store — implements just enough of IWorkflowStore to drive
 // the real run lifecycle (create / pause / resume / complete / fail / cancel),
@@ -179,12 +184,7 @@ class InMemoryStore implements IWorkflowStore {
   ): Promise<WorkflowRun | null> {
     const exclude = new Set([self?.id, ...(self?.excludeRunIds ?? [])].filter(Boolean));
     const active = [...this.runs.values()]
-      .filter(
-        r =>
-          r.working_path === workingPath &&
-          (r.status === 'running' || r.status === 'paused' || r.status === 'pending') &&
-          !exclude.has(r.id)
-      )
+      .filter(r => r.working_path === workingPath && holdsPathLock(r.status) && !exclude.has(r.id))
       .sort((a, b) => a.started_at.getTime() - b.started_at.getTime());
     return Promise.resolve(active[0] ? this.clone(active[0]) : null);
   }
@@ -3807,6 +3807,10 @@ nodes:
     expect(result.workflows.map(w => w.workflow.name)).toContain('leaky-slot');
   });
 
+  // The rendezvous wait runs inside executeWorkflow's lock guard, so it counts
+  // fully against this test's clock: the timeout must exceed the rendezvous
+  // deadline (5s) or a loaded CI run dies as a bun-test timeout instead of the
+  // diagnostic rendezvous error.
   it('GAP: concurrent fan-out cancels a sibling unless the child sets mutates_checkout:false', async () => {
     // The path lock (executor.ts, "Siblings are intentionally NOT excluded") means two
     // `workflow:` nodes in one layer collide on the shared checkout: the loser
@@ -3873,7 +3877,7 @@ nodes:
         const deadline = Date.now() + 5000;
         for (;;) {
           const children = await this.findChildRuns(parent.id);
-          const live = children.filter(c => c.status === 'pending' || c.status === 'running');
+          const live = children.filter(c => holdsPathLock(c.status));
           if (live.length >= 2) {
             this.overlapSeen = true;
           }
@@ -3914,7 +3918,7 @@ nodes:
     );
     expect(safeResult.success).toBe(true);
     expect(kids(safeStore, 'parent-fanout-safe-child')).toEqual(['completed', 'completed']);
-  });
+  }, 20000);
 
   it('GAP (#2180 Defect A): a GATING child loses the path lock before it ever reaches its gate', async () => {
     // Fan-out where both children would gate. What actually happens is the PATH LOCK
