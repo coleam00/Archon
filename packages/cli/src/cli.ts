@@ -29,6 +29,7 @@ loadArchonEnv(process.cwd());
 // rationale.
 import { installPipeSafeConsole } from './utils/safe-console';
 import { withDrainedExit } from './utils/exit-with-drain';
+import { writeJsonLine } from './utils/stdout';
 installPipeSafeConsole();
 
 import { parseArgs } from 'util';
@@ -432,7 +433,11 @@ async function main(): Promise<number> {
         return await workflowTestCommand(testCwd, target, { json: jsonFlag });
       } catch (error) {
         const err = error as Error;
-        console.error(`Error: ${err.message}`);
+        if (jsonFlag) {
+          await writeJsonLine({ ok: false, error: err.message });
+        } else {
+          console.error(`Error: ${err.message}`);
+        }
         return 1;
       }
     }

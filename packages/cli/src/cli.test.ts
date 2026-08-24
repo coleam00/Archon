@@ -704,3 +704,20 @@ describe('CLI git repo check', () => {
     });
   });
 });
+
+describe('workflow test --json error envelope', () => {
+  it('emits { ok: false } on stdout when the command throws under --json', () => {
+    // A --cwd that does not exist makes findRepoRoot throw inside the
+    // `workflow test` handler — the only reachable error path without a full
+    // fixture project. The envelope, not the message, is the contract.
+    const result = spawnSync(
+      process.execPath,
+      [CLI_ENTRY, 'workflow', 'test', '--json', '--cwd', join(tmpdir(), 'archon-missing-cwd')],
+      { encoding: 'utf8', env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' } }
+    );
+
+    expect(result.status).toBe(1);
+    expect(() => JSON.parse(result.stdout)).not.toThrow();
+    expect(JSON.parse(result.stdout)).toMatchObject({ ok: false });
+  });
+});
