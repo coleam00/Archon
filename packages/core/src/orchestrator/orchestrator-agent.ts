@@ -74,7 +74,7 @@ import { listDecryptedUserProviderCredentials } from '../db/user-provider-key-st
 import { getUserAiPrefs, type UserAiPrefs } from '../db/user-ai-prefs-store';
 import { createWorkflowDeps } from '../workflows/store-adapter';
 import { createChildWorktreeResolver } from '../workflows/child-isolation-resolver';
-import { resolveWorkflowAdoption } from '../operations/workflow-adoption';
+import { resolveWorkflowAdoption, WorkflowAdoptionError } from '../operations/workflow-adoption';
 import { loadConfig, loadRepoConfig } from '../config/config-loader';
 import type { MergedConfig } from '../config/config-types';
 import { generateAndSetTitle } from '../services/title-generator';
@@ -781,6 +781,22 @@ async function dispatchOrchestratorWorkflowOwned(
       ).lane
     : undefined;
 
+  // A lane other than in-place inherits a worktree or branch estate; a workflow
+  // that opted out of worktrees runs in the parent checkout and has nothing to
+  // inherit, so honoring the adoption would mean silently dropping the lane.
+  if (
+    options?.adoptRunId !== undefined &&
+    adoptionLane !== undefined &&
+    adoptionLane.kind !== 'in-place' &&
+    workflow.worktree?.enabled === false
+  ) {
+    throw new WorkflowAdoptionError(
+      `Cannot adopt run '${options.adoptRunId}': workflow '${workflow.name}' disables ` +
+        'worktrees, so there is no worktree or branch estate to inherit. ' +
+        'Drop the adoption or run a worktree-isolated workflow.'
+    );
+  }
+
   // Per-child isolation resolver (#2121 slice 2, PR-A): a `workflow:` node with
   // `isolation: 'worktree'` gets its own worktree per child. Built for git-repo
   // codebases only — a folder project can't make worktrees, so the engine fails
@@ -841,6 +857,18 @@ async function dispatchOrchestratorWorkflowOwned(
   const willContinueExistingRun =
     Boolean(resumableRun?.working_path) &&
     (resumableRun?.status === 'paused' || resumableRun?.id === options?.resumeRunId);
+
+  // Adoption and continuation are mutually exclusive: both decide where the run
+  // executes and which estate it inherits, and every continuation path below forwards
+  // only the resume context — an adopted id would be validated above and then silently
+  // dropped. Refuse the combination up front, mirroring the CLI's adopt/resume guard.
+  if (options?.adoptRunId !== undefined && willContinueExistingRun && resumableRun) {
+    throw new WorkflowAdoptionError(
+      `Cannot adopt run '${options.adoptRunId}': this conversation already continues ` +
+        `run '${resumableRun.id}' (${resumableRun.status}). Resume or abandon that run ` +
+        'first, or declare the adoption from a conversation with no open run.'
+    );
+  }
 
   // ── Executable source ───────────────────────────────────────────────────────
   //
@@ -982,7 +1010,24 @@ async function dispatchOrchestratorWorkflowOwned(
   // declarative equivalent of CLI `--no-worktree` for workflows that should always
   // run live (e.g. read-only triage, docs generation on the main checkout).
   let cwd: string;
-  if (workflow.worktree?.enabled === false) {
+  if (adoptionLane?.kind === 'reuse-worktree') {
+    // Adoption lane: the adopted run's worktree survives — run in it dirty-as-is
+    // instead of cutting a fresh one (same shape as the background dispatch in
+    // orchestrator.ts). Linking the env keeps isolation hygiene pointed at this
+    // checkout.
+    cwd = adoptionLane.workingPath;
+    await db
+      .updateConversation(conversation.id, {
+        cwd,
+        ...(adoptionLane.envId ? { isolation_env_id: adoptionLane.envId } : {}),
+      })
+      .catch((e: unknown) => {
+        getLog().warn(
+          { err: toError(e), conversationId },
+          'orchestrator.worker_cwd_persist_failed'
+        );
+      });
+  } else if (workflow.worktree?.enabled === false) {
     getLog().info(
       { workflowName: workflow.name, conversationId, codebaseId: codebase.id },
       'workflow.worktree_disabled_by_policy'
@@ -995,7 +1040,13 @@ async function dispatchOrchestratorWorkflowOwned(
         codebase,
         platform,
         conversationId,
-        isolationHints,
+        adoptionLane?.kind === 'fresh-from-branch'
+          ? {
+              ...isolationHints,
+              workflowType: 'task',
+              fromBranch: toBranchName(adoptionLane.branch),
+            }
+          : isolationHints,
         false,
         userId
       );
