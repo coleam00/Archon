@@ -930,61 +930,73 @@ async function dispatchOrchestratorWorkflowOwned(
     workflow = freshCaptured.workflow;
   }
 
-  // Signature gate (#2470, #2554): resolve this invocation's declared inputs from the
-  // values its channel supplied — the run route's `inputs` map today; chat platforms
-  // supply nothing and so still refuse a required-input workflow here, before any
-  // worktree/clone/AI cost. The workflow still lists/loads normally either way.
   let resolvedInputs: Record<string, string> | undefined;
   // A contract violation held back because a resume may make it moot. Only the one
   // branch below that falls through to a FRESH run row (hydration found nothing worth
   // resuming) still needs it; every other continuation path never reads inputs from
   // this invocation at all.
   let deferredInputError: Error | undefined;
-  try {
-    resolvedInputs = resolveTopLevelInputs(workflow, options?.inputs);
-  } catch (err) {
-    // Both are user-facing contract violations: a missing required input, and — now
-    // that a caller can supply values — a key the workflow does not declare.
-    if (err instanceof WorkflowMissingInputsError || err instanceof WorkflowInputContractError) {
-      getLog().info(
-        {
-          workflowName: workflow.name,
-          // Names only, never values — a supplied value is user content (logging rules).
-          missing: err instanceof WorkflowMissingInputsError ? err.missing : undefined,
-          suppliedKeys: options?.inputs ? Object.keys(options.inputs) : [],
-          deferred: willContinueExistingRun,
-        },
-        'workflow.required_inputs_unsatisfiable'
-      );
-      if (!willContinueExistingRun) {
-        await platform.sendMessage(conversationId, err.message);
-        return;
-      }
-      deferredInputError = err;
-    } else {
-      throw err;
-    }
-  }
 
-  // Capability gate: hard-fail before any worktree/clone/AI cost if the
-  // workflow declares `requires: [github]` and the originating user hasn't
-  // connected. No-op when per-user GitHub is disabled (solo PAT installs).
-  if (isPerUserGitHubEnabled() && workflow.requires?.length) {
-    const githubConnected = userId ? Boolean(await getDecryptedAccessToken(userId)) : false;
+  // Input signature gate (#2470, #2554) plus capability gate, judged against ONE
+  // workflow definition. A fresh-from-branch adoption swaps the definition for the
+  // branch's vintage only after isolation resolves its worktree, so these gates must
+  // run AFTER that swap there — otherwise required inputs or `requires:` declared on
+  // the branch would bypass them entirely.
+  const runSignatureGates = async (definition: WorkflowDefinition): Promise<boolean> => {
+    // Resolve this invocation's declared inputs from the values its channel supplied —
+    // the run route's `inputs` map today; chat platforms supply nothing and so still
+    // refuse a required-input workflow here. The workflow still lists/loads normally.
     try {
-      assertWorkflowRequirementsMet(workflow, { githubConnected });
+      resolvedInputs = resolveTopLevelInputs(definition, options?.inputs);
     } catch (err) {
-      if (err instanceof WorkflowRequirementError) {
+      // Both are user-facing contract violations: a missing required input, and — now
+      // that a caller can supply values — a key the workflow does not declare.
+      if (err instanceof WorkflowMissingInputsError || err instanceof WorkflowInputContractError) {
         getLog().info(
-          { workflowName: workflow.name, conversationId, userId, requirement: err.requirement },
-          'workflow.requirement_unmet'
+          {
+            workflowName: definition.name,
+            // Names only, never values — a supplied value is user content (logging rules).
+            missing: err instanceof WorkflowMissingInputsError ? err.missing : undefined,
+            suppliedKeys: options?.inputs ? Object.keys(options.inputs) : [],
+            deferred: willContinueExistingRun,
+          },
+          'workflow.required_inputs_unsatisfiable'
         );
-        await platform.sendMessage(conversationId, err.message);
-        return;
+        if (!willContinueExistingRun) {
+          await platform.sendMessage(conversationId, err.message);
+          return false;
+        }
+        deferredInputError = err;
+      } else {
+        throw err;
       }
-      throw err;
     }
-  }
+
+    // Capability gate: hard-fail before any worktree/clone/AI cost if the
+    // workflow declares `requires: [github]` and the originating user hasn't
+    // connected. No-op when per-user GitHub is disabled (solo PAT installs).
+    if (isPerUserGitHubEnabled() && definition.requires?.length) {
+      const githubConnected = userId ? Boolean(await getDecryptedAccessToken(userId)) : false;
+      try {
+        assertWorkflowRequirementsMet(definition, { githubConnected });
+      } catch (err) {
+        if (err instanceof WorkflowRequirementError) {
+          getLog().info(
+            { workflowName: definition.name, conversationId, userId, requirement: err.requirement },
+            'workflow.requirement_unmet'
+          );
+          await platform.sendMessage(conversationId, err.message);
+          return false;
+        }
+        throw err;
+      }
+    }
+    return true;
+  };
+
+  const gatesWaitForBranchVintage =
+    adoptionLane?.kind === 'fresh-from-branch' && !willContinueExistingRun;
+  if (!gatesWaitForBranchVintage && !(await runSignatureGates(workflow))) return;
 
   // Keys the engine dropped from this workflow's YAML (#2213). Every chat and
   // console run funnels through here, so this is the one place that covers all
@@ -1093,6 +1105,9 @@ async function dispatchOrchestratorWorkflowOwned(
     freshCaptured = await captureFreshSource(owner, cwd, workflow, conversationId, platform);
     if (!freshCaptured) return; // capture failed, message already sent
     workflow = freshCaptured.workflow;
+    // The executed graph just changed vintages; judge the invocation against the
+    // branch's definition, not the parent checkout's it was provisionally read from.
+    if (!(await runSignatureGates(workflow))) return;
   }
 
   // Dispatch workflow.
