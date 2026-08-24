@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -384,6 +384,21 @@ export class PiProvider implements IAgentProvider {
     const oauthVarName = PI_OAUTH_ENV_VARS[parsed.provider];
     let modelRuntime: Awaited<ReturnType<typeof piCodingAgent.ModelRuntime.create>>;
     let modelRegistry: InstanceType<typeof piCodingAgent.ModelRegistry>;
+    // For custom (non-built-in) Pi providers, build a per-call `models.json`
+    // with `${VAR}` references substituted against the per-call env. The
+    // SDK's session-auth path resolves `${VAR}` from `process.env`, which
+    // Archon deliberately keeps empty (per-call secrets ride on
+    // `requestOptions.env`); pre-substituting into a per-call file closes
+    // the seam (see `./request-auth.ts` for the full rationale). Declared
+    // before the try so the cleanup `finally` below can unlink the file
+    // whether `ModelRuntime.create` succeeds or throws.
+    const customProviderModelsPath = !envVarName
+      ? buildCustomProviderModelsPath({
+          provider: parsed.provider,
+          requestEnv: requestOptions?.env,
+          protectedEnvKeys: requestOptions?.protectedEnvKeys,
+        })
+      : undefined;
     try {
       // Archon delivers per-user credentials (API keys + subscriptions) as a
       // per-run auth.json and points us at it via ARCHON_PI_AUTH_PATH — using an
@@ -395,19 +410,6 @@ export class PiProvider implements IAgentProvider {
       const archonAuthPath =
         (requestOptions?.env?.ARCHON_PI_AUTH_PATH ?? process.env.ARCHON_PI_AUTH_PATH)?.trim() ||
         undefined;
-      // For custom (non-built-in) Pi providers, build a per-call `models.json`
-      // with `${VAR}` references substituted against the per-call env. The
-      // SDK's session-auth path resolves `${VAR}` from `process.env`, which
-      // Archon deliberately keeps empty (per-call secrets ride on
-      // `requestOptions.env`); pre-substituting into a per-call file closes
-      // the seam (see `./request-auth.ts` for the full rationale).
-      const customProviderModelsPath = !envVarName
-        ? buildCustomProviderModelsPath({
-            provider: parsed.provider,
-            requestEnv: requestOptions?.env,
-            protectedEnvKeys: requestOptions?.protectedEnvKeys,
-          })
-        : undefined;
       // pi-coding-agent 0.84.0 folded AuthStorage + ModelRegistry into a single
       // ModelRuntime; ModelRegistry is now a thin facade constructed from a
       // runtime. authPath still feeds the file-backed CredentialStore inside
@@ -426,6 +428,25 @@ export class PiProvider implements IAgentProvider {
         `Pi auth storage init failed: ${e.message}. Check that ~/.pi/agent/auth.json ` +
           '(or $PI_CODING_AGENT_DIR/auth.json) is valid JSON and readable.'
       );
+    } finally {
+      // The per-call models.json holds the literal substituted secret in
+      // cleartext. ModelRuntime.create reads it once at construction (via
+      // ModelConfig.load); the runtime carries the loaded values for the
+      // rest of the session, so the file can be removed as soon as the
+      // create() promise resolves. Without this cleanup, long-running
+      // processes accumulate one file per sendQuery and eventually hit
+      // ENOSPC, after which buildCustomProviderModelsPath's mkdirSync fails
+      // and the SDK silently falls through to the unsubstituted user
+      // models.json — re-opening the round-1 R1 leak surface. Errors here
+      // are non-fatal (the file may already be gone, or the FS may be in
+      // an odd state); the original error has already been surfaced.
+      if (customProviderModelsPath) {
+        try {
+          rmSync(customProviderModelsPath, { force: true });
+        } catch {
+          // Deliberately swallowed — see comment above.
+        }
+      }
     }
 
     // 3. [LOOKUP-1] Check the static catalog first (phase 1 of 2).

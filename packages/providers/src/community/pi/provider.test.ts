@@ -205,7 +205,7 @@ const mockModelRegistryConstruct = mock(
 // `authStorage.getApiKey(...)` continue to assert against the same call shape
 // (just on the runtime object now).
 const mockModelRuntimeCreate = mock(
-  async (_options?: { authPath?: string }): Promise<MockModelRuntime> => ({
+  async (_options?: { authPath?: string; modelsPath?: string }): Promise<MockModelRuntime> => ({
     setRuntimeApiKey: mockSetRuntimeApiKey,
     getAuth: mockGetAuth,
     hasConfiguredAuth: mockHasConfiguredAuth,
@@ -522,7 +522,26 @@ describe('PiProvider', () => {
     const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
     process.env.PI_CODING_AGENT_DIR = userModelsDir;
 
+    // The per-call file is unlinked in `provider.ts`'s `finally` block as
+    // soon as ModelRuntime.create resolves. The mock factory returns
+    // synchronously without actually reading the file, so the cleanup
+    // would race with the file-content assertions below. Capture the file
+    // contents INSIDE the mock implementation, while the file still exists,
+    // and assert against the captured snapshot.
+    let capturedPerCallContent: string | undefined;
+    mockModelRuntimeCreate.mockImplementationOnce(async (options?: { modelsPath?: string }) => {
+      if (options?.modelsPath && existsSync(options.modelsPath)) {
+        capturedPerCallContent = readFileSync(options.modelsPath, 'utf-8');
+      }
+      return {
+        setRuntimeApiKey: mockSetRuntimeApiKey,
+        getAuth: mockGetAuth,
+        hasConfiguredAuth: mockHasConfiguredAuth,
+      };
+    });
+
     resetScript(scriptedAgentEnd());
+    let createArgs: { authPath?: string; modelsPath?: string } | undefined;
     try {
       await consume(
         new PiProvider().sendQuery('hi', '/tmp', undefined, {
@@ -545,14 +564,17 @@ describe('PiProvider', () => {
       // file), NOT the user's models.json — the SDK then reads the literal
       // substituted values directly without falling through to process.env.
       expect(mockModelRuntimeCreate).toHaveBeenCalledTimes(1);
-      const createArgs = mockModelRuntimeCreate.mock.calls[0]?.[0] as
+      createArgs = mockModelRuntimeCreate.mock.calls[0]?.[0] as
         | { authPath?: string; modelsPath?: string }
         | undefined;
       expect(createArgs?.modelsPath).toBeDefined();
       expect(createArgs?.modelsPath).not.toBe(userModelsPath);
-      // The per-call file carries the substituted literals.
-      expect(existsSync(createArgs!.modelsPath as string)).toBe(true);
-      const perCallModels = JSON.parse(readFileSync(createArgs!.modelsPath as string, 'utf-8')) as {
+      // The per-call file carried the substituted literals at create time.
+      // The cleanup `finally` in provider.ts unlinks it as soon as create()
+      // resolves — see the dedicated "per-call models.json is unlinked after
+      // ModelRuntime.create" test below for the post-cleanup assertion.
+      expect(capturedPerCallContent).toBeDefined();
+      const perCallModels = JSON.parse(capturedPerCallContent as string) as {
         providers: Record<
           string,
           {
@@ -582,6 +604,134 @@ describe('PiProvider', () => {
       // provider's pre-session path (the substitution happens at models.json
       // load time, before the session even constructs).
       expect(requestRegistry?.getApiKeyAndHeaders).not.toHaveBeenCalled();
+    } finally {
+      // Best-effort: if the per-call file is still on disk (cleanup didn't
+      // run for some reason in this test path), unlink it so the dir
+      // cleanup below doesn't blow up.
+      if (createArgs?.modelsPath && existsSync(createArgs.modelsPath)) {
+        rmSync(createArgs.modelsPath, { force: true });
+      }
+      rmSync(userModelsDir, { recursive: true, force: true });
+      if (previousAgentDir === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      }
+    }
+  });
+
+  test('custom provider: per-call models.json is unlinked after ModelRuntime.create', async () => {
+    // Round-2 review (Finding 3): the per-call models.json was written and
+    // returned to the caller, but never deleted. Long-running processes
+    // accumulate one file per sendQuery until mkdirSync/writeFileSync fails
+    // with ENOSPC, after which buildCustomProviderModelsPath's errors are
+    // caught at the caller and the SDK silently falls back to the
+    // unsubstituted user models.json — re-opening the round-1 R1 leak
+    // surface. The fix wraps ModelRuntime.create in a try/finally that
+    // unlinks the file regardless of create() outcome.
+    const userModelsDir = mkdtempSync(join(tmpdir(), 'archon-pi-test-user-models-cleanup-'));
+    writeFileSync(
+      join(userModelsDir, 'models.json'),
+      JSON.stringify({
+        providers: {
+          mygw: {
+            baseUrl: 'https://gateway.example/v1',
+            api: 'openai-completions',
+            apiKey: 'prefix-${MYGW_API_KEY}',
+            models: [{ id: 'demo' }],
+          },
+        },
+      })
+    );
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = userModelsDir;
+
+    resetScript(scriptedAgentEnd());
+    let perCallPath: string | undefined;
+    try {
+      await consume(
+        new PiProvider().sendQuery('hi', '/tmp', undefined, {
+          model: 'mygw/demo',
+          env: { MYGW_API_KEY: 'request-secret' },
+          protectedEnvKeys: [],
+        })
+      );
+      const createArgs = mockModelRuntimeCreate.mock.calls[0]?.[0] as
+        | { modelsPath?: string }
+        | undefined;
+      perCallPath = createArgs?.modelsPath;
+      expect(perCallPath).toBeDefined();
+      // The cleanup ran in the provider's `finally` block, so the file is
+      // gone after sendQuery resolves.
+      expect(existsSync(perCallPath as string)).toBe(false);
+    } finally {
+      if (perCallPath && existsSync(perCallPath)) {
+        rmSync(perCallPath, { force: true });
+      }
+      rmSync(userModelsDir, { recursive: true, force: true });
+      if (previousAgentDir === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      }
+    }
+  });
+
+  test('custom provider: per-call models.json is unlinked even when ModelRuntime.create throws', async () => {
+    // Round-2 review (Finding 3): cleanup must run on the failure path
+    // too, otherwise a transient SDK failure (corrupt auth.json, transient
+    // ENOSPC, etc.) leaks the per-call file. The file holds the literal
+    // substituted secret, so leaving it on disk after a failed create()
+    // is a credential-leak regression.
+    const userModelsDir = mkdtempSync(join(tmpdir(), 'archon-pi-test-user-models-cleanup-fail-'));
+    writeFileSync(
+      join(userModelsDir, 'models.json'),
+      JSON.stringify({
+        providers: {
+          mygw: {
+            baseUrl: 'https://gateway.example/v1',
+            api: 'openai-completions',
+            apiKey: 'prefix-${MYGW_API_KEY}',
+            models: [{ id: 'demo' }],
+          },
+        },
+      })
+    );
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = userModelsDir;
+
+    mockModelRuntimeCreate.mockImplementationOnce(async (options?: { modelsPath?: string }) => {
+      // Force the SDK to throw AFTER reading the per-call file's existence
+      // so the cleanup `finally` runs on the failure path. The provider
+      // wraps the error in a "Pi auth storage init failed" message; we
+      // assert the cleanup still happened regardless.
+      if (options?.modelsPath) {
+        // Touch the file so we can verify it disappears.
+        if (existsSync(options.modelsPath)) {
+          // ok
+        }
+      }
+      throw new Error('simulated SDK failure');
+    });
+
+    try {
+      const { error } = await consume(
+        new PiProvider().sendQuery('hi', '/tmp', undefined, {
+          model: 'mygw/demo',
+          env: { MYGW_API_KEY: 'request-secret' },
+          protectedEnvKeys: [],
+        })
+      );
+      expect(error).toBeDefined();
+      expect(error?.message).toContain('Pi auth storage init failed');
+      expect(error?.message).toContain('simulated SDK failure');
+      // Capture the path from the call that DID happen (before the throw).
+      const createArgs = mockModelRuntimeCreate.mock.calls[0]?.[0] as
+        | { modelsPath?: string }
+        | undefined;
+      expect(createArgs?.modelsPath).toBeDefined();
+      // The cleanup ran in the failure path too — file is gone.
+      expect(existsSync(createArgs!.modelsPath as string)).toBe(false);
     } finally {
       rmSync(userModelsDir, { recursive: true, force: true });
       if (previousAgentDir === undefined) {

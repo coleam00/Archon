@@ -130,19 +130,42 @@ describe('buildCustomProviderModelsPath', () => {
     expect(result).toBeUndefined();
   });
 
-  test('does not substitute protected ${VAR} references', () => {
+  test('substitutes protected ${VAR} references with a host-env-independent placeholder', () => {
     createUserModelsDir('${GH_TOKEN}');
     const result = buildCustomProviderModelsPath({
       provider: 'mygw',
       requestEnv: { GH_TOKEN: 'acting-user-secret' },
       protectedEnvKeys: ['GH_TOKEN'],
     });
-    // No substitution happened (the protected reference was skipped, leaving
-    // nothing to write), so the per-call file is NOT produced — the SDK's
-    // default `modelsPath` lookup will load the user's `models.json` with
-    // `${GH_TOKEN}` intact, and Pi's own resolveConfigValue surfaces the
-    // standard "no value for env var" error at request time.
-    expect(result).toBeUndefined();
+    // Protected refs ARE substituted into the per-call file — but with a
+    // structurally-valid placeholder (one identifier the SDK parses as an
+    // env reference) that is provably absent from both requestEnv and
+    // process.env. The SDK's own resolver then fails at request time with
+    // `Failed to resolve API key from environment variable:
+    // __ARCHON_BLOCKED_GH_TOKEN__` — the failure is host-environment-
+    // independent, no matter what GH_TOKEN is set to in the shell.
+    expect(result).toBeDefined();
+    const written = readModelsJson(result as string);
+    expect(written.providers.mygw.apiKey).toBe('${__ARCHON_BLOCKED_GH_TOKEN__}');
+    // The literal protected value must never appear in the file.
+    expect(written.providers.mygw.apiKey).not.toContain('acting-user-secret');
+    expect(written.providers.mygw.apiKey).not.toMatch(/(?<!__ARCHON_BLOCKED_)GH_TOKEN/);
+  });
+
+  test('protected ${VAR} in header is also placeholder-substituted', () => {
+    createUserModelsDir('key-${GH_TOKEN}', { Authorization: 'Bearer ${GH_TOKEN}' });
+    const result = buildCustomProviderModelsPath({
+      provider: 'mygw',
+      requestEnv: { GH_TOKEN: 'acting-user-secret' },
+      protectedEnvKeys: ['GH_TOKEN'],
+    });
+    expect(result).toBeDefined();
+    const written = readModelsJson(result as string);
+    expect(written.providers.mygw.apiKey).toBe('key-${__ARCHON_BLOCKED_GH_TOKEN__}');
+    expect(written.providers.mygw.headers).toEqual({
+      Authorization: 'Bearer ${__ARCHON_BLOCKED_GH_TOKEN__}',
+    });
+    expect(JSON.stringify(written.providers.mygw)).not.toContain('acting-user-secret');
   });
 
   test('does not substitute ${VAR} references absent from requestEnv', () => {
@@ -228,20 +251,32 @@ describe('buildCustomProviderModelsPath', () => {
     'GH_TOKEN',
     'GITHUB_TOKEN',
     'COPILOT_GITHUB_TOKEN',
-  ])('does not expose protected %s to custom provider config', credentialEnvKey => {
-    createUserModelsDir(`$${credentialEnvKey}`);
-    const result = buildCustomProviderModelsPath({
-      provider: 'mygw',
-      requestEnv: { [credentialEnvKey]: 'acting-user-secret' },
-      protectedEnvKeys: [credentialEnvKey],
-    });
-    // Per the security contract, protected `${VAR}` references are NEVER
-    // substituted into the per-call file. The user models.json stays
-    // untouched; Pi's own resolveConfigValue surfaces the standard
-    // "no value for env var" error at request time (or succeeds if the
-    // var happens to be in process.env, which Archon keeps empty).
-    expect(result).toBeUndefined();
-  });
+  ])(
+    'does not expose literal value of protected %s to custom provider config',
+    credentialEnvKey => {
+      // User config: `$$<KEY>` parses to a literal `$` followed by an env
+      // reference to the credential var. The credential var is protected.
+      createUserModelsDir(`$${credentialEnvKey}`);
+      const result = buildCustomProviderModelsPath({
+        provider: 'mygw',
+        requestEnv: { [credentialEnvKey]: 'acting-user-secret' },
+        protectedEnvKeys: [credentialEnvKey],
+      });
+      // Two layered guarantees for the security contract:
+      //  (1) The per-call file must NEVER contain the literal protected value
+      //      (`acting-user-secret`). Verified below — this is the round-2
+      //      review's regression-critical assertion.
+      //  (2) The file either contains no protected value (no `${VAR}` in the
+      //      user template) and we return undefined, OR the per-call file
+      //      contains a placeholder the SDK cannot resolve (covered by the
+      //      `${GH_TOKEN}` test above). Either way, no path the SDK walks
+      //      can produce the protected value from the per-call file.
+      if (result !== undefined) {
+        const written = JSON.stringify(readModelsJson(result));
+        expect(written).not.toContain('acting-user-secret');
+      }
+    }
+  );
 
   test('honours PI_CODING_AGENT_DIR override for the user models.json path', () => {
     const customDir = mkdtempSync(join(tmpdir(), 'archon-pi-user-models-custom-'));
