@@ -70,6 +70,7 @@ import {
   workflowResetSessionsCommand,
   workflowEventEmitCommand,
   workflowSearchCommand,
+  workflowTestCommand,
   workflowInstallCommand,
   isValidEventType,
 } from './commands/workflow';
@@ -157,6 +158,9 @@ Commands:
                              ('approve'/'reject' are sugar for the dedicated commands)
   workflow search [query]    Search the workflow marketplace
   workflow install <slug>    Install a workflow from the marketplace
+  workflow test [<name>|<pack>]
+                             Run declared dry-run fixtures (fixtures/*.stubs.yaml) for a
+                             workflow or pack; never creates a run or contacts a provider
   isolation list             List all active worktrees/environments
   isolation cleanup [days]   Remove stale environments (default: 7 days)
   isolation cleanup --merged Remove environments with branches merged into main
@@ -415,6 +419,22 @@ async function main(): Promise<number> {
         return 1;
       }
       return 0;
+    }
+
+    // Fixture testing reads workflow files only — handle before git validation,
+    // like marketplace search above.
+    if (command === 'workflow' && subcommand === 'test') {
+      const target = positionals[2];
+      try {
+        // Resolve to the repo root like the git gate below does, so project
+        // workflow discovery reads the repository, not a subdirectory of it.
+        const testCwd = requiresGitRepo ? ((await git.findRepoRoot(cwd)) ?? cwd) : cwd;
+        return await workflowTestCommand(testCwd, target, { json: jsonFlag });
+      } catch (error) {
+        const err = error as Error;
+        console.error(`Error: ${err.message}`);
+        return 1;
+      }
     }
 
     // Validate working directory exists

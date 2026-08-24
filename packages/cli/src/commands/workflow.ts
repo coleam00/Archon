@@ -74,6 +74,7 @@ import {
   loadDryRunStubs,
   writeDryRunStubScaffold,
 } from '@archon/workflows/dry-run';
+import { formatFixtureReport, runFixtures } from '@archon/workflows/fixture-runner';
 import {
   getWorkflowEventEmitter,
   type WorkflowEmitterEvent,
@@ -904,6 +905,40 @@ interface WorkflowJsonEntry {
   webSearchMode?: string;
   /** Keys the workflow's YAML declares that the engine drops (#2213). */
   parseWarnings?: string[];
+}
+
+/**
+ * Run every declared dry-run fixture and report per-fixture pass/fail (#2772).
+ *
+ * Read-only by construction — the only execution path is `dryRunWorkflow`, so no
+ * run state is created and no provider is contacted. Returns the process exit code:
+ * 0 when everything passes (including the nothing-declared case), 1 when any fixture
+ * fails or an explicitly named target has none.
+ */
+export async function workflowTestCommand(
+  cwd: string,
+  target: string | undefined,
+  options: { json?: boolean } = {}
+): Promise<number> {
+  const { workflows } = await loadWorkflows(cwd);
+  const report = await runFixtures({ workflows, cwd, ...(target !== undefined ? { target } : {}) });
+
+  if (options.json) {
+    await writeJsonLine({
+      results: report.results.map(r => ({
+        ...r,
+        missingStubs: [...r.missingStubs],
+        unusedStubs: [...r.unusedStubs],
+      })),
+      passed: report.passed,
+      failed: report.failed,
+    });
+  } else {
+    await writeStdout(`${formatFixtureReport(report)}\n`);
+  }
+
+  if (report.failed > 0 || (target !== undefined && report.results.length === 0)) return 1;
+  return 0;
 }
 
 /**

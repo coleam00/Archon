@@ -27,6 +27,7 @@ import {
   workflowRespondCommand,
   workflowEventEmitCommand,
   workflowCleanupCommand,
+  workflowTestCommand,
   workflowResetSessionsCommand,
   buildDetachedRunCmd,
   maybePrintTierNotice,
@@ -183,6 +184,10 @@ mock.module('@archon/core/db/users', () => ({
 
 mock.module('@archon/workflows/workflow-discovery', () => ({
   discoverWorkflowsWithConfig: mock(() => Promise.resolve({ workflows: [], errors: [] })),
+}));
+mock.module('@archon/workflows/fixture-runner', () => ({
+  runFixtures: mock(() => Promise.resolve({ results: [], passed: 0, failed: 0 })),
+  formatFixtureReport: mock(() => 'FIXTURE REPORT'),
 }));
 /**
  * Ownership calls the run path makes on its capture, in order.
@@ -8648,5 +8653,111 @@ describe('resolveContainerBackendConfig', () => {
   it('rejects a non-integer / non-positive pidsLimit', () => {
     expect(() => resolveContainerBackendConfig({ pidsLimit: 10.5 })).toThrow(/positive integer/);
     expect(() => resolveContainerBackendConfig({ pidsLimit: 0 })).toThrow(/positive integer/);
+  });
+});
+
+describe('workflowTestCommand', () => {
+  let stdoutSpy: ReturnType<typeof spyOn>;
+  let consoleSpy: ReturnType<typeof spyOn>;
+
+  beforeEach(async () => {
+    stdoutSpy = spyOnJsonStdout();
+    consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    const fixtureRunner = await import('@archon/workflows/fixture-runner');
+    (fixtureRunner.runFixtures as ReturnType<typeof mock>).mockClear();
+    (fixtureRunner.formatFixtureReport as ReturnType<typeof mock>).mockClear();
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    discoverWorkflowsWithConfigAsMock().mockResolvedValue({
+      workflows: [makeTestWorkflowWithSource({ name: 'plan' }, 'project')],
+      errors: [],
+    });
+  });
+
+  afterEach(() => {
+    stdoutSpy.mockRestore();
+    consoleSpy.mockRestore();
+  });
+
+  function discoverWorkflowsWithConfigAsMock(): ReturnType<typeof mock> {
+    return mock() as unknown as ReturnType<typeof mock>;
+  }
+
+  it('emits one JSON document and exits 0 when every fixture passes', async () => {
+    const fixtureRunner = await import('@archon/workflows/fixture-runner');
+    (fixtureRunner.runFixtures as ReturnType<typeof mock>).mockResolvedValue({
+      results: [
+        {
+          fixture: 'sdlc/plan/fixtures/ready.stubs.yaml',
+          workflow: 'plan',
+          expect: 'completed',
+          outcome: 'completed',
+          pass: true,
+          missingStubs: [],
+          unusedStubs: ['spare'],
+        },
+      ],
+      passed: 1,
+      failed: 0,
+    });
+
+    const exit = await workflowTestCommand('/test/path', undefined, { json: true });
+
+    expect(exit).toBe(0);
+    expect(fixtureRunner.runFixtures).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: '/test/path' })
+    );
+    expect(stdoutSpy).toHaveBeenCalledTimes(1);
+    const payload = JSON.parse(firstJsonPayload(stdoutSpy));
+    expect(payload.passed).toBe(1);
+    expect(payload.failed).toBe(0);
+    expect(payload.results[0]).toMatchObject({ fixture: 'sdlc/plan/fixtures/ready.stubs.yaml' });
+  });
+
+  it('exits 1 when a fixture fails', async () => {
+    const fixtureRunner = await import('@archon/workflows/fixture-runner');
+    (fixtureRunner.runFixtures as ReturnType<typeof mock>).mockResolvedValue({
+      results: [
+        {
+          fixture: 'f.stubs.yaml',
+          workflow: 'plan',
+          expect: 'completed',
+          outcome: 'failed',
+          pass: false,
+          failureReason: 'expected completed, dry-run reported failed',
+          missingStubs: [],
+          unusedStubs: [],
+        },
+      ],
+      passed: 0,
+      failed: 1,
+    });
+
+    const exit = await workflowTestCommand('/test/path', 'plan');
+    expect(exit).toBe(1);
+  });
+
+  it('exits 1 when an explicitly named target has no fixtures', async () => {
+    const fixtureRunner = await import('@archon/workflows/fixture-runner');
+    (fixtureRunner.runFixtures as ReturnType<typeof mock>).mockResolvedValue({
+      results: [],
+      passed: 0,
+      failed: 0,
+    });
+
+    const exit = await workflowTestCommand('/test/path', 'no-fixtures');
+    expect(exit).toBe(1);
+  });
+
+  it('exits 0 with no fixtures when no target was named', async () => {
+    const fixtureRunner = await import('@archon/workflows/fixture-runner');
+    (fixtureRunner.runFixtures as ReturnType<typeof mock>).mockResolvedValue({
+      results: [],
+      passed: 0,
+      failed: 0,
+    });
+
+    const exit = await workflowTestCommand('/test/path', undefined);
+    expect(exit).toBe(0);
+    expect(fixtureRunner.formatFixtureReport).toHaveBeenCalled();
   });
 });
