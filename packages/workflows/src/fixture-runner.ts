@@ -6,7 +6,7 @@
  * the expected outcome, so a fixture runner needs no prose conventions:
  *
  *   fixture:
- *     expect: completed          # or `failed`
+ *     expect: completed          # or failed / paused / cancelled
  *     fail-node: gate-ready      # required iff expect: failed
  *     inputs:                    # caller-supplied declared-input values
  *       branch: "task-123"
@@ -20,7 +20,13 @@ import { readdir, stat } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
 import { z } from '@hono/zod-openapi';
 import { createLogger } from '@archon/paths';
-import { dryRunStubsSchema, dryRunWorkflow, type DryRunResult, type DryRunStubs } from './dry-run';
+import {
+  RESERVED_FIXTURE_KEYS,
+  dryRunStubsSchema,
+  dryRunWorkflow,
+  type DryRunResult,
+  type DryRunStubs,
+} from './dry-run';
 import type { WorkflowWithSource } from './schemas/workflow';
 import type { WorkflowConfig } from './deps';
 import type { ResolvedAiProfile } from './model-validation';
@@ -35,7 +41,7 @@ function getLog(): ReturnType<typeof createLogger> {
 
 export const fixtureDeclarationSchema = z
   .object({
-    expect: z.enum(['completed', 'failed']).default('completed'),
+    expect: z.enum(['completed', 'failed', 'paused', 'cancelled']).default('completed'),
     'fail-node': z.string().optional(),
     inputs: z.record(z.string(), z.string()).optional(),
   })
@@ -43,8 +49,6 @@ export const fixtureDeclarationSchema = z
     message: "fail-node is required when expect is 'failed'",
   });
 export type FixtureDeclaration = z.infer<typeof fixtureDeclarationSchema>;
-
-const RESERVED_FIXTURE_KEYS = new Set(['fixture', 'exec-code']);
 
 export interface ParsedFixtureFile {
   declaration: FixtureDeclaration;
@@ -203,7 +207,7 @@ async function discoverFixtures(roots: readonly string[]): Promise<DiscoveredFix
 export interface FixtureCheckResult {
   readonly fixture: string;
   readonly workflow: string;
-  readonly expect: 'completed' | 'failed';
+  readonly expect: DryRunResult['outcome'];
   readonly outcome?: DryRunResult['outcome'];
   readonly pass: boolean;
   readonly failureReason?: string;

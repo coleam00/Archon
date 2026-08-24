@@ -91,6 +91,15 @@ describe('loadDryRunStubs', () => {
       'Invalid dry-run stub file'
     );
   });
+
+  test('rejects a fixture file with a targeted message instead of mis-reading it (#2772)', async () => {
+    await expect(
+      loadDryRunStubs(temporaryFile('fixture:\n  expect: completed\nnode-a: "stub"\n'))
+    ).rejects.toThrow("this is a fixture file; run it with 'workflow test'");
+    await expect(
+      loadDryRunStubs(temporaryFile('exec-code: false\nnode-a: "stub"\n'))
+    ).rejects.toThrow('workflow test');
+  });
 });
 
 describe('dry-run stub scaffolding and sparse defaults (#2624)', () => {

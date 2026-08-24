@@ -83,6 +83,16 @@ describe('parseFixtureFile', () => {
   it('rejects invalid stub values with the dry-run stub grammar', () => {
     expect(() => parseFixtureFile('node-a:\n  - bad\n', 'x')).toThrow('node-a');
   });
+
+  it('accepts every dry-run outcome the producer can emit (#2772)', () => {
+    for (const outcome of ['completed', 'failed', 'paused', 'cancelled'] as const) {
+      const body =
+        outcome === 'failed'
+          ? ['fixture:', '  expect: failed', '  fail-node: node-a'].join('\n')
+          : ['fixture:', `  expect: ${outcome}`].join('\n');
+      expect(parseFixtureFile(body, 'x').declaration.expect).toBe(outcome);
+    }
+  });
 });
 
 describe('runFixtures', () => {
