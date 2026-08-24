@@ -705,6 +705,30 @@ describe('CLI git repo check', () => {
   });
 });
 
+describe('workflow search --json error envelope', () => {
+  it('emits { ok: false } on stdout when the command throws under --json', () => {
+    // An unreachable marketplace URL makes fetchMarketplace throw inside the
+    // `workflow search` handler — the only deterministic error path. The
+    // envelope, not the message, is the contract.
+    const result = spawnSync(
+      process.execPath,
+      [CLI_ENTRY, 'workflow', 'search', 'anything', '--json'],
+      {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          ARCHON_TELEMETRY_DISABLED: '1',
+          ARCHON_MARKETPLACE_URL: 'http://127.0.0.1:9/nope',
+        },
+      }
+    );
+
+    expect(result.status).toBe(1);
+    expect(() => JSON.parse(result.stdout)).not.toThrow();
+    expect(JSON.parse(result.stdout)).toMatchObject({ ok: false });
+  });
+});
+
 describe('workflow test --json error envelope', () => {
   it('emits { ok: false } on stdout when the command throws under --json', () => {
     // A --cwd that does not exist makes findRepoRoot throw inside the

@@ -416,7 +416,11 @@ async function main(): Promise<number> {
         await workflowSearchCommand(query, jsonFlag);
       } catch (error) {
         const err = error as Error;
-        console.error(`Error: ${err.message}`);
+        if (jsonFlag) {
+          await writeJsonLine({ ok: false, error: err.message });
+        } else {
+          console.error(`Error: ${err.message}`);
+        }
         return 1;
       }
       return 0;
