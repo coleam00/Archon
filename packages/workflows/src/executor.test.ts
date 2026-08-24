@@ -435,7 +435,11 @@ describe('executeWorkflow', () => {
       );
       expect(result.success).toBe(true);
       expect(store.getWorkflowRun).toHaveBeenCalledWith('prior-run');
-      expect(substituted).toBe('Read /tmp/roots/prior/artifacts/runs/prior-run/report.md');
+      // path.join resolves platform-separator natively; the template's own
+      // '/report.md' suffix stays a literal POSIX slash
+      expect(substituted).toBe(
+        `Read ${join('/tmp/roots/prior', 'artifacts', 'runs', 'prior-run')}/report.md`
+      );
       // The adoption announcement is creation-only — a resume must not re-emit it.
       const adoptedEvents = (
         store.createWorkflowEvent as ReturnType<typeof mock>
