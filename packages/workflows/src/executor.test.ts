@@ -170,6 +170,7 @@ import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
 import type { IWorkflowStore } from './store';
 import type { WorkflowDefinition, WorkflowRun, WorkflowRunNodeSession } from './schemas';
 import { RUN_METADATA_KEYS, workflowDefinitionSchema } from './schemas';
+import { substituteWorkflowVariables } from './executor-shared';
 
 // --- Helpers ---
 
@@ -391,6 +392,56 @@ describe('executeWorkflow', () => {
         costUsd: 0.5,
       });
       expect(result.success).toBe(true);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Adopted-run directory on resume (#2747)
+  // -------------------------------------------------------------------------
+
+  describe('adopted run dir on resume', () => {
+    it('resolves $ADOPTED_RUN_DIR on a resumed run from its persisted adopted_from_run_id', async () => {
+      const store = makeStore({
+        getWorkflowRun: mock(async (id: string) =>
+          id === 'prior-run'
+            ? makeRun({ id: 'prior-run', status: 'completed', output_root: '/tmp/roots/prior' })
+            : { ...makeRun(), status: 'completed' as const }
+        ),
+      });
+      let substituted = '';
+      mockExecuteDagWorkflow.mockImplementationOnce(async () => {
+        substituted = substituteWorkflowVariables(
+          'Read $ADOPTED_RUN_DIR/report.md',
+          'run-123',
+          'msg',
+          '/artifacts',
+          'main',
+          'docs'
+        ).prompt;
+      });
+      const result = await executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv-1',
+        '/tmp/ops',
+        makeWorkflow(),
+        'msg',
+        'db-conv-1',
+        {
+          preCreatedRun: makeRun({ status: 'running', adopted_from_run_id: 'prior-run' }),
+          priorCompletedNodes: new Map([['node1', { output: 'out' }]]),
+        }
+      );
+      expect(result.success).toBe(true);
+      expect(store.getWorkflowRun).toHaveBeenCalledWith('prior-run');
+      expect(substituted).toBe('Read /tmp/roots/prior/artifacts/runs/prior-run/report.md');
+      // The adoption announcement is creation-only — a resume must not re-emit it.
+      const adoptedEvents = (
+        store.createWorkflowEvent as ReturnType<typeof mock>
+      ).mock.calls.filter(
+        c => (c[0] as { event_type: string }).event_type === 'workflow.run_adopted'
+      );
+      expect(adoptedEvents).toHaveLength(0);
     });
   });
 

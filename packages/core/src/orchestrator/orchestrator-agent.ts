@@ -74,6 +74,7 @@ import { listDecryptedUserProviderCredentials } from '../db/user-provider-key-st
 import { getUserAiPrefs, type UserAiPrefs } from '../db/user-ai-prefs-store';
 import { createWorkflowDeps } from '../workflows/store-adapter';
 import { createChildWorktreeResolver } from '../workflows/child-isolation-resolver';
+import { resolveWorkflowAdoption } from '../operations/workflow-adoption';
 import { loadConfig, loadRepoConfig } from '../config/config-loader';
 import type { MergedConfig } from '../config/config-types';
 import { generateAndSetTitle } from '../services/title-generator';
@@ -765,6 +766,21 @@ async function dispatchOrchestratorWorkflowOwned(
   // executeWorkflow dispatch below (repo config worktree.baseBranch still wins).
   const codebaseBaseBranch = codebase.default_branch?.trim() || undefined;
 
+  // Between-run continuation (#2747): adoption is validated by the ONE resolver,
+  // whatever surface declared it — CLI, API, or chat. A non-terminal target, a
+  // cross-codebase id, or a missing estate refuses here, before any worktree is
+  // cut; the resolved lane then drives where the run actually executes.
+  const adoptionLane = options?.adoptRunId
+    ? (
+        await resolveWorkflowAdoption({
+          adoptedRunId: options.adoptRunId,
+          codebaseId: codebase.id,
+          codebasePath: codebase.default_cwd,
+          codebaseKind: codebase.kind,
+        })
+      ).lane
+    : undefined;
+
   // Per-child isolation resolver (#2121 slice 2, PR-A): a `workflow:` node with
   // `isolation: 'worktree'` gets its own worktree per child. Built for git-repo
   // codebases only — a folder project can't make worktrees, so the engine fails
@@ -1228,6 +1244,7 @@ async function dispatchOrchestratorWorkflowOwned(
           modelOverrides: options?.modelOverrides,
           adoptRunId: options?.adoptRunId,
           supersedesRunId: options?.supersedesRunId,
+          adoptionLane,
         },
         workflow
       );

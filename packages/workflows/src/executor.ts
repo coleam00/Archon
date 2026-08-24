@@ -2414,29 +2414,38 @@ export async function executeWorkflow(
   // adopted run's persisted `output_root` (rename-safe per #2200) and announce
   // the adoption on THIS run's own event log so the chain renders without a
   // column join. Read-only by contract — this run writes to its own artifacts;
-  // stores are never merged, so evidence stays attributable per run. Skipped on
-  // resume: the link and its event were written once at creation.
+  // stores are never merged, so evidence stays attributable per run.
+  // Resolution also runs on resume: a resumed run carries no caller-supplied id,
+  // but its row still records the adoption, and every remaining node may reference
+  // $ADOPTED_RUN_DIR. Only the announcement event stays creation-only — it was
+  // written once when the adoption was made.
+  const effectiveAdoptedFromRunId = adoptedFromRunId ?? workflowRun.adopted_from_run_id;
   let adoptedRunDir: string | undefined;
-  if (adoptedFromRunId && !isContinuation) {
-    const adopted = await deps.store.getWorkflowRun(adoptedFromRunId);
+  if (effectiveAdoptedFromRunId) {
+    const adopted = await deps.store.getWorkflowRun(effectiveAdoptedFromRunId);
     if (!adopted?.output_root) {
       throw new Error(
-        `Cannot adopt run '${adoptedFromRunId}': it has no persisted output root, so its ` +
+        `Cannot adopt run '${effectiveAdoptedFromRunId}': it has no persisted output root, so its ` +
           'artifact directory cannot be addressed.'
       );
     }
-    adoptedRunDir = archonPaths.getRunArtifactsDirForRoot(adopted.output_root, adoptedFromRunId);
-    try {
-      await deps.store.createWorkflowEvent({
-        workflow_run_id: workflowRun.id,
-        event_type: 'workflow.run_adopted',
-        data: { adopted_from_run_id: adoptedFromRunId },
-      });
-    } catch (err) {
-      getLog().warn(
-        { err: err as Error, workflowRunId: workflowRun.id, adoptedFromRunId },
-        'workflow.run_adopted_event_persist_failed'
-      );
+    adoptedRunDir = archonPaths.getRunArtifactsDirForRoot(
+      adopted.output_root,
+      effectiveAdoptedFromRunId
+    );
+    if (!isContinuation) {
+      try {
+        await deps.store.createWorkflowEvent({
+          workflow_run_id: workflowRun.id,
+          event_type: 'workflow.run_adopted',
+          data: { adopted_from_run_id: effectiveAdoptedFromRunId },
+        });
+      } catch (err) {
+        getLog().warn(
+          { err: err as Error, workflowRunId: workflowRun.id, adoptedFromRunId },
+          'workflow.run_adopted_event_persist_failed'
+        );
+      }
     }
   }
 

@@ -38,6 +38,7 @@ import {
   isWebAdapter,
 } from '../types';
 import type { IsolationHints, IsolationEnvironmentRow } from '@archon/isolation';
+import type { AdoptionLane } from '../operations/workflow-adoption';
 import {
   IsolationBlockedError,
   IsolationResolver,
@@ -324,6 +325,12 @@ export interface WorkflowRoutingContext {
   /** Between-run continuation (#2747): adopt/supersede target, if declared. */
   readonly adoptRunId?: string;
   readonly supersedesRunId?: string;
+  /**
+   * Adoption lane resolved by `resolveWorkflowAdoption` upstream — the adopting
+   * run executes in the adopted run's worktree (reuse) or in one cut from its
+   * branch (fresh-from-branch) instead of a fresh worktree from base.
+   */
+  readonly adoptionLane?: AdoptionLane;
 }
 
 /**
@@ -414,13 +421,52 @@ async function dispatchBackgroundWorkflowOwned(
         'workflow.worktree_disabled_by_policy'
       );
       workerCwd = ctx.cwd;
+    } else if (ctx.adoptionLane?.kind === 'reuse-worktree') {
+      // Adoption lane 2: the adopted run's worktree survives — inherit it dirty-as-is
+      // instead of cutting a fresh one from base. Linking the env keeps standard
+      // isolation hygiene (list/cleanup/complete) pointed at this checkout.
+      workerCwd = ctx.adoptionLane.workingPath;
+      await db
+        .updateConversation(workerConv.id, {
+          cwd: workerCwd,
+          ...(ctx.adoptionLane.envId ? { isolation_env_id: ctx.adoptionLane.envId } : {}),
+        })
+        .catch((e: unknown) => {
+          getLog().warn(
+            { err: toError(e), workerPlatformId },
+            'orchestrator.worker_cwd_persist_failed'
+          );
+        });
+      await ctx.platform
+        .sendMessage(
+          ctx.conversationId,
+          `Adopting prior run — reusing its worktree at ${workerCwd} (dirty state inherited as-is).`,
+          { category: 'workflow_dispatch_status', segment: 'new' }
+        )
+        .catch(e => {
+          getLog().warn(
+            { err: toError(e), conversationId: ctx.conversationId },
+            'workflow_adoption_notice_failed'
+          );
+        });
     } else {
+      // A fresh-from-branch adoption lane cuts the new worktree FROM the adopted
+      // run's branch rather than base; 'task' is the workflow type whose creation
+      // path consumes `fromBranch` (same shape the CLI's adopt lane produces).
+      const hints: IsolationHints =
+        ctx.adoptionLane?.kind === 'fresh-from-branch'
+          ? {
+              workflowType: 'task',
+              workflowId: workerPlatformId,
+              fromBranch: toBranchName(ctx.adoptionLane.branch),
+            }
+          : { workflowType: 'thread', workflowId: workerPlatformId };
       const result = await validateAndResolveIsolation(
         workerConv,
         codebase,
         ctx.platform,
         workerPlatformId,
-        { workflowType: 'thread', workflowId: workerPlatformId },
+        hints,
         false,
         ctx.userId
       );

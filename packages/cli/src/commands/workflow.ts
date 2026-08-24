@@ -1707,6 +1707,10 @@ async function runWorkflowWithOwnedSource(
       if (lane.kind === 'reuse-worktree') {
         workingCwd = lane.workingPath;
         isolationEnvId = lane.envId;
+        // The reuse lane IS the isolation: run in the inherited worktree as-is.
+        // Leaving wantsIsolation set would fall through to worktree creation below
+        // and silently cut a fresh worktree from base over the inherited one.
+        wantsIsolation = false;
         console.log(
           `Adopting run ${adoptedRun.id} — reusing its worktree at ${lane.workingPath} (dirty state inherited as-is).`
         );
