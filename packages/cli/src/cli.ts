@@ -134,6 +134,20 @@ function getLog(): ReturnType<typeof createLogger> {
 }
 
 /**
+ * Emit a failure message and return exit code 1. Under `--json` stdout must
+ * stay exactly one machine-readable payload, so the diagnostic goes into an
+ * `{ ok: false }` envelope there instead of bare stderr text (or stdout usage).
+ */
+async function fail(json: boolean | undefined, message: string): Promise<1> {
+  if (json) {
+    await writeJsonLine({ ok: false, error: message });
+  } else {
+    console.error(message);
+  }
+  return 1;
+}
+
+/**
  * Print usage information
  */
 function printUsage(): void {
@@ -450,8 +464,7 @@ async function main(): Promise<number> {
     let effectiveCwd = cwd;
     if (requiresGitRepo) {
       if (!existsSync(cwd)) {
-        console.error(`Error: Directory does not exist: ${cwd}`);
-        return 1;
+        return await fail(jsonFlag, `Error: Directory does not exist: ${cwd}`);
       }
 
       // Validate git repository and resolve to root
@@ -509,22 +522,24 @@ async function main(): Promise<number> {
           effectiveCwd = realCwd;
         } else if (gateLookupError && looksLikeConnectionError(gateLookupError)) {
           // A DB outage would otherwise be mis-reported as "not a git repository".
-          console.error(
-            'Error: Could not verify project registration — the database is unavailable.'
+          return await fail(
+            jsonFlag,
+            [
+              'Error: Could not verify project registration — the database is unavailable.',
+              `  ${gateLookupError.message}`,
+              '  Check that your database is running (or DATABASE_URL is set), then retry.',
+            ].join('\n')
           );
-          console.error(`  ${gateLookupError.message}`);
-          console.error(
-            '  Check that your database is running (or DATABASE_URL is set), then retry.'
-          );
-          return 1;
         } else {
-          console.error('Error: Not in a git repository.');
-          console.error('The Archon CLI must be run from within a git repository.');
-          console.error('Either navigate to a git repo or use --cwd to specify one.');
-          console.error(
-            'Or register this folder as a project: run with --folder, or use /register-project in chat.'
+          return await fail(
+            jsonFlag,
+            [
+              'Error: Not in a git repository.',
+              'The Archon CLI must be run from within a git repository.',
+              'Either navigate to a git repo or use --cwd to specify one.',
+              'Or register this folder as a project: run with --folder, or use /register-project in chat.',
+            ].join('\n')
           );
-          return 1;
         }
       }
     }
@@ -1185,14 +1200,17 @@ async function main(): Promise<number> {
         }
       }
 
-      default:
-        if (command === undefined) {
-          console.error('Missing command');
-        } else {
-          console.error(`Unknown command: ${command}`);
+      default: {
+        const problem = command === undefined ? 'Missing command' : `Unknown command: ${command}`;
+        // printUsage() writes human text to stdout, which would corrupt the
+        // machine-readable payload under --json.
+        if (jsonFlag) {
+          return await fail(true, problem);
         }
+        console.error(problem);
         printUsage();
         return 1;
+      }
     }
     await printUpdateNotice(values.quiet as boolean | undefined);
     return 0;

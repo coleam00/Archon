@@ -749,6 +749,43 @@ describe('main catch --json error envelope', () => {
   });
 });
 
+describe('pre-dispatch gates --json error envelope', () => {
+  it('emits { ok: false } on stdout when --cwd does not exist', () => {
+    const result = spawnSync(
+      process.execPath,
+      [CLI_ENTRY, 'workflow', 'run', 'anything', '--json', '--cwd', '/does/not/exist'],
+      { encoding: 'utf8', env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' } }
+    );
+
+    expect(result.status).toBe(1);
+    expect(() => JSON.parse(result.stdout)).not.toThrow();
+    expect(JSON.parse(result.stdout)).toMatchObject({ ok: false });
+  });
+
+  it('emits { ok: false } on stdout when outside a git repository', () => {
+    const result = spawnSync(
+      process.execPath,
+      [CLI_ENTRY, 'workflow', 'list', '--json', '--cwd', tmpdir()],
+      { encoding: 'utf8', env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' } }
+    );
+
+    expect(result.status).toBe(1);
+    expect(() => JSON.parse(result.stdout)).not.toThrow();
+    expect(JSON.parse(result.stdout)).toMatchObject({ ok: false });
+  });
+
+  it('emits { ok: false } on stdout for an unknown command instead of usage text', () => {
+    const result = spawnSync(process.execPath, [CLI_ENTRY, 'boguscmd', '--json'], {
+      encoding: 'utf8',
+      env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' },
+    });
+
+    expect(result.status).toBe(1);
+    expect(() => JSON.parse(result.stdout)).not.toThrow();
+    expect(JSON.parse(result.stdout)).toMatchObject({ ok: false });
+  });
+});
+
 describe('workflow test --json error envelope', () => {
   it('emits { ok: false } on stdout when the command throws under --json', () => {
     // A --cwd that does not exist makes findRepoRoot throw inside the
