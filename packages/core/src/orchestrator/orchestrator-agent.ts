@@ -6,6 +6,7 @@
  * - Can answer directly or invoke workflows
  * - Does NOT require a project to be selected before starting a conversation
  */
+import { randomUUID } from 'node:crypto';
 import { existsSync, realpathSync } from 'fs';
 import { createLogger, captureChatTurn } from '@archon/paths';
 import type {
@@ -917,8 +918,12 @@ async function dispatchOrchestratorWorkflowOwned(
     }
   }
 
+  // A reuse-worktree lane inherits the adopted run's worktree; its `.archon` belongs to
+  // whatever branch that worktree carries, so the frozen source must come from THERE —
+  // capturing from the parent checkout would mix vintages exactly as #2660 describes.
+  const captureCwd = adoptionLane?.kind === 'reuse-worktree' ? adoptionLane.workingPath : runCwd;
   if (!willContinueExistingRun) {
-    freshCaptured = await captureFreshSource(owner, runCwd, workflow, conversationId, platform);
+    freshCaptured = await captureFreshSource(owner, captureCwd, workflow, conversationId, platform);
     if (!freshCaptured) return; // capture failed, message already sent
     workflow = freshCaptured.workflow;
   }
@@ -1036,13 +1041,24 @@ async function dispatchOrchestratorWorkflowOwned(
   } else {
     try {
       const result = await validateAndResolveIsolation(
-        { ...conversation, codebase_id: codebase.id },
+        // A fresh-from-branch adoption must not adopt the conversation's existing env:
+        // the resolver short-circuits on `existingEnvId` before hints are read (R7), so a
+        // stale worktree from an earlier run in this conversation would win over the
+        // adopted branch. Null it out — same shape the `stale_cleaned` retry sees.
+        {
+          ...conversation,
+          codebase_id: codebase.id,
+          ...(adoptionLane?.kind === 'fresh-from-branch' ? { isolation_env_id: null } : {}),
+        },
         codebase,
         platform,
         conversationId,
         adoptionLane?.kind === 'fresh-from-branch'
           ? {
               ...isolationHints,
+              // Unique per dispatch: a shared id would key the reuse lookup to an
+              // earlier adoption's worktree and drop `fromBranch` on later ones.
+              workflowId: randomUUID(),
               workflowType: 'task',
               fromBranch: toBranchName(adoptionLane.branch),
             }
