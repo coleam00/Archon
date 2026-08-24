@@ -1198,6 +1198,10 @@ async function main(): Promise<number> {
     return 0;
   } catch (error) {
     const err = error as Error;
+    if (values.json as boolean | undefined) {
+      await writeJsonLine({ ok: false, error: err.message });
+      return 1;
+    }
     console.error(`Error: ${err.message}`);
     if (process.env.DEBUG) {
       console.error(err.stack);
