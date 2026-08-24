@@ -42,7 +42,7 @@ import {
   markTierNoticeShown,
 } from '@archon/paths';
 import { isAbsolute, join } from 'node:path';
-import { mkdirSync, openSync, closeSync, readFileSync, writeSync } from 'node:fs';
+import { mkdirSync, openSync, closeSync, readFileSync, rmSync, writeSync } from 'node:fs';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createWorkflowDeps } from '@archon/core/workflows/store-adapter';
 import { createChildWorktreeResolver } from '@archon/core/workflows/child-isolation-resolver';
@@ -1083,7 +1083,9 @@ async function runWorkflowWithOwnedSource(
 
   // A resolved continuation already discovered over its own roots; reusing that result is
   // what keeps a resume from paying digest verification and full discovery twice.
-  const { workflows: workflowEntries, errors } = continuation
+  // Mutable: an adopt lane that runs inside the adopted run's worktree re-freezes and
+  // re-discovers from THAT checkout once its path is known (see recaptureForLane).
+  let { workflows: workflowEntries, errors } = continuation
     ? { workflows: continuation.workflows, errors: continuation.errors }
     : preparedSource
       ? await discoverWorkflowsWithConfig(cwd, loadConfig, preparedSource.roots)
@@ -1107,12 +1109,55 @@ async function runWorkflowWithOwnedSource(
   const workflows = workflowEntries.map(ws => ws.workflow);
 
   // A continuation executes the graph it froze; only a fresh invocation resolves by name.
-  const workflow = continuation?.workflow ?? resolveWorkflowName(workflowName, workflows);
+  let workflow = continuation?.workflow ?? resolveWorkflowName(workflowName, workflows);
   // Recover the discovery entry (dropped by the .map above) for telemetry —
   // bundled workflows report their real name, custom ones report "custom" —
   // and for the parse warnings surfaced just below.
-  const workflowEntry = workflow ? workflowEntries.find(ws => ws.workflow === workflow) : undefined;
-  const workflowSource = workflowEntry?.source;
+  let workflowEntry = workflow ? workflowEntries.find(ws => ws.workflow === workflow) : undefined;
+  let workflowSource = workflowEntry?.source;
+
+  // An adoption lane that executes inside an inherited or freshly cut worktree must run
+  // THAT checkout's `.archon`, not the parent checkout's bytes captured on entry — the
+  // branch may carry a different workflow YAML, and executing one against the other is
+  // exactly the mixed-vintage defect (#2660/#2747). Re-freeze the source and re-discover
+  // from the lane path once the lane resolves it.
+  const recaptureForLane = async (sourceRoot: string): Promise<void> => {
+    try {
+      const replacement = await prepareWorkflowSource(createWorkflowDeps(), { sourceRoot });
+      owner.hold(replacement);
+      originalStagedRoot = replacement.captureRoot;
+      const stale = preparedSource;
+      preparedSource = replacement;
+      if (stale) {
+        rmSync(stale.captureRoot, { recursive: true, force: true });
+      }
+    } catch (error) {
+      throw new Error(
+        `Failed to capture workflow source from ${sourceRoot}: ${(error as Error).message}`
+      );
+    }
+    const rediscovered = await discoverWorkflowsWithConfig(
+      sourceRoot,
+      loadConfig,
+      preparedSource.roots
+    );
+    workflowEntries = rediscovered.workflows;
+    errors = rediscovered.errors;
+    workflow = resolveWorkflowName(
+      workflowName,
+      workflowEntries.map(ws => ws.workflow)
+    );
+    workflowEntry = workflow ? workflowEntries.find(ws => ws.workflow === workflow) : undefined;
+    workflowSource = workflowEntry?.source;
+    if (!workflow) {
+      const availableWorkflows = workflowEntries.map(ws => `  - ${ws.workflow.name}`).join('\n');
+      throw new Error(
+        `Workflow '${workflowName}' not found.\n\nAvailable workflows:\n${availableWorkflows}`
+      );
+    }
+    await recordSelectedWorkflow(preparedSource.captureRoot, workflow.name);
+    emitParseWarnings(workflowEntry?.parseWarnings, workflow.name);
+  };
 
   // Name the selection in the capture's manifest, now that it is known. The manifest is
   // outside the digest, so this records provenance without disturbing what was frozen.
@@ -1678,6 +1723,9 @@ async function runWorkflowWithOwnedSource(
   // inherits nothing.
   let adoptedFromRunId: string | undefined;
   let continuationMode: 'adopt' | 'supersede' | undefined;
+  // Set when the adopt lane executes inside a checkout whose `.archon` may differ from
+  // this process's cwd — the trigger for recaptureForLane once the path is final.
+  let adoptLaneRunsIsolatedCheckout = false;
   if (options.adoptRunId !== undefined || options.supersedesRunId !== undefined) {
     if (!codebase) {
       throw new Error(
@@ -1707,6 +1755,7 @@ async function runWorkflowWithOwnedSource(
       if (lane.kind === 'reuse-worktree') {
         workingCwd = lane.workingPath;
         isolationEnvId = lane.envId;
+        adoptLaneRunsIsolatedCheckout = true;
         // The reuse lane IS the isolation: run in the inherited worktree as-is.
         // Leaving wantsIsolation set would fall through to worktree creation below
         // and silently cut a fresh worktree from base over the inherited one.
@@ -1715,6 +1764,9 @@ async function runWorkflowWithOwnedSource(
           `Adopting run ${adoptedRun.id} — reusing its worktree at ${lane.workingPath} (dirty state inherited as-is).`
         );
       } else if (lane.kind === 'fresh-from-branch') {
+        options.fromBranch = lane.branch;
+        wantsIsolation = true;
+        adoptLaneRunsIsolatedCheckout = true;
         options.fromBranch = lane.branch;
         wantsIsolation = true;
         console.log(
@@ -2103,6 +2155,13 @@ async function runWorkflowWithOwnedSource(
       'Cannot create worktree: not in a git repository.\n' +
         'Run from within a git repo, or use --no-worktree to skip isolation.'
     );
+  }
+
+  // The lane's checkout is final here — reuse-worktree set it in the lane block, and
+  // fresh-from-branch when the resolver cut its worktree above.
+  if (adoptLaneRunsIsolatedCheckout) {
+    console.log(`Capturing workflow source from ${workingCwd}.`);
+    await recaptureForLane(workingCwd);
   }
 
   // Update conversation with cwd and isolation info
