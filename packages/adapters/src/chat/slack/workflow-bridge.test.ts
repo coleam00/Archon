@@ -136,7 +136,7 @@ function makeFakeAdapter(allowedUserIds: string[] = []) {
     },
     getAllowedUserIds: () => allowedUserIds,
     dispatchThreadCommand: mock(
-      async (text: string, channel: string, threadTs: string, userId: string) => {
+      async (text: string, channel: string, threadTs: string, userId: string): Promise<boolean> => {
         resumeDispatches.push({ text, channel, threadTs, userId });
         return true;
       }
@@ -344,14 +344,14 @@ describe('SlackWorkflowBridge', () => {
     expect(resumeDispatches).toHaveLength(0);
   });
 
-  test('approval whose resume dispatch is not accepted reports manual resume', async () => {
+  test('approval whose resume dispatch is not accepted reports manual resume', async (): Promise<void> => {
     // Run state exists, so the dispatch is attempted — but the adapter reports it
     // was not accepted (returns false). The resolution edit must reflect that, not
     // the unconditional "workflow resumed".
     const { adapter, updated, triggerMap, dispatchAction } = makeFakeAdapter();
     triggerMap.set('C1:111.0', { channel: 'C1', ts: '111.0' });
     mockGetConversationId.mockReturnValue('C1:111.0');
-    adapter.dispatchThreadCommand = mock(async () => false);
+    adapter.dispatchThreadCommand = mock(async (): Promise<boolean> => false);
 
     new SlackWorkflowBridge(adapter as never).attach();
     await dispatchEvent({
