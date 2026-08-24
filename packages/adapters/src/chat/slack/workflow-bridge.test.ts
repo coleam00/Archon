@@ -318,6 +318,31 @@ describe('SlackWorkflowBridge', () => {
     });
   });
 
+  test('approval with no in-process run state reports manual resume, does not claim it resumed', async () => {
+    // No workflow_started / approval_pending events here: this.runs stays empty,
+    // simulating buttons that outlived a server restart. The gate still resolves
+    // against the DB, but nothing in-process can continue the run.
+    const { adapter, updated, dispatchAction, resumeDispatches } = makeFakeAdapter();
+
+    new SlackWorkflowBridge(adapter as never).attach();
+    await dispatchAction('approve:r1:review', {
+      user: { id: 'U123' },
+      channel: { id: 'C1' },
+      message: { ts: '2.000' },
+    });
+
+    expect(mockApproveWorkflow).toHaveBeenCalledWith('r1');
+    expect(updated).toHaveLength(1);
+    const headerText = (updated[0]?.blocks?.[0] as { text?: { text?: string } } | undefined)?.text
+      ?.text;
+    // The note must not claim a resume that never happened; it must point the
+    // user at the only way to continue the run.
+    expect(headerText).not.toContain('workflow resumed');
+    expect(headerText).toContain('resume manually');
+    // Nothing to continue in-process, so no dispatch.
+    expect(resumeDispatches).toHaveLength(0);
+  });
+
   test('interactive-loop approval describes the aggregate completion condition', async () => {
     const { adapter, updated, triggerMap, dispatchAction } = makeFakeAdapter();
     triggerMap.set('C1:111.0', { channel: 'C1', ts: '111.0' });

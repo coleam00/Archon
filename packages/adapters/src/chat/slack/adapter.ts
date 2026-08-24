@@ -410,23 +410,24 @@ export class SlackAdapter implements IPlatformAdapter {
       return;
     }
     if (!this.messageHandler) return;
-    getLog().info({ channel }, 'slack.thread_command_dispatch_started');
-    try {
-      const displayName = await this.fetchDisplayName(userId);
-      const messageEvent: SlackMessageEvent = {
-        text,
-        user: userId,
-        channel,
-        ts: threadTs,
-        thread_ts: threadTs,
-        displayName,
-      };
-      await this.messageHandler(messageEvent);
-      getLog().info({ channel }, 'slack.thread_command_dispatch_completed');
-    } catch (error) {
-      getLog().error({ err: error as Error, channel }, 'slack.thread_command_dispatch_failed');
-      throw error;
-    }
+    const displayName = await this.fetchDisplayName(userId);
+    const messageEvent: SlackMessageEvent = {
+      text,
+      user: userId,
+      channel,
+      ts: threadTs,
+      thread_ts: threadTs,
+      displayName,
+    };
+    // Fire-and-forget, matching the app_mention / message.im / slash inbound
+    // paths: messageHandler's promise covers the whole resumed run, so awaiting
+    // it would tie this dispatch's lifetime to full workflow execution. Log the
+    // dispatch at the send point; a mid-run fault is an execution-domain event,
+    // not a dispatch failure.
+    getLog().info({ channel }, 'slack.thread_command_dispatched');
+    void this.messageHandler(messageEvent).catch(error => {
+      getLog().error({ err: error as Error, channel }, 'slack.thread_command_execution_failed');
+    });
   }
 
   /**

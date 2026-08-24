@@ -466,6 +466,28 @@ describe('SlackAdapter', () => {
       }
     });
 
+    test('does not block on the resumed run finishing (fire-and-forget)', async () => {
+      const original = process.env.SLACK_ALLOWED_USER_IDS;
+      process.env.SLACK_ALLOWED_USER_IDS = 'U1ALICE';
+      try {
+        const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
+        let handlerStarted = false;
+        // A handler whose promise never settles stands in for a long-running
+        // resumed run; before the fix, awaiting it would hang this call.
+        adapter.onMessage(() => {
+          handlerStarted = true;
+          return new Promise<void>(() => {});
+        });
+
+        await adapter.dispatchThreadCommand('/workflow resume r1', 'C1', '111.0', 'U1ALICE');
+
+        expect(handlerStarted).toBe(true);
+      } finally {
+        if (original === undefined) delete process.env.SLACK_ALLOWED_USER_IDS;
+        else process.env.SLACK_ALLOWED_USER_IDS = original;
+      }
+    });
+
     test('unauthorized user is rejected — messageHandler not called', async () => {
       const original = process.env.SLACK_ALLOWED_USER_IDS;
       process.env.SLACK_ALLOWED_USER_IDS = 'U1ALICE';

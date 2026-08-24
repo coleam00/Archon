@@ -522,6 +522,12 @@ export class SlackWorkflowBridge {
               getLog().error({ err, runId }, 'slack.bridge_resume_dispatch_failed');
             });
         } else {
+          // No in-process run state — e.g. after a server restart the buttons
+          // survive in Slack and the gate still resolves against the DB, but
+          // `this.runs` is empty so nothing here can continue the run. This is
+          // the one path where the thread is the user's only signal, so the note
+          // must not claim a resume that never happened.
+          outcomeNote = `recorded — resume manually with \`archon workflow resume ${runId}\` (no active session to continue it here)`;
           getLog().warn({ runId, hasRunState: Boolean(runState) }, 'slack.bridge_resume_skipped');
         }
       }
