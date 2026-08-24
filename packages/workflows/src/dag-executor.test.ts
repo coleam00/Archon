@@ -27283,6 +27283,178 @@ describe('executeDagWorkflow -- gate pause vs external transition (#1123)', () =
     expect(store.completeWorkflowRun).not.toHaveBeenCalled();
   });
 
+  describe('workflow: declared output_format vs the child terminal output (#2774)', () => {
+    const setupCompletedChild = (
+      metadata: Record<string, unknown>
+    ): ReturnType<typeof createMockStore> => {
+      const store = createMockStore();
+      store.findChildRuns = mock(() =>
+        Promise.resolve([
+          makeWorkflowRun('child-run-2774', {
+            workflow_name: 'child-wf',
+            status: 'completed',
+            metadata: { parent_node_id: 'sub', ...metadata },
+          }),
+        ])
+      );
+      return store;
+    };
+
+    const runSubNode = async (
+      store: ReturnType<typeof createMockStore>,
+      outputFormat?: Record<string, unknown>
+    ) => {
+      const mockDeps = createMockDeps(store);
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun();
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-subrun-contract',
+        testDir,
+        {
+          name: 'subrun-contract',
+          nodes: [
+            {
+              id: 'sub',
+              kind: 'workflow',
+              workflow: 'child-wf',
+              ...(outputFormat !== undefined ? { output_format: outputFormat } : {}),
+            } as unknown as DagNode,
+          ],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'state'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        async () => {
+          throw new Error('runChildWorkflow should not be called — a completed child exists');
+        }
+      );
+      return platform;
+    };
+
+    const eventTypes = (store: ReturnType<typeof createMockStore>): string[] =>
+      (store.createWorkflowEvent as Mock<IWorkflowStore['createWorkflowEvent']>).mock.calls.map(
+        (c: unknown[]) => (c[0] as { event_type: string }).event_type
+      );
+
+    beforeEach(async () => {
+      testDir = join(
+        tmpdir(),
+        `dag-subrun-contract-${Date.now()}-${Math.random().toString(36).slice(2)}`
+      );
+      await mkdir(join(testDir, '.archon', 'commands'), { recursive: true });
+    });
+
+    afterEach(async () => {
+      try {
+        await rm(testDir, { recursive: true, force: true });
+      } catch {
+        // ignore cleanup errors
+      }
+    });
+
+    it('fails the node when structuredOutput violates the declared schema', async () => {
+      const store = setupCompletedChild({
+        summary_value: { verdict: 42 },
+      });
+
+      await runSubNode(store, {
+        type: 'object',
+        properties: { verdict: { type: 'string' } },
+        required: ['verdict'],
+      });
+
+      expect(eventTypes(store)).toContain('node_failed');
+      expect(eventTypes(store)).not.toContain('node_completed');
+      expect(store.failWorkflowRun).toHaveBeenCalled();
+      const failed = (
+        store.createWorkflowEvent as Mock<IWorkflowStore['createWorkflowEvent']>
+      ).mock.calls
+        .map((c: unknown[]) => c[0] as { event_type: string; data: { error: string } })
+        .filter(c => c.event_type === 'node_failed');
+      expect(failed.length).toBeGreaterThan(0);
+      for (const call of failed) {
+        expect(call.data.error).toContain("Node 'sub'");
+        expect(call.data.error).toContain("sub-run 'child-wf'");
+        expect(call.data.error).toContain('/verdict');
+        expect(call.data.error).toContain('must be string');
+        expect(call.data.error).toContain('Received: object');
+      }
+    });
+
+    it('completes when text-only output parses to a valid object', async () => {
+      const store = setupCompletedChild({
+        summary: JSON.stringify({ verdict: 'SHIP' }),
+      });
+
+      await runSubNode(store, {
+        type: 'object',
+        properties: { verdict: { type: 'string' } },
+        required: ['verdict'],
+      });
+
+      expect(eventTypes(store)).toContain('node_completed');
+      expect(eventTypes(store)).not.toContain('node_failed');
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    });
+
+    it('fails when text-only output is not JSON against an object-typed schema', async () => {
+      const store = setupCompletedChild({ summary: 'plain prose summary' });
+
+      await runSubNode(store, {
+        type: 'object',
+        properties: { verdict: { type: 'string' } },
+      });
+
+      expect(eventTypes(store)).toContain('node_failed');
+      const failed = (
+        store.createWorkflowEvent as Mock<IWorkflowStore['createWorkflowEvent']>
+      ).mock.calls
+        .map((c: unknown[]) => c[0] as { event_type: string; data: { error: string } })
+        .filter(c => c.event_type === 'node_failed');
+      expect(failed.some(c => c.data.error.includes('Received: string'))).toBe(true);
+    });
+
+    it('leaves nodes without output_format untouched', async () => {
+      const store = setupCompletedChild({ summary: 'plain prose summary' });
+
+      await runSubNode(store);
+
+      expect(eventTypes(store)).toContain('node_completed');
+      expect(eventTypes(store)).not.toContain('node_failed');
+    });
+
+    it('warns instead of failing on an uncompilable schema', async () => {
+      const store = setupCompletedChild({ summary_value: { verdict: 'SHIP' } });
+
+      const platform = await runSubNode(store, {
+        type: 'object',
+        properties: { verdict: { $ref: '#/definitions/missing' } },
+      });
+
+      expect(eventTypes(store)).toContain('node_completed');
+      expect(eventTypes(store)).not.toContain('node_failed');
+      const sent = platform.sendMessage.mock.calls.map(([, message]) => message);
+      expect(sent.some(m => m.includes('could not be compiled'))).toBe(true);
+    });
+  });
+
   it('gate pause failure with the run still running stays a genuine node failure', async () => {
     const store = createMockStore();
     // Pause fails but the run is still 'running' (default mock) — a real store

@@ -7436,6 +7436,21 @@ async function executeApprovalNode(
  *    node_completed (mirrors executeApprovalNode), so the node re-runs when the
  *    parent auto-resumes after the child terminates.
  */
+/**
+ * The child's terminal LOGICAL value for `output_format` validation (#2774): prefer the
+ * typed `structuredOutput` (#2637); fall back to parsing the text summary, and treat
+ * non-JSON text as a raw string — which then correctly fails an object-typed schema,
+ * since a string IS what the child returned.
+ */
+function subrunLogicalValue(outcome: ChildWorkflowOutcome): unknown {
+  if (outcome.structuredOutput !== undefined) return outcome.structuredOutput;
+  try {
+    return JSON.parse(outcome.output ?? '') as unknown;
+  } catch {
+    return outcome.output ?? '';
+  }
+}
+
 async function executeWorkflowNode(
   node: WorkflowNode,
   ctx: RunLayersContext
@@ -7572,6 +7587,53 @@ async function executeWorkflowNode(
   // branch — so the resume snapshot skips a truly-finished sub-run on resume
   // but re-runs one still blocked on its child.
   const asCompleted = (outcome: ChildWorkflowOutcome): NodeExecutionResult => {
+    // Declared boundary contract (#2774): when the node declares `output_format`, the
+    // child's terminal value must match it — a mismatch fails the node HERE, before any
+    // node_completed row exists, so resume re-runs into the same named failure instead
+    // of rehydrating an invalid "completed" payload. Mirrors the AI/loop structured-
+    // output gates; no reask loop (a child rerun costs a full run and may have side
+    // effects), one validation, one hard failure.
+    if (node.output_format) {
+      const logicalValue = subrunLogicalValue(outcome);
+      let schemaCompileError: string | undefined;
+      const validation = validateStructuredOutput(logicalValue, node.output_format, compileMsg => {
+        schemaCompileError = compileMsg;
+      });
+      if (schemaCompileError !== undefined) {
+        // Fail-safe on an uncompilable schema, same contract as the AI-node gate:
+        // surface it loudly but never turn it into a spurious node failure.
+        getLog().warn(
+          { nodeId: node.id, workflowRunId: parentRun.id, compileMsg: schemaCompileError },
+          'workflow.subrun_schema_uncompilable'
+        );
+        void safeSendMessage(
+          platform,
+          conversationId,
+          `⚠️ Node '${node.id}': its \`output_format\` schema could not be compiled (${schemaCompileError}), so the sub-run '${node.workflow}' output was NOT validated against it. Fix the schema to enforce it.`,
+          msgContext
+        ).catch((err: Error) => {
+          getLog().error(
+            { err, workflowRunId: parentRun.id, nodeId: node.id },
+            'workflow.subrun_schema_warn_send_failed'
+          );
+        });
+      } else if (!validation.valid) {
+        const errors = (validation.errors ?? ['value does not match the declared schema']).join(
+          '; '
+        );
+        const received =
+          logicalValue === null
+            ? 'null'
+            : Array.isArray(logicalValue)
+              ? 'array'
+              : typeof logicalValue;
+        return failResult(
+          `Node '${node.id}': sub-run '${node.workflow}' output does not match its declared output_format: ${errors}. Expected: ${JSON.stringify(node.output_format)}. Received: ${received}.`,
+          outcome.costUsd,
+          outcome.tokens
+        );
+      }
+    }
     if (outcome.output === undefined) {
       // A completed child with no non-blank terminal output threads '' into
       // $<node>.output — legal, but indistinguishable downstream from an
