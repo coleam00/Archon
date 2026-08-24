@@ -172,10 +172,11 @@ class InMemoryStore implements IWorkflowStore {
     return Promise.resolve(out);
   };
 
-  getActiveWorkflowRunByPath = (
+  // Prototype method (not an arrow-field) so store doubles can call it via `super`.
+  getActiveWorkflowRunByPath(
     workingPath: string,
     self?: { id: string; startedAt: Date; excludeRunIds?: string[] }
-  ): Promise<WorkflowRun | null> => {
+  ): Promise<WorkflowRun | null> {
     const exclude = new Set([self?.id, ...(self?.excludeRunIds ?? [])].filter(Boolean));
     const active = [...this.runs.values()]
       .filter(
@@ -186,7 +187,7 @@ class InMemoryStore implements IWorkflowStore {
       )
       .sort((a, b) => a.started_at.getTime() - b.started_at.getTime());
     return Promise.resolve(active[0] ? this.clone(active[0]) : null);
-  };
+  }
 
   resumeWorkflowRun = (id: string): Promise<WorkflowRun> => {
     const r = this.runs.get(id);
@@ -3852,7 +3853,42 @@ nodes:
     };
 
     // Default posture: the sibling is cancelled and the parent run fails.
-    const racyStore = new InMemoryStore();
+    // Whether the collision fires depends on both child rows coexisting in
+    // non-terminal state when either lock query runs; under CI load the children
+    // can serialize end-to-end and both succeed. This store holds each child's
+    // lock query until BOTH child rows exist and are live, so the overlap the test
+    // characterizes is a precondition instead of a chance interleaving.
+    class RendezvousStore extends InMemoryStore {
+      private overlapSeen = false;
+      getActiveWorkflowRunByPath: IWorkflowStore['getActiveWorkflowRunByPath'] = async (
+        path,
+        self
+      ) => {
+        const selfRow = self ? this.runs.get(self.id) : undefined;
+        if (!selfRow?.parent_run_id || this.overlapSeen) {
+          return super.getActiveWorkflowRunByPath(path, self);
+        }
+        const parent = this.runs.get(selfRow.parent_run_id);
+        if (!parent) return super.getActiveWorkflowRunByPath(path, self);
+        const deadline = Date.now() + 5000;
+        for (;;) {
+          const children = await this.findChildRuns(parent.id);
+          const live = children.filter(c => c.status === 'pending' || c.status === 'running');
+          if (live.length >= 2) {
+            this.overlapSeen = true;
+          }
+          if (this.overlapSeen) break;
+          if (Date.now() > deadline) {
+            throw new Error(
+              `rendezvous failed: ${children.length} child rows, ${live.length} live`
+            );
+          }
+          await new Promise(resolve => setTimeout(resolve, 1));
+        }
+        return super.getActiveWorkflowRunByPath(path, self);
+      };
+    }
+    const racyStore = new RendezvousStore();
     const racyResult = await executeWorkflow(
       makeDeps(racyStore),
       makePlatform(),
