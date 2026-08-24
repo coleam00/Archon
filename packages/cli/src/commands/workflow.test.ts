@@ -8728,4 +8728,35 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
     expect((executed[4] as { description: string }).description).toBe('Branch vintage');
     expect(executed[3]).toBe('/wt/adopted');
   });
+
+  it('re-judges the declared-input gate against the branch vintage after recapture', async () => {
+    // The parent checkout's YAML declares no inputs, so the invocation gate on entry
+    // passes an input-less call; only the adopted branch's YAML requires one.
+    setupAdoptMocks();
+    const discoverMock = require('@archon/workflows/workflow-discovery')
+      .discoverWorkflowsWithConfig as ReturnType<typeof mock>;
+    discoverMock.mockReset();
+    discoverMock
+      .mockResolvedValueOnce({
+        workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Parent vintage' })],
+        errors: [],
+      })
+      .mockResolvedValueOnce({
+        workflows: [
+          makeTestWorkflowWithSource({
+            name: 'assist',
+            description: 'Branch vintage',
+            inputs: { diff: { required: true } },
+          }),
+        ],
+        errors: [],
+      });
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    (executeWorkflow as ReturnType<typeof mock>).mockClear();
+
+    await expect(
+      workflowRunCommand('/test/path', 'assist', 'hello', { adoptRunId: 'run-old' })
+    ).rejects.toThrow(/requires input/);
+    expect(executeWorkflow).not.toHaveBeenCalled();
+  });
 });

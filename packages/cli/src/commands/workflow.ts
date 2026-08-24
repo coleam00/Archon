@@ -1157,6 +1157,16 @@ async function runWorkflowWithOwnedSource(
     }
     await recordSelectedWorkflow(preparedSource.captureRoot, workflow.name);
     emitParseWarnings(workflowEntry?.parseWarnings, workflow.name);
+    // The gates above ran against the parent checkout's YAML; this lane executes the
+    // branch's graph, so judge the same signature gates against the branch vintage
+    // (mirrors the orchestrator's deferred runSignatureGates).
+    if (!options.resume) {
+      resolvedInputs = resolveTopLevelInputs(
+        workflow,
+        options.inputs ? parseInputAssignments(options.inputs) : undefined
+      );
+    }
+    await assertCliWorkflowRequirementsMet(workflow);
   };
 
   // Name the selection in the capture's manifest, now that it is known. The manifest is
