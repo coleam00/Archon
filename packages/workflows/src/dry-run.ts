@@ -61,6 +61,9 @@ export const dryRunStubValueSchema = z.union([
   z.string(),
   z.record(z.string(), z.unknown()),
   z.array(z.unknown()),
+  z.number(),
+  z.boolean(),
+  z.null(),
 ]);
 export type DryRunStubValue = z.infer<typeof dryRunStubValueSchema>;
 export const dryRunStubsSchema = z.unknown().transform((value, ctx) => {
@@ -181,7 +184,7 @@ function generatedStubFor(node: DagNode): DryRunStubValue {
   }
   if (!isStubValue(value)) {
     throw new Error(
-      `Cannot generate dry-run stub for node '${node.id}': output_format produced a non-JSON placeholder`
+      `Cannot generate dry-run stub for node '${node.id}': output_format produced a placeholder of an unsupported type`
     );
   }
   return value;
