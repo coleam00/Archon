@@ -393,13 +393,19 @@ export class SlackAdapter implements IPlatformAdapter {
    * Slack-side gate approval so the resumed output streams back into the same
    * thread instead of a web worker conversation. Routing through the same
    * `messageHandler` inbound path keeps the run bound to its Slack conversation.
+   *
+   * Resolves to whether the command was *dispatched* — handed off to the
+   * handler — not whether the resumed run finished. `false` means it was never
+   * scheduled (unauthorized actor or no handler); a pre-dispatch failure
+   * rejects. Handler execution stays fire-and-forget once dispatched, so
+   * callers can decide the resolution note from the dispatch outcome alone.
    */
   async dispatchThreadCommand(
     text: string,
     channel: string,
     threadTs: string,
     userId: string
-  ): Promise<void> {
+  ): Promise<boolean> {
     // Authorize at the adapter boundary, like every other messageHandler entry
     // point (app_mention / message.im / slash), so a synthetic command can never
     // bypass the whitelist even if a caller forgets to check. Silent + masked,
@@ -407,9 +413,9 @@ export class SlackAdapter implements IPlatformAdapter {
     if (!isSlackUserAuthorized(userId, this.allowedUserIds)) {
       const maskedId = userId ? `${userId.slice(0, 4)}***` : 'unknown';
       getLog().info({ maskedUserId: maskedId }, 'slack.thread_command_unauthorized');
-      return;
+      return false;
     }
-    if (!this.messageHandler) return;
+    if (!this.messageHandler) return false;
     const displayName = await this.fetchDisplayName(userId);
     const messageEvent: SlackMessageEvent = {
       text,
@@ -423,11 +429,13 @@ export class SlackAdapter implements IPlatformAdapter {
     // paths: messageHandler's promise covers the whole resumed run, so awaiting
     // it would tie this dispatch's lifetime to full workflow execution. Log the
     // dispatch at the send point; a mid-run fault is an execution-domain event,
-    // not a dispatch failure.
+    // not a dispatch failure. Returning here (post-handoff) is the dispatch
+    // acceptance the bridge keys its resolution note off.
     getLog().info({ channel }, 'slack.thread_command_dispatched');
     void this.messageHandler(messageEvent).catch(error => {
       getLog().error({ err: error as Error, channel }, 'slack.thread_command_execution_failed');
     });
+    return true;
   }
 
   /**

@@ -138,6 +138,7 @@ function makeFakeAdapter(allowedUserIds: string[] = []) {
     dispatchThreadCommand: mock(
       async (text: string, channel: string, threadTs: string, userId: string) => {
         resumeDispatches.push({ text, channel, threadTs, userId });
+        return true;
       }
     ),
   };
@@ -341,6 +342,41 @@ describe('SlackWorkflowBridge', () => {
     expect(headerText).toContain('resume manually');
     // Nothing to continue in-process, so no dispatch.
     expect(resumeDispatches).toHaveLength(0);
+  });
+
+  test('approval whose resume dispatch is not accepted reports manual resume', async () => {
+    // Run state exists, so the dispatch is attempted — but the adapter reports it
+    // was not accepted (returns false). The resolution edit must reflect that, not
+    // the unconditional "workflow resumed".
+    const { adapter, updated, triggerMap, dispatchAction } = makeFakeAdapter();
+    triggerMap.set('C1:111.0', { channel: 'C1', ts: '111.0' });
+    mockGetConversationId.mockReturnValue('C1:111.0');
+    adapter.dispatchThreadCommand = mock(async () => false);
+
+    new SlackWorkflowBridge(adapter as never).attach();
+    await dispatchEvent({
+      type: 'workflow_started',
+      runId: 'r1',
+      workflowName: 'assist',
+      conversationId: 'conv-db-uuid',
+    });
+    await dispatchEvent({
+      type: 'approval_pending',
+      runId: 'r1',
+      nodeId: 'review',
+      message: 'Approve?',
+    });
+
+    await dispatchAction('approve:r1:review', {
+      user: { id: 'U123' },
+      channel: { id: 'C1' },
+      message: { ts: '2.000' },
+    });
+
+    const headerText = (updated[0]?.blocks?.[0] as { text?: { text?: string } } | undefined)?.text
+      ?.text;
+    expect(headerText).not.toContain('workflow resumed');
+    expect(headerText).toContain('resume manually');
   });
 
   test('interactive-loop approval describes the aggregate completion condition', async () => {

@@ -506,29 +506,34 @@ export class SlackWorkflowBridge {
       // in "approved/awaiting resume" with no further output in the thread.
       // Continue it here by dispatching `/workflow resume <id>` back through the
       // Slack conversation, so the remaining nodes and final report stream into
-      // this same thread. Fire-and-forget: the resolution edit below must still
-      // land even if the resume dispatch is slow or fails.
+      // this same thread. We await dispatch *acceptance* (not the resumed run —
+      // that stays fire-and-forget inside dispatchThreadCommand), which is what
+      // lets the resolution note below tell the truth about whether the run was
+      // actually continued.
       if (shouldResume) {
         const runState = this.runs.get(runId);
+        let dispatched = false;
         if (runState && actorId) {
-          void this.adapter
-            .dispatchThreadCommand(
+          try {
+            dispatched = await this.adapter.dispatchThreadCommand(
               `/workflow resume ${runId}`,
               runState.channel,
               runState.threadTs,
               actorId
-            )
-            .catch(err => {
-              getLog().error({ err, runId }, 'slack.bridge_resume_dispatch_failed');
-            });
+            );
+          } catch (err) {
+            getLog().error({ err, runId }, 'slack.bridge_resume_dispatch_failed');
+          }
         } else {
-          // No in-process run state — e.g. after a server restart the buttons
-          // survive in Slack and the gate still resolves against the DB, but
-          // `this.runs` is empty so nothing here can continue the run. This is
-          // the one path where the thread is the user's only signal, so the note
-          // must not claim a resume that never happened.
-          outcomeNote = `recorded — resume manually with \`archon workflow resume ${runId}\` (no active session to continue it here)`;
           getLog().warn({ runId, hasRunState: Boolean(runState) }, 'slack.bridge_resume_skipped');
+        }
+        if (!dispatched) {
+          // The gate resolved in the DB, but nothing here continued the run —
+          // no in-process run state (buttons that outlived a server restart), or
+          // the resume command was never dispatched. This is the path where the
+          // thread is the user's only signal, so the note must not claim a resume
+          // that never happened; point them at the only way to continue it.
+          outcomeNote = `recorded — resume manually with \`archon workflow resume ${runId}\` (nothing continued the run here)`;
         }
       }
 

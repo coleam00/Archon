@@ -450,8 +450,14 @@ describe('SlackAdapter', () => {
           received.push(e);
         });
 
-        await adapter.dispatchThreadCommand('/workflow resume r1', 'C1', '111.0', 'U1ALICE');
+        const accepted = await adapter.dispatchThreadCommand(
+          '/workflow resume r1',
+          'C1',
+          '111.0',
+          'U1ALICE'
+        );
 
+        expect(accepted).toBe(true);
         expect(received).toHaveLength(1);
         expect(received[0]).toMatchObject({
           text: '/workflow resume r1',
@@ -479,8 +485,14 @@ describe('SlackAdapter', () => {
           return new Promise<void>(() => {});
         });
 
-        await adapter.dispatchThreadCommand('/workflow resume r1', 'C1', '111.0', 'U1ALICE');
+        const accepted = await adapter.dispatchThreadCommand(
+          '/workflow resume r1',
+          'C1',
+          '111.0',
+          'U1ALICE'
+        );
 
+        expect(accepted).toBe(true);
         expect(handlerStarted).toBe(true);
       } finally {
         if (original === undefined) delete process.env.SLACK_ALLOWED_USER_IDS;
@@ -496,8 +508,14 @@ describe('SlackAdapter', () => {
         const onMessage = mock(async () => {});
         adapter.onMessage(onMessage);
 
-        await adapter.dispatchThreadCommand('/workflow resume r1', 'C1', '111.0', 'U2BOB');
+        const accepted = await adapter.dispatchThreadCommand(
+          '/workflow resume r1',
+          'C1',
+          '111.0',
+          'U2BOB'
+        );
 
+        expect(accepted).toBe(false);
         expect(onMessage).not.toHaveBeenCalled();
       } finally {
         if (original === undefined) delete process.env.SLACK_ALLOWED_USER_IDS;
