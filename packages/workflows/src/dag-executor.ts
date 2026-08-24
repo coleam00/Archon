@@ -7,7 +7,7 @@
  */
 import { existsSync, mkdirSync, writeFileSync } from 'fs';
 import { readFile } from 'fs/promises';
-import { isAbsolute, join as joinPath, resolve as resolvePath } from 'path';
+import { isAbsolute, join as joinPath, resolve as resolvePath, sep } from 'path';
 import { execFileAsync, resolveBashPath } from '@archon/git';
 import { discoverScriptsForCwd } from './script-discovery';
 import { discoverWorkflowsWithConfig } from './workflow-discovery';
@@ -1182,6 +1182,117 @@ async function runDeterministicNodeWithRetry(
     output: '',
     error: 'Node did not execute',
   });
+}
+
+/**
+ * Absolute directories a run writes into by engine design (artifacts, state, logs).
+ * Changes under them never count against a node's `mutates_checkout: false`
+ * assertion (#2771) — extend here if another engine-write root appears.
+ */
+function checkoutSnapshotExcludes(
+  artifactsDir: string,
+  stateDir: string,
+  logDir: string
+): readonly string[] {
+  return [artifactsDir, stateDir, logDir].map(d => resolvePath(d));
+}
+
+function isInsideAny(absPath: string, dirs: readonly string[]): boolean {
+  return dirs.some(d => absPath === d || absPath.startsWith(d + sep));
+}
+
+/** Path operands of one `git status --porcelain` line (`XY path` or `XY old -> new`). */
+function porcelainPaths(line: string): string[] {
+  const body = line.slice(3);
+  const unquote = (p: string): string =>
+    p.startsWith('"') && p.endsWith('"') ? p.slice(1, -1) : p;
+  return (body.includes(' -> ') ? body.split(' -> ') : [body]).map(unquote);
+}
+
+/**
+ * Snapshot the working tree's dirty state (`git status --porcelain`) for a node's
+ * `mutates_checkout: false` assertion (#2771), dropping entries under `excludeDirs`.
+ * Returns `undefined` when the check cannot run — cwd outside a repo, or git failing
+ * — so a broken assertion degrades to no check rather than breaking unrelated runs.
+ */
+async function snapshotCheckout(
+  cwd: string,
+  excludeDirs: readonly string[]
+): Promise<string | undefined> {
+  try {
+    const { stdout } = await execFileAsync(
+      'git',
+      ['status', '--porcelain', '--untracked-files=normal'],
+      { cwd, timeout: 10_000 }
+    );
+    const relevant = stdout
+      .split('\n')
+      .filter(line => line.length > 3)
+      .filter(
+        line => !porcelainPaths(line).some(p => isInsideAny(resolvePath(cwd, p), excludeDirs))
+      );
+    return relevant.join('\n');
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Enforce a node's `mutates_checkout: false` declaration (#2771): when the node ran
+ * successfully but the pre-run snapshot changed, rewrite its result to a failure that
+ * names the node and lists what moved, and persist the standard `node_failed` event so
+ * the violation surfaces like any other node failure. Applied OUTSIDE the retry loop so
+ * the failure is non-retryable by construction — retrying a node that provably mutates
+ * would only multiply the damage. A node that already failed keeps its own attributable
+ * outcome; an absent snapshot (`undefined`) means the check could not run and is skipped.
+ */
+async function assertCheckoutUntouched(
+  node: DagNode,
+  cwd: string,
+  excludeDirs: readonly string[],
+  before: string | undefined,
+  result: NodeExecutionResult,
+  deps: WorkflowDeps,
+  workflowRunId: string,
+  stepName: string
+): Promise<NodeExecutionResult> {
+  if (node.mutates_checkout !== false || before === undefined || result.state !== 'completed') {
+    return result;
+  }
+  const after = await snapshotCheckout(cwd, excludeDirs);
+  if (after === undefined || after === before) {
+    return result;
+  }
+  const changedPaths = after
+    .split('\n')
+    .filter(Boolean)
+    .flatMap(porcelainPaths)
+    .slice(0, 10)
+    .join(', ');
+  const error = `Node \`${node.id}\` declared \`mutates_checkout: false\` but modified the working tree: ${changedPaths}`;
+  getLog().error({ nodeId: node.id, changed: changedPaths }, 'dag_mutates_checkout_violation');
+  const emitter = getWorkflowEventEmitter();
+  deps.store
+    .createWorkflowEvent({
+      workflow_run_id: workflowRunId,
+      event_type: 'node_failed',
+      step_name: stepName,
+      data: { error },
+    })
+    .catch((err: Error) => {
+      getLog().error(
+        { err, workflowRunId, eventType: 'node_failed' },
+        'workflow_event_persist_failed'
+      );
+    });
+  emitter.emit({
+    type: 'node_failed',
+    runId: workflowRunId,
+    nodeId: node.id,
+    nodeName: node.id,
+    error,
+  });
+  return { ...result, state: 'failed', output: '', error };
 }
 
 /**
@@ -9320,6 +9431,11 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               // oversight (#2718). See the rationale on `execNodeSchema` in
               // schemas/dag-node.ts.
               if (node.runtime === 'sh') {
+                const excludes = checkoutSnapshotExcludes(artifactsDir, stateDir, logDir);
+                const treeBefore =
+                  node.mutates_checkout === false
+                    ? await snapshotCheckout(cwd, excludes)
+                    : undefined;
                 const output = await runDeterministicNodeWithRetry(
                   node,
                   platform,
@@ -9349,10 +9465,25 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                       execContext
                     )
                 );
-                return { nodeId: node.id, output };
+                return {
+                  nodeId: node.id,
+                  output: await assertCheckoutUntouched(
+                    node,
+                    cwd,
+                    excludes,
+                    treeBefore,
+                    output,
+                    deps,
+                    workflowRun.id,
+                    stepNamePrefix + node.id
+                  ),
+                };
               }
               // Script dispatch — runs via bun or uv. Same opt-in retry rule as bash
               // (#2088): retries solely when an explicit `retry:` block is declared.
+              const excludes = checkoutSnapshotExcludes(artifactsDir, stateDir, logDir);
+              const treeBefore =
+                node.mutates_checkout === false ? await snapshotCheckout(cwd, excludes) : undefined;
               const output = await runDeterministicNodeWithRetry(
                 node,
                 platform,
@@ -9383,7 +9514,19 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                     ctx.workflowSourceRoots
                   )
               );
-              return { nodeId: node.id, output };
+              return {
+                nodeId: node.id,
+                output: await assertCheckoutUntouched(
+                  node,
+                  cwd,
+                  excludes,
+                  treeBefore,
+                  output,
+                  deps,
+                  workflowRun.id,
+                  stepNamePrefix + node.id
+                ),
+              };
             }
 
             case 'loop': {
@@ -9773,7 +9916,15 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
           // 6. Execute with retry for transient failures. AI nodes get the
           // default 2 transient retries; the shared loop applies the same
           // backoff + FATAL-never-retried semantics as deterministic nodes.
-          const output = await runNodeRetryLoop(
+          // `mutates_checkout: false` (#2771) is asserted OUTSIDE the retry loop:
+          // the snapshot covers every attempt, and a violation fails the node
+          // without offering retry another chance to mutate.
+          const checkoutExcludes = checkoutSnapshotExcludes(artifactsDir, stateDir, logDir);
+          const treeBefore =
+            node.mutates_checkout === false
+              ? await snapshotCheckout(cwd, checkoutExcludes)
+              : undefined;
+          const retriedOutput = await runNodeRetryLoop(
             node,
             platform,
             conversationId,
@@ -9810,6 +9961,16 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                 ctx.workflowSourceRoots
               ),
             { state: 'failed', output: '', error: 'Node did not execute' } as NodeExecutionResult
+          );
+          const output = await assertCheckoutUntouched(
+            node,
+            cwd,
+            checkoutExcludes,
+            treeBefore,
+            retriedOutput,
+            deps,
+            workflowRun.id,
+            stepNamePrefix + node.id
           );
 
           // Cold-resume surfacing: this node requested a session resume but the

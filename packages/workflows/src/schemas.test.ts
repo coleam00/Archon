@@ -13,6 +13,8 @@ import {
   LOOP_NODE_AI_FIELDS,
   LOOP_GROUP_NODE_AI_FIELDS,
   INCLUDE_NODE_IGNORED_FIELDS,
+  WAIT_NODE_IGNORED_FIELDS,
+  WORKFLOW_NODE_IGNORED_FIELDS,
   BASH_NODE_AI_FIELDS,
   approvalOnRejectSchema,
   dagNodeSchema,
@@ -1682,6 +1684,48 @@ describe('INCLUDE_NODE_IGNORED_FIELDS', () => {
     // Structural fields the include node legitimately carries are NOT ignored.
     for (const f of ['id', 'depends_on', 'when', 'trigger_rule', 'include', 'description']) {
       expect(INCLUDE_NODE_IGNORED_FIELDS).not.toContain(f);
+    }
+  });
+});
+
+describe('dagNodeSchema — mutates_checkout tree-integrity declaration (#2771)', () => {
+  test('parses a boolean on an exec node and carries it through the transform', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'guard',
+      bash: 'echo hi',
+      mutates_checkout: false,
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect('mutates_checkout' in result.data && result.data.mutates_checkout === false).toBe(
+        true
+      );
+    }
+  });
+
+  test('parses true and stays absent when undeclared', () => {
+    const declared = dagNodeSchema.safeParse({ id: 'a', prompt: 'x', mutates_checkout: true });
+    expect(
+      declared.success &&
+        'mutates_checkout' in declared.data &&
+        declared.data.mutates_checkout === true
+    ).toBe(true);
+    const absent = dagNodeSchema.safeParse({ id: 'b', prompt: 'x' });
+    expect(absent.success && !('mutates_checkout' in absent.data)).toBe(true);
+  });
+
+  test('rejects a non-boolean value', () => {
+    const result = dagNodeSchema.safeParse({ id: 'a', bash: 'echo hi', mutates_checkout: 'no' });
+    expect(result.success).toBe(false);
+  });
+
+  test('is warned as ignored on wait nodes, not silently stripped', () => {
+    // The field parses into the base shape (so Zod does not drop it), but a wait's
+    // lifecycle is engine-owned — the loader warns via WAIT_NODE_IGNORED_FIELDS.
+    for (const f of ['mutates_checkout']) {
+      expect(WAIT_NODE_IGNORED_FIELDS).toContain(f);
+      expect(WORKFLOW_NODE_IGNORED_FIELDS).toContain(f);
+      expect(BASH_NODE_AI_FIELDS).not.toContain(f); // enforced on exec/agent nodes
     }
   });
 });
