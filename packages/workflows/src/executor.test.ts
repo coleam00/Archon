@@ -418,6 +418,7 @@ describe('executeWorkflow', () => {
           'main',
           'docs'
         ).prompt;
+        return undefined;
       });
       const result = await executeWorkflow(
         makeDeps(store),
