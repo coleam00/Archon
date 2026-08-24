@@ -8579,27 +8579,28 @@ async function executeFanOutWorkflowNode(
   const totalCostUsd = sumFanOutCost(outcomes);
   const totalTokens = sumFanOutTokens(outcomes);
 
-  // I3: parity with the 1:1 asCompleted path — a completed child with no terminal output
-  // threads '' but is indistinguishable downstream from an intentional empty result, so
-  // leave a trace. Used by both join reducers.
-  const childOutput = (o: ChildWorkflowOutcome, index: number): string => {
+  // A completed child's aggregate ELEMENT (#2637): its terminal LOGICAL value —
+  // exactly what the #2774 output_format gate above certified via
+  // {@link subrunLogicalValue} — so a structured child lands single-encoded
+  // (`[{"v":1}]`, never `["{\"v\":1}"]`), a text-only child whose summary happens
+  // to be JSON lands parsed like the validator saw it, and any other child stays
+  // the exact string it always was.
+  // I3: parity with the 1:1 asCompleted path — a completed child with no terminal
+  // output is indistinguishable downstream from an intentional empty result, so
+  // leave a trace before falling back to ''. A structured child always has text too
+  // (the canonical serialization), so this warn still covers every genuinely empty
+  // completion.
+  const childElement = (o: ChildWorkflowOutcome, index: number): JsonValue => {
     if (o.status === 'completed' && o.output === undefined) {
       getLog().warn(
         { parentRunId: parentRun.id, nodeId: node.id, childRunId: o.childRunId, childIndex: index },
         'workflow.subrun_completed_without_output'
       );
     }
-    return o.output ?? '';
+    return o.structuredOutput !== undefined
+      ? (o.structuredOutput as JsonValue)
+      : (subrunLogicalValue(o) as JsonValue);
   };
-
-  // A completed child's aggregate ELEMENT (#2637): its terminal LOGICAL value when it
-  // produced one, else its output text — so a structured child lands single-encoded
-  // (`[{"v":1}]`, never `["{\"v\":1}"]`) while a string-output child stays the exact
-  // string it always was. A structured child always has text too (the canonical
-  // serialization), so the missing-output warn in childOutput still covers every
-  // genuinely empty completion.
-  const childElement = (o: ChildWorkflowOutcome, index: number): JsonValue =>
-    o.structuredOutput !== undefined ? (o.structuredOutput as JsonValue) : childOutput(o, index);
 
   // 7. #2180 (first-run path): a freshly-spawned child that paused at a gate fails the
   //    node. Cancel the paused child(ren) tagged `fan_out_gate` (recoverable once the gate

@@ -2125,11 +2125,12 @@ nodes:
       e => e.event_type === 'node_completed' && e.step_name === 'work'
     );
     expect(completed).toBeDefined();
-    // Text-only bash children land as single-encoded JSON strings in the aggregate
-    // (no typed summary_value) — validation parsed each against output_format and passed.
+    // Text-only bash children land PARSED in the aggregate (no typed summary_value):
+    // the join persists exactly the value the output_format gate validated, so
+    // downstream typed access ($work.output[i].verdict) sees what was certified.
     expect(JSON.parse(String(completed?.data?.node_output))).toEqual([
-      '{"verdict":"ship"}',
-      '{"verdict":"ship"}',
+      { verdict: 'ship' },
+      { verdict: 'ship' },
     ]);
     expect(
       store.events.find(e => e.event_type === 'node_failed' && e.step_name === 'work')
