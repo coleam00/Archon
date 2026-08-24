@@ -2134,6 +2134,37 @@ describe('workflow dispatch routing — interactive flag', () => {
     expect(captureArg.sourceRoot).toBe('/wt/adopted');
   });
 
+  // R10: a fresh-from-branch adoption runs in a worktree cut from the adopted branch,
+  // so its frozen source must come from that worktree — not from the parent checkout.
+  test('adopt with fresh-from-branch captures workflow source from the created worktree', async () => {
+    mockValidateAndResolveIsolation.mockImplementationOnce(() =>
+      Promise.resolve({ cwd: '/wt/from-branch', status: 'new' })
+    );
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve(makeWorkflowResult(true, { args: 'test message' }))
+    );
+    mockResolveWorkflowAdoption.mockImplementationOnce(() =>
+      Promise.resolve({
+        adoptedRun: {},
+        lane: { kind: 'fresh-from-branch', branch: 'feature/adopted' },
+      })
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+      workflowAdoptRunId: 'prior-run',
+    });
+
+    expect(mockPrepareWorkflowSource).toHaveBeenCalled();
+    const lastCaptureCall = mockPrepareWorkflowSource.mock.calls.at(-1) as unknown[];
+    const captureArg = lastCaptureCall[1] as {
+      sourceRoot?: string;
+    };
+    expect(captureArg.sourceRoot).toBe('/wt/from-branch');
+  });
+
   test('adopt is refused when the conversation already continues a resumable run', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));

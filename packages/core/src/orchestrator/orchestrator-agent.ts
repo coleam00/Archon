@@ -921,8 +921,10 @@ async function dispatchOrchestratorWorkflowOwned(
   // A reuse-worktree lane inherits the adopted run's worktree; its `.archon` belongs to
   // whatever branch that worktree carries, so the frozen source must come from THERE —
   // capturing from the parent checkout would mix vintages exactly as #2660 describes.
+  // A fresh-from-branch lane has the same constraint, but its worktree only exists after
+  // isolation resolution below — so its capture is deferred until `cwd` is known.
   const captureCwd = adoptionLane?.kind === 'reuse-worktree' ? adoptionLane.workingPath : runCwd;
-  if (!willContinueExistingRun) {
+  if (!willContinueExistingRun && adoptionLane?.kind !== 'fresh-from-branch') {
     freshCaptured = await captureFreshSource(owner, captureCwd, workflow, conversationId, platform);
     if (!freshCaptured) return; // capture failed, message already sent
     workflow = freshCaptured.workflow;
@@ -1082,6 +1084,15 @@ async function dispatchOrchestratorWorkflowOwned(
       }
       throw error;
     }
+  }
+
+  // Deferred capture for the fresh-from-branch lane: the resolver cut a worktree from
+  // the adopted branch, so its `.archon` is the branch's vintage — freeze it instead of
+  // the parent checkout's, for the same reason the reuse-worktree lane captures above.
+  if (adoptionLane?.kind === 'fresh-from-branch' && !willContinueExistingRun) {
+    freshCaptured = await captureFreshSource(owner, cwd, workflow, conversationId, platform);
+    if (!freshCaptured) return; // capture failed, message already sent
+    workflow = freshCaptured.workflow;
   }
 
   // Dispatch workflow.
