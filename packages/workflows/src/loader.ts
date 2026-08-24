@@ -32,6 +32,7 @@ import {
   BASH_NODE_AI_FIELDS,
   LOOP_NODE_AI_FIELDS,
   LOOP_GROUP_NODE_AI_FIELDS,
+  GATE_AND_HALT_IGNORED_FIELDS,
   WAIT_NODE_IGNORED_FIELDS,
   INCLUDE_NODE_IGNORED_FIELDS,
   WORKFLOW_NODE_IGNORED_FIELDS,
@@ -661,11 +662,11 @@ function parseDagNode(
   if (isIncludeDirective(node)) {
     nonAiNode = { type: 'include', fields: INCLUDE_NODE_IGNORED_FIELDS };
   } else if (isHaltNode(node)) {
-    nonAiNode = { type: 'cancel', fields: BASH_NODE_AI_FIELDS };
+    nonAiNode = { type: 'cancel', fields: GATE_AND_HALT_IGNORED_FIELDS };
   } else if (isWorkflowNode(node)) {
     nonAiNode = { type: 'workflow', fields: WORKFLOW_NODE_IGNORED_FIELDS };
   } else if (isGateNode(node)) {
-    nonAiNode = { type: 'approval', fields: BASH_NODE_AI_FIELDS };
+    nonAiNode = { type: 'approval', fields: GATE_AND_HALT_IGNORED_FIELDS };
   } else if (isWaitNode(node)) {
     nonAiNode = { type: 'wait', fields: WAIT_NODE_IGNORED_FIELDS };
   } else if (isLoopNode(node)) {

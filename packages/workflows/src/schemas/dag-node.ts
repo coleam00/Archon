@@ -920,9 +920,14 @@ export const SCRIPT_NODE_AI_FIELDS: readonly string[] = BASH_NODE_AI_FIELDS;
  * on a declared boolean. It stays listed for `loop_group`, which never calls
  * sendQuery — its body nodes carry their own.
  */
-export const LOOP_NODE_AI_FIELDS: readonly string[] = BASH_NODE_AI_FIELDS.filter(
-  f => f !== 'model' && f !== 'provider' && f !== 'pi' && f !== 'output_format'
-);
+export const LOOP_NODE_AI_FIELDS: readonly string[] = [
+  ...BASH_NODE_AI_FIELDS.filter(
+    f => f !== 'model' && f !== 'provider' && f !== 'pi' && f !== 'output_format'
+  ),
+  // The tree-integrity assertion (#2771) is enforced only on exec/agent nodes; on a
+  // loop it would have to cover every iteration's body, which no execution path does.
+  'mutates_checkout',
+];
 
 /**
  * AI-specific fields that are unsupported on loop_group nodes. `model`/`provider`
@@ -931,9 +936,21 @@ export const LOOP_NODE_AI_FIELDS: readonly string[] = BASH_NODE_AI_FIELDS.filter
  * sendQuery, and body nodes carry their own `pi:` block — so it's warned as
  * ignored here (unlike on a plain `loop:` node, which does sendQuery itself).
  */
-export const LOOP_GROUP_NODE_AI_FIELDS: readonly string[] = BASH_NODE_AI_FIELDS.filter(
-  f => f !== 'model' && f !== 'provider'
-);
+export const LOOP_GROUP_NODE_AI_FIELDS: readonly string[] = [
+  ...BASH_NODE_AI_FIELDS.filter(f => f !== 'model' && f !== 'provider'),
+  // Same as `loop:` above — body-node enforcement is the only real coverage.
+  'mutates_checkout',
+];
+
+/**
+ * Fields ignored on gate (approval) and halt (cancel) nodes — they make no provider
+ * call and execute nothing, so every AI-turn field is inert, and
+ * `mutates_checkout` (#2771) has no enforcement site for them either.
+ */
+export const GATE_AND_HALT_IGNORED_FIELDS: readonly string[] = [
+  ...BASH_NODE_AI_FIELDS,
+  'mutates_checkout',
+];
 
 /** Fields a wait cannot consume; its output contract and lifecycle are engine-owned. */
 export const WAIT_NODE_IGNORED_FIELDS: readonly string[] = [

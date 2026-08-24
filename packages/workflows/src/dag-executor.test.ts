@@ -30296,6 +30296,7 @@ describe('executeDagWorkflow -- node-level mutates_checkout: false (#2771)', () 
     expect(error).toContain('guarded');
     expect(error).toContain('mutates_checkout: false');
     expect(error).toContain('stray.txt');
+    console.log('EVENTS', JSON.stringify((deps.store.createWorkflowEvent as any).mock.calls));
   });
 
   it('an undeclared mutating node is not checked', async () => {
@@ -30316,6 +30317,53 @@ describe('executeDagWorkflow -- node-level mutates_checkout: false (#2771)', () 
 
   it('outside a git repo the check fails open and the node succeeds', async () => {
     const deps = await runBashNode('touch stray.txt', true);
+    expect(nodeFailedError(deps, 'guarded')).toBeUndefined();
+  });
+
+  it('a mutating sibling in the same layer is not attributed to a guarded node', async () => {
+    initRepo(testDir);
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('mc-run-id', {
+      workflow_name: 'mc-test',
+      conversation_id: 'conv-mc',
+      user_message: 'mc test',
+    });
+    const nodes: ExecNode[] = [
+      {
+        id: 'guarded',
+        kind: 'exec',
+        runtime: 'sh',
+        script: 'echo read-only',
+        mutates_checkout: false as const,
+      },
+      { id: 'mutator', kind: 'exec', runtime: 'sh', script: 'touch sibling.txt' },
+    ];
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-mc',
+      testDir,
+      { name: 'mc-test', nodes },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+    expect(nodeFailedError(mockDeps, 'guarded')).toBeUndefined();
+  });
+
+  it('non-ASCII paths under excluded dirs do not trip the assertion', async () => {
+    initRepo(testDir);
+    const deps = await runBashNode(
+      'mkdir -p "$ARTIFACTS_DIR/日本語" && echo x > "$ARTIFACTS_DIR/日本語/out.txt"',
+      true
+    );
     expect(nodeFailedError(deps, 'guarded')).toBeUndefined();
   });
 });

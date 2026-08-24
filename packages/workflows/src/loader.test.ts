@@ -614,6 +614,38 @@ nodes:
       expect(result.error).not.toBeNull();
     });
 
+    it('should warn that mutates_checkout is inert on loop/gate/cancel/loop_group nodes', () => {
+      mockLogger.warn.mockClear();
+      for (const [nodeYaml, kind] of [
+        ['    loop:\n      until: done\n      max_iterations: 1\n      prompt: p', 'loop'],
+        ['    approval:\n      message: m', 'approval'],
+        ['    cancel: stop', 'cancel'],
+        [
+          '    loop_group:\n      nodes:\n        - id: b\n          bash: echo hi\n      until: done\n      max_iterations: 1',
+          'loop_group',
+        ],
+      ] as const) {
+        const result = parseWorkflow(
+          `name: mc-inert-${kind}
+description: d
+nodes:
+  - id: n
+${nodeYaml}
+    mutates_checkout: false
+`,
+          `${kind}-mc.yaml`
+        );
+        expect(result.error).toBeNull();
+        expect(
+          mockLogger.warn.mock.calls.some(
+            call =>
+              call[1] === `${kind}_node_ai_fields_ignored` &&
+              JSON.stringify(call[0]).includes('mutates_checkout')
+          )
+        ).toBe(true);
+      }
+    });
+
     it('should parse valid DAG workflow YAML', () => {
       const { workflow } = parseWorkflowYaml(`name: test-workflow
 description: A test workflow
