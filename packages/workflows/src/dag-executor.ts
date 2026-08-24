@@ -8627,6 +8627,50 @@ async function executeFanOutWorkflowNode(
     return failResult(msg, totalCostUsd, totalTokens);
   }
 
+  // Declared boundary contract (#2774), fan-out parity with the 1:1 asCompleted path:
+  // when the node declares `output_format`, EVERY completed child's terminal value must
+  // match it — the join aggregates children, so one invalid element would otherwise be
+  // persisted inside a "completed" node_completed row. Fails the node BEFORE any
+  // writeCompleted so resume re-runs into the same named failure. An uncompilable
+  // schema warn-skips like the 1:1 gate; failed/paused/cancelled children are not
+  // validated (they never contribute a payload element).
+  if (node.output_format) {
+    for (const [index, outcome] of outcomes.entries()) {
+      if (outcome.status !== 'completed') continue;
+      const logicalValue = subrunLogicalValue(outcome);
+      let schemaCompileError: string | undefined;
+      const validation = validateStructuredOutput(logicalValue, node.output_format, compileMsg => {
+        schemaCompileError = compileMsg;
+      });
+      if (schemaCompileError !== undefined) {
+        getLog().warn(
+          { nodeId: node.id, workflowRunId: parentRun.id, compileMsg: schemaCompileError },
+          'workflow.subrun_schema_uncompilable'
+        );
+        await notify(
+          `⚠️ Node '${node.id}': its \`output_format\` schema could not be compiled (${schemaCompileError}), so fan-out child ${String(index)} of '${node.workflow}' was NOT validated against it. Fix the schema to enforce it.`
+        );
+        continue;
+      }
+      if (!validation.valid) {
+        const errors = (validation.errors ?? ['value does not match the declared schema']).join(
+          '; '
+        );
+        const received =
+          logicalValue === null
+            ? 'null'
+            : Array.isArray(logicalValue)
+              ? 'array'
+              : typeof logicalValue;
+        const msg =
+          `Node '${node.id}': fan-out child ${String(index)} of sub-run '${node.workflow}' output does not match the node's declared output_format: ${errors}. ` +
+          `Expected: ${JSON.stringify(node.output_format)}. Received: ${received}.`;
+        await notify(`❌ **Fan-out output_format violation** (node \`${node.id}\`): ${msg}`);
+        return failResult(msg, totalCostUsd, totalTokens);
+      }
+    }
+  }
+
   // 8. Join.
   if (fanOut.join === 'all_success') {
     // Every child ran to its own terminal state, so the lowest-index non-completed outcome
