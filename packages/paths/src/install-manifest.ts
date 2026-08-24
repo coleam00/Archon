@@ -5,7 +5,11 @@ import { dirname, resolve } from 'path';
 import { getInstallManifestPath } from './archon-paths';
 import { createLogger } from './logger';
 
-const log = createLogger('install-manifest');
+let cachedLog: ReturnType<typeof createLogger> | undefined;
+function getLog(): ReturnType<typeof createLogger> {
+  if (!cachedLog) cachedLog = createLogger('install-manifest');
+  return cachedLog;
+}
 
 export interface InstallManifest {
   binary: string;
@@ -17,7 +21,7 @@ function canonicalizeBinaryPath(binary: string): string {
   try {
     return realpathSync(absoluteBinary);
   } catch (err) {
-    log.debug({ err, binary: absoluteBinary }, 'install_manifest.realpath_failed');
+    getLog().debug({ err, binary: absoluteBinary }, 'install_manifest.realpath_failed');
     return absoluteBinary;
   }
 }
@@ -39,7 +43,7 @@ function readCurrentManifest(path: string): InstallManifest | null {
     return { binary: record.binary, version: record.version };
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
-    if (code !== 'ENOENT') log.debug({ err, path }, 'install_manifest.read_failed');
+    if (code !== 'ENOENT') getLog().debug({ err, path }, 'install_manifest.read_failed');
     return null;
   }
 }
@@ -76,9 +80,9 @@ export function refreshCompiledInstallManifest(
       try {
         rmSync(tempPath, { force: true });
       } catch (cleanupError) {
-        log.debug({ err: cleanupError, tempPath }, 'install_manifest.cleanup_failed');
+        getLog().debug({ err: cleanupError, tempPath }, 'install_manifest.cleanup_failed');
       }
     }
-    log.debug({ err, manifestPath }, 'install_manifest.write_failed');
+    getLog().debug({ err, manifestPath }, 'install_manifest.write_failed');
   }
 }

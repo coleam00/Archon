@@ -287,8 +287,6 @@ function isVersionRequest(args: string[]): boolean {
 async function main(): Promise<number> {
   const args = process.argv.slice(2);
 
-  refreshCompiledInstallManifest(BUNDLED_IS_BINARY, process.execPath, BUNDLED_VERSION);
-
   // Anonymous once-per-invocation startup event (self-gates on opt-out).
   // Emitted before any early return so EVERY invocation — including bare
   // `archon`, `--help`, and `--version` — is counted, matching the
@@ -298,6 +296,7 @@ async function main(): Promise<number> {
 
   // Handle no arguments - show help and exit successfully
   if (args.length === 0) {
+    refreshCompiledInstallManifest(BUNDLED_IS_BINARY, process.execPath, BUNDLED_VERSION);
     printUsage();
     await shutdownTelemetry();
     return 0;
@@ -307,6 +306,7 @@ async function main(): Promise<number> {
   // `archon --version` works the same as `archon version` from any directory.
   if (isVersionRequest(args)) {
     try {
+      refreshCompiledInstallManifest(BUNDLED_IS_BINARY, process.execPath, BUNDLED_VERSION);
       await versionCommand();
       return 0;
     } finally {
@@ -329,6 +329,7 @@ async function main(): Promise<number> {
     });
   } catch (error) {
     const err = error as Error;
+    refreshCompiledInstallManifest(BUNDLED_IS_BINARY, process.execPath, BUNDLED_VERSION);
     console.error(`Error parsing arguments: ${err.message}`);
     printUsage();
     await shutdownTelemetry();
@@ -356,16 +357,30 @@ async function main(): Promise<number> {
   const defaultStubsFlag = values['default-stubs'] as boolean | undefined;
   const execCodeFlag = values['exec-code'] as boolean | undefined;
   const pauseAtGatesFlag = values['pause-at-gates'] as boolean | undefined;
+  const command = positionals[0];
+  const subcommand = positionals[1];
+
+  // setup/doctor/telemetry default to warn to avoid Pino info JSON interleaving with their human-readable output; lazy loggers pick up this level at first creation
+  const isInteractiveCommand =
+    command === 'setup' || command === 'doctor' || command === 'telemetry';
+  const suppressByDefault = isInteractiveCommand && !values.verbose && !isVerboseBoot();
+  // Apply output policy before install discovery: its best-effort debug logs
+  // must never prefix a machine-readable response.
+  if (jsonFlag) {
+    setLogLevel('silent');
+  } else if (values.quiet || suppressByDefault) {
+    setLogLevel('warn');
+  } else if (values.verbose) {
+    setLogLevel('debug');
+  }
+  refreshCompiledInstallManifest(BUNDLED_IS_BINARY, process.execPath, BUNDLED_VERSION);
+
   // Handle help flag
   if (values.help) {
     printUsage();
     await shutdownTelemetry();
     return 0;
   }
-
-  // Get command and subcommand
-  const command = positionals[0];
-  const subcommand = positionals[1];
 
   // Commands that don't require git repo validation
   const noGitCommands = [
@@ -384,24 +399,6 @@ async function main(): Promise<number> {
   const requiresGitRepo = !noGitCommands.includes(command ?? '');
 
   try {
-    // setup/doctor/telemetry default to warn to avoid Pino info JSON interleaving with their human-readable output; lazy loggers pick up this level at first creation
-    const isInteractiveCommand =
-      command === 'setup' || command === 'doctor' || command === 'telemetry';
-    const suppressByDefault = isInteractiveCommand && !values.verbose && !isVerboseBoot();
-    // --json must keep stdout to EXACTLY the machine-readable payload. Pino's
-    // default destination is stdout, so even one warn/error line would precede
-    // the JSON and break JSON.parse for a consuming agent. Silence logs entirely
-    // (not just lower to 'warn' — warnings still print at that level): every
-    // --json command surfaces failures inside its own { ok: false } envelope, so
-    // no diagnostic the caller needs is lost.
-    if (jsonFlag) {
-      setLogLevel('silent');
-    } else if (values.quiet || suppressByDefault) {
-      setLogLevel('warn');
-    } else if (values.verbose) {
-      setLogLevel('debug');
-    }
-
     // Note: orphaned run cleanup moved to `workflow cleanup` command only.
     // Running it on every CLI startup killed parallel workflow runs (all
     // 'running' status rows were marked failed by each new process).

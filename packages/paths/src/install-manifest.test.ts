@@ -11,6 +11,7 @@ import {
 } from 'fs';
 import { tmpdir } from 'os';
 import { isAbsolute, join, resolve } from 'path';
+import { spawnSync } from 'node:child_process';
 import { refreshCompiledInstallManifest, type InstallManifest } from './install-manifest';
 
 describe('compiled install manifest', () => {
@@ -104,5 +105,22 @@ describe('compiled install manifest', () => {
 
     expect(() => refreshCompiledInstallManifest(true, process.execPath, '1.2.3')).not.toThrow();
     expect(readdirSync(testDir).filter(name => name.endsWith('.tmp'))).toEqual([]);
+  });
+
+  test('respects the JSON log gate before a compiled startup failure', () => {
+    writeFileSync(manifestPath(), 'not-json');
+
+    const result = spawnSync(
+      process.execPath,
+      [join(import.meta.dir, 'fixtures', 'install-manifest-json.ts')],
+      {
+        encoding: 'utf8',
+        env: { ...process.env, ARCHON_HOME: testDir, LOG_LEVEL: 'debug' },
+      }
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe('{"ok":true}\n');
+    expect(result.stderr).toBe('');
   });
 });
