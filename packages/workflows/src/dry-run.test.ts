@@ -438,6 +438,25 @@ describe('dry-run stub scaffolding and sparse defaults (#2624)', () => {
       output: 'live',
     });
   });
+
+  test('generates array-typed output_format stubs', () => {
+    const workflow = makeTestWorkflow({
+      name: 'array-output',
+      nodes: [
+        {
+          id: 'items',
+          prompt: 'List items',
+          output_format: {
+            type: 'array',
+            items: { type: 'string' },
+            minItems: 2,
+          },
+        },
+      ],
+    });
+
+    expect(createDryRunStubScaffold(workflow)).toEqual({ items: ['TODO', 'TODO'] });
+  });
 });
 
 describe('dryRunWorkflow', () => {
