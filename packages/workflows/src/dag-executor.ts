@@ -7593,13 +7593,18 @@ async function executeWorkflowNode(
     // of rehydrating an invalid "completed" payload. Mirrors the AI/loop structured-
     // output gates; no reask loop (a child rerun costs a full run and may have side
     // effects), one validation, one hard failure.
+    let certifiedLogicalValue: unknown;
+    let schemaCompiled = false;
     if (node.output_format) {
       const logicalValue = subrunLogicalValue(outcome);
       let schemaCompileError: string | undefined;
       const validation = validateStructuredOutput(logicalValue, node.output_format, compileMsg => {
         schemaCompileError = compileMsg;
       });
-      if (schemaCompileError !== undefined) {
+      if (schemaCompileError === undefined) {
+        schemaCompiled = true;
+        certifiedLogicalValue = logicalValue;
+      } else {
         // Fail-safe on an uncompilable schema, same contract as the AI-node gate:
         // surface it loudly but never turn it into a spurious node failure.
         getLog().warn(
@@ -7617,7 +7622,8 @@ async function executeWorkflowNode(
             'workflow.subrun_schema_warn_send_failed'
           );
         });
-      } else if (!validation.valid) {
+      }
+      if (!validation.valid) {
         const errors = (validation.errors ?? ['value does not match the declared schema']).join(
           '; '
         );
@@ -7660,10 +7666,16 @@ async function executeWorkflowNode(
           type: 'workflow',
           child_run_id: outcome.childRunId,
           // The child's terminal logical value (#2637), so parent cold resume
-          // rehydrates typed access to `$<node>.output.field`.
+          // rehydrates typed access to `$<node>.output.field`. When the child
+          // carried no typed value but the output_format gate certified a parsed
+          // one, persist THAT — otherwise an array-typed certified output would
+          // pass its own gate yet stay unreadable downstream (parity with the
+          // fan-out join's childElement fallback).
           ...(outcome.structuredOutput !== undefined
             ? { structured_output: outcome.structuredOutput }
-            : {}),
+            : schemaCompiled && certifiedLogicalValue !== outcome.output
+              ? { structured_output: certifiedLogicalValue as JsonValue }
+              : {}),
           ...(outcome.costUsd !== undefined ? { cost_usd: outcome.costUsd } : {}),
           // Rolled up from the child run's persisted totals, exactly like cost_usd —
           // tokens are the axis every provider reports (Codex reports no cost at all),
@@ -7696,7 +7708,9 @@ async function executeWorkflowNode(
       ...(outcome.tokens !== undefined ? { tokens: outcome.tokens } : {}),
       ...(outcome.structuredOutput !== undefined
         ? { structuredOutput: outcome.structuredOutput }
-        : {}),
+        : schemaCompiled && certifiedLogicalValue !== outcome.output
+          ? { structuredOutput: certifiedLogicalValue }
+          : {}),
       ...(declaredFields !== undefined ? { declaredFields } : {}),
     };
   };

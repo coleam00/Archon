@@ -2137,6 +2137,65 @@ nodes:
     ).toBeUndefined();
   });
 
+  it('persists the certified logical value on the 1:1 path when the child had no typed summary (#2774)', async () => {
+    await writeWorkflow(
+      'array-child',
+      `
+name: array-child
+description: terminal node emits a bare JSON array as text
+nodes:
+  - id: emit
+    bash: |
+      printf '%s' '[{"verdict":"ship"},{"verdict":"hold"}]'
+`
+    );
+    await writeWorkflow(
+      'array-parent',
+      `
+name: array-parent
+description: declares an array output_format over a text-only child
+nodes:
+  - id: sub
+    workflow: array-child
+    mutates_checkout: false
+    output_format:
+      type: array
+      items:
+        type: object
+        properties:
+          verdict: { type: string }
+        required: [verdict]
+`
+    );
+
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      await discover('array-parent'),
+      'goal',
+      'conv-db'
+    );
+
+    expect(result.success).toBe(true);
+    const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'array-parent');
+    const subCompleted = store.events.find(
+      e =>
+        e.workflow_run_id === parentRun?.id &&
+        e.event_type === 'node_completed' &&
+        e.step_name === 'sub'
+    );
+    // The gate certified the PARSED array, so that — not the raw text — is what a
+    // cold resume rehydrates and downstream `$sub.output[0].verdict` reads.
+    expect(subCompleted?.data?.structured_output).toEqual([
+      { verdict: 'ship' },
+      { verdict: 'hold' },
+    ]);
+  });
+
   it('read-only children (mutates_checkout: false) fan out IN the parent checkout, no worktrees', async () => {
     await writeWorkflow('fan-child-ro', fanChildEchoReadOnly);
     await writeWorkflow(
