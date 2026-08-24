@@ -784,6 +784,40 @@ describe('pre-dispatch gates --json error envelope', () => {
     expect(() => JSON.parse(result.stdout)).not.toThrow();
     expect(JSON.parse(result.stdout)).toMatchObject({ ok: false });
   });
+
+  it('emits { ok: false } on stdout when arg parsing rejects an unknown flag', () => {
+    const result = spawnSync(
+      process.execPath,
+      [CLI_ENTRY, 'workflow', 'list', '--json', '--bogus-flag'],
+      { encoding: 'utf8', env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' } }
+    );
+
+    expect(result.status).toBe(1);
+    expect(() => JSON.parse(result.stdout)).not.toThrow();
+    expect(JSON.parse(result.stdout)).toMatchObject({ ok: false });
+  });
+
+  it('emits { ok: false } on stdout when chat is invoked with no message', () => {
+    const result = spawnSync(process.execPath, [CLI_ENTRY, 'chat', '--json'], {
+      encoding: 'utf8',
+      env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' },
+    });
+
+    expect(result.status).toBe(1);
+    expect(() => JSON.parse(result.stdout)).not.toThrow();
+    expect(JSON.parse(result.stdout)).toMatchObject({ ok: false });
+  });
+
+  it('emits { ok: false } on stdout for an invalid setup --scope', () => {
+    const result = spawnSync(process.execPath, [CLI_ENTRY, 'setup', '--scope', 'bogus', '--json'], {
+      encoding: 'utf8',
+      env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' },
+    });
+
+    expect(result.status).toBe(1);
+    expect(() => JSON.parse(result.stdout)).not.toThrow();
+    expect(JSON.parse(result.stdout)).toMatchObject({ ok: false });
+  });
 });
 
 describe('workflow test --json error envelope', () => {

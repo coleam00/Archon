@@ -346,8 +346,11 @@ async function main(): Promise<number> {
     });
   } catch (error) {
     const err = error as Error;
-    console.error(`Error parsing arguments: ${err.message}`);
-    printUsage();
+    // parseArgs rejected before values.json was bound, so derive the flag
+    // from raw argv to honor the --json stdout contract.
+    const json = args.includes('--json');
+    await fail(json, `Error parsing arguments: ${err.message}`);
+    if (!json) printUsage();
     await shutdownTelemetry();
     return 1;
   }
@@ -555,10 +558,7 @@ async function main(): Promise<number> {
 
       case 'chat': {
         const chatMessage = positionals.slice(1).join(' ');
-        if (!chatMessage) {
-          console.error('Usage: archon chat <message>');
-          return 1;
-        }
+        if (!chatMessage) return await fail(jsonFlag, 'Usage: archon chat <message>');
         await chatCommand(chatMessage);
         break;
       }
@@ -566,8 +566,10 @@ async function main(): Promise<number> {
       case 'setup': {
         const rawScope = values.scope as string | undefined;
         if (rawScope !== undefined && rawScope !== 'home' && rawScope !== 'project') {
-          console.error(`Error: Invalid --scope: "${rawScope}". Must be "home" or "project".`);
-          return 1;
+          return await fail(
+            jsonFlag,
+            `Error: Invalid --scope: "${rawScope}". Must be "home" or "project".`
+          );
         }
         const scope: 'home' | 'project' = rawScope ?? 'home';
         const forceFlag = (values.force as boolean | undefined) ?? false;
