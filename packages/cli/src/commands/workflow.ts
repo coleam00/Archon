@@ -1,6 +1,8 @@
 /**
  * Workflow command - list and run workflows
  */
+import { existsSync, readdirSync, type Dirent } from 'node:fs';
+import * as archonPaths from '@archon/paths';
 import {
   registerRepository,
   registerFolder,
@@ -93,6 +95,7 @@ import {
   isScheduledWorkflowResume,
 } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun, WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
+import { TERMINAL_WORKFLOW_STATUSES } from '@archon/workflows/schemas/workflow-run';
 import {
   approveWorkflow,
   rejectWorkflow,
@@ -105,6 +108,7 @@ import {
   assertRejectable,
   assertRespondable,
 } from '@archon/core/operations/workflow-operations';
+import { resolveWorkflowAdoption } from '@archon/core/operations/workflow-adoption';
 import * as conversationDb from '@archon/core/db/conversations';
 import * as codebaseDb from '@archon/core/db/codebases';
 import * as isolationDb from '@archon/core/db/isolation-environments';
@@ -298,6 +302,19 @@ export interface WorkflowRunOptions {
   inputs?: string[];
   /** Raw repeatable `--model name=spec` mappings; parsed once at the invocation gate. */
   modelAssignments?: string[];
+  /**
+   * Between-run continuation (#2747): adopt a terminal run's estate — its
+   * worktree/branch plus read access to its artifacts via `$ADOPTED_RUN_DIR`.
+   * Run-id only, never a name (#2645): newest-wins selection is the ambiguity
+   * class this flag must not introduce.
+   */
+  adoptRunId?: string;
+  /**
+   * Between-run continuation (#2747): record that this fresh-lane run replaces
+   * the prior run's open item, closing its inbox row through the same
+   * no-adopter query. Provenance only — NO lane inheritance.
+   */
+  supersedesRunId?: string;
 }
 
 /**
@@ -1305,6 +1322,27 @@ async function runWorkflowWithOwnedSource(
     );
   }
 
+  // Between-run continuation (#2747): adoption dictates the lane itself, so the
+  // lane-choosing flags are refused rather than silently overridden.
+  if (options.adoptRunId !== undefined) {
+    const conflicts: string[] = [];
+    if (options.resume) conflicts.push('--resume');
+    if (options.branchName !== undefined) conflicts.push('--branch');
+    if (options.fromBranch !== undefined) conflicts.push('--from/--from-branch');
+    if (options.baseBranch !== undefined) conflicts.push('--base');
+    if (options.noWorktree) conflicts.push('--no-worktree');
+    if (conflicts.length > 0) {
+      throw new Error(
+        `--adopt and ${conflicts.join('/')} are mutually exclusive.\n` +
+          '  Adoption resolves its own lane: reuse the adopted worktree, or cut a fresh one from its branch.'
+      );
+    }
+  } else if (options.supersedesRunId !== undefined && options.resume) {
+    throw new Error(
+      '--supersedes records a FRESH-lane rerun as replacing a prior open item; it cannot be combined with --resume.'
+    );
+  }
+
   // Per-dispatch --base override, normalized once. Wins over repo config + the
   // codebase default for both the worktree cut-from (the provider request's
   // `baseOverride` below) and the PR target / $BASE_BRANCH (executeWorkflow's
@@ -1359,7 +1397,9 @@ async function runWorkflowWithOwnedSource(
   // (not at the worktree block below) because --detach also needs it to decide
   // whether to pin a generated branch on the child.
   const flagWantsIsolation = !options.resume && !options.noWorktree;
-  const wantsIsolation =
+  // Reassigned by adoption resolution (#2747): adopting a branch whose worktree
+  // is gone forces isolation ON to cut a fresh worktree FROM that branch.
+  let wantsIsolation =
     !options.resume && pinnedEnabled !== undefined ? pinnedEnabled : flagWantsIsolation;
 
   // Worktree options require a git repo. When the caller explicitly declares
@@ -1459,6 +1499,11 @@ async function runWorkflowWithOwnedSource(
     if (options.conversationId === undefined) {
       extraArgs.push('--conversation-id', childConversationId);
     }
+    // Between-run continuation (#2747) — the child re-resolves the adoption
+    // against the live filesystem/database, so pass the declaration through.
+    if (options.adoptRunId !== undefined) extraArgs.push('--adopt', options.adoptRunId);
+    if (options.supersedesRunId !== undefined)
+      extraArgs.push('--supersedes', options.supersedesRunId);
     // Re-pin the source as an ABSOLUTE path (parseArgs is last-wins, same as --cwd).
     // The original argv may hold a relative `--workflow-source`, and the child is
     // spawned with a different working directory, so passing it through unresolved
@@ -1626,6 +1671,69 @@ async function runWorkflowWithOwnedSource(
   // Overlay mode the backend actually mounted (fuse = unprivileged; native =
   // CAP_SYS_ADMIN, gate-bypassable). Threaded to the engine for the H4 run-start warning.
   let containerOverlayMode: 'fuse' | 'native' | undefined;
+
+  // Between-run continuation (#2747): resolve the declared adoption BEFORE any
+  // lane decision — it dictates the lane, fail-loud (never a silent fresh
+  // start). Supersede validates existence/terminality only; it deliberately
+  // inherits nothing.
+  let adoptedFromRunId: string | undefined;
+  let continuationMode: 'adopt' | 'supersede' | undefined;
+  if (options.adoptRunId !== undefined || options.supersedesRunId !== undefined) {
+    if (!codebase) {
+      throw new Error(
+        'Cannot resolve the project for --adopt/--supersedes. Run from the project checkout and try again.'
+      );
+    }
+    // Narrowed by construction: the flag-conflict gate above guarantees exactly
+    // one of the two ids is present.
+    if (options.adoptRunId !== undefined) {
+      continuationMode = 'adopt';
+      adoptedFromRunId = options.adoptRunId;
+    } else if (options.supersedesRunId !== undefined) {
+      continuationMode = 'supersede';
+      adoptedFromRunId = options.supersedesRunId;
+    } else {
+      throw new Error('--adopt/--supersedes requires a run id.');
+    }
+
+    if (continuationMode === 'adopt') {
+      const { adoptedRun, lane } = await resolveWorkflowAdoption({
+        adoptedRunId: adoptedFromRunId,
+        codebaseId: codebase.id,
+        codebasePath: codebase.default_cwd,
+        codebaseKind: codebase.kind,
+        containerRequested: options.container === true,
+      });
+      if (lane.kind === 'reuse-worktree') {
+        workingCwd = lane.workingPath;
+        isolationEnvId = lane.envId;
+        console.log(
+          `Adopting run ${adoptedRun.id} — reusing its worktree at ${lane.workingPath} (dirty state inherited as-is).`
+        );
+      } else if (lane.kind === 'fresh-from-branch') {
+        options.fromBranch = lane.branch;
+        wantsIsolation = true;
+        console.log(
+          `Adopting run ${adoptedRun.id} — its worktree is gone; cutting a fresh worktree from its branch '${lane.branch}'.`
+        );
+      } else {
+        console.log(
+          `Adopting run ${adoptedRun.id} — folder projects run in place; adoption carries provenance and $ADOPTED_RUN_DIR access only.`
+        );
+      }
+    } else {
+      const superseded = await workflowDb.getWorkflowRun(adoptedFromRunId);
+      if (!superseded) {
+        throw new Error(`Cannot supersede: no workflow run '${adoptedFromRunId}' exists.`);
+      }
+      if (!TERMINAL_WORKFLOW_STATUSES.includes(superseded.status)) {
+        throw new Error(
+          `Cannot supersede run '${superseded.id}': it is still ${superseded.status}.`
+        );
+      }
+      console.log(`Superseding run ${superseded.id} — fresh lane, provenance recorded.`);
+    }
+  }
 
   // Handle --resume: locate the prior failed run, reuse its worktree, and hand
   // the resumed-run handle to executeWorkflow below via opts. The executor no
@@ -2325,6 +2433,8 @@ async function runWorkflowWithOwnedSource(
           // leaves the staged directory un-adopted so the wrap reclaims it on the
           // way out.
           capturedSourceOwner: owner,
+          // Between-run continuation (#2747): written once onto the fresh row.
+          ...(adoptedFromRunId !== undefined ? { adoptedFromRunId, continuationMode } : {}),
         };
     result = await executeWorkflow(
       deps,
@@ -2768,9 +2878,19 @@ export async function workflowGetCommand(
     eventsFailed = fetched.failed;
   }
 
+  // Leave-behind view (#2747): what did this run leave, and where. Assembled
+  // from existing data — status/outcome, adoption chain, and its artifact file
+  // list resolved through the persisted output_root (read-only by contract).
+  let leaveBehind: LeaveBehind | undefined;
+  try {
+    leaveBehind = await buildLeaveBehind(run);
+  } catch (error) {
+    getLog().warn({ err: error as Error, runId: run.id }, 'cli.workflow_get_leave_behind_failed');
+  }
+
   if (json) {
     if (!verbose) {
-      await writeJsonLine(run);
+      await writeJsonLine({ ...run, ...(leaveBehind ? { leave_behind: leaveBehind } : {}) });
       return 0;
     }
 
@@ -2792,7 +2912,7 @@ export async function workflowGetCommand(
   console.log(`  ID:     ${run.id}`);
   console.log(`  Name:   ${run.workflow_name}`);
   console.log(`  Path:   ${run.working_path ?? '(none)'}`);
-  console.log(`  Status: ${run.status}`);
+  console.log(`  Status: ${run.status}${run.outcome ? ` (${run.outcome})` : ''}`);
   console.log(`  Age:    ${formatAge(run.started_at)}`);
   // Paused interactive-loop gate: one honest line so a human (or an agent parsing
   // the plain output) sees whether any declared completion condition completed
@@ -2830,6 +2950,24 @@ export async function workflowGetCommand(
   if (runError) {
     console.log(`  Error:  ${runError}`);
   }
+  if (leaveBehind) {
+    console.log('  Leave-behind:');
+    if (leaveBehind.branch) console.log(`    Branch: ${leaveBehind.branch}`);
+    if (leaveBehind.worktree) {
+      console.log(
+        `    Worktree: ${leaveBehind.worktree} (${leaveBehind.worktreeLive ? 'live' : 'gone'})`
+      );
+    }
+    if (leaveBehind.adopted_from) console.log(`    Adopted from: ${leaveBehind.adopted_from}`);
+    for (const a of leaveBehind.adopted_by) console.log(`    Adopted by: ${a}`);
+    if (leaveBehind.artifactFiles.length > 0) {
+      console.log(
+        `    Artifacts (${String(leaveBehind.artifactFiles.length)} files under $ARTIFACTS_DIR):`
+      );
+      for (const f of leaveBehind.artifactFiles.slice(0, 20)) console.log(`      - ${f}`);
+      if (leaveBehind.artifactFiles.length > 20) console.log('      …');
+    }
+  }
   if (events) {
     if (eventsFailed) {
       console.log('  (node events unavailable — see logs)');
@@ -2851,6 +2989,77 @@ export async function workflowGetCommand(
  * whatever surface started the run — so this is the read path for a run that
  * had no conversation to post into (CLI, REST) or whose chat delivery failed.
  */
+/**
+ * Leave-behind view (#2747): what a run concluded and what it left undone —
+ * outcome, branch, worktree (live or gone), adoption chain, and its artifact
+ * file list. Artifacts resolve through the persisted `output_root` and are
+ * read-only here: the adopting run references them via `$ADOPTED_RUN_DIR`, it
+ * never writes into them.
+ */
+interface LeaveBehind {
+  branch?: string;
+  worktree?: string;
+  worktreeLive?: boolean;
+  adopted_from?: string;
+  adopted_by: string[];
+  artifactFiles: string[];
+}
+
+async function buildLeaveBehind(run: WorkflowRun): Promise<LeaveBehind> {
+  const leaveBehind: LeaveBehind = { adopted_by: [], artifactFiles: [] };
+
+  if (run.working_path) {
+    leaveBehind.worktree = run.working_path;
+    leaveBehind.worktreeLive = existsSync(run.working_path);
+  }
+  if (run.adopted_from_run_id) leaveBehind.adopted_from = run.adopted_from_run_id;
+  leaveBehind.adopted_by = (await workflowDb.findAdoptingRuns(run.id)).map(r => r.id);
+
+  // Branch from the isolation record that owned the working path, if any.
+  if (run.codebase_id && run.working_path) {
+    try {
+      const envs = await isolationDb.listByCodebase(run.codebase_id);
+      const env = envs.find(e => e.working_path === run.working_path);
+      if (env) leaveBehind.branch = env.branch_name;
+    } catch (error) {
+      getLog().debug({ err: error as Error }, 'cli.workflow_get_branch_lookup_failed');
+    }
+  }
+
+  // Artifact file list — capped walk so `get` stays cheap on big runs.
+  if (run.output_root) {
+    try {
+      const artifactsDir = archonPaths.getRunArtifactsDirForRoot(run.output_root, run.id);
+      leaveBehind.artifactFiles = listArtifactFiles(artifactsDir);
+    } catch (error) {
+      getLog().debug({ err: error as Error }, 'cli.workflow_get_artifact_walk_failed');
+    }
+  }
+  return leaveBehind;
+}
+
+/** Relative paths under `dir`, shallow-walked with a hard cap (#2747 display). */
+function listArtifactFiles(dir: string, maxFiles = 200): string[] {
+  const out: string[] = [];
+  const walk = (current: string, prefix: string): void => {
+    if (out.length >= maxFiles) return;
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(current, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (out.length >= maxFiles) return;
+      const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) walk(join(current, entry.name), rel);
+      else out.push(rel);
+    }
+  };
+  walk(dir, '');
+  return out;
+}
+
 function readParseWarningEvents(events: readonly WorkflowEventRow[]): string[] {
   const out: string[] = [];
   for (const event of events) {
@@ -2871,8 +3080,50 @@ function readParseWarningEvents(events: readonly WorkflowEventRow[]): string[] {
  */
 export async function workflowRunsCommand(
   cwd: string,
-  opts: { json?: boolean; all?: boolean; status?: string; limit?: number } = {}
+  opts: { json?: boolean; all?: boolean; status?: string; limit?: number; open?: boolean } = {}
 ): Promise<void> {
+  // Open-work inbox (#2747): terminal failed runs nothing has adopted or
+  // superseded — the operator's "what ended with work on the table" query.
+  // Status-derived v1 semantics; --status/--open are mutually exclusive shapes.
+  if (opts.open) {
+    if (opts.status) {
+      const msg = '--open and --status are mutually exclusive: the inbox is failed runs only.';
+      if (opts.json) {
+        await writeJsonLine({ ok: false, error: msg });
+        return;
+      }
+      throw new Error(msg);
+    }
+    let codebase = null;
+    if (!opts.all) {
+      try {
+        codebase = await findCodebaseForCheckoutPath(cwd);
+      } catch (error) {
+        getLog().warn({ err: error as Error, cwd }, 'cli.workflow_runs_codebase_lookup_failed');
+      }
+    }
+    const runs = await workflowDb.findOpenWorkRuns({
+      codebaseId: opts.all ? undefined : (codebase?.id ?? undefined),
+      limit: opts.limit ?? 20,
+    });
+    if (opts.json) {
+      await writeJsonLine({ runs, total: runs.length, scopeFallback: !opts.all && !codebase });
+      return;
+    }
+    if (runs.length === 0) {
+      console.log('No open workflow runs — nothing ended with work on the table.');
+      return;
+    }
+    console.log(`\nOpen work (${String(runs.length)}):\n`);
+    for (const run of runs) {
+      console.log(
+        `  ${run.id.slice(0, 8)}  ${run.workflow_name}  (${formatAge(run.started_at)})  adopt: workflow run <name> --adopt ${run.id}`
+      );
+    }
+    console.log('');
+    return;
+  }
+
   let statusFilter: WorkflowRunStatus | undefined;
   if (opts.status) {
     const parsed = workflowRunStatusSchema.safeParse(opts.status);

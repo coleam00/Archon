@@ -149,6 +149,7 @@ function mockWorkflowRun(id = 'mock-run-id'): WorkflowRun {
     user_id: null,
     parent_run_id: null,
     output_root: null,
+    adopted_from_run_id: null,
   };
 }
 
@@ -409,6 +410,7 @@ function makeWorkflowRun(id = 'dag-test-run-id', overrides?: Partial<WorkflowRun
     user_id: null,
     parent_run_id: null,
     output_root: null,
+    adopted_from_run_id: null,
     ...overrides,
   };
 }

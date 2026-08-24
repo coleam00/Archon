@@ -340,6 +340,8 @@ export async function createWorkflowRun(data: {
   parent_conversation_id?: string;
   user_id?: string;
   parent_run_id?: string;
+  /** Between-run continuation (#2747) — written once at creation, never on resume. */
+  adopted_from_run_id?: string;
 }): Promise<WorkflowRun> {
   // Serialize metadata with validation to catch circular references early
   let metadataJson: string;
@@ -375,12 +377,12 @@ export async function createWorkflowRun(data: {
     const result = await pool.query<WorkflowRun>(
       data.id === undefined
         ? `INSERT INTO remote_agent_workflow_runs
-       (workflow_name, conversation_id, codebase_id, user_message, metadata, working_path, parent_conversation_id, user_id, parent_run_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       (workflow_name, conversation_id, codebase_id, user_message, metadata, working_path, parent_conversation_id, user_id, parent_run_id, adopted_from_run_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        RETURNING *`
         : `INSERT INTO remote_agent_workflow_runs
-       (workflow_name, conversation_id, codebase_id, user_message, metadata, working_path, parent_conversation_id, user_id, parent_run_id, id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       (workflow_name, conversation_id, codebase_id, user_message, metadata, working_path, parent_conversation_id, user_id, parent_run_id, adopted_from_run_id, id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        RETURNING *`,
       [
         data.workflow_name,
@@ -392,6 +394,7 @@ export async function createWorkflowRun(data: {
         data.parent_conversation_id ?? null,
         data.user_id ?? null,
         data.parent_run_id ?? null,
+        data.adopted_from_run_id ?? null,
         ...(data.id === undefined ? [] : [data.id]),
       ]
     );
@@ -1832,6 +1835,67 @@ export async function listWorkflowRuns(options?: {
     const err = error as Error;
     getLog().error({ err }, 'db.workflow_run_list_failed');
     throw new Error(`Failed to list workflow runs: ${err.message}`);
+  }
+}
+
+/**
+ * The open-work inbox (#2747): runs that ended with work on the table. Status-
+ * derived v1 semantics — terminal AND failed AND no run has adopted or
+ * superseded it (the NOT EXISTS closes the row behaviorally when a successor
+ * claims it). Deletion is hard in this store, so "not deleted" holds by
+ * construction. Paused/waiting/cancelled runs are excluded by design: they are
+ * live or already judged.
+ */
+export async function findOpenWorkRuns(options?: {
+  codebaseId?: string;
+  limit?: number;
+}): Promise<WorkflowRun[]> {
+  const values: unknown[] = [];
+  let codebaseClause = '';
+  if (options?.codebaseId) {
+    values.push(options.codebaseId);
+    codebaseClause = `AND codebase_id = $${String(values.length)}`;
+  }
+  const limit = options?.limit ?? 50;
+  values.push(limit);
+  const limitParam = `$${String(values.length)}`;
+
+  try {
+    const result = await pool.query<WorkflowRun>(
+      `SELECT * FROM remote_agent_workflow_runs r
+       WHERE r.status = 'failed'
+         ${codebaseClause}
+         AND NOT EXISTS (
+           SELECT 1 FROM remote_agent_workflow_runs a
+           WHERE a.adopted_from_run_id = r.id
+         )
+       ORDER BY r.started_at DESC
+       LIMIT ${limitParam}`,
+      values
+    );
+    return result.rows.map(normalizeWorkflowRun);
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err }, 'db.workflow_open_work_list_failed');
+    throw new Error(`Failed to list open workflow runs: ${err.message}`);
+  }
+}
+
+/**
+ * Runs that adopted or superseded `runId` (#2747) — the reverse direction of
+ * `adopted_from_run_id`, same column, no second column. Newest first.
+ */
+export async function findAdoptingRuns(runId: string): Promise<WorkflowRun[]> {
+  try {
+    const result = await pool.query<WorkflowRun>(
+      'SELECT * FROM remote_agent_workflow_runs WHERE adopted_from_run_id = $1 ORDER BY started_at DESC',
+      [runId]
+    );
+    return result.rows.map(normalizeWorkflowRun);
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, runId }, 'db.workflow_run_adopters_lookup_failed');
+    throw new Error(`Failed to find adopting runs: ${err.message}`);
   }
 }
 

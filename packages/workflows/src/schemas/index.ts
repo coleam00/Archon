@@ -190,6 +190,8 @@ export {
   workflowSourceMetadataSchema,
   readWorkflowSourceMetadata,
   readWorkflowSourceState,
+  CONTINUATION_METADATA_KEY,
+  readContinuationMode,
 } from './workflow-run';
 export type {
   WorkflowRunStatus,
@@ -206,6 +208,7 @@ export type {
   LoopGateRunMetadata,
   WorkflowSourceMetadata,
   WorkflowSourceState,
+  ContinuationMode,
 } from './workflow-run';
 
 // Per-node persisted provider sessions

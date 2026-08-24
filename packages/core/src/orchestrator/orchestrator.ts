@@ -64,7 +64,10 @@ import {
   assertComposedGateDriveable,
   assertInteractiveClassNotBackgrounded,
 } from '@archon/workflows/utils/workflow-requirements';
-import { SUBRUN_METADATA_KEYS } from '@archon/workflows/schemas/workflow-run';
+import {
+  SUBRUN_METADATA_KEYS,
+  CONTINUATION_METADATA_KEY,
+} from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowDefinition, WorkflowSource } from '@archon/workflows/schemas/workflow';
 import type { DagNode } from '@archon/workflows/schemas/dag-node';
 import type { RunModelOverrides } from '@archon/workflows/model-validation';
@@ -318,6 +321,9 @@ export interface WorkflowRoutingContext {
   readonly inputs?: Readonly<Record<string, string>>;
   /** Sparse tier/@alias rebindings supplied by this invocation (#2481). */
   readonly modelOverrides?: RunModelOverrides;
+  /** Between-run continuation (#2747): adopt/supersede target, if declared. */
+  readonly adoptRunId?: string;
+  readonly supersedesRunId?: string;
 }
 
 /**
@@ -534,9 +540,20 @@ async function dispatchBackgroundWorkflowOwned(
         ...(ctx.inputs && Object.keys(ctx.inputs).length > 0
           ? { [SUBRUN_METADATA_KEYS.inputs]: { ...ctx.inputs } }
           : {}),
+        // Between-run continuation (#2747) — write-once with the column below.
+        ...(ctx.adoptRunId || ctx.supersedesRunId
+          ? {
+              [CONTINUATION_METADATA_KEY]: {
+                mode: ctx.adoptRunId ? 'adopt' : 'supersede',
+              },
+            }
+          : {}),
       },
       parent_conversation_id: ctx.conversationDbId,
       user_id: ctx.userId,
+      ...(ctx.adoptRunId || ctx.supersedesRunId
+        ? { adopted_from_run_id: ctx.adoptRunId ?? ctx.supersedesRunId }
+        : {}),
     });
   } catch (error) {
     const err = error as Error;
@@ -581,6 +598,14 @@ async function dispatchBackgroundWorkflowOwned(
             // the executor creates the row itself); otherwise the row above already
             // carries them.
             inputs: ctx.inputs,
+            ...(ctx.adoptRunId
+              ? { adoptedFromRunId: ctx.adoptRunId, continuationMode: 'adopt' as const }
+              : ctx.supersedesRunId
+                ? {
+                    adoptedFromRunId: ctx.supersedesRunId,
+                    continuationMode: 'supersede' as const,
+                  }
+                : {}),
             ...(ctx.modelOverrides
               ? { modelOverrideLayer: { kind: 'raw' as const, overrides: ctx.modelOverrides } }
               : {}),

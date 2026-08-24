@@ -148,6 +148,7 @@ class InMemoryStore implements IWorkflowStore {
       user_id: data.user_id ?? null,
       parent_run_id: data.parent_run_id ?? null,
       output_root: null,
+      adopted_from_run_id: null,
     };
     this.runs.set(id, row);
     return Promise.resolve(this.clone(row));

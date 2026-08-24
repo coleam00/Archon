@@ -95,6 +95,38 @@ describe('substituteWorkflowVariables', () => {
     expect(prompt).toBe('cat "/state/root/pr-state.json"');
   });
 
+  // $ADOPTED_RUN_DIR (#2747): resolves only under an explicit adoption; a run
+  // that references it without one throws instead of substituting empty.
+  it('replaces $ADOPTED_RUN_DIR with the adopted run artifact directory', () => {
+    const { prompt } = substituteWorkflowVariables(
+      'Read $ADOPTED_RUN_DIR/report.md',
+      'run-2',
+      'msg',
+      '/tmp/artifacts',
+      'main',
+      'docs/',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { adoptedRunDir: '/root/artifacts/runs/run-1' }
+    );
+    expect(prompt).toBe('Read /root/artifacts/runs/run-1/report.md');
+  });
+
+  it('throws when $ADOPTED_RUN_DIR is referenced without an adoption active', () => {
+    expect(() =>
+      substituteWorkflowVariables(
+        'Read $ADOPTED_RUN_DIR/report.md',
+        'run-2',
+        'msg',
+        '/tmp/artifacts',
+        'main',
+        'docs/'
+      )
+    ).toThrow(/did not adopt a prior run/);
+  });
+
   it('throws when $STATE_DIR is referenced but no state dir was resolved', () => {
     expect(() =>
       substituteWorkflowVariables(

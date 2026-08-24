@@ -6,6 +6,7 @@
  * utilities. Single source of truth; no logic changes from either copy.
  */
 import { readFile } from 'fs/promises';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { join } from 'path';
 import type { IWorkflowPlatform, WorkflowDeps, WorkflowMessageMetadata } from './deps';
 import * as archonPaths from '@archon/paths';
@@ -535,6 +536,28 @@ export async function loadCommandPrompt(
 
 // ─── Variable Substitution ───────────────────────────────────────────────────
 
+/**
+ * Scope holding the current run's adopted artifact directory (#2747), entered by
+ * the executor around DAG execution. A scoped context rather than another
+ * positional parameter because the value is RUN-level (like `artifactsDir`) but
+ * is consumed at every substitution site several layers down; a child sub-run's
+ * `executeWorkflow` re-enters with its own (absent) scope, correctly shadowing
+ * the parent's adoption.
+ */
+const adoptedRunDirContext = new AsyncLocalStorage<string>();
+
+export function runWithAdoptedRunDir<T>(
+  adoptedRunDir: string | undefined,
+  fn: () => Promise<T>
+): Promise<T> {
+  if (adoptedRunDir === undefined) return fn();
+  return adoptedRunDirContext.run(adoptedRunDir, fn);
+}
+
+function currentAdoptedRunDir(): string | undefined {
+  return adoptedRunDirContext.getStore();
+}
+
 /** Pattern string for context variables - used to create fresh regex instances */
 export const CONTEXT_VAR_PATTERN_STR =
   '\\$(?:CONTEXT|EXTERNAL_CONTEXT|ISSUE_CONTEXT)(?![A-Za-z0-9_])';
@@ -549,6 +572,9 @@ export const CONTEXT_VAR_PATTERN_STR =
  * - $STATE_DIR - External per-PROJECT cross-run state directory (shared by every
  *   workflow in the project; pre-created by the executor). Throws if referenced
  *   without a resolved value.
+ * - $ADOPTED_RUN_DIR (#2747) - The adopted run's artifact directory, resolved
+ *   through its persisted `output_root`. Read-only by contract; throws if
+ *   referenced without an adoption active.
  * - $BASE_BRANCH - The base branch (from config or auto-detected)
  * - $CONTEXT, $EXTERNAL_CONTEXT, $ISSUE_CONTEXT - GitHub issue/PR context (if available)
  * - $DOCS_DIR - Documentation directory path (configured or default 'docs/')
@@ -576,7 +602,13 @@ export function substituteWorkflowVariables(
   loopUserInput?: string,
   rejectionReason?: string,
   loopPrevOutput?: string,
-  options?: { shellSafe?: boolean; stateDir?: string; inputs?: Record<string, JsonValue> }
+  options?: {
+    shellSafe?: boolean;
+    stateDir?: string;
+    inputs?: Record<string, JsonValue>;
+    /** Adopted run's artifact directory (#2747). Undefined = no adoption active. */
+    adoptedRunDir?: string;
+  }
 ): { prompt: string; contextSubstituted: boolean } {
   // Fail fast if the prompt references $BASE_BRANCH but no base branch could be resolved
   if (!baseBranch && prompt.includes('$BASE_BRANCH')) {
@@ -598,6 +630,18 @@ export function substituteWorkflowVariables(
     );
   }
 
+  // $ADOPTED_RUN_DIR (#2747) resolves only under an explicit adoption. A run
+  // that references it without one throws — mirroring $BASE_BRANCH/$STATE_DIR —
+  // because a literal or empty substitution would silently point work at
+  // nothing instead of telling the author the run was never started with --adopt.
+  if (!options?.adoptedRunDir && !currentAdoptedRunDir() && prompt.includes('$ADOPTED_RUN_DIR')) {
+    throw new Error(
+      '$ADOPTED_RUN_DIR is referenced but this run did not adopt a prior run. ' +
+        'Start it with `workflow run <name> --adopt <run-id>` (or adopt_run_id on the API) ' +
+        "to read an earlier run's artifacts by reference."
+    );
+  }
+
   // Defensive: ensure docsDir always has a value (callers should resolve, but guard here)
   const resolvedDocsDir = docsDir || 'docs/';
 
@@ -610,6 +654,7 @@ export function substituteWorkflowVariables(
     // Engine-controlled like $ARTIFACTS_DIR — substituted even under shellSafe,
     // or `bash:`/`script:` bodies would never see it.
     .replace(/\$STATE_DIR/g, options?.stateDir ?? '')
+    .replace(/\$ADOPTED_RUN_DIR/g, options?.adoptedRunDir ?? currentAdoptedRunDir() ?? '')
     .replace(/\$BASE_BRANCH/g, baseBranch)
     .replace(/\$DOCS_DIR/g, resolvedDocsDir);
 

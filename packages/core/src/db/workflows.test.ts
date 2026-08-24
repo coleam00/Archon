@@ -44,6 +44,8 @@ import {
   findChildRuns,
   getRunAncestry,
   listWorkflowRuns,
+  findOpenWorkRuns,
+  findAdoptingRuns,
   deleteOldWorkflowRuns,
   deleteWorkflowRun,
   WorkflowNotResumableError,
@@ -94,6 +96,7 @@ describe('workflows database', () => {
           null,
           null,
           null,
+          null, // adopted_from_run_id (#2747)
         ]
       );
     });
@@ -126,6 +129,7 @@ describe('workflows database', () => {
           null,
           null,
           null,
+          null, // adopted_from_run_id (#2747)
         ]
       );
     });
@@ -153,6 +157,7 @@ describe('workflows database', () => {
           null,
           null,
           null,
+          null, // adopted_from_run_id (#2747)
         ]
       );
     });
@@ -1719,6 +1724,36 @@ describe('workflows database', () => {
       await expect(deleteWorkflowRun('run-123')).rejects.toThrow(
         'Failed to delete workflow run: constraint violation'
       );
+    });
+  });
+
+  // Open-work inbox (#2747): the query IS the semantics — terminal failed runs
+  // with no adopting successor — so assert the statement's shape.
+  describe('open-work inbox', () => {
+    test('findOpenWorkRuns filters to failed runs with no adopter', async () => {
+      let capturedSql = '';
+      mockQuery.mockImplementationOnce(((sql: string) => {
+        capturedSql = sql;
+        return Promise.resolve(createQueryResult([]));
+      }) as typeof mockQuery);
+
+      await findOpenWorkRuns({ codebaseId: 'cb-1', limit: 10 });
+      expect(capturedSql).toContain("r.status = 'failed'");
+      expect(capturedSql).toContain('NOT EXISTS');
+      expect(capturedSql).toContain('a.adopted_from_run_id = r.id');
+      expect(capturedSql).toContain('codebase_id = $1');
+      expect(capturedSql).not.toContain("status IN ('paused')");
+    });
+
+    test('findAdoptingRuns reads the same column in reverse', async () => {
+      let capturedSql = '';
+      mockQuery.mockImplementationOnce(((sql: string) => {
+        capturedSql = sql;
+        return Promise.resolve(createQueryResult([]));
+      }) as typeof mockQuery);
+
+      await findAdoptingRuns('run-1');
+      expect(capturedSql).toContain('adopted_from_run_id = $1');
     });
   });
 });

@@ -663,6 +663,9 @@ interface WorkflowDispatchOptions {
   inputs?: Readonly<Record<string, string>>;
   /** Sparse tier/@alias rebindings supplied by this run invocation (#2481). */
   modelOverrides?: RunModelOverrides;
+  /** Between-run continuation (#2747): adopt/supersede target, if declared. */
+  adoptRunId?: string;
+  supersedesRunId?: string;
 }
 
 const FAILED_RUN_PROMPT_PREVIEW_MAX = 160;
@@ -1223,6 +1226,8 @@ async function dispatchOrchestratorWorkflowOwned(
           parseWarnings: options?.parseWarnings,
           inputs: resolvedInputs,
           modelOverrides: options?.modelOverrides,
+          adoptRunId: options?.adoptRunId,
+          supersedesRunId: options?.supersedesRunId,
         },
         workflow
       );
@@ -1274,6 +1279,14 @@ async function dispatchOrchestratorWorkflowOwned(
         resolveChildIsolation,
         capturedSourceOwner: owner,
         inputs: resolvedInputs,
+        ...(options?.adoptRunId
+          ? { adoptedFromRunId: options.adoptRunId, continuationMode: 'adopt' as const }
+          : options?.supersedesRunId
+            ? {
+                adoptedFromRunId: options.supersedesRunId,
+                continuationMode: 'supersede' as const,
+              }
+            : {}),
         ...(options?.modelOverrides
           ? {
               modelOverrideLayer: { kind: 'raw' as const, overrides: options.modelOverrides },
@@ -1862,6 +1875,9 @@ export async function handleMessage(
               // command text — the run route is the only caller that sets them.
               inputs: context?.workflowInputs,
               modelOverrides: context?.workflowModelOverrides,
+              // Between-run continuation (#2747), same channel.
+              adoptRunId: context?.workflowAdoptRunId,
+              supersedesRunId: context?.workflowSupersedesRunId,
             }
           );
         }

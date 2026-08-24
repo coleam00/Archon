@@ -67,6 +67,14 @@ export interface HandleMessageContext {
   readonly workflowInputs?: Readonly<Record<string, string>>;
   /** Sparse tier/@alias rebindings supplied by the workflow run route (#2481). */
   readonly workflowModelOverrides?: RunModelOverrides;
+  /**
+   * Between-run continuation (#2747): the terminal run this run adopts or
+   * supersedes. Rides the context like `workflowInputs` so it can never be
+   * confused with message text. Provenance is recorded engine-side; lane
+   * resolution is the dispatching surface's job.
+   */
+  readonly workflowAdoptRunId?: string;
+  readonly workflowSupersedesRunId?: string;
 }
 
 export interface CommandResult {

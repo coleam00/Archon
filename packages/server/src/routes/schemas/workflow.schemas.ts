@@ -278,4 +278,7 @@ export const workflowRunsQuerySchema = z.object({
   // when an identity resolves. Default lists everything. Enum makes the boolean
   // contract explicit (the handler treats only 'true' as on).
   mine: z.enum(['true', 'false']).optional(),
+  // Open-work inbox (#2747): 'true' lists terminal failed runs nothing has
+  // adopted or superseded. Mutually exclusive with status/conversationId.
+  open: z.enum(['true', 'false']).optional(),
 });

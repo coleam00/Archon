@@ -363,6 +363,13 @@ export class SqliteAdapter implements IDatabase {
           'ALTER TABLE remote_agent_workflow_runs ADD COLUMN parent_run_id TEXT REFERENCES remote_agent_workflow_runs(id) ON DELETE SET NULL'
         );
       }
+      // Between-run continuation (#2747). Self-referential FK mirroring
+      // parent_run_id — written once at run creation, never on resume.
+      if (!wfColNames.has('adopted_from_run_id')) {
+        this.db.run(
+          'ALTER TABLE remote_agent_workflow_runs ADD COLUMN adopted_from_run_id TEXT REFERENCES remote_agent_workflow_runs(id) ON DELETE SET NULL'
+        );
+      }
       // Durable output root (#2200). The resolved ~/.archon/workspaces/<project>/
       // directory this run's artifacts, logs, and state live under, written once
       // at run start so historical artifacts survive a codebase rename (#1192).
@@ -380,6 +387,9 @@ export class SqliteAdapter implements IDatabase {
       );
       this.db.run(
         'CREATE INDEX IF NOT EXISTS idx_workflow_runs_parent_run ON remote_agent_workflow_runs(parent_run_id) WHERE parent_run_id IS NOT NULL'
+      );
+      this.db.run(
+        'CREATE INDEX IF NOT EXISTS idx_workflow_runs_adopted_from ON remote_agent_workflow_runs(adopted_from_run_id) WHERE adopted_from_run_id IS NOT NULL'
       );
       this.db.run(
         'CREATE INDEX IF NOT EXISTS idx_workflow_runs_parent_conv ON remote_agent_workflow_runs(parent_conversation_id)'
@@ -724,6 +734,7 @@ export class SqliteAdapter implements IDatabase {
         parent_conversation_id TEXT REFERENCES remote_agent_conversations(id) ON DELETE SET NULL,
         user_id TEXT REFERENCES remote_agent_users(id) ON DELETE SET NULL,
         parent_run_id TEXT REFERENCES remote_agent_workflow_runs(id) ON DELETE SET NULL,
+        adopted_from_run_id TEXT REFERENCES remote_agent_workflow_runs(id) ON DELETE SET NULL,
         started_at TEXT DEFAULT (datetime('now')),
         completed_at TEXT,
         last_activity_at TEXT DEFAULT (datetime('now')),
