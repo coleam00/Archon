@@ -48,6 +48,7 @@ Archon provides a unified directory and configuration system with:
 ├── web-dist/<version>/             # Cached web UI dist (archon serve, binary only)
 ├── update-check.json               # Update check cache (binary builds only, 24h TTL)
 ├── tier-notice.json                # One-time tier-default notice state (CLI, per version)
+├── install.json                    # Last compiled CLI path and version (discovery hint)
 ├── credential-key                  # Auto-provisioned per-user credential encryption key
 ├── archon.db                       # SQLite database (when DATABASE_URL is unset)
 └── config.yaml                     # Global user configuration
@@ -69,6 +70,9 @@ Archon provides a unified directory and configuration system with:
 - `workspaces/<project>/state/` - `$STATE_DIR`. Cross-run workflow state, shared by every
   workflow in the project. Survives worktree teardown; never visible to git.
 - `worktrees/` - Legacy fallback for repos not registered under `workspaces/`
+- `install.json` - Discovery metadata for the last compiled Archon invoked. GUI and
+  service consumers may use its absolute `binary` path when the user has not
+  configured one explicitly. Source/Bun runs do not write this file.
 - `config.yaml` - Non-secret user preferences
 
 Each run also records the project root it resolved in `workflow_runs.output_root`, so an
@@ -142,6 +146,10 @@ getArchonWorktreesPath(): string
 // Get global config path
 getArchonConfigPath(): string
 // Returns: ${ARCHON_HOME}/config.yaml
+
+// Get the compiled CLI discovery manifest path
+getInstallManifestPath(): string
+// Returns: ${ARCHON_HOME}/install.json
 
 // Get cached web UI distribution directory for a given version
 getWebDistDir(version: string): string

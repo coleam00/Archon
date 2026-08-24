@@ -16,6 +16,7 @@ import {
   ensureArchonWorkspacesPath,
   getArchonWorktreesPath,
   getArchonConfigPath,
+  getInstallManifestPath,
   getCredentialKeyPath,
   getHomeWorkflowsPath,
   getHomeCommandsPath,
@@ -237,6 +238,22 @@ describe('archon-paths', () => {
       delete process.env.ARCHON_DOCKER;
       process.env.ARCHON_HOME = '/custom/archon';
       expect(getArchonWorktreesPath()).toBe(join('/custom/archon', 'worktrees'));
+    });
+  });
+
+  describe('getInstallManifestPath', () => {
+    test('returns install.json under the default ARCHON_HOME', () => {
+      delete process.env.WORKSPACE_PATH;
+      delete process.env.ARCHON_HOME;
+      delete process.env.ARCHON_DOCKER;
+      expect(getInstallManifestPath()).toBe(join(homedir(), '.archon', 'install.json'));
+    });
+
+    test('respects ARCHON_HOME', () => {
+      delete process.env.WORKSPACE_PATH;
+      delete process.env.ARCHON_DOCKER;
+      process.env.ARCHON_HOME = '/custom/archon';
+      expect(getInstallManifestPath()).toBe(join('/custom/archon', 'install.json'));
     });
   });
 

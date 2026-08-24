@@ -15,6 +15,7 @@
  * │   └── state/                         # $STATE_DIR — cross-run state, shared per project
  * ├── temp/                              # Ephemeral scratch (per-simulation dry-run dirs)
  * ├── worktrees/                         # Legacy global worktrees (for repos not in workspaces/)
+ * ├── install.json                       # Last compiled CLI invoked
  * └── config.yaml                        # Global config
  *
  * `resolveProjectStorageKey` + `getProjectStoragePaths` are the single source of
@@ -164,6 +165,11 @@ export function getArchonTempPath(): string {
  */
 export function getArchonConfigPath(): string {
   return join(getArchonHome(), 'config.yaml');
+}
+
+/** Path to the compiled CLI discovery manifest (`<ARCHON_HOME>/install.json`). */
+export function getInstallManifestPath(): string {
+  return join(getArchonHome(), 'install.json');
 }
 
 /** Path where the auto-provisioned encryption key is stored (~/.archon/credential-key). */
