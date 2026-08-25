@@ -11139,7 +11139,19 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         join(testDir, 'logs'),
         'main',
         'docs/',
-        minimalConfig
+        minimalConfig,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        // The cursor cost has already been reconstructed into run-level prior usage.
+        { costUsd: 0.02, workUnits: 1 }
       );
 
       // No new iteration ran — the node finalized from the persisted output.
@@ -11488,7 +11500,18 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         join(testDir, 'logs'),
         'main',
         'docs/',
-        minimalConfig
+        minimalConfig,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { costUsd: 0.02, workUnits: 1 }
       );
 
       // Feedback ⇒ a fresh iteration ran with $LOOP_USER_INPUT substituted.

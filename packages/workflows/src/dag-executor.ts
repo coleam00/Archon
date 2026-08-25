@@ -5976,6 +5976,29 @@ async function executeLoopNode(
   // each event's data (`iteration`), so no separate iteration param is threaded here.
   const stepName = stepNamePrefix + node.id;
 
+  // Detect interactive loop resume — check if workflowRun.metadata has loop gate state for this node
+  const rawApproval = workflowRun.metadata?.approval;
+  const loopGateMeta = isApprovalContext(rawApproval) ? rawApproval : undefined;
+  const isLoopResume = loopGateMeta?.type === 'interactive_loop' && loopGateMeta.nodeId === node.id;
+  const startIteration = isLoopResume ? (loopGateMeta.iteration ?? 0) + 1 : 1;
+  let currentSessionId: string | undefined = isLoopResume
+    ? (loopGateMeta.sessionId ?? undefined)
+    : undefined;
+  const loopGateRunMeta = (workflowRun.metadata ?? {}) as LoopGateRunMetadata;
+  const loopUserInput = isLoopResume ? (loopGateRunMeta.loop_user_input ?? '') : '';
+  const persistedUsageContext = { workflowRunId: workflowRun.id, nodeId: node.id };
+  const persistedLoopCostUsd = isLoopResume
+    ? readSignaledCostUsd(loopGateMeta.signaledCostUsd, persistedUsageContext)
+    : undefined;
+  const persistedLoopTokens = isLoopResume
+    ? readSignaledTokens(loopGateMeta.signaledTokens, persistedUsageContext)
+    : undefined;
+  // Cursor usage is already part of the resumed run's prior total. Loop terminal
+  // events remain cumulative for future cold resumes, while the value returned to
+  // runLayers carries only spend incurred by this execution pass.
+  const currentPassLoopCostUsd = (cumulativeCostUsd: number | undefined): number | undefined =>
+    cumulativeCostUsd === undefined ? undefined : cumulativeCostUsd - (persistedLoopCostUsd ?? 0);
+
   await chargeWorkUnit?.();
   // Emit node_started up-front so every terminal outcome of this loop node is
   // paired with a corresponding _started event — same pattern the bash and
@@ -6079,29 +6102,11 @@ async function executeLoopNode(
       state: 'failed',
       output: extras.output ?? '',
       error,
-      ...(extras.costUsd !== undefined ? { costUsd: extras.costUsd } : {}),
+      ...(extras.costUsd !== undefined ? { costUsd: currentPassLoopCostUsd(extras.costUsd) } : {}),
       ...(extras.tokens !== undefined ? { tokens: extras.tokens } : {}),
       ...(extras.loopIterations !== undefined ? { loopIterations: extras.loopIterations } : {}),
     };
   };
-
-  // Detect interactive loop resume — check if workflowRun.metadata has loop gate state for this node
-  const rawApproval = workflowRun.metadata?.approval;
-  const loopGateMeta = isApprovalContext(rawApproval) ? rawApproval : undefined;
-  const isLoopResume = loopGateMeta?.type === 'interactive_loop' && loopGateMeta.nodeId === node.id;
-  const startIteration = isLoopResume ? (loopGateMeta.iteration ?? 0) + 1 : 1;
-  let currentSessionId: string | undefined = isLoopResume
-    ? (loopGateMeta.sessionId ?? undefined)
-    : undefined;
-  const loopGateRunMeta = (workflowRun.metadata ?? {}) as LoopGateRunMetadata;
-  const loopUserInput = isLoopResume ? (loopGateRunMeta.loop_user_input ?? '') : '';
-  const persistedUsageContext = { workflowRunId: workflowRun.id, nodeId: node.id };
-  const persistedLoopCostUsd = isLoopResume
-    ? readSignaledCostUsd(loopGateMeta.signaledCostUsd, persistedUsageContext)
-    : undefined;
-  const persistedLoopTokens = isLoopResume
-    ? readSignaledTokens(loopGateMeta.signaledTokens, persistedUsageContext)
-    : undefined;
 
   // Finalize-on-approve (#2074): a gate that paused on a completion-bearing iteration,
   // resumed WITHOUT feedback, completes the node from the persisted output instead of
@@ -6145,7 +6150,9 @@ async function executeLoopNode(
       state: 'completed',
       output: finalizeOutput,
       sessionId: currentSessionId,
-      ...(persistedLoopCostUsd !== undefined ? { costUsd: persistedLoopCostUsd } : {}),
+      ...(persistedLoopCostUsd !== undefined
+        ? { costUsd: currentPassLoopCostUsd(persistedLoopCostUsd) }
+        : {}),
       ...(persistedLoopTokens !== undefined ? { tokens: persistedLoopTokens } : {}),
       ...(finalizeDeclaredFields !== undefined ? { declaredFields: finalizeDeclaredFields } : {}),
       ...(finalizeStructured !== null ? { structuredOutput: finalizeStructured } : {}),
@@ -7374,7 +7381,7 @@ async function executeLoopNode(
         state: 'completed',
         output: lastIterationOutput,
         sessionId: currentSessionId,
-        costUsd: loopTotalCostUsd,
+        costUsd: currentPassLoopCostUsd(loopTotalCostUsd),
         ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
         loopIterations: i,
         ...(lastIterationStructuredOutput !== undefined
@@ -7462,7 +7469,7 @@ async function executeLoopNode(
       return {
         state: 'completed',
         output: lastIterationOutput,
-        costUsd: loopTotalCostUsd,
+        costUsd: currentPassLoopCostUsd(loopTotalCostUsd),
         ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
         loopIterations: i,
       };
