@@ -37,6 +37,16 @@ is confirmed stopped. If shutdown cannot be confirmed, throw
 fails closed when a cap is configured for a provider that does not declare this
 contract.
 
+Import the shared helper and error class from the same module so the lease owner
+can recognize an unconfirmed stop:
+
+```typescript
+import {
+  ProviderAttemptStopUnconfirmedError,
+  withProviderAttempt,
+} from '../../shared/provider-attempt';
+```
+
 ## Directory layout
 
 A community provider lives entirely under `packages/providers/src/community/<your-provider-id>/`. The Pi provider uses this layout:
@@ -153,7 +163,7 @@ export function registerYourProvider(): void {
 }
 ```
 
-The strict parser validates provider defaults selected for one workflow run. Declare the credential vendors and kinds the provider actually consumes; use `credentials: { kind: 'none' }` only when it needs no credential.
+The strict parser validates provider defaults selected for one workflow run. Declare the credential vendors and kinds the provider actually consumes; use `credentials: { kind: 'static', specs: [] }` when it needs no credential.
 
 Then add one line to the aggregator at `packages/providers/src/registry.ts`:
 

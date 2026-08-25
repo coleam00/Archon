@@ -796,7 +796,7 @@ concurrency:
     claude: 2
 ```
 
-Calls beyond a cap queue until a lease is available. Workflow nodes show that queued interval separately from provider execution. Retry backoff, durable waits, and quota continuations do not hold a slot; each later attempt or continuation acquires again. This is separate from workflow budgets, which bound total consumption rather than simultaneous demand.
+Calls beyond a cap queue until a lease is available. A workflow node is shown as queued while it has waiting attempts and no admitted attempt; a queued sibling does not replace the running state of another active attempt from the same node. Retry backoff, durable waits, and quota continuations do not hold a slot; each later attempt or continuation acquires again. This is separate from workflow budgets, which bound total consumption rather than simultaneous demand.
 
 Provider caps are install policy. A repository or run profile cannot override them for one project. The former global `assistants.pi.maxConcurrent` key is accepted temporarily as a warned fallback when `concurrency.providers.pi` is absent; move it to the global shape above. Repository-level Pi values no longer change concurrency.
 
@@ -825,8 +825,9 @@ curl http://localhost:3090/health/concurrency
 Returns: `{"status":"ok","active":0,"queuedTotal":0,"maxConcurrent":10}`
 
 This endpoint reports conversation admission only. Provider-cap waits are exposed
-on the affected workflow nodes through `provider_slot_queued` and
-`provider_slot_acquired` events.
+on the affected workflow node through `provider_slot_queued` and
+`provider_slot_acquired` events when the node has no admitted attempt. A queued
+sibling stays folded into the node's running state while another attempt is active.
 
 **Use cases:**
 - Docker healthcheck configuration

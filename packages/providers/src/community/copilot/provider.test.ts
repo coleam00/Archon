@@ -754,9 +754,20 @@ describe('CopilotProvider.sendQuery', () => {
   test('sendAndWait rejection propagates as thrown error', async () => {
     const session = makeFakeSession();
     nextCreateSessionResult = session;
+    const releases: { upstreamStopped: boolean }[] = [];
 
     const p = new CopilotProvider();
-    const gen = p.sendQuery('hi', '/w', undefined, { model: 'gpt-5' });
+    const gen = p.sendQuery('hi', '/w', undefined, {
+      model: 'gpt-5',
+      providerAttemptGate: {
+        acquire: async () => ({
+          signal: new AbortController().signal,
+          release: async options => {
+            releases.push(options);
+          },
+        }),
+      },
+    });
     const first = gen.next();
     await new Promise(resolve => setTimeout(resolve, 5));
     session.rejectSend(new Error('kaboom'));
@@ -769,5 +780,7 @@ describe('CopilotProvider.sendQuery', () => {
         }
       })()
     ).rejects.toThrow('kaboom');
+    expect(session.aborted).toBe(true);
+    expect(releases).toEqual([{ upstreamStopped: true }]);
   });
 });

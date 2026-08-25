@@ -36,10 +36,33 @@ async function waitForFile(path: string): Promise<void> {
   }
 }
 
+async function removeTempDir(path: string): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (true) {
+    try {
+      rmSync(path, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      const code =
+        typeof error === 'object' && error !== null && 'code' in error ? error.code : undefined;
+      const retryable =
+        process.platform === 'win32' &&
+        (code === 'EBUSY' || code === 'EPERM' || code === 'ENOTEMPTY') &&
+        Date.now() < deadline;
+      if (!retryable) throw error;
+
+      // Windows can report a transient SQLite file lock after Database.close().
+      // Run pending finalizers before retrying fixture cleanup.
+      Bun.gc(true);
+      await Bun.sleep(25);
+    }
+  }
+}
+
 afterEach(async () => {
   for (const db of openDatabases.splice(0)) await db.close();
   for (const dir of tempDirs.splice(0)) {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+    await removeTempDir(dir);
   }
 });
 
