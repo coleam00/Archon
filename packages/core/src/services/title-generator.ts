@@ -9,6 +9,7 @@ import { getAgentProvider } from '@archon/providers';
 import type { SendQueryOptions } from '@archon/providers/types';
 import * as conversationDb from '../db/conversations';
 import { createLogger } from '@archon/paths';
+import { runProviderQuery } from '../providers/provider-query-runner';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -66,7 +67,13 @@ export async function generateAndSetTitle(
       },
     };
 
-    for await (const chunk of client.sendQuery(titlePrompt, cwd, undefined, options)) {
+    for await (const chunk of runProviderQuery({
+      provider: assistantType,
+      client,
+      prompt: titlePrompt,
+      cwd,
+      options,
+    })) {
       if (chunk.type === 'assistant') {
         generatedTitle += chunk.content;
       }

@@ -117,6 +117,24 @@ interface NodeSkippedEvent {
   reason: 'when_condition' | 'when_condition_parse_error' | 'trigger_rule' | 'prior_success';
 }
 
+interface ProviderSlotQueuedEvent {
+  type: 'provider_slot_queued';
+  runId: string;
+  nodeId: string;
+  provider: string;
+  limit: number;
+}
+
+interface ProviderSlotAcquiredEvent {
+  type: 'provider_slot_acquired';
+  runId: string;
+  nodeId: string;
+  provider: string;
+  limit: number;
+  slot: number;
+  waitMs: number;
+}
+
 interface ToolStartedEvent {
   type: 'tool_started';
   runId: string;
@@ -222,6 +240,8 @@ export type WorkflowEmitterEvent =
   | NodeCompletedEvent
   | NodeFailedEvent
   | NodeSkippedEvent
+  | ProviderSlotQueuedEvent
+  | ProviderSlotAcquiredEvent
   | WorkflowArtifactEvent
   | ToolStartedEvent
   | ToolCompletedEvent

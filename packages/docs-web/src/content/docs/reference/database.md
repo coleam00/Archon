@@ -71,7 +71,7 @@ psql $DATABASE_URL -c "\dt"
 
 ## Schema Overview
 
-The database has 18 tables, all prefixed with `remote_agent_`:
+The database has 21 tables, all prefixed with `remote_agent_`:
 
 1. **`remote_agent_codebases`** - Repository metadata
    - Commands stored as JSONB: `{command_name: {path, description}}`
@@ -109,6 +109,11 @@ The database has 18 tables, all prefixed with `remote_agent_`:
    - Enables workflow run detail views and debugging
    - Indexed on `created_at` (`idx_workflow_events_created_at`) for the dashboard event poller's cross-run tail. On PostgreSQL an `AFTER INSERT` trigger (`archon_workflow_event_notify`) calls `pg_notify('archon_dashboard_event', …)` so runs started out of process (the `archon` CLI / `--detach`) stream live to the console; on SQLite the poller picks them up within its interval. The trigger is Postgres-only and best-effort (a role without `CREATE TRIGGER` degrades to poll-only, not a boot failure).
 
+6b. **`remote_agent_provider_slots`** - Install-wide AI provider admission leases
+   - Numbered slots keyed by Archon provider ID enforce simultaneous-call caps across server and CLI processes
+   - Opaque owner IDs make heartbeat and release safe after expiry; expired rows recover capacity after a process crash
+   - Operational state only: no user, credential, workflow, or model ownership is stored
+
 7. **`remote_agent_messages`** - Conversation message history
    - Persists user and assistant messages with timestamps
    - Stores tool call metadata (name, input, duration) in JSONB
@@ -136,21 +141,29 @@ The database has 18 tables, all prefixed with `remote_agent_`:
     - Opt-in via `persist_session`; keyed by `(workflow_name, node_id, scope_key, provider)`
     - `scope_key` is typically the conversation UUID
 
-12. **`remote_agent_user_github_tokens`** - Per-user GitHub device-flow tokens
+12. **`remote_agent_workflow_run_node_sessions`** - Private provider session handles scoped to one run
+    - Keyed by `(workflow_run_id, node_id)` and cascades with the owning run
+    - Used for exact continuation without exposing provider handles through run or event APIs
+
+13. **`remote_agent_user_github_tokens`** - Per-user GitHub device-flow tokens
     - Encrypted at rest (AES-256-GCM); one row per Archon user (`UNIQUE(user_id)`), cascades on user deletion
     - Numeric `github_user_id` anchors the commit no-reply email
 
-13. **`remote_agent_user_provider_keys`** - Per-user AI-provider credentials (API key or OAuth subscription blob)
+14. **`remote_agent_user_provider_keys`** - Per-user AI-provider credentials (API key or OAuth subscription blob)
     - Encrypted at rest (AES-256-GCM, same `TOKEN_ENCRYPTION_KEY`); one row per `(user_id, provider)`, cascades on user deletion
     - `kind` records `api_key` vs `oauth`; resolved + injected into the user's runs/chat env at execution time
     - `provider` holds **vendor-canonical** credential ids (`anthropic`, `openai`, `github-copilot`, plus Pi backend vendors) — legacy `claude`/`codex`/`copilot` rows are renamed by an idempotent startup data fix (the vendor row wins when both exist)
 
-14. **`remote_agent_user_ai_prefs`** - Per-user AI preferences (personal model tiers, `@custom` aliases, default assistant + default chat model)
+15. **`remote_agent_user_ai_prefs`** - Per-user AI preferences (personal model tiers, `@custom` aliases, default assistant + default chat model)
     - NON-encrypted (model names aren't secrets); one row per user (`UNIQUE(user_id)`), cascades on user deletion
     - `tiers` / `aliases` are JSON-as-TEXT; folded into model resolution as the highest-precedence layer. `default_model` pins the user's direct-chat model (written atomically with `default_provider`; applied only when the effective chat provider matches — workflows still resolve the `large` tier). Resolution follows the **acting user**: workflow runs use the run starter; chat turns use the message **sender** (the conversation creator's row is only a fallback when no sender identity resolves)
     - Editable via the console "Just me" scope, `archon ai … --scope user`, or `/api/auth/me/ai-prefs*`
 
-15–18. **`remote_agent_auth_user` / `remote_agent_auth_session` / `remote_agent_auth_account` / `remote_agent_auth_verification`** - Better Auth tables for opt-in web login
+16. **`remote_agent_schema_version`** - Diagnostic schema provenance
+    - Records the Archon build that created the database and the build that most recently applied the bundled schema
+    - Reported by `archon doctor` and `/api/health`; it does not gate migrations
+
+17–20. **`remote_agent_auth_user` / `remote_agent_auth_session` / `remote_agent_auth_account` / `remote_agent_auth_verification`** - Better Auth tables for opt-in web login
     - **PostgreSQL only.** Always created on Postgres via the idempotent schema apply, but populated only when web auth is enabled (`DATABASE_URL` + `BETTER_AUTH_SECRET`)
     - Owned and shaped by Better Auth (text ids, camelCase columns); Archon never queries them directly — a session maps to the canonical `users` row via `user_identities('web', <betterAuthUserId>)`
 

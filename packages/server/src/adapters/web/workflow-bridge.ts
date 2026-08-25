@@ -91,19 +91,28 @@ export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
     case 'node_completed':
     case 'node_failed':
     case 'node_skipped':
+    case 'provider_slot_queued':
+    case 'provider_slot_acquired':
       return JSON.stringify({
         type: 'dag_node',
         runId: event.runId,
         nodeId: event.nodeId,
-        name: event.nodeName,
+        name:
+          event.type === 'provider_slot_queued' || event.type === 'provider_slot_acquired'
+            ? event.nodeId
+            : event.nodeName,
         status:
-          event.type === 'node_started'
-            ? 'running'
-            : event.type === 'node_completed'
-              ? 'completed'
-              : event.type === 'node_failed'
-                ? 'failed'
-                : 'skipped',
+          event.type === 'provider_slot_queued'
+            ? 'queued'
+            : event.type === 'provider_slot_acquired'
+              ? 'running'
+              : event.type === 'node_started'
+                ? 'running'
+                : event.type === 'node_completed'
+                  ? 'completed'
+                  : event.type === 'node_failed'
+                    ? 'failed'
+                    : 'skipped',
         duration: event.type === 'node_completed' ? event.duration : undefined,
         error: event.type === 'node_failed' ? event.error : undefined,
         reason: event.type === 'node_skipped' ? event.reason : undefined,
@@ -224,8 +233,10 @@ const ROW_WORKFLOW_STATUS: Record<string, 'running' | 'completed' | 'failed' | '
 };
 
 /** DB event_type → node-level status, emitted as a `dag_node` SSE event. */
-const ROW_NODE_STATUS: Record<string, 'running' | 'completed' | 'failed' | 'skipped'> = {
+const ROW_NODE_STATUS: Record<string, 'queued' | 'running' | 'completed' | 'failed' | 'skipped'> = {
   node_started: 'running',
+  provider_slot_queued: 'queued',
+  provider_slot_acquired: 'running',
   step_started: 'running',
   loop_iteration_started: 'running',
   node_completed: 'completed',
@@ -253,7 +264,7 @@ interface DagNodeSsePayload {
   runId: string;
   nodeId: string;
   name: string;
-  status: 'running' | 'completed' | 'failed' | 'skipped';
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'skipped';
   error?: string;
   timestamp: number;
 }

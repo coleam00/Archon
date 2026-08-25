@@ -26,6 +26,7 @@ const nodeTypes: NodeTypes = { executionNode: executionDagNode };
 const STATUS_MINIMAP_COLORS: Partial<Record<WorkflowStepStatus, string>> = {
   completed: 'var(--success)',
   running: 'var(--accent-bright)',
+  queued: 'var(--warning)',
   failed: 'var(--error)',
   skipped: 'var(--text-tertiary)',
 };
@@ -34,6 +35,7 @@ const DEFAULT_MINIMAP_COLOR = 'var(--surface-elevated)';
 const EDGE_STROKE_BY_STATUS: Partial<Record<WorkflowStepStatus, string>> = {
   completed: 'var(--success)',
   running: 'var(--accent-bright)',
+  queued: 'var(--warning)',
   failed: 'var(--error)',
 };
 const DEFAULT_EDGE_STROKE = 'var(--border)';

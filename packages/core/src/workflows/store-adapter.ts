@@ -32,6 +32,7 @@ import {
 import { listDecryptedUserProviderCredentials } from '../db/user-provider-key-store';
 import { getUserAiPrefs, type UserAiPrefs } from '../db/user-ai-prefs-store';
 import { sealWorkflowRunConfig, unsealWorkflowRunConfig } from '../config/run-config';
+import { runProviderQuery } from '../providers/provider-query-runner';
 
 // Compile-time assertion: MergedConfig must remain a structural subtype of WorkflowConfig.
 // If MergedConfig drifts from WorkflowConfig, this line becomes a type error.
@@ -135,6 +136,7 @@ export function createWorkflowDeps(): WorkflowDeps {
   return {
     store: createWorkflowStore(),
     getAgentProvider,
+    runProviderQuery,
     loadConfig: loadMergedConfig,
     sealRunConfig: sealWorkflowRunConfig,
     unsealRunConfig: unsealWorkflowRunConfig,

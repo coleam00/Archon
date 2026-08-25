@@ -150,6 +150,14 @@ export class SlackWorkflowBridge {
           this.upsertNode(event.runId, event.nodeId, event.nodeName, 'skipped');
           this.scheduleStatusUpdate(event.runId);
           break;
+        case 'provider_slot_queued':
+          this.upsertNode(event.runId, event.nodeId, event.nodeId, 'queued');
+          this.scheduleStatusUpdate(event.runId);
+          break;
+        case 'provider_slot_acquired':
+          this.upsertNode(event.runId, event.nodeId, event.nodeId, 'running');
+          this.scheduleStatusUpdate(event.runId);
+          break;
         case 'approval_pending':
           await this.onApprovalPending(event);
           break;

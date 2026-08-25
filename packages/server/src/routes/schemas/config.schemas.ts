@@ -53,7 +53,10 @@ export const safeConfigSchema = z
       slack: z.enum(['stream', 'batch']),
       // github removed — never implemented; hardcoded 'batch' in GitHubAdapter
     }),
-    concurrency: z.object({ maxConversations: z.number() }),
+    concurrency: z.object({
+      maxConversations: z.number(),
+      providers: z.record(z.string(), z.number()),
+    }),
     defaults: z.object({
       copyDefaults: z.boolean(),
       loadDefaultCommands: z.boolean(),

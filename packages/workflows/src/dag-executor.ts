@@ -22,6 +22,7 @@ import type {
   WorkflowMessageMetadata,
   WorkflowConfig,
   WorkflowDeps,
+  ProviderQueryContext,
 } from './deps';
 import type {
   SendQueryOptions,
@@ -952,6 +953,60 @@ const CANCEL_CHECK_INTERVAL_MS = 10_000;
  */
 export function shouldContinueStreamingForStatus(status: WorkflowRunStatus | null): boolean {
   return status === 'running' || status === 'paused';
+}
+
+function createProviderQueryContext(
+  deps: WorkflowDeps,
+  workflowRunId: string,
+  stepName: string,
+  data: Record<string, unknown>
+): ProviderQueryContext {
+  return {
+    onQueued: async ({ provider, limit }): Promise<void> => {
+      getWorkflowEventEmitter().emit({
+        type: 'provider_slot_queued',
+        runId: workflowRunId,
+        nodeId: stepName,
+        provider,
+        limit,
+      });
+      await deps.store.createWorkflowEvent({
+        workflow_run_id: workflowRunId,
+        event_type: 'provider_slot_queued',
+        step_name: stepName,
+        data: { provider, limit, ...data },
+      });
+    },
+    onAcquired: async ({ provider, limit, slot, waitMs }): Promise<void> => {
+      getWorkflowEventEmitter().emit({
+        type: 'provider_slot_acquired',
+        runId: workflowRunId,
+        nodeId: stepName,
+        provider,
+        limit,
+        slot,
+        waitMs,
+      });
+      await deps.store.createWorkflowEvent({
+        workflow_run_id: workflowRunId,
+        event_type: 'provider_slot_acquired',
+        step_name: stepName,
+        data: { provider, limit, slot, wait_ms: waitMs, ...data },
+      });
+    },
+    shouldContinue: async (): Promise<boolean> => {
+      try {
+        const status = await deps.store.getWorkflowRunStatus(workflowRunId);
+        return shouldContinueStreamingForStatus(status);
+      } catch (error) {
+        getLog().warn(
+          { err: error as Error, workflowRunId, stepName },
+          'provider_concurrency.status_check_failed'
+        );
+        return true;
+      }
+    },
+  };
 }
 
 /** Throttle state for activity heartbeat writes (only used for stale/zombie detection) */
@@ -2333,7 +2388,8 @@ async function executeNodeInternal(
   // — those failures are never reasked).
   const runStreamPass = async (
     attemptPrompt: string,
-    attemptResumeId: string | undefined
+    attemptResumeId: string | undefined,
+    queryAttempt: number
   ): Promise<void> => {
     nodeOutputText = '';
     structuredOutput = undefined;
@@ -2346,7 +2402,18 @@ async function executeNodeInternal(
     backgroundTasksIncomplete = [];
     const backgroundTasks = createBackgroundTaskTracker();
     for await (const msg of withIdleTimeout(
-      aiClient.sendQuery(attemptPrompt, cwd, attemptResumeId, nodeOptionsWithAbort),
+      deps.runProviderQuery({
+        provider,
+        client: aiClient,
+        prompt: attemptPrompt,
+        cwd,
+        resumeSessionId: attemptResumeId,
+        options: nodeOptionsWithAbort,
+        context: createProviderQueryContext(deps, workflowRun.id, stepName, {
+          query_attempt: queryAttempt,
+          ...iterationData,
+        }),
+      }),
       effectiveIdleTimeout,
       () => {
         nodeIdleTimedOut = true;
@@ -2962,7 +3029,7 @@ async function executeNodeInternal(
       const reaskResumeSessionId =
         namedResumeSourceNodeId !== undefined || reaskAttempt === 0 ? resumeSessionId : undefined;
       try {
-        await runStreamPass(reaskPrompt, reaskResumeSessionId);
+        await runStreamPass(reaskPrompt, reaskResumeSessionId, reaskAttempt);
       } finally {
         if (nodeCostUsd !== undefined) {
           accumulatedCostUsd = (accumulatedCostUsd ?? 0) + nodeCostUsd;
@@ -6243,12 +6310,19 @@ async function executeLoopNode(
 
           // Reask attempts start a FRESH session (mirrors runStreamPass in
           // executeNodeInternal) so an invalid turn is not carried forward as context.
-          const generator = aiClient.sendQuery(
-            finalPrompt,
+          const generator = deps.runProviderQuery({
+            provider: workflowProvider,
+            client: aiClient,
+            prompt: finalPrompt,
             cwd,
-            reaskAttempt === 0 ? resumeSessionId : undefined,
-            iterationOptions
-          );
+            resumeSessionId: reaskAttempt === 0 ? resumeSessionId : undefined,
+            options: iterationOptions,
+            context: createProviderQueryContext(deps, workflowRun.id, stepName, {
+              iteration: i,
+              retry_attempt: iterRetry,
+              query_attempt: reaskAttempt,
+            }),
+          });
           const runningTools = new Map<string, RunningTool>();
           let anonymousToolSequence = 0;
           let lastAnonymousToolCallId: string | undefined;

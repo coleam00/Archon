@@ -896,6 +896,16 @@ function renderWorkflowEvent(event: WorkflowEmitterEvent, verbose: boolean): voi
     case 'node_skipped':
       process.stderr.write(`[${event.nodeName}] Skipped (${event.reason})\n`);
       break;
+    case 'provider_slot_queued':
+      process.stderr.write(
+        `[${event.nodeId}] Queued for ${event.provider} capacity (limit ${String(event.limit)})\n`
+      );
+      break;
+    case 'provider_slot_acquired':
+      process.stderr.write(
+        `[${event.nodeId}] ${event.provider} capacity acquired after ${formatDuration(event.waitMs)}\n`
+      );
+      break;
     case 'approval_pending':
       process.stderr.write(`[${event.nodeId}] Waiting for approval: ${event.message}\n`);
       break;
@@ -2852,7 +2862,7 @@ function formatDuration(ms: number): string {
 
 export interface NodeSummary {
   nodeId: string;
-  state: 'running' | 'completed' | 'failed' | 'skipped';
+  state: 'queued' | 'running' | 'completed' | 'failed' | 'skipped';
   startedAt?: string;
   durationMs?: number;
   outputPreview?: string;
@@ -2877,6 +2887,22 @@ export function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
         // A retry is a new active attempt, so stale terminal details must not
         // leak into the compact current-state summary.
         summaries.set(nodeId, { nodeId, state: 'running', startedAt: event.created_at });
+        break;
+      }
+      case 'provider_slot_queued': {
+        summaries.set(nodeId, {
+          nodeId,
+          state: 'queued',
+          startedAt: summaries.get(nodeId)?.startedAt,
+        });
+        break;
+      }
+      case 'provider_slot_acquired': {
+        summaries.set(nodeId, {
+          nodeId,
+          state: 'running',
+          startedAt: summaries.get(nodeId)?.startedAt,
+        });
         break;
       }
       case 'node_completed': {
@@ -2952,10 +2978,12 @@ function printVerboseNodes(events: WorkflowEventRow[]): void {
       failed: '✗',
       skipped: '-',
       running: '◌',
+      queued: '⏸',
     };
     const icon = iconMap[node.state] ?? '◌';
     const duration = node.durationMs !== undefined ? ` (${formatDuration(node.durationMs)})` : '';
-    const stateLabel = node.state === 'running' ? ' (running)' : '';
+    const stateLabel =
+      node.state === 'running' ? ' (running)' : node.state === 'queued' ? ' (queued)' : '';
     console.log(`    ${icon} ${node.nodeId}${duration}${stateLabel}`);
     if (node.outputPreview !== undefined) {
       console.log(`        Output: ${node.outputPreview}`);

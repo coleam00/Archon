@@ -27,6 +27,7 @@ import { classifyAndFormatError } from '../utils/error-formatter';
 import { toError } from '../utils/error';
 import { safeDeactivateSession } from '../state/session-transitions';
 import { getAgentProvider, getProviderCapabilities } from '@archon/providers';
+import { runProviderQuery } from '../providers/provider-query-runner';
 import { buildManageRunTool } from './manage-run-tool';
 import { getArchonWorkspacesPath, ensureArchonWorkspacesPath } from '@archon/paths';
 import { resolveWorkflowSourceRoot } from '../utils/workflow-source-root';
@@ -2584,6 +2585,7 @@ export async function handleMessage(
           codebases,
           workflowsWithSource,
           aiClient,
+          providerKey,
           fullPrompt,
           cwd,
           session,
@@ -2601,6 +2603,7 @@ export async function handleMessage(
           codebases,
           workflowsWithSource,
           aiClient,
+          providerKey,
           fullPrompt,
           cwd,
           session,
@@ -2669,6 +2672,7 @@ async function handleStreamMode(
   codebases: readonly Codebase[],
   workflows: readonly WorkflowWithSource[],
   aiClient: ReturnType<typeof getAgentProvider>,
+  provider: string,
   fullPrompt: string,
   cwd: string,
   session: { id: string; assistant_session_id: string | null },
@@ -2685,12 +2689,14 @@ async function handleStreamMode(
   let commandFullyParsed = false;
   let lastResult: { cost?: number; tokens?: TokenUsage; stopReason?: string } | undefined;
 
-  for await (const msg of aiClient.sendQuery(
-    fullPrompt,
+  for await (const msg of runProviderQuery({
+    provider,
+    client: aiClient,
+    prompt: fullPrompt,
     cwd,
-    session.assistant_session_id ?? undefined,
-    requestOptions
-  )) {
+    resumeSessionId: session.assistant_session_id ?? undefined,
+    options: requestOptions,
+  })) {
     if (msg.type === 'assistant' && msg.content) {
       // Accumulate only while the command is not yet fully captured; post-command
       // trailing chunks would corrupt the project-name token if joined without a
@@ -2785,7 +2791,7 @@ async function handleStreamMode(
         // Anonymous telemetry: AI returned an error result for this chat turn.
         captureChatTurn({
           platform: platform.getPlatformType(),
-          provider: aiClient.getType(),
+          provider,
           model: requestOptions?.model,
           durationMs: Date.now() - turnStartedAt,
           outcome: 'failed',
@@ -2874,7 +2880,7 @@ async function handleStreamMode(
   // provider only, never message content.
   captureChatTurn({
     platform: platform.getPlatformType(),
-    provider: aiClient.getType(),
+    provider,
     model: requestOptions?.model,
     // durationMs deliberately measures from mode-handler entry — it includes
     // pre-AI setup, i.e. "time the user waited", not pure model latency.
@@ -2899,6 +2905,7 @@ async function handleBatchMode(
   codebases: readonly Codebase[],
   workflows: readonly WorkflowWithSource[],
   aiClient: ReturnType<typeof getAgentProvider>,
+  provider: string,
   fullPrompt: string,
   cwd: string,
   session: { id: string; assistant_session_id: string | null },
@@ -2918,12 +2925,14 @@ async function handleBatchMode(
   let commandFullyParsed = false;
   let lastResult: { cost?: number; tokens?: TokenUsage; stopReason?: string } | undefined;
 
-  for await (const msg of aiClient.sendQuery(
-    fullPrompt,
+  for await (const msg of runProviderQuery({
+    provider,
+    client: aiClient,
+    prompt: fullPrompt,
     cwd,
-    session.assistant_session_id ?? undefined,
-    requestOptions
-  )) {
+    resumeSessionId: session.assistant_session_id ?? undefined,
+    options: requestOptions,
+  })) {
     if (msg.type === 'assistant' && msg.content) {
       // Always record in allChunks for debug logging; accumulate assistantMessages
       // only while the command is not yet fully captured (same reason as stream mode).
@@ -3019,7 +3028,7 @@ async function handleBatchMode(
         // Anonymous telemetry: AI returned an error result for this chat turn.
         captureChatTurn({
           platform: platform.getPlatformType(),
-          provider: aiClient.getType(),
+          provider,
           model: requestOptions?.model,
           durationMs: Date.now() - turnStartedAt,
           outcome: 'failed',
@@ -3135,7 +3144,7 @@ async function handleBatchMode(
   // rationale as the stream-mode capture in handleStreamMode above).
   captureChatTurn({
     platform: platform.getPlatformType(),
-    provider: aiClient.getType(),
+    provider,
     model: requestOptions?.model,
     // durationMs deliberately measures from mode-handler entry — it includes
     // pre-AI setup, i.e. "time the user waited", not pure model latency.

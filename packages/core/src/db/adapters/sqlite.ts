@@ -754,6 +754,16 @@ export class SqliteAdapter implements IDatabase {
         created_at TEXT DEFAULT (datetime('now'))
       );
 
+      CREATE TABLE IF NOT EXISTS remote_agent_provider_slots (
+        provider_id TEXT NOT NULL,
+        slot_index INTEGER NOT NULL CHECK (slot_index >= 0),
+        lease_id TEXT NOT NULL,
+        lease_expires_at TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (provider_id, slot_index)
+      );
+
       -- Private provider session handles scoped to one workflow run
       CREATE TABLE IF NOT EXISTS remote_agent_workflow_run_node_sessions (
         workflow_run_id TEXT NOT NULL REFERENCES remote_agent_workflow_runs(id) ON DELETE CASCADE,

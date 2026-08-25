@@ -166,6 +166,13 @@ function createMockDeps(): WorkflowDeps {
   return {
     store: createMockStore(),
     getAgentProvider: mockGetAgentProvider,
+    runProviderQuery: request =>
+      request.client.sendQuery(
+        request.prompt,
+        request.cwd,
+        request.resumeSessionId,
+        request.options
+      ),
     loadConfig: mock(() =>
       Promise.resolve({
         assistant: 'claude' as const,

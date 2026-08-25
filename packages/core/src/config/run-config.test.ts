@@ -168,7 +168,7 @@ describe('workflow run config', () => {
     ).toThrow("Invalid run config at 'tiers.medium.thinking'");
   });
 
-  it('rejects Pi defaults whose consumers own process-lifetime state', () => {
+  it('rejects Pi defaults whose consumers own install- or process-wide state', () => {
     for (const [key, value] of [
       ['env', { TOKEN: 'secret' }],
       ['maxConcurrent', 1],

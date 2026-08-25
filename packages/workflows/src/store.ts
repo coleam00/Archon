@@ -86,6 +86,8 @@ export const WORKFLOW_EVENT_TYPES = [
   // the cache was honored — a skipped node only writes `node_skipped_prior_success`.
   'node_prior_cache_invalidated',
   'node_always_run_reset',
+  'provider_slot_queued',
+  'provider_slot_acquired',
   'loop_iteration_started',
   'loop_iteration_completed',
   'loop_iteration_failed',

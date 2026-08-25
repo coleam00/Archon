@@ -73,6 +73,38 @@ describe('mapWorkflowEvent — tool activity correlation', () => {
   });
 });
 
+describe('mapWorkflowEvent — provider capacity', () => {
+  test('distinguishes queued and acquired provider slots', () => {
+    const queued: WorkflowEmitterEvent = {
+      type: 'provider_slot_queued',
+      runId: 'run-1',
+      nodeId: 'implement',
+      provider: 'pi',
+      limit: 2,
+    };
+    const acquired: WorkflowEmitterEvent = {
+      type: 'provider_slot_acquired',
+      runId: 'run-1',
+      nodeId: 'implement',
+      provider: 'pi',
+      limit: 2,
+      slot: 1,
+      waitMs: 42,
+    };
+
+    expect(JSON.parse(mapWorkflowEvent(queued) ?? '{}')).toMatchObject({
+      type: 'dag_node',
+      nodeId: 'implement',
+      status: 'queued',
+    });
+    expect(JSON.parse(mapWorkflowEvent(acquired) ?? '{}')).toMatchObject({
+      type: 'dag_node',
+      nodeId: 'implement',
+      status: 'running',
+    });
+  });
+});
+
 describe('mapWorkflowEvent — task_activity (Phase 2 of #975)', () => {
   beforeEach(() => {
     mockLogger.warn.mockClear();

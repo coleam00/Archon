@@ -221,6 +221,22 @@ CREATE TABLE IF NOT EXISTS remote_agent_workflow_events (
 COMMENT ON TABLE remote_agent_workflow_events IS
   'Lean UI-relevant workflow events for observability (step transitions, artifacts, errors)';
 
+-- Install-wide provider concurrency leases. Each numbered row is one live
+-- admission slot for an Archon provider ID; owner tokens make renew/release
+-- safe after expiry and process crashes.
+CREATE TABLE IF NOT EXISTS remote_agent_provider_slots (
+  provider_id VARCHAR(64) NOT NULL,
+  slot_index INTEGER NOT NULL CHECK (slot_index >= 0),
+  lease_id UUID NOT NULL,
+  lease_expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (provider_id, slot_index)
+);
+
+COMMENT ON TABLE remote_agent_provider_slots IS
+  'Renewable install-wide admission slots for simultaneous AI provider calls';
+
 -- ============================================================================
 -- Workflow run node sessions (private same-run session lineage)
 -- ============================================================================

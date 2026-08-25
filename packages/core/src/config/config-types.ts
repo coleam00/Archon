@@ -175,6 +175,13 @@ export interface GlobalConfig {
      * @default 10
      */
     maxConversations?: number;
+
+    /**
+     * Maximum simultaneous calls admitted for each registered AI provider.
+     * Omitted providers are unlimited. This is install-wide policy and is
+     * intentionally unavailable in repository and per-run configuration.
+     */
+    providers?: Record<string, number>;
   };
 
   /**
@@ -390,6 +397,7 @@ export interface MergedConfig {
   };
   concurrency: {
     maxConversations: number;
+    providers: Record<string, number>;
   };
   workflows: {
     autoResumeOnQuotaReset: boolean;
@@ -457,6 +465,7 @@ export interface SafeConfig {
   };
   concurrency: {
     maxConversations: number;
+    providers: Record<string, number>;
   };
   defaults: {
     copyDefaults: boolean;

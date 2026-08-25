@@ -72,6 +72,26 @@ function getRegisteredProviderNames(): string[] {
   return getRegisteredProviders().map(p => p.id);
 }
 
+function sanitizeProviderConcurrency(
+  raw: Record<string, number> | undefined
+): Record<string, number> {
+  if (!raw) return {};
+  const registered = new Set(getRegisteredProviderNames());
+  const limits: Record<string, number> = {};
+  for (const [provider, value] of Object.entries(raw)) {
+    if (!registered.has(provider)) {
+      getLog().warn({ provider }, 'config.provider_concurrency_unknown_provider_ignored');
+      continue;
+    }
+    if (!Number.isInteger(value) || value <= 0) {
+      getLog().warn({ provider, value }, 'config.provider_concurrency_invalid_limit_ignored');
+      continue;
+    }
+    limits[provider] = value;
+  }
+  return limits;
+}
+
 /**
  * Shallow-merge alias maps. Last-write-wins per key, intentional — repo wins
  * over global, global wins over (currently absent) built-in alias defaults.
@@ -223,6 +243,9 @@ const DEFAULT_CONFIG_CONTENT = `# Archon Global Configuration
 # Concurrency settings
 # concurrency:
 #   maxConversations: 10
+#   providers:
+#     pi: 4
+#     claude: 2
 `;
 
 /**
@@ -395,6 +418,7 @@ function getDefaults(): MergedConfig {
     },
     concurrency: {
       maxConversations: 10,
+      providers: {},
     },
     workflows: {
       autoResumeOnQuotaReset: false,
@@ -512,6 +536,9 @@ function mergeGlobalConfig(defaults: MergedConfig, global: GlobalConfig): Merged
   }
 
   result.assistants = mergeAssistantDefaults(result.assistants, global.assistants);
+  // The deprecated Pi field is migration input only. Do not pass it back to
+  // the provider now that admission is owned by the core query runner.
+  delete result.assistants.pi?.maxConcurrent;
 
   result.aliases = mergeAliases(result.aliases, global.aliases);
   result.tiers = mergeTiers(result.tiers, global.tiers);
@@ -532,6 +559,22 @@ function mergeGlobalConfig(defaults: MergedConfig, global: GlobalConfig): Merged
   // Concurrency preferences
   if (global.concurrency?.maxConversations) {
     result.concurrency.maxConversations = global.concurrency.maxConversations;
+  }
+  const configuredProviderLimits = sanitizeProviderConcurrency(global.concurrency?.providers);
+  result.concurrency.providers = configuredProviderLimits;
+
+  const legacyPiLimit = global.assistants?.pi?.maxConcurrent;
+  if (
+    configuredProviderLimits.pi === undefined &&
+    typeof legacyPiLimit === 'number' &&
+    Number.isInteger(legacyPiLimit) &&
+    legacyPiLimit > 0
+  ) {
+    result.concurrency.providers.pi = legacyPiLimit;
+    getLog().warn(
+      { maxConcurrent: legacyPiLimit },
+      'config.pi_max_concurrent_deprecated_use_concurrency_providers'
+    );
   }
 
   if (global.workflows) {
@@ -568,6 +611,14 @@ function mergeRepoConfig(merged: MergedConfig, repo: RepoConfig): MergedConfig {
   }
 
   result.assistants = mergeAssistantDefaults(result.assistants, repo.assistants);
+  delete result.assistants.pi?.maxConcurrent;
+
+  if (repo.assistants?.pi?.maxConcurrent !== undefined) {
+    getLog().warn(
+      { maxConcurrent: repo.assistants.pi.maxConcurrent },
+      'config.repo_pi_max_concurrent_ignored_install_policy'
+    );
+  }
 
   result.aliases = mergeAliases(result.aliases, repo.aliases);
   result.tiers = mergeTiers(result.tiers, repo.tiers);
@@ -825,7 +876,10 @@ export function toSafeConfig(config: MergedConfig): SafeConfig {
       discord: config.streaming.discord,
       slack: config.streaming.slack,
     },
-    concurrency: { maxConversations: config.concurrency.maxConversations },
+    concurrency: {
+      maxConversations: config.concurrency.maxConversations,
+      providers: { ...config.concurrency.providers },
+    },
     defaults: {
       copyDefaults: config.defaults.copyDefaults,
       loadDefaultCommands: config.defaults.loadDefaultCommands,

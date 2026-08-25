@@ -8,6 +8,8 @@ export function StatusIcon({ status }: { status: string }): React.ReactElement {
       return (
         <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-accent border-t-transparent" />
       );
+    case 'queued':
+      return <Pause className="h-3 w-3 text-warning" />;
     case 'paused':
       return <Pause className="h-3 w-3 text-warning" />;
     case 'failed':

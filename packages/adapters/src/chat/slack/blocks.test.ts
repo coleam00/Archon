@@ -158,6 +158,7 @@ describe('buildStatusBlocks', () => {
         nodes: [
           { nodeId: 'a', nodeName: 'plan', state: 'completed', durationMs: 4000 },
           { nodeId: 'b', nodeName: 'review', state: 'running' },
+          { nodeId: 'q', nodeName: 'implement', state: 'queued' },
           { nodeId: 'c', nodeName: 'apply', state: 'pending' },
           { nodeId: 'd', nodeName: 'verify', state: 'failed', error: 'boom' },
           { nodeId: 'e', nodeName: 'cleanup', state: 'skipped' },
@@ -170,6 +171,7 @@ describe('buildStatusBlocks', () => {
     expect(text).toContain(':white_check_mark: `plan`');
     expect(text).toContain('4s');
     expect(text).toContain(':hourglass_flowing_sand: `review`');
+    expect(text).toContain(':pause_button: `implement`');
     expect(text).toContain(':white_circle: `apply`');
     expect(text).toContain(':x: `verify`');
     expect(text).toContain('boom');

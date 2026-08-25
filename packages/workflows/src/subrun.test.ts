@@ -420,6 +420,13 @@ function makeDeps(store: IWorkflowStore): WorkflowDeps {
   return {
     store,
     getAgentProvider: mock(() => makeProvider()) as unknown as WorkflowDeps['getAgentProvider'],
+    runProviderQuery: request =>
+      request.client.sendQuery(
+        request.prompt,
+        request.cwd,
+        request.resumeSessionId,
+        request.options
+      ),
     loadConfig: mock(
       (): Promise<WorkflowConfig> =>
         Promise.resolve({

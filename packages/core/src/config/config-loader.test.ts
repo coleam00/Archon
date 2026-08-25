@@ -53,6 +53,7 @@ describe('config-loader', () => {
     clearConfigCache();
     mockFsReadFile.mockReset();
     mockFsWriteFile.mockReset();
+    mockLogger.warn.mockClear();
 
     // Save original env vars
     envVars.forEach(key => {
@@ -336,11 +337,87 @@ recommendedWorkflows: "archon-plan"
       expect(config.assistants.codex).toEqual({});
       expect(config.streaming.telegram).toBe('stream');
       expect(config.concurrency.maxConversations).toBe(10);
+      expect(config.concurrency.providers).toEqual({});
       expect(config.workflows).toEqual({
         autoResumeOnQuotaReset: false,
         quotaMaxAttempts: 1,
         quotaDeadlineMs: 86_400_000,
       });
+    });
+
+    test('loads positive caps for registered providers and ignores invalid entries', async () => {
+      mockFsReadFile.mockResolvedValue(`
+concurrency:
+  providers:
+    pi: 2
+    claude: 3
+    codex: 0
+    missing-provider: 4
+`);
+
+      const config = await loadConfig();
+
+      expect(config.concurrency.providers).toEqual({ pi: 2, claude: 3 });
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        { provider: 'codex', value: 0 },
+        'config.provider_concurrency_invalid_limit_ignored'
+      );
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        { provider: 'missing-provider' },
+        'config.provider_concurrency_unknown_provider_ignored'
+      );
+    });
+
+    test('migrates global Pi maxConcurrent unless the new cap is configured', async () => {
+      mockFsReadFile.mockResolvedValue(`
+assistants:
+  pi:
+    maxConcurrent: 4
+`);
+      const migrated = await loadConfig();
+      expect(migrated.concurrency.providers.pi).toBe(4);
+      expect(migrated.assistants.pi.maxConcurrent).toBeUndefined();
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        { maxConcurrent: 4 },
+        'config.pi_max_concurrent_deprecated_use_concurrency_providers'
+      );
+
+      clearConfigCache();
+      mockLogger.warn.mockClear();
+      mockFsReadFile.mockResolvedValue(`
+assistants:
+  pi:
+    maxConcurrent: 4
+concurrency:
+  providers:
+    pi: 2
+`);
+      expect((await loadConfig()).concurrency.providers.pi).toBe(2);
+      expect(mockLogger.warn).not.toHaveBeenCalledWith(
+        { maxConcurrent: 4 },
+        'config.pi_max_concurrent_deprecated_use_concurrency_providers'
+      );
+    });
+
+    test('repository Pi maxConcurrent cannot override install policy', async () => {
+      mockFsReadFile.mockResolvedValueOnce(`
+concurrency:
+  providers:
+    pi: 2
+`).mockResolvedValueOnce(`
+assistants:
+  pi:
+    maxConcurrent: 1
+`);
+
+      const config = await loadConfig('/test/repo');
+
+      expect(config.concurrency.providers.pi).toBe(2);
+      expect(config.assistants.pi.maxConcurrent).toBeUndefined();
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        { maxConcurrent: 1 },
+        'config.repo_pi_max_concurrent_ignored_install_policy'
+      );
     });
 
     test('merges global and repo quota continuation policy per field', async () => {
@@ -1048,6 +1125,16 @@ assistants:
       expect(safe.assistants.claude).toBeDefined();
       expect(safe.assistants.codex).toBeDefined();
       expect(safe.assistants.codex).not.toHaveProperty('additionalDirectories');
+    });
+
+    test('exposes provider caps in safe config', async () => {
+      mockFsReadFile.mockResolvedValue(`
+concurrency:
+  providers:
+    pi: 2
+`);
+      const safe = toSafeConfig(await loadConfig());
+      expect(safe.concurrency.providers).toEqual({ pi: 2 });
     });
 
     test('exposes configured tiers and computed tierDefaults', async () => {

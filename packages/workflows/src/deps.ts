@@ -129,6 +129,30 @@ export interface WorkflowConfig {
 
 export type AgentProviderFactory = (provider: string) => IAgentProvider;
 
+export interface ProviderQueryContext {
+  onQueued?: (event: { provider: string; limit: number }) => Promise<void> | void;
+  onAcquired?: (event: {
+    provider: string;
+    limit: number;
+    slot: number;
+    waitMs: number;
+  }) => Promise<void> | void;
+  /** Checked while queued so a terminal workflow does not wait for first yield. */
+  shouldContinue?: () => Promise<boolean>;
+}
+
+export interface ProviderQueryRequest {
+  provider: string;
+  client: IAgentProvider;
+  prompt: string;
+  cwd: string;
+  resumeSessionId?: string;
+  options?: SendQueryOptions;
+  context?: ProviderQueryContext;
+}
+
+export type ProviderQueryRunner = (request: ProviderQueryRequest) => AsyncGenerator<MessageChunk>;
+
 // ---------------------------------------------------------------------------
 // WorkflowDeps — the single injection point
 // ---------------------------------------------------------------------------
@@ -136,6 +160,7 @@ export type AgentProviderFactory = (provider: string) => IAgentProvider;
 export interface WorkflowDeps {
   store: IWorkflowStore;
   getAgentProvider: AgentProviderFactory;
+  runProviderQuery: ProviderQueryRunner;
   loadConfig: (cwd: string) => Promise<WorkflowConfig>;
   /** Seal a run-owned config layer before it is persisted in public run metadata. */
   sealRunConfig?: (

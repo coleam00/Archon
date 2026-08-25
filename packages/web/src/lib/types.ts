@@ -10,7 +10,13 @@ export type WorkflowRunStatus =
   | 'failed'
   | 'cancelled'
   | 'paused';
-export type WorkflowStepStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
+export type WorkflowStepStatus =
+  | 'pending'
+  | 'queued'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'skipped';
 export type ArtifactType = 'pr' | 'commit' | 'file_created' | 'file_modified' | 'branch';
 
 /**

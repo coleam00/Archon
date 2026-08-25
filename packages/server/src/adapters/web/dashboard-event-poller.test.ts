@@ -91,6 +91,22 @@ describe('mapWorkflowEventRow', () => {
     expect(e).toMatchObject({ type: 'dag_node', status: 'running', nodeId: 'plan' });
   });
 
+  test('provider capacity rows expose queued and acquired node state', () => {
+    const queued = JSON.parse(
+      mapWorkflowEventRow(
+        row({ event_type: 'provider_slot_queued', step_name: 'implement' })
+      ) as string
+    );
+    const acquired = JSON.parse(
+      mapWorkflowEventRow(
+        row({ event_type: 'provider_slot_acquired', step_name: 'implement' })
+      ) as string
+    );
+
+    expect(queued).toMatchObject({ type: 'dag_node', nodeId: 'implement', status: 'queued' });
+    expect(acquired).toMatchObject({ type: 'dag_node', nodeId: 'implement', status: 'running' });
+  });
+
   test('loop_iteration_started → dag_node running', () => {
     const e = JSON.parse(
       mapWorkflowEventRow(

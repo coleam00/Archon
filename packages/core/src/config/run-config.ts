@@ -129,8 +129,8 @@ function normalizeRunConfigSemantics(layer: WorkflowRunConfigLayer): WorkflowRun
     }
     if (provider === 'pi' && Object.hasOwn(defaults, 'maxConcurrent')) {
       throw new Error(
-        "Run config key 'assistants.pi.maxConcurrent' cannot apply: Pi concurrency is " +
-          'initialized once for the process lifetime.'
+        "Run config key 'assistants.pi.maxConcurrent' cannot apply: provider concurrency is " +
+          "install-wide. Configure 'concurrency.providers.pi' in ~/.archon/config.yaml."
       );
     }
     try {

@@ -3863,6 +3863,51 @@ describe('buildNodeSummaries', () => {
       { nodeId: 'build', state: 'running', startedAt: '2026-08-03T10:00:02.000Z' },
     ]);
   });
+
+  it('shows provider queue state until capacity is acquired', () => {
+    const events = [
+      {
+        id: 'started',
+        workflow_run_id: 'run-queue',
+        event_type: 'node_started',
+        step_index: 0,
+        step_name: 'implement',
+        data: {},
+        created_at: '2026-08-03T10:00:00.000Z',
+        event_order: 1,
+      },
+      {
+        id: 'queued',
+        workflow_run_id: 'run-queue',
+        event_type: 'provider_slot_queued',
+        step_index: 0,
+        step_name: 'implement',
+        data: { provider: 'pi', limit: 1 },
+        created_at: '2026-08-03T10:00:01.000Z',
+        event_order: 2,
+      },
+    ];
+
+    expect(buildNodeSummaries(events)).toEqual([
+      {
+        nodeId: 'implement',
+        state: 'queued',
+        startedAt: '2026-08-03T10:00:00.000Z',
+      },
+    ]);
+
+    events.push({
+      id: 'acquired',
+      workflow_run_id: 'run-queue',
+      event_type: 'provider_slot_acquired',
+      step_index: 0,
+      step_name: 'implement',
+      data: { provider: 'pi', limit: 1, slot: 0, wait_ms: 10 },
+      created_at: '2026-08-03T10:00:10.000Z',
+      event_order: 3,
+    });
+    expect(buildNodeSummaries(events)[0]?.state).toBe('running');
+  });
 });
 
 describe('workflowStatusCommand', () => {

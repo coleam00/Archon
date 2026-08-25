@@ -25,6 +25,7 @@ export type ExecutionFlowNode = Node<ExecutionNodeData>;
 const STATUS_STYLES: Partial<Record<WorkflowStepStatus, string>> = {
   completed: 'border-l-2 border-success bg-success/5',
   running: 'border-l-2 border-accent-bright bg-accent/5 shadow-[0_0_8px_var(--accent)]',
+  queued: 'border-l-2 border-warning bg-warning/5',
   failed: 'border-l-2 border-error bg-error/5',
   skipped: 'opacity-50 border-l-2 border-border',
 };

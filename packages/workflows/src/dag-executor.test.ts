@@ -298,6 +298,13 @@ function createMockDeps<TStore extends IWorkflowStore = MockWorkflowStore>(
   return {
     store: store as TStore,
     getAgentProvider: mockGetAgentProviderDag,
+    runProviderQuery: request =>
+      request.client.sendQuery(
+        request.prompt,
+        request.cwd,
+        request.resumeSessionId,
+        request.options
+      ),
     loadConfig: mock<WorkflowDeps['loadConfig']>(async _cwd => ({
       assistant: 'claude' as const,
       commands: {},
@@ -4280,6 +4287,72 @@ describe('executeDagWorkflow -- tool_called event persistence', () => {
       path: '/tmp/test.ts',
     });
     expect((eventData.data as Record<string, unknown>).tool_call_id).toBe('anonymous-1');
+  });
+
+  it('persists provider queue and acquisition events with node context', async () => {
+    const mockStore = createMockStore();
+    const mockDeps = createMockDeps(mockStore);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+    mockDeps.runProviderQuery = request =>
+      (async function* () {
+        await request.context?.onQueued?.({ provider: request.provider, limit: 2 });
+        await request.context?.onAcquired?.({
+          provider: request.provider,
+          limit: 2,
+          slot: 1,
+          waitMs: 40,
+        });
+        yield* request.client.sendQuery(
+          request.prompt,
+          request.cwd,
+          request.resumeSessionId,
+          request.options
+        );
+      })();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      { name: 'capacity-events', nodes: [node('my-cmd')] },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const persisted = (mockStore.createWorkflowEvent as ReturnType<typeof mock>).mock.calls
+      .map(
+        (call: unknown[]) =>
+          call[0] as {
+            workflow_run_id: string;
+            event_type: string;
+            step_name?: string;
+            data: unknown;
+          }
+      )
+      .filter(event => event.event_type.startsWith('provider_slot_'));
+    expect(persisted).toEqual([
+      {
+        workflow_run_id: workflowRun.id,
+        event_type: 'provider_slot_queued',
+        step_name: 'my-cmd',
+        data: { provider: 'claude', limit: 2, query_attempt: 0 },
+      },
+      {
+        workflow_run_id: workflowRun.id,
+        event_type: 'provider_slot_acquired',
+        step_name: 'my-cmd',
+        data: { provider: 'claude', limit: 2, slot: 1, wait_ms: 40, query_attempt: 0 },
+      },
+    ]);
   });
 
   it('calls sendStructuredEvent for tool messages in streaming mode during DAG', async () => {
@@ -28069,6 +28142,13 @@ describe('executeDagWorkflow -- a workflow runs as authored, standalone or compo
           getCapabilities: provider === 'codex' ? mockCodexCapabilities : mockClaudeCapabilities,
         })
       ),
+      runProviderQuery: request =>
+        request.client.sendQuery(
+          request.prompt,
+          request.cwd,
+          request.resumeSessionId,
+          request.options
+        ),
       loadConfig: mock<WorkflowDeps['loadConfig']>(async _cwd => collapseConfig),
     };
 
@@ -28742,6 +28822,13 @@ describe('executeDagWorkflow -- composition governance survives the collapse', (
           };
         }
       ),
+      runProviderQuery: request =>
+        request.client.sendQuery(
+          request.prompt,
+          request.cwd,
+          request.resumeSessionId,
+          request.options
+        ),
       loadConfig: mock<WorkflowDeps['loadConfig']>(async _cwd => minimalConfig),
     };
 

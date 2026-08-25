@@ -111,20 +111,27 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
           status: data.run.status,
           dagNodes: ((): DagNodeState[] => {
             const nodeMap = new Map<string, DagNodeState>();
-            for (const e of data.events.filter(ev => ev.event_type.startsWith('node_'))) {
+            for (const e of data.events.filter(
+              ev => ev.event_type.startsWith('node_') || ev.event_type.startsWith('provider_slot_')
+            )) {
               const nodeId = e.step_name ?? (e.data.nodeId as string) ?? '';
               if (!nodeId) continue;
               const status =
                 e.event_type === 'node_started'
                   ? 'running'
-                  : e.event_type === 'node_completed'
-                    ? 'completed'
-                    : e.event_type === 'node_failed'
-                      ? 'failed'
-                      : 'skipped';
+                  : e.event_type === 'provider_slot_queued'
+                    ? 'queued'
+                    : e.event_type === 'provider_slot_acquired'
+                      ? 'running'
+                      : e.event_type === 'node_completed'
+                        ? 'completed'
+                        : e.event_type === 'node_failed'
+                          ? 'failed'
+                          : 'skipped';
               const existing = nodeMap.get(nodeId);
-              // Keep the latest non-running status (completed/failed/skipped override running)
-              if (!existing || status !== 'running') {
+              // Queue state replaces node_started; acquisition returns it to running.
+              // Terminal states still replace either active state in event order.
+              if (!existing || status !== 'running' || existing.status === 'queued') {
                 nodeMap.set(nodeId, {
                   nodeId,
                   name: nodeId,

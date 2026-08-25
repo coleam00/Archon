@@ -10,7 +10,7 @@ import type { TokenUsage } from '@archon/providers/types';
 type KnownBlock = types.KnownBlock;
 
 /** State of a single DAG node as tracked by the workflow bridge. */
-export type NodeState = 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
+export type NodeState = 'pending' | 'queued' | 'running' | 'completed' | 'failed' | 'skipped';
 
 /** Terminal state for an entire workflow run, used by status block + reactions. */
 export type RunTerminalState = 'completed' | 'failed' | 'cancelled';
@@ -38,6 +38,7 @@ export interface RunSnapshot {
 
 const NODE_GLYPH: Record<NodeState, string> = {
   pending: ':white_circle:',
+  queued: ':pause_button:',
   running: ':hourglass_flowing_sand:',
   completed: ':white_check_mark:',
   failed: ':x:',

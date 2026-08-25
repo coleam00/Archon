@@ -3495,7 +3495,6 @@ export interface components {
       evidence_policy?: {
         required: boolean;
       };
-      mutates_checkout?: boolean;
       persist_sessions?: boolean;
       tags?: string[];
       requires?: 'github'[];
@@ -3758,6 +3757,7 @@ export interface components {
         [key: string]: unknown;
       };
       always_run?: boolean;
+      mutates_checkout?: boolean;
       persist_session?: boolean;
       output_type?: string;
       command?: string;
@@ -4018,6 +4018,9 @@ export interface components {
       };
       concurrency: {
         maxConversations: number;
+        providers: {
+          [key: string]: number;
+        };
       };
       defaults: {
         copyDefaults: boolean;
