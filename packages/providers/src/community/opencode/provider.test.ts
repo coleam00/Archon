@@ -1658,6 +1658,47 @@ describe('OpencodeProvider', () => {
     expect(sessionAbort).toHaveBeenCalledTimes(2);
   });
 
+  test('re-aborts an in-flight prompt after its late rejection', async () => {
+    const promptDeferred = Promise.withResolvers<void>();
+    const sessionAbort = mock(async () => undefined);
+    const runtime = makeRuntime({
+      promptAsync: mock(async () => promptDeferred.promise),
+      subscribe: mock(async () => ({ stream: createPendingStream() })),
+      sessionAbort,
+    });
+    runtimeQueue.push(runtime);
+    const abortController = new AbortController();
+    const releases: { upstreamStopped: boolean }[] = [];
+
+    const consumption = consume(
+      new OpencodeProvider().sendQuery('hi', '/tmp', undefined, {
+        assistantConfig: TEST_MODEL,
+        abortSignal: abortController.signal,
+        providerAttemptGate: {
+          acquire: async () => ({
+            signal: new AbortController().signal,
+            release: async options => {
+              releases.push(options);
+            },
+          }),
+        },
+      })
+    );
+
+    while (runtime.client.session.promptAsync.mock.calls.length === 0) await Bun.sleep(1);
+    abortController.abort();
+    const { error } = await consumption;
+
+    expect(error?.name).toBe('ProviderAttemptStopUnconfirmedError');
+    expect(sessionAbort).toHaveBeenCalledTimes(1);
+    expect(releases).toEqual([{ upstreamStopped: false }]);
+
+    promptDeferred.reject(new Error('late prompt rejection'));
+    while (sessionAbort.mock.calls.length < 2) await Bun.sleep(1);
+    expect(sessionAbort).toHaveBeenCalledTimes(2);
+    expect(mockCreateOpencode).toHaveBeenCalledTimes(1);
+  });
+
   test('expires a single-agent lease when prompt submission never settles after cancellation', async () => {
     const promptStarted = Promise.withResolvers<void>();
     const runtime = makeRuntime({
