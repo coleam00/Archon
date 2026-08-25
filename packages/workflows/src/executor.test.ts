@@ -306,6 +306,49 @@ describe('executeWorkflow', () => {
     expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
   });
 
+  it('rejects a non-finite hand-built budget at the public execution boundary (#1961)', async () => {
+    const store = makeStore();
+    const workflow = { ...makeWorkflow(), budget: { max_spend_usd: Number.NaN } };
+
+    await expect(
+      executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv-1',
+        '/tmp/ops',
+        workflow,
+        'msg',
+        'db-conv-1'
+      )
+    ).rejects.toThrow("Invalid workflow 'test-workflow' budget");
+
+    expect(store.createWorkflowRun).not.toHaveBeenCalled();
+    expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('rejects a governed continuation whose prior usage was omitted (#1961)', async () => {
+    const store = makeStore();
+    const workflow = { ...makeWorkflow(), budget: { max_work_units: 2 } };
+    const resumed = makeRun({ id: 'governed-resume', status: 'running' });
+
+    await expect(
+      executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv-1',
+        '/tmp/ops',
+        workflow,
+        'msg',
+        'db-conv-1',
+        { preCreatedRun: resumed, priorCompletedNodes: new Map() }
+      )
+    ).rejects.toThrow(
+      "Cannot resume workflow run 'governed-resume' without its persisted prior usage"
+    );
+
+    expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+  });
+
   // -------------------------------------------------------------------------
   // Container resume guard (Phase C)
   // -------------------------------------------------------------------------

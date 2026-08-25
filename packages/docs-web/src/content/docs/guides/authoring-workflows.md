@@ -341,7 +341,7 @@ nodes:
     depends_on: [implement]
 ```
 
-`max_spend_usd` uses finite costs reported by providers. Archon checks recorded spend before
+`max_spend_usd` uses finite, non-negative costs reported by providers. Archon checks recorded spend before
 starting the next cost-bearing node, loop iteration, or fan-out child. If a paid AI result does
 not report a finite cost, the run fails with `budget_enforcement_failed`; unknown spend is never
 treated as zero while claiming the ceiling is enforced.

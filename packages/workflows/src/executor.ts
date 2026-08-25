@@ -38,6 +38,7 @@ import {
   CONTINUATION_METADATA_KEY,
   WORKFLOW_SOURCE_METADATA_KEY,
   readWorkflowSourceState,
+  workflowBudgetPolicySchema,
 } from './schemas';
 import {
   WorkflowSourceIntegrityError,
@@ -1419,6 +1420,9 @@ async function runChildWorkflow(
         user_id: userId,
         metadata: {
           [SUBRUN_METADATA_KEYS.parentNodeId]: nodeId,
+          ...(requireReportedCost === true
+            ? { [SUBRUN_METADATA_KEYS.requireReportedCost]: true }
+            : {}),
           // Fan-out instance index (slice 2, PR-C) — stamped only for a fan-out child so
           // parent resume can re-key the ordered instance set by index (findChildRuns is
           // started_at-ordered, which ≠ items order under max_parallel concurrency). A
@@ -1527,10 +1531,11 @@ async function runChildWorkflow(
     await deps.store.cancelWorkflowRun(childRunId).catch((cancelErr: unknown) => {
       getLog().error({ err: cancelErr as Error, childRunId }, 'workflow.child_setup_cancel_failed');
     });
-    return failOutcome(
+    const failed = failOutcome(
       `Sub-run '${childWorkflowName}' errored: ${(err as Error).message}`,
       childRunId
     );
+    return requireReportedCost ? { ...failed, costEnforceable: false } : failed;
   }
 }
 
@@ -1780,8 +1785,21 @@ export async function executeWorkflow(
     preparedSource,
     adoptedFromRunId,
     continuationMode = 'adopt',
-    requireReportedCost = false,
+    requireReportedCost: callerRequireReportedCost = false,
   } = opts;
+
+  const budgetValidation =
+    workflow.budget === undefined
+      ? undefined
+      : workflowBudgetPolicySchema.safeParse(workflow.budget);
+  if (budgetValidation !== undefined && !budgetValidation.success) {
+    throw new Error(
+      `Invalid workflow '${workflow.name}' budget: ${budgetValidation.error.issues.map(issue => issue.message).join('; ')}`
+    );
+  }
+
+  const requireReportedCost =
+    callerRequireReportedCost || readSubrunMetadata(preCreatedRun?.metadata).requireReportedCost;
 
   const executionUserId = preCreatedRun ? (preCreatedRun.user_id ?? undefined) : userId;
   const modelOverrides =
@@ -1791,6 +1809,15 @@ export async function executeWorkflow(
   const isContinuation =
     preCreatedRun !== undefined &&
     (priorCompletedNodes !== undefined || preCreatedRun.status !== 'pending');
+  if (
+    isContinuation &&
+    priorUsage === undefined &&
+    (workflow.budget !== undefined || requireReportedCost)
+  ) {
+    throw new Error(
+      `Cannot resume workflow run '${preCreatedRun.id}' without its persisted prior usage.`
+    );
+  }
   if (isContinuation && modelOverrides !== undefined) {
     throw new Error('Cannot supply model overrides when resuming an existing workflow run.');
   }

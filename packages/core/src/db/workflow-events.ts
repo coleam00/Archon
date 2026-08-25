@@ -431,7 +431,7 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<{
       // Same guard shape as tokens: a non-finite value from a provider must not
       // silently poison the total (NaN > 0 is false, which would drop the run's
       // cost from the persisted metadata with no trace).
-      if (typeof eventCost === 'number' && Number.isFinite(eventCost)) {
+      if (typeof eventCost === 'number' && Number.isFinite(eventCost) && eventCost >= 0) {
         costUsd += eventCost;
       } else {
         getLog().warn(

@@ -2461,6 +2461,42 @@ describe('executeDagWorkflow -- bash nodes', () => {
     );
   });
 
+  it('atomically reserves max_work_units across a parallel layer (#1961)', async () => {
+    const store = createMockStore();
+    await executeDagWorkflow(
+      createMockDeps(store),
+      createMockPlatform(),
+      'conv-parallel-budget',
+      testDir,
+      {
+        name: 'parallel-work-unit-budget',
+        budget: { max_work_units: 1 },
+        nodes: [
+          { id: 'one', kind: 'exec', runtime: 'sh', script: 'echo one' },
+          { id: 'two', kind: 'exec', runtime: 'sh', script: 'echo two' },
+        ],
+      },
+      makeWorkflowRun('parallel-work-unit-budget-run'),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(
+      store.createWorkflowEvent.mock.calls.filter(([event]) => event.event_type === 'node_started')
+    ).toHaveLength(1);
+    expect(
+      store.createWorkflowEvent.mock.calls.filter(
+        ([event]) => event.event_type === 'work_unit_charged'
+      )
+    ).toHaveLength(1);
+  });
+
   it('a child spawn decision persists a work_unit_charged audit row (#1961 R1)', async () => {
     // The live charge alone is not enough: getDagResumeSnapshot reconstructs the
     // work-unit ceiling from the event log on cold resume, so a spawn charge with no
@@ -2689,6 +2725,103 @@ describe('executeDagWorkflow -- bash nodes', () => {
         ([event]) => event.event_type === 'budget_enforcement_failed'
       )
     ).toBe(true);
+  });
+
+  it('persists the unknown-cost marker with terminal usage after its first write fails (#1961)', async () => {
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'assistant', content: 'completed without cost' };
+      yield { type: 'result', sessionId: 'missing-cost-marker-retry' };
+    });
+    const store = createMockStore();
+    const update = store.updateWorkflowRun;
+    let rejectedMarker = false;
+    store.updateWorkflowRun = mock((id, updates) => {
+      if (updates.metadata?.cost_reporting_unavailable === true && !rejectedMarker) {
+        rejectedMarker = true;
+        return Promise.reject(new Error('transient marker write failure'));
+      }
+      return update(id, updates);
+    });
+
+    await executeDagWorkflow(
+      createMockDeps(store),
+      createMockPlatform(),
+      'conv-marker-retry',
+      testDir,
+      {
+        name: 'marker-retry-budget',
+        budget: { max_spend_usd: 1 },
+        nodes: [{ id: 'paid', kind: 'agent', source: { kind: 'inline', prompt: 'work' } }],
+      },
+      makeWorkflowRun('marker-retry-run'),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(rejectedMarker).toBe(true);
+    expect(
+      store.updateWorkflowRun.mock.calls.some(
+        ([, updates]) =>
+          updates.metadata?.cost_reporting_unavailable === true &&
+          updates.metadata?.total_cost_usd === 0
+      )
+    ).toBe(true);
+  });
+
+  it('treats a negative provider cost as unenforceable spend (#1961)', async () => {
+    let calls = 0;
+    mockSendQueryDag.mockImplementation(async function* () {
+      calls++;
+      yield { type: 'assistant', content: 'malformed cost' };
+      yield { type: 'result', sessionId: 'negative-cost', cost: -4 };
+    });
+    const store = createMockStore();
+
+    await executeDagWorkflow(
+      createMockDeps(store),
+      createMockPlatform(),
+      'conv-negative-cost',
+      testDir,
+      {
+        name: 'negative-cost-budget',
+        budget: { max_spend_usd: 5 },
+        nodes: [
+          { id: 'first', kind: 'agent', source: { kind: 'inline', prompt: 'first' } },
+          {
+            id: 'second',
+            kind: 'agent',
+            source: { kind: 'inline', prompt: 'second' },
+            depends_on: ['first'],
+            trigger_rule: 'all_done',
+          },
+        ],
+      },
+      makeWorkflowRun('negative-cost-run'),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(calls).toBe(1);
+    expect(
+      store.createWorkflowEvent.mock.calls.some(
+        ([event]) => event.event_type === 'budget_enforcement_failed'
+      )
+    ).toBe(true);
+    expect(runUsageWrites(store)).toEqual([
+      { total_cost_usd: 0, cost_reporting_unavailable: true },
+    ]);
   });
 
   it('formats work-unit exhaustion as counts rather than dollars (#1961)', async () => {
@@ -3967,6 +4100,103 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
       },
     ]);
   }, 5_000);
+
+  it('settles a failed attempt before admitting its retry under max_spend_usd (#1961)', async () => {
+    let callCount = 0;
+    mockSendQueryDag.mockImplementation(async function* () {
+      callCount++;
+      yield {
+        type: 'result',
+        isError: true,
+        errorSubtype: 'error_during_execution',
+        errors: ['Claude Code crash: process exited with code 1'],
+        sessionId: 'spent-before-retry',
+        cost: 6,
+      };
+    });
+
+    const store = createMockStore();
+    await executeDagWorkflow(
+      createMockDeps(store),
+      createMockPlatform(),
+      'conv-retry-budget',
+      testDir,
+      {
+        name: 'retry-spend-budget',
+        budget: { max_spend_usd: 5 },
+        nodes: [
+          {
+            id: 'work',
+            kind: 'agent',
+            source: { kind: 'command', name: 'my-cmd' },
+            retry: { max_attempts: 2, delay_ms: 1 },
+          },
+        ],
+      },
+      makeWorkflowRun('retry-spend-budget-run'),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(callCount).toBe(1);
+    expect(runUsageWrites(store)).toEqual([{ total_cost_usd: 6 }]);
+    expect(
+      store.createWorkflowEvent.mock.calls.some(
+        ([event]) =>
+          event.event_type === 'budget_exhausted' && event.data?.phase === 'retry_attempt'
+      )
+    ).toBe(true);
+  });
+
+  it('checks max_work_units again before a retry attempt (#1961)', async () => {
+    let callCount = 0;
+    mockSendQueryDag.mockImplementation(async function* () {
+      callCount++;
+      throw new Error('provider process exited');
+    });
+
+    const store = createMockStore();
+    await executeDagWorkflow(
+      createMockDeps(store),
+      createMockPlatform(),
+      'conv-retry-work-units',
+      testDir,
+      {
+        name: 'retry-work-unit-budget',
+        budget: { max_work_units: 1 },
+        nodes: [
+          {
+            id: 'work',
+            kind: 'agent',
+            source: { kind: 'command', name: 'my-cmd' },
+            retry: { max_attempts: 2, delay_ms: 1 },
+          },
+        ],
+      },
+      makeWorkflowRun('retry-work-unit-budget-run'),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(callCount).toBe(1);
+    expect(
+      store.createWorkflowEvent.mock.calls.filter(
+        ([event]) => event.event_type === 'work_unit_charged'
+      )
+    ).toHaveLength(1);
+  });
 
   it('workflow fails after exhausting all node retries', async () => {
     let callCount = 0;

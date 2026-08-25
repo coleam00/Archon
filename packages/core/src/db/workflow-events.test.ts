@@ -286,6 +286,27 @@ describe('workflow-events', () => {
       expect(result.costUsd).toBeCloseTo(0.01);
     });
 
+    test('does not let a negative persisted provider cost reduce resumed spend (#1961)', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          {
+            step_name: 'valid',
+            event_type: 'node_completed',
+            data: { node_output: 'ok', cost_usd: 3 },
+          },
+          {
+            step_name: 'malformed',
+            event_type: 'node_failed',
+            data: { error: 'bad provider cost', cost_usd: -10 },
+          },
+        ])
+      );
+
+      const result = await getDagResumeSnapshot('run-123');
+
+      expect(result.costUsd).toBe(3);
+    });
+
     test('counts work_unit_charged spawn-decision rows as one work unit each (#1961 R1)', async () => {
       mockQuery.mockResolvedValueOnce(
         createQueryResult([

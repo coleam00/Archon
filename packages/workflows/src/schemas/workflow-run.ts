@@ -285,6 +285,9 @@ export type WorkflowRun = z.infer<typeof workflowRunSchema>;
  * `summary_value`  — additive sibling of `summary` (#2637): the child's terminal
  *                    structured value, stamped at completion alongside the text summary
  *                    so a parent `workflow:` node threads the logical value back.
+ * `require_reported_cost` — run-owned child execution policy inherited from a parent
+ *                    spend ceiling. It survives pause/resume independently of the
+ *                    original parent call stack.
  */
 export const SUBRUN_METADATA_KEYS = {
   parentNodeId: 'parent_node_id',
@@ -293,6 +296,7 @@ export const SUBRUN_METADATA_KEYS = {
   inputs: 'inputs',
   inputsValues: 'inputs_values',
   summaryValue: 'summary_value',
+  requireReportedCost: 'require_reported_cost',
 } as const;
 
 /** Typed view of the sub-run keys on a run's metadata; each is undefined when unset. */
@@ -302,6 +306,7 @@ export function readSubrunMetadata(metadata: Record<string, unknown> | undefined
   fanOutItemHash: string | undefined;
   inputs: Record<string, JsonValue> | undefined;
   summaryValue: unknown;
+  requireReportedCost: boolean;
 } {
   const parentNodeId = metadata?.[SUBRUN_METADATA_KEYS.parentNodeId];
   const childIndex = metadata?.[SUBRUN_METADATA_KEYS.childIndex];
@@ -333,6 +338,7 @@ export function readSubrunMetadata(metadata: Record<string, unknown> | undefined
       metadata !== undefined && Object.hasOwn(metadata, SUBRUN_METADATA_KEYS.summaryValue)
         ? metadata[SUBRUN_METADATA_KEYS.summaryValue]
         : undefined,
+    requireReportedCost: metadata?.[SUBRUN_METADATA_KEYS.requireReportedCost] === true,
   };
 }
 

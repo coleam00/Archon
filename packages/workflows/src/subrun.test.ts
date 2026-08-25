@@ -849,6 +849,85 @@ nodes:
     expect(subCompleted?.data?.node_output).toBe('ai-output');
   });
 
+  it('restores a parent-inherited cost-reporting policy when a gated child resumes (#1961)', async () => {
+    await writeWorkflow(
+      'child-gated-cost-policy',
+      `
+name: child-gated-cost-policy
+description: paid child resumes after a gate
+interactive: true
+nodes:
+  - id: gate
+    approval:
+      message: continue
+  - id: paid
+    prompt: do paid work
+    depends_on: [gate]
+`
+    );
+    await writeWorkflow(
+      'parent-gated-cost-policy',
+      `
+name: parent-gated-cost-policy
+description: spend-governed parent
+interactive: true
+budget: { max_spend_usd: 5 }
+nodes:
+  - id: sub
+    workflow: child-gated-cost-policy
+    isolation: inherit
+`
+    );
+
+    let providerCalls = 0;
+    const store = new InMemoryStore();
+    const deps: WorkflowDeps = {
+      ...makeDeps(store),
+      getAgentProvider: mock(() => ({
+        ...makeProvider(),
+        sendQuery: mock(function* () {
+          providerCalls++;
+          yield { type: 'assistant', content: 'unmetered result' };
+          yield { type: 'result', sessionId: 'unmetered-resume' };
+        }),
+      })) as unknown as WorkflowDeps['getAgentProvider'],
+    };
+
+    const parent = await discover('parent-gated-cost-policy');
+    const first = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parent,
+      'goal',
+      'conv-db'
+    );
+    expect(first.success && 'paused' in first && first.paused).toBe(true);
+
+    const child = [...store.runs.values()].find(
+      run => run.workflow_name === 'child-gated-cost-policy'
+    );
+    expect(child?.metadata.require_reported_cost).toBe(true);
+    store.approveGate(child!.id);
+    const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(child!.id))!);
+    expect(hydrated).not.toBeNull();
+    await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      await discover('child-gated-cost-policy'),
+      child!.user_message,
+      'conv-db',
+      { ...hydrated! }
+    );
+
+    expect(providerCalls).toBe(1);
+    expect((await store.getWorkflowRun(child!.id))?.status).toBe('failed');
+    expect((await store.getWorkflowRun(child!.id))?.metadata.cost_reporting_unavailable).toBe(true);
+  });
+
   it('a throw during the parent auto-resume pass lands the parent in failed, never wedged at running', async () => {
     await writeWorkflow(
       'child-gated',
@@ -2774,6 +2853,78 @@ nodes:
         event => event.event_type === 'budget_enforcement_failed' && event.step_name === 'work'
       )
     ).toBe(true);
+  });
+
+  it('does not admit all_done work after a failed child makes spend unknowable (#1961)', async () => {
+    await writeWorkflow(
+      'unknown-cost-child',
+      `
+name: unknown-cost-child
+description: child provider omits cost
+nodes:
+  - id: work
+    prompt: do paid work
+`
+    );
+    await writeWorkflow(
+      'unknown-cost-parent',
+      `
+name: unknown-cost-parent
+description: parent stops after unknown child spend
+budget: { max_spend_usd: 5 }
+nodes:
+  - id: sub
+    workflow: unknown-cost-child
+    isolation: inherit
+  - id: after
+    bash: echo must-not-run
+    depends_on: [sub]
+    trigger_rule: all_done
+`
+    );
+
+    let providerCalls = 0;
+    const store = new InMemoryStore();
+    const unknownCostProvider = {
+      ...makeProvider(),
+      sendQuery: mock(function* () {
+        providerCalls++;
+        yield { type: 'assistant', content: 'done without cost' };
+        yield { type: 'result', sessionId: 'unknown-cost-child' };
+      }),
+    };
+    const deps: WorkflowDeps = {
+      ...makeDeps(store),
+      getAgentProvider: mock(
+        () => unknownCostProvider
+      ) as unknown as WorkflowDeps['getAgentProvider'],
+    };
+
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      await discover('unknown-cost-parent'),
+      'goal',
+      'conv-db',
+      { resolveChildIsolation: makeFanResolver(cwd).resolver }
+    );
+
+    expect(result.success).toBe(false);
+    expect(providerCalls).toBe(1);
+    const parent = [...store.runs.values()].find(
+      run => run.workflow_name === 'unknown-cost-parent'
+    );
+    expect(parent?.metadata?.cost_reporting_unavailable).toBe(true);
+    expect(
+      store.events.some(
+        event =>
+          event.workflow_run_id === parent?.id &&
+          event.step_name === 'after' &&
+          event.event_type === 'node_started'
+      )
+    ).toBe(false);
   });
 
   it('records an explicit zero for a deterministic child under a parent spend ceiling (#1961)', async () => {
