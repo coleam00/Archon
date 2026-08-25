@@ -1,10 +1,21 @@
 /**
  * Tests for workflow commands
  */
-import { describe, it, expect, beforeEach, afterEach, spyOn, mock, jest } from 'bun:test';
+import {
+  describe,
+  it,
+  expect,
+  beforeAll,
+  beforeEach,
+  afterEach,
+  spyOn,
+  mock,
+  jest,
+} from 'bun:test';
 import { appendFileSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { homedir, tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { getArchonHome, isDocker } from '@archon/paths';
 import type { WorkflowEmitterEvent } from '@archon/workflows/event-emitter';
 import {
   makeTestComposedWorkflow,
@@ -27,13 +38,22 @@ import {
   workflowRespondCommand,
   workflowEventEmitCommand,
   workflowCleanupCommand,
+  workflowTestCommand,
   workflowResetSessionsCommand,
   buildDetachedRunCmd,
+  resolveDetachedRunEncryptionEnv,
   maybePrintTierNotice,
   resolveContainerBackendConfig,
   hasUnresolvedWriteback,
   buildNodeSummaries,
 } from './workflow';
+
+beforeAll(async () => {
+  const { registerBuiltinProviders, registerCommunityProviders } =
+    await import('@archon/providers');
+  registerBuiltinProviders();
+  registerCommunityProviders();
+});
 
 const mockLogger = {
   fatal: mock(() => undefined),
@@ -110,11 +130,26 @@ const mockResolveFolderBackend = mock(() => ({
   destroy: mockFolderBackendDestroy,
 }));
 
+const mockIsDocker = (env: NodeJS.ProcessEnv = process.env): boolean =>
+  env.WORKSPACE_PATH === '/workspace' ||
+  (env.HOME === '/root' && Boolean(env.WORKSPACE_PATH)) ||
+  env.ARCHON_DOCKER === 'true';
+const mockExpandTilde = (path: string): string =>
+  path.startsWith('~') ? join(homedir(), path.slice(1).replace(/^[/\\]/, '')) : path;
+
 // Mock @archon/paths (createLogger moved here from @archon/core)
 mock.module('@archon/paths', () => ({
   captureApprovalResolved: () => undefined,
   createLogger: mock(() => mockLogger),
-  getArchonHome: mock(() => '/home/test/.archon'),
+  expandTilde: mockExpandTilde,
+  isDocker: mockIsDocker,
+  getArchonHome: mock((env: NodeJS.ProcessEnv = process.env) =>
+    mockIsDocker(env)
+      ? '/.archon'
+      : env.ARCHON_HOME
+        ? mockExpandTilde(env.ARCHON_HOME)
+        : '/home/test/.archon'
+  ),
   BUNDLED_IS_BINARY: false,
   BUNDLED_VERSION: '0.0.0-test',
   readTierNoticeState: mock(() => null),
@@ -189,6 +224,10 @@ mock.module('@archon/core/operations/workflow-adoption', () => ({
 
 mock.module('@archon/workflows/workflow-discovery', () => ({
   discoverWorkflowsWithConfig: mock(() => Promise.resolve({ workflows: [], errors: [] })),
+}));
+mock.module('@archon/workflows/fixture-runner', () => ({
+  runFixtures: mock(() => Promise.resolve({ results: [], passed: 0, failed: 0 })),
+  formatFixtureReport: mock(() => 'FIXTURE REPORT'),
 }));
 /**
  * Ownership calls the run path makes on its capture, in order.
@@ -791,7 +830,7 @@ describe('workflowRunCommand — dry-run', () => {
 
       await workflowRunCommand('/test/path', 'plan', 'hello', {
         dryRun: true,
-        modelAssignments: ['large=@personal', '@planner=next-model'],
+        modelAssignments: ['large=@personal', '@planner=openai/next-model'],
       });
 
       const options = (dryRun.dryRunWorkflow as ReturnType<typeof mock>).mock.calls[0]?.[0] as {
@@ -804,11 +843,64 @@ describe('workflowRunCommand — dry-run', () => {
       expect(options.aiProfile.aliases.large).toEqual({ provider: 'claude', model: 'opus' });
       expect(options.aiProfile.aliases['@planner']).toEqual({
         provider: 'pi',
-        model: 'next-model',
+        model: 'openai/next-model',
       });
     } finally {
       if (previousUserId === undefined) Reflect.deleteProperty(process.env, 'ARCHON_USER_ID');
       else process.env.ARCHON_USER_ID = previousUserId;
+    }
+  });
+
+  it('applies the config file and then replaces only the explicit model binding', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'archon-cli-dry-run-config-'));
+    const configPath = join(dir, 'config.minimax.yaml');
+    appendFileSync(
+      configPath,
+      'tiers:\n  large: { provider: pi, model: minimax/MiniMax-M3 }\nenv:\n  BENCH_MODE: "1"\n'
+    );
+    try {
+      const core = await import('@archon/core');
+      const dryRun = await import('@archon/workflows/dry-run');
+      (core.loadConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+        assistant: 'claude',
+        assistants: { claude: {}, pi: {} },
+        tiers: {
+          small: { provider: 'claude', model: 'haiku' },
+          medium: { provider: 'claude', model: 'sonnet' },
+          large: { provider: 'claude', model: 'opus' },
+        },
+        aliases: {},
+        envVars: { LOWER: 'kept' },
+        commands: {},
+      });
+
+      await workflowRunCommand('/test/path', 'plan', 'hello', {
+        dryRun: true,
+        configPath,
+        modelAssignments: ['large=openai/gpt-5.6'],
+      });
+
+      const options = (dryRun.dryRunWorkflow as ReturnType<typeof mock>).mock.calls[0]?.[0] as {
+        config: { envVars?: Record<string, string> };
+        aiProfile: {
+          aliases: Record<string, { provider: string; model: string }>;
+        };
+      };
+      expect(options.config.envVars).toEqual({ LOWER: 'kept', BENCH_MODE: '1' });
+      expect(options.aiProfile.aliases.large).toEqual({
+        provider: 'pi',
+        model: 'openai/gpt-5.6',
+      });
+      expect(options.aiProfile.aliases.small).toEqual({
+        provider: 'claude',
+        model: 'haiku',
+      });
+      expect(options.aiProfile.aliases.medium).toEqual({
+        provider: 'claude',
+        model: 'sonnet',
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 
@@ -1435,6 +1527,91 @@ describe('workflowRunCommand — sparse model bindings (#2481)', () => {
         modelAssignments: ['large=openai/gpt-5.6'],
       })
     ).rejects.toThrow(/--resume and --model/);
+  });
+});
+
+describe('workflowRunCommand — sparse config file (#2482)', () => {
+  let tempRoot: string;
+  let consoleSpy: ReturnType<typeof spyOn>;
+
+  beforeEach(async () => {
+    tempRoot = mkdtempSync(join(tmpdir(), 'archon-cli-run-config-'));
+    consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    (executeWorkflow as ReturnType<typeof mock>).mockClear();
+  });
+
+  afterEach(() => {
+    consoleSpy.mockRestore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  });
+
+  async function stubWorkflow(): Promise<void> {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'bench' }, 'project')],
+      errors: [],
+    });
+  }
+
+  it('passes validated file content beside explicit model mappings', async () => {
+    const path = join(tempRoot, 'config.minimax.yaml');
+    appendFileSync(
+      path,
+      'tiers:\n  large: { provider: pi, model: minimax/MiniMax-M3 }\nenv:\n  BENCH: "yes"\n'
+    );
+    await stubWorkflow();
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      workflowRunId: 'run-config',
+    });
+
+    await workflowRunCommand(tempRoot, 'bench', 'go', {
+      noWorktree: true,
+      configPath: './config.minimax.yaml',
+      modelAssignments: ['large=openai/gpt-5.6'],
+    });
+
+    const opts = (executeWorkflow as ReturnType<typeof mock>).mock.calls[0][7] as {
+      runConfig?: unknown;
+      modelOverrideLayer?: unknown;
+    };
+    expect(opts.runConfig).toEqual({
+      source: { kind: 'cli', label: 'config.minimax.yaml' },
+      layer: {
+        tiers: { large: { provider: 'pi', model: 'minimax/MiniMax-M3' } },
+        envVars: { BENCH: 'yes' },
+      },
+    });
+    expect(opts.modelOverrideLayer).toEqual({
+      kind: 'raw',
+      overrides: { tiers: { large: 'openai/gpt-5.6' } },
+    });
+  });
+
+  it('rejects an ineffective key before source capture or execution', async () => {
+    const path = join(tempRoot, 'bad.yaml');
+    appendFileSync(path, 'commands:\n  folder: custom\n');
+    const { executeWorkflow, prepareWorkflowSource } = await import('@archon/workflows/executor');
+    const prepareCallsBefore = (prepareWorkflowSource as ReturnType<typeof mock>).mock.calls.length;
+
+    await expect(
+      workflowRunCommand('/repo/root', 'bench', 'go', { configPath: path })
+    ).rejects.toThrow("Run config key 'commands' cannot apply");
+    expect((prepareWorkflowSource as ReturnType<typeof mock>).mock.calls).toHaveLength(
+      prepareCallsBefore
+    );
+    expect(executeWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('refuses config on resume without trying to read the path', async () => {
+    await expect(
+      workflowRunCommand('/repo/root', 'bench', 'go', {
+        resume: true,
+        configPath: join(tempRoot, 'does-not-exist.yaml'),
+      })
+    ).rejects.toThrow(/--resume and --config/);
   });
 });
 
@@ -5158,6 +5335,80 @@ describe('workflowRunCommand — detach', () => {
     expect(consoleSpy).toHaveBeenCalledWith("Started 'assist' in the background.");
   });
 
+  it('hands the detached child the sealed validated layer instead of a mutable path', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const paths = await import('@archon/paths');
+    const { unsealWorkflowRunConfig } = await import('@archon/core/config');
+    const { workflowRunConfigMetadataSchema } =
+      await import('@archon/workflows/schemas/run-config');
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
+      errors: [],
+    });
+    (paths.getArchonHome as ReturnType<typeof mock>).mockImplementationOnce(() => {
+      throw new Error('no home in test');
+    });
+
+    const child = createDetachedChildFixture();
+    const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue(child.child);
+    const savedArgv = process.argv;
+    const savedKey = process.env.TOKEN_ENCRYPTION_KEY;
+    const savedArchonHome = process.env.ARCHON_HOME;
+    process.env.TOKEN_ENCRYPTION_KEY = 'ab'.repeat(32);
+    delete process.env.ARCHON_HOME;
+    process.argv = [
+      'bun',
+      '/abs/cli.ts',
+      'workflow',
+      'run',
+      'assist',
+      '--config',
+      '/caller/config.yaml',
+      '--detach',
+    ];
+
+    let payload: string | undefined;
+    try {
+      const commandPromise = workflowRunCommand('/test/path', 'assist', '', {
+        detach: true,
+        configPath: '/caller/config.yaml',
+        detachedRunConfig: {
+          source: { kind: 'cli', label: 'config.yaml' },
+          layer: { docsPath: 'accepted', envVars: { SNAPSHOT: 'original' } },
+        },
+      });
+      await finishStartupWindow(commandPromise, spawnSpy);
+      const spawnOptions = spawnSpy.mock.calls[0]?.[0] as
+        | { cmd?: string[]; env?: Record<string, string | undefined> }
+        | undefined;
+      const payloadIndex = spawnOptions?.cmd?.indexOf('--internal-detached-run-config') ?? -1;
+      payload = payloadIndex >= 0 ? spawnOptions?.cmd?.[payloadIndex + 1] : undefined;
+      expect(spawnOptions?.env?.ARCHON_INTERNAL_DETACHED_RUN_CONFIG).toBeUndefined();
+      expect(spawnOptions?.env?.TOKEN_ENCRYPTION_KEY).toBe('ab'.repeat(32));
+      expect(spawnOptions?.env?.ARCHON_HOME).toBe('');
+    } finally {
+      process.argv = savedArgv;
+      if (savedKey === undefined) delete process.env.TOKEN_ENCRYPTION_KEY;
+      else process.env.TOKEN_ENCRYPTION_KEY = savedKey;
+      if (savedArchonHome === undefined) delete process.env.ARCHON_HOME;
+      else process.env.ARCHON_HOME = savedArchonHome;
+      spawnSpy.mockRestore();
+    }
+
+    expect(payload).toBeDefined();
+    process.env.TOKEN_ENCRYPTION_KEY = 'ab'.repeat(32);
+    try {
+      const metadata = workflowRunConfigMetadataSchema.parse(JSON.parse(payload ?? ''));
+      expect(unsealWorkflowRunConfig(metadata)).toMatchObject({
+        docsPath: 'accepted',
+        envVars: { SNAPSHOT: 'original' },
+      });
+    } finally {
+      if (savedKey === undefined) delete process.env.TOKEN_ENCRYPTION_KEY;
+      else process.env.TOKEN_ENCRYPTION_KEY = savedKey;
+    }
+  });
+
   // #2213 — the headline `--json` claim. `writeJsonLine` (not console.log) is
   // what emits the payload, and it is only reached on this `--detach` branch,
   // so this is the only place the "stdout stays exactly the payload" guarantee
@@ -6158,6 +6409,52 @@ describe('buildDetachedRunCmd', () => {
     expect(cmd).not.toContain('B:/~BUN/root/archon-windows-x64.exe');
     expect(cmd[1]).toBe('workflow');
     expect(cmd[2]).toBe('run');
+  });
+});
+
+describe('resolveDetachedRunEncryptionEnv', () => {
+  it('pins both absence and a relative home before the child changes cwd', () => {
+    expect(resolveDetachedRunEncryptionEnv({}, '/parent/repo')).toEqual({
+      TOKEN_ENCRYPTION_KEY: '',
+      ARCHON_HOME: '',
+      ARCHON_DOCKER: '',
+      WORKSPACE_PATH: '',
+      HOME: '',
+    });
+    expect(
+      resolveDetachedRunEncryptionEnv(
+        { TOKEN_ENCRYPTION_KEY: 'install-key', ARCHON_HOME: './relative-home' },
+        '/parent/repo'
+      )
+    ).toEqual({
+      TOKEN_ENCRYPTION_KEY: 'install-key',
+      ARCHON_HOME: resolve('/parent/repo', 'relative-home'),
+      ARCHON_DOCKER: '',
+      WORKSPACE_PATH: '',
+      HOME: '',
+    });
+    expect(resolveDetachedRunEncryptionEnv({ ARCHON_HOME: '~/.archon-custom' }, '/parent')).toEqual(
+      {
+        TOKEN_ENCRYPTION_KEY: '',
+        ARCHON_HOME: join(homedir(), '.archon-custom'),
+        ARCHON_DOCKER: '',
+        WORKSPACE_PATH: '',
+        HOME: '',
+      }
+    );
+    const dockerHandoff = resolveDetachedRunEncryptionEnv(
+      { ARCHON_DOCKER: 'true', ARCHON_HOME: '/ignored-custom-home' },
+      '/parent'
+    );
+    expect(dockerHandoff).toEqual({
+      TOKEN_ENCRYPTION_KEY: '',
+      ARCHON_HOME: '/.archon',
+      ARCHON_DOCKER: 'true',
+      WORKSPACE_PATH: '',
+      HOME: '',
+    });
+    expect(isDocker(dockerHandoff)).toBe(true);
+    expect(getArchonHome(dockerHandoff)).toBe('/.archon');
   });
 });
 
@@ -8654,6 +8951,112 @@ describe('resolveContainerBackendConfig', () => {
   it('rejects a non-integer / non-positive pidsLimit', () => {
     expect(() => resolveContainerBackendConfig({ pidsLimit: 10.5 })).toThrow(/positive integer/);
     expect(() => resolveContainerBackendConfig({ pidsLimit: 0 })).toThrow(/positive integer/);
+  });
+});
+
+describe('workflowTestCommand', () => {
+  let stdoutSpy: ReturnType<typeof spyOn>;
+  let consoleSpy: ReturnType<typeof spyOn>;
+
+  beforeEach(async () => {
+    stdoutSpy = spyOnJsonStdout();
+    consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    const fixtureRunner = await import('@archon/workflows/fixture-runner');
+    (fixtureRunner.runFixtures as ReturnType<typeof mock>).mockClear();
+    (fixtureRunner.formatFixtureReport as ReturnType<typeof mock>).mockClear();
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    discoverWorkflowsWithConfigAsMock().mockResolvedValue({
+      workflows: [makeTestWorkflowWithSource({ name: 'plan' }, 'project')],
+      errors: [],
+    });
+  });
+
+  afterEach(() => {
+    stdoutSpy.mockRestore();
+    consoleSpy.mockRestore();
+  });
+
+  function discoverWorkflowsWithConfigAsMock(): ReturnType<typeof mock> {
+    return mock() as unknown as ReturnType<typeof mock>;
+  }
+
+  it('emits one JSON document and exits 0 when every fixture passes', async () => {
+    const fixtureRunner = await import('@archon/workflows/fixture-runner');
+    (fixtureRunner.runFixtures as ReturnType<typeof mock>).mockResolvedValue({
+      results: [
+        {
+          fixture: 'sdlc/plan/fixtures/ready.stubs.yaml',
+          workflow: 'plan',
+          expect: 'completed',
+          outcome: 'completed',
+          pass: true,
+          missingStubs: [],
+          unusedStubs: ['spare'],
+        },
+      ],
+      passed: 1,
+      failed: 0,
+    });
+
+    const exit = await workflowTestCommand('/test/path', undefined, { json: true });
+
+    expect(exit).toBe(0);
+    expect(fixtureRunner.runFixtures).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: '/test/path' })
+    );
+    expect(stdoutSpy).toHaveBeenCalledTimes(1);
+    const payload = JSON.parse(firstJsonPayload(stdoutSpy));
+    expect(payload.passed).toBe(1);
+    expect(payload.failed).toBe(0);
+    expect(payload.results[0]).toMatchObject({ fixture: 'sdlc/plan/fixtures/ready.stubs.yaml' });
+  });
+
+  it('exits 1 when a fixture fails', async () => {
+    const fixtureRunner = await import('@archon/workflows/fixture-runner');
+    (fixtureRunner.runFixtures as ReturnType<typeof mock>).mockResolvedValue({
+      results: [
+        {
+          fixture: 'f.stubs.yaml',
+          workflow: 'plan',
+          expect: 'completed',
+          outcome: 'failed',
+          pass: false,
+          failureReason: 'expected completed, dry-run reported failed',
+          missingStubs: [],
+          unusedStubs: [],
+        },
+      ],
+      passed: 0,
+      failed: 1,
+    });
+
+    const exit = await workflowTestCommand('/test/path', 'plan');
+    expect(exit).toBe(1);
+  });
+
+  it('exits 1 when an explicitly named target has no fixtures', async () => {
+    const fixtureRunner = await import('@archon/workflows/fixture-runner');
+    (fixtureRunner.runFixtures as ReturnType<typeof mock>).mockResolvedValue({
+      results: [],
+      passed: 0,
+      failed: 0,
+    });
+
+    const exit = await workflowTestCommand('/test/path', 'no-fixtures');
+    expect(exit).toBe(1);
+  });
+
+  it('exits 0 with no fixtures when no target was named', async () => {
+    const fixtureRunner = await import('@archon/workflows/fixture-runner');
+    (fixtureRunner.runFixtures as ReturnType<typeof mock>).mockResolvedValue({
+      results: [],
+      passed: 0,
+      failed: 0,
+    });
+
+    const exit = await workflowTestCommand('/test/path', undefined);
+    expect(exit).toBe(0);
+    expect(fixtureRunner.formatFixtureReport).toHaveBeenCalled();
   });
 });
 

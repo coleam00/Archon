@@ -1,4 +1,11 @@
 import type { PiProviderDefaults } from '../../types';
+import {
+  assertKnownRunConfigKeys,
+  invalidRunConfigValue,
+  isConfigRecord,
+  normalizeRunConfigString,
+} from '../../shared/run-config';
+import { parsePiModelRef } from './model-ref';
 
 export type { PiProviderDefaults };
 
@@ -159,4 +166,62 @@ export function parsePiConfig(raw: Record<string, unknown>): ParsedPiConfig {
   }
 
   return result;
+}
+
+function validateExtensionPosture(raw: Record<string, unknown>, path = ''): void {
+  assertKnownRunConfigKeys(raw, ['enableExtensions', 'interactive', 'extensionFlags']);
+  for (const key of ['enableExtensions', 'interactive'] as const) {
+    if (raw[key] !== undefined && typeof raw[key] !== 'boolean') {
+      invalidRunConfigValue(`${path}${key}`, 'a boolean');
+    }
+  }
+  if (raw.extensionFlags !== undefined) {
+    if (!isConfigRecord(raw.extensionFlags)) {
+      invalidRunConfigValue(`${path}extensionFlags`, 'an object of boolean or string values');
+    }
+    for (const [key, value] of Object.entries(raw.extensionFlags)) {
+      if (typeof value !== 'boolean' && typeof value !== 'string') {
+        invalidRunConfigValue(`${path}extensionFlags.${key}`, 'a boolean or string');
+      }
+    }
+  }
+}
+
+/** Strict counterpart used only for an explicitly selected per-run layer. */
+export function parsePiRunConfig(raw: Record<string, unknown>): ParsedPiConfig {
+  assertKnownRunConfigKeys(raw, [
+    'model',
+    'enableExtensions',
+    'interactive',
+    'extensionFlags',
+    'nodes',
+  ]);
+  let model = normalizeRunConfigString(raw.model, 'model');
+  if (model !== undefined) {
+    const parsedModel = parsePiModelRef(model);
+    if (parsedModel === undefined) {
+      invalidRunConfigValue('model', "'<provider>/<model>'");
+    }
+    model = `${parsedModel.provider}/${parsedModel.modelId}`;
+  }
+  validateExtensionPosture(
+    Object.fromEntries(
+      ['enableExtensions', 'interactive', 'extensionFlags']
+        .filter(key => Object.hasOwn(raw, key))
+        .map(key => [key, raw[key]])
+    )
+  );
+  if (raw.nodes !== undefined) {
+    if (!isConfigRecord(raw.nodes)) {
+      invalidRunConfigValue('nodes', 'an object of per-node settings');
+    }
+    for (const [nodeId, value] of Object.entries(raw.nodes)) {
+      if (!isConfigRecord(value)) {
+        invalidRunConfigValue(`nodes.${nodeId}`, 'an object');
+      }
+      validateExtensionPosture(value, `nodes.${nodeId}.`);
+    }
+  }
+  const parsed = parsePiConfig(raw);
+  return model === undefined ? parsed : { ...parsed, model };
 }

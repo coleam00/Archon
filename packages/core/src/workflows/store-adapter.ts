@@ -31,6 +31,7 @@ import {
 } from '../credentials/delivery';
 import { listDecryptedUserProviderCredentials } from '../db/user-provider-key-store';
 import { getUserAiPrefs, type UserAiPrefs } from '../db/user-ai-prefs-store';
+import { sealWorkflowRunConfig, unsealWorkflowRunConfig } from '../config/run-config';
 
 // Compile-time assertion: MergedConfig must remain a structural subtype of WorkflowConfig.
 // If MergedConfig drifts from WorkflowConfig, this line becomes a type error.
@@ -135,6 +136,8 @@ export function createWorkflowDeps(): WorkflowDeps {
     store: createWorkflowStore(),
     getAgentProvider,
     loadConfig: loadMergedConfig,
+    sealRunConfig: sealWorkflowRunConfig,
+    unsealRunConfig: unsealWorkflowRunConfig,
     // App mode: resolve fresh installation tokens for subprocess env. PAT mode:
     // undefined → engine falls back to env inheritance, preserving legacy
     // behaviour for solo installs.

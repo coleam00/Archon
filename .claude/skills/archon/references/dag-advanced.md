@@ -309,15 +309,17 @@ Available on command and prompt nodes (default-on for transient errors), and on 
 
 For deterministic bash/script failures (a script that exits 1 reproducibly), retrying is pointless — `retry:` there is for flaky externals (network fetches, rate-limited APIs). Classification detail: a bash/script failure message is formatted `<node> failed [exit N]: <stderr>`, so the classifier runs on your script's **stderr text** — the `exited with code` TRANSIENT pattern in the table below targets AI-CLI crash messages and does NOT match a bash/script non-zero exit. A subprocess `timeout` DOES classify TRANSIENT. Practical rule: rely on the default `on_error: transient` when failures surface as timeouts/rate-limit text on stderr; use `on_error: all` when the flaky failure mode produces generic stderr.
 
+**Rate-limit override (#2706):** once any attempt fails with a rate-limit pattern (`429`, `rate limit`, `too many requests`, `overloaded`, `at capacity`), the delay policy changes: instead of your `delay_ms` doubling, retries back off flat at ~45s ±50% jitter (22–67s) and the attempt budget widens to at least 5, regardless of `max_attempts`. Your `delay_ms`/`max_attempts` ceilings are ignored for these failures — providers shedding load recover on a minutes-scale window that short exponential backoff misses.
+
 ### Error Classification
 
 | Category | Examples | Retried? |
 |----------|----------|----------|
-| **FATAL** | `unauthorized`, `forbidden`, `permission denied`, `invalid token`, `authentication failed`, `auth error`, `401`, `403`, `credit balance` | Never |
-| **TRANSIENT** | `timeout`, `etimedout`, `rate limit`, `too many requests`, `429`, `502`, `503`, `econnrefused`, `econnreset`, `network error`, `socket hang up`, `exited with code`, `claude code crash` | By default |
+| **FATAL** | `unauthorized`, `forbidden`, `permission denied`, `invalid token`, `authentication failed`, `401`, `403`, `session limit`, `usage limit reached`, `credit exhaustion`, `credit balance` | Never |
+| **TRANSIENT** | `timeout`, `etimedout`, `rate limit`, `too many requests`, `429`, `502`, `503`, `529`, `overloaded`, `at capacity`, `stream closed without yielding content`, `econnrefused`, `econnreset`, `network error`, `socket hang up`, `exited with code`, `claude code crash` | By default (rate-limit matches get the ~45s±50% backoff and widened budget above) |
 | **UNKNOWN** | Everything else | Only with `on_error: all` |
 
-FATAL patterns take priority over TRANSIENT patterns in the same error message.
+FATAL patterns take priority over TRANSIENT patterns in the same error message. `auth error` alone is fatal, but yields to any concrete transient pattern in the same message.
 
 ### Two-Layer Retry Stack
 

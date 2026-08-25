@@ -95,6 +95,7 @@ import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
 import type { IWorkflowStore } from './store';
 import type { WorkflowRun } from './schemas/workflow-run';
 import type { WorkflowDefinition } from './schemas/workflow';
+import type { WorkflowRunConfigMetadata } from './schemas/run-config';
 import type {
   ChildIsolationResolver,
   ChildIsolationRequest,
@@ -428,6 +429,15 @@ function makeDeps(store: IWorkflowStore): WorkflowDeps {
           defaults: { loadDefaultCommands: false, loadDefaultWorkflows: false },
         })
     ),
+    sealRunConfig: (layer, source): WorkflowRunConfigMetadata => ({
+      version: 1,
+      ciphertext: 'opaque-test-payload',
+      source,
+      keys: [
+        ...Object.keys(layer.tiers ?? {}).map(name => `tiers.${name}`),
+        ...Object.keys(layer.envVars ?? {}).map(name => `env.${name}`),
+      ].sort(),
+    }),
   };
 }
 
@@ -672,6 +682,67 @@ nodes:
       overrides: {
         tiers: { large: { provider: 'codex', model: 'gpt-5.6-sol' } },
       },
+      effective: {
+        aliases: { large: { provider: 'codex', model: 'gpt-5.6-sol' } },
+      },
+    });
+  });
+
+  it('propagates a sparse run config into a child and gives it durable attribution', async () => {
+    await writeWorkflow(
+      'child-run-config',
+      `
+name: child-run-config
+description: child using the large tier
+nodes:
+  - id: child-work
+    prompt: "child work"
+    model: large
+`
+    );
+    await writeWorkflow(
+      'parent-run-config',
+      `
+name: parent-run-config
+description: parent composing a child with the same run config
+nodes:
+  - id: sub
+    workflow: child-run-config
+`
+    );
+
+    const store = new InMemoryStore();
+    const parent = await discover('parent-run-config');
+    const result = await executeWorkflow(
+      makeDeps(store),
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parent,
+      'goal',
+      'conv-db',
+      {
+        runConfig: {
+          source: { kind: 'cli', label: 'config.minimax.yaml' },
+          layer: {
+            tiers: { large: { provider: 'codex', model: 'gpt-5.6-sol' } },
+            envVars: { BENCH_MODE: '1' },
+          },
+        },
+      }
+    );
+
+    expect(result.success).toBe(true);
+    const parentRun = [...store.runs.values()].find(
+      run => run.workflow_name === 'parent-run-config'
+    );
+    const childRun = [...store.runs.values()].find(run => run.workflow_name === 'child-run-config');
+    expect(childRun?.parent_run_id).toBe(parentRun?.id);
+    expect(childRun?.metadata.run_config).toMatchObject({
+      source: { kind: 'cli', label: 'config.minimax.yaml' },
+      keys: ['env.BENCH_MODE', 'tiers.large'],
+    });
+    expect(childRun?.metadata.model_bindings).toMatchObject({
       effective: {
         aliases: { large: { provider: 'codex', model: 'gpt-5.6-sol' } },
       },

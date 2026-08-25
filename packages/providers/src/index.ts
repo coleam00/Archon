@@ -6,6 +6,7 @@ export type {
   NodeConfig,
   ProviderDefaults,
   ProviderDefaultsMap,
+  ProviderRunConfigParser,
   ProviderCapabilities,
   ProviderRegistration,
   ProviderInfo,
@@ -26,6 +27,7 @@ export {
   getAgentProvider,
   getRegistration,
   getProviderCapabilities,
+  parseProviderRunModel,
   getRegisteredProviders,
   getProviderInfoList,
   isRegisteredProvider,
@@ -35,7 +37,7 @@ export {
 } from './registry';
 
 // Error
-export { UnknownProviderError } from './errors';
+export { InvalidProviderRunConfigError, UnknownProviderError } from './errors';
 
 // The shared reasoning-depth ladder is deliberately NOT re-exported here. It is
 // reachable only as `@archon/providers/effort`, a leaf with zero SDK imports, so

@@ -96,6 +96,9 @@ export const dryRunStubsSchema = z.unknown().transform((value, ctx) => {
 });
 export type DryRunStubs = z.infer<typeof dryRunStubsSchema>;
 
+/** Reserved keys of the `.stubs.yaml` fixture format (#2772); `loadDryRunStubs` rejects them so a fixture file is never mis-read as plain stubs. */
+export const RESERVED_FIXTURE_KEYS = new Set(['fixture', 'exec-code']);
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -377,6 +380,14 @@ export async function loadDryRunStubs(path?: string): Promise<DryRunStubs> {
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error(
       `Invalid dry-run stub file '${path}': expected one YAML mapping of node ids to outputs`
+    );
+  }
+  const reservedHit = Object.keys(parsed as Record<string, unknown>).find(key =>
+    RESERVED_FIXTURE_KEYS.has(key)
+  );
+  if (reservedHit !== undefined) {
+    throw new Error(
+      `Invalid dry-run stub file '${path}': contains the fixture key '${reservedHit}' — this is a fixture file; run it with 'workflow test'`
     );
   }
   const result = dryRunStubsSchema.safeParse(parsed);

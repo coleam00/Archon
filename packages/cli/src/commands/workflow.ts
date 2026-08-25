@@ -14,9 +14,15 @@ import {
   isPerUserGitHubEnabled,
   getDecryptedAccessToken,
 } from '@archon/core';
+import {
+  loadWorkflowRunConfigFile,
+  sealWorkflowRunConfig,
+  unsealWorkflowRunConfig,
+} from '@archon/core/config';
 import { WORKFLOW_EVENT_TYPES, type WorkflowEventType } from '@archon/workflows/store';
 import {
   isTierName,
+  applyResolvedRunModelOverrides,
   buildAiProfile,
   parseRunModelAssignments,
   resolveRunModelOverrides,
@@ -40,8 +46,13 @@ import {
   BUNDLED_VERSION,
   readTierNoticeState,
   markTierNoticeShown,
+  expandTilde,
+  isDocker,
+  captureDetachedInstallContext,
+  type DetachedInstallContext,
 } from '@archon/paths';
-import { isAbsolute, join } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
+import { applyWorkflowRunConfigLayer } from '@archon/workflows/run-config';
 import { mkdirSync, openSync, closeSync, readFileSync, rmSync, writeSync } from 'node:fs';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createWorkflowDeps } from '@archon/core/workflows/store-adapter';
@@ -76,6 +87,7 @@ import {
   loadDryRunStubs,
   writeDryRunStubScaffold,
 } from '@archon/workflows/dry-run';
+import { formatFixtureReport, runFixtures } from '@archon/workflows/fixture-runner';
 import {
   getWorkflowEventEmitter,
   type WorkflowEmitterEvent,
@@ -88,6 +100,10 @@ import type {
   WorkflowWithSource,
 } from '@archon/workflows/schemas/workflow';
 import type { DagNode } from '@archon/workflows/schemas/dag-node';
+import {
+  workflowRunConfigMetadataSchema,
+  type WorkflowRunConfigInput,
+} from '@archon/workflows/schemas/run-config';
 import {
   workflowRunStatusSchema,
   isApprovalContext,
@@ -139,6 +155,24 @@ function getLog(): ReturnType<typeof createLogger> {
 const DETACHED_STARTUP_WINDOW_MS = 500;
 const DETACHED_LOG_TAIL_MAX_CHARS = 4_000;
 const DETACHED_LOG_TAIL_MAX_LINES = 40;
+function parseDetachedRunConfig(payload: string | undefined): WorkflowRunConfigInput | undefined {
+  if (payload === undefined) return undefined;
+
+  let value: unknown;
+  try {
+    value = JSON.parse(payload) as unknown;
+  } catch {
+    throw new Error('Detached workflow run config payload is not valid JSON.');
+  }
+  const metadata = workflowRunConfigMetadataSchema.safeParse(value);
+  if (!metadata.success) {
+    throw new Error('Detached workflow run config payload is invalid.');
+  }
+  return {
+    layer: unsealWorkflowRunConfig(metadata.data),
+    source: metadata.data.source,
+  };
+}
 
 function readDetachedLogTail(path: string): string | null {
   try {
@@ -302,6 +336,12 @@ export interface WorkflowRunOptions {
   inputs?: string[];
   /** Raw repeatable `--model name=spec` mappings; parsed once at the invocation gate. */
   modelAssignments?: string[];
+  /** Local YAML file supplying a sparse configuration layer for this run. */
+  configPath?: string;
+  /** @internal Validated immutable layer transferred from a detached parent. */
+  detachedRunConfig?: WorkflowRunConfigInput;
+  /** @internal AES-GCM-sealed detached parent payload carried outside config env layers. */
+  detachedRunConfigPayload?: string;
   /**
    * Between-run continuation (#2747): adopt a terminal run's estate — its
    * worktree/branch plus read access to its artifacts via `$ADOPTED_RUN_DIR`.
@@ -419,17 +459,35 @@ export function buildDetachedRunCmd(
   return [...baseCmd, ...userArgs, '--cwd', cwd, ...extraArgs];
 }
 
+/** Freeze the install key context before a detached child changes cwd. */
+export function resolveDetachedRunEncryptionEnv(
+  env: NodeJS.ProcessEnv = process.env,
+  cwd: string = process.cwd()
+): DetachedInstallContext {
+  return {
+    ...captureDetachedInstallContext(env),
+    ARCHON_HOME: isDocker(env)
+      ? getArchonHome(env)
+      : env.ARCHON_HOME
+        ? resolve(cwd, expandTilde(env.ARCHON_HOME))
+        : '',
+  };
+}
+
 async function spawnDetachedWorkflowRun(
   cwd: string,
   conversationId: string,
-  extraArgs: string[]
+  extraArgs: string[],
+  runConfigPayload?: string
 ): Promise<string | null> {
   const cmd = buildDetachedRunCmd(
     BUNDLED_IS_BINARY,
     process.execPath,
     process.argv,
     cwd,
-    extraArgs
+    runConfigPayload
+      ? [...extraArgs, '--internal-detached-run-config', runConfigPayload]
+      : extraArgs
   );
 
   let logPath: string | null = null;
@@ -466,7 +524,17 @@ async function spawnDetachedWorkflowRun(
     // next step. `windowsHide` keeps the child headless.
     const child = spawn(cmd[0], cmd.slice(1), {
       cwd,
-      env: { ...process.env, [DETACHED_RUN_OWNER_ENV]: '1' },
+      env: {
+        ...process.env,
+        [DETACHED_RUN_OWNER_ENV]: '1',
+        ...(runConfigPayload
+          ? {
+              // Empty strings preserve meaningful absence: Bun will not fill
+              // these from the target repo's auto-loaded .env.
+              ...resolveDetachedRunEncryptionEnv(),
+            }
+          : {}),
+      },
       stdio: ['ignore', logFd ?? 'ignore', logFd ?? 'ignore'],
       detached: true,
       windowsHide: true,
@@ -924,6 +992,40 @@ interface WorkflowJsonEntry {
 }
 
 /**
+ * Run every declared dry-run fixture and report per-fixture pass/fail (#2772).
+ *
+ * Read-only by construction — the only execution path is `dryRunWorkflow`, so no
+ * run state is created and no provider is contacted. Returns the process exit code:
+ * 0 when everything passes (including the nothing-declared case), 1 when any fixture
+ * fails or an explicitly named target has none.
+ */
+export async function workflowTestCommand(
+  cwd: string,
+  target: string | undefined,
+  options: { json?: boolean } = {}
+): Promise<number> {
+  const { workflows } = await loadWorkflows(cwd);
+  const report = await runFixtures({ workflows, cwd, ...(target !== undefined ? { target } : {}) });
+
+  if (options.json) {
+    await writeJsonLine({
+      results: report.results.map(r => ({
+        ...r,
+        missingStubs: [...r.missingStubs],
+        unusedStubs: [...r.unusedStubs],
+      })),
+      passed: report.passed,
+      failed: report.failed,
+    });
+  } else {
+    await writeStdout(`${formatFixtureReport(report)}\n`);
+  }
+
+  if (report.failed > 0 || (target !== undefined && report.results.length === 0)) return 1;
+  return 0;
+}
+
+/**
  * List available workflows in the current directory
  */
 export async function workflowListCommand(cwd: string, json?: boolean): Promise<void> {
@@ -1055,6 +1157,20 @@ async function runWorkflowWithOwnedSource(
   // legacy path the executor takes for it. Capturing here would freeze bytes the run
   // never agreed to and still not make it deterministic.
   const isContinuation = options.resume === true || continuationRun !== undefined;
+
+  const resolvedRunConfigPath = options.configPath
+    ? isAbsolute(options.configPath)
+      ? options.configPath
+      : join(cwd, options.configPath)
+    : undefined;
+  if (isContinuation && (resolvedRunConfigPath || options.detachedRunConfig)) {
+    throw new Error(
+      '--resume and --config are mutually exclusive. A resumed run keeps its original run config.'
+    );
+  }
+  const runConfig =
+    options.detachedRunConfig ??
+    (resolvedRunConfigPath ? await loadWorkflowRunConfigFile(resolvedRunConfigPath) : undefined);
 
   let preparedSource: PreparedWorkflowSource | undefined;
   // Pinned at the moment of prepare so the SIGINT/SIGTERM cleanup never rm's a
@@ -1288,24 +1404,30 @@ async function runWorkflowWithOwnedSource(
     // The target workspace, never the authoring root: `--exec-code` runs real bash and
     // script nodes, and running them in the checkout the workflow was merely READ from
     // would mutate the author's tree instead of the one they aimed the dry run at.
-    const dryRunConfig = await loadConfig(cwd);
+    const dryRunFileConfig = await loadConfig(cwd);
+    const dryRunConfig = applyWorkflowRunConfigLayer(dryRunFileConfig, runConfig?.layer);
     const dryRunUserPrefs = await resolveCliDryRunAiPrefs();
-    let dryRunDefaultProvider = dryRunUserPrefs.defaultProvider ?? dryRunConfig.assistant;
+    let dryRunDefaultProvider =
+      runConfig?.layer.assistant ?? dryRunUserPrefs.defaultProvider ?? dryRunFileConfig.assistant;
     let dryRunProfileOptions: BuildAiProfileOptions = {
-      repoTiers: dryRunConfig.tiers,
-      repoAliases: dryRunConfig.aliases,
+      repoTiers: dryRunFileConfig.tiers,
+      repoAliases: dryRunFileConfig.aliases,
       userTiers: dryRunUserPrefs.tiers,
       userAliases: dryRunUserPrefs.aliases,
+      runTiers: runConfig?.layer.tiers,
+      runAliases: runConfig?.layer.aliases,
     };
     let dryRunBaseProfile: ResolvedAiProfile;
     try {
       dryRunBaseProfile = buildAiProfile(dryRunDefaultProvider, dryRunProfileOptions);
     } catch (error) {
       getLog().error({ err: error as Error }, 'cli.dry_run_user_ai_prefs_profile_invalid');
-      dryRunDefaultProvider = dryRunConfig.assistant;
+      dryRunDefaultProvider = runConfig?.layer.assistant ?? dryRunFileConfig.assistant;
       dryRunProfileOptions = {
-        repoTiers: dryRunConfig.tiers,
-        repoAliases: dryRunConfig.aliases,
+        repoTiers: dryRunFileConfig.tiers,
+        repoAliases: dryRunFileConfig.aliases,
+        runTiers: runConfig?.layer.tiers,
+        runAliases: runConfig?.layer.aliases,
       };
       dryRunBaseProfile = buildAiProfile(dryRunDefaultProvider, dryRunProfileOptions);
     }
@@ -1320,11 +1442,7 @@ async function runWorkflowWithOwnedSource(
       defaultStubs: options.defaultStubs,
       pauseAtGates: options.pauseAtGates,
       config: dryRunConfig,
-      aiProfile: buildAiProfile(dryRunDefaultProvider, {
-        ...dryRunProfileOptions,
-        runTiers: dryRunModelOverrides.tiers,
-        runAliases: dryRunModelOverrides.aliases,
-      }),
+      aiProfile: applyResolvedRunModelOverrides(dryRunBaseProfile, dryRunModelOverrides),
     });
     if (options.json) {
       await writeJsonLine(result);
@@ -1566,10 +1684,17 @@ async function runWorkflowWithOwnedSource(
     if (options.discoveryCwd !== undefined) {
       extraArgs.push('--workflow-source', options.discoveryCwd);
     }
-
     // The detached child captures its own source, so this process's capture is dead
     // weight — and never adopted, so the owner reclaims it when this returns.
-    const logPath = await spawnDetachedWorkflowRun(cwd, childConversationId, extraArgs);
+    const runConfigPayload = runConfig
+      ? JSON.stringify(sealWorkflowRunConfig(runConfig.layer, runConfig.source))
+      : undefined;
+    const logPath = await spawnDetachedWorkflowRun(
+      cwd,
+      childConversationId,
+      extraArgs,
+      runConfigPayload
+    );
 
     if (options.json) {
       await writeJsonLine({
@@ -2498,6 +2623,7 @@ async function runWorkflowWithOwnedSource(
           ...(modelOverrides
             ? { modelOverrideLayer: { kind: 'raw' as const, overrides: modelOverrides } }
             : {}),
+          ...(runConfig ? { runConfig } : {}),
           // The frozen source this run executes, captured before the workflow was even
           // selected. A resume ignores it and loads the source recorded on its own row.
           preparedSource,
@@ -2682,8 +2808,12 @@ export async function workflowRunCommand(
   userMessage: string,
   options: WorkflowRunOptions = {}
 ): Promise<void> {
+  const detachedRunConfig = parseDetachedRunConfig(options.detachedRunConfigPayload);
   await withCapturedSource(owner =>
-    runWorkflowWithOwnedSource(owner, cwd, workflowName, userMessage, options)
+    runWorkflowWithOwnedSource(owner, cwd, workflowName, userMessage, {
+      ...options,
+      ...(detachedRunConfig ? { detachedRunConfig } : {}),
+    })
   );
 }
 

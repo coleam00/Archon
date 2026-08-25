@@ -48,7 +48,12 @@ Settings are loaded in this order (later overrides earlier):
 1. **Defaults** - Sensible built-in defaults
 2. **Global Config** - `~/.archon/config.yaml`
 3. **Repo Config** - `.archon/config.yaml` in repository
-4. **Environment Variables** - Always highest priority
+4. **Environment Variables** - Process-level overrides
+5. **Per-user AI preferences** - Personal assistant, tiers, and aliases for the acting user
+6. **Run config** - Sparse content selected for one fresh run
+7. **Explicit run model bindings** - Repeatable `--model` or HTTP `tiers`/`aliases`, per named binding
+
+The last three layers exist only where their setting has a run-time consumer. Archon-managed GitHub and provider credentials remain protected and are injected after user-authored run environment values.
 
 ## Global Configuration
 
@@ -118,7 +123,41 @@ aliases:
 
 The `tiers:` block above is no longer hand-edit-only -- you can also set the `small`/`medium`/`large` presets from the console **AI Settings** -> **Model Tiers** panel, or from the CLI with [`archon ai tier set`](/reference/cli/#ai). Connecting your own provider API key or subscription is covered in [Per-user credentials and AI Settings](/getting-started/ai-assistants/#per-user-credentials-and-ai-settings).
 
-These files are persistent layers. For one invocation, use repeatable [`workflow run --model <name>=<spec>`](/reference/cli/#workflow-run-name-message) or the run API's `tiers` / `aliases` maps. A per-run map is sparse and sits above user, repository, global, and built-in values without editing any config file. Loading a separate config file for one run is tracked separately in [#2482](https://github.com/coleam00/Archon/issues/2482).
+These files are persistent layers. For one invocation, use repeatable [`workflow run --model <name>=<spec>`](/reference/cli/#workflow-run-name-message), [`workflow run --config <path>`](/reference/cli/#per-run-config-files), or the run API's inline `config`, `tiers`, and `aliases` fields. Each run layer is sparse and sits above user, repository, global, and built-in values without editing a persistent config file.
+
+## Run-scoped configuration
+
+Keep a reusable file such as `config.minimax.yaml` in a repository and select it only for runs that need it:
+
+```yaml
+assistant: pi
+tiers:
+  large: { provider: pi, model: minimax/MiniMax-M3 }
+workflows:
+  quotaMaxAttempts: 3
+env:
+  BENCH_MODE: "1"
+```
+
+```bash
+archon workflow run x \
+  --config ./config.minimax.yaml \
+  --model large=openai/gpt-5.6
+```
+
+The file changes only the keys it contains. The explicit model flag is the final layer, so the command above replaces the file's `large` binding and keeps the file or lower-layer `small`, `medium`, aliases, assistant defaults, and other settings.
+
+Run config accepts settings whose consumers still execute after the run is dispatched: `assistant` or `defaultAssistant`, `assistants`, `tiers`, `aliases`, `workflows`, `docs.path`, and `env`. It fails before source capture, isolation, or execution when a key cannot truthfully apply at that point:
+
+- `commands` and `defaults` already affected workflow and command discovery.
+- `worktree` and `container` already affected isolation.
+- `botName`, `streaming`, `paths`, and `concurrency` are process-scoped or have no per-run consumer.
+- `recommendedWorkflows` is listing-only.
+- `assistants.pi.env` and `assistants.pi.maxConcurrent` mutate process-lifetime Pi state rather than one request.
+
+Unknown keys, unregistered providers, invalid effort values, and alias names without `@` also fail instead of being ignored. CLI accepts a local path; the HTTP run API accepts inline validated content and never a caller-selected server path.
+
+Fresh runs seal the normalized layer before recording it. Run metadata exposes its source label and configured key paths, not plaintext `env` or provider-default values. A continuation restores that sealed layer without rereading the original file, and child workflows inherit it. Detached CLI launches also transfer the already-validated sealed layer to the child instead of rereading the caller's file. This is why `--config` cannot be supplied with `--resume`.
 
 ## Repository Configuration
 

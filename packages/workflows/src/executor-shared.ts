@@ -52,21 +52,33 @@ export const FATAL_PATTERNS = [
 /** Ambiguous fatal patterns that yield to concrete transient evidence. */
 const FALLBACK_FATAL_PATTERNS = ['auth error'];
 
+/**
+ * Rate/concurrency pressure (429, provider overload) — a subset of TRANSIENT that
+ * sheds load on a minutes-scale window, so it earns its own patient backoff policy
+ * (see {@link getRetryDelayMs}) instead of the generic short exponential one (#2706).
+ * Defined first so {@link TRANSIENT_PATTERNS} derives from it: a pattern can never
+ * widen the rate-limit budget while classifyError treats it as non-transient.
+ */
+export const RATE_LIMIT_PATTERNS = [
+  '429',
+  'rate limit',
+  'too many requests',
+  'overloaded', // Anthropic/Minimax overload message text
+  'at capacity', // Codex/OpenAI model-level saturation
+] as const;
+
 /** Transient error patterns - temporary issues that may resolve with retry */
 export const TRANSIENT_PATTERNS = [
   'timeout',
   'econnrefused',
   'econnreset',
   'etimedout',
-  'rate limit',
-  'too many requests',
-  '429',
+  ...RATE_LIMIT_PATTERNS,
   '503',
   '502',
   '529', // Anthropic HTTP 529 = service overloaded
-  'overloaded', // Anthropic/Minimax overload message text
-  'at capacity', // Codex/OpenAI model-level saturation
   'network error',
+  'stream closed without yielding content', // empty provider stream (#2706): silent rejection or interruption, not a node defect
   'socket hang up',
   'exited with code',
   'claude code crash',
@@ -99,6 +111,37 @@ export function classifyError(error: Error): ErrorType {
     return 'FATAL';
   }
   return 'UNKNOWN';
+}
+
+/** Retry budget for rate-limited failures, replacing the node's own maxRetries when one is seen. */
+export const RATE_LIMIT_MAX_RETRIES = 5;
+
+/** Flat delay center for rate-limit retries; jitter widens it to ±50% in {@link getRetryDelayMs}. */
+export const RATE_LIMIT_RETRY_DELAY_MS = 45_000;
+
+export function isRateLimitError(error: string): boolean {
+  const message = error.toLowerCase();
+  return RATE_LIMIT_PATTERNS.some(pattern => message.includes(pattern));
+}
+
+/**
+ * Delay before retry attempt N for a failed attempt with this error message.
+ *
+ * Rate-limit failures back off FLAT at ~45s ±50% jitter: providers shedding load
+ * recover on a minutes-scale window with no retry-after signal (#2706), so exponential
+ * from 3s either exhausts before the window opens or over-waits once it does; flat +
+ * jitter spreads concurrent nodes apart without thundering-herd re-synchronization.
+ * Everything else keeps the caller's base × 2^attempt exponential shape.
+ */
+export function getRetryDelayMs(
+  errorMessage: string,
+  attempt: number,
+  baseDelayMs: number
+): number {
+  if (isRateLimitError(errorMessage)) {
+    return Math.round(RATE_LIMIT_RETRY_DELAY_MS * (0.5 + Math.random()));
+  }
+  return baseDelayMs * Math.pow(2, attempt);
 }
 
 export function isQuotaExhaustionError(error: string): boolean {

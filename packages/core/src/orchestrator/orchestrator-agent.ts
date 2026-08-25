@@ -47,6 +47,7 @@ import {
   withCapturedSource,
   type CapturedSourceOwner,
   hydrateResumableRun,
+  inspectResumableRun,
   prepareWorkflowSource,
   recordSelectedWorkflow,
   type PreparedWorkflowSource,
@@ -67,6 +68,7 @@ import type {
   WorkflowSource,
 } from '@archon/workflows/schemas/workflow';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
 import { isPerUserGitHubEnabled } from '../github-auth/config';
 import { getDecryptedAccessToken } from '../db/user-github-token-store';
 import { isPerUserProviderKeysEnabled } from '../credentials/config';
@@ -665,6 +667,8 @@ interface WorkflowDispatchOptions {
   inputs?: Readonly<Record<string, string>>;
   /** Sparse tier/@alias rebindings supplied by this run invocation (#2481). */
   modelOverrides?: RunModelOverrides;
+  /** Validated sparse config content supplied by a fresh HTTP invocation. */
+  runConfig?: WorkflowRunConfigInput;
   /** Between-run continuation (#2747): adopt/supersede target, if declared. */
   adoptRunId?: string;
   supersedesRunId?: string;
@@ -1165,7 +1169,20 @@ async function dispatchOrchestratorWorkflowOwned(
     const deps = createWorkflowDeps();
     let prepared: Awaited<ReturnType<typeof hydrateResumableRun>>;
     try {
-      prepared = await hydrateResumableRun(deps, resumableRun);
+      if (options?.runConfig) {
+        const inspection = await inspectResumableRun(deps, resumableRun);
+        if (inspection) {
+          await platform.sendMessage(
+            conversationId,
+            'This command would resume an existing run, so a new run config cannot be applied. ' +
+              'Resume without config, or force a fresh run.'
+          );
+          return;
+        }
+        prepared = null;
+      } else {
+        prepared = await hydrateResumableRun(deps, resumableRun);
+      }
     } catch (err) {
       // resumeWorkflowRun is a compare-and-swap: if another surface (web Resume,
       // a concurrent re-dispatch, the CLI) already claimed this run, it throws
@@ -1309,6 +1326,7 @@ async function dispatchOrchestratorWorkflowOwned(
                 },
               }
             : {}),
+          ...(options?.runConfig ? { runConfig: options.runConfig } : {}),
         }
       );
     }
@@ -1335,6 +1353,7 @@ async function dispatchOrchestratorWorkflowOwned(
           parseWarnings: options?.parseWarnings,
           inputs: resolvedInputs,
           modelOverrides: options?.modelOverrides,
+          runConfig: options?.runConfig,
           adoptRunId: options?.adoptRunId,
           supersedesRunId: options?.supersedesRunId,
           adoptionLane,
@@ -1402,6 +1421,7 @@ async function dispatchOrchestratorWorkflowOwned(
               modelOverrideLayer: { kind: 'raw' as const, overrides: options.modelOverrides },
             }
           : {}),
+        ...(options?.runConfig ? { runConfig: options.runConfig } : {}),
       }
     );
   }
@@ -1985,6 +2005,7 @@ export async function handleMessage(
               // command text — the run route is the only caller that sets them.
               inputs: context?.workflowInputs,
               modelOverrides: context?.workflowModelOverrides,
+              runConfig: context?.workflowRunConfig,
               // Between-run continuation (#2747), same channel.
               adoptRunId: context?.workflowAdoptRunId,
               supersedesRunId: context?.workflowSupersedesRunId,

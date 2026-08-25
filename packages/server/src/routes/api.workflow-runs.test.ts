@@ -1,4 +1,4 @@
-import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test';
+import { describe, test, expect, mock, beforeAll, beforeEach, afterEach } from 'bun:test';
 import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -7,6 +7,13 @@ import type { ConversationLockManager } from '@archon/core';
 import type { WebAdapter } from '../adapters/web';
 import { validationErrorHook } from './openapi-defaults';
 import { mockAllWorkflowModules } from '../test/workflow-mock-factories';
+
+beforeAll(async (): Promise<void> => {
+  const { registerBuiltinProviders, registerCommunityProviders } =
+    await import('@archon/providers');
+  registerBuiltinProviders();
+  registerCommunityProviders();
+});
 
 // ---------------------------------------------------------------------------
 // Mock setup — must be before dynamic imports of mocked modules
@@ -921,6 +928,101 @@ describe('POST /api/workflows/:name/run', () => {
         body: JSON.stringify({ conversationId: 'web-test-abc', message: 'Go', ...payload }),
       });
       expect(response.status).toBe(400);
+    }
+    expect(mockHandleMessage).not.toHaveBeenCalled();
+  });
+
+  test('forwards validated inline JSON config as structured context', async () => {
+    mockFindConversationByPlatformId.mockImplementationOnce(async () => MOCK_CONV);
+    mockHandleMessage.mockImplementationOnce(async () => {});
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/bench/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        conversationId: 'web-test-abc',
+        message: 'Go',
+        config: {
+          defaultAssistant: 'pi',
+          tiers: { small: { provider: 'pi', model: 'minimax/MiniMax-M3' } },
+          env: { BENCH_TOKEN: 'secret' },
+        },
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(mockHandleMessage).toHaveBeenCalledWith(
+      expect.anything(),
+      'web-test-abc',
+      '/workflow run bench Go',
+      expect.objectContaining({
+        workflowRunConfig: {
+          source: { kind: 'http', label: 'inline' },
+          layer: {
+            assistant: 'pi',
+            tiers: { small: { provider: 'pi', model: 'minimax/MiniMax-M3' } },
+            envVars: { BENCH_TOKEN: 'secret' },
+          },
+        },
+      })
+    );
+  });
+
+  test('accepts multipart config as a JSON-encoded object', async () => {
+    mockFindConversationByPlatformId.mockImplementationOnce(async () => MOCK_CONV);
+    mockHandleMessage.mockImplementationOnce(async () => {});
+    const form = new FormData();
+    form.append('conversationId', 'web-test-abc');
+    form.append('message', 'Go');
+    form.append('config', JSON.stringify({ docs: { path: 'handbook' } }));
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/bench/run', {
+      method: 'POST',
+      body: form,
+    });
+
+    expect(response.status).toBe(200);
+    const context = mockHandleMessage.mock.calls[0][3] as Record<string, unknown>;
+    expect(context.workflowRunConfig).toEqual({
+      source: { kind: 'http', label: 'inline' },
+      layer: { docsPath: 'handbook' },
+    });
+  });
+
+  test('rejects caller-supplied server paths and ineffective config before dispatch', async () => {
+    const { app } = makeApp();
+    const invalidConfigs = [
+      [{ configPath: '/etc/passwd' }, 'configPath is not supported'],
+      [{ config: null }, "Invalid run config at 'document'"],
+      [{ config: { paths: { worktrees: '/tmp/other' } } }, "Run config key 'paths' cannot apply"],
+      [{ config: { unknown: true } }, "Unknown run config key 'unknown'"],
+    ] as const;
+    for (const [payload, expectedError] of invalidConfigs) {
+      const response = await app.request('/api/workflows/bench/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ conversationId: 'web-test-abc', message: 'Go', ...payload }),
+      });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({
+        error: expect.stringContaining(expectedError),
+      });
+    }
+    for (const [payload, expectedError] of invalidConfigs) {
+      const form = new FormData();
+      form.append('conversationId', 'web-test-abc');
+      form.append('message', 'Go');
+      if ('configPath' in payload) form.append('configPath', payload.configPath);
+      if ('config' in payload) form.append('config', JSON.stringify(payload.config));
+      const response = await app.request('/api/workflows/bench/run', {
+        method: 'POST',
+        body: form,
+      });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({
+        error: expect.stringContaining(expectedError),
+      });
     }
     expect(mockHandleMessage).not.toHaveBeenCalled();
   });

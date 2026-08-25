@@ -1,6 +1,7 @@
 import { isRegisteredProvider, registerProvider } from '../../registry';
 
 import { OPENCODE_CAPABILITIES } from './capabilities';
+import { parseOpencodeRunConfig } from './config';
 import { OpencodeProvider } from './provider';
 
 /**
@@ -16,6 +17,7 @@ export function registerOpencodeProvider(): void {
     factory: () => new OpencodeProvider(),
     capabilities: OPENCODE_CAPABILITIES,
     builtIn: false,
+    parseRunConfig: parseOpencodeRunConfig,
     // OpenCode's backend universe is the models.dev catalog, resolved at
     // runtime by the embedded server — there is no static list to declare.
     // Introspection is exposed via GET /api/providers/opencode/credentials.

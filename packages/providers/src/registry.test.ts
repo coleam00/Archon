@@ -57,6 +57,7 @@ function makeMockRegistration(
     builtIn: false,
     credentials: { kind: 'static', specs: [] },
     ...overrides,
+    parseRunConfig: overrides?.parseRunConfig ?? (raw => raw),
   };
 }
 

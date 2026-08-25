@@ -204,6 +204,11 @@ archon workflow run review-block --cwd /path/to/repo \
 # Rebind only the large tier for this run
 archon workflow run issue-to-pr --cwd /path/to/repo \
   --model large=openai/gpt-5.6 "fix #2481"
+
+# Load a saved sparse layer, then replace only its large tier for this run
+archon workflow run issue-to-pr --cwd /path/to/repo \
+  --config ./config.minimax.yaml \
+  --model large=openai/gpt-5.6 "fix #2482"
 ```
 
 Progress events (node start/complete/fail/skip, approval gates) are written to stderr during execution.
@@ -226,6 +231,7 @@ Note that a real `run` emits a JSON payload **only** under `--detach`. Without i
 | `--container` | Run a **folder project** inside an overlay-isolated Docker container instead of in place (writes land in an overlay, not the live root, until an approval-gated write-back). Folder-only; a repo project errors. Requires the runner image (`bun run build:runner-image`). Pauses `docker stop` the container; `--resume`/`approve`/`reject` rediscover and restart it. See the [Container isolation guide](/guides/container-isolation/) and [configuration](/reference/configuration/#container-isolation-folder-projects). |
 | `--input <name>=<value>` | Supply one value for the workflow's declared `inputs:`. **Repeat the flag per input.** Splits on the first `=`, so the value may itself contain `=`; `--input name=` supplies an empty string. Omitted inputs take their declared `default:`. A missing **required** input or an **undeclared** name is refused before any worktree, clone, or AI cost, through the same contract a composing `with:` map goes through. Works with `--dry-run` (inputs resolve exactly as in a real run). Rejected with `--resume` (a resume replays the inputs recorded on the run). See [Running a workflow that declares inputs](/guides/authoring-workflows/#running-a-workflow-that-declares-inputs). |
 | `--model <name>=<spec>` | Rebind one `small`, `medium`, `large`, or existing `@alias` for this run. **Repeat the flag per binding.** An Archon agent prefix selects that agent (`codex/gpt-5.6-sol`); another valid vendor/model ref selects Pi (`openai/gpt-5.6`); an unqualified model keeps the binding's current provider; a tier or alias RHS copies that preset. Unspecified names keep their user → repo → global → built-in values. Literal `model:` pins and nodes that never reference the rebound name do not change. Bare `--model <spec>` is invalid, there is no run-wide `--provider`, and the flag is rejected with `--resume`. Works with `--dry-run`. |
+| `--config <path>` | Load one sparse YAML config layer for this fresh run. Relative paths resolve from the directory named by `--cwd`, even when it is a repository subdirectory. Values in the file override persistent config and user AI preferences; explicit `--model` flags then replace only their named bindings. Works with `--dry-run` and `--detach`; the parent validates and seals the layer before handing it to a detached child, so later file edits cannot change that launch. Rejected with `--resume` because a continuation restores the sealed layer recorded when the run started. |
 | `--resume` | Resume from last failed run at the working path (skips completed nodes) |
 | `--quiet`, `-q` | Suppress all progress output to stderr |
 | `--verbose`, `-v` | Also show tool-level events (tool name and duration) |
@@ -236,6 +242,20 @@ Note that a real `run` emits a JSON payload **only** under `--detach`. Without i
 | `--default-stubs` | Fill reachable nodes omitted from `--stubs` with schema-valid placeholders. Explicit stubs still win; without this flag, missing reachable stubs remain an error. |
 | `--exec-code` | During `--dry-run`, execute trusted `bash:`/`script:` nodes locally instead of requiring stubs. Default is no code execution. |
 | `--pause-at-gates` | During `--dry-run`, stop at the first approval gate instead of auto-approving it. |
+
+#### Per-run config files
+
+A run config is an ordinary YAML file selected explicitly for one invocation. It is useful for reusable choices such as `config.minimax.yaml`, but it is not a registered profile and does not change `.archon/config.yaml`.
+
+```yaml
+# config.minimax.yaml
+tiers:
+  large: { provider: pi, model: minimax/MiniMax-M3 }
+env:
+  BENCH_MODE: "1"
+```
+
+The layer is sparse: omitted settings keep their normal lower-layer values. In `--config ./config.minimax.yaml --model large=openai/gpt-5.6`, only `large` is replaced by the flag; `small`, `medium`, aliases, and every other omitted setting still fall through. See [Run-scoped configuration](/reference/configuration/#run-scoped-configuration) for the supported keys and fail-fast exclusions.
 
 #### Running a workflow from another checkout
 

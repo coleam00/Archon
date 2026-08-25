@@ -68,6 +68,15 @@ mock.module('../db/codebases', () => ({
 mock.module('@archon/providers', () => ({
   getAgentProvider: mock(() => ({})),
   getRegisteredProviders: mock(() => []),
+  getRegistration: mock(
+    (): { parseRunConfig: (raw: Record<string, unknown>) => Record<string, unknown> } => ({
+      parseRunConfig: (raw: Record<string, unknown>): Record<string, unknown> => raw,
+    })
+  ),
+  parseProviderRunModel: mock((_provider: string, model: string): string => model),
+  isRegisteredProvider: mock((): boolean => false),
+  InvalidProviderRunConfigError: class InvalidProviderRunConfigError extends Error {},
+  getProviderCapabilities: mock((): { effortControl: boolean } => ({ effortControl: false })),
   // Vendor → env-var map consumed by credentials/delivery (#1955). A realistic
   // subset of the generated map (incl. HF_TOKEN, the upstream var).
   PI_PROVIDER_ENV_VARS: {

@@ -11,6 +11,9 @@ export const modelAliasPresetSchema = z.object({
   effort: z.string().optional(),
   thinking: thinkingConfigSchema.optional(),
 });
+const runModelAliasPresetSchema = modelAliasPresetSchema
+  .extend({ model: z.string().trim().min(1) })
+  .strict();
 
 export type ModelAliasPreset = z.infer<typeof modelAliasPresetSchema>;
 export type RawAliasEntry = z.infer<typeof modelAliasPresetSchema>;
@@ -18,15 +21,16 @@ export type RawAliasEntry = z.infer<typeof modelAliasPresetSchema>;
 export const rawAliasesConfigSchema = z.record(z.string(), modelAliasPresetSchema);
 export const runAliasesConfigSchema = z.record(
   z.string().refine(name => name.startsWith('@'), 'run alias names must start with @'),
-  modelAliasPresetSchema
+  runModelAliasPresetSchema
 );
 export const rawTiersConfigSchema = z.partialRecord(tierNameSchema, modelAliasPresetSchema);
+export const runTiersConfigSchema = z.partialRecord(tierNameSchema, runModelAliasPresetSchema);
 
 export type RawAliasesConfig = z.infer<typeof rawAliasesConfigSchema>;
 export type RawTiersConfig = z.infer<typeof rawTiersConfigSchema>;
 
 export const resolvedRunModelOverridesSchema = z.object({
-  tiers: rawTiersConfigSchema.optional(),
+  tiers: runTiersConfigSchema.optional(),
   aliases: runAliasesConfigSchema.optional(),
 });
 

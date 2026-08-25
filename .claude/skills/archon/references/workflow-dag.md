@@ -257,7 +257,7 @@ All node types share these fields:
 | `output_format` | object | — | JSON Schema for structured output — see §Structured Output for the per-provider enforcement + failure contract |
 | `allowed_tools` | string[] | all | Tool whitelist. `[]` = disable all. All providers except Codex |
 | `denied_tools` | string[] | none | Tool blacklist. All providers except Codex |
-| `retry` | object | 2 retries, 3s (AI nodes) | Retry config. AI nodes retry transient errors by default even without `retry:`. Bash/script nodes retry **only with an explicit `retry:` block** (#2088 — on builds before that fix, `retry:` on bash/script is silently ignored). **Hard parse error on loop/loop_group** |
+| `retry` | object | 2 retries, 3s (AI nodes) | Retry config. AI nodes retry transient errors by default even without `retry:`. Rate-limit failures override the policy: ~45s ±50% flat backoff and a budget of at least 5 attempts, ignoring `delay_ms`/`max_attempts` (#2706 — details in dag-advanced.md §Retry). Bash/script nodes retry **only with an explicit `retry:` block** (#2088 — on builds before that fix, `retry:` on bash/script is silently ignored). **Hard parse error on loop/loop_group** |
 | `persist_session` | boolean | workflow `persist_sessions` | `command`/`prompt` only. Persist the provider session across RUNS (keyed by workflow + node + conversation). See `dag-advanced.md` §Session Persistence |
 | `hooks` | object | — | SDK hooks. Claude only. See `dag-advanced.md` |
 | `mcp` | string | — | MCP config path. All providers except Pi. See `dag-advanced.md` |

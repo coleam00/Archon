@@ -48,6 +48,21 @@ export type {
   RunModelBindingsMetadata,
 } from './model-binding';
 
+// Sparse, durable configuration for one workflow invocation
+export {
+  workflowRunContinuationConfigSchema,
+  workflowRunConfigLayerSchema,
+  workflowRunConfigSourceSchema,
+  workflowRunConfigInputSchema,
+  workflowRunConfigMetadataSchema,
+} from './run-config';
+export type {
+  WorkflowRunConfigLayer,
+  WorkflowRunConfigSource,
+  WorkflowRunConfigInput,
+  WorkflowRunConfigMetadata,
+} from './run-config';
+
 // DAG node types
 export {
   triggerRuleSchema,

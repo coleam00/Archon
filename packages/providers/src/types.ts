@@ -160,6 +160,9 @@ export interface OpencodeProviderDefaults {
 /** Generic per-provider defaults bag used by config surfaces and UI. */
 export type ProviderDefaults = Record<string, unknown>;
 
+/** Strict parser for an explicitly selected, run-scoped provider config layer. */
+export type ProviderRunConfigParser = (raw: ProviderDefaults) => ProviderDefaults;
+
 /** Provider-keyed defaults map. Built-ins may refine individual entries. */
 export type ProviderDefaultsMap = Record<string, ProviderDefaults>;
 
@@ -775,6 +778,13 @@ export interface ProviderRegistration {
    * GET /api/auth/providers are derived from these declarations.
    */
   credentials: ProviderCredentialCatalog;
+
+  /**
+   * Validate and normalize provider defaults selected for one workflow run.
+   * Ordinary config remains defensive and tolerant; explicit run config must
+   * reject values the provider would otherwise silently discard.
+   */
+  parseRunConfig: ProviderRunConfigParser;
 }
 
 /**

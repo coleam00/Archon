@@ -12,3 +12,14 @@ export class UnknownProviderError extends Error {
     this.name = 'UnknownProviderError';
   }
 }
+
+/** A provider-owned strict run-config parser rejected one field. */
+export class InvalidProviderRunConfigError extends Error {
+  constructor(
+    public readonly fieldPath: string,
+    message: string
+  ) {
+    super(message);
+    this.name = 'InvalidProviderRunConfigError';
+  }
+}

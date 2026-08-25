@@ -167,6 +167,9 @@ const mockHydrateResumableRun = mock(
       priorCompletedNodes: new Map([['n1', 'v1']]),
     }) as unknown
 );
+const mockInspectResumableRun = mock(() =>
+  Promise.resolve({ priorCompletedNodes: new Map([['n1', 'v1']]), priorUsage: { costUsd: 0 } })
+);
 const mockPrepareWorkflowSource = mock(() =>
   Promise.resolve({
     runId: 'prepared-run-id',
@@ -197,6 +200,7 @@ const capturedSourceOwnerCalls: string[] = [];
 mock.module('@archon/workflows/executor', () => ({
   executeWorkflow: mockExecuteWorkflow,
   hydrateResumableRun: mockHydrateResumableRun,
+  inspectResumableRun: mockInspectResumableRun,
   // Source capture runs before dispatch and does real filesystem work; stub it so these
   // tests stay about routing. `mock.module` MERGES, so an export omitted here keeps its
   // REAL implementation — which is exactly how a stub silently starts doing disk I/O.
@@ -1967,6 +1971,10 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockDispatchBackgroundWorkflow.mockClear();
     mockFindResumableRunByParentConversation.mockClear();
     mockHydrateResumableRun.mockClear();
+    mockInspectResumableRun.mockReset();
+    mockInspectResumableRun.mockImplementation(() =>
+      Promise.resolve({ priorCompletedNodes: new Map([['n1', 'v1']]), priorUsage: { costUsd: 0 } })
+    );
     mockUpdateWorkflowRun.mockClear();
     mockUpdateWorkflowRun.mockImplementation(() => Promise.resolve());
     mockResolveApprovalGate.mockClear();
@@ -2597,6 +2605,32 @@ describe('workflow dispatch routing — interactive flag', () => {
     expect(opts.preparedSource?.manifest?.captured_at).toBe('2026-08-21T00:00:00.000Z');
   });
 
+  test('applies a run config when a resume candidate hydrates to a fresh run', async () => {
+    const runConfig = {
+      source: { kind: 'http' as const, label: 'inline' },
+      layer: { docsPath: 'handbook' },
+    };
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve(makeResumableRun({ id: 'empty-config-run', status: 'paused' }))
+    );
+    mockInspectResumableRun.mockReturnValueOnce(Promise.resolve(null));
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+      workflowRunConfig: runConfig,
+    });
+
+    expect(mockInspectResumableRun).toHaveBeenCalled();
+    expect(mockHydrateResumableRun).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflow.mock.calls[0]?.[7]?.runConfig).toEqual(runConfig);
+    expect(platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n')).not.toContain(
+      'a new run config cannot be applied'
+    );
+  });
+
   test('foreground_resume_detected: fresh-run-in-same-worktree refuses with the capture-failure message when prepareWorkflowSource rejects (#2686)', async () => {
     // The new capture call inside the resume-null fallback introduces a SECOND call site
     // of `captureFreshSource(...)` whose failure path is unexercised by the success-only
@@ -2808,6 +2842,28 @@ describe('workflow dispatch routing — interactive flag', () => {
     });
   });
 
+  test('threads context.workflowRunConfig into fresh foreground and background runs', async () => {
+    const runConfig = {
+      source: { kind: 'http' as const, label: 'inline' },
+      layer: { docsPath: 'handbook' },
+    };
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
+    await handleMessage(makePlatform(), 'conv-1', '/workflow run test-workflow', {
+      workflowRunConfig: runConfig,
+    });
+    expect(mockExecuteWorkflow.mock.calls[0]?.[7]?.runConfig).toEqual(runConfig);
+
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(undefined)));
+    await handleMessage(makePlatform(), 'conv-1', '/workflow run test-workflow', {
+      workflowRunConfig: runConfig,
+    });
+    expect(mockDispatchBackgroundWorkflow.mock.calls[0]?.[0]?.runConfig).toEqual(runConfig);
+  });
+
   test('refuses a required-input workflow when nothing is supplied, starting nothing', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
@@ -2982,6 +3038,37 @@ describe('workflow dispatch routing — interactive flag', () => {
     expect(sent).not.toContain('openai/gpt-5.6');
     expect(mockExecuteWorkflow).toHaveBeenCalled();
     expect(mockExecuteWorkflow.mock.calls[0]?.[7]?.modelOverrideLayer).toBeUndefined();
+  });
+
+  test('refuses a new run config when the command would auto-resume existing work', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve({
+        id: 'implicit-config-resume',
+        workflow_name: 'test-workflow',
+        working_path: '/repos/test-repo/worktrees/paused',
+        parent_conversation_id: 'conv-1',
+        status: 'paused',
+      })
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+      workflowRunConfig: {
+        source: { kind: 'http', label: 'inline' },
+        layer: { docsPath: 'handbook' },
+      },
+    });
+
+    const sent = platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n');
+    expect(sent).toContain('a new run config cannot be applied');
+    expect(sent).toContain('force a fresh run');
+    expect(mockInspectResumableRun).toHaveBeenCalled();
+    expect(mockHydrateResumableRun).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
   });
 
   test('uses the actual state when explicit resume ignores supplied model bindings', async () => {
