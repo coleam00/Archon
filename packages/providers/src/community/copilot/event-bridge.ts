@@ -21,6 +21,7 @@ import { createLogger } from '@archon/paths';
 import type { AssistantMessageEvent, CopilotSession, SessionEvent } from '@github/copilot-sdk';
 
 import type { MessageChunk, TokenUsage } from '../../types';
+import { ProviderAttemptStopUnconfirmedError } from '../../shared/provider-attempt';
 import { tryParseStructuredOutput } from '../../shared/structured-output';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -243,6 +244,13 @@ export function mapCopilotEvent(event: SessionEvent, ctx: EventMapperContext): M
  */
 const SEND_AND_WAIT_TIMEOUT_MS = 60 * 60 * 1000;
 
+function assertCopilotShutdownConfirmed(failed: boolean, cause: unknown): void {
+  if (!failed) return;
+  throw new ProviderAttemptStopUnconfirmedError('Copilot session shutdown could not be confirmed', {
+    cause,
+  });
+}
+
 export type BridgeQueueItem =
   | { kind: 'chunk'; chunk: MessageChunk }
   | { kind: 'done' }
@@ -256,18 +264,18 @@ export type BridgeQueueItem =
  *     `mapCopilotEvent` and pushed into an `AsyncQueue`. Listener-thrown
  *     errors are captured and pushed as `{ kind: 'error' }` so the consumer
  *     surfaces them instead of swallowing.
- *  2. Wire `abortSignal` to `session.abort()`. Fire-and-forget — the SDK
- *     will surface the resulting rejection through `sendAndWait`, which
- *     feeds the queue.
+ *  2. Wire `abortSignal` to `session.abort()`. A failed abort is pushed into
+ *     the queue as an unconfirmed-stop error so the admission lease expires
+ *     naturally instead of being released over a live call.
  *  3. Call `session.sendAndWait({ prompt })` in parallel. Resolution pushes
  *     `{ kind: 'done' }`; rejection pushes `{ kind: 'error' }`. Its return
  *     value is stashed as a safety net for the no-streaming-deltas case.
  *  4. Consume the queue, yielding chunks. On `done`, emit a terminal
  *     `{ type: 'result', sessionId, tokens?, isError? }` chunk. Tokens are
  *     captured via the `assistant.usage` event earlier in the stream.
- *  5. Finally: close the queue, unsubscribe, remove abort listener, call
- *     `session.disconnect()` (best-effort), and await the sendAndWait
- *     promise to let the SDK settle (errors already surfaced via queue).
+ *  5. Finally: close the queue, unsubscribe, confirm any in-flight session
+ *     stopped, and disconnect. A confirmed abort does not wait on an SDK
+ *     promise that may remain pending after cancellation.
  */
 export async function* bridgeSession(
   session: CopilotSession,
@@ -280,6 +288,31 @@ export async function* bridgeSession(
   const toolCallIdToName = new Map<string, string>();
   let capturedTokens: TokenUsage | undefined;
   let errorMessage: string | undefined;
+  let abortPromise: Promise<void> | undefined;
+  let abortFailed = false;
+  let abortFailure: unknown;
+
+  const requestAbort = (): Promise<void> => {
+    abortPromise ??= session.abort().catch((error: unknown) => {
+      abortFailed = true;
+      abortFailure = error;
+      throw error;
+    });
+    return abortPromise;
+  };
+
+  const throwAbortReason = async (): Promise<void> => {
+    if (!abortSignal?.aborted) return;
+    try {
+      await requestAbort();
+    } catch {
+      throw new ProviderAttemptStopUnconfirmedError(
+        'Copilot session shutdown could not be confirmed after the provider attempt was aborted',
+        { cause: abortFailure }
+      );
+    }
+    abortSignal.throwIfAborted();
+  };
 
   // Structured-output buffer. Populated only when the caller supplied a
   // schema; parsed into the terminal result chunk after the run completes.
@@ -311,8 +344,15 @@ export async function* bridgeSession(
   });
 
   const onAbort = (): void => {
-    void session.abort().catch(err => {
+    void requestAbort().catch(err => {
       log.debug({ err, sessionId: session.sessionId }, 'copilot.abort_failed');
+      queue.push({
+        kind: 'error',
+        error: new ProviderAttemptStopUnconfirmedError(
+          'Copilot session shutdown could not be confirmed after the provider attempt was aborted',
+          { cause: err }
+        ),
+      });
     });
   };
   // `addEventListener('abort', ...)` is a no-op on an already-aborted signal,
@@ -321,7 +361,11 @@ export async function* bridgeSession(
   // as a clean cancellation. Clean up listeners + queue first so the throw
   // doesn't leak resources.
   if (abortSignal?.aborted) {
-    onAbort();
+    try {
+      await requestAbort();
+    } catch {
+      // Converted to ProviderAttemptStopUnconfirmedError below after cleanup.
+    }
     queue.close();
     try {
       unsubscribe();
@@ -333,7 +377,13 @@ export async function* bridgeSession(
     } catch (err) {
       log.debug({ err, sessionId: session.sessionId }, 'copilot.disconnect_failed');
     }
-    throw new DOMException('Copilot sendQuery aborted before start', 'AbortError');
+    if (abortFailed) {
+      throw new ProviderAttemptStopUnconfirmedError(
+        'Copilot session shutdown could not be confirmed before the provider attempt started',
+        { cause: abortFailure }
+      );
+    }
+    abortSignal.throwIfAborted();
   }
   if (abortSignal) {
     abortSignal.addEventListener('abort', onAbort, { once: true });
@@ -342,12 +392,15 @@ export async function* bridgeSession(
   // Kick off sendAndWait; it resolves on `session.idle`. The explicit
   // timeout overrides the SDK's 60s default — see SEND_AND_WAIT_TIMEOUT_MS.
   let sendResult: AssistantMessageEvent | undefined;
+  let sendSettled = false;
   const sendPromise = session.sendAndWait({ prompt }, SEND_AND_WAIT_TIMEOUT_MS).then(
     (r: AssistantMessageEvent | undefined) => {
+      sendSettled = true;
       sendResult = r;
       queue.push({ kind: 'done' });
     },
     (err: unknown) => {
+      sendSettled = true;
       queue.push({ kind: 'error', error: err as Error });
     }
   );
@@ -360,6 +413,10 @@ export async function* bridgeSession(
       if (item.chunk.type === 'assistant') sawAssistantContent = true;
       yield item.chunk;
     }
+
+    // Some SDKs resolve sendAndWait normally after aborting the active call.
+    // Ownership loss must still fail the attempt instead of minting a success.
+    await throwAbortReason();
 
     // Safety net: if `streaming: true` didn't produce deltas for some reason
     // (older SDK, model quirks, BYOK provider), emit the accumulated final
@@ -411,25 +468,23 @@ export async function* bridgeSession(
     if (abortSignal) {
       abortSignal.removeEventListener('abort', onAbort);
     }
-    // Abort before disconnect: if the consumer closed the generator early
-    // (return() / break), sendAndWait is still running in the background.
-    // Without an explicit abort, the finally would wait on sendPromise for up
-    // to SEND_AND_WAIT_TIMEOUT_MS. abort() tells the SDK to cancel the run;
-    // disconnect() tears down the connection.
-    try {
-      await session.abort();
-    } catch (err) {
-      log.debug({ err, sessionId: session.sessionId }, 'copilot.abort_cleanup_failed');
+    // If the consumer closed the generator early (return() / break), abort
+    // confirms that the remote call stopped before releasing capacity.
+    if (!sendSettled) {
+      try {
+        await requestAbort();
+      } catch (err) {
+        log.debug({ err, sessionId: session.sessionId }, 'copilot.abort_cleanup_failed');
+      }
     }
     try {
       await session.disconnect();
     } catch (err) {
       log.debug({ err, sessionId: session.sessionId }, 'copilot.disconnect_failed');
     }
-    // Let the SDK's sendPromise settle so we don't leave a dangling promise.
-    // Any error was already pushed to the queue.
-    await sendPromise.catch(() => {
-      /* already surfaced via queue */
-    });
+    assertCopilotShutdownConfirmed(abortFailed, abortFailure);
+    // The rejection path is handled above. Do not wait on an unsettled SDK
+    // promise after confirmed abort; some runtimes do not resolve it promptly.
+    if (sendSettled) await sendPromise;
   }
 }

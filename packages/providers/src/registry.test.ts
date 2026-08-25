@@ -216,6 +216,15 @@ describe('registry', () => {
       );
     });
 
+    test('rejects empty provider IDs', () => {
+      expect(() => registerProvider(makeMockRegistration(''))).toThrow(
+        'Provider ID must not be empty'
+      );
+      expect(() => registerProvider(makeMockRegistration('   '))).toThrow(
+        'Provider ID must not be empty'
+      );
+    });
+
     test('rejects provider IDs that collide with provider-keyed object maps', () => {
       expect(() => registerProvider(makeMockRegistration('__proto__'))).toThrow(
         'conflicts with JavaScript object properties'

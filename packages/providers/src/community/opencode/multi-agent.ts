@@ -1,5 +1,6 @@
 import { createLogger } from '@archon/paths';
 
+import { ProviderAttemptStopUnconfirmedError } from '../../shared/provider-attempt';
 import { mergeTokenUsage } from '../../types';
 import type { MessageChunk, ProviderAttemptLease, SendQueryOptions, TokenUsage } from '../../types';
 import { getOrderedAgents, type NamedAgentConfig } from './agent-config';
@@ -29,6 +30,9 @@ interface AgentRunState {
   leaseAbortHandler?: () => void;
   done: boolean;
   stopConfirmed: boolean;
+  promptPhase: 'not_started' | 'pending' | 'settled';
+  abortPhase?: AgentRunState['promptPhase'];
+  abortPromise?: Promise<boolean>;
 }
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -137,8 +141,10 @@ export async function* streamMultiAgentOpencodeSession(
   const sessionToAgent = new Map<string, AgentRunState>();
   let aborted = requestOptions?.abortSignal?.aborted === true;
   let promptError: Error | undefined;
-  const abortPromises = new Map<string, Promise<unknown>>();
+  let promptTasks: Promise<void>[] = [];
   let completed = false;
+  let failed = false;
+  let failure: unknown;
 
   const releaseStateLease = async (state: AgentRunState): Promise<void> => {
     if (!state.lease) return;
@@ -154,8 +160,9 @@ export async function* streamMultiAgentOpencodeSession(
   const abortAll = (): Promise<void> => {
     const aborts = Array.from(sessionToAgent.values(), state => {
       if (state.stopConfirmed) return Promise.resolve(true);
-      let abort = abortPromises.get(state.sessionId);
+      let abort = state.abortPhase === state.promptPhase ? state.abortPromise : undefined;
       if (!abort) {
+        const abortPhase = state.promptPhase;
         abort = client.session
           .abort({
             path: { id: state.sessionId },
@@ -163,7 +170,12 @@ export async function* streamMultiAgentOpencodeSession(
           })
           .then(
             () => {
-              state.stopConfirmed = true;
+              // A cancellation issued while prompt submission is pending can resolve
+              // before the prompt is accepted. Only a stable pre-submit state or a
+              // post-submit abort proves that no upstream work remains.
+              if (abortPhase !== 'pending' && state.promptPhase === abortPhase) {
+                state.stopConfirmed = true;
+              }
               return true;
             },
             error => {
@@ -174,7 +186,8 @@ export async function* streamMultiAgentOpencodeSession(
               return false;
             }
           );
-        abortPromises.set(state.sessionId, abort);
+        state.abortPhase = abortPhase;
+        state.abortPromise = abort;
       }
       return abort;
     });
@@ -208,6 +221,7 @@ export async function* streamMultiAgentOpencodeSession(
           chunks: [],
           done: false,
           stopConfirmed: false,
+          promptPhase: 'not_started',
         };
         sessionToAgent.set(sessionId, state);
         return state;
@@ -220,7 +234,7 @@ export async function* streamMultiAgentOpencodeSession(
     // the cap is lower than the fan-out width, so admission and event demux run
     // concurrently.
     getLog().info({ nodeId, sessionCount: states.length }, 'opencode.multi_agent_prompting');
-    const promptTasks = states.map(async state => {
+    promptTasks = states.map(async state => {
       try {
         const lease = requestOptions?.providerAttemptGate
           ? await requestOptions.providerAttemptGate.acquire(lifecycleController.signal)
@@ -245,14 +259,21 @@ export async function* streamMultiAgentOpencodeSession(
           }
           lease.signal.addEventListener('abort', onLeaseLost, { once: true });
         }
-        lifecycleController.signal.throwIfAborted();
         const agentRequestOptions = withAgentNodeConfig(requestOptions, state.agent);
         const promptBody = createSessionPromptBody(prompt, model, agentRequestOptions, state.agent);
+        lifecycleController.signal.throwIfAborted();
+        state.promptPhase = 'pending';
+        state.stopConfirmed = false;
         getLog().info(
           { agent: state.agent.key, sessionId: state.sessionId },
           'opencode.multi_agent_prompt_sending'
         );
-        await promptSession(client, cwd, state.sessionId, promptBody);
+        try {
+          await promptSession(client, cwd, state.sessionId, promptBody);
+        } finally {
+          state.promptPhase = 'settled';
+        }
+        lifecycleController.signal.throwIfAborted();
         getLog().info(
           { agent: state.agent.key, sessionId: state.sessionId },
           'opencode.multi_agent_prompt_sent'
@@ -484,10 +505,25 @@ export async function* streamMultiAgentOpencodeSession(
       );
     }
     throw new Error('OpenCode multi-agent stream ended before all agents completed');
+  } catch (error) {
+    failed = true;
+    failure = error;
   } finally {
     requestOptions?.abortSignal?.removeEventListener('abort', abortHandler);
     lifecycleController.abort();
-    if (!completed) await abortAll();
+    if (!completed) {
+      await abortAll();
+      await Promise.allSettled(promptTasks);
+      // Prompts that were already in flight when cancellation started need a
+      // fresh abort after their submissions settle.
+      await abortAll();
+    }
     await Promise.all(Array.from(sessionToAgent.values(), state => releaseStateLease(state)));
   }
+
+  if (failed && Array.from(sessionToAgent.values()).some(state => !state.stopConfirmed)) {
+    const message = failure instanceof Error ? failure.message : String(failure);
+    throw new ProviderAttemptStopUnconfirmedError(message, { cause: failure });
+  }
+  if (failed) throw failure;
 }

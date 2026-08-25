@@ -840,11 +840,13 @@ on the affected workflow nodes through `provider_slot_queued` and
 
 ### Config Parse Errors
 
-If your config file has invalid YAML syntax, you'll see error messages like:
+If your global config file has invalid YAML syntax, Archon logs the parse error.
+The process may remain healthy, but provider calls refuse to start while the
+global config is unreadable or invalid. This prevents a broken concurrency
+policy from silently becoming unlimited.
 
 ```
 [Config] Failed to parse global config at ~/.archon/config.yaml: <error details>
-[Config] Using default configuration. Please fix the YAML syntax in your config file.
 ```
 
 Common YAML syntax issues:
@@ -852,4 +854,6 @@ Common YAML syntax issues:
 - Missing colons after keys
 - Unquoted values with special characters
 
-The application will continue running with default settings until the config file is fixed.
+After manually repairing `~/.archon/config.yaml`, restart Archon so it reloads
+the file. Config writes through Archon's API invalidate the cached error
+automatically.

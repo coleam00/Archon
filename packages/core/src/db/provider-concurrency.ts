@@ -42,7 +42,7 @@ export interface ProviderConcurrencyLease {
   readonly slot: number;
   /** Aborts when Archon can no longer prove ownership of the slot. */
   readonly signal: AbortSignal;
-  release(options?: { upstreamStopped?: boolean }): Promise<void>;
+  release(options: { upstreamStopped: boolean }): Promise<void>;
 }
 
 interface GateTiming {
@@ -181,12 +181,12 @@ class DatabaseProviderLease implements ProviderConcurrencyLease {
     return result.rowCount === 1 ? queryStartedAt + this.timing.leaseMs : null;
   }
 
-  async release(options?: { upstreamStopped?: boolean }): Promise<void> {
+  async release(options: { upstreamStopped: boolean }): Promise<void> {
     if (this.released) return;
     this.released = true;
     if (this.heartbeatTimer) clearTimeout(this.heartbeatTimer);
     if (this.expiryGuardTimer) clearTimeout(this.expiryGuardTimer);
-    if (options?.upstreamStopped === false) {
+    if (!options.upstreamStopped) {
       getLog().warn(
         { provider: this.provider, slot: this.slot },
         'provider_concurrency.release_deferred_until_expiry'
@@ -283,13 +283,13 @@ export class ProviderConcurrencyGate {
                   );
                 }
                 if (shouldContinue === undefined) {
-                  await lease.release();
+                  await lease.release({ upstreamStopped: true });
                   await this.timing.sleep(this.timing.pollMs, options.signal);
                   continue waitForSlot;
                 }
               }
             } catch (error) {
-              await lease.release();
+              await lease.release({ upstreamStopped: true });
               throw error;
             }
             if (queued) {
@@ -299,7 +299,7 @@ export class ProviderConcurrencyGate {
               );
             }
             if (lease.signal.aborted) {
-              await lease.release();
+              await lease.release({ upstreamStopped: true });
               throw abortError(`Provider concurrency lease was lost before '${provider}' started`);
             }
             getLog().info({ provider, limit, slot, waitMs }, 'provider_concurrency.acquired');

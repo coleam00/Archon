@@ -527,7 +527,7 @@ export interface ProviderAttemptLease {
    * Stop renewing this lease. When upstream shutdown cannot be confirmed, preserve the
    * database row until expiry so another attempt cannot overlap the still-running call.
    */
-  release(options?: { upstreamStopped?: boolean }): Promise<void>;
+  release(options: { upstreamStopped: boolean }): Promise<void>;
 }
 
 export interface ProviderAttemptGate {

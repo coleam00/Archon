@@ -553,7 +553,9 @@ describe('OpencodeProvider', () => {
     const events = createPushStream();
     const leaseControllers = [new AbortController(), new AbortController()];
     let promptCalls = 0;
-    const sessionAbort = mock(async () => undefined);
+    const sessionAbort = mock(
+      async (_request: { path: { id: string }; query: { directory: string } }) => undefined
+    );
     const runtime = makeRuntime({
       sessionCreate: mock(async () => ({ data: { id: sessionIds.shift() } })),
       promptAsync: mock(async () => {
@@ -597,32 +599,33 @@ describe('OpencodeProvider', () => {
     );
 
     expect(error?.message).toContain('lease ownership lost');
-    expect(sessionAbort).toHaveBeenCalledTimes(2);
+    expect(sessionAbort).toHaveBeenCalledTimes(4);
     expect(releases).toBe(2);
   });
 
-  test('preserves each unconfirmed multi-agent lease without replacing the causal error', async () => {
+  test('re-aborts multi-agent sessions after pending prompt submissions settle', async () => {
     const cwd = await createTempProjectDir();
     const sessionIds = ['scout-session', 'reviewer-session'];
     const events = createPushStream();
     const leaseControllers = [new AbortController(), new AbortController()];
-    let promptCalls = 0;
+    let settlePrompts!: () => void;
+    const promptsSettled = new Promise<void>(resolve => {
+      settlePrompts = resolve;
+    });
+    const sessionAbort = mock(
+      async (_request: { path: { id: string }; query: { directory: string } }) => undefined
+    );
     const runtime = makeRuntime({
       sessionCreate: mock(async () => ({ data: { id: sessionIds.shift() } })),
-      promptAsync: mock(async () => {
-        promptCalls += 1;
-        if (promptCalls === 2) leaseControllers[0]?.abort(new Error('lease ownership lost'));
-      }),
-      sessionAbort: mock(async request => {
-        if (request.path.id === 'scout-session') throw new Error('abort transport failed');
-      }),
+      promptAsync: mock(async () => promptsSettled),
+      sessionAbort,
       subscribe: mock(async () => ({ stream: events.stream })),
     });
     runtimeQueue.push(runtime);
 
     let acquireCalls = 0;
-    const releases: ({ upstreamStopped?: boolean } | undefined)[] = [];
-    const { error } = await consume(
+    const releases: { upstreamStopped: boolean }[] = [];
+    const consumption = consume(
       new OpencodeProvider().sendQuery('hi', cwd, undefined, {
         assistantConfig: TEST_MODEL,
         nodeConfig: {
@@ -648,10 +651,127 @@ describe('OpencodeProvider', () => {
       })
     );
 
+    while (runtime.client.session.promptAsync.mock.calls.length < 2) await Bun.sleep(1);
+    leaseControllers[0]?.abort(new Error('lease ownership lost'));
+    while (sessionAbort.mock.calls.length < 2) await Bun.sleep(1);
+    await Promise.resolve();
+    expect(sessionAbort).toHaveBeenCalledTimes(2);
+    expect(releases).toEqual([]);
+
+    settlePrompts();
+    const { error } = await consumption;
+
+    expect(error?.message).toContain('lease ownership lost');
+    expect(sessionAbort).toHaveBeenCalledTimes(4);
+    const abortedSessionIds = sessionAbort.mock.calls.map(call => call[0].path.id);
+    expect(abortedSessionIds.filter(id => id === 'scout-session')).toHaveLength(2);
+    expect(abortedSessionIds.filter(id => id === 'reviewer-session')).toHaveLength(2);
+    expect(releases).toEqual([{ upstreamStopped: true }, { upstreamStopped: true }]);
+  });
+
+  test('preserves each unconfirmed multi-agent lease without replacing the causal error', async () => {
+    const cwd = await createTempProjectDir();
+    const sessionIds = ['scout-session', 'reviewer-session'];
+    const events = createPushStream();
+    const leaseControllers = [new AbortController(), new AbortController()];
+    let promptCalls = 0;
+    const runtime = makeRuntime({
+      sessionCreate: mock(async () => ({ data: { id: sessionIds.shift() } })),
+      promptAsync: mock(async () => {
+        promptCalls += 1;
+        if (promptCalls === 2) leaseControllers[0]?.abort(new Error('lease ownership lost'));
+      }),
+      sessionAbort: mock(async request => {
+        if (request.path.id === 'scout-session') throw new Error('abort transport failed');
+      }),
+      subscribe: mock(async () => ({ stream: events.stream })),
+    });
+    runtimeQueue.push(runtime);
+
+    let acquireCalls = 0;
+    const releasesBySession = new Map<string, { upstreamStopped?: boolean } | undefined>();
+    const { error } = await consume(
+      new OpencodeProvider().sendQuery('hi', cwd, undefined, {
+        assistantConfig: TEST_MODEL,
+        nodeConfig: {
+          nodeId: 'research',
+          agents: {
+            scout: { description: 'Scout', prompt: 'Explore' },
+            reviewer: { description: 'Reviewer', prompt: 'Review' },
+          },
+        },
+        providerAttemptGate: {
+          acquire: async () => {
+            const leaseIndex = acquireCalls;
+            const controller = leaseControllers[leaseIndex];
+            acquireCalls += 1;
+            if (!controller) throw new Error('unexpected admission');
+            const sessionId = leaseIndex === 0 ? 'scout-session' : 'reviewer-session';
+            return {
+              signal: controller.signal,
+              release: async options => {
+                releasesBySession.set(sessionId, options);
+              },
+            };
+          },
+        },
+      })
+    );
+
     expect(error?.message).toContain('lease ownership lost');
     expect(error?.message).not.toContain('abort transport failed');
-    expect(releases).toContainEqual({ upstreamStopped: false });
-    expect(releases).toContainEqual({ upstreamStopped: true });
+    expect(releasesBySession.get('scout-session')).toEqual({ upstreamStopped: false });
+    expect(releasesBySession.get('reviewer-session')).toEqual({ upstreamStopped: true });
+  });
+
+  test('does not retry a multi-agent failure while a child shutdown is unconfirmed', async () => {
+    const cwd = await createTempProjectDir();
+    const sessionIds = ['scout-session', 'reviewer-session'];
+    const events = createPushStream();
+    let promptCalls = 0;
+    const runtime = makeRuntime({
+      sessionCreate: mock(async () => ({ data: { id: sessionIds.shift() } })),
+      promptAsync: mock(async () => {
+        promptCalls += 1;
+        if (promptCalls === 2) {
+          events.push({
+            type: 'session.error',
+            properties: {
+              sessionID: 'scout-session',
+              error: { message: 'server disconnected' },
+            },
+          });
+        }
+      }),
+      sessionAbort: mock(async request => {
+        if (request.path.id === 'reviewer-session') throw new Error('abort transport failed');
+      }),
+      subscribe: mock(async () => ({ stream: events.stream })),
+    });
+    runtimeQueue.push(runtime);
+
+    const { error } = await consume(
+      new OpencodeProvider({ retryBaseDelayMs: 0 }).sendQuery('hi', cwd, undefined, {
+        assistantConfig: TEST_MODEL,
+        nodeConfig: {
+          nodeId: 'research',
+          agents: {
+            scout: { description: 'Scout', prompt: 'Explore' },
+            reviewer: { description: 'Reviewer', prompt: 'Review' },
+          },
+        },
+        providerAttemptGate: {
+          acquire: async () => ({
+            signal: new AbortController().signal,
+            release: async () => undefined,
+          }),
+        },
+      })
+    );
+
+    expect(error?.name).toBe('ProviderAttemptStopUnconfirmedError');
+    expect(error?.message).toContain('server disconnected');
+    expect(mockCreateOpencode).toHaveBeenCalledTimes(1);
   });
 
   test('multi-agent session error closes admission before a queued sibling can start', async () => {
@@ -1222,6 +1342,51 @@ describe('OpencodeProvider', () => {
     const { error } = await consumption;
     expect(error?.message).toBe('OpenCode query aborted');
     expect(released).toBe(true);
+  });
+
+  test('re-aborts a session after an in-flight prompt submission settles', async () => {
+    let settlePrompt!: () => void;
+    const promptSettled = new Promise<void>(resolve => {
+      settlePrompt = resolve;
+    });
+    const sessionAbort = mock(async () => undefined);
+    const runtime = makeRuntime({
+      promptAsync: mock(async () => promptSettled),
+      subscribe: mock(async () => ({ stream: createPendingStream() })),
+      sessionAbort,
+    });
+    runtimeQueue.push(runtime);
+    const abortController = new AbortController();
+    const releases: { upstreamStopped: boolean }[] = [];
+
+    const consumption = consume(
+      new OpencodeProvider().sendQuery('hi', '/tmp', undefined, {
+        assistantConfig: TEST_MODEL,
+        abortSignal: abortController.signal,
+        providerAttemptGate: {
+          acquire: async () => ({
+            signal: new AbortController().signal,
+            release: async options => {
+              releases.push(options);
+            },
+          }),
+        },
+      })
+    );
+
+    while (runtime.client.session.promptAsync.mock.calls.length === 0) await Bun.sleep(1);
+    abortController.abort();
+    while (sessionAbort.mock.calls.length === 0) await Bun.sleep(1);
+    await Promise.resolve();
+    expect(sessionAbort).toHaveBeenCalledTimes(1);
+    expect(releases).toEqual([]);
+
+    settlePrompt();
+    const { error } = await consumption;
+
+    expect(error?.message).toBe('OpenCode query aborted');
+    expect(sessionAbort).toHaveBeenCalledTimes(2);
+    expect(releases).toEqual([{ upstreamStopped: true }]);
   });
 
   test('aborts an unconfirmed single-agent stream before releasing provider capacity', async () => {

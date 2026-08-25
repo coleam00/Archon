@@ -48,6 +48,9 @@ export function registerProvider(entry: ProviderRegistration): void {
   if (registry.has(entry.id)) {
     throw new Error(`Provider '${entry.id}' is already registered`);
   }
+  if (entry.id.trim().length === 0) {
+    throw new Error('Provider ID must not be empty');
+  }
   if (entry.id.length > 20) {
     throw new Error(`Provider ID '${entry.id}' exceeds the 20-character database limit`);
   }

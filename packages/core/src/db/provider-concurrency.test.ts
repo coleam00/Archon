@@ -66,25 +66,43 @@ describe('ProviderConcurrencyGate', () => {
     while (!queued) await Bun.sleep(1);
     expect(admitted).toBe(false);
 
-    await first.release();
+    await first.release({ upstreamStopped: true });
     const second = await secondPromise;
     expect(admitted).toBe(true);
     expect(second.slot).toBe(0);
-    await second.release();
+    await second.release({ upstreamStopped: true });
   });
 
   test('preserves an owned row until expiry when upstream shutdown is unconfirmed', async () => {
-    const [db] = sharedDatabase();
-    const lease = await gate(db).acquire('opencode', 1);
+    const [firstDb, secondDb] = sharedDatabase();
+    const timing = { leaseMs: 300, heartbeatMs: 50, pollMs: 5 };
+    const lease = await new ProviderConcurrencyGate(firstDb, timing).acquire('opencode', 1);
 
     await lease.release({ upstreamStopped: false });
 
-    const rows = await db.query(
+    const rows = await firstDb.query(
       `SELECT slot_index FROM remote_agent_provider_slots
        WHERE provider_id = $1 AND slot_index = $2`,
       ['opencode', lease.slot]
     );
     expect(rows.rowCount).toBe(1);
+
+    let admitted = false;
+    const controller = new AbortController();
+    const successorPromise = new ProviderConcurrencyGate(secondDb, timing)
+      .acquire('opencode', 1, { signal: controller.signal })
+      .then(successor => {
+        admitted = true;
+        return successor;
+      });
+    await Bun.sleep(100);
+    expect(admitted).toBe(false);
+
+    const timeout = setTimeout(() => controller.abort(), 2_000);
+    const successor = await successorPromise;
+    clearTimeout(timeout);
+    expect(successor.slot).toBe(lease.slot);
+    await successor.release({ upstreamStopped: true });
   });
 
   test('coordinates a cap across independent processes sharing SQLite', async () => {
@@ -155,8 +173,8 @@ describe('ProviderConcurrencyGate', () => {
 
     expect(pi.slot).toBe(0);
     expect(claude.slot).toBe(0);
-    await pi.release();
-    await claude.release();
+    await pi.release({ upstreamStopped: true });
+    await claude.release({ upstreamStopped: true });
   });
 
   test('admits exactly the configured number of concurrent owners', async () => {
@@ -175,11 +193,11 @@ describe('ProviderConcurrencyGate', () => {
     await Bun.sleep(5);
     expect(thirdAdmitted).toBe(false);
 
-    await first.release();
+    await first.release({ upstreamStopped: true });
     const third = await thirdPromise;
     expect(third.slot).toBe(first.slot);
-    await second.release();
-    await third.release();
+    await second.release({ upstreamStopped: true });
+    await third.release({ upstreamStopped: true });
   });
 
   test('counts live slots outside a reduced limit before admitting new work', async () => {
@@ -191,8 +209,8 @@ describe('ProviderConcurrencyGate', () => {
       gate(firstDb).acquire('pi', 4),
     ]);
     const bySlot = original.toSorted((a, b) => a.slot - b.slot);
-    await bySlot[0]?.release();
-    await bySlot[1]?.release();
+    await bySlot[0]?.release({ upstreamStopped: true });
+    await bySlot[1]?.release({ upstreamStopped: true });
 
     let queued = false;
     const reduced = gate(secondDb).acquire('pi', 2, {
@@ -210,12 +228,12 @@ describe('ProviderConcurrencyGate', () => {
     );
     expect(liveBefore.rowCount).toBe(2);
 
-    await bySlot[2]?.release();
+    await bySlot[2]?.release({ upstreamStopped: true });
     const admitted = await reduced;
     expect(admitted.slot).toBe(0);
 
-    await bySlot[3]?.release();
-    await admitted.release();
+    await bySlot[3]?.release({ upstreamStopped: true });
+    await admitted.release({ upstreamStopped: true });
   });
 
   test('aborts a queued waiter without disturbing the live owner', async () => {
@@ -246,7 +264,7 @@ describe('ProviderConcurrencyGate', () => {
       ['pi']
     );
     expect(rows.rowCount).toBe(1);
-    await first.release();
+    await first.release({ upstreamStopped: true });
   });
 
   test('releases a successful claim when cancellation wins during the claim query', async () => {
@@ -329,7 +347,7 @@ describe('ProviderConcurrencyGate', () => {
        WHERE provider_id = $1 AND slot_index = $2`,
       ['pi', 0, 'newer-owner']
     );
-    await successor.release();
+    await successor.release({ upstreamStopped: true });
 
     const rows = await secondDb.query<{ lease_id: string }>(
       `SELECT lease_id FROM remote_agent_provider_slots
@@ -351,7 +369,7 @@ describe('ProviderConcurrencyGate', () => {
     ).rejects.toMatchObject({ name: 'AbortError' });
 
     expect(checks).toBe(2);
-    await first.release();
+    await first.release({ upstreamStopped: true });
   });
 
   test('observer failures and unsettled callbacks cannot hold capacity', async () => {
@@ -373,10 +391,10 @@ describe('ProviderConcurrencyGate', () => {
     });
 
     while (!queued) await Bun.sleep(1);
-    await first.release();
+    await first.release({ upstreamStopped: true });
     const second = await secondPromise;
     expect(second.slot).toBe(0);
-    await second.release();
+    await second.release({ upstreamStopped: true });
   });
 
   test('renews a live lease and aborts the owner when ownership is lost', async () => {
@@ -425,7 +443,7 @@ describe('ProviderConcurrencyGate', () => {
       });
     }
     expect(lease.signal.aborted).toBe(true);
-    await lease.release();
+    await lease.release({ upstreamStopped: true });
 
     const successor = await db.query<{ lease_id: string }>(
       `SELECT lease_id FROM remote_agent_provider_slots
@@ -474,7 +492,7 @@ describe('ProviderConcurrencyGate', () => {
 
     expect(lease.signal.aborted).toBe(true);
     expect(lease.signal.reason).toMatchObject({ name: 'AbortError' });
-    await lease.release();
+    await lease.release({ upstreamStopped: true });
   });
 
   test('does not start with a claim response that consumed the renewal safety window', async () => {
@@ -532,7 +550,7 @@ describe('ProviderConcurrencyGate', () => {
     ) {
       await Bun.sleep(2);
     }
-    await lease.release();
+    await lease.release({ upstreamStopped: true });
 
     const claim = queries.find(sql => sql.includes('INSERT'));
     const renewal = queries.find(sql => sql.trimStart().startsWith('UPDATE'));

@@ -30,6 +30,7 @@ interface FakeSession {
   sendTimeout?: number;
   aborted: boolean;
   disconnected: boolean;
+  abortError?: Error;
   listener: ((event: SessionEvent) => void) | undefined;
   fire: (event: SessionEvent) => void;
   resolveSend: (result?: unknown) => void;
@@ -82,6 +83,7 @@ function makeFakeSession(sessionId = 'sess-1'): FakeSession {
   };
   session.abort = async (): Promise<void> => {
     fake.aborted = true;
+    if (fake.abortError) throw fake.abortError;
   };
   return session as unknown as FakeSession;
 }
@@ -213,7 +215,7 @@ describe('CopilotProvider.sendQuery', () => {
     );
   });
 
-  test('holds provider admission around sendAndWait and forwards lease loss', async () => {
+  test('holds provider admission around sendAndWait and fails when lease ownership is lost', async () => {
     const session = makeFakeSession('sess-admitted');
     nextCreateSessionResult = session;
     const leaseController = new AbortController();
@@ -221,7 +223,7 @@ describe('CopilotProvider.sendQuery', () => {
     const admitted = new Promise<void>(resolve => {
       admit = resolve;
     });
-    let released = 0;
+    const releases: { upstreamStopped: boolean }[] = [];
 
     const p = new CopilotProvider();
     const gen = p.sendQuery('hello', '/work/dir', undefined, {
@@ -231,8 +233,8 @@ describe('CopilotProvider.sendQuery', () => {
           await admitted;
           return {
             signal: leaseController.signal,
-            release: async () => {
-              released += 1;
+            release: async options => {
+              releases.push(options);
             },
           };
         },
@@ -250,11 +252,45 @@ describe('CopilotProvider.sendQuery', () => {
     leaseController.abort(new Error('lease lost'));
     while (!session.aborted) await Bun.sleep(1);
     session.resolveSend(undefined);
-    await firstNext;
-    await collect(gen);
+    await expect(
+      (async (): Promise<void> => {
+        await firstNext;
+        await collect(gen);
+      })()
+    ).rejects.toThrow('lease lost');
 
     expect(session.aborted).toBe(true);
-    expect(released).toBe(1);
+    expect(releases).toEqual([{ upstreamStopped: true }]);
+  });
+
+  test('preserves the lease when Copilot abort cannot confirm shutdown', async () => {
+    const session = makeFakeSession('sess-unconfirmed-stop');
+    session.abortError = new Error('abort transport failed');
+    nextCreateSessionResult = session;
+    const leaseController = new AbortController();
+    const releases: { upstreamStopped: boolean }[] = [];
+
+    const p = new CopilotProvider();
+    const completion = collect(
+      p.sendQuery('hello', '/work/dir', undefined, {
+        model: 'gpt-5',
+        providerAttemptGate: {
+          acquire: async () => ({
+            signal: leaseController.signal,
+            release: async options => {
+              releases.push(options);
+            },
+          }),
+        },
+      })
+    );
+
+    while (session.prompt === undefined) await Bun.sleep(1);
+    leaseController.abort(new Error('lease lost'));
+
+    await expect(completion).rejects.toThrow('Copilot session shutdown could not be confirmed');
+    expect(session.aborted).toBe(true);
+    expect(releases).toEqual([{ upstreamStopped: false }]);
   });
 
   test('reasoningEffort from nodeConfig.effort passes through', async () => {
@@ -472,8 +508,12 @@ describe('CopilotProvider.sendQuery', () => {
     // Give the abort listener a tick to run session.abort().
     await new Promise(resolve => setTimeout(resolve, 5));
     session.resolveSend(undefined);
-    await first;
-    await collect(gen);
+    await expect(
+      (async (): Promise<void> => {
+        await first;
+        await collect(gen);
+      })()
+    ).rejects.toMatchObject({ name: 'AbortError' });
 
     expect(session.aborted).toBe(true);
   });

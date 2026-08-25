@@ -1,9 +1,13 @@
 import { createLogger } from '@archon/paths';
-import type { IAgentProvider } from '@archon/providers/types';
+import type { IAgentProvider, ProviderAttemptLease } from '@archon/providers/types';
 import type { ProviderQueryRequest, ProviderQueryRunner } from '@archon/workflows/deps';
 import { loadProviderConcurrencyLimits } from '../config/config-loader';
 import { getDatabase } from '../db/connection';
-import { ProviderConcurrencyGate } from '../db/provider-concurrency';
+import {
+  ProviderConcurrencyGate,
+  type ProviderConcurrencyAcquired,
+  type ProviderConcurrencyWait,
+} from '../db/provider-concurrency';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -43,11 +47,26 @@ export function createProviderQueryRunner(deps: ProviderQueryRunnerDeps): Provid
     }
 
     let queuedAttempts = 0;
+    let activeAttempts = 0;
+    let queryQueued = false;
+    let latestQueuedEvent: ProviderConcurrencyWait | undefined;
+    const enterQueued = (event: ProviderConcurrencyWait): void => {
+      latestQueuedEvent = event;
+      if (queryQueued || activeAttempts > 0 || queuedAttempts === 0) return;
+      queryQueued = true;
+      request.context?.onQueued?.(event);
+    };
+    const enterActive = (event: ProviderConcurrencyAcquired): void => {
+      if (!queryQueued) return;
+      queryQueued = false;
+      request.context?.onAcquired?.(event);
+    };
     const options = {
       ...request.options,
       providerAttemptGate: {
-        acquire: (attemptSignal?: AbortSignal): ReturnType<ProviderConcurrencyGate['acquire']> =>
-          deps.acquire(provider, limit, {
+        acquire: async (attemptSignal?: AbortSignal): Promise<ProviderAttemptLease> => {
+          let acquiredEvent: ProviderConcurrencyAcquired | undefined;
+          const lease = await deps.acquire(provider, limit, {
             signal:
               request.options?.abortSignal && attemptSignal
                 ? AbortSignal.any([request.options.abortSignal, attemptSignal])
@@ -56,12 +75,16 @@ export function createProviderQueryRunner(deps: ProviderQueryRunnerDeps): Provid
               ? {
                   onQueued: (event): void => {
                     queuedAttempts += 1;
-                    if (queuedAttempts === 1) request.context?.onQueued?.(event);
+                    enterQueued(event);
                   },
-                  onWaiting: request.context.onWaiting,
+                  onWaiting: (): void => {
+                    if (queryQueued && activeAttempts === 0 && queuedAttempts > 0) {
+                      request.context?.onWaiting?.();
+                    }
+                  },
                   onAcquired: (event): void => {
                     queuedAttempts = Math.max(0, queuedAttempts - 1);
-                    if (queuedAttempts === 0) request.context?.onAcquired?.(event);
+                    acquiredEvent = event;
                   },
                   onDequeued: (): void => {
                     queuedAttempts = Math.max(0, queuedAttempts - 1);
@@ -69,7 +92,24 @@ export function createProviderQueryRunner(deps: ProviderQueryRunnerDeps): Provid
                 }
               : undefined,
             shouldContinue: request.context?.shouldContinue,
-          }),
+          });
+          activeAttempts += 1;
+          enterActive(acquiredEvent ?? { provider, limit, slot: lease.slot, waitMs: 0 });
+          let released = false;
+          return {
+            ...lease,
+            release: async (releaseOptions: { upstreamStopped: boolean }): Promise<void> => {
+              if (released) return;
+              released = true;
+              try {
+                await lease.release(releaseOptions);
+              } finally {
+                activeAttempts = Math.max(0, activeAttempts - 1);
+                if (latestQueuedEvent) enterQueued(latestQueuedEvent);
+              }
+            },
+          };
+        },
       },
     };
     yield* request.client.sendQuery(request.prompt, request.cwd, request.resumeSessionId, options);

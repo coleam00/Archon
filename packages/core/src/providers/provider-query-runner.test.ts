@@ -38,7 +38,7 @@ function provider(stream: IAgentProvider['sendQuery']): IAgentProvider {
           abortSignal: lease.signal,
         });
       } finally {
-        await lease.release();
+        await lease.release({ upstreamStopped: true });
       }
     },
     getType: () => 'pi',
@@ -228,7 +228,7 @@ describe('createProviderQueryRunner', () => {
         const attemptGate = options?.providerAttemptGate;
         if (!attemptGate) throw new Error('missing attempt gate');
         const leases = await Promise.all([attemptGate.acquire(), attemptGate.acquire()]);
-        for (const lease of leases) await lease.release();
+        for (const lease of leases) await lease.release({ upstreamStopped: true });
         yield { type: 'assistant', content: 'ok' };
       },
     };
@@ -248,7 +248,77 @@ describe('createProviderQueryRunner', () => {
     expect(transitions).toEqual(['queued', 'acquired']);
   });
 
-  test('clears an aborted waiter so a provider retry can return to running', async () => {
+  test('reports a mixed active and waiting query as active until its last lease releases', async () => {
+    let acquireCalls = 0;
+    let secondQueued!: () => void;
+    const queued = new Promise<void>(resolve => {
+      secondQueued = resolve;
+    });
+    let admitSecond!: () => void;
+    const admitted = new Promise<void>(resolve => {
+      admitSecond = resolve;
+    });
+    let waitingObserver: (() => void) | undefined;
+    const transitions: string[] = [];
+    const runner = createProviderQueryRunner({
+      acquire: async (providerId, limit, options) => {
+        acquireCalls += 1;
+        const call = acquireCalls;
+        if (call === 2) {
+          options?.observer?.onQueued?.({ provider: providerId, limit });
+          waitingObserver = options?.observer?.onWaiting;
+          options?.observer?.onWaiting?.();
+          secondQueued();
+          await admitted;
+          options?.observer?.onAcquired?.({ provider: providerId, limit, slot: 0, waitMs: 1 });
+        }
+        return {
+          provider: providerId,
+          slot: 0,
+          signal: new AbortController().signal,
+          release: async () => undefined,
+        };
+      },
+      loadLimits: async () => ({ pi: 1 }),
+    });
+    const mixedProvider: IAgentProvider = {
+      supportsProviderAttemptGate: true,
+      getType: () => 'pi',
+      getCapabilities: () => capabilities,
+      sendQuery: async function* (_prompt, _cwd, _resume, options) {
+        const attemptGate = options?.providerAttemptGate;
+        if (!attemptGate) throw new Error('missing attempt gate');
+        const first = await attemptGate.acquire();
+        const secondPromise = attemptGate.acquire();
+        await queued;
+        expect(transitions).toEqual([]);
+
+        await first.release({ upstreamStopped: true });
+        waitingObserver?.();
+        admitSecond();
+        const second = await secondPromise;
+        await second.release({ upstreamStopped: true });
+        yield { type: 'assistant', content: 'ok' };
+      },
+    };
+
+    await consume(
+      runner({
+        client: mixedProvider,
+        prompt: 'hello',
+        cwd: '/tmp',
+        context: {
+          onQueued: () => transitions.push('queued'),
+          onWaiting: () => transitions.push('waiting'),
+          onAcquired: () => transitions.push('acquired'),
+        },
+      })
+    );
+
+    expect(transitions).toEqual(['queued', 'waiting', 'acquired']);
+  });
+
+  test('keeps an aborted waiter queued until the provider retry acquires', async () => {
     let acquireCalls = 0;
     const transitions: string[] = [];
     const runner = createProviderQueryRunner({
@@ -278,7 +348,7 @@ describe('createProviderQueryRunner', () => {
         if (!attemptGate) throw new Error('missing attempt gate');
         await expect(attemptGate.acquire()).rejects.toThrow('queued sibling aborted');
         const lease = await attemptGate.acquire();
-        await lease.release();
+        await lease.release({ upstreamStopped: true });
         yield { type: 'assistant', content: 'ok' };
       },
     };
@@ -295,7 +365,7 @@ describe('createProviderQueryRunner', () => {
       })
     );
 
-    expect(transitions).toEqual(['queued', 'queued', 'acquired']);
+    expect(transitions).toEqual(['queued', 'acquired']);
   });
 
   test('releases when the provider throws', async () => {
@@ -422,7 +492,7 @@ describe('createProviderQueryRunner', () => {
           } catch (error) {
             if (attempt === 2) throw error;
           } finally {
-            await lease.release();
+            await lease.release({ upstreamStopped: true });
           }
           order.push('backoff');
         }

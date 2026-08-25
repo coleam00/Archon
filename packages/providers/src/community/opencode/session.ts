@@ -133,13 +133,20 @@ export async function* streamOpencodeSession(
   let lastAssistantMessageId: string | undefined;
   let aborted = requestOptions?.abortSignal?.aborted === true;
   let terminalObserved = false;
-  let abortPromise: Promise<unknown> | undefined;
+  let promptSettled = false;
+  let preSubmissionAbortPromise: Promise<unknown> | undefined;
+  let postSubmissionAbortPromise: Promise<unknown> | undefined;
 
   const abortSession = (): Promise<unknown> => {
-    abortPromise ??= client.session.abort({
+    const existingAbort = promptSettled ? postSubmissionAbortPromise : preSubmissionAbortPromise;
+    if (existingAbort) return existingAbort;
+
+    const abortPromise = client.session.abort({
       path: { id: sessionId },
       query: { directory: cwd },
     });
+    if (promptSettled) postSubmissionAbortPromise = abortPromise;
+    else preSubmissionAbortPromise = abortPromise;
     void abortPromise.catch((error): void => {
       getLog().debug({ err: error, sessionId }, 'opencode.session_abort_failed');
     });
@@ -169,7 +176,13 @@ export async function* streamOpencodeSession(
 
   try {
     const promptBody = createSessionPromptBody(prompt, model, requestOptions);
-    await promptSession(client, cwd, sessionId, promptBody);
+    try {
+      await promptSession(client, cwd, sessionId, promptBody);
+    } finally {
+      // An abort accepted before promptAsync settles cannot prove that work accepted
+      // afterward was stopped. Cleanup must confirm cancellation again from this point.
+      promptSettled = true;
+    }
 
     for await (const rawEvent of abortableStream(events.stream, streamController.signal)) {
       const event = rawEvent as {

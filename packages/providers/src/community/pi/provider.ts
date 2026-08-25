@@ -39,7 +39,7 @@ export function installPiAdmission(
       return (async function* (): AsyncGenerator<AssistantMessageEvent> {
         try {
           signal.throwIfAborted();
-          yield* streamSimple(model, context, {
+          const stream = streamSimple(model, context, {
             ...options,
             signal,
             // Keep the user's high-level Pi session retry unchanged, but
@@ -47,8 +47,16 @@ export function installPiAdmission(
             // sleep inside this lease.
             maxRetries: 0,
           });
+          for await (const event of stream) {
+            // Pi may translate an aborted transport into a normal terminal
+            // event. Check before forwarding every event, especially `done`,
+            // so ownership loss cannot become a successful model attempt.
+            signal.throwIfAborted();
+            yield event;
+          }
+          signal.throwIfAborted();
         } finally {
-          await lease.release();
+          await lease.release({ upstreamStopped: true });
         }
       })();
     });

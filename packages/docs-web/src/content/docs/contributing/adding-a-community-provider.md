@@ -28,9 +28,14 @@ The provider yields a stream of `MessageChunk` variants (see `packages/providers
 `IAgentProvider` is sufficient when the provider is uncapped. To support an
 install-wide `concurrency.providers.<id>` limit, set
 `supportsProviderAttemptGate = true` and consume the `providerAttemptGate`
-passed to `sendQuery`. Acquire immediately before each actual upstream attempt
-and release before retry backoff. Archon fails closed when a cap is configured
-for a provider that does not declare this contract.
+passed to `sendQuery`. Ordinary providers should use `withProviderAttempt`,
+forward its combined abort signal to the upstream request, and leave the lease
+before retry backoff. Capacity may be released only after the upstream attempt
+is confirmed stopped. If shutdown cannot be confirmed, throw
+`ProviderAttemptStopUnconfirmedError` or release with
+`{ upstreamStopped: false }` so the database lease remains until expiry. Archon
+fails closed when a cap is configured for a provider that does not declare this
+contract.
 
 ## Directory layout
 
@@ -120,6 +125,9 @@ See `packages/providers/src/community/pi/provider.ts` for a full reference with 
 ### 3. Registration
 
 Each community provider exports a `register*Provider()` function. Idempotent — guard with `isRegisteredProvider(id)` so it's safe to call from multiple bootstrap sites.
+
+Provider IDs must be non-empty, no more than 20 characters, and cannot be
+JavaScript object-property names such as `constructor` or `__proto__`.
 
 ```typescript
 // registration.ts

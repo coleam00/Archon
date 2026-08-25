@@ -21,7 +21,7 @@ try {
     const lease = await gate.acquire('pi', 1);
     writeFileSync(join(markerDirectory, 'holder-acquired'), '');
     while (!existsSync(join(markerDirectory, 'release-holder'))) await Bun.sleep(5);
-    await lease.release();
+    await lease.release({ upstreamStopped: true });
   } else if (mode === 'waiter') {
     const lease = await gate.acquire('pi', 1, {
       observer: {
@@ -31,7 +31,7 @@ try {
       },
     });
     writeFileSync(join(markerDirectory, 'waiter-acquired'), '');
-    await lease.release();
+    await lease.release({ upstreamStopped: true });
   } else {
     throw new Error(`Unknown fixture mode '${mode}'`);
   }

@@ -4,6 +4,7 @@ import {
   lazyStream,
   type Api,
   type AssistantMessage,
+  type AssistantMessageEvent,
   type Context,
   type Model,
   type SimpleStreamOptions,
@@ -146,23 +147,24 @@ describe('installPiAdmission', () => {
       return stream;
     });
     const runtime: Pick<ModelRuntime, 'streamSimple'> = { streamSimple };
-    let released = false;
+    const releases: { upstreamStopped: boolean }[] = [];
     installPiAdmission(
       runtime,
       {
         acquire: async () => ({
           signal: leaseController.signal,
-          release: async () => {
-            released = true;
+          release: async options => {
+            releases.push(options);
           },
         }),
       },
       lazyStream
     );
 
+    const events: AssistantMessageEvent[] = [];
     const consumption = (async (): Promise<void> => {
-      for await (const _event of runtime.streamSimple(model, { messages: [] })) {
-        // Consume until the lease-loss signal ends the fake upstream stream.
+      for await (const event of runtime.streamSimple(model, { messages: [] })) {
+        events.push(event);
       }
     })();
     while (!upstreamSignal) await Bun.sleep(1);
@@ -172,6 +174,11 @@ describe('installPiAdmission', () => {
     await consumption;
     expect(upstreamSignal.aborted).toBe(true);
     expect(upstreamSignal.reason).toBe(leaseLost);
-    expect(released).toBe(true);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.type).toBe('error');
+    if (events[0]?.type === 'error') {
+      expect(events[0].error.errorMessage).toBe('lease ownership lost');
+    }
+    expect(releases).toEqual([{ upstreamStopped: true }]);
   });
 });

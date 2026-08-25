@@ -22,12 +22,18 @@ describe.skipIf(process.env.ARCHON_POSTGRES_INTEGRATION !== 'true')(
       const secondDb = new PostgresAdapter(postgresUrl());
       await secondDb.query('SELECT 1');
       const provider = `integration-${randomUUID()}`;
-      const timing = { leaseMs: 10_000, heartbeatMs: 2_000, pollMs: 5 };
+      const timing = { leaseMs: 1_000, heartbeatMs: 150, pollMs: 5 };
       let firstLease: Awaited<ReturnType<ProviderConcurrencyGate['acquire']>> | undefined;
       let secondLease: Awaited<ReturnType<ProviderConcurrencyGate['acquire']>> | undefined;
 
       try {
         firstLease = await new ProviderConcurrencyGate(firstDb, timing).acquire(provider, 1);
+        const initialExpiry = await firstDb.query<{ expires_ms: string }>(
+          `SELECT (EXTRACT(EPOCH FROM lease_expires_at) * 1000)::text AS expires_ms
+           FROM remote_agent_provider_slots
+           WHERE provider_id = $1 AND slot_index = $2`,
+          [provider, firstLease.slot]
+        );
 
         let queued = false;
         let admitted = false;
@@ -54,14 +60,30 @@ describe.skipIf(process.env.ARCHON_POSTGRES_INTEGRATION !== 'true')(
         );
         expect(held.rows[0]?.count).toBe('1');
 
-        await firstLease.release();
+        await Bun.sleep(timing.leaseMs + timing.heartbeatMs);
+        const renewed = await firstDb.query<{ expires_ms: string; expired: boolean }>(
+          `SELECT
+             (EXTRACT(EPOCH FROM lease_expires_at) * 1000)::text AS expires_ms,
+             lease_expires_at <= NOW() AS expired
+           FROM remote_agent_provider_slots
+           WHERE provider_id = $1 AND slot_index = $2`,
+          [provider, firstLease.slot]
+        );
+        expect(Number(renewed.rows[0]?.expires_ms)).toBeGreaterThan(
+          Number(initialExpiry.rows[0]?.expires_ms)
+        );
+        expect(renewed.rows[0]?.expired).toBe(false);
+        expect(firstLease.signal.aborted).toBe(false);
+        expect(admitted).toBe(false);
+
+        await firstLease.release({ upstreamStopped: true });
         firstLease = undefined;
         secondLease = await secondPromise;
         expect(admitted).toBe(true);
         expect(secondLease.slot).toBe(0);
       } finally {
-        await firstLease?.release();
-        await secondLease?.release();
+        await firstLease?.release({ upstreamStopped: true });
+        await secondLease?.release({ upstreamStopped: true });
         await firstDb.query('DELETE FROM remote_agent_provider_slots WHERE provider_id = $1', [
           provider,
         ]);
