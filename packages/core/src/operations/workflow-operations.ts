@@ -36,6 +36,12 @@ export interface WorkflowStatusData {
 }
 
 export interface ApprovalOperationResult {
+  /**
+   * True when the gate was ALREADY resolved as approved and this call returned
+   * the resume context instead of recording a fresh approval. Only ever set
+   * when the caller opts in via `allowAlreadyApproved`.
+   */
+  alreadyApproved?: boolean;
   workflowName: string;
   workingPath: string | null;
   userMessage: string | null;
@@ -237,7 +243,10 @@ function resolvedNodeCompletedStepName(approval: ApprovalContext): string {
     : approval.nodeId;
 }
 
-export function assertApprovable(run: WorkflowRun): ApprovalContext {
+export function assertApprovable(
+  run: WorkflowRun,
+  options?: { allowAlreadyApproved?: boolean }
+): ApprovalContext {
   if (run.status !== 'paused') {
     throw new Error(
       `Cannot approve run with status '${run.status}'. Only paused runs can be approved.`
@@ -273,6 +282,14 @@ export function assertApprovable(run: WorkflowRun): ApprovalContext {
     );
   }
   if (isGateResolved(approval)) {
+    // Opt-in idempotency, checked HERE rather than before the call so that every
+    // gate above still runs: a resolved `child_workflow` pause must still
+    // redirect to the child, and an unrecognized suspend reason must still
+    // refuse, regardless of who is asking. The caller distinguishes this return
+    // from a fresh one with its own isGateResolved check.
+    if (options?.allowAlreadyApproved && approval.resolved === 'approved') {
+      return approval;
+    }
     // Fast-path friendly error for the common (sequential) case. The run stays
     // 'paused' after a resolution, so the status check alone no longer blocks a
     // second approve. This in-memory read can still race a concurrent approve —
@@ -488,6 +505,28 @@ export async function abandonResumableRunsForConversation(
   };
 }
 
+export interface ApproveWorkflowOptions {
+  /**
+   * Return the resume context instead of throwing when the gate is already
+   * resolved as APPROVED.
+   *
+   * A gate approved from the dashboard is recorded but not auto-resumed when the
+   * run has no parent conversation — which is every CLI-created run
+   * (`tryAutoResumeAfterGate` returns early). The run is then paused-and-approved,
+   * and the natural next command, `archon workflow approve`, throws
+   * "already approved and is awaiting resume" — so approving again cannot work and
+   * the only way forward is `archon workflow resume`, which the error does not name.
+   *
+   * Callers whose very next step is to resume (the CLI) can opt in: the user's
+   * intent is unambiguous and the gate already carries the decision. Rejection is
+   * deliberately NOT covered — re-running a reject would re-run its on_reject
+   * prompt, which is a side effect, not an idempotent no-op.
+   *
+   * Off by default, so HTTP and chat callers keep the strict double-resolution error.
+   */
+  allowAlreadyApproved?: boolean;
+}
+
 /**
  * Approve a paused workflow run.
  *
@@ -499,10 +538,28 @@ export async function abandonResumableRunsForConversation(
  */
 export async function approveWorkflow(
   runId: string,
-  comment?: string
+  comment?: string,
+  options?: ApproveWorkflowOptions
 ): Promise<ApprovalOperationResult> {
   const run = await getRunOrThrow(runId, 'operations.workflow_approve_lookup_failed');
-  const approval = assertApprovable(run);
+  const approval = assertApprovable(run, {
+    allowAlreadyApproved: options?.allowAlreadyApproved === true,
+  });
+  if (isGateResolved(approval)) {
+    // Opt-in idempotency: the gate already says approved, so hand back the same
+    // resume context a fresh approval would have produced. No CAS, no second
+    // audit event, no telemetry — nothing is being resolved here, only read.
+    // Only reachable when the caller opted in; assertApprovable throws otherwise.
+    return {
+      alreadyApproved: true,
+      workflowName: run.workflow_name,
+      workingPath: run.working_path,
+      userMessage: run.user_message,
+      codebaseId: run.codebase_id,
+      conversationId: run.conversation_id,
+      type: approval.type === 'interactive_loop' ? 'interactive_loop' : 'approval_gate',
+    };
+  }
 
   // Whitespace-only comments count as absent (mirrors feedbackProvided below):
   // HTTP/CLI/chat pass the raw comment through since #2074, so '   ' would

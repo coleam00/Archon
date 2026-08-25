@@ -3892,7 +3892,14 @@ export async function workflowApproveCommand(
       }
       // The SAME gate approveWorkflow enforces — not a copy of one branch of it.
       // A partial copy acks { ok: true } and lets the child die unseen.
-      assertApprovable(run);
+      //
+      // allowAlreadyApproved must match what the child will do, for the same
+      // reason: the child approves with it set, so a strict precheck here would
+      // refuse a dashboard-approved run BEFORE the child ever starts, and
+      // `--detach` would dead-end on exactly the case this command exists to
+      // unblock. The remaining gates inside assertApprovable (unrecognized
+      // suspend reason, child_workflow redirect) still apply — see its doc.
+      assertApprovable(run, { allowAlreadyApproved: true });
       // The child always auto-resumes after approving, and the inline path below
       // refuses a run with no recorded working path. Same check here (message
       // copied verbatim) so the refusal is synchronous instead of buried in a log.
@@ -3914,13 +3921,17 @@ export async function workflowApproveCommand(
   if (json) {
     try {
       const resolvedId = await resolveRunIdArg(runId, cwd);
-      const result = await approveWorkflow(resolvedId, comment);
+      // allowAlreadyApproved: a gate approved from the dashboard is recorded but
+      // not resumed on a CLI-created run, so `approve` is the natural next command
+      // and must not dead-end on "already approved". See ApproveWorkflowOptions.
+      const result = await approveWorkflow(resolvedId, comment, { allowAlreadyApproved: true });
       await writeJsonLine({
         ok: true,
         runId: resolvedId,
         action: 'approve',
         type: result.type,
         workflowName: result.workflowName,
+        alreadyApproved: result.alreadyApproved === true,
         resumable: true,
       });
     } catch (error) {
@@ -3930,7 +3941,9 @@ export async function workflowApproveCommand(
   }
 
   const resolvedId = await resolveRunIdArg(runId, cwd);
-  const result = await approveWorkflow(resolvedId, comment);
+  // See the JSON branch above: approving a gate the dashboard already resolved
+  // must resume rather than dead-end.
+  const result = await approveWorkflow(resolvedId, comment, { allowAlreadyApproved: true });
 
   // CLI auto-resumes after approval, as chat does since #2565. `--json` (handled
   // above) is the one surface that records the decision without continuing.
@@ -3940,7 +3953,11 @@ export async function workflowApproveCommand(
         'Cannot determine where to resume.'
     );
   }
-  console.log(`Approved workflow: ${result.workflowName}`);
+  console.log(
+    result.alreadyApproved
+      ? `Already approved (resolved elsewhere, e.g. the dashboard): ${result.workflowName}`
+      : `Approved workflow: ${result.workflowName}`
+  );
   console.log(`Path: ${result.workingPath}`);
   console.log('');
   console.log('Resuming workflow...');

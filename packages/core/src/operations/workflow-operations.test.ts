@@ -396,6 +396,106 @@ describe('approveWorkflow', () => {
     expect(mockUpdateWorkflowRun).not.toHaveBeenCalled();
   });
 
+  test('allowAlreadyApproved returns the resume context instead of throwing', async () => {
+    // The dashboard resolved this gate; the run has no parent conversation (every
+    // CLI-created run), so tryAutoResumeAfterGate returned early and nothing
+    // resumed it. `archon workflow approve` is the natural next command and must
+    // hand back the resume context rather than dead-ending on "already approved".
+    const run = makePausedRun({
+      metadata: {
+        approval: {
+          nodeId: 'review',
+          message: 'Please review',
+          type: 'approval',
+          resolved: 'approved',
+        },
+      },
+    });
+    mockGetWorkflowRun.mockResolvedValueOnce(run);
+
+    const result = await approveWorkflow('run-1', undefined, { allowAlreadyApproved: true });
+
+    expect(result.alreadyApproved).toBe(true);
+    expect(result.workingPath).toBe(run.working_path);
+    expect(result.workflowName).toBe(run.workflow_name);
+    expect(result.type).toBe('approval_gate');
+    // Nothing is being RESOLVED here, only read: no second CAS, no duplicate
+    // audit event, no double-counted telemetry.
+    expect(mockResolveApprovalGate).not.toHaveBeenCalled();
+    expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
+    expect(mockCaptureApprovalResolved).not.toHaveBeenCalled();
+    expect(mockUpdateWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  test('allowAlreadyApproved does not bypass the child_workflow redirect', async () => {
+    // The opt-in is checked INSIDE assertApprovable, after every other gate, so
+    // that a resolved sub-run pause still redirects to the child. Checking it
+    // before the call would have been the obvious rebase and would silently
+    // stamp a node_completed on the parent with empty output, discard the
+    // child's real output on resume, and orphan the still-paused child.
+    const run = makePausedRun({
+      metadata: {
+        approval: {
+          nodeId: 'sub',
+          message: 'waiting on child',
+          type: 'child_workflow',
+          childRunId: 'child-9',
+          resolved: 'approved',
+        },
+      },
+    });
+    mockGetWorkflowRun.mockResolvedValueOnce(run);
+
+    await expect(
+      approveWorkflow('run-1', undefined, { allowAlreadyApproved: true })
+    ).rejects.toThrow('child-9');
+    expect(mockResolveApprovalGate).not.toHaveBeenCalled();
+  });
+
+  test('allowAlreadyApproved does not bypass the unrecognized-gate refusal', async () => {
+    // Same reasoning: a gate this build cannot resolve must refuse whether or
+    // not it has been marked approved elsewhere. Opting into idempotency says
+    // "do not dead-end on a decision already made", never "resolve something
+    // you do not understand".
+    const run = makePausedRun({
+      metadata: {
+        approval: {
+          nodeId: 'gate',
+          message: 'm',
+          type: 'some_future_gate_type',
+          resolved: 'approved',
+        },
+      },
+    });
+    mockGetWorkflowRun.mockResolvedValueOnce(run);
+
+    await expect(
+      approveWorkflow('run-1', undefined, { allowAlreadyApproved: true })
+    ).rejects.toThrow('unrecognized gate type');
+    expect(mockResolveApprovalGate).not.toHaveBeenCalled();
+  });
+
+  test('allowAlreadyApproved still throws on an already-REJECTED gate', async () => {
+    // Opt-in idempotency covers approval only. Treating a rejected gate as
+    // approvable would silently overturn the decision.
+    const run = makePausedRun({
+      metadata: {
+        approval: {
+          nodeId: 'review',
+          message: 'Please review',
+          type: 'approval',
+          resolved: 'rejected',
+        },
+      },
+    });
+    mockGetWorkflowRun.mockResolvedValueOnce(run);
+
+    await expect(
+      approveWorkflow('run-1', undefined, { allowAlreadyApproved: true })
+    ).rejects.toThrow('already rejected and is awaiting resume');
+    expect(mockResolveApprovalGate).not.toHaveBeenCalled();
+  });
+
   test('concurrent loser (CAS miss) writes NO events or telemetry (#2113)', async () => {
     // Both callers read an UNRESOLVED gate (fast-path passes), but only one wins
     // the atomic CAS. The loser must not duplicate events/telemetry.

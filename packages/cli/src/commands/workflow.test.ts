@@ -5870,6 +5870,43 @@ describe('workflowApproveCommand / workflowRejectCommand / workflowResumeCommand
     });
   };
 
+  // The regression this pairs with the inline fix. `dev` grew a read-only
+  // precheck in the detaching parent AFTER the inline fix was first written, so
+  // rebasing forward left the two paths disagreeing: the child approves with
+  // allowAlreadyApproved set, while a strict precheck refused the run before the
+  // child ever started. `--detach` would then dead-end on precisely the case
+  // this command exists to unblock, and the parent's own comment says the gate
+  // must be "the SAME gate approveWorkflow enforces — not a copy of one branch".
+  it('approve --detach still spawns when the gate was already approved from the dashboard', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      ...pausedRun,
+      metadata: {
+        approval: { nodeId: 'gate', message: 'Approve?', type: 'approval', resolved: 'approved' },
+      },
+    });
+    await silenceLogFile();
+
+    const child = createDetachedChildFixture();
+    const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue(child.child);
+    const savedArgv = process.argv;
+    process.argv = ['bun', '/abs/cli.ts', 'workflow', 'approve', 'run-123', '--detach'];
+    try {
+      const commandPromise = workflowApproveCommand(
+        'run-123',
+        undefined,
+        undefined,
+        undefined,
+        true
+      );
+      await finishStartupWindow(commandPromise, spawnSpy);
+      expect(spawnSpy).toHaveBeenCalled();
+    } finally {
+      process.argv = savedArgv;
+      spawnSpy.mockRestore();
+    }
+  });
+
   it('approve --detach spawns a detached child (minus --detach) and performs ZERO writes in the parent', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     const { executeWorkflow } = await import('@archon/workflows/executor');
