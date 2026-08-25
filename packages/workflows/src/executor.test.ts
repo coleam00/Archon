@@ -3332,6 +3332,7 @@ describe('hydrateResumableRun', () => {
         total_tokens_in: 20,
         total_tokens_out: 8,
         total_cache_read_tokens: 6,
+        [RUN_METADATA_KEYS.usageTerminalNodeIds]: ['n1'],
       },
     });
     const priorNodes = new Map([['n1', { output: 'out1' }]]);
@@ -3353,6 +3354,30 @@ describe('hydrateResumableRun', () => {
       workUnits: 1,
       terminalNodeIds: new Set(['n1']),
     });
+  });
+
+  it('fails closed on terminal provenance when a legacy row exceeds event usage', async () => {
+    const candidate = makeRun({
+      id: 'legacy-row-usage-fallback',
+      status: 'failed',
+      metadata: { total_cost_usd: 0.5, total_tokens_in: 20, total_tokens_out: 8 },
+    });
+    const priorNodes = new Map([['n1', { output: 'out1' }]]);
+    const store = makeStore({
+      getDagResumeSnapshot: mock(async () => ({
+        completedNodeOutputs: priorNodes,
+        terminalNodeIds: new Set(['n1']),
+        tokens: { input: 10, output: 4 },
+        costUsd: 0.25,
+        workUnits: 1,
+      })),
+    });
+
+    const result = await inspectResumableRun(makeDeps(store), candidate);
+
+    expect(result?.priorUsage.costUsd).toBe(0.5);
+    expect(result?.priorUsage.tokens).toEqual({ input: 20, output: 8 });
+    expect(result?.priorUsage.terminalNodeIds).toBeUndefined();
   });
 
   it('returns hydrated run + prior outputs for a candidate with completed nodes', async () => {

@@ -288,6 +288,34 @@ describe('workflow-events', () => {
       expect(result.terminalNodeIds).toEqual(new Set(['node-a']));
     });
 
+    test('tracks terminal provenance only when that row contributed valid usage (#1961)', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          {
+            step_name: 'lookup-failed',
+            event_type: 'node_failed',
+            data: { error: 'child lookup failed' },
+          },
+          {
+            step_name: 'paid',
+            event_type: 'node_failed',
+            data: { error: 'schema mismatch', cost_usd: 0.01 },
+          },
+          {
+            step_name: 'token-only',
+            event_type: 'node_completed',
+            data: { node_output: 'ok', tokens: { input: 7, output: 3 } },
+          },
+        ])
+      );
+
+      const result = await getDagResumeSnapshot('run-usage-provenance');
+
+      expect(result.terminalNodeIds).toEqual(new Set(['paid', 'token-only']));
+      expect(result.costUsd).toBeCloseTo(0.01);
+      expect(result.tokens).toEqual({ input: 7, output: 3 });
+    });
+
     test('does not let a negative persisted provider cost reduce resumed spend (#1961)', async () => {
       mockQuery.mockResolvedValueOnce(
         createQueryResult([

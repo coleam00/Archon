@@ -79,6 +79,7 @@ import {
   isLoopGroupNode,
   isGateNode,
   isWaitNode,
+  isWorkflowNode,
   isWorkflowWaitContext,
   isScheduledWorkflowResume,
   isHaltNode,
@@ -90,6 +91,7 @@ import {
   isNodeContextResume,
   isBindingDirective,
   SUBRUN_METADATA_KEYS,
+  RUN_METADATA_KEYS,
   WAIT_NODE_OUTPUT_FORMAT,
   waitUntilTimestampSchema,
   waitCondition,
@@ -6014,6 +6016,32 @@ async function executeLoopNode(
     cumulativeCostUsd === undefined
       ? undefined
       : cumulativeCostUsd - (priorUsageRestored ? (persistedLoopCostUsd ?? 0) : 0);
+  const currentPassLoopTokens = (
+    cumulativeTokens: TokenUsage | undefined
+  ): TokenUsage | undefined => {
+    if (cumulativeTokens === undefined || !priorUsageRestored) return cumulativeTokens;
+    return {
+      input: Math.max(0, cumulativeTokens.input - (persistedLoopTokens?.input ?? 0)),
+      output: Math.max(0, cumulativeTokens.output - (persistedLoopTokens?.output ?? 0)),
+      ...(cumulativeTokens.cacheRead !== undefined
+        ? {
+            cacheRead: Math.max(
+              0,
+              cumulativeTokens.cacheRead - (persistedLoopTokens?.cacheRead ?? 0)
+            ),
+          }
+        : {}),
+      ...(cumulativeTokens.cacheWrite !== undefined
+        ? {
+            cacheWrite: Math.max(
+              0,
+              cumulativeTokens.cacheWrite - (persistedLoopTokens?.cacheWrite ?? 0)
+            ),
+          }
+        : {}),
+      ...(cumulativeTokens.cachePartial === true ? { cachePartial: true as const } : {}),
+    };
+  };
 
   // Emit node_started up-front so every terminal outcome of this loop node is
   // paired with a corresponding _started event — same pattern the bash and
@@ -6118,7 +6146,7 @@ async function executeLoopNode(
       output: extras.output ?? '',
       error,
       ...(extras.costUsd !== undefined ? { costUsd: currentPassLoopCostUsd(extras.costUsd) } : {}),
-      ...(extras.tokens !== undefined ? { tokens: extras.tokens } : {}),
+      ...(extras.tokens !== undefined ? { tokens: currentPassLoopTokens(extras.tokens) } : {}),
       ...(extras.loopIterations !== undefined ? { loopIterations: extras.loopIterations } : {}),
     };
   };
@@ -6168,7 +6196,9 @@ async function executeLoopNode(
       ...(persistedLoopCostUsd !== undefined
         ? { costUsd: currentPassLoopCostUsd(persistedLoopCostUsd) }
         : {}),
-      ...(persistedLoopTokens !== undefined ? { tokens: persistedLoopTokens } : {}),
+      ...(persistedLoopTokens !== undefined
+        ? { tokens: currentPassLoopTokens(persistedLoopTokens) }
+        : {}),
       ...(finalizeDeclaredFields !== undefined ? { declaredFields: finalizeDeclaredFields } : {}),
       ...(finalizeStructured !== null ? { structuredOutput: finalizeStructured } : {}),
     };
@@ -7401,7 +7431,9 @@ async function executeLoopNode(
         output: lastIterationOutput,
         sessionId: currentSessionId,
         costUsd: currentPassLoopCostUsd(loopTotalCostUsd),
-        ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+        ...(loopTotalTokens !== undefined
+          ? { tokens: currentPassLoopTokens(loopTotalTokens) }
+          : {}),
         loopIterations: i,
         ...(lastIterationStructuredOutput !== undefined
           ? { structuredOutput: lastIterationStructuredOutput }
@@ -7489,7 +7521,9 @@ async function executeLoopNode(
         state: 'completed',
         output: lastIterationOutput,
         costUsd: currentPassLoopCostUsd(loopTotalCostUsd),
-        ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+        ...(loopTotalTokens !== undefined
+          ? { tokens: currentPassLoopTokens(loopTotalTokens) }
+          : {}),
         loopIterations: i,
       };
     }
@@ -9664,6 +9698,8 @@ interface RunLayersContext {
   priorUsageRestored: boolean;
   /** Prior terminal rows that already contributed usage to the hydrated run total. */
   priorTerminalNodeIds?: ReadonlySet<string>;
+  /** Node-keyed usage provenance persisted atomically with the run's cumulative totals. */
+  usageTerminalNodeIds?: Set<string>;
   /**
    * Private provider session handles produced by completed top-level nodes. Undefined
    * inside loop_group bodies because repeated local IDs have no addressable lineage
@@ -9717,6 +9753,15 @@ interface RunLayersContext {
    * (top-level exec nodes have no loop user input).
    */
   bodyLoopUserInput?: string;
+}
+
+function containsWorkflowNode(nodes: readonly (DagNode | IncludeDirective)[]): boolean {
+  return nodes.some(
+    node =>
+      !isIncludeDirective(node) &&
+      (isWorkflowNode(node) ||
+        (isLoopGroupNode(node) && containsWorkflowNode(node.loop_group.nodes)))
+  );
 }
 
 async function refuseNodeForBudget(
@@ -11199,6 +11244,12 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
             { nodeId }
           );
         }
+        if (
+          completedNode?.kind === 'workflow' &&
+          (output.costUsd !== undefined || output.tokens !== undefined)
+        ) {
+          ctx.usageTerminalNodeIds?.add(ctx.stepNamePrefix + nodeId);
+        }
         if (output.loopIterations !== undefined) ctx.totalLoopIterations += output.loopIterations;
         ctx.nodeOutputs.set(nodeId, output);
         if (
@@ -11837,6 +11888,7 @@ export async function executeDagWorkflow(
   requireReportedCost = false
 ): Promise<string | undefined> {
   const dagStartTime = Date.now();
+  const tracksWorkflowUsageProvenance = containsWorkflowNode(workflow.nodes);
 
   // Container capability fail-fast: before ANY node runs (and before any
   // container work), reject a container run whose AI nodes resolve to a provider
@@ -12151,6 +12203,13 @@ export async function executeDagWorkflow(
     priorCompletedNodes,
     priorUsageRestored: priorUsage !== undefined,
     priorTerminalNodeIds: priorUsage?.terminalNodeIds,
+    usageTerminalNodeIds: !tracksWorkflowUsageProvenance
+      ? undefined
+      : priorUsage === undefined
+        ? new Set<string>()
+        : priorUsage.terminalNodeIds === undefined
+          ? undefined
+          : new Set(priorUsage.terminalNodeIds),
     nodeSessionHandles,
     namedResumeSourceIds,
     lastSequentialSession: undefined,
@@ -12214,6 +12273,11 @@ export async function executeDagWorkflow(
         : {}),
       ...(runCtx.budgetLedger?.spendEnforceable === false
         ? { cost_reporting_unavailable: true }
+        : {}),
+      ...(runCtx.usageTerminalNodeIds !== undefined
+        ? {
+            [RUN_METADATA_KEYS.usageTerminalNodeIds]: [...runCtx.usageTerminalNodeIds].sort(),
+          }
         : {}),
     };
     if (Object.keys(usage).length === 0) return;

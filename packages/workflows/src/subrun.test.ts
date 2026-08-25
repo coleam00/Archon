@@ -93,9 +93,10 @@ import { discoverWorkflows } from './workflow-discovery';
 import { validateWorkflowResources } from './validator';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
 import type { IWorkflowStore } from './store';
-import type { WorkflowRun } from './schemas/workflow-run';
+import { RUN_METADATA_KEYS, type WorkflowRun } from './schemas/workflow-run';
 import type { WorkflowDefinition } from './schemas/workflow';
 import type { WorkflowRunConfigMetadata } from './schemas/run-config';
+import type { TokenUsage } from '@archon/providers/types';
 import type {
   ChildIsolationResolver,
   ChildIsolationRequest,
@@ -310,7 +311,7 @@ class InMemoryStore implements IWorkflowStore {
   getDagResumeSnapshot: IWorkflowStore['getDagResumeSnapshot'] = workflowRunId => {
     const completedNodeOutputs = new Map<string, { output: string; structuredOutput?: unknown }>();
     const terminalNodeIds = new Set<string>();
-    const tokens = { input: 0, output: 0 };
+    const tokens: TokenUsage = { input: 0, output: 0 };
     let costUsd = 0;
     let workUnits = 0;
     for (const e of this.events) {
@@ -325,9 +326,7 @@ class InMemoryStore implements IWorkflowStore {
           e.event_type === 'node_skipped_prior_success') &&
         typeof e.step_name === 'string'
       ) {
-        if (e.event_type === 'node_completed' || e.event_type === 'node_failed') {
-          terminalNodeIds.add(e.step_name);
-        }
+        const isTerminal = e.event_type === 'node_completed' || e.event_type === 'node_failed';
         if (e.event_type === 'node_failed') {
           completedNodeOutputs.delete(e.step_name);
         } else {
@@ -342,6 +341,7 @@ class InMemoryStore implements IWorkflowStore {
         // Mirrors the real store: a derived row (loop_group roll-up) restates usage
         // other rows already carry, so it contributes output but never usage (#2469).
         if (e.data?.aggregate === true) continue;
+        let usageAccounted = false;
         const eventTokens = e.data?.tokens;
         if (
           e.event_type !== 'node_skipped_prior_success' &&
@@ -356,6 +356,16 @@ class InMemoryStore implements IWorkflowStore {
         ) {
           tokens.input += eventTokens.input;
           tokens.output += eventTokens.output;
+          for (const axis of ['cacheRead', 'cacheWrite'] as const) {
+            const value = (eventTokens as Record<string, unknown>)[axis];
+            if (typeof value === 'number' && Number.isFinite(value)) {
+              tokens[axis] = (tokens[axis] ?? 0) + value;
+            }
+          }
+          if ((eventTokens as Record<string, unknown>).cachePartial === true) {
+            tokens.cachePartial = true;
+          }
+          usageAccounted = true;
         }
         const eventCost = e.data?.cost_usd;
         if (
@@ -364,6 +374,10 @@ class InMemoryStore implements IWorkflowStore {
           Number.isFinite(eventCost)
         ) {
           costUsd += eventCost;
+          usageAccounted = true;
+        }
+        if (isTerminal && usageAccounted) {
+          terminalNodeIds.add(e.step_name);
         }
       }
     }
@@ -2402,6 +2416,26 @@ nodes:
     expect(first.success).toBe(false);
     const parent = [...store.runs.values()].find(run => run.workflow_name === 'paid-schema-parent');
     expect(parent?.metadata.total_cost_usd).toBeCloseTo(0.01, 5);
+    expect(parent?.metadata[RUN_METADATA_KEYS.usageTerminalNodeIds]).toEqual(['sub']);
+
+    // Simulate loss of the wrapper terminal row followed by a usage-free lookup
+    // failure for the same node. Event membership alone is not proof that the
+    // child's cumulative usage reached the parent total; the required row update
+    // carries the matching node-keyed provenance.
+    store.events = store.events.filter(
+      event =>
+        !(
+          event.workflow_run_id === parent?.id &&
+          event.step_name === 'sub' &&
+          event.event_type === 'node_failed'
+        )
+    );
+    await store.createWorkflowEvent({
+      workflow_run_id: parent!.id,
+      event_type: 'node_failed',
+      step_name: 'sub',
+      data: { error: 'simulated child lookup failure' },
+    });
 
     const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(parent!.id))!);
     expect(hydrated).not.toBeNull();
@@ -2429,7 +2463,7 @@ nodes:
         event.event_type === 'node_failed'
     );
     expect(subFailures).toHaveLength(2);
-    expect(subFailures[0]?.data?.cost_usd).toBeCloseTo(0.01, 5);
+    expect(subFailures[0]?.data?.cost_usd).toBeUndefined();
     expect(subFailures[1]?.data?.cost_usd).toBe(0);
     expect(subFailures[1]?.data?.tokens).toBeUndefined();
   });
@@ -3222,6 +3256,18 @@ nodes:
       run => run.workflow_name === 'resumed-paid-child-usage-write-fails'
     );
     expect(child?.metadata.total_cost_usd).toBeCloseTo(0.01, 5);
+
+    // A governed cumulative row is also the recovery source when the child's
+    // best-effort terminal event was lost. With zero completed nodes this takes
+    // the failed-child re-drive path rather than generic DAG hydration.
+    store.events = store.events.filter(
+      event =>
+        !(
+          event.workflow_run_id === child?.id &&
+          event.step_name === 'paid' &&
+          event.event_type === 'node_failed'
+        )
+    );
 
     const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(parent!.id))!);
     expect(hydrated).not.toBeNull();

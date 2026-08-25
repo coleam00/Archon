@@ -364,6 +364,7 @@ export function readSubrunMetadata(metadata: Record<string, unknown> | undefined
  */
 export const RUN_METADATA_KEYS = {
   identityUnresolved: 'identity_unresolved',
+  usageTerminalNodeIds: 'usage_terminal_node_ids',
 } as const;
 
 /**
@@ -393,6 +394,15 @@ export function readIdentityUnresolved(
 ): boolean | undefined {
   const raw = metadata?.[RUN_METADATA_KEYS.identityUnresolved];
   return typeof raw === 'boolean' ? raw : undefined;
+}
+
+/** Node ids whose terminal usage is included in the run's persisted cumulative totals. */
+export function readUsageTerminalNodeIds(
+  metadata: Record<string, unknown> | undefined
+): ReadonlySet<string> | undefined {
+  const raw = metadata?.[RUN_METADATA_KEYS.usageTerminalNodeIds];
+  if (!Array.isArray(raw) || raw.some(value => typeof value !== 'string')) return undefined;
+  return new Set(raw);
 }
 
 /**

@@ -19,6 +19,7 @@ import type {
   WorkflowExecutionResult,
   WorkflowSource,
   WorkflowRunNodeSession,
+  ApprovalContext,
 } from './schemas';
 import {
   isLoopNode,
@@ -35,6 +36,7 @@ import {
   readSubrunMetadata,
   RUN_METADATA_KEYS,
   readIdentityUnresolved,
+  readUsageTerminalNodeIds,
   CONTINUATION_METADATA_KEY,
   WORKFLOW_SOURCE_METADATA_KEY,
   readWorkflowSourceState,
@@ -1026,7 +1028,13 @@ export interface ResumableRunInspection {
   priorUsage: PriorRunUsage;
 }
 
-function readPersistedRunUsage(run: WorkflowRun): { costUsd?: number; tokens?: TokenUsage } {
+interface PersistedRunUsage {
+  costUsd?: number;
+  tokens?: TokenUsage;
+  terminalNodeIds?: ReadonlySet<string>;
+}
+
+function readPersistedRunUsage(run: WorkflowRun): PersistedRunUsage {
   const metadata = run.metadata ?? {};
   const cost = metadata.total_cost_usd;
   const input = metadata.total_tokens_in;
@@ -1035,6 +1043,7 @@ function readPersistedRunUsage(run: WorkflowRun): { costUsd?: number; tokens?: T
   const cacheWrite = metadata.total_cache_write_tokens;
   const isNonNegativeFinite = (value: unknown): value is number =>
     typeof value === 'number' && Number.isFinite(value) && value >= 0;
+  const terminalNodeIds = readUsageTerminalNodeIds(metadata);
   return {
     ...(isNonNegativeFinite(cost) ? { costUsd: cost } : {}),
     ...(isNonNegativeFinite(input) && isNonNegativeFinite(output)
@@ -1048,6 +1057,7 @@ function readPersistedRunUsage(run: WorkflowRun): { costUsd?: number; tokens?: T
           },
         }
       : {}),
+    ...(terminalNodeIds !== undefined ? { terminalNodeIds } : {}),
   };
 }
 
@@ -1069,6 +1079,47 @@ function maxPersistedTokenUsage(
     ...(eventTokens.cachePartial === true || rowTokens.cachePartial === true
       ? { cachePartial: true as const }
       : {}),
+  };
+}
+
+function tokenUsageExceeds(
+  candidate: TokenUsage | undefined,
+  baseline: TokenUsage | undefined
+): boolean {
+  if (candidate === undefined) return false;
+  if (baseline === undefined) return true;
+  return (
+    candidate.input > baseline.input ||
+    candidate.output > baseline.output ||
+    (candidate.cacheRead ?? 0) > (baseline.cacheRead ?? 0) ||
+    (candidate.cacheWrite ?? 0) > (baseline.cacheWrite ?? 0)
+  );
+}
+
+function mergePersistedPriorUsage(
+  snapshot: Awaited<ReturnType<WorkflowDeps['store']['getDagResumeSnapshot']>>,
+  run: WorkflowRun,
+  approvalContext?: ApprovalContext
+): PriorRunUsage {
+  const rowUsage = readPersistedRunUsage(run);
+  const eventAndCursorCost =
+    snapshot.costUsd +
+    (approvalContext?.type === 'interactive_loop' &&
+    !snapshot.completedNodeOutputs.has(approvalContext.nodeId) &&
+    typeof approvalContext.signaledCostUsd === 'number' &&
+    Number.isFinite(approvalContext.signaledCostUsd) &&
+    approvalContext.signaledCostUsd >= 0
+      ? approvalContext.signaledCostUsd
+      : 0);
+  const persistedTokens = maxPersistedTokenUsage(snapshot.tokens, rowUsage.tokens);
+  const rowFallbackUsed =
+    (rowUsage.costUsd ?? 0) > eventAndCursorCost ||
+    tokenUsageExceeds(rowUsage.tokens, snapshot.tokens);
+  return {
+    ...(persistedTokens !== undefined ? { tokens: persistedTokens } : {}),
+    costUsd: Math.max(eventAndCursorCost, rowUsage.costUsd ?? 0),
+    workUnits: snapshot.workUnits,
+    terminalNodeIds: rowFallbackUsed ? rowUsage.terminalNodeIds : snapshot.terminalNodeIds,
   };
 }
 
@@ -1096,29 +1147,9 @@ export async function inspectResumableRun(
     );
     return null;
   }
-  const rowUsage = readPersistedRunUsage(candidate);
-  const eventAndCursorCost =
-    snapshot.costUsd +
-    (approvalContext?.type === 'interactive_loop' &&
-    !priorCompletedNodes.has(approvalContext.nodeId) &&
-    typeof approvalContext.signaledCostUsd === 'number' &&
-    Number.isFinite(approvalContext.signaledCostUsd) &&
-    approvalContext.signaledCostUsd >= 0
-      ? approvalContext.signaledCostUsd
-      : 0);
-  const persistedTokens = maxPersistedTokenUsage(snapshot.tokens, rowUsage.tokens);
   return {
     priorCompletedNodes,
-    priorUsage: {
-      ...(persistedTokens !== undefined ? { tokens: persistedTokens } : {}),
-      // A paused single-node loop has no terminal node row yet. Its approval cursor is
-      // therefore the only durable record of spend from the iterations before the gate.
-      // Once the loop has a terminal row, that row already carries the cumulative cost
-      // and adding the cursor again would double count it on a later downstream resume.
-      costUsd: Math.max(eventAndCursorCost, rowUsage.costUsd ?? 0),
-      workUnits: snapshot.workUnits,
-      terminalNodeIds: snapshot.terminalNodeIds,
-    },
+    priorUsage: mergePersistedPriorUsage(snapshot, candidate, approvalContext),
   };
 }
 
@@ -1488,21 +1519,17 @@ async function runChildWorkflow(
         // classifier correctly found no resumable node output.
         const snapshot = await deps.store.getDagResumeSnapshot(resumeFailedChild.id);
         const preCreatedRun = await deps.store.resumeWorkflowRun(resumeFailedChild.id);
+        const priorUsage = mergePersistedPriorUsage(snapshot, preCreatedRun);
         childOpts = {
           preCreatedRun,
-          priorUsage: {
-            ...(snapshot.tokens !== undefined ? { tokens: snapshot.tokens } : {}),
-            costUsd: snapshot.costUsd,
-            workUnits: snapshot.workUnits,
-            terminalNodeIds: snapshot.terminalNodeIds,
-          },
+          priorUsage,
           codebaseId,
           resolveChildIsolation,
           preparedSource: childSource,
         };
         childRunId = preCreatedRun.id;
-        priorChildCostUsd = snapshot.costUsd;
-        priorChildTokens ??= snapshot.tokens;
+        priorChildCostUsd = priorUsage.costUsd;
+        priorChildTokens = priorUsage.tokens;
       }
     } else {
       const childRun = await deps.store.createWorkflowRun({

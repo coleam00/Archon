@@ -205,6 +205,7 @@ export {
   readSubrunMetadata,
   RUN_METADATA_KEYS,
   readIdentityUnresolved,
+  readUsageTerminalNodeIds,
   WORKFLOW_SOURCE_METADATA_KEY,
   workflowSourceMetadataSchema,
   readWorkflowSourceMetadata,

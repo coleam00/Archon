@@ -315,9 +315,7 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<{
       workUnits++;
       continue;
     }
-    if (row.event_type === 'node_completed' || row.event_type === 'node_failed') {
-      terminalNodeIds.add(row.step_name);
-    }
+    const isTerminal = row.event_type === 'node_completed' || row.event_type === 'node_failed';
     if (row.event_type === 'node_failed') {
       // A later failure for this step supersedes any earlier node_completed /
       // node_skipped_prior_success entry (#2705 R2) — otherwise a node the engine's own
@@ -388,6 +386,7 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<{
     }
     // A derived row restates usage that other rows in this same log already carry.
     if (data.aggregate === true) continue;
+    let usageAccounted = false;
     if (row.event_type !== 'node_skipped_prior_success' && data.tokens !== undefined) {
       const eventTokens = data.tokens;
       if (
@@ -424,6 +423,7 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<{
           normalized.cachePartial = true;
         }
         usages.push(normalized);
+        usageAccounted = true;
       } else {
         getLog().warn(
           { runId: workflowRunId, stepName: row.step_name, tokens: eventTokens },
@@ -438,12 +438,16 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<{
       // cost from the persisted metadata with no trace).
       if (typeof eventCost === 'number' && Number.isFinite(eventCost) && eventCost >= 0) {
         costUsd += eventCost;
+        usageAccounted = true;
       } else {
         getLog().warn(
           { runId: workflowRunId, stepName: row.step_name, costUsd: eventCost },
           'db.workflow_dag_node_cost_invalid_ignored'
         );
       }
+    }
+    if (isTerminal && usageAccounted) {
+      terminalNodeIds.add(row.step_name);
     }
   }
   return {

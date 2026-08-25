@@ -24,6 +24,7 @@ import {
   readSubrunMetadata,
   RUN_METADATA_KEYS,
   readIdentityUnresolved,
+  readUsageTerminalNodeIds,
   workflowWaitContextSchema,
   scheduledWorkflowResumeSchema,
   workflowWaitStepName,
@@ -1781,5 +1782,20 @@ describe('readIdentityUnresolved (#2304)', () => {
       readIdentityUnresolved({ [RUN_METADATA_KEYS.identityUnresolved]: null })
     ).toBeUndefined();
     expect(readIdentityUnresolved({ [RUN_METADATA_KEYS.identityUnresolved]: {} })).toBeUndefined();
+  });
+});
+
+describe('readUsageTerminalNodeIds (#1961)', () => {
+  test('reads the persisted node-keyed usage provenance', () => {
+    expect(
+      readUsageTerminalNodeIds({ [RUN_METADATA_KEYS.usageTerminalNodeIds]: ['sub', 'fan'] })
+    ).toEqual(new Set(['sub', 'fan']));
+  });
+
+  test('rejects missing or malformed provenance', () => {
+    expect(readUsageTerminalNodeIds(undefined)).toBeUndefined();
+    expect(
+      readUsageTerminalNodeIds({ [RUN_METADATA_KEYS.usageTerminalNodeIds]: ['sub', 1] })
+    ).toBeUndefined();
   });
 });
