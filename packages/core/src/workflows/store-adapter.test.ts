@@ -200,20 +200,6 @@ describe('createWorkflowStore', () => {
     expect(result).toBeNull();
   });
 
-  test('createWorkflowEvent catches and logs unexpected throws', async () => {
-    mockCreateWorkflowEvent.mockRejectedValueOnce(new Error('DB connection lost'));
-    const store = createWorkflowStore();
-    // Should not throw — the wrapper guarantees the non-throwing contract
-    await expect(
-      store.createWorkflowEvent({
-        workflow_run_id: 'run-1',
-        event_type: 'step_started',
-        step_index: 0,
-        step_name: 'test-step',
-      })
-    ).resolves.toBeUndefined();
-  });
-
   test('serializes fire-and-forget event writes within one workflow run', async () => {
     let releaseFirst: (() => void) | undefined;
     const firstBlocked = new Promise<void>(resolve => {

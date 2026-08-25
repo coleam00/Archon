@@ -68,18 +68,7 @@ export function createWorkflowStore(): IWorkflowStore {
   const eventWriteTails = new Map<string, Promise<void>>();
   const createWorkflowEvent: IWorkflowStore['createWorkflowEvent'] = data => {
     const previous = eventWriteTails.get(data.workflow_run_id) ?? Promise.resolve();
-    const current = previous.then(async (): Promise<void> => {
-      try {
-        await workflowEventDb.createWorkflowEvent(data);
-      } catch (err) {
-        // Belt-and-suspenders: workflowEventDb.createWorkflowEvent already catches internally,
-        // but this wrapper guarantees the IWorkflowStore non-throwing contract at the boundary.
-        getLog().error(
-          { err: err as Error, eventType: data.event_type, runId: data.workflow_run_id },
-          'workflow_event_create_unexpected_throw'
-        );
-      }
-    });
+    const current = previous.then(() => workflowEventDb.createWorkflowEvent(data));
     eventWriteTails.set(data.workflow_run_id, current);
     void current.finally(() => {
       if (eventWriteTails.get(data.workflow_run_id) === current) {

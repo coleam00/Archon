@@ -9,7 +9,7 @@
  * in Bun. Adapter package.json keeps this test in its own `bun test`
  * invocation so it doesn't pollute other suites.
  */
-import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
 import type { WorkflowEmitterEvent } from '@archon/workflows/event-emitter';
 
 // ─── Mocks ────────────────────────────────────────────────────────────────
@@ -222,6 +222,59 @@ describe('SlackWorkflowBridge', () => {
     expect(posted[0]?.channel).toBe('C1');
     expect(posted[0]?.thread_ts).toBe('111.0');
     expect(posted[0]?.text).toContain('running');
+  });
+
+  test('provider capacity events edit the exact node from queued to running', async () => {
+    const timeoutSpy = spyOn(globalThis, 'setTimeout').mockImplementation(((
+      callback: (...args: unknown[]) => void,
+      _delay?: number,
+      ...args: unknown[]
+    ) => {
+      queueMicrotask(() => callback(...args));
+      return 1 as unknown as ReturnType<typeof setTimeout>;
+    }) as typeof setTimeout);
+
+    try {
+      const { adapter, updated, triggerMap } = makeFakeAdapter();
+      triggerMap.set('C1:111.0', { channel: 'C1', ts: '111.0' });
+      mockGetConversationId.mockReturnValue('C1:111.0');
+
+      new SlackWorkflowBridge(adapter as never).attach();
+      await dispatchEvent({
+        type: 'workflow_started',
+        runId: 'r-capacity',
+        workflowName: 'implement',
+        conversationId: 'conv-db-uuid',
+      });
+      await dispatchEvent({
+        type: 'provider_slot_queued',
+        runId: 'r-capacity',
+        nodeId: 'implement-node',
+        nodeName: 'implement',
+        provider: 'pi',
+        limit: 1,
+      });
+
+      expect(updated).toHaveLength(1);
+      expect(JSON.stringify(updated[0]?.blocks)).toContain(':pause_button: `implement`');
+
+      await dispatchEvent({
+        type: 'provider_slot_acquired',
+        runId: 'r-capacity',
+        nodeId: 'implement-node',
+        nodeName: 'implement',
+        provider: 'pi',
+        limit: 1,
+        slot: 0,
+        waitMs: 25,
+      });
+
+      expect(updated).toHaveLength(2);
+      expect(JSON.stringify(updated[1]?.blocks)).toContain(':hourglass_flowing_sand: `implement`');
+      expect(JSON.stringify(updated[1]?.blocks)).not.toContain(':pause_button: `implement`');
+    } finally {
+      timeoutSpy.mockRestore();
+    }
   });
 
   test('approval_pending posts a Block Kit approve/reject prompt in-thread', async () => {

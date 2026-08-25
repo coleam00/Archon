@@ -175,6 +175,7 @@ export async function* streamOpencodeSession(
   });
 
   try {
+    requestOptions?.abortSignal?.throwIfAborted();
     const promptBody = createSessionPromptBody(prompt, model, requestOptions);
     try {
       await promptSession(client, cwd, sessionId, promptBody);

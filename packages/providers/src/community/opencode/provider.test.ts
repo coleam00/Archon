@@ -547,6 +547,127 @@ describe('OpencodeProvider', () => {
     expect(releases).toBe(2);
   });
 
+  test('does not accept a multi-agent idle event until its pending prompt is stopped', async () => {
+    const cwd = await createTempProjectDir();
+    const sessionIds = ['scout-session', 'reviewer-session'];
+    const events = createPushStream();
+    let settlePrompts!: () => void;
+    const promptsSettled = new Promise<void>(resolve => {
+      settlePrompts = resolve;
+    });
+    const sessionAbort = mock(
+      async (_request: { path: { id: string }; query: { directory: string } }) => undefined
+    );
+    const runtime = makeRuntime({
+      sessionCreate: mock(async () => ({ data: { id: sessionIds.shift() } })),
+      promptAsync: mock(async () => promptsSettled),
+      sessionAbort,
+      subscribe: mock(async () => ({ stream: events.stream })),
+    });
+    runtimeQueue.push(runtime);
+    const releases: { upstreamStopped: boolean }[] = [];
+
+    const consumption = consume(
+      new OpencodeProvider().sendQuery('hi', cwd, undefined, {
+        assistantConfig: TEST_MODEL,
+        nodeConfig: {
+          nodeId: 'research',
+          agents: {
+            scout: { description: 'Scout', prompt: 'Explore' },
+            reviewer: { description: 'Reviewer', prompt: 'Review' },
+          },
+        },
+        providerAttemptGate: {
+          acquire: async () => ({
+            signal: new AbortController().signal,
+            release: async options => {
+              releases.push(options);
+            },
+          }),
+        },
+      })
+    );
+
+    while (runtime.client.session.promptAsync.mock.calls.length < 2) await Bun.sleep(1);
+    events.push({ type: 'session.idle', properties: { sessionID: 'scout-session' } });
+    await Bun.sleep(5);
+    expect(sessionAbort).not.toHaveBeenCalled();
+    expect(releases).toEqual([]);
+
+    settlePrompts();
+    while (releases.length === 0) await Bun.sleep(1);
+    expect(sessionAbort).toHaveBeenCalledTimes(1);
+    expect(sessionAbort.mock.calls[0]?.[0].path.id).toBe('scout-session');
+    expect(releases).toEqual([{ upstreamStopped: true }]);
+
+    events.push({ type: 'session.idle', properties: { sessionID: 'reviewer-session' } });
+    const { error } = await consumption;
+
+    expect(error).toBeUndefined();
+    expect(releases).toEqual([{ upstreamStopped: true }, { upstreamStopped: true }]);
+  });
+
+  test('does not accept a multi-agent error until its pending prompt is stopped', async () => {
+    const cwd = await createTempProjectDir();
+    const sessionIds = ['scout-session', 'reviewer-session'];
+    const events = createPushStream();
+    let settlePrompts!: () => void;
+    const promptsSettled = new Promise<void>(resolve => {
+      settlePrompts = resolve;
+    });
+    const sessionAbort = mock(
+      async (_request: { path: { id: string }; query: { directory: string } }) => undefined
+    );
+    const runtime = makeRuntime({
+      sessionCreate: mock(async () => ({ data: { id: sessionIds.shift() } })),
+      promptAsync: mock(async () => promptsSettled),
+      sessionAbort,
+      subscribe: mock(async () => ({ stream: events.stream })),
+    });
+    runtimeQueue.push(runtime);
+    const releases: { upstreamStopped: boolean }[] = [];
+
+    const consumption = consume(
+      new OpencodeProvider().sendQuery('hi', cwd, undefined, {
+        assistantConfig: TEST_MODEL,
+        nodeConfig: {
+          nodeId: 'research',
+          agents: {
+            scout: { description: 'Scout', prompt: 'Explore' },
+            reviewer: { description: 'Reviewer', prompt: 'Review' },
+          },
+        },
+        providerAttemptGate: {
+          acquire: async () => ({
+            signal: new AbortController().signal,
+            release: async options => {
+              releases.push(options);
+            },
+          }),
+        },
+      })
+    );
+
+    while (runtime.client.session.promptAsync.mock.calls.length < 2) await Bun.sleep(1);
+    events.push({
+      type: 'session.error',
+      properties: { sessionID: 'scout-session', error: { message: 'upstream failed' } },
+    });
+    await Bun.sleep(5);
+    expect(sessionAbort).not.toHaveBeenCalled();
+    expect(releases).toEqual([]);
+
+    settlePrompts();
+    const { error } = await consumption;
+
+    expect(error?.message).toContain('upstream failed');
+    expect(sessionAbort).toHaveBeenCalledTimes(3);
+    const abortedSessionIds = sessionAbort.mock.calls.map(call => call[0].path.id);
+    expect(abortedSessionIds.filter(id => id === 'scout-session')).toHaveLength(1);
+    expect(abortedSessionIds.filter(id => id === 'reviewer-session')).toHaveLength(2);
+    expect(releases).toEqual([{ upstreamStopped: true }, { upstreamStopped: true }]);
+  });
+
   test('multi-agent fan-out aborts siblings and releases every lease on ownership loss', async () => {
     const cwd = await createTempProjectDir();
     const sessionIds = ['scout-session', 'reviewer-session'];
@@ -1303,6 +1424,48 @@ describe('OpencodeProvider', () => {
       path: { id: 'session-1' },
       query: { directory: '/tmp' },
     });
+  });
+
+  test('does not submit a prompt when capacity ownership is lost during event subscription', async () => {
+    let finishSubscribe!: () => void;
+    const subscribeFinished = new Promise<void>(resolve => {
+      finishSubscribe = resolve;
+    });
+    const subscribeStarted = Promise.withResolvers<void>();
+    const leaseController = new AbortController();
+    const releases: { upstreamStopped: boolean }[] = [];
+    const runtime = makeRuntime({
+      subscribe: mock(async () => {
+        subscribeStarted.resolve();
+        await subscribeFinished;
+        return { stream: createPendingStream() };
+      }),
+    });
+    runtimeQueue.push(runtime);
+
+    const consumption = consume(
+      new OpencodeProvider().sendQuery('hi', '/tmp', undefined, {
+        assistantConfig: TEST_MODEL,
+        providerAttemptGate: {
+          acquire: async () => ({
+            signal: leaseController.signal,
+            release: async options => {
+              releases.push(options);
+            },
+          }),
+        },
+      })
+    );
+
+    await subscribeStarted.promise;
+    leaseController.abort(new Error('lease ownership lost'));
+    finishSubscribe();
+    const { error } = await consumption;
+
+    expect(error?.message).toBe('OpenCode query aborted');
+    expect(runtime.client.session.promptAsync).not.toHaveBeenCalled();
+    expect(runtime.client.session.abort).toHaveBeenCalledTimes(1);
+    expect(releases).toEqual([{ upstreamStopped: true }]);
   });
 
   test('keeps the provider lease until OpenCode confirms cancellation', async () => {

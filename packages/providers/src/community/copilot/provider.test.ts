@@ -251,7 +251,6 @@ describe('CopilotProvider.sendQuery', () => {
 
     leaseController.abort(new Error('lease lost'));
     while (!session.aborted) await Bun.sleep(1);
-    session.resolveSend(undefined);
     await expect(
       (async (): Promise<void> => {
         await firstNext;
@@ -504,16 +503,12 @@ describe('CopilotProvider.sendQuery', () => {
     });
     const first = gen.next();
     await new Promise(resolve => setTimeout(resolve, 5));
+    const completion = (async (): Promise<void> => {
+      await first;
+      await collect(gen);
+    })();
     ac.abort();
-    // Give the abort listener a tick to run session.abort().
-    await new Promise(resolve => setTimeout(resolve, 5));
-    session.resolveSend(undefined);
-    await expect(
-      (async (): Promise<void> => {
-        await first;
-        await collect(gen);
-      })()
-    ).rejects.toMatchObject({ name: 'AbortError' });
+    await expect(completion).rejects.toMatchObject({ name: 'AbortError' });
 
     expect(session.aborted).toBe(true);
   });

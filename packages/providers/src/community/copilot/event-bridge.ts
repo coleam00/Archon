@@ -244,13 +244,6 @@ export function mapCopilotEvent(event: SessionEvent, ctx: EventMapperContext): M
  */
 const SEND_AND_WAIT_TIMEOUT_MS = 60 * 60 * 1000;
 
-function assertCopilotShutdownConfirmed(failed: boolean, cause: unknown): void {
-  if (!failed) return;
-  throw new ProviderAttemptStopUnconfirmedError('Copilot session shutdown could not be confirmed', {
-    cause,
-  });
-}
-
 export type BridgeQueueItem =
   | { kind: 'chunk'; chunk: MessageChunk }
   | { kind: 'done' }
@@ -264,9 +257,10 @@ export type BridgeQueueItem =
  *     `mapCopilotEvent` and pushed into an `AsyncQueue`. Listener-thrown
  *     errors are captured and pushed as `{ kind: 'error' }` so the consumer
  *     surfaces them instead of swallowing.
- *  2. Wire `abortSignal` to `session.abort()`. A failed abort is pushed into
- *     the queue as an unconfirmed-stop error so the admission lease expires
- *     naturally instead of being released over a live call.
+ *  2. Wire `abortSignal` to `session.abort()`. Confirmed shutdown pushes the
+ *     original abort reason so the queue exits even if the SDK promise stays
+ *     pending. A failed abort pushes an unconfirmed-stop error so the admission
+ *     lease expires naturally instead of being released over a live call.
  *  3. Call `session.sendAndWait({ prompt })` in parallel. Resolution pushes
  *     `{ kind: 'done' }`; rejection pushes `{ kind: 'error' }`. Its return
  *     value is stashed as a safety net for the no-streaming-deltas case.
@@ -289,29 +283,22 @@ export async function* bridgeSession(
   let capturedTokens: TokenUsage | undefined;
   let errorMessage: string | undefined;
   let abortPromise: Promise<void> | undefined;
-  let abortFailed = false;
-  let abortFailure: unknown;
 
   const requestAbort = (): Promise<void> => {
     abortPromise ??= session.abort().catch((error: unknown) => {
-      abortFailed = true;
-      abortFailure = error;
-      throw error;
+      throw new ProviderAttemptStopUnconfirmedError(
+        'Copilot session shutdown could not be confirmed',
+        { cause: error }
+      );
     });
     return abortPromise;
   };
 
-  const throwAbortReason = async (): Promise<void> => {
-    if (!abortSignal?.aborted) return;
-    try {
-      await requestAbort();
-    } catch {
-      throw new ProviderAttemptStopUnconfirmedError(
-        'Copilot session shutdown could not be confirmed after the provider attempt was aborted',
-        { cause: abortFailure }
-      );
-    }
-    abortSignal.throwIfAborted();
+  const abortReason = (): Error => {
+    if (abortSignal?.reason instanceof Error) return abortSignal.reason;
+    const error = new Error('Copilot provider attempt aborted');
+    error.name = 'AbortError';
+    return error;
   };
 
   // Structured-output buffer. Populated only when the caller supplied a
@@ -344,16 +331,15 @@ export async function* bridgeSession(
   });
 
   const onAbort = (): void => {
-    void requestAbort().catch(err => {
-      log.debug({ err, sessionId: session.sessionId }, 'copilot.abort_failed');
-      queue.push({
-        kind: 'error',
-        error: new ProviderAttemptStopUnconfirmedError(
-          'Copilot session shutdown could not be confirmed after the provider attempt was aborted',
-          { cause: err }
-        ),
-      });
-    });
+    void requestAbort().then(
+      () => {
+        queue.push({ kind: 'error', error: abortReason() });
+      },
+      error => {
+        log.debug({ err: error, sessionId: session.sessionId }, 'copilot.abort_failed');
+        queue.push({ kind: 'error', error: error as Error });
+      }
+    );
   };
   // `addEventListener('abort', ...)` is a no-op on an already-aborted signal,
   // so short-circuit before handing the 24-hour sendAndWait path a signal
@@ -361,11 +347,7 @@ export async function* bridgeSession(
   // as a clean cancellation. Clean up listeners + queue first so the throw
   // doesn't leak resources.
   if (abortSignal?.aborted) {
-    try {
-      await requestAbort();
-    } catch {
-      // Converted to ProviderAttemptStopUnconfirmedError below after cleanup.
-    }
+    const abort = requestAbort();
     queue.close();
     try {
       unsubscribe();
@@ -377,12 +359,7 @@ export async function* bridgeSession(
     } catch (err) {
       log.debug({ err, sessionId: session.sessionId }, 'copilot.disconnect_failed');
     }
-    if (abortFailed) {
-      throw new ProviderAttemptStopUnconfirmedError(
-        'Copilot session shutdown could not be confirmed before the provider attempt started',
-        { cause: abortFailure }
-      );
-    }
+    await abort;
     abortSignal.throwIfAborted();
   }
   if (abortSignal) {
@@ -416,7 +393,10 @@ export async function* bridgeSession(
 
     // Some SDKs resolve sendAndWait normally after aborting the active call.
     // Ownership loss must still fail the attempt instead of minting a success.
-    await throwAbortReason();
+    if (abortSignal?.aborted) {
+      await requestAbort();
+      abortSignal.throwIfAborted();
+    }
 
     // Safety net: if `streaming: true` didn't produce deltas for some reason
     // (older SDK, model quirks, BYOK provider), emit the accumulated final
@@ -482,7 +462,6 @@ export async function* bridgeSession(
     } catch (err) {
       log.debug({ err, sessionId: session.sessionId }, 'copilot.disconnect_failed');
     }
-    assertCopilotShutdownConfirmed(abortFailed, abortFailure);
     // The rejection path is handled above. Do not wait on an unsettled SDK
     // promise after confirmed abort; some runtimes do not resolve it promptly.
     if (sendSettled) await sendPromise;

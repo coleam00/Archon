@@ -183,8 +183,7 @@ export function registerBuiltinProviders(): void {
 
   for (const entry of builtins) {
     if (!registry.has(entry.id)) {
-      assertValidCapabilities(entry);
-      registry.set(entry.id, entry);
+      registerProvider(entry);
       getLog().debug({ provider: entry.id }, 'builtin_provider.registered');
     }
   }

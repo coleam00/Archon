@@ -4017,6 +4017,86 @@ describe('workflowStatusCommand', () => {
     expect(calls.some(c => c.includes('Plan output here'))).toBe(true);
   });
 
+  it('renders queued and acquired provider capacity in verbose status output', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const workflowEventsDb = await import('@archon/core/db/workflow-events');
+    const startedAt = new Date('2026-08-03T10:00:00.000Z');
+
+    (workflowDb.listWorkflowRuns as ReturnType<typeof mock>).mockResolvedValueOnce([
+      {
+        id: 'run-queued',
+        workflow_name: 'implement',
+        working_path: '/path/to/queued-worktree',
+        status: 'running',
+        started_at: startedAt,
+      },
+      {
+        id: 'run-acquired',
+        workflow_name: 'review',
+        working_path: '/path/to/acquired-worktree',
+        status: 'running',
+        started_at: startedAt,
+      },
+    ]);
+
+    (workflowEventsDb.listWorkflowEvents as ReturnType<typeof mock>)
+      .mockResolvedValueOnce([
+        {
+          id: 'queued-started',
+          workflow_run_id: 'run-queued',
+          event_type: 'node_started',
+          step_name: 'implement',
+          step_index: 0,
+          data: {},
+          created_at: '2026-08-03T10:00:01.000Z',
+        },
+        {
+          id: 'queued-capacity',
+          workflow_run_id: 'run-queued',
+          event_type: 'provider_slot_queued',
+          step_name: 'implement',
+          step_index: 0,
+          data: { provider: 'pi', limit: 2 },
+          created_at: '2026-08-03T10:00:02.000Z',
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          id: 'acquired-started',
+          workflow_run_id: 'run-acquired',
+          event_type: 'node_started',
+          step_name: 'review',
+          step_index: 0,
+          data: {},
+          created_at: '2026-08-03T10:00:01.000Z',
+        },
+        {
+          id: 'acquired-queued',
+          workflow_run_id: 'run-acquired',
+          event_type: 'provider_slot_queued',
+          step_name: 'review',
+          step_index: 0,
+          data: { provider: 'claude', limit: 3 },
+          created_at: '2026-08-03T10:00:02.000Z',
+        },
+        {
+          id: 'acquired-capacity',
+          workflow_run_id: 'run-acquired',
+          event_type: 'provider_slot_acquired',
+          step_name: 'review',
+          step_index: 0,
+          data: { provider: 'claude', limit: 3, slot: 1, wait_ms: 1_500 },
+          created_at: '2026-08-03T10:00:03.500Z',
+        },
+      ]);
+
+    await workflowStatusCommand(false, true);
+
+    const calls = consoleSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+    expect(calls).toContain('    ⏸ implement (queued for pi capacity; limit 2)');
+    expect(calls).toContain('    ◌ review (running; claude slot 2 after 1.5s)');
+  });
+
   it('should show error message for failed node in verbose mode', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     const workflowEventsDb = await import('@archon/core/db/workflow-events');
