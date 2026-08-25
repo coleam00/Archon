@@ -96,7 +96,7 @@ import type { IWorkflowStore } from './store';
 import { RUN_METADATA_KEYS, type WorkflowRun } from './schemas/workflow-run';
 import type { WorkflowDefinition } from './schemas/workflow';
 import type { WorkflowRunConfigMetadata } from './schemas/run-config';
-import type { TokenUsage } from '@archon/providers/types';
+import { mergeTokenUsage, type TokenUsage } from '@archon/providers/types';
 import type {
   ChildIsolationResolver,
   ChildIsolationRequest,
@@ -311,6 +311,7 @@ class InMemoryStore implements IWorkflowStore {
   getDagResumeSnapshot: IWorkflowStore['getDagResumeSnapshot'] = workflowRunId => {
     const completedNodeOutputs = new Map<string, { output: string; structuredOutput?: unknown }>();
     const terminalNodeIds = new Set<string>();
+    const terminalUsageByNode = new Map<string, { costUsd: number; tokens?: TokenUsage }>();
     const tokens: TokenUsage = { input: 0, output: 0 };
     let costUsd = 0;
     let workUnits = 0;
@@ -342,6 +343,7 @@ class InMemoryStore implements IWorkflowStore {
         // other rows already carry, so it contributes output but never usage (#2469).
         if (e.data?.aggregate === true) continue;
         let usageAccounted = false;
+        let normalizedEventTokens: TokenUsage | undefined;
         const eventTokens = e.data?.tokens;
         if (
           e.event_type !== 'node_skipped_prior_success' &&
@@ -365,6 +367,19 @@ class InMemoryStore implements IWorkflowStore {
           if ((eventTokens as Record<string, unknown>).cachePartial === true) {
             tokens.cachePartial = true;
           }
+          normalizedEventTokens = {
+            input: eventTokens.input,
+            output: eventTokens.output,
+            ...(['cacheRead', 'cacheWrite'] as const).reduce<Partial<TokenUsage>>((axes, axis) => {
+              const value = (eventTokens as Record<string, unknown>)[axis];
+              return typeof value === 'number' && Number.isFinite(value)
+                ? { ...axes, [axis]: value }
+                : axes;
+            }, {}),
+            ...((eventTokens as Record<string, unknown>).cachePartial === true
+              ? { cachePartial: true as const }
+              : {}),
+          };
           usageAccounted = true;
         }
         const eventCost = e.data?.cost_usd;
@@ -378,10 +393,27 @@ class InMemoryStore implements IWorkflowStore {
         }
         if (isTerminal && usageAccounted) {
           terminalNodeIds.add(e.step_name);
+          const prior = terminalUsageByNode.get(e.step_name);
+          const mergedTokens = mergeTokenUsage(
+            [prior?.tokens, normalizedEventTokens].filter(
+              (usage): usage is TokenUsage => usage !== undefined
+            )
+          );
+          terminalUsageByNode.set(e.step_name, {
+            costUsd: (prior?.costUsd ?? 0) + (typeof eventCost === 'number' ? eventCost : 0),
+            ...(mergedTokens !== undefined ? { tokens: mergedTokens } : {}),
+          });
         }
       }
     }
-    return Promise.resolve({ completedNodeOutputs, terminalNodeIds, tokens, costUsd, workUnits });
+    return Promise.resolve({
+      completedNodeOutputs,
+      terminalNodeIds,
+      terminalUsageByNode,
+      tokens,
+      costUsd,
+      workUnits,
+    });
   };
 
   getCodebase = (): Promise<null> => Promise.resolve(null);
@@ -1440,6 +1472,232 @@ nodes:
     expect(String((await store2.getWorkflowRun(parentRun2!.id))?.metadata.error)).toMatch(
       /cancelled/i
     );
+  });
+
+  it('returns current-pass tokens when a costless child is re-driven (#1961)', async () => {
+    await writeWorkflow(
+      'costless-token-child',
+      `
+name: costless-token-child
+description: reports tokens without provider cost
+nodes:
+  - id: prepare
+    bash: echo ready
+  - id: classify
+    prompt: classify
+    depends_on: [prepare]
+    output_format:
+      type: object
+      properties:
+        verdict: { type: string }
+      required: [verdict]
+`
+    );
+    await writeWorkflow(
+      'costless-token-parent',
+      `
+name: costless-token-parent
+description: re-drives a costless failed child
+nodes:
+  - id: prepare
+    bash: echo ready
+  - id: sub
+    workflow: costless-token-child
+    depends_on: [prepare]
+`
+    );
+
+    let providerCalls = 0;
+    const store = new InMemoryStore();
+    const deps: WorkflowDeps = {
+      ...makeDeps(store),
+      getAgentProvider: mock(() => ({
+        ...makeProvider(),
+        sendQuery: mock(function* () {
+          providerCalls++;
+          yield { type: 'assistant', content: 'classified' };
+          yield {
+            type: 'result',
+            sessionId: `costless-${String(providerCalls)}`,
+            tokens:
+              providerCalls === 1
+                ? { input: 7, output: 3, cacheRead: 5, cacheWrite: 1 }
+                : { input: 11, output: 5, cacheRead: 4, cacheWrite: 2 },
+            ...(providerCalls === 2 ? { structuredOutput: { verdict: 'ship' } } : {}),
+          };
+        }),
+      })) as unknown as WorkflowDeps['getAgentProvider'],
+    };
+    const definition = await discover('costless-token-parent');
+
+    const first = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      definition,
+      'goal',
+      'conv-db'
+    );
+    expect(first.success).toBe(false);
+    const parent = [...store.runs.values()].find(
+      run => run.workflow_name === 'costless-token-parent'
+    );
+    const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(parent!.id))!);
+    expect(hydrated).not.toBeNull();
+
+    const second = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      definition,
+      'goal',
+      'conv-db',
+      { ...hydrated! }
+    );
+
+    expect(second.success).toBe(true);
+    expect(providerCalls).toBe(2);
+    const resumedParent = await store.getWorkflowRun(parent!.id);
+    expect(resumedParent?.metadata.total_tokens_in).toBe(18);
+    expect(resumedParent?.metadata.total_tokens_out).toBe(8);
+    expect(resumedParent?.metadata.total_cache_read_tokens).toBe(9);
+    expect(resumedParent?.metadata.total_cache_write_tokens).toBe(3);
+    const subCompleted = store.events
+      .filter(
+        event =>
+          event.workflow_run_id === parent!.id &&
+          event.step_name === 'sub' &&
+          event.event_type === 'node_completed'
+      )
+      .at(-1);
+    expect(subCompleted?.data?.tokens).toEqual({
+      input: 11,
+      output: 5,
+      cacheRead: 4,
+      cacheWrite: 2,
+    });
+  });
+
+  it('accounts child usage accumulated after the parent last observed it (#1961)', async () => {
+    await writeWorkflow(
+      'independently-advanced-child',
+      `
+name: independently-advanced-child
+description: can fail across several independently driven passes
+nodes:
+  - id: prepare
+    bash: echo ready
+  - id: classify
+    prompt: classify
+    depends_on: [prepare]
+    output_format:
+      type: object
+      properties:
+        verdict: { type: string }
+      required: [verdict]
+`
+    );
+    await writeWorkflow(
+      'independently-advanced-parent',
+      `
+name: independently-advanced-parent
+description: resumes after its child advanced separately
+budget: { max_spend_usd: 10 }
+nodes:
+  - id: prepare
+    bash: echo ready
+  - id: sub
+    workflow: independently-advanced-child
+    depends_on: [prepare]
+`
+    );
+
+    let providerCalls = 0;
+    const costs = [1, 2, 4] as const;
+    const usages = [
+      { input: 7, output: 3, cacheRead: 5, cacheWrite: 1 },
+      { input: 11, output: 5, cacheRead: 4, cacheWrite: 1 },
+      { input: 13, output: 6, cacheRead: 5, cacheWrite: 2 },
+    ] as const;
+    const store = new InMemoryStore();
+    const deps: WorkflowDeps = {
+      ...makeDeps(store),
+      getAgentProvider: mock(() => ({
+        ...makeProvider(),
+        sendQuery: mock(function* () {
+          const call = providerCalls++;
+          yield { type: 'assistant', content: 'classified' };
+          yield {
+            type: 'result',
+            sessionId: `independent-${String(call)}`,
+            cost: costs[call]!,
+            tokens: usages[call]!,
+            ...(call === 2 ? { structuredOutput: { verdict: 'ship' } } : {}),
+          };
+        }),
+      })) as unknown as WorkflowDeps['getAgentProvider'],
+    };
+    const parentDefinition = await discover('independently-advanced-parent');
+    const childDefinition = await discover('independently-advanced-child');
+
+    const first = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parentDefinition,
+      'goal',
+      'conv-db'
+    );
+    expect(first.success).toBe(false);
+    const parent = [...store.runs.values()].find(
+      run => run.workflow_name === 'independently-advanced-parent'
+    );
+    const child = [...store.runs.values()].find(
+      run => run.workflow_name === 'independently-advanced-child'
+    );
+
+    const childHydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(child!.id))!);
+    expect(childHydrated).not.toBeNull();
+    const independentSecond = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      childDefinition,
+      child!.user_message,
+      'conv-db',
+      { ...childHydrated! }
+    );
+    expect(independentSecond.success).toBe(false);
+    expect((await store.getWorkflowRun(parent!.id))?.status).toBe('failed');
+
+    const parentHydrated = await hydrateResumableRun(
+      deps,
+      (await store.getWorkflowRun(parent!.id))!
+    );
+    expect(parentHydrated).not.toBeNull();
+    const third = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parentDefinition,
+      'goal',
+      'conv-db',
+      { ...parentHydrated! }
+    );
+
+    expect(third.success).toBe(true);
+    expect(providerCalls).toBe(3);
+    const finalParent = await store.getWorkflowRun(parent!.id);
+    expect(finalParent?.metadata.total_cost_usd).toBe(7);
+    expect(finalParent?.metadata.total_tokens_in).toBe(31);
+    expect(finalParent?.metadata.total_tokens_out).toBe(14);
+    expect(finalParent?.metadata.total_cache_read_tokens).toBe(14);
+    expect(finalParent?.metadata.total_cache_write_tokens).toBe(4);
   });
 
   it('keeps failed first-attempt budget usage when a child is re-driven from the top (#1961)', async () => {
@@ -2538,7 +2796,12 @@ nodes:
     expect(first.success).toBe(false);
     const parent = [...store.runs.values()].find(run => run.workflow_name === 'paid-schema-parent');
     expect(parent?.metadata.total_cost_usd).toBeCloseTo(0.01, 5);
-    expect(parent?.metadata[RUN_METADATA_KEYS.usageTerminalNodeIds]).toEqual(['sub']);
+    expect(parent?.metadata[RUN_METADATA_KEYS.usageTerminalNodes]).toEqual({
+      sub: {
+        costUsd: 0.01,
+        tokens: { input: 7, output: 3, cacheRead: 5, cacheWrite: 0 },
+      },
+    });
 
     // Simulate loss of the wrapper terminal row followed by a usage-free lookup
     // failure for the same node. Event membership alone is not proof that the
@@ -4132,20 +4395,29 @@ nodes:
     expect((parentRun?.metadata as Record<string, unknown>).total_tokens_out).toBe(9);
   });
 
-  it('parent resume re-drives only the failed instance, skipping completed ones (1:N re-entry)', async () => {
+  it('recovers fan-out usage accumulated after the parent last observed its children (1:N re-entry)', async () => {
     await writeWorkflow(
       'fan-child-flaky',
       `
 name: fan-child-flaky
-description: every child spends once; the flaky item then fails once and recovers
+description: every child spends on each pass; the flaky item fails twice and recovers
 nodes:
   - id: think
     prompt: "prepare $ARGUMENTS"
+    always_run: true
   - id: run
     depends_on: [think]
     bash: |
       if [ "$ARGUMENTS" = "flaky" ]; then
-        test -f flaky-marker && printf 'recovered' || { touch flaky-marker; exit 3; }
+        if [ -f flaky-marker-2 ]; then
+          printf 'recovered'
+        elif [ -f flaky-marker-1 ]; then
+          touch flaky-marker-2
+          exit 3
+        else
+          touch flaky-marker-1
+          exit 3
+        fi
       else
         printf 'ok:%s' "$ARGUMENTS"
       fi
@@ -4206,8 +4478,34 @@ nodes:
     expect(parentRun?.metadata.total_tokens_out).toBe(9);
     const completedAtBefore = byIndex1.get(0)!.completed_at;
 
-    // Resume the PARENT: only the failed index-1 child is re-driven (marker now present →
-    // recovered); the two COMPLETED siblings are threaded from their rows, not re-executed.
+    // Resume the failed child independently while its parent remains failed. This second
+    // pass spends again and still fails. The parent's persisted usage watermark has not
+    // moved, so its next pass must recover this delta from the child's lifetime total.
+    const failedChild = byIndex1.get(1)!;
+    const childDefinition = await discover('fan-child-flaky');
+    const hydratedChild = await hydrateResumableRun(
+      deps,
+      (await store.getWorkflowRun(failedChild.id))!
+    );
+    expect(hydratedChild).not.toBeNull();
+    const independent = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      failedChild.working_path!,
+      childDefinition,
+      'flaky',
+      'conv-db',
+      hydratedChild!
+    );
+    expect(independent.success).toBe(false);
+    expect((await store.getWorkflowRun(failedChild.id))?.metadata.total_cost_usd).toBeCloseTo(
+      0.02,
+      5
+    );
+
+    // Resume the PARENT: only the failed index-1 child is re-driven again (the second
+    // marker now exists, so it recovers). The completed siblings are threaded from rows.
     const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(parentRun!.id))!);
     expect(hydrated?.priorUsage.tokens).toMatchObject({ input: 21, output: 9 });
     const resumeOpts = hydrated ?? {
@@ -4227,9 +4525,9 @@ nodes:
     expect(r2.success).toBe(true);
     expect((await store.getWorkflowRun(parentRun!.id))?.status).toBe('completed');
     const resumedParent = await store.getWorkflowRun(parentRun!.id);
-    expect(resumedParent?.metadata.total_cost_usd).toBeCloseTo(0.03, 5);
-    expect(resumedParent?.metadata.total_tokens_in).toBe(21);
-    expect(resumedParent?.metadata.total_tokens_out).toBe(9);
+    expect(resumedParent?.metadata.total_cost_usd).toBeCloseTo(0.05, 5);
+    expect(resumedParent?.metadata.total_tokens_in).toBe(35);
+    expect(resumedParent?.metadata.total_tokens_out).toBe(15);
     // Exactly 3 child rows — one per index; the failed one was re-driven in its own row.
     expect(
       [...store.runs.values()].filter(r => r.workflow_name === 'fan-child-flaky')

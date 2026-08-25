@@ -20,6 +20,7 @@ import type {
   WorkflowSource,
   WorkflowRunNodeSession,
   ApprovalContext,
+  WorkflowRunUsage,
 } from './schemas';
 import {
   isLoopNode,
@@ -36,7 +37,7 @@ import {
   readSubrunMetadata,
   RUN_METADATA_KEYS,
   readIdentityUnresolved,
-  readUsageTerminalNodeIds,
+  readUsageTerminalNodes,
   CONTINUATION_METADATA_KEY,
   WORKFLOW_SOURCE_METADATA_KEY,
   readWorkflowSourceState,
@@ -1033,7 +1034,7 @@ export interface ResumableRunInspection {
 interface PersistedRunUsage {
   costUsd?: number;
   tokens?: TokenUsage;
-  terminalNodeIds?: ReadonlySet<string>;
+  terminalUsageByNode?: ReadonlyMap<string, WorkflowRunUsage>;
 }
 
 function readPersistedRunUsage(run: WorkflowRun): PersistedRunUsage {
@@ -1045,7 +1046,7 @@ function readPersistedRunUsage(run: WorkflowRun): PersistedRunUsage {
   const cacheWrite = metadata.total_cache_write_tokens;
   const isNonNegativeFinite = (value: unknown): value is number =>
     typeof value === 'number' && Number.isFinite(value) && value >= 0;
-  const terminalNodeIds = readUsageTerminalNodeIds(metadata);
+  const terminalUsageByNode = readUsageTerminalNodes(metadata);
   return {
     ...(isNonNegativeFinite(cost) ? { costUsd: cost } : {}),
     ...(isNonNegativeFinite(input) && isNonNegativeFinite(output)
@@ -1059,7 +1060,7 @@ function readPersistedRunUsage(run: WorkflowRun): PersistedRunUsage {
           },
         }
       : {}),
-    ...(terminalNodeIds !== undefined ? { terminalNodeIds } : {}),
+    ...(terminalUsageByNode !== undefined ? { terminalUsageByNode } : {}),
   };
 }
 
@@ -1104,18 +1105,20 @@ function mergePersistedPriorUsage(
   approvalContext?: ApprovalContext
 ): PriorRunUsage {
   const rowUsage = readPersistedRunUsage(run);
+  const loopCursorIsTerminal =
+    approvalContext?.type === 'interactive_loop' &&
+    snapshot.terminalNodeIds.has(approvalContext.nodeId);
   const eventAndCursorCost =
     snapshot.costUsd +
     (approvalContext?.type === 'interactive_loop' &&
-    !snapshot.completedNodeOutputs.has(approvalContext.nodeId) &&
+    !loopCursorIsTerminal &&
     typeof approvalContext.signaledCostUsd === 'number' &&
     Number.isFinite(approvalContext.signaledCostUsd) &&
     approvalContext.signaledCostUsd >= 0
       ? approvalContext.signaledCostUsd
       : 0);
   const cursorTokens =
-    approvalContext?.type === 'interactive_loop' &&
-    !snapshot.completedNodeOutputs.has(approvalContext.nodeId)
+    approvalContext?.type === 'interactive_loop' && !loopCursorIsTerminal
       ? readSignaledTokens(approvalContext.signaledTokens, {
           workflowRunId: run.id,
           nodeId: approvalContext.nodeId,
@@ -1128,11 +1131,14 @@ function mergePersistedPriorUsage(
   const rowFallbackUsed =
     (rowUsage.costUsd ?? 0) > eventAndCursorCost ||
     tokenUsageExceeds(rowUsage.tokens, eventAndCursorTokens);
+  const terminalUsageByNode = rowFallbackUsed
+    ? rowUsage.terminalUsageByNode
+    : snapshot.terminalUsageByNode;
   return {
     ...(persistedTokens !== undefined ? { tokens: persistedTokens } : {}),
     costUsd: Math.max(eventAndCursorCost, rowUsage.costUsd ?? 0),
     workUnits: snapshot.workUnits,
-    terminalNodeIds: rowFallbackUsed ? rowUsage.terminalNodeIds : snapshot.terminalNodeIds,
+    ...(terminalUsageByNode !== undefined ? { terminalUsageByNode } : {}),
   };
 }
 
@@ -1499,7 +1505,7 @@ async function runChildWorkflow(
         };
         childRunId = hydrated.preCreatedRun.id;
         priorChildCostUsd = hydrated.priorUsage.costUsd;
-        priorChildTokens ??= hydrated.priorUsage.tokens;
+        priorChildTokens = hydrated.priorUsage.tokens ?? priorChildTokens;
       } else {
         // Failed child with no completed nodes — flip it back to running and re-run
         // from the top (nothing to skip). Its failed attempts still consumed budget,
@@ -1658,13 +1664,15 @@ async function runChildWorkflow(
     ) {
       return { ...outcome, costUsd: 0 };
     }
-    if (!resumeFailedChild || outcome.costUsd === undefined) return outcome;
+    if (!resumeFailedChild) return outcome;
     return {
       ...outcome,
       // The child row owns the cumulative total. The parent resume ledger already
       // contains the child's earlier contribution, so this execution pass carries only
       // the newly consumed delta into the next parent event and live admission check.
-      costUsd: Math.max(0, outcome.costUsd - priorChildCostUsd),
+      ...(outcome.costUsd !== undefined
+        ? { costUsd: Math.max(0, outcome.costUsd - priorChildCostUsd) }
+        : {}),
       tokens: subtractPriorTokenUsage(outcome.tokens, priorChildTokens),
     };
   } catch (err) {

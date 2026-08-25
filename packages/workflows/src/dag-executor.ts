@@ -71,6 +71,7 @@ import type {
   WorkflowRunStatus,
   WorkflowWaitContext,
   ScheduledWorkflowResume,
+  WorkflowRunUsage,
 } from './schemas';
 import {
   isExecNode,
@@ -92,7 +93,7 @@ import {
   isBindingDirective,
   SUBRUN_METADATA_KEYS,
   RUN_METADATA_KEYS,
-  readUsageTerminalNodeIds,
+  readUsageTerminalNodes,
   WAIT_NODE_OUTPUT_FORMAT,
   waitUntilTimestampSchema,
   waitCondition,
@@ -792,6 +793,22 @@ export function subtractPriorTokenUsage(
   };
 }
 
+function subtractOwnedTokenUsage(
+  cumulative: TokenUsage | undefined,
+  owned: TokenUsage | undefined
+): TokenUsage | undefined {
+  const delta = subtractPriorTokenUsage(cumulative, owned);
+  if (
+    delta?.input === 0 &&
+    delta.output === 0 &&
+    (delta.cacheRead ?? 0) === 0 &&
+    (delta.cacheWrite ?? 0) === 0
+  ) {
+    return undefined;
+  }
+  return delta;
+}
+
 // ---------------------------------------------------------------------------
 // workflow: (sub-run) node — cross-run composition (#2121 Phase 2)
 // ---------------------------------------------------------------------------
@@ -808,8 +825,8 @@ export interface PriorRunUsage {
   costUsd: number;
   /** Started node attempts from prior passes (#1961) — seeds the work-unit budget ledger. */
   workUnits: number;
-  /** Nodes whose prior terminal rows already contributed usage to this cumulative total. */
-  terminalNodeIds?: ReadonlySet<string>;
+  /** Per-node watermark for the usage already absorbed by this run. */
+  terminalUsageByNode?: ReadonlyMap<string, WorkflowRunUsage>;
 }
 
 /** A governed run could not durably publish the cumulative usage its caller must trust. */
@@ -8394,16 +8411,22 @@ async function executeWorkflowNode(
     tokens: undefined,
   });
 
-  const withPriorLifetimeUsage = (
+  const withUnownedPriorUsage = (
     outcome: ChildWorkflowOutcome,
-    prior: ChildWorkflowOutcome
+    prior: ChildWorkflowOutcome,
+    owned: WorkflowRunUsage | undefined
   ): ChildWorkflowOutcome => {
+    const unownedPriorCostUsd =
+      prior.costUsd === undefined ? undefined : Math.max(0, prior.costUsd - (owned?.costUsd ?? 0));
     const costUsd =
-      outcome.costUsd !== undefined || prior.costUsd !== undefined
-        ? (outcome.costUsd ?? 0) + (prior.costUsd ?? 0)
+      outcome.costUsd !== undefined || unownedPriorCostUsd !== undefined
+        ? (outcome.costUsd ?? 0) + (unownedPriorCostUsd ?? 0)
         : undefined;
+    const unownedPriorTokens = subtractOwnedTokenUsage(prior.tokens, owned?.tokens);
     const tokens = sumTokenUsage(
-      [prior.tokens, outcome.tokens].filter((usage): usage is TokenUsage => usage !== undefined),
+      [unownedPriorTokens, outcome.tokens].filter(
+        (usage): usage is TokenUsage => usage !== undefined
+      ),
       { nodeId: node.id }
     );
     return {
@@ -8413,6 +8436,10 @@ async function executeWorkflowNode(
       ...(prior.costEnforceable === false ? { costEnforceable: false as const } : {}),
     };
   };
+
+  const priorUsageByNode = ctx.priorUsageRestored
+    ? ctx.usageByTerminalNode
+    : readUsageTerminalNodes(ctx.workflowRun.metadata);
 
   // Re-entry: find THIS node's child (a parent may run several workflow: nodes, so
   // filter by parent_node_id). At most one child per node in slice 1; if somehow
@@ -8454,15 +8481,12 @@ async function executeWorkflowNode(
       return await interpret(await ctx.runChildWorkflow(childArgs));
     }
     if (existing.status === 'failed') {
-      if (ctx.priorUsageRestored && ctx.priorTerminalNodeIds === undefined) {
+      if (ctx.priorUsageRestored && priorUsageByNode === undefined) {
         return failResult(
-          `Cannot resume workflow node '${node.id}': prior terminal-node accounting is unavailable.`
+          `Cannot resume workflow node '${node.id}': prior child-usage accounting is unavailable.`
         );
       }
-      const priorTerminalNodeIds = ctx.priorUsageRestored
-        ? ctx.priorTerminalNodeIds
-        : readUsageTerminalNodeIds(ctx.workflowRun.metadata);
-      const parentOwnsPriorUsage = priorTerminalNodeIds?.has(ctx.stepNamePrefix + node.id);
+      const parentOwnedUsage = priorUsageByNode?.get(ctx.stepNamePrefix + node.id);
       const priorOutcome = childOutcomeFromRun(existing);
       // Resume-through-parent recovery (D5/#1764): re-drive the failed child once.
       await chargeBudgetWorkUnit(ctx, node.id, 'spawn_decision');
@@ -8470,9 +8494,7 @@ async function executeWorkflowNode(
         ...childArgs,
         resumeFailedChild: existing,
       });
-      return await interpret(
-        parentOwnsPriorUsage ? redriveOutcome : withPriorLifetimeUsage(redriveOutcome, priorOutcome)
-      );
+      return await interpret(withUnownedPriorUsage(redriveOutcome, priorOutcome, parentOwnedUsage));
     }
     if (
       existing.status === 'paused' ||
@@ -8490,15 +8512,18 @@ async function executeWorkflowNode(
     // paused on the child has no prior terminal row and must account the full child
     // total when the child later settles.
     const cumulativeOutcome = childOutcomeFromRun(existing);
-    if (ctx.priorUsageRestored && ctx.priorTerminalNodeIds === undefined) {
+    if (ctx.priorUsageRestored && priorUsageByNode === undefined) {
       return failResult(
-        `Cannot resume workflow node '${node.id}': prior terminal-node accounting is unavailable.`
+        `Cannot resume workflow node '${node.id}': prior child-usage accounting is unavailable.`
       );
     }
+    const parentOwnedUsage = priorUsageByNode?.get(ctx.stepNamePrefix + node.id);
     return await interpret(
-      ctx.priorTerminalNodeIds?.has(ctx.stepNamePrefix + node.id)
-        ? withoutCurrentPassUsage(cumulativeOutcome)
-        : cumulativeOutcome
+      withUnownedPriorUsage(
+        withoutCurrentPassUsage(cumulativeOutcome),
+        cumulativeOutcome,
+        parentOwnedUsage
+      )
     );
   } catch (err) {
     if (err instanceof BudgetAdmissionError) {
@@ -9024,6 +9049,42 @@ async function executeFanOutWorkflowNode(
     return failResult(msg);
   }
 
+  const priorUsageByNode = ctx.priorUsageRestored
+    ? ctx.usageByTerminalNode
+    : readUsageTerminalNodes(ctx.workflowRun.metadata);
+  const priorTerminalOutcomes = [...existingByIndex.values()]
+    .filter(
+      child =>
+        child.status === 'completed' || child.status === 'failed' || child.status === 'cancelled'
+    )
+    .map(childOutcomeFromRun);
+  if (
+    ctx.priorUsageRestored &&
+    priorUsageByNode === undefined &&
+    priorTerminalOutcomes.length > 0
+  ) {
+    return failResult(
+      `Cannot resume fan_out node '${node.id}': prior child-usage accounting is unavailable.`
+    );
+  }
+  const parentOwnedUsage = priorUsageByNode?.get(stepName);
+  const priorLifetimeCostUsd = sumFanOutCost(priorTerminalOutcomes);
+  const unownedPriorCostUsd =
+    priorLifetimeCostUsd === undefined
+      ? undefined
+      : Math.max(0, priorLifetimeCostUsd - (parentOwnedUsage?.costUsd ?? 0));
+  const unownedPriorTokens = subtractOwnedTokenUsage(
+    sumFanOutTokens(priorTerminalOutcomes),
+    parentOwnedUsage?.tokens
+  );
+  if (
+    ctx.budgetLedger !== undefined &&
+    unownedPriorCostUsd !== undefined &&
+    unownedPriorCostUsd > 0
+  ) {
+    ctx.budgetLedger.spendUsd += unownedPriorCostUsd;
+  }
+
   // 4. #2180 (D5): a fan-out child cannot hold the single parent gate slot. Split the
   //    non-terminal existing children by how much is actually known:
   //    - `paused` = a gate was genuinely OBSERVED → the designed autonomous-fan-out
@@ -9176,7 +9237,12 @@ async function executeFanOutWorkflowNode(
   // gate exhaustion, but it must fail the node explicitly under every join mode too.
   let chargeFailures = 0;
   let chargeFailureError: string | undefined;
-  let costEnforcementFailure: ChildWorkflowOutcome | undefined;
+  let costEnforcementFailure: ChildWorkflowOutcome | undefined = priorTerminalOutcomes.find(
+    outcome => outcome.costEnforceable === false
+  );
+  if (costEnforcementFailure !== undefined && ctx.budgetLedger !== undefined) {
+    ctx.budgetLedger.spendEnforceable = false;
+  }
   let costEnforcementRefusals = 0;
   const existingOutcomeWithoutUsage = (run: WorkflowRun): ChildWorkflowOutcome => {
     const outcome = childOutcomeFromRun(run);
@@ -9348,8 +9414,17 @@ async function executeFanOutWorkflowNode(
         }
   );
 
-  const totalCostUsd = sumFanOutCost(outcomes);
-  const totalTokens = sumFanOutTokens(outcomes);
+  const currentPassCostUsd = sumFanOutCost(outcomes);
+  const totalCostUsd =
+    currentPassCostUsd !== undefined || unownedPriorCostUsd !== undefined
+      ? (currentPassCostUsd ?? 0) + (unownedPriorCostUsd ?? 0)
+      : undefined;
+  const totalTokens = sumTokenUsage(
+    [sumFanOutTokens(outcomes), unownedPriorTokens].filter(
+      (usage): usage is TokenUsage => usage !== undefined
+    ),
+    { nodeId: node.id }
+  );
 
   if (costEnforcementFailure !== undefined) {
     const msg =
@@ -9734,10 +9809,8 @@ interface RunLayersContext {
   priorCompletedNodes?: Map<string, PersistedNodeOutput>;
   /** Whether the run-level usage accumulators already include hydrated prior usage. */
   priorUsageRestored: boolean;
-  /** Prior terminal rows that already contributed usage to the hydrated run total. */
-  priorTerminalNodeIds?: ReadonlySet<string>;
-  /** Node-keyed usage provenance persisted atomically with the run's cumulative totals. */
-  usageTerminalNodeIds?: Set<string>;
+  /** Per-node cumulative usage persisted beside the run total. */
+  usageByTerminalNode?: Map<string, WorkflowRunUsage>;
   /**
    * Private provider session handles produced by completed top-level nodes. Undefined
    * inside loop_group bodies because repeated local IDs have no addressable lineage
@@ -11286,7 +11359,20 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
           completedNode?.kind === 'workflow' &&
           (output.costUsd !== undefined || output.tokens !== undefined)
         ) {
-          ctx.usageTerminalNodeIds?.add(ctx.stepNamePrefix + nodeId);
+          const stepName = ctx.stepNamePrefix + nodeId;
+          if (ctx.usageByTerminalNode !== undefined) {
+            const prior = ctx.usageByTerminalNode.get(stepName);
+            const tokens = sumTokenUsage(
+              [prior?.tokens, output.tokens].filter(
+                (usage): usage is TokenUsage => usage !== undefined
+              ),
+              { nodeId }
+            );
+            ctx.usageByTerminalNode.set(stepName, {
+              costUsd: (prior?.costUsd ?? 0) + (output.costUsd ?? 0),
+              ...(tokens !== undefined ? { tokens } : {}),
+            });
+          }
         }
         if (output.loopIterations !== undefined) ctx.totalLoopIterations += output.loopIterations;
         ctx.nodeOutputs.set(nodeId, output);
@@ -12240,14 +12326,13 @@ export async function executeDagWorkflow(
     afterLayer: persistAuthoredOutcome,
     priorCompletedNodes,
     priorUsageRestored: priorUsage !== undefined,
-    priorTerminalNodeIds: priorUsage?.terminalNodeIds,
-    usageTerminalNodeIds: !tracksWorkflowUsageProvenance
+    usageByTerminalNode: !tracksWorkflowUsageProvenance
       ? undefined
       : priorUsage === undefined
-        ? new Set<string>()
-        : priorUsage.terminalNodeIds === undefined
+        ? new Map<string, WorkflowRunUsage>()
+        : priorUsage.terminalUsageByNode === undefined
           ? undefined
-          : new Set(priorUsage.terminalNodeIds),
+          : new Map(priorUsage.terminalUsageByNode),
     nodeSessionHandles,
     namedResumeSourceIds,
     lastSequentialSession: undefined,
@@ -12312,9 +12397,11 @@ export async function executeDagWorkflow(
       ...(runCtx.budgetLedger?.spendEnforceable === false
         ? { cost_reporting_unavailable: true }
         : {}),
-      ...(runCtx.usageTerminalNodeIds !== undefined
+      ...(runCtx.usageByTerminalNode !== undefined
         ? {
-            [RUN_METADATA_KEYS.usageTerminalNodeIds]: [...runCtx.usageTerminalNodeIds].sort(),
+            [RUN_METADATA_KEYS.usageTerminalNodes]: Object.fromEntries(
+              [...runCtx.usageByTerminalNode].sort(([left], [right]) => left.localeCompare(right))
+            ),
           }
         : {}),
     };

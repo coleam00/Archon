@@ -243,6 +243,7 @@ describe('workflow-events', () => {
         ])
       );
       expect(result.terminalNodeIds).toEqual(new Set(['node-a', 'node-b']));
+      expect(result.terminalUsageByNode).toEqual(new Map());
       expect(result.tokens).toEqual({
         input: 100,
         output: 10,
@@ -299,12 +300,26 @@ describe('workflow-events', () => {
           {
             step_name: 'paid',
             event_type: 'node_failed',
-            data: { error: 'schema mismatch', cost_usd: 0.01 },
+            data: { error: 'schema mismatch', type: 'workflow', cost_usd: 0.01 },
+          },
+          {
+            step_name: 'paid',
+            event_type: 'node_completed',
+            data: {
+              node_output: 'recovered',
+              type: 'workflow',
+              cost_usd: 0.02,
+              tokens: { input: 5, output: 2 },
+            },
           },
           {
             step_name: 'token-only',
             event_type: 'node_completed',
-            data: { node_output: 'ok', tokens: { input: 7, output: 3 } },
+            data: {
+              node_output: 'ok',
+              type: 'workflow',
+              tokens: { input: 7, output: 3 },
+            },
           },
         ])
       );
@@ -312,8 +327,14 @@ describe('workflow-events', () => {
       const result = await getDagResumeSnapshot('run-usage-provenance');
 
       expect(result.terminalNodeIds).toEqual(new Set(['paid', 'token-only']));
-      expect(result.costUsd).toBeCloseTo(0.01);
-      expect(result.tokens).toEqual({ input: 7, output: 3 });
+      expect(result.terminalUsageByNode).toEqual(
+        new Map([
+          ['paid', { costUsd: 0.03, tokens: { input: 5, output: 2 } }],
+          ['token-only', { costUsd: 0, tokens: { input: 7, output: 3 } }],
+        ])
+      );
+      expect(result.costUsd).toBeCloseTo(0.03);
+      expect(result.tokens).toEqual({ input: 12, output: 5 });
     });
 
     test('does not let a negative persisted provider cost reduce resumed spend (#1961)', async () => {

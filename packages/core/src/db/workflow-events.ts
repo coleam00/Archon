@@ -268,6 +268,7 @@ export async function listWorkflowEventsSince(
 export async function getDagResumeSnapshot(workflowRunId: string): Promise<{
   completedNodeOutputs: Map<string, { output: string; structuredOutput?: unknown }>;
   terminalNodeIds: ReadonlySet<string>;
+  terminalUsageByNode: ReadonlyMap<string, { costUsd: number; tokens?: TokenUsage }>;
   tokens?: TokenUsage;
   costUsd: number;
   /**
@@ -293,6 +294,7 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<{
   );
   const completedNodeOutputs = new Map<string, { output: string; structuredOutput?: unknown }>();
   const terminalNodeIds = new Set<string>();
+  const terminalUsageParts = new Map<string, { costUsd: number; tokens: TokenUsage[] }>();
   // Collected and merged once at the end rather than folded pairwise: a pairwise fold
   // cannot tell "one of five contributions reported" from "one of two" (#2662).
   const usages: TokenUsage[] = [];
@@ -387,6 +389,8 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<{
     // A derived row restates usage that other rows in this same log already carry.
     if (data.aggregate === true) continue;
     let usageAccounted = false;
+    let rowTokens: TokenUsage | undefined;
+    let rowCostUsd = 0;
     if (row.event_type !== 'node_skipped_prior_success' && data.tokens !== undefined) {
       const eventTokens = data.tokens;
       if (
@@ -423,6 +427,7 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<{
           normalized.cachePartial = true;
         }
         usages.push(normalized);
+        rowTokens = normalized;
         usageAccounted = true;
       } else {
         getLog().warn(
@@ -438,6 +443,7 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<{
       // cost from the persisted metadata with no trace).
       if (typeof eventCost === 'number' && Number.isFinite(eventCost) && eventCost >= 0) {
         costUsd += eventCost;
+        rowCostUsd = eventCost;
         usageAccounted = true;
       } else {
         getLog().warn(
@@ -449,10 +455,22 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<{
     if (isTerminal && usageAccounted) {
       terminalNodeIds.add(row.step_name);
     }
+    if (isTerminal && usageAccounted && data.type === 'workflow') {
+      const prior = terminalUsageParts.get(row.step_name) ?? { costUsd: 0, tokens: [] };
+      prior.costUsd += rowCostUsd;
+      if (rowTokens !== undefined) prior.tokens.push(rowTokens);
+      terminalUsageParts.set(row.step_name, prior);
+    }
   }
   return {
     completedNodeOutputs,
     terminalNodeIds,
+    terminalUsageByNode: new Map(
+      [...terminalUsageParts].map(([nodeId, usage]) => {
+        const tokens = mergeTokenUsage(usage.tokens);
+        return [nodeId, { costUsd: usage.costUsd, ...(tokens !== undefined ? { tokens } : {}) }];
+      })
+    ),
     tokens: mergeTokenUsage(usages),
     costUsd,
     workUnits,

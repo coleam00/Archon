@@ -364,8 +364,23 @@ export function readSubrunMetadata(metadata: Record<string, unknown> | undefined
  */
 export const RUN_METADATA_KEYS = {
   identityUnresolved: 'identity_unresolved',
-  usageTerminalNodeIds: 'usage_terminal_node_ids',
+  usageTerminalNodes: 'usage_terminal_nodes',
 } as const;
+
+const workflowRunTokenUsageSchema = z.strictObject({
+  input: z.number().finite().nonnegative(),
+  output: z.number().finite().nonnegative(),
+  cacheRead: z.number().finite().nonnegative().optional(),
+  cacheWrite: z.number().finite().nonnegative().optional(),
+  cachePartial: z.literal(true).optional(),
+});
+
+export const workflowRunUsageSchema = z.strictObject({
+  costUsd: z.number().finite().nonnegative(),
+  tokens: workflowRunTokenUsageSchema.optional(),
+});
+
+export type WorkflowRunUsage = z.infer<typeof workflowRunUsageSchema>;
 
 /**
  * Between-run continuation (#2747). Written once at run creation alongside
@@ -396,13 +411,19 @@ export function readIdentityUnresolved(
   return typeof raw === 'boolean' ? raw : undefined;
 }
 
-/** Node ids whose terminal usage is included in the run's persisted cumulative totals. */
-export function readUsageTerminalNodeIds(
+/** Per-node cumulative usage persisted atomically with the run total. */
+export function readUsageTerminalNodes(
   metadata: Record<string, unknown> | undefined
-): ReadonlySet<string> | undefined {
-  const raw = metadata?.[RUN_METADATA_KEYS.usageTerminalNodeIds];
-  if (!Array.isArray(raw) || raw.some(value => typeof value !== 'string')) return undefined;
-  return new Set(raw);
+): ReadonlyMap<string, WorkflowRunUsage> | undefined {
+  const raw = metadata?.[RUN_METADATA_KEYS.usageTerminalNodes];
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined;
+  const result = new Map<string, WorkflowRunUsage>();
+  for (const [nodeId, value] of Object.entries(raw)) {
+    const parsed = workflowRunUsageSchema.safeParse(value);
+    if (!parsed.success) return undefined;
+    result.set(nodeId, parsed.data);
+  }
+  return result;
 }
 
 /**

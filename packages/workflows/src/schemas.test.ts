@@ -24,7 +24,7 @@ import {
   readSubrunMetadata,
   RUN_METADATA_KEYS,
   readIdentityUnresolved,
-  readUsageTerminalNodeIds,
+  readUsageTerminalNodes,
   workflowWaitContextSchema,
   scheduledWorkflowResumeSchema,
   workflowWaitStepName,
@@ -1785,17 +1785,45 @@ describe('readIdentityUnresolved (#2304)', () => {
   });
 });
 
-describe('readUsageTerminalNodeIds (#1961)', () => {
-  test('reads the persisted node-keyed usage provenance', () => {
+describe('readUsageTerminalNodes (#1961)', () => {
+  test('reads persisted per-node usage watermarks', () => {
     expect(
-      readUsageTerminalNodeIds({ [RUN_METADATA_KEYS.usageTerminalNodeIds]: ['sub', 'fan'] })
-    ).toEqual(new Set(['sub', 'fan']));
+      readUsageTerminalNodes({
+        [RUN_METADATA_KEYS.usageTerminalNodes]: {
+          sub: {
+            costUsd: 3,
+            tokens: { input: 30, output: 3, cacheRead: 20, cacheWrite: 1 },
+          },
+          deterministic: { costUsd: 0 },
+        },
+      })
+    ).toEqual(
+      new Map([
+        [
+          'sub',
+          {
+            costUsd: 3,
+            tokens: { input: 30, output: 3, cacheRead: 20, cacheWrite: 1 },
+          },
+        ],
+        ['deterministic', { costUsd: 0 }],
+      ])
+    );
   });
 
-  test('rejects missing or malformed provenance', () => {
-    expect(readUsageTerminalNodeIds(undefined)).toBeUndefined();
+  test('rejects malformed usage watermarks', () => {
+    expect(readUsageTerminalNodes(undefined)).toBeUndefined();
     expect(
-      readUsageTerminalNodeIds({ [RUN_METADATA_KEYS.usageTerminalNodeIds]: ['sub', 1] })
+      readUsageTerminalNodes({
+        [RUN_METADATA_KEYS.usageTerminalNodes]: { sub: { costUsd: -1 } },
+      })
+    ).toBeUndefined();
+    expect(
+      readUsageTerminalNodes({
+        [RUN_METADATA_KEYS.usageTerminalNodes]: {
+          sub: { costUsd: 1, tokens: { input: Number.NaN, output: 1 } },
+        },
+      })
     ).toBeUndefined();
   });
 });

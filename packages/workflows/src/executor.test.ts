@@ -2157,7 +2157,6 @@ describe('executeWorkflow', () => {
         tokens,
         costUsd,
         workUnits: 0,
-        terminalNodeIds: new Set(['node-a']),
       });
       expect(dagCall?.[25]).toEqual(hydrated.priorNodeSessions);
       expect(store.createWorkflowRun).not.toHaveBeenCalled();
@@ -3316,7 +3315,6 @@ describe('hydrateResumableRun', () => {
         tokens: { input: 4, output: 1 },
         costUsd: 0.1,
         workUnits: 2,
-        terminalNodeIds: new Set(['n1']),
       },
     });
     expect(store.resumeWorkflowRun).not.toHaveBeenCalled();
@@ -3332,7 +3330,12 @@ describe('hydrateResumableRun', () => {
         total_tokens_in: 20,
         total_tokens_out: 8,
         total_cache_read_tokens: 6,
-        [RUN_METADATA_KEYS.usageTerminalNodeIds]: ['n1'],
+        [RUN_METADATA_KEYS.usageTerminalNodes]: {
+          n1: {
+            costUsd: 0.5,
+            tokens: { input: 20, output: 8, cacheRead: 6 },
+          },
+        },
       },
     });
     const priorNodes = new Map([['n1', { output: 'out1' }]]);
@@ -3352,7 +3355,9 @@ describe('hydrateResumableRun', () => {
       tokens: { input: 20, output: 8, cacheRead: 6 },
       costUsd: 0.5,
       workUnits: 1,
-      terminalNodeIds: new Set(['n1']),
+      terminalUsageByNode: new Map([
+        ['n1', { costUsd: 0.5, tokens: { input: 20, output: 8, cacheRead: 6 } }],
+      ]),
     });
   });
 
@@ -3377,7 +3382,7 @@ describe('hydrateResumableRun', () => {
 
     expect(result?.priorUsage.costUsd).toBe(0.5);
     expect(result?.priorUsage.tokens).toEqual({ input: 20, output: 8 });
-    expect(result?.priorUsage.terminalNodeIds).toBeUndefined();
+    expect(result?.priorUsage.terminalUsageByNode).toBeUndefined();
   });
 
   it('returns hydrated run + prior outputs for a candidate with completed nodes', async () => {
@@ -3421,7 +3426,6 @@ describe('hydrateResumableRun', () => {
       tokens: { input: 40, output: 4 },
       costUsd: 0.75,
       workUnits: 0,
-      terminalNodeIds: new Set(['n1']),
     });
     expect(result?.priorNodeSessions.map(row => row.node_id)).toEqual(['n1']);
     expect(store.listWorkflowRunNodeSessions).toHaveBeenCalledWith('prior-failed');
@@ -3518,7 +3522,6 @@ describe('hydrateResumableRun', () => {
       tokens: { input: 50, output: 5, cacheRead: 25, cacheWrite: 0 },
       costUsd: 1.75,
       workUnits: 1,
-      terminalNodeIds: new Set(['prepare']),
     });
   });
 
@@ -3551,6 +3554,40 @@ describe('hydrateResumableRun', () => {
 
     expect(result?.priorUsage.costUsd).toBe(2);
     expect(result?.priorUsage.tokens).toEqual({ input: 4, output: 1 });
+  });
+
+  it('does not add a stale loop cursor after that loop has a failed usage row', async () => {
+    const candidate = makeRun({
+      id: 'failed-loop-downstream-resume',
+      status: 'failed',
+      metadata: {
+        approval: {
+          type: 'interactive_loop',
+          nodeId: 'loop-1',
+          message: 'Iterate?',
+          signaledCostUsd: 3,
+          signaledTokens: { input: 30, output: 3 },
+        },
+      },
+    });
+    const store = makeStore({
+      getDagResumeSnapshot: mock(async () => ({
+        completedNodeOutputs: new Map(),
+        terminalNodeIds: new Set(['loop-1']),
+        tokens: { input: 50, output: 5 },
+        costUsd: 5,
+        workUnits: 2,
+      })),
+      resumeWorkflowRun: mock(async () => makeRun({ id: candidate.id, status: 'running' })),
+    });
+
+    const result = await hydrateResumableRun(makeDeps(store), candidate);
+
+    expect(result?.priorUsage).toEqual({
+      tokens: { input: 50, output: 5 },
+      costUsd: 5,
+      workUnits: 2,
+    });
   });
 
   it.each([

@@ -15,6 +15,7 @@ import type {
   ScheduledWorkflowResume,
   WorkflowNodeSession,
   WorkflowRunNodeSession,
+  WorkflowRunUsage,
 } from './schemas';
 import type { TokenUsage } from '@archon/providers/types';
 
@@ -33,8 +34,10 @@ export interface PersistedNodeOutput {
 
 export interface DagResumeSnapshot {
   completedNodeOutputs: Map<string, PersistedNodeOutput>;
-  /** Nodes with a persisted completed/failed terminal row in any prior execution pass. */
+  /** Nodes whose persisted terminal rows contributed usage in a prior execution pass. */
   terminalNodeIds: ReadonlySet<string>;
+  /** Usage absorbed from each terminal workflow: step; absent on legacy/custom stores. */
+  terminalUsageByNode?: ReadonlyMap<string, WorkflowRunUsage>;
   tokens?: TokenUsage;
   /** Cumulative USD cost persisted by completed and failed node attempts across prior passes. */
   costUsd: number;
