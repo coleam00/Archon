@@ -1368,6 +1368,7 @@ nodes:
       `
 name: parent-plain
 description: parent that spawns a child
+budget: { max_spend_usd: 5 }
 nodes:
   - id: sub
     workflow: child-plain
@@ -1408,6 +1409,21 @@ nodes:
     expect(['cancelled', 'failed']).toContain(child.status);
     const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'parent-plain');
     expect(parentRun?.status).toBe('failed');
+    expect(parentRun?.metadata.cost_reporting_unavailable).not.toBe(true);
+    const nodeFailure = store.events.find(
+      event =>
+        event.workflow_run_id === parentRun?.id &&
+        event.event_type === 'node_failed' &&
+        event.step_name === 'sub'
+    );
+    expect(String(nodeFailure?.data?.error)).toContain('env lookup exploded');
+    expect(
+      store.events.some(
+        event =>
+          event.workflow_run_id === parentRun?.id &&
+          event.event_type === 'budget_enforcement_failed'
+      )
+    ).toBe(false);
   });
 
   it('rejects a CASE-VARIANT self-reference by resolving the name before the cycle check (I3)', async () => {

@@ -1521,9 +1521,22 @@ async function runChildWorkflow(
         }
       );
     });
+  } catch (err) {
+    // executeWorkflow can throw only from setup before its own execution catch-all
+    // (config/env/credential/source preparation). No provider or DAG work has started,
+    // so a spend-governed parent must keep the original error and record known zero.
+    await deps.store.cancelWorkflowRun(childRunId).catch((cancelErr: unknown) => {
+      getLog().error({ err: cancelErr as Error, childRunId }, 'workflow.child_setup_cancel_failed');
+    });
+    return failBeforeExecution(
+      `Sub-run '${childWorkflowName}' errored: ${(err as Error).message}`,
+      childRunId
+    );
+  }
 
-    // 6. Read the child back for the node-facing outcome (status + summary + cost +
-    //    tokens). Works for synchronous completion AND a child paused at its gate.
+  // 6. Read the child back for the node-facing outcome (status + summary + cost +
+  //    tokens). Works for synchronous completion AND a child paused at its gate.
+  try {
     const finalChild = await deps.store.getWorkflowRun(childRunId);
     if (!finalChild) {
       return failAfterExecution('Child run row disappeared after execution.', childRunId);
@@ -1538,19 +1551,9 @@ async function runChildWorkflow(
       costUsd: Math.max(0, outcome.costUsd - priorChildCostUsd),
     };
   } catch (err) {
-    // Honor the never-throws contract: executeWorkflow can throw from its early
-    // setup (before its own failWorkflowRun catch-all), and the read-back can
-    // throw on a DB error — both must surface as a failed node outcome, not an
-    // exception unwinding the parent's DAG.
-    //
-    // Wedge guard (symmetric to maybeResumeParentRun's post-CAS handler): a throw in
-    // executeWorkflow's EARLY setup (config load, getCodebaseEnvVars, token
-    // resolution) fires BEFORE the status→running flip and BEFORE its own catch-all,
-    // stranding the pre-created child at 'pending' (or 'running' on a later window) —
-    // a non-terminal row that holds the working-path lock. `cancelWorkflowRun` (NOT
-    // failWorkflowRun, whose `WHERE status='running'` would miss the 'pending' case)
-    // flips any non-terminal child to 'cancelled' and no-ops on a child that reached
-    // completed/cancelled on its own. childRunId is always assigned once step 3 ran.
+    // A read-back/interpretation failure crosses the execution boundary: paid work may
+    // have happened, so cost stays explicitly unenforceable. Preserve the never-throws
+    // node contract and cancel only if the child somehow remained non-terminal.
     await deps.store.cancelWorkflowRun(childRunId).catch((cancelErr: unknown) => {
       getLog().error({ err: cancelErr as Error, childRunId }, 'workflow.child_setup_cancel_failed');
     });
