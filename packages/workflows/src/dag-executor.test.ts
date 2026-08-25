@@ -965,6 +965,75 @@ describe('substituteNodeOutputRefs', () => {
     expect(warnCalls[0]?.[0]).toEqual(expect.objectContaining({ nodeId: 'missing' }));
   });
 
+  it('required mode rejects a missing whole-output ref with consumer context and a hint', () => {
+    const outputs = new Map([['analyze', makeOutput('completed', 'ready')]]);
+
+    expect(() =>
+      substituteNodeOutputRefs('test $analze.output = ready', outputs, true, undefined, {
+        consumerId: 'review-loop',
+        field: 'loop_group.until_bash',
+      })
+    ).toThrow(
+      "Node 'review-loop' field 'loop_group.until_bash' cannot resolve '$analze.output': node 'analze' has not produced output at this point. Did you mean: 'analyze'?"
+    );
+  });
+
+  it.each(['skipped', 'pending'] as const)(
+    'required mode rejects a %s whole-output producer instead of fabricating empty text',
+    state => {
+      const outputs = new Map([['probe', makeOutput(state)]]);
+
+      expect(() =>
+        substituteNodeOutputRefs('test $probe.output != pending', outputs, true, undefined, {
+          consumerId: 'poll',
+          field: 'loop.until_bash',
+        })
+      ).toThrow(
+        "Node 'poll' field 'loop.until_bash' cannot resolve '$probe.output': node 'probe' did not run"
+      );
+    }
+  );
+
+  it('required mode rejects a failed whole-output producer with the owning loop context', () => {
+    const outputs = new Map([['probe', makeOutput('failed', 'stale')]]);
+
+    expect(() =>
+      substituteNodeOutputRefs('test $probe.output = done', outputs, true, undefined, {
+        consumerId: 'poll',
+        field: 'loop.until_bash',
+      })
+    ).toThrow(
+      "Node 'poll' field 'loop.until_bash' cannot resolve '$probe.output': node 'probe' failed (error)"
+    );
+  });
+
+  it('required mode preserves a completed producer whose real output is empty', () => {
+    const outputs = new Map([['probe', makeOutput('completed', '')]]);
+
+    expect(
+      substituteNodeOutputRefs('test -z $probe.output', outputs, true, undefined, {
+        consumerId: 'poll',
+        field: 'loop.until_bash',
+      })
+    ).toBe("test -z ''");
+  });
+
+  it('required mode preserves an absent field declared optional by the producer', () => {
+    const outputs = new Map([
+      [
+        'probe',
+        makeOutput('completed', '{"state":"pending"}', { state: 'pending' }, ['state', 'note']),
+      ],
+    ]);
+
+    expect(
+      substituteNodeOutputRefs('test -z $probe.output.note', outputs, true, undefined, {
+        consumerId: 'poll',
+        field: 'loop.until_bash',
+      })
+    ).toBe("test -z ''");
+  });
+
   it('dot notation extracts JSON field', () => {
     const outputs = new Map([['a', makeOutput('completed', JSON.stringify({ type: 'BUG' }))]]);
     expect(substituteNodeOutputRefs('Fix $a.output.type issue', outputs)).toBe('Fix BUG issue');
@@ -1019,6 +1088,30 @@ describe('substituteNodeOutputRefs', () => {
     expect(() => substituteNodeOutputRefs('echo $missing.output.field', outputs, true)).toThrow(
       OutputRefError
     );
+  });
+
+  it('required mode preserves the field error cause and nearby-id hint', () => {
+    const outputs = new Map([['analyze', makeOutput('completed', '{"state":"done"}')]]);
+    let caught: unknown;
+
+    try {
+      substituteNodeOutputRefs('test $analze.output.state = done', outputs, true, undefined, {
+        consumerId: 'poll',
+        field: 'loop_group.until_bash',
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(Error);
+    const message = (caught as Error).message;
+    expect(message).toContain(
+      "Node 'poll' field 'loop_group.until_bash' cannot resolve '$analze.output.state'"
+    );
+    expect(message).toContain(
+      "references node 'analze', but no node with that id has produced output"
+    );
+    expect(message).toContain("Did you mean: 'analyze'?");
   });
 
   it('failed producer (#2713): whole-text $node.output throws instead of splicing stale output', () => {
@@ -9289,6 +9382,63 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
 
       expect(calls).toBe(2);
       expect((await readFile(counterFile, 'utf8')).trim()).toBe('2');
+    });
+
+    it('#2803: loop until_bash fails when an upstream whole-output producer was skipped', async () => {
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield { type: 'assistant', content: 'working' };
+        yield { type: 'result', sessionId: 'loop-required-ref' };
+      });
+      const store = createMockStore();
+      const markerPath = join(testDir, 'loop-required-ref-ran.marker');
+      const workflow = workflowDefinitionSchema.parse({
+        name: 'loop-required-output-ref',
+        description: 'A loop must not decide completion from a skipped producer',
+        nodes: [
+          { id: 'gate', bash: "printf 'skip'" },
+          {
+            id: 'probe',
+            bash: "printf 'pending'",
+            depends_on: ['gate'],
+            when: "$gate.output == 'run'",
+          },
+          {
+            id: 'poll',
+            depends_on: ['probe'],
+            trigger_rule: 'all_done',
+            loop: {
+              prompt: 'poll once',
+              until_bash: `printf ran > ${JSON.stringify(markerPath)}; test $probe.output != pending`,
+              max_iterations: 1,
+            },
+          },
+        ],
+      });
+
+      await executeDagWorkflow(
+        createMockDeps(store),
+        createMockPlatform(),
+        'conv-dag',
+        testDir,
+        ready(workflow),
+        makeWorkflowRun('loop-required-output-ref'),
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'state'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      const failed = store.createWorkflowEvent.mock.calls
+        .map(([event]) => event)
+        .find(event => event.event_type === 'node_failed' && event.step_name === 'poll');
+      expect(failed?.data?.error).toContain(
+        "Node 'poll' field 'loop.until_bash' cannot resolve '$probe.output'"
+      );
+      expect(await Bun.file(markerPath).exists()).toBe(false);
     });
 
     it('reads oversized upstream output in until_bash from the run-owned spill directory', async () => {
@@ -22130,6 +22280,58 @@ describe('executeDagWorkflow -- loop_group node', () => {
     expect(await Bun.file(join(logDir, 'bump.nodeoutput')).exists()).toBe(false);
   });
 
+  it('#2803: loop_group until_bash fails when a direct whole-output producer was skipped', async () => {
+    const store = createMockStore();
+    const markerPath = join(testDir, 'group-required-ref-ran.marker');
+    const workflow = workflowDefinitionSchema.parse({
+      name: 'group-required-output-ref',
+      description: 'A group must not decide completion from a skipped body producer',
+      nodes: [
+        {
+          id: 'poll',
+          loop_group: {
+            until_bash: `printf ran > ${JSON.stringify(markerPath)}; test $probe.output != pending`,
+            max_iterations: 1,
+            nodes: [
+              { id: 'gate', bash: "printf 'skip'" },
+              {
+                id: 'probe',
+                bash: "printf 'pending'",
+                depends_on: ['gate'],
+                when: "$gate.output == 'run'",
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    await executeDagWorkflow(
+      createMockDeps(store),
+      createMockPlatform(),
+      'conv-lg',
+      testDir,
+      ready(workflow),
+      makeWorkflowRun('group-required-output-ref'),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const failed = store.createWorkflowEvent.mock.calls
+      .map(([event]) => event)
+      .find(event => event.event_type === 'node_failed' && event.step_name === 'poll');
+    expect(failed?.data?.error).toContain(
+      "Node 'poll' field 'loop_group.until_bash' cannot resolve '$probe.output'"
+    );
+    expect(await Bun.file(markerPath).exists()).toBe(false);
+  });
+
   it('INSTANCE 4: single-node body degenerates like loop: and completes in 1 iteration', async () => {
     // A loop_group with a single prompt node that emits DONE on the very first iteration.
     let calls = 0;
@@ -30733,6 +30935,44 @@ function waitTerminatedLoopGroupWorkflow(): WorkflowDefinition {
   };
 }
 
+function includedProbeWaitTerminatedLoopGroupWorkflow(markerPath: string): WorkflowDefinition {
+  const block = workflowDefinitionSchema.parse({
+    name: 'probe-wait-block',
+    description: 'Included polling loop with a terminal wait',
+    returns: 'await-checks',
+    nodes: [
+      {
+        id: 'await-checks',
+        loop_group: {
+          until_bash: `printf ran > ${JSON.stringify(markerPath)}; test $ci-probe.output != pending`,
+          max_iterations: 3,
+          nodes: [
+            { id: 'ci-probe', bash: "printf 'pending'" },
+            { id: 'ci-pause', wait: { duration_ms: 60_000 }, depends_on: ['ci-probe'] },
+          ],
+        },
+      },
+    ],
+  });
+  const parent = workflowDefinitionSchema.parse({
+    name: 'included-probe-wait',
+    description: 'Runs the polling loop through include expansion',
+    nodes: [{ id: 'deliver', include: 'probe-wait-block' }],
+  });
+  const { workflows, errors } = expandWorkflowIncludes(
+    new Map([
+      [block.name, block],
+      [parent.name, parent],
+    ])
+  );
+  if (errors.length > 0) {
+    throw new Error(`included probe fixture failed to expand: ${JSON.stringify(errors)}`);
+  }
+  const expanded = workflows.get(parent.name);
+  if (!expanded) throw new Error('included probe fixture was not expanded');
+  return expanded;
+}
+
 function repeatingWaitTerminatedLoopGroupWorkflow(): WorkflowDefinition {
   return {
     name: 'repeating-wait-terminated-loop-group',
@@ -30938,6 +31178,62 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
       bodyWaitId: 'delay',
       iteration: 2,
     });
+  });
+
+  it('#2803: an included wait-resume fails loud when until_bash cannot restore its producer', async () => {
+    const markerPath = join(testDir, 'included-resume-required-ref-ran.marker');
+    const workflow = includedProbeWaitTerminatedLoopGroupWorkflow(markerPath);
+    const group = workflow.nodes.find(node => node.id === 'deliver__await-checks');
+    expect(group && !('include' in group)).toBe(true);
+    if (!group || 'include' in group || group.kind !== 'loop_group') {
+      throw new Error('expected the included loop_group to be expanded');
+    }
+    expect(group.loop_group.nodes.map(node => node.id)).toEqual(['ci-probe', 'ci-pause']);
+
+    const expiredWait: WorkflowWaitContext = {
+      owner: 'loop_group',
+      nodeId: 'deliver__await-checks',
+      bodyWaitId: 'ci-pause',
+      iteration: 1,
+      sessionId: null,
+      sessionProvider: null,
+      kind: 'time',
+      waitingSince: '2026-08-23T00:00:00.000Z',
+      resumeAt: '2026-08-23T00:01:00.000Z',
+    };
+    const store = createEscalationStore('run-included-missing-probe');
+
+    await executeDagWorkflow(
+      createMockDeps(store),
+      createMockPlatform(),
+      'conv-dag',
+      testDir,
+      ready(workflow),
+      makeWorkflowRun('run-included-missing-probe', { metadata: { wait: expiredWait } }),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      new Map()
+    );
+
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
+    const failed = store.createWorkflowEvent.mock.calls
+      .map(([event]) => event)
+      .find(
+        event => event.event_type === 'node_failed' && event.step_name === 'deliver__await-checks'
+      );
+    expect(failed?.data?.error).toContain(
+      "Node 'deliver__await-checks' field 'loop_group.until_bash' cannot resolve '$ci-probe.output'"
+    );
+    expect(await Bun.file(markerPath).exists()).toBe(false);
   });
 
   it('keeps loop ownership when an event signal lands before the pause call returns', async () => {

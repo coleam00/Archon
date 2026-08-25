@@ -1561,6 +1561,21 @@ function shellQuoteOrFile(
   return shellQuote(value);
 }
 
+interface RequiredOutputRefContext {
+  consumerId: string;
+  field: 'loop.until_bash' | 'loop_group.until_bash';
+}
+
+function requiredOutputRefError(
+  context: RequiredOutputRefContext,
+  ref: string,
+  detail: string
+): Error {
+  return new Error(
+    `Node '${context.consumerId}' field '${context.field}' cannot resolve '${ref}': ${detail}`
+  );
+}
+
 /**
  * Substitute $node_id.output and $node_id.output.field references in a prompt.
  * Called AFTER the standard substituteWorkflowVariables pass.
@@ -1575,12 +1590,16 @@ function shellQuoteOrFile(
  * @param escapedForBash - When true, wraps substituted values in single quotes so
  *   they are safe to embed in bash scripts passed to `bash -c`. Set true only for
  *   bash node script substitution; AI/command prompt substitution should use false.
+ * @param requiredContext - Makes unavailable whole-output refs fail with the owning
+ *   decision surface named. Used by `until_bash`; other callers keep the legacy empty
+ *   fallback. Field refs remain strict in either mode.
  */
 export function substituteNodeOutputRefs(
   prompt: string,
   nodeOutputs: Map<string, NodeOutput>,
   escapedForBash = false,
-  artifactsDir?: string
+  artifactsDir?: string,
+  requiredContext?: RequiredOutputRefContext
 ): string {
   return prompt.replace(
     /\$([a-zA-Z_][a-zA-Z0-9_-]*)\.output(?:\.([a-zA-Z_][a-zA-Z0-9_]*))?/g,
@@ -1592,20 +1611,50 @@ export function substituteNodeOutputRefs(
         // output is unavailable on this execution path) fails the consuming node loudly,
         // matching the strict
         // no-silent-drop posture for known-producer field access below. The whole-text
-        // `$id.output` form stays lenient ('') as a long-documented surface (changing
-        // it is a bigger compatibility break).
+        // `$id.output` form stays lenient ('') by default as a long-documented surface.
+        // `until_bash` opts into requiredContext because empty text would become an
+        // input to a completion decision rather than merely missing display text.
         if (field) {
-          throw new OutputRefError(
+          const error = new OutputRefError(
             nodeId,
             field,
             'unknown-node',
             similarNodeIds(nodeId, nodeOutputs.keys())
+          );
+          throw requiredContext
+            ? requiredOutputRefError(requiredContext, match, error.message)
+            : error;
+        }
+        if (requiredContext) {
+          const candidates = similarNodeIds(nodeId, nodeOutputs.keys());
+          const hint =
+            candidates.length > 0
+              ? ` Did you mean: ${candidates.map(candidate => `'${candidate}'`).join(', ')}?`
+              : '';
+          throw requiredOutputRefError(
+            requiredContext,
+            match,
+            `node '${nodeId}' has not produced output at this point.${hint} Fix the id, or ensure '${nodeId}' runs before this check.`
           );
         }
         getLog().warn({ nodeId, match }, 'dag_node_output_ref_unknown_node');
         return escapedForBash ? "''" : '';
       }
       if (!field) {
+        if (requiredContext && (nodeOutput.state === 'skipped' || nodeOutput.state === 'pending')) {
+          throw requiredOutputRefError(
+            requiredContext,
+            match,
+            `node '${nodeId}' did not run (skipped or pending), so it has no output to read. Fix the dependency or guard the consuming loop.`
+          );
+        }
+        if (requiredContext && nodeOutput.state === 'failed') {
+          throw requiredOutputRefError(
+            requiredContext,
+            match,
+            `node '${nodeId}' failed (${nodeOutput.error}), so its output cannot be trusted. Fix the failure or guard the consuming loop.`
+          );
+        }
         // A failed producer's stale output is never spliced into a consumer's own
         // prompt/bash/command body (#2713) — matches resolveBindingDirective's #2710
         // guard for the same class of bug (a loop_group's failure paths leave real,
@@ -1631,7 +1680,15 @@ export function substituteNodeOutputRefs(
       // key). The throw propagates to the dag-executor's per-node catch → the
       // consuming node fails visibly instead of receiving a poisoned ''. The only
       // value that resolves to empty is an author-declared-optional field.
-      const resolution = resolveNodeOutputField(nodeOutput, nodeId, field);
+      let resolution: ReturnType<typeof resolveNodeOutputField>;
+      try {
+        resolution = resolveNodeOutputField(nodeOutput, nodeId, field);
+      } catch (error) {
+        if (requiredContext && error instanceof OutputRefError) {
+          throw requiredOutputRefError(requiredContext, match, error.message);
+        }
+        throw error;
+      }
       if (resolution.kind === 'empty') return escapedForBash ? "''" : '';
       const value = resolution.value;
       // numbers and booleans are shell-safe without quoting: JSON disallows
@@ -4910,7 +4967,8 @@ async function executeLoopGroupNode(
           resumedBashPrompt,
           resumedScope,
           true, // escapedForBash
-          artifactsDir
+          artifactsDir,
+          { consumerId: node.id, field: 'loop_group.until_bash' }
         );
         const resumedBashPath = resolveBashPath();
         try {
@@ -5383,7 +5441,8 @@ async function executeLoopGroupNode(
           bashPrompt,
           scopedNodeOutputs,
           true, // escapedForBash
-          artifactsDir
+          artifactsDir,
+          { consumerId: node.id, field: 'loop_group.until_bash' }
         );
         await runSubprocess(execContext, groupBashPath, ['-c', substitutedBash], {
           cwd,
@@ -7140,7 +7199,8 @@ async function executeLoopNode(
           bashPrompt,
           nodeOutputs,
           true, // escapedForBash
-          artifactsDir
+          artifactsDir,
+          { consumerId: node.id, field: 'loop.until_bash' }
         );
         await runSubprocess(execContext, loopBashPath, ['-c', substitutedBash], {
           cwd,
