@@ -93,6 +93,37 @@ export async function promptSession(
   });
 }
 
+export async function waitForPromiseOrAbort<T>(
+  promise: Promise<T>,
+  signal: AbortSignal | undefined
+): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) {
+    void promise.catch(() => undefined);
+    signal.throwIfAborted();
+  }
+
+  let onAbort: (() => void) | undefined;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    onAbort = (): void => {
+      if (signal.reason instanceof Error) {
+        reject(signal.reason);
+        return;
+      }
+      const error = new Error('OpenCode operation aborted');
+      error.name = 'AbortError';
+      reject(error);
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+
+  try {
+    return await Promise.race([promise, aborted]);
+  } finally {
+    if (onAbort) signal.removeEventListener('abort', onAbort);
+  }
+}
+
 async function readStructuredOutput(
   client: OpencodeClientLike,
   cwd: string,
@@ -134,6 +165,7 @@ export async function* streamOpencodeSession(
   let aborted = requestOptions?.abortSignal?.aborted === true;
   let terminalObserved = false;
   let promptSettled = false;
+  let promptPendingAfterAbort = false;
   let preSubmissionAbortPromise: Promise<unknown> | undefined;
   let postSubmissionAbortPromise: Promise<unknown> | undefined;
 
@@ -177,12 +209,27 @@ export async function* streamOpencodeSession(
   try {
     requestOptions?.abortSignal?.throwIfAborted();
     const promptBody = createSessionPromptBody(prompt, model, requestOptions);
-    try {
-      await promptSession(client, cwd, sessionId, promptBody);
-    } finally {
+    const promptPromise = promptSession(client, cwd, sessionId, promptBody).finally((): void => {
       // An abort accepted before promptAsync settles cannot prove that work accepted
       // afterward was stopped. Cleanup must confirm cancellation again from this point.
       promptSettled = true;
+    });
+    try {
+      await waitForPromiseOrAbort(promptPromise, requestOptions?.abortSignal);
+    } catch (error) {
+      if (requestOptions?.abortSignal?.aborted && !promptSettled) {
+        promptPendingAfterAbort = true;
+        // The lease must expire instead of renewing forever, but a submission that
+        // eventually settles still gets a best-effort post-submission abort.
+        void promptPromise.then(confirmSessionStopped, confirmSessionStopped).catch(abortError => {
+          getLog().debug({ err: abortError, sessionId }, 'opencode.late_session_abort_failed');
+        });
+        throw new ProviderAttemptStopUnconfirmedError(
+          `OpenCode prompt submission did not settle after cancellation (session: ${sessionId}, cwd: ${cwd})`,
+          { cause: error }
+        );
+      }
+      throw error;
     }
 
     for await (const rawEvent of abortableStream(events.stream, streamController.signal)) {
@@ -330,7 +377,7 @@ export async function* streamOpencodeSession(
   } finally {
     requestOptions?.abortSignal?.removeEventListener('abort', abortHandler);
     streamController.abort();
-    if (!terminalObserved) await confirmSessionStopped();
+    if (!terminalObserved && !promptPendingAfterAbort) await confirmSessionStopped();
   }
 }
 

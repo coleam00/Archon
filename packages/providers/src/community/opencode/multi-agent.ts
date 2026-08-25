@@ -11,6 +11,7 @@ import {
   createSessionPromptBody,
   promptSession,
   resolveSessionId,
+  waitForPromiseOrAbort,
 } from './session';
 import { normalizeTokens } from './tokens';
 
@@ -230,7 +231,16 @@ export async function* streamMultiAgentOpencodeSession(
     const lifecycle = state.lifecycle;
     if (lifecycle.phase !== 'pending') return false;
 
-    await lifecycle.settled;
+    try {
+      await waitForPromiseOrAbort(lifecycle.settled, lifecycleController.signal);
+    } catch (error) {
+      if (state.lifecycle.phase === 'pending') {
+        throw new ProviderAttemptStopUnconfirmedError(
+          `OpenCode prompt submission did not settle after cancellation (session: ${state.sessionId}, cwd: ${state.cwd})`,
+          { cause: error }
+        );
+      }
+    }
     // The terminal event may describe the session before promptAsync accepted
     // this submission. A fresh post-submission abort is the only proof that the
     // current upstream attempt has stopped.
@@ -338,7 +348,10 @@ export async function* streamMultiAgentOpencodeSession(
     // guarantee that all submissions complete before consuming scripted/live
     // events. Gated fan-out must consume events concurrently to release slots.
     if (!requestOptions?.providerAttemptGate) {
-      await Promise.all(promptTasks);
+      await waitForPromiseOrAbort(
+        Promise.all(promptTasks).then(() => undefined),
+        lifecycleController.signal
+      );
       getLog().info({ nodeId }, 'opencode.multi_agent_all_prompts_sent');
     } else {
       for (const task of promptTasks) void task.catch(() => undefined);
@@ -570,9 +583,9 @@ export async function* streamMultiAgentOpencodeSession(
     lifecycleController.abort();
     if (!completed) {
       await abortAll();
-      await Promise.allSettled(promptTasks);
-      // Prompts that were already in flight when cancellation started need a
-      // fresh abort after their submissions settle.
+      // Pending prompt tasks retain their rejection handlers and issue a fresh
+      // abort if their submissions ever settle. Do not await an SDK request that
+      // may never settle: release its lease as unconfirmed so expiry can recover it.
       await abortAll();
     }
     await Promise.all(Array.from(sessionToAgent.values(), state => releaseStateLease(state)));

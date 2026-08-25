@@ -663,7 +663,7 @@ describe('OpencodeProvider', () => {
     expect(sessionAbort).toHaveBeenCalled();
   });
 
-  test('does not accept a multi-agent error until its pending prompt is stopped', async () => {
+  test('expires multi-agent leases when an error races pending prompt submissions', async () => {
     const cwd = await createTempProjectDir();
     const sessionIds = ['scout-session', 'reviewer-session'];
     const events = createPushStream();
@@ -709,19 +709,17 @@ describe('OpencodeProvider', () => {
       type: 'session.error',
       properties: { sessionID: 'scout-session', error: { message: 'upstream failed' } },
     });
-    await Bun.sleep(5);
-    expect(sessionAbort).not.toHaveBeenCalled();
-    expect(releases).toEqual([]);
-
-    settlePrompts();
     const { error } = await consumption;
 
-    expect(error?.message).toContain('upstream failed');
-    expect(sessionAbort).toHaveBeenCalledTimes(3);
+    expect(error?.name).toBe('ProviderAttemptStopUnconfirmedError');
+    expect(sessionAbort).toHaveBeenCalledTimes(2);
+    expect(releases).toEqual([{ upstreamStopped: false }, { upstreamStopped: false }]);
+
+    settlePrompts();
+    while (sessionAbort.mock.calls.length < 4) await Bun.sleep(1);
     const abortedSessionIds = sessionAbort.mock.calls.map(call => call[0].path.id);
-    expect(abortedSessionIds.filter(id => id === 'scout-session')).toHaveLength(1);
+    expect(abortedSessionIds.filter(id => id === 'scout-session')).toHaveLength(2);
     expect(abortedSessionIds.filter(id => id === 'reviewer-session')).toHaveLength(2);
-    expect(releases).toEqual([{ upstreamStopped: true }, { upstreamStopped: true }]);
   });
 
   test('multi-agent fan-out aborts siblings and releases every lease on ownership loss', async () => {
@@ -844,6 +842,60 @@ describe('OpencodeProvider', () => {
     expect(abortedSessionIds.filter(id => id === 'scout-session')).toHaveLength(2);
     expect(abortedSessionIds.filter(id => id === 'reviewer-session')).toHaveLength(2);
     expect(releases).toEqual([{ upstreamStopped: true }, { upstreamStopped: true }]);
+  });
+
+  test('expires multi-agent leases when prompt submissions never settle after cancellation', async () => {
+    const cwd = await createTempProjectDir();
+    const sessionIds = ['scout-session', 'reviewer-session'];
+    const promptStarted = Promise.withResolvers<void>();
+    const neverSettles = new Promise<void>(() => undefined);
+    const runtime = makeRuntime({
+      sessionCreate: mock(async () => ({ data: { id: sessionIds.shift() } })),
+      promptAsync: mock(async () => {
+        if (runtime.client.session.promptAsync.mock.calls.length === 2) promptStarted.resolve();
+        return neverSettles;
+      }),
+      sessionAbort: mock(async () => undefined),
+      subscribe: mock(async () => ({ stream: createPendingStream() })),
+    });
+    runtimeQueue.push(runtime);
+    const abortController = new AbortController();
+    const releases: { upstreamStopped: boolean }[] = [];
+
+    const consumption = consume(
+      new OpencodeProvider().sendQuery('hi', cwd, undefined, {
+        assistantConfig: TEST_MODEL,
+        abortSignal: abortController.signal,
+        nodeConfig: {
+          nodeId: 'research',
+          agents: {
+            scout: { description: 'Scout', prompt: 'Explore' },
+            reviewer: { description: 'Reviewer', prompt: 'Review' },
+          },
+        },
+        providerAttemptGate: {
+          acquire: async () => ({
+            signal: new AbortController().signal,
+            release: async options => {
+              releases.push(options);
+            },
+          }),
+        },
+      })
+    );
+
+    await promptStarted.promise;
+    abortController.abort(new Error('cancelled'));
+    const result = await Promise.race([
+      consumption,
+      Bun.sleep(100).then(() => 'timed-out' as const),
+    ]);
+
+    expect(result).not.toBe('timed-out');
+    if (result === 'timed-out') return;
+    expect(result.error?.name).toBe('ProviderAttemptStopUnconfirmedError');
+    expect(runtime.client.session.abort).toHaveBeenCalledTimes(2);
+    expect(releases).toEqual([{ upstreamStopped: false }, { upstreamStopped: false }]);
   });
 
   test('preserves each unconfirmed multi-agent lease without replacing the causal error', async () => {
@@ -1563,7 +1615,7 @@ describe('OpencodeProvider', () => {
     expect(released).toBe(true);
   });
 
-  test('re-aborts a session after an in-flight prompt submission settles', async () => {
+  test('expires the lease before re-aborting an in-flight prompt that later settles', async () => {
     let settlePrompt!: () => void;
     const promptSettled = new Promise<void>(resolve => {
       settlePrompt = resolve;
@@ -1595,17 +1647,58 @@ describe('OpencodeProvider', () => {
 
     while (runtime.client.session.promptAsync.mock.calls.length === 0) await Bun.sleep(1);
     abortController.abort();
-    while (sessionAbort.mock.calls.length === 0) await Bun.sleep(1);
-    await Promise.resolve();
-    expect(sessionAbort).toHaveBeenCalledTimes(1);
-    expect(releases).toEqual([]);
-
-    settlePrompt();
     const { error } = await consumption;
 
-    expect(error?.message).toBe('OpenCode query aborted');
+    expect(error?.name).toBe('ProviderAttemptStopUnconfirmedError');
+    expect(sessionAbort).toHaveBeenCalledTimes(1);
+    expect(releases).toEqual([{ upstreamStopped: false }]);
+
+    settlePrompt();
+    while (sessionAbort.mock.calls.length < 2) await Bun.sleep(1);
     expect(sessionAbort).toHaveBeenCalledTimes(2);
-    expect(releases).toEqual([{ upstreamStopped: true }]);
+  });
+
+  test('expires a single-agent lease when prompt submission never settles after cancellation', async () => {
+    const promptStarted = Promise.withResolvers<void>();
+    const runtime = makeRuntime({
+      promptAsync: mock(async () => {
+        promptStarted.resolve();
+        return new Promise<void>(() => undefined);
+      }),
+      subscribe: mock(async () => ({ stream: createPendingStream() })),
+      sessionAbort: mock(async () => undefined),
+    });
+    runtimeQueue.push(runtime);
+    const abortController = new AbortController();
+    const releases: { upstreamStopped: boolean }[] = [];
+
+    const consumption = consume(
+      new OpencodeProvider().sendQuery('hi', '/tmp', undefined, {
+        assistantConfig: TEST_MODEL,
+        abortSignal: abortController.signal,
+        providerAttemptGate: {
+          acquire: async () => ({
+            signal: new AbortController().signal,
+            release: async options => {
+              releases.push(options);
+            },
+          }),
+        },
+      })
+    );
+
+    await promptStarted.promise;
+    abortController.abort(new Error('cancelled'));
+    const result = await Promise.race([
+      consumption,
+      Bun.sleep(100).then(() => 'timed-out' as const),
+    ]);
+
+    expect(result).not.toBe('timed-out');
+    if (result === 'timed-out') return;
+    expect(result.error?.name).toBe('ProviderAttemptStopUnconfirmedError');
+    expect(runtime.client.session.abort).toHaveBeenCalledTimes(1);
+    expect(releases).toEqual([{ upstreamStopped: false }]);
   });
 
   test('aborts an unconfirmed single-agent stream before releasing provider capacity', async () => {
