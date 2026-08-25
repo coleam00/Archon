@@ -28,6 +28,7 @@ interface AgentRunState {
   lease?: ProviderAttemptLease;
   leaseAbortHandler?: () => void;
   done: boolean;
+  stopConfirmed: boolean;
 }
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -147,26 +148,37 @@ export async function* streamMultiAgentOpencodeSession(
     const lease = state.lease;
     state.lease = undefined;
     state.leaseAbortHandler = undefined;
-    await lease.release();
+    await lease.release({ upstreamStopped: state.stopConfirmed });
   };
 
   const abortAll = (): Promise<void> => {
     const aborts = Array.from(sessionToAgent.values(), state => {
+      if (state.stopConfirmed) return Promise.resolve(true);
       let abort = abortPromises.get(state.sessionId);
       if (!abort) {
-        abort = client.session.abort({
-          path: { id: state.sessionId },
-          query: { directory: state.cwd },
-        });
+        abort = client.session
+          .abort({
+            path: { id: state.sessionId },
+            query: { directory: state.cwd },
+          })
+          .then(
+            () => {
+              state.stopConfirmed = true;
+              return true;
+            },
+            error => {
+              getLog().debug(
+                { err: error, sessionId: state.sessionId },
+                'opencode.multi_agent_abort_failed'
+              );
+              return false;
+            }
+          );
         abortPromises.set(state.sessionId, abort);
       }
       return abort;
     });
-    const all = Promise.all(aborts).then(() => undefined);
-    void all.catch(error => {
-      getLog().debug({ err: error }, 'opencode.multi_agent_abort_failed');
-    });
-    return all;
+    return Promise.all(aborts).then(() => undefined);
   };
 
   const abortHandler = (): void => {
@@ -195,6 +207,7 @@ export async function* streamMultiAgentOpencodeSession(
           sessionId,
           chunks: [],
           done: false,
+          stopConfirmed: false,
         };
         sessionToAgent.set(sessionId, state);
         return state;
@@ -370,6 +383,7 @@ export async function* streamMultiAgentOpencodeSession(
         const err = new Error(`[${state.agent.key}] ${errorMessage(rawError)}`);
         err.cause = rawError;
         lifecycleController.abort(err);
+        state.stopConfirmed = true;
         await releaseStateLease(state);
         await abortAll();
         throw err;
@@ -380,8 +394,9 @@ export async function* streamMultiAgentOpencodeSession(
           typeof properties.sessionID === 'string' ? properties.sessionID : undefined;
         const state = sessionId ? sessionToAgent.get(sessionId) : undefined;
         if (!state) continue;
-        await releaseStateLease(state);
         state.done = true;
+        state.stopConfirmed = true;
+        await releaseStateLease(state);
         getLog().info(
           {
             nodeId,

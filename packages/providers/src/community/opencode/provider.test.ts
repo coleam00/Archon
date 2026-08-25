@@ -601,6 +601,59 @@ describe('OpencodeProvider', () => {
     expect(releases).toBe(2);
   });
 
+  test('preserves each unconfirmed multi-agent lease without replacing the causal error', async () => {
+    const cwd = await createTempProjectDir();
+    const sessionIds = ['scout-session', 'reviewer-session'];
+    const events = createPushStream();
+    const leaseControllers = [new AbortController(), new AbortController()];
+    let promptCalls = 0;
+    const runtime = makeRuntime({
+      sessionCreate: mock(async () => ({ data: { id: sessionIds.shift() } })),
+      promptAsync: mock(async () => {
+        promptCalls += 1;
+        if (promptCalls === 2) leaseControllers[0]?.abort(new Error('lease ownership lost'));
+      }),
+      sessionAbort: mock(async request => {
+        if (request.path.id === 'scout-session') throw new Error('abort transport failed');
+      }),
+      subscribe: mock(async () => ({ stream: events.stream })),
+    });
+    runtimeQueue.push(runtime);
+
+    let acquireCalls = 0;
+    const releases: ({ upstreamStopped?: boolean } | undefined)[] = [];
+    const { error } = await consume(
+      new OpencodeProvider().sendQuery('hi', cwd, undefined, {
+        assistantConfig: TEST_MODEL,
+        nodeConfig: {
+          nodeId: 'research',
+          agents: {
+            scout: { description: 'Scout', prompt: 'Explore' },
+            reviewer: { description: 'Reviewer', prompt: 'Review' },
+          },
+        },
+        providerAttemptGate: {
+          acquire: async () => {
+            const controller = leaseControllers[acquireCalls];
+            acquireCalls += 1;
+            if (!controller) throw new Error('unexpected admission');
+            return {
+              signal: controller.signal,
+              release: async options => {
+                releases.push(options);
+              },
+            };
+          },
+        },
+      })
+    );
+
+    expect(error?.message).toContain('lease ownership lost');
+    expect(error?.message).not.toContain('abort transport failed');
+    expect(releases).toContainEqual({ upstreamStopped: false });
+    expect(releases).toContainEqual({ upstreamStopped: true });
+  });
+
   test('multi-agent session error closes admission before a queued sibling can start', async () => {
     const cwd = await createTempProjectDir();
     const sessionIds = ['scout-session', 'reviewer-session'];
@@ -662,7 +715,7 @@ describe('OpencodeProvider', () => {
 
     expect(error?.message).toContain('upstream failed');
     expect(promptCalls).toBe(1);
-    expect(runtime.client.session.abort).toHaveBeenCalledTimes(2);
+    expect(runtime.client.session.abort).toHaveBeenCalledTimes(1);
     expect(releases).toBe(1);
   });
 
