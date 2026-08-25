@@ -548,24 +548,35 @@ export function resolveScopeArtifactsDir(
   return archonPaths.getScopeArtifactsPath(artifactsRoot, workflow.name, conversationId);
 }
 
+const claimedResumePayload: unique symbol = Symbol('claimedResumePayload');
+
 /**
- * Resume state may only appear together with `preCreatedRun` — passing prior
- * outputs or usage without the resumed row would silently inject state into a
- * freshly-created run. Lock-token rows (used by `dispatchBackgroundWorkflow`)
- * supply `preCreatedRun` alone.
+ * A persisted resume bundle produced only after this module successfully claims
+ * its run row. The private brand keeps caller-authored prior state out of the
+ * public execution contract; the runtime proof below remains authoritative when
+ * JavaScript or a TypeScript cast bypasses that contract.
+ */
+interface ClaimedResumePayload {
+  readonly [claimedResumePayload]: true;
+  preCreatedRun: WorkflowRun;
+  priorCompletedNodes: Map<string, PersistedNodeOutput>;
+  priorUsage: PriorRunUsage;
+  priorNodeSessions: readonly WorkflowRunNodeSession[];
+}
+
+/**
+ * Fresh dispatches may supply an already-created pending row (for example the
+ * lock-token path), but persisted continuation state must come from a claimed
+ * resume payload.
  */
 type ResumePayload =
+  | ClaimedResumePayload
   | {
-      preCreatedRun: WorkflowRun;
-      priorCompletedNodes?: Map<string, PersistedNodeOutput>;
-      priorUsage?: PriorRunUsage;
-      priorNodeSessions?: readonly WorkflowRunNodeSession[];
-    }
-  | {
-      preCreatedRun?: undefined;
-      priorCompletedNodes?: undefined;
-      priorUsage?: undefined;
-      priorNodeSessions?: undefined;
+      readonly [claimedResumePayload]?: never;
+      preCreatedRun?: WorkflowRun;
+      priorCompletedNodes?: never;
+      priorUsage?: never;
+      priorNodeSessions?: never;
     };
 
 /**
@@ -1041,34 +1052,17 @@ interface PersistedRunUsage {
   terminalUsageByNode?: ReadonlyMap<string, WorkflowRunUsage>;
 }
 
-// Ownership watermarks are capabilities, not caller-authored data: only this module's
-// persisted event/row reconciliation can prove which node and child usage the run owns.
-interface HydratedPriorUsageProof {
-  runId: string;
-  usage: PriorRunUsage;
-}
+// Resume state is a capability, not caller-authored data: only this module's
+// successful row claim can mint the canonical bundle admitted by the executor.
+type HydratedResumeProof = Omit<ClaimedResumePayload, typeof claimedResumePayload>;
 
-const hydratedPriorUsage = new WeakMap<PriorRunUsage, HydratedPriorUsageProof>();
+const hydratedPriorUsage = new WeakMap<PriorRunUsage, HydratedResumeProof>();
 
-function clonePriorRunUsage(usage: PriorRunUsage): PriorRunUsage {
-  const total = workflowRunUsageLeafSchema.parse({
-    costUsd: usage.costUsd,
-    ...(usage.tokens !== undefined ? { tokens: usage.tokens } : {}),
-  });
-  const terminalUsageByNode =
-    usage.terminalUsageByNode === undefined
-      ? undefined
-      : new Map(
-          [...usage.terminalUsageByNode].map(([nodeId, nodeUsage]) => [
-            nodeId,
-            workflowRunUsageSchema.parse(nodeUsage),
-          ])
-        );
-  return {
-    ...total,
-    workUnits: usage.workUnits,
-    ...(terminalUsageByNode !== undefined ? { terminalUsageByNode } : {}),
-  };
+function proveHydratedResume(
+  state: Omit<ClaimedResumePayload, typeof claimedResumePayload>
+): ClaimedResumePayload {
+  hydratedPriorUsage.set(state.priorUsage, structuredClone(state));
+  return { ...state, [claimedResumePayload]: true };
 }
 
 function readPersistedRunUsage(run: WorkflowRun): PersistedRunUsage {
@@ -1263,10 +1257,6 @@ function mergePersistedPriorUsage(
     workUnits: snapshot.workUnits,
     ...(terminalUsageByNode !== undefined ? { terminalUsageByNode } : {}),
   };
-  hydratedPriorUsage.set(priorUsage, {
-    runId: run.id,
-    usage: clonePriorRunUsage(priorUsage),
-  });
   return priorUsage;
 }
 
@@ -1317,12 +1307,7 @@ export async function hydrateResumableRun(
   deps: WorkflowDeps,
   candidate: WorkflowRun,
   cursor?: WorkflowResumeCursor
-): Promise<{
-  preCreatedRun: WorkflowRun;
-  priorCompletedNodes: Map<string, PersistedNodeOutput>;
-  priorUsage: PriorRunUsage;
-  priorNodeSessions: WorkflowRunNodeSession[];
-} | null> {
+): Promise<ClaimedResumePayload | null> {
   const inspection = await inspectResumableRun(deps, candidate);
   if (inspection === null) return null;
   const { priorCompletedNodes, priorUsage } = inspection;
@@ -1345,12 +1330,12 @@ export async function hydrateResumableRun(
     { workflowRunId: preCreatedRun.id, priorCompletedCount: priorCompletedNodes.size },
     'workflow.dag_resuming'
   );
-  return {
+  return proveHydratedResume({
     preCreatedRun,
     priorCompletedNodes,
     priorUsage,
     priorNodeSessions,
-  };
+  });
 }
 
 /** Depth cap on the `workflow:` sub-run tree (D9). A node nested deeper fails fast. */
@@ -1641,17 +1626,21 @@ async function runChildWorkflow(
         // classifier correctly found no resumable node output.
         const snapshot = await deps.store.getDagResumeSnapshot(resumeFailedChild.id);
         const preCreatedRun = await deps.store.resumeWorkflowRun(resumeFailedChild.id);
-        const priorUsage = mergePersistedPriorUsage(snapshot, preCreatedRun);
-        childOpts = {
+        const resumedState = proveHydratedResume({
           preCreatedRun,
-          priorUsage,
+          priorCompletedNodes: new Map(),
+          priorUsage: mergePersistedPriorUsage(snapshot, preCreatedRun),
+          priorNodeSessions: [],
+        });
+        childOpts = {
+          ...resumedState,
           codebaseId,
           resolveChildIsolation,
           preparedSource: childSource,
         };
         childRunId = preCreatedRun.id;
-        priorChildCostUsd = priorUsage.costUsd;
-        priorChildTokens = priorUsage.tokens;
+        priorChildCostUsd = resumedState.priorUsage.costUsd;
+        priorChildTokens = resumedState.priorUsage.tokens;
       }
     } else {
       const childRun = await deps.store.createWorkflowRun({
@@ -2056,10 +2045,10 @@ export async function executeWorkflow(
     issueContext,
     isolationContext,
     parentConversationId,
-    preCreatedRun,
-    priorCompletedNodes,
-    priorUsage,
-    priorNodeSessions,
+    preCreatedRun: suppliedPreCreatedRun,
+    priorCompletedNodes: suppliedPriorCompletedNodes,
+    priorUsage: suppliedPriorUsage,
+    priorNodeSessions: suppliedPriorNodeSessions,
     userId,
     source,
     parseWarnings,
@@ -2075,6 +2064,29 @@ export async function executeWorkflow(
     adoptedFromRunId,
     continuationMode = 'adopt',
   } = opts;
+
+  const hydratedResumeProof =
+    suppliedPriorUsage === undefined ? undefined : hydratedPriorUsage.get(suppliedPriorUsage);
+  const hasMatchingResumeProof =
+    hydratedResumeProof !== undefined &&
+    hydratedResumeProof.preCreatedRun.id === suppliedPreCreatedRun?.id;
+  const suppliedPriorState =
+    suppliedPriorCompletedNodes !== undefined ||
+    suppliedPriorUsage !== undefined ||
+    suppliedPriorNodeSessions !== undefined;
+  const isSuppliedContinuation =
+    suppliedPriorState ||
+    (suppliedPreCreatedRun !== undefined && suppliedPreCreatedRun.status !== 'pending');
+  const preCreatedRun = hasMatchingResumeProof
+    ? hydratedResumeProof.preCreatedRun
+    : suppliedPreCreatedRun;
+  const priorCompletedNodes = hasMatchingResumeProof
+    ? hydratedResumeProof.priorCompletedNodes
+    : suppliedPriorCompletedNodes;
+  const priorUsage = hasMatchingResumeProof ? hydratedResumeProof.priorUsage : suppliedPriorUsage;
+  const priorNodeSessions = hasMatchingResumeProof
+    ? hydratedResumeProof.priorNodeSessions
+    : suppliedPriorNodeSessions;
 
   const budgetValidation =
     workflow.budget === undefined
@@ -2109,25 +2121,25 @@ export async function executeWorkflow(
   }
   const requiresPersistedUsage =
     isContinuation && (workflow.budget !== undefined || requireReportedCost);
-  const hydratedUsageProof =
-    priorUsage === undefined ? undefined : hydratedPriorUsage.get(priorUsage);
-  const hasMatchingUsageProof =
-    hydratedUsageProof !== undefined && hydratedUsageProof.runId === preCreatedRun?.id;
-  const admittedPriorUsage = hasMatchingUsageProof ? hydratedUsageProof.usage : priorUsage;
   if (
     priorUsage !== undefined &&
-    (!isValidPriorRunUsage(admittedPriorUsage ?? priorUsage) ||
+    (!isValidPriorRunUsage(priorUsage) ||
       ((requiresPersistedUsage || priorUsage.terminalUsageByNode !== undefined) &&
-        !hasMatchingUsageProof))
+        !hasMatchingResumeProof))
   ) {
     throw new Error(
       `Cannot resume workflow run '${preCreatedRun?.id ?? 'unknown'}' with invalid persisted prior usage.`
     );
   }
-  if (priorUsage !== undefined && hasMatchingUsageProof) {
+  if (isSuppliedContinuation && !hasMatchingResumeProof) {
+    throw new Error(
+      `Cannot resume workflow run '${suppliedPreCreatedRun?.id ?? 'unknown'}' without a successful persisted resume claim.`
+    );
+  }
+  if (suppliedPriorUsage !== undefined && hasMatchingResumeProof) {
     // Consume the proof atomically at admission. A retry must re-read durable usage so
     // concurrent or later work cannot reuse a stale ledger snapshot.
-    hydratedPriorUsage.delete(priorUsage);
+    hydratedPriorUsage.delete(suppliedPriorUsage);
   }
   if (isContinuation && modelOverrides !== undefined) {
     throw new Error('Cannot supply model overrides when resuming an existing workflow run.');
@@ -2471,7 +2483,7 @@ export async function executeWorkflow(
   // preCreatedRun (from hydrateResumableRun) + priorCompletedNodes via opts.
   // When both are absent the executor creates a fresh row below.
   const dagPriorCompletedNodes = priorCompletedNodes;
-  const dagPriorUsage = admittedPriorUsage;
+  const dagPriorUsage = priorUsage;
   let workflowRun: WorkflowRun | undefined = preCreatedRun;
 
   if (preCreatedRun && priorCompletedNodes !== undefined) {

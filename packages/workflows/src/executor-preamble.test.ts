@@ -83,11 +83,17 @@ registerBuiltinProviders();
 // Import after mocks
 // ---------------------------------------------------------------------------
 
-import { executeWorkflow } from './executor';
+import { executeWorkflow, hydrateResumableRun } from './executor';
+import type { ExecuteWorkflowOptions } from './executor';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/** Deliberately bypass the public claim brand in tests of executor ingress behavior. */
+function callerAuthoredResume(value: object): ExecuteWorkflowOptions {
+  return value as ExecuteWorkflowOptions;
+}
 
 function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
   return {
@@ -371,48 +377,75 @@ describe('executeWorkflow preamble', () => {
   // -------------------------------------------------------------------------
 
   describe('workflow resume', () => {
-    it('uses caller-supplied preCreatedRun + priorCompletedNodes without re-querying the store', async () => {
-      // The caller has already run hydrateResumableRun and hands the result
-      // to executeWorkflow. The executor must NOT touch findResumableRun on
-      // its own — that decision lives at the caller.
-      const resumedRun = makeRun({ id: 'prior-run', status: 'running' });
-      const priorCompletedNodes = new Map([['node-a', { output: 'output from node-a' }]]);
+    it.each([
+      [
+        'a raw non-pending run',
+        makeRun({ id: 'unclaimed-run', status: 'running' }),
+        undefined,
+        'unclaimed-run',
+      ],
+      [
+        'caller-authored prior nodes on a pending run',
+        makeRun({ id: 'forged-priors-run', status: 'pending' }),
+        new Map([['node-a', { output: 'forged output' }]]),
+        'forged-priors-run',
+      ],
+      [
+        'caller-authored prior nodes without a run',
+        undefined,
+        new Map([['node-a', { output: 'forged output' }]]),
+        'unknown',
+      ],
+    ])(
+      'rejects %s without a successful claim',
+      async (_label, preCreatedRun, priorCompletedNodes, expectedRunId) => {
+        const findSpy = mock(async () => null);
+        const store = makeStore({ findResumableRun: findSpy });
+        const deps = makeDeps(store);
+        const platform = makePlatform();
 
-      const findSpy = mock(async () => null);
-      const store = makeStore({ findResumableRun: findSpy });
-      const deps = makeDeps(store);
-      const platform = makePlatform();
+        await expect(
+          executeWorkflow(
+            deps,
+            platform,
+            'conv-123',
+            '/tmp',
+            makeWorkflow(),
+            'User message',
+            'db-conv-id',
+            callerAuthoredResume({ preCreatedRun, priorCompletedNodes })
+          )
+        ).rejects.toThrow(
+          `Cannot resume workflow run '${expectedRunId}' without a successful persisted resume claim.`
+        );
 
-      const result = await executeWorkflow(
-        deps,
-        platform,
-        'conv-123',
-        '/tmp',
-        makeWorkflow(),
-        'User message',
-        'db-conv-id',
-        { preCreatedRun: resumedRun, priorCompletedNodes }
-      );
-
-      // Executor never queries findResumableRun (caller did it via hydrateResumableRun).
-      expect(findSpy).not.toHaveBeenCalled();
-      // No createWorkflowRun — caller supplied the resumed run.
-      expect((store.createWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(0);
-      // Resume notification was sent to user with the completed-node count.
-      const resumeMsg = findMessage(platform, 'Resuming');
-      expect(resumeMsg).toBeDefined();
-      expect((resumeMsg as unknown[])[1]).toContain('1 already-completed node(s)');
-      // Workflow run ID is the resumed run.
-      expect(result.workflowRunId).toBe('prior-run');
-    });
+        expect(findSpy).not.toHaveBeenCalled();
+        expect(store.createWorkflowRun).not.toHaveBeenCalled();
+        expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+      }
+    );
 
     it('sends interactive-loop notification when priorCompletedNodes is empty (paused approval gate)', async () => {
+      const candidate = makeRun({
+        id: 'paused-loop-run',
+        status: 'paused',
+        metadata: {
+          approval: {
+            type: 'interactive_loop',
+            nodeId: 'loop-1',
+            message: 'Iterate?',
+            iteration: 1,
+          },
+        },
+      });
       const resumedRun = makeRun({ id: 'paused-loop-run', status: 'running' });
-      const priorCompletedNodes = new Map<string, { output: string }>();
 
-      const store = makeStore();
+      const store = makeStore({ resumeWorkflowRun: mock(async () => resumedRun) });
       const deps = makeDeps(store);
       const platform = makePlatform();
+      const hydrated = await hydrateResumableRun(deps, candidate);
+      expect(hydrated).not.toBeNull();
+      if (!hydrated) throw new Error('Expected interactive loop continuation to hydrate');
 
       const result = await executeWorkflow(
         deps,
@@ -422,7 +455,7 @@ describe('executeWorkflow preamble', () => {
         makeWorkflow(),
         'User message',
         'db-conv-id',
-        { preCreatedRun: resumedRun, priorCompletedNodes }
+        hydrated
       );
 
       const resumeMsg = findMessage(platform, 'continuing interactive loop');

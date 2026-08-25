@@ -1382,7 +1382,10 @@ nodes:
 name: parent-recover
 description: parent that recovers a flaky child on resume
 nodes:
+  - id: seed
+    bash: "echo ready"
   - id: sub
+    depends_on: [seed]
     workflow: child-flaky
     input: "x"
   - id: after
@@ -1413,13 +1416,10 @@ nodes:
 
     // Resume the PARENT: re-entry finds the failed child and re-drives it once
     // (resumeFailedChild), the marker now exists so the child completes, and the
-    // output threads through to the downstream node. A failed parent with zero
-    // completed nodes hydrates to null — mirror the CLI's fallback: flip it back
-    // to running and re-run from the top under the SAME run id.
+    // output threads through to the downstream node. The completed seed makes
+    // this a real claimed continuation rather than a caller-authored retry.
     const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(parentRun!.id))!);
-    const resumeOpts = hydrated ?? {
-      preCreatedRun: await store.resumeWorkflowRun(parentRun!.id),
-    };
+    expect(hydrated).not.toBeNull();
     const r2 = await executeWorkflow(
       deps,
       makePlatform(),
@@ -1428,7 +1428,7 @@ nodes:
       parent,
       'goal',
       'conv-db',
-      { ...resumeOpts }
+      hydrated!
     );
     expect(r2.success).toBe(true);
     expect((await store.getWorkflowRun(parentRun!.id))?.status).toBe('completed');
@@ -1440,19 +1440,16 @@ nodes:
       .filter(e => e.event_type === 'node_completed' && e.step_name === 'sub')
       .at(-1);
     expect(String(subCompleted?.data?.node_output)).toContain('recovered');
-    // This direct unbudgeted continuation did not hydrate priorUsage, so its zero
-    // accumulator owns nothing. The child lifetime usage must be re-attributed to
-    // this pass instead of trusting a separate row watermark and under-reporting.
-    expect(subCompleted?.data?.cost_usd).toBeCloseTo(0.01, 5);
+    // Claimed continuation restores the parent's prior ownership watermark, so
+    // the child's already-attributed lifetime usage is not charged a second time.
+    expect(subCompleted?.data?.cost_usd).toBe(0);
     expect(subCompleted?.data?.tokens).toEqual({
-      input: 7,
-      output: 3,
-      cacheRead: 5,
+      input: 0,
+      output: 0,
+      cacheRead: 0,
       cacheWrite: 0,
     });
     const resumedParent = await store.getWorkflowRun(parentRun!.id);
-    // Without hydrated prior usage the continuation conservatively re-attributes
-    // the child lifetime total; the existing row total remains a separate prior pass.
     expect(resumedParent?.metadata.total_cost_usd).toBeCloseTo(0.02, 5);
     expect(resumedParent?.metadata.total_tokens_in).toBe(14);
     expect(resumedParent?.metadata.total_tokens_out).toBe(6);
@@ -1464,7 +1461,10 @@ nodes:
 name: parent-cancelled
 description: parent whose child gets cancelled out-of-band
 nodes:
+  - id: seed
+    bash: echo ready
   - id: sub
+    depends_on: [seed]
     workflow: child-flaky
     input: "x"
 `
@@ -1492,9 +1492,7 @@ nodes:
       deps2,
       (await store2.getWorkflowRun(parentRun2!.id))!
     );
-    const resumeOpts2 = hydrated2 ?? {
-      preCreatedRun: await store2.resumeWorkflowRun(parentRun2!.id),
-    };
+    expect(hydrated2).not.toBeNull();
     const p2r2 = await executeWorkflow(
       deps2,
       makePlatform(),
@@ -1503,7 +1501,7 @@ nodes:
       parent2,
       'goal',
       'conv-db',
-      { ...resumeOpts2 }
+      hydrated2!
     );
     expect(p2r2.success).toBe(false);
     // The cancelled child was NOT re-driven; the node failed with the cancel message.
@@ -1867,7 +1865,10 @@ nodes:
 name: charge-failure-child
 description: records spend before failing structured output
 nodes:
+  - id: seed
+    bash: echo ready
   - id: classify
+    depends_on: [seed]
     prompt: classify
     output_format:
       type: object
@@ -1933,17 +1934,8 @@ nodes:
       run => run.workflow_name === 'charge-failure-child'
     )!;
 
-    const childHydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(child.id))!);
-    const childSnapshot = await store.getDagResumeSnapshot(child.id);
-    const childResume = childHydrated ?? {
-      preCreatedRun: await store.resumeWorkflowRun(child.id),
-      priorCompletedNodes: childSnapshot.completedNodeOutputs,
-      priorUsage: {
-        costUsd: childSnapshot.costUsd,
-        tokens: childSnapshot.tokens,
-        workUnits: childSnapshot.workUnits,
-      },
-    };
+    const childResume = await hydrateResumableRun(deps, (await store.getWorkflowRun(child.id))!);
+    expect(childResume).not.toBeNull();
     expect(
       (
         await executeWorkflow(
@@ -1954,7 +1946,7 @@ nodes:
           childDefinition,
           child.user_message,
           'conv-db',
-          childResume
+          childResume!
         )
       ).success
     ).toBe(false);
@@ -2008,9 +2000,12 @@ nodes:
       `
 name: child-budget-fails-first
 description: its first failed attempt consumes the whole work budget
-budget: { max_work_units: 1 }
+budget: { max_work_units: 2 }
 nodes:
+  - id: seed
+    bash: echo ready
   - id: attempt
+    depends_on: [seed]
     bash: "test -f budget-marker && echo should-not-run || { touch budget-marker; exit 3; }"
 `
     );
@@ -2020,7 +2015,10 @@ nodes:
 name: parent-budget-retry
 description: tries to re-drive the failed child
 nodes:
+  - id: seed
+    bash: echo ready
   - id: sub
+    depends_on: [seed]
     workflow: child-budget-fails-first
 `
     );
@@ -2036,6 +2034,7 @@ nodes:
       run => run.workflow_name === 'parent-budget-retry'
     );
     const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(parentRun!.id))!);
+    expect(hydrated).not.toBeNull();
     const result = await executeWorkflow(
       deps,
       makePlatform(),
@@ -2044,7 +2043,7 @@ nodes:
       parent,
       'goal',
       'conv-db',
-      hydrated ?? { preCreatedRun: await store.resumeWorkflowRun(parentRun!.id) }
+      hydrated!
     );
 
     expect(result.success).toBe(false);
@@ -2059,8 +2058,8 @@ nodes:
     );
     expect(exhaustion?.data).toMatchObject({
       budget: 'max_work_units',
-      limit: 1,
-      current: 1,
+      limit: 2,
+      current: 2,
     });
   });
 
@@ -2614,7 +2613,10 @@ nodes:
 name: parent-iso-resume
 description: parent whose isolated child worktree gets pruned
 nodes:
+  - id: seed
+    bash: echo ready
   - id: sub
+    depends_on: [seed]
     workflow: child-iso-fail
     input: "x"
     isolation: worktree
@@ -2647,9 +2649,7 @@ nodes:
     // Prune the child's worktree, then resume the parent.
     await rm(childCwd, { recursive: true, force: true });
     const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(parentRun!.id))!);
-    const resumeOpts = hydrated ?? {
-      preCreatedRun: await store.resumeWorkflowRun(parentRun!.id),
-    };
+    expect(hydrated).not.toBeNull();
     const r2 = await executeWorkflow(
       deps,
       makePlatform(),
@@ -2658,7 +2658,7 @@ nodes:
       parent,
       'goal',
       'conv-db',
-      { ...resumeOpts, resolveChildIsolation: resolver }
+      { ...hydrated!, resolveChildIsolation: resolver }
     );
 
     expect(r2.success).toBe(false);
@@ -2693,7 +2693,10 @@ nodes:
 name: parent-null-path
 description: parent resuming a child with no recorded checkout
 nodes:
+  - id: seed
+    bash: echo ready
   - id: sub
+    depends_on: [seed]
     workflow: child-null-path
     input: "x"
     isolation: worktree
@@ -2716,7 +2719,7 @@ nodes:
     // Erase the recorded checkout, then resume the parent.
     store.runs.get(child!.id)!.working_path = null;
     const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(parentRun!.id))!);
-    const resumeOpts = hydrated ?? { preCreatedRun: await store.resumeWorkflowRun(parentRun!.id) };
+    expect(hydrated).not.toBeNull();
     const r2 = await executeWorkflow(
       deps,
       makePlatform(),
@@ -2725,7 +2728,7 @@ nodes:
       parent,
       'goal',
       'conv-db',
-      { ...resumeOpts, resolveChildIsolation: resolver }
+      { ...hydrated!, resolveChildIsolation: resolver }
     );
 
     expect(r2.success).toBe(false);

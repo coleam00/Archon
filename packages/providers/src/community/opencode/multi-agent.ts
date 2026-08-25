@@ -11,7 +11,7 @@ import {
   promptSession,
   resolveSessionId,
 } from './session';
-import { normalizeTokens } from './tokens';
+import { aggregateAssistantMessageUsage } from './tokens';
 
 interface ProviderModel {
   providerID: string;
@@ -24,6 +24,7 @@ interface AgentRunState {
   sessionId: string;
   chunks: MessageChunk[];
   latestAssistantInfo?: Record<string, unknown>;
+  assistantInfoById: Map<string, Record<string, unknown>>;
   lastAssistantMessageId?: string;
   done: boolean;
 }
@@ -170,6 +171,7 @@ export async function* streamMultiAgentOpencodeSession(
           cwd,
           sessionId,
           chunks: [],
+          assistantInfoById: new Map(),
           done: false,
         };
         sessionToAgent.set(sessionId, state);
@@ -224,6 +226,7 @@ export async function* streamMultiAgentOpencodeSession(
         state.latestAssistantInfo = info;
         if (typeof info.id === 'string') {
           state.lastAssistantMessageId = info.id;
+          state.assistantInfoById.set(info.id, info);
         }
         continue;
       }
@@ -345,7 +348,7 @@ export async function* streamMultiAgentOpencodeSession(
           // OpenCode's own composition, including its `input + output` fallback. Cost is
           // emitted only when every sub-agent reported a finite non-negative value.
           const perAgentUsage = states
-            .map(candidate => normalizeTokens(candidate.latestAssistantInfo))
+            .map(candidate => aggregateAssistantMessageUsage(candidate.assistantInfoById.values()))
             .filter((usage): usage is TokenUsage => usage !== undefined);
           const mergedUsage = mergeTokenUsage(perAgentUsage);
           const cost =

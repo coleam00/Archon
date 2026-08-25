@@ -391,6 +391,21 @@ describe('OpencodeProvider', () => {
         type: 'message.updated',
         properties: {
           info: {
+            id: 'message-scout-before-tool',
+            role: 'assistant',
+            sessionID: 'scout-session',
+            providerID: 'anthropic',
+            modelID: 'claude-sonnet',
+            cost: 0.1,
+            finish: 'tool-calls',
+            tokens: { input: 2, output: 1 },
+          },
+        },
+      },
+      {
+        type: 'message.updated',
+        properties: {
+          info: {
             id: 'message-scout',
             role: 'assistant',
             sessionID: 'scout-session',
@@ -442,16 +457,16 @@ describe('OpencodeProvider', () => {
       expect.arrayContaining([
         expect.objectContaining({
           type: 'result',
-          cost: 0.5,
           tokens: {
-            input: 36,
-            output: 10,
+            input: 38,
+            output: 11,
             cacheRead: 5,
             cacheWrite: 0,
             cachePartial: true,
-            total: 46,
-            cost: 0.5,
+            total: 49,
+            cost: 0.6,
           },
+          cost: 0.6,
         }),
       ])
     );
@@ -541,6 +556,21 @@ describe('OpencodeProvider', () => {
         type: 'message.updated',
         properties: {
           info: {
+            id: 'message-before-tool',
+            role: 'assistant',
+            sessionID: 'session-1',
+            providerID: 'anthropic',
+            modelID: 'claude-sonnet',
+            cost: 0.1,
+            finish: 'tool-calls',
+            tokens: { input: 2, output: 1 },
+          },
+        },
+      },
+      {
+        type: 'message.updated',
+        properties: {
+          info: {
             id: 'message-1',
             role: 'assistant',
             sessionID: 'session-1',
@@ -568,14 +598,15 @@ describe('OpencodeProvider', () => {
         type: 'result',
         sessionId: 'session-1',
         tokens: {
-          input: 16,
-          output: 7,
+          input: 18,
+          output: 8,
           cacheRead: 5,
           cacheWrite: 0,
-          total: 26,
-          cost: 0.42,
+          cachePartial: true,
+          total: 29,
+          cost: 0.52,
         },
-        cost: 0.42,
+        cost: 0.52,
         stopReason: 'stop',
         resolvedModel: { id: 'claude-sonnet' },
       },

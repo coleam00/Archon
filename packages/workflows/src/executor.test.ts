@@ -168,6 +168,7 @@ import {
   resolveProjectPaths,
   resolveScopeArtifactsDir,
 } from './executor';
+import type { ExecuteWorkflowOptions } from './executor';
 import { keepAwake } from './utils/keep-awake';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
 import type { IWorkflowStore } from './store';
@@ -177,6 +178,11 @@ import type { WorkflowRunConfigMetadata } from './schemas/run-config';
 import { substituteWorkflowVariables } from './executor-shared';
 
 // --- Helpers ---
+
+/** Deliberately bypass the public claim brand in tests that exercise runtime rejection. */
+function callerAuthoredResume(value: object): ExecuteWorkflowOptions {
+  return value as ExecuteWorkflowOptions;
+}
 
 function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
   return {
@@ -278,6 +284,48 @@ function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
   };
 }
 
+async function claimResume(
+  deps: WorkflowDeps,
+  preCreatedRun: WorkflowRun,
+  priorCompletedNodes: Map<string, { output: string }> = new Map(),
+  priorUsage: {
+    tokens?: { input: number; output: number };
+    costUsd?: number;
+    workUnits?: number;
+  } = {}
+): Promise<ExecuteWorkflowOptions> {
+  const getSnapshot = deps.store.getDagResumeSnapshot as ReturnType<typeof mock>;
+  getSnapshot.mockImplementationOnce(async () => ({
+    completedNodeOutputs: priorCompletedNodes,
+    terminalNodeIds: new Set(priorCompletedNodes.keys()),
+    tokens: priorUsage.tokens,
+    costUsd: priorUsage.costUsd ?? 0,
+    workUnits: priorUsage.workUnits ?? 0,
+  }));
+  const resumeRun = deps.store.resumeWorkflowRun as ReturnType<typeof mock>;
+  resumeRun.mockImplementationOnce(async () => preCreatedRun);
+  const candidate = makeRun({
+    ...preCreatedRun,
+    status: 'paused',
+    ...(priorCompletedNodes.size === 0
+      ? {
+          metadata: {
+            ...preCreatedRun.metadata,
+            approval: {
+              type: 'interactive_loop',
+              nodeId: 'node1',
+              message: 'Continue?',
+              iteration: 1,
+            },
+          },
+        }
+      : {}),
+  });
+  const claimed = await hydrateResumableRun(deps, candidate);
+  if (claimed === null) throw new Error('Expected test continuation to be claimable');
+  return claimed;
+}
+
 describe('executeWorkflow', () => {
   beforeEach(() => {
     mockLogFn.mockClear();
@@ -343,7 +391,7 @@ describe('executeWorkflow', () => {
         workflow,
         'msg',
         'db-conv-1',
-        { preCreatedRun: resumed, priorCompletedNodes: new Map() }
+        callerAuthoredResume({ preCreatedRun: resumed, priorCompletedNodes: new Map() })
       )
     ).rejects.toThrow(
       "Cannot resume workflow run 'governed-resume' without its persisted prior usage"
@@ -370,11 +418,11 @@ describe('executeWorkflow', () => {
         { ...makeWorkflow(), budget: { max_work_units: 2 } },
         'msg',
         'db-conv-1',
-        {
+        callerAuthoredResume({
           preCreatedRun: resumed,
           priorCompletedNodes: new Map(),
           priorUsage,
-        }
+        })
       )
     ).rejects.toThrow(
       "Cannot resume workflow run 'invalid-usage-resume' with invalid persisted prior usage"
@@ -387,6 +435,13 @@ describe('executeWorkflow', () => {
     const store = makeStore();
     const resumed = makeRun({ id: 'forged-total-resume', status: 'running' });
 
+    // @ts-expect-error Persisted state must carry the module-private successful-claim brand.
+    const callerAuthored: ExecuteWorkflowOptions = {
+      preCreatedRun: resumed,
+      priorUsage: { costUsd: 0, workUnits: 0 },
+    };
+    expect(callerAuthored.preCreatedRun).toBe(resumed);
+
     await expect(
       executeWorkflow(
         makeDeps(store),
@@ -396,11 +451,11 @@ describe('executeWorkflow', () => {
         { ...makeWorkflow(), budget: { max_work_units: 2 } },
         'msg',
         'db-conv-1',
-        {
+        callerAuthoredResume({
           preCreatedRun: resumed,
           priorCompletedNodes: new Map(),
           priorUsage: { costUsd: 0, workUnits: 0 },
-        }
+        })
       )
     ).rejects.toThrow(
       "Cannot resume workflow run 'forged-total-resume' with invalid persisted prior usage"
@@ -433,14 +488,50 @@ describe('executeWorkflow', () => {
         { ...makeWorkflow(), budget: { max_work_units: 2 } },
         'msg',
         'db-conv-1',
-        {
+        callerAuthoredResume({
           preCreatedRun: target,
           priorCompletedNodes: inspection!.priorCompletedNodes,
           priorUsage: inspection!.priorUsage,
-        }
+        })
       )
     ).rejects.toThrow(
       "Cannot resume workflow run 'usage-target-run' with invalid persisted prior usage"
+    );
+
+    expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('does not let read-only inspection mint a governed resume proof (#1961)', async () => {
+    const resumed = makeRun({ id: 'inspected-only-run', status: 'paused' });
+    const completed = new Map([['node1', { output: 'done' }]]);
+    const store = makeStore({
+      getDagResumeSnapshot: mock(async () => ({
+        completedNodeOutputs: completed,
+        terminalNodeIds: new Set(['node1']),
+        costUsd: 1,
+        workUnits: 1,
+      })),
+    });
+    const inspection = await inspectResumableRun(makeDeps(store), resumed);
+    expect(inspection).not.toBeNull();
+
+    await expect(
+      executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv-1',
+        '/tmp/ops',
+        { ...makeWorkflow(), budget: { max_work_units: 2 } },
+        'msg',
+        'db-conv-1',
+        callerAuthoredResume({
+          preCreatedRun: resumed,
+          priorCompletedNodes: inspection!.priorCompletedNodes,
+          priorUsage: inspection!.priorUsage,
+        })
+      )
+    ).rejects.toThrow(
+      "Cannot resume workflow run 'inspected-only-run' with invalid persisted prior usage"
     );
 
     expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
@@ -459,7 +550,7 @@ describe('executeWorkflow', () => {
         { ...makeWorkflow(), budget: { max_spend_usd: 5 } },
         'msg',
         'db-conv-1',
-        {
+        callerAuthoredResume({
           preCreatedRun: resumed,
           priorCompletedNodes: new Map(),
           priorUsage: {
@@ -467,7 +558,7 @@ describe('executeWorkflow', () => {
             workUnits: 0,
             terminalUsageByNode: new Map([['sub', { costUsd: 1 }]]),
           },
-        }
+        })
       )
     ).rejects.toThrow(
       "Cannot resume workflow run 'oversized-watermark-resume' with invalid persisted prior usage"
@@ -489,7 +580,7 @@ describe('executeWorkflow', () => {
         { ...makeWorkflow(), budget: { max_spend_usd: 5 } },
         'msg',
         'db-conv-1',
-        {
+        callerAuthoredResume({
           preCreatedRun: resumed,
           priorCompletedNodes: new Map(),
           priorUsage: {
@@ -499,7 +590,7 @@ describe('executeWorkflow', () => {
               ['fan', { costUsd: 0, children: { child: { costUsd: 1 } } }],
             ]),
           },
-        }
+        })
       )
     ).rejects.toThrow(
       "Cannot resume workflow run 'oversized-child-watermark-resume' with invalid persisted prior usage"
@@ -521,7 +612,7 @@ describe('executeWorkflow', () => {
         { ...makeWorkflow(), budget: { max_spend_usd: 5 } },
         'msg',
         'db-conv-1',
-        {
+        callerAuthoredResume({
           preCreatedRun: resumed,
           priorCompletedNodes: new Map(),
           priorUsage: {
@@ -529,7 +620,7 @@ describe('executeWorkflow', () => {
             workUnits: 0,
             terminalUsageByNode: new Map([['sub', { costUsd: 1 }]]),
           },
-        }
+        })
       )
     ).rejects.toThrow(
       "Cannot resume workflow run 'forged-watermark-resume' with invalid persisted prior usage"
@@ -550,7 +641,7 @@ describe('executeWorkflow', () => {
         { ...makeWorkflow(), budget: { max_spend_usd: 5 } },
         'msg',
         'db-conv-1',
-        {
+        callerAuthoredResume({
           preCreatedRun: resumed,
           priorCompletedNodes: new Map(),
           priorUsage: {
@@ -558,7 +649,7 @@ describe('executeWorkflow', () => {
             workUnits: 0,
             tokens: { input: 1, output: 1, cachePartial: true },
           },
-        }
+        })
       )
     ).rejects.toThrow(
       "Cannot resume workflow run 'invalid-cache-floor-resume' with invalid persisted prior usage"
@@ -598,11 +689,11 @@ describe('executeWorkflow', () => {
         { ...makeWorkflow(), budget: { max_spend_usd: 5 } },
         'msg',
         'db-conv-1',
-        {
+        callerAuthoredResume({
           preCreatedRun: resumed,
           priorCompletedNodes: inspection!.priorCompletedNodes,
           priorUsage: inspection!.priorUsage,
-        }
+        })
       )
     ).rejects.toThrow(
       "Cannot resume workflow run 'partial-watermark-resume' with invalid persisted prior usage"
@@ -648,15 +739,21 @@ describe('executeWorkflow', () => {
         id: 'crun',
         metadata: { isolation: 'container', isolation_env_id: 'env-x' },
       });
+      const deps = makeDeps(store);
+      const claimed = await claimResume(
+        deps,
+        preCreatedRun,
+        new Map([['node1', { output: 'out' }]])
+      );
       const result = await executeWorkflow(
-        makeDeps(store),
+        deps,
         makePlatform(),
         'conv-1',
         '/tmp/ops',
         makeWorkflow(),
         'msg',
         'db-conv-1',
-        { preCreatedRun, priorCompletedNodes: new Map([['node1', { output: 'out' }]]) }
+        claimed
       );
       expect(result.success).toBe(false);
       if (result.success) throw new Error('Expected missing-container-context failure');
@@ -677,8 +774,15 @@ describe('executeWorkflow', () => {
         applyChanges: mock(async () => ({ filesApplied: 0, filesDeleted: 0, warnings: [] })),
         discardChanges: mock(async () => {}),
       };
+      const deps = makeDeps();
+      const claimed = await claimResume(
+        deps,
+        preCreatedRun,
+        new Map([['node1', { output: 'out' }]]),
+        { tokens: { input: 40, output: 4 }, costUsd: 0.5 }
+      );
       const result = await executeWorkflow(
-        makeDeps(),
+        deps,
         makePlatform(),
         'conv-1',
         '/tmp/ops',
@@ -686,9 +790,7 @@ describe('executeWorkflow', () => {
         'msg',
         'db-conv-1',
         {
-          preCreatedRun,
-          priorCompletedNodes: new Map([['node1', { output: 'out' }]]),
-          priorUsage: { tokens: { input: 40, output: 4 }, costUsd: 0.5, workUnits: 0 },
+          ...claimed,
           execContext: { kind: 'container', containerId: 'cid' },
           container: { envId: 'env-x', writeBack: 'approve', backend },
         }
@@ -729,18 +831,21 @@ describe('executeWorkflow', () => {
         ).prompt;
         return undefined;
       });
+      const deps = makeDeps(store);
+      const claimed = await claimResume(
+        deps,
+        makeRun({ status: 'running', adopted_from_run_id: 'prior-run' }),
+        new Map([['node1', { output: 'out' }]])
+      );
       const result = await executeWorkflow(
-        makeDeps(store),
+        deps,
         makePlatform(),
         'conv-1',
         '/tmp/ops',
         makeWorkflow(),
         'msg',
         'db-conv-1',
-        {
-          preCreatedRun: makeRun({ status: 'running', adopted_from_run_id: 'prior-run' }),
-          priorCompletedNodes: new Map([['node1', { output: 'out' }]]),
-        }
+        claimed
       );
       expect(result.success).toBe(true);
       expect(store.getWorkflowRun).toHaveBeenCalledWith('prior-run');
@@ -1260,22 +1365,25 @@ describe('executeWorkflow', () => {
         },
       });
 
+      const firstDeps = makeDeps(makeStore());
       await executeWorkflow(
-        makeDeps(makeStore()),
+        firstDeps,
         makePlatform(),
         'conv-1',
         '/tmp',
         makeWorkflow({ model: 'large' }),
         'msg',
         'db-conv-1',
-        { preCreatedRun, priorCompletedNodes: new Map() }
+        await claimResume(firstDeps, preCreatedRun)
       );
       expect(mockExecuteDagWorkflow.mock.calls[0]?.[6]).toBe('pi');
       expect(mockExecuteDagWorkflow.mock.calls[0]?.[7]).toBe('openai/gpt-5.6');
 
+      const secondDeps = makeDeps(makeStore());
+      const secondClaim = await claimResume(secondDeps, preCreatedRun);
       await expect(
         executeWorkflow(
-          makeDeps(makeStore()),
+          secondDeps,
           makePlatform(),
           'conv-1',
           '/tmp',
@@ -1283,8 +1391,7 @@ describe('executeWorkflow', () => {
           'msg',
           'db-conv-1',
           {
-            preCreatedRun,
-            priorCompletedNodes: new Map(),
+            ...secondClaim,
             modelOverrideLayer: {
               kind: 'raw',
               overrides: { tiers: { large: 'codex/gpt-5.6-sol' } },
@@ -1326,16 +1433,17 @@ describe('executeWorkflow', () => {
         },
       });
 
+      const deps = makeDeps(makeStore({ failWorkflowRun: failRun }));
       await expect(
         executeWorkflow(
-          makeDeps(makeStore({ failWorkflowRun: failRun })),
+          deps,
           makePlatform(),
           'conv-1',
           '/tmp',
           makeWorkflow({ model: 'large' }),
           'msg',
           'db-conv-1',
-          { preCreatedRun, priorCompletedNodes: new Map() }
+          await claimResume(deps, preCreatedRun)
         )
       ).rejects.toThrow(/cannot apply effort to provider 'opencode'/);
 
@@ -1364,16 +1472,17 @@ describe('executeWorkflow', () => {
         },
       });
 
+      const deps = makeDeps(makeStore({ failWorkflowRun: failRun }));
       await expect(
         executeWorkflow(
-          makeDeps(makeStore({ failWorkflowRun: failRun })),
+          deps,
           makePlatform(),
           'conv-1',
           '/tmp',
           makeWorkflow({ model: 'large' }),
           'msg',
           'db-conv-1',
-          { preCreatedRun, priorCompletedNodes: new Map() }
+          await claimResume(deps, preCreatedRun)
         )
       ).rejects.toThrow(/invalid model_bindings aliases/);
 
@@ -1404,16 +1513,17 @@ describe('executeWorkflow', () => {
         },
       });
 
+      const deps = makeDeps(makeStore({ failWorkflowRun: failRun }));
       await expect(
         executeWorkflow(
-          makeDeps(makeStore({ failWorkflowRun: failRun })),
+          deps,
           makePlatform(),
           'conv-1',
           '/tmp',
           makeWorkflow({ model: 'large' }),
           'msg',
           'db-conv-1',
-          { preCreatedRun, priorCompletedNodes: new Map() }
+          await claimResume(deps, preCreatedRun)
         )
       ).rejects.toThrow(/unknown provider 'removed-provider'/);
 
@@ -1445,16 +1555,17 @@ describe('executeWorkflow', () => {
         },
       });
 
+      const deps = makeDeps(makeStore({ failWorkflowRun: failRun }));
       await expect(
         executeWorkflow(
-          makeDeps(makeStore({ failWorkflowRun: failRun })),
+          deps,
           makePlatform(),
           'conv-1',
           '/tmp',
           makeWorkflow({ model: 'large' }),
           'msg',
           'db-conv-1',
-          { preCreatedRun, priorCompletedNodes: new Map() }
+          await claimResume(deps, preCreatedRun)
         )
       ).rejects.toThrow(/cannot apply Claude-shaped thinking options/);
 
@@ -1652,16 +1763,17 @@ describe('executeWorkflow', () => {
         status: 'running',
         metadata: { run_config: sealedMetadata },
       });
+      const deps = { ...makeDeps(makeStore()), unsealRunConfig };
 
       await executeWorkflow(
-        { ...makeDeps(makeStore()), unsealRunConfig },
+        deps,
         makePlatform(),
         'conv-1',
         '/tmp',
         makeWorkflow(),
         'msg',
         'db-conv-1',
-        { preCreatedRun, priorCompletedNodes: new Map() }
+        await claimResume(deps, preCreatedRun)
       );
 
       expect(unsealRunConfig).toHaveBeenCalledWith(sealedMetadata);
@@ -1678,22 +1790,23 @@ describe('executeWorkflow', () => {
         status: 'running',
         metadata: { run_config: sealedMetadata },
       });
+      const deps: WorkflowDeps = {
+        ...makeDeps(makeStore({ failWorkflowRun: failRun })),
+        unsealRunConfig: () => {
+          throw new Error('Workflow run config could not be decrypted.');
+        },
+      };
 
       await expect(
         executeWorkflow(
-          {
-            ...makeDeps(makeStore({ failWorkflowRun: failRun })),
-            unsealRunConfig: () => {
-              throw new Error('Workflow run config could not be decrypted.');
-            },
-          },
+          deps,
           makePlatform(),
           'conv-1',
           '/tmp',
           makeWorkflow(),
           'msg',
           'db-conv-1',
-          { preCreatedRun, priorCompletedNodes: new Map() }
+          await claimResume(deps, preCreatedRun)
         )
       ).rejects.toThrow('could not be decrypted');
       expect(failRun).toHaveBeenCalledWith(
@@ -1912,6 +2025,7 @@ describe('executeWorkflow', () => {
       const createEventSpy = mock<IWorkflowStore['createWorkflowEvent']>(async _data => {});
       const preCreatedRun = makeRun({
         id: 'child-run',
+        status: 'pending',
         user_message: 'persisted child input',
         user_id: null,
         parent_run_id: 'parent-run',
@@ -2269,7 +2383,7 @@ describe('executeWorkflow', () => {
       expect(store.createWorkflowRun).toHaveBeenCalledTimes(1);
     });
 
-    it('runs the dag-executor with priorCompletedNodes when caller supplies them', async () => {
+    it('runs the dag-executor with claimed priorCompletedNodes', async () => {
       const resumed = makeRun({ id: 'resumed-run', status: 'running' });
       const priorCompletedNodes = new Map([
         ['node-a', { output: 'a-output' }],
@@ -2277,6 +2391,7 @@ describe('executeWorkflow', () => {
       ]);
       const store = makeStore();
       const deps = makeDeps(store);
+      const claimed = await claimResume(deps, resumed, priorCompletedNodes);
       await executeWorkflow(
         deps,
         makePlatform(),
@@ -2285,7 +2400,7 @@ describe('executeWorkflow', () => {
         makeWorkflow(),
         'test message',
         'db-conv-1',
-        { preCreatedRun: resumed, priorCompletedNodes }
+        claimed
       );
       // dag-executor receives the priorCompletedNodes map at arg index 15.
       // dag-executor signature: deps, platform, conversationId, cwd, workflow,
@@ -2294,7 +2409,7 @@ describe('executeWorkflow', () => {
       const passedPriors = mockExecuteDagWorkflow.mock.calls[0]?.[16] as
         | Map<string, { output: string }>
         | undefined;
-      expect(passedPriors).toBe(priorCompletedNodes);
+      expect(passedPriors).toEqual(priorCompletedNodes);
       // No fresh row created when a preCreatedRun is supplied.
       expect(store.createWorkflowRun).not.toHaveBeenCalled();
     });
@@ -2309,8 +2424,12 @@ describe('executeWorkflow', () => {
         created_at: '2026-08-19T00:00:00Z',
         updated_at: '2026-08-19T00:00:00Z',
       };
-      const store = makeStore();
+      const completed = new Map([['source', { output: 'prior output' }]]);
+      const store = makeStore({
+        listWorkflowRunNodeSessions: mock(async () => [foreignSession]),
+      });
       const deps = makeDeps(store);
+      const claimed = await claimResume(deps, preCreatedRun, completed);
 
       await expect(
         executeWorkflow(
@@ -2321,11 +2440,7 @@ describe('executeWorkflow', () => {
           makeWorkflow(),
           'test message',
           'db-conv-1',
-          {
-            preCreatedRun,
-            priorCompletedNodes: new Map([['source', { output: 'prior output' }]]),
-            priorNodeSessions: [foreignSession],
-          }
+          claimed
         )
       ).rejects.toThrow("Cannot resume workflow run 'run-a' with session state from run 'run-b'");
 
@@ -2336,7 +2451,11 @@ describe('executeWorkflow', () => {
 
     it('forwards a hydrated resume snapshot into resumed DAG execution', async () => {
       const candidate = makeRun({ id: 'failed-run', status: 'failed' });
-      const resumed = makeRun({ id: 'failed-run', status: 'running' });
+      const resumed = makeRun({
+        id: 'failed-run',
+        status: 'running',
+        metadata: { cost_reporting_unavailable: true },
+      });
       const completedNodeOutputs = new Map([['node-a', { output: 'first output' }]]);
       const tokens = { input: 40, output: 4 };
       const costUsd = 0.25;
@@ -2371,6 +2490,8 @@ describe('executeWorkflow', () => {
       hydrated.priorUsage.costUsd = 0;
       hydrated.priorUsage.workUnits = 99;
       if (hydrated.priorUsage.tokens !== undefined) hydrated.priorUsage.tokens.input = 0;
+      hydrated.priorCompletedNodes.delete('node-a');
+      hydrated.preCreatedRun.metadata = { cost_reporting_unavailable: false };
 
       await executeWorkflow(
         deps,
@@ -2384,7 +2505,8 @@ describe('executeWorkflow', () => {
       );
 
       const dagCall = mockExecuteDagWorkflow.mock.calls[0];
-      expect(dagCall?.[16]).toBe(completedNodeOutputs);
+      expect(dagCall?.[5].metadata).toMatchObject({ cost_reporting_unavailable: true });
+      expect(dagCall?.[16]).toEqual(new Map([['node-a', { output: 'first output' }]]));
       // Both usage axes travel as one `priorUsage` bundle (#2469) — cost is restored
       // across resume exactly like tokens, so a resumed run's total never regresses.
       expect(dagCall?.[24]).toEqual({
@@ -2518,7 +2640,7 @@ describe('executeWorkflow', () => {
 
   describe('pre-created run', () => {
     it('uses pre-created run row but still runs concurrent-run check', async () => {
-      const preRun = makeRun({ id: 'pre-run-1' });
+      const preRun = makeRun({ id: 'pre-run-1', status: 'pending' });
       const store = makeStore();
       const deps = makeDeps(store);
       const result = await executeWorkflow(
@@ -2817,6 +2939,8 @@ describe('executeWorkflow', () => {
         isPerUserProviderKeysEnabled: () => true,
         getUserProviderEnv,
       };
+      const preCreatedRun = makeRun({ user_id: 'persisted-user' });
+      const claimed = await claimResume(deps, preCreatedRun);
 
       await executeWorkflow(
         deps,
@@ -2827,7 +2951,7 @@ describe('executeWorkflow', () => {
         'msg',
         'db-c1',
         {
-          preCreatedRun: makeRun({ user_id: 'persisted-user' }),
+          ...claimed,
           userId: 'transient-resumer',
         }
       );

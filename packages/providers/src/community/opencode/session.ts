@@ -10,7 +10,7 @@ import {
 } from './agent-config';
 import { errorMessage } from './errors';
 import type { OpencodeClientLike } from './runtime';
-import { normalizeTokens } from './tokens';
+import { aggregateAssistantMessageUsage } from './tokens';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 
@@ -129,6 +129,7 @@ export async function* streamOpencodeSession(
   const seenToolCalls = new Set<string>();
   const completedToolCalls = new Set<string>();
   let latestAssistantInfo: Record<string, unknown> | undefined;
+  const assistantInfoById = new Map<string, Record<string, unknown>>();
   let lastAssistantMessageId: string | undefined;
   let aborted = requestOptions?.abortSignal?.aborted === true;
   let resultYielded = false;
@@ -164,6 +165,7 @@ export async function* streamOpencodeSession(
           latestAssistantInfo = info;
           if (typeof info.id === 'string') {
             lastAssistantMessageId = info.id;
+            assistantInfoById.set(info.id, info);
           }
         }
         continue;
@@ -255,16 +257,14 @@ export async function* streamOpencodeSession(
           sessionId,
           lastAssistantMessageId
         );
-        const tokens = normalizeTokens(latestAssistantInfo);
+        const tokens = aggregateAssistantMessageUsage(assistantInfoById.values());
 
         yield {
           type: 'result',
           sessionId,
           ...(tokens ? { tokens } : {}),
           ...(structuredOutput !== undefined ? { structuredOutput } : {}),
-          ...(typeof latestAssistantInfo?.cost === 'number'
-            ? { cost: latestAssistantInfo.cost }
-            : {}),
+          ...(tokens?.cost !== undefined ? { cost: tokens.cost } : {}),
           ...(typeof latestAssistantInfo?.finish === 'string'
             ? { stopReason: latestAssistantInfo.finish }
             : {}),
