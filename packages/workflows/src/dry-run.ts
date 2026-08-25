@@ -57,7 +57,14 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
-export const dryRunStubValueSchema = z.union([z.string(), z.record(z.string(), z.unknown())]);
+export const dryRunStubValueSchema = z.union([
+  z.string(),
+  z.record(z.string(), z.unknown()),
+  z.array(z.unknown()),
+  z.number(),
+  z.boolean(),
+  z.null(),
+]);
 export type DryRunStubValue = z.infer<typeof dryRunStubValueSchema>;
 export const dryRunStubsSchema = z.unknown().transform((value, ctx) => {
   if (!isRecord(value)) {
@@ -91,6 +98,10 @@ export type DryRunStubs = z.infer<typeof dryRunStubsSchema>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isStubValue(value: unknown): value is DryRunStubValue {
+  return dryRunStubValueSchema.safeParse(value).success;
 }
 
 function schemaPlaceholder(schema: unknown): unknown {
@@ -148,12 +159,12 @@ function generatedStubFor(node: DagNode): DryRunStubValue {
   }
 
   const value = schemaPlaceholder(node.output_format);
-  if (!isRecord(value)) {
-    throw new Error(
-      `Cannot generate dry-run stub for node '${node.id}': output_format must produce an object value`
-    );
-  }
   if (isLoopNode(node) && node.loop.until_field !== undefined) {
+    if (!isRecord(value)) {
+      throw new Error(
+        `Cannot generate dry-run stub for node '${node.id}': loop.until_field requires an object-typed output_format`
+      );
+    }
     value[node.loop.until_field] = true;
   }
 
@@ -171,12 +182,16 @@ function generatedStubFor(node: DagNode): DryRunStubValue {
       `Cannot generate schema-valid dry-run stub for node '${node.id}': ${validation.errors.join('; ')}`
     );
   }
+  if (!isStubValue(value)) {
+    throw new Error(
+      `Cannot generate dry-run stub for node '${node.id}': output_format produced a placeholder of an unsupported type`
+    );
+  }
   return value;
 }
 
 function stubSatisfiesNode(node: DagNode, stub: DryRunStubValue): boolean {
   if (node.output_format !== undefined) {
-    if (!isRecord(stub)) return false;
     const validation = validateStructuredOutput(stub, node.output_format);
     if (!validation.valid) return false;
   }

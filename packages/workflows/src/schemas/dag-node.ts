@@ -277,6 +277,13 @@ export const dagNodeBaseSchema = z.object({
   // prior run completed it successfully. Use for producers whose exit code does
   // not capture output validity (e.g. bash that writes a file the consumer parses).
   always_run: z.boolean().optional(),
+  // Post-run tree-integrity assertion (#2771): when explicitly `false`, the engine
+  // snapshots the git working tree before the node runs and fails the node with an
+  // error naming it if the snapshot changed — outside the run's engine-owned
+  // directories (artifacts/state/logs). Enforced for exec and agent nodes; warned
+  // as ignored on wait and workflow (sub-run) nodes, whose execution is not a
+  // single checkout-scoped payload. Absent means no enforcement.
+  mutates_checkout: z.boolean().optional(),
   // Persist this node's provider session ID across workflow re-runs in the same
   // scope (typically the conversation). On the next run with the same scope, the
   // executor loads the stored session and passes it as resumeSessionId. Requires
@@ -913,9 +920,14 @@ export const SCRIPT_NODE_AI_FIELDS: readonly string[] = BASH_NODE_AI_FIELDS;
  * on a declared boolean. It stays listed for `loop_group`, which never calls
  * sendQuery — its body nodes carry their own.
  */
-export const LOOP_NODE_AI_FIELDS: readonly string[] = BASH_NODE_AI_FIELDS.filter(
-  f => f !== 'model' && f !== 'provider' && f !== 'pi' && f !== 'output_format'
-);
+export const LOOP_NODE_AI_FIELDS: readonly string[] = [
+  ...BASH_NODE_AI_FIELDS.filter(
+    f => f !== 'model' && f !== 'provider' && f !== 'pi' && f !== 'output_format'
+  ),
+  // The tree-integrity assertion (#2771) is enforced only on exec/agent nodes; on a
+  // loop it would have to cover every iteration's body, which no execution path does.
+  'mutates_checkout',
+];
 
 /**
  * AI-specific fields that are unsupported on loop_group nodes. `model`/`provider`
@@ -924,14 +936,29 @@ export const LOOP_NODE_AI_FIELDS: readonly string[] = BASH_NODE_AI_FIELDS.filter
  * sendQuery, and body nodes carry their own `pi:` block — so it's warned as
  * ignored here (unlike on a plain `loop:` node, which does sendQuery itself).
  */
-export const LOOP_GROUP_NODE_AI_FIELDS: readonly string[] = BASH_NODE_AI_FIELDS.filter(
-  f => f !== 'model' && f !== 'provider'
-);
+export const LOOP_GROUP_NODE_AI_FIELDS: readonly string[] = [
+  ...BASH_NODE_AI_FIELDS.filter(f => f !== 'model' && f !== 'provider'),
+  // Same as `loop:` above — body-node enforcement is the only real coverage.
+  'mutates_checkout',
+];
+
+/**
+ * Fields ignored on gate (approval) and halt (cancel) nodes — they make no provider
+ * call and execute nothing, so every AI-turn field is inert, and
+ * `mutates_checkout` (#2771) has no enforcement site for them either.
+ */
+export const GATE_AND_HALT_IGNORED_FIELDS: readonly string[] = [
+  ...BASH_NODE_AI_FIELDS,
+  'mutates_checkout',
+];
 
 /** Fields a wait cannot consume; its output contract and lifecycle are engine-owned. */
 export const WAIT_NODE_IGNORED_FIELDS: readonly string[] = [
   ...BASH_NODE_AI_FIELDS.filter(field => field !== 'output_format'),
   'idle_timeout',
+  // The tree-integrity assertion is enforced only on exec/agent nodes (#2771); a
+  // wait's lifecycle is engine-owned and touches no checkout-scoped payload.
+  'mutates_checkout',
 ];
 
 /**
@@ -960,9 +987,13 @@ export const INCLUDE_NODE_IGNORED_FIELDS: readonly string[] = [
  * structural graph fields (id / depends_on / when / trigger_rule / description /
  * input / isolation) are likewise meaningful and absent here.
  */
-export const WORKFLOW_NODE_IGNORED_FIELDS: readonly string[] = BASH_NODE_AI_FIELDS.filter(
-  f => f !== 'output_format'
-);
+// `mutates_checkout` is appended rather than filtered out: enforcement (#2771) is
+// per-node over the parent checkout, which a sub-run child does not own — its own
+// workflow-level declaration governs instead.
+export const WORKFLOW_NODE_IGNORED_FIELDS: readonly string[] = [
+  ...BASH_NODE_AI_FIELDS.filter(f => f !== 'output_format'),
+  'mutates_checkout',
+];
 
 /**
  * Flat schema with all DAG node fields (base + mode + mode-specific) before
@@ -1571,6 +1602,7 @@ export const dagNodeSchema = dagNodeFlatSchema
       ...structuralBase,
       ...(data.idle_timeout !== undefined ? { idle_timeout: data.idle_timeout } : {}),
       ...(data.always_run !== undefined ? { always_run: data.always_run } : {}),
+      ...(data.mutates_checkout !== undefined ? { mutates_checkout: data.mutates_checkout } : {}),
       ...(data.output_type !== undefined ? { output_type: data.output_type } : {}),
     };
 

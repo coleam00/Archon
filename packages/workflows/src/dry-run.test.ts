@@ -77,7 +77,7 @@ describe('loadDryRunStubs', () => {
     expect(result).toEqual({ classify: 'BUG', details: { severity: 'high', count: 2 } });
   });
 
-  test('rejects missing, list, multi-document, and invalid-value files', async () => {
+  test('rejects missing, list, and multi-document files', async () => {
     await expect(loadDryRunStubs('/definitely/missing/stubs.yaml')).rejects.toThrow(
       'Dry-run stub file not found'
     );
@@ -86,9 +86,6 @@ describe('loadDryRunStubs', () => {
     );
     await expect(loadDryRunStubs(temporaryFile('one: value\n---\ntwo: value\n'))).rejects.toThrow(
       'expected one YAML mapping'
-    );
-    await expect(loadDryRunStubs(temporaryFile('node: 42\n'))).rejects.toThrow(
-      'Invalid dry-run stub file'
     );
   });
 });
@@ -437,6 +434,40 @@ describe('dry-run stub scaffolding and sparse defaults (#2624)', () => {
       reason: 'executed locally',
       output: 'live',
     });
+  });
+
+  test('generates array-typed output_format stubs', () => {
+    const workflow = makeTestWorkflow({
+      name: 'array-output',
+      nodes: [
+        {
+          id: 'items',
+          prompt: 'List items',
+          output_format: {
+            type: 'array',
+            items: { type: 'string' },
+            minItems: 2,
+          },
+        },
+      ],
+    });
+
+    expect(createDryRunStubScaffold(workflow)).toEqual({ items: ['TODO', 'TODO'] });
+  });
+
+  test.each([
+    ['boolean', { type: 'boolean' }, false],
+    ['number', { type: 'number' }, 0],
+    ['integer with minimum', { type: 'integer', minimum: 3 }, 3],
+    ['null', { type: 'null' }, null],
+    ['scalar const', { const: 5 }, 5],
+  ])('generates %s-typed output_format stubs', (_name, outputFormat, expected) => {
+    const workflow = makeTestWorkflow({
+      name: 'scalar-output',
+      nodes: [{ id: 'flag', prompt: 'Decide', output_format: outputFormat as never }],
+    });
+
+    expect(createDryRunStubScaffold(workflow)).toEqual({ flag: expected });
   });
 });
 
