@@ -1,7 +1,10 @@
 import { createLogger } from '@archon/paths';
 
 import type { MessageChunk, SendQueryOptions } from '../../types';
-import { ProviderAttemptStopUnconfirmedError } from '../../shared/provider-attempt';
+import {
+  confirmProviderAttemptStopped,
+  ProviderAttemptStopUnconfirmedError,
+} from '../../shared/provider-attempt';
 
 import {
   adaptNamedAgentForOpencode,
@@ -186,14 +189,10 @@ export async function* streamOpencodeSession(
   };
 
   const confirmSessionStopped = async (): Promise<void> => {
-    try {
-      await abortSession();
-    } catch (error) {
-      throw new ProviderAttemptStopUnconfirmedError(
-        `OpenCode session shutdown could not be confirmed (session: ${sessionId}, cwd: ${cwd})`,
-        { cause: error }
-      );
-    }
+    await confirmProviderAttemptStopped(
+      abortSession(),
+      `OpenCode session shutdown could not be confirmed (session: ${sessionId}, cwd: ${cwd})`
+    );
   };
 
   const abortHandler = (): void => {

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, jest, mock, test } from 'bun:test';
 
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -160,6 +160,7 @@ mock.module('@opencode-ai/sdk', () => ({
 import { OpencodeProvider, resetEmbeddedRuntime } from './provider';
 import { classifyOpencodeError } from './errors';
 import type { NodeConfig } from '../../types';
+import { PROVIDER_STOP_CONFIRMATION_TIMEOUT_MS } from '../../shared/provider-attempt';
 
 /** Default model for tests — satisfies the model-or-agent validation */
 const TEST_MODEL = { model: 'test/mock-model' };
@@ -198,6 +199,7 @@ describe('OpencodeProvider', () => {
   });
 
   afterEach(async () => {
+    jest.useRealTimers();
     await Promise.all(Array.from(tempDirs, dir => rm(dir, { recursive: true, force: true })));
     tempDirs.clear();
   });
@@ -895,6 +897,57 @@ describe('OpencodeProvider', () => {
     if (result === 'timed-out') return;
     expect(result.error?.name).toBe('ProviderAttemptStopUnconfirmedError');
     expect(runtime.client.session.abort).toHaveBeenCalledTimes(2);
+    expect(releases).toEqual([{ upstreamStopped: false }, { upstreamStopped: false }]);
+  });
+
+  test('expires multi-agent leases when session aborts never settle', async () => {
+    const cwd = await createTempProjectDir();
+    const sessionIds = ['scout-session', 'reviewer-session'];
+    const runtime = makeRuntime({
+      sessionCreate: mock(async () => ({ data: { id: sessionIds.shift() } })),
+      promptAsync: mock(async () => undefined),
+      sessionAbort: mock(() => new Promise<void>(() => undefined)),
+      subscribe: mock(async () => ({ stream: createPendingStream() })),
+    });
+    runtimeQueue.push(runtime);
+    const abortController = new AbortController();
+    const releases: { upstreamStopped: boolean }[] = [];
+    const consumption = consume(
+      new OpencodeProvider().sendQuery('hi', cwd, undefined, {
+        assistantConfig: TEST_MODEL,
+        abortSignal: abortController.signal,
+        nodeConfig: {
+          nodeId: 'research',
+          agents: {
+            scout: { description: 'Scout', prompt: 'Explore' },
+            reviewer: { description: 'Reviewer', prompt: 'Review' },
+          },
+        },
+        providerAttemptGate: {
+          acquire: async () => ({
+            signal: new AbortController().signal,
+            release: async options => {
+              releases.push(options);
+            },
+          }),
+        },
+      })
+    );
+
+    while (runtime.client.session.promptAsync.mock.calls.length < 2) await Bun.sleep(1);
+    jest.useFakeTimers();
+    abortController.abort();
+    for (
+      let attempt = 0;
+      attempt < 20 && runtime.client.session.abort.mock.calls.length < 2;
+      attempt++
+    ) {
+      await Promise.resolve();
+    }
+    jest.advanceTimersByTime(PROVIDER_STOP_CONFIRMATION_TIMEOUT_MS);
+    const { error } = await consumption;
+
+    expect(error?.name).toBe('ProviderAttemptStopUnconfirmedError');
     expect(releases).toEqual([{ upstreamStopped: false }, { upstreamStopped: false }]);
   });
 
@@ -1613,6 +1666,47 @@ describe('OpencodeProvider', () => {
     const { error } = await consumption;
     expect(error?.message).toBe('OpenCode query aborted');
     expect(released).toBe(true);
+  });
+
+  test('expires a single-agent lease when session abort never settles', async () => {
+    const runtime = makeRuntime({
+      subscribe: mock(async () => ({ stream: createPendingStream() })),
+      sessionAbort: mock(() => new Promise<void>(() => undefined)),
+    });
+    runtimeQueue.push(runtime);
+    const abortController = new AbortController();
+    const releases: { upstreamStopped: boolean }[] = [];
+    const consumption = consume(
+      new OpencodeProvider().sendQuery('hi', '/tmp', undefined, {
+        assistantConfig: TEST_MODEL,
+        abortSignal: abortController.signal,
+        providerAttemptGate: {
+          acquire: async () => ({
+            signal: new AbortController().signal,
+            release: async options => {
+              releases.push(options);
+            },
+          }),
+        },
+      })
+    );
+
+    while (runtime.client.session.promptAsync.mock.calls.length === 0) await Bun.sleep(1);
+    jest.useFakeTimers();
+    abortController.abort();
+    for (
+      let attempt = 0;
+      attempt < 20 && runtime.client.session.abort.mock.calls.length === 0;
+      attempt++
+    ) {
+      await Promise.resolve();
+    }
+    for (let attempt = 0; attempt < 10; attempt++) await Promise.resolve();
+    jest.advanceTimersByTime(PROVIDER_STOP_CONFIRMATION_TIMEOUT_MS);
+    const { error } = await consumption;
+
+    expect(error?.name).toBe('ProviderAttemptStopUnconfirmedError');
+    expect(releases).toEqual([{ upstreamStopped: false }]);
   });
 
   test('expires the lease before re-aborting an in-flight prompt that later settles', async () => {

@@ -8,6 +8,37 @@ export class ProviderAttemptStopUnconfirmedError extends Error {
   }
 }
 
+export const PROVIDER_STOP_CONFIRMATION_TIMEOUT_MS = 5_000;
+
+/** Bound provider shutdown so an unresponsive SDK cannot renew capacity forever. */
+export async function confirmProviderAttemptStopped(
+  stop: Promise<unknown>,
+  message: string
+): Promise<void> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => {
+      reject(
+        new ProviderAttemptStopUnconfirmedError(
+          `${message} within ${PROVIDER_STOP_CONFIRMATION_TIMEOUT_MS}ms`
+        )
+      );
+    }, PROVIDER_STOP_CONFIRMATION_TIMEOUT_MS);
+  });
+
+  try {
+    await Promise.race([
+      stop.catch(error => {
+        if (error instanceof ProviderAttemptStopUnconfirmedError) throw error;
+        throw new ProviderAttemptStopUnconfirmedError(message, { cause: error });
+      }),
+      timedOut,
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
 function throwIfAborted(signal: AbortSignal): void {
   if (!signal.aborted) return;
   if (signal.reason instanceof Error) throw signal.reason;

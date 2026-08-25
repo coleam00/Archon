@@ -21,7 +21,10 @@ import { createLogger } from '@archon/paths';
 import type { AssistantMessageEvent, CopilotSession, SessionEvent } from '@github/copilot-sdk';
 
 import type { MessageChunk, TokenUsage } from '../../types';
-import { ProviderAttemptStopUnconfirmedError } from '../../shared/provider-attempt';
+import {
+  confirmProviderAttemptStopped,
+  PROVIDER_STOP_CONFIRMATION_TIMEOUT_MS,
+} from '../../shared/provider-attempt';
 import { tryParseStructuredOutput } from '../../shared/structured-output';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -285,13 +288,40 @@ export async function* bridgeSession(
   let abortPromise: Promise<void> | undefined;
 
   const requestAbort = (): Promise<void> => {
-    abortPromise ??= session.abort().catch((error: unknown) => {
-      throw new ProviderAttemptStopUnconfirmedError(
-        'Copilot session shutdown could not be confirmed',
-        { cause: error }
-      );
-    });
+    abortPromise ??= confirmProviderAttemptStopped(
+      session.abort(),
+      'Copilot session shutdown could not be confirmed'
+    );
     return abortPromise;
+  };
+
+  const disconnectSession = async (): Promise<void> => {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = new Promise<'timeout'>(resolve => {
+      timeout = setTimeout(() => {
+        resolve('timeout');
+      }, PROVIDER_STOP_CONFIRMATION_TIMEOUT_MS);
+    });
+    try {
+      const outcome = await Promise.race([
+        session.disconnect().then(
+          () => 'disconnected' as const,
+          err => {
+            log.debug({ err, sessionId: session.sessionId }, 'copilot.disconnect_failed');
+            return 'failed' as const;
+          }
+        ),
+        timedOut,
+      ]);
+      if (outcome === 'timeout') {
+        log.warn(
+          { sessionId: session.sessionId, timeoutMs: PROVIDER_STOP_CONFIRMATION_TIMEOUT_MS },
+          'copilot.disconnect_timed_out'
+        );
+      }
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
   };
 
   const abortReason = (): Error => {
@@ -354,11 +384,7 @@ export async function* bridgeSession(
     } catch (err) {
       log.debug({ err }, 'copilot.unsubscribe_failed');
     }
-    try {
-      await session.disconnect();
-    } catch (err) {
-      log.debug({ err, sessionId: session.sessionId }, 'copilot.disconnect_failed');
-    }
+    await disconnectSession();
     await abort;
     abortSignal.throwIfAborted();
   }
@@ -457,11 +483,7 @@ export async function* bridgeSession(
     try {
       if (!sendResolved || abortPromise) await requestAbort();
     } finally {
-      try {
-        await session.disconnect();
-      } catch (err) {
-        log.debug({ err, sessionId: session.sessionId }, 'copilot.disconnect_failed');
-      }
+      await disconnectSession();
       // The rejection path is handled above. Do not wait on an unsettled SDK
       // promise after confirmed abort; some runtimes do not resolve it promptly.
       if (sendSettled) await sendPromise;

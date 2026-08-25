@@ -8,10 +8,11 @@
  * Runs in its own bun test invocation — mocks @github/copilot-sdk and
  * @archon/paths process-wide.
  */
-import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, jest, mock, test } from 'bun:test';
 import type { SessionEvent } from '@github/copilot-sdk';
 
 import { createMockLogger } from '../../test/mocks/logger';
+import { PROVIDER_STOP_CONFIRMATION_TIMEOUT_MS } from '../../shared/provider-attempt';
 
 // ─── Mocks ───────────────────────────────────────────────────────────────
 
@@ -31,6 +32,8 @@ interface FakeSession {
   aborted: boolean;
   disconnected: boolean;
   abortError?: Error;
+  abortPromise?: Promise<void>;
+  disconnectPromise?: Promise<void>;
   listener: ((event: SessionEvent) => void) | undefined;
   fire: (event: SessionEvent) => void;
   resolveSend: (result?: unknown) => void;
@@ -80,10 +83,12 @@ function makeFakeSession(sessionId = 'sess-1'): FakeSession {
   };
   session.disconnect = async (): Promise<void> => {
     fake.disconnected = true;
+    if (fake.disconnectPromise) await fake.disconnectPromise;
   };
   session.abort = async (): Promise<void> => {
     fake.aborted = true;
     if (fake.abortError) throw fake.abortError;
+    if (fake.abortPromise) await fake.abortPromise;
   };
   return session as unknown as FakeSession;
 }
@@ -163,6 +168,10 @@ describe('CopilotProvider.sendQuery', () => {
     resumeSessionSpy.mockClear();
     approveAllStub.mockClear();
     lastClientOpts = undefined;
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
   });
 
   test('defaults to model="auto" when none is configured', async () => {
@@ -290,6 +299,65 @@ describe('CopilotProvider.sendQuery', () => {
     await expect(completion).rejects.toThrow('Copilot session shutdown could not be confirmed');
     expect(session.aborted).toBe(true);
     expect(releases).toEqual([{ upstreamStopped: false }]);
+  });
+
+  test('expires the lease when Copilot abort never settles', async () => {
+    const session = makeFakeSession('sess-hung-abort');
+    session.abortPromise = new Promise<void>(() => undefined);
+    nextCreateSessionResult = session;
+    const leaseController = new AbortController();
+    const releases: { upstreamStopped: boolean }[] = [];
+    const completion = collect(
+      new CopilotProvider().sendQuery('hello', '/work/dir', undefined, {
+        model: 'gpt-5',
+        providerAttemptGate: {
+          acquire: async () => ({
+            signal: leaseController.signal,
+            release: async options => {
+              releases.push(options);
+            },
+          }),
+        },
+      })
+    );
+
+    while (session.prompt === undefined) await Bun.sleep(1);
+    jest.useFakeTimers();
+    leaseController.abort(new Error('lease lost'));
+    for (let attempt = 0; attempt < 20 && !session.aborted; attempt++) await Promise.resolve();
+    jest.advanceTimersByTime(PROVIDER_STOP_CONFIRMATION_TIMEOUT_MS);
+
+    await expect(completion).rejects.toThrow('Copilot session shutdown could not be confirmed');
+    expect(releases).toEqual([{ upstreamStopped: false }]);
+  });
+
+  test('bounds Copilot disconnect cleanup after a completed attempt', async () => {
+    const session = makeFakeSession('sess-hung-disconnect');
+    session.disconnectPromise = new Promise<void>(() => undefined);
+    nextCreateSessionResult = session;
+    const releases: { upstreamStopped: boolean }[] = [];
+    const completion = collect(
+      new CopilotProvider().sendQuery('hello', '/work/dir', undefined, {
+        model: 'gpt-5',
+        providerAttemptGate: {
+          acquire: async () => ({
+            signal: new AbortController().signal,
+            release: async options => {
+              releases.push(options);
+            },
+          }),
+        },
+      })
+    );
+
+    while (session.prompt === undefined) await Bun.sleep(1);
+    jest.useFakeTimers();
+    session.resolveSend(undefined);
+    for (let attempt = 0; attempt < 20 && !session.disconnected; attempt++) await Promise.resolve();
+    jest.advanceTimersByTime(PROVIDER_STOP_CONFIRMATION_TIMEOUT_MS);
+    await completion;
+
+    expect(releases).toEqual([{ upstreamStopped: true }]);
   });
 
   test('preserves the lease when early consumer return cannot confirm shutdown', async () => {

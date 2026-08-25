@@ -1,6 +1,9 @@
 import { createLogger } from '@archon/paths';
 
-import { ProviderAttemptStopUnconfirmedError } from '../../shared/provider-attempt';
+import {
+  confirmProviderAttemptStopped,
+  ProviderAttemptStopUnconfirmedError,
+} from '../../shared/provider-attempt';
 import { mergeTokenUsage } from '../../types';
 import type { MessageChunk, ProviderAttemptLease, SendQueryOptions, TokenUsage } from '../../types';
 import { getOrderedAgents, type NamedAgentConfig } from './agent-config';
@@ -191,31 +194,32 @@ export async function* streamMultiAgentOpencodeSession(
     let abort = state.abortPhase === promptPhase ? state.abortPromise : undefined;
     if (!abort) {
       const abortPhase = promptPhase;
-      abort = client.session
-        .abort({
+      abort = confirmProviderAttemptStopped(
+        client.session.abort({
           path: { id: state.sessionId },
           query: { directory: state.cwd },
-        })
-        .then(
-          () => {
-            // A cancellation issued while prompt submission is pending can resolve
-            // before the prompt is accepted. Only a stable pre-submit state or a
-            // post-submit abort proves that no upstream work remains.
-            if (abortPhase !== 'pending' && state.lifecycle.phase === abortPhase) {
-              if (state.lifecycle.phase === 'not_started') {
-                state.lifecycle = { phase: 'not_started', terminal: 'aborted' };
-              } else {
-                markTerminal(state, 'aborted');
-              }
+        }),
+        `OpenCode session shutdown could not be confirmed (session: ${state.sessionId}, cwd: ${state.cwd})`
+      ).then(
+        () => {
+          // A cancellation issued while prompt submission is pending can resolve
+          // before the prompt is accepted. Only a stable pre-submit state or a
+          // post-submit abort proves that no upstream work remains.
+          if (abortPhase !== 'pending' && state.lifecycle.phase === abortPhase) {
+            if (state.lifecycle.phase === 'not_started') {
+              state.lifecycle = { phase: 'not_started', terminal: 'aborted' };
+            } else {
+              markTerminal(state, 'aborted');
             }
-          },
-          error => {
-            getLog().debug(
-              { err: error, sessionId: state.sessionId },
-              'opencode.multi_agent_abort_failed'
-            );
           }
-        );
+        },
+        error => {
+          getLog().debug(
+            { err: error, sessionId: state.sessionId },
+            'opencode.multi_agent_abort_failed'
+          );
+        }
+      );
       state.abortPhase = abortPhase;
       state.abortPromise = abort;
     }

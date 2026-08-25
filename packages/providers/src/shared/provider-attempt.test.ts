@@ -1,6 +1,40 @@
-import { describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, jest, test } from 'bun:test';
 import type { MessageChunk, SendQueryOptions } from '../types';
-import { ProviderAttemptStopUnconfirmedError, withProviderAttempt } from './provider-attempt';
+import {
+  confirmProviderAttemptStopped,
+  PROVIDER_STOP_CONFIRMATION_TIMEOUT_MS,
+  ProviderAttemptStopUnconfirmedError,
+  withProviderAttempt,
+} from './provider-attempt';
+
+afterEach(() => {
+  jest.useRealTimers();
+});
+
+describe('confirmProviderAttemptStopped', () => {
+  test('accepts confirmed shutdown', async () => {
+    await expect(confirmProviderAttemptStopped(Promise.resolve(), 'stop failed')).resolves.toBe(
+      undefined
+    );
+  });
+
+  test('wraps rejected shutdown as unconfirmed', async () => {
+    await expect(
+      confirmProviderAttemptStopped(Promise.reject(new Error('transport failed')), 'stop failed')
+    ).rejects.toMatchObject({ name: 'ProviderAttemptStopUnconfirmedError' });
+  });
+
+  test('bounds a shutdown promise that never settles', async () => {
+    jest.useFakeTimers();
+    const confirmation = confirmProviderAttemptStopped(new Promise(() => undefined), 'stop failed');
+
+    jest.advanceTimersByTime(PROVIDER_STOP_CONFIRMATION_TIMEOUT_MS);
+
+    await expect(confirmation).rejects.toMatchObject({
+      name: 'ProviderAttemptStopUnconfirmedError',
+    });
+  });
+});
 
 async function consume(generator: AsyncGenerator<MessageChunk>): Promise<MessageChunk[]> {
   const chunks: MessageChunk[] = [];
