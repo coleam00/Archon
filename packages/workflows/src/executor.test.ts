@@ -445,6 +445,109 @@ describe('executeWorkflow', () => {
     expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
   });
 
+  it('rejects caller-authored ownership attribution even when its totals are consistent (#1961)', async () => {
+    const store = makeStore();
+    const resumed = makeRun({ id: 'forged-watermark-resume', status: 'running' });
+
+    await expect(
+      executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv-1',
+        '/tmp/ops',
+        { ...makeWorkflow(), budget: { max_spend_usd: 5 } },
+        'msg',
+        'db-conv-1',
+        {
+          preCreatedRun: resumed,
+          priorCompletedNodes: new Map(),
+          priorUsage: {
+            costUsd: 1,
+            workUnits: 0,
+            terminalUsageByNode: new Map([['sub', { costUsd: 1 }]]),
+          },
+        }
+      )
+    ).rejects.toThrow(
+      "Cannot resume workflow run 'forged-watermark-resume' with invalid persisted prior usage"
+    );
+
+    expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('rejects a cache-partial prior total with no reported cache axis (#1961)', async () => {
+    const resumed = makeRun({ id: 'invalid-cache-floor-resume', status: 'running' });
+
+    await expect(
+      executeWorkflow(
+        makeDeps(),
+        makePlatform(),
+        'conv-1',
+        '/tmp/ops',
+        { ...makeWorkflow(), budget: { max_spend_usd: 5 } },
+        'msg',
+        'db-conv-1',
+        {
+          preCreatedRun: resumed,
+          priorCompletedNodes: new Map(),
+          priorUsage: {
+            costUsd: 0,
+            workUnits: 0,
+            tokens: { input: 1, output: 1, cachePartial: true },
+          },
+        }
+      )
+    ).rejects.toThrow(
+      "Cannot resume workflow run 'invalid-cache-floor-resume' with invalid persisted prior usage"
+    );
+  });
+
+  it('rejects hydrated ownership whose partial cache usage is not reflected by its total (#1961)', async () => {
+    const resumed = makeRun({ id: 'partial-watermark-resume', status: 'running' });
+    const priorCompletedNodes = new Map([['sub', { output: 'done' }]]);
+    const store = makeStore({
+      getDagResumeSnapshot: mock(async () => ({
+        completedNodeOutputs: priorCompletedNodes,
+        terminalNodeIds: new Set(['sub']),
+        tokens: { input: 10, output: 2, cacheRead: 5 },
+        costUsd: 1,
+        workUnits: 1,
+        terminalUsageByNode: new Map([
+          [
+            'sub',
+            {
+              costUsd: 1,
+              tokens: { input: 10, output: 2, cacheRead: 5, cachePartial: true as const },
+            },
+          ],
+        ]),
+      })),
+    });
+    const inspection = await inspectResumableRun(makeDeps(store), resumed);
+    expect(inspection).not.toBeNull();
+
+    await expect(
+      executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv-1',
+        '/tmp/ops',
+        { ...makeWorkflow(), budget: { max_spend_usd: 5 } },
+        'msg',
+        'db-conv-1',
+        {
+          preCreatedRun: resumed,
+          priorCompletedNodes: inspection!.priorCompletedNodes,
+          priorUsage: inspection!.priorUsage,
+        }
+      )
+    ).rejects.toThrow(
+      "Cannot resume workflow run 'partial-watermark-resume' with invalid persisted prior usage"
+    );
+
+    expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+  });
+
   // -------------------------------------------------------------------------
   // Container resume guard (Phase C)
   // -------------------------------------------------------------------------

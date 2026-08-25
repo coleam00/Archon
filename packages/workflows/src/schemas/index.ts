@@ -207,6 +207,7 @@ export {
   readIdentityUnresolved,
   workflowRunUsageLeafSchema,
   workflowRunUsageSchema,
+  readWorkflowRunTokenUsage,
   readUsageTerminalNodes,
   WORKFLOW_SOURCE_METADATA_KEY,
   workflowSourceMetadataSchema,

@@ -39,6 +39,7 @@ import {
   RUN_METADATA_KEYS,
   readIdentityUnresolved,
   readUsageTerminalNodes,
+  readWorkflowRunTokenUsage,
   CONTINUATION_METADATA_KEY,
   WORKFLOW_SOURCE_METADATA_KEY,
   readWorkflowSourceState,
@@ -1040,29 +1041,20 @@ interface PersistedRunUsage {
   terminalUsageByNode?: ReadonlyMap<string, WorkflowRunUsage>;
 }
 
+// Ownership watermarks are capabilities, not caller-authored data: only this module's
+// persisted event/row reconciliation can prove which node and child usage the run owns.
+const hydratedPriorUsage = new WeakSet<PriorRunUsage>();
+
 function readPersistedRunUsage(run: WorkflowRun): PersistedRunUsage {
   const metadata = run.metadata ?? {};
   const cost = metadata.total_cost_usd;
-  const input = metadata.total_tokens_in;
-  const output = metadata.total_tokens_out;
-  const cacheRead = metadata.total_cache_read_tokens;
-  const cacheWrite = metadata.total_cache_write_tokens;
   const isNonNegativeFinite = (value: unknown): value is number =>
     typeof value === 'number' && Number.isFinite(value) && value >= 0;
+  const tokens = readWorkflowRunTokenUsage(metadata);
   const terminalUsageByNode = readUsageTerminalNodes(metadata);
   return {
     ...(isNonNegativeFinite(cost) ? { costUsd: cost } : {}),
-    ...(isNonNegativeFinite(input) && isNonNegativeFinite(output)
-      ? {
-          tokens: {
-            input,
-            output,
-            ...(isNonNegativeFinite(cacheRead) ? { cacheRead } : {}),
-            ...(isNonNegativeFinite(cacheWrite) ? { cacheWrite } : {}),
-            ...(metadata.total_cache_partial === true ? { cachePartial: true as const } : {}),
-          },
-        }
-      : {}),
+    ...(tokens !== undefined ? { tokens } : {}),
     ...(terminalUsageByNode !== undefined ? { terminalUsageByNode } : {}),
   };
 }
@@ -1098,7 +1090,8 @@ function tokenUsageExceeds(
     candidate.input > baseline.input ||
     candidate.output > baseline.output ||
     (candidate.cacheRead ?? 0) > (baseline.cacheRead ?? 0) ||
-    (candidate.cacheWrite ?? 0) > (baseline.cacheWrite ?? 0)
+    (candidate.cacheWrite ?? 0) > (baseline.cacheWrite ?? 0) ||
+    (candidate.cachePartial === true && baseline.cachePartial !== true)
   );
 }
 
@@ -1238,12 +1231,14 @@ function mergePersistedPriorUsage(
     rowFallbackUsed && rowUsage.terminalUsageByNode === undefined
       ? undefined
       : mergeWorkflowUsageWatermarks(snapshot.terminalUsageByNode, rowUsage.terminalUsageByNode);
-  return {
+  const priorUsage: PriorRunUsage = {
     ...(persistedTokens !== undefined ? { tokens: persistedTokens } : {}),
     costUsd: Math.max(eventAndCursorCost, rowUsage.costUsd ?? 0),
     workUnits: snapshot.workUnits,
     ...(terminalUsageByNode !== undefined ? { terminalUsageByNode } : {}),
   };
+  hydratedPriorUsage.add(priorUsage);
+  return priorUsage;
 }
 
 /** Read whether a candidate has state worth resuming without claiming or mutating it. */
@@ -2083,7 +2078,11 @@ export async function executeWorkflow(
       `Cannot resume workflow run '${preCreatedRun.id}' without its persisted prior usage.`
     );
   }
-  if (priorUsage !== undefined && !isValidPriorRunUsage(priorUsage)) {
+  if (
+    priorUsage !== undefined &&
+    (!isValidPriorRunUsage(priorUsage) ||
+      (priorUsage.terminalUsageByNode !== undefined && !hydratedPriorUsage.has(priorUsage)))
+  ) {
     throw new Error(
       `Cannot resume workflow run '${preCreatedRun?.id ?? 'unknown'}' with invalid persisted prior usage.`
     );

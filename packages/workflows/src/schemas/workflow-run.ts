@@ -367,13 +367,27 @@ export const RUN_METADATA_KEYS = {
   usageTerminalNodes: 'usage_terminal_nodes',
 } as const;
 
-const workflowRunTokenUsageSchema = z.strictObject({
-  input: z.number().finite().nonnegative(),
-  output: z.number().finite().nonnegative(),
-  cacheRead: z.number().finite().nonnegative().optional(),
-  cacheWrite: z.number().finite().nonnegative().optional(),
-  cachePartial: z.literal(true).optional(),
-});
+const workflowRunTokenUsageSchema = z
+  .strictObject({
+    input: z.number().finite().nonnegative(),
+    output: z.number().finite().nonnegative(),
+    cacheRead: z.number().finite().nonnegative().optional(),
+    cacheWrite: z.number().finite().nonnegative().optional(),
+    cachePartial: z.literal(true).optional(),
+  })
+  .superRefine((usage, ctx) => {
+    if (
+      usage.cachePartial === true &&
+      usage.cacheRead === undefined &&
+      usage.cacheWrite === undefined
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['cachePartial'],
+        message: 'cachePartial requires at least one reported cache token axis',
+      });
+    }
+  });
 
 export const workflowRunUsageLeafSchema = z.strictObject({
   costUsd: z.number().finite().nonnegative(),
@@ -386,6 +400,32 @@ export const workflowRunUsageSchema = workflowRunUsageLeafSchema.extend({
 
 export type WorkflowRunUsageLeaf = z.infer<typeof workflowRunUsageLeafSchema>;
 export type WorkflowRunUsage = z.infer<typeof workflowRunUsageSchema>;
+
+/** Decode cumulative run-row token metadata without inventing required axes. */
+export function readWorkflowRunTokenUsage(
+  metadata: Record<string, unknown>
+): TokenUsage | undefined {
+  const input = metadata.total_tokens_in;
+  const output = metadata.total_tokens_out;
+  const isNonNegativeFinite = (value: unknown): value is number =>
+    typeof value === 'number' && Number.isFinite(value) && value >= 0;
+  if (!isNonNegativeFinite(input) || !isNonNegativeFinite(output)) return undefined;
+
+  const cacheRead = metadata.total_cache_read_tokens;
+  const cacheWrite = metadata.total_cache_write_tokens;
+  const raw = {
+    input,
+    output,
+    ...(isNonNegativeFinite(cacheRead) ? { cacheRead } : {}),
+    ...(isNonNegativeFinite(cacheWrite) ? { cacheWrite } : {}),
+    ...(metadata.total_cache_partial === true &&
+    (isNonNegativeFinite(cacheRead) || isNonNegativeFinite(cacheWrite))
+      ? { cachePartial: true as const }
+      : {}),
+  };
+  const parsed = workflowRunTokenUsageSchema.safeParse(raw);
+  return parsed.success ? parsed.data : undefined;
+}
 
 /**
  * Between-run continuation (#2747). Written once at run creation alongside

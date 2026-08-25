@@ -29921,6 +29921,24 @@ describe('childOutcomeFromRun cache reporting', () => {
     expect(outcome.costUsd).toBeUndefined();
     expect(outcome.tokens).toBeUndefined();
   });
+
+  it('does not manufacture a missing required persisted token axis as zero', () => {
+    const outcome = childOutcomeFromRun(settledRun({ total_tokens_in: 5 }));
+
+    expect(outcome.tokens).toBeUndefined();
+  });
+
+  it('omits malformed optional persisted axes without dropping valid gross usage', () => {
+    const outcome = childOutcomeFromRun(
+      settledRun({
+        total_tokens_in: 5,
+        total_tokens_out: 2,
+        total_cache_read_tokens: -1,
+      })
+    );
+
+    expect(outcome.tokens).toEqual({ input: 5, output: 2 });
+  });
 });
 
 // ───────────────────────────────────────────────────────────────────────────

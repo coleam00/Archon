@@ -94,6 +94,7 @@ import {
   isBindingDirective,
   SUBRUN_METADATA_KEYS,
   RUN_METADATA_KEYS,
+  readWorkflowRunTokenUsage,
   workflowRunUsageLeafSchema,
   WAIT_NODE_OUTPUT_FORMAT,
   waitUntilTimestampSchema,
@@ -1141,26 +1142,7 @@ export function childOutcomeFromRun(run: WorkflowRun): ChildWorkflowOutcome {
     );
   }
   const md: Record<string, unknown> = run.metadata ?? {};
-  const rawTokens =
-    typeof md.total_tokens_in === 'number' || typeof md.total_tokens_out === 'number'
-      ? {
-          input: typeof md.total_tokens_in === 'number' ? md.total_tokens_in : 0,
-          output: typeof md.total_tokens_out === 'number' ? md.total_tokens_out : 0,
-          ...(typeof md.total_cache_read_tokens === 'number'
-            ? { cacheRead: md.total_cache_read_tokens }
-            : {}),
-          ...(typeof md.total_cache_write_tokens === 'number'
-            ? { cacheWrite: md.total_cache_write_tokens }
-            : {}),
-          // Persisted by persistRunUsage; without it a child's floor would contribute to
-          // the parent as though it were an exact total.
-          ...(md.total_cache_partial === true ? { cachePartial: true as const } : {}),
-        }
-      : undefined;
-  const parsedTokens =
-    rawTokens === undefined
-      ? undefined
-      : workflowRunUsageLeafSchema.safeParse({ costUsd: 0, tokens: rawTokens });
+  const tokens = readWorkflowRunTokenUsage(md);
   const parsedCost = workflowRunUsageLeafSchema.safeParse({ costUsd: md.total_cost_usd });
   // Presence-keyed (#2637): `false`/`0`/`null` are legitimate structured values, so
   // reading through readSubrunMetadata's summaryValue keeps them distinguishable
@@ -1173,7 +1155,7 @@ export function childOutcomeFromRun(run: WorkflowRun): ChildWorkflowOutcome {
     ...(summaryValue !== undefined ? { structuredOutput: summaryValue } : {}),
     costUsd: parsedCost.success ? parsedCost.data.costUsd : undefined,
     ...(md.cost_reporting_unavailable === true ? { costEnforceable: false as const } : {}),
-    tokens: parsedTokens?.success ? parsedTokens.data.tokens : undefined,
+    tokens,
     error: typeof md.error === 'string' ? md.error : undefined,
   };
 }

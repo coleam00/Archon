@@ -1821,7 +1821,6 @@ nodes:
         costUsd: childSnapshot.costUsd,
         tokens: childSnapshot.tokens,
         workUnits: childSnapshot.workUnits,
-        terminalUsageByNode: childSnapshot.terminalUsageByNode,
       },
     };
     expect(
@@ -1890,8 +1889,11 @@ name: charge-failure-parent
 description: persists recovered child usage when redrive admission fails
 budget: { max_work_units: 20 }
 nodes:
+  - id: prepare
+    bash: echo ready
   - id: sub
     workflow: charge-failure-child
+    depends_on: [prepare]
 `
     );
 
@@ -1946,7 +1948,6 @@ nodes:
         costUsd: childSnapshot.costUsd,
         tokens: childSnapshot.tokens,
         workUnits: childSnapshot.workUnits,
-        terminalUsageByNode: childSnapshot.terminalUsageByNode,
       },
     };
     expect(
@@ -1968,17 +1969,7 @@ nodes:
       deps,
       (await store.getWorkflowRun(parent.id))!
     );
-    const parentSnapshot = await store.getDagResumeSnapshot(parent.id);
-    const parentResume = parentHydrated ?? {
-      preCreatedRun: await store.resumeWorkflowRun(parent.id),
-      priorCompletedNodes: parentSnapshot.completedNodeOutputs,
-      priorUsage: {
-        costUsd: parentSnapshot.costUsd,
-        tokens: parentSnapshot.tokens,
-        workUnits: parentSnapshot.workUnits,
-        terminalUsageByNode: parentSnapshot.terminalUsageByNode,
-      },
-    };
+    expect(parentHydrated).not.toBeNull();
     const refusingDeps: WorkflowDeps = {
       ...deps,
       createRequiredWorkflowEvent: event => {
@@ -2000,7 +1991,7 @@ nodes:
       parentDefinition,
       'goal',
       'conv-db',
-      parentResume
+      parentHydrated!
     );
 
     expect(resumed.success).toBe(false);
