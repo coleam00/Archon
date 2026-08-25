@@ -1709,7 +1709,10 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
             filename,
             error:
               'Invalid budget: expected { max_spend_usd?: number > 0, max_work_units?: positive integer }. ' +
-              'Both fields are optional, but each must be valid when present.',
+              'Both fields are optional, but each must be valid when present. ' +
+              parsedBudget.error.issues
+                .map(issue => `${issue.path.join('.') || 'budget'}: ${issue.message}`)
+                .join('; '),
             errorType: 'validation_error',
           },
         };

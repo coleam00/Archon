@@ -145,20 +145,22 @@ export type WorkflowEvidencePolicy = z.infer<typeof workflowEvidencePolicySchema
  * child's own declared ceiling remains authoritative for its internal work. The
  * parent adds settled child spend and charges every child spawn as one work unit.
  */
-export const workflowBudgetPolicySchema = z.object({
-  /**
-   * Run-wide ceiling on summed recorded provider cost (USD), including rolled-up
-   * child cost. A cost-bearing provider that omits finite cost fails explicitly;
-   * absence is never treated as zero while this ceiling is active.
-   */
-  max_spend_usd: z.number().positive().optional(),
-  /**
-   * Run-wide ceiling on deterministic work units. One required
-   * `work_unit_charged` row records each node attempt or governed child spawn,
-   * so retries count and the ceiling is reconstructible across cold resume.
-   */
-  max_work_units: z.number().int().positive().optional(),
-});
+export const workflowBudgetPolicySchema = z
+  .object({
+    /**
+     * Run-wide ceiling on summed recorded provider cost (USD), including rolled-up
+     * child cost. A cost-bearing provider that omits finite cost fails explicitly;
+     * absence is never treated as zero while this ceiling is active.
+     */
+    max_spend_usd: z.number().positive().optional(),
+    /**
+     * Run-wide ceiling on deterministic work units. One required
+     * `work_unit_charged` row records each node attempt or governed child spawn,
+     * so retries count and the ceiling is reconstructible across cold resume.
+     */
+    max_work_units: z.number().int().positive().optional(),
+  })
+  .strict();
 
 export type WorkflowBudgetPolicy = z.infer<typeof workflowBudgetPolicySchema>;
 

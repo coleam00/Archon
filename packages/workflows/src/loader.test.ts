@@ -6780,21 +6780,28 @@ nodes:
       expect(pw[0]).toContain("unknown key 'worktree.base_branch'");
     });
 
-    it('should warn on an unknown key inside a workflow-level budget block (#1961)', async () => {
-      const pw = await warningsFor([
-        'name: test',
-        'description: test',
-        'budget:',
-        '  max_spend_usd: 5',
-        '  max_work_units: 10',
-        '  max_dollars: 5', // real field is max_spend_usd
-        'nodes:',
-        '  - id: n',
-        '    prompt: p',
-      ]);
-      expect(pw.length).toBe(1);
-      expect(pw[0]).toContain("Workflow 'test'");
-      expect(pw[0]).toContain("unknown key 'budget.max_dollars'");
+    it('should reject an unknown key inside a workflow-level budget block (#1961)', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      await writeFile(
+        join(workflowDir, 'mistyped-budget.yaml'),
+        [
+          'name: mistyped-budget',
+          'description: typo must not silently remove the ceiling',
+          'budget:',
+          '  max_spend_usd: 5',
+          '  max_spned_usd: 10',
+          'nodes:',
+          '  - id: n',
+          '    prompt: p',
+        ].join('\n')
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.workflows).toHaveLength(0);
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0].error).toContain('Invalid budget');
+      expect(result.errors[0].error).toContain('Unrecognized key');
     });
 
     it('should not warn on valid nested keys, including a clean loop_group body', async () => {
