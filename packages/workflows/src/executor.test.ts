@@ -349,6 +349,37 @@ describe('executeWorkflow', () => {
     expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['NaN cost', { costUsd: Number.NaN, workUnits: 0 }],
+    ['negative cost', { costUsd: -1, workUnits: 0 }],
+    ['negative work units', { costUsd: 0, workUnits: -1 }],
+    ['fractional work units', { costUsd: 0, workUnits: 0.5 }],
+  ])('rejects governed continuation usage with %s (#1961)', async (_label, priorUsage) => {
+    const store = makeStore();
+    const resumed = makeRun({ id: 'invalid-usage-resume', status: 'running' });
+
+    await expect(
+      executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv-1',
+        '/tmp/ops',
+        { ...makeWorkflow(), budget: { max_work_units: 2 } },
+        'msg',
+        'db-conv-1',
+        {
+          preCreatedRun: resumed,
+          priorCompletedNodes: new Map(),
+          priorUsage,
+        }
+      )
+    ).rejects.toThrow(
+      "Cannot resume workflow run 'invalid-usage-resume' with invalid persisted prior usage"
+    );
+
+    expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+  });
+
   // -------------------------------------------------------------------------
   // Container resume guard (Phase C)
   // -------------------------------------------------------------------------
@@ -3344,7 +3375,13 @@ describe('hydrateResumableRun', () => {
       id: 'paused-loop',
       status: 'paused',
       metadata: {
-        approval: { type: 'interactive_loop', nodeId: 'loop-1', message: 'Iterate?', iteration: 2 },
+        approval: {
+          type: 'interactive_loop',
+          nodeId: 'loop-1',
+          message: 'Iterate?',
+          iteration: 2,
+          signaledCostUsd: 1.25,
+        },
       },
     });
     const resumed = makeRun({ id: 'paused-loop', status: 'running' });
@@ -3361,7 +3398,36 @@ describe('hydrateResumableRun', () => {
     const result = await hydrateResumableRun(deps, candidate);
     expect(result).not.toBeNull();
     expect(result?.priorCompletedNodes.size).toBe(0);
+    expect(result?.priorUsage.costUsd).toBe(1.25);
     expect(store.resumeWorkflowRun).toHaveBeenCalledWith('paused-loop');
+  });
+
+  it('does not add a stale loop cursor after that loop has a terminal usage row', async () => {
+    const candidate = makeRun({
+      id: 'completed-loop-downstream-failed',
+      status: 'failed',
+      metadata: {
+        approval: {
+          type: 'interactive_loop',
+          nodeId: 'loop-1',
+          message: 'Iterate?',
+          signaledCostUsd: 1.25,
+        },
+      },
+    });
+    const store = makeStore({
+      getDagResumeSnapshot: mock(async () => ({
+        completedNodeOutputs: new Map([['loop-1', { output: 'done' }]]),
+        tokens: { input: 4, output: 1 },
+        costUsd: 2,
+        workUnits: 1,
+      })),
+      resumeWorkflowRun: mock(async () => makeRun({ id: candidate.id, status: 'running' })),
+    });
+
+    const result = await hydrateResumableRun(makeDeps(store), candidate);
+
+    expect(result?.priorUsage.costUsd).toBe(2);
   });
 
   it.each([

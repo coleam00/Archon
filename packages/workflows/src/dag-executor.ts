@@ -9000,6 +9000,13 @@ async function executeFanOutWorkflowNode(
   let chargeFailureError: string | undefined;
   let costEnforcementFailure: ChildWorkflowOutcome | undefined;
   let costEnforcementRefusals = 0;
+  const existingOutcomeWithoutUsage = (run: WorkflowRun): ChildWorkflowOutcome => {
+    const outcome = childOutcomeFromRun(run);
+    // A prior fan-out attempt already persisted these terminal children's usage on
+    // the parent wrapper event. They still contribute their output to the resumed join,
+    // but only newly executed children may contribute usage to this pass.
+    return { ...outcome, costUsd: 0, tokens: undefined };
+  };
   const observeChildCost = (
     outcome: ChildWorkflowOutcome,
     chargeLiveLedger: boolean
@@ -9029,12 +9036,12 @@ async function executeFanOutWorkflowNode(
       const existing = existingByIndex.get(i);
       // Existing completed child → thread its outcome without re-spawning (resume skip).
       if (existing?.status === 'completed')
-        return observeChildCost(childOutcomeFromRun(existing), false);
+        return observeChildCost(existingOutcomeWithoutUsage(existing), false);
       // A user-cancelled child (no fan-out tag) is terminal — thread it as-is (fails
       // all_success; represented in all_done). A fan-out-tagged cancel is recoverable and
       // falls through to re-drive.
       if (existing?.status === 'cancelled' && !isFanOutRecoverableCancel(existing)) {
-        return observeChildCost(childOutcomeFromRun(existing), false);
+        return observeChildCost(existingOutcomeWithoutUsage(existing), false);
       }
       if (costEnforcementFailure !== undefined) {
         costEnforcementRefusals++;

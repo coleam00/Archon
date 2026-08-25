@@ -1213,7 +1213,7 @@ reference it from many workflows, instead of copy-pasting the nodes and letting 
 drift apart.
 
 **A node runs with the configuration its own workflow file declares; the run owns isolation,
-interactivity and evidence policy.** That one sentence is the whole rule. A composed workflow
+interactivity, evidence policy, and consumption limits.** That one sentence is the whole rule. A composed workflow
 that declares `provider: codex` / `model: large` / `effort: high` runs on exactly those,
 whichever workflow composed it — and a composed workflow that declares nothing resolves from
 your config, tier presets and personal AI preferences at run time, exactly as it would on its
@@ -1249,7 +1249,7 @@ and then removed from the definition, so nothing can fall back to an outer file'
 | `requires` | **Unions** into the composing workflow, so a missing capability refuses the run at invocation instead of failing mid-block. |
 | `inputs`, `returns` | **Consumed** by composition — `inputs:` validates the caller's `with:`, `returns:` selects `$includeId.output`. |
 | `outcome_field` | **Owned by the workflow being run.** An included workflow's declaration does not propagate to its composer. A top-level composer may declare its own field relative to its own `returns:`; an include alias is rebound before that contract is validated. |
-| `interactive`, `worktree`, `container`, `evidence_policy`, `mutates_checkout` | **Run-owned.** Whoever starts the run decides these; a composed file's values are dropped with a load-time warning. Declare them on the top-level workflow. |
+| `interactive`, `worktree`, `container`, `evidence_policy`, `mutates_checkout`, `budget` | **Run-owned.** Whoever starts the run decides these; a composed file's values are dropped with a load-time warning. Declare them on the top-level workflow. In particular, an included block's `budget:` does not limit its nodes inside the composing run. |
 | `webSearchMode` | **Dropped, and this one is a real gap.** It is the only workflow-level field with no per-node counterpart, so there is nowhere for it to travel. Set it on the top-level workflow — where it then applies to every node in the run. |
 
 Two consequences worth knowing:

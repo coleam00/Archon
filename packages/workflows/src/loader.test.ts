@@ -5604,6 +5604,50 @@ nodes:
       expect(payload.webSearchModeNote).toContain('no per-node form');
     });
 
+    it('warns that an included budget is dropped and belongs on the top-level workflow', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'budgeted-block.yaml'),
+        `
+name: budgeted-block
+description: A block whose budget cannot govern its composer's run
+budget:
+  max_spend_usd: 5
+nodes:
+  - id: work
+    prompt: "do the work"
+`
+      );
+      await writeFile(
+        join(workflowDir, 'budget-parent.yaml'),
+        `
+name: budget-parent
+description: Includes the budgeted block
+nodes:
+  - id: budget-sub
+    include: budgeted-block
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      const parent = result.workflows.find(w => w.workflow.name === 'budget-parent');
+      expect(parent).toBeDefined();
+      expect(parent?.workflow.budget).toBeUndefined();
+
+      const call = (mockLogger.warn as Mock<(...args: unknown[]) => unknown>).mock.calls.find(
+        c =>
+          c[1] === 'include.workflow_level_fields_dropped' &&
+          (c[0] as { include?: string }).include === 'budget-sub'
+      );
+      expect(call).toBeDefined();
+      const payload = call![0] as { droppedFields: string[]; safetyNote?: string };
+      expect(payload.droppedFields).toContain('budget');
+      expect(payload.safetyNote).toContain('budget');
+      expect(payload.safetyNote).toContain('TOP-LEVEL workflow');
+    });
+
     it('should compile a block command file and namespace a local sibling ref', async () => {
       const workflowDir = join(testDir, '.archon', 'workflows');
       const commandsDir = join(testDir, '.archon', 'commands');

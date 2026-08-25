@@ -229,9 +229,9 @@ function markComposedNode(node: DagNode, patch: ComposedNodeMeta): void {
  *
  * Absent on purpose:
  *   - Run-owned fields (`interactive`, `worktree`, `container`, `evidence_policy`,
- *     `mutates_checkout`) — decisions belonging to whoever started the run, not to the
- *     file that happens to hold a node. These stay workflow-level and are warned about
- *     when a composed workflow declares them.
+ *     `mutates_checkout`, `budget`) — decisions belonging to whoever started the run,
+ *     not to the file that happens to hold a node. These stay workflow-level and are
+ *     warned about when a composed workflow declares them.
  *   - `webSearchMode` — node-affecting in spirit but the ONE workflow-level field with
  *     no node-level counterpart (#2556 settled that it keeps none), so there is nowhere
  *     to write it. It is a real hole in the invariant, stated in the drop-warning and in
@@ -914,14 +914,15 @@ const NON_DROPPED_WORKFLOW_KEYS: ReadonlySet<string> = new Set([
   'requires',
 ]);
 
-/** Isolation/concurrency-safety fields — a silent drop of these is the most dangerous. */
-const SAFETY_WORKFLOW_KEYS: ReadonlySet<string> = new Set(['mutates_checkout']);
+/** Run-governance fields whose silent drop could make execution less constrained. */
+const SAFETY_WORKFLOW_KEYS: ReadonlySet<string> = new Set(['budget', 'mutates_checkout']);
 
 /**
  * What remains of the included file's workflow-level configuration after the collapse is
- * RUN-owned: isolation, interactivity, evidence policy, concurrency safety. Those are
- * decisions belonging to whoever started the run, so a composed workflow cannot carry
- * them — emit a one-line load-time WARN so the author who wrote them gets a signal.
+ * RUN-owned: isolation, interactivity, evidence policy, consumption limits, concurrency
+ * safety. Those are decisions belonging to whoever started the run, so a composed
+ * workflow cannot carry them — emit a one-line load-time WARN so the author who wrote
+ * them gets a signal.
  *
  * The set is DERIVED from the child's own defined keys rather than hand-maintained, so a
  * future workflow-level field is covered automatically: it either travels (by joining
@@ -964,7 +965,7 @@ function warnDroppedWorkflowLevelFields(
         : {}),
       ...(safetyDropped.length > 0
         ? {
-            safetyNote: `${safetyDropped.join(' and ')} affect isolation/concurrency safety and belong to the RUN — set them on the TOP-LEVEL workflow if the block relies on them`,
+            safetyNote: `${safetyDropped.join(' and ')} affect run governance/safety and belong to the RUN — set them on the TOP-LEVEL workflow if the block relies on them`,
           }
         : {}),
     },

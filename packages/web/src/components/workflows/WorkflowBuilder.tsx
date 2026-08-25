@@ -35,6 +35,18 @@ const NODE_LIBRARY_MIN_WIDTH = 160;
 const NODE_LIBRARY_MAX_WIDTH = 400;
 const NODE_LIBRARY_DEFAULT_WIDTH = 208; // w-52
 
+type BuilderEditableWorkflowFields = Pick<
+  WorkflowDefinition,
+  'name' | 'description' | 'provider' | 'model' | 'nodes'
+>;
+
+export function overlayBuilderEdits(
+  loadedDefinition: WorkflowDefinition | undefined,
+  editedFields: BuilderEditableWorkflowFields
+): WorkflowDefinition {
+  return { ...loadedDefinition, ...editedFields };
+}
+
 function NodeLibraryPanel({
   commands,
   isLoading,
@@ -129,6 +141,9 @@ function WorkflowBuilderInner(): React.ReactElement {
   const [workflowDescription, setWorkflowDescription] = useState('');
   const [provider, setProvider] = useState<string | undefined>(undefined);
   const [model, setModel] = useState<string | undefined>(undefined);
+  const [loadedDefinition, setLoadedDefinition] = useState<WorkflowDefinition | undefined>(
+    undefined
+  );
   const [workflowSource, setWorkflowSource] = useState<WorkflowSource | undefined>(undefined);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
@@ -190,14 +205,14 @@ function WorkflowBuilderInner(): React.ReactElement {
     const name = workflowName.trim() || 'untitled';
     const description = workflowDescription;
     const dagNodes = reactFlowToDagNodes(nodes, edges);
-    return {
+    return overlayBuilderEdits(loadedDefinition, {
       name,
       description,
       provider,
       model,
       nodes: dagNodes,
-    };
-  }, [workflowName, workflowDescription, provider, model, nodes, edges]);
+    });
+  }, [workflowName, workflowDescription, provider, model, loadedDefinition, nodes, edges]);
 
   const loadWorkflow = useCallback(
     async (name: string): Promise<void> => {
@@ -207,6 +222,7 @@ function WorkflowBuilderInner(): React.ReactElement {
         setWorkflowDescription(workflow.description);
         setProvider(workflow.provider);
         setModel(workflow.model);
+        setLoadedDefinition(workflow);
         setWorkflowSource(source);
         setValidationErrors([]);
 
@@ -298,7 +314,9 @@ function WorkflowBuilderInner(): React.ReactElement {
         return;
       }
       setValidationErrors([]);
-      await saveWorkflow(workflowName.trim(), def, cwd, workflowSource);
+      const saved = await saveWorkflow(workflowName.trim(), def, cwd, workflowSource);
+      setLoadedDefinition(saved.workflow);
+      setWorkflowSource(saved.source);
       setHasUnsavedChanges(false);
     } catch (err) {
       const error = err instanceof Error ? err : new Error('Unknown error');

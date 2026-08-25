@@ -1154,9 +1154,12 @@ nodes:
       'child-flaky',
       `
 name: child-flaky
-description: fails once then succeeds
+description: spends once, fails, then succeeds without repeating paid work
 nodes:
+  - id: think
+    prompt: "prepare the attempt"
   - id: attempt
+    depends_on: [think]
     bash: "test -f flaky-marker && echo recovered || { touch flaky-marker; exit 3; }"
 `
     );
@@ -1220,10 +1223,15 @@ nodes:
     const flakyRuns = [...store.runs.values()].filter(r => r.workflow_name === 'child-flaky');
     expect(flakyRuns).toHaveLength(1);
     expect(flakyRuns[0].status).toBe('completed');
-    const subCompleted = store.events.find(
-      e => e.event_type === 'node_completed' && e.step_name === 'sub'
-    );
+    const subCompleted = store.events
+      .filter(e => e.event_type === 'node_completed' && e.step_name === 'sub')
+      .at(-1);
     expect(String(subCompleted?.data?.node_output)).toContain('recovered');
+    expect(subCompleted?.data?.cost_usd).toBe(0);
+    expect((await store.getWorkflowRun(parentRun!.id))?.metadata.total_cost_usd).toBeCloseTo(
+      0.01,
+      5
+    );
 
     // Separately: a child cancelled out-of-band fails the node on re-entry.
     await writeWorkflow(
@@ -1513,6 +1521,7 @@ nodes:
       `
 name: parent-typo
 description: references a non-existent sub-run
+budget: { max_spend_usd: 5 }
 nodes:
   - id: sub
     workflow: does-not-exist-typo
@@ -1540,6 +1549,14 @@ nodes:
       e => e.event_type === 'node_failed' && e.step_name === 'sub'
     );
     expect(String(nodeFailed?.data?.error)).toContain('Unknown sub-run workflow');
+    expect(parentRun?.metadata?.cost_reporting_unavailable).not.toBe(true);
+    expect(
+      store.events.some(
+        event =>
+          event.workflow_run_id === parentRun?.id &&
+          event.event_type === 'budget_enforcement_failed'
+      )
+    ).toBe(false);
     // No child run was created for a target that doesn't resolve.
     expect([...store.runs.values()].filter(r => r.parent_run_id !== null)).toHaveLength(0);
   });
@@ -3641,9 +3658,12 @@ nodes:
       'fan-child-flaky',
       `
 name: fan-child-flaky
-description: the "flaky" item fails once then recovers; others always succeed (writes a marker file)
+description: every child spends once; the flaky item then fails once and recovers
 nodes:
+  - id: think
+    prompt: "prepare $ARGUMENTS"
   - id: run
+    depends_on: [think]
     bash: |
       if [ "$ARGUMENTS" = "flaky" ]; then
         test -f flaky-marker && printf 'recovered' || { touch flaky-marker; exit 3; }
@@ -3702,6 +3722,7 @@ nodes:
     expect(byIndex1.get(0)?.status).toBe('completed');
     expect(byIndex1.get(1)?.status).toBe('failed');
     expect(byIndex1.get(2)?.status).toBe('completed');
+    expect(parentRun?.metadata.total_cost_usd).toBeCloseTo(0.03, 5);
     const completedAtBefore = byIndex1.get(0)!.completed_at;
 
     // Resume the PARENT: only the failed index-1 child is re-driven (marker now present →
@@ -3723,6 +3744,10 @@ nodes:
 
     expect(r2.success).toBe(true);
     expect((await store.getWorkflowRun(parentRun!.id))?.status).toBe('completed');
+    expect((await store.getWorkflowRun(parentRun!.id))?.metadata.total_cost_usd).toBeCloseTo(
+      0.03,
+      5
+    );
     // Exactly 3 child rows — one per index; the failed one was re-driven in its own row.
     expect(
       [...store.runs.values()].filter(r => r.workflow_name === 'fan-child-flaky')

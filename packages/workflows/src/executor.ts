@@ -705,12 +705,6 @@ export type ExecuteWorkflowOptions = ResumePayload & {
    * themselves in `withCapturedSource`.
    */
   capturedSourceOwner?: CapturedSourceOwner;
-  /**
-   * Require every cost-bearing result in this run to report finite provider cost.
-   * Child runs use this when their parent has a spend ceiling: it keeps the runs'
-   * ledgers separate while making the child's rolled-up cost truthful.
-   */
-  requireReportedCost?: boolean;
 };
 
 /**
@@ -1056,7 +1050,19 @@ export async function inspectResumableRun(
     priorCompletedNodes,
     priorUsage: {
       ...(snapshot.tokens !== undefined ? { tokens: snapshot.tokens } : {}),
-      costUsd: snapshot.costUsd,
+      // A paused single-node loop has no terminal node row yet. Its approval cursor is
+      // therefore the only durable record of spend from the iterations before the gate.
+      // Once the loop has a terminal row, that row already carries the cumulative cost
+      // and adding the cursor again would double count it on a later downstream resume.
+      costUsd:
+        snapshot.costUsd +
+        (approvalContext?.type === 'interactive_loop' &&
+        !priorCompletedNodes.has(approvalContext.nodeId) &&
+        typeof approvalContext.signaledCostUsd === 'number' &&
+        Number.isFinite(approvalContext.signaledCostUsd) &&
+        approvalContext.signaledCostUsd >= 0
+          ? approvalContext.signaledCostUsd
+          : 0),
       workUnits: snapshot.workUnits,
     },
   };
@@ -1188,9 +1194,7 @@ async function runChildWorkflow(
     requireReportedCost,
   } = args;
 
-  // Every failure below returns a `{ status: 'failed' }` outcome (never throws);
-  // `childRunId` defaults to '' for failures before a child row exists.
-  const failOutcome = (error: string, childRunId = ''): ChildWorkflowOutcome => {
+  const buildFailure = (error: string, childRunId = ''): ChildWorkflowOutcome => {
     // Reclaim the child's staged capture. Several ordinary refusals happen between
     // capturing and creating the child row — an unknown name, a cycle, the depth cap, a
     // contract violation — and each would otherwise strand a complete tree under
@@ -1200,6 +1204,15 @@ async function runChildWorkflow(
     if (childSource) void disposeWorkflowSource(childSource);
     return { childRunId, status: 'failed', error };
   };
+  // Before recursive child execution begins, spend is provably zero. Make that
+  // distinction explicit when the parent requires truthful cost reporting; missing
+  // cost is reserved for paths where paid child work may actually have started.
+  const failBeforeExecution = (error: string, childRunId = ''): ChildWorkflowOutcome => ({
+    ...buildFailure(error, childRunId),
+    ...(requireReportedCost ? { costUsd: 0 } : {}),
+  });
+  const failAfterExecution = (error: string, childRunId: string): ChildWorkflowOutcome =>
+    buildFailure(error, childRunId);
 
   // A `workflow:` child freezes its own source AT ITS OWN START, from the parent's
   // AUTHORING directory rather than the parent's frozen copy of it. Both halves matter:
@@ -1212,7 +1225,7 @@ async function runChildWorkflow(
   try {
     childSource = await prepareWorkflowSource(deps, { sourceRoot: parentSourceRoot ?? cwd });
   } catch (err) {
-    return failOutcome(
+    return failBeforeExecution(
       `Failed to capture workflow source for sub-run '${childWorkflowName}': ${(err as Error).message}`
     );
   }
@@ -1243,12 +1256,12 @@ async function runChildWorkflow(
     if (childWorkflow) await recordSelectedWorkflow(childSource.captureRoot, childWorkflow.name);
   } catch (err) {
     // resolveWorkflowName throws only on ambiguity.
-    return failOutcome(
+    return failBeforeExecution(
       `Failed to resolve sub-run '${childWorkflowName}': ${(err as Error).message}`
     );
   }
   if (!childWorkflow) {
-    return failOutcome(`Unknown sub-run workflow '${childWorkflowName}'.`);
+    return failBeforeExecution(`Unknown sub-run workflow '${childWorkflowName}'.`);
   }
   // 2. Cycle guard + depth cap (D9), compared against the RESOLVED canonical name.
   //    The child's ancestor chain is the parent plus the parent's ancestors; a
@@ -1257,17 +1270,17 @@ async function runChildWorkflow(
   try {
     ancestry = [parentRun, ...(await deps.store.getRunAncestry(parentRun.id))];
   } catch (err) {
-    return failOutcome(
+    return failBeforeExecution(
       `Failed to resolve run ancestry for sub-run guard: ${(err as Error).message}`
     );
   }
   if (ancestry.some(a => a.workflow_name === childWorkflow.name)) {
-    return failOutcome(
+    return failBeforeExecution(
       `Sub-run cycle detected: '${childWorkflow.name}' is already an ancestor of this run.`
     );
   }
   if (ancestry.length >= CHILD_WORKFLOW_DEPTH_CAP) {
-    return failOutcome(
+    return failBeforeExecution(
       `Sub-run depth cap (${String(CHILD_WORKFLOW_DEPTH_CAP)}) exceeded nesting '${childWorkflow.name}'.`
     );
   }
@@ -1289,7 +1302,7 @@ async function runChildWorkflow(
     );
     childInputs = Object.keys(resolved).length > 0 ? resolved : undefined;
   } catch (err) {
-    return failOutcome((err as Error).message);
+    return failBeforeExecution((err as Error).message);
   }
 
   // 3. Resolve the child's execution cwd (slice 2, PR-A). `isolation: 'worktree'`
@@ -1318,7 +1331,7 @@ async function runChildWorkflow(
     // deep ENOENT mid-run; fail fast with the same guidance the top-level CLI resume
     // gives (workflow.ts resume precedent).
     if (priorPath && !existsSync(priorPath)) {
-      return failOutcome(
+      return failBeforeExecution(
         `Cannot resume sub-run '${childWorkflowName}': its working path no longer exists ` +
           `(${priorPath}). The worktree may have been cleaned up — start a fresh run.`,
         resumeFailedChild.id
@@ -1331,7 +1344,7 @@ async function runChildWorkflow(
     // created with a real path, see the createWorkflowRun call below), so this is
     // defense-in-depth: fail loudly rather than resume somewhere the author didn't ask for.
     if (!priorPath) {
-      return failOutcome(
+      return failBeforeExecution(
         `Cannot resume sub-run '${childWorkflowName}': its run row has no recorded working ` +
           'path, so the checkout it ran in is unknown — start a fresh run.',
         resumeFailedChild.id
@@ -1340,7 +1353,7 @@ async function runChildWorkflow(
     childCwd = priorPath;
   } else if (isolation === 'worktree') {
     if (!resolveChildIsolation) {
-      return failOutcome(
+      return failBeforeExecution(
         `isolation: 'worktree' on sub-run '${childWorkflowName}' requires an injected ` +
           'child-isolation resolver (available for git-repo codebases run via the CLI or ' +
           "orchestrator). Remove the isolation or use 'inherit' (shared checkout)."
@@ -1357,7 +1370,7 @@ async function runChildWorkflow(
     } catch (err) {
       // The resolver already classified + logged the failure (child-isolation-resolver);
       // prepend the sub-run context for the node-facing outcome.
-      return failOutcome(
+      return failBeforeExecution(
         `Failed to create isolated worktree for sub-run '${childWorkflowName}': ${(err as Error).message}`
       );
     }
@@ -1368,6 +1381,7 @@ async function runChildWorkflow(
   // 4. Create the child run row (fresh) or hydrate the failed one (resume path).
   let childOpts: ExecuteWorkflowOptions;
   let childRunId: string;
+  let priorChildCostUsd = 0;
   // Thread the resolver into every child so a NESTED grandchild `workflow:` node can
   // also request its own worktree (nesting is first-class up to the depth cap) — the
   // recursive executeWorkflow otherwise has no resolver and would fail-fast. (The
@@ -1384,6 +1398,7 @@ async function runChildWorkflow(
           preparedSource: childSource,
         };
         childRunId = hydrated.preCreatedRun.id;
+        priorChildCostUsd = hydrated.priorUsage.costUsd;
       } else {
         // Failed child with no completed nodes — flip it back to running and re-run
         // from the top (nothing to skip). Its failed attempts still consumed budget,
@@ -1403,6 +1418,7 @@ async function runChildWorkflow(
           preparedSource: childSource,
         };
         childRunId = preCreatedRun.id;
+        priorChildCostUsd = snapshot.costUsd;
       }
     } else {
       const childRun = await deps.store.createWorkflowRun({
@@ -1471,7 +1487,7 @@ async function runChildWorkflow(
       childRunId = childRun.id;
     }
   } catch (err) {
-    return failOutcome(
+    return failBeforeExecution(
       `Failed to create sub-run '${childWorkflowName}': ${(err as Error).message}`
     );
   }
@@ -1482,7 +1498,7 @@ async function runChildWorkflow(
   //
   //    Wrapped in `withCapturedSource` so the staged capture above is reclaimed by
   //    the wrap's `finally` if `executeWorkflow`'s move-into-artifacts rename fails
-  //    (#2690 recursive path). `failOutcome` already covers early-refusal paths
+  //    (#2690 recursive path). `failBeforeExecution` already covers early-refusal paths
   //    before this point; the rename failure inside the recursive call is the one
   //    path the wrap is the only thing that can see — `executeWorkflow` returns
   //    `{success: false}` from that branch rather than throwing, so without the
@@ -1502,7 +1518,6 @@ async function runChildWorkflow(
           ...childOpts,
           capturedSourceOwner: owner,
           modelOverrideLayer: { kind: 'resolved', overrides: resolvedModelOverrides },
-          requireReportedCost,
         }
       );
     });
@@ -1511,9 +1526,17 @@ async function runChildWorkflow(
     //    tokens). Works for synchronous completion AND a child paused at its gate.
     const finalChild = await deps.store.getWorkflowRun(childRunId);
     if (!finalChild) {
-      return failOutcome('Child run row disappeared after execution.', childRunId);
+      return failAfterExecution('Child run row disappeared after execution.', childRunId);
     }
-    return childOutcomeFromRun(finalChild);
+    const outcome = childOutcomeFromRun(finalChild);
+    if (!resumeFailedChild || outcome.costUsd === undefined) return outcome;
+    return {
+      ...outcome,
+      // The child row owns the cumulative total. The parent resume ledger already
+      // contains the child's earlier contribution, so this execution pass carries only
+      // the newly consumed delta into the next parent event and live admission check.
+      costUsd: Math.max(0, outcome.costUsd - priorChildCostUsd),
+    };
   } catch (err) {
     // Honor the never-throws contract: executeWorkflow can throw from its early
     // setup (before its own failWorkflowRun catch-all), and the read-back can
@@ -1531,7 +1554,7 @@ async function runChildWorkflow(
     await deps.store.cancelWorkflowRun(childRunId).catch((cancelErr: unknown) => {
       getLog().error({ err: cancelErr as Error, childRunId }, 'workflow.child_setup_cancel_failed');
     });
-    const failed = failOutcome(
+    const failed = failAfterExecution(
       `Sub-run '${childWorkflowName}' errored: ${(err as Error).message}`,
       childRunId
     );
@@ -1785,7 +1808,6 @@ export async function executeWorkflow(
     preparedSource,
     adoptedFromRunId,
     continuationMode = 'adopt',
-    requireReportedCost: callerRequireReportedCost = false,
   } = opts;
 
   const budgetValidation =
@@ -1798,8 +1820,9 @@ export async function executeWorkflow(
     );
   }
 
-  const requireReportedCost =
-    callerRequireReportedCost || readSubrunMetadata(preCreatedRun?.metadata).requireReportedCost;
+  // Child cost-reporting policy is run-owned state. Fresh children persist it before
+  // execution, and every continuation restores it from that same row.
+  const requireReportedCost = readSubrunMetadata(preCreatedRun?.metadata).requireReportedCost;
 
   const executionUserId = preCreatedRun ? (preCreatedRun.user_id ?? undefined) : userId;
   const modelOverrides =
@@ -1816,6 +1839,17 @@ export async function executeWorkflow(
   ) {
     throw new Error(
       `Cannot resume workflow run '${preCreatedRun.id}' without its persisted prior usage.`
+    );
+  }
+  if (
+    priorUsage !== undefined &&
+    (!Number.isFinite(priorUsage.costUsd) ||
+      priorUsage.costUsd < 0 ||
+      !Number.isInteger(priorUsage.workUnits) ||
+      priorUsage.workUnits < 0)
+  ) {
+    throw new Error(
+      `Cannot resume workflow run '${preCreatedRun?.id ?? 'unknown'}' with invalid persisted prior usage.`
     );
   }
   if (isContinuation && modelOverrides !== undefined) {

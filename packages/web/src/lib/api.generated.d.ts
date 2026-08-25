@@ -3495,6 +3495,10 @@ export interface components {
       evidence_policy?: {
         required: boolean;
       };
+      budget?: {
+        max_spend_usd?: number;
+        max_work_units?: number;
+      };
       mutates_checkout?: boolean;
       persist_sessions?: boolean;
       tags?: string[];
