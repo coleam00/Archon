@@ -94,6 +94,7 @@ import {
   isBindingDirective,
   SUBRUN_METADATA_KEYS,
   RUN_METADATA_KEYS,
+  workflowRunUsageLeafSchema,
   WAIT_NODE_OUTPUT_FORMAT,
   waitUntilTimestampSchema,
   waitCondition,
@@ -736,7 +737,7 @@ type NodeExecutionResult = NodeOutput & {
 /**
  * Add provider usage, keeping each cache axis that was actually reported and marking the
  * result a floor when some contribution stayed silent (see `mergeTokenUsage`).
- * Required non-finite counters invalidate only that contribution; malformed optional
+ * Malformed required counters invalidate only that contribution; malformed optional
  * counters are treated as unknown while valid gross input/output remain usable.
  */
 function sumTokenUsage(
@@ -745,8 +746,13 @@ function sumTokenUsage(
 ): TokenUsage | undefined {
   const valid: TokenUsage[] = [];
   for (const usage of usages) {
-    if (!Number.isFinite(usage.input) || !Number.isFinite(usage.output)) {
-      getLog().warn({ ...context, tokens: usage }, 'dag.usage_tokens_non_finite_ignored');
+    if (
+      !Number.isFinite(usage.input) ||
+      usage.input < 0 ||
+      !Number.isFinite(usage.output) ||
+      usage.output < 0
+    ) {
+      getLog().warn({ ...context, tokens: usage }, 'dag.usage_tokens_invalid_ignored');
       continue;
     }
     // Spread rather than rebuild field-by-field: a rebuilt literal silently drops any
@@ -756,11 +762,11 @@ function sumTokenUsage(
     for (const axis of ['cacheRead', 'cacheWrite'] as const) {
       const value = usage[axis];
       if (value === undefined) continue;
-      if (!Number.isFinite(value)) {
+      if (!Number.isFinite(value) || value < 0) {
         // Cleared rather than deleted (no-dynamic-delete): every reader treats an
         // undefined axis as unreported, and JSON.stringify omits the key entirely.
         normalized[axis] = undefined;
-        getLog().warn({ ...context, axis, value }, 'dag.usage_optional_tokens_non_finite_ignored');
+        getLog().warn({ ...context, axis, value }, 'dag.usage_optional_tokens_invalid_ignored');
       }
     }
     valid.push(normalized);
@@ -1135,24 +1141,27 @@ export function childOutcomeFromRun(run: WorkflowRun): ChildWorkflowOutcome {
     );
   }
   const md: Record<string, unknown> = run.metadata ?? {};
-  const input = typeof md.total_tokens_in === 'number' ? md.total_tokens_in : undefined;
-  const output = typeof md.total_tokens_out === 'number' ? md.total_tokens_out : undefined;
-  const cacheRead =
-    typeof md.total_cache_read_tokens === 'number' ? md.total_cache_read_tokens : undefined;
-  const cacheWrite =
-    typeof md.total_cache_write_tokens === 'number' ? md.total_cache_write_tokens : undefined;
-  const tokens =
-    input !== undefined || output !== undefined
+  const rawTokens =
+    typeof md.total_tokens_in === 'number' || typeof md.total_tokens_out === 'number'
       ? {
-          input: input ?? 0,
-          output: output ?? 0,
-          ...(cacheRead !== undefined ? { cacheRead } : {}),
-          ...(cacheWrite !== undefined ? { cacheWrite } : {}),
+          input: typeof md.total_tokens_in === 'number' ? md.total_tokens_in : 0,
+          output: typeof md.total_tokens_out === 'number' ? md.total_tokens_out : 0,
+          ...(typeof md.total_cache_read_tokens === 'number'
+            ? { cacheRead: md.total_cache_read_tokens }
+            : {}),
+          ...(typeof md.total_cache_write_tokens === 'number'
+            ? { cacheWrite: md.total_cache_write_tokens }
+            : {}),
           // Persisted by persistRunUsage; without it a child's floor would contribute to
           // the parent as though it were an exact total.
           ...(md.total_cache_partial === true ? { cachePartial: true as const } : {}),
         }
       : undefined;
+  const parsedTokens =
+    rawTokens === undefined
+      ? undefined
+      : workflowRunUsageLeafSchema.safeParse({ costUsd: 0, tokens: rawTokens });
+  const parsedCost = workflowRunUsageLeafSchema.safeParse({ costUsd: md.total_cost_usd });
   // Presence-keyed (#2637): `false`/`0`/`null` are legitimate structured values, so
   // reading through readSubrunMetadata's summaryValue keeps them distinguishable
   // from "not stamped".
@@ -1162,9 +1171,9 @@ export function childOutcomeFromRun(run: WorkflowRun): ChildWorkflowOutcome {
     status: run.status,
     output: typeof md.summary === 'string' ? md.summary : undefined,
     ...(summaryValue !== undefined ? { structuredOutput: summaryValue } : {}),
-    costUsd: typeof md.total_cost_usd === 'number' ? md.total_cost_usd : undefined,
+    costUsd: parsedCost.success ? parsedCost.data.costUsd : undefined,
     ...(md.cost_reporting_unavailable === true ? { costEnforceable: false as const } : {}),
-    tokens,
+    tokens: parsedTokens?.success ? parsedTokens.data.tokens : undefined,
     error: typeof md.error === 'string' ? md.error : undefined,
   };
 }
@@ -8543,7 +8552,28 @@ async function executeWorkflowNode(
         }
       }
       // Resume-through-parent recovery (D5/#1764): re-drive the failed child once.
-      await chargeBudgetWorkUnit(ctx, node.id, 'spawn_decision');
+      try {
+        await chargeBudgetWorkUnit(ctx, node.id, 'spawn_decision');
+      } catch (err) {
+        if (err instanceof BudgetAdmissionError) {
+          return {
+            ...(await refuseNodeForBudget(ctx, node, err.exhaustion, 'work_unit_reservation')),
+            ...(unownedPriorUsage !== undefined
+              ? {
+                  costUsd: unownedPriorUsage.costUsd,
+                  ...(unownedPriorUsage.tokens !== undefined
+                    ? { tokens: unownedPriorUsage.tokens }
+                    : {}),
+                }
+              : {}),
+          };
+        }
+        return failResult(
+          `Sub-run '${node.workflow}' errored: ${(err as Error).message}`,
+          unownedPriorUsage?.costUsd,
+          unownedPriorUsage?.tokens
+        );
+      }
       const redriveOutcome = await ctx.runChildWorkflow({
         ...childArgs,
         resumeFailedChild: existing,
@@ -8988,11 +9018,10 @@ async function executeFanOutWorkflowNode(
     return failResult(msg);
   }
 
-  // 2. Empty array → a valid zero-width expansion (#977 acceptance): complete with '[]'.
+  // 2. Empty array is a valid zero-width expansion (#977 acceptance), but re-entry still
+  // has to reconcile and account prior children before the normal join completes with `[]`.
   if (items.length === 0) {
     getLog().info({ parentRunId: parentRun.id, nodeId: node.id }, 'workflow.fan_out_empty');
-    writeCompleted('[]', undefined);
-    return { state: 'completed', output: '[]' };
   }
 
   // 3. Re-entry: find THIS node's existing children (a parent may run several workflow
@@ -9184,14 +9213,14 @@ async function executeFanOutWorkflowNode(
   //    unnecessary — an unattended-class workflow is GUARANTEED gate-free by the load-time
   //    class-placement check (loader.ts), so "is the target unattended-class" is a
   //    one-field read, cheaper than the tree walk #2474 originally scoped.
-  const pendingCount = items.reduce<number>((n, _item, i) => {
-    const existing = existingByIndex.get(i);
-    if (existing?.status === 'completed') return n;
-    if (existing?.status === 'cancelled' && !isFanOutRecoverableCancel(existing)) return n;
-    return n + 1;
-  }, 0);
-  const plannedConcurrency = Math.min(fanOut.max_parallel, pendingCount);
-  {
+  if (items.length > 0) {
+    const pendingCount = items.reduce<number>((n, _item, i) => {
+      const existing = existingByIndex.get(i);
+      if (existing?.status === 'completed') return n;
+      if (existing?.status === 'cancelled' && !isFanOutRecoverableCancel(existing)) return n;
+      return n + 1;
+    }, 0);
+    const plannedConcurrency = Math.min(fanOut.max_parallel, pendingCount);
     // The fan-out target is a not-yet-started child, so it resolves from the parent's
     // AUTHORING directory (live) rather than the parent's frozen copy — same rule as a
     // 1:1 `workflow:` child. See resolveChildDiscoveryRoot.

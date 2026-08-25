@@ -7603,6 +7603,82 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
     expect(completedEvent?.[0].data).not.toHaveProperty('tokens');
   });
 
+  it('drops negative provider token counts instead of persisting them', async () => {
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'assistant', content: 'out' };
+      yield { type: 'result', sessionId: 'negative-sid', tokens: { input: -1, output: 10 } };
+    });
+
+    const store = createMockStore();
+    await executeDagWorkflow(
+      createMockDeps(store),
+      createMockPlatform(),
+      'conv-negative-tokens',
+      testDir,
+      {
+        name: 'negative-tokens',
+        nodes: [{ id: 'step1', kind: 'agent', source: { kind: 'command', name: 'step1' } }],
+      },
+      makeWorkflowRun('negative-tokens-run'),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls as Array<
+      [{ event_type: string; step_name: string; data?: Record<string, unknown> }]
+    >;
+    const completedEvent = eventCalls.find(
+      ([event]) => event.event_type === 'node_completed' && event.step_name === 'step1'
+    );
+    expect(completedEvent?.[0].data).not.toHaveProperty('tokens');
+  });
+
+  it('omits a negative optional token axis while retaining valid gross usage', async () => {
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'assistant', content: 'out' };
+      yield {
+        type: 'result',
+        sessionId: 'negative-cache-sid',
+        tokens: { input: 10, output: 2, cacheRead: -3 },
+      };
+    });
+
+    const store = createMockStore();
+    await executeDagWorkflow(
+      createMockDeps(store),
+      createMockPlatform(),
+      'conv-negative-cache',
+      testDir,
+      {
+        name: 'negative-cache',
+        nodes: [{ id: 'step1', kind: 'agent', source: { kind: 'command', name: 'step1' } }],
+      },
+      makeWorkflowRun('negative-cache-run'),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls as Array<
+      [{ event_type: string; step_name: string; data?: Record<string, unknown> }]
+    >;
+    const completedEvent = eventCalls.find(
+      ([event]) => event.event_type === 'node_completed' && event.step_name === 'step1'
+    );
+    expect(completedEvent?.[0].data?.tokens).toEqual({ input: 10, output: 2 });
+  });
+
   it('writes node and run cost to the transcript, matching the persisted events', async () => {
     mockSendQueryDag.mockImplementation(async function* () {
       yield { type: 'assistant', content: 'out' };
@@ -29830,6 +29906,20 @@ describe('childOutcomeFromRun cache reporting', () => {
     // toEqual alone would still pass on `cachePartial: undefined`; the key must be absent,
     // because absence is what every reader treats as "this total is exact".
     expect(outcome.tokens).not.toHaveProperty('cachePartial');
+  });
+
+  it('does not promote malformed persisted usage into a parent outcome', () => {
+    const outcome = childOutcomeFromRun(
+      settledRun({
+        total_cost_usd: -1,
+        total_tokens_in: -5,
+        total_tokens_out: 2,
+        total_cache_read_tokens: -3,
+      })
+    );
+
+    expect(outcome.costUsd).toBeUndefined();
+    expect(outcome.tokens).toBeUndefined();
   });
 });
 

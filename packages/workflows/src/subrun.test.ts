@@ -1867,6 +1867,156 @@ nodes:
     ).toBe(true);
   });
 
+  it('retains independently accumulated child usage when redrive admission persistence fails (#1961)', async () => {
+    await writeWorkflow(
+      'charge-failure-child',
+      `
+name: charge-failure-child
+description: records spend before failing structured output
+nodes:
+  - id: classify
+    prompt: classify
+    output_format:
+      type: object
+      properties:
+        verdict: { type: string }
+      required: [verdict]
+`
+    );
+    await writeWorkflow(
+      'charge-failure-parent',
+      `
+name: charge-failure-parent
+description: persists recovered child usage when redrive admission fails
+budget: { max_work_units: 20 }
+nodes:
+  - id: sub
+    workflow: charge-failure-child
+`
+    );
+
+    let providerCalls = 0;
+    const store = new InMemoryStore();
+    const baseDeps = makeDeps(store);
+    const deps: WorkflowDeps = {
+      ...baseDeps,
+      getAgentProvider: mock(() => ({
+        ...makeProvider(),
+        sendQuery: mock(function* () {
+          providerCalls++;
+          yield { type: 'assistant', content: 'not structured' };
+          yield {
+            type: 'result',
+            sessionId: `charge-failure-${String(providerCalls)}`,
+            cost: providerCalls,
+            tokens: { input: providerCalls * 10, output: providerCalls },
+          };
+        }),
+      })) as unknown as WorkflowDeps['getAgentProvider'],
+    };
+    const parentDefinition = await discover('charge-failure-parent');
+    const childDefinition = await discover('charge-failure-child');
+
+    expect(
+      (
+        await executeWorkflow(
+          deps,
+          makePlatform(),
+          'conv-plat',
+          cwd,
+          parentDefinition,
+          'goal',
+          'conv-db'
+        )
+      ).success
+    ).toBe(false);
+    const parent = [...store.runs.values()].find(
+      run => run.workflow_name === 'charge-failure-parent'
+    )!;
+    const child = [...store.runs.values()].find(
+      run => run.workflow_name === 'charge-failure-child'
+    )!;
+
+    const childHydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(child.id))!);
+    const childSnapshot = await store.getDagResumeSnapshot(child.id);
+    const childResume = childHydrated ?? {
+      preCreatedRun: await store.resumeWorkflowRun(child.id),
+      priorCompletedNodes: childSnapshot.completedNodeOutputs,
+      priorUsage: {
+        costUsd: childSnapshot.costUsd,
+        tokens: childSnapshot.tokens,
+        workUnits: childSnapshot.workUnits,
+        terminalUsageByNode: childSnapshot.terminalUsageByNode,
+      },
+    };
+    expect(
+      (
+        await executeWorkflow(
+          deps,
+          makePlatform(),
+          'conv-plat',
+          cwd,
+          childDefinition,
+          child.user_message,
+          'conv-db',
+          childResume
+        )
+      ).success
+    ).toBe(false);
+
+    const parentHydrated = await hydrateResumableRun(
+      deps,
+      (await store.getWorkflowRun(parent.id))!
+    );
+    const parentSnapshot = await store.getDagResumeSnapshot(parent.id);
+    const parentResume = parentHydrated ?? {
+      preCreatedRun: await store.resumeWorkflowRun(parent.id),
+      priorCompletedNodes: parentSnapshot.completedNodeOutputs,
+      priorUsage: {
+        costUsd: parentSnapshot.costUsd,
+        tokens: parentSnapshot.tokens,
+        workUnits: parentSnapshot.workUnits,
+        terminalUsageByNode: parentSnapshot.terminalUsageByNode,
+      },
+    };
+    const refusingDeps: WorkflowDeps = {
+      ...deps,
+      createRequiredWorkflowEvent: event => {
+        if (
+          event.workflow_run_id === parent.id &&
+          event.event_type === 'work_unit_charged' &&
+          event.step_name === 'sub'
+        ) {
+          return Promise.reject(new Error('required event unavailable'));
+        }
+        return store.createWorkflowEvent(event);
+      },
+    };
+    const resumed = await executeWorkflow(
+      refusingDeps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parentDefinition,
+      'goal',
+      'conv-db',
+      parentResume
+    );
+
+    expect(resumed.success).toBe(false);
+    expect(providerCalls).toBe(2);
+    expect((await store.getWorkflowRun(parent.id))?.metadata.total_cost_usd).toBe(3);
+    expect((await store.getWorkflowRun(parent.id))?.metadata.total_tokens_in).toBe(30);
+    expect((await store.getWorkflowRun(parent.id))?.metadata.total_tokens_out).toBe(3);
+    const lastSubFailure = store.events
+      .filter(event => event.event_type === 'node_failed' && event.step_name === 'sub')
+      .at(-1);
+    expect(lastSubFailure?.data).toMatchObject({
+      cost_usd: 2,
+      tokens: { input: 20, output: 2 },
+    });
+  });
+
   it('keeps failed first-attempt budget usage when a child is re-driven from the top (#1961)', async () => {
     await writeWorkflow(
       'child-budget-fails-first',
@@ -4135,6 +4285,97 @@ nodes:
       e => e.event_type === 'node_completed' && e.step_name === 'work'
     );
     expect(workCompleted?.data?.node_output).toBe('[]');
+  });
+
+  it('an empty fan-out reconciles prior children and retains their usage (#1961)', async () => {
+    await writeWorkflow(
+      'fan-empty-resume',
+      `
+name: fan-empty-resume
+description: reconcile children after the expansion shrinks to zero
+budget: { max_spend_usd: 5 }
+nodes:
+  - id: plan
+    bash: |
+      printf '%s' '[]'
+  - id: work
+    workflow: missing-empty-target
+    depends_on: [plan]
+    fan_out:
+      items: "$plan.output"
+`
+    );
+
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    const parentDefinition = await discover('fan-empty-resume');
+    const parent = await store.createWorkflowRun({
+      workflow_name: 'fan-empty-resume',
+      conversation_id: 'conv-db',
+      user_message: 'goal',
+      working_path: cwd,
+    });
+    store.events.push({
+      workflow_run_id: parent.id,
+      event_type: 'node_completed',
+      step_name: 'plan',
+      data: { node_output: '[]' },
+    });
+    const completedChild = await store.createWorkflowRun({
+      workflow_name: 'missing-empty-target',
+      conversation_id: 'conv-db',
+      user_message: 'old item',
+      parent_run_id: parent.id,
+      working_path: join(cwd, 'completed-child'),
+      metadata: {
+        parent_node_id: 'work',
+        child_index: 0,
+        total_cost_usd: 0.5,
+        total_tokens_in: 7,
+        total_tokens_out: 3,
+      },
+    });
+    await store.updateWorkflowRun(completedChild.id, { status: 'completed' });
+    const liveChild = await store.createWorkflowRun({
+      workflow_name: 'missing-empty-target',
+      conversation_id: 'conv-db',
+      user_message: 'live old item',
+      parent_run_id: parent.id,
+      working_path: join(cwd, 'live-child'),
+      metadata: { parent_node_id: 'work', child_index: 1 },
+    });
+    await store.updateWorkflowRun(liveChild.id, { status: 'running' });
+
+    const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(parent.id))!);
+    expect(hydrated).not.toBeNull();
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parentDefinition,
+      'goal',
+      'conv-db',
+      hydrated!
+    );
+
+    expect(result.success).toBe(true);
+    expect((await store.getWorkflowRun(liveChild.id))?.status).toBe('cancelled');
+    expect((await store.getWorkflowRun(liveChild.id))?.metadata.cancelled_reason).toBe(
+      'fan_out_orphan'
+    );
+    expect((await store.getWorkflowRun(parent.id))?.metadata.total_cost_usd).toBe(0.5);
+    const workCompleted = store.events.find(
+      event => event.event_type === 'node_completed' && event.step_name === 'work'
+    );
+    expect(workCompleted?.data).toMatchObject({
+      node_output: '[]',
+      cost_usd: 0.5,
+      tokens: { input: 7, output: 3 },
+      child_usage_by_id: {
+        [completedChild.id]: { costUsd: 0.5, tokens: { input: 7, output: 3 } },
+      },
+    });
   });
 
   it('a non-array items resolution fails the node closed (never silently zero items)', async () => {

@@ -43,6 +43,8 @@ import {
   WORKFLOW_SOURCE_METADATA_KEY,
   readWorkflowSourceState,
   workflowBudgetPolicySchema,
+  workflowRunUsageLeafSchema,
+  workflowRunUsageSchema,
 } from './schemas';
 import {
   WorkflowSourceIntegrityError,
@@ -1100,6 +1102,60 @@ function tokenUsageExceeds(
   );
 }
 
+function usageLeafExceeds(
+  candidate: WorkflowRunUsageLeaf | undefined,
+  baseline: WorkflowRunUsageLeaf
+): boolean {
+  return (
+    candidate !== undefined &&
+    (candidate.costUsd > baseline.costUsd || tokenUsageExceeds(candidate.tokens, baseline.tokens))
+  );
+}
+
+function sumUsageLeaves(usages: readonly WorkflowRunUsageLeaf[]): WorkflowRunUsageLeaf | undefined {
+  if (usages.length === 0) return undefined;
+  const tokens = mergeTokenUsage(
+    usages.map(usage => usage.tokens).filter((usage): usage is TokenUsage => usage !== undefined)
+  );
+  return {
+    costUsd: usages.reduce((total, usage) => total + usage.costUsd, 0),
+    ...(tokens !== undefined ? { tokens } : {}),
+  };
+}
+
+/** Validate both the persisted usage shape and the ownership relationships it asserts. */
+function isValidPriorRunUsage(priorUsage: PriorRunUsage): boolean {
+  if (
+    !Number.isInteger(priorUsage.workUnits) ||
+    priorUsage.workUnits < 0 ||
+    !workflowRunUsageLeafSchema.safeParse({
+      costUsd: priorUsage.costUsd,
+      ...(priorUsage.tokens !== undefined ? { tokens: priorUsage.tokens } : {}),
+    }).success
+  ) {
+    return false;
+  }
+  if (priorUsage.terminalUsageByNode === undefined) return true;
+  if (!(priorUsage.terminalUsageByNode instanceof Map)) return false;
+
+  const nodeUsages: WorkflowRunUsageLeaf[] = [];
+  for (const [nodeId, rawUsage] of priorUsage.terminalUsageByNode) {
+    if (typeof nodeId !== 'string') return false;
+    const parsed = workflowRunUsageSchema.safeParse(rawUsage);
+    if (!parsed.success) return false;
+    const nodeUsage = parsed.data;
+    const childUsage = sumUsageLeaves(Object.values(nodeUsage.children ?? {}));
+    if (usageLeafExceeds(childUsage, nodeUsage)) return false;
+    nodeUsages.push(nodeUsage);
+  }
+
+  const totalUsage: WorkflowRunUsageLeaf = {
+    costUsd: priorUsage.costUsd,
+    ...(priorUsage.tokens !== undefined ? { tokens: priorUsage.tokens } : {}),
+  };
+  return !usageLeafExceeds(sumUsageLeaves(nodeUsages), totalUsage);
+}
+
 function maxWorkflowRunUsageLeaf(
   eventUsage: WorkflowRunUsageLeaf | undefined,
   rowUsage: WorkflowRunUsageLeaf | undefined
@@ -2027,13 +2083,7 @@ export async function executeWorkflow(
       `Cannot resume workflow run '${preCreatedRun.id}' without its persisted prior usage.`
     );
   }
-  if (
-    priorUsage !== undefined &&
-    (!Number.isFinite(priorUsage.costUsd) ||
-      priorUsage.costUsd < 0 ||
-      !Number.isInteger(priorUsage.workUnits) ||
-      priorUsage.workUnits < 0)
-  ) {
+  if (priorUsage !== undefined && !isValidPriorRunUsage(priorUsage)) {
     throw new Error(
       `Cannot resume workflow run '${preCreatedRun?.id ?? 'unknown'}' with invalid persisted prior usage.`
     );

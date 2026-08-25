@@ -383,6 +383,68 @@ describe('executeWorkflow', () => {
     expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
   });
 
+  it('rejects a continuation whose node watermark exceeds the restored total (#1961)', async () => {
+    const store = makeStore();
+    const resumed = makeRun({ id: 'oversized-watermark-resume', status: 'running' });
+
+    await expect(
+      executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv-1',
+        '/tmp/ops',
+        { ...makeWorkflow(), budget: { max_spend_usd: 5 } },
+        'msg',
+        'db-conv-1',
+        {
+          preCreatedRun: resumed,
+          priorCompletedNodes: new Map(),
+          priorUsage: {
+            costUsd: 0,
+            workUnits: 0,
+            terminalUsageByNode: new Map([['sub', { costUsd: 1 }]]),
+          },
+        }
+      )
+    ).rejects.toThrow(
+      "Cannot resume workflow run 'oversized-watermark-resume' with invalid persisted prior usage"
+    );
+
+    expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('rejects a continuation whose child watermarks exceed their node total (#1961)', async () => {
+    const store = makeStore();
+    const resumed = makeRun({ id: 'oversized-child-watermark-resume', status: 'running' });
+
+    await expect(
+      executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv-1',
+        '/tmp/ops',
+        { ...makeWorkflow(), budget: { max_spend_usd: 5 } },
+        'msg',
+        'db-conv-1',
+        {
+          preCreatedRun: resumed,
+          priorCompletedNodes: new Map(),
+          priorUsage: {
+            costUsd: 1,
+            workUnits: 0,
+            terminalUsageByNode: new Map([
+              ['fan', { costUsd: 0, children: { child: { costUsd: 1 } } }],
+            ]),
+          },
+        }
+      )
+    ).rejects.toThrow(
+      "Cannot resume workflow run 'oversized-child-watermark-resume' with invalid persisted prior usage"
+    );
+
+    expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+  });
+
   // -------------------------------------------------------------------------
   // Container resume guard (Phase C)
   // -------------------------------------------------------------------------
