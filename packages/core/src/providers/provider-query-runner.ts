@@ -76,14 +76,9 @@ export function createProviderQueryRunner(deps: ProviderQueryRunnerDeps): Provid
   };
 }
 
-let sharedGate: ProviderConcurrencyGate | undefined;
-function getSharedGate(): ProviderConcurrencyGate {
-  sharedGate ??= new ProviderConcurrencyGate(getDatabase());
-  return sharedGate;
-}
-
 export const runProviderQuery: ProviderQueryRunner = createProviderQueryRunner({
-  acquire: (provider, limit, options) => getSharedGate().acquire(provider, limit, options),
+  acquire: (provider, limit, options) =>
+    new ProviderConcurrencyGate(getDatabase()).acquire(provider, limit, options),
   loadLimits: async (): Promise<Record<string, number>> => {
     try {
       return await loadProviderConcurrencyLimits();

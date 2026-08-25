@@ -134,8 +134,7 @@ export async function* streamOpencodeSession(
   let resultYielded = false;
   let abortPromise: Promise<unknown> | undefined;
 
-  const abortHandler = (): void => {
-    aborted = true;
+  const abortSession = (): Promise<unknown> => {
     abortPromise ??= client.session.abort({
       path: { id: sessionId },
       query: { directory: cwd },
@@ -143,6 +142,12 @@ export async function* streamOpencodeSession(
     void abortPromise.catch((error): void => {
       getLog().debug({ err: error, sessionId }, 'opencode.session_abort_failed');
     });
+    return abortPromise;
+  };
+
+  const abortHandler = (): void => {
+    aborted = true;
+    void abortSession();
     streamController.abort();
   };
 
@@ -282,7 +287,10 @@ export async function* streamOpencodeSession(
     }
 
     if (!resultYielded && !aborted) {
-      yield { type: 'result', sessionId };
+      await abortSession();
+      throw new Error(
+        `OpenCode event stream ended before session became idle (session: ${sessionId}, cwd: ${cwd})`
+      );
     }
 
     if (aborted) {

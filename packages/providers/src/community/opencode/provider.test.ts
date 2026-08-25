@@ -601,6 +601,71 @@ describe('OpencodeProvider', () => {
     expect(releases).toBe(2);
   });
 
+  test('multi-agent session error closes admission before a queued sibling can start', async () => {
+    const cwd = await createTempProjectDir();
+    const sessionIds = ['scout-session', 'reviewer-session'];
+    const events = createPushStream();
+    let promptCalls = 0;
+    const runtime = makeRuntime({
+      sessionCreate: mock(async () => ({ data: { id: sessionIds.shift() } })),
+      promptAsync: mock(async () => {
+        promptCalls += 1;
+        if (promptCalls === 1) {
+          events.push({
+            type: 'session.error',
+            properties: {
+              sessionID: 'scout-session',
+              error: { message: 'upstream failed' },
+            },
+          });
+        }
+      }),
+      subscribe: mock(async () => ({ stream: events.stream })),
+    });
+    runtimeQueue.push(runtime);
+    let acquireCalls = 0;
+    let releases = 0;
+
+    const { error } = await consume(
+      new OpencodeProvider().sendQuery('hi', cwd, undefined, {
+        assistantConfig: TEST_MODEL,
+        nodeConfig: {
+          nodeId: 'research',
+          agents: {
+            scout: { description: 'Scout', prompt: 'Explore' },
+            reviewer: { description: 'Reviewer', prompt: 'Review' },
+          },
+        },
+        providerAttemptGate: {
+          acquire: async signal => {
+            acquireCalls += 1;
+            if (acquireCalls === 1) {
+              return {
+                signal: new AbortController().signal,
+                release: async () => {
+                  releases += 1;
+                },
+              };
+            }
+            await new Promise<void>((_resolve, reject) => {
+              if (signal?.aborted) {
+                reject(signal.reason);
+                return;
+              }
+              signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
+            });
+            throw new Error('unreachable admission');
+          },
+        },
+      })
+    );
+
+    expect(error?.message).toContain('upstream failed');
+    expect(promptCalls).toBe(1);
+    expect(runtime.client.session.abort).toHaveBeenCalledTimes(2);
+    expect(releases).toBe(1);
+  });
+
   test('terminal result chunk includes sessionId and normalized tokens', async () => {
     scriptedEvents = [
       {
@@ -1104,6 +1169,84 @@ describe('OpencodeProvider', () => {
     const { error } = await consumption;
     expect(error?.message).toBe('OpenCode query aborted');
     expect(released).toBe(true);
+  });
+
+  test('aborts an unconfirmed single-agent stream before releasing provider capacity', async () => {
+    let confirmAbort!: () => void;
+    const abortConfirmed = new Promise<void>(resolve => {
+      confirmAbort = resolve;
+    });
+    const runtime = makeRuntime({
+      subscribe: mock(async () => ({ stream: createEventStream([]) })),
+      sessionAbort: mock(() => abortConfirmed),
+    });
+    runtimeQueue.push(runtime);
+    let released = false;
+
+    const consumption = consume(
+      new OpencodeProvider().sendQuery('hi', '/tmp', undefined, {
+        assistantConfig: TEST_MODEL,
+        providerAttemptGate: {
+          acquire: async () => ({
+            signal: new AbortController().signal,
+            release: async () => {
+              released = true;
+            },
+          }),
+        },
+      })
+    );
+
+    while (runtime.client.session.abort.mock.calls.length === 0) await Bun.sleep(1);
+    expect(released).toBe(false);
+
+    confirmAbort();
+    const { chunks, error } = await consumption;
+    expect(chunks).toEqual([]);
+    expect(error?.message).toContain('event stream ended before session became idle');
+    expect(released).toBe(true);
+  });
+
+  test('cancellation during multi-agent session creation aborts every created session', async () => {
+    const cwd = await createTempProjectDir();
+    let releaseSecondCreate!: () => void;
+    const secondCreateReleased = new Promise<void>(resolve => {
+      releaseSecondCreate = resolve;
+    });
+    let createCalls = 0;
+    const runtime = makeRuntime({
+      sessionCreate: mock(async () => {
+        createCalls += 1;
+        if (createCalls === 2) await secondCreateReleased;
+        return { data: { id: createCalls === 1 ? 'scout-session' : 'reviewer-session' } };
+      }),
+      subscribe: mock(async () => ({ stream: createPendingStream() })),
+    });
+    runtimeQueue.push(runtime);
+    const abortController = new AbortController();
+
+    const consumption = consume(
+      new OpencodeProvider().sendQuery('hi', cwd, undefined, {
+        assistantConfig: TEST_MODEL,
+        abortSignal: abortController.signal,
+        nodeConfig: {
+          nodeId: 'research',
+          agents: {
+            scout: { description: 'Scout', prompt: 'Explore' },
+            reviewer: { description: 'Reviewer', prompt: 'Review' },
+          },
+        },
+      })
+    );
+
+    while (runtime.client.session.create.mock.calls.length < 2) await Bun.sleep(1);
+    abortController.abort(new Error('cancelled'));
+    releaseSecondCreate();
+
+    const { error } = await consumption;
+    expect(error?.message).toBe('OpenCode query aborted');
+    expect(runtime.client.session.promptAsync).not.toHaveBeenCalled();
+    expect(runtime.client.session.abort).toHaveBeenCalledTimes(2);
   });
 
   test('cleanup closes the embedded runtime after completion', async () => {

@@ -132,12 +132,12 @@ export async function* streamMultiAgentOpencodeSession(
 
   const events = await client.event.subscribe({ query: { directory: cwd } });
   getLog().info({ nodeId }, 'opencode.multi_agent_events_subscribed');
-  const streamController = new AbortController();
-  const admissionController = new AbortController();
+  const lifecycleController = new AbortController();
   const sessionToAgent = new Map<string, AgentRunState>();
   let aborted = requestOptions?.abortSignal?.aborted === true;
   let promptError: Error | undefined;
-  let abortPromise: Promise<void> | undefined;
+  const abortPromises = new Map<string, Promise<unknown>>();
+  let completed = false;
 
   const releaseStateLease = async (state: AgentRunState): Promise<void> => {
     if (!state.lease) return;
@@ -151,22 +151,28 @@ export async function* streamMultiAgentOpencodeSession(
   };
 
   const abortAll = (): Promise<void> => {
-    abortPromise ??= Promise.all(
-      Array.from(sessionToAgent.values()).map(state =>
-        client.session.abort({ path: { id: state.sessionId }, query: { directory: state.cwd } })
-      )
-    ).then(() => undefined);
-    void abortPromise.catch(error => {
+    const aborts = Array.from(sessionToAgent.values(), state => {
+      let abort = abortPromises.get(state.sessionId);
+      if (!abort) {
+        abort = client.session.abort({
+          path: { id: state.sessionId },
+          query: { directory: state.cwd },
+        });
+        abortPromises.set(state.sessionId, abort);
+      }
+      return abort;
+    });
+    const all = Promise.all(aborts).then(() => undefined);
+    void all.catch(error => {
       getLog().debug({ err: error }, 'opencode.multi_agent_abort_failed');
     });
-    return abortPromise;
+    return all;
   };
 
   const abortHandler = (): void => {
     aborted = true;
-    admissionController.abort(requestOptions?.abortSignal?.reason);
+    lifecycleController.abort(requestOptions?.abortSignal?.reason);
     void abortAll();
-    streamController.abort();
   };
 
   if (requestOptions?.abortSignal?.aborted) {
@@ -204,7 +210,7 @@ export async function* streamMultiAgentOpencodeSession(
     const promptTasks = states.map(async state => {
       try {
         const lease = requestOptions?.providerAttemptGate
-          ? await requestOptions.providerAttemptGate.acquire(admissionController.signal)
+          ? await requestOptions.providerAttemptGate.acquire(lifecycleController.signal)
           : undefined;
         if (lease) {
           state.lease = lease;
@@ -213,9 +219,8 @@ export async function* streamMultiAgentOpencodeSession(
               lease.signal.reason instanceof Error
                 ? lease.signal.reason
                 : new Error(`OpenCode capacity lease lost for agent '${state.agent.key}'`);
-            admissionController.abort(promptError);
+            lifecycleController.abort(promptError);
             void abortAll();
-            streamController.abort();
           };
           state.leaseAbortHandler = onLeaseLost;
           if (lease.signal.aborted) {
@@ -227,6 +232,7 @@ export async function* streamMultiAgentOpencodeSession(
           }
           lease.signal.addEventListener('abort', onLeaseLost, { once: true });
         }
+        lifecycleController.signal.throwIfAborted();
         const agentRequestOptions = withAgentNodeConfig(requestOptions, state.agent);
         const promptBody = createSessionPromptBody(prompt, model, agentRequestOptions, state.agent);
         getLog().info(
@@ -240,9 +246,8 @@ export async function* streamMultiAgentOpencodeSession(
         );
       } catch (error) {
         promptError ??= error instanceof Error ? error : new Error(String(error));
-        admissionController.abort(promptError);
+        lifecycleController.abort(promptError);
         void abortAll();
-        streamController.abort();
         throw promptError;
       }
     });
@@ -262,7 +267,7 @@ export async function* streamMultiAgentOpencodeSession(
     // Phase 3: Listen to events and demux by sessionID
     getLog().info({ nodeId }, 'opencode.multi_agent_listening');
     let eventCount = 0;
-    for await (const rawEvent of abortableStream(events.stream, streamController.signal)) {
+    for await (const rawEvent of abortableStream(events.stream, lifecycleController.signal)) {
       eventCount++;
       if (eventCount <= 5) {
         getLog().info(
@@ -361,11 +366,12 @@ export async function* streamMultiAgentOpencodeSession(
           typeof properties.sessionID === 'string' ? properties.sessionID : undefined;
         const state = sessionId ? sessionToAgent.get(sessionId) : undefined;
         if (!state) continue;
-        await releaseStateLease(state);
-        await abortAll();
         const rawError = isRecord(properties.error) ? properties.error : properties;
         const err = new Error(`[${state.agent.key}] ${errorMessage(rawError)}`);
         err.cause = rawError;
+        lifecycleController.abort(err);
+        await releaseStateLease(state);
+        await abortAll();
         throw err;
       }
 
@@ -446,6 +452,7 @@ export async function* streamMultiAgentOpencodeSession(
             ...(tokens ? { tokens } : {}),
             ...(structuredOutputs ? { structuredOutput: structuredOutputs } : {}),
           };
+          completed = true;
           getLog().info({ nodeId }, 'opencode.multi_agent_completed');
           return;
         }
@@ -464,9 +471,8 @@ export async function* streamMultiAgentOpencodeSession(
     throw new Error('OpenCode multi-agent stream ended before all agents completed');
   } finally {
     requestOptions?.abortSignal?.removeEventListener('abort', abortHandler);
-    admissionController.abort();
-    streamController.abort();
-    if (abortPromise) await abortPromise;
+    lifecycleController.abort();
+    if (!completed) await abortAll();
     await Promise.all(Array.from(sessionToAgent.values(), state => releaseStateLease(state)));
   }
 }

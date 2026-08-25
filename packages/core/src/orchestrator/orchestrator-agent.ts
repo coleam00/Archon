@@ -2585,7 +2585,6 @@ export async function handleMessage(
           codebases,
           workflowsWithSource,
           aiClient,
-          providerKey,
           fullPrompt,
           cwd,
           session,
@@ -2603,7 +2602,6 @@ export async function handleMessage(
           codebases,
           workflowsWithSource,
           aiClient,
-          providerKey,
           fullPrompt,
           cwd,
           session,
@@ -2672,7 +2670,6 @@ async function handleStreamMode(
   codebases: readonly Codebase[],
   workflows: readonly WorkflowWithSource[],
   aiClient: ReturnType<typeof getAgentProvider>,
-  provider: string,
   fullPrompt: string,
   cwd: string,
   session: { id: string; assistant_session_id: string | null },
@@ -2790,7 +2787,7 @@ async function handleStreamMode(
         // Anonymous telemetry: AI returned an error result for this chat turn.
         captureChatTurn({
           platform: platform.getPlatformType(),
-          provider,
+          provider: aiClient.getType(),
           model: requestOptions?.model,
           durationMs: Date.now() - turnStartedAt,
           outcome: 'failed',
@@ -2879,7 +2876,7 @@ async function handleStreamMode(
   // provider only, never message content.
   captureChatTurn({
     platform: platform.getPlatformType(),
-    provider,
+    provider: aiClient.getType(),
     model: requestOptions?.model,
     // durationMs deliberately measures from mode-handler entry — it includes
     // pre-AI setup, i.e. "time the user waited", not pure model latency.
@@ -2904,7 +2901,6 @@ async function handleBatchMode(
   codebases: readonly Codebase[],
   workflows: readonly WorkflowWithSource[],
   aiClient: ReturnType<typeof getAgentProvider>,
-  provider: string,
   fullPrompt: string,
   cwd: string,
   session: { id: string; assistant_session_id: string | null },
@@ -3026,7 +3022,7 @@ async function handleBatchMode(
         // Anonymous telemetry: AI returned an error result for this chat turn.
         captureChatTurn({
           platform: platform.getPlatformType(),
-          provider,
+          provider: aiClient.getType(),
           model: requestOptions?.model,
           durationMs: Date.now() - turnStartedAt,
           outcome: 'failed',
@@ -3142,7 +3138,7 @@ async function handleBatchMode(
   // rationale as the stream-mode capture in handleStreamMode above).
   captureChatTurn({
     platform: platform.getPlatformType(),
-    provider,
+    provider: aiClient.getType(),
     model: requestOptions?.model,
     // durationMs deliberately measures from mode-handler entry — it includes
     // pre-AI setup, i.e. "time the user waited", not pure model latency.
