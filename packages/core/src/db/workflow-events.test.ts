@@ -337,6 +337,75 @@ describe('workflow-events', () => {
       expect(result.tokens).toEqual({ input: 12, output: 5 });
     });
 
+    test('restores per-child workflow usage provenance from terminal events (#1961)', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          {
+            step_name: 'fan',
+            event_type: 'node_failed',
+            data: {
+              type: 'workflow',
+              cost_usd: 3,
+              tokens: { input: 30, output: 12 },
+              child_usage_by_id: {
+                'child-a': { costUsd: 1, tokens: { input: 10, output: 4 } },
+                'child-b': { costUsd: 2, tokens: { input: 20, output: 8 } },
+              },
+            },
+          },
+        ])
+      );
+
+      const result = await getDagResumeSnapshot('run-child-provenance');
+
+      expect(result.terminalUsageByNode).toEqual(
+        new Map([
+          [
+            'fan',
+            {
+              costUsd: 3,
+              tokens: { input: 30, output: 12 },
+              children: {
+                'child-a': { costUsd: 1, tokens: { input: 10, output: 4 } },
+                'child-b': { costUsd: 2, tokens: { input: 20, output: 8 } },
+              },
+            },
+          ],
+        ])
+      );
+    });
+
+    test('ignores negative persisted token axes instead of increasing resumed usage (#1961)', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          {
+            step_name: 'valid',
+            event_type: 'node_completed',
+            data: { node_output: 'ok', tokens: { input: 4, output: 2, cacheRead: 1 } },
+          },
+          {
+            step_name: 'negative-required',
+            event_type: 'node_failed',
+            data: { error: 'bad tokens', tokens: { input: -5, output: 1 } },
+          },
+          {
+            step_name: 'negative-optional',
+            event_type: 'node_failed',
+            data: {
+              error: 'bad cache tokens',
+              tokens: { input: 3, output: 1, cacheRead: -9, cacheWrite: -2 },
+            },
+          },
+        ])
+      );
+
+      const result = await getDagResumeSnapshot('run-negative-tokens');
+
+      expect(result.tokens).toEqual({ input: 7, output: 3, cacheRead: 1, cachePartial: true });
+      expect(result.terminalUsageByNode).toEqual(new Map());
+      expect(mockLogger.warn).toHaveBeenCalled();
+    });
+
     test('does not let a negative persisted provider cost reduce resumed spend (#1961)', async () => {
       mockQuery.mockResolvedValueOnce(
         createQueryResult([

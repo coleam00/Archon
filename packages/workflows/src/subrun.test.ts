@@ -93,7 +93,12 @@ import { discoverWorkflows } from './workflow-discovery';
 import { validateWorkflowResources } from './validator';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
 import type { IWorkflowStore } from './store';
-import { RUN_METADATA_KEYS, type WorkflowRun } from './schemas/workflow-run';
+import {
+  RUN_METADATA_KEYS,
+  workflowRunUsageLeafSchema,
+  type WorkflowRun,
+  type WorkflowRunUsage,
+} from './schemas/workflow-run';
 import type { WorkflowDefinition } from './schemas/workflow';
 import type { WorkflowRunConfigMetadata } from './schemas/run-config';
 import { mergeTokenUsage, type TokenUsage } from '@archon/providers/types';
@@ -311,7 +316,7 @@ class InMemoryStore implements IWorkflowStore {
   getDagResumeSnapshot: IWorkflowStore['getDagResumeSnapshot'] = workflowRunId => {
     const completedNodeOutputs = new Map<string, { output: string; structuredOutput?: unknown }>();
     const terminalNodeIds = new Set<string>();
-    const terminalUsageByNode = new Map<string, { costUsd: number; tokens?: TokenUsage }>();
+    const terminalUsageByNode = new Map<string, WorkflowRunUsage>();
     const tokens: TokenUsage = { input: 0, output: 0 };
     let costUsd = 0;
     let workUnits = 0;
@@ -354,13 +359,15 @@ class InMemoryStore implements IWorkflowStore {
           typeof eventTokens.input === 'number' &&
           typeof eventTokens.output === 'number' &&
           Number.isFinite(eventTokens.input) &&
-          Number.isFinite(eventTokens.output)
+          Number.isFinite(eventTokens.output) &&
+          eventTokens.input >= 0 &&
+          eventTokens.output >= 0
         ) {
           tokens.input += eventTokens.input;
           tokens.output += eventTokens.output;
           for (const axis of ['cacheRead', 'cacheWrite'] as const) {
             const value = (eventTokens as Record<string, unknown>)[axis];
-            if (typeof value === 'number' && Number.isFinite(value)) {
+            if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
               tokens[axis] = (tokens[axis] ?? 0) + value;
             }
           }
@@ -372,7 +379,7 @@ class InMemoryStore implements IWorkflowStore {
             output: eventTokens.output,
             ...(['cacheRead', 'cacheWrite'] as const).reduce<Partial<TokenUsage>>((axes, axis) => {
               const value = (eventTokens as Record<string, unknown>)[axis];
-              return typeof value === 'number' && Number.isFinite(value)
+              return typeof value === 'number' && Number.isFinite(value) && value >= 0
                 ? { ...axes, [axis]: value }
                 : axes;
             }, {}),
@@ -386,7 +393,8 @@ class InMemoryStore implements IWorkflowStore {
         if (
           e.event_type !== 'node_skipped_prior_success' &&
           typeof eventCost === 'number' &&
-          Number.isFinite(eventCost)
+          Number.isFinite(eventCost) &&
+          eventCost >= 0
         ) {
           costUsd += eventCost;
           usageAccounted = true;
@@ -399,9 +407,36 @@ class InMemoryStore implements IWorkflowStore {
               (usage): usage is TokenUsage => usage !== undefined
             )
           );
+          const children = { ...(prior?.children ?? {}) };
+          const rawChildren = e.data?.child_usage_by_id;
+          if (
+            typeof rawChildren === 'object' &&
+            rawChildren !== null &&
+            !Array.isArray(rawChildren)
+          ) {
+            for (const [childRunId, rawUsage] of Object.entries(rawChildren)) {
+              const parsed = workflowRunUsageLeafSchema.safeParse(rawUsage);
+              if (!parsed.success) continue;
+              const priorChild = children[childRunId];
+              const childTokens = mergeTokenUsage(
+                [priorChild?.tokens, parsed.data.tokens].filter(
+                  (usage): usage is TokenUsage => usage !== undefined
+                )
+              );
+              children[childRunId] = {
+                costUsd: (priorChild?.costUsd ?? 0) + parsed.data.costUsd,
+                ...(childTokens !== undefined ? { tokens: childTokens } : {}),
+              };
+            }
+          }
           terminalUsageByNode.set(e.step_name, {
-            costUsd: (prior?.costUsd ?? 0) + (typeof eventCost === 'number' ? eventCost : 0),
+            costUsd:
+              (prior?.costUsd ?? 0) +
+              (typeof eventCost === 'number' && Number.isFinite(eventCost) && eventCost >= 0
+                ? eventCost
+                : 0),
             ...(mergedTokens !== undefined ? { tokens: mergedTokens } : {}),
+            ...(Object.keys(children).length > 0 ? { children } : {}),
           });
         }
       }
@@ -1405,17 +1440,22 @@ nodes:
       .filter(e => e.event_type === 'node_completed' && e.step_name === 'sub')
       .at(-1);
     expect(String(subCompleted?.data?.node_output)).toContain('recovered');
-    expect(subCompleted?.data?.cost_usd).toBe(0);
+    // This direct unbudgeted continuation did not hydrate priorUsage, so its zero
+    // accumulator owns nothing. The child lifetime usage must be re-attributed to
+    // this pass instead of trusting a separate row watermark and under-reporting.
+    expect(subCompleted?.data?.cost_usd).toBeCloseTo(0.01, 5);
     expect(subCompleted?.data?.tokens).toEqual({
-      input: 0,
-      output: 0,
-      cacheRead: 0,
+      input: 7,
+      output: 3,
+      cacheRead: 5,
       cacheWrite: 0,
     });
     const resumedParent = await store.getWorkflowRun(parentRun!.id);
-    expect(resumedParent?.metadata.total_cost_usd).toBeCloseTo(0.01, 5);
-    expect(resumedParent?.metadata.total_tokens_in).toBe(7);
-    expect(resumedParent?.metadata.total_tokens_out).toBe(3);
+    // Without hydrated prior usage the continuation conservatively re-attributes
+    // the child lifetime total; the existing row total remains a separate prior pass.
+    expect(resumedParent?.metadata.total_cost_usd).toBeCloseTo(0.02, 5);
+    expect(resumedParent?.metadata.total_tokens_in).toBe(14);
+    expect(resumedParent?.metadata.total_tokens_out).toBe(6);
 
     // Separately: a child cancelled out-of-band fails the node on re-entry.
     await writeWorkflow(
@@ -1698,6 +1738,133 @@ nodes:
     expect(finalParent?.metadata.total_tokens_out).toBe(14);
     expect(finalParent?.metadata.total_cache_read_tokens).toBe(14);
     expect(finalParent?.metadata.total_cache_write_tokens).toBe(4);
+  });
+
+  it('refuses a failed child redrive when independently accumulated spend exhausted the parent (#1961)', async () => {
+    await writeWorkflow(
+      'independent-budget-child',
+      `
+name: independent-budget-child
+description: fails after a paid classification attempt
+nodes:
+  - id: classify
+    prompt: classify
+    output_format:
+      type: object
+      properties:
+        verdict: { type: string }
+      required: [verdict]
+`
+    );
+    await writeWorkflow(
+      'independent-budget-parent',
+      `
+name: independent-budget-parent
+description: refuses a redrive after child spend advanced elsewhere
+budget: { max_spend_usd: 2.5 }
+nodes:
+  - id: prepare
+    bash: echo ready
+  - id: sub
+    workflow: independent-budget-child
+    depends_on: [prepare]
+`
+    );
+
+    let providerCalls = 0;
+    const store = new InMemoryStore();
+    const deps: WorkflowDeps = {
+      ...makeDeps(store),
+      getAgentProvider: mock(() => ({
+        ...makeProvider(),
+        sendQuery: mock(function* () {
+          providerCalls++;
+          yield { type: 'assistant', content: 'not structured' };
+          yield {
+            type: 'result',
+            sessionId: `independent-budget-${String(providerCalls)}`,
+            cost: providerCalls,
+            tokens: { input: 1, output: 1 },
+          };
+        }),
+      })) as unknown as WorkflowDeps['getAgentProvider'],
+    };
+    const parentDefinition = await discover('independent-budget-parent');
+    const childDefinition = await discover('independent-budget-child');
+
+    expect(
+      (
+        await executeWorkflow(
+          deps,
+          makePlatform(),
+          'conv-plat',
+          cwd,
+          parentDefinition,
+          'goal',
+          'conv-db'
+        )
+      ).success
+    ).toBe(false);
+    const parent = [...store.runs.values()].find(
+      run => run.workflow_name === 'independent-budget-parent'
+    )!;
+    const child = [...store.runs.values()].find(
+      run => run.workflow_name === 'independent-budget-child'
+    )!;
+
+    const childHydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(child.id))!);
+    const childSnapshot = await store.getDagResumeSnapshot(child.id);
+    const childResume = childHydrated ?? {
+      preCreatedRun: await store.resumeWorkflowRun(child.id),
+      priorCompletedNodes: childSnapshot.completedNodeOutputs,
+      priorUsage: {
+        costUsd: childSnapshot.costUsd,
+        tokens: childSnapshot.tokens,
+        workUnits: childSnapshot.workUnits,
+        terminalUsageByNode: childSnapshot.terminalUsageByNode,
+      },
+    };
+    expect(
+      (
+        await executeWorkflow(
+          deps,
+          makePlatform(),
+          'conv-plat',
+          cwd,
+          childDefinition,
+          child.user_message,
+          'conv-db',
+          childResume
+        )
+      ).success
+    ).toBe(false);
+
+    const parentHydrated = await hydrateResumableRun(
+      deps,
+      (await store.getWorkflowRun(parent.id))!
+    );
+    expect(parentHydrated).not.toBeNull();
+    const resumed = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parentDefinition,
+      'goal',
+      'conv-db',
+      parentHydrated!
+    );
+
+    expect(resumed.success).toBe(false);
+    expect(providerCalls).toBe(2);
+    expect(
+      store.events.some(
+        event =>
+          event.workflow_run_id === parent.id &&
+          event.event_type === 'budget_exhausted' &&
+          event.step_name === 'sub'
+      )
+    ).toBe(true);
   });
 
   it('keeps failed first-attempt budget usage when a child is re-driven from the top (#1961)', async () => {
@@ -3419,6 +3586,79 @@ nodes:
     ).toBe(true);
   });
 
+  it('does not apply a prior child cost marker when the parent has no spend ceiling (#1961)', async () => {
+    await writeWorkflow(
+      'unbudgeted-marker-child',
+      fanChildEchoReadOnly.replace('fan-child-ro', 'unbudgeted-marker-child')
+    );
+    await writeWorkflow(
+      'unbudgeted-marker-parent',
+      `
+name: unbudgeted-marker-parent
+description: a prior unknown-cost child remains usable without a spend ceiling
+nodes:
+  - id: plan
+    bash: printf '%s' '["x"]'
+  - id: work
+    workflow: unbudgeted-marker-child
+    depends_on: [plan]
+    fan_out:
+      items: "$plan.output"
+      max_parallel: 1
+      join: all_success
+`
+    );
+
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    const parent = await store.createWorkflowRun({
+      workflow_name: 'unbudgeted-marker-parent',
+      conversation_id: 'conv-db',
+      user_message: 'goal',
+      working_path: cwd,
+    });
+    await store.updateWorkflowRun(parent.id, { status: 'failed' });
+    store.events.push({
+      workflow_run_id: parent.id,
+      event_type: 'node_completed',
+      step_name: 'plan',
+      data: { node_output: '["x"]' },
+    });
+    const child = await store.createWorkflowRun({
+      workflow_name: 'unbudgeted-marker-child',
+      conversation_id: 'conv-db',
+      user_message: 'x',
+      parent_run_id: parent.id,
+      working_path: cwd,
+      metadata: {
+        parent_node_id: 'work',
+        child_index: 0,
+        summary: 'did:x',
+        cost_reporting_unavailable: true,
+      },
+    });
+    await store.updateWorkflowRun(child.id, { status: 'running' });
+    await store.completeWorkflowRun(child.id);
+
+    const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(parent.id))!);
+    expect(hydrated).not.toBeNull();
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      await discover('unbudgeted-marker-parent'),
+      'goal',
+      'conv-db',
+      hydrated!
+    );
+
+    expect(result.success).toBe(true);
+    expect((await store.getWorkflowRun(parent.id))?.metadata.cost_reporting_unavailable).not.toBe(
+      true
+    );
+  });
+
   it('does not admit all_done work after a failed child makes spend unknowable (#1961)', async () => {
     await writeWorkflow(
       'unknown-cost-child',
@@ -4670,6 +4910,26 @@ nodes:
       metadata: { parent_node_id: 'work', child_index: 0 },
     });
     await store.updateWorkflowRun(child.id, { status: 'running' });
+    // A terminal sibling from the prior, wider item set advanced after the parent
+    // last observed the wrapper. Its usage must survive this early ambiguous-child
+    // return even though its index is now out of range.
+    const advancedSibling = await store.createWorkflowRun({
+      workflow_name: 'fan-child-echo2',
+      conversation_id: 'conv-db',
+      user_message: 'old-item',
+      parent_run_id: parentRun.id,
+      working_path: cwd,
+      metadata: {
+        parent_node_id: 'work',
+        child_index: 1,
+        summary: 'did:old-item',
+        total_cost_usd: 0.02,
+        total_tokens_in: 5,
+        total_tokens_out: 2,
+      },
+    });
+    await store.updateWorkflowRun(advancedSibling.id, { status: 'running' });
+    await store.completeWorkflowRun(advancedSibling.id);
 
     const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(parentRun.id))!);
     const r = await executeWorkflow(
@@ -4691,6 +4951,11 @@ nodes:
       .find(e => e.event_type === 'node_failed' && e.step_name === 'work');
     expect(String(nodeFailed?.data?.error)).toContain('may still be running');
     expect(String(nodeFailed?.data?.error)).not.toContain('gate');
+    expect(nodeFailed?.data?.cost_usd).toBeCloseTo(0.02, 5);
+    expect(nodeFailed?.data?.tokens).toEqual({ input: 5, output: 2 });
+    expect(nodeFailed?.data?.child_usage_by_id).toEqual({
+      [advancedSibling.id]: { costUsd: 0.02, tokens: { input: 5, output: 2 } },
+    });
   });
 
   it('an out-of-range child_index (shrunk items) is warned + a live orphan cancelled (I2)', async () => {

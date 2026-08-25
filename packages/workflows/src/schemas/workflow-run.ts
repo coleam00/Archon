@@ -375,11 +375,16 @@ const workflowRunTokenUsageSchema = z.strictObject({
   cachePartial: z.literal(true).optional(),
 });
 
-export const workflowRunUsageSchema = z.strictObject({
+export const workflowRunUsageLeafSchema = z.strictObject({
   costUsd: z.number().finite().nonnegative(),
   tokens: workflowRunTokenUsageSchema.optional(),
 });
 
+export const workflowRunUsageSchema = workflowRunUsageLeafSchema.extend({
+  children: z.record(z.string(), workflowRunUsageLeafSchema).optional(),
+});
+
+export type WorkflowRunUsageLeaf = z.infer<typeof workflowRunUsageLeafSchema>;
 export type WorkflowRunUsage = z.infer<typeof workflowRunUsageSchema>;
 
 /**

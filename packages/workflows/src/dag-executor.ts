@@ -72,6 +72,7 @@ import type {
   WorkflowWaitContext,
   ScheduledWorkflowResume,
   WorkflowRunUsage,
+  WorkflowRunUsageLeaf,
 } from './schemas';
 import {
   isExecNode,
@@ -93,7 +94,6 @@ import {
   isBindingDirective,
   SUBRUN_METADATA_KEYS,
   RUN_METADATA_KEYS,
-  readUsageTerminalNodes,
   WAIT_NODE_OUTPUT_FORMAT,
   waitUntilTimestampSchema,
   waitCondition,
@@ -729,6 +729,8 @@ type NodeExecutionResult = NodeOutput & {
   tokens?: TokenUsage;
   /** Loop nodes only: number of iterations executed. */
   loopIterations?: number;
+  /** Fan-out current-pass usage keyed by the durable child run id. */
+  childUsageById?: Record<string, WorkflowRunUsageLeaf>;
 };
 
 /**
@@ -807,6 +809,41 @@ function subtractOwnedTokenUsage(
     return undefined;
   }
   return delta;
+}
+
+function usageLeafFromOutcome(outcome: ChildWorkflowOutcome): WorkflowRunUsageLeaf | undefined {
+  if (outcome.costUsd === undefined && outcome.tokens === undefined) return undefined;
+  return {
+    costUsd: outcome.costUsd ?? 0,
+    ...(outcome.tokens !== undefined ? { tokens: outcome.tokens } : {}),
+  };
+}
+
+function addUsageLeaves(
+  usages: readonly (WorkflowRunUsageLeaf | undefined)[],
+  nodeId: string
+): WorkflowRunUsageLeaf | undefined {
+  const present = usages.filter((usage): usage is WorkflowRunUsageLeaf => usage !== undefined);
+  if (present.length === 0) return undefined;
+  const tokens = sumTokenUsage(
+    present.map(usage => usage.tokens).filter((usage): usage is TokenUsage => usage !== undefined),
+    { nodeId }
+  );
+  return {
+    costUsd: present.reduce((total, usage) => total + usage.costUsd, 0),
+    ...(tokens !== undefined ? { tokens } : {}),
+  };
+}
+
+function subtractOwnedUsage(
+  cumulative: WorkflowRunUsageLeaf | undefined,
+  owned: WorkflowRunUsageLeaf | undefined
+): WorkflowRunUsageLeaf | undefined {
+  if (cumulative === undefined) return undefined;
+  const tokens = subtractOwnedTokenUsage(cumulative.tokens, owned?.tokens);
+  const costUsd = Math.max(0, cumulative.costUsd - (owned?.costUsd ?? 0));
+  if (costUsd === 0 && tokens === undefined) return undefined;
+  return { costUsd, ...(tokens !== undefined ? { tokens } : {}) };
 }
 
 // ---------------------------------------------------------------------------
@@ -8070,7 +8107,8 @@ async function executeWorkflowNode(
   const failResult = (
     error: string,
     costUsd?: number,
-    tokens?: TokenUsage
+    tokens?: TokenUsage,
+    childUsageById?: Record<string, WorkflowRunUsageLeaf>
   ): NodeExecutionResult => {
     deps.store
       .createWorkflowEvent({
@@ -8082,6 +8120,7 @@ async function executeWorkflowNode(
           type: 'workflow',
           ...(costUsd !== undefined ? { cost_usd: costUsd } : {}),
           ...(tokens !== undefined ? { tokens } : {}),
+          ...(childUsageById !== undefined ? { child_usage_by_id: childUsageById } : {}),
         },
       })
       .catch((err: Error) => {
@@ -8109,6 +8148,7 @@ async function executeWorkflowNode(
       // child outcome is available; failure paths without an outcome omit them.
       ...(costUsd !== undefined ? { costUsd } : {}),
       ...(tokens !== undefined ? { tokens } : {}),
+      ...(childUsageById !== undefined ? { childUsageById } : {}),
     };
   };
 
@@ -8416,30 +8456,18 @@ async function executeWorkflowNode(
     prior: ChildWorkflowOutcome,
     owned: WorkflowRunUsage | undefined
   ): ChildWorkflowOutcome => {
-    const unownedPriorCostUsd =
-      prior.costUsd === undefined ? undefined : Math.max(0, prior.costUsd - (owned?.costUsd ?? 0));
-    const costUsd =
-      outcome.costUsd !== undefined || unownedPriorCostUsd !== undefined
-        ? (outcome.costUsd ?? 0) + (unownedPriorCostUsd ?? 0)
-        : undefined;
-    const unownedPriorTokens = subtractOwnedTokenUsage(prior.tokens, owned?.tokens);
-    const tokens = sumTokenUsage(
-      [unownedPriorTokens, outcome.tokens].filter(
-        (usage): usage is TokenUsage => usage !== undefined
-      ),
-      { nodeId: node.id }
+    const usage = addUsageLeaves(
+      [subtractOwnedUsage(usageLeafFromOutcome(prior), owned), usageLeafFromOutcome(outcome)],
+      node.id
     );
     return {
       ...outcome,
-      ...(costUsd !== undefined ? { costUsd } : {}),
-      ...(tokens !== undefined ? { tokens } : {}),
+      ...(usage !== undefined ? { costUsd: usage.costUsd, tokens: usage.tokens } : {}),
       ...(prior.costEnforceable === false ? { costEnforceable: false as const } : {}),
     };
   };
 
-  const priorUsageByNode = ctx.priorUsageRestored
-    ? ctx.usageByTerminalNode
-    : readUsageTerminalNodes(ctx.workflowRun.metadata);
+  const priorUsageByNode = ctx.usageByTerminalNode;
 
   // Re-entry: find THIS node's child (a parent may run several workflow: nodes, so
   // filter by parent_node_id). At most one child per node in slice 1; if somehow
@@ -8481,13 +8509,39 @@ async function executeWorkflowNode(
       return await interpret(await ctx.runChildWorkflow(childArgs));
     }
     if (existing.status === 'failed') {
-      if (ctx.priorUsageRestored && priorUsageByNode === undefined) {
+      if (priorUsageByNode === undefined) {
         return failResult(
           `Cannot resume workflow node '${node.id}': prior child-usage accounting is unavailable.`
         );
       }
       const parentOwnedUsage = priorUsageByNode?.get(ctx.stepNamePrefix + node.id);
       const priorOutcome = childOutcomeFromRun(existing);
+      const unownedPriorUsage = subtractOwnedUsage(
+        usageLeafFromOutcome(priorOutcome),
+        parentOwnedUsage
+      );
+      if (ctx.requireReportedCost && priorOutcome.costEnforceable === false) {
+        return await interpret(
+          withUnownedPriorUsage(
+            withoutCurrentPassUsage(priorOutcome),
+            priorOutcome,
+            parentOwnedUsage
+          )
+        );
+      }
+      if (ctx.budgetLedger !== undefined && unownedPriorUsage !== undefined) {
+        const exhaustion = checkBudgetExhaustion(ctx.budget, {
+          ...ctx.budgetLedger,
+          spendUsd: ctx.budgetLedger.spendUsd + unownedPriorUsage.costUsd,
+        });
+        if (exhaustion !== undefined) {
+          return {
+            ...(await refuseNodeForBudget(ctx, node, exhaustion, 'pre_dispatch')),
+            costUsd: unownedPriorUsage.costUsd,
+            ...(unownedPriorUsage.tokens !== undefined ? { tokens: unownedPriorUsage.tokens } : {}),
+          };
+        }
+      }
       // Resume-through-parent recovery (D5/#1764): re-drive the failed child once.
       await chargeBudgetWorkUnit(ctx, node.id, 'spawn_decision');
       const redriveOutcome = await ctx.runChildWorkflow({
@@ -8512,7 +8566,7 @@ async function executeWorkflowNode(
     // paused on the child has no prior terminal row and must account the full child
     // total when the child later settles.
     const cumulativeOutcome = childOutcomeFromRun(existing);
-    if (ctx.priorUsageRestored && priorUsageByNode === undefined) {
+    if (priorUsageByNode === undefined) {
       return failResult(
         `Cannot resume workflow node '${node.id}': prior child-usage accounting is unavailable.`
       );
@@ -8703,39 +8757,6 @@ async function resolveFanOutChildDefinition(
 }
 
 /**
- * Σ of defined child `costUsd`. Returns undefined when NO child reported cost so the
- * node's own `costUsd` stays absent (a misleading `0` would look like a free run) —
- * matching the run-level aggregation's "only write when > 0" posture.
- *
- * This is Σ of every child, not only the completed ones: a child persists its usage at
- * its run tail whatever its outcome (#2469), so a failed or cancelled child still
- * contributes what it burned. That matters most here — `all_done` is the default join,
- * which makes a partly-failed fan-out the ordinary case rather than the exceptional one.
- */
-function sumFanOutCost(outcomes: readonly ChildWorkflowOutcome[]): number | undefined {
-  let sum = 0;
-  let any = false;
-  for (const o of outcomes) {
-    if (isUsableReportedCost(o.costUsd)) {
-      sum += o.costUsd;
-      any = true;
-    }
-  }
-  return any ? sum : undefined;
-}
-
-/**
- * Σ of defined child token usage; undefined when no child reported tokens. Like
- * {@link sumFanOutCost}, this covers every child regardless of outcome.
- */
-function sumFanOutTokens(outcomes: readonly ChildWorkflowOutcome[]): TokenUsage | undefined {
-  return sumTokenUsage(
-    outcomes.flatMap(outcome => (outcome.tokens !== undefined ? [outcome.tokens] : [])),
-    { scope: 'fan_out' }
-  );
-}
-
-/**
  * Execute a fan-out `workflow:` node (#2121 slice 2, PR-C): expand the node into N
  * governed child runs over a data-driven item list, bound by a `max_parallel` sliding
  * window, and reduce the N child outcomes into one node outcome via the declared
@@ -8781,7 +8802,8 @@ async function executeFanOutWorkflowNode(
   const failResult = (
     error: string,
     costUsd?: number,
-    tokens?: TokenUsage
+    tokens?: TokenUsage,
+    childUsageById?: Record<string, WorkflowRunUsageLeaf>
   ): NodeExecutionResult => {
     deps.store
       .createWorkflowEvent({
@@ -8793,6 +8815,7 @@ async function executeFanOutWorkflowNode(
           type: 'workflow',
           ...(costUsd !== undefined ? { cost_usd: costUsd } : {}),
           ...(tokens !== undefined ? { tokens } : {}),
+          ...(childUsageById !== undefined ? { child_usage_by_id: childUsageById } : {}),
         },
       })
       .catch((err: Error) => {
@@ -8814,6 +8837,7 @@ async function executeFanOutWorkflowNode(
       error,
       ...(costUsd !== undefined ? { costUsd } : {}),
       ...(tokens !== undefined ? { tokens } : {}),
+      ...(childUsageById !== undefined ? { childUsageById } : {}),
     };
   };
 
@@ -8824,7 +8848,8 @@ async function executeFanOutWorkflowNode(
     output: string,
     costUsd?: number,
     tokens?: TokenUsage,
-    structured?: unknown
+    structured?: unknown,
+    childUsageById?: Record<string, WorkflowRunUsageLeaf>
   ): void => {
     deps.store
       .createWorkflowEvent({
@@ -8845,6 +8870,7 @@ async function executeFanOutWorkflowNode(
           // by exactly the children's usage — silently, since an absent key is skipped
           // without warning.
           ...(tokens !== undefined ? { tokens } : {}),
+          ...(childUsageById !== undefined ? { child_usage_by_id: childUsageById } : {}),
         },
       })
       .catch((err: Error) => {
@@ -8973,11 +8999,21 @@ async function executeFanOutWorkflowNode(
   //    nodes → filter by parent_node_id) and index them by metadata.child_index. Empty
   //    on the first run; carries the ordered instance set on resume.
   const existingByIndex = new Map<number, WorkflowRun>();
+  const accountableExistingChildren: WorkflowRun[] = [];
   try {
     const children = (await deps.store.findChildRuns(parentRun.id)).filter(
       c =>
         readSubrunMetadata(c.metadata as Record<string, unknown> | undefined).parentNodeId ===
         node.id
+    );
+    accountableExistingChildren.push(
+      ...children.filter(
+        child =>
+          child.status === 'completed' ||
+          child.status === 'failed' ||
+          child.status === 'cancelled' ||
+          child.status === 'paused'
+      )
     );
     for (const child of children) {
       const meta = readSubrunMetadata(child.metadata as Record<string, unknown> | undefined);
@@ -9049,41 +9085,47 @@ async function executeFanOutWorkflowNode(
     return failResult(msg);
   }
 
-  const priorUsageByNode = ctx.priorUsageRestored
-    ? ctx.usageByTerminalNode
-    : readUsageTerminalNodes(ctx.workflowRun.metadata);
-  const priorTerminalOutcomes = [...existingByIndex.values()]
-    .filter(
-      child =>
-        child.status === 'completed' || child.status === 'failed' || child.status === 'cancelled'
-    )
-    .map(childOutcomeFromRun);
-  if (
-    ctx.priorUsageRestored &&
-    priorUsageByNode === undefined &&
-    priorTerminalOutcomes.length > 0
-  ) {
+  const priorUsageByNode = ctx.usageByTerminalNode;
+  const priorAccountableOutcomes = accountableExistingChildren.map(childOutcomeFromRun);
+  if (priorUsageByNode === undefined && priorAccountableOutcomes.length > 0) {
     return failResult(
       `Cannot resume fan_out node '${node.id}': prior child-usage accounting is unavailable.`
     );
   }
   const parentOwnedUsage = priorUsageByNode?.get(stepName);
-  const priorLifetimeCostUsd = sumFanOutCost(priorTerminalOutcomes);
-  const unownedPriorCostUsd =
-    priorLifetimeCostUsd === undefined
-      ? undefined
-      : Math.max(0, priorLifetimeCostUsd - (parentOwnedUsage?.costUsd ?? 0));
-  const unownedPriorTokens = subtractOwnedTokenUsage(
-    sumFanOutTokens(priorTerminalOutcomes),
-    parentOwnedUsage?.tokens
+  if (
+    parentOwnedUsage !== undefined &&
+    parentOwnedUsage.children === undefined &&
+    priorAccountableOutcomes.length > 0
+  ) {
+    return failResult(
+      `Cannot resume fan_out node '${node.id}': per-child usage accounting is unavailable.`
+    );
+  }
+  const unownedPriorUsageByChild = Object.fromEntries(
+    priorAccountableOutcomes.flatMap(outcome => {
+      const usage = subtractOwnedUsage(
+        usageLeafFromOutcome(outcome),
+        parentOwnedUsage?.children?.[outcome.childRunId]
+      );
+      return usage === undefined ? [] : [[outcome.childRunId, usage]];
+    })
   );
+  const unownedPriorUsage = addUsageLeaves(Object.values(unownedPriorUsageByChild), node.id);
   if (
     ctx.budgetLedger !== undefined &&
-    unownedPriorCostUsd !== undefined &&
-    unownedPriorCostUsd > 0
+    unownedPriorUsage !== undefined &&
+    unownedPriorUsage.costUsd > 0
   ) {
-    ctx.budgetLedger.spendUsd += unownedPriorCostUsd;
+    ctx.budgetLedger.spendUsd += unownedPriorUsage.costUsd;
   }
+  const failWithRecoveredUsage = (message: string): NodeExecutionResult =>
+    failResult(
+      message,
+      unownedPriorUsage?.costUsd,
+      unownedPriorUsage?.tokens,
+      Object.keys(unownedPriorUsageByChild).length > 0 ? unownedPriorUsageByChild : undefined
+    );
 
   // 4. #2180 (D5): a fan-out child cannot hold the single parent gate slot. Split the
   //    non-terminal existing children by how much is actually known:
@@ -9100,7 +9142,7 @@ async function executeFanOutWorkflowNode(
     for (const [, c] of pausedExisting) await cancelChild(c.id, 'fan_out_gate');
     const msg = fanOutAutonomousGateMessage(node, child.id, index);
     await notify(`⏸→❌ **Fan-out gate rejected** (node \`${node.id}\`): ${msg}`);
-    return failResult(msg);
+    return failWithRecoveredUsage(msg);
   }
   const ambiguous = [...existingByIndex.entries()].filter(
     ([, c]) => c.status === 'running' || c.status === 'pending'
@@ -9121,7 +9163,7 @@ async function executeFanOutWorkflowNode(
     );
     const msg = fanOutAmbiguousChildMessage(node, child, index, stale);
     await notify(`⚠️ **Fan-out blocked** (node \`${node.id}\`): ${msg}`);
-    return failResult(msg);
+    return failWithRecoveredUsage(msg);
   }
 
   // 5. Shared-checkout preflight (#2180 Defect A) AND interactive-class preflight (#2707
@@ -9178,7 +9220,7 @@ async function executeFanOutWorkflowNode(
         'workflow.fan_out_preflight_unresolved'
       );
       await notify(`❌ **Fan-out blocked** (node \`${node.id}\`): ${msg}`);
-      return failResult(msg);
+      return failWithRecoveredUsage(msg);
     }
     if (resolved.definition.interactive === true) {
       const msg =
@@ -9192,7 +9234,7 @@ async function executeFanOutWorkflowNode(
         'workflow.fan_out_interactive_target'
       );
       await notify(`❌ **Fan-out blocked** (node \`${node.id}\`): ${msg}`);
-      return failResult(msg);
+      return failWithRecoveredUsage(msg);
     }
     if (
       node.isolation !== 'worktree' &&
@@ -9210,7 +9252,7 @@ async function executeFanOutWorkflowNode(
         'workflow.fan_out_shared_checkout_collision'
       );
       await notify(`❌ **Fan-out blocked** (node \`${node.id}\`): ${msg}`);
-      return failResult(msg);
+      return failWithRecoveredUsage(msg);
     }
   }
 
@@ -9237,9 +9279,9 @@ async function executeFanOutWorkflowNode(
   // gate exhaustion, but it must fail the node explicitly under every join mode too.
   let chargeFailures = 0;
   let chargeFailureError: string | undefined;
-  let costEnforcementFailure: ChildWorkflowOutcome | undefined = priorTerminalOutcomes.find(
-    outcome => outcome.costEnforceable === false
-  );
+  let costEnforcementFailure: ChildWorkflowOutcome | undefined = ctx.requireReportedCost
+    ? priorAccountableOutcomes.find(outcome => outcome.costEnforceable === false)
+    : undefined;
   if (costEnforcementFailure !== undefined && ctx.budgetLedger !== undefined) {
     ctx.budgetLedger.spendEnforceable = false;
   }
@@ -9414,17 +9456,28 @@ async function executeFanOutWorkflowNode(
         }
   );
 
-  const currentPassCostUsd = sumFanOutCost(outcomes);
-  const totalCostUsd =
-    currentPassCostUsd !== undefined || unownedPriorCostUsd !== undefined
-      ? (currentPassCostUsd ?? 0) + (unownedPriorCostUsd ?? 0)
-      : undefined;
-  const totalTokens = sumTokenUsage(
-    [sumFanOutTokens(outcomes), unownedPriorTokens].filter(
-      (usage): usage is TokenUsage => usage !== undefined
-    ),
-    { nodeId: node.id }
-  );
+  const currentPassUsageByChild = new Map<string, WorkflowRunUsageLeaf>();
+  for (const outcome of outcomes) {
+    if (outcome.childRunId === '') continue;
+    const usage = usageLeafFromOutcome(outcome);
+    if (usage === undefined) continue;
+    const combined = addUsageLeaves(
+      [currentPassUsageByChild.get(outcome.childRunId), usage],
+      node.id
+    );
+    if (combined !== undefined) currentPassUsageByChild.set(outcome.childRunId, combined);
+  }
+  const childUsageById: Record<string, WorkflowRunUsageLeaf> = {
+    ...unownedPriorUsageByChild,
+  };
+  for (const [childRunId, usage] of currentPassUsageByChild) {
+    const combined = addUsageLeaves([childUsageById[childRunId], usage], node.id);
+    if (combined !== undefined) childUsageById[childRunId] = combined;
+  }
+  const totalUsage = addUsageLeaves(Object.values(childUsageById), node.id);
+  const totalCostUsd = totalUsage?.costUsd;
+  const totalTokens = totalUsage?.tokens;
+  const persistedChildUsage = Object.keys(childUsageById).length > 0 ? childUsageById : undefined;
 
   if (costEnforcementFailure !== undefined) {
     const msg =
@@ -9461,7 +9514,7 @@ async function executeFanOutWorkflowNode(
         );
       });
     await notify(`⛔ **Fan-out blocked** (node \`${node.id}\`): ${msg}`);
-    return failResult(msg, totalCostUsd, totalTokens);
+    return failResult(msg, totalCostUsd, totalTokens, persistedChildUsage);
   }
 
   // Explicit budget refusal (#1961): children the gate would not spawn fail the node
@@ -9513,7 +9566,7 @@ async function executeFanOutWorkflowNode(
         );
       });
     await notify(`⛔ **Fan-out blocked** (node \`${node.id}\`): ${msg}`);
-    return failResult(msg, totalCostUsd, totalTokens);
+    return failResult(msg, totalCostUsd, totalTokens, persistedChildUsage);
   }
 
   // A completed child's aggregate ELEMENT (#2637): its terminal LOGICAL value —
@@ -9562,7 +9615,7 @@ async function executeFanOutWorkflowNode(
       if (o.status === 'paused') await cancelChild(o.childRunId, 'fan_out_gate');
     const msg = fanOutAutonomousGateMessage(node, outcomes[pausedIdx].childRunId, pausedIdx);
     await notify(`⏸→❌ **Fan-out gate rejected** (node \`${node.id}\`): ${msg}`);
-    return failResult(msg, totalCostUsd, totalTokens);
+    return failResult(msg, totalCostUsd, totalTokens, persistedChildUsage);
   }
 
   // Declared boundary contract (#2774), fan-out parity with the 1:1 asCompleted path:
@@ -9604,7 +9657,7 @@ async function executeFanOutWorkflowNode(
           `Node '${node.id}': fan-out child ${String(index)} of sub-run '${node.workflow}' output does not match the node's declared output_format: ${errors}. ` +
           `Expected: ${JSON.stringify(node.output_format)}. Received: ${received}.`;
         await notify(`❌ **Fan-out output_format violation** (node \`${node.id}\`): ${msg}`);
-        return failResult(msg, totalCostUsd, totalTokens);
+        return failResult(msg, totalCostUsd, totalTokens, persistedChildUsage);
       }
     }
   }
@@ -9625,20 +9678,22 @@ async function executeFanOutWorkflowNode(
         `fan_out node '${node.id}' (join: all_success): child ${String(firstBad)}${ref} ${bad.status}` +
           (bad.error ? `: ${bad.error}` : ''),
         totalCostUsd,
-        totalTokens
+        totalTokens,
+        persistedChildUsage
       );
     }
     // All completed → aggregate the child results in item order: a LOGICAL array
     // (#2637), serialized once for the text channel.
     const elements = outcomes.map((o, i) => childElement(o, i));
     const aggregate = JSON.stringify(elements);
-    writeCompleted(aggregate, totalCostUsd, totalTokens, elements);
+    writeCompleted(aggregate, totalCostUsd, totalTokens, elements, persistedChildUsage);
     return {
       state: 'completed',
       output: aggregate,
       structuredOutput: elements,
       ...(totalCostUsd !== undefined ? { costUsd: totalCostUsd } : {}),
       ...(totalTokens !== undefined ? { tokens: totalTokens } : {}),
+      ...(persistedChildUsage !== undefined ? { childUsageById: persistedChildUsage } : {}),
     };
   }
 
@@ -9658,13 +9713,14 @@ async function executeFanOutWorkflowNode(
       : { archon_failed: true, error: o.error ?? `child ${o.status}`, status: o.status }
   );
   const aggregate = JSON.stringify(elements);
-  writeCompleted(aggregate, totalCostUsd, totalTokens, elements);
+  writeCompleted(aggregate, totalCostUsd, totalTokens, elements, persistedChildUsage);
   return {
     state: 'completed',
     output: aggregate,
     structuredOutput: elements,
     ...(totalCostUsd !== undefined ? { costUsd: totalCostUsd } : {}),
     ...(totalTokens !== undefined ? { tokens: totalTokens } : {}),
+    ...(persistedChildUsage !== undefined ? { childUsageById: persistedChildUsage } : {}),
   };
 }
 
@@ -11357,7 +11413,9 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
         }
         if (
           completedNode?.kind === 'workflow' &&
-          (output.costUsd !== undefined || output.tokens !== undefined)
+          (output.costUsd !== undefined ||
+            output.tokens !== undefined ||
+            output.childUsageById !== undefined)
         ) {
           const stepName = ctx.stepNamePrefix + nodeId;
           if (ctx.usageByTerminalNode !== undefined) {
@@ -11368,9 +11426,17 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               ),
               { nodeId }
             );
+            const children: Record<string, WorkflowRunUsageLeaf> = {
+              ...(prior?.children ?? {}),
+            };
+            for (const [childRunId, usage] of Object.entries(output.childUsageById ?? {})) {
+              const combined = addUsageLeaves([children[childRunId], usage], nodeId);
+              if (combined !== undefined) children[childRunId] = combined;
+            }
             ctx.usageByTerminalNode.set(stepName, {
               costUsd: (prior?.costUsd ?? 0) + (output.costUsd ?? 0),
               ...(tokens !== undefined ? { tokens } : {}),
+              ...(Object.keys(children).length > 0 ? { children } : {}),
             });
           }
         }

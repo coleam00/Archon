@@ -21,6 +21,7 @@ import type {
   WorkflowRunNodeSession,
   ApprovalContext,
   WorkflowRunUsage,
+  WorkflowRunUsageLeaf,
 } from './schemas';
 import {
   isLoopNode,
@@ -1099,6 +1100,52 @@ function tokenUsageExceeds(
   );
 }
 
+function maxWorkflowRunUsageLeaf(
+  eventUsage: WorkflowRunUsageLeaf | undefined,
+  rowUsage: WorkflowRunUsageLeaf | undefined
+): WorkflowRunUsageLeaf | undefined {
+  if (eventUsage === undefined) return rowUsage;
+  if (rowUsage === undefined) return eventUsage;
+  const tokens = maxPersistedTokenUsage(eventUsage.tokens, rowUsage.tokens);
+  return {
+    costUsd: Math.max(eventUsage.costUsd, rowUsage.costUsd),
+    ...(tokens !== undefined ? { tokens } : {}),
+  };
+}
+
+function mergeWorkflowUsageWatermarks(
+  eventUsage: ReadonlyMap<string, WorkflowRunUsage> | undefined,
+  rowUsage: ReadonlyMap<string, WorkflowRunUsage> | undefined
+): ReadonlyMap<string, WorkflowRunUsage> | undefined {
+  if (eventUsage === undefined) return rowUsage;
+  if (rowUsage === undefined) return eventUsage;
+  const merged = new Map<string, WorkflowRunUsage>();
+  for (const nodeId of new Set([...eventUsage.keys(), ...rowUsage.keys()])) {
+    const eventNode = eventUsage.get(nodeId);
+    const rowNode = rowUsage.get(nodeId);
+    const node = maxWorkflowRunUsageLeaf(eventNode, rowNode);
+    if (node === undefined) continue;
+    const childIds = new Set([
+      ...Object.keys(eventNode?.children ?? {}),
+      ...Object.keys(rowNode?.children ?? {}),
+    ]);
+    const children = Object.fromEntries(
+      [...childIds].flatMap(childRunId => {
+        const child = maxWorkflowRunUsageLeaf(
+          eventNode?.children?.[childRunId],
+          rowNode?.children?.[childRunId]
+        );
+        return child === undefined ? [] : [[childRunId, child]];
+      })
+    );
+    merged.set(nodeId, {
+      ...node,
+      ...(Object.keys(children).length > 0 ? { children } : {}),
+    });
+  }
+  return merged;
+}
+
 function mergePersistedPriorUsage(
   snapshot: Awaited<ReturnType<WorkflowDeps['store']['getDagResumeSnapshot']>>,
   run: WorkflowRun,
@@ -1131,9 +1178,10 @@ function mergePersistedPriorUsage(
   const rowFallbackUsed =
     (rowUsage.costUsd ?? 0) > eventAndCursorCost ||
     tokenUsageExceeds(rowUsage.tokens, eventAndCursorTokens);
-  const terminalUsageByNode = rowFallbackUsed
-    ? rowUsage.terminalUsageByNode
-    : snapshot.terminalUsageByNode;
+  const terminalUsageByNode =
+    rowFallbackUsed && rowUsage.terminalUsageByNode === undefined
+      ? undefined
+      : mergeWorkflowUsageWatermarks(snapshot.terminalUsageByNode, rowUsage.terminalUsageByNode);
   return {
     ...(persistedTokens !== undefined ? { tokens: persistedTokens } : {}),
     costUsd: Math.max(eventAndCursorCost, rowUsage.costUsd ?? 0),

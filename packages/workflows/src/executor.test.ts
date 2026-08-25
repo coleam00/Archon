@@ -3361,6 +3361,38 @@ describe('hydrateResumableRun', () => {
     });
   });
 
+  it('merges row and event usage watermarks independently per axis (#1961)', async () => {
+    const candidate = makeRun({
+      id: 'mixed-usage-fallback',
+      status: 'failed',
+      metadata: {
+        total_cost_usd: 0.5,
+        total_tokens_in: 20,
+        total_tokens_out: 8,
+        [RUN_METADATA_KEYS.usageTerminalNodes]: {
+          n1: { costUsd: 0.25, tokens: { input: 20, output: 8 } },
+        },
+      },
+    });
+    const priorNodes = new Map([['n1', { output: 'out1' }]]);
+    const store = makeStore({
+      getDagResumeSnapshot: mock(async () => ({
+        completedNodeOutputs: priorNodes,
+        terminalNodeIds: new Set(['n1']),
+        tokens: { input: 10, output: 4 },
+        costUsd: 0.5,
+        workUnits: 1,
+        terminalUsageByNode: new Map([['n1', { costUsd: 0.5, tokens: { input: 10, output: 4 } }]]),
+      })),
+    });
+
+    const result = await inspectResumableRun(makeDeps(store), candidate);
+
+    expect(result?.priorUsage.terminalUsageByNode).toEqual(
+      new Map([['n1', { costUsd: 0.5, tokens: { input: 20, output: 8 } }]])
+    );
+  });
+
   it('fails closed on terminal provenance when a legacy row exceeds event usage', async () => {
     const candidate = makeRun({
       id: 'legacy-row-usage-fallback',

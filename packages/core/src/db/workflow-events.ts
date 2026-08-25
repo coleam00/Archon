@@ -13,6 +13,11 @@ import type { QueryResult } from './adapters/types';
 import type { WorkflowEventRow } from '../schemas/workflow-event';
 import { createLogger } from '@archon/paths';
 import { mergeTokenUsage, type TokenUsage } from '@archon/providers/types';
+import {
+  workflowRunUsageLeafSchema,
+  type WorkflowRunUsageLeaf,
+  type WorkflowRunUsage,
+} from '@archon/workflows/schemas/workflow-run';
 import { readFile } from 'node:fs/promises';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -268,7 +273,7 @@ export async function listWorkflowEventsSince(
 export async function getDagResumeSnapshot(workflowRunId: string): Promise<{
   completedNodeOutputs: Map<string, { output: string; structuredOutput?: unknown }>;
   terminalNodeIds: ReadonlySet<string>;
-  terminalUsageByNode: ReadonlyMap<string, { costUsd: number; tokens?: TokenUsage }>;
+  terminalUsageByNode: ReadonlyMap<string, WorkflowRunUsage>;
   tokens?: TokenUsage;
   costUsd: number;
   /**
@@ -294,7 +299,14 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<{
   );
   const completedNodeOutputs = new Map<string, { output: string; structuredOutput?: unknown }>();
   const terminalNodeIds = new Set<string>();
-  const terminalUsageParts = new Map<string, { costUsd: number; tokens: TokenUsage[] }>();
+  const terminalUsageParts = new Map<
+    string,
+    {
+      costUsd: number;
+      tokens: TokenUsage[];
+      children: Map<string, { costUsd: number; tokens: TokenUsage[] }>;
+    }
+  >();
   // Collected and merged once at the end rather than folded pairwise: a pairwise fold
   // cannot tell "one of five contributions reported" from "one of two" (#2662).
   const usages: TokenUsage[] = [];
@@ -401,7 +413,9 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<{
         typeof eventTokens.input === 'number' &&
         typeof eventTokens.output === 'number' &&
         Number.isFinite(eventTokens.input) &&
-        Number.isFinite(eventTokens.output)
+        Number.isFinite(eventTokens.output) &&
+        eventTokens.input >= 0 &&
+        eventTokens.output >= 0
       ) {
         const normalized: TokenUsage = {
           input: eventTokens.input,
@@ -411,7 +425,7 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<{
         for (const axis of ['cacheRead', 'cacheWrite'] as const) {
           const value = optionalTokens[axis];
           if (value === undefined) continue;
-          if (typeof value === 'number' && Number.isFinite(value)) {
+          if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
             normalized[axis] = value;
           } else {
             getLog().warn(
@@ -456,9 +470,30 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<{
       terminalNodeIds.add(row.step_name);
     }
     if (isTerminal && usageAccounted && data.type === 'workflow') {
-      const prior = terminalUsageParts.get(row.step_name) ?? { costUsd: 0, tokens: [] };
+      const prior = terminalUsageParts.get(row.step_name) ?? {
+        costUsd: 0,
+        tokens: [],
+        children: new Map<string, { costUsd: number; tokens: TokenUsage[] }>(),
+      };
       prior.costUsd += rowCostUsd;
       if (rowTokens !== undefined) prior.tokens.push(rowTokens);
+      const rawChildren = data.child_usage_by_id;
+      if (typeof rawChildren === 'object' && rawChildren !== null && !Array.isArray(rawChildren)) {
+        for (const [childRunId, rawUsage] of Object.entries(rawChildren)) {
+          const parsed = workflowRunUsageLeafSchema.safeParse(rawUsage);
+          if (!parsed.success) {
+            getLog().warn(
+              { runId: workflowRunId, stepName: row.step_name, childRunId },
+              'db.workflow_dag_child_usage_invalid_ignored'
+            );
+            continue;
+          }
+          const child = prior.children.get(childRunId) ?? { costUsd: 0, tokens: [] };
+          child.costUsd += parsed.data.costUsd;
+          if (parsed.data.tokens !== undefined) child.tokens.push(parsed.data.tokens);
+          prior.children.set(childRunId, child);
+        }
+      }
       terminalUsageParts.set(row.step_name, prior);
     }
   }
@@ -468,7 +503,24 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<{
     terminalUsageByNode: new Map(
       [...terminalUsageParts].map(([nodeId, usage]) => {
         const tokens = mergeTokenUsage(usage.tokens);
-        return [nodeId, { costUsd: usage.costUsd, ...(tokens !== undefined ? { tokens } : {}) }];
+        const children = Object.fromEntries(
+          [...usage.children].map(([childRunId, childUsage]) => {
+            const childTokens = mergeTokenUsage(childUsage.tokens);
+            const child: WorkflowRunUsageLeaf = {
+              costUsd: childUsage.costUsd,
+              ...(childTokens !== undefined ? { tokens: childTokens } : {}),
+            };
+            return [childRunId, child];
+          })
+        );
+        return [
+          nodeId,
+          {
+            costUsd: usage.costUsd,
+            ...(tokens !== undefined ? { tokens } : {}),
+            ...(Object.keys(children).length > 0 ? { children } : {}),
+          },
+        ];
       })
     ),
     tokens: mergeTokenUsage(usages),

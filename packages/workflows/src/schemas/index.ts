@@ -205,6 +205,7 @@ export {
   readSubrunMetadata,
   RUN_METADATA_KEYS,
   readIdentityUnresolved,
+  workflowRunUsageLeafSchema,
   workflowRunUsageSchema,
   readUsageTerminalNodes,
   WORKFLOW_SOURCE_METADATA_KEY,
@@ -231,6 +232,7 @@ export type {
   WorkflowSourceState,
   ContinuationMode,
   WorkflowRunUsage,
+  WorkflowRunUsageLeaf,
 } from './workflow-run';
 
 // Per-node persisted provider sessions
