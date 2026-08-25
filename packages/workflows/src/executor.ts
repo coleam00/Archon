@@ -1382,6 +1382,7 @@ async function runChildWorkflow(
   let childOpts: ExecuteWorkflowOptions;
   let childRunId: string;
   let priorChildCostUsd = 0;
+  let priorChildWorkUnits = 0;
   // Thread the resolver into every child so a NESTED grandchild `workflow:` node can
   // also request its own worktree (nesting is first-class up to the depth cap) — the
   // recursive executeWorkflow otherwise has no resolver and would fail-fast. (The
@@ -1399,6 +1400,7 @@ async function runChildWorkflow(
         };
         childRunId = hydrated.preCreatedRun.id;
         priorChildCostUsd = hydrated.priorUsage.costUsd;
+        priorChildWorkUnits = hydrated.priorUsage.workUnits;
       } else {
         // Failed child with no completed nodes — flip it back to running and re-run
         // from the top (nothing to skip). Its failed attempts still consumed budget,
@@ -1419,6 +1421,7 @@ async function runChildWorkflow(
         };
         childRunId = preCreatedRun.id;
         priorChildCostUsd = snapshot.costUsd;
+        priorChildWorkUnits = snapshot.workUnits;
       }
     } else {
       const childRun = await deps.store.createWorkflowRun({
@@ -1503,10 +1506,11 @@ async function runChildWorkflow(
   //    path the wrap is the only thing that can see — `executeWorkflow` returns
   //    `{success: false}` from that branch rather than throwing, so without the
   //    wrap the staged directory sits for the hourly age sweep.
+  let childExecutionResult: WorkflowExecutionResult;
   try {
-    await withCapturedSource(async owner => {
+    childExecutionResult = await withCapturedSource(async owner => {
       owner.hold(childSource);
-      await executeWorkflow(
+      return await executeWorkflow(
         deps,
         platform,
         conversationId,
@@ -1542,6 +1546,17 @@ async function runChildWorkflow(
       return failAfterExecution('Child run row disappeared after execution.', childRunId);
     }
     const outcome = childOutcomeFromRun(finalChild);
+    if (requireReportedCost && !childExecutionResult.success && outcome.costUsd === undefined) {
+      // A normal failure return before DAG admission (source/config/path/credential
+      // setup) has no result cost, just like an unreported paid provider result. The
+      // required work-unit ledger is the durable boundary between those states: if
+      // this pass admitted no new unit, its spend is provably zero. Previous child
+      // attempts remain in the cumulative snapshot and are excluded by comparison.
+      const snapshot = await deps.store.getDagResumeSnapshot(childRunId);
+      if (snapshot.workUnits === priorChildWorkUnits) {
+        return { ...outcome, costUsd: 0 };
+      }
+    }
     if (!resumeFailedChild || outcome.costUsd === undefined) return outcome;
     return {
       ...outcome,

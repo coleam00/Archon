@@ -6387,6 +6387,7 @@ nodes:
       `
 name: parent-rename-fail
 description: parent whose sub-run rename will be forced to fail
+budget: { max_spend_usd: 5 }
 nodes:
   - id: sub
     workflow: child-rename-fail
@@ -6415,6 +6416,26 @@ nodes:
       const child = [...store.runs.values()].find(r => r.workflow_name === 'child-rename-fail');
       expect(child).toBeDefined();
       expect(child?.status).toBe('failed');
+      const parentRun = [...store.runs.values()].find(
+        r => r.workflow_name === 'parent-rename-fail'
+      );
+      expect(parentRun?.metadata.cost_reporting_unavailable).not.toBe(true);
+      const nodeFailure = store.events.find(
+        event =>
+          event.workflow_run_id === parentRun?.id &&
+          event.event_type === 'node_failed' &&
+          event.step_name === 'sub'
+      );
+      expect(String(nodeFailure?.data?.error)).toContain(
+        "Could not move this run's captured workflow source into place"
+      );
+      expect(
+        store.events.some(
+          event =>
+            event.workflow_run_id === parentRun?.id &&
+            event.event_type === 'budget_enforcement_failed'
+        )
+      ).toBe(false);
 
       // The assertion that proves the fix. Without the wrap around the recursive
       // call, the child's UUID-named directory under ARCHON_HOME/staged-source/
