@@ -33,6 +33,7 @@ mock.module('./connection', () => ({
 
 import {
   createWorkflowEvent,
+  createRequiredWorkflowEvent,
   listWorkflowEvents,
   listRecentEvents,
   getDagResumeSnapshot,
@@ -106,6 +107,20 @@ describe('workflow-events', () => {
         workflow_run_id: 'run-456',
         event_type: 'step_started',
       });
+    });
+  });
+
+  describe('createRequiredWorkflowEvent', () => {
+    test('rejects when the state-bearing insert fails', async () => {
+      mockQuery.mockRejectedValueOnce(new Error('connection refused'));
+
+      await expect(
+        createRequiredWorkflowEvent({
+          workflow_run_id: 'run-456',
+          event_type: 'work_unit_charged',
+          step_name: 'work',
+        })
+      ).rejects.toThrow('connection refused');
     });
   });
 
@@ -238,24 +253,24 @@ describe('workflow-events', () => {
       ]);
     });
 
-    test('counts every node_started row as one work unit (#1961)', async () => {
+    test('counts every required node-attempt charge as one work unit (#1961)', async () => {
       mockQuery.mockResolvedValueOnce(
         createQueryResult([
           {
             step_name: 'node-a',
-            event_type: 'node_started',
-            data: { provider: 'claude' },
+            event_type: 'work_unit_charged',
+            data: { kind: 'node_attempt' },
           },
           {
             step_name: 'node-a',
             event_type: 'node_completed',
             data: { node_output: 'output A', tokens: { input: 40, output: 4 } },
           },
-          // A retry writes a second node_started for the same step — both count.
+          // A retry writes a second required charge for the same step — both count.
           {
             step_name: 'node-a',
-            event_type: 'node_started',
-            data: { provider: 'claude' },
+            event_type: 'work_unit_charged',
+            data: { kind: 'node_attempt' },
           },
           {
             step_name: 'node-a',
@@ -281,8 +296,8 @@ describe('workflow-events', () => {
           },
           {
             step_name: 'solo',
-            event_type: 'node_started',
-            data: { provider: 'claude' },
+            event_type: 'work_unit_charged',
+            data: { kind: 'node_attempt' },
           },
         ])
       );

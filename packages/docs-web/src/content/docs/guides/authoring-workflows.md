@@ -323,6 +323,44 @@ provider the node resolves to.
   maxBudgetUsd: 2.50
 ```
 
+### Run-wide work and spend budgets
+
+Use a top-level `budget:` block when the entire run needs a consumption ceiling:
+
+```yaml
+name: bounded-delivery
+description: Deliver within an operator-approved run budget
+budget:
+  max_spend_usd: 10
+  max_work_units: 50
+nodes:
+  - id: implement
+    prompt: Implement the requested change
+  - id: verify
+    bash: bun run validate
+    depends_on: [implement]
+```
+
+`max_spend_usd` uses finite costs reported by providers. Archon checks recorded spend before
+starting the next cost-bearing node, loop iteration, or fan-out child. If a paid AI result does
+not report a finite cost, the run fails with `budget_enforcement_failed`; unknown spend is never
+treated as zero while claiming the ceiling is enforced.
+
+`max_work_units` is provider-independent. One unit is charged for each node attempt (including
+retries and each `loop_group` body-node attempt) and each governed child spawn or re-drive. A
+plain `loop:` is one node attempt even when it makes several internal provider calls; use
+`max_spend_usd` to govern those calls by recorded cost.
+
+Both limits survive cold resume through the workflow event log. Exhaustion emits
+`budget_exhausted` and fails explicitly; Archon never silently truncates a fan-out or skips the
+remaining workflow. Work already in flight is allowed to finish, so parallel layers and
+`fan_out.max_parallel` may overshoot by their current in-flight width. `max_parallel` still
+controls concurrency, not total work.
+
+A `workflow:` child remains a separate governed run. Its own `budget:` controls its internal
+execution. The parent charges the spawn as one work unit and adds the child's reported terminal
+cost when the child settles; this does not create one shared live ledger across the run tree.
+
 **systemPrompt** — override the default `claude_code` system prompt:
 
 ```yaml

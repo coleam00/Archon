@@ -49,6 +49,7 @@ mock.module('../db/workflows', () => ({
 }));
 
 const mockCreateWorkflowEvent = mock(() => Promise.resolve());
+const mockCreateRequiredWorkflowEvent = mock(() => Promise.resolve());
 const mockGetDagResumeSnapshot = mock(() =>
   Promise.resolve({
     completedNodeOutputs: new Map<string, string>(),
@@ -57,6 +58,7 @@ const mockGetDagResumeSnapshot = mock(() =>
 );
 mock.module('../db/workflow-events', () => ({
   createWorkflowEvent: mockCreateWorkflowEvent,
+  createRequiredWorkflowEvent: mockCreateRequiredWorkflowEvent,
   getDagResumeSnapshot: mockGetDagResumeSnapshot,
 }));
 
@@ -256,6 +258,7 @@ describe('createWorkflowDeps', () => {
     expect(deps.store).toBeDefined();
     expect(typeof deps.getAgentProvider).toBe('function');
     expect(typeof deps.loadConfig).toBe('function');
+    expect(deps.createRequiredWorkflowEvent).toBe(mockCreateRequiredWorkflowEvent);
   });
 
   test('store from createWorkflowDeps has all IWorkflowStore methods', () => {

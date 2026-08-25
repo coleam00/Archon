@@ -138,25 +138,24 @@ export type WorkflowEvidencePolicy = z.infer<typeof workflowEvidencePolicySchema
  * whichever ceiling is hit first fails the run explicitly — never silently
  * truncates remaining work. Enforcement is pre-dispatch: nodes already running
  * when a ceiling is crossed are allowed to finish, so overshoot is bounded by
- * one in-flight layer.
+ * the work already admitted in the current layer or fan-out window.
  *
- * Child sub-runs (`workflow:`/`fan_out:`) do NOT inherit their parent's budget;
- * each run enforces its own declared block. The parent's ceilings still bound
- * the aggregate because a settled child's spend rolls up into the parent node's
- * cost, and every child spawn charges the parent one work unit.
+ * Child sub-runs (`workflow:`/`fan_out:`) keep separate ledgers. A parent's spend
+ * ceiling requires each child to make cost availability explicit, while the
+ * child's own declared ceiling remains authoritative for its internal work. The
+ * parent adds settled child spend and charges every child spawn as one work unit.
  */
 export const workflowBudgetPolicySchema = z.object({
   /**
    * Run-wide ceiling on summed recorded provider cost (USD), including rolled-up
-   * child cost. Providers that report no usage contribute nothing (absence is
-   * not zero) — pair with `max_work_units` when providers may omit cost.
+   * child cost. A cost-bearing provider that omits finite cost fails explicitly;
+   * absence is never treated as zero while this ceiling is active.
    */
   max_spend_usd: z.number().positive().optional(),
   /**
-   * Run-wide ceiling on deterministic work units. One unit = one started node
-   * attempt (one `node_started` audit row) or one child spawn decision (one
-   * `work_unit_charged` audit row), so retries count, and the count is
-   * reconstructible from the event log across cold resume.
+   * Run-wide ceiling on deterministic work units. One required
+   * `work_unit_charged` row records each node attempt or governed child spawn,
+   * so retries count and the ceiling is reconstructible across cold resume.
    */
   max_work_units: z.number().int().positive().optional(),
 });

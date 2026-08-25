@@ -311,7 +311,12 @@ class InMemoryStore implements IWorkflowStore {
     const completedNodeOutputs = new Map<string, { output: string; structuredOutput?: unknown }>();
     const tokens = { input: 0, output: 0 };
     let costUsd = 0;
+    let workUnits = 0;
     for (const e of this.events) {
+      if (e.workflow_run_id === workflowRunId && e.event_type === 'work_unit_charged') {
+        workUnits++;
+        continue;
+      }
       if (
         e.workflow_run_id === workflowRunId &&
         (e.event_type === 'node_completed' || e.event_type === 'node_skipped_prior_success') &&
@@ -352,7 +357,7 @@ class InMemoryStore implements IWorkflowStore {
         }
       }
     }
-    return Promise.resolve({ completedNodeOutputs, tokens, costUsd, workUnits: 0 });
+    return Promise.resolve({ completedNodeOutputs, tokens, costUsd, workUnits });
   };
 
   getCodebase = (): Promise<null> => Promise.resolve(null);
@@ -419,6 +424,7 @@ function makeProvider() {
 function makeDeps(store: IWorkflowStore): WorkflowDeps {
   return {
     store,
+    createRequiredWorkflowEvent: data => store.createWorkflowEvent(data),
     getAgentProvider: mock(() => makeProvider()) as unknown as WorkflowDeps['getAgentProvider'],
     loadConfig: mock(
       (): Promise<WorkflowConfig> =>
@@ -1195,6 +1201,68 @@ nodes:
     expect(String((await store2.getWorkflowRun(parentRun2!.id))?.metadata.error)).toMatch(
       /cancelled/i
     );
+  });
+
+  it('keeps failed first-attempt budget usage when a child is re-driven from the top (#1961)', async () => {
+    await writeWorkflow(
+      'child-budget-fails-first',
+      `
+name: child-budget-fails-first
+description: its first failed attempt consumes the whole work budget
+budget: { max_work_units: 1 }
+nodes:
+  - id: attempt
+    bash: "test -f budget-marker && echo should-not-run || { touch budget-marker; exit 3; }"
+`
+    );
+    await writeWorkflow(
+      'parent-budget-retry',
+      `
+name: parent-budget-retry
+description: tries to re-drive the failed child
+nodes:
+  - id: sub
+    workflow: child-budget-fails-first
+`
+    );
+
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    const parent = await discover('parent-budget-retry');
+    expect(
+      (await executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, parent, 'goal', 'conv-db'))
+        .success
+    ).toBe(false);
+    const parentRun = [...store.runs.values()].find(
+      run => run.workflow_name === 'parent-budget-retry'
+    );
+    const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(parentRun!.id))!);
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parent,
+      'goal',
+      'conv-db',
+      hydrated ?? { preCreatedRun: await store.resumeWorkflowRun(parentRun!.id) }
+    );
+
+    expect(result.success).toBe(false);
+    const child = [...store.runs.values()].find(
+      run => run.workflow_name === 'child-budget-fails-first'
+    );
+    const exhaustion = store.events.find(
+      event =>
+        event.workflow_run_id === child?.id &&
+        event.event_type === 'budget_exhausted' &&
+        event.data?.phase === 'pre_start'
+    );
+    expect(exhaustion?.data).toMatchObject({
+      budget: 'max_work_units',
+      limit: 1,
+      current: 1,
+    });
   });
 
   it('a throw during the child spawn does NOT leave a non-terminal zombie child (I1)', async () => {
@@ -2565,12 +2633,188 @@ nodes:
     );
 
     expect(result.success).toBe(false);
-    const nodeFailed = store.events.find(
-      e => e.event_type === 'node_failed' && e.step_name === 'work'
-    );
-    expect(String(nodeFailed?.data?.error)).toContain('work-unit charge could not be persisted');
+    const nodeFailed = store.events.find(e => e.event_type === 'node_failed');
+    expect(String(nodeFailed?.data?.error)).toContain('db blip');
     // No child was started behind the refused charge.
     expect([...store.runs.values()].filter(r => r.workflow_name === 'fan-child')).toHaveLength(0);
+  });
+
+  it('charges a settled child before the next fan-out slot is admitted (#1961)', async () => {
+    await writeWorkflow(
+      'fan-cost-child',
+      `
+name: fan-cost-child
+description: reports a paid provider result
+nodes:
+  - id: work
+    prompt: do paid work
+`
+    );
+    await writeWorkflow(
+      'fan-spend-budget',
+      `
+name: fan-spend-budget
+description: serial fan-out governed by reported child cost
+budget: { max_spend_usd: 5 }
+nodes:
+  - id: plan
+    bash: |
+      printf '%s' '["alpha","beta","gamma"]'
+  - id: work
+    workflow: fan-cost-child
+    depends_on: [plan]
+    isolation: inherit
+    fan_out:
+      items: "$plan.output"
+      max_parallel: 1
+`
+    );
+
+    const store = new InMemoryStore();
+    const paidProvider = {
+      ...makeProvider(),
+      sendQuery: mock(function* () {
+        yield { type: 'assistant', content: 'paid child done' };
+        yield { type: 'result', sessionId: 'paid-child', cost: 6 };
+      }),
+    };
+    const deps: WorkflowDeps = {
+      ...makeDeps(store),
+      getAgentProvider: mock(() => paidProvider) as unknown as WorkflowDeps['getAgentProvider'],
+    };
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      await discover('fan-spend-budget'),
+      'goal',
+      'conv-db',
+      { resolveChildIsolation: makeFanResolver(cwd).resolver }
+    );
+
+    expect(result.success).toBe(false);
+    expect(
+      [...store.runs.values()].filter(run => run.workflow_name === 'fan-cost-child')
+    ).toHaveLength(1);
+    const exhausted = store.events.find(
+      event => event.event_type === 'budget_exhausted' && event.step_name === 'work'
+    );
+    expect(exhausted?.data).toMatchObject({
+      budget: 'max_spend_usd',
+      limit: 5,
+      current: 6,
+      planned_children: 3,
+      spawned_children: 1,
+    });
+  });
+
+  it('stops fan-out when a child provider cannot report enforceable cost (#1961)', async () => {
+    await writeWorkflow(
+      'fan-unknown-cost-child',
+      `
+name: fan-unknown-cost-child
+description: provider omits cost
+nodes:
+  - id: work
+    prompt: do paid work
+`
+    );
+    await writeWorkflow(
+      'fan-unknown-cost-parent',
+      `
+name: fan-unknown-cost-parent
+description: parent refuses unknown child spend
+budget: { max_spend_usd: 5 }
+nodes:
+  - id: plan
+    bash: |
+      printf '%s' '["alpha","beta"]'
+  - id: work
+    workflow: fan-unknown-cost-child
+    depends_on: [plan]
+    isolation: inherit
+    fan_out:
+      items: "$plan.output"
+      max_parallel: 1
+`
+    );
+
+    const store = new InMemoryStore();
+    const unknownCostProvider = {
+      ...makeProvider(),
+      sendQuery: mock(function* () {
+        yield { type: 'assistant', content: 'done without cost' };
+        yield { type: 'result', sessionId: 'unknown-cost-child' };
+      }),
+    };
+    const deps: WorkflowDeps = {
+      ...makeDeps(store),
+      getAgentProvider: mock(
+        () => unknownCostProvider
+      ) as unknown as WorkflowDeps['getAgentProvider'],
+    };
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      await discover('fan-unknown-cost-parent'),
+      'goal',
+      'conv-db',
+      { resolveChildIsolation: makeFanResolver(cwd).resolver }
+    );
+
+    expect(result.success).toBe(false);
+    expect(
+      [...store.runs.values()].filter(run => run.workflow_name === 'fan-unknown-cost-child')
+    ).toHaveLength(1);
+    expect(
+      store.events.some(
+        event => event.event_type === 'budget_enforcement_failed' && event.step_name === 'work'
+      )
+    ).toBe(true);
+  });
+
+  it('records an explicit zero for a deterministic child under a parent spend ceiling (#1961)', async () => {
+    await writeWorkflow(
+      'deterministic-budget-child',
+      `
+name: deterministic-budget-child
+description: no provider spend
+nodes:
+  - id: work
+    bash: echo deterministic
+`
+    );
+    await writeWorkflow(
+      'deterministic-budget-parent',
+      `
+name: deterministic-budget-parent
+description: parent can distinguish zero from unknown child spend
+budget: { max_spend_usd: 5 }
+nodes:
+  - id: sub
+    workflow: deterministic-budget-child
+`
+    );
+
+    const store = new InMemoryStore();
+    const result = await executeWorkflow(
+      makeDeps(store),
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      await discover('deterministic-budget-parent'),
+      'goal',
+      'conv-db'
+    );
+
+    expect(result.success).toBe(true);
+    const child = [...store.runs.values()].find(
+      run => run.workflow_name === 'deterministic-budget-child'
+    );
+    expect(child?.metadata.total_cost_usd).toBe(0);
   });
 
   it('a resume with ONE instance left is not blocked by the shared-checkout preflight', async () => {

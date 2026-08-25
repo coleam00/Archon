@@ -118,6 +118,15 @@ export async function createWorkflowEvent(data: WorkflowEventInput): Promise<voi
 }
 
 /**
+ * Persist an event whose row is part of engine state rather than best-effort
+ * observability. Unlike {@link createWorkflowEvent}, this rejects on insert
+ * failure so the caller can refuse the governed action that depends on it.
+ */
+export async function createRequiredWorkflowEvent(data: WorkflowEventInput): Promise<void> {
+  await insertWorkflowEvent((sql, params) => pool.query(sql, params), data);
+}
+
+/**
  * List all events for a workflow run in lifecycle order. `event_order` is
  * allocated by the database, so it preserves insertion order when timestamps tie.
  */
@@ -261,10 +270,9 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<{
   tokens?: TokenUsage;
   costUsd: number;
   /**
-   * Count of deterministic work units (`node_started` rows plus `work_unit_charged`
-   * spawn-decision rows) — the total the run-wide budget ceiling (#1961) is checked
-   * against on resume. Every unit writes exactly one row, so this is reconstructible
-   * from the audit log by construction.
+   * Count of required `work_unit_charged` rows — the total the run-wide budget ceiling
+   * (#1961) checks on resume. Node starts remain best-effort observability events;
+   * governed units use the throwing insert boundary so every live charge is durable.
    */
   workUnits: number;
 }> {
@@ -274,12 +282,11 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<{
       | 'node_completed'
       | 'node_failed'
       | 'node_skipped_prior_success'
-      | 'node_started'
       | 'work_unit_charged';
     data: string | Record<string, unknown>;
   }>(
     `SELECT step_name, event_type, data FROM remote_agent_workflow_events
-     WHERE workflow_run_id = $1 AND event_type IN ('node_completed', 'node_failed', 'node_skipped_prior_success', 'node_started', 'work_unit_charged')
+     WHERE workflow_run_id = $1 AND event_type IN ('node_completed', 'node_failed', 'node_skipped_prior_success', 'work_unit_charged')
      ORDER BY created_at ASC, COALESCE(event_order, 0) ASC, id ASC`,
     [workflowRunId]
   );
@@ -301,10 +308,8 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<{
       );
       continue;
     }
-    if (row.event_type === 'node_started' || row.event_type === 'work_unit_charged') {
-      // Counted for the run-wide work-unit budget (#1961); carries no output or usage.
-      // `work_unit_charged` rows are the persisted trace of a child spawn decision,
-      // charged live beside the node attempt rows.
+    if (row.event_type === 'work_unit_charged') {
+      // Required persisted trace of either a node attempt or child spawn decision.
       workUnits++;
       continue;
     }

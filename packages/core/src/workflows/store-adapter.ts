@@ -136,6 +136,7 @@ export function createWorkflowDeps(): WorkflowDeps {
     store: createWorkflowStore(),
     getAgentProvider,
     loadConfig: loadMergedConfig,
+    createRequiredWorkflowEvent: workflowEventDb.createRequiredWorkflowEvent,
     sealRunConfig: sealWorkflowRunConfig,
     unsealRunConfig: unsealWorkflowRunConfig,
     // App mode: resolve fresh installation tokens for subprocess env. PAT mode:

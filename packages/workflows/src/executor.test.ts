@@ -3219,6 +3219,7 @@ describe('hydrateResumableRun', () => {
         completedNodeOutputs: priorNodes,
         tokens: { input: 4, output: 1 },
         costUsd: 0.1,
+        workUnits: 2,
       })),
     });
 
@@ -3226,7 +3227,7 @@ describe('hydrateResumableRun', () => {
 
     expect(result).toEqual({
       priorCompletedNodes: priorNodes,
-      priorUsage: { tokens: { input: 4, output: 1 }, costUsd: 0.1 },
+      priorUsage: { tokens: { input: 4, output: 1 }, costUsd: 0.1, workUnits: 2 },
     });
     expect(store.resumeWorkflowRun).not.toHaveBeenCalled();
     expect(store.listWorkflowRunNodeSessions).not.toHaveBeenCalled();

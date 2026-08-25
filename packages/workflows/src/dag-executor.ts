@@ -785,8 +785,8 @@ export interface PriorRunUsage {
  * Created once per `executeDagWorkflow` when the workflow declares `budget:` and
  * passed BY REFERENCE into loop-group body contexts and child-spawn drivers so
  * every attempt and spawn counts toward one ceiling. `spendUsd` is seeded from
- * prior usage on resume; `workUnits` counts node attempts (one `node_started`
- * audit row each) and spawn decisions (one `work_unit_charged` audit row each),
+ * prior usage on resume; `workUnits` counts node attempts and spawn decisions
+ * (one required `work_unit_charged` audit row each),
  * so a cold resume reconstructs both from the event log.
  */
 export interface RunBudgetLedger {
@@ -822,8 +822,10 @@ function checkBudgetExhaustion(
 
 function describeBudgetExhaustion(e: BudgetExhaustion): string {
   const axis = e.budget === 'max_spend_usd' ? 'spend' : 'work-unit';
+  const limit = e.budget === 'max_spend_usd' ? `$${e.limit}` : String(e.limit);
+  const current = e.budget === 'max_spend_usd' ? `$${e.current}` : String(e.current);
   return (
-    `${axis} budget exhausted: ${e.budget} limit $${e.limit} reached ($${e.current} recorded). ` +
+    `${axis} budget exhausted: ${e.budget} limit ${limit} reached (${current} recorded). ` +
     `Raise budget.${e.budget} in the workflow definition or cancel the run.`
   );
 }
@@ -840,17 +842,25 @@ function describeBudgetExhaustion(e: BudgetExhaustion): string {
  * persist rolls the reservation back and THROWS, failing the spawn explicitly rather than
  * continuing with diverged accounting.
  */
-async function chargeBudgetWorkUnit(ctx: RunLayersContext, nodeId: string): Promise<void> {
-  if (ctx.budgetLedger === undefined) return;
+async function chargeBudgetWorkUnit(
+  ctx: RunLayersContext,
+  nodeId: string,
+  kind: 'node_attempt' | 'spawn_decision'
+): Promise<void> {
+  if (ctx.budget?.max_work_units === undefined || ctx.budgetLedger === undefined) return;
+  const persistRequired = ctx.deps.createRequiredWorkflowEvent;
+  if (persistRequired === undefined) {
+    throw new Error('Required workflow-event persistence is unavailable for max_work_units');
+  }
   // Reserve before awaiting anything so the check-then-reserve pair is atomic against the
   // other workers inside mapWithLimit; rolled back if the persist fails below.
   ctx.budgetLedger.workUnits++;
   try {
-    await ctx.deps.store.createWorkflowEvent({
+    await persistRequired({
       workflow_run_id: ctx.workflowRun.id,
       event_type: 'work_unit_charged',
       step_name: ctx.stepNamePrefix + nodeId,
-      data: { kind: 'spawn_decision' },
+      data: { kind },
     });
   } catch (err) {
     ctx.budgetLedger.workUnits--;
@@ -860,6 +870,43 @@ async function chargeBudgetWorkUnit(ctx: RunLayersContext, nodeId: string): Prom
     );
     throw err;
   }
+}
+
+async function reportUnenforceableSpend(
+  deps: WorkflowDeps,
+  platform: IWorkflowPlatform,
+  conversationId: string,
+  workflowRunId: string,
+  stepName: string,
+  provider: string
+): Promise<string> {
+  const error =
+    `Cannot enforce budget.max_spend_usd for node '${stepName}': provider '${provider}' ` +
+    'did not report a finite cost. Remove the spend ceiling or use a provider with cost reporting.';
+  deps.store
+    .createWorkflowEvent({
+      workflow_run_id: workflowRunId,
+      event_type: 'budget_enforcement_failed',
+      step_name: stepName,
+      data: { budget: 'max_spend_usd', provider, reason: 'cost_unreported' },
+    })
+    .catch((err: Error) => {
+      getLog().error(
+        { err, workflowRunId, eventType: 'budget_enforcement_failed' },
+        'workflow_event_persist_failed'
+      );
+    });
+  await deps.store
+    .updateWorkflowRun(workflowRunId, { metadata: { cost_reporting_unavailable: true } })
+    .catch((err: Error) => {
+      getLog().error({ err, workflowRunId }, 'dag.budget_cost_reporting_marker_persist_failed');
+    });
+  getLog().error({ workflowRunId, stepName, provider }, 'dag.budget_spend_unenforceable');
+  await safeSendMessage(platform, conversationId, error, {
+    workflowId: workflowRunId,
+    nodeName: stepName,
+  });
+  return error;
 }
 
 /** Terminal (or paused) outcome of a child sub-run, as consumed by a `workflow:` node. */
@@ -877,6 +924,8 @@ export interface ChildWorkflowOutcome {
   structuredOutput?: unknown;
   /** Child run's total cost, rolled up into the parent node's costUsd (D8). */
   costUsd?: number;
+  /** False when a cost-bearing provider result made spend accounting unknowable. */
+  costEnforceable?: false;
   tokens?: TokenUsage;
   error?: string;
 }
@@ -927,6 +976,8 @@ export interface RunChildWorkflowArgs {
    * declares no `with:`/`as`.
    */
   inputs?: Record<string, JsonValue>;
+  /** Require the child to make provider-cost availability explicit for a parent spend ceiling. */
+  requireReportedCost?: boolean;
 }
 
 /**
@@ -985,6 +1036,7 @@ export function childOutcomeFromRun(run: WorkflowRun): ChildWorkflowOutcome {
     output: typeof md.summary === 'string' ? md.summary : undefined,
     ...(summaryValue !== undefined ? { structuredOutput: summaryValue } : {}),
     costUsd: typeof md.total_cost_usd === 'number' ? md.total_cost_usd : undefined,
+    ...(md.cost_reporting_unavailable === true ? { costEnforceable: false as const } : {}),
     tokens,
     error: typeof md.error === 'string' ? md.error : undefined,
   };
@@ -2109,8 +2161,8 @@ async function executeNodeInternal(
   checkpointSession?: SessionCheckpoint,
   /** Roots command files resolve under; always supplied from RunLayersContext. */
   workflowSourceRoots?: WorkflowSourceRoots,
-  /** Invoked once per attempt beside the node_started write (#1961 work-unit accounting). */
-  chargeWorkUnit?: () => void
+  /** Invoked once per attempt before the node_started write (#1961 work-unit accounting). */
+  chargeWorkUnit?: () => Promise<void>
 ): Promise<NodeExecutionResult> {
   const nodeStartTime = Date.now();
   const nodeContext: SendMessageContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -2138,6 +2190,7 @@ async function executeNodeInternal(
 
   const configuredMcpNames = await loadConfiguredMcpServerNames(node.mcp, cwd);
 
+  await chargeWorkUnit?.();
   getLog().info({ nodeId: node.id, provider }, 'dag_node_started');
   await logNodeStart(logDir, workflowRun.id, node.id, commandName ?? '<inline>');
 
@@ -2162,8 +2215,6 @@ async function executeNodeInternal(
         'workflow_event_persist_failed'
       );
     });
-  chargeWorkUnit?.();
-
   const emitter = getWorkflowEventEmitter();
   emitter.emit({
     type: 'node_started',
@@ -3716,8 +3767,8 @@ async function executeBashNode(
   // for top-level bash nodes and non-first iterations.
   loopUserInput = '',
   execContext: ExecutionContext = { kind: 'host' },
-  /** Invoked once per attempt beside the node_started write (#1961 work-unit accounting). */
-  chargeWorkUnit?: () => void
+  /** Invoked once per attempt before the node_started write (#1961 work-unit accounting). */
+  chargeWorkUnit?: () => Promise<void>
 ): Promise<NodeOutput> {
   const nodeStartTime = Date.now();
   const nodeContext: SendMessageContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -3725,6 +3776,7 @@ async function executeBashNode(
   const stepName = stepNamePrefix + node.id;
   const iterationData = iteration !== undefined ? { iteration } : {};
 
+  await chargeWorkUnit?.();
   getLog().info({ nodeId: node.id, type: 'bash' }, 'dag_node_started');
   await logNodeStart(logDir, workflowRun.id, node.id, '<bash>');
 
@@ -3741,8 +3793,6 @@ async function executeBashNode(
         'workflow_event_persist_failed'
       );
     });
-  chargeWorkUnit?.();
-
   const emitter = getWorkflowEventEmitter();
   emitter.emit({
     type: 'node_started',
@@ -3999,8 +4049,8 @@ async function executeScriptNode(
   execContext: ExecutionContext = { kind: 'host' },
   /** Roots named scripts resolve under; always supplied from RunLayersContext. */
   workflowSourceRoots?: WorkflowSourceRoots,
-  /** Invoked once per attempt beside the node_started write (#1961 work-unit accounting). */
-  chargeWorkUnit?: () => void
+  /** Invoked once per attempt before the node_started write (#1961 work-unit accounting). */
+  chargeWorkUnit?: () => Promise<void>
 ): Promise<NodeOutput> {
   const nodeStartTime = Date.now();
   const nodeContext: SendMessageContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -4008,6 +4058,7 @@ async function executeScriptNode(
   const stepName = stepNamePrefix + node.id;
   const iterationData = iteration !== undefined ? { iteration } : {};
 
+  await chargeWorkUnit?.();
   getLog().info({ nodeId: node.id, type: 'script', runtime: node.runtime }, 'dag_node_started');
   await logNodeStart(logDir, workflowRun.id, node.id, '<script>');
 
@@ -4024,8 +4075,6 @@ async function executeScriptNode(
         'workflow_event_persist_failed'
       );
     });
-  chargeWorkUnit?.();
-
   const emitter = getWorkflowEventEmitter();
   emitter.emit({
     type: 'node_started',
@@ -4581,7 +4630,8 @@ async function executeLoopGroupNode(
   /** Run-wide budget policy + shared ledger (#1961), threaded by reference so body
    *  attempts gate on and charge the same ceilings as top-level nodes. */
   budget?: WorkflowBudgetPolicy,
-  budgetLedger?: RunBudgetLedger
+  budgetLedger?: RunBudgetLedger,
+  requireReportedCost = false
 ): Promise<NodeExecutionResult> {
   const group = node.loop_group;
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -5044,6 +5094,7 @@ async function executeLoopGroupNode(
       totalCostUsd: 0,
       totalTokens: undefined,
       totalLoopIterations: 0,
+      requireReportedCost,
       stepNamePrefix: bodyStepNamePrefix,
       loopGroupPath: [...enclosingLoopGroupPath, { groupId: node.id, iteration: i }],
       // Deliver this iteration's approval-gate free-text to body exec: nodes via env
@@ -5783,8 +5834,11 @@ async function executeLoopNode(
   checkpointSession?: SessionCheckpoint,
   /** Roots a `loop.command` file resolves under; always supplied from RunLayersContext. */
   workflowSourceRoots?: WorkflowSourceRoots,
-  /** Invoked once per execution beside the node_started write (#1961 work-unit accounting). */
-  chargeWorkUnit?: () => void
+  /** Invoked once per execution before the node_started write (#1961 work-unit accounting). */
+  chargeWorkUnit?: () => Promise<void>,
+  budget?: WorkflowBudgetPolicy,
+  budgetLedger?: RunBudgetLedger,
+  requireReportedCost = false
 ): Promise<NodeExecutionResult> {
   const loop = node.loop;
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -5793,6 +5847,7 @@ async function executeLoopNode(
   // each event's data (`iteration`), so no separate iteration param is threaded here.
   const stepName = stepNamePrefix + node.id;
 
+  await chargeWorkUnit?.();
   // Emit node_started up-front so every terminal outcome of this loop node is
   // paired with a corresponding _started event — same pattern the bash and
   // script node executors follow. The pairing contract: every `return` of a
@@ -5829,8 +5884,6 @@ async function executeLoopNode(
         'workflow_event_persist_failed'
       );
     });
-  chargeWorkUnit?.();
-
   getWorkflowEventEmitter().emit({
     type: 'node_started',
     runId: workflowRun.id,
@@ -6045,6 +6098,30 @@ async function executeLoopNode(
   let loopFinalStopReason: string | undefined;
   let loopTotalNumTurns: number | undefined;
   let loopTotalTokens: TokenUsage | undefined = persistedLoopTokens;
+  const refuseLoopForBudget = async (
+    exhaustion: BudgetExhaustion,
+    phase: 'loop_iteration' | 'loop_reask'
+  ): Promise<NodeExecutionResult> => {
+    const error = describeBudgetExhaustion(exhaustion);
+    deps.store
+      .createWorkflowEvent({
+        workflow_run_id: workflowRun.id,
+        event_type: 'budget_exhausted',
+        step_name: stepName,
+        data: { ...exhaustion, phase },
+      })
+      .catch((err: Error) => {
+        getLog().error(
+          { err, workflowRunId: workflowRun.id, eventType: 'budget_exhausted' },
+          'workflow_event_persist_failed'
+        );
+      });
+    await safeSendMessage(platform, conversationId, error, msgContext);
+    return failLoopNode(error, {
+      costUsd: loopTotalCostUsd,
+      ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+    });
+  };
   // Concrete model the provider resolved to (#2314). Last-seen wins, like
   // loopFinalStopReason: every iteration runs on the same resolved provider and
   // model, so the final iteration's report is the node's report.
@@ -6209,6 +6286,7 @@ async function executeLoopNode(
         iterationUsageFolded = true;
         if (iterationCost !== undefined) {
           loopTotalCostUsd = (loopTotalCostUsd ?? 0) + iterationCost;
+          if (budgetLedger !== undefined) budgetLedger.spendUsd += iterationCost;
         }
         if (iterationTokens !== undefined) {
           loopTotalTokens = sumTokenUsage(
@@ -6235,6 +6313,13 @@ async function executeLoopNode(
           : 0;
 
       attempts: while (true) {
+        const exhaustion = checkBudgetExhaustion(budget, budgetLedger);
+        if (exhaustion !== undefined) {
+          return refuseLoopForBudget(
+            exhaustion,
+            reaskAttempt === 0 ? 'loop_iteration' : 'loop_reask'
+          );
+        }
         // Per-attempt reset. A reask re-runs the stream, so anything the stream
         // accumulates or aborts must start clean or a prior attempt's prose would
         // leak into this one's output and signal detection.
@@ -6613,6 +6698,21 @@ async function executeLoopNode(
             // rate_limit chunks: already log.warn'd in claude.ts; not surfaced to SSE per design
           }
           foldIterationUsage();
+          if (requireReportedCost && iterationCost === undefined) {
+            const error = await reportUnenforceableSpend(
+              deps,
+              platform,
+              conversationId,
+              workflowRun.id,
+              stepName,
+              workflowProvider
+            );
+            return await failLoopNode(error, {
+              costUsd: loopTotalCostUsd,
+              ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+              loopIterations: i,
+            });
+          }
 
           // Stream ended with background tasks still live (idle timeout mid-wait or
           // subprocess death): their artifacts may be missing — record the
@@ -7512,7 +7612,7 @@ async function executeApprovalNode(
   /** Forwarded to the synthetic `on_reject` node; see RunLayersContext. */
   workflowSourceRoots?: WorkflowSourceRoots,
   /** Invoked beside the synthetic `on_reject` node's `node_started` write (#1961). */
-  chargeWorkUnit?: () => void
+  chargeWorkUnit?: () => Promise<void>
 ): Promise<NodeOutput> {
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
   // Namespaced persisted step_name for loop_group bodies ('' → node.id at top level, #2090).
@@ -7871,7 +7971,23 @@ async function executeWorkflowNode(
   // writes node_completed HERE — and ONLY on true completion, never on the paused
   // branch — so the resume snapshot skips a truly-finished sub-run on resume
   // but re-runs one still blocked on its child.
-  const asCompleted = (outcome: ChildWorkflowOutcome): NodeExecutionResult => {
+  const asCompleted = async (outcome: ChildWorkflowOutcome): Promise<NodeExecutionResult> => {
+    if (
+      ctx.requireReportedCost &&
+      (outcome.costEnforceable === false ||
+        outcome.costUsd === undefined ||
+        !Number.isFinite(outcome.costUsd))
+    ) {
+      const error = await reportUnenforceableSpend(
+        deps,
+        platform,
+        conversationId,
+        parentRun.id,
+        ctx.stepNamePrefix + node.id,
+        `workflow:${node.workflow}`
+      );
+      return failResult(error, outcome.costUsd, outcome.tokens);
+    }
     // Declared boundary contract (#2774): when the node declares `output_format`, the
     // child's terminal value must match it — a mismatch fails the node HERE, before any
     // node_completed row exists, so resume re-runs into the same named failure instead
@@ -8097,6 +8213,7 @@ async function executeWorkflowNode(
     userId: parentRun.user_id ?? undefined,
     codebaseId: parentRun.codebase_id ?? undefined,
     isolation: node.isolation,
+    requireReportedCost: ctx.requireReportedCost,
     ...(resolvedInputs !== undefined ? { inputs: resolvedInputs } : {}),
   };
 
@@ -8104,12 +8221,12 @@ async function executeWorkflowNode(
     if (existing === undefined) {
       // One work unit per spawn decision (#1961): the child's own attempts are its
       // own run's ledger; the parent charges the decision to start it.
-      await chargeBudgetWorkUnit(ctx, node.id);
+      await chargeBudgetWorkUnit(ctx, node.id, 'spawn_decision');
       return await interpret(await ctx.runChildWorkflow(childArgs));
     }
     if (existing.status === 'failed') {
       // Resume-through-parent recovery (D5/#1764): re-drive the failed child once.
-      await chargeBudgetWorkUnit(ctx, node.id);
+      await chargeBudgetWorkUnit(ctx, node.id, 'spawn_decision');
       return await interpret(
         await ctx.runChildWorkflow({ ...childArgs, resumeFailedChild: existing })
       );
@@ -8799,18 +8916,52 @@ async function executeFanOutWorkflowNode(
   // gate exhaustion, but it must fail the node explicitly under every join mode too.
   let chargeFailures = 0;
   let chargeFailureError: string | undefined;
+  let costEnforcementFailure: ChildWorkflowOutcome | undefined;
+  let costEnforcementRefusals = 0;
+  const observeChildCost = (
+    outcome: ChildWorkflowOutcome,
+    chargeLiveLedger: boolean
+  ): ChildWorkflowOutcome => {
+    const costReportingRequired = ctx.requireReportedCost;
+    const observed =
+      costReportingRequired && (outcome.costUsd === undefined || !Number.isFinite(outcome.costUsd))
+        ? { ...outcome, costEnforceable: false as const }
+        : outcome;
+    if (costReportingRequired && observed.costEnforceable === false) {
+      costEnforcementFailure ??= observed;
+    }
+    if (
+      chargeLiveLedger &&
+      ctx.budgetLedger !== undefined &&
+      observed.costUsd !== undefined &&
+      Number.isFinite(observed.costUsd)
+    ) {
+      ctx.budgetLedger.spendUsd += observed.costUsd;
+    }
+    return observed;
+  };
   const settled = await mapWithLimit(
     items,
     fanOut.max_parallel,
     async (item, i): Promise<ChildWorkflowOutcome> => {
       const existing = existingByIndex.get(i);
       // Existing completed child → thread its outcome without re-spawning (resume skip).
-      if (existing?.status === 'completed') return childOutcomeFromRun(existing);
+      if (existing?.status === 'completed')
+        return observeChildCost(childOutcomeFromRun(existing), false);
       // A user-cancelled child (no fan-out tag) is terminal — thread it as-is (fails
       // all_success; represented in all_done). A fan-out-tagged cancel is recoverable and
       // falls through to re-drive.
       if (existing?.status === 'cancelled' && !isFanOutRecoverableCancel(existing)) {
-        return childOutcomeFromRun(existing);
+        return observeChildCost(childOutcomeFromRun(existing), false);
+      }
+      if (costEnforcementFailure !== undefined) {
+        costEnforcementRefusals++;
+        return {
+          childRunId: '',
+          status: 'failed',
+          costEnforceable: false,
+          error: `child ${String(i)} not spawned: a prior child made max_spend_usd unenforceable`,
+        };
       }
       // Spawn gate (#1961): a ceiling met before this child starts refuses the spawn
       // explicitly instead of silently truncating the item list — the refusals are
@@ -8828,7 +8979,7 @@ async function executeFanOutWorkflowNode(
       // persisted, refuse this spawn like a gate refusal so the explicit pre-join failure
       // fires under every join mode (`all_done` must not mask it either).
       try {
-        await chargeBudgetWorkUnit(ctx, node.id);
+        await chargeBudgetWorkUnit(ctx, node.id, 'spawn_decision');
       } catch (err) {
         chargeFailures++;
         chargeFailureError ??= (err as Error).message;
@@ -8879,11 +9030,16 @@ async function executeFanOutWorkflowNode(
         userId: parentRun.user_id ?? undefined,
         codebaseId: parentRun.codebase_id ?? undefined,
         isolation: node.isolation,
+        requireReportedCost: ctx.requireReportedCost,
         childIndex: i,
         itemHash: hashFanOutItem(input),
         ...(Object.keys(childInputs).length > 0 ? { inputs: childInputs } : {}),
         ...(resumeChild ? { resumeFailedChild: resumeChild } : {}),
       });
+      // mapWithLimit opens the next sliding-window slot only after this callback settles.
+      // Charge a newly settled child's reported cost now so that next slot observes it;
+      // the fan-out wrapper's aggregate cost is excluded from the ledger later.
+      const observedOutcome = observeChildCost(outcome, true);
       // A paused child is cancelled HERE rather than at the join, and the timing is
       // load-bearing rather than tidiness. A pause is not terminal, and a non-terminal run
       // keeps holding its working path: `getActiveWorkflowRunByPath` counts `paused` as
@@ -8896,8 +9052,10 @@ async function executeFanOutWorkflowNode(
       // paused child's own state, it is the same cancel the gate path (#2180/#2438) applies
       // at the join a moment later, and every sibling still runs to its own terminal state.
       // All it changes is that the lock is released before the next child starts.
-      if (outcome.status === 'paused') await cancelChild(outcome.childRunId, 'fan_out_gate');
-      return outcome;
+      if (observedOutcome.status === 'paused') {
+        await cancelChild(observedOutcome.childRunId, 'fan_out_gate');
+      }
+      return observedOutcome;
     }
   );
 
@@ -8915,6 +9073,32 @@ async function executeFanOutWorkflowNode(
 
   const totalCostUsd = sumFanOutCost(outcomes);
   const totalTokens = sumFanOutTokens(outcomes);
+
+  if (costEnforcementFailure !== undefined) {
+    const msg =
+      `fan_out node '${node.id}': child '${costEnforcementFailure.childRunId}' could not report ` +
+      `enforceable cost; ${String(costEnforcementRefusals)} later child spawn${costEnforcementRefusals === 1 ? ' was' : 's were'} refused.`;
+    deps.store
+      .createWorkflowEvent({
+        workflow_run_id: parentRun.id,
+        event_type: 'budget_enforcement_failed',
+        step_name: stepName,
+        data: {
+          budget: 'max_spend_usd',
+          reason: 'child_cost_unreported',
+          child_run_id: costEnforcementFailure.childRunId,
+          refused_children: costEnforcementRefusals,
+        },
+      })
+      .catch((err: Error) => {
+        getLog().error(
+          { err, workflowRunId: parentRun.id, eventType: 'budget_enforcement_failed' },
+          'workflow_event_persist_failed'
+        );
+      });
+    await notify(`⛔ **Fan-out blocked** (node \`${node.id}\`): ${msg}`);
+    return failResult(msg, totalCostUsd, totalTokens);
+  }
 
   // Explicit budget refusal (#1961): children the gate would not spawn fail the node
   // here, naming how many ran vs were planned — never a silent truncation of the item
@@ -9285,11 +9469,16 @@ interface RunLayersContext {
   /** Run-wide budget policy (#1961); undefined = the workflow declares no budget. */
   budget?: WorkflowBudgetPolicy;
   /**
+   * Every cost-bearing result must report finite cost. True for a run with its own
+   * spend ceiling and for a child whose parent needs a truthful rolled-up cost.
+   */
+  requireReportedCost: boolean;
+  /**
    * Shared budget ledger (#1961). Created once per executeDagWorkflow and passed
    * BY REFERENCE into loop-group body contexts, so body attempts count toward
-   * the same ceilings. `spendUsd` is only aggregated at top level (stepNamePrefix
-   * '') — body spend arrives via the loop-group node's rolled-up costUsd instead,
-   * so body cost is never counted twice.
+   * the same ceilings. Real body leaves charge spend as they settle; derived loop,
+   * loop-group, and fan-out wrapper totals are excluded from ledger aggregation so
+   * each provider-reported cost is counted exactly once.
    */
   budgetLedger?: RunBudgetLedger;
   /** Prefix prepended to every persisted `step_name` ('' for top-level, '{groupId}.' for a loop_group body). */
@@ -9480,11 +9669,6 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
   // identity retains the complete outermost-to-innermost lineage.
   const iteration = loopGroupPath.at(-1)?.iteration;
   // nodeOutputs + accumulators + lastSequentialSession are mutated in place on `ctx`.
-  // Charges one work unit per started node attempt (#1961) — invoked beside each
-  // node_started write by the node executors.
-  const chargeWorkUnit = (): void => {
-    if (ctx.budgetLedger !== undefined) ctx.budgetLedger.workUnits++;
-  };
 
   for (let layerIdx = 0; layerIdx < layers.length; layerIdx++) {
     const layer = layers[layerIdx];
@@ -9504,6 +9688,8 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
     const nodeThunks = layer.map(
       (node): (() => Promise<LayerNodeResult>) =>
         async (): Promise<LayerNodeResult> => {
+          const chargeWorkUnit = (): Promise<void> =>
+            chargeBudgetWorkUnit(ctx, node.id, 'node_attempt');
           try {
             // Include nodes are expanded away at discovery time (include-expander.ts): one
             // must never reach the executor. This guard is FIRST in the per-node body — before
@@ -10060,7 +10246,10 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                   resolvedLoopEffort,
                   checkpointSessionForProvider(loopProvider),
                   ctx.workflowSourceRoots,
-                  chargeWorkUnit
+                  chargeWorkUnit,
+                  ctx.budget,
+                  ctx.budgetLedger,
+                  ctx.requireReportedCost
                 );
                 // Loop nodes run every iteration on the same resolved provider, so the
                 // result session (if any) is attributable to loopProvider — tag it so a
@@ -10119,7 +10308,8 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                   ctx.runChildWorkflow,
                   ctx.workflowSourceRoots,
                   ctx.budget,
-                  ctx.budgetLedger
+                  ctx.budgetLedger,
+                  ctx.requireReportedCost
                 );
                 return { nodeId: node.id, output };
               }
@@ -10151,9 +10341,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                   iteration,
                   execContext,
                   ctx.workflowSourceRoots,
-                  () => {
-                    if (ctx.budgetLedger !== undefined) ctx.budgetLedger.workUnits++;
-                  }
+                  chargeWorkUnit
                 );
                 return { nodeId: node.id, output };
               }
@@ -10461,6 +10649,40 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               stepNamePrefix + node.id
             );
 
+            if (
+              ctx.requireReportedCost &&
+              output.state === 'completed' &&
+              (output.costUsd === undefined || !Number.isFinite(output.costUsd))
+            ) {
+              const stepName = stepNamePrefix + node.id;
+              const error = await reportUnenforceableSpend(
+                deps,
+                platform,
+                conversationId,
+                workflowRun.id,
+                stepName,
+                provider
+              );
+              deps.store
+                .createWorkflowEvent({
+                  workflow_run_id: workflowRun.id,
+                  event_type: 'node_failed',
+                  step_name: stepName,
+                  data: { error },
+                })
+                .catch((err: Error) => {
+                  getLog().error(
+                    { err, workflowRunId: workflowRun.id, eventType: 'node_failed' },
+                    'workflow_event_persist_failed'
+                  );
+                });
+              return {
+                nodeId: node.id,
+                output: { state: 'failed', output: output.output, error },
+                sessionProvider: provider,
+              };
+            }
+
             // Cold-resume surfacing: this node requested a session resume but the
             // provider reported it came back cold (resumed === false) — the prior
             // context is gone. Every provider's cold fallback is already a clean
@@ -10604,6 +10826,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
     for (const result of layerResults) {
       if (result.status === 'fulfilled') {
         const { nodeId, output, sessionProvider } = result.value;
+        const completedNode = nodeById.get(nodeId);
         // SINGLE aggregation point for run-level usage telemetry. Per-node
         // cost/tokens must be summed here and ONLY here — adding a per-node
         // telemetry capture elsewhere would double-count against the totals
@@ -10617,10 +10840,15 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
           // costs only its own contribution.
           if (Number.isFinite(output.costUsd)) {
             ctx.totalCostUsd += output.costUsd;
-            // Budget-ledger mirror (#1961), top level only: a loop-group body shares the
-            // ledger by reference, so aggregating there too would double-count body spend
-            // (the outer rollup of the group's costUsd already carries it).
-            if (ctx.budgetLedger !== undefined && ctx.stepNamePrefix === '') {
+            // Real leaf results charge the shared ledger as soon as they settle, including
+            // namespaced loop-group body nodes. Loop and fan-out executors account their
+            // internal paid units between iterations/slots, so their wrapper totals are
+            // telemetry roll-ups only and must not charge the same spend again.
+            const isDerivedRollup =
+              completedNode?.kind === 'loop' ||
+              completedNode?.kind === 'loop_group' ||
+              (completedNode?.kind === 'workflow' && completedNode.fan_out !== undefined);
+            if (ctx.budgetLedger !== undefined && !isDerivedRollup) {
               ctx.budgetLedger.spendUsd += output.costUsd;
             }
           } else {
@@ -10652,7 +10880,6 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
         // The writer keeps top-level node paths stable and qualifies loop body
         // paths with ctx.loopGroupPath. Best-effort — a metadata write must never
         // fail an otherwise-successful node.
-        const completedNode = nodeById.get(nodeId);
         if (output.state === 'completed' && completedNode?.output_type) {
           const meta = {
             nodeId,
@@ -11267,7 +11494,9 @@ export async function executeDagWorkflow(
    * has no capture (an in-process caller with a hand-built definition); the boundary below
    * normalizes it to live roots ONCE so nothing downstream has to.
    */
-  workflowSourceRoots?: WorkflowSourceRoots
+  workflowSourceRoots?: WorkflowSourceRoots,
+  /** Require finite cost reporting without imposing a second run-local spend ceiling. */
+  requireReportedCost = false
 ): Promise<string | undefined> {
   const dagStartTime = Date.now();
 
@@ -11556,6 +11785,7 @@ export async function executeDagWorkflow(
     totalTokens: priorUsage?.tokens,
     totalLoopIterations: 0,
     budget: workflow.budget,
+    requireReportedCost: workflow.budget?.max_spend_usd !== undefined || requireReportedCost,
     budgetLedger,
     stepNamePrefix: '',
     loopGroupPath: [],
@@ -11585,8 +11815,13 @@ export async function executeDagWorkflow(
    */
   const persistRunUsage = async (): Promise<void> => {
     const usage = {
-      // No usage stays absent: a bash-only workflow must not read as a free AI run.
-      ...(runCtx.totalCostUsd > 0 ? { total_cost_usd: runCtx.totalCostUsd } : {}),
+      // Ordinarily no usage stays absent: a bash-only workflow must not read as a free
+      // AI run. A spend-governed run is the exception — explicit zero proves every
+      // cost-bearing result was measurable and lets a governed parent distinguish it
+      // from unknown child spend.
+      ...(runCtx.totalCostUsd > 0 || runCtx.requireReportedCost
+        ? { total_cost_usd: runCtx.totalCostUsd }
+        : {}),
       ...(runCtx.totalTokens !== undefined
         ? {
             total_tokens_in: runCtx.totalTokens.input,

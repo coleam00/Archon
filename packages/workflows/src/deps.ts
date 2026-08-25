@@ -137,6 +137,12 @@ export interface WorkflowDeps {
   store: IWorkflowStore;
   getAgentProvider: AgentProviderFactory;
   loadConfig: (cwd: string) => Promise<WorkflowConfig>;
+  /**
+   * Persist an event that is itself engine state and reject on failure. Ordinary
+   * timeline events stay on the non-throwing store method; budget work-unit rows
+   * use this boundary because cold resume reconstructs its ceiling from them.
+   */
+  createRequiredWorkflowEvent?: IWorkflowStore['createWorkflowEvent'];
   /** Seal a run-owned config layer before it is persisted in public run metadata. */
   sealRunConfig?: (
     layer: WorkflowRunConfigLayer,

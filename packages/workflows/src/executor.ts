@@ -704,6 +704,12 @@ export type ExecuteWorkflowOptions = ResumePayload & {
    * themselves in `withCapturedSource`.
    */
   capturedSourceOwner?: CapturedSourceOwner;
+  /**
+   * Require every cost-bearing result in this run to report finite provider cost.
+   * Child runs use this when their parent has a spend ceiling: it keeps the runs'
+   * ledgers separate while making the child's rolled-up cost truthful.
+   */
+  requireReportedCost?: boolean;
 };
 
 /**
@@ -1178,6 +1184,7 @@ async function runChildWorkflow(
     itemHash,
     resumeFailedChild,
     inputs,
+    requireReportedCost,
   } = args;
 
   // Every failure below returns a `{ status: 'failed' }` outcome (never throws);
@@ -1242,7 +1249,6 @@ async function runChildWorkflow(
   if (!childWorkflow) {
     return failOutcome(`Unknown sub-run workflow '${childWorkflowName}'.`);
   }
-
   // 2. Cycle guard + depth cap (D9), compared against the RESOLVED canonical name.
   //    The child's ancestor chain is the parent plus the parent's ancestors; a
   //    resolved target already in the chain is a cycle.
@@ -1379,10 +1385,18 @@ async function runChildWorkflow(
         childRunId = hydrated.preCreatedRun.id;
       } else {
         // Failed child with no completed nodes — flip it back to running and re-run
-        // from the top (nothing to skip).
+        // from the top (nothing to skip). Its failed attempts still consumed budget,
+        // so carry their persisted usage even though the generic top-level resume
+        // classifier correctly found no resumable node output.
+        const snapshot = await deps.store.getDagResumeSnapshot(resumeFailedChild.id);
         const preCreatedRun = await deps.store.resumeWorkflowRun(resumeFailedChild.id);
         childOpts = {
           preCreatedRun,
+          priorUsage: {
+            ...(snapshot.tokens !== undefined ? { tokens: snapshot.tokens } : {}),
+            costUsd: snapshot.costUsd,
+            workUnits: snapshot.workUnits,
+          },
           codebaseId,
           resolveChildIsolation,
           preparedSource: childSource,
@@ -1484,6 +1498,7 @@ async function runChildWorkflow(
           ...childOpts,
           capturedSourceOwner: owner,
           modelOverrideLayer: { kind: 'resolved', overrides: resolvedModelOverrides },
+          requireReportedCost,
         }
       );
     });
@@ -1765,6 +1780,7 @@ export async function executeWorkflow(
     preparedSource,
     adoptedFromRunId,
     continuationMode = 'adopt',
+    requireReportedCost = false,
   } = opts;
 
   const executionUserId = preCreatedRun ? (preCreatedRun.user_id ?? undefined) : userId;
@@ -3022,7 +3038,8 @@ export async function executeWorkflow(
         // Container runs resolve from the capture like every other run: it is bind-mounted
         // read-only at the SAME absolute path inside the container, so one source-roots
         // value means the same thing on both sides of the boundary.
-        workflowSourceRoots
+        workflowSourceRoots,
+        requireReportedCost
       )
     );
 

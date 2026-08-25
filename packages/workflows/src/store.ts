@@ -36,7 +36,7 @@ export interface DagResumeSnapshot {
   tokens?: TokenUsage;
   /** Cumulative USD cost persisted by completed and failed node attempts across prior passes. */
   costUsd: number;
-  /** Deterministic work units (`node_started` plus `work_unit_charged` rows) — the work-unit total for budget enforcement (#1961). */
+  /** Required `work_unit_charged` rows — the durable work-unit total for budget enforcement (#1961). */
   workUnits: number;
 }
 
@@ -75,8 +75,8 @@ export const WORKFLOW_EVENT_TYPES = [
   // starts with `--adopt`/`--supersedes`, so the chain renders from events alone.
   'workflow.run_adopted',
   'node_started',
-  // Run-wide work-unit budget (#1961): the persisted trace of ONE child spawn
-  // decision charged to the parent run's ledger (`data.kind: 'spawn_decision'`).
+  // Run-wide work-unit budget (#1961): the required persisted trace of one node
+  // attempt or child spawn (`data.kind: 'node_attempt' | 'spawn_decision'`).
   // getDagResumeSnapshot counts these rows back on cold resume, so the ceiling
   // survives pause/resume instead of silently loosening each cycle.
   'work_unit_charged',
@@ -139,6 +139,9 @@ export const WORKFLOW_EVENT_TYPES = [
   // budget.max_work_units) was met and new work was refused. Data carries the
   // tripped axis, the limit, the observed value, and the phase that refused.
   'budget_exhausted',
+  // A spend ceiling encountered paid work whose provider did not report a finite
+  // cost, so the engine refused to present the ceiling as enforced.
+  'budget_enforcement_failed',
   // #2213 — keys the engine dropped from this run's workflow YAML. Written by the
   // executor at run start for EVERY run that has them, whatever surface started
   // it, so the record does not depend on a chat/console notification being

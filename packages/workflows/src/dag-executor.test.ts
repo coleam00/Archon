@@ -298,6 +298,7 @@ function createMockDeps<TStore extends IWorkflowStore = MockWorkflowStore>(
   const store = storeOverride ?? createMockStore();
   return {
     store: store as TStore,
+    createRequiredWorkflowEvent: event => store.createWorkflowEvent(event),
     getAgentProvider: mockGetAgentProviderDag,
     loadConfig: mock<WorkflowDeps['loadConfig']>(async _cwd => ({
       assistant: 'claude' as const,
@@ -2641,6 +2642,85 @@ describe('executeDagWorkflow -- bash nodes', () => {
     const exhaustionData = (exhaustionEvents[0][0] as { data: Record<string, unknown> }).data;
     expect(exhaustionData).toMatchObject({ budget: 'max_spend_usd', limit: 5, current: 7.5 });
     expect(mockDeps.store.failWorkflowRun).toHaveBeenCalled();
+  });
+
+  it('fails explicitly when a paid provider omits cost under max_spend_usd (#1961)', async () => {
+    let calls = 0;
+    mockSendQueryDag.mockImplementation(async function* () {
+      calls++;
+      yield { type: 'assistant', content: 'completed without cost' };
+      yield { type: 'result', sessionId: `missing-cost-${String(calls)}` };
+    });
+    const mockDeps = createMockDeps();
+
+    await executeDagWorkflow(
+      mockDeps,
+      createMockPlatform(),
+      'conv-missing-cost',
+      testDir,
+      {
+        name: 'missing-cost-budget',
+        budget: { max_spend_usd: 1 },
+        nodes: [
+          { id: 'first', kind: 'agent', source: { kind: 'inline', prompt: 'first' } },
+          {
+            id: 'second',
+            kind: 'agent',
+            source: { kind: 'inline', prompt: 'second' },
+            depends_on: ['first'],
+          },
+        ],
+      },
+      makeWorkflowRun('missing-cost-run'),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(calls).toBe(1);
+    expect(mockDeps.store.failWorkflowRun).toHaveBeenCalled();
+    expect(
+      mockDeps.store.createWorkflowEvent.mock.calls.some(
+        ([event]) => event.event_type === 'budget_enforcement_failed'
+      )
+    ).toBe(true);
+  });
+
+  it('formats work-unit exhaustion as counts rather than dollars (#1961)', async () => {
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-budget-message',
+      testDir,
+      {
+        name: 'budget-message',
+        budget: { max_work_units: 1 },
+        nodes: [
+          { id: 'first', kind: 'exec', runtime: 'sh', script: 'true' },
+          { id: 'second', kind: 'exec', runtime: 'sh', script: 'true', depends_on: ['first'] },
+        ],
+      },
+      makeWorkflowRun('budget-message-run'),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const message = platform.sendMessage.mock.calls.map(call => String(call[1])).join('\n');
+    expect(message).toContain('limit 1 reached (1 recorded)');
+    expect(message).not.toContain('limit $1');
   });
 
   it('non-zero exit code results in failed state', async () => {
@@ -7440,6 +7520,56 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
   // ─── Loop Node Tests ─────────────────────────────────────────────────────
 
   describe('loop node execution', () => {
+    it('stops before the next iteration after spend reaches the run ceiling (#1961)', async () => {
+      let calls = 0;
+      mockSendQueryDag.mockImplementation(async function* () {
+        calls++;
+        yield { type: 'assistant', content: 'not complete' };
+        yield { type: 'result', sessionId: `loop-budget-${String(calls)}`, cost: 6 };
+      });
+      const mockDeps = createMockDeps();
+
+      await executeDagWorkflow(
+        mockDeps,
+        createMockPlatform(),
+        'conv-loop-budget',
+        testDir,
+        {
+          name: 'loop-budget',
+          budget: { max_spend_usd: 5 },
+          nodes: [
+            {
+              id: 'iterate',
+              kind: 'loop',
+              loop: {
+                prompt: 'keep working',
+                until: 'COMPLETE',
+                max_iterations: 3,
+                fresh_context: false,
+              },
+            },
+          ],
+        },
+        makeWorkflowRun('loop-budget-run'),
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'state'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      expect(calls).toBe(1);
+      expect(
+        mockDeps.store.createWorkflowEvent.mock.calls.some(
+          ([event]) => event.event_type === 'budget_exhausted' && event.step_name === 'iterate'
+        )
+      ).toBe(true);
+      expect(runUsageWrites(mockDeps.store).at(-1)?.total_cost_usd).toBe(6);
+    });
+
     it('emits a loop tool_completed duration at tool_result, excluding later assistant time', async () => {
       const store = createMockStore();
       const mockDeps = createMockDeps(store);
@@ -21824,6 +21954,64 @@ describe('executeDagWorkflow -- loop_group node', () => {
     // Single iteration, completed immediately.
     expect(calls).toBe(1);
     expect(result).toContain('done immediately');
+  });
+
+  it('stops a loop_group before the next iteration after body spend reaches the run ceiling (#1961)', async () => {
+    let calls = 0;
+    mockSendQueryDag.mockImplementation(async function* () {
+      calls++;
+      yield { type: 'assistant', content: 'not done' };
+      yield { type: 'result', sessionId: `budget-${String(calls)}`, cost: 6 };
+    });
+    const mockDeps = createMockDeps();
+
+    await executeDagWorkflow(
+      mockDeps,
+      createMockPlatform(),
+      'conv-loop-group-budget',
+      testDir,
+      {
+        name: 'loop-group-budget',
+        budget: { max_spend_usd: 5 },
+        nodes: [
+          {
+            id: 'group',
+            kind: 'loop_group',
+            loop_group: {
+              until: 'DONE',
+              max_iterations: 3,
+              fresh_context: false,
+              nodes: [
+                {
+                  id: 'work',
+                  kind: 'agent',
+                  source: { kind: 'inline', prompt: 'work' },
+                  depends_on: [],
+                },
+              ],
+            },
+            depends_on: [],
+          },
+        ],
+      },
+      makeWorkflowRun('loop-group-budget-run'),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(calls).toBe(1);
+    expect(
+      mockDeps.store.createWorkflowEvent.mock.calls.some(
+        ([event]) => event.event_type === 'budget_exhausted' && event.step_name === 'group.work'
+      )
+    ).toBe(true);
+    expect(runUsageWrites(mockDeps.store).at(-1)?.total_cost_usd).toBe(6);
   });
 
   // --- Edge cases ---

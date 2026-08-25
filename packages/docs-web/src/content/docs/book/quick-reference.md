@@ -112,6 +112,7 @@ archon workflow run my-workflow "auth refresh-tokens"
 | `effort` | No | string | Reasoning depth on any provider that has one; also a node field: `minimal` \| `low` \| `medium` \| `high` \| `xhigh` \| `max` |
 | `modelReasoningEffort` | No | string | **Deprecated** — translated into `effort` at load (dropped if `effort` is also declared), with a warning: `minimal` \| `low` \| `medium` \| `high` \| `xhigh` |
 | `webSearchMode` | No | string | Codex only, no per-node form. Gates Codex's built-in search tool, not network access: `disabled` \| `cached` \| `live` |
+| `budget` | No | object | Run-wide consumption limits: `max_spend_usd` (positive number) and/or `max_work_units` (positive integer). These bound total work, not concurrency. Exhaustion fails explicitly before new governed work starts; already-running parallel work may finish. A provider that omits cost cannot satisfy `max_spend_usd`, so the run fails rather than treating unknown spend as zero. |
 
 ### Node Options (DAG)
 
