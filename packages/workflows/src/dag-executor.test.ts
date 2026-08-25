@@ -2459,6 +2459,67 @@ describe('executeDagWorkflow -- bash nodes', () => {
     );
   });
 
+  it('a child spawn decision persists a work_unit_charged audit row (#1961 R1)', async () => {
+    // The live charge alone is not enough: getDagResumeSnapshot reconstructs the
+    // work-unit ceiling from the event log on cold resume, so a spawn charge with no
+    // persisted row silently loosens max_work_units across every pause/resume cycle.
+    const store = createMockStore();
+    store.findChildRuns = mock(() => Promise.resolve([]));
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('spawn-charge-run', {
+      workflow_name: 'spawn-charge-test',
+      conversation_id: 'conv-spawn-charge',
+      user_message: 'spawn charge test message',
+    });
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-spawn-charge',
+      testDir,
+      {
+        name: 'spawn-charge',
+        nodes: [{ id: 'sub', kind: 'workflow', workflow: 'child-wf' } as DagNode],
+        budget: { max_work_units: 5 },
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      async () => ({
+        childRunId: 'child-run-id',
+        status: 'completed' as const,
+        output: 'child done',
+      })
+    );
+
+    const chargedEvents = store.createWorkflowEvent.mock.calls.filter(
+      call => (call[0] as { event_type: string }).event_type === 'work_unit_charged'
+    );
+    expect(chargedEvents.length).toBe(1);
+    expect(chargedEvents[0][0]).toMatchObject({
+      workflow_run_id: workflowRun.id,
+      event_type: 'work_unit_charged',
+      step_name: 'sub',
+      data: { kind: 'spawn_decision' },
+    });
+  });
+
   it('a resumed run whose spend already exceeds the ceiling refuses before any node (#1961)', async () => {
     const mockDeps = createMockDeps();
     const platform = createMockPlatform();

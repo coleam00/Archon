@@ -261,19 +261,25 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<{
   tokens?: TokenUsage;
   costUsd: number;
   /**
-   * Count of started node attempts (`node_started` rows) — the deterministic work-unit
-   * total the run-wide budget ceiling (#1961) is checked against on resume. Every attempt
-   * writes exactly one row, so this is reconstructible from the audit log by construction.
+   * Count of deterministic work units (`node_started` rows plus `work_unit_charged`
+   * spawn-decision rows) — the total the run-wide budget ceiling (#1961) is checked
+   * against on resume. Every unit writes exactly one row, so this is reconstructible
+   * from the audit log by construction.
    */
   workUnits: number;
 }> {
   const result = await pool.query<{
     step_name: string | null;
-    event_type: 'node_completed' | 'node_failed' | 'node_skipped_prior_success' | 'node_started';
+    event_type:
+      | 'node_completed'
+      | 'node_failed'
+      | 'node_skipped_prior_success'
+      | 'node_started'
+      | 'work_unit_charged';
     data: string | Record<string, unknown>;
   }>(
     `SELECT step_name, event_type, data FROM remote_agent_workflow_events
-     WHERE workflow_run_id = $1 AND event_type IN ('node_completed', 'node_failed', 'node_skipped_prior_success', 'node_started')
+     WHERE workflow_run_id = $1 AND event_type IN ('node_completed', 'node_failed', 'node_skipped_prior_success', 'node_started', 'work_unit_charged')
      ORDER BY created_at ASC, COALESCE(event_order, 0) ASC, id ASC`,
     [workflowRunId]
   );
@@ -295,8 +301,10 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<{
       );
       continue;
     }
-    if (row.event_type === 'node_started') {
+    if (row.event_type === 'node_started' || row.event_type === 'work_unit_charged') {
       // Counted for the run-wide work-unit budget (#1961); carries no output or usage.
+      // `work_unit_charged` rows are the persisted trace of a child spawn decision,
+      // charged live beside the node attempt rows.
       workUnits++;
       continue;
     }

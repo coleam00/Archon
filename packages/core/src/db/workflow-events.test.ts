@@ -271,6 +271,27 @@ describe('workflow-events', () => {
       expect(result.costUsd).toBeCloseTo(0.01);
     });
 
+    test('counts work_unit_charged spawn-decision rows as one work unit each (#1961 R1)', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          {
+            step_name: 'sub',
+            event_type: 'work_unit_charged',
+            data: { kind: 'spawn_decision' },
+          },
+          {
+            step_name: 'solo',
+            event_type: 'node_started',
+            data: { provider: 'claude' },
+          },
+        ])
+      );
+
+      const result = await getDagResumeSnapshot('run-123');
+
+      expect(result.workUnits).toBe(2);
+    });
+
     test('carries structured_output back out; rows without it stay text-only (#2637)', async () => {
       mockQuery.mockResolvedValueOnce(
         createQueryResult([

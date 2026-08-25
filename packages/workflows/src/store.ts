@@ -36,7 +36,7 @@ export interface DagResumeSnapshot {
   tokens?: TokenUsage;
   /** Cumulative USD cost persisted by completed and failed node attempts across prior passes. */
   costUsd: number;
-  /** Started node attempts (`node_started` rows) — the work-unit total for budget enforcement (#1961). */
+  /** Deterministic work units (`node_started` plus `work_unit_charged` rows) — the work-unit total for budget enforcement (#1961). */
   workUnits: number;
 }
 
@@ -75,6 +75,11 @@ export const WORKFLOW_EVENT_TYPES = [
   // starts with `--adopt`/`--supersedes`, so the chain renders from events alone.
   'workflow.run_adopted',
   'node_started',
+  // Run-wide work-unit budget (#1961): the persisted trace of ONE child spawn
+  // decision charged to the parent run's ledger (`data.kind: 'spawn_decision'`).
+  // getDagResumeSnapshot counts these rows back on cold resume, so the ceiling
+  // survives pause/resume instead of silently loosening each cycle.
+  'work_unit_charged',
   'node_completed',
   'node_failed',
   'node_skipped',

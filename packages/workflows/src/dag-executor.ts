@@ -783,7 +783,8 @@ export interface PriorRunUsage {
  * passed BY REFERENCE into loop-group body contexts and child-spawn drivers so
  * every attempt and spawn counts toward one ceiling. `spendUsd` is seeded from
  * prior usage on resume; `workUnits` counts node attempts (one `node_started`
- * audit row each), so a cold resume reconstructs both from the event log.
+ * audit row each) and spawn decisions (one `work_unit_charged` audit row each),
+ * so a cold resume reconstructs both from the event log.
  */
 export interface RunBudgetLedger {
   spendUsd: number;
@@ -824,9 +825,29 @@ function describeBudgetExhaustion(e: BudgetExhaustion): string {
   );
 }
 
-/** Charge one work unit to the run's shared ledger when one exists (#1961). */
-function chargeBudgetWorkUnit(ctx: RunLayersContext): void {
-  if (ctx.budgetLedger !== undefined) ctx.budgetLedger.workUnits++;
+/**
+ * Charge one work unit to the run's shared ledger when one exists (#1961), and
+ * persist a matching `work_unit_charged` audit row so the charge is reconstructible
+ * from the event log on cold resume (`getDagResumeSnapshot` counts these rows back).
+ * Without the persisted trace, a spawn decision charged live only would vanish across
+ * pause/resume and silently loosen the `max_work_units` ceiling each cycle.
+ */
+function chargeBudgetWorkUnit(ctx: RunLayersContext, nodeId: string): void {
+  if (ctx.budgetLedger === undefined) return;
+  ctx.budgetLedger.workUnits++;
+  ctx.deps.store
+    .createWorkflowEvent({
+      workflow_run_id: ctx.workflowRun.id,
+      event_type: 'work_unit_charged',
+      step_name: ctx.stepNamePrefix + nodeId,
+      data: { kind: 'spawn_decision' },
+    })
+    .catch((err: Error) => {
+      getLog().error(
+        { err, workflowRunId: ctx.workflowRun.id, eventType: 'work_unit_charged' },
+        'workflow.event_persist_failed'
+      );
+    });
 }
 
 /** Terminal (or paused) outcome of a child sub-run, as consumed by a `workflow:` node. */
@@ -7414,7 +7435,9 @@ async function executeApprovalNode(
   iteration?: number,
   execContext: ExecutionContext = { kind: 'host' },
   /** Forwarded to the synthetic `on_reject` node; see RunLayersContext. */
-  workflowSourceRoots?: WorkflowSourceRoots
+  workflowSourceRoots?: WorkflowSourceRoots,
+  /** Invoked beside the synthetic `on_reject` node's `node_started` write (#1961). */
+  chargeWorkUnit?: () => void
 ): Promise<NodeOutput> {
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
   // Namespaced persisted step_name for loop_group bodies ('' → node.id at top level, #2090).
@@ -7556,7 +7579,8 @@ async function executeApprovalNode(
       stepNamePrefix,
       iteration,
       undefined, // synthetic on_reject node never carries a session checkpoint
-      workflowSourceRoots
+      workflowSourceRoots,
+      chargeWorkUnit
     );
 
     if (output.state === 'failed') {
@@ -8005,12 +8029,12 @@ async function executeWorkflowNode(
     if (existing === undefined) {
       // One work unit per spawn decision (#1961): the child's own attempts are its
       // own run's ledger; the parent charges the decision to start it.
-      chargeBudgetWorkUnit(ctx);
+      chargeBudgetWorkUnit(ctx, node.id);
       return await interpret(await ctx.runChildWorkflow(childArgs));
     }
     if (existing.status === 'failed') {
       // Resume-through-parent recovery (D5/#1764): re-drive the failed child once.
-      chargeBudgetWorkUnit(ctx);
+      chargeBudgetWorkUnit(ctx, node.id);
       return await interpret(
         await ctx.runChildWorkflow({ ...childArgs, resumeFailedChild: existing })
       );
@@ -8722,7 +8746,7 @@ async function executeFanOutWorkflowNode(
         };
       }
       // One parent work unit per spawned/re-driven child (#1961).
-      chargeBudgetWorkUnit(ctx);
+      chargeBudgetWorkUnit(ctx, node.id);
       const input = itemToInput(item);
       // Per-child $INPUTS (#2470): the static `with:` map plus the per-item `fan_out.as`
       // channel (the item value under `$INPUTS.<as>`). `as` is load-time guaranteed not to
@@ -10019,7 +10043,10 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                   stepNamePrefix,
                   iteration,
                   execContext,
-                  ctx.workflowSourceRoots
+                  ctx.workflowSourceRoots,
+                  () => {
+                    if (ctx.budgetLedger !== undefined) ctx.budgetLedger.workUnits++;
+                  }
                 );
                 return { nodeId: node.id, output };
               }

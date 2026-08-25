@@ -154,7 +154,8 @@ export const workflowBudgetPolicySchema = z.object({
   max_spend_usd: z.number().positive().optional(),
   /**
    * Run-wide ceiling on deterministic work units. One unit = one started node
-   * attempt (one `node_started` audit row), so retries count, and the count is
+   * attempt (one `node_started` audit row) or one child spawn decision (one
+   * `work_unit_charged` audit row), so retries count, and the count is
    * reconstructible from the event log across cold resume.
    */
   max_work_units: z.number().int().positive().optional(),
