@@ -52,20 +52,31 @@ export const FATAL_PATTERNS = [
 /** Ambiguous fatal patterns that yield to concrete transient evidence. */
 const FALLBACK_FATAL_PATTERNS = ['auth error'];
 
+/**
+ * Rate/concurrency pressure (429, provider overload) — a subset of TRANSIENT that
+ * sheds load on a minutes-scale window, so it earns its own patient backoff policy
+ * (see {@link getRetryDelayMs}) instead of the generic short exponential one (#2706).
+ * Defined first so {@link TRANSIENT_PATTERNS} derives from it: a pattern can never
+ * widen the rate-limit budget while classifyError treats it as non-transient.
+ */
+export const RATE_LIMIT_PATTERNS = [
+  '429',
+  'rate limit',
+  'too many requests',
+  'overloaded', // Anthropic/Minimax overload message text
+  'at capacity', // Codex/OpenAI model-level saturation
+] as const;
+
 /** Transient error patterns - temporary issues that may resolve with retry */
 export const TRANSIENT_PATTERNS = [
   'timeout',
   'econnrefused',
   'econnreset',
   'etimedout',
-  'rate limit',
-  'too many requests',
-  '429',
+  ...RATE_LIMIT_PATTERNS,
   '503',
   '502',
   '529', // Anthropic HTTP 529 = service overloaded
-  'overloaded', // Anthropic/Minimax overload message text
-  'at capacity', // Codex/OpenAI model-level saturation
   'network error',
   'stream closed without yielding content', // empty provider stream (#2706): silent rejection or interruption, not a node defect
   'socket hang up',
@@ -101,19 +112,6 @@ export function classifyError(error: Error): ErrorType {
   }
   return 'UNKNOWN';
 }
-
-/**
- * Rate/concurrency pressure (429, provider overload) — a subset of TRANSIENT that
- * sheds load on a minutes-scale window, so it earns its own patient backoff policy
- * (see {@link getRetryDelayMs}) instead of the generic short exponential one (#2706).
- */
-export const RATE_LIMIT_PATTERNS = [
-  '429',
-  'rate limit',
-  'too many requests',
-  'overloaded',
-  'at capacity',
-] as const;
 
 /** Retry budget for rate-limited failures, replacing the node's own maxRetries when one is seen. */
 export const RATE_LIMIT_MAX_RETRIES = 5;

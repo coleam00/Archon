@@ -33,7 +33,9 @@ import {
   extractQuotaResetAt,
   getRetryDelayMs,
   isRateLimitError,
+  RATE_LIMIT_PATTERNS,
   RATE_LIMIT_RETRY_DELAY_MS,
+  TRANSIENT_PATTERNS,
   toTelemetryErrorClass,
   safeSendMessage,
   type UnknownErrorTracker,
@@ -818,6 +820,12 @@ describe('formatSubprocessFailure', () => {
 });
 
 describe('classifyError', () => {
+  it('keeps every rate-limit pattern inside TRANSIENT so the widened budget stays reachable', () => {
+    for (const pattern of RATE_LIMIT_PATTERNS) {
+      expect(TRANSIENT_PATTERNS).toContain(pattern);
+    }
+  });
+
   it('classifies 429 as TRANSIENT', () => {
     expect(classifyError(new Error('rate limit: 429 too many requests'))).toBe('TRANSIENT');
   });
