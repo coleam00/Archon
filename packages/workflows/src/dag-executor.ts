@@ -991,7 +991,13 @@ function createProviderQueryContext(
         workflow_run_id: workflowRunId,
         event_type: 'provider_slot_queued',
         step_name: identity.stepName,
-        data: { provider, limit, ...data },
+        data: {
+          provider,
+          limit,
+          node_id: identity.nodeId,
+          node_name: identity.nodeName,
+          ...data,
+        },
       });
     },
     onAcquired: ({ provider, limit, slot, waitMs }): void => {
@@ -1009,11 +1015,19 @@ function createProviderQueryContext(
         workflow_run_id: workflowRunId,
         event_type: 'provider_slot_acquired',
         step_name: identity.stepName,
-        data: { provider, limit, slot, wait_ms: waitMs, ...data },
+        data: {
+          provider,
+          limit,
+          slot,
+          wait_ms: waitMs,
+          node_id: identity.nodeId,
+          node_name: identity.nodeName,
+          ...data,
+        },
       });
     },
     onWaiting,
-    shouldContinue: async (): Promise<boolean> => {
+    shouldContinue: async (): Promise<boolean | undefined> => {
       try {
         const status = await deps.store.getWorkflowRunStatus(workflowRunId);
         return shouldContinueStreamingForStatus(status);
@@ -1022,7 +1036,7 @@ function createProviderQueryContext(
           { err: error as Error, workflowRunId, stepName: identity.stepName },
           'provider_concurrency.status_check_failed'
         );
-        return true;
+        return undefined;
       }
     },
   };

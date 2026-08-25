@@ -1,7 +1,7 @@
 import { createLogger } from '@archon/paths';
-import type { AdmissionCapableAgentProvider, IAgentProvider } from '@archon/providers/types';
+import type { IAgentProvider } from '@archon/providers/types';
 import type { ProviderQueryRequest, ProviderQueryRunner } from '@archon/workflows/deps';
-import { loadConfig } from '../config/config-loader';
+import { loadProviderConcurrencyLimits } from '../config/config-loader';
 import { getDatabase } from '../db/connection';
 import { ProviderConcurrencyGate } from '../db/provider-concurrency';
 
@@ -16,8 +16,8 @@ export interface ProviderQueryRunnerDeps {
   loadLimits: () => Promise<Record<string, number>>;
 }
 
-function supportsAdmission(client: IAgentProvider): client is AdmissionCapableAgentProvider {
-  return 'sendQueryWithAdmission' in client && typeof client.sendQueryWithAdmission === 'function';
+function supportsAdmission(client: IAgentProvider): boolean {
+  return client.supportsProviderAttemptGate === true;
 }
 
 export function createProviderQueryRunner(deps: ProviderQueryRunnerDeps): ProviderQueryRunner {
@@ -42,6 +42,7 @@ export function createProviderQueryRunner(deps: ProviderQueryRunnerDeps): Provid
       );
     }
 
+    let queuedAttempts = 0;
     const options = {
       ...request.options,
       providerAttemptGate: {
@@ -51,17 +52,24 @@ export function createProviderQueryRunner(deps: ProviderQueryRunnerDeps): Provid
               request.options?.abortSignal && attemptSignal
                 ? AbortSignal.any([request.options.abortSignal, attemptSignal])
                 : (request.options?.abortSignal ?? attemptSignal),
-            observer: request.context,
+            observer: request.context
+              ? {
+                  onQueued: (event): void => {
+                    queuedAttempts += 1;
+                    if (queuedAttempts === 1) request.context?.onQueued?.(event);
+                  },
+                  onWaiting: request.context.onWaiting,
+                  onAcquired: (event): void => {
+                    queuedAttempts = Math.max(0, queuedAttempts - 1);
+                    if (queuedAttempts === 0) request.context?.onAcquired?.(event);
+                  },
+                }
+              : undefined,
             shouldContinue: request.context?.shouldContinue,
           }),
       },
     };
-    yield* request.client.sendQueryWithAdmission(
-      request.prompt,
-      request.cwd,
-      request.resumeSessionId,
-      options
-    );
+    yield* request.client.sendQuery(request.prompt, request.cwd, request.resumeSessionId, options);
   };
 }
 
@@ -73,12 +81,11 @@ function getSharedGate(): ProviderConcurrencyGate {
 
 export const runProviderQuery: ProviderQueryRunner = createProviderQueryRunner({
   acquire: (provider, limit, options) => getSharedGate().acquire(provider, limit, options),
-  loadLimits: async () => {
+  loadLimits: async (): Promise<Record<string, number>> => {
     try {
-      return (await loadConfig()).concurrency?.providers ?? {};
+      return await loadProviderConcurrencyLimits();
     } catch (error) {
-      // A configured cap must fail closed if its policy cannot be loaded. loadConfig
-      // already tolerates ordinary missing/invalid files, so this is an unexpected fault.
+      // A configured cap must fail closed if its policy cannot be loaded.
       getLog().error({ err: error as Error }, 'provider_concurrency.config_load_failed');
       throw error;
     }

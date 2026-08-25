@@ -1245,8 +1245,10 @@ describe('ClaudeProvider', () => {
 
     test('recovers from transient crash on retry', async () => {
       let callCount = 0;
+      const admissionOrder: string[] = [];
       mockQuery.mockImplementation(async function* () {
         callCount++;
+        admissionOrder.push(`start-${callCount}`);
         if (callCount <= 2) {
           throw new Error('process exited with code 1');
         }
@@ -1257,7 +1259,20 @@ describe('ClaudeProvider', () => {
       });
 
       const chunks = [];
-      for await (const chunk of client.sendQuery('test', '/workspace')) {
+      for await (const chunk of client.sendQuery('test', '/workspace', undefined, {
+        providerAttemptGate: {
+          acquire: async () => {
+            const attempt = callCount + 1;
+            admissionOrder.push(`acquire-${attempt}`);
+            return {
+              signal: new AbortController().signal,
+              release: async () => {
+                admissionOrder.push(`release-${attempt}`);
+              },
+            };
+          },
+        },
+      })) {
         chunks.push(chunk);
       }
 
@@ -1265,6 +1280,17 @@ describe('ClaudeProvider', () => {
       expect(callCount).toBe(3);
       expect(chunks).toHaveLength(1);
       expect(chunks[0]).toEqual({ type: 'assistant', content: 'Recovered!' });
+      expect(admissionOrder).toEqual([
+        'acquire-1',
+        'start-1',
+        'release-1',
+        'acquire-2',
+        'start-2',
+        'release-2',
+        'acquire-3',
+        'start-3',
+        'release-3',
+      ]);
     }, 5_000);
 
     test('classifies auth errors as fatal (no retry)', async () => {

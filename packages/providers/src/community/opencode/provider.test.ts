@@ -527,7 +527,7 @@ describe('OpencodeProvider', () => {
     };
 
     const { error } = await consume(
-      new OpencodeProvider().sendQueryWithAdmission('hi', cwd, undefined, {
+      new OpencodeProvider().sendQuery('hi', cwd, undefined, {
         assistantConfig: TEST_MODEL,
         nodeConfig: {
           nodeId: 'research',
@@ -544,6 +544,60 @@ describe('OpencodeProvider', () => {
     expect(runtime.client.session.promptAsync).toHaveBeenCalledTimes(2);
     expect(maxActive).toBe(1);
     expect(active).toBe(0);
+    expect(releases).toBe(2);
+  });
+
+  test('multi-agent fan-out aborts siblings and releases every lease on ownership loss', async () => {
+    const cwd = await createTempProjectDir();
+    const sessionIds = ['scout-session', 'reviewer-session'];
+    const events = createPushStream();
+    const leaseControllers = [new AbortController(), new AbortController()];
+    let promptCalls = 0;
+    const sessionAbort = mock(async () => undefined);
+    const runtime = makeRuntime({
+      sessionCreate: mock(async () => ({ data: { id: sessionIds.shift() } })),
+      promptAsync: mock(async () => {
+        promptCalls += 1;
+        if (promptCalls === 2) leaseControllers[0]?.abort(new Error('lease ownership lost'));
+      }),
+      sessionAbort,
+      subscribe: mock(async () => ({ stream: events.stream })),
+    });
+    runtimeQueue.push(runtime);
+
+    let acquireCalls = 0;
+    let releases = 0;
+    const { error } = await consume(
+      new OpencodeProvider().sendQuery('hi', cwd, undefined, {
+        assistantConfig: TEST_MODEL,
+        nodeConfig: {
+          nodeId: 'research',
+          agents: {
+            scout: { description: 'Scout', prompt: 'Explore' },
+            reviewer: { description: 'Reviewer', prompt: 'Review' },
+          },
+        },
+        providerAttemptGate: {
+          acquire: async () => {
+            const controller = leaseControllers[acquireCalls];
+            acquireCalls += 1;
+            if (!controller) throw new Error('unexpected admission');
+            let released = false;
+            return {
+              signal: controller.signal,
+              release: async () => {
+                if (released) return;
+                released = true;
+                releases += 1;
+              },
+            };
+          },
+        },
+      })
+    );
+
+    expect(error?.message).toContain('lease ownership lost');
+    expect(sessionAbort).toHaveBeenCalledTimes(2);
     expect(releases).toBe(2);
   });
 
@@ -756,12 +810,18 @@ describe('OpencodeProvider', () => {
   });
 
   test('rate limit errors are classified as retryable and retried', async () => {
+    const admissionOrder: string[] = [];
     const retryRuntime = makeRuntime({
       promptAsync: mock(async () => {
+        admissionOrder.push('start-1');
         throw new Error('429 rate limit exceeded');
       }),
     });
-    const successRuntime = makeRuntime();
+    const successRuntime = makeRuntime({
+      promptAsync: mock(async () => {
+        admissionOrder.push('start-2');
+      }),
+    });
     runtimeQueue.push(retryRuntime, successRuntime);
     scriptedEvents = [
       {
@@ -773,6 +833,18 @@ describe('OpencodeProvider', () => {
     const { chunks, error } = await consume(
       new OpencodeProvider({ retryBaseDelayMs: 1 }).sendQuery('hi', '/tmp', undefined, {
         assistantConfig: TEST_MODEL,
+        providerAttemptGate: {
+          acquire: async () => {
+            const attempt = admissionOrder.filter(entry => entry.startsWith('acquire')).length + 1;
+            admissionOrder.push(`acquire-${attempt}`);
+            return {
+              signal: new AbortController().signal,
+              release: async () => {
+                admissionOrder.push(`release-${attempt}`);
+              },
+            };
+          },
+        },
       })
     );
 
@@ -783,6 +855,14 @@ describe('OpencodeProvider', () => {
       { attempt: 0, delayMs: 1, errorClass: 'rate_limit' },
       'opencode.retrying_query'
     );
+    expect(admissionOrder).toEqual([
+      'acquire-1',
+      'start-1',
+      'release-1',
+      'acquire-2',
+      'start-2',
+      'release-2',
+    ]);
   });
 
   test('retries a structured 429 from the single-agent session stream', async () => {
@@ -864,6 +944,67 @@ describe('OpencodeProvider', () => {
             reviewer: { description: 'Reviewer', prompt: 'Review' },
           },
         },
+      })
+    );
+
+    expect(error).toBeUndefined();
+    expect(mockCreateOpencode).toHaveBeenCalledTimes(2);
+    expect(mockLogger.info).toHaveBeenCalledWith(
+      { attempt: 0, delayMs: 1, errorClass: 'rate_limit' },
+      'opencode.retrying_query'
+    );
+  });
+
+  test('keeps the upstream fan-out error when aborting a queued sibling', async () => {
+    const cwd = await createTempProjectDir();
+    const retrySessionIds = ['scout-session', 'reviewer-session'];
+    const retryRuntime = makeRuntime({
+      sessionCreate: mock(async () => ({ data: { id: retrySessionIds.shift() } })),
+      promptAsync: mock(async () => {
+        throw new Error('rate limit from upstream');
+      }),
+    });
+    const successSessionIds = ['scout-session', 'reviewer-session'];
+    const successRuntime = makeRuntime({
+      sessionCreate: mock(async () => ({ data: { id: successSessionIds.shift() } })),
+      subscribe: mock(async () => ({
+        stream: createEventStream([
+          { type: 'session.idle', properties: { sessionID: 'scout-session' } },
+          { type: 'session.idle', properties: { sessionID: 'reviewer-session' } },
+        ]),
+      })),
+    });
+    runtimeQueue.push(retryRuntime, successRuntime);
+
+    let acquireCalls = 0;
+    const gate = {
+      acquire: async (signal?: AbortSignal) => {
+        acquireCalls += 1;
+        if (acquireCalls === 2) {
+          await new Promise<void>((_resolve, reject) => {
+            signal?.addEventListener('abort', () => reject(new Error('queued sibling aborted')), {
+              once: true,
+            });
+          });
+        }
+        return {
+          signal: new AbortController().signal,
+          release: async (): Promise<void> => undefined,
+        };
+      },
+    };
+
+    const { error } = await consume(
+      new OpencodeProvider({ retryBaseDelayMs: 1 }).sendQuery('hi', cwd, undefined, {
+        assistantConfig: TEST_MODEL,
+        nodeConfig: {
+          nodeId: 'research',
+          agents: {
+            scout: { description: 'Scout', prompt: 'Explore' },
+            reviewer: { description: 'Reviewer', prompt: 'Review' },
+          },
+        },
+        providerAttemptGate: gate,
       })
     );
 

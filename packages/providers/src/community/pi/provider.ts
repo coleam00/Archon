@@ -10,7 +10,7 @@ import type { DefaultResourceLoader, ModelRuntime } from '@earendil-works/pi-cod
 import type { AssistantMessageEvent } from '@earendil-works/pi-ai';
 
 import type {
-  AdmissionCapableAgentProvider,
+  IAgentProvider,
   MessageChunk,
   ProviderCapabilities,
   ProviderAttemptGate,
@@ -279,17 +279,8 @@ Guidelines:
  * coding-agent harness. Each `sendQuery()` call creates a fresh session
  * (no reuse) so concurrent calls don't collide.
  */
-export class PiProvider implements AdmissionCapableAgentProvider {
-  async *sendQueryWithAdmission(
-    prompt: string,
-    cwd: string,
-    resumeSessionId: string | undefined,
-    options: SendQueryOptions & {
-      providerAttemptGate: NonNullable<SendQueryOptions['providerAttemptGate']>;
-    }
-  ): AsyncGenerator<MessageChunk> {
-    yield* this.sendQuery(prompt, cwd, resumeSessionId, options);
-  }
+export class PiProvider implements IAgentProvider {
+  readonly supportsProviderAttemptGate = true;
 
   async *sendQuery(
     prompt: string,

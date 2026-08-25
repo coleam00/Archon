@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { createLogger } from '@archon/paths';
 
 import type {
-  AdmissionCapableAgentProvider,
+  IAgentProvider,
   MessageChunk,
   ProviderCapabilities,
   SendQueryOptions,
@@ -41,17 +41,8 @@ function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-export class OpencodeProvider implements AdmissionCapableAgentProvider {
-  async *sendQueryWithAdmission(
-    prompt: string,
-    cwd: string,
-    resumeSessionId: string | undefined,
-    options: SendQueryOptions & {
-      providerAttemptGate: NonNullable<SendQueryOptions['providerAttemptGate']>;
-    }
-  ): AsyncGenerator<MessageChunk> {
-    yield* this.sendQuery(prompt, cwd, resumeSessionId, options);
-  }
+export class OpencodeProvider implements IAgentProvider {
+  readonly supportsProviderAttemptGate = true;
 
   private readonly retryBaseDelayMs: number;
 

@@ -241,13 +241,14 @@ are more current than any tree drawn here.
 
 ### Database Schema
 
-**20 Tables (all prefixed with `remote_agent_`):**
+**21 Tables (all prefixed with `remote_agent_`):**
 1. **`codebases`** - Repository/project metadata and commands (JSONB); `kind` (`'repo'`/`'folder'`, default `'repo'`) discriminates git repos from **folder projects** (non-git workspaces — multi-repo roots or plain ops folders — that run in place with named `_folder/<slug>/` storage; `repository_url`/`default_branch` are null)
 2. **`conversations`** - Track platform conversations with titles and soft-delete support; nullable `user_id` records first creator (provenance + execution-identity **fallback** only — chat turns execute as the message sender, #1982)
 3. **`sessions`** - Track AI SDK sessions with resume capability
 4. **`isolation_environments`** - Isolation tracking (git worktrees AND folder-project containers — `provider` is `'worktree'`/`'container'`; container rows use a `''` `branch_name` sentinel and store `{containerId, volume, image, overlayMode, …}` in `metadata`); nullable `created_by_user_id` preserves first creator
 5. **`workflow_runs`** - Workflow execution tracking and state; nullable `user_id` for per-run attribution; nullable `parent_run_id` (self-referential FK, `ON DELETE SET NULL`) links a `workflow:` sub-run to the parent run that spawned it (#2121 Phase 2); nullable `output_root` records the resolved `~/.archon/workspaces/<project>/` this run's artifacts, logs, and state live under, written ONCE at run start (never on resume) so historical artifacts stay addressable across a codebase rename (#2200/#1192) — readers prefer it and re-derive identity only when it is NULL
 6. **`workflow_events`** - Step-level workflow event log (step transitions, artifacts, errors)
+6b. **`provider_slots`** - Renewable install-wide provider admission leases; keyed by `(provider_id, slot_index)` and reclaimed after expiry
 7. **`messages`** - Conversation message history with tool call metadata (JSONB); nullable `user_id` (NULL for assistant rows). Split write-path: the **web** adapter persists its own turns via `MessagePersistence`; the **orchestrator** persists non-web turns (Slack/Telegram/GitHub/Discord/CLI) fire-and-forget, guarded by `isWebAdapter` to avoid double-writing web turns — only AI-bound turns get a user row (deterministic-command and approval-only turns return earlier), so a `user` row always pairs with an `assistant` row
 8. **`codebase_env_vars`** - Per-project env vars injected into project-scoped execution surfaces (Claude, Codex, bash/script nodes, and direct chat when codebase-scoped), managed via Web UI or `env:` in config
 9. **`users`** - Archon-internal identity (one row per human/bot); created lazily on first sight by any adapter; `role` (`'admin'`(default)`/'member'`) is the identity seam for future per-resource scoping (visibility stays open today)

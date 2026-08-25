@@ -32,7 +32,8 @@ export interface ProviderConcurrencyAcquireOptions {
   signal?: AbortSignal;
   observer?: ProviderConcurrencyObserver;
   /** Return false when the live owner (for example a workflow run) is terminal. */
-  shouldContinue?: () => Promise<boolean>;
+  /** True = live, false = terminal, undefined = ownership status unavailable. */
+  shouldContinue?: () => Promise<boolean | undefined>;
 }
 
 export interface ProviderConcurrencyLease {
@@ -237,15 +238,22 @@ export class ProviderConcurrencyGate {
 
     const startedAt = this.timing.now();
     let queued = false;
-    while (true) {
+    waitForSlot: while (true) {
       throwIfAborted(options.signal);
-      if (options.shouldContinue && !(await options.shouldContinue())) {
-        throw abortError(`Provider concurrency wait stopped for terminal owner '${provider}'`);
+      if (options.shouldContinue) {
+        const shouldContinue = await options.shouldContinue();
+        if (shouldContinue === false) {
+          throw abortError(`Provider concurrency wait stopped for terminal owner '${provider}'`);
+        }
+        if (shouldContinue === undefined) {
+          await this.timing.sleep(this.timing.pollMs, options.signal);
+          continue;
+        }
       }
 
       for (let slot = 0; slot < limit; slot += 1) {
         const leaseId = randomUUID();
-        const claimedUntil = await this.tryClaim(provider, slot, leaseId);
+        const claimedUntil = await this.tryClaim(provider, slot, leaseId, limit);
         if (claimedUntil !== null) {
           const waitMs = this.timing.now() - startedAt;
           const lease = new DatabaseProviderLease(
@@ -258,10 +266,18 @@ export class ProviderConcurrencyGate {
           );
           try {
             throwIfAborted(options.signal);
-            if (options.shouldContinue && !(await options.shouldContinue())) {
-              throw abortError(
-                `Provider concurrency wait stopped for terminal owner '${provider}'`
-              );
+            if (options.shouldContinue) {
+              const shouldContinue = await options.shouldContinue();
+              if (shouldContinue === false) {
+                throw abortError(
+                  `Provider concurrency wait stopped for terminal owner '${provider}'`
+                );
+              }
+              if (shouldContinue === undefined) {
+                await lease.release();
+                await this.timing.sleep(this.timing.pollMs, options.signal);
+                continue waitForSlot;
+              }
             }
           } catch (error) {
             await lease.release();
@@ -295,7 +311,12 @@ export class ProviderConcurrencyGate {
     }
   }
 
-  private async tryClaim(provider: string, slot: number, leaseId: string): Promise<number | null> {
+  private async tryClaim(
+    provider: string,
+    slot: number,
+    leaseId: string,
+    limit: number
+  ): Promise<number | null> {
     const queryStartedAt = this.timing.now();
     const expiry =
       this.db.dialect === 'postgres'
@@ -305,16 +326,24 @@ export class ProviderConcurrencyGate {
       this.db.dialect === 'postgres'
         ? 'remote_agent_provider_slots.lease_expires_at <= NOW()'
         : "julianday(remote_agent_provider_slots.lease_expires_at) <= julianday('now')";
+    const live =
+      this.db.dialect === 'postgres'
+        ? 'lease_expires_at > NOW()'
+        : "julianday(lease_expires_at) > julianday('now')";
     const result = await this.db.query<{ slot_index: number }>(
       `INSERT INTO remote_agent_provider_slots
          (provider_id, slot_index, lease_id, lease_expires_at)
-       VALUES ($1, $2, $3, ${expiry})
+       SELECT $1, $2, $3, ${expiry}
+       WHERE (
+         SELECT COUNT(*) FROM remote_agent_provider_slots
+         WHERE provider_id = $1 AND ${live}
+       ) < $5
        ON CONFLICT (provider_id, slot_index) DO UPDATE SET
          lease_id = EXCLUDED.lease_id,
          lease_expires_at = EXCLUDED.lease_expires_at
        WHERE ${expired}
        RETURNING slot_index`,
-      [provider, slot, leaseId, this.timing.leaseMs]
+      [provider, slot, leaseId, this.timing.leaseMs, limit]
     );
     return result.rowCount === 1 ? queryStartedAt + this.timing.leaseMs : null;
   }

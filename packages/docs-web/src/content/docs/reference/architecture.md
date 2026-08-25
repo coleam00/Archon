@@ -53,7 +53,7 @@ Archon is a **platform-agnostic AI coding assistant orchestrator** that connects
       └───────────────┼───────────────────┘
                       ▼
 ┌─────────────────────────────────────────────┐
-│    SQLite (default) / PostgreSQL (16 Tables) │
+│         SQLite (default) / PostgreSQL         │
 │  • Codebases  • Conversations  • Sessions   │
 │  • Isolation Envs • Workflow Runs            │
 │  • Workflow Events • Messages                │
@@ -327,10 +327,11 @@ export interface IAgentProvider {
 }
 ```
 
-Providers that participate in install-wide concurrency limits also implement
-`AdmissionCapableAgentProvider`. Its admitted send method receives a required
-attempt gate, preventing a configured cap from being silently ignored by an
-adapter that does not know where its actual upstream attempts begin and end.
+Providers that participate in install-wide concurrency limits declare
+`supportsProviderAttemptGate = true` and consume the required attempt gate
+passed to `sendQuery`. The declaration prevents a configured cap from being
+silently ignored by an adapter that does not know where its actual upstream
+attempts begin and end.
 
 ### MessageChunk Types
 
@@ -1061,7 +1062,7 @@ export function formatToolCall(toolName: string, toolInput?: Record<string, unkn
 
 ## Database Schema
 
-Archon uses a 16-table schema with `remote_agent_` prefix. SQLite is the default (zero setup); PostgreSQL is optional for cloud/advanced deployments.
+Archon's shared schema uses the `remote_agent_` prefix; see the [database reference](/reference/database/) for the authoritative table inventory. SQLite is the default (zero setup); PostgreSQL is optional for cloud/advanced deployments.
 
 ### Schema Overview
 

@@ -97,10 +97,7 @@ export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
         type: 'dag_node',
         runId: event.runId,
         nodeId: event.nodeId,
-        name:
-          event.type === 'provider_slot_queued' || event.type === 'provider_slot_acquired'
-            ? event.nodeName
-            : event.nodeName,
+        name: event.nodeName,
         status:
           event.type === 'provider_slot_queued'
             ? 'queued'
@@ -343,11 +340,14 @@ export function mapWorkflowEventRow(row: WorkflowEventRow): string | null {
 
   const nodeStatus = ROW_NODE_STATUS[row.event_type];
   if (nodeStatus) {
+    const isProviderSlotEvent = row.event_type.startsWith('provider_slot_');
+    const nodeId =
+      (isProviderSlotEvent ? dataStr(data, 'node_id', 'nodeId') : undefined) ?? row.step_name ?? '';
     const payload: DagNodeSsePayload = {
       type: 'dag_node',
       runId,
-      nodeId: row.step_name ?? '',
-      name: row.step_name ?? '',
+      nodeId,
+      name: (isProviderSlotEvent ? dataStr(data, 'node_name', 'nodeName') : undefined) ?? nodeId,
       status: nodeStatus,
       error:
         row.event_type === 'node_failed' || row.event_type === 'loop_iteration_failed'

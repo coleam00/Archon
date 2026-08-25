@@ -230,7 +230,7 @@ curl http://localhost:3090/health
 
 # Additional checks (both contexts)
 curl http://localhost:3090/health/db           # Database connectivity
-curl http://localhost:3090/health/concurrency  # Concurrency status
+curl http://localhost:3090/health/concurrency  # Conversation concurrency status
 ```
 
 ---

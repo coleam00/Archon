@@ -135,7 +135,7 @@ export interface ProviderQueryContext {
   /** Local liveness pulse while admission is queued; never persisted. */
   onWaiting?: () => void;
   /** Checked while queued so a terminal workflow does not wait for first yield. */
-  shouldContinue?: () => Promise<boolean>;
+  shouldContinue?: () => Promise<boolean | undefined>;
 }
 
 export interface ProviderQueryRequest {

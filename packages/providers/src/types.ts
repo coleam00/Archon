@@ -813,6 +813,9 @@ export interface ProviderInfo {
  * Allows supporting multiple agent providers (Claude, Codex, etc.)
  */
 export interface IAgentProvider {
+  /** Provider consumes providerAttemptGate at each upstream attempt boundary. */
+  readonly supportsProviderAttemptGate?: true;
+
   /**
    * Send a message and get streaming response.
    * @param prompt - User message or prompt
@@ -837,19 +840,4 @@ export interface IAgentProvider {
    * Used by the dag-executor to warn when nodes specify unsupported features.
    */
   getCapabilities(): ProviderCapabilities;
-}
-
-/**
- * Provider contract required when an install-wide concurrency cap is active.
- * Keeping this separate from IAgentProvider preserves uncapped community
- * providers while making a configured cap fail closed instead of relying on
- * an optional SendQueryOptions field that a provider may ignore.
- */
-export interface AdmissionCapableAgentProvider extends IAgentProvider {
-  sendQueryWithAdmission(
-    prompt: string,
-    cwd: string,
-    resumeSessionId: string | undefined,
-    options: SendQueryOptions & { providerAttemptGate: ProviderAttemptGate }
-  ): AsyncGenerator<MessageChunk>;
 }

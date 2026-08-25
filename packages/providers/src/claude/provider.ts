@@ -38,7 +38,7 @@ import {
   type ModelUsage,
 } from '@anthropic-ai/claude-agent-sdk';
 import type {
-  AdmissionCapableAgentProvider,
+  IAgentProvider,
   SendQueryOptions,
   MessageChunk,
   TokenUsage,
@@ -1375,17 +1375,8 @@ function classifyAndEnrichError(
  * - streamClaudeMessages: raw SDK event normalization into MessageChunks
  * - classifyAndEnrichError: error classification for retry decisions
  */
-export class ClaudeProvider implements AdmissionCapableAgentProvider {
-  async *sendQueryWithAdmission(
-    prompt: string,
-    cwd: string,
-    resumeSessionId: string | undefined,
-    options: SendQueryOptions & {
-      providerAttemptGate: NonNullable<SendQueryOptions['providerAttemptGate']>;
-    }
-  ): AsyncGenerator<MessageChunk> {
-    yield* this.sendQuery(prompt, cwd, resumeSessionId, options);
-  }
+export class ClaudeProvider implements IAgentProvider {
+  readonly supportsProviderAttemptGate = true;
 
   private readonly retryBaseDelayMs: number;
 

@@ -80,12 +80,10 @@ function sanitizeProviderConcurrency(
   const limits: Record<string, number> = {};
   for (const [provider, value] of Object.entries(raw)) {
     if (!registered.has(provider)) {
-      getLog().warn({ provider }, 'config.provider_concurrency_unknown_provider_ignored');
-      continue;
+      throw new Error(`concurrency.providers.${provider} is not a registered provider`);
     }
     if (!Number.isInteger(value) || value <= 0) {
-      getLog().warn({ provider, value }, 'config.provider_concurrency_invalid_limit_ignored');
-      continue;
+      throw new Error(`concurrency.providers.${provider} must be a positive integer`);
     }
     limits[provider] = value;
   }
@@ -204,6 +202,7 @@ function parseYaml(content: string): unknown {
 
 // Cache for loaded configs
 let cachedGlobalConfig: GlobalConfig | null = null;
+let cachedGlobalConfigError: unknown = null;
 
 /**
  * Default config file content
@@ -310,6 +309,7 @@ export async function loadGlobalConfig(forceReload = false): Promise<GlobalConfi
     const content = await readConfigFile(configPath);
     const parsed = parseYaml(content);
     validateWorkflowContinuationConfig(parsed, configPath);
+    cachedGlobalConfigError = null;
     cachedGlobalConfig = parsed as GlobalConfig;
     return cachedGlobalConfig ?? {};
   } catch (error) {
@@ -317,9 +317,11 @@ export async function loadGlobalConfig(forceReload = false): Promise<GlobalConfi
     if (err.code === 'ENOENT') {
       // File doesn't exist - create default config
       await createDefaultConfig(configPath);
+      cachedGlobalConfigError = null;
     } else {
       // Log specific error message based on error type
       logConfigError(configPath, error);
+      cachedGlobalConfigError = error;
     }
     cachedGlobalConfig = {};
     return cachedGlobalConfig;
@@ -716,11 +718,25 @@ export async function loadConfig(repoPath?: string): Promise<MergedConfig> {
   return config;
 }
 
+/** Load install-wide provider caps without treating a broken policy file as no policy. */
+export async function loadProviderConcurrencyLimits(): Promise<Record<string, number>> {
+  registerBuiltinProviders();
+  registerCommunityProviders();
+  const globalConfig = await loadGlobalConfig();
+  if (cachedGlobalConfigError) {
+    throw new Error('Cannot load provider concurrency policy from the global config', {
+      cause: cachedGlobalConfigError,
+    });
+  }
+  return mergeGlobalConfig(getDefaults(), globalConfig).concurrency.providers ?? {};
+}
+
 /**
  * Clear cached global config (useful for testing)
  */
 export function clearConfigCache(): void {
   cachedGlobalConfig = null;
+  cachedGlobalConfigError = null;
 }
 
 /**

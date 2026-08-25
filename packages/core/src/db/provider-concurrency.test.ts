@@ -38,7 +38,9 @@ async function waitForFile(path: string): Promise<void> {
 
 afterEach(async () => {
   for (const db of openDatabases.splice(0)) await db.close();
-  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  for (const dir of tempDirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+  }
 });
 
 describe('ProviderConcurrencyGate', () => {
@@ -98,6 +100,37 @@ describe('ProviderConcurrencyGate', () => {
     } finally {
       holder.kill();
       waiter?.kill();
+      await Promise.allSettled([holder.exited, ...(waiter ? [waiter.exited] : [])]);
+    }
+  }, 15_000);
+
+  test('reclaims a real process lease after the owner dies', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'archon-provider-concurrency-crash-'));
+    tempDirs.push(dir);
+    const databasePath = join(dir, 'archon.db');
+    const fixture = join(import.meta.dir, 'provider-concurrency.fixture.ts');
+    const holder = Bun.spawn([process.execPath, fixture, databasePath, 'holder', dir, '250'], {
+      stdout: 'ignore',
+      stderr: 'pipe',
+    });
+    let waiter: ReturnType<typeof Bun.spawn> | undefined;
+
+    try {
+      await waitForFile(join(dir, 'holder-acquired'));
+      waiter = Bun.spawn([process.execPath, fixture, databasePath, 'waiter', dir, '250'], {
+        stdout: 'ignore',
+        stderr: 'pipe',
+      });
+      await waitForFile(join(dir, 'waiter-queued'));
+
+      holder.kill();
+      await holder.exited;
+      await waitForFile(join(dir, 'waiter-acquired'));
+      expect(await waiter.exited).toBe(0);
+    } finally {
+      holder.kill();
+      waiter?.kill();
+      await Promise.allSettled([holder.exited, ...(waiter ? [waiter.exited] : [])]);
     }
   }, 15_000);
 
@@ -133,6 +166,42 @@ describe('ProviderConcurrencyGate', () => {
     expect(third.slot).toBe(first.slot);
     await second.release();
     await third.release();
+  });
+
+  test('counts live slots outside a reduced limit before admitting new work', async () => {
+    const [firstDb, secondDb] = sharedDatabase();
+    const original = await Promise.all([
+      gate(firstDb).acquire('pi', 4),
+      gate(firstDb).acquire('pi', 4),
+      gate(firstDb).acquire('pi', 4),
+      gate(firstDb).acquire('pi', 4),
+    ]);
+    const bySlot = original.toSorted((a, b) => a.slot - b.slot);
+    await bySlot[0]?.release();
+    await bySlot[1]?.release();
+
+    let queued = false;
+    const reduced = gate(secondDb).acquire('pi', 2, {
+      observer: {
+        onQueued: () => {
+          queued = true;
+        },
+      },
+    });
+    while (!queued) await Bun.sleep(1);
+
+    const liveBefore = await firstDb.query(
+      `SELECT slot_index FROM remote_agent_provider_slots WHERE provider_id = $1`,
+      ['pi']
+    );
+    expect(liveBefore.rowCount).toBe(2);
+
+    await bySlot[2]?.release();
+    const admitted = await reduced;
+    expect(admitted.slot).toBe(0);
+
+    await bySlot[3]?.release();
+    await admitted.release();
   });
 
   test('aborts a queued waiter without disturbing the live owner', async () => {
@@ -197,6 +266,24 @@ describe('ProviderConcurrencyGate', () => {
     await expect(
       gate(db).acquire('pi', 1, {
         shouldContinue: async () => ++checks === 1,
+      })
+    ).rejects.toMatchObject({ name: 'AbortError' });
+
+    expect(checks).toBe(2);
+    const rows = await db.query(
+      `SELECT lease_id FROM remote_agent_provider_slots WHERE provider_id = $1`,
+      ['pi']
+    );
+    expect(rows.rowCount).toBe(0);
+  });
+
+  test('does not let an unknown lifecycle read authorize a claim', async () => {
+    const [db] = sharedDatabase();
+    let checks = 0;
+
+    await expect(
+      gate(db).acquire('pi', 1, {
+        shouldContinue: async () => (++checks === 1 ? undefined : false),
       })
     ).rejects.toMatchObject({ name: 'AbortError' });
 

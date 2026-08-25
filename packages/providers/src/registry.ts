@@ -48,6 +48,9 @@ export function registerProvider(entry: ProviderRegistration): void {
   if (registry.has(entry.id)) {
     throw new Error(`Provider '${entry.id}' is already registered`);
   }
+  if (entry.id.length > 64) {
+    throw new Error(`Provider ID '${entry.id}' exceeds the 64-character database limit`);
+  }
   assertValidCapabilities(entry);
   registry.set(entry.id, entry);
   getLog().debug({ provider: entry.id, builtIn: entry.builtIn }, 'provider.registered');
@@ -63,7 +66,12 @@ export function getAgentProvider(id: string): IAgentProvider {
     throw new UnknownProviderError(id, [...registry.keys()]);
   }
   getLog().debug({ provider: id }, 'provider_selected');
-  return entry.factory();
+  const provider = entry.factory();
+  const reportedId = provider.getType();
+  if (reportedId !== id) {
+    throw new Error(`Provider registration '${id}' created a provider reporting '${reportedId}'`);
+  }
+  return provider;
 }
 
 /**

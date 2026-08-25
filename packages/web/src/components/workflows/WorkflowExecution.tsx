@@ -114,7 +114,12 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
             for (const e of data.events.filter(
               ev => ev.event_type.startsWith('node_') || ev.event_type.startsWith('provider_slot_')
             )) {
-              const nodeId = e.step_name ?? (e.data.nodeId as string) ?? '';
+              const isProviderSlotEvent = e.event_type.startsWith('provider_slot_');
+              const nodeId =
+                (isProviderSlotEvent ? (e.data.node_id as string | undefined) : undefined) ??
+                e.step_name ??
+                (e.data.nodeId as string) ??
+                '';
               if (!nodeId) continue;
               const status =
                 e.event_type === 'node_started'
@@ -134,7 +139,9 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
               if (!existing || status !== 'running' || existing.status === 'queued') {
                 nodeMap.set(nodeId, {
                   nodeId,
-                  name: nodeId,
+                  name:
+                    (isProviderSlotEvent ? (e.data.node_name as string | undefined) : undefined) ??
+                    nodeId,
                   status: status as WorkflowStepStatus,
                   duration: e.data.duration_ms as number | undefined,
                   error: e.data.error as string | undefined,

@@ -3,13 +3,18 @@ import { join } from 'node:path';
 import { SqliteAdapter } from './adapters/sqlite';
 import { ProviderConcurrencyGate } from './provider-concurrency';
 
-const [databasePath, mode, markerDirectory] = process.argv.slice(2);
+const [databasePath, mode, markerDirectory, leaseMsArg] = process.argv.slice(2);
 if (!databasePath || !mode || !markerDirectory) {
   throw new Error('Expected database path, mode, and marker directory');
 }
 
 const db = new SqliteAdapter(databasePath);
-const gate = new ProviderConcurrencyGate(db, { pollMs: 5 });
+const leaseMs = leaseMsArg ? Number(leaseMsArg) : 120_000;
+const gate = new ProviderConcurrencyGate(db, {
+  leaseMs,
+  heartbeatMs: Math.max(10, Math.floor(leaseMs / 4)),
+  pollMs: 5,
+});
 
 try {
   if (mode === 'holder') {

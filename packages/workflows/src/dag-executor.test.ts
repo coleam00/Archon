@@ -4358,13 +4358,27 @@ describe('executeDagWorkflow -- tool_called event persistence', () => {
         workflow_run_id: workflowRun.id,
         event_type: 'provider_slot_queued',
         step_name: 'node-id',
-        data: { provider: 'claude', limit: 2, query_attempt: 0 },
+        data: {
+          provider: 'claude',
+          limit: 2,
+          node_id: 'node-id',
+          node_name: 'my-cmd',
+          query_attempt: 0,
+        },
       },
       {
         workflow_run_id: workflowRun.id,
         event_type: 'provider_slot_acquired',
         step_name: 'node-id',
-        data: { provider: 'claude', limit: 2, slot: 1, wait_ms: 40, query_attempt: 0 },
+        data: {
+          provider: 'claude',
+          limit: 2,
+          slot: 1,
+          wait_ms: 40,
+          node_id: 'node-id',
+          node_name: 'my-cmd',
+          query_attempt: 0,
+        },
       },
     ]);
     expect(liveEvents).toEqual([
@@ -13634,6 +13648,60 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
     );
     expect(nodeCompletedEvents.length).toBe(0);
     expect(store.failWorkflowRun).toHaveBeenCalled();
+  });
+
+  it('provider capacity polls keep an ordinary AI node alive past idle timeout', async () => {
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    mockDeps.runProviderQuery = request =>
+      (async function* () {
+        for (let pulse = 0; pulse < 5; pulse += 1) {
+          await Bun.sleep(20);
+          request.context?.onWaiting?.();
+        }
+        yield { type: 'assistant', content: 'admitted' };
+        yield { type: 'result', sessionId: 'capacity-session' };
+      })();
+
+    await executeDagWorkflow(
+      mockDeps,
+      createMockPlatform(),
+      'conv-capacity-idle',
+      testDir,
+      {
+        name: 'capacity-idle',
+        nodes: [
+          {
+            id: 'wait-for-provider',
+            kind: 'agent',
+            source: { kind: 'inline', prompt: 'wait' },
+            idle_timeout: 35,
+            retry: { max_attempts: 0 },
+          },
+        ],
+      },
+      makeWorkflowRun('capacity-idle'),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    expect(
+      eventCalls.some(
+        (call: unknown[]) => (call[0] as Record<string, unknown>).event_type === 'node_completed'
+      )
+    ).toBe(true);
+    expect(
+      eventCalls.some(
+        (call: unknown[]) => (call[0] as Record<string, unknown>).event_type === 'node_failed'
+      )
+    ).toBe(false);
   });
 
   it('output_format set but provider returns no structured output → node_failed (Task 8 fail-fast)', async () => {

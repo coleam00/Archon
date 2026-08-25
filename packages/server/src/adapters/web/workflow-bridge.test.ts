@@ -20,8 +20,9 @@ mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
 }));
 
-import { mapWorkflowEvent } from './workflow-bridge';
+import { mapWorkflowEvent, mapWorkflowEventRow } from './workflow-bridge';
 import type { WorkflowEmitterEvent } from '@archon/workflows/event-emitter';
+import type { WorkflowEventRow } from '@archon/core/db/workflow-events';
 
 describe('mapWorkflowEvent — tool activity correlation', () => {
   test('forwards tool call IDs and completion metadata', () => {
@@ -105,6 +106,30 @@ describe('mapWorkflowEvent — provider capacity', () => {
       nodeId: 'implement',
       name: 'Implementation',
       status: 'running',
+    });
+  });
+
+  test('preserves persisted provider node identity during dashboard replay', () => {
+    const row: WorkflowEventRow = {
+      id: 'event-1',
+      workflow_run_id: 'run-1',
+      event_type: 'provider_slot_queued',
+      step_index: null,
+      step_name: 'loop#2:scope',
+      data: {
+        provider: 'pi',
+        limit: 1,
+        node_id: 'scope',
+        node_name: 'archon-pr-review-scope',
+      },
+      created_at: '2026-08-25T00:00:00.000Z',
+    };
+
+    expect(JSON.parse(mapWorkflowEventRow(row) ?? '{}')).toMatchObject({
+      type: 'dag_node',
+      nodeId: 'scope',
+      name: 'archon-pr-review-scope',
+      status: 'queued',
     });
   });
 });

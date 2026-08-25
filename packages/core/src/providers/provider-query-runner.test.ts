@@ -1,10 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type {
-  AdmissionCapableAgentProvider,
-  IAgentProvider,
-  MessageChunk,
-  ProviderCapabilities,
-} from '@archon/providers/types';
+import type { IAgentProvider, MessageChunk, ProviderCapabilities } from '@archon/providers/types';
 import type { ProviderConcurrencyLease } from '../db/provider-concurrency';
 import { createProviderQueryRunner } from './provider-query-runner';
 
@@ -26,8 +21,9 @@ const capabilities: ProviderCapabilities = {
   containerExec: false,
 };
 
-function provider(stream: IAgentProvider['sendQuery']): AdmissionCapableAgentProvider {
+function provider(stream: IAgentProvider['sendQuery']): IAgentProvider {
   return {
+    supportsProviderAttemptGate: true,
     sendQuery: async function* (prompt, cwd, resumeSessionId, options) {
       const gate = options?.providerAttemptGate;
       if (!gate) {
@@ -44,9 +40,6 @@ function provider(stream: IAgentProvider['sendQuery']): AdmissionCapableAgentPro
       } finally {
         await lease.release();
       }
-    },
-    sendQueryWithAdmission: async function* (prompt, cwd, resumeSessionId, options) {
-      yield* this.sendQuery(prompt, cwd, resumeSessionId, options);
     },
     getType: () => 'pi',
     getCapabilities: () => capabilities,
@@ -81,6 +74,33 @@ describe('createProviderQueryRunner', () => {
 
     expect(chunks).toEqual([{ type: 'assistant', content: 'ok' }]);
     expect(acquireCalls).toBe(0);
+  });
+
+  test('does not start a provider when install policy loading fails', async () => {
+    let started = false;
+    const policyError = new Error('policy unreadable');
+    const runner = createProviderQueryRunner({
+      acquire: async () => {
+        throw new Error('should not acquire');
+      },
+      loadLimits: async () => {
+        throw policyError;
+      },
+    });
+
+    await expect(
+      consume(
+        runner({
+          client: provider(async function* () {
+            started = true;
+            yield { type: 'assistant', content: 'should not start' };
+          }),
+          prompt: 'hello',
+          cwd: '/tmp',
+        })
+      )
+    ).rejects.toBe(policyError);
+    expect(started).toBe(false);
   });
 
   test('configured caps fail closed for providers without the admission contract', async () => {
@@ -142,6 +162,62 @@ describe('createProviderQueryRunner', () => {
     );
 
     expect(order).toEqual(['acquire', 'start', 'release']);
+  });
+
+  test('keeps a multi-attempt query queued until its last waiter acquires', async () => {
+    let acquireCalls = 0;
+    let releaseBoth!: () => void;
+    const bothQueued = new Promise<void>(resolve => {
+      releaseBoth = resolve;
+    });
+    const transitions: string[] = [];
+    const runner = createProviderQueryRunner({
+      acquire: async (providerId, limit, options) => {
+        acquireCalls += 1;
+        options?.observer?.onQueued?.({ provider: providerId, limit });
+        if (acquireCalls === 2) releaseBoth();
+        await bothQueued;
+        options?.observer?.onAcquired?.({
+          provider: providerId,
+          limit,
+          slot: acquireCalls,
+          waitMs: 1,
+        });
+        return {
+          provider: providerId,
+          slot: acquireCalls,
+          signal: new AbortController().signal,
+          release: async () => undefined,
+        };
+      },
+      loadLimits: async () => ({ pi: 1 }),
+    });
+    const multiAttemptProvider: IAgentProvider = {
+      supportsProviderAttemptGate: true,
+      getType: () => 'pi',
+      getCapabilities: () => capabilities,
+      sendQuery: async function* (_prompt, _cwd, _resume, options) {
+        const attemptGate = options?.providerAttemptGate;
+        if (!attemptGate) throw new Error('missing attempt gate');
+        const leases = await Promise.all([attemptGate.acquire(), attemptGate.acquire()]);
+        for (const lease of leases) await lease.release();
+        yield { type: 'assistant', content: 'ok' };
+      },
+    };
+
+    await consume(
+      runner({
+        client: multiAttemptProvider,
+        prompt: 'hello',
+        cwd: '/tmp',
+        context: {
+          onQueued: () => transitions.push('queued'),
+          onAcquired: () => transitions.push('acquired'),
+        },
+      })
+    );
+
+    expect(transitions).toEqual(['queued', 'acquired']);
   });
 
   test('releases when the provider throws', async () => {
@@ -252,11 +328,11 @@ describe('createProviderQueryRunner', () => {
       },
       loadLimits: async () => ({ pi: 1 }),
     });
-    const retryingProvider: AdmissionCapableAgentProvider = {
+    const retryingProvider: IAgentProvider = {
       ...provider(async function* () {
         yield { type: 'assistant', content: 'unused' };
       }),
-      sendQueryWithAdmission: async function* (prompt, cwd, resumeSessionId, options) {
+      sendQuery: async function* (prompt, cwd, resumeSessionId, options) {
         for (attempt = 1; attempt <= 2; attempt += 1) {
           const lease = await options?.providerAttemptGate?.acquire();
           if (!lease) throw new Error('missing attempt gate');

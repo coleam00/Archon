@@ -818,11 +818,15 @@ curl http://localhost:3090/health/db
 ```
 Returns: `{"status":"ok","database":"connected"}`
 
-**Concurrency Status:**
+**Conversation Concurrency Status:**
 ```bash
 curl http://localhost:3090/health/concurrency
 ```
-Returns: `{"status":"ok","active":0,"queued":0,"maxConcurrent":10}`
+Returns: `{"status":"ok","active":0,"queuedTotal":0,"maxConcurrent":10}`
+
+This endpoint reports conversation admission only. Provider-cap waits are exposed
+on the affected workflow nodes through `provider_slot_queued` and
+`provider_slot_acquired` events.
 
 **Use cases:**
 - Docker healthcheck configuration

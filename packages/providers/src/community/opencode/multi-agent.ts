@@ -211,7 +211,7 @@ export async function* streamMultiAgentOpencodeSession(
         if (lease) {
           state.lease = lease;
           const onLeaseLost = (): void => {
-            promptError =
+            promptError ??=
               lease.signal.reason instanceof Error
                 ? lease.signal.reason
                 : new Error(`OpenCode capacity lease lost for agent '${state.agent.key}'`);
@@ -241,7 +241,7 @@ export async function* streamMultiAgentOpencodeSession(
           'opencode.multi_agent_prompt_sent'
         );
       } catch (error) {
-        promptError = error instanceof Error ? error : new Error(String(error));
+        promptError ??= error instanceof Error ? error : new Error(String(error));
         admissionController.abort(promptError);
         void abortAll();
         streamController.abort();

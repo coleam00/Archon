@@ -84,6 +84,18 @@ describe('registry', () => {
       expect(typeof provider.sendQuery).toBe('function');
     });
 
+    test('rejects a provider whose runtime identity differs from its registration', () => {
+      registerProvider(
+        makeMockRegistration('acme', {
+          factory: () => makeMockProvider('acme-sdk'),
+        })
+      );
+
+      expect(() => getAgentProvider('acme')).toThrow(
+        "Provider registration 'acme' created a provider reporting 'acme-sdk'"
+      );
+    });
+
     test('throws UnknownProviderError for unknown type', () => {
       expect(() => getAgentProvider('unknown')).toThrow(UnknownProviderError);
       expect(() => getAgentProvider('unknown')).toThrow(
@@ -194,6 +206,13 @@ describe('registry', () => {
 
       expect(() => registerProvider(entry)).toThrow(
         "Provider 'invalid-fork' cannot advertise sessionFork without sessionResume"
+      );
+    });
+
+    test('rejects provider IDs that cannot fit the shared database schema', () => {
+      const id = 'p'.repeat(65);
+      expect(() => registerProvider(makeMockRegistration(id))).toThrow(
+        'exceeds the 64-character database limit'
       );
     });
   });

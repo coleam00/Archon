@@ -31,6 +31,7 @@ import {
   loadGlobalConfig,
   loadRepoConfig,
   loadConfig,
+  loadProviderConcurrencyLimits,
   clearConfigCache,
   toSafeConfig,
   updateGlobalConfig,
@@ -345,7 +346,7 @@ recommendedWorkflows: "archon-plan"
       });
     });
 
-    test('loads positive caps for registered providers and ignores invalid entries', async () => {
+    test('rejects invalid or unregistered provider caps', async () => {
       mockFsReadFile.mockResolvedValue(`
 concurrency:
   providers:
@@ -355,16 +356,17 @@ concurrency:
     missing-provider: 4
 `);
 
-      const config = await loadConfig();
-
-      expect(config.concurrency.providers).toEqual({ pi: 2, claude: 3 });
-      expect(mockLogger.warn).toHaveBeenCalledWith(
-        { provider: 'codex', value: 0 },
-        'config.provider_concurrency_invalid_limit_ignored'
+      await expect(loadConfig()).rejects.toThrow(
+        'concurrency.providers.codex must be a positive integer'
       );
-      expect(mockLogger.warn).toHaveBeenCalledWith(
-        { provider: 'missing-provider' },
-        'config.provider_concurrency_unknown_provider_ignored'
+    });
+
+    test('provider policy loading fails closed after a global config read error', async () => {
+      const syntaxError = new SyntaxError('YAML Parse error');
+      mockFsReadFile.mockRejectedValue(syntaxError);
+
+      await expect(loadProviderConcurrencyLimits()).rejects.toThrow(
+        'Cannot load provider concurrency policy from the global config'
       );
     });
 

@@ -8,6 +8,7 @@ import type {
   CreateAgentSessionOptions,
   CreateAgentSessionResult,
   ModelRegistry,
+  ModelRuntime,
 } from '@earendil-works/pi-coding-agent';
 import type { Api, Model } from '@earendil-works/pi-ai';
 
@@ -158,6 +159,7 @@ type MockModelRuntime = {
   setRuntimeApiKey(providerId: string, key: string): Promise<void>;
   getAuth(providerId: string): Promise<unknown>;
   hasConfiguredAuth(providerId: string): boolean;
+  streamSimple: ModelRuntime['streamSimple'];
 };
 type MockModelRegistryCtor = new (runtime: MockModelRuntime) => MockModelRegistry;
 function makeMockRegistry(runtime: MockModelRuntime): MockModelRegistry {
@@ -204,12 +206,20 @@ const mockModelRegistryConstruct = mock(
 // so tests that previously poked `authStorage.setRuntimeApiKey(...)` or
 // `authStorage.getApiKey(...)` continue to assert against the same call shape
 // (just on the runtime object now).
+const mockStreamSimple = mock(() => {
+  throw new Error('mock streamSimple should not run through the session stub');
+}) as unknown as ModelRuntime['streamSimple'];
+let capturedModelRuntime: MockModelRuntime | undefined;
 const mockModelRuntimeCreate = mock(
-  async (_options?: { authPath?: string; modelsPath?: string }): Promise<MockModelRuntime> => ({
-    setRuntimeApiKey: mockSetRuntimeApiKey,
-    getAuth: mockGetAuth,
-    hasConfiguredAuth: mockHasConfiguredAuth,
-  })
+  async (_options?: { authPath?: string; modelsPath?: string }): Promise<MockModelRuntime> => {
+    capturedModelRuntime = {
+      setRuntimeApiKey: mockSetRuntimeApiKey,
+      getAuth: mockGetAuth,
+      hasConfiguredAuth: mockHasConfiguredAuth,
+      streamSimple: mockStreamSimple,
+    };
+    return capturedModelRuntime;
+  }
 );
 
 // SessionManager mocks. Each returns a tagged session-manager stub so tests
@@ -359,6 +369,7 @@ describe('PiProvider', () => {
     mockLoaderRuntime.pendingProviderRegistrations = [];
     mockCreateAgentSession.mockClear();
     mockModelRuntimeCreate.mockClear();
+    capturedModelRuntime = undefined;
     mockModelRegistryConstruct.mockClear();
     mockModelRegistryFind.mockClear();
     mockSetRuntimeApiKey.mockClear();
@@ -405,6 +416,29 @@ describe('PiProvider', () => {
 
   test('getCapabilities matches PI_CAPABILITIES constant', () => {
     expect(new PiProvider().getCapabilities()).toEqual(PI_CAPABILITIES);
+  });
+
+  test('installs provider admission on the runtime before creating the session', async () => {
+    resetScript(scriptedAgentEnd());
+    process.env.ANTHROPIC_API_KEY = 'test-key';
+    const gate = {
+      acquire: async () => ({
+        signal: new AbortController().signal,
+        release: async (): Promise<void> => undefined,
+      }),
+    };
+
+    const { error } = await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'anthropic/claude-sonnet-4',
+        providerAttemptGate: gate,
+      })
+    );
+
+    expect(error).toBeUndefined();
+    expect(capturedModelRuntime?.streamSimple).toBeDefined();
+    expect(capturedModelRuntime?.streamSimple).not.toBe(mockStreamSimple);
+    expect(mockCreateAgentSession).toHaveBeenCalledTimes(1);
   });
 
   test('sendQuery installs PI_PACKAGE_DIR shim before Pi SDK loads', async () => {
@@ -533,11 +567,13 @@ describe('PiProvider', () => {
       if (options?.modelsPath && existsSync(options.modelsPath)) {
         capturedPerCallContent = readFileSync(options.modelsPath, 'utf-8');
       }
-      return {
+      capturedModelRuntime = {
         setRuntimeApiKey: mockSetRuntimeApiKey,
         getAuth: mockGetAuth,
         hasConfiguredAuth: mockHasConfiguredAuth,
+        streamSimple: mockStreamSimple,
       };
+      return capturedModelRuntime;
     });
 
     resetScript(scriptedAgentEnd());
