@@ -363,6 +363,34 @@ describe('CopilotProvider.sendQuery', () => {
     expect(releases).toEqual([{ upstreamStopped: false }]);
   });
 
+  test('preserves the lease when a rejected wait cannot confirm session shutdown', async () => {
+    const session = makeFakeSession('sess-unconfirmed-after-wait-rejection');
+    session.abortError = new Error('abort transport failed');
+    nextCreateSessionResult = session;
+    const releases: { upstreamStopped: boolean }[] = [];
+
+    const completion = collect(
+      new CopilotProvider().sendQuery('hello', '/work/dir', undefined, {
+        model: 'gpt-5',
+        providerAttemptGate: {
+          acquire: async () => ({
+            signal: new AbortController().signal,
+            release: async options => {
+              releases.push(options);
+            },
+          }),
+        },
+      })
+    );
+
+    while (session.prompt === undefined) await Bun.sleep(1);
+    session.rejectSend(new Error('SDK wait timed out'));
+
+    await expect(completion).rejects.toThrow('Copilot session shutdown could not be confirmed');
+    expect(session.aborted).toBe(true);
+    expect(releases).toEqual([{ upstreamStopped: false }]);
+  });
+
   test('reasoningEffort from nodeConfig.effort passes through', async () => {
     const session = makeFakeSession();
     nextCreateSessionResult = session;

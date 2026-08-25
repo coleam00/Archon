@@ -370,9 +370,11 @@ export async function* bridgeSession(
   // timeout overrides the SDK's 60s default — see SEND_AND_WAIT_TIMEOUT_MS.
   let sendResult: AssistantMessageEvent | undefined;
   let sendSettled = false;
+  let sendResolved = false;
   const sendPromise = session.sendAndWait({ prompt }, SEND_AND_WAIT_TIMEOUT_MS).then(
     (r: AssistantMessageEvent | undefined) => {
       sendSettled = true;
+      sendResolved = true;
       sendResult = r;
       queue.push({ kind: 'done' });
     },
@@ -449,9 +451,11 @@ export async function* bridgeSession(
       abortSignal.removeEventListener('abort', onAbort);
     }
     // If the consumer closed the generator early (return() / break), abort
-    // confirms that the remote call stopped before releasing capacity.
+    // confirms that the remote call stopped before releasing capacity. A
+    // rejected wait also needs abort confirmation: SDK timeouts can stop only
+    // the wait while leaving the upstream session active.
     try {
-      if (!sendSettled || abortPromise) await requestAbort();
+      if (!sendResolved || abortPromise) await requestAbort();
     } finally {
       try {
         await session.disconnect();

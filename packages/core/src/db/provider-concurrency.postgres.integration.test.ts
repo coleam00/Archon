@@ -90,5 +90,58 @@ describe.skipIf(process.env.ARCHON_POSTGRES_INTEGRATION !== 'true')(
         await Promise.all([firstDb.close(), secondDb.close()]);
       }
     }, 20_000);
+
+    test('reclaims an expired slot without letting the stale owner delete its successor', async () => {
+      const firstDb = new PostgresAdapter(postgresUrl());
+      await firstDb.query('SELECT 1');
+      const secondDb = new PostgresAdapter(postgresUrl());
+      await secondDb.query('SELECT 1');
+      const provider = `integration-${randomUUID()}`;
+      const staleLeaseId = randomUUID();
+      let lease: Awaited<ReturnType<ProviderConcurrencyGate['acquire']>> | undefined;
+
+      try {
+        await firstDb.query(
+          `INSERT INTO remote_agent_provider_slots
+             (provider_id, slot_index, lease_id, lease_expires_at)
+           VALUES ($1, 0, $2, NOW() - INTERVAL '1 second')`,
+          [provider, staleLeaseId]
+        );
+
+        lease = await new ProviderConcurrencyGate(secondDb, {
+          leaseMs: 1_000,
+          heartbeatMs: 150,
+          pollMs: 5,
+        }).acquire(provider, 1);
+
+        const claimed = await firstDb.query<{ lease_id: string; expired: boolean }>(
+          `SELECT lease_id, lease_expires_at <= NOW() AS expired
+           FROM remote_agent_provider_slots
+           WHERE provider_id = $1 AND slot_index = 0`,
+          [provider]
+        );
+        expect(claimed.rows[0]?.lease_id).not.toBe(staleLeaseId);
+        expect(claimed.rows[0]?.expired).toBe(false);
+
+        await firstDb.query(
+          `DELETE FROM remote_agent_provider_slots
+           WHERE provider_id = $1 AND slot_index = 0 AND lease_id = $2`,
+          [provider, staleLeaseId]
+        );
+        const remaining = await firstDb.query<{ count: string }>(
+          `SELECT COUNT(*)::text AS count
+           FROM remote_agent_provider_slots
+           WHERE provider_id = $1 AND slot_index = 0`,
+          [provider]
+        );
+        expect(remaining.rows[0]?.count).toBe('1');
+      } finally {
+        await lease?.release({ upstreamStopped: true });
+        await firstDb.query('DELETE FROM remote_agent_provider_slots WHERE provider_id = $1', [
+          provider,
+        ]);
+        await Promise.all([firstDb.close(), secondDb.close()]);
+      }
+    }, 10_000);
   }
 );
