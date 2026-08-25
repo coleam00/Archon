@@ -149,9 +149,14 @@ mock.module('./event-emitter', () => ({
 }));
 
 // --- Bootstrap provider registry (after path mocks) ---
-import { registerBuiltinProviders, clearRegistry } from '@archon/providers';
+import {
+  registerBuiltinProviders,
+  registerCommunityProviders,
+  clearRegistry,
+} from '@archon/providers';
 clearRegistry();
 registerBuiltinProviders();
+registerCommunityProviders();
 
 // --- Import after mocks ---
 import {
@@ -165,6 +170,7 @@ import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
 import type { IWorkflowStore } from './store';
 import type { WorkflowDefinition, WorkflowRun, WorkflowRunNodeSession } from './schemas';
 import { RUN_METADATA_KEYS, workflowDefinitionSchema } from './schemas';
+import { substituteWorkflowVariables } from './executor-shared';
 
 // --- Helpers ---
 
@@ -192,6 +198,8 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     updateWorkflowActivity: mock(async () => {}),
     completeWorkflowRun: mock(async () => {}),
     pauseWorkflowRun: mock(async () => {}),
+    pauseWorkflowRunForWait: mock(async () => {}),
+    clearWorkflowWaitContext: mock(async () => ({ cleared: true })),
     rewriteApprovalContext: mock(async () => ({ resolved: true })),
     claimWriteback: mock(async () => ({ claimed: true })),
     releaseWritebackClaim: mock(async () => {}),
@@ -259,6 +267,7 @@ function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
     user_id: null,
     parent_run_id: null,
     output_root: null,
+    adopted_from_run_id: null,
     ...overrides,
   };
 }
@@ -299,6 +308,31 @@ describe('executeWorkflow', () => {
   // -------------------------------------------------------------------------
 
   describe('container resume guard', () => {
+    it('rejects a fresh container workflow with a durable wait before creating a run', async () => {
+      const workflow = workflowDefinitionSchema.parse({
+        name: 'container-wait',
+        description: 'unsupported durable wait in container isolation',
+        nodes: [{ id: 'delay', wait: { duration_ms: 1000 } }],
+      });
+      const store = makeStore();
+
+      await expect(
+        executeWorkflow(
+          makeDeps(store),
+          makePlatform(),
+          'conv-1',
+          '/tmp/ops',
+          workflow,
+          'msg',
+          'db-conv-1',
+          { execContext: { kind: 'container', containerId: 'cid' } }
+        )
+      ).rejects.toThrow('durable wait, which is not supported in container isolation');
+
+      expect(store.createWorkflowRun).not.toHaveBeenCalled();
+      expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+    });
+
     it('fails a container run resumed without a container context, pointing at the CLI', async () => {
       const failSpy = mock(async () => {});
       const store = makeStore({ failWorkflowRun: failSpy });
@@ -358,6 +392,61 @@ describe('executeWorkflow', () => {
         costUsd: 0.5,
       });
       expect(result.success).toBe(true);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Adopted-run directory on resume (#2747)
+  // -------------------------------------------------------------------------
+
+  describe('adopted run dir on resume', () => {
+    it('resolves $ADOPTED_RUN_DIR on a resumed run from its persisted adopted_from_run_id', async () => {
+      const store = makeStore({
+        getWorkflowRun: mock(async (id: string) =>
+          id === 'prior-run'
+            ? makeRun({ id: 'prior-run', status: 'completed', output_root: '/tmp/roots/prior' })
+            : { ...makeRun(), status: 'completed' as const }
+        ),
+      });
+      let substituted = '';
+      mockExecuteDagWorkflow.mockImplementationOnce(async () => {
+        substituted = substituteWorkflowVariables(
+          'Read $ADOPTED_RUN_DIR/report.md',
+          'run-123',
+          'msg',
+          '/artifacts',
+          'main',
+          'docs'
+        ).prompt;
+        return undefined;
+      });
+      const result = await executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv-1',
+        '/tmp/ops',
+        makeWorkflow(),
+        'msg',
+        'db-conv-1',
+        {
+          preCreatedRun: makeRun({ status: 'running', adopted_from_run_id: 'prior-run' }),
+          priorCompletedNodes: new Map([['node1', { output: 'out' }]]),
+        }
+      );
+      expect(result.success).toBe(true);
+      expect(store.getWorkflowRun).toHaveBeenCalledWith('prior-run');
+      // path.join resolves platform-separator natively; the template's own
+      // '/report.md' suffix stays a literal POSIX slash
+      expect(substituted).toBe(
+        `Read ${join('/tmp/roots/prior', 'artifacts', 'runs', 'prior-run')}/report.md`
+      );
+      // The adoption announcement is creation-only — a resume must not re-emit it.
+      const adoptedEvents = (
+        store.createWorkflowEvent as ReturnType<typeof mock>
+      ).mock.calls.filter(
+        c => (c[0] as { event_type: string }).event_type === 'workflow.run_adopted'
+      );
+      expect(adoptedEvents).toHaveLength(0);
     });
   });
 
@@ -729,6 +818,340 @@ describe('executeWorkflow', () => {
           'db-conv-1'
         )
       ).rejects.toThrow(/unknown provider 'claud'/);
+    });
+  });
+
+  describe('run-scoped model bindings (#2481)', () => {
+    it('rebinding large changes only large and records the effective profile', async () => {
+      const createRun = mock<IWorkflowStore['createWorkflowRun']>(async () => makeRun());
+      const store = makeStore({ createWorkflowRun: createRun });
+      await executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow({ model: 'large' }),
+        'msg',
+        'db-conv-1',
+        {
+          modelOverrideLayer: {
+            kind: 'raw',
+            overrides: { tiers: { large: 'openai/gpt-5.6' } },
+          },
+        }
+      );
+
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[6]).toBe('pi');
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[7]).toBe('openai/gpt-5.6');
+      const profile = mockExecuteDagWorkflow.mock.calls[0]?.[18];
+      expect(profile?.aliases.large).toEqual({ provider: 'pi', model: 'openai/gpt-5.6' });
+      expect(profile?.aliases.small?.provider).toBe('claude');
+      expect(profile?.aliases.medium?.provider).toBe('claude');
+      expect(
+        (mockLogFn.mock.calls as unknown[][]).some(
+          call =>
+            call[1] === 'workflow_provider_resolved' &&
+            (call[0] as { providerSource?: string }).providerSource === 'run-override'
+        )
+      ).toBe(true);
+
+      const created = createRun.mock.calls[0]?.[0];
+      expect(created?.metadata?.model_bindings).toMatchObject({
+        overrides: { tiers: { large: { provider: 'pi', model: 'openai/gpt-5.6' } } },
+        effective: { aliases: { large: { provider: 'pi', model: 'openai/gpt-5.6' } } },
+      });
+    });
+
+    it('merges effective bindings onto a pre-created fresh run before DAG execution', async () => {
+      const updateRun = mock<IWorkflowStore['updateWorkflowRun']>(async () => {});
+      const preCreatedRun = makeRun({ id: 'pending-run', status: 'pending', metadata: {} });
+      const store = makeStore({ updateWorkflowRun: updateRun });
+
+      await executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow({ model: 'large' }),
+        'msg',
+        'db-conv-1',
+        {
+          preCreatedRun,
+          modelOverrideLayer: {
+            kind: 'raw',
+            overrides: { tiers: { large: 'codex/gpt-5.6-sol' } },
+          },
+        }
+      );
+
+      expect(updateRun).toHaveBeenCalledWith(
+        'pending-run',
+        expect.objectContaining({
+          metadata: expect.objectContaining({ model_bindings: expect.any(Object) }),
+        })
+      );
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[6]).toBe('codex');
+    });
+
+    it('fails a pre-created run when its effective bindings cannot be recorded', async () => {
+      const updateRun = mock<IWorkflowStore['updateWorkflowRun']>(async () => {
+        throw new Error('database unavailable');
+      });
+      const failRun = mock<IWorkflowStore['failWorkflowRun']>(async () => {});
+      const preCreatedRun = makeRun({ id: 'pending-run', status: 'pending', metadata: {} });
+
+      const result = await executeWorkflow(
+        makeDeps(makeStore({ updateWorkflowRun: updateRun, failWorkflowRun: failRun })),
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow({ model: 'large' }),
+        'msg',
+        'db-conv-1',
+        {
+          preCreatedRun,
+          modelOverrideLayer: {
+            kind: 'raw',
+            overrides: { tiers: { large: 'codex/gpt-5.6-sol' } },
+          },
+        }
+      );
+
+      expect(result).toEqual({
+        success: false,
+        workflowRunId: 'pending-run',
+        error: 'Database error recording workflow model bindings',
+      });
+      expect(failRun).toHaveBeenCalledWith(
+        'pending-run',
+        'Database error recording workflow model bindings'
+      );
+      expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+    });
+
+    it('restores the persisted sparse layer on resume and refuses a new one', async () => {
+      const preCreatedRun = makeRun({
+        id: 'resume-model-run',
+        status: 'running',
+        metadata: {
+          model_bindings: {
+            overrides: {
+              tiers: { large: { provider: 'pi', model: 'openai/gpt-5.6' } },
+            },
+            effective: {
+              defaultProvider: 'claude',
+              aliases: {
+                small: { provider: 'claude', model: 'haiku' },
+                medium: { provider: 'claude', model: 'sonnet' },
+                large: { provider: 'pi', model: 'openai/gpt-5.6' },
+              },
+            },
+          },
+        },
+      });
+
+      await executeWorkflow(
+        makeDeps(makeStore()),
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow({ model: 'large' }),
+        'msg',
+        'db-conv-1',
+        { preCreatedRun, priorCompletedNodes: new Map() }
+      );
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[6]).toBe('pi');
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[7]).toBe('openai/gpt-5.6');
+
+      await expect(
+        executeWorkflow(
+          makeDeps(makeStore()),
+          makePlatform(),
+          'conv-1',
+          '/tmp',
+          makeWorkflow({ model: 'large' }),
+          'msg',
+          'db-conv-1',
+          {
+            preCreatedRun,
+            priorCompletedNodes: new Map(),
+            modelOverrideLayer: {
+              kind: 'raw',
+              overrides: { tiers: { large: 'codex/gpt-5.6-sol' } },
+            },
+          }
+        )
+      ).rejects.toThrow(/Cannot supply model overrides when resuming/);
+    });
+
+    it('resumes a persisted no-op effort accepted by the provider', async () => {
+      const preCreatedRun = makeRun({
+        id: 'resume-opencode-effort-run',
+        status: 'running',
+        metadata: {
+          model_bindings: {
+            overrides: {
+              tiers: {
+                large: {
+                  provider: 'opencode',
+                  model: 'anthropic/claude-sonnet-4-6',
+                  effort: 'ultra',
+                },
+              },
+            },
+            effective: {
+              defaultProvider: 'claude',
+              aliases: {
+                small: { provider: 'claude', model: 'haiku' },
+                medium: { provider: 'claude', model: 'sonnet' },
+                large: {
+                  provider: 'opencode',
+                  model: 'anthropic/claude-sonnet-4-6',
+                  effort: 'ultra',
+                },
+              },
+            },
+          },
+        },
+      });
+
+      await executeWorkflow(
+        makeDeps(makeStore()),
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow({ model: 'large' }),
+        'msg',
+        'db-conv-1',
+        { preCreatedRun, priorCompletedNodes: new Map() }
+      );
+
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[6]).toBe('opencode');
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[7]).toBe('anthropic/claude-sonnet-4-6');
+    });
+
+    it('terminalizes a resumed run with an invalid persisted alias key', async () => {
+      const failRun = mock<IWorkflowStore['failWorkflowRun']>(async () => {});
+      const preCreatedRun = makeRun({
+        id: 'resume-invalid-alias-run',
+        status: 'running',
+        metadata: {
+          model_bindings: {
+            overrides: {
+              aliases: { planner: { provider: 'claude', model: 'opus' } },
+            },
+            effective: {
+              defaultProvider: 'claude',
+              aliases: {},
+            },
+          },
+        },
+      });
+
+      await expect(
+        executeWorkflow(
+          makeDeps(makeStore({ failWorkflowRun: failRun })),
+          makePlatform(),
+          'conv-1',
+          '/tmp',
+          makeWorkflow({ model: 'large' }),
+          'msg',
+          'db-conv-1',
+          { preCreatedRun, priorCompletedNodes: new Map() }
+        )
+      ).rejects.toThrow(/invalid model_bindings aliases/);
+
+      expect(failRun).toHaveBeenCalledWith(
+        'resume-invalid-alias-run',
+        expect.stringContaining('invalid model_bindings aliases')
+      );
+      expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+    });
+
+    it('fails a pre-created row when a semantic binding error stops startup', async () => {
+      const failRun = mock<IWorkflowStore['failWorkflowRun']>(async () => {});
+      const preCreatedRun = makeRun({ id: 'invalid-model-run', status: 'pending', metadata: {} });
+
+      await expect(
+        executeWorkflow(
+          makeDeps(makeStore({ failWorkflowRun: failRun })),
+          makePlatform(),
+          'conv-1',
+          '/tmp',
+          makeWorkflow({ model: 'large' }),
+          'msg',
+          'db-conv-1',
+          {
+            preCreatedRun,
+            modelOverrideLayer: {
+              kind: 'raw',
+              overrides: { aliases: { '@missing': 'codex/gpt-5.6-sol' } },
+            },
+          }
+        )
+      ).rejects.toThrow(/unknown alias '@missing'/);
+      expect(failRun).toHaveBeenCalledWith(
+        'invalid-model-run',
+        expect.stringContaining("unknown alias '@missing'")
+      );
+      expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+    });
+
+    it('keeps concurrent profiles isolated and leaves no residue', async () => {
+      const workflow = makeWorkflow({ model: 'large', mutates_checkout: false });
+      await Promise.all([
+        executeWorkflow(
+          makeDeps(makeStore({ createWorkflowRun: mock(async () => makeRun({ id: 'run-a' })) })),
+          makePlatform(),
+          'conv-a',
+          '/tmp',
+          workflow,
+          'a',
+          'db-a',
+          {
+            modelOverrideLayer: {
+              kind: 'raw',
+              overrides: { tiers: { large: 'openai/gpt-5.6' } },
+            },
+          }
+        ),
+        executeWorkflow(
+          makeDeps(makeStore({ createWorkflowRun: mock(async () => makeRun({ id: 'run-b' })) })),
+          makePlatform(),
+          'conv-b',
+          '/tmp',
+          workflow,
+          'b',
+          'db-b',
+          {
+            modelOverrideLayer: {
+              kind: 'raw',
+              overrides: { tiers: { large: 'codex/gpt-5.6-sol' } },
+            },
+          }
+        ),
+      ]);
+
+      const concurrent = mockExecuteDagWorkflow.mock.calls.slice(0, 2).map(call => ({
+        provider: call[6],
+        model: call[7],
+      }));
+      expect(concurrent).toContainEqual({ provider: 'pi', model: 'openai/gpt-5.6' });
+      expect(concurrent).toContainEqual({ provider: 'codex', model: 'gpt-5.6-sol' });
+
+      await executeWorkflow(
+        makeDeps(makeStore({ createWorkflowRun: mock(async () => makeRun({ id: 'run-c' })) })),
+        makePlatform(),
+        'conv-c',
+        '/tmp',
+        workflow,
+        'c',
+        'db-c'
+      );
+      const cleanCall = mockExecuteDagWorkflow.mock.calls[2];
+      expect(cleanCall?.[6]).toBe('claude');
+      expect(cleanCall?.[7]).not.toBe('openai/gpt-5.6');
+      expect(cleanCall?.[7]).not.toBe('gpt-5.6-sol');
     });
   });
 
@@ -2547,6 +2970,53 @@ describe('hydrateResumableRun', () => {
     expect(result).not.toBeNull();
     expect(result?.priorCompletedNodes.size).toBe(0);
     expect(store.resumeWorkflowRun).toHaveBeenCalledWith('paused-loop');
+  });
+
+  it.each([
+    [
+      'first-node wait',
+      'paused',
+      {
+        wait: {
+          owner: 'node',
+          nodeId: 'delay',
+          kind: 'time',
+          waitingSince: '2026-08-24T10:00:00.000Z',
+          resumeAt: '2026-08-24T11:00:00.000Z',
+        },
+      },
+    ],
+    [
+      'first-node quota continuation',
+      'failed',
+      {
+        scheduled_resume: {
+          reason: 'quota',
+          resumeAt: '2026-08-24T11:00:00.000Z',
+          deadlineAt: '2026-08-25T11:00:00.000Z',
+          attempt: 1,
+          maxAttempts: 1,
+          error: 'usage limit reached',
+        },
+      },
+    ],
+  ] as const)('hydrates a %s with zero completed nodes', async (_label, status, metadata) => {
+    const candidate = makeRun({ id: 'first-node-continuation', status, metadata });
+    const resumed = makeRun({ id: 'first-node-continuation', status: 'running', metadata });
+    const store = makeStore({
+      getDagResumeSnapshot: mock(async () => ({
+        completedNodeOutputs: new Map(),
+        tokens: { input: 0, output: 0 },
+        costUsd: 0,
+      })),
+      resumeWorkflowRun: mock(async () => resumed),
+    });
+
+    const result = await hydrateResumableRun(makeDeps(store), candidate);
+
+    expect(result).not.toBeNull();
+    expect(result?.priorCompletedNodes.size).toBe(0);
+    expect(store.resumeWorkflowRun).toHaveBeenCalledWith('first-node-continuation');
   });
 
   it('#2714 regression: resumes a first-node legacy on_reject gate with a genuinely staged rework, even with zero completed nodes', async () => {

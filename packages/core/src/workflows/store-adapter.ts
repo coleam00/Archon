@@ -77,6 +77,8 @@ export function createWorkflowStore(): IWorkflowStore {
     completeWorkflowRun: workflowDb.completeWorkflowRun,
     failWorkflowRun: workflowDb.failWorkflowRun,
     pauseWorkflowRun: workflowDb.pauseWorkflowRun,
+    pauseWorkflowRunForWait: workflowDb.pauseWorkflowRunForWait,
+    clearWorkflowWaitContext: workflowDb.clearWorkflowWaitContext,
     rewriteApprovalContext: (id, approvalContext) =>
       workflowDb.resolveApprovalGate(id, { approval: approvalContext }, []),
     claimWriteback: workflowDb.claimWriteback,

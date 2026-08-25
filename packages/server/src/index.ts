@@ -80,6 +80,12 @@ import { PgNotifyListener } from './adapters/web/pg-notify-listener';
 import { registerApiRoutes } from './routes/api';
 import { registerGithubWebhookRoute } from './routes/webhooks';
 import {
+  startWorkflowContinuationScheduler,
+  stopWorkflowContinuationScheduler,
+  workflowResumeConversationId,
+  workflowResumeTargetForConversation,
+} from './services/workflow-resume-service';
+import {
   handleMessage,
   pool,
   ConversationLockManager,
@@ -105,6 +111,8 @@ import {
 import type { IPlatformAdapter } from '@archon/core';
 import type { IdentityPlatform } from '@archon/core';
 import * as userDb from '@archon/core/db/users';
+import * as conversationDb from '@archon/core/db/conversations';
+import type { IWorkflowPlatform } from '@archon/workflows/deps';
 import {
   createLogger,
   logArchonPaths,
@@ -961,10 +969,44 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     getLog().info('telegram_adapter_skipped');
   }
 
+  // Continuations can execute only after every credential provider and platform
+  // adapter is initialized. Web background runs execute against a hidden worker
+  // conversation but deliver to their visible parent; other runs use their owning
+  // conversation directly.
+  const workflowPlatforms = new Map<string, IWorkflowPlatform>();
+  for (const platform of [webAdapter, github, gitea, gitlab, discord, slack, telegram]) {
+    if (platform !== null) workflowPlatforms.set(platform.getPlatformType(), platform);
+  }
+  startWorkflowContinuationScheduler(async run => {
+    const conversation = await conversationDb.getConversationById(
+      workflowResumeConversationId(run)
+    );
+    if (!conversation) {
+      return { kind: 'unavailable', reason: 'origin conversation no longer exists' };
+    }
+    if (run.parent_conversation_id !== null) {
+      const parent = await conversationDb.getConversationById(run.parent_conversation_id);
+      if (!parent?.platform_conversation_id) {
+        return { kind: 'unavailable', reason: 'parent conversation no longer exists' };
+      }
+      if (!conversation.platform_conversation_id) {
+        return { kind: 'unavailable', reason: 'worker conversation has no platform id' };
+      }
+      return workflowResumeTargetForConversation(
+        parent,
+        workflowPlatforms,
+        conversation.platform_conversation_id,
+        parent.platform_conversation_id
+      );
+    }
+    return workflowResumeTargetForConversation(conversation, workflowPlatforms);
+  });
+
   // Graceful shutdown
   const shutdown = (): void => {
     getLog().info('server_shutting_down');
     stopCleanupScheduler();
+    stopWorkflowContinuationScheduler();
     persistence.stopPeriodicFlush();
 
     // Flush all buffered messages before stopping adapters

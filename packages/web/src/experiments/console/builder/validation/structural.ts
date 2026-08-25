@@ -4,7 +4,32 @@
  * without depending on a runtime schema.
  */
 import type { BuilderNode, BuilderWorkflow, Issue } from '../types';
+import { OUTPUT_REF_SOURCE } from '@/lib/node-ref';
 import { makeIssue } from './make-issue';
+
+const waitTimestampPattern = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?Z$/;
+const wholeInputsRefPattern = /^\$INPUTS\.[a-zA-Z_][a-zA-Z0-9_-]*$/;
+// @archon/web cannot import workflow runtime values. Keep aligned with
+// MAX_DURABLE_WAIT_MS in @archon/workflows/schemas/dag-node.
+const MAX_DURABLE_WAIT_MS = 1_000 * 365 * 24 * 60 * 60 * 1_000;
+
+function isValidWaitTimestamp(value: string): boolean {
+  if (new RegExp(OUTPUT_REF_SOURCE).test(value) || wholeInputsRefPattern.test(value.trim())) {
+    return true;
+  }
+  const match = waitTimestampPattern.exec(value);
+  if (match === null) return false;
+  const parsed = new Date(value);
+  return (
+    Number.isFinite(parsed.getTime()) &&
+    parsed.getUTCFullYear() === Number(match[1]) &&
+    parsed.getUTCMonth() + 1 === Number(match[2]) &&
+    parsed.getUTCDate() === Number(match[3]) &&
+    parsed.getUTCHours() === Number(match[4]) &&
+    parsed.getUTCMinutes() === Number(match[5]) &&
+    parsed.getUTCSeconds() === Number(match[6] ?? 0)
+  );
+}
 
 /** Empty (or whitespace-only) ids and duplicate ids across the node list. */
 function checkIds(nodes: BuilderNode[]): Issue[] {
@@ -126,6 +151,51 @@ function checkRequiredFields(node: BuilderNode): Issue[] {
       if (node.data.message.trim().length === 0)
         missing('approval.message', 'approval requires a message');
       break;
+    case 'wait': {
+      const conditions = [node.data.duration_ms, node.data.until, node.data.event].filter(
+        value => value !== undefined
+      );
+      if (conditions.length !== 1) {
+        invalid('wait', "wait requires exactly one of 'duration_ms', 'until', or 'event'");
+      }
+      if (
+        node.data.duration_ms !== undefined &&
+        (!Number.isInteger(node.data.duration_ms) ||
+          node.data.duration_ms <= 0 ||
+          node.data.duration_ms > MAX_DURABLE_WAIT_MS)
+      ) {
+        invalid(
+          'wait.duration_ms',
+          'wait duration must be a positive integer no greater than 1000 years'
+        );
+      }
+      if (node.data.until?.trim().length === 0) {
+        missing('wait.until', 'wait timestamp must not be empty');
+      } else if (node.data.until !== undefined && !isValidWaitTimestamp(node.data.until)) {
+        invalid(
+          'wait.until',
+          'wait timestamp must be an ISO-8601 UTC timestamp or contain a runtime reference'
+        );
+      }
+      if (node.data.event?.trim().length === 0)
+        missing('wait.event', 'wait event must not be empty');
+      if (
+        node.data.event !== undefined &&
+        (node.data.deadline_ms === undefined ||
+          !Number.isInteger(node.data.deadline_ms) ||
+          node.data.deadline_ms <= 0 ||
+          node.data.deadline_ms > MAX_DURABLE_WAIT_MS)
+      ) {
+        invalid(
+          'wait.deadline_ms',
+          'event waits require a positive integer deadline no greater than 1000 years'
+        );
+      }
+      if (node.data.event === undefined && node.data.deadline_ms !== undefined) {
+        invalid('wait.deadline_ms', 'deadline is only supported for event waits');
+      }
+      break;
+    }
     case 'cancel':
       if (node.data.reason.trim().length === 0) missing('cancel', 'cancel requires a reason');
       break;

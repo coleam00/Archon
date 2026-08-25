@@ -41,6 +41,84 @@ export const workflowRunOutcomeSchema = z.enum(['succeeded', 'failed']);
 
 export type WorkflowRunOutcome = z.infer<typeof workflowRunOutcomeSchema>;
 
+const workflowWaitTimeFields = {
+  kind: z.literal('time'),
+  waitingSince: z.string().datetime(),
+  resumeAt: z.string().datetime(),
+} as const;
+const workflowWaitEventFields = {
+  kind: z.literal('event'),
+  waitingSince: z.string().datetime(),
+  resumeAt: z.string().datetime(),
+  event: z.string().trim().min(1),
+  signaledAt: z.string().datetime().optional(),
+  payload: z.unknown().optional(),
+} as const;
+const workflowWaitNodeOwnerFields = {
+  owner: z.literal('node'),
+  nodeId: z.string().min(1),
+} as const;
+const workflowWaitLoopOwnerFields = {
+  owner: z.literal('loop_group'),
+  nodeId: z.string().min(1),
+  bodyWaitId: z.string().min(1),
+  iteration: z.number().int().positive(),
+  sessionId: z.string().nullable(),
+  sessionProvider: z.string().nullable(),
+} as const;
+
+/**
+ * Persisted reason a run is waiting on the outside world rather than a person.
+ * Loop-owned cursors carry their complete owner path in the initial pause write;
+ * there is no externally visible body-owned intermediate state.
+ */
+export const workflowWaitContextSchema = z.union([
+  z.strictObject({ ...workflowWaitNodeOwnerFields, ...workflowWaitTimeFields }),
+  z.strictObject({ ...workflowWaitNodeOwnerFields, ...workflowWaitEventFields }),
+  z.strictObject({ ...workflowWaitLoopOwnerFields, ...workflowWaitTimeFields }),
+  z.strictObject({ ...workflowWaitLoopOwnerFields, ...workflowWaitEventFields }),
+]);
+export type WorkflowWaitContext = z.infer<typeof workflowWaitContextSchema>;
+
+export function isWorkflowWaitContext(value: unknown): value is WorkflowWaitContext {
+  return workflowWaitContextSchema.safeParse(value).success;
+}
+
+export function workflowWaitStepName(wait: WorkflowWaitContext): string {
+  return wait.owner === 'loop_group' ? `${wait.nodeId}.${wait.bodyWaitId}` : wait.nodeId;
+}
+
+export const scheduledWorkflowResumeSchema = z
+  .object({
+    reason: z.literal('quota'),
+    resumeAt: z.string().datetime(),
+    deadlineAt: z.string().datetime(),
+    attempt: z.number().int().positive(),
+    maxAttempts: z.number().int().positive(),
+    triggeredAt: z.string().datetime().optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.attempt > value.maxAttempts) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['attempt'],
+        message: 'quota continuation attempt cannot exceed maxAttempts',
+      });
+    }
+    if (Date.parse(value.resumeAt) > Date.parse(value.deadlineAt)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['resumeAt'],
+        message: 'quota continuation resumeAt cannot exceed deadlineAt',
+      });
+    }
+  });
+export type ScheduledWorkflowResume = z.infer<typeof scheduledWorkflowResumeSchema>;
+
+export function isScheduledWorkflowResume(value: unknown): value is ScheduledWorkflowResume {
+  return scheduledWorkflowResumeSchema.safeParse(value).success;
+}
+
 /** Statuses that indicate a run has finished and cannot transition further. */
 export const TERMINAL_WORKFLOW_STATUSES: readonly WorkflowRunStatus[] = [
   'completed',
@@ -158,6 +236,16 @@ export const workflowRunSchema = z.object({
    */
   parent_run_id: z.string().nullable(),
   /**
+   * Between-run continuation (#2747). The terminal run whose estate (branch/
+   * worktree + artifacts-by-reference via `$ADOPTED_RUN_DIR`) this run
+   * explicitly adopted. Written once at run creation, never on resume (the
+   * `output_root` write-once precedent). Reverse lookup (`adopted_by`) reads
+   * the same column — the chain walks in both directions with no second
+   * column. Also carries supersession (`--supersedes`), which records
+   * provenance WITHOUT lane inheritance; the mode lives in run metadata.
+   */
+  adopted_from_run_id: z.string().nullable(),
+  /**
    * Durable pointer to this run's storage tree (#2200) — the resolved
    * `~/.archon/workspaces/<project>/` root its artifacts, logs, and state live
    * under. Written ONCE at run start and never rewritten (a resume must not
@@ -271,6 +359,27 @@ export function readSubrunMetadata(metadata: Record<string, unknown> | undefined
 export const RUN_METADATA_KEYS = {
   identityUnresolved: 'identity_unresolved',
 } as const;
+
+/**
+ * Between-run continuation (#2747). Written once at run creation alongside
+ * `adopted_from_run_id`: `{mode: 'adopt'}` when this run took over a terminal
+ * run's estate, `{mode: 'supersede'}` when a fresh-lane rerun replaces its open
+ * item (NO lane inheritance). Lives in metadata, not a column — nothing queries
+ * it except display.
+ */
+export const CONTINUATION_METADATA_KEY = 'continuation';
+
+export type ContinuationMode = 'adopt' | 'supersede';
+
+/** Typed view of the continuation stamp; undefined when the run adopted nothing. */
+export function readContinuationMode(
+  metadata: Record<string, unknown> | undefined
+): ContinuationMode | undefined {
+  const raw = metadata?.[CONTINUATION_METADATA_KEY];
+  if (typeof raw !== 'object' || raw === null) return undefined;
+  const mode = (raw as { mode?: unknown }).mode;
+  return mode === 'adopt' || mode === 'supersede' ? mode : undefined;
+}
 
 /** Typed view of the run-lifecycle keys on a run's metadata; undefined when unset. */
 export function readIdentityUnresolved(

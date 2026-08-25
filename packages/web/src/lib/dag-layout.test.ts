@@ -46,6 +46,18 @@ describe('resolveNodeDisplay', () => {
       nodeType: 'approval',
     });
   });
+
+  test('wait node returns its condition without falling through to Prompt', (): void => {
+    const dn: DagNode = {
+      id: 'n3',
+      wait: { event: 'checks.complete', deadline_ms: 60_000 },
+    };
+    expect(resolveNodeDisplay(dn)).toEqual({
+      label: 'Wait',
+      nodeType: 'wait',
+      promptText: 'checks.complete',
+    });
+  });
 });
 
 describe('dagNodesToReactFlow', () => {

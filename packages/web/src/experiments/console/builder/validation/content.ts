@@ -72,6 +72,11 @@ function variantTextBodies(node: BuilderNode): string[] {
     case 'approval':
       // `on_reject.prompt` is an ordinary prompt the engine substitutes and scans.
       return [node.data.message, ...(node.data.on_reject ? [node.data.on_reject.prompt] : [])];
+    case 'wait':
+      return [
+        ...(node.data.until !== undefined ? [node.data.until] : []),
+        ...(node.data.event !== undefined ? [node.data.event] : []),
+      ];
     case 'loop':
       // A command-backed loop has no inline text to scan — the command file's
       // body is loaded at runtime (same posture as the engine loader's ref scan).

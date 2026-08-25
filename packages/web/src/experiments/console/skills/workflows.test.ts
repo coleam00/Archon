@@ -1,5 +1,5 @@
 import { describe, test, expect, afterEach } from 'bun:test';
-import { buildWorkflowPath, buildSavePath, listWorkflows } from './workflows';
+import { buildWorkflowPath, buildSavePath, getWorkflowGraph, listWorkflows } from './workflows';
 
 describe('buildWorkflowPath', () => {
   test('encodes both name and cwd', () => {
@@ -68,6 +68,39 @@ describe('listWorkflows — declared inputs survive the wire mapping (#2554)', (
     expect(result.workflows[0].inputs).toEqual([
       { name: 'diff', required: true, default: null, description: null },
       { name: 'style', required: false, default: 'strict', description: null },
+    ]);
+  });
+});
+
+describe('getWorkflowGraph', () => {
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  test('projects wait nodes as wait rather than prompt', async () => {
+    globalThis.fetch = ((_input: RequestInfo | URL, _init?: RequestInit) =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            workflows: [
+              {
+                workflow: {
+                  name: 'await-checks',
+                  description: 'waits for checks',
+                  nodes: [{ id: 'checks', wait: { event: 'checks.complete', deadline_ms: 1000 } }],
+                },
+                source: 'project',
+              },
+            ],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        )
+      )) as typeof fetch;
+
+    await expect(getWorkflowGraph('await-checks')).resolves.toEqual([
+      { id: 'checks', dependsOn: [], kind: 'wait' },
     ]);
   });
 });

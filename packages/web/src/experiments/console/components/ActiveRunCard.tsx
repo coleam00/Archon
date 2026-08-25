@@ -8,7 +8,7 @@ import { ApprovalContext } from './ApprovalContext';
 import type { Run } from '../primitives/run';
 import { shortRunId, formatElapsed, elapsedSince, formatCost } from '../lib/format';
 import { useIsDocker, useIdeEnv, openInIde } from '../lib/health';
-import { statusTextClass, statusLabel } from '../lib/run-status';
+import { statusTextClass, runStatusLabel } from '../lib/run-status';
 
 /** Present + non-empty — narrows `string | null | undefined` to `string`. */
 const hasValue = (v: string | null | undefined): v is string => v != null && v !== '';
@@ -106,7 +106,7 @@ export function ActiveRunCard({
           <span
             className={`shrink-0 text-[10px] font-semibold uppercase tracking-[0.12em] ${statusTextClass[run.status]}`}
           >
-            {statusLabel[run.status]}
+            {runStatusLabel(run)}
           </span>
           <span className="mx-1 h-3 w-px shrink-0 bg-border" aria-hidden />
           <span className="text-sm font-medium text-text-primary">{run.workflow}</span>
@@ -173,6 +173,25 @@ export function ActiveRunCard({
                 </span>
               </>
             ) : null}
+          </div>
+        ) : null}
+
+        {run.status === 'paused' && run.wait != null ? (
+          <div className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 rounded border border-warning/25 bg-warning/[0.05] px-3 py-2 text-[12px]">
+            <span className="font-mono text-text-tertiary">node</span>
+            <span className="font-mono text-text-primary">{run.wait.nodeId}</span>
+            {run.wait.event !== undefined ? (
+              <>
+                <span className="font-mono text-text-tertiary">event</span>
+                <span className="font-mono text-text-primary">{run.wait.event}</span>
+              </>
+            ) : null}
+            <span className="font-mono text-text-tertiary">
+              {run.wait.kind === 'event' ? 'deadline' : 'resume'}
+            </span>
+            <span className="font-mono text-text-secondary">
+              {new Date(run.wait.resumeAt).toLocaleString()}
+            </span>
           </div>
         ) : null}
 

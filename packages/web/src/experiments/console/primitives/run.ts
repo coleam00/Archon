@@ -53,6 +53,13 @@ export interface Run {
     decisions: { id: string; label?: string }[];
     decisionsAuthored: boolean;
   } | null;
+  /** Active durable wait cursor. Mutually exclusive with approval metadata. */
+  wait?: {
+    nodeId: string;
+    kind: 'time' | 'event';
+    resumeAt: string;
+    event?: string;
+  } | null;
   /**
    * Set when a paused run's gate was already approved/rejected and the run is
    * only awaiting auto-resume (server: metadata.approval.resolved). The
@@ -187,6 +194,26 @@ export function toRun(raw: RawWorkflowRun): Run {
             (approval as { decisionsAuthored?: unknown }).decisionsAuthored === true,
         }
       : null;
+  const wait = raw.metadata?.wait;
+  const isWaitShape =
+    wait !== null &&
+    typeof wait === 'object' &&
+    wait !== undefined &&
+    'nodeId' in wait &&
+    typeof wait.nodeId === 'string' &&
+    'resumeAt' in wait &&
+    typeof (wait as { resumeAt: unknown }).resumeAt === 'string' &&
+    'kind' in wait &&
+    ((wait as { kind: unknown }).kind === 'time' || (wait as { kind: unknown }).kind === 'event');
+  const waitRecord = isWaitShape ? (wait as Record<string, unknown>) : undefined;
+  const parsedWait = isWaitShape
+    ? {
+        nodeId: (wait as { nodeId: string }).nodeId,
+        kind: (wait as { kind: 'time' | 'event' }).kind,
+        resumeAt: (wait as { resumeAt: string }).resumeAt,
+        ...(typeof waitRecord?.event === 'string' ? { event: waitRecord.event } : {}),
+      }
+    : null;
 
   return {
     id: raw.id,
@@ -206,6 +233,7 @@ export function toRun(raw: RawWorkflowRun): Run {
     currentNode: raw.current_step_name ?? null,
     lastTool: null,
     approval: parsedApproval,
+    wait: parsedWait,
     gateResolved,
     parentRunId: raw.parent_run_id ?? null,
   };

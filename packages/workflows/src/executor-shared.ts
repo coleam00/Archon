@@ -6,6 +6,7 @@
  * utilities. Single source of truth; no logic changes from either copy.
  */
 import { readFile } from 'fs/promises';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { join } from 'path';
 import type { IWorkflowPlatform, WorkflowDeps, WorkflowMessageMetadata } from './deps';
 import * as archonPaths from '@archon/paths';
@@ -14,18 +15,8 @@ import { BUNDLED_COMMANDS, isBinaryBuild } from './defaults/bundled-defaults';
 import { createLogger } from '@archon/paths';
 import { isValidCommandName } from './command-validation';
 import type { LoadCommandResult } from './schemas';
-import { INPUT_NAME_SOURCE } from './schemas/dag-node';
-import { similarNodeIds, canonicalValueText, type JsonValue } from './output-ref';
+import { substituteInputRefs, type JsonValue } from './output-ref';
 import { getPackagedResourceDirectory, parsePackagedResourceReference } from './packaged-workflow';
-
-/**
- * Runtime `$INPUTS.<name>` reference — the sub-run twin of the include-expander's
- * load-time INPUTS_REF, built from the same identifier grammar so a name that
- * validates as a `with:` key can never fail to match here. Resolved only for
- * `workflow:` sub-runs (child runs get `metadata.inputs`), and only into non-shell
- * surfaces (shell nodes get `INPUTS_<UPPER_SNAKE>` env vars instead — see #2470).
- */
-const INPUTS_RUNTIME_REF = new RegExp(String.raw`\$INPUTS\.(${INPUT_NAME_SOURCE})`, 'g');
 
 /** Lazy-initialized logger */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -39,11 +30,14 @@ function getLog(): ReturnType<typeof createLogger> {
 /** Result of error classification */
 export type ErrorType = 'TRANSIENT' | 'FATAL' | 'UNKNOWN';
 
-/**
- * Fatal error patterns - errors that won't resolve with retry: authentication/
- * authorization failures and provider quota/limit-window exhaustion (a retry
- * inside the same limit window is guaranteed to fail — see #2177).
- */
+const QUOTA_EXHAUSTION_PATTERNS = [
+  'session limit',
+  'usage limit reached',
+  'credit exhaustion',
+  'credit balance',
+] as const;
+
+/** Fatal errors: authentication/authorization failures plus quota exhaustion. */
 export const FATAL_PATTERNS = [
   'unauthorized',
   'forbidden',
@@ -52,14 +46,26 @@ export const FATAL_PATTERNS = [
   'permission denied',
   '401',
   '403',
-  'credit balance',
-  'session limit', // Claude subscription 5h window — covers every detectCreditExhaustion session variant
-  'usage limit reached', // Claude CLI quota string, e.g. "Claude AI usage limit reached|<ts>"
-  'credit exhaustion', // synthesized "Credit exhaustion detected — resume when credits reset"
+  ...QUOTA_EXHAUSTION_PATTERNS,
 ];
 
 /** Ambiguous fatal patterns that yield to concrete transient evidence. */
 const FALLBACK_FATAL_PATTERNS = ['auth error'];
+
+/**
+ * Rate/concurrency pressure (429, provider overload) — a subset of TRANSIENT that
+ * sheds load on a minutes-scale window, so it earns its own patient backoff policy
+ * (see {@link getRetryDelayMs}) instead of the generic short exponential one (#2706).
+ * Defined first so {@link TRANSIENT_PATTERNS} derives from it: a pattern can never
+ * widen the rate-limit budget while classifyError treats it as non-transient.
+ */
+export const RATE_LIMIT_PATTERNS = [
+  '429',
+  'rate limit',
+  'too many requests',
+  'overloaded', // Anthropic/Minimax overload message text
+  'at capacity', // Codex/OpenAI model-level saturation
+] as const;
 
 /** Transient error patterns - temporary issues that may resolve with retry */
 export const TRANSIENT_PATTERNS = [
@@ -67,15 +73,12 @@ export const TRANSIENT_PATTERNS = [
   'econnrefused',
   'econnreset',
   'etimedout',
-  'rate limit',
-  'too many requests',
-  '429',
+  ...RATE_LIMIT_PATTERNS,
   '503',
   '502',
   '529', // Anthropic HTTP 529 = service overloaded
-  'overloaded', // Anthropic/Minimax overload message text
-  'at capacity', // Codex/OpenAI model-level saturation
   'network error',
+  'stream closed without yielding content', // empty provider stream (#2706): silent rejection or interruption, not a node defect
   'socket hang up',
   'exited with code',
   'claude code crash',
@@ -108,6 +111,61 @@ export function classifyError(error: Error): ErrorType {
     return 'FATAL';
   }
   return 'UNKNOWN';
+}
+
+/** Retry budget for rate-limited failures, replacing the node's own maxRetries when one is seen. */
+export const RATE_LIMIT_MAX_RETRIES = 5;
+
+/** Flat delay center for rate-limit retries; jitter widens it to ±50% in {@link getRetryDelayMs}. */
+export const RATE_LIMIT_RETRY_DELAY_MS = 45_000;
+
+export function isRateLimitError(error: string): boolean {
+  const message = error.toLowerCase();
+  return RATE_LIMIT_PATTERNS.some(pattern => message.includes(pattern));
+}
+
+/**
+ * Delay before retry attempt N for a failed attempt with this error message.
+ *
+ * Rate-limit failures back off FLAT at ~45s ±50% jitter: providers shedding load
+ * recover on a minutes-scale window with no retry-after signal (#2706), so exponential
+ * from 3s either exhausts before the window opens or over-waits once it does; flat +
+ * jitter spreads concurrent nodes apart without thundering-herd re-synchronization.
+ * Everything else keeps the caller's base × 2^attempt exponential shape.
+ */
+export function getRetryDelayMs(
+  errorMessage: string,
+  attempt: number,
+  baseDelayMs: number
+): number {
+  if (isRateLimitError(errorMessage)) {
+    return Math.round(RATE_LIMIT_RETRY_DELAY_MS * (0.5 + Math.random()));
+  }
+  return baseDelayMs * Math.pow(2, attempt);
+}
+
+export function isQuotaExhaustionError(error: string): boolean {
+  const message = error.toLowerCase();
+  return QUOTA_EXHAUSTION_PATTERNS.some(pattern => message.includes(pattern));
+}
+
+/** Parse only provider reset forms that carry an unambiguous instant/duration. */
+export function extractQuotaResetAt(error: string, now = new Date()): Date | null {
+  const epoch = /usage limit reached\|(\d{10,13})/i.exec(error)?.[1];
+  if (epoch !== undefined) {
+    const raw = Number(epoch);
+    const millis = epoch.length === 10 ? raw * 1000 : raw;
+    const parsed = new Date(millis);
+    return Number.isFinite(parsed.getTime()) ? parsed : null;
+  }
+  const relative = /resets\s+in\s+(\d+(?:\.\d+)?)\s*(m(?:in(?:ute)?s?)?|h(?:ours?)?)/i.exec(error);
+  if (relative?.[1] !== undefined && relative[2] !== undefined) {
+    const amount = Number(relative[1]);
+    const multiplier = relative[2].toLowerCase().startsWith('h') ? 60 * 60 * 1000 : 60 * 1000;
+    const parsed = new Date(now.getTime() + amount * multiplier);
+    return Number.isFinite(parsed.getTime()) ? parsed : null;
+  }
+  return null;
 }
 
 /**
@@ -521,6 +579,28 @@ export async function loadCommandPrompt(
 
 // ─── Variable Substitution ───────────────────────────────────────────────────
 
+/**
+ * Scope holding the current run's adopted artifact directory (#2747), entered by
+ * the executor around DAG execution. A scoped context rather than another
+ * positional parameter because the value is RUN-level (like `artifactsDir`) but
+ * is consumed at every substitution site several layers down; a child sub-run's
+ * `executeWorkflow` re-enters with its own (absent) scope, correctly shadowing
+ * the parent's adoption.
+ */
+const adoptedRunDirContext = new AsyncLocalStorage<string>();
+
+export function runWithAdoptedRunDir<T>(
+  adoptedRunDir: string | undefined,
+  fn: () => Promise<T>
+): Promise<T> {
+  if (adoptedRunDir === undefined) return fn();
+  return adoptedRunDirContext.run(adoptedRunDir, fn);
+}
+
+function currentAdoptedRunDir(): string | undefined {
+  return adoptedRunDirContext.getStore();
+}
+
 /** Pattern string for context variables - used to create fresh regex instances */
 export const CONTEXT_VAR_PATTERN_STR =
   '\\$(?:CONTEXT|EXTERNAL_CONTEXT|ISSUE_CONTEXT)(?![A-Za-z0-9_])';
@@ -535,6 +615,9 @@ export const CONTEXT_VAR_PATTERN_STR =
  * - $STATE_DIR - External per-PROJECT cross-run state directory (shared by every
  *   workflow in the project; pre-created by the executor). Throws if referenced
  *   without a resolved value.
+ * - $ADOPTED_RUN_DIR (#2747) - The adopted run's artifact directory, resolved
+ *   through its persisted `output_root`. Read-only by contract; throws if
+ *   referenced without an adoption active.
  * - $BASE_BRANCH - The base branch (from config or auto-detected)
  * - $CONTEXT, $EXTERNAL_CONTEXT, $ISSUE_CONTEXT - GitHub issue/PR context (if available)
  * - $DOCS_DIR - Documentation directory path (configured or default 'docs/')
@@ -562,7 +645,13 @@ export function substituteWorkflowVariables(
   loopUserInput?: string,
   rejectionReason?: string,
   loopPrevOutput?: string,
-  options?: { shellSafe?: boolean; stateDir?: string; inputs?: Record<string, JsonValue> }
+  options?: {
+    shellSafe?: boolean;
+    stateDir?: string;
+    inputs?: Record<string, JsonValue>;
+    /** Adopted run's artifact directory (#2747). Undefined = no adoption active. */
+    adoptedRunDir?: string;
+  }
 ): { prompt: string; contextSubstituted: boolean } {
   // Fail fast if the prompt references $BASE_BRANCH but no base branch could be resolved
   if (!baseBranch && prompt.includes('$BASE_BRANCH')) {
@@ -584,6 +673,18 @@ export function substituteWorkflowVariables(
     );
   }
 
+  // $ADOPTED_RUN_DIR (#2747) resolves only under an explicit adoption. A run
+  // that references it without one throws — mirroring $BASE_BRANCH/$STATE_DIR —
+  // because a literal or empty substitution would silently point work at
+  // nothing instead of telling the author the run was never started with --adopt.
+  if (!options?.adoptedRunDir && !currentAdoptedRunDir() && prompt.includes('$ADOPTED_RUN_DIR')) {
+    throw new Error(
+      '$ADOPTED_RUN_DIR is referenced but this run did not adopt a prior run. ' +
+        'Start it with `workflow run <name> --adopt <run-id>` (or adopt_run_id on the API) ' +
+        "to read an earlier run's artifacts by reference."
+    );
+  }
+
   // Defensive: ensure docsDir always has a value (callers should resolve, but guard here)
   const resolvedDocsDir = docsDir || 'docs/';
 
@@ -596,6 +697,7 @@ export function substituteWorkflowVariables(
     // Engine-controlled like $ARTIFACTS_DIR — substituted even under shellSafe,
     // or `bash:`/`script:` bodies would never see it.
     .replace(/\$STATE_DIR/g, options?.stateDir ?? '')
+    .replace(/\$ADOPTED_RUN_DIR/g, options?.adoptedRunDir ?? currentAdoptedRunDir() ?? '')
     .replace(/\$BASE_BRANCH/g, baseBranch)
     .replace(/\$DOCS_DIR/g, resolvedDocsDir);
 
@@ -613,21 +715,7 @@ export function substituteWorkflowVariables(
     // source (#2115). Bash/script bodies read INPUTS_<UPPER_SNAKE> env vars instead.
     // An unknown name THROWS (mirrors $node.output.field strictness) rather than
     // substituting '' — a typo'd input silently emptying is worse than a load-visible error.
-    const inputs = options?.inputs;
-    result = result.replace(INPUTS_RUNTIME_REF, (_match, name: string) => {
-      // Canonical text (#2637): a typed input splices as its one deterministic
-      // representation — strings raw, everything else canonical JSON text.
-      if (inputs && Object.hasOwn(inputs, name)) return canonicalValueText(inputs[name]);
-      const known = inputs ? Object.keys(inputs) : [];
-      const hint = similarNodeIds(name, known);
-      const suffix =
-        hint.length > 0
-          ? ` Did you mean ${hint.map(h => `$INPUTS.${h}`).join(', ')}?`
-          : known.length > 0
-            ? ` Available inputs: ${known.map(k => `$INPUTS.${k}`).join(', ')}.`
-            : ' This run has no declared inputs.';
-      throw new Error(`Unknown input '$INPUTS.${name}'.${suffix}`);
-    });
+    result = substituteInputRefs(result, options?.inputs);
   }
 
   // Check if context variables exist (use fresh regex to avoid lastIndex issues)

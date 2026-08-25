@@ -144,6 +144,26 @@ export function parseWholeInputsRef(text: string): string | undefined {
   return WHOLE_INPUTS_REF_PATTERN.exec(text.trim())?.[1];
 }
 
+/** Resolve every runtime `$INPUTS.<name>` reference in a text surface. */
+export function substituteInputRefs(
+  text: string,
+  inputs: Record<string, JsonValue> | undefined
+): string {
+  const pattern = new RegExp(String.raw`\$INPUTS\.(${INPUT_NAME_SOURCE})`, 'g');
+  return text.replace(pattern, (_match, name: string) => {
+    if (inputs && Object.hasOwn(inputs, name)) return canonicalValueText(inputs[name]);
+    const known = inputs ? Object.keys(inputs) : [];
+    const hint = similarNodeIds(name, known);
+    const suffix =
+      hint.length > 0
+        ? ` Did you mean ${hint.map(candidate => `$INPUTS.${candidate}`).join(', ')}?`
+        : known.length > 0
+          ? ` Available inputs: ${known.map(candidate => `$INPUTS.${candidate}`).join(', ')}.`
+          : ' This run has no declared inputs.';
+    throw new Error(`Unknown input '$INPUTS.${name}'.${suffix}`);
+  });
+}
+
 /** Anchored whole-value form: the ENTIRE (trimmed) string is one `$id.output[.field]` ref. */
 const WHOLE_OUTPUT_REF_PATTERN = new RegExp(
   `^${OUTPUT_REF_SOURCE}(?:\\.([a-zA-Z_][a-zA-Z0-9_]*))?$`

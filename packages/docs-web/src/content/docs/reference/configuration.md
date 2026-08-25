@@ -96,6 +96,13 @@ paths:
 concurrency:
   maxConversations: 10
 
+# Optional continuation for provider quota-window exhaustion. Off by default.
+workflows:
+  autoResumeOnQuotaReset: false
+  # quotaFallbackDelayMs: 3600000
+  quotaMaxAttempts: 1
+  quotaDeadlineMs: 86400000
+
 # Model tiers — optional cross-provider presets used by bundled workflows,
 # custom workflows, direct chat (`large`), and title generation (`small`).
 tiers:
@@ -110,6 +117,8 @@ aliases:
 ```
 
 The `tiers:` block above is no longer hand-edit-only -- you can also set the `small`/`medium`/`large` presets from the console **AI Settings** -> **Model Tiers** panel, or from the CLI with [`archon ai tier set`](/reference/cli/#ai). Connecting your own provider API key or subscription is covered in [Per-user credentials and AI Settings](/getting-started/ai-assistants/#per-user-credentials-and-ai-settings).
+
+These files are persistent layers. For one invocation, use repeatable [`workflow run --model <name>=<spec>`](/reference/cli/#workflow-run-name-message) or the run API's `tiers` / `aliases` maps. A per-run map is sparse and sits above user, repository, global, and built-in values without editing any config file. Loading a separate config file for one run is tracked separately in [#2482](https://github.com/coleam00/Archon/issues/2482).
 
 ## Repository Configuration
 
@@ -695,6 +704,21 @@ DISCORD_STREAMING_MODE=batch
 | Web UI   | SSE streaming (always real-time, not configurable) |
 
 ---
+
+## Workflow continuation settings
+
+`workflows:` can be set globally or per repository; repo fields override matching global fields.
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `autoResumeOnQuotaReset` | `false` | Schedule a failed workflow for continuation when its node error proves provider quota-window exhaustion |
+| `quotaFallbackDelayMs` | unset | Explicit delay to use only when the provider error has no machine-readable reset time, capped at 1000 years. When unset, Archon records that automatic continuation was skipped instead of guessing |
+| `quotaMaxAttempts` | `1` | Maximum number of scheduled continuation attempts for one run |
+| `quotaDeadlineMs` | `86400000` | Maximum window from the first quota failure in which a continuation may be scheduled, capped at 1000 years |
+
+This policy is separate from per-node `retry:`. Quota exhaustion is terminal for the current attempt because retrying in the same provider window only repeats the failure. When enabled, Archon leaves the run `failed`, records the scheduled time in run metadata, and the server claims and resumes it when due. The claim is durable and bounded, so two server scans cannot launch the same attempt and an early resume failure does not create a rapid retry loop.
+
+Provider errors that include an unambiguous epoch or relative reset duration use it. Errors such as MiniMax plan exhaustion code `2056` often omit a reset time; those resume only when you configure `quotaFallbackDelayMs`. The server must be running at the due time, or it resumes the run on the first later scan.
 
 ## Concurrency Settings
 

@@ -24,6 +24,8 @@ import {
   declaredFieldsFromSchema,
   jsonValueSchema,
   parseWholeOutputRef,
+  parseWholeInputsRef,
+  OUTPUT_REF_SOURCE,
   INPUT_NAME_SOURCE,
   type JsonValue,
 } from '../output-ref';
@@ -275,6 +277,13 @@ export const dagNodeBaseSchema = z.object({
   // prior run completed it successfully. Use for producers whose exit code does
   // not capture output validity (e.g. bash that writes a file the consumer parses).
   always_run: z.boolean().optional(),
+  // Post-run tree-integrity assertion (#2771): when explicitly `false`, the engine
+  // snapshots the git working tree before the node runs and fails the node with an
+  // error naming it if the snapshot changed — outside the run's engine-owned
+  // directories (artifacts/state/logs). Enforced for exec and agent nodes; warned
+  // as ignored on wait and workflow (sub-run) nodes, whose execution is not a
+  // single checkout-scoped payload. Absent means no enforcement.
+  mutates_checkout: z.boolean().optional(),
   // Persist this node's provider session ID across workflow re-runs in the same
   // scope (typically the conversation). On the next run with the same scope, the
   // executor loads the stored session and passes it as resumeSessionId. Requires
@@ -615,6 +624,91 @@ export const haltNodeSchema = dagNodeBaseSchema.extend({
 /** DAG node that cancels the workflow run with a reason string */
 export type HaltNode = z.infer<typeof haltNodeSchema>;
 
+/** Engine-visible condition that may suspend a run without occupying a worker slot. */
+export const MAX_DURABLE_WAIT_MS = 1_000 * 365 * 24 * 60 * 60 * 1_000;
+
+export const waitConfigFlatSchema = z.object({
+  duration_ms: z.number().int().positive().max(MAX_DURABLE_WAIT_MS).optional(),
+  until: z.string().min(1, "'wait.until' must not be empty").optional(),
+  event: z.string().trim().min(1, "'wait.event' must not be empty").optional(),
+  deadline_ms: z.number().int().positive().max(MAX_DURABLE_WAIT_MS).optional(),
+});
+export const waitUntilTimestampSchema = z.string().datetime();
+const waitUntilValueSchema = z
+  .string()
+  .min(1, "'wait.until' must not be empty")
+  .refine(
+    value =>
+      new RegExp(OUTPUT_REF_SOURCE).test(value) ||
+      parseWholeInputsRef(value) !== undefined ||
+      waitUntilTimestampSchema.safeParse(value).success,
+    "'wait.until' must be an ISO-8601 timestamp or contain a runtime reference"
+  );
+
+// The transforms preserve the validated wire shape while making sibling fields
+// `never` in the inferred type, so widened programmatic objects cannot combine variants.
+export const waitConfigSchema = z.union([
+  z
+    .strictObject({ duration_ms: z.number().int().positive().max(MAX_DURABLE_WAIT_MS) })
+    .transform(
+      value => value as typeof value & { until?: never; event?: never; deadline_ms?: never }
+    ),
+  z
+    .strictObject({ until: waitUntilValueSchema })
+    .transform(
+      value => value as typeof value & { duration_ms?: never; event?: never; deadline_ms?: never }
+    ),
+  z
+    .strictObject({
+      event: z.string().trim().min(1, "'wait.event' must not be empty"),
+      deadline_ms: z.number().int().positive().max(MAX_DURABLE_WAIT_MS),
+    })
+    .transform(value => value as typeof value & { duration_ms?: never; until?: never }),
+]);
+export type WaitConfig = z.infer<typeof waitConfigSchema>;
+
+/** Validated engine condition used for exhaustive wait execution. */
+export type WaitCondition =
+  | { kind: 'duration'; durationMs: number }
+  | { kind: 'until'; timestamp: string }
+  | { kind: 'event'; event: string; deadlineMs: number };
+
+export function waitCondition(config: WaitConfig): WaitCondition {
+  if (config.duration_ms !== undefined) {
+    return { kind: 'duration', durationMs: config.duration_ms };
+  }
+  if (config.until !== undefined) {
+    return { kind: 'until', timestamp: config.until };
+  }
+  return { kind: 'event', event: config.event, deadlineMs: config.deadline_ms };
+}
+
+export const workflowWaitResultSchema = z.object({
+  status: z.enum(['satisfied', 'expired']),
+  waited_ms: z.number().nonnegative(),
+  event: z.string().optional(),
+  payload: z.unknown().optional(),
+});
+export type WorkflowWaitResult = z.infer<typeof workflowWaitResultSchema>;
+
+export const WAIT_NODE_OUTPUT_FORMAT = {
+  type: 'object',
+  properties: {
+    status: { type: 'string', enum: ['satisfied', 'expired'] },
+    waited_ms: { type: 'number' },
+    event: { type: 'string' },
+    payload: {},
+  },
+  required: ['status', 'waited_ms'],
+  additionalProperties: false,
+} as const;
+
+export const waitNodeSchema = dagNodeBaseSchema.extend({
+  kind: z.literal('wait'),
+  wait: waitConfigSchema,
+});
+export type WaitNode = z.infer<typeof waitNodeSchema>;
+
 /**
  * Identifier grammar for an include input name.
  *
@@ -778,6 +872,7 @@ export type DagNode =
   | ExecNode
   | GateNode
   | HaltNode
+  | WaitNode
   | LoopNode
   | LoopGroupNode
   | WorkflowNode;
@@ -825,9 +920,14 @@ export const SCRIPT_NODE_AI_FIELDS: readonly string[] = BASH_NODE_AI_FIELDS;
  * on a declared boolean. It stays listed for `loop_group`, which never calls
  * sendQuery — its body nodes carry their own.
  */
-export const LOOP_NODE_AI_FIELDS: readonly string[] = BASH_NODE_AI_FIELDS.filter(
-  f => f !== 'model' && f !== 'provider' && f !== 'pi' && f !== 'output_format'
-);
+export const LOOP_NODE_AI_FIELDS: readonly string[] = [
+  ...BASH_NODE_AI_FIELDS.filter(
+    f => f !== 'model' && f !== 'provider' && f !== 'pi' && f !== 'output_format'
+  ),
+  // The tree-integrity assertion (#2771) is enforced only on exec/agent nodes; on a
+  // loop it would have to cover every iteration's body, which no execution path does.
+  'mutates_checkout',
+];
 
 /**
  * AI-specific fields that are unsupported on loop_group nodes. `model`/`provider`
@@ -836,9 +936,30 @@ export const LOOP_NODE_AI_FIELDS: readonly string[] = BASH_NODE_AI_FIELDS.filter
  * sendQuery, and body nodes carry their own `pi:` block — so it's warned as
  * ignored here (unlike on a plain `loop:` node, which does sendQuery itself).
  */
-export const LOOP_GROUP_NODE_AI_FIELDS: readonly string[] = BASH_NODE_AI_FIELDS.filter(
-  f => f !== 'model' && f !== 'provider'
-);
+export const LOOP_GROUP_NODE_AI_FIELDS: readonly string[] = [
+  ...BASH_NODE_AI_FIELDS.filter(f => f !== 'model' && f !== 'provider'),
+  // Same as `loop:` above — body-node enforcement is the only real coverage.
+  'mutates_checkout',
+];
+
+/**
+ * Fields ignored on gate (approval) and halt (cancel) nodes — they make no provider
+ * call and execute nothing, so every AI-turn field is inert, and
+ * `mutates_checkout` (#2771) has no enforcement site for them either.
+ */
+export const GATE_AND_HALT_IGNORED_FIELDS: readonly string[] = [
+  ...BASH_NODE_AI_FIELDS,
+  'mutates_checkout',
+];
+
+/** Fields a wait cannot consume; its output contract and lifecycle are engine-owned. */
+export const WAIT_NODE_IGNORED_FIELDS: readonly string[] = [
+  ...BASH_NODE_AI_FIELDS.filter(field => field !== 'output_format'),
+  'idle_timeout',
+  // The tree-integrity assertion is enforced only on exec/agent nodes (#2771); a
+  // wait's lifecycle is engine-owned and touches no checkout-scoped payload.
+  'mutates_checkout',
+];
 
 /**
  * Fields that are meaningless on an include node — it inlines another workflow's
@@ -866,9 +987,13 @@ export const INCLUDE_NODE_IGNORED_FIELDS: readonly string[] = [
  * structural graph fields (id / depends_on / when / trigger_rule / description /
  * input / isolation) are likewise meaningful and absent here.
  */
-export const WORKFLOW_NODE_IGNORED_FIELDS: readonly string[] = BASH_NODE_AI_FIELDS.filter(
-  f => f !== 'output_format'
-);
+// `mutates_checkout` is appended rather than filtered out: enforcement (#2771) is
+// per-node over the parent checkout, which a sub-run child does not own — its own
+// workflow-level declaration governs instead.
+export const WORKFLOW_NODE_IGNORED_FIELDS: readonly string[] = [
+  ...BASH_NODE_AI_FIELDS.filter(f => f !== 'output_format'),
+  'mutates_checkout',
+];
 
 /**
  * Flat schema with all DAG node fields (base + mode + mode-specific) before
@@ -883,6 +1008,7 @@ export const dagNodeFlatSchema = dagNodeBaseSchema.extend({
   loop: loopNodeConfigSchema.optional(),
   loop_group: loopGroupNodeConfigSchema.optional(),
   approval: approvalConfigSchema.optional(),
+  wait: waitConfigSchema.optional(),
   cancel: z.string().optional(),
   // Load-time inlining directive — the target workflow name.
   include: z.string().min(1, "'include' must be a non-empty workflow name").optional(),
@@ -972,6 +1098,7 @@ export const dagNodeSchema = dagNodeFlatSchema
     const hasLoop = data.loop !== undefined;
     const hasLoopGroup = data.loop_group !== undefined;
     const hasApproval = data.approval !== undefined;
+    const hasWait = data.wait !== undefined;
     const hasCancel = typeof data.cancel === 'string' && data.cancel.trim().length > 0;
     const hasScript = typeof data.script === 'string' && data.script.trim().length > 0;
     const hasInclude = typeof data.include === 'string' && data.include.trim().length > 0;
@@ -984,6 +1111,7 @@ export const dagNodeSchema = dagNodeFlatSchema
       hasLoop,
       hasLoopGroup,
       hasApproval,
+      hasWait,
       hasCancel,
       hasScript,
       hasInclude,
@@ -994,7 +1122,7 @@ export const dagNodeSchema = dagNodeFlatSchema
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message:
-          "'command', 'prompt', 'bash', 'loop', 'loop_group', 'approval', 'cancel', 'script', 'include', and 'workflow' are mutually exclusive",
+          "'command', 'prompt', 'bash', 'loop', 'loop_group', 'approval', 'wait', 'cancel', 'script', 'include', and 'workflow' are mutually exclusive",
       });
       return z.NEVER;
     }
@@ -1296,7 +1424,7 @@ export const dagNodeSchema = dagNodeFlatSchema
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message:
-          "must have either 'command', 'prompt', 'bash', 'loop', 'loop_group', 'approval', 'cancel', 'script', 'include', or 'workflow'",
+          "must have either 'command', 'prompt', 'bash', 'loop', 'loop_group', 'approval', 'wait', 'cancel', 'script', 'include', or 'workflow'",
       });
       return z.NEVER;
     }
@@ -1417,6 +1545,29 @@ export const dagNodeSchema = dagNodeFlatSchema
       });
     }
 
+    if (hasWait && data.output_format !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "'output_format' is fixed by wait nodes and cannot be overridden",
+        path: ['output_format'],
+      });
+    }
+    if (hasWait && data.retry !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "'retry' is not supported on wait nodes; the persisted condition governs continuation",
+        path: ['retry'],
+      });
+    }
+    if (hasWait && data.always_run !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "'always_run' is not supported on wait nodes",
+        path: ['always_run'],
+      });
+    }
+
     // idle_timeout must be finite and positive
     if (
       data.idle_timeout !== undefined &&
@@ -1451,6 +1602,7 @@ export const dagNodeSchema = dagNodeFlatSchema
       ...structuralBase,
       ...(data.idle_timeout !== undefined ? { idle_timeout: data.idle_timeout } : {}),
       ...(data.always_run !== undefined ? { always_run: data.always_run } : {}),
+      ...(data.mutates_checkout !== undefined ? { mutates_checkout: data.mutates_checkout } : {}),
       ...(data.output_type !== undefined ? { output_type: data.output_type } : {}),
     };
 
@@ -1574,6 +1726,14 @@ export const dagNodeSchema = dagNodeFlatSchema
         captureResponse: data.approval.capture_response ?? false,
       } as GateNode;
     }
+    if (data.wait !== undefined) {
+      return {
+        ...base,
+        kind: 'wait',
+        wait: data.wait,
+        output_format: WAIT_NODE_OUTPUT_FORMAT,
+      } as WaitNode;
+    }
     if (data.cancel !== undefined && data.cancel.trim().length > 0) {
       return { ...base, ...shared, kind: 'halt', reason: data.cancel.trim() } as HaltNode;
     }
@@ -1669,6 +1829,11 @@ export function isExecNode(node: DagNode): node is ExecNode {
 /** Type guard: check if a DAG node is a gate (human-in-the-loop) node */
 export function isGateNode(node: DagNode): node is GateNode {
   return node.kind === 'gate';
+}
+
+/** Type guard: check if a DAG node is a durable world-wait node. */
+export function isWaitNode(node: DagNode): node is WaitNode {
+  return node.kind === 'wait';
 }
 
 /** Type guard: check if a DAG node is a halt (workflow termination) node */
@@ -1822,6 +1987,7 @@ export const KNOWN_NODE_NESTED_KEYS: ReadonlyMap<string, NestedKeySpec> = new Ma
   ['context', { kind: 'object', keys: new Set(Object.keys(nodeContextResumeSchema.shape)) }],
   ['loop', { kind: 'object', keys: new Set(Object.keys(loopNodeConfigSchema.shape)) }],
   ['loop_group', { kind: 'object', keys: new Set(Object.keys(loopGroupShape)) }],
+  ['wait', { kind: 'object', keys: new Set(Object.keys(waitConfigFlatSchema.shape)) }],
   ['pi', { kind: 'object', keys: new Set(Object.keys(piNodeConfigSchema.shape)) }],
   ['fan_out', { kind: 'object', keys: new Set(Object.keys(fanOutConfigSchema.shape)) }],
   // `agents` keys are author-chosen agent ids; each VALUE is an agentDefinition,

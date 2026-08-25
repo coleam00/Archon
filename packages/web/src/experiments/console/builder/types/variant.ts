@@ -2,7 +2,7 @@
  * Builder type definitions — the in-editor data model for a workflow under edit.
  *
  * A `BuilderNode` partitions a wire `DagNode` into `{ id, variant, base, data }`:
- *   - `variant`  — the discriminant (which of the seven node kinds this is)
+ *   - `variant`  — the discriminant (which of the eight node kinds this is)
  *   - `base`     — shared base fields (depends_on, when, model, …) minus `id`
  *   - `data`     — variant-specific fields, discriminated by `variant`
  *
@@ -13,7 +13,7 @@ import type { WorkflowNodeKind } from '../../primitives/workflow-graph';
 import type { WireDagNode, WireWorkflowDefinition } from './wire';
 
 /**
- * The seven representable node variants — an alias of the console's
+ * The eight representable node variants — an alias of the console's
  * `WorkflowNodeKind` primitive so the builder and the graph renderer share one
  * union (the builder does not redefine the kinds).
  */
@@ -25,8 +25,8 @@ export type VariantId = WorkflowNodeKind;
 
 /**
  * The base-field keys present on every wire `DagNode`, excluding `id` (which is
- * partitioned out separately) and the seven mutually-exclusive mode fields
- * (command/prompt/bash/script/loop/approval/cancel) plus their satellites
+ * partitioned out separately) and the eight mutually-exclusive mode fields
+ * (command/prompt/bash/script/loop/approval/wait/cancel) plus their satellites
  * (runtime/deps/timeout). Picking from `WireDagNode` keeps `BaseFields` exactly
  * in sync with the generated spec.
  *
@@ -118,6 +118,36 @@ export interface CancelNodeData {
   reason: string;
 }
 
+type UnionKeys<T> = T extends T ? keyof T : never;
+type UnionValue<T, K extends PropertyKey> = T extends Record<K, infer V> ? V : never;
+
+/**
+ * The wire wait is a validated one-of union. The builder deliberately holds an
+ * incomplete form while the operator switches variants and edits fields, then
+ * structural validation restores the wire invariant before serialization.
+ */
+export type WaitNodeData = {
+  [K in UnionKeys<NonNullable<WireDagNode['wait']>>]?: UnionValue<
+    NonNullable<WireDagNode['wait']>,
+    K
+  >;
+};
+
+/** Sparse builder output before structural validation restores the wire invariant. */
+export type BuilderDagFragment = Omit<Partial<WireDagNode>, 'wait'> & {
+  wait?: WaitNodeData;
+};
+
+/** Full preview node that may still contain an incomplete wait draft. */
+export type BuilderDagNode = Omit<WireDagNode, 'wait'> & {
+  wait?: WaitNodeData;
+};
+
+/** Preview/validation payload; it becomes a wire definition only after validation. */
+export type BuilderWorkflowDefinition = Omit<WireWorkflowDefinition, 'nodes'> & {
+  nodes: BuilderDagNode[];
+};
+
 /** Script node data (inline code or named script run via bun/uv). */
 export interface ScriptNodeData {
   script: string;
@@ -155,6 +185,7 @@ export interface BashNodeData {
 export interface VariantDataMap {
   loop: LoopNodeData;
   approval: ApprovalNodeData;
+  wait: WaitNodeData;
   cancel: CancelNodeData;
   script: ScriptNodeData;
   command: CommandNodeData;

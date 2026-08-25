@@ -192,6 +192,7 @@ CREATE TABLE IF NOT EXISTS remote_agent_workflow_runs (
   metadata JSONB DEFAULT '{}',
   parent_conversation_id UUID REFERENCES remote_agent_conversations(id) ON DELETE SET NULL,
   parent_run_id UUID REFERENCES remote_agent_workflow_runs(id) ON DELETE SET NULL,
+  adopted_from_run_id UUID REFERENCES remote_agent_workflow_runs(id) ON DELETE SET NULL,
   started_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   completed_at TIMESTAMP WITH TIME ZONE,
   last_activity_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
@@ -370,6 +371,15 @@ ALTER TABLE remote_agent_workflow_runs
 -- across a codebase rename (#1192). Declared identically on SQLite (sqlite.ts).
 ALTER TABLE remote_agent_workflow_runs
   ADD COLUMN IF NOT EXISTS output_root TEXT;
+
+-- Between-run continuation (#2747): the terminal run whose estate (worktree/
+-- branch + artifacts-by-reference) this run explicitly adopted. Mirrors
+-- `parent_run_id` exactly — nullable, self-referential, SET NULL — and like it
+-- is written once at run creation, never on resume. Reverse lookup (`adopted_by`)
+-- reads the same column; no second column. Declared identically on SQLite.
+ALTER TABLE remote_agent_workflow_runs
+  ADD COLUMN IF NOT EXISTS adopted_from_run_id UUID
+    REFERENCES remote_agent_workflow_runs(id) ON DELETE SET NULL;
 
 -- Authored workflow verdict (#2618), independent from lifecycle status. Nullable
 -- means undeclared or not yet authored; no default/backfill so historical rows
@@ -671,6 +681,9 @@ CREATE INDEX IF NOT EXISTS idx_workflow_runs_user_id
   ON remote_agent_workflow_runs(user_id) WHERE user_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_workflow_runs_parent_run
   ON remote_agent_workflow_runs(parent_run_id) WHERE parent_run_id IS NOT NULL;
+-- Open-work inbox (#2747): adopter lookup by adopted run.
+CREATE INDEX IF NOT EXISTS idx_workflow_runs_adopted_from
+  ON remote_agent_workflow_runs(adopted_from_run_id) WHERE adopted_from_run_id IS NOT NULL;
 -- Partial index for efficient staleness queries on running workflows
 CREATE INDEX IF NOT EXISTS idx_workflow_runs_last_activity
   ON remote_agent_workflow_runs(last_activity_at)

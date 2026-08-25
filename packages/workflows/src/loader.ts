@@ -14,6 +14,7 @@ import {
   isLoopNode,
   isLoopGroupNode,
   isGateNode,
+  isWaitNode,
   isHaltNode,
   isWorkflowNode,
   isIncludeDirective,
@@ -31,6 +32,8 @@ import {
   BASH_NODE_AI_FIELDS,
   LOOP_NODE_AI_FIELDS,
   LOOP_GROUP_NODE_AI_FIELDS,
+  GATE_AND_HALT_IGNORED_FIELDS,
+  WAIT_NODE_IGNORED_FIELDS,
   INCLUDE_NODE_IGNORED_FIELDS,
   WORKFLOW_NODE_IGNORED_FIELDS,
   KNOWN_DAG_NODE_KEYS,
@@ -659,11 +662,13 @@ function parseDagNode(
   if (isIncludeDirective(node)) {
     nonAiNode = { type: 'include', fields: INCLUDE_NODE_IGNORED_FIELDS };
   } else if (isHaltNode(node)) {
-    nonAiNode = { type: 'cancel', fields: BASH_NODE_AI_FIELDS };
+    nonAiNode = { type: 'cancel', fields: GATE_AND_HALT_IGNORED_FIELDS };
   } else if (isWorkflowNode(node)) {
     nonAiNode = { type: 'workflow', fields: WORKFLOW_NODE_IGNORED_FIELDS };
   } else if (isGateNode(node)) {
-    nonAiNode = { type: 'approval', fields: BASH_NODE_AI_FIELDS };
+    nonAiNode = { type: 'approval', fields: GATE_AND_HALT_IGNORED_FIELDS };
+  } else if (isWaitNode(node)) {
+    nonAiNode = { type: 'wait', fields: WAIT_NODE_IGNORED_FIELDS };
   } else if (isLoopNode(node)) {
     nonAiNode = { type: 'loop', fields: LOOP_NODE_AI_FIELDS };
   } else if (isLoopGroupNode(node)) {
@@ -791,23 +796,50 @@ export function validateDagStructure(
     }
   }
 
-  const queue = nodes.filter(n => (inDegree.get(n.id) ?? 0) === 0).map(n => n.id);
+  let ready = nodes.filter(n => (inDegree.get(n.id) ?? 0) === 0).map(n => n.id);
+  const layers: string[][] = [];
   let visited = 0;
 
-  while (queue.length > 0) {
-    const nodeId = queue.shift();
-    if (nodeId === undefined) break;
-    visited++;
-    for (const dep of dependents.get(nodeId) ?? []) {
-      const newDegree = (inDegree.get(dep) ?? 0) - 1;
-      inDegree.set(dep, newDegree);
-      if (newDegree === 0) queue.push(dep);
+  while (ready.length > 0) {
+    layers.push(ready);
+    const nextIds: string[] = [];
+    for (const nodeId of ready) {
+      visited++;
+      for (const dep of dependents.get(nodeId) ?? []) {
+        const newDegree = (inDegree.get(dep) ?? 0) - 1;
+        inDegree.set(dep, newDegree);
+        if (newDegree === 0) nextIds.push(dep);
+      }
     }
+    ready = nextIds;
   }
 
   if (visited < nodes.length) {
     const cycleNodes = nodes.filter(n => (inDegree.get(n.id) ?? 0) > 0).map(n => n.id);
     return `Cycle detected among nodes: ${cycleNodes.join(', ')}`;
+  }
+
+  // Scalar `shared` inherits one ambient sequential cursor. A multi-node ready set is
+  // the executor's exact definition of a parallel layer; it clears that cursor before
+  // evaluating `when:` or dispatching either sibling. Reject the otherwise silent no-op
+  // here, while the graph is still being loaded. Explicit named resume owns deliberate
+  // parallel ancestry (#2099/#2643).
+  for (const layer of layers) {
+    if (layer.length < 2) continue;
+    const sharedNode = layer
+      .map(nodeId => nodesById.get(nodeId))
+      .find(
+        (node): node is DagNode =>
+          node !== undefined &&
+          !isIncludeDirective(node) &&
+          isAgentNode(node) &&
+          node.context === 'shared'
+      );
+    if (sharedNode === undefined) continue;
+    if (enclosingNodes !== undefined) {
+      return `Node '${sharedNode.id}' uses scalar context: 'shared' in a structurally parallel loop_group body. Scalar 'shared' only inherits the ambient session in sequential layers. Serialize the body nodes with 'depends_on' or use fresh context; context.resume is not supported inside loop_group bodies`;
+    }
+    return `Node '${sharedNode.id}' uses scalar context: 'shared' in a structurally parallel layer. Scalar 'shared' only inherits the ambient session in sequential layers. Use 'context: { resume: <upstream-node-id> }' to fork an exact upstream session, or serialize the nodes with 'depends_on'`;
   }
 
   const directDeps = new Map<string, string[]>(nodes.map(n => [n.id, n.depends_on ?? []]));
@@ -823,10 +855,37 @@ export function validateDagStructure(
     return seen;
   };
 
+  const hasDurableWait = (node: DagNode | IncludeDirective): boolean => {
+    if (isIncludeDirective(node)) return false;
+    if (isWaitNode(node)) return true;
+    return isLoopGroupNode(node) && node.loop_group.nodes.some(hasDurableWait);
+  };
+  const canSuspend = (node: DagNode | IncludeDirective): boolean => {
+    if (isIncludeDirective(node)) return false;
+    if (isGateNode(node) || isWaitNode(node) || isWorkflowNode(node)) return true;
+    if (isLoopNode(node) && node.loop.interactive) return true;
+    return (
+      isLoopGroupNode(node) &&
+      (node.loop_group.interactive === true || node.loop_group.nodes.some(canSuspend))
+    );
+  };
+  const suspensionNodes = nodes.filter(canSuspend);
+  for (let index = 0; index < suspensionNodes.length; index++) {
+    const left = suspensionNodes[index];
+    if (left === undefined) continue;
+    for (const right of suspensionNodes.slice(index + 1)) {
+      const ordered =
+        transitiveDepsOf(left.id).has(right.id) || transitiveDepsOf(right.id).has(left.id);
+      if (!ordered && (hasDurableWait(left) || hasDurableWait(right))) {
+        return `Suspending nodes '${left.id}' and '${right.id}' can run concurrently; add a dependency so only one suspension owns the run cursor at a time`;
+      }
+    }
+  }
+
   // Check $nodeId.output references across every public YAML field the executor substitutes at
   // runtime: when:, and the text surfaces that flow through substituteNodeOutputRefs
   // (prompt, systemPrompt, agents.*.prompt/description, bash, script,
-  // approval.message/on_reject.prompt, cancel, loop.prompt, loop.until_bash,
+  // approval.message/on_reject.prompt, wait.until/event, cancel, loop.prompt, loop.until_bash,
   // loop_group.until_bash, workflow.input/with/fan_out.items). A dangling ref in any of
   // them can bind the wrong flat-DAG output or fail at run time, so all must be validated
   // here.
@@ -840,7 +899,7 @@ export function validateDagStructure(
   //      before this scan ever runs. It is a separate package and cannot import from here,
   //      so it is the copy most likely to fall behind; a miss there is a silent UX gap
   //      rather than a wrong run, since (1) still rejects the workflow. It covers the
-  //      surfaces of the 7 node variants the builder can author — `workflow:` and
+  //      surfaces of the 8 node variants the builder can author — `workflow:` and
   //      `loop_group:` are not authorable there, so their surfaces are out of its scope
   //      rather than missing from it.
   // Adding a substituted field to one means updating all four. Included loop-command
@@ -886,6 +945,14 @@ export function validateDagStructure(
       }
       if (isExecNode(node)) {
         sources.push({ field: node.runtime === 'sh' ? 'bash' : 'script', text: node.script });
+      }
+      if (isWaitNode(node)) {
+        if (node.wait.until !== undefined) {
+          sources.push({ field: 'wait.until', text: node.wait.until });
+        }
+        if (node.wait.event !== undefined) {
+          sources.push({ field: 'wait.event', text: node.wait.event });
+        }
       }
       // Node-local bindings (#2637): an agent's command-sourced `with:` and an exec
       // node's `with:` string values are live ref surfaces (whole refs and
@@ -974,6 +1041,29 @@ export function validateDagStructure(
             return `Node '${node.id}' field '${source.field}' references unknown node '$${refNodeId}.output'. Expected a node in the loop_group body or current/enclosing DAG scope`;
           }
           return `Node '${node.id}' field '${source.field}' references unknown node '$${refNodeId}.output'. In a composed workflow, pass caller data through declared 'inputs:' and caller 'with:' instead of referencing a caller node directly`;
+        }
+      }
+    }
+
+    if (!isIncludeDirective(node) && isWaitNode(node)) {
+      const waitSources: (readonly [string, string])[] = [];
+      if (node.wait.until !== undefined) waitSources.push(['wait.until', node.wait.until]);
+      if (node.wait.event !== undefined) waitSources.push(['wait.event', node.wait.event]);
+      for (const [field, text] of waitSources) {
+        outputRefPattern.lastIndex = 0;
+        let m: RegExpExecArray | null;
+        while ((m = outputRefPattern.exec(text)) !== null) {
+          const producerId = m[1];
+          if (
+            producerId === undefined ||
+            producerId === WHEN_INPUTS_SCOPE ||
+            enclosingNodes?.has(producerId)
+          ) {
+            continue;
+          }
+          if (!transitiveDepsOf(node.id).has(producerId)) {
+            return `Node '${node.id}' field '${field}' references '$${producerId}.output', which is not an upstream dependency — add '${producerId}' to '${node.id}'.depends_on so the wait condition is produced first`;
+          }
         }
       }
     }
@@ -1122,6 +1212,20 @@ export function validateDagStructure(
       );
       if (workflowInBody) {
         return `loop_group '${node.id}' body: 'workflow' (sub-run) is not supported inside a loop_group body`;
+      }
+      const dependedOn = new Set(node.loop_group.nodes.flatMap(n => n.depends_on ?? []));
+      const sinks = node.loop_group.nodes.filter(n => !dependedOn.has(n.id));
+      const misplacedWait = node.loop_group.nodes.find(
+        n => !isIncludeDirective(n) && isWaitNode(n) && (dependedOn.has(n.id) || sinks.length !== 1)
+      );
+      if (misplacedWait) {
+        return `loop_group '${node.id}' body: wait node '${misplacedWait.id}' must be the body's sole terminal sink`;
+      }
+      const nestedWaitGroup = node.loop_group.nodes.find(
+        n => !isIncludeDirective(n) && isLoopGroupNode(n) && hasDurableWait(n)
+      );
+      if (nestedWaitGroup) {
+        return `loop_group '${node.id}' body: wait nodes nested below another loop_group are not supported`;
       }
       const scopeNodes = new Map<string, DagNode | IncludeDirective>([
         ...(enclosingNodes ?? []),

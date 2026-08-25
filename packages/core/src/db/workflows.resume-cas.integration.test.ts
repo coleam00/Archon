@@ -12,6 +12,7 @@
  */
 import { describe, test, expect, mock } from 'bun:test';
 import type { TokenUsage } from '@archon/providers/types';
+import { isWorkflowWaitContext } from '@archon/workflows/schemas/workflow-run';
 
 mock.module('@archon/paths', () => ({
   createLogger: () => ({
@@ -42,6 +43,11 @@ mock.module('./connection', () => ({
 const {
   resumeWorkflowRun,
   pauseWorkflowRun,
+  pauseWorkflowRunForWait,
+  clearWorkflowWaitContext,
+  signalWorkflowWait,
+  listDueWorkflowContinuations,
+  deferWorkflowContinuation,
   getWorkflowRun,
   findResumableRun,
   findResumableRunByParentConversation,
@@ -572,6 +578,106 @@ async function countEvents(runId: string, eventType: string): Promise<number> {
   );
   return Number(result.rows[0]?.cnt ?? 0);
 }
+
+describe('durable wait continuation races — real SQLite', () => {
+  const waitA = {
+    owner: 'loop_group' as const,
+    nodeId: 'release-loop',
+    bodyWaitId: 'await-checks',
+    iteration: 1,
+    sessionId: null,
+    sessionProvider: null,
+    kind: 'event' as const,
+    event: 'checks.complete',
+    waitingSince: '2026-08-24T10:00:00.000Z',
+    resumeAt: '2099-08-25T10:00:00.000Z',
+  };
+
+  test('rejects a stale signal after the same event advances to a later occurrence', async () => {
+    await seed('wait-signal-cursor', 'paused', "datetime('now')", { wait: waitA });
+    await resumeWorkflowRun('wait-signal-cursor', {
+      kind: 'wait',
+      nodeId: waitA.nodeId,
+      resumeAt: waitA.resumeAt,
+    });
+    await clearWorkflowWaitContext('wait-signal-cursor', waitA, {
+      stepName: 'release-loop.await-checks',
+      result: { status: 'satisfied', waited_ms: 1, event: waitA.event },
+    });
+
+    const waitB = {
+      ...waitA,
+      iteration: 2,
+      waitingSince: '2026-08-24T10:01:00.000Z',
+      resumeAt: '2099-08-25T10:01:00.000Z',
+    };
+    await pauseWorkflowRunForWait('wait-signal-cursor', waitB, {
+      kind: 'started',
+      stepName: 'release-loop.await-checks',
+    });
+
+    await expect(
+      signalWorkflowWait('wait-signal-cursor', waitA, { conclusion: 'stale' })
+    ).resolves.toEqual({ signaled: false });
+
+    const run = await getWorkflowRun('wait-signal-cursor');
+    expect(run?.status).toBe('paused');
+    expect(run?.metadata.wait).toEqual(waitB);
+    expect(await countEvents('wait-signal-cursor', 'wait_signaled')).toBe(0);
+  });
+
+  test('gives one resume competitor ownership and leaves every loser side effect free', async () => {
+    await seed('wait-three-way-race', 'paused', "datetime('now')", {
+      wait: waitA,
+      error: 'prior attempt interrupted',
+    });
+    await expect(
+      signalWorkflowWait('wait-three-way-race', waitA, { conclusion: 'success' })
+    ).resolves.toEqual({ signaled: true });
+
+    const due = await listDueWorkflowContinuations(new Date('2026-08-24T10:02:00.000Z'), 25);
+    const dueRun = due.find(run => run.id === 'wait-three-way-race');
+    if (!dueRun || !isWorkflowWaitContext(dueRun.metadata.wait)) {
+      throw new Error('Expected the signaled wait to be selected as a due continuation');
+    }
+    const cursor = {
+      kind: 'wait' as const,
+      nodeId: dueRun.metadata.wait.nodeId,
+      resumeAt: dueRun.metadata.wait.resumeAt,
+    };
+    let dispatchCount = 0;
+    const claimAndDispatch = async (expectedCursor?: typeof cursor): Promise<void> => {
+      await resumeWorkflowRun('wait-three-way-race', expectedCursor);
+      dispatchCount += 1;
+    };
+
+    const claims = await Promise.allSettled([claimAndDispatch(cursor), claimAndDispatch()]);
+    expect(claims.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+    expect(dispatchCount).toBe(1);
+    expect(await countEvents('wait-three-way-race', 'workflow_resumed')).toBe(1);
+    expect(await countEvents('wait-three-way-race', 'wait_signaled')).toBe(1);
+
+    await deferWorkflowContinuation('wait-three-way-race', '2026-08-24T10:03:00.000Z', cursor);
+    expect((await getWorkflowRun('wait-three-way-race'))?.metadata.continuation_retry_at).toBe(
+      undefined
+    );
+
+    await clearWorkflowWaitContext('wait-three-way-race', waitA, {
+      stepName: 'release-loop.await-checks',
+      result: {
+        status: 'satisfied',
+        waited_ms: 120_000,
+        event: waitA.event,
+        payload: { conclusion: 'success' },
+      },
+    });
+    const consumed = await getWorkflowRun('wait-three-way-race');
+    expect(consumed?.status).toBe('running');
+    expect(consumed?.metadata.wait).toBeUndefined();
+    expect(await countEvents('wait-three-way-race', 'wait_completed')).toBe(1);
+    expect(await countEvents('wait-three-way-race', 'node_completed')).toBe(1);
+  });
+});
 
 describe('resolveApprovalGate — CAS at the DB layer (#2113)', () => {
   test('wins once on an open gate and merges the resolution metadata', async () => {

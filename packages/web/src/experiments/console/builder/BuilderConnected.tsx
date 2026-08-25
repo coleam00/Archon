@@ -41,7 +41,12 @@ import {
   saveTargetFor,
   validationFailureToIssues,
 } from './connect/save-logic';
-import type { BuilderWorkflow, Issue, WireWorkflowDefinition } from './types';
+import type {
+  BuilderWorkflow,
+  BuilderWorkflowDefinition,
+  Issue,
+  WireWorkflowDefinition,
+} from './types';
 import {
   loadWorkflow,
   saveWorkflow,
@@ -221,7 +226,7 @@ export function BuilderConnected(): ReactElement {
   const doSave = useCallback(async (): Promise<void> => {
     if (currentWorkflow === null || cwd === undefined || name === undefined) return;
     // Force the in-YAML name to match the route name so filename and `name:` stay in sync.
-    const definition: WireWorkflowDefinition = { ...toWorkflowDefinition(currentWorkflow), name };
+    const draft: BuilderWorkflowDefinition = { ...toWorkflowDefinition(currentWorkflow), name };
 
     const blocking = blockingErrors(runValidation(currentWorkflow));
     if (blocking.length > 0) {
@@ -236,11 +241,13 @@ export function BuilderConnected(): ReactElement {
 
     setBusy(true);
     try {
-      const validation = await validateWorkflow(definition);
+      const validation = await validateWorkflow(draft);
       if (!validation.valid) {
         setServerIssues(validationFailureToIssues(validation.errors));
         return;
       }
+      // The server validated this exact draft against the workflow wire schema.
+      const definition = draft as WireWorkflowDefinition;
       const saved = await saveWorkflow(name, definition, {
         cwd,
         source: saveTargetFor(effectiveSource),
@@ -296,15 +303,17 @@ export function BuilderConnected(): ReactElement {
 
     setBusy(true);
     try {
-      const definition: WireWorkflowDefinition = {
+      const draft: BuilderWorkflowDefinition = {
         ...toWorkflowDefinition(currentWorkflow),
         name: to,
       };
-      const validation = await validateWorkflow(definition);
+      const validation = await validateWorkflow(draft);
       if (!validation.valid) {
         setServerIssues(validationFailureToIssues(validation.errors));
         return;
       }
+      // The server validated this exact draft against the workflow wire schema.
+      const definition = draft as WireWorkflowDefinition;
       // New-then-old: the new file is authoritative even if the old delete fails.
       await saveWorkflow(to, definition, { cwd, source: saveTargetFor(effectiveSource) });
       let notices: Issue[] = [];

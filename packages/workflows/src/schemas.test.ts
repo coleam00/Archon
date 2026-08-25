@@ -2,6 +2,7 @@ import { describe, test, expect } from 'bun:test';
 import {
   isExecNode,
   isGateNode,
+  isWaitNode,
   isHaltNode,
   isLoopNode,
   isLoopGroupNode,
@@ -12,13 +13,20 @@ import {
   LOOP_NODE_AI_FIELDS,
   LOOP_GROUP_NODE_AI_FIELDS,
   INCLUDE_NODE_IGNORED_FIELDS,
+  WAIT_NODE_IGNORED_FIELDS,
+  WORKFLOW_NODE_IGNORED_FIELDS,
   BASH_NODE_AI_FIELDS,
   approvalOnRejectSchema,
   dagNodeSchema,
+  MAX_DURABLE_WAIT_MS,
+  waitConfigSchema,
   inputEnvKey,
   readSubrunMetadata,
   RUN_METADATA_KEYS,
   readIdentityUnresolved,
+  workflowWaitContextSchema,
+  scheduledWorkflowResumeSchema,
+  workflowWaitStepName,
 } from './schemas';
 import type {
   DagNode,
@@ -27,6 +35,7 @@ import type {
   HaltNode,
   IncludeDirective,
   TriggerRule,
+  WaitConfig,
 } from './schemas';
 
 // ---------------------------------------------------------------------------
@@ -45,6 +54,140 @@ const promptNode: AgentNode = {
 };
 const bashNode: ExecNode = { id: 'n3', kind: 'exec', runtime: 'sh', script: 'echo hello' };
 const cancelNode: HaltNode = { id: 'n5', kind: 'halt', reason: 'Precondition failed' };
+
+describe('persisted workflow continuation schemas', () => {
+  const timeWait = {
+    owner: 'node' as const,
+    nodeId: 'later',
+    kind: 'time' as const,
+    waitingSince: '2026-08-24T10:00:00.000Z',
+    resumeAt: '2026-08-25T10:00:00.000Z',
+  };
+
+  test('requires the fields belonging to the persisted wait kind and owner', () => {
+    expect(workflowWaitContextSchema.safeParse(timeWait).success).toBe(true);
+    expect(
+      workflowWaitContextSchema.safeParse({ ...timeWait, event: 'deploy.complete' }).success
+    ).toBe(false);
+    expect(workflowWaitContextSchema.safeParse({ ...timeWait, kind: 'event' }).success).toBe(false);
+
+    const loopEvent = workflowWaitContextSchema.parse({
+      owner: 'loop_group',
+      nodeId: 'release',
+      bodyWaitId: 'checks',
+      iteration: 2,
+      sessionId: null,
+      sessionProvider: null,
+      kind: 'event',
+      event: 'checks.complete',
+      waitingSince: '2026-08-24T10:00:00.000Z',
+      resumeAt: '2026-08-25T10:00:00.000Z',
+    });
+    expect(workflowWaitStepName(loopEvent)).toBe('release.checks');
+  });
+
+  test('rejects quota continuations beyond their attempt or time budget', () => {
+    const scheduled = {
+      reason: 'quota' as const,
+      resumeAt: '2026-08-25T10:00:00.000Z',
+      deadlineAt: '2026-08-26T10:00:00.000Z',
+      attempt: 1,
+      maxAttempts: 2,
+    };
+    expect(scheduledWorkflowResumeSchema.safeParse(scheduled).success).toBe(true);
+    expect(scheduledWorkflowResumeSchema.safeParse({ ...scheduled, attempt: 3 }).success).toBe(
+      false
+    );
+    expect(
+      scheduledWorkflowResumeSchema.safeParse({
+        ...scheduled,
+        resumeAt: '2026-08-27T10:00:00.000Z',
+      }).success
+    ).toBe(false);
+  });
+});
+
+describe('dagNodeSchema — durable wait', () => {
+  test('normalizes duration, until, and bounded event waits', () => {
+    const duration = dagNodeSchema.parse({ id: 'later', wait: { duration_ms: 5000 } });
+    const until = dagNodeSchema.parse({
+      id: 'clock',
+      wait: { until: '2026-08-25T10:00:00Z' },
+    });
+    const event = dagNodeSchema.parse({
+      id: 'ci',
+      wait: { event: 'checks.complete', deadline_ms: 60_000 },
+    });
+    expect(isWaitNode(duration as DagNode)).toBe(true);
+    expect((until as DagNode).kind).toBe('wait');
+    expect((event as DagNode).kind).toBe('wait');
+    expect((event as DagNode).output_format?.required).toEqual(['status', 'waited_ms']);
+  });
+
+  test('rejects ambiguous and unbounded waits', () => {
+    const mixedWait = { duration_ms: 1, until: '2026-08-25T10:00:00Z' };
+    // @ts-expect-error A programmatic caller must not be able to construct two wait variants.
+    const invalidTypedWait: WaitConfig = mixedWait;
+    expect(waitConfigSchema.safeParse(invalidTypedWait).success).toBe(false);
+    expect(
+      dagNodeSchema.safeParse({ id: 'mixed', wait: { duration_ms: 1, until: 'later' } }).success
+    ).toBe(false);
+    expect(
+      dagNodeSchema.safeParse({ id: 'event', wait: { event: 'checks.complete' } }).success
+    ).toBe(false);
+    expect(
+      dagNodeSchema.safeParse({ id: 'blank-event', wait: { event: '   ', deadline_ms: 1 } }).success
+    ).toBe(false);
+    expect(
+      dagNodeSchema.safeParse({ id: 'duration', wait: { duration_ms: 1, deadline_ms: 2 } }).success
+    ).toBe(false);
+    expect(
+      dagNodeSchema.safeParse({
+        id: 'custom-output',
+        wait: { duration_ms: 1 },
+        output_format: { type: 'string' },
+      }).success
+    ).toBe(false);
+    expect(
+      dagNodeSchema.safeParse({ id: 'repeating', wait: { duration_ms: 1 }, always_run: true })
+        .success
+    ).toBe(false);
+    expect(
+      dagNodeSchema.safeParse({ id: 'invalid-date', wait: { until: 'tomorrow' } }).success
+    ).toBe(false);
+    expect(
+      dagNodeSchema.safeParse({ id: 'stray-dollar', wait: { until: 'tomorrow$' } }).success
+    ).toBe(false);
+    expect(
+      dagNodeSchema.safeParse({ id: 'dynamic-date', wait: { until: '$schedule.output' } }).success
+    ).toBe(true);
+    expect(
+      dagNodeSchema.safeParse({ id: 'input-date', wait: { until: '$INPUTS.resume_at' } }).success
+    ).toBe(true);
+    expect(
+      dagNodeSchema.safeParse({ id: 'date-only', wait: { until: '2026-08-25' } }).success
+    ).toBe(false);
+  });
+
+  test('bounds persisted delays before they can overflow their timestamps', () => {
+    expect(waitConfigSchema.safeParse({ duration_ms: MAX_DURABLE_WAIT_MS }).success).toBe(true);
+    expect(waitConfigSchema.safeParse({ duration_ms: MAX_DURABLE_WAIT_MS + 1 }).success).toBe(
+      false
+    );
+    expect(
+      waitConfigSchema.safeParse({
+        event: 'checks.complete',
+        deadline_ms: MAX_DURABLE_WAIT_MS,
+      }).success
+    ).toBe(true);
+    expect(
+      waitConfigSchema.safeParse({
+        event: 'checks.complete',
+        deadline_ms: MAX_DURABLE_WAIT_MS + 1,
+      }).success
+    ).toBe(false);
+  });
+});
 
 describe('dagNodeSchema — context', () => {
   test('parses scalar and named resume contexts on AI consumers', () => {
@@ -1541,6 +1684,48 @@ describe('INCLUDE_NODE_IGNORED_FIELDS', () => {
     // Structural fields the include node legitimately carries are NOT ignored.
     for (const f of ['id', 'depends_on', 'when', 'trigger_rule', 'include', 'description']) {
       expect(INCLUDE_NODE_IGNORED_FIELDS).not.toContain(f);
+    }
+  });
+});
+
+describe('dagNodeSchema — mutates_checkout tree-integrity declaration (#2771)', () => {
+  test('parses a boolean on an exec node and carries it through the transform', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'guard',
+      bash: 'echo hi',
+      mutates_checkout: false,
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect('mutates_checkout' in result.data && result.data.mutates_checkout === false).toBe(
+        true
+      );
+    }
+  });
+
+  test('parses true and stays absent when undeclared', () => {
+    const declared = dagNodeSchema.safeParse({ id: 'a', prompt: 'x', mutates_checkout: true });
+    expect(
+      declared.success &&
+        'mutates_checkout' in declared.data &&
+        declared.data.mutates_checkout === true
+    ).toBe(true);
+    const absent = dagNodeSchema.safeParse({ id: 'b', prompt: 'x' });
+    expect(absent.success && !('mutates_checkout' in absent.data)).toBe(true);
+  });
+
+  test('rejects a non-boolean value', () => {
+    const result = dagNodeSchema.safeParse({ id: 'a', bash: 'echo hi', mutates_checkout: 'no' });
+    expect(result.success).toBe(false);
+  });
+
+  test('is warned as ignored on wait nodes, not silently stripped', () => {
+    // The field parses into the base shape (so Zod does not drop it), but a wait's
+    // lifecycle is engine-owned — the loader warns via WAIT_NODE_IGNORED_FIELDS.
+    for (const f of ['mutates_checkout']) {
+      expect(WAIT_NODE_IGNORED_FIELDS).toContain(f);
+      expect(WORKFLOW_NODE_IGNORED_FIELDS).toContain(f);
+      expect(BASH_NODE_AI_FIELDS).not.toContain(f); // enforced on exec/agent nodes
     }
   });
 });

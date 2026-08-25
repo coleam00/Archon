@@ -10,6 +10,7 @@ export type WorkflowNodeKind =
   | 'bash'
   | 'script'
   | 'approval'
+  | 'wait'
   | 'loop'
   | 'cancel';
 

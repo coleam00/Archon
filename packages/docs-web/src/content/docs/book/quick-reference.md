@@ -135,7 +135,7 @@ All nodes share these base fields:
 | `trigger_rule` | No | string | Join semantics when multiple upstreams exist (see Trigger Rules) |
 | `provider` | No | string | Per-node provider override (any registered provider) |
 | `model` | No | string | Per-node model override |
-| `context` | No | `fresh` \| `shared` | Session context — `fresh` starts a new conversation, `shared` inherits from prior node |
+| `context` | No | `fresh` \| `shared` \| `{ resume: node-id }` | Session context — `fresh` starts a new conversation; scalar `shared` inherits the ambient prior session in a sequential layer; named [`resume`](/guides/authoring-workflows/#addressable-session-ancestry) forks one exact upstream session and is required for parallel ancestry |
 | `output_format` | No | JSON Schema | Enforce structured JSON output from this node |
 | `allowed_tools` | No | string[] | Restrict available tools to this list (Claude only) |
 | `denied_tools` | No | string[] | Remove specific tools from this node's context (Claude only) |

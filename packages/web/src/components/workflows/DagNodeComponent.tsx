@@ -7,7 +7,7 @@ import { cn } from '@/lib/utils';
 export interface DagNodeData extends DagNode {
   /** For command nodes: the command name. For prompt nodes: display label ("Prompt"). For bash: display label ("Shell"). */
   label: string;
-  nodeType: 'command' | 'prompt' | 'bash' | 'loop' | 'approval';
+  nodeType: 'command' | 'prompt' | 'bash' | 'loop' | 'approval' | 'wait';
   promptText?: string;
   bashScript?: string;
   bashTimeout?: number;
@@ -48,6 +48,12 @@ const TYPE_CONFIG = {
     badgeBg: 'bg-node-approval/20',
     badgeText: 'text-node-approval',
   },
+  wait: {
+    badge: 'WAIT',
+    stripeColor: 'bg-warning',
+    badgeBg: 'bg-warning/20',
+    badgeText: 'text-warning',
+  },
 } as const;
 
 export function getContentPreview(data: DagNodeData): string {
@@ -56,6 +62,7 @@ export function getContentPreview(data: DagNodeData): string {
       return data.label;
     case 'prompt':
     case 'loop':
+    case 'wait':
       return data.promptText?.split('\n')[0] ?? '';
     case 'bash':
       return data.bashScript?.split('\n')[0] ?? '';

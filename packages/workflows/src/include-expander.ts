@@ -49,6 +49,7 @@ import {
   isHaltNode,
   isExecNode,
   isWorkflowNode,
+  isWaitNode,
   isPersistableNode,
   isNodeContextResume,
   isBindingDirective,
@@ -365,9 +366,9 @@ function collapseWorkflowScope(raw: WorkflowDefinition): WorkflowDefinition {
  *   - Prompt text (prompt / loop.prompt / approval fields) — canonical `.output` refs are
  *     live everywhere, including Markdown code spans, because runtime substitution is
  *     syntax-agnostic.
- *   - Code/expression (bash / script / loop.until_bash / loop_group.until_bash / cancel /
- *     workflow.input / workflow.fan_out.items) — canonical `.output` refs are LIVE (never
- *     documentation) → rewritten verbatim.
+ *   - Code/expression (bash / script / wait.until / wait.event / loop.until_bash /
+ *     loop_group.until_bash / cancel / workflow.input / workflow.fan_out.items) — canonical
+ *     `.output` refs are LIVE (never documentation) → rewritten verbatim.
  *
  * Public runtime node-ref surfaces stay aligned across this rewrite, the loader's
  * validateDagStructure scan, and the substituteNodeOutputRefs call sites in
@@ -445,6 +446,9 @@ function rewriteNodeOutputRefs(
     }
   } else if (isExecNode(node)) {
     node.script = code(node.script);
+  } else if (isWaitNode(node)) {
+    if (node.wait.until !== undefined) node.wait.until = code(node.wait.until);
+    if (node.wait.event !== undefined) node.wait.event = code(node.wait.event);
   } else if (isWorkflowNode(node)) {
     // workflow.input, workflow.with values and workflow.fan_out.items are live
     // code/expression ref surfaces (data strings), so refs inside an included block's
@@ -604,6 +608,9 @@ function applyInputsMacro(
     }
   } else if (isExecNode(node)) {
     node.script = substitute(node.script);
+  } else if (isWaitNode(node)) {
+    if (node.wait.until !== undefined) node.wait.until = substitute(node.wait.until);
+    if (node.wait.event !== undefined) node.wait.event = substitute(node.wait.event);
   } else if (isWorkflowNode(node)) {
     // `input:` is the child's $ARGUMENTS — a TEXT channel by construction, so a typed
     // input splices as canonical text there; `with:` values are typed positions.

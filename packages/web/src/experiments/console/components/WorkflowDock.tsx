@@ -8,7 +8,7 @@ import { ApprovalPanel } from './ApprovalPanel';
 import * as skill from '../skills';
 import type { Run } from '../primitives/run';
 import type { RunCounts } from '../skills/runs';
-import { statusDotClass, statusLabel } from '../lib/run-status';
+import { statusDotClass, runStatusLabel } from '../lib/run-status';
 import { shortRunId, formatElapsed, elapsedSince } from '../lib/format';
 
 interface FeedData {
@@ -162,7 +162,7 @@ function DockCard({ run }: { run: Run }): ReactElement {
           <span className="font-mono text-[10px] text-text-tertiary">{shortRunId(run.id)}</span>
         </span>
         <span className="mt-0.5 flex items-center gap-2 font-mono text-[11px] text-text-tertiary">
-          <span className="text-text-secondary">{statusLabel[run.status]}</span>
+          <span className="text-text-secondary">{runStatusLabel(run)}</span>
           {node !== null ? (
             <>
               <span aria-hidden>·</span>

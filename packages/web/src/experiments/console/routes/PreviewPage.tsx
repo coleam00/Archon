@@ -137,7 +137,7 @@ const BUILDER_FIXTURE_KEYS = Object.keys(FIXTURES);
 
 /**
  * Workflow Builder preview: fixture switcher over PR-1's typed fixtures so a
- * reviewer can see all seven node variants rendering with no server running.
+ * reviewer can see all eight node variants rendering with no server running.
  */
 function BuilderPreview(): ReactElement {
   const [fixtureKey, setFixtureKey] = useState<string>('mixed');

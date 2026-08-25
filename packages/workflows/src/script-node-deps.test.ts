@@ -72,6 +72,7 @@ function createMockStore(): IWorkflowStore {
         user_id: null,
         parent_run_id: null,
         output_root: null,
+        adopted_from_run_id: null,
       })
     ),
     getWorkflowRun: mock(() => Promise.resolve(null)),
@@ -98,6 +99,7 @@ function createMockStore(): IWorkflowStore {
         user_id: null,
         parent_run_id: null,
         output_root: null,
+        adopted_from_run_id: null,
       })
     ),
     updateWorkflowRun: mock(() => Promise.resolve()),
@@ -106,6 +108,8 @@ function createMockStore(): IWorkflowStore {
     completeWorkflowRun: mock(() => Promise.resolve()),
     failWorkflowRun: mock(() => Promise.resolve()),
     pauseWorkflowRun: mock(() => Promise.resolve()),
+    pauseWorkflowRunForWait: mock(() => Promise.resolve()),
+    clearWorkflowWaitContext: mock(() => Promise.resolve({ cleared: true })),
     rewriteApprovalContext: mock(() => Promise.resolve({ resolved: true })),
     claimWriteback: mock(() => Promise.resolve({ claimed: true })),
     releaseWritebackClaim: mock(() => Promise.resolve()),
@@ -200,6 +204,7 @@ function makeWorkflowRun(id: string): WorkflowRun {
     user_id: null,
     parent_run_id: null,
     output_root: null,
+    adopted_from_run_id: null,
   };
 }
 

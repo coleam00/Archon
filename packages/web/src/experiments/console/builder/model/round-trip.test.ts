@@ -126,6 +126,37 @@ describe('round-trip fidelity', () => {
     }
   });
 
+  test('wait event and deadline round-trip exactly', () => {
+    const definition: WireWorkflowDefinition = {
+      name: 'wait-for-checks',
+      description: 'waits for an external signal',
+      nodes: [{ id: 'checks', wait: { event: 'checks.complete', deadline_ms: 86_400_000 } }],
+    };
+
+    const { workflow, issues } = fromWorkflowDefinition(definition);
+    expect(issues).toEqual([]);
+    expect(workflow.nodes[0]?.variant).toBe('wait');
+    expect(toWorkflowDefinition(workflow)).toEqual(definition);
+  });
+
+  test('cleared wait fields remain drafts until server validation', () => {
+    const clearedWaits = [
+      { duration_ms: undefined },
+      { event: 'checks.complete', deadline_ms: undefined },
+    ];
+
+    for (const data of clearedWaits) {
+      const draft = toWorkflowDefinition({
+        name: 'wait-draft',
+        description: 'wait mode is selected before its value is entered',
+        meta: {},
+        nodes: [{ id: 'pause', variant: 'wait', base: {}, data }],
+      });
+
+      expect(draft.nodes).toEqual([{ id: 'pause', wait: data }]);
+    }
+  });
+
   test('script runtime/deps/timeout survive partitioning', () => {
     const bw = fromWorkflowDefinition(FIXTURES.script).workflow;
     const node = bw.nodes[0];

@@ -29,6 +29,13 @@ import {
   isInlineScript,
   formatSubprocessFailure,
   classifyError,
+  isQuotaExhaustionError,
+  extractQuotaResetAt,
+  getRetryDelayMs,
+  isRateLimitError,
+  RATE_LIMIT_PATTERNS,
+  RATE_LIMIT_RETRY_DELAY_MS,
+  TRANSIENT_PATTERNS,
   toTelemetryErrorClass,
   safeSendMessage,
   type UnknownErrorTracker,
@@ -91,6 +98,38 @@ describe('substituteWorkflowVariables', () => {
       { shellSafe: true, stateDir: '/state/root' }
     );
     expect(prompt).toBe('cat "/state/root/pr-state.json"');
+  });
+
+  // $ADOPTED_RUN_DIR (#2747): resolves only under an explicit adoption; a run
+  // that references it without one throws instead of substituting empty.
+  it('replaces $ADOPTED_RUN_DIR with the adopted run artifact directory', () => {
+    const { prompt } = substituteWorkflowVariables(
+      'Read $ADOPTED_RUN_DIR/report.md',
+      'run-2',
+      'msg',
+      '/tmp/artifacts',
+      'main',
+      'docs/',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { adoptedRunDir: '/root/artifacts/runs/run-1' }
+    );
+    expect(prompt).toBe('Read /root/artifacts/runs/run-1/report.md');
+  });
+
+  it('throws when $ADOPTED_RUN_DIR is referenced without an adoption active', () => {
+    expect(() =>
+      substituteWorkflowVariables(
+        'Read $ADOPTED_RUN_DIR/report.md',
+        'run-2',
+        'msg',
+        '/tmp/artifacts',
+        'main',
+        'docs/'
+      )
+    ).toThrow(/did not adopt a prior run/);
   });
 
   it('throws when $STATE_DIR is referenced but no state dir was resolved', () => {
@@ -781,6 +820,12 @@ describe('formatSubprocessFailure', () => {
 });
 
 describe('classifyError', () => {
+  it('keeps every rate-limit pattern inside TRANSIENT so the widened budget stays reachable', () => {
+    for (const pattern of RATE_LIMIT_PATTERNS) {
+      expect(TRANSIENT_PATTERNS).toContain(pattern);
+    }
+  });
+
   it('classifies 429 as TRANSIENT', () => {
     expect(classifyError(new Error('rate limit: 429 too many requests'))).toBe('TRANSIENT');
   });
@@ -798,6 +843,23 @@ describe('classifyError', () => {
       classifyError(
         new Error(
           "Node 'prime' failed: SDK returned codex_turn_failed — unexpected status 503 Service Unavailable: Service Unavailable, url: https://chatgpt.com/backend-api/codex/responses, cf-ray: ..., auth error: 503, auth error code: biscuit_baker_service_me_circuit_open"
+        )
+      )
+    ).toBe('TRANSIENT');
+  });
+
+  it('classifies a silent empty stream as TRANSIENT — #2706', () => {
+    expect(
+      classifyError(
+        new Error(
+          "Node 'x' produced no assistant output. The provider stream closed without yielding content — likely a silent provider rejection."
+        )
+      )
+    ).toBe('TRANSIENT');
+    expect(
+      classifyError(
+        new Error(
+          'Loop iteration produced no assistant output. The provider stream closed without yielding content — likely a silent provider rejection or stream interruption.'
         )
       )
     ).toBe('TRANSIENT');
@@ -838,6 +900,45 @@ describe('classifyError', () => {
     // CLI-only quota string: not producible by detectCreditExhaustion, so the
     // drift guard below cannot cover it.
     expect(classifyError(new Error('Claude AI usage limit reached|1751234567'))).toBe('FATAL');
+  });
+
+  it('distinguishes MiniMax plan exhaustion from transient limit/load errors', () => {
+    const exhausted = '429 Token Plan usage limit reached: purchase Credits (2056)';
+    expect(classifyError(new Error(exhausted))).toBe('FATAL');
+    expect(isQuotaExhaustionError(exhausted)).toBe(true);
+    expect(classifyError(new Error('429 Token Plan rate limit reached (2062)'))).toBe('TRANSIENT');
+    expect(classifyError(new Error('MiniMax overloaded/high load (2064)'))).toBe('TRANSIENT');
+  });
+
+  it('detects rate-limit pressure messages — #2706', () => {
+    expect(isRateLimitError('rate limit: 429 too many requests')).toBe(true);
+    expect(isRateLimitError('MiniMax overloaded/high load (2064)')).toBe(true);
+    expect(isRateLimitError('Selected model is at capacity.')).toBe(true);
+    // Quota/session exhaustion stays out: it is FATAL and never reaches the backoff.
+    expect(isRateLimitError('Claude session limit reached')).toBe(false);
+    expect(isRateLimitError('econnreset')).toBe(false);
+  });
+
+  it('backs off flat + jitter on rate limits, exponential otherwise — #2706', () => {
+    for (let i = 0; i < 20; i++) {
+      const delay = getRetryDelayMs('429 too many requests', i, 3000);
+      expect(delay).toBeGreaterThanOrEqual(RATE_LIMIT_RETRY_DELAY_MS / 2);
+      expect(delay).toBeLessThanOrEqual((RATE_LIMIT_RETRY_DELAY_MS * 3) / 2);
+    }
+    expect(getRetryDelayMs('econnreset', 0, 3000)).toBe(3000);
+    expect(getRetryDelayMs('econnreset', 2, 3000)).toBe(12000);
+  });
+
+  it('parses only unambiguous quota reset timestamps', () => {
+    const now = new Date('2026-08-24T10:00:00.000Z');
+    expect(extractQuotaResetAt('usage limit reached|1787569200', now)?.toISOString()).toBe(
+      '2026-08-24T11:00:00.000Z'
+    );
+    expect(extractQuotaResetAt('session limit reached — resets in 2h', now)?.toISOString()).toBe(
+      '2026-08-24T12:00:00.000Z'
+    );
+    expect(extractQuotaResetAt('session limit reached — resets in 2400000001h', now)).toBeNull();
+    expect(extractQuotaResetAt('Token Plan usage limit reached (2056)', now)).toBeNull();
   });
 
   it('session-limit stays FATAL even when the message also matches a TRANSIENT pattern', () => {

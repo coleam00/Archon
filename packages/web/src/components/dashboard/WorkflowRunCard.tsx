@@ -115,6 +115,54 @@ function isValidNodeCounts(value: unknown): value is NodeCounts {
   );
 }
 
+interface WaitMetadata {
+  kind: 'time' | 'event';
+  resumeAt: string;
+  event?: string;
+}
+
+interface ScheduledResumeMetadata {
+  resumeAt: string;
+  attempt: number;
+  maxAttempts: number;
+}
+
+function readWaitMetadata(value: unknown): WaitMetadata | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const wait = value as Record<string, unknown>;
+  if ((wait.kind !== 'time' && wait.kind !== 'event') || typeof wait.resumeAt !== 'string') {
+    return null;
+  }
+  return {
+    kind: wait.kind,
+    resumeAt: wait.resumeAt,
+    ...(typeof wait.event === 'string' ? { event: wait.event } : {}),
+  };
+}
+
+function readScheduledResumeMetadata(value: unknown): ScheduledResumeMetadata | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const scheduled = value as Record<string, unknown>;
+  if (
+    scheduled.reason !== 'quota' ||
+    typeof scheduled.resumeAt !== 'string' ||
+    typeof scheduled.attempt !== 'number' ||
+    typeof scheduled.maxAttempts !== 'number' ||
+    scheduled.triggeredAt !== undefined
+  ) {
+    return null;
+  }
+  return {
+    resumeAt: scheduled.resumeAt,
+    attempt: scheduled.attempt,
+    maxAttempts: scheduled.maxAttempts,
+  };
+}
+
+function hasApprovalMetadata(value: unknown): boolean {
+  return typeof value === 'object' && value !== null;
+}
+
 function NodeCountsSummary({ counts }: { counts: NodeCounts }): React.ReactElement {
   const hasFailures = counts.failed > 0 || counts.skipped > 0;
   return (
@@ -173,6 +221,9 @@ export function WorkflowRunCard({
       ? run.user_message
       : run.user_message.slice(0, 80) + '…'
     : null;
+  const wait = readWaitMetadata(run.metadata?.wait);
+  const scheduledResume = readScheduledResumeMetadata(run.metadata?.scheduled_resume);
+  const hasApproval = wait === null && hasApprovalMetadata(run.metadata?.approval);
 
   return (
     <div className="rounded-lg border border-border bg-surface p-4 space-y-3">
@@ -258,7 +309,7 @@ export function WorkflowRunCard({
       )}
 
       {/* Approval request message */}
-      {run.status === 'paused' && run.metadata?.approval != null && (
+      {run.status === 'paused' && hasApproval && (
         <div className="rounded-md bg-warning/5 border border-warning/20 px-3 py-2 flex items-start gap-2">
           <Pause className="h-4 w-4 text-warning shrink-0 mt-0.5" />
           <p className="text-xs text-text-secondary">
@@ -267,6 +318,27 @@ export function WorkflowRunCard({
                 message?: string;
               }
             )?.message ?? 'Waiting for approval'}
+          </p>
+        </div>
+      )}
+
+      {run.status === 'paused' && wait !== null && (
+        <div className="rounded-md bg-warning/5 border border-warning/20 px-3 py-2 flex items-start gap-2">
+          <Pause className="h-4 w-4 text-warning shrink-0 mt-0.5" />
+          <p className="text-xs text-text-secondary">
+            {wait.kind === 'event'
+              ? `Waiting for event '${wait.event ?? '?'}' until ${wait.resumeAt}`
+              : `Waiting until ${wait.resumeAt}`}
+          </p>
+        </div>
+      )}
+
+      {run.status === 'failed' && scheduledResume !== null && (
+        <div className="rounded-md bg-primary/5 border border-primary/20 px-3 py-2 flex items-start gap-2">
+          <PlayCircle className="h-4 w-4 text-primary shrink-0 mt-0.5" />
+          <p className="text-xs text-text-secondary">
+            Resume scheduled for {scheduledResume.resumeAt} (attempt{' '}
+            {String(scheduledResume.attempt)}/{String(scheduledResume.maxAttempts)})
           </p>
         </div>
       )}
@@ -312,7 +384,7 @@ export function WorkflowRunCard({
           </a>
         )}
         <div className="ml-auto flex items-center gap-1">
-          {run.status === 'paused' && onApprove && (
+          {run.status === 'paused' && hasApproval && onApprove && (
             <button
               onClick={(): void => {
                 onApprove(run.id);
@@ -323,7 +395,7 @@ export function WorkflowRunCard({
               Approve
             </button>
           )}
-          {run.status === 'paused' && onReject && (
+          {run.status === 'paused' && hasApproval && onReject && (
             <ConfirmRunActionDialog
               trigger={
                 <button className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-error/80 hover:bg-error/10 hover:text-error transition-colors">

@@ -841,6 +841,12 @@ archon ai default pi openrouter/minimax/minimax-m2 --scope user
 
 The model-tier presets are the same ones you can hand-write in `~/.archon/config.yaml`; see [Configuration](/reference/configuration/) for the YAML format.
 
+### Per-run model bindings
+
+The console's **Start a new run** card and `archon workflow run --model <name>=<spec>` can sparsely rebind tiers and existing aliases for one invocation. For example, `--model large=openai/gpt-5.6` changes only `large`; `small`, `medium`, and every alias still resolve through personal preferences, repository config, install config, and built-in defaults. A node pinned to a literal model does not change.
+
+There is no run-wide provider or bare-model shortcut. To replace every default tier, explicitly bind `small`, `medium`, and `large`. This keeps the workflow's authored cheap/medium/frontier split visible. The run records its effective non-secret bindings in metadata, and concurrent runs never mutate shared configuration.
+
 ## How Assistant Selection Works
 
 - Assistant type is set per codebase via the `assistant` field in `.archon/config.yaml` or the `DEFAULT_AI_ASSISTANT` env var

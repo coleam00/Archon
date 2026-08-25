@@ -420,6 +420,7 @@ describe('dispatchBackgroundWorkflow', () => {
     mockResolve.mockClear();
     mockUpdateConversation.mockClear();
     mockCreateWorkflowRun.mockClear();
+    mockExecuteWorkflow.mockClear();
     mockLogger.info.mockClear();
     mockGetOrCreateConversation.mockResolvedValue(
       makeConversation({ id: 'worker-conv-1', platform_conversation_id: 'web-worker-1' })
@@ -560,6 +561,22 @@ describe('dispatchBackgroundWorkflow', () => {
     expect(runRow.metadata).not.toHaveProperty('inputs');
 
     await flushBackgroundExecution();
+  });
+
+  test('passes sparse model bindings to the executor for a pre-created background run', async () => {
+    const workflow = makeWorkflow({ worktree: { enabled: false } });
+
+    await dispatchBackgroundWorkflow(
+      makeRoutingCtx({ modelOverrides: { tiers: { large: 'openai/gpt-5.6' } } }),
+      workflow
+    );
+    await flushBackgroundExecution();
+
+    const opts = mockExecuteWorkflow.mock.calls[0]?.[7] as { modelOverrideLayer?: unknown };
+    expect(opts.modelOverrideLayer).toEqual({
+      kind: 'raw',
+      overrides: { tiers: { large: 'openai/gpt-5.6' } },
+    });
   });
 
   test('default policy still resolves isolation for the worker', async () => {

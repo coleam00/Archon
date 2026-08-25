@@ -13,6 +13,7 @@
 
 // Provider config defaults — canonical definitions live in @archon/providers/types.
 // Imported and re-exported here so existing consumers don't break.
+import { z } from '@hono/zod-openapi';
 import type {
   ClaudeProviderDefaults,
   CodexProviderDefaults,
@@ -21,6 +22,7 @@ import type {
   ProviderDefaultsMap,
 } from '@archon/providers/types';
 import type { RawAliasesConfig, RawTiersConfig } from '@archon/workflows/model-validation';
+import { MAX_DURABLE_WAIT_MS } from '@archon/workflows/schemas/dag-node';
 
 export type {
   ClaudeProviderDefaults,
@@ -178,7 +180,18 @@ export interface GlobalConfig {
    * overrides these per-field.
    */
   container?: ContainerConfig;
+
+  /** Default-off policy for continuing terminal quota failures after time passes. */
+  workflows?: WorkflowContinuationConfig;
 }
+
+export const workflowContinuationConfigSchema = z.object({
+  autoResumeOnQuotaReset: z.boolean().optional(),
+  quotaFallbackDelayMs: z.number().finite().positive().max(MAX_DURABLE_WAIT_MS).optional(),
+  quotaMaxAttempts: z.number().int().positive().optional(),
+  quotaDeadlineMs: z.number().finite().positive().max(MAX_DURABLE_WAIT_MS).optional(),
+});
+export type WorkflowContinuationConfig = z.infer<typeof workflowContinuationConfigSchema>;
 
 /**
  * Repository configuration (project-specific settings)
@@ -201,6 +214,9 @@ export interface RepoConfig {
 
   /** Repo-level model tier presets — override global tiers with same name. */
   tiers?: RawTiersConfig;
+
+  /** Project override for quota-failure continuation. */
+  workflows?: WorkflowContinuationConfig;
 
   /**
    * Commands configuration
@@ -375,6 +391,12 @@ export interface MergedConfig {
   };
   concurrency: {
     maxConversations: number;
+  };
+  workflows: {
+    autoResumeOnQuotaReset: boolean;
+    quotaFallbackDelayMs?: number;
+    quotaMaxAttempts: number;
+    quotaDeadlineMs: number;
   };
   commands: {
     /**

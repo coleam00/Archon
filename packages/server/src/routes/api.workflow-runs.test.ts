@@ -296,6 +296,9 @@ const mockResolveAndCancelApprovalGate = mock(async (_id: string, _events?: unkn
   resolved: true,
 }));
 const mockFindChildRuns = mock(async (_parentRunId: string): Promise<unknown[]> => []);
+const mockSignalWorkflowWait = mock(async (_id: string, _wait: unknown, _payload?: unknown) => ({
+  signaled: true,
+}));
 
 mock.module('@archon/core/db/workflows', () => ({
   listWorkflowRuns: mockListWorkflowRuns,
@@ -307,6 +310,7 @@ mock.module('@archon/core/db/workflows', () => ({
   updateWorkflowRun: mockUpdateWorkflowRun,
   resolveApprovalGate: mockResolveApprovalGate,
   resolveAndCancelApprovalGate: mockResolveAndCancelApprovalGate,
+  signalWorkflowWait: mockSignalWorkflowWait,
   getWorkflowRunByWorkerPlatformId: mockGetWorkflowRunByWorkerPlatformId,
 }));
 
@@ -848,6 +852,76 @@ describe('POST /api/workflows/:name/run', () => {
       body: form,
     });
     expect(response.status).toBe(400);
+    expect(mockHandleMessage).not.toHaveBeenCalled();
+  });
+
+  test('forwards sparse JSON tier and alias bindings as structured context', async () => {
+    mockFindConversationByPlatformId.mockImplementationOnce(async () => MOCK_CONV);
+    mockHandleMessage.mockImplementationOnce(async () => {});
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/bench/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        conversationId: 'web-test-abc',
+        message: 'Go',
+        tiers: { large: 'openai/gpt-5.6' },
+        aliases: { '@planner': 'codex/gpt-5.6-sol' },
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(mockHandleMessage).toHaveBeenCalledWith(
+      expect.anything(),
+      'web-test-abc',
+      '/workflow run bench Go',
+      expect.objectContaining({
+        workflowModelOverrides: {
+          tiers: { large: 'openai/gpt-5.6' },
+          aliases: { '@planner': 'codex/gpt-5.6-sol' },
+        },
+      })
+    );
+  });
+
+  test('accepts multipart tier and alias maps as JSON object fields', async () => {
+    mockFindConversationByPlatformId.mockImplementationOnce(async () => MOCK_CONV);
+    mockHandleMessage.mockImplementationOnce(async () => {});
+    const form = new FormData();
+    form.append('conversationId', 'web-test-abc');
+    form.append('message', 'Go');
+    form.append('tiers', JSON.stringify({ large: 'openai/gpt-5.6' }));
+    form.append('aliases', JSON.stringify({ '@planner': 'codex/gpt-5.6-sol' }));
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/bench/run', {
+      method: 'POST',
+      body: form,
+    });
+
+    expect(response.status).toBe(200);
+    const context = mockHandleMessage.mock.calls[0][3] as Record<string, unknown>;
+    expect(context.workflowModelOverrides).toEqual({
+      tiers: { large: 'openai/gpt-5.6' },
+      aliases: { '@planner': 'codex/gpt-5.6-sol' },
+    });
+  });
+
+  test('rejects malformed model binding maps before dispatch', async () => {
+    const { app } = makeApp();
+    for (const payload of [
+      { tiers: { tiny: 'x' } },
+      { tiers: { large: 5 } },
+      { aliases: { planner: 'x' } },
+      { aliases: ['@planner=x'] },
+    ]) {
+      const response = await app.request('/api/workflows/bench/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ conversationId: 'web-test-abc', message: 'Go', ...payload }),
+      });
+      expect(response.status).toBe(400);
+    }
     expect(mockHandleMessage).not.toHaveBeenCalled();
   });
 });
@@ -1608,6 +1682,228 @@ describe('POST /api/workflows/runs/:runId/resume', () => {
     ];
     expect(platformConvId).toBe('web-plat-abc');
     expect(dispatchedMessage).toBe('/workflow resume run-uuid-4');
+  });
+});
+
+describe('POST /api/workflows/runs/:runId/signal', () => {
+  beforeEach(() => {
+    mockGetWorkflowRun.mockReset();
+    mockGetConversationById.mockReset();
+    mockHandleMessage.mockReset();
+    mockSignalWorkflowWait.mockReset();
+    mockSignalWorkflowWait.mockResolvedValue({ signaled: true });
+    mockHydrateResumableRun.mockClear();
+    mockExecuteWorkflow.mockClear();
+  });
+
+  test('atomically signals the matching event wait and leaves continuation to the scheduler', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce({
+      ...MOCK_RUNNING_RUN,
+      id: 'run-wait-1',
+      status: 'paused',
+      working_path: '/tmp/worktrees/run-wait-1',
+      metadata: {
+        wait: {
+          owner: 'node',
+          nodeId: 'checks',
+          kind: 'event',
+          event: 'checks.complete',
+          waitingSince: '2026-08-24T10:00:00.000Z',
+          resumeAt: '2026-08-25T10:00:00.000Z',
+        },
+      },
+    });
+    const { app } = makeApp();
+
+    const response = await app.request('/api/workflows/runs/run-wait-1/signal', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        event: 'checks.complete',
+        resumeAt: '2026-08-25T10:00:00.000Z',
+        payload: { conclusion: 'success' },
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(mockSignalWorkflowWait).toHaveBeenCalledWith(
+      'run-wait-1',
+      {
+        owner: 'node',
+        nodeId: 'checks',
+        kind: 'event',
+        event: 'checks.complete',
+        waitingSince: '2026-08-24T10:00:00.000Z',
+        resumeAt: '2026-08-25T10:00:00.000Z',
+      },
+      { conclusion: 'success' }
+    );
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    expect(mockHandleMessage).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toMatchObject({
+      success: true,
+      message: "Signaled 'checks.complete'. The workflow will resume shortly.",
+    });
+  });
+
+  test('acknowledges a web-parented signal without inline routing after commit', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce({
+      ...MOCK_RUNNING_RUN,
+      id: 'run-wait-web',
+      status: 'paused',
+      parent_conversation_id: 'parent-conv-uuid',
+      working_path: '/tmp/worktrees/run-wait-web',
+      metadata: {
+        wait: {
+          owner: 'node',
+          nodeId: 'checks',
+          kind: 'event',
+          event: 'checks.complete',
+          waitingSince: '2026-08-24T10:00:00.000Z',
+          resumeAt: '2026-08-25T10:00:00.000Z',
+        },
+      },
+    });
+    const { app } = makeApp();
+
+    const response = await app.request('/api/workflows/runs/run-wait-web/signal', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        event: 'checks.complete',
+        resumeAt: '2026-08-25T10:00:00.000Z',
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    expect(mockHandleMessage).not.toHaveBeenCalled();
+    expect(mockGetConversationById).not.toHaveBeenCalled();
+  });
+
+  test('forwards the exact loop-owned wait occurrence to the signal CAS', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce({
+      ...MOCK_RUNNING_RUN,
+      id: 'run-loop-wait',
+      status: 'paused',
+      metadata: {
+        wait: {
+          owner: 'loop_group',
+          nodeId: 'release',
+          bodyWaitId: 'checks',
+          iteration: 2,
+          sessionId: null,
+          sessionProvider: null,
+          kind: 'event',
+          event: 'checks.complete',
+          waitingSince: '2026-08-24T10:00:00.000Z',
+          resumeAt: '2026-08-25T10:00:00.000Z',
+        },
+      },
+    });
+    const { app } = makeApp();
+
+    const response = await app.request('/api/workflows/runs/run-loop-wait/signal', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        event: 'checks.complete',
+        resumeAt: '2026-08-25T10:00:00.000Z',
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(mockSignalWorkflowWait).toHaveBeenCalledWith(
+      'run-loop-wait',
+      expect.objectContaining({
+        owner: 'loop_group',
+        nodeId: 'release',
+        bodyWaitId: 'checks',
+        iteration: 2,
+        event: 'checks.complete',
+        resumeAt: '2026-08-25T10:00:00.000Z',
+      }),
+      undefined
+    );
+  });
+
+  test('rejects a signal that does not match the run wait', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce({
+      ...MOCK_RUNNING_RUN,
+      id: 'run-wait-2',
+      status: 'paused',
+      metadata: {
+        wait: {
+          owner: 'node',
+          nodeId: 'checks',
+          kind: 'event',
+          event: 'checks.complete',
+          waitingSince: '2026-08-24T10:00:00.000Z',
+          resumeAt: '2026-08-25T10:00:00.000Z',
+        },
+      },
+    });
+    const { app } = makeApp();
+
+    const response = await app.request('/api/workflows/runs/run-wait-2/signal', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        event: 'deploy.complete',
+        resumeAt: '2026-08-25T10:00:00.000Z',
+      }),
+    });
+
+    expect(response.status).toBe(400);
+    expect(mockSignalWorkflowWait).not.toHaveBeenCalled();
+  });
+
+  test('rejects a delayed signal for an earlier occurrence of the same event', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce({
+      ...MOCK_RUNNING_RUN,
+      id: 'run-wait-2',
+      status: 'paused',
+      metadata: {
+        wait: {
+          owner: 'loop_group',
+          nodeId: 'release',
+          bodyWaitId: 'checks',
+          iteration: 2,
+          sessionId: null,
+          sessionProvider: null,
+          kind: 'event',
+          event: 'checks.complete',
+          waitingSince: '2026-08-24T10:01:00.000Z',
+          resumeAt: '2026-08-25T10:01:00.000Z',
+        },
+      },
+    });
+    const { app } = makeApp();
+
+    const response = await app.request('/api/workflows/runs/run-wait-2/signal', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        event: 'checks.complete',
+        resumeAt: '2026-08-25T10:00:00.000Z',
+        payload: { conclusion: 'stale' },
+      }),
+    });
+
+    expect(response.status).toBe(400);
+    expect(mockSignalWorkflowWait).not.toHaveBeenCalled();
+  });
+
+  test('rejects a missing JSON body before reading the run', async () => {
+    const { app } = makeApp();
+
+    const response = await app.request('/api/workflows/runs/run-wait-2/signal', {
+      method: 'POST',
+    });
+
+    expect(response.status).toBe(400);
+    expect(mockGetWorkflowRun).not.toHaveBeenCalled();
+    expect(mockSignalWorkflowWait).not.toHaveBeenCalled();
   });
 });
 

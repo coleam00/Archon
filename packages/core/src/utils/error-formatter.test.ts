@@ -1,5 +1,6 @@
 import { describe, test, expect } from 'bun:test';
 import { classifyAndFormatError } from './error-formatter';
+import { WorkflowAdoptionError } from '../operations/workflow-adoption';
 
 describe('classifyAndFormatError', () => {
   describe('rate limit errors', () => {
@@ -701,6 +702,17 @@ describe('classifyAndFormatError', () => {
       // Inner message has "token" — but Codex branch fires before security filter
       const result = classifyAndFormatError(new Error('Codex query failed: token limit reached'));
       expect(result).toBe('⚠️ AI error: token limit reached. Try /reset if issue persists.');
+    });
+  });
+
+  describe('workflow adoption refusals', () => {
+    // Adoption refusals are authored guidance (fail-loud contract, #2747 R9); they
+    // must reach chat/web users verbatim instead of the generic fallback.
+    test('delivers a WorkflowAdoptionError message verbatim', () => {
+      const refusal =
+        "Cannot adopt run 'prior-run': this conversation already continues run 'x' (paused).";
+      const result = classifyAndFormatError(new WorkflowAdoptionError(refusal));
+      expect(result).toBe(`⚠️ ${refusal}`);
     });
   });
 });

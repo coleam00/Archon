@@ -310,6 +310,25 @@ curl -X POST http://localhost:3090/api/workflows/review-block/run \
 
 Values are validated against the workflow's declaration before any worktree, clone, or AI cost: a missing **required** input and an **undeclared** name are both refused up front, through the same contract a composing `with:` map goes through. `400` if `inputs` is not an object of strings (or, on multipart, not valid JSON). An empty object is the same as omitting the field.
 
+**Rebinding models for one run.** Optional `tiers` and `aliases` maps change only the named tier or existing `@alias` for this invocation. Every other binding keeps its normal user → repo → global → built-in value.
+
+```bash
+# JSON: only `large` changes
+curl -X POST http://localhost:3090/api/workflows/issue-to-pr/run \
+  -H "Content-Type: application/json" \
+  -d '{"message":"fix #2481","conversationId":"conv-123",
+       "tiers":{"large":"openai/gpt-5.6"},
+       "aliases":{"@reviewer":"codex/gpt-5.6-sol"}}'
+
+# multipart: each map is one JSON-encoded form field
+curl -X POST http://localhost:3090/api/workflows/issue-to-pr/run \
+  -F "conversationId=conv-123" \
+  -F "message=fix #2481" \
+  -F 'tiers={"large":"openai/gpt-5.6"}'
+```
+
+Tier keys are `small`, `medium`, and `large`; alias keys start with `@`. A model spec can name an Archon agent/model, a Pi vendor/model, an unqualified model under the binding's current provider, or another tier/alias preset. Literal model pins in the workflow remain unchanged. To replace all default tiers, author all three mappings explicitly. The run's `metadata.model_bindings` records the effective non-secret bindings for attribution and the sparse resolved overrides for reuse on resume.
+
 #### List Run Artifacts
 
 ```bash

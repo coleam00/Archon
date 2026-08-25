@@ -17,6 +17,7 @@ import { ScriptFields } from './inspector/ScriptFields';
 import { LoopFields } from './inspector/LoopFields';
 import { ApprovalFields } from './inspector/ApprovalFields';
 import { CancelFields } from './inspector/CancelFields';
+import { WaitFields } from './inspector/WaitFields';
 import { WhenBuilder } from './WhenBuilder';
 
 interface InspectorProps {
@@ -92,6 +93,15 @@ function VariantFields({
     case 'approval':
       return (
         <ApprovalFields
+          data={node.data}
+          onChange={(data): void => {
+            onPatch({ ...node, data });
+          }}
+        />
+      );
+    case 'wait':
+      return (
+        <WaitFields
           data={node.data}
           onChange={(data): void => {
             onPatch({ ...node, data });

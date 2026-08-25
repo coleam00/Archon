@@ -1515,7 +1515,7 @@ export interface paths {
     put?: never;
     /**
      * Run a workflow via the orchestrator (JSON or multipart with file uploads)
-     * @description Accepts `application/json` with `{ conversationId, message, inputs? }` or `multipart/form-data` with `conversationId`, `message`, an optional `inputs` field holding the same map JSON-encoded, and optional file attachments (max 5 files, 10 MB each). `inputs` supplies values for the workflow's declared `inputs:` (#2554); it is validated against the declaration before any worktree, clone, or AI cost, so a missing required input or an undeclared key is refused up front.
+     * @description Accepts `application/json` with `{ conversationId, message, inputs?, tiers?, aliases? }` or `multipart/form-data` with `conversationId`, `message`, an optional `inputs` field holding the same map JSON-encoded, optional `tiers` and `aliases` JSON object fields, and optional file attachments (max 5 files, 10 MB each). `inputs` supplies values for the workflow's declared `inputs:` (#2554); it is validated against the declaration before any worktree, clone, or AI cost, so a missing required input or an undeclared key is refused up front.
      */
     post: {
       parameters: {
@@ -1712,6 +1712,79 @@ export interface paths {
           };
         };
         /** @description Bad request */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/workflows/runs/{runId}/signal': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Signal the exact external event awaited by a paused workflow run */
+    post: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          runId: string;
+        };
+        cookie?: never;
+      };
+      requestBody: {
+        content: {
+          'application/json': {
+            event: string;
+            resumeAt: string;
+            payload?: unknown;
+          };
+        };
+      };
+      responses: {
+        /** @description Signal accepted; the scheduler will resume the workflow shortly */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['WorkflowRunActionResponse'];
+          };
+        };
+        /** @description Run is not waiting on this event */
         400: {
           headers: {
             [name: string]: unknown;
@@ -3726,6 +3799,17 @@ export interface components {
           max_attempts?: number;
         };
       };
+      wait?:
+        | {
+            duration_ms: number;
+          }
+        | {
+            until: string;
+          }
+        | {
+            event: string;
+            deadline_ms: number;
+          };
       cancel?: string;
       include?: string;
       workflow?: string;

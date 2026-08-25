@@ -3,6 +3,10 @@ import { registerBuiltinProviders, registerCommunityProviders } from '@archon/pr
 
 import {
   buildAiProfile,
+  createRunModelBindingsMetadata,
+  parseRunModelAssignments,
+  readRunModelBindingsMetadata,
+  resolveRunModelOverrides,
   isEffortValidForProvider,
   isLiteralSpec,
   resolvePresetEffort,
@@ -300,6 +304,167 @@ describe('buildAiProfile — per-user layer (highest precedence)', () => {
         userAliases: { fast: { provider: 'claude', model: 'haiku' } },
       })
     ).toThrow(/must start with '@'/);
+  });
+});
+
+describe('per-run model bindings', () => {
+  const base = buildAiProfile('claude', {
+    repoAliases: {
+      '@planner': { provider: 'claude', model: 'opus', effort: 'high' },
+      '@cheap': { provider: 'claude', model: 'haiku' },
+    },
+  });
+
+  test('parses repeatable tier and alias assignments', () => {
+    expect(
+      parseRunModelAssignments(['large=openai/gpt-5.6', '@planner=codex/gpt-5.6-sol'])
+    ).toEqual({
+      tiers: { large: 'openai/gpt-5.6' },
+      aliases: { '@planner': 'codex/gpt-5.6-sol' },
+    });
+  });
+
+  test('rejects bare, malformed, and duplicate assignments', () => {
+    expect(() => parseRunModelAssignments(['openai/gpt-5.6'])).toThrow(/Expected/);
+    expect(() => parseRunModelAssignments(['large='])).toThrow(/Expected/);
+    expect(() => parseRunModelAssignments(['large=   '])).toThrow(/Expected/);
+    expect(() => parseRunModelAssignments(['tiny=x'])).toThrow(/must start with '@'/);
+    expect(() => parseRunModelAssignments(['large=x', 'large=y'])).toThrow(/Duplicate/);
+  });
+
+  test('resolves vendor/model as Pi and changes only the named tier', () => {
+    const run = resolveRunModelOverrides(base, { tiers: { large: 'openai/gpt-5.6' } });
+    const effective = buildAiProfile('claude', {
+      repoAliases: {
+        '@planner': { provider: 'claude', model: 'opus', effort: 'high' },
+        '@cheap': { provider: 'claude', model: 'haiku' },
+      },
+      runTiers: run.tiers,
+      runAliases: run.aliases,
+    });
+
+    expect(effective.aliases.large).toEqual({ provider: 'pi', model: 'openai/gpt-5.6' });
+    expect(effective.aliases.small).toEqual(base.aliases.small);
+    expect(effective.aliases.medium).toEqual(base.aliases.medium);
+    expect(effective.aliases['@planner']).toEqual(base.aliases['@planner']);
+    expect(resolveModelSpec(effective, 'medium')).toEqual(base.aliases.medium);
+    expect(resolveModelSpec(effective, 'claude-opus-pinned')).toEqual({
+      literal: 'claude-opus-pinned',
+    });
+  });
+
+  test('registered agent refs switch provider and Pi refs validate their nested model', () => {
+    expect(
+      resolveRunModelOverrides(base, { tiers: { large: 'codex/gpt-5.6-sol' } }).tiers?.large
+    ).toEqual({ provider: 'codex', model: 'gpt-5.6-sol' });
+    expect(
+      resolveRunModelOverrides(base, { tiers: { large: 'pi/openrouter/qwen/qwen3' } }).tiers?.large
+    ).toEqual({ provider: 'pi', model: 'openrouter/qwen/qwen3' });
+    expect(() => resolveRunModelOverrides(base, { tiers: { large: 'pi/not-a-model' } })).toThrow(
+      /Expected <vendor>\/<model>/
+    );
+  });
+
+  test('unqualified literals inherit the target provider and preset refs copy options', () => {
+    expect(resolveRunModelOverrides(base, { tiers: { large: 'opus-next' } }).tiers?.large).toEqual({
+      provider: 'claude',
+      model: 'opus-next',
+    });
+    expect(
+      resolveRunModelOverrides(base, { aliases: { '@cheap': '@planner' } }).aliases?.['@cheap']
+    ).toEqual({ provider: 'claude', model: 'opus', effort: 'high' });
+  });
+
+  test('rejects unknown alias targets and references', () => {
+    expect(() => resolveRunModelOverrides(base, { aliases: { '@missing': 'opus' } })).toThrow(
+      /unknown alias '@missing'/
+    );
+    expect(() => resolveRunModelOverrides(base, { tiers: { large: '@missing' } })).toThrow(
+      /Unknown alias '@missing'/
+    );
+  });
+
+  test('metadata round-trips the sparse override and effective snapshot', () => {
+    const overrides = resolveRunModelOverrides(base, { tiers: { large: 'openai/gpt-5.6' } });
+    const effective = buildAiProfile('claude', {
+      repoAliases: {
+        '@planner': { provider: 'claude', model: 'opus', effort: 'high' },
+        '@cheap': { provider: 'claude', model: 'haiku' },
+      },
+      runTiers: overrides.tiers,
+    });
+    const value = createRunModelBindingsMetadata(overrides, effective);
+
+    expect(readRunModelBindingsMetadata({ model_bindings: value })).toEqual(value);
+    expect(() => readRunModelBindingsMetadata({ model_bindings: 'bad' })).toThrow(/invalid/);
+    expect(() =>
+      readRunModelBindingsMetadata({
+        model_bindings: { ...value, overrides: { tiers: 1 } },
+      })
+    ).toThrow(/invalid model_bindings tiers/);
+    expect(() =>
+      readRunModelBindingsMetadata({
+        model_bindings: { ...value, overrides: { aliases: [] } },
+      })
+    ).toThrow(/invalid model_bindings aliases/);
+    expect(() =>
+      readRunModelBindingsMetadata({
+        model_bindings: {
+          ...value,
+          overrides: {
+            aliases: { planner: { provider: 'claude', model: 'opus' } },
+          },
+        },
+      })
+    ).toThrow(/invalid model_bindings aliases/);
+    expect(() =>
+      readRunModelBindingsMetadata({
+        model_bindings: {
+          ...value,
+          overrides: {
+            tiers: {
+              large: {
+                provider: 'claude',
+                model: 'opus',
+                thinking: { type: 'enabled', budgetTokens: -1 },
+              },
+            },
+          },
+        },
+      })
+    ).toThrow(/invalid thinking options/);
+    expect(() =>
+      readRunModelBindingsMetadata({
+        model_bindings: {
+          ...value,
+          effective: {
+            ...value.effective,
+            aliases: {
+              ...value.effective.aliases,
+              large: { provider: 'codex', model: 'gpt-5.6-sol', effort: 'warp' },
+            },
+          },
+        },
+      })
+    ).toThrow(/invalid effort/);
+    expect(
+      readRunModelBindingsMetadata({
+        model_bindings: {
+          ...value,
+          effective: {
+            ...value.effective,
+            aliases: {
+              ...value.effective.aliases,
+              medium: {
+                provider: 'opencode',
+                model: 'anthropic/claude-sonnet-4-6',
+                effort: 'ultra',
+              },
+            },
+          },
+        },
+      })
+    ).toBeDefined();
   });
 });
 

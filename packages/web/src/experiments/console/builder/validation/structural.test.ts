@@ -181,6 +181,56 @@ describe('validateStructural', () => {
     expect(issues.some(i => i.path.field === 'approval.message')).toBe(true);
   });
 
+  test('wait timestamps match the engine literal and runtime-reference grammar', () => {
+    for (const [until, shouldPass] of [
+      ['2026-08-25T22:00:00Z', true],
+      ['2026-08-25T22:00:00.000Z', true],
+      ['2026-08-25T22:00Z', true],
+      ['$clock.output.resume_at', true],
+      ['$INPUTS.resume_at', true],
+      ['tomorrow', false],
+      ['2026-08-25T22:00:00', false],
+      ['2026-08-25T22:00:00+02:00', false],
+    ] as const) {
+      const issues = validateStructural(
+        wf([{ id: 'wait', variant: 'wait', base: {}, data: { until } }])
+      );
+      expect(issues.some(i => i.path.field === 'wait.until')).toBe(!shouldPass);
+    }
+  });
+
+  test('wait delays mirror the engine persisted timestamp bound', () => {
+    const maximum = 1_000 * 365 * 24 * 60 * 60 * 1_000;
+    const accepted = validateStructural(
+      wf([
+        { id: 'duration', variant: 'wait', base: {}, data: { duration_ms: maximum } },
+        {
+          id: 'event',
+          variant: 'wait',
+          base: {},
+          data: { event: 'checks.complete', deadline_ms: maximum },
+        },
+      ])
+    );
+    expect(accepted.filter(issue => issue.path.field?.startsWith('wait.'))).toEqual([]);
+
+    const rejected = validateStructural(
+      wf([
+        { id: 'duration', variant: 'wait', base: {}, data: { duration_ms: maximum + 1 } },
+        {
+          id: 'event',
+          variant: 'wait',
+          base: {},
+          data: { event: 'checks.complete', deadline_ms: maximum + 1 },
+        },
+      ])
+    );
+    expect(rejected.map(issue => issue.path.field)).toEqual([
+      'wait.duration_ms',
+      'wait.deadline_ms',
+    ]);
+  });
+
   test('cancel missing reason is flagged', () => {
     const issues = validateStructural(
       wf([{ id: 'c', variant: 'cancel', base: {}, data: { reason: '' } }])

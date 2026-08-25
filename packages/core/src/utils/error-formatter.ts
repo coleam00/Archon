@@ -4,6 +4,7 @@
  * Classifies errors and provides user-friendly messages
  * without leaking sensitive information
  */
+import { WorkflowAdoptionError } from '../operations/workflow-adoption';
 
 /**
  * Classify an error and return a user-friendly message
@@ -13,6 +14,13 @@
  */
 export function classifyAndFormatError(error: Error): string {
   const message = error.message || '';
+
+  // Adoption refusals are authored user guidance (fail-loud contract in
+  // workflow-adoption.ts): deliver them verbatim instead of erasing them into
+  // the generic fallback below.
+  if (error instanceof WorkflowAdoptionError) {
+    return `⚠️ ${message}`;
+  }
 
   // AI-provider rate-limit / usage-cap classification
   // Broad substrings are intentional: every call site feeds errors from handling

@@ -557,6 +557,95 @@ describe('Workflow Loader', () => {
       expect(result.workflows[0].workflow.mutates_checkout).toBeUndefined();
     });
 
+    // Node-level declaration (#2771): the engine-enforced tree-integrity assertion.
+    it('should parse node-level mutates_checkout onto exec and agent nodes', () => {
+      const { workflow } = parseWorkflowYaml(`name: test-workflow
+description: node-level declarations
+nodes:
+  - id: guarded-bash
+    bash: echo hi
+    mutates_checkout: false
+  - id: guarded-agent
+    prompt: p
+    mutates_checkout: false
+  - id: plain
+    bash: echo hi
+`);
+      const byId = Object.fromEntries(workflow.nodes.map(n => [n.id, n]));
+      const guardedBash = byId['guarded-bash'];
+      expect(
+        guardedBash && 'mutates_checkout' in guardedBash && guardedBash.mutates_checkout === false
+      ).toBe(true);
+      const guardedAgent = byId['guarded-agent'];
+      expect(
+        guardedAgent &&
+          'mutates_checkout' in guardedAgent &&
+          guardedAgent.mutates_checkout === false
+      ).toBe(true);
+      const plain = byId['plain'];
+      expect(plain && !('mutates_checkout' in plain)).toBe(true);
+    });
+
+    it('should reject a non-boolean node-level mutates_checkout', () => {
+      const result = parseWorkflow(
+        `name: test-workflow
+description: bad type
+nodes:
+  - id: n
+    bash: echo hi
+    mutates_checkout: "no"
+`,
+        'bad.yaml'
+      );
+      expect(result.error).not.toBeNull();
+    });
+
+    it('should still hard-reject mutates_checkout on an include node', () => {
+      const result = parseWorkflow(
+        `name: test-workflow
+description: include rejection
+nodes:
+  - id: blk
+    include: other
+    mutates_checkout: false
+`,
+        'include-mc.yaml'
+      );
+      expect(result.error).not.toBeNull();
+    });
+
+    it('should warn that mutates_checkout is inert on loop/gate/cancel/loop_group nodes', () => {
+      mockLogger.warn.mockClear();
+      for (const [nodeYaml, kind] of [
+        ['    loop:\n      until: done\n      max_iterations: 1\n      prompt: p', 'loop'],
+        ['    approval:\n      message: m', 'approval'],
+        ['    cancel: stop', 'cancel'],
+        [
+          '    loop_group:\n      nodes:\n        - id: b\n          bash: echo hi\n      until: done\n      max_iterations: 1',
+          'loop_group',
+        ],
+      ] as const) {
+        const result = parseWorkflow(
+          `name: mc-inert-${kind}
+description: d
+nodes:
+  - id: n
+${nodeYaml}
+    mutates_checkout: false
+`,
+          `${kind}-mc.yaml`
+        );
+        expect(result.error).toBeNull();
+        expect(
+          mockLogger.warn.mock.calls.some(
+            call =>
+              call[1] === `${kind}_node_ai_fields_ignored` &&
+              JSON.stringify(call[0]).includes('mutates_checkout')
+          )
+        ).toBe(true);
+      }
+    });
+
     it('should parse valid DAG workflow YAML', () => {
       const { workflow } = parseWorkflowYaml(`name: test-workflow
 description: A test workflow
@@ -2452,6 +2541,117 @@ nodes:
       expect(result.errors).toHaveLength(1);
       expect(result.errors[0].error).toMatch(/unknown node/i);
       expect(result.errors[0].error).toContain('analyize');
+    });
+
+    it('rejects unknown and non-upstream output refs in wait conditions', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'bad-wait-ref.yaml'),
+        `
+name: bad-wait-ref
+description: Invalid output refs in waits
+nodes:
+  - id: schedule
+    bash: echo 2026-08-25T22:00:00Z
+  - id: wait-for-window
+    wait:
+      until: "$schedule.output"
+`
+      );
+
+      let result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0].error).toContain('not an upstream dependency');
+
+      await writeFile(
+        join(workflowDir, 'bad-wait-ref.yaml'),
+        `
+name: bad-wait-ref
+description: Invalid output refs in waits
+nodes:
+  - id: wait-for-checks
+    wait:
+      event: "$missing.output"
+      deadline_ms: 60000
+`
+      );
+
+      result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0].error).toContain("unknown node '$missing.output'");
+    });
+
+    it('rejects suspension nodes that can run concurrently', () => {
+      const suspensionNodes = [
+        `  - id: review
+    approval:
+      message: Review this`,
+        `  - id: refine
+    loop:
+      prompt: Iterate.
+      until: DONE
+      max_iterations: 2
+      interactive: true
+      gate_message: Review.`,
+        `  - id: child
+    workflow: child-workflow`,
+        `  - id: refine-group
+    loop_group:
+      until_bash: exit 0
+      max_iterations: 2
+      interactive: true
+      gate_message: Review.
+      nodes:
+        - id: refine-step
+          bash: echo refine`,
+      ];
+      for (const suspensionNode of suspensionNodes) {
+        const result = parseWorkflow(
+          `
+name: parallel-suspensions
+description: Two nodes cannot own the run cursor together
+nodes:
+  - id: wait-for-time
+    wait:
+      duration_ms: 60000
+${suspensionNode}
+`,
+          'parallel-suspensions.yaml'
+        );
+
+        expect(result.workflow).toBeNull();
+        expect(result.error?.error).toContain("Suspending nodes 'wait-for-time'");
+      }
+    });
+
+    it('rejects waits nested below more than one loop_group boundary', () => {
+      const result = parseWorkflow(
+        `
+name: nested-wait
+description: nested wait
+nodes:
+  - id: outer
+    loop_group:
+      max_iterations: 2
+      until_bash: exit 0
+      nodes:
+        - id: inner
+          loop_group:
+            max_iterations: 2
+            until_bash: exit 0
+            nodes:
+              - id: delay
+                wait:
+                  duration_ms: 1000
+`,
+        '/tmp/nested-wait.yaml'
+      );
+
+      expect(result.error?.error).toContain(
+        'wait nodes nested below another loop_group are not supported'
+      );
     });
 
     it('should accept a workflow where output refs use valid existing node IDs', async () => {
@@ -5755,6 +5955,120 @@ nodes:
       const mockLoadConfig = mock(async () => ({ defaults: { loadDefaultWorkflows: true } }));
       await discoverWorkflowsWithConfig(null, mockLoadConfig);
       expect(mockLoadConfig).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('scalar shared session context', () => {
+    function parseSessionContext(yaml: string): ParseResult {
+      return parseWorkflow(yaml, 'session-context.yaml');
+    }
+
+    it('rejects scalar shared on a node in a structurally parallel layer', () => {
+      const result = parseSessionContext(`
+name: parallel-shared
+description: parallel shared
+nodes:
+  - id: source
+    prompt: source
+  - id: shared
+    prompt: continue
+    depends_on: [source]
+    context: shared
+  - id: sibling
+    prompt: independent
+    depends_on: [source]
+`);
+
+      expect(result.error?.error).toContain(
+        "Node 'shared' uses scalar context: 'shared' in a structurally parallel layer"
+      );
+      expect(result.error?.error).toContain('context: { resume: <upstream-node-id> }');
+      expect(result.error?.error).toContain('depends_on');
+    });
+
+    it('rejects scalar shared when parallel sibling conditions appear mutually exclusive', () => {
+      const result = parseSessionContext(`
+name: conditional-parallel-shared
+description: conditional parallel shared
+nodes:
+  - id: choice
+    bash: echo left
+  - id: left
+    prompt: continue left
+    depends_on: [choice]
+    when: "$choice.output == 'left'"
+    context: shared
+  - id: right
+    prompt: start right
+    depends_on: [choice]
+    when: "$choice.output == 'right'"
+`);
+
+      expect(result.error?.error).toContain(
+        "Node 'left' uses scalar context: 'shared' in a structurally parallel layer"
+      );
+    });
+
+    it('accepts scalar shared in a sequential chain', () => {
+      const result = parseSessionContext(`
+name: sequential-shared
+description: sequential shared
+nodes:
+  - id: source
+    prompt: source
+  - id: continuation
+    prompt: continue
+    depends_on: [source]
+    context: shared
+`);
+
+      expect(result.error).toBeNull();
+    });
+
+    it('accepts named resume in a structurally parallel layer', () => {
+      const result = parseSessionContext(`
+name: parallel-named-resume
+description: parallel named resume
+provider: claude
+nodes:
+  - id: source
+    prompt: source
+  - id: continuation
+    prompt: continue
+    depends_on: [source]
+    context: { resume: source }
+  - id: sibling
+    prompt: independent
+    depends_on: [source]
+`);
+
+      expect(result.error).toBeNull();
+    });
+
+    it('rejects scalar shared in a structurally parallel loop_group body', () => {
+      const result = parseSessionContext(`
+name: loop-group-parallel-shared
+description: loop group parallel shared
+nodes:
+  - id: group
+    loop_group:
+      until: DONE
+      max_iterations: 2
+      nodes:
+        - id: source
+          prompt: source
+        - id: shared
+          prompt: continue
+          depends_on: [source]
+          context: shared
+        - id: sibling
+          prompt: independent
+          depends_on: [source]
+`);
+
+      expect(result.error?.error).toContain("loop_group 'group' body: Node 'shared'");
+      expect(result.error?.error).toContain('context.resume is not supported');
+      expect(result.error?.error).toContain('depends_on');
     });
   });
 

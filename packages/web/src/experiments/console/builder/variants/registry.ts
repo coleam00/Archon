@@ -8,7 +8,14 @@
  * type-safe for `toDag` (the data type cannot be correlated with the variant key
  * once destructured). The helpers recover that correlation without `any`.
  */
-import type { BuilderNode, VariantData, VariantDataMap, VariantId, WireDagNode } from '../types';
+import type {
+  BuilderDagFragment,
+  BuilderNode,
+  VariantData,
+  VariantDataMap,
+  VariantId,
+  WireDagNode,
+} from '../types';
 import { VARIANT_CAPABILITIES, type VariantCapabilities } from './capabilities';
 import { defaultLoopData, loopFromDag, loopToDag } from './loop';
 import { approvalFromDag, approvalToDag, defaultApprovalData } from './approval';
@@ -17,8 +24,9 @@ import { defaultScriptData, scriptFromDag, scriptToDag } from './script';
 import { commandFromDag, commandToDag, defaultCommandData } from './command';
 import { defaultPromptData, promptFromDag, promptToDag } from './prompt';
 import { bashFromDag, bashToDag, defaultBashData } from './bash';
+import { defaultWaitData, waitFromDag, waitToDag } from './wait';
 
-/** Canonical variant order (three existing kinds, then the four new variants). */
+/** Canonical palette and registry order. */
 export const VARIANTS: readonly VariantId[] = [
   'prompt',
   'command',
@@ -26,6 +34,7 @@ export const VARIANTS: readonly VariantId[] = [
   'script',
   'loop',
   'approval',
+  'wait',
   'cancel',
 ];
 
@@ -41,7 +50,7 @@ export interface VariantRegistryEntry<K extends VariantId> {
   label: string;
   defaultData: () => VariantDataMap[K];
   fromDag: (variantSpecific: Partial<WireDagNode>) => VariantDataMap[K];
-  toDag: (data: VariantDataMap[K]) => Partial<WireDagNode>;
+  toDag: (data: VariantDataMap[K]) => BuilderDagFragment;
   capabilities: VariantCapabilities;
   /**
    * The wire keys this variant's converters consume from `variantSpecific`.
@@ -103,6 +112,14 @@ export const VARIANT_REGISTRY: { [K in VariantId]: VariantRegistryEntry<K> } = {
     wireKeys: ['approval'],
     capabilities: VARIANT_CAPABILITIES.approval,
   },
+  wait: {
+    label: 'Wait',
+    defaultData: defaultWaitData,
+    fromDag: waitFromDag,
+    toDag: waitToDag,
+    wireKeys: ['wait'],
+    capabilities: VARIANT_CAPABILITIES.wait,
+  },
   cancel: {
     label: 'Cancel',
     defaultData: defaultCancelData,
@@ -130,12 +147,14 @@ export function variantDataFromDag(
  * on the discriminant lets `node.data` narrow to the matching `toDag` parameter
  * type — no casts, no `any`.
  */
-export function nodeDataToDag(node: BuilderNode): Partial<WireDagNode> {
+export function nodeDataToDag(node: BuilderNode): BuilderDagFragment {
   switch (node.variant) {
     case 'loop':
       return loopToDag(node.data);
     case 'approval':
       return approvalToDag(node.data);
+    case 'wait':
+      return waitToDag(node.data);
     case 'cancel':
       return cancelToDag(node.data);
     case 'script':

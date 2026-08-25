@@ -25,6 +25,29 @@ export {
 } from './hooks';
 export type { WorkflowHookEvent, WorkflowHookMatcher, WorkflowNodeHooks } from './hooks';
 
+// Model binding profiles and durable run metadata
+export {
+  TIER_NAMES,
+  tierNameSchema,
+  modelAliasPresetSchema,
+  rawAliasesConfigSchema,
+  runAliasesConfigSchema,
+  rawTiersConfigSchema,
+  resolvedRunModelOverridesSchema,
+  resolvedAiProfileSchema,
+  runModelBindingsMetadataSchema,
+} from './model-binding';
+export type {
+  TierName,
+  ModelAliasPreset,
+  RawAliasEntry,
+  RawAliasesConfig,
+  RawTiersConfig,
+  ResolvedRunModelOverrides,
+  ResolvedAiProfile,
+  RunModelBindingsMetadata,
+} from './model-binding';
+
 // DAG node types
 export {
   triggerRuleSchema,
@@ -41,6 +64,13 @@ export {
   gateNodeSchema,
   approvalOnRejectSchema,
   haltNodeSchema,
+  MAX_DURABLE_WAIT_MS,
+  waitConfigSchema,
+  waitUntilTimestampSchema,
+  waitNodeSchema,
+  waitCondition,
+  workflowWaitResultSchema,
+  WAIT_NODE_OUTPUT_FORMAT,
   includeDirectiveSchema,
   workflowNodeSchema,
   fanOutConfigSchema,
@@ -53,6 +83,7 @@ export {
   isExecNode,
   isGateNode,
   isHaltNode,
+  isWaitNode,
   isLoopNode,
   isLoopGroupNode,
   isWorkflowNode,
@@ -65,7 +96,9 @@ export {
   LOOP_NODE_AI_FIELDS,
   LOOP_GROUP_NODE_AI_FIELDS,
   INCLUDE_NODE_IGNORED_FIELDS,
+  WAIT_NODE_IGNORED_FIELDS,
   WORKFLOW_NODE_IGNORED_FIELDS,
+  GATE_AND_HALT_IGNORED_FIELDS,
   KNOWN_DAG_NODE_KEYS,
   KNOWN_NODE_NESTED_KEYS,
   approvalConfigSchema,
@@ -91,6 +124,10 @@ export type {
   GateNode,
   ApprovalOnReject,
   HaltNode,
+  WaitConfig,
+  WaitNode,
+  WaitCondition,
+  WorkflowWaitResult,
   IncludeDirective,
   WorkflowNode,
   FanOutConfig,
@@ -130,6 +167,8 @@ export type {
 export {
   workflowRunStatusSchema,
   workflowRunOutcomeSchema,
+  workflowWaitContextSchema,
+  scheduledWorkflowResumeSchema,
   workflowStepStatusSchema,
   nodeStateSchema,
   nodeOutputSchema,
@@ -138,6 +177,9 @@ export {
   TERMINAL_WORKFLOW_STATUSES,
   RESUMABLE_WORKFLOW_STATUSES,
   isApprovalContext,
+  isWorkflowWaitContext,
+  workflowWaitStepName,
+  isScheduledWorkflowResume,
   isRunBlockedOnChild,
   suspendReasonSchema,
   isRecognizedSuspendReason,
@@ -150,6 +192,8 @@ export {
   workflowSourceMetadataSchema,
   readWorkflowSourceMetadata,
   readWorkflowSourceState,
+  CONTINUATION_METADATA_KEY,
+  readContinuationMode,
 } from './workflow-run';
 export type {
   WorkflowRunStatus,
@@ -160,10 +204,13 @@ export type {
   WorkflowRun,
   ArtifactType,
   ApprovalContext,
+  WorkflowWaitContext,
+  ScheduledWorkflowResume,
   SuspendReason,
   LoopGateRunMetadata,
   WorkflowSourceMetadata,
   WorkflowSourceState,
+  ContinuationMode,
 } from './workflow-run';
 
 // Per-node persisted provider sessions

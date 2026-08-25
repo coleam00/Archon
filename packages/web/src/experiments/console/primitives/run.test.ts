@@ -1,5 +1,6 @@
 import { describe, test, expect } from 'bun:test';
 import { toRun, normalizeOrigin, runMessageConversationId } from './run';
+import { runStatusLabel } from '../lib/run-status';
 
 type Raw = Parameters<typeof toRun>[0];
 
@@ -312,5 +313,34 @@ describe('toRun — resolved gate (approved/rejected awaiting resume)', () => {
       decisionsAuthored: false,
     });
     expect(r.gateResolved).toBeNull();
+  });
+});
+
+describe('toRun — durable wait', () => {
+  test('parses the active wait and labels it without implying human approval', () => {
+    const r = toRun(
+      raw({
+        id: 'r1',
+        workflow_name: 'await-checks',
+        status: 'paused',
+        metadata: {
+          wait: {
+            owner: 'node',
+            nodeId: 'checks',
+            kind: 'event',
+            event: 'checks.complete',
+            resumeAt: '2026-08-25T10:00:00.000Z',
+          },
+        },
+      })
+    );
+
+    expect(r.wait).toEqual({
+      nodeId: 'checks',
+      kind: 'event',
+      event: 'checks.complete',
+      resumeAt: '2026-08-25T10:00:00.000Z',
+    });
+    expect(runStatusLabel(r)).toBe('Waiting for event');
   });
 });

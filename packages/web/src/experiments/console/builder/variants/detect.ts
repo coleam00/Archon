@@ -5,7 +5,7 @@
  * input any presence order resolves identically. For malformed/ambiguous nodes
  * the priority order below is a builder-specific choice so resolution stays
  * deterministic (the engine has no fallback — it rejects nodes whose mode-field
- * count is not exactly one): `loop → approval → cancel → bash → script →
+ * count is not exactly one): `loop → approval → wait → cancel → bash → script →
  * command → prompt`.
  */
 import type { VariantId, WireDagNode } from '../types';
@@ -19,6 +19,7 @@ import type { VariantId, WireDagNode } from '../types';
 export function detectVariantOrNull(node: WireDagNode): VariantId | null {
   if (node.loop !== undefined) return 'loop';
   if (node.approval !== undefined) return 'approval';
+  if (node.wait !== undefined) return 'wait';
   if (node.cancel !== undefined) return 'cancel';
   if (node.bash !== undefined) return 'bash';
   if (node.script !== undefined) return 'script';

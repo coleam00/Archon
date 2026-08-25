@@ -3,6 +3,7 @@
  */
 import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import type { RunModelOverrides } from '@archon/workflows/model-validation';
 
 // MessageChunk + TokenUsage are used by IPlatformAdapter below.
 import type { MessageChunk, TokenUsage } from '@archon/providers/types';
@@ -64,6 +65,16 @@ export interface HandleMessageContext {
    * (#2555 tracks giving them one).
    */
   readonly workflowInputs?: Readonly<Record<string, string>>;
+  /** Sparse tier/@alias rebindings supplied by the workflow run route (#2481). */
+  readonly workflowModelOverrides?: RunModelOverrides;
+  /**
+   * Between-run continuation (#2747): the terminal run this run adopts or
+   * supersedes. Rides the context like `workflowInputs` so it can never be
+   * confused with message text. Provenance is recorded engine-side; lane
+   * resolution is the dispatching surface's job.
+   */
+  readonly workflowAdoptRunId?: string;
+  readonly workflowSupersedesRunId?: string;
 }
 
 export interface CommandResult {

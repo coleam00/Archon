@@ -90,6 +90,12 @@ export interface WorkflowConfig {
   aliases?: RawAliasesConfig;
   tiers?: RawTiersConfig;
   commands: { folder?: string };
+  workflows?: {
+    autoResumeOnQuotaReset: boolean;
+    quotaFallbackDelayMs?: number;
+    quotaMaxAttempts: number;
+    quotaDeadlineMs: number;
+  };
   defaults?: {
     loadDefaultWorkflows?: boolean;
     loadDefaultCommands?: boolean;

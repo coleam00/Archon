@@ -14,6 +14,7 @@ import { K } from '../store/keys';
 import * as skill from '../skills';
 import { orderWithRecommended } from '../lib/recommended';
 import { missingRequiredInputs, collectSuppliedInputs } from '../lib/workflow-inputs';
+import { collectRunModelOverrides, type RunModelOverrideRow } from '../lib/run-model-overrides';
 
 interface DraftRunCardProps {
   projectId: string;
@@ -86,6 +87,8 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
   // Cleared whenever the selected workflow changes so one workflow's values can never
   // be submitted against another's declaration.
   const [inputValues, setInputValues] = useState<Record<string, string>>({});
+  const [modelOverrideRows, setModelOverrideRows] = useState<RunModelOverrideRow[]>([]);
+  const nextModelOverrideId = useRef(1);
 
   // Pre-fill from `?rerun=1&workflow=…&message=…` query params (set by the
   // ↻ rerun button on RecentRunRow). Reacts to searchParams so the card
@@ -158,6 +161,7 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
   // typed against a different declaration and would be rejected as undeclared keys.
   useEffect(() => {
     setInputValues({});
+    setModelOverrideRows([]);
   }, [workflowName]);
 
   // Global `N` keybind: expand + open the workflow picker so the user can
@@ -214,6 +218,12 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
     setError(null);
     setSubmitting(true);
     const suppliedInputs = collectSuppliedInputs(declaredInputs, inputValues);
+    const collectedModelOverrides = collectRunModelOverrides(modelOverrideRows);
+    if (!collectedModelOverrides.ok) {
+      setError(collectedModelOverrides.error);
+      setSubmitting(false);
+      return;
+    }
     try {
       writeLastWorkflow(workflowName);
       await skill.startRun({
@@ -223,6 +233,8 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
         files: files.length > 0 ? files : undefined,
         // startRun already treats an empty map as "nothing supplied".
         inputs: suppliedInputs,
+        tiers: collectedModelOverrides.overrides.tiers,
+        aliases: collectedModelOverrides.overrides.aliases,
       });
       // Dispatch is fire-and-forget — the orchestrator creates the run row
       // asynchronously. Nudge the runs feed so the new card appears as soon
@@ -230,6 +242,7 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
       setContext('');
       setFiles([]);
       setInputValues({});
+      setModelOverrideRows([]);
       setMode('collapsed');
       invalidate('runs');
     } catch (err: unknown) {
@@ -243,6 +256,7 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
     setMode('collapsed');
     setFiles([]);
     setInputValues({});
+    setModelOverrideRows([]);
     setError(null);
   };
 
@@ -424,6 +438,87 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
             ))}
           </div>
         ) : null}
+
+        <div className="mt-3 rounded-[10px] border border-border bg-surface-inset px-3 py-2.5">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-text-tertiary">
+                Model bindings
+              </p>
+              <p className="mt-0.5 text-[11px] text-text-tertiary">
+                {modelOverrideRows.length === 0
+                  ? 'As authored'
+                  : 'Only the named tiers and aliases change for this run.'}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                const id = nextModelOverrideId.current;
+                nextModelOverrideId.current += 1;
+                setModelOverrideRows(prev => [...prev, { id, name: '', spec: '' }]);
+              }}
+              disabled={submitting}
+              className="shrink-0 rounded border border-border px-2.5 py-1 font-mono text-[11px] text-text-secondary transition-colors hover:border-border-bright hover:text-text-primary disabled:opacity-40"
+            >
+              + binding
+            </button>
+          </div>
+          {modelOverrideRows.length > 0 ? (
+            <div className="mt-2 space-y-2">
+              {modelOverrideRows.map(row => (
+                <div key={row.id} className="flex items-center gap-2">
+                  <input
+                    value={row.name}
+                    onChange={e => {
+                      const name = e.target.value;
+                      setModelOverrideRows(prev =>
+                        prev.map(candidate =>
+                          candidate.id === row.id ? { ...candidate, name } : candidate
+                        )
+                      );
+                      if (error !== null) setError(null);
+                    }}
+                    placeholder="large or @planner"
+                    aria-label="Tier or alias"
+                    disabled={submitting}
+                    className="w-[150px] rounded-[8px] border border-border bg-surface px-2.5 py-1.5 font-mono text-[12px] text-text-primary placeholder:text-text-tertiary focus:border-accent-bright/50 focus:outline-none disabled:opacity-50"
+                  />
+                  <span className="font-mono text-[11px] text-text-tertiary">=</span>
+                  <input
+                    value={row.spec}
+                    onChange={e => {
+                      const spec = e.target.value;
+                      setModelOverrideRows(prev =>
+                        prev.map(candidate =>
+                          candidate.id === row.id ? { ...candidate, spec } : candidate
+                        )
+                      );
+                      if (error !== null) setError(null);
+                    }}
+                    placeholder="openai/gpt-5.6"
+                    aria-label="Model spec"
+                    disabled={submitting}
+                    className="min-w-0 flex-1 rounded-[8px] border border-border bg-surface px-2.5 py-1.5 font-mono text-[12px] text-text-primary placeholder:text-text-tertiary focus:border-accent-bright/50 focus:outline-none disabled:opacity-50"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setModelOverrideRows(prev =>
+                        prev.filter(candidate => candidate.id !== row.id)
+                      );
+                    }}
+                    disabled={submitting}
+                    className="rounded p-1 text-text-tertiary transition-colors hover:bg-error/10 hover:text-error disabled:opacity-40"
+                    aria-label={`Remove model binding ${row.name || String(row.id)}`}
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </div>
 
         {/* Body: context textarea */}
         <div className="mt-3">

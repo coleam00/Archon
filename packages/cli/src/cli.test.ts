@@ -15,6 +15,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const CLI_ENTRY = join(import.meta.dir, 'cli.ts');
+// The enclosing git worktree — a valid repo for the git gate, with a real
+// .archon/workflows/ directory so an unknown workflow name fails deterministically.
+const repoRoot = join(import.meta.dir, '..', '..', '..');
 
 describe('CLI help output', () => {
   it('lists the workflow resume command', () => {
@@ -55,6 +58,51 @@ describe('CLI help output', () => {
     expect(result.stdout).toContain('--exec-code');
     expect(result.stdout).toContain('--pause-at-gates');
   });
+
+  it('documents sparse repeatable model bindings', () => {
+    const result = spawnSync(process.execPath, [CLI_ENTRY, '--help'], { encoding: 'utf8' });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('--model <name>=<spec>');
+  });
+});
+
+describe('workflow model arguments', () => {
+  it('parses repeated --model values without accepting a coarse provider flag', () => {
+    const parsed = parseArgs({
+      args: ['workflow', 'run', 'x', '--model', 'large=openai/gpt-5.6', '--model', '@p=large'],
+      options: cliArgOptions,
+      allowPositionals: true,
+      strict: true,
+    });
+    expect(parsed.values.model).toEqual(['large=openai/gpt-5.6', '@p=large']);
+    expect(() =>
+      parseArgs({
+        args: ['workflow', 'run', 'x', '--provider', 'pi'],
+        options: cliArgOptions,
+        allowPositionals: true,
+        strict: true,
+      })
+    ).toThrow(/provider/);
+  });
+
+  for (const args of [
+    ['workflow', 'resume', 'run-1'],
+    ['workflow', 'approve', 'run-1'],
+    ['workflow', 'reject', 'run-1'],
+    ['workflow', 'respond', 'run-1', 'approve'],
+  ]) {
+    it(`rejects --model on ${args[0]} ${args[1]}`, () => {
+      const result = spawnSync(process.execPath, [CLI_ENTRY, ...args, '--model', 'large=opus'], {
+        encoding: 'utf8',
+      });
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        '--model cannot be used when continuing an existing workflow run'
+      );
+      expect(result.stderr).toContain('keeps the model bindings it started with');
+    });
+  }
 });
 
 describe('unknown flag rejection (#2769)', () => {
@@ -657,5 +705,157 @@ describe('CLI git repo check', () => {
       expect(msg).toContain('Directory does not exist');
       expect(msg).toContain('/nonexistent');
     });
+  });
+});
+
+describe('workflow search --json error envelope', () => {
+  it('emits { ok: false } on stdout when the command throws under --json', () => {
+    // An unreachable marketplace URL makes fetchMarketplace throw inside the
+    // `workflow search` handler — the only deterministic error path. The
+    // envelope, not the message, is the contract.
+    const result = spawnSync(
+      process.execPath,
+      [CLI_ENTRY, 'workflow', 'search', 'anything', '--json'],
+      {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          ARCHON_TELEMETRY_DISABLED: '1',
+          ARCHON_MARKETPLACE_URL: 'http://127.0.0.1:9/nope',
+        },
+      }
+    );
+
+    expect(result.status).toBe(1);
+    expect(() => JSON.parse(result.stdout)).not.toThrow();
+    expect(JSON.parse(result.stdout)).toMatchObject({ ok: false });
+  });
+});
+
+describe('main catch --json error envelope', () => {
+  it('emits { ok: false } on stdout when an unhandled command error reaches the top-level catch', () => {
+    // An unknown workflow name makes workflowRunCommand throw with no local
+    // handling, so the error escapes to main()'s outer catch — the last route
+    // that could still leak bare stderr text under --json.
+    const result = spawnSync(
+      process.execPath,
+      [CLI_ENTRY, 'workflow', 'run', 'definitely-not-a-workflow', '--json', '--cwd', repoRoot],
+      { encoding: 'utf8', env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' } }
+    );
+
+    expect(result.status).toBe(1);
+    expect(() => JSON.parse(result.stdout)).not.toThrow();
+    expect(JSON.parse(result.stdout)).toMatchObject({ ok: false });
+  });
+});
+
+describe('pre-dispatch gates --json error envelope', () => {
+  it('emits { ok: false } on stdout when --cwd does not exist', () => {
+    const result = spawnSync(
+      process.execPath,
+      [CLI_ENTRY, 'workflow', 'run', 'anything', '--json', '--cwd', '/does/not/exist'],
+      { encoding: 'utf8', env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' } }
+    );
+
+    expect(result.status).toBe(1);
+    expect(() => JSON.parse(result.stdout)).not.toThrow();
+    expect(JSON.parse(result.stdout)).toMatchObject({ ok: false });
+  });
+
+  it('emits { ok: false } on stdout when outside a git repository', () => {
+    const result = spawnSync(
+      process.execPath,
+      [CLI_ENTRY, 'workflow', 'list', '--json', '--cwd', tmpdir()],
+      { encoding: 'utf8', env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' } }
+    );
+
+    expect(result.status).toBe(1);
+    expect(() => JSON.parse(result.stdout)).not.toThrow();
+    expect(JSON.parse(result.stdout)).toMatchObject({ ok: false });
+  });
+
+  it('emits { ok: false } on stdout for an unknown command instead of usage text', () => {
+    const result = spawnSync(process.execPath, [CLI_ENTRY, 'boguscmd', '--json'], {
+      encoding: 'utf8',
+      env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' },
+    });
+
+    expect(result.status).toBe(1);
+    expect(() => JSON.parse(result.stdout)).not.toThrow();
+    expect(JSON.parse(result.stdout)).toMatchObject({ ok: false });
+  });
+
+  it('emits { ok: false } on stdout when arg parsing rejects an unknown flag', () => {
+    const result = spawnSync(
+      process.execPath,
+      [CLI_ENTRY, 'workflow', 'list', '--json', '--bogus-flag'],
+      { encoding: 'utf8', env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' } }
+    );
+
+    expect(result.status).toBe(1);
+    expect(() => JSON.parse(result.stdout)).not.toThrow();
+    expect(JSON.parse(result.stdout)).toMatchObject({ ok: false });
+  });
+
+  it('emits { ok: false } on stdout when chat is invoked with no message', () => {
+    const result = spawnSync(process.execPath, [CLI_ENTRY, 'chat', '--json'], {
+      encoding: 'utf8',
+      env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' },
+    });
+
+    expect(result.status).toBe(1);
+    expect(() => JSON.parse(result.stdout)).not.toThrow();
+    expect(JSON.parse(result.stdout)).toMatchObject({ ok: false });
+  });
+
+  it('emits { ok: false } on stdout for an invalid setup --scope', () => {
+    const result = spawnSync(process.execPath, [CLI_ENTRY, 'setup', '--scope', 'bogus', '--json'], {
+      encoding: 'utf8',
+      env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' },
+    });
+
+    expect(result.status).toBe(1);
+    expect(() => JSON.parse(result.stdout)).not.toThrow();
+    expect(JSON.parse(result.stdout)).toMatchObject({ ok: false });
+  });
+
+  it('emits { ok: false } on stdout when workflow get is missing its run-id', () => {
+    const result = spawnSync(process.execPath, [CLI_ENTRY, 'workflow', 'get', '--json'], {
+      encoding: 'utf8',
+      env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' },
+    });
+
+    expect(result.status).toBe(1);
+    expect(() => JSON.parse(result.stdout)).not.toThrow();
+    expect(JSON.parse(result.stdout)).toMatchObject({ ok: false });
+  });
+
+  it('emits { ok: false } on stdout when setup --scope project runs outside a git repo', () => {
+    const result = spawnSync(
+      process.execPath,
+      [CLI_ENTRY, 'setup', '--scope', 'project', '--json', '--cwd', tmpdir()],
+      { encoding: 'utf8', env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' } }
+    );
+
+    expect(result.status).toBe(1);
+    expect(() => JSON.parse(result.stdout)).not.toThrow();
+    expect(JSON.parse(result.stdout)).toMatchObject({ ok: false });
+  });
+});
+
+describe('workflow test --json error envelope', () => {
+  it('emits { ok: false } on stdout when the command throws under --json', () => {
+    // A --cwd that does not exist makes findRepoRoot throw inside the
+    // `workflow test` handler — the only reachable error path without a full
+    // fixture project. The envelope, not the message, is the contract.
+    const result = spawnSync(
+      process.execPath,
+      [CLI_ENTRY, 'workflow', 'test', '--json', '--cwd', join(tmpdir(), 'archon-missing-cwd')],
+      { encoding: 'utf8', env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' } }
+    );
+
+    expect(result.status).toBe(1);
+    expect(() => JSON.parse(result.stdout)).not.toThrow();
+    expect(JSON.parse(result.stdout)).toMatchObject({ ok: false });
   });
 });

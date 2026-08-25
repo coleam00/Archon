@@ -99,8 +99,8 @@ in isolation — reviewable by construction.
   `/console/_preview` (fixture switcher) plus PR screenshots. No `mock.module`,
   no happy-dom, no `@testing-library/*`, no web-local `bunfig.toml`.
 - **Node color tokens.** PR-2 adds two console-scoped tokens in `theme.css` —
-  `--node-script` and `--node-cancel` — completing the seven variant stripes
-  (the other five inherit from the production `:root` in `index.css`). Per the
+  `--node-script` and `--node-cancel` — completing the eight variant stripes
+  (the other six inherit from the production `:root` in `index.css`). Per the
   brand foundation rule, any future promotion of these to the production
   palette must update both the token source and the brand guide.
 - **Keymap.** Bindings reuse the console `lib/keymap.ts` (modifier-free,

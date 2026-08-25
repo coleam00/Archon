@@ -28,10 +28,14 @@ import {
   isApprovalContext,
   isRunBlockedOnChild,
   reRunsOwnNodeOnResume,
+  isWorkflowWaitContext,
+  isScheduledWorkflowResume,
+  isWaitNode,
   SUBRUN_METADATA_KEYS,
   readSubrunMetadata,
   RUN_METADATA_KEYS,
   readIdentityUnresolved,
+  CONTINUATION_METADATA_KEY,
   WORKFLOW_SOURCE_METADATA_KEY,
   readWorkflowSourceState,
 } from './schemas';
@@ -50,7 +54,7 @@ import {
 } from './workflow-source';
 import { executeDagWorkflow, childOutcomeFromRun } from './dag-executor';
 import type { RunChildWorkflowArgs, ChildWorkflowOutcome, PriorRunUsage } from './dag-executor';
-import type { PersistedNodeOutput } from './store';
+import type { PersistedNodeOutput, WorkflowResumeCursor } from './store';
 import { canonicalValueText, type JsonValue } from './output-ref';
 import { discoverWorkflowsWithConfig } from './workflow-discovery';
 import type { WorkflowWithSource, WorkflowLoadError } from './schemas';
@@ -79,11 +83,26 @@ import {
   classifyError,
   toTelemetryErrorClass,
   safeSendMessage,
+  runWithAdoptedRunDir,
   type SendMessageContext,
 } from './executor-shared';
 import { resolveGithubTokenOverrides } from './utils/github-token-policy';
-import { buildAiProfile } from './model-validation';
-import type { ResolvedAiProfile } from './model-validation';
+import {
+  buildAiProfile,
+  createRunModelBindingsMetadata,
+  hasRunModelOverrides,
+  readRunModelBindingsMetadata,
+  resolveRunModelOverrides,
+  RUN_MODEL_BINDINGS_METADATA_KEY,
+  runOverrideAppliesToRef,
+} from './model-validation';
+import type {
+  BuildAiProfileOptions,
+  ResolvedAiProfile,
+  ResolvedRunModelOverrides,
+  RunModelBindingsMetadata,
+  RunModelOverrides,
+} from './model-validation';
 import { assistantModelDefaults, resolveWorkflowModelScope } from './node-model-resolution';
 
 /** The per-user prefs layer as returned by `WorkflowDeps.getUserAiPrefs`. */
@@ -642,6 +661,21 @@ export type ExecuteWorkflowOptions = ResumePayload & {
    */
   inputs?: Readonly<Record<string, string>>;
   /**
+   * Between-run continuation (#2747): the terminal run whose estate this run
+   * adopted (`--adopt`) or superseded (`--supersedes`). Written once onto the
+   * fresh run row's `adopted_from_run_id` — never on resume — and announced on
+   * THIS run's event log as `workflow.run_adopted` so the chain renders without
+   * joining on the column. The lane itself is resolved by the caller before
+   * dispatch; the executor only records provenance.
+   */
+  adoptedFromRunId?: string;
+  /** How `adoptedFromRunId` continues: estate adoption or fresh-lane supersession. */
+  continuationMode?: 'adopt' | 'supersede';
+  /** One model-binding phase: raw at invocation boundaries, resolved for child runs. */
+  modelOverrideLayer?:
+    | { kind: 'raw'; overrides: RunModelOverrides }
+    | { kind: 'resolved'; overrides: ResolvedRunModelOverrides };
+  /**
    * The frozen source this run executes, from {@link prepareWorkflowSource}.
    *
    * Callers that run a workflow read off disk MUST prepare one and discover the workflow
@@ -989,7 +1023,8 @@ export async function prepareWorkflowSource(
  */
 export async function hydrateResumableRun(
   deps: WorkflowDeps,
-  candidate: WorkflowRun
+  candidate: WorkflowRun,
+  cursor?: WorkflowResumeCursor
 ): Promise<{
   preCreatedRun: WorkflowRun;
   priorCompletedNodes: Map<string, PersistedNodeOutput>;
@@ -1008,7 +1043,14 @@ export async function hydrateResumableRun(
   const rawApproval = candidate.metadata?.approval;
   const approvalContext = isApprovalContext(rawApproval) ? rawApproval : undefined;
   const hasReRunGateState = reRunsOwnNodeOnResume(approvalContext, candidate.metadata);
-  if (priorCompletedNodes.size === 0 && !hasReRunGateState) {
+  const hasWaitState = isWorkflowWaitContext(candidate.metadata?.wait);
+  const hasScheduledResume = isScheduledWorkflowResume(candidate.metadata?.scheduled_resume);
+  if (
+    priorCompletedNodes.size === 0 &&
+    !hasReRunGateState &&
+    !hasWaitState &&
+    !hasScheduledResume
+  ) {
     getLog().info(
       { resumableRunId: candidate.id },
       'workflow.dag_resume_skipped_no_completed_nodes'
@@ -1019,7 +1061,10 @@ export async function hydrateResumableRun(
   const priorNodeSessions = (await deps.store.listWorkflowRunNodeSessions(candidate.id)).filter(
     row => completedNodeIds.has(row.node_id)
   );
-  const preCreatedRun = await deps.store.resumeWorkflowRun(candidate.id);
+  const preCreatedRun =
+    cursor === undefined
+      ? await deps.store.resumeWorkflowRun(candidate.id)
+      : await deps.store.resumeWorkflowRun(candidate.id, cursor);
   getLog().info(
     { workflowRunId: preCreatedRun.id, priorCompletedCount: priorCompletedNodes.size },
     'workflow.dag_resuming'
@@ -1086,6 +1131,7 @@ async function runChildWorkflow(
   deps: WorkflowDeps,
   platform: IWorkflowPlatform,
   args: RunChildWorkflowArgs,
+  resolvedModelOverrides: ResolvedRunModelOverrides,
   resolveChildIsolation?: ChildIsolationResolver
 ): Promise<ChildWorkflowOutcome> {
   const {
@@ -1404,7 +1450,11 @@ async function runChildWorkflow(
         childWorkflow,
         input,
         conversationDbId,
-        { ...childOpts, capturedSourceOwner: owner }
+        {
+          ...childOpts,
+          capturedSourceOwner: owner,
+          modelOverrideLayer: { kind: 'resolved', overrides: resolvedModelOverrides },
+        }
       );
     });
 
@@ -1680,10 +1730,39 @@ export async function executeWorkflow(
     container: containerCtx,
     resolveChildIsolation,
     inputs: suppliedInputs,
+    modelOverrideLayer,
     preparedSource,
+    adoptedFromRunId,
+    continuationMode = 'adopt',
   } = opts;
 
   const executionUserId = preCreatedRun ? (preCreatedRun.user_id ?? undefined) : userId;
+  const modelOverrides =
+    modelOverrideLayer?.kind === 'raw' ? modelOverrideLayer.overrides : undefined;
+  const callerResolvedModelOverrides =
+    modelOverrideLayer?.kind === 'resolved' ? modelOverrideLayer.overrides : undefined;
+  const isContinuation =
+    preCreatedRun !== undefined &&
+    (priorCompletedNodes !== undefined || preCreatedRun.status !== 'pending');
+  if (isContinuation && modelOverrides !== undefined) {
+    throw new Error('Cannot supply model overrides when resuming an existing workflow run.');
+  }
+
+  const containsWait = (nodes: readonly (DagNode | IncludeDirective)[]): boolean =>
+    nodes.some(node => {
+      if (!('kind' in node)) return false;
+      if (isWaitNode(node)) return true;
+      return isLoopGroupNode(node) && containsWait(node.loop_group.nodes);
+    });
+  if (
+    preCreatedRun === undefined &&
+    execContext.kind === 'container' &&
+    containsWait(workflow.nodes)
+  ) {
+    throw new Error(
+      `Workflow '${workflow.name}' contains a durable wait, which is not supported in container isolation because server continuation cannot rewire the container. Run it without container isolation.`
+    );
+  }
 
   if (preCreatedRun !== undefined) {
     const foreignPriorNodeSession = priorNodeSessions?.find(
@@ -1808,14 +1887,19 @@ export async function executeWorkflow(
       'workflow.user_ai_prefs_applied'
     );
   }
-  let aiProfile: ResolvedAiProfile;
+  let baseAiProfile: ResolvedAiProfile;
+  let appliedProfileOptions: BuildAiProfileOptions;
   try {
-    aiProfile = buildAiProfile(userAiPrefs.defaultProvider ?? config.assistant, {
+    appliedProfileOptions = {
       repoTiers: config.tiers,
       repoAliases: config.aliases,
       userTiers: userAiPrefs.tiers,
       userAliases: userAiPrefs.aliases,
-    });
+    };
+    baseAiProfile = buildAiProfile(
+      userAiPrefs.defaultProvider ?? config.assistant,
+      appliedProfileOptions
+    );
   } catch (error) {
     // Structurally invalid STORED prefs (corrupt DB row) must not kill the run
     // before its record exists — degrade to config-only. A broken config layer
@@ -1824,10 +1908,56 @@ export async function executeWorkflow(
       { err: error as Error, userId: executionUserId },
       'workflow.user_ai_prefs_profile_invalid'
     );
-    aiProfile = buildAiProfile(config.assistant, {
+    appliedProfileOptions = {
       repoTiers: config.tiers,
       repoAliases: config.aliases,
-    });
+    };
+    baseAiProfile = buildAiProfile(config.assistant, appliedProfileOptions);
+  }
+
+  let persistedModelBindings: RunModelBindingsMetadata | undefined;
+  let resolvedModelOverrides: ResolvedRunModelOverrides;
+  try {
+    persistedModelBindings = isContinuation
+      ? readRunModelBindingsMetadata(preCreatedRun.metadata)
+      : undefined;
+    resolvedModelOverrides =
+      persistedModelBindings?.overrides ??
+      callerResolvedModelOverrides ??
+      resolveRunModelOverrides(baseAiProfile, modelOverrides);
+  } catch (error) {
+    // HTTP/background dispatch pre-creates a pending row before this shared semantic
+    // gate runs. An invalid explicit binding must not leave that row holding the path
+    // lock indefinitely just because validation happens before the executor's main
+    // lifecycle catch.
+    if (preCreatedRun) {
+      await deps.store
+        .failWorkflowRun(preCreatedRun.id, (error as Error).message)
+        .catch((dbError: Error) => {
+          getLog().error(
+            { err: dbError, workflowRunId: preCreatedRun.id },
+            'workflow.model_overrides_fail_db_record_failed'
+          );
+        });
+    }
+    throw error;
+  }
+  const aiProfile = buildAiProfile(baseAiProfile.defaultProvider, {
+    ...appliedProfileOptions,
+    runTiers: resolvedModelOverrides.tiers,
+    runAliases: resolvedModelOverrides.aliases,
+  });
+  const modelBindingsMetadata = createRunModelBindingsMetadata(resolvedModelOverrides, aiProfile);
+  if (hasRunModelOverrides(resolvedModelOverrides)) {
+    getLog().info(
+      {
+        workflowName: workflow.name,
+        tierKeys: Object.keys(resolvedModelOverrides.tiers ?? {}),
+        aliasKeys: Object.keys(resolvedModelOverrides.aliases ?? {}),
+        effective: modelBindingsMetadata.effective.aliases,
+      },
+      'workflow.run_model_overrides_applied'
+    );
   }
 
   // Resolve the workflow-level provider/model fallbacks once (used by all nodes) through
@@ -1849,8 +1979,9 @@ export async function executeWorkflow(
   const resolvedProvider = scope.provider;
   const resolvedModel = scope.model;
   const workflowPreset = scope.preset;
-  const providerSource =
-    scope.providerOrigin === 'model ref'
+  const providerSource = runOverrideAppliesToRef(resolvedModelOverrides, workflow.model)
+    ? 'run-override'
+    : scope.providerOrigin === 'model ref'
       ? `model preset '${workflow.model ?? ''}'`
       : scope.providerOrigin === 'workflow'
         ? 'workflow definition'
@@ -1944,9 +2075,14 @@ export async function executeWorkflow(
           ...(suppliedInputs && Object.keys(suppliedInputs).length > 0
             ? { [SUBRUN_METADATA_KEYS.inputs]: { ...suppliedInputs } }
             : {}),
+          // Between-run continuation (#2747): the mode stamp rides the same
+          // creation write as `adopted_from_run_id` so both are write-once.
+          ...(adoptedFromRunId ? { [CONTINUATION_METADATA_KEY]: { mode: continuationMode } } : {}),
+          [RUN_MODEL_BINDINGS_METADATA_KEY]: modelBindingsMetadata,
         },
         parent_conversation_id: parentConversationId,
         user_id: userId,
+        ...(adoptedFromRunId ? { adopted_from_run_id: adoptedFromRunId } : {}),
       });
     } catch (error) {
       const err = error as Error;
@@ -1961,6 +2097,45 @@ export async function executeWorkflow(
       );
       return { success: false, error: 'Database error creating workflow run' };
     }
+  }
+
+  if (preCreatedRun && !isContinuation) {
+    try {
+      await deps.store.updateWorkflowRun(preCreatedRun.id, {
+        metadata: { [RUN_MODEL_BINDINGS_METADATA_KEY]: modelBindingsMetadata },
+      });
+    } catch (error) {
+      const err = error as Error;
+      getLog().error(
+        { err, workflowRunId: preCreatedRun.id },
+        'workflow.model_bindings_persist_failed'
+      );
+      await deps.store
+        .failWorkflowRun(preCreatedRun.id, 'Database error recording workflow model bindings')
+        .catch((dbError: Error) => {
+          getLog().error(
+            { err: dbError, workflowRunId: preCreatedRun.id },
+            'workflow.model_bindings_failure_record_failed'
+          );
+        });
+      await sendCriticalMessage(
+        platform,
+        conversationId,
+        '❌ **Workflow failed**: Unable to record the run model bindings. Please try again later.'
+      );
+      return {
+        success: false,
+        workflowRunId: preCreatedRun.id,
+        error: 'Database error recording workflow model bindings',
+      };
+    }
+    workflowRun = {
+      ...preCreatedRun,
+      metadata: {
+        ...preCreatedRun.metadata,
+        [RUN_MODEL_BINDINGS_METADATA_KEY]: modelBindingsMetadata,
+      },
+    };
   }
 
   // Path-lock guard: ensure no other workflow run holds this working_path.
@@ -2234,6 +2409,45 @@ export async function executeWorkflow(
     };
   }
   getLog().debug({ artifactsDir, logDir, stateDir, outputRoot }, 'workflow_paths_resolved');
+
+  // Between-run continuation (#2747): resolve $ADOPTED_RUN_DIR through the
+  // adopted run's persisted `output_root` (rename-safe per #2200) and announce
+  // the adoption on THIS run's own event log so the chain renders without a
+  // column join. Read-only by contract — this run writes to its own artifacts;
+  // stores are never merged, so evidence stays attributable per run.
+  // Resolution also runs on resume: a resumed run carries no caller-supplied id,
+  // but its row still records the adoption, and every remaining node may reference
+  // $ADOPTED_RUN_DIR. Only the announcement event stays creation-only — it was
+  // written once when the adoption was made.
+  const effectiveAdoptedFromRunId = adoptedFromRunId ?? workflowRun.adopted_from_run_id;
+  let adoptedRunDir: string | undefined;
+  if (effectiveAdoptedFromRunId) {
+    const adopted = await deps.store.getWorkflowRun(effectiveAdoptedFromRunId);
+    if (!adopted?.output_root) {
+      throw new Error(
+        `Cannot adopt run '${effectiveAdoptedFromRunId}': it has no persisted output root, so its ` +
+          'artifact directory cannot be addressed.'
+      );
+    }
+    adoptedRunDir = archonPaths.getRunArtifactsDirForRoot(
+      adopted.output_root,
+      effectiveAdoptedFromRunId
+    );
+    if (!isContinuation) {
+      try {
+        await deps.store.createWorkflowEvent({
+          workflow_run_id: workflowRun.id,
+          event_type: 'workflow.run_adopted',
+          data: { adopted_from_run_id: effectiveAdoptedFromRunId },
+        });
+      } catch (err) {
+        getLog().warn(
+          { err: err as Error, workflowRunId: workflowRun.id, adoptedFromRunId },
+          'workflow.run_adopted_event_persist_failed'
+        );
+      }
+    }
+  }
 
   // ── Executable source ──────────────────────────────────────────────────────
   //
@@ -2677,43 +2891,53 @@ export async function executeWorkflow(
 
     // Execute the DAG workflow. Already-expanded (see `telemetryNodes` above) — the
     // executor's own `DagNode[]` parameter type is correctly narrow; this boundary
-    // cast reflects that invariant, not a new one.
-    const dagSummary = await executeDagWorkflow(
-      deps,
-      platform,
-      conversationId,
-      cwd,
-      { ...workflow, nodes: telemetryNodes },
-      runForDag,
-      resolvedProvider,
-      resolvedModel,
-      artifactsDir,
-      stateDir,
-      logDir,
-      baseBranch,
-      docsDir,
-      config,
-      configuredCommandFolder,
-      issueContext,
-      dagPriorCompletedNodes,
-      source,
-      aiProfile,
-      workflowPreset,
-      scopeArtifactsDir,
-      execContext,
-      containerCtx,
-      // Sub-run closure (#2121 Phase 2): captures executeWorkflow (this module — no
-      // import cycle) so a `workflow:` node can spawn a governed child run in-process.
-      // Also captures the per-child isolation resolver (slice 2, PR-A) so an
-      // `isolation: 'worktree'` child gets its own worktree cwd.
-      (childArgs: RunChildWorkflowArgs): Promise<ChildWorkflowOutcome> =>
-        runChildWorkflow(deps, platform, childArgs, resolveChildIsolation),
-      dagPriorUsage,
-      priorNodeSessions,
-      // Container runs resolve from the capture like every other run: it is bind-mounted
-      // read-only at the SAME absolute path inside the container, so one source-roots
-      // value means the same thing on both sides of the boundary.
-      workflowSourceRoots
+    // cast reflects that invariant, not a new one. The adopted-dir scope (#2747)
+    // encloses only the DAG: a child sub-run spawned from a node re-enters
+    // `executeWorkflow` and scopes its own (absent) adoption.
+    const dagSummary = await runWithAdoptedRunDir(adoptedRunDir, () =>
+      executeDagWorkflow(
+        deps,
+        platform,
+        conversationId,
+        cwd,
+        { ...workflow, nodes: telemetryNodes },
+        runForDag,
+        resolvedProvider,
+        resolvedModel,
+        artifactsDir,
+        stateDir,
+        logDir,
+        baseBranch,
+        docsDir,
+        config,
+        configuredCommandFolder,
+        issueContext,
+        dagPriorCompletedNodes,
+        source,
+        aiProfile,
+        workflowPreset,
+        scopeArtifactsDir,
+        execContext,
+        containerCtx,
+        // Sub-run closure (#2121 Phase 2): captures executeWorkflow (this module — no
+        // import cycle) so a `workflow:` node can spawn a governed child run in-process.
+        // Also captures the per-child isolation resolver (slice 2, PR-A) so an
+        // `isolation: 'worktree'` child gets its own worktree cwd.
+        (childArgs: RunChildWorkflowArgs): Promise<ChildWorkflowOutcome> =>
+          runChildWorkflow(
+            deps,
+            platform,
+            childArgs,
+            resolvedModelOverrides,
+            resolveChildIsolation
+          ),
+        dagPriorUsage,
+        priorNodeSessions,
+        // Container runs resolve from the capture like every other run: it is bind-mounted
+        // read-only at the SAME absolute path inside the container, so one source-roots
+        // value means the same thing on both sides of the boundary.
+        workflowSourceRoots
+      )
     );
 
     // executeDagWorkflow throws on fatal errors; check DB status for result

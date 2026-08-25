@@ -239,37 +239,6 @@ export const dashboardRunsResponseSchema = z
   })
   .openapi('DashboardRunsResponse');
 
-/**
- * POST /api/workflows/:name/run request body.
- *
- * NOT WIRED, and deliberately so: `runWorkflowRoute` omits `request.body` because this
- * route also accepts `multipart/form-data`, which Zod would reject against a JSON schema
- * (the documented multipart-or-JSON exception in AGENTS.md). Nothing references this
- * schema, so it contributes nothing to `/api/openapi.json` — `RunWorkflowBody` does not
- * appear in the generated spec or in `api.generated.d.ts`. The route's real contract is
- * the hand-written validation in the handler plus the route `description` string; those
- * are what a caller and the generated client actually see.
- *
- * It is kept as the declared shape of the JSON body for a reader, and must be updated
- * alongside the handler — but do not add a field here believing that publishes it.
- */
-export const runWorkflowBodySchema = z
-  .object({
-    conversationId: z.string(),
-    message: z.string(),
-    /**
-     * Values for the workflow's declared `inputs:` (#2554), keyed by input name.
-     * Validated against the declaration before any worktree, clone, or AI cost; a
-     * missing required input or an undeclared key is refused. Omit for a workflow that
-     * declares no inputs, or to take every declared default.
-     *
-     * In a `multipart/form-data` request the same map travels as a single `inputs` form
-     * field holding this object JSON-encoded (form fields can only be strings).
-     */
-    inputs: z.record(z.string(), z.string()).optional(),
-  })
-  .openapi('RunWorkflowBody');
-
 /** A single artifact file listed by GET /api/runs/:runId/artifacts. */
 export const artifactFileSchema = z
   .object({
@@ -309,4 +278,7 @@ export const workflowRunsQuerySchema = z.object({
   // when an identity resolves. Default lists everything. Enum makes the boolean
   // contract explicit (the handler treats only 'true' as on).
   mine: z.enum(['true', 'false']).optional(),
+  // Open-work inbox (#2747): 'true' lists terminal failed runs nothing has
+  // adopted or superseded. Mutually exclusive with status/conversationId.
+  open: z.enum(['true', 'false']).optional(),
 });

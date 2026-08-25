@@ -77,7 +77,7 @@ describe('loadDryRunStubs', () => {
     expect(result).toEqual({ classify: 'BUG', details: { severity: 'high', count: 2 } });
   });
 
-  test('rejects missing, list, multi-document, and invalid-value files', async () => {
+  test('rejects missing, list, and multi-document files', async () => {
     await expect(loadDryRunStubs('/definitely/missing/stubs.yaml')).rejects.toThrow(
       'Dry-run stub file not found'
     );
@@ -87,9 +87,15 @@ describe('loadDryRunStubs', () => {
     await expect(loadDryRunStubs(temporaryFile('one: value\n---\ntwo: value\n'))).rejects.toThrow(
       'expected one YAML mapping'
     );
-    await expect(loadDryRunStubs(temporaryFile('node: 42\n'))).rejects.toThrow(
-      'Invalid dry-run stub file'
-    );
+  });
+
+  test('rejects a fixture file with a targeted message instead of mis-reading it (#2772)', async () => {
+    await expect(
+      loadDryRunStubs(temporaryFile('fixture:\n  expect: completed\nnode-a: "stub"\n'))
+    ).rejects.toThrow("this is a fixture file; run it with 'workflow test'");
+    await expect(
+      loadDryRunStubs(temporaryFile('exec-code: false\nnode-a: "stub"\n'))
+    ).rejects.toThrow('workflow test');
   });
 });
 
@@ -437,6 +443,40 @@ describe('dry-run stub scaffolding and sparse defaults (#2624)', () => {
       reason: 'executed locally',
       output: 'live',
     });
+  });
+
+  test('generates array-typed output_format stubs', () => {
+    const workflow = makeTestWorkflow({
+      name: 'array-output',
+      nodes: [
+        {
+          id: 'items',
+          prompt: 'List items',
+          output_format: {
+            type: 'array',
+            items: { type: 'string' },
+            minItems: 2,
+          },
+        },
+      ],
+    });
+
+    expect(createDryRunStubScaffold(workflow)).toEqual({ items: ['TODO', 'TODO'] });
+  });
+
+  test.each([
+    ['boolean', { type: 'boolean' }, false],
+    ['number', { type: 'number' }, 0],
+    ['integer with minimum', { type: 'integer', minimum: 3 }, 3],
+    ['null', { type: 'null' }, null],
+    ['scalar const', { const: 5 }, 5],
+  ])('generates %s-typed output_format stubs', (_name, outputFormat, expected) => {
+    const workflow = makeTestWorkflow({
+      name: 'scalar-output',
+      nodes: [{ id: 'flag', prompt: 'Decide', output_format: outputFormat as never }],
+    });
+
+    expect(createDryRunStubScaffold(workflow)).toEqual({ flag: expected });
   });
 });
 
@@ -790,6 +830,33 @@ describe('dryRunWorkflow', () => {
     expect(paused.outcome).toBe('paused');
     expect(paused.trace.at(-1)).toMatchObject({ nodeId: 'gate', state: 'paused' });
     expect(paused.unusedStubs).toEqual(['after']);
+  });
+
+  test('reports a durable wait as a pause without AI resolution', async () => {
+    const workflow = makeTestWorkflow({
+      name: 'wait',
+      nodes: [{ id: 'delay', wait: { duration_ms: 60_000 } }],
+    });
+
+    const result = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd: process.cwd(),
+      stubs: {},
+    });
+
+    expect(result.outcome).toBe('paused');
+    expect(createDryRunStubScaffold(workflow)).toEqual({});
+    expect(result.trace).toEqual([
+      {
+        nodeId: 'delay',
+        nodeType: 'wait',
+        state: 'paused',
+        reason: 'durable wait',
+      },
+    ]);
+    expect(result.missingStubs).toEqual([]);
+    expect(result.unusedStubs).toEqual([]);
   });
 
   test('simulates loop completion and max-iteration failure', async () => {

@@ -3,7 +3,7 @@ import { detectVariant } from './detect';
 import type { VariantId, WireDagNode } from '../types';
 
 describe('detectVariant', () => {
-  test('resolves all seven variants by mode-field presence', () => {
+  test('resolves all eight variants by mode-field presence', () => {
     const cases: Array<[WireDagNode, VariantId]> = [
       [{ id: 'a', prompt: 'hi' }, 'prompt'],
       [{ id: 'a', command: 'do-thing' }, 'command'],
@@ -14,6 +14,7 @@ describe('detectVariant', () => {
         'loop',
       ],
       [{ id: 'a', approval: { message: 'ok?' } }, 'approval'],
+      [{ id: 'a', wait: { duration_ms: 1000 } }, 'wait'],
       [{ id: 'a', cancel: 'stop' }, 'cancel'],
     ];
     for (const [node, expected] of cases) {

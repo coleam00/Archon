@@ -6,6 +6,7 @@ import {
   type RawWorkflowShape,
 } from '../primitives/workflow';
 import type { WorkflowGraphNode } from '../primitives/workflow-graph';
+import type { BuilderWorkflowDefinition } from '../builder/types';
 import type { WireWorkflowDefinition } from '../builder/types/wire';
 
 interface RawNode {
@@ -16,6 +17,7 @@ interface RawNode {
   command?: string;
   cancel?: string;
   approval?: unknown;
+  wait?: unknown;
   loop?: unknown;
   script?: unknown;
 }
@@ -59,6 +61,7 @@ export async function listWorkflows(cwd?: string): Promise<WorkflowListResult> {
 function nodeKind(n: RawNode): WorkflowGraphNode['kind'] {
   if (n.loop !== undefined) return 'loop';
   if (n.approval !== undefined) return 'approval';
+  if (n.wait !== undefined) return 'wait';
   if (n.cancel !== undefined) return 'cancel';
   if (n.bash !== undefined) return 'bash';
   if (n.command !== undefined) return 'command';
@@ -191,7 +194,7 @@ export async function deleteWorkflow(
  * NO `?cwd=` (validation is stateless).
  */
 export function validateWorkflow(
-  definition: WireWorkflowDefinition
+  definition: BuilderWorkflowDefinition
 ): Promise<ValidateWorkflowResponse> {
   return requestJson<ValidateWorkflowResponse>('/api/workflows/validate', {
     method: 'POST',

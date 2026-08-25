@@ -28,6 +28,8 @@ export interface StartRunArgs {
    * the server before any worktree, clone, or AI cost.
    */
   inputs?: Record<string, string>;
+  tiers?: Partial<Record<'small' | 'medium' | 'large', string>>;
+  aliases?: Record<string, string>;
 }
 
 interface CreateConversationResponse {
@@ -40,6 +42,8 @@ export async function startRun({
   message,
   files,
   inputs,
+  tiers,
+  aliases,
 }: StartRunArgs): Promise<void> {
   const conv = await requestJson<CreateConversationResponse>('/api/conversations', {
     method: 'POST',
@@ -49,6 +53,8 @@ export async function startRun({
   const url = `/api/workflows/${encodeURIComponent(workflow)}/run`;
 
   const hasInputs = inputs !== undefined && Object.keys(inputs).length > 0;
+  const hasTiers = tiers !== undefined && Object.keys(tiers).length > 0;
+  const hasAliases = aliases !== undefined && Object.keys(aliases).length > 0;
 
   if (files === undefined || files.length === 0) {
     await requestJson<{ accepted: boolean; status: string }>(url, {
@@ -57,6 +63,8 @@ export async function startRun({
         conversationId: conv.conversationId,
         message,
         ...(hasInputs ? { inputs } : {}),
+        ...(hasTiers ? { tiers } : {}),
+        ...(hasAliases ? { aliases } : {}),
       }),
     });
     return;
@@ -71,6 +79,8 @@ export async function startRun({
   if (hasInputs) {
     form.append('inputs', JSON.stringify(inputs));
   }
+  if (hasTiers) form.append('tiers', JSON.stringify(tiers));
+  if (hasAliases) form.append('aliases', JSON.stringify(aliases));
   for (const file of files) {
     form.append('files', file, file.name);
   }

@@ -6,6 +6,8 @@
  * Status classes are kept separate from accent/primary classes: a primary CTA
  * must never collide with the "running" signal.
  */
+import type { Run } from '../primitives/run';
+
 export type RunStatus = 'running' | 'paused' | 'failed' | 'completed' | 'cancelled';
 
 export const statusLabel: Record<RunStatus, string> = {
@@ -15,6 +17,11 @@ export const statusLabel: Record<RunStatus, string> = {
   completed: 'Completed',
   cancelled: 'Cancelled',
 };
+
+export function runStatusLabel(run: Run): string {
+  if (run.status !== 'paused' || run.wait == null) return statusLabel[run.status];
+  return run.wait.kind === 'event' ? 'Waiting for event' : 'Waiting until scheduled time';
+}
 
 /**
  * Status → class mappings.

@@ -113,6 +113,8 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     updateWorkflowActivity: mock(async () => {}),
     completeWorkflowRun: mock(async () => {}),
     pauseWorkflowRun: mock(async () => {}),
+    pauseWorkflowRunForWait: mock(async () => {}),
+    clearWorkflowWaitContext: mock(async () => ({ cleared: true })),
     rewriteApprovalContext: mock(async () => ({ resolved: true })),
     claimWriteback: mock(async () => ({ claimed: true })),
     releaseWritebackClaim: mock(async () => {}),
@@ -178,6 +180,7 @@ function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
     user_id: null,
     parent_run_id: null,
     output_root: null,
+    adopted_from_run_id: null,
     ...overrides,
   };
 }

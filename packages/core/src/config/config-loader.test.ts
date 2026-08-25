@@ -101,6 +101,48 @@ concurrency:
       expect(config.concurrency?.maxConversations).toBe(5);
     });
 
+    test('rejects malformed quota continuation policy at config ingress', async () => {
+      mockFsReadFile.mockResolvedValue(`
+workflows:
+  autoResumeOnQuotaReset: yes
+  quotaMaxAttempts: 1.5
+  quotaDeadlineMs: -1
+`);
+
+      const config = await loadGlobalConfig();
+
+      expect(config).toEqual({});
+      expect(mockLogger.error).toHaveBeenCalled();
+    });
+
+    test('rejects quota continuation delays beyond the persisted timestamp range', async () => {
+      mockFsReadFile.mockResolvedValue(`
+workflows:
+  quotaFallbackDelayMs: 31536000000001
+  quotaDeadlineMs: 31536000000001
+`);
+
+      const config = await loadGlobalConfig();
+
+      expect(config).toEqual({});
+      expect(mockLogger.error).toHaveBeenCalled();
+    });
+
+    test('accepts quota continuation delays at the persisted timestamp bound', async () => {
+      mockFsReadFile.mockResolvedValue(`
+workflows:
+  quotaFallbackDelayMs: 31536000000000
+  quotaDeadlineMs: 31536000000000
+`);
+
+      const config = await loadGlobalConfig();
+
+      expect(config.workflows).toEqual({
+        quotaFallbackDelayMs: 31_536_000_000_000,
+        quotaDeadlineMs: 31_536_000_000_000,
+      });
+    });
+
     test('caches config on subsequent calls', async () => {
       mockFsReadFile.mockResolvedValue('defaultAssistant: claude');
 
@@ -280,6 +322,33 @@ recommendedWorkflows: "archon-plan"
       expect(config.assistants.codex).toEqual({});
       expect(config.streaming.telegram).toBe('stream');
       expect(config.concurrency.maxConversations).toBe(10);
+      expect(config.workflows).toEqual({
+        autoResumeOnQuotaReset: false,
+        quotaMaxAttempts: 1,
+        quotaDeadlineMs: 86_400_000,
+      });
+    });
+
+    test('merges global and repo quota continuation policy per field', async () => {
+      mockFsReadFile.mockResolvedValueOnce(`
+workflows:
+  autoResumeOnQuotaReset: true
+  quotaFallbackDelayMs: 3600000
+  quotaMaxAttempts: 2
+`).mockResolvedValueOnce(`
+workflows:
+  quotaMaxAttempts: 3
+  quotaDeadlineMs: 43200000
+`);
+
+      const config = await loadConfig('/test/repo');
+
+      expect(config.workflows).toEqual({
+        autoResumeOnQuotaReset: true,
+        quotaFallbackDelayMs: 3_600_000,
+        quotaMaxAttempts: 3,
+        quotaDeadlineMs: 43_200_000,
+      });
     });
 
     test('env var DEFAULT_AI_ASSISTANT is a fallback — config file assistant wins', async () => {
@@ -811,6 +880,28 @@ assistants:
       const writtenContent = mockFsWriteFile.mock.calls[0]?.[1] as string;
       expect(writtenContent).toContain('claude');
       expect(writtenContent).toContain('MyBot');
+    });
+
+    test('merges workflow continuation policy into the persisted config', async () => {
+      mockFsReadFile.mockResolvedValue(`
+workflows:
+  autoResumeOnQuotaReset: false
+  quotaMaxAttempts: 2
+`);
+
+      await updateGlobalConfig({
+        workflows: { autoResumeOnQuotaReset: true, quotaFallbackDelayMs: 60_000 },
+      });
+
+      const writtenContent = mockFsWriteFile.mock.calls[0]?.[1] as string;
+      const written = Bun.YAML.parse(writtenContent) as {
+        workflows?: Record<string, unknown>;
+      };
+      expect(written.workflows).toEqual({
+        autoResumeOnQuotaReset: true,
+        quotaMaxAttempts: 2,
+        quotaFallbackDelayMs: 60_000,
+      });
     });
 
     test('creates config when file does not exist', async () => {

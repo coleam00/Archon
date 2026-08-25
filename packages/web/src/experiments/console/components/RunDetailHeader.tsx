@@ -5,7 +5,7 @@ import { OriginBadge } from './OriginBadge';
 import type { Run } from '../primitives/run';
 import { shortRunId, formatElapsed, elapsedSince, formatCost } from '../lib/format';
 import { useIsDocker, useIdeEnv, openInIde } from '../lib/health';
-import { statusLabel, statusTextClass } from '../lib/run-status';
+import { runStatusLabel, statusTextClass } from '../lib/run-status';
 
 interface RunDetailHeaderProps {
   run: Run;
@@ -102,7 +102,7 @@ export function RunDetailHeader({
         <span
           className={`text-[11px] font-semibold uppercase tracking-[0.14em] ${statusTextClass[run.status]}`}
         >
-          {statusLabel[run.status]}
+          {runStatusLabel(run)}
         </span>
       </div>
 

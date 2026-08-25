@@ -109,4 +109,37 @@ describe('startRun — declared inputs (#2554)', () => {
     const form = runCall().init?.body as FormData;
     expect(form.get('inputs')).toBeNull();
   });
+
+  test('JSON branch carries sparse tier and alias bindings', async () => {
+    await startRun({
+      projectId: 'p1',
+      workflow: 'bench',
+      message: 'go',
+      tiers: { large: 'openai/gpt-5.6' },
+      aliases: { '@planner': 'codex/gpt-5.6-sol' },
+    });
+
+    const body = JSON.parse(String(runCall().init?.body)) as Record<string, unknown>;
+    expect(body).toMatchObject({
+      tiers: { large: 'openai/gpt-5.6' },
+      aliases: { '@planner': 'codex/gpt-5.6-sol' },
+    });
+  });
+
+  test('multipart branch JSON-encodes sparse tier and alias bindings', async () => {
+    await startRun({
+      projectId: 'p1',
+      workflow: 'bench',
+      message: 'go',
+      files: [new File(['x'], 'a.txt', { type: 'text/plain' })],
+      tiers: { large: 'openai/gpt-5.6' },
+      aliases: { '@planner': 'codex/gpt-5.6-sol' },
+    });
+
+    const form = runCall().init?.body as FormData;
+    expect(JSON.parse(String(form.get('tiers')))).toEqual({ large: 'openai/gpt-5.6' });
+    expect(JSON.parse(String(form.get('aliases')))).toEqual({
+      '@planner': 'codex/gpt-5.6-sol',
+    });
+  });
 });

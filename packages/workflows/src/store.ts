@@ -10,6 +10,9 @@ import type {
   WorkflowRunOutcome,
   WorkflowRunStatus,
   ApprovalContext,
+  WorkflowWaitContext,
+  WorkflowWaitResult,
+  ScheduledWorkflowResume,
   WorkflowNodeSession,
   WorkflowRunNodeSession,
 } from './schemas';
@@ -35,6 +38,19 @@ export interface DagResumeSnapshot {
   costUsd: number;
 }
 
+/** Durable wait outcome committed atomically with consumption of its active cursor. */
+export interface WorkflowWaitCompletion {
+  stepName: string;
+  result: WorkflowWaitResult;
+}
+
+export type WorkflowWaitPause = { kind: 'started'; stepName: string } | { kind: 'continued' };
+
+/** Exact persisted cursor expected by an automatic continuation claim. */
+export type WorkflowResumeCursor =
+  | { kind: 'wait'; nodeId: string; resumeAt: string }
+  | { kind: 'quota'; attempt: number; resumeAt: string };
+
 /** Composite primary key identifying a single persisted node session row. */
 export interface WorkflowNodeSessionKey {
   workflow_name: string;
@@ -53,6 +69,9 @@ export const WORKFLOW_EVENT_TYPES = [
   // handler records a failure in metadata and nowhere else), NOT a general
   // "a resume happened" marker: its absence never means the run wasn't resumed.
   'workflow_resumed',
+  // Between-run continuation (#2747) — written on the ADOPTING run's log when it
+  // starts with `--adopt`/`--supersedes`, so the chain renders from events alone.
+  'workflow.run_adopted',
   'node_started',
   'node_completed',
   'node_failed',
@@ -76,6 +95,14 @@ export const WORKFLOW_EVENT_TYPES = [
   'ralph_story_completed',
   'approval_requested',
   'approval_received',
+  'wait_started',
+  'wait_signaled',
+  'wait_completed',
+  'wait_expired',
+  'quota_resume_scheduled',
+  'quota_resume_triggered',
+  'quota_resume_exhausted',
+  'quota_resume_skipped',
   'workflow_cancelled',
   'workflow_artifact',
   'node_session_resumed',
@@ -166,6 +193,12 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
      * links back to the spawning parent run; omitted for top-level runs.
      */
     parent_run_id?: string;
+    /**
+     * Between-run continuation (#2747). Set when this run adopts a terminal
+     * run's estate (or supersedes it); written once at creation, never on
+     * resume. Omitted for ordinary fresh runs.
+     */
+    adopted_from_run_id?: string;
   }): Promise<WorkflowRun>;
   getWorkflowRun(id: string): Promise<WorkflowRun | null>;
   /**
@@ -195,7 +228,7 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
   ): Promise<WorkflowRun | null>;
   findResumableRun(workflowName: string, workingPath: string): Promise<WorkflowRun | null>;
   failOrphanedRuns(): Promise<{ count: number }>;
-  resumeWorkflowRun(id: string): Promise<WorkflowRun>;
+  resumeWorkflowRun(id: string, cursor?: WorkflowResumeCursor): Promise<WorkflowRun>;
   /**
    * `output_root` (#2200) is write-once: the executor sets it at run start only
    * when the persisted value is null. Re-writing it on resume would re-derive
@@ -211,7 +244,11 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
   updateWorkflowActivity(id: string): Promise<void>;
   getWorkflowRunStatus(id: string): Promise<WorkflowRunStatus | null>;
   completeWorkflowRun(id: string, metadata?: Record<string, unknown>): Promise<void>;
-  failWorkflowRun(id: string, error: string): Promise<void>;
+  failWorkflowRun(
+    id: string,
+    error: string,
+    scheduledResume?: ScheduledWorkflowResume
+  ): Promise<void>;
   /**
    * Pause a running run for human review, stamping the approval context. Optional
    * `extraMetadata` is folded into the SAME atomic metadata write (e.g. the
@@ -223,7 +260,18 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
     approvalContext: ApprovalContext,
     extraMetadata?: Record<string, unknown>
   ): Promise<void>;
-
+  /** Pause a running run and record its engine-owned wait start atomically. */
+  pauseWorkflowRunForWait(
+    id: string,
+    waitContext: WorkflowWaitContext,
+    pause: WorkflowWaitPause
+  ): Promise<void>;
+  /** Consume the exact wait cursor and persist its completion snapshot atomically. */
+  clearWorkflowWaitContext(
+    id: string,
+    waitContext: WorkflowWaitContext,
+    completion: WorkflowWaitCompletion
+  ): Promise<{ cleared: boolean }>;
   /**
    * Rewrite the approval context of an ALREADY-paused, still-open gate — unlike
    * `pauseWorkflowRun`, which requires the run to currently be `'running'` and so

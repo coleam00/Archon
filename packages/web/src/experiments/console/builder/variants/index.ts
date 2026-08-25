@@ -12,6 +12,7 @@ export {
 } from './registry';
 export { defaultLoopData, loopFromDag, loopToDag } from './loop';
 export { defaultApprovalData, approvalFromDag, approvalToDag } from './approval';
+export { defaultWaitData, waitFromDag, waitToDag } from './wait';
 export { defaultCancelData, cancelFromDag, cancelToDag } from './cancel';
 export { defaultScriptData, scriptFromDag, scriptToDag } from './script';
 export { defaultCommandData, commandFromDag, commandToDag } from './command';

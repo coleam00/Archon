@@ -30,6 +30,7 @@
   --node-bash: oklch(0.75 0.15 75);
   --node-loop: oklch(0.62 0.18 170);
   --node-approval: oklch(0.72 0.17 40);
+  --node-wait: oklch(0.76 0.13 205);
 
   /* shadcn variables mapped to dark theme */
   --radius: 0.625rem;
@@ -90,6 +91,7 @@
   --color-node-bash: var(--node-bash);
   --color-node-loop: var(--node-loop);
   --color-node-approval: var(--node-approval);
+  --color-node-wait: var(--node-wait);
   --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, monospace;
 
