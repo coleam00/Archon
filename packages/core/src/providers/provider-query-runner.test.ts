@@ -21,9 +21,25 @@ const capabilities: ProviderCapabilities = {
   containerExec: false,
 };
 
-function provider(stream: () => AsyncGenerator<MessageChunk>): IAgentProvider {
+function provider(stream: IAgentProvider['sendQuery']): IAgentProvider {
   return {
-    sendQuery: stream,
+    sendQuery: async function* (prompt, cwd, resumeSessionId, options) {
+      const gate = options?.providerAttemptGate;
+      if (!gate) {
+        yield* stream(prompt, cwd, resumeSessionId, options);
+        return;
+      }
+
+      const lease = await gate.acquire();
+      try {
+        yield* stream(prompt, cwd, resumeSessionId, {
+          ...options,
+          abortSignal: lease.signal,
+        });
+      } finally {
+        await lease.release();
+      }
+    },
     getType: () => 'pi',
     getCapabilities: () => capabilities,
   };
@@ -148,5 +164,102 @@ describe('createProviderQueryRunner', () => {
     await generator.next();
     await generator.return(undefined);
     expect(released).toBe(true);
+  });
+
+  test('aborts the provider stream and releases when lease ownership is lost', async () => {
+    const leaseController = new AbortController();
+    let released = false;
+    let started = false;
+    const runner = createProviderQueryRunner({
+      acquire: async () => ({
+        provider: 'pi',
+        slot: 0,
+        signal: leaseController.signal,
+        release: async () => {
+          released = true;
+        },
+      }),
+      loadLimits: async () => ({ pi: 1 }),
+    });
+    const result = consume(
+      runner({
+        provider: 'pi',
+        client: provider(async function* (_prompt, _cwd, _resumeSessionId, options) {
+          started = true;
+          await new Promise<void>(resolve => {
+            options?.abortSignal?.addEventListener('abort', () => resolve(), { once: true });
+          });
+          throw options?.abortSignal?.reason;
+        }),
+        prompt: 'hello',
+        cwd: '/tmp',
+      })
+    );
+
+    while (!started) await Bun.sleep(1);
+    leaseController.abort(new Error('lease lost'));
+
+    await expect(result).rejects.toThrow('lease lost');
+    expect(released).toBe(true);
+  });
+
+  test('releases before provider retry backoff and reacquires for the next attempt', async () => {
+    const order: string[] = [];
+    let attempt = 0;
+    const runner = createProviderQueryRunner({
+      acquire: async () => {
+        order.push(`acquire-${attempt}`);
+        return {
+          provider: 'pi',
+          slot: 0,
+          signal: new AbortController().signal,
+          release: async () => {
+            order.push(`release-${attempt}`);
+          },
+        };
+      },
+      loadLimits: async () => ({ pi: 1 }),
+    });
+    const retryingProvider: IAgentProvider = {
+      ...provider(async function* () {
+        yield { type: 'assistant', content: 'unused' };
+      }),
+      sendQuery: async function* (prompt, cwd, resumeSessionId, options) {
+        for (attempt = 1; attempt <= 2; attempt += 1) {
+          const lease = await options?.providerAttemptGate?.acquire();
+          if (!lease) throw new Error('missing attempt gate');
+          try {
+            order.push(`start-${attempt}`);
+            if (attempt === 1) throw new Error('retryable');
+            yield { type: 'assistant', content: 'ok' };
+            return;
+          } catch (error) {
+            if (attempt === 2) throw error;
+          } finally {
+            await lease.release();
+          }
+          order.push('backoff');
+        }
+      },
+    };
+
+    await consume(
+      runner({
+        provider: 'pi',
+        client: retryingProvider,
+        prompt: 'hello',
+        cwd: '/tmp',
+      })
+    );
+
+    expect(order).toEqual([
+      'acquire-1',
+      'start-1',
+      'release-1',
+      'backoff',
+      'acquire-2',
+      'start-2',
+      'release-2',
+    ]);
   });
 });

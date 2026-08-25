@@ -30,6 +30,7 @@ import {
   normalizeJsonSchemaForOpenAiStrict,
 } from '../shared/structured-output';
 import { withResumedOutcome, resumedOutcome } from '../shared/resumed';
+import { withProviderAttempt } from '../shared/provider-attempt';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -975,7 +976,7 @@ export class CodexProvider implements IAgentProvider {
 
     // 2. Create or resume thread
     let sessionResumeFailed = false;
-    let thread;
+    let thread: ReturnType<Codex['startThread']>;
     if (resumeSessionId) {
       getLog().debug({ sessionId: resumeSessionId }, 'resuming_thread');
       try {
@@ -1026,8 +1027,8 @@ export class CodexProvider implements IAgentProvider {
         throw new Error('Query aborted');
       }
 
-      // Fresh AbortController per attempt. Caller's abortSignal, if any, is
-      // chained in via a once-listener so cancellation still propagates.
+      // Fresh AbortController per attempt. The admission gate combines the
+      // caller and lease signals before forwarding them to this controller.
       // Without this, a signal aborted during attempt N (e.g. when the
       // Codex subprocess crashes and Node.js reacts to the `spawn({ signal })`
       // linkage) would wire an already-aborted signal into attempt N+1's
@@ -1036,137 +1037,139 @@ export class CodexProvider implements IAgentProvider {
       // Codex CLI's startup banner, not an indicator of crash location.
       // See issue #1266.
       const attemptController = new AbortController();
-      const onCallerAbort = (): void => {
-        attemptController.abort();
-      };
-      if (requestOptions?.abortSignal) {
-        requestOptions.abortSignal.addEventListener('abort', onCallerAbort, { once: true });
-      }
       turnOptions.signal = attemptController.signal;
 
       try {
-        if (attempt > 0) {
-          getLog().debug({ cwd, attempt }, 'starting_new_thread');
-          try {
-            thread = codex.startThread(threadOptions);
-          } catch (startError) {
-            const err = startError as Error;
-            if (isModelAccessError(err.message)) {
-              getLog().debug({ attempt, errorClass: 'model_access' }, 'query_error_pre_retry');
-              throw new Error(buildModelAccessMessage(requestOptions?.model));
-            }
-            throw new Error(`Codex query failed: ${err.message}`);
-          }
-        }
-
-        try {
-          // 4. Run and consume the streamed turn. Codex starts its subprocess
-          // lazily while events are iterated, so compatibility errors must be
-          // caught around both runStreamed() and event consumption.
-          let providerEventEmitted = false;
-          while (true) {
+        yield* withProviderAttempt(requestOptions, signal =>
+          (async function* (provider: CodexProvider): AsyncGenerator<MessageChunk> {
+            const abortAttempt = (): void => {
+              attemptController.abort(signal?.reason);
+            };
+            if (signal?.aborted) abortAttempt();
+            else signal?.addEventListener('abort', abortAttempt, { once: true });
             try {
-              const result = await thread.runStreamed(effectivePrompt, turnOptions);
-              for await (const chunk of withResumedOutcome(
-                streamCodexEvents(
-                  result.events as AsyncIterable<Record<string, unknown>>,
-                  hasOutputFormat,
-                  thread.id,
-                  attemptController.signal,
-                  Boolean(requestOptions?.nodeConfig?.mcp)
-                ),
-                // Stamp from the attempt that produced the result: any retry
-                // (attempt > 0) re-runs on a fresh startThread (cold), so the prior
-                // session context is lost even when the initial resumeThread succeeded.
-                resumedOutcome(resumeSessionId, !sessionResumeFailed && attempt === 0)
-              )) {
-                providerEventEmitted = true;
-                yield chunk;
-              }
-              return;
-            } catch (error) {
-              const err = error as Error;
-              if (
-                providerEventEmitted ||
-                !suppressWorkflowSkillCatalog ||
-                skillCatalogCompatibilityFallbackUsed ||
-                !isWorkflowSkillCatalogConfigUnsupported(err.message)
-              ) {
-                throw error;
-              }
-
-              skillCatalogCompatibilityFallbackUsed = true;
-              getLog().warn(
-                { err, nodeId: requestOptions?.nodeConfig?.nodeId },
-                'codex.workflow_skill_catalog_suppression_unsupported'
-              );
-              yield {
-                type: 'system',
-                content:
-                  '⚠️ This Codex binary does not support suppressing the automatic skill catalog. Continuing with native skill discovery enabled.',
-              };
-
-              codex = await this.createCodexClient(
-                codexConfig.codexBinaryPath,
-                requestOptions?.env,
-                declaredMcpConfigOverrides
-              );
-              if (resumeSessionId) {
+              if (attempt > 0) {
+                getLog().debug({ cwd, attempt }, 'starting_new_thread');
                 try {
-                  thread = codex.resumeThread(resumeSessionId, threadOptions);
-                } catch (resumeError) {
-                  getLog().error(
-                    { err: resumeError, sessionId: resumeSessionId },
-                    'resume_thread_failed'
-                  );
                   thread = codex.startThread(threadOptions);
-                  sessionResumeFailed = true;
+                } catch (startError) {
+                  const err = startError as Error;
+                  if (isModelAccessError(err.message)) {
+                    getLog().debug(
+                      { attempt, errorClass: 'model_access' },
+                      'query_error_pre_retry'
+                    );
+                    throw new Error(buildModelAccessMessage(requestOptions?.model));
+                  }
+                  throw new Error(`Codex query failed: ${err.message}`);
+                }
+              }
+
+              // 4. Run and consume the streamed turn. Codex starts its subprocess
+              // lazily while events are iterated, so compatibility errors must be
+              // caught around both runStreamed() and event consumption.
+              let providerEventEmitted = false;
+              while (true) {
+                try {
+                  const result = await thread.runStreamed(effectivePrompt, turnOptions);
+                  for await (const chunk of withResumedOutcome(
+                    streamCodexEvents(
+                      result.events as AsyncIterable<Record<string, unknown>>,
+                      hasOutputFormat,
+                      thread.id,
+                      attemptController.signal,
+                      Boolean(requestOptions?.nodeConfig?.mcp)
+                    ),
+                    // Stamp from the attempt that produced the result: any retry
+                    // (attempt > 0) re-runs on a fresh startThread (cold), so the prior
+                    // session context is lost even when the initial resumeThread succeeded.
+                    resumedOutcome(resumeSessionId, !sessionResumeFailed && attempt === 0)
+                  )) {
+                    providerEventEmitted = true;
+                    yield chunk;
+                  }
+                  return;
+                } catch (error) {
+                  const err = error as Error;
+                  if (
+                    providerEventEmitted ||
+                    !suppressWorkflowSkillCatalog ||
+                    skillCatalogCompatibilityFallbackUsed ||
+                    !isWorkflowSkillCatalogConfigUnsupported(err.message)
+                  ) {
+                    throw error;
+                  }
+
+                  skillCatalogCompatibilityFallbackUsed = true;
+                  getLog().warn(
+                    { err, nodeId: requestOptions?.nodeConfig?.nodeId },
+                    'codex.workflow_skill_catalog_suppression_unsupported'
+                  );
                   yield {
                     type: 'system',
-                    content: '⚠️ Could not resume previous session. Starting fresh conversation.',
+                    content:
+                      '⚠️ This Codex binary does not support suppressing the automatic skill catalog. Continuing with native skill discovery enabled.',
                   };
+
+                  codex = await provider.createCodexClient(
+                    codexConfig.codexBinaryPath,
+                    requestOptions?.env,
+                    declaredMcpConfigOverrides
+                  );
+                  if (resumeSessionId) {
+                    try {
+                      thread = codex.resumeThread(resumeSessionId, threadOptions);
+                    } catch (resumeError) {
+                      getLog().error(
+                        { err: resumeError, sessionId: resumeSessionId },
+                        'resume_thread_failed'
+                      );
+                      thread = codex.startThread(threadOptions);
+                      sessionResumeFailed = true;
+                      yield {
+                        type: 'system',
+                        content:
+                          '⚠️ Could not resume previous session. Starting fresh conversation.',
+                      };
+                    }
+                  } else {
+                    thread = codex.startThread(threadOptions);
+                  }
                 }
-              } else {
-                thread = codex.startThread(threadOptions);
               }
+            } finally {
+              signal?.removeEventListener('abort', abortAttempt);
             }
-          }
-        } catch (error) {
-          const err = error as Error;
+          })(this)
+        );
+        return;
+      } catch (error) {
+        const err = error as Error;
 
-          if (requestOptions?.abortSignal?.aborted) {
-            throw new Error('Query aborted');
-          }
-
-          const { enrichedError, errorClass, shouldRetry } = classifyAndEnrichCodexError(
-            err,
-            requestOptions?.model
-          );
-
-          getLog().error(
-            { err, errorClass, attempt, maxRetries: MAX_SUBPROCESS_RETRIES },
-            'query_error'
-          );
-
-          if (!shouldRetry || attempt >= MAX_SUBPROCESS_RETRIES) {
-            throw enrichedError;
-          }
-
-          const delayMs = this.retryBaseDelayMs * Math.pow(2, attempt);
-          getLog().info({ attempt, delayMs, errorClass }, 'retrying_query');
-          await new Promise(resolve => setTimeout(resolve, delayMs));
-          lastError = enrichedError;
+        if (attemptController.signal.aborted) {
+          if (requestOptions?.abortSignal?.aborted) throw new Error('Query aborted');
+          const reason = attemptController.signal.reason;
+          throw reason instanceof Error ? reason : new Error('Query aborted');
         }
-      } finally {
-        if (requestOptions?.abortSignal) {
-          requestOptions.abortSignal.removeEventListener('abort', onCallerAbort);
+
+        const { enrichedError, errorClass, shouldRetry } = classifyAndEnrichCodexError(
+          err,
+          requestOptions?.model
+        );
+
+        getLog().error(
+          { err, errorClass, attempt, maxRetries: MAX_SUBPROCESS_RETRIES },
+          'query_error'
+        );
+
+        if (!shouldRetry || attempt >= MAX_SUBPROCESS_RETRIES) {
+          throw enrichedError;
         }
-        // The per-attempt AbortController is short-lived and goes out of
-        // scope at iteration end — no explicit abort() cleanup needed.
-        // Calling abort() here would race with the codex-sdk's own finally
-        // (which calls child.removeAllListeners() + child.kill()), firing
-        // Node's internal spawn-signal abort listener on a listenerless
-        // child and surfacing an uncaught AbortError.  See #1735.
+
+        const delayMs = this.retryBaseDelayMs * Math.pow(2, attempt);
+        getLog().info({ attempt, delayMs, errorClass }, 'retrying_query');
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+        lastError = enrichedError;
       }
     }
 

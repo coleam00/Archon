@@ -2867,6 +2867,12 @@ export interface NodeSummary {
   durationMs?: number;
   outputPreview?: string;
   error?: string;
+  providerCapacity?: {
+    provider: string;
+    limit: number;
+    slot?: number;
+    waitMs?: number;
+  };
 }
 
 /**
@@ -2890,18 +2896,37 @@ export function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
         break;
       }
       case 'provider_slot_queued': {
+        const provider = event.data.provider;
+        const limit = event.data.limit;
         summaries.set(nodeId, {
           nodeId,
           state: 'queued',
           startedAt: summaries.get(nodeId)?.startedAt,
+          ...(typeof provider === 'string' && typeof limit === 'number'
+            ? { providerCapacity: { provider, limit } }
+            : {}),
         });
         break;
       }
       case 'provider_slot_acquired': {
+        const provider = event.data.provider;
+        const limit = event.data.limit;
+        const slot = event.data.slot;
+        const waitMs = event.data.wait_ms;
         summaries.set(nodeId, {
           nodeId,
           state: 'running',
           startedAt: summaries.get(nodeId)?.startedAt,
+          ...(typeof provider === 'string' && typeof limit === 'number'
+            ? {
+                providerCapacity: {
+                  provider,
+                  limit,
+                  ...(typeof slot === 'number' ? { slot } : {}),
+                  ...(typeof waitMs === 'number' ? { waitMs } : {}),
+                },
+              }
+            : {}),
         });
         break;
       }
@@ -2982,8 +3007,18 @@ function printVerboseNodes(events: WorkflowEventRow[]): void {
     };
     const icon = iconMap[node.state] ?? '◌';
     const duration = node.durationMs !== undefined ? ` (${formatDuration(node.durationMs)})` : '';
-    const stateLabel =
-      node.state === 'running' ? ' (running)' : node.state === 'queued' ? ' (queued)' : '';
+    let stateLabel = node.state === 'running' ? ' (running)' : '';
+    if (node.state === 'queued') {
+      const capacity = node.providerCapacity;
+      stateLabel = capacity
+        ? ` (queued for ${capacity.provider} capacity; limit ${String(capacity.limit)})`
+        : ' (queued)';
+    } else if (node.state === 'running' && node.providerCapacity) {
+      const capacity = node.providerCapacity;
+      const slot = capacity.slot === undefined ? '' : ` slot ${String(capacity.slot + 1)}`;
+      const wait = capacity.waitMs === undefined ? '' : ` after ${formatDuration(capacity.waitMs)}`;
+      stateLabel = ` (running; ${capacity.provider}${slot}${wait})`;
+    }
     console.log(`    ${icon} ${node.nodeId}${duration}${stateLabel}`);
     if (node.outputPreview !== undefined) {
       console.log(`        Output: ${node.outputPreview}`);

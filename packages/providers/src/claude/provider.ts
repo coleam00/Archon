@@ -53,6 +53,7 @@ import { buildArchonMcpServer, ARCHON_TOOL_SERVER } from './native-tools';
 import { createLogger } from '@archon/paths';
 import { loadMcpConfig } from '../mcp/config';
 import { withResumedOutcome, resumedOutcome } from '../shared/resumed';
+import { withProviderAttempt } from '../shared/provider-attempt';
 import { clampEffort, type AssertNever } from '../shared/effort';
 import {
   claudeSkillSearchRoots,
@@ -1457,16 +1458,6 @@ export class ClaudeProvider implements IAgentProvider {
       yield { type: 'system' as const, content: `⚠️ ${warning.message}` };
     }
 
-    // Track the current attempt's controller so a single abort listener
-    // can forward cancellation without accumulating per-retry listeners.
-    let currentController: AbortController | undefined;
-    const onAbort = (): void => {
-      currentController?.abort();
-    };
-    if (requestOptions?.abortSignal) {
-      requestOptions.abortSignal.addEventListener('abort', onAbort, { once: true });
-    }
-
     for (let attempt = 0; attempt <= MAX_SUBPROCESS_RETRIES; attempt++) {
       if (requestOptions?.abortSignal?.aborted) {
         throw new Error('Query aborted');
@@ -1475,7 +1466,6 @@ export class ClaudeProvider implements IAgentProvider {
       const stderrLines: string[] = [];
       const toolResultQueue: ToolResultEntry[] = [];
       const controller = new AbortController();
-      currentController = controller;
 
       // 1. Build SDK options (env and cliPath pre-computed above)
       const options = buildBaseClaudeOptions(
@@ -1520,22 +1510,35 @@ export class ClaudeProvider implements IAgentProvider {
       }
 
       try {
-        // 4. Run query with first-event timeout protection
-        const rawEvents = query({ prompt, options });
-        const timeoutMs = getFirstEventTimeoutMs();
-        const diagnostics = buildFirstEventHangDiagnostics(
-          options.env as Record<string, string>,
-          options.model
-        );
-        const events = withFirstMessageTimeout(rawEvents, controller, timeoutMs, diagnostics);
+        yield* withProviderAttempt(requestOptions, signal =>
+          (async function* (): AsyncGenerator<MessageChunk> {
+            const abortAttempt = (): void => {
+              controller.abort(signal?.reason);
+            };
+            if (signal?.aborted) abortAttempt();
+            else signal?.addEventListener('abort', abortAttempt, { once: true });
+            try {
+              // 4. Run query with first-event timeout protection
+              const rawEvents = query({ prompt, options });
+              const timeoutMs = getFirstEventTimeoutMs();
+              const diagnostics = buildFirstEventHangDiagnostics(
+                options.env as Record<string, string>,
+                options.model
+              );
+              const events = withFirstMessageTimeout(rawEvents, controller, timeoutMs, diagnostics);
 
-        // 5. Stream normalized events
-        // Claude resumes-or-errors: an invalid resume id throws (and is
-        // retried/surfaced), so reaching the result stream means the prior
-        // session was restored. Hence `true` whenever a resume was requested.
-        yield* withResumedOutcome(
-          streamClaudeMessages(events, toolResultQueue),
-          resumedOutcome(resumeSessionId, true)
+              // 5. Stream normalized events
+              // Claude resumes-or-errors: an invalid resume id throws (and is
+              // retried/surfaced), so reaching the result stream means the prior
+              // session was restored. Hence `true` whenever a resume was requested.
+              yield* withResumedOutcome(
+                streamClaudeMessages(events, toolResultQueue),
+                resumedOutcome(resumeSessionId, true)
+              );
+            } finally {
+              signal?.removeEventListener('abort', abortAttempt);
+            }
+          })()
         );
         return;
       } catch (error) {

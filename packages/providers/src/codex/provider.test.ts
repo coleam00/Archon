@@ -2224,6 +2224,51 @@ describe('CodexProvider', () => {
         expect(chunks.some(c => c.type === 'assistant' && c.content === 'Recovered!')).toBe(true);
       }, 5_000);
 
+      test('releases provider capacity before retrying and reacquires for the next attempt', async () => {
+        const order: string[] = [];
+        let callCount = 0;
+        let leaseCount = 0;
+        mockRunStreamed.mockImplementation(() => {
+          callCount += 1;
+          order.push(`attempt-${callCount}`);
+          if (callCount === 1) {
+            return Promise.reject(new Error('Codex Exec exited with code 1'));
+          }
+          return Promise.resolve({
+            events: (async function* () {
+              yield { type: 'turn.completed', usage: defaultUsage };
+            })(),
+          });
+        });
+
+        for await (const _chunk of client.sendQuery('test', '/workspace', undefined, {
+          providerAttemptGate: {
+            acquire: async () => {
+              leaseCount += 1;
+              const leaseNumber = leaseCount;
+              order.push(`acquire-${leaseNumber}`);
+              return {
+                signal: new AbortController().signal,
+                release: async () => {
+                  order.push(`release-${leaseNumber}`);
+                },
+              };
+            },
+          },
+        })) {
+          // consume
+        }
+
+        expect(order).toEqual([
+          'acquire-1',
+          'attempt-1',
+          'release-1',
+          'acquire-2',
+          'attempt-2',
+          'release-2',
+        ]);
+      });
+
       test('classifies auth errors as fatal (no retry)', async () => {
         mockRunStreamed.mockRejectedValue(new Error('unauthorized'));
 

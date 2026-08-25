@@ -130,13 +130,10 @@ export interface WorkflowConfig {
 export type AgentProviderFactory = (provider: string) => IAgentProvider;
 
 export interface ProviderQueryContext {
-  onQueued?: (event: { provider: string; limit: number }) => Promise<void> | void;
-  onAcquired?: (event: {
-    provider: string;
-    limit: number;
-    slot: number;
-    waitMs: number;
-  }) => Promise<void> | void;
+  onQueued?: (event: { provider: string; limit: number }) => void;
+  onAcquired?: (event: { provider: string; limit: number; slot: number; waitMs: number }) => void;
+  /** Local liveness pulse while admission is queued; never persisted. */
+  onWaiting?: () => void;
   /** Checked while queued so a terminal workflow does not wait for first yield. */
   shouldContinue?: () => Promise<boolean>;
 }

@@ -21,6 +21,7 @@ import { parsePiConfig, resolvePiExtensionSettings } from './config';
 import { parsePiModelRef } from './model-ref';
 import { buildCustomProviderModelsPath } from './request-auth';
 import { withResumedOutcome, resumedOutcome } from '../../shared/resumed';
+import { withProviderAttempt } from '../../shared/provider-attempt';
 
 // IMPORTANT: Do NOT add static `import { ... } from '@earendil-works/*'` here,
 // and do NOT statically import sibling modules that themselves import runtime
@@ -865,15 +866,11 @@ export class PiProvider implements IAgentProvider {
     //    is on, it also binds/unbinds the UI stub's emitter so extension
     //    notifications land on the same queue as Pi events.
     try {
-      yield* withResumedOutcome(
-        bridgeSession(
-          session,
-          effectivePrompt,
-          requestOptions?.abortSignal,
-          outputFormat?.schema,
-          uiBridge
-        ),
-        resumedOutcome(resumeSessionId, !resumeFailed)
+      yield* withProviderAttempt(requestOptions, signal =>
+        withResumedOutcome(
+          bridgeSession(session, effectivePrompt, signal, outputFormat?.schema, uiBridge),
+          resumedOutcome(resumeSessionId, !resumeFailed)
+        )
       );
       getLog().info({ piProvider: parsed.provider }, 'pi.prompt_completed');
     } catch (err) {

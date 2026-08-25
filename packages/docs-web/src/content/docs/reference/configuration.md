@@ -161,18 +161,6 @@ Run config accepts settings whose consumers still execute after the run is dispa
 
 Unknown keys, unregistered providers, invalid effort values, and alias names without `@` also fail instead of being ignored. CLI accepts a local path; the HTTP run API accepts inline validated content and never a caller-selected server path.
 
-`concurrency.providers` bounds simultaneous live calls by Archon provider ID across every process and user sharing the install database. Omitted providers are unlimited; values must be positive integers. Calls beyond a cap queue until a lease is available. Workflow nodes show that queued interval separately from provider execution. Retry backoff, durable waits, and quota continuations do not hold a slot; each later attempt or continuation acquires again. This is separate from workflow budgets, which bound total consumption rather than simultaneous demand.
-
-The former global `assistants.pi.maxConcurrent` key is accepted temporarily as a warned fallback when `concurrency.providers.pi` is absent. Move it to:
-
-```yaml
-concurrency:
-  providers:
-    pi: 4
-```
-
-Repository-level Pi values no longer change concurrency because one project cannot override shared install capacity.
-
 Fresh runs seal the normalized layer before recording it. Run metadata exposes its source label and configured key paths, not plaintext `env` or provider-default values. A continuation restores that sealed layer without rereading the original file, and child workflows inherit it. Detached CLI launches also transfer the already-validated sealed layer to the child instead of rereading the caller's file. This is why `--config` cannot be supplied with `--resume`.
 
 ## Repository Configuration
@@ -796,6 +784,21 @@ MAX_CONCURRENT_CONVERSATIONS=10  # Default: 10
 | Low resources | 3-5 |
 | Standard | 10 (default) |
 | High resources | 20-30 (monitor API limits) |
+
+### Provider calls
+
+`concurrency.providers` bounds simultaneous live calls by Archon provider ID across every process and user sharing the install database. Omitted providers are unlimited; values must be positive integers:
+
+```yaml
+concurrency:
+  providers:
+    pi: 4
+    claude: 2
+```
+
+Calls beyond a cap queue until a lease is available. Workflow nodes show that queued interval separately from provider execution. Retry backoff, durable waits, and quota continuations do not hold a slot; each later attempt or continuation acquires again. This is separate from workflow budgets, which bound total consumption rather than simultaneous demand.
+
+Provider caps are install policy. A repository or run profile cannot override them for one project. The former global `assistants.pi.maxConcurrent` key is accepted temporarily as a warned fallback when `concurrency.providers.pi` is absent; move it to the global shape above. Repository-level Pi values no longer change concurrency.
 
 ---
 

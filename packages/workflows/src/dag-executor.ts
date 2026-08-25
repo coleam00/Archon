@@ -959,10 +959,21 @@ function createProviderQueryContext(
   deps: WorkflowDeps,
   workflowRunId: string,
   stepName: string,
-  data: Record<string, unknown>
+  data: Record<string, unknown>,
+  onWaiting?: () => void
 ): ProviderQueryContext {
+  const persistEvent = (
+    event: Parameters<WorkflowDeps['store']['createWorkflowEvent']>[0]
+  ): void => {
+    void deps.store.createWorkflowEvent(event).catch((error: unknown) => {
+      getLog().warn(
+        { err: error as Error, workflowRunId, stepName, eventType: event.event_type },
+        'provider_concurrency.event_persist_failed'
+      );
+    });
+  };
   return {
-    onQueued: async ({ provider, limit }): Promise<void> => {
+    onQueued: ({ provider, limit }): void => {
       getWorkflowEventEmitter().emit({
         type: 'provider_slot_queued',
         runId: workflowRunId,
@@ -970,14 +981,14 @@ function createProviderQueryContext(
         provider,
         limit,
       });
-      await deps.store.createWorkflowEvent({
+      persistEvent({
         workflow_run_id: workflowRunId,
         event_type: 'provider_slot_queued',
         step_name: stepName,
         data: { provider, limit, ...data },
       });
     },
-    onAcquired: async ({ provider, limit, slot, waitMs }): Promise<void> => {
+    onAcquired: ({ provider, limit, slot, waitMs }): void => {
       getWorkflowEventEmitter().emit({
         type: 'provider_slot_acquired',
         runId: workflowRunId,
@@ -987,13 +998,14 @@ function createProviderQueryContext(
         slot,
         waitMs,
       });
-      await deps.store.createWorkflowEvent({
+      persistEvent({
         workflow_run_id: workflowRunId,
         event_type: 'provider_slot_acquired',
         step_name: stepName,
         data: { provider, limit, slot, wait_ms: waitMs, ...data },
       });
     },
+    onWaiting,
     shouldContinue: async (): Promise<boolean> => {
       try {
         const status = await deps.store.getWorkflowRunStatus(workflowRunId);
@@ -2401,6 +2413,7 @@ async function executeNodeInternal(
     nodeIdleTimedOut = false;
     backgroundTasksIncomplete = [];
     const backgroundTasks = createBackgroundTaskTracker();
+    let providerWaitActivityAt: number | undefined;
     for await (const msg of withIdleTimeout(
       deps.runProviderQuery({
         provider,
@@ -2409,10 +2422,18 @@ async function executeNodeInternal(
         cwd,
         resumeSessionId: attemptResumeId,
         options: nodeOptionsWithAbort,
-        context: createProviderQueryContext(deps, workflowRun.id, stepName, {
-          query_attempt: queryAttempt,
-          ...iterationData,
-        }),
+        context: createProviderQueryContext(
+          deps,
+          workflowRun.id,
+          stepName,
+          {
+            query_attempt: queryAttempt,
+            ...iterationData,
+          },
+          () => {
+            providerWaitActivityAt = Date.now();
+          }
+        ),
       }),
       effectiveIdleTimeout,
       () => {
@@ -2422,7 +2443,9 @@ async function executeNodeInternal(
           'dag_node_idle_timeout_reached'
         );
         nodeAbortController.abort();
-      }
+      },
+      undefined,
+      () => providerWaitActivityAt
     )) {
       const tickNow = Date.now();
       const nodeKey = `${workflowRun.id}:${node.id}`;
@@ -6307,6 +6330,7 @@ async function executeLoopNode(
             ...resolvedOptions,
             abortSignal: iterationAbortController.signal,
           };
+          let providerWaitActivityAt: number | undefined;
 
           // Reask attempts start a FRESH session (mirrors runStreamPass in
           // executeNodeInternal) so an invalid turn is not carried forward as context.
@@ -6317,11 +6341,19 @@ async function executeLoopNode(
             cwd,
             resumeSessionId: reaskAttempt === 0 ? resumeSessionId : undefined,
             options: iterationOptions,
-            context: createProviderQueryContext(deps, workflowRun.id, stepName, {
-              iteration: i,
-              retry_attempt: iterRetry,
-              query_attempt: reaskAttempt,
-            }),
+            context: createProviderQueryContext(
+              deps,
+              workflowRun.id,
+              stepName,
+              {
+                iteration: i,
+                retry_attempt: iterRetry,
+                query_attempt: reaskAttempt,
+              },
+              () => {
+                providerWaitActivityAt = Date.now();
+              }
+            ),
           });
           const runningTools = new Map<string, RunningTool>();
           let anonymousToolSequence = 0;
@@ -6329,14 +6361,20 @@ async function executeLoopNode(
 
           const effectiveIdleTimeout = node.idle_timeout ?? STEP_IDLE_TIMEOUT_MS;
 
-          for await (const msg of withIdleTimeout(generator, effectiveIdleTimeout, () => {
-            iterationIdleTimedOut = true;
-            getLog().warn(
-              { nodeId: node.id, iteration: i, timeoutMs: effectiveIdleTimeout },
-              'loop_node.idle_timeout_reached'
-            );
-            iterationAbortController.abort();
-          })) {
+          for await (const msg of withIdleTimeout(
+            generator,
+            effectiveIdleTimeout,
+            () => {
+              iterationIdleTimedOut = true;
+              getLog().warn(
+                { nodeId: node.id, iteration: i, timeoutMs: effectiveIdleTimeout },
+                'loop_node.idle_timeout_reached'
+              );
+              iterationAbortController.abort();
+            },
+            undefined,
+            () => providerWaitActivityAt
+          )) {
             // Mid-stream cancel/pause check (every CANCEL_CHECK_INTERVAL_MS) —
             // lifted from the AI-node stream loop in executeNodeInternal. Same
             // posture: `paused` is tolerated (a sibling approval node may pause

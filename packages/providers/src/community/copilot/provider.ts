@@ -37,6 +37,7 @@ import { COPILOT_EFFORTS, parseCopilotConfig, type CopilotProviderDefaults } fro
 import { clampEffort } from '../../shared/effort';
 import { resolveCopilotBinaryPath } from './binary-resolver';
 import { bridgeSession } from './event-bridge';
+import { withProviderAttempt } from '../../shared/provider-attempt';
 
 // `ReasoningEffort` is defined in the SDK but not re-exported from its barrel
 // (as of @github/copilot-sdk@0.2.2), so the vocabulary is mirrored in ./config
@@ -607,11 +608,13 @@ export class CopilotProvider implements IAgentProvider {
     );
 
     try {
-      yield* bridgeSession(
-        session,
-        effectivePrompt,
-        requestOptions?.abortSignal,
-        wantsStructured ? outputFormat.schema : undefined
+      yield* withProviderAttempt(requestOptions, signal =>
+        bridgeSession(
+          session,
+          effectivePrompt,
+          signal,
+          wantsStructured ? outputFormat.schema : undefined
+        )
       );
       log.info({ sessionId: session.sessionId }, 'copilot.prompt_completed');
     } catch (err) {

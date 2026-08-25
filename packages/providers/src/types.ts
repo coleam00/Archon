@@ -512,6 +512,22 @@ export interface AgentRequestOptions {
    * `nativeTools` capability.
    */
   nativeTools?: NativeTool[];
+  /**
+   * Archon-owned admission boundary for one actual provider attempt. Bundled
+   * providers enter it immediately before upstream work and leave it before
+   * any provider-internal retry delay. Ordinary provider consumers omit it.
+   */
+  providerAttemptGate?: ProviderAttemptGate;
+}
+
+export interface ProviderAttemptLease {
+  /** Ownership-loss signal. The provider must stop the active upstream attempt when it aborts. */
+  readonly signal: AbortSignal;
+  release(): Promise<void>;
+}
+
+export interface ProviderAttemptGate {
+  acquire(): Promise<ProviderAttemptLease>;
 }
 
 /**

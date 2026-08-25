@@ -2,7 +2,7 @@ import { createLogger } from '@archon/paths';
 import type { ProviderQueryRequest, ProviderQueryRunner } from '@archon/workflows/deps';
 import { loadConfig } from '../config/config-loader';
 import { getDatabase } from '../db/connection';
-import { ProviderConcurrencyGate, type ProviderConcurrencyLease } from '../db/provider-concurrency';
+import { ProviderConcurrencyGate } from '../db/provider-concurrency';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -13,34 +13,6 @@ function getLog(): ReturnType<typeof createLogger> {
 export interface ProviderQueryRunnerDeps {
   acquire: ProviderConcurrencyGate['acquire'];
   loadLimits: () => Promise<Record<string, number>>;
-}
-
-function combineAbortSignals(signals: readonly (AbortSignal | undefined)[]): {
-  signal: AbortSignal;
-  cleanup: () => void;
-} {
-  const controller = new AbortController();
-  const active = signals.filter((signal): signal is AbortSignal => signal !== undefined);
-  const listeners = new Map<AbortSignal, () => void>();
-  for (const signal of active) {
-    const abort = (): void => {
-      controller.abort(signal.reason);
-    };
-    if (signal.aborted) {
-      abort();
-      break;
-    }
-    signal.addEventListener('abort', abort, { once: true });
-    listeners.set(signal, abort);
-  }
-  return {
-    signal: controller.signal,
-    cleanup: (): void => {
-      for (const [signal, listener] of listeners) {
-        signal.removeEventListener('abort', listener);
-      }
-    },
-  };
 }
 
 export function createProviderQueryRunner(deps: ProviderQueryRunnerDeps): ProviderQueryRunner {
@@ -57,27 +29,18 @@ export function createProviderQueryRunner(deps: ProviderQueryRunnerDeps): Provid
       return;
     }
 
-    let lease: ProviderConcurrencyLease | undefined;
-    let cleanupSignals: (() => void) | undefined;
-    try {
-      lease = await deps.acquire(request.provider, limit, {
-        signal: request.options?.abortSignal,
-        observer: request.context,
-        shouldContinue: request.context?.shouldContinue,
-      });
-      const combined = combineAbortSignals([request.options?.abortSignal, lease.signal]);
-      cleanupSignals = combined.cleanup;
-      const options = { ...request.options, abortSignal: combined.signal };
-      yield* request.client.sendQuery(
-        request.prompt,
-        request.cwd,
-        request.resumeSessionId,
-        options
-      );
-    } finally {
-      cleanupSignals?.();
-      await lease?.release();
-    }
+    const options = {
+      ...request.options,
+      providerAttemptGate: {
+        acquire: (): ReturnType<ProviderConcurrencyGate['acquire']> =>
+          deps.acquire(request.provider, limit, {
+            signal: request.options?.abortSignal,
+            observer: request.context,
+            shouldContinue: request.context?.shouldContinue,
+          }),
+      },
+    };
+    yield* request.client.sendQuery(request.prompt, request.cwd, request.resumeSessionId, options);
   };
 }
 

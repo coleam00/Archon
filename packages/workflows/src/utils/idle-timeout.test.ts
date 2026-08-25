@@ -212,4 +212,20 @@ describe('withIdleTimeout', () => {
     expect(result).toEqual([{ type: 'assistant' }, { type: 'tool' }]);
     expect(onTimeout).toHaveBeenCalledTimes(1);
   });
+
+  test('external queue activity keeps one pending next call alive', async () => {
+    async function* delayedValue(): AsyncGenerator<string> {
+      await Bun.sleep(70);
+      yield 'admitted';
+    }
+
+    const result: string[] = [];
+    for await (const value of withIdleTimeout(delayedValue(), 20, undefined, undefined, () =>
+      Date.now()
+    )) {
+      result.push(value);
+    }
+
+    expect(result).toEqual(['admitted']);
+  });
 });

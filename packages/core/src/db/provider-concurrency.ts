@@ -23,8 +23,9 @@ export interface ProviderConcurrencyAcquired extends ProviderConcurrencyWait {
 }
 
 export interface ProviderConcurrencyObserver {
-  onQueued?: (event: ProviderConcurrencyWait) => Promise<void> | void;
-  onAcquired?: (event: ProviderConcurrencyAcquired) => Promise<void> | void;
+  onQueued?: (event: ProviderConcurrencyWait) => void;
+  onAcquired?: (event: ProviderConcurrencyAcquired) => void;
+  onWaiting?: () => void;
 }
 
 export interface ProviderConcurrencyAcquireOptions {
@@ -76,13 +77,10 @@ function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-async function notify(
-  callback: (() => Promise<void> | void) | undefined,
-  eventName: string
-): Promise<void> {
+function notify(callback: (() => void) | undefined, eventName: string): void {
   if (!callback) return;
   try {
-    await callback();
+    callback();
   } catch (error) {
     getLog().warn({ err: error as Error }, eventName);
   }
@@ -92,6 +90,7 @@ class DatabaseProviderLease implements ProviderConcurrencyLease {
   readonly signal: AbortSignal;
   private readonly abortController = new AbortController();
   private heartbeatTimer: ReturnType<typeof setTimeout> | undefined;
+  private expiryGuardTimer: ReturnType<typeof setTimeout> | undefined;
   private localExpiry: number;
   private released = false;
 
@@ -100,11 +99,31 @@ class DatabaseProviderLease implements ProviderConcurrencyLease {
     readonly provider: string,
     readonly slot: number,
     private readonly leaseId: string,
-    private readonly timing: GateTiming
+    private readonly timing: GateTiming,
+    localExpiry: number
   ) {
     this.signal = this.abortController.signal;
-    this.localExpiry = timing.now() + timing.leaseMs;
+    this.localExpiry = localExpiry;
+    this.scheduleExpiryGuard();
     this.scheduleHeartbeat();
+  }
+
+  private scheduleExpiryGuard(): void {
+    if (this.expiryGuardTimer) clearTimeout(this.expiryGuardTimer);
+    const delay = this.localExpiry - this.timing.now() - this.timing.heartbeatMs;
+    if (delay <= 0) {
+      this.abortController.abort(
+        abortError('Provider concurrency lease could not be renewed before expiry')
+      );
+      return;
+    }
+    this.expiryGuardTimer = setTimeout(() => {
+      if (this.released || this.signal.aborted) return;
+      this.abortController.abort(
+        abortError('Provider concurrency lease could not be renewed before expiry')
+      );
+    }, delay);
+    this.expiryGuardTimer.unref?.();
   }
 
   private scheduleHeartbeat(delay = this.timing.heartbeatMs): void {
@@ -116,8 +135,8 @@ class DatabaseProviderLease implements ProviderConcurrencyLease {
   private async heartbeat(): Promise<void> {
     if (this.released || this.signal.aborted) return;
     try {
-      const renewed = await this.renew();
-      if (!renewed) {
+      const renewedUntil = await this.renew();
+      if (renewedUntil === null) {
         getLog().error(
           { provider: this.provider, slot: this.slot },
           'provider_concurrency.lease_lost'
@@ -125,7 +144,9 @@ class DatabaseProviderLease implements ProviderConcurrencyLease {
         this.abortController.abort(abortError('Provider concurrency lease ownership lost'));
         return;
       }
-      this.localExpiry = this.timing.now() + this.timing.leaseMs;
+      if (this.released || this.signal.aborted) return;
+      this.localExpiry = renewedUntil;
+      this.scheduleExpiryGuard();
       this.scheduleHeartbeat();
     } catch (error) {
       getLog().warn(
@@ -143,7 +164,8 @@ class DatabaseProviderLease implements ProviderConcurrencyLease {
     }
   }
 
-  private async renew(): Promise<boolean> {
+  private async renew(): Promise<number | null> {
+    const queryStartedAt = this.timing.now();
     const expiry =
       this.db.dialect === 'postgres'
         ? "NOW() + ($4 * INTERVAL '1 millisecond')"
@@ -155,13 +177,14 @@ class DatabaseProviderLease implements ProviderConcurrencyLease {
        WHERE provider_id = $1 AND slot_index = $2 AND lease_id = $3`,
       [this.provider, this.slot, this.leaseId, this.timing.leaseMs]
     );
-    return result.rowCount === 1;
+    return result.rowCount === 1 ? queryStartedAt + this.timing.leaseMs : null;
   }
 
   async release(): Promise<void> {
     if (this.released) return;
     this.released = true;
     if (this.heartbeatTimer) clearTimeout(this.heartbeatTimer);
+    if (this.expiryGuardTimer) clearTimeout(this.expiryGuardTimer);
     try {
       await this.db.query(
         `DELETE FROM remote_agent_provider_slots
@@ -223,32 +246,47 @@ export class ProviderConcurrencyGate {
 
       for (let slot = 0; slot < limit; slot += 1) {
         const leaseId = randomUUID();
-        if (await this.tryClaim(provider, slot, leaseId)) {
+        const claimedUntil = await this.tryClaim(provider, slot, leaseId);
+        if (claimedUntil !== null) {
           const waitMs = this.timing.now() - startedAt;
+          const lease = new DatabaseProviderLease(
+            this.db,
+            provider,
+            slot,
+            leaseId,
+            this.timing,
+            claimedUntil
+          );
           if (queued) {
-            await notify(
+            notify(
               () => options.observer?.onAcquired?.({ provider, limit, slot, waitMs }),
               'provider_concurrency.acquired_observer_failed'
             );
           }
+          if (lease.signal.aborted) {
+            await lease.release();
+            throw abortError(`Provider concurrency lease was lost before '${provider}' started`);
+          }
           getLog().info({ provider, limit, slot, waitMs }, 'provider_concurrency.acquired');
-          return new DatabaseProviderLease(this.db, provider, slot, leaseId, this.timing);
+          return lease;
         }
       }
 
       if (!queued) {
         queued = true;
-        await notify(
+        notify(
           () => options.observer?.onQueued?.({ provider, limit }),
           'provider_concurrency.queued_observer_failed'
         );
         getLog().info({ provider, limit }, 'provider_concurrency.queued');
       }
+      notify(options.observer?.onWaiting, 'provider_concurrency.wait_observer_failed');
       await this.timing.sleep(this.timing.pollMs, options.signal);
     }
   }
 
-  private async tryClaim(provider: string, slot: number, leaseId: string): Promise<boolean> {
+  private async tryClaim(provider: string, slot: number, leaseId: string): Promise<number | null> {
+    const queryStartedAt = this.timing.now();
     const expiry =
       this.db.dialect === 'postgres'
         ? "NOW() + ($4 * INTERVAL '1 millisecond')"
@@ -270,6 +308,6 @@ export class ProviderConcurrencyGate {
        RETURNING slot_index`,
       [provider, slot, leaseId, this.timing.leaseMs]
     );
-    return result.rowCount === 1;
+    return result.rowCount === 1 ? queryStartedAt + this.timing.leaseMs : null;
   }
 }

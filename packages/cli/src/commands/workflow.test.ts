@@ -3893,6 +3893,7 @@ describe('buildNodeSummaries', () => {
         nodeId: 'implement',
         state: 'queued',
         startedAt: '2026-08-03T10:00:00.000Z',
+        providerCapacity: { provider: 'pi', limit: 1 },
       },
     ]);
 
@@ -3906,7 +3907,12 @@ describe('buildNodeSummaries', () => {
       created_at: '2026-08-03T10:00:10.000Z',
       event_order: 3,
     });
-    expect(buildNodeSummaries(events)[0]?.state).toBe('running');
+    expect(buildNodeSummaries(events)[0]).toEqual({
+      nodeId: 'implement',
+      state: 'running',
+      startedAt: '2026-08-03T10:00:00.000Z',
+      providerCapacity: { provider: 'pi', limit: 1, slot: 0, waitMs: 10 },
+    });
   });
 });
 

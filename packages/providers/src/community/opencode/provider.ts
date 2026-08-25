@@ -22,6 +22,7 @@ import {
 } from './runtime';
 import { resolveSessionId, streamOpencodeSession } from './session';
 import { withResumedOutcome, resumedOutcome } from '../../shared/resumed';
+import { withProviderAttempt } from '../../shared/provider-attempt';
 
 export { parseModelRef } from './config';
 export { resetEmbeddedRuntime } from './runtime';
@@ -110,6 +111,7 @@ export class OpencodeProvider implements IAgentProvider {
           },
         };
       })();
+      let attemptSignal: AbortSignal | undefined;
 
       try {
         // When agents are defined, use a per-node session directory so each node
@@ -139,17 +141,20 @@ export class OpencodeProvider implements IAgentProvider {
           // sessions internally and cannot resume a single prior session. If a
           // resume was requested, report it as cold (false) so the executor
           // surfaces the lost continuity instead of silently starting fresh.
-          yield* withResumedOutcome(
-            streamMultiAgentOpencodeSession(
-              runtime.client,
-              sessionCwd,
-              nodeId,
-              prompt,
-              parsedModel,
-              requestOptions
-            ),
-            resumedOutcome(resumeSessionId, false)
-          );
+          yield* withProviderAttempt(requestOptions, signal => {
+            attemptSignal = signal;
+            return withResumedOutcome(
+              streamMultiAgentOpencodeSession(
+                runtime.client,
+                sessionCwd,
+                nodeId,
+                prompt,
+                parsedModel,
+                { ...requestOptions, abortSignal: signal }
+              ),
+              resumedOutcome(resumeSessionId, false)
+            );
+          });
           return;
         }
 
@@ -165,22 +170,21 @@ export class OpencodeProvider implements IAgentProvider {
           };
         }
 
-        yield* withResumedOutcome(
-          streamOpencodeSession(
-            runtime.client,
-            sessionCwd,
-            sessionId,
-            prompt,
-            parsedModel,
-            requestOptions
-          ),
-          resumedOutcome(resumeSessionId, resumed)
-        );
+        yield* withProviderAttempt(requestOptions, signal => {
+          attemptSignal = signal;
+          return withResumedOutcome(
+            streamOpencodeSession(runtime.client, sessionCwd, sessionId, prompt, parsedModel, {
+              ...requestOptions,
+              abortSignal: signal,
+            }),
+            resumedOutcome(resumeSessionId, resumed)
+          );
+        });
         return;
       } catch (error) {
         const errorClass = classifyOpencodeError(
           error,
-          requestOptions?.abortSignal?.aborted === true
+          attemptSignal?.aborted === true || requestOptions?.abortSignal?.aborted === true
         );
         const enrichedError = enrichOpencodeError(error, errorClass);
         const shouldRetry =

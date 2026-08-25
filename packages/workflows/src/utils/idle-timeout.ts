@@ -43,35 +43,48 @@ const IDLE_TIMEOUT_SENTINEL = Symbol('IDLE_TIMEOUT');
  * @param timeoutMs - Maximum idle time in milliseconds before terminating
  * @param onTimeout - Optional callback invoked when idle timeout fires (before return)
  * @param shouldResetTimer - Optional predicate; return false to NOT reset the timer for a value
+ * @param getExternalActivityAt - Optional timestamp source for non-stream liveness such as a
+ * provider-capacity queue. Activity newer than the current timer start extends the wait without
+ * fabricating a stream message.
  */
 export async function* withIdleTimeout<T>(
   generator: AsyncGenerator<T>,
   timeoutMs: number,
   onTimeout?: () => void,
-  shouldResetTimer?: (value: T) => boolean
+  shouldResetTimer?: (value: T) => boolean,
+  getExternalActivityAt?: () => number | undefined
 ): AsyncGenerator<T> {
   let timedOut = false;
   let timerStartedAt = Date.now();
 
   try {
     while (true) {
-      const elapsed = Date.now() - timerStartedAt;
-      const remaining = Math.max(0, timeoutMs - elapsed);
-
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const timeoutPromise = new Promise<typeof IDLE_TIMEOUT_SENTINEL>(resolve => {
-        timer = setTimeout(() => {
-          resolve(IDLE_TIMEOUT_SENTINEL);
-        }, remaining);
-      });
-
       // Start waiting for the next value from the generator
       const nextPromise = generator.next();
+      let result: IteratorResult<T> | typeof IDLE_TIMEOUT_SENTINEL;
 
-      const result = await Promise.race([nextPromise, timeoutPromise]);
-      clearTimeout(timer);
+      while (true) {
+        const elapsed = Date.now() - timerStartedAt;
+        const remaining = Math.max(0, timeoutMs - elapsed);
 
-      if (result === IDLE_TIMEOUT_SENTINEL) {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const timeoutPromise = new Promise<typeof IDLE_TIMEOUT_SENTINEL>(resolve => {
+          timer = setTimeout(() => {
+            resolve(IDLE_TIMEOUT_SENTINEL);
+          }, remaining);
+        });
+
+        result = await Promise.race([nextPromise, timeoutPromise]);
+        clearTimeout(timer);
+
+        if (result !== IDLE_TIMEOUT_SENTINEL) break;
+
+        const externalActivityAt = getExternalActivityAt?.();
+        if (externalActivityAt !== undefined && externalActivityAt > timerStartedAt) {
+          timerStartedAt = externalActivityAt;
+          continue;
+        }
+
         timedOut = true;
         // Prevent unhandled rejection when the subprocess is aborted via onTimeout
         nextPromise.catch((_err: unknown) => {
