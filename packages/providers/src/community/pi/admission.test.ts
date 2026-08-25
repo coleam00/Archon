@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, jest, mock, test } from 'bun:test';
+import { describe, expect, mock, test } from 'bun:test';
 import {
   createAssistantMessageEventStream,
   lazyStream,
@@ -10,7 +10,6 @@ import {
   type SimpleStreamOptions,
 } from '@earendil-works/pi-ai';
 import type { ModelRuntime } from '@earendil-works/pi-coding-agent';
-import { PROVIDER_STOP_CONFIRMATION_TIMEOUT_MS } from '../../shared/provider-attempt';
 import { installPiAdmission } from './provider';
 
 const model: Model<Api> = {
@@ -47,10 +46,6 @@ function message(stopReason: AssistantMessage['stopReason'] = 'stop'): Assistant
 }
 
 describe('installPiAdmission', () => {
-  afterEach(() => {
-    jest.useRealTimers();
-  });
-
   test('leases each model stream separately and disables nested transport retries', async () => {
     const lifecycle: string[] = [];
     const seenOptions: (SimpleStreamOptions | undefined)[] = [];
@@ -211,7 +206,6 @@ describe('installPiAdmission', () => {
 
     const iterator = runtime.streamSimple(model, { messages: [] })[Symbol.asyncIterator]();
     expect((await iterator.next()).value?.type).toBe('start');
-    jest.useFakeTimers();
     leaseController.abort(new Error('lease ownership lost'));
     const completion = (async (): Promise<void> => {
       while (!(await iterator.next()).done) {
@@ -221,7 +215,6 @@ describe('installPiAdmission', () => {
     for (let attempt = 0; attempt < 20 && releases.length === 0; attempt++) {
       await Promise.resolve();
     }
-    jest.advanceTimersByTime(PROVIDER_STOP_CONFIRMATION_TIMEOUT_MS);
     await completion;
 
     expect(releases).toEqual([{ upstreamStopped: false }]);
@@ -300,12 +293,10 @@ describe('installPiAdmission', () => {
       }
     })();
     await nextStarted.promise;
-    jest.useFakeTimers();
     leaseController.abort(new Error('lease ownership lost'));
     for (let attempt = 0; attempt < 20 && returnCall.mock.calls.length === 0; attempt++) {
       await Promise.resolve();
     }
-    jest.advanceTimersByTime(PROVIDER_STOP_CONFIRMATION_TIMEOUT_MS);
     await consumption;
 
     expect(returnCall).toHaveBeenCalledTimes(1);

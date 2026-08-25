@@ -23,10 +23,7 @@ import { parsePiConfig, resolvePiExtensionSettings } from './config';
 import { parsePiModelRef } from './model-ref';
 import { buildCustomProviderModelsPath } from './request-auth';
 import { withResumedOutcome, resumedOutcome } from '../../shared/resumed';
-import {
-  confirmProviderAttemptStopped,
-  waitForPromiseOrAbort,
-} from '../../shared/provider-attempt';
+import { waitForPromiseOrAbort } from '../../shared/provider-attempt';
 
 export function installPiAdmission(
   runtime: Pick<ModelRuntime, 'streamSimple'>,
@@ -73,12 +70,8 @@ export function installPiAdmission(
           signal.throwIfAborted();
         } finally {
           if (iterator && !upstreamStopped) {
-            const activeIterator = iterator;
             try {
-              await confirmProviderAttemptStopped(async () => {
-                if (!activeIterator.return) throw new Error('Pi model stream cannot be closed');
-                await activeIterator.return();
-              }, 'Pi provider attempt shutdown could not be confirmed');
+              void iterator.return?.().catch(() => undefined);
             } catch {
               // Closing Pi's consumer iterator cannot prove that its
               // independently-fed event stream stopped. Lease expiry remains
