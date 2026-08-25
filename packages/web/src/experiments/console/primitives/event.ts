@@ -48,7 +48,7 @@ export interface ArtifactEvent extends RunEventBase {
 export interface NodeTransitionEvent extends RunEventBase {
   kind: 'node_transition';
   nodeName: string;
-  transition: 'started' | 'completed' | 'failed' | 'skipped';
+  transition: 'queued' | 'started' | 'completed' | 'failed' | 'skipped';
   durationMs: number | null;
   /** Only populated for `skipped` — the server's skip reason (e.g. `when_condition`, `trigger_rule`, `prior_success`). */
   skipReason: string | null;
@@ -136,6 +136,8 @@ function readNumberOrNull(obj: Record<string, unknown>, key: string): number | n
  */
 const NODE_TRANSITION_BY_EVENT: Record<string, NodeTransitionEvent['transition']> = {
   node_started: 'started',
+  provider_slot_queued: 'queued',
+  provider_slot_acquired: 'started',
   node_completed: 'completed',
   node_failed: 'failed',
   node_skipped: 'skipped',
@@ -157,21 +159,13 @@ export function toRunEvent(raw: RawWorkflowEvent): RunEvent {
   const data = raw.data;
   const et = raw.event_type;
 
-  if (
-    et === 'node_started' ||
-    et === 'node_completed' ||
-    et === 'node_failed' ||
-    et === 'node_skipped' ||
-    et === 'node_skipped_prior_success'
-  ) {
-    // Guard above restricts `et` to the map's keys; `?? 'skipped'` is only a
-    // defensive default if a new node_* type is added to the guard but not the map.
-    const transition = NODE_TRANSITION_BY_EVENT[et] ?? 'skipped';
+  const transition = NODE_TRANSITION_BY_EVENT[et];
+  if (transition !== undefined) {
     const output = readStringOrNull(data, 'node_output');
     return {
       ...base,
       kind: 'node_transition',
-      nodeName: readString(data, 'name') || (raw.step_name ?? ''),
+      nodeName: readString(data, 'node_name') || readString(data, 'name') || (raw.step_name ?? ''),
       transition,
       // Server persists `duration_ms` (NOT `duration`); reading the wrong key here
       // left every node duration null in the UI.
@@ -367,7 +361,7 @@ export interface NodeRun {
   nodeId: string;
   nodeName: string;
   /** `running` = only a `started` transition seen so far (in-flight). */
-  status: 'running' | 'completed' | 'failed' | 'skipped';
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'skipped';
   /** Earliest transition timestamp — positions the single divider in the stream. */
   startedAt: string;
   /** Terminal transition timestamp; null while still running. */
@@ -403,6 +397,7 @@ export function foldNodeRuns(events: RunEvent[]): NodeRun[] {
     let completed: NodeTransitionEvent | null = null;
     let failed: NodeTransitionEvent | null = null;
     let skipped: NodeTransitionEvent | null = null;
+    let active: NodeTransitionEvent | null = null;
     let nodeName = '';
     let startedAt = transitions[0]?.timestamp ?? '';
     for (const t of transitions) {
@@ -411,6 +406,7 @@ export function foldNodeRuns(events: RunEvent[]): NodeRun[] {
       if (t.transition === 'completed') completed = t;
       else if (t.transition === 'failed') failed = t;
       else if (t.transition === 'skipped') skipped = t;
+      else active = t;
     }
     const terminal = completed ?? failed ?? skipped;
     // Precedence in documented order: ever-completed wins, then failed, then
@@ -419,7 +415,7 @@ export function foldNodeRuns(events: RunEvent[]): NodeRun[] {
     if (completed !== null) status = 'completed';
     else if (failed !== null) status = 'failed';
     else if (skipped !== null) status = 'skipped';
-    else status = 'running';
+    else status = active?.transition === 'queued' ? 'queued' : 'running';
     runs.push({
       nodeId,
       nodeName: nodeName !== '' ? nodeName : nodeId,
@@ -451,7 +447,7 @@ export function countTerminalNodes(events: RunEvent[]): { completed: number; tot
   let completed = 0;
   let total = 0;
   for (const r of foldNodeRuns(events)) {
-    if (r.status === 'running') continue;
+    if (r.status === 'running' || r.status === 'queued') continue;
     total += 1;
     if (r.status === 'completed') completed += 1;
   }

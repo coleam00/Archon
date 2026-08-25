@@ -342,7 +342,7 @@ export function mapWorkflowEventRow(row: WorkflowEventRow): string | null {
   if (nodeStatus) {
     const isProviderSlotEvent = row.event_type.startsWith('provider_slot_');
     const nodeId =
-      (isProviderSlotEvent ? dataStr(data, 'node_id', 'nodeId') : undefined) ?? row.step_name ?? '';
+      row.step_name ?? (isProviderSlotEvent ? dataStr(data, 'node_id', 'nodeId') : undefined) ?? '';
     const payload: DagNodeSsePayload = {
       type: 'dag_node',
       runId,

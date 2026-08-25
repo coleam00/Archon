@@ -132,14 +132,17 @@ export async function* streamOpencodeSession(
   let lastAssistantMessageId: string | undefined;
   let aborted = requestOptions?.abortSignal?.aborted === true;
   let resultYielded = false;
+  let abortPromise: Promise<unknown> | undefined;
 
   const abortHandler = (): void => {
     aborted = true;
-    void client.session
-      .abort({ path: { id: sessionId }, query: { directory: cwd } })
-      .catch((error): void => {
-        getLog().debug({ err: error, sessionId }, 'opencode.session_abort_failed');
-      });
+    abortPromise ??= client.session.abort({
+      path: { id: sessionId },
+      query: { directory: cwd },
+    });
+    void abortPromise.catch((error): void => {
+      getLog().debug({ err: error, sessionId }, 'opencode.session_abort_failed');
+    });
     streamController.abort();
   };
 
@@ -292,6 +295,7 @@ export async function* streamOpencodeSession(
   } finally {
     requestOptions?.abortSignal?.removeEventListener('abort', abortHandler);
     streamController.abort();
+    if (abortPromise) await abortPromise;
   }
 }
 

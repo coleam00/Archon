@@ -69,6 +69,20 @@ const mockSendQuery = mock(async function* () {
   yield { type: 'assistant', content: 'test response' };
   yield { type: 'result', sessionId: 'session-1' };
 });
+const mockRunProviderQuery = mock(async function* (request: {
+  client: { sendQuery: (...args: unknown[]) => AsyncGenerator<unknown> };
+  prompt: string;
+  cwd: string;
+  resumeSessionId?: string;
+  options?: unknown;
+}): AsyncGenerator<unknown> {
+  yield* request.client.sendQuery(
+    request.prompt,
+    request.cwd,
+    request.resumeSessionId,
+    request.options
+  );
+});
 const mockGetCodebaseEnvVars = mock(() => Promise.resolve({}));
 const mockLoadConfig = mock(() =>
   Promise.resolve({
@@ -293,7 +307,12 @@ mock.module('../db/workflow-events', () => ({
 
 mock.module('../config/config-loader', () => ({
   loadConfig: mockLoadConfig,
+  loadProviderConcurrencyLimits: mock(() => Promise.resolve({})),
   loadRepoConfig: mockLoadRepoConfig,
+}));
+
+mock.module('../providers/provider-query-runner', () => ({
+  runProviderQuery: mockRunProviderQuery,
 }));
 
 const mockGenerateAndSetTitle = mock(() => Promise.resolve());
@@ -4284,6 +4303,7 @@ describe('stale session ID clearing on error_during_execution', () => {
     mockGetOrCreateConversation.mockReset();
     mockGetCodebase.mockReset();
     mockSendQuery.mockReset();
+    mockRunProviderQuery.mockClear();
     mockLogger.warn.mockClear();
     mockGetRecentWorkflowResultMessages.mockReset();
     mockGetRecentWorkflowResultMessages.mockImplementation(() => Promise.resolve([]));
@@ -4320,6 +4340,7 @@ describe('stale session ID clearing on error_during_execution', () => {
 
     // updateSession should be called with null to clear the stale session ID
     expect(mockUpdateSession).toHaveBeenCalledWith('session-1', null);
+    expect(mockRunProviderQuery).toHaveBeenCalledTimes(1);
   });
 
   test('handleBatchMode: clears session ID on error_during_execution result', async () => {
@@ -4342,6 +4363,7 @@ describe('stale session ID clearing on error_during_execution', () => {
     await handleMessage(platform, 'conv-1', 'hello');
 
     expect(mockUpdateSession).toHaveBeenCalledWith('session-1', null);
+    expect(mockRunProviderQuery).toHaveBeenCalledTimes(1);
   });
 
   test('does NOT surface error to user on stop_sequence success (#1425)', async () => {

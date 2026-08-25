@@ -65,6 +65,36 @@ describe('toRunEvent — node transitions', () => {
     expect(e.costUsd).toBeNull();
   });
 
+  test('provider capacity events keep namespaced identity and map queue lifecycle', () => {
+    const queued = toRunEvent(
+      raw({
+        event_type: 'provider_slot_queued',
+        step_name: 'outer.review',
+        data: { node_id: 'review', node_name: 'Review changes' },
+      })
+    );
+    const acquired = toRunEvent(
+      raw({
+        event_type: 'provider_slot_acquired',
+        step_name: 'outer.review',
+        data: { node_id: 'review', node_name: 'Review changes' },
+      })
+    );
+
+    expect(queued).toMatchObject({
+      kind: 'node_transition',
+      nodeId: 'outer.review',
+      nodeName: 'Review changes',
+      transition: 'queued',
+    });
+    expect(acquired).toMatchObject({
+      kind: 'node_transition',
+      nodeId: 'outer.review',
+      nodeName: 'Review changes',
+      transition: 'started',
+    });
+  });
+
   test('node_skipped carries when_condition reason + expr', () => {
     const e = toRunEvent(
       raw({
@@ -362,6 +392,15 @@ describe('foldNodeRuns', () => {
     ]);
     expect(runs[0]?.status).toBe('failed');
     expect(runs[0]?.durationMs).toBe(42);
+  });
+
+  test('provider queue and acquisition update one node from queued to running', () => {
+    const queued = node('review', 'provider_slot_queued', { created_at: at('1') });
+    expect(foldNodeRuns([queued])[0]?.status).toBe('queued');
+    expect(countTerminalNodes([queued])).toEqual({ completed: 0, total: 0 });
+
+    const acquired = node('review', 'provider_slot_acquired', { created_at: at('2') });
+    expect(foldNodeRuns([queued, acquired])[0]?.status).toBe('running');
   });
 
   test('failed THEN a later completed (retry) folds to completed — duration/cost from the completion', () => {

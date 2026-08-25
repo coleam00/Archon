@@ -107,6 +107,7 @@ mock.module('../workflows/store-adapter', () => ({
 
 mock.module('../config/config-loader', () => ({
   loadConfig: mock(() => Promise.resolve({})),
+  loadProviderConcurrencyLimits: mock(() => Promise.resolve({})),
   loadRepoConfig: mock(() => Promise.resolve(null)),
 }));
 

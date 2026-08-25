@@ -25,6 +25,7 @@ export interface ProviderConcurrencyAcquired extends ProviderConcurrencyWait {
 export interface ProviderConcurrencyObserver {
   onQueued?: (event: ProviderConcurrencyWait) => void;
   onAcquired?: (event: ProviderConcurrencyAcquired) => void;
+  onDequeued?: (event: ProviderConcurrencyWait) => void;
   onWaiting?: () => void;
 }
 
@@ -238,76 +239,86 @@ export class ProviderConcurrencyGate {
 
     const startedAt = this.timing.now();
     let queued = false;
-    waitForSlot: while (true) {
-      throwIfAborted(options.signal);
-      if (options.shouldContinue) {
-        const shouldContinue = await options.shouldContinue();
-        if (shouldContinue === false) {
-          throw abortError(`Provider concurrency wait stopped for terminal owner '${provider}'`);
-        }
-        if (shouldContinue === undefined) {
-          await this.timing.sleep(this.timing.pollMs, options.signal);
-          continue;
-        }
-      }
-
-      for (let slot = 0; slot < limit; slot += 1) {
-        const leaseId = randomUUID();
-        const claimedUntil = await this.tryClaim(provider, slot, leaseId, limit);
-        if (claimedUntil !== null) {
-          const waitMs = this.timing.now() - startedAt;
-          const lease = new DatabaseProviderLease(
-            this.db,
-            provider,
-            slot,
-            leaseId,
-            this.timing,
-            claimedUntil
-          );
-          try {
-            throwIfAborted(options.signal);
-            if (options.shouldContinue) {
-              const shouldContinue = await options.shouldContinue();
-              if (shouldContinue === false) {
-                throw abortError(
-                  `Provider concurrency wait stopped for terminal owner '${provider}'`
-                );
-              }
-              if (shouldContinue === undefined) {
-                await lease.release();
-                await this.timing.sleep(this.timing.pollMs, options.signal);
-                continue waitForSlot;
-              }
-            }
-          } catch (error) {
-            await lease.release();
-            throw error;
+    try {
+      waitForSlot: while (true) {
+        throwIfAborted(options.signal);
+        if (options.shouldContinue) {
+          const shouldContinue = await options.shouldContinue();
+          if (shouldContinue === false) {
+            throw abortError(`Provider concurrency wait stopped for terminal owner '${provider}'`);
           }
-          if (queued) {
-            notify(
-              () => options.observer?.onAcquired?.({ provider, limit, slot, waitMs }),
-              'provider_concurrency.acquired_observer_failed'
+          if (shouldContinue === undefined) {
+            await this.timing.sleep(this.timing.pollMs, options.signal);
+            continue;
+          }
+        }
+
+        for (let slot = 0; slot < limit; slot += 1) {
+          const leaseId = randomUUID();
+          const claimedUntil = await this.tryClaim(provider, slot, leaseId, limit);
+          if (claimedUntil !== null) {
+            const waitMs = this.timing.now() - startedAt;
+            const lease = new DatabaseProviderLease(
+              this.db,
+              provider,
+              slot,
+              leaseId,
+              this.timing,
+              claimedUntil
             );
+            try {
+              throwIfAborted(options.signal);
+              if (options.shouldContinue) {
+                const shouldContinue = await options.shouldContinue();
+                if (shouldContinue === false) {
+                  throw abortError(
+                    `Provider concurrency wait stopped for terminal owner '${provider}'`
+                  );
+                }
+                if (shouldContinue === undefined) {
+                  await lease.release();
+                  await this.timing.sleep(this.timing.pollMs, options.signal);
+                  continue waitForSlot;
+                }
+              }
+            } catch (error) {
+              await lease.release();
+              throw error;
+            }
+            if (queued) {
+              notify(
+                () => options.observer?.onAcquired?.({ provider, limit, slot, waitMs }),
+                'provider_concurrency.acquired_observer_failed'
+              );
+            }
+            if (lease.signal.aborted) {
+              await lease.release();
+              throw abortError(`Provider concurrency lease was lost before '${provider}' started`);
+            }
+            getLog().info({ provider, limit, slot, waitMs }, 'provider_concurrency.acquired');
+            return lease;
           }
-          if (lease.signal.aborted) {
-            await lease.release();
-            throw abortError(`Provider concurrency lease was lost before '${provider}' started`);
-          }
-          getLog().info({ provider, limit, slot, waitMs }, 'provider_concurrency.acquired');
-          return lease;
         }
-      }
 
-      if (!queued) {
-        queued = true;
-        notify(
-          () => options.observer?.onQueued?.({ provider, limit }),
-          'provider_concurrency.queued_observer_failed'
-        );
-        getLog().info({ provider, limit }, 'provider_concurrency.queued');
+        if (!queued) {
+          queued = true;
+          notify(
+            () => options.observer?.onQueued?.({ provider, limit }),
+            'provider_concurrency.queued_observer_failed'
+          );
+          getLog().info({ provider, limit }, 'provider_concurrency.queued');
+        }
+        notify(options.observer?.onWaiting, 'provider_concurrency.wait_observer_failed');
+        await this.timing.sleep(this.timing.pollMs, options.signal);
       }
-      notify(options.observer?.onWaiting, 'provider_concurrency.wait_observer_failed');
-      await this.timing.sleep(this.timing.pollMs, options.signal);
+    } catch (error) {
+      if (queued) {
+        notify(
+          () => options.observer?.onDequeued?.({ provider, limit }),
+          'provider_concurrency.dequeued_observer_failed'
+        );
+      }
+      throw error;
     }
   }
 
@@ -318,6 +329,9 @@ export class ProviderConcurrencyGate {
     limit: number
   ): Promise<number | null> {
     const queryStartedAt = this.timing.now();
+    // PostgreSQL otherwise tries to infer the reused $1 as both the SELECT's
+    // default text type and the VARCHAR provider_id comparison.
+    const providerParam = this.db.dialect === 'postgres' ? '$1::varchar(64)' : '$1';
     const expiry =
       this.db.dialect === 'postgres'
         ? "NOW() + ($4 * INTERVAL '1 millisecond')"
@@ -333,10 +347,10 @@ export class ProviderConcurrencyGate {
     const result = await this.db.query<{ slot_index: number }>(
       `INSERT INTO remote_agent_provider_slots
          (provider_id, slot_index, lease_id, lease_expires_at)
-       SELECT $1, $2, $3, ${expiry}
+       SELECT ${providerParam}, $2, $3, ${expiry}
        WHERE (
          SELECT COUNT(*) FROM remote_agent_provider_slots
-         WHERE provider_id = $1 AND ${live}
+         WHERE provider_id = ${providerParam} AND ${live}
        ) < $5
        ON CONFLICT (provider_id, slot_index) DO UPDATE SET
          lease_id = EXCLUDED.lease_id,

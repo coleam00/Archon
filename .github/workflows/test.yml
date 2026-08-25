@@ -111,12 +111,19 @@ jobs:
         with:
           bun-version: 1.3.11
 
-      # No `bun install`: the checker shells out to psql and uses only builtins.
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
       - name: Ensure psql is available
         run: psql --version || (sudo apt-get update && sudo apt-get install -y postgresql-client)
 
       - name: Upgrade from released schemas
         run: bun run check:schema-upgrades
+
+      - name: Check provider concurrency on PostgreSQL
+        run: bun test packages/core/src/db/provider-concurrency.postgres.integration.test.ts
+        env:
+          ARCHON_POSTGRES_INTEGRATION: 'true'
 
   docker-build:
     runs-on: ubuntu-latest

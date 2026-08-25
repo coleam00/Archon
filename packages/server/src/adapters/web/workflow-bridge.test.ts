@@ -109,7 +109,7 @@ describe('mapWorkflowEvent — provider capacity', () => {
     });
   });
 
-  test('preserves persisted provider node identity during dashboard replay', () => {
+  test('keeps the namespaced persisted identity and raw display name during replay', () => {
     const row: WorkflowEventRow = {
       id: 'event-1',
       workflow_run_id: 'run-1',
@@ -127,7 +127,7 @@ describe('mapWorkflowEvent — provider capacity', () => {
 
     expect(JSON.parse(mapWorkflowEventRow(row) ?? '{}')).toMatchObject({
       type: 'dag_node',
-      nodeId: 'scope',
+      nodeId: 'loop#2:scope',
       name: 'archon-pr-review-scope',
       status: 'queued',
     });

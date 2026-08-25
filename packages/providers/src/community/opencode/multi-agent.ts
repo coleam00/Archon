@@ -137,6 +137,7 @@ export async function* streamMultiAgentOpencodeSession(
   const sessionToAgent = new Map<string, AgentRunState>();
   let aborted = requestOptions?.abortSignal?.aborted === true;
   let promptError: Error | undefined;
+  let abortPromise: Promise<void> | undefined;
 
   const releaseStateLease = async (state: AgentRunState): Promise<void> => {
     if (!state.lease) return;
@@ -149,19 +150,16 @@ export async function* streamMultiAgentOpencodeSession(
     await lease.release();
   };
 
-  const abortAll = async (): Promise<void> => {
-    await Promise.all(
+  const abortAll = (): Promise<void> => {
+    abortPromise ??= Promise.all(
       Array.from(sessionToAgent.values()).map(state =>
-        client.session
-          .abort({ path: { id: state.sessionId }, query: { directory: state.cwd } })
-          .catch(error => {
-            getLog().debug(
-              { err: error, sessionId: state.sessionId, agent: state.agent.key },
-              'opencode.multi_agent_abort_failed'
-            );
-          })
+        client.session.abort({ path: { id: state.sessionId }, query: { directory: state.cwd } })
       )
-    );
+    ).then(() => undefined);
+    void abortPromise.catch(error => {
+      getLog().debug({ err: error }, 'opencode.multi_agent_abort_failed');
+    });
+    return abortPromise;
   };
 
   const abortHandler = (): void => {
@@ -468,6 +466,7 @@ export async function* streamMultiAgentOpencodeSession(
     requestOptions?.abortSignal?.removeEventListener('abort', abortHandler);
     admissionController.abort();
     streamController.abort();
+    if (abortPromise) await abortPromise;
     await Promise.all(Array.from(sessionToAgent.values(), state => releaseStateLease(state)));
   }
 }

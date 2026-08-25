@@ -220,6 +220,56 @@ describe('createProviderQueryRunner', () => {
     expect(transitions).toEqual(['queued', 'acquired']);
   });
 
+  test('clears an aborted waiter so a provider retry can return to running', async () => {
+    let acquireCalls = 0;
+    const transitions: string[] = [];
+    const runner = createProviderQueryRunner({
+      acquire: async (providerId, limit, options) => {
+        acquireCalls += 1;
+        options?.observer?.onQueued?.({ provider: providerId, limit });
+        if (acquireCalls === 1) {
+          options?.observer?.onDequeued?.({ provider: providerId, limit });
+          throw new Error('queued sibling aborted');
+        }
+        options?.observer?.onAcquired?.({ provider: providerId, limit, slot: 0, waitMs: 1 });
+        return {
+          provider: providerId,
+          slot: 0,
+          signal: new AbortController().signal,
+          release: async () => undefined,
+        };
+      },
+      loadLimits: async () => ({ pi: 1 }),
+    });
+    const retryingProvider: IAgentProvider = {
+      supportsProviderAttemptGate: true,
+      getType: () => 'pi',
+      getCapabilities: () => capabilities,
+      sendQuery: async function* (_prompt, _cwd, _resume, options) {
+        const attemptGate = options?.providerAttemptGate;
+        if (!attemptGate) throw new Error('missing attempt gate');
+        await expect(attemptGate.acquire()).rejects.toThrow('queued sibling aborted');
+        const lease = await attemptGate.acquire();
+        await lease.release();
+        yield { type: 'assistant', content: 'ok' };
+      },
+    };
+
+    await consume(
+      runner({
+        client: retryingProvider,
+        prompt: 'hello',
+        cwd: '/tmp',
+        context: {
+          onQueued: () => transitions.push('queued'),
+          onAcquired: () => transitions.push('acquired'),
+        },
+      })
+    );
+
+    expect(transitions).toEqual(['queued', 'queued', 'acquired']);
+  });
+
   test('releases when the provider throws', async () => {
     let released = false;
     const runner = createProviderQueryRunner({

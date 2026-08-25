@@ -209,11 +209,15 @@ describe('ProviderConcurrencyGate', () => {
     const first = await gate(firstDb).acquire('pi', 1);
     const controller = new AbortController();
     let queued = false;
+    let dequeued = false;
     const waiter = gate(secondDb).acquire('pi', 1, {
       signal: controller.signal,
       observer: {
         onQueued: () => {
           queued = true;
+        },
+        onDequeued: () => {
+          dequeued = true;
         },
       },
     });
@@ -221,6 +225,7 @@ describe('ProviderConcurrencyGate', () => {
     while (!queued) await Bun.sleep(1);
     controller.abort();
     await expect(waiter).rejects.toMatchObject({ name: 'AbortError' });
+    expect(dequeued).toBe(true);
 
     const rows = await firstDb.query<{ lease_id: string }>(
       `SELECT lease_id FROM remote_agent_provider_slots WHERE provider_id = $1`,

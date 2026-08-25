@@ -361,6 +361,27 @@ concurrency:
       );
     });
 
+    test('rejects wrong-shaped provider concurrency policy instead of running uncapped', async () => {
+      mockFsReadFile.mockResolvedValue('concurrency: 5\n');
+      await expect(loadProviderConcurrencyLimits()).rejects.toThrow(
+        'concurrency must be a mapping'
+      );
+
+      clearConfigCache();
+      mockFsReadFile.mockResolvedValue('concurrency:\n  providers: 4\n');
+      await expect(loadProviderConcurrencyLimits()).rejects.toThrow(
+        'concurrency.providers must be a mapping'
+      );
+
+      for (const providers of ['null', '[]']) {
+        clearConfigCache();
+        mockFsReadFile.mockResolvedValue(`concurrency:\n  providers: ${providers}\n`);
+        await expect(loadProviderConcurrencyLimits()).rejects.toThrow(
+          'concurrency.providers must be a mapping'
+        );
+      }
+    });
+
     test('provider policy loading fails closed after a global config read error', async () => {
       const syntaxError = new SyntaxError('YAML Parse error');
       mockFsReadFile.mockRejectedValue(syntaxError);

@@ -116,6 +116,7 @@ mock.module('../db/codebases', () => ({
 type RepoConfigForTest = { worktree?: { baseBranch?: string } };
 const mockLoadRepoConfig = mock(() => Promise.resolve({} as RepoConfigForTest));
 mock.module('../config/config-loader', () => ({
+  loadProviderConcurrencyLimits: mock(() => Promise.resolve({})),
   loadRepoConfig: mockLoadRepoConfig,
 }));
 

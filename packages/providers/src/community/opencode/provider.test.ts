@@ -1067,6 +1067,45 @@ describe('OpencodeProvider', () => {
     });
   });
 
+  test('keeps the provider lease until OpenCode confirms cancellation', async () => {
+    let confirmAbort!: () => void;
+    const abortConfirmed = new Promise<void>(resolve => {
+      confirmAbort = resolve;
+    });
+    const runtime = makeRuntime({
+      subscribe: mock(async () => ({ stream: createPendingStream() })),
+      sessionAbort: mock(() => abortConfirmed),
+    });
+    runtimeQueue.push(runtime);
+    const abortController = new AbortController();
+    let released = false;
+
+    const consumption = consume(
+      new OpencodeProvider().sendQuery('hi', '/tmp', undefined, {
+        assistantConfig: TEST_MODEL,
+        abortSignal: abortController.signal,
+        providerAttemptGate: {
+          acquire: async () => ({
+            signal: new AbortController().signal,
+            release: async () => {
+              released = true;
+            },
+          }),
+        },
+      })
+    );
+
+    await new Promise(resolve => setTimeout(resolve, 10));
+    abortController.abort();
+    while (runtime.client.session.abort.mock.calls.length === 0) await Bun.sleep(1);
+    expect(released).toBe(false);
+
+    confirmAbort();
+    const { error } = await consumption;
+    expect(error?.message).toBe('OpenCode query aborted');
+    expect(released).toBe(true);
+  });
+
   test('cleanup closes the embedded runtime after completion', async () => {
     const runtimeA = makeRuntime({ close: mock(() => undefined) });
     const runtimeB = makeRuntime({ close: mock(() => undefined) });

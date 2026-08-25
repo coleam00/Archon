@@ -94,6 +94,7 @@ mock.module('@archon/providers', () => ({
 
 mock.module('../config/config-loader', () => ({
   loadConfig: mock(() => Promise.resolve({ assistant: 'claude' })),
+  loadProviderConcurrencyLimits: mock(() => Promise.resolve({})),
   // Required even though nothing here calls it: this factory replaces the module
   // for the whole process, and child-isolation-resolver.ts (same `bun test
   // src/workflows/` batch) does `import { loadRepoConfig }`. Omit it and that

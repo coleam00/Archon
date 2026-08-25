@@ -13704,6 +13704,65 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
     ).toBe(false);
   });
 
+  it('provider capacity polls keep a loop iteration alive past idle timeout', async () => {
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    mockDeps.runProviderQuery = request =>
+      (async function* () {
+        for (let pulse = 0; pulse < 5; pulse += 1) {
+          await Bun.sleep(20);
+          request.context?.onWaiting?.();
+        }
+        yield { type: 'assistant', content: 'finished' };
+        yield { type: 'result', sessionId: 'loop-capacity-session' };
+      })();
+
+    await executeDagWorkflow(
+      mockDeps,
+      createMockPlatform(),
+      'conv-loop-capacity-idle',
+      testDir,
+      {
+        name: 'loop-capacity-idle',
+        nodes: [
+          {
+            id: 'wait-for-provider',
+            kind: 'loop',
+            idle_timeout: 35,
+            retry: { max_attempts: 0 },
+            loop: {
+              prompt: 'wait',
+              until: 'finished',
+              max_iterations: 1,
+              fresh_context: false,
+            },
+          },
+        ],
+      },
+      makeWorkflowRun('loop-capacity-idle'),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    expect(
+      eventCalls.some(
+        (call: unknown[]) => (call[0] as Record<string, unknown>).event_type === 'node_completed'
+      )
+    ).toBe(true);
+    expect(
+      eventCalls.some(
+        (call: unknown[]) => (call[0] as Record<string, unknown>).event_type === 'node_failed'
+      )
+    ).toBe(false);
+  });
+
   it('output_format set but provider returns no structured output → node_failed (Task 8 fail-fast)', async () => {
     // Provider replied with prose only; no structuredOutput on the result chunk.
     mockSendQueryDag.mockImplementation(async function* () {

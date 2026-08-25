@@ -63,6 +63,9 @@ export function createProviderQueryRunner(deps: ProviderQueryRunnerDeps): Provid
                     queuedAttempts = Math.max(0, queuedAttempts - 1);
                     if (queuedAttempts === 0) request.context?.onAcquired?.(event);
                   },
+                  onDequeued: (): void => {
+                    queuedAttempts = Math.max(0, queuedAttempts - 1);
+                  },
                 }
               : undefined,
             shouldContinue: request.context?.shouldContinue,

@@ -108,6 +108,8 @@ function layout(nodes: WorkflowGraphNodeWithStatus[]): Layout {
 /* Status → color (design v3 .gnode tints; CSS var refs so themes can retune). */
 function statusFill(s: WorkflowNodeStatus): string {
   switch (s) {
+    case 'queued':
+      return 'color-mix(in oklch, var(--warning), transparent 90%)';
     case 'running':
       return 'color-mix(in oklch, var(--running), transparent 90%)';
     case 'completed':
@@ -123,6 +125,8 @@ function statusFill(s: WorkflowNodeStatus): string {
 
 function statusBorder(s: WorkflowNodeStatus): string {
   switch (s) {
+    case 'queued':
+      return 'color-mix(in oklch, var(--warning), transparent 40%)';
     case 'running':
       return 'color-mix(in oklch, var(--running), transparent 40%)';
     case 'completed':
@@ -139,6 +143,8 @@ function statusBorder(s: WorkflowNodeStatus): string {
 /* Glyph/icon color per status (design: green check-tone icon, rose on failed). */
 function statusGlyphClass(s: WorkflowNodeStatus): string {
   switch (s) {
+    case 'queued':
+      return 'text-warning';
     case 'running':
       return 'text-[color:var(--running)]';
     case 'completed':

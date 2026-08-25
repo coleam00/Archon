@@ -14,7 +14,13 @@ export type WorkflowNodeKind =
   | 'loop'
   | 'cancel';
 
-export type WorkflowNodeStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
+export type WorkflowNodeStatus =
+  | 'pending'
+  | 'queued'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'skipped';
 
 export interface WorkflowGraphNode {
   id: string;
@@ -40,18 +46,18 @@ export function deriveNodeStatuses(
 ): WorkflowGraphNodeWithStatus[] {
   const byNode = new Map<string, { status: WorkflowNodeStatus; durationMs: number | null }>();
   for (const e of events) {
-    if (e.kind !== 'node_transition') continue;
-    const name = e.nodeName;
-    if (name.length === 0) continue;
+    if (e.kind !== 'node_transition' || e.nodeId === null) continue;
     const status: WorkflowNodeStatus =
-      e.transition === 'started'
-        ? 'running'
-        : e.transition === 'completed'
-          ? 'completed'
-          : e.transition === 'failed'
-            ? 'failed'
-            : 'skipped';
-    byNode.set(name, { status, durationMs: e.durationMs });
+      e.transition === 'queued'
+        ? 'queued'
+        : e.transition === 'started'
+          ? 'running'
+          : e.transition === 'completed'
+            ? 'completed'
+            : e.transition === 'failed'
+              ? 'failed'
+              : 'skipped';
+    byNode.set(e.nodeId, { status, durationMs: e.durationMs });
   }
   return nodes.map(n => {
     const current = byNode.get(n.id);

@@ -7,7 +7,7 @@ interface NodeDividerProps {
   nodeId: string;
   nodeName: string;
   /** Folded lifecycle status; `running` = the node is still in-flight. */
-  status: 'running' | 'completed' | 'failed' | 'skipped';
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'skipped';
   durationMs: number | null;
   timestamp: string;
   /** From `node_completed` — surfaced inline so per-node spend is visible. */
@@ -24,6 +24,7 @@ interface NodeDividerProps {
 }
 
 const STATUS_LABEL: Record<NodeDividerProps['status'], string> = {
+  queued: 'queued',
   running: 'running',
   completed: 'completed',
   failed: 'failed',
@@ -31,6 +32,7 @@ const STATUS_LABEL: Record<NodeDividerProps['status'], string> = {
 };
 
 const STATUS_COLOR: Record<NodeDividerProps['status'], string> = {
+  queued: 'text-warning',
   running: 'text-text-tertiary',
   completed: 'text-success',
   failed: 'text-error',

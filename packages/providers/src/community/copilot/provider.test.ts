@@ -213,6 +213,50 @@ describe('CopilotProvider.sendQuery', () => {
     );
   });
 
+  test('holds provider admission around sendAndWait and forwards lease loss', async () => {
+    const session = makeFakeSession('sess-admitted');
+    nextCreateSessionResult = session;
+    const leaseController = new AbortController();
+    let admit: (() => void) | undefined;
+    const admitted = new Promise<void>(resolve => {
+      admit = resolve;
+    });
+    let released = 0;
+
+    const p = new CopilotProvider();
+    const gen = p.sendQuery('hello', '/work/dir', undefined, {
+      model: 'gpt-5',
+      providerAttemptGate: {
+        acquire: async () => {
+          await admitted;
+          return {
+            signal: leaseController.signal,
+            release: async () => {
+              released += 1;
+            },
+          };
+        },
+      },
+    });
+
+    const firstNext = gen.next();
+    await Bun.sleep(5);
+    expect(session.prompt).toBeUndefined();
+
+    admit?.();
+    while (session.prompt === undefined) await Bun.sleep(1);
+    expect(session.prompt).toBe('hello');
+
+    leaseController.abort(new Error('lease lost'));
+    while (!session.aborted) await Bun.sleep(1);
+    session.resolveSend(undefined);
+    await firstNext;
+    await collect(gen);
+
+    expect(session.aborted).toBe(true);
+    expect(released).toBe(1);
+  });
+
   test('reasoningEffort from nodeConfig.effort passes through', async () => {
     const session = makeFakeSession();
     nextCreateSessionResult = session;

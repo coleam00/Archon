@@ -72,17 +72,27 @@ function getRegisteredProviderNames(): string[] {
   return getRegisteredProviders().map(p => p.id);
 }
 
-function sanitizeProviderConcurrency(
-  raw: Record<string, number> | undefined
-): Record<string, number> {
-  if (!raw) return {};
+function sanitizeProviderConcurrency(rawConcurrency: unknown): Record<string, number> {
+  if (rawConcurrency === undefined) return {};
+  if (
+    typeof rawConcurrency !== 'object' ||
+    rawConcurrency === null ||
+    Array.isArray(rawConcurrency)
+  ) {
+    throw new Error('concurrency must be a mapping');
+  }
+  const raw = (rawConcurrency as Record<string, unknown>).providers;
+  if (raw === undefined) return {};
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    throw new Error('concurrency.providers must be a mapping');
+  }
   const registered = new Set(getRegisteredProviderNames());
   const limits: Record<string, number> = {};
   for (const [provider, value] of Object.entries(raw)) {
     if (!registered.has(provider)) {
       throw new Error(`concurrency.providers.${provider} is not a registered provider`);
     }
-    if (!Number.isInteger(value) || value <= 0) {
+    if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
       throw new Error(`concurrency.providers.${provider} must be a positive integer`);
     }
     limits[provider] = value;
@@ -562,7 +572,7 @@ function mergeGlobalConfig(defaults: MergedConfig, global: GlobalConfig): Merged
   if (global.concurrency?.maxConversations) {
     result.concurrency.maxConversations = global.concurrency.maxConversations;
   }
-  const configuredProviderLimits = sanitizeProviderConcurrency(global.concurrency?.providers);
+  const configuredProviderLimits = sanitizeProviderConcurrency(global.concurrency);
   result.concurrency.providers = configuredProviderLimits;
 
   const legacyPiLimit = global.assistants?.pi?.maxConcurrent;

@@ -37,6 +37,32 @@ const mockGetAgentProvider = mock(() => ({
   getType: () => 'claude',
 }));
 
+const mockRunProviderQuery = mock(async function* (request: {
+  client: {
+    sendQuery: (
+      prompt: string,
+      cwd: string,
+      resumeSessionId?: string,
+      options?: SendQueryOptions
+    ) => AsyncGenerator<MessageChunk>;
+  };
+  prompt: string;
+  cwd: string;
+  resumeSessionId?: string;
+  options?: SendQueryOptions;
+}): AsyncGenerator<MessageChunk> {
+  yield* request.client.sendQuery(
+    request.prompt,
+    request.cwd,
+    request.resumeSessionId,
+    request.options
+  );
+});
+
+mock.module('../providers/provider-query-runner', () => ({
+  runProviderQuery: mockRunProviderQuery,
+}));
+
 mock.module('@archon/providers', () => ({
   getAgentProvider: mockGetAgentProvider,
   getRegisteredProviders: mock(() => []),
@@ -55,6 +81,7 @@ describe('title-generator', () => {
   beforeEach(() => {
     mockUpdateConversationTitle.mockClear();
     mockSendQuery.mockClear();
+    mockRunProviderQuery.mockClear();
     mockGetAgentProvider.mockClear();
 
     // Reset to default happy-path behavior
@@ -79,6 +106,7 @@ describe('title-generator', () => {
 
     expect(mockUpdateConversationTitle).toHaveBeenCalledTimes(1);
     expect(mockUpdateConversationTitle).toHaveBeenCalledWith('conv-1', 'Summarize Project README');
+    expect(mockRunProviderQuery).toHaveBeenCalledTimes(1);
   });
 
   test('strips surrounding quotes from AI response', async () => {
