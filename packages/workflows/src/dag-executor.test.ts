@@ -2343,6 +2343,7 @@ describe('executeDagWorkflow -- AI node prompt substitution failure', () => {
       testDir,
       {
         name: 'subst-fail',
+        budget: { max_spend_usd: 5 },
         nodes: [
           {
             id: 'needs-base',
@@ -2375,7 +2376,67 @@ describe('executeDagWorkflow -- AI node prompt substitution failure', () => {
     expect(failedEvent).toBeDefined();
     const errorMsg = (failedEvent![0] as { data: { error: string } }).data.error;
     expect(errorMsg).toContain('No base branch could be resolved');
+    expect(
+      eventCalls.some(
+        (call: unknown[]) =>
+          (call[0] as { event_type: string }).event_type === 'budget_enforcement_failed'
+      )
+    ).toBe(false);
     // The provider must never have been reached — the failure precedes the query.
+    expect(mockSendQueryDag.mock.calls.length).toBe(0);
+  });
+
+  it('preserves a command-load error under a spend budget before calling the provider', async () => {
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('command-load-fail-run-id', {
+      workflow_name: 'command-load-fail',
+      conversation_id: 'conv-command-load',
+      user_message: 'test',
+    });
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-command-load',
+      testDir,
+      {
+        name: 'command-load-fail',
+        budget: { max_spend_usd: 5 },
+        nodes: [
+          {
+            id: 'missing-command',
+            kind: 'agent',
+            source: { kind: 'command', name: 'does-not-exist' },
+          },
+        ],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const eventCalls = (mockDeps.store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    const failedEvent = eventCalls.find(
+      (call: unknown[]) =>
+        (call[0] as { event_type: string }).event_type === 'node_failed' &&
+        (call[0] as { step_name: string }).step_name === 'missing-command'
+    );
+    expect(String((failedEvent?.[0] as { data?: { error?: string } })?.data?.error)).toContain(
+      'does-not-exist'
+    );
+    expect(
+      eventCalls.some(
+        (call: unknown[]) =>
+          (call[0] as { event_type: string }).event_type === 'budget_enforcement_failed'
+      )
+    ).toBe(false);
     expect(mockSendQueryDag.mock.calls.length).toBe(0);
   });
 });

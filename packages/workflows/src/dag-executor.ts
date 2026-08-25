@@ -2381,7 +2381,7 @@ async function executeNodeInternal(
         nodeName: commandName,
         error: errMsg,
       });
-      return { state: 'failed', output: '', error: errMsg };
+      return { state: 'failed', output: '', error: errMsg, costUsd: 0 };
     }
     rawPrompt = promptResult.content;
   } else {
@@ -2469,7 +2469,7 @@ async function executeNodeInternal(
       `Node '${node.id}' failed: ${err.message}`,
       nodeContext
     );
-    return { state: 'failed', output: '', error: err.message };
+    return { state: 'failed', output: '', error: err.message, costUsd: 0 };
   }
 
   // Substitute upstream node output references
