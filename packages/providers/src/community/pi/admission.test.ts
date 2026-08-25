@@ -303,4 +303,55 @@ describe('installPiAdmission', () => {
     expect(releases).toEqual([{ upstreamStopped: false }]);
     expect(events.at(-1)?.type).toBe('error');
   });
+
+  test('contains rejected Pi iterator cleanup while preserving lease expiry', async () => {
+    const leaseController = new AbortController();
+    const nextStarted = Promise.withResolvers<void>();
+    const returnCall = mock(async (): Promise<IteratorResult<AssistantMessageEvent>> => {
+      throw new Error('cleanup failed');
+    });
+    const streamSimple = mock<ModelRuntime['streamSimple']>(
+      () =>
+        ({
+          [Symbol.asyncIterator]() {
+            return {
+              next: () => {
+                nextStarted.resolve();
+                return new Promise<IteratorResult<AssistantMessageEvent>>(() => undefined);
+              },
+              return: returnCall,
+            };
+          },
+        }) as unknown as ReturnType<ModelRuntime['streamSimple']>
+    );
+    const runtime: Pick<ModelRuntime, 'streamSimple'> = { streamSimple };
+    const releases: { upstreamStopped: boolean }[] = [];
+    installPiAdmission(
+      runtime,
+      {
+        acquire: async () => ({
+          signal: leaseController.signal,
+          release: async options => {
+            releases.push(options);
+          },
+        }),
+      },
+      lazyStream
+    );
+
+    const events: AssistantMessageEvent[] = [];
+    const consumption = (async (): Promise<void> => {
+      for await (const event of runtime.streamSimple(model, { messages: [] })) {
+        events.push(event);
+      }
+    })();
+    await nextStarted.promise;
+    leaseController.abort(new Error('lease ownership lost'));
+    await consumption;
+    await Promise.resolve();
+
+    expect(returnCall).toHaveBeenCalledTimes(1);
+    expect(releases).toEqual([{ upstreamStopped: false }]);
+    expect(events.at(-1)?.type).toBe('error');
+  });
 });
