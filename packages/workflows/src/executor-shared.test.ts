@@ -31,6 +31,9 @@ import {
   classifyError,
   isQuotaExhaustionError,
   extractQuotaResetAt,
+  getRetryDelayMs,
+  isRateLimitError,
+  RATE_LIMIT_RETRY_DELAY_MS,
   toTelemetryErrorClass,
   safeSendMessage,
   type UnknownErrorTracker,
@@ -837,6 +840,23 @@ describe('classifyError', () => {
     ).toBe('TRANSIENT');
   });
 
+  it('classifies a silent empty stream as TRANSIENT — #2706', () => {
+    expect(
+      classifyError(
+        new Error(
+          "Node 'x' produced no assistant output. The provider stream closed without yielding content — likely a silent provider rejection."
+        )
+      )
+    ).toBe('TRANSIENT');
+    expect(
+      classifyError(
+        new Error(
+          'Loop iteration produced no assistant output. The provider stream closed without yielding content — likely a silent provider rejection or stream interruption.'
+        )
+      )
+    ).toBe('TRANSIENT');
+  });
+
   it('classifies Codex model-capacity errors as TRANSIENT — #2425', () => {
     expect(
       classifyError(new Error('Selected model is at capacity. Please try a different model.'))
@@ -880,6 +900,25 @@ describe('classifyError', () => {
     expect(isQuotaExhaustionError(exhausted)).toBe(true);
     expect(classifyError(new Error('429 Token Plan rate limit reached (2062)'))).toBe('TRANSIENT');
     expect(classifyError(new Error('MiniMax overloaded/high load (2064)'))).toBe('TRANSIENT');
+  });
+
+  it('detects rate-limit pressure messages — #2706', () => {
+    expect(isRateLimitError('rate limit: 429 too many requests')).toBe(true);
+    expect(isRateLimitError('MiniMax overloaded/high load (2064)')).toBe(true);
+    expect(isRateLimitError('Selected model is at capacity.')).toBe(true);
+    // Quota/session exhaustion stays out: it is FATAL and never reaches the backoff.
+    expect(isRateLimitError('Claude session limit reached')).toBe(false);
+    expect(isRateLimitError('econnreset')).toBe(false);
+  });
+
+  it('backs off flat + jitter on rate limits, exponential otherwise — #2706', () => {
+    for (let i = 0; i < 20; i++) {
+      const delay = getRetryDelayMs('429 too many requests', i, 3000);
+      expect(delay).toBeGreaterThanOrEqual(RATE_LIMIT_RETRY_DELAY_MS / 2);
+      expect(delay).toBeLessThanOrEqual((RATE_LIMIT_RETRY_DELAY_MS * 3) / 2);
+    }
+    expect(getRetryDelayMs('econnreset', 0, 3000)).toBe(3000);
+    expect(getRetryDelayMs('econnreset', 2, 3000)).toBe(12000);
   });
 
   it('parses only unambiguous quota reset timestamps', () => {

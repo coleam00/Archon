@@ -14,6 +14,7 @@ import { unlinkSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import * as git from '@archon/git';
+import { RATE_LIMIT_MAX_RETRIES } from './executor-shared';
 
 // --- Mock logger (MUST come before imports of modules under test) ---
 
@@ -3686,6 +3687,158 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
     expect(mockDeps.store.failWorkflowRun as ReturnType<typeof mock>).toHaveBeenCalled();
   }, 5_000);
 
+  it('a rate-limited failure earns the widened rate-limit retry budget — #2706', async () => {
+    // Keep the test fast without weakening the policy: the rate-limit backoff is flat
+    // ~45s in production, so clamp the sleep, not the budget.
+    const realSetTimeout = globalThis.setTimeout;
+    globalThis.setTimeout = ((fn: () => void) => realSetTimeout(fn, 1)) as typeof setTimeout;
+    try {
+      let callCount = 0;
+      mockSendQueryDag.mockImplementation(async function* () {
+        callCount++;
+        throw new Error('429 too many requests: provider overloaded');
+      });
+
+      const mockDeps = createMockDeps();
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun('dag-retry-ratelimit-run');
+
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-dag-retry-ratelimit',
+        testDir,
+        {
+          name: 'dag-retry-ratelimit',
+          nodes: [
+            {
+              id: 'my-node',
+              kind: 'agent',
+              source: { kind: 'command', name: 'my-cmd' },
+              retry: { max_attempts: 1, delay_ms: 1 },
+            },
+          ],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'state'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      // max_attempts would allow 2 attempts; a rate-limited failure widens the
+      // budget to RATE_LIMIT_MAX_RETRIES retries.
+      expect(callCount).toBe(1 + RATE_LIMIT_MAX_RETRIES);
+      expect(mockDeps.store.failWorkflowRun as ReturnType<typeof mock>).toHaveBeenCalled();
+    } finally {
+      globalThis.setTimeout = realSetTimeout;
+    }
+  }, 10_000);
+
+  it('a rate-limited node recovers when the provider sheds load mid-budget — #2706', async () => {
+    const realSetTimeout = globalThis.setTimeout;
+    globalThis.setTimeout = ((fn: () => void) => realSetTimeout(fn, 1)) as typeof setTimeout;
+    try {
+      let callCount = 0;
+      mockSendQueryDag.mockImplementation(async function* () {
+        callCount++;
+        if (callCount <= 3) {
+          throw new Error('rate limit exceeded, slow down');
+        }
+        yield { type: 'assistant', content: 'Recovered after load shed' };
+        yield { type: 'result', sessionId: 'ratelimit-recover-sess' };
+      });
+
+      const mockDeps = createMockDeps();
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun('dag-ratelimit-recover-run');
+
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-dag-ratelimit-recover',
+        testDir,
+        {
+          name: 'dag-ratelimit-recover',
+          nodes: [
+            {
+              id: 'my-node',
+              kind: 'agent',
+              source: { kind: 'command', name: 'my-cmd' },
+              retry: { max_attempts: 1, delay_ms: 1 },
+            },
+          ],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'state'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      expect(callCount).toBe(4);
+      expect(mockDeps.store.failWorkflowRun as ReturnType<typeof mock>).not.toHaveBeenCalled();
+    } finally {
+      globalThis.setTimeout = realSetTimeout;
+    }
+  }, 10_000);
+
+  it('retries an AI node whose stream closed without yielding content — #2706', async () => {
+    let callCount = 0;
+    mockSendQueryDag.mockImplementation(async function* () {
+      callCount++;
+      if (callCount === 1) {
+        // Silent stream death: clean result chunk, zero assistant content.
+        yield { type: 'result', sessionId: 'silent-death-sess' };
+        return;
+      }
+      yield { type: 'assistant', content: 'Second attempt produced output' };
+      yield { type: 'result', sessionId: 'silent-recovery-sess' };
+    });
+
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('dag-silent-stream-run');
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag-silent-stream',
+      testDir,
+      {
+        name: 'dag-silent-stream',
+        nodes: [
+          {
+            id: 'my-node',
+            kind: 'agent',
+            source: { kind: 'command', name: 'my-cmd' },
+            retry: { max_attempts: 1, delay_ms: 1 },
+          },
+        ],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(callCount).toBe(2);
+    expect(mockDeps.store.failWorkflowRun as ReturnType<typeof mock>).not.toHaveBeenCalled();
+  }, 5_000);
+
   it('node with FATAL error does not retry (call count = 1)', async () => {
     let callCount = 0;
     mockSendQueryDag.mockImplementation(async function* () {
@@ -4045,6 +4198,7 @@ describe('executeDagWorkflow -- tool_called event persistence', () => {
 
     mockSendQueryDag.mockImplementation(async function* () {
       yield { type: 'tool', toolName: 'Write', toolInput: { path: '/bar', content: 'x' } };
+      yield { type: 'assistant', content: 'Wrote the file.' };
       yield { type: 'result', sessionId: 'dag-session-tool' };
     });
 
@@ -4111,6 +4265,7 @@ describe('executeDagWorkflow -- tool_completed event emission', () => {
     mockSendQueryDag.mockImplementation(async function* () {
       yield { type: 'tool', toolName: 'read_file', toolInput: { path: '/a' } };
       yield { type: 'tool', toolName: 'write_file', toolInput: { path: '/b', content: 'x' } };
+      yield { type: 'assistant', content: 'done with tools' };
       yield { type: 'result', sessionId: 'dag-sess-1' };
     });
 
@@ -4154,6 +4309,7 @@ describe('executeDagWorkflow -- tool_completed event emission', () => {
 
     mockSendQueryDag.mockImplementation(async function* () {
       yield { type: 'tool', toolName: 'read_file', toolInput: { path: '/a' } };
+      yield { type: 'assistant', content: 'file read' };
       yield { type: 'result', sessionId: 'dag-sess-2' };
     });
 
@@ -4271,6 +4427,7 @@ describe('executeDagWorkflow -- tool_completed event emission', () => {
         toolOutcome: 'error',
         exitCode: 2,
       };
+      yield { type: 'assistant', content: 'tools done' };
       yield { type: 'result', sessionId: 'dag-sess-interleaved-tools' };
     });
 
@@ -5548,6 +5705,9 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
           kind: 'agent',
           source: { kind: 'command', name: 'step2' },
           depends_on: ['step1'],
+          // Empty-output failures are transient-retried (#2706); keep this test on
+          // its failure-semantics assertions rather than the default retry wait.
+          retry: { max_attempts: 1, delay_ms: 1 },
         },
       ] as DagNode[],
     };
@@ -7100,6 +7260,65 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         tool_outcome: 'success',
       });
     });
+
+    it('retries an iteration that dies on a 429 instead of failing the loop node — #2706', async () => {
+      const realSetTimeout = globalThis.setTimeout;
+      globalThis.setTimeout = ((fn: () => void) => realSetTimeout(fn, 1)) as typeof setTimeout;
+      try {
+        let callCount = 0;
+        mockSendQueryDag.mockImplementation(async function* () {
+          callCount++;
+          if (callCount === 1) {
+            throw new Error('429 too many requests: provider overloaded');
+          }
+          yield { type: 'assistant', content: 'Did the task. <promise>COMPLETE</promise>' };
+          yield { type: 'result', sessionId: 'loop-retry-sess' };
+        });
+
+        const store = createMockStore();
+        const mockDeps = createMockDeps(store);
+        const platform = createMockPlatform();
+        const workflowRun = makeWorkflowRun('loop-iteration-retry-run');
+
+        await executeDagWorkflow(
+          mockDeps,
+          platform,
+          'conv-loop-retry',
+          testDir,
+          {
+            name: 'loop-iteration-retry',
+            nodes: [
+              {
+                id: 'my-loop',
+                kind: 'loop',
+                loop: {
+                  fresh_context: false,
+                  prompt: 'Complete the task.',
+                  until: 'COMPLETE',
+                  max_iterations: 3,
+                },
+              },
+            ],
+          },
+          workflowRun,
+          'claude',
+          undefined,
+          join(testDir, 'artifacts'),
+          join(testDir, 'state'),
+          join(testDir, 'logs'),
+          'main',
+          'docs/',
+          minimalConfig
+        );
+
+        // The failed attempt is re-streamed within iteration 1 and the run completes.
+        expect(callCount).toBe(2);
+        expect(store.completeWorkflowRun).toHaveBeenCalled();
+        expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      } finally {
+        globalThis.setTimeout = realSetTimeout;
+      }
+    }, 10_000);
 
     it('correlates interleaved loop tool lifecycles by toolCallId', async () => {
       const store = createMockStore();
@@ -12988,7 +13207,14 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
       testDir,
       {
         name: 'empty-dag',
-        nodes: [{ id: 'only', kind: 'agent', source: { kind: 'command', name: 'my-cmd' } }],
+        nodes: [
+          {
+            id: 'only',
+            kind: 'agent',
+            source: { kind: 'command', name: 'my-cmd' },
+            retry: { max_attempts: 1, delay_ms: 1 },
+          },
+        ],
       },
       workflowRun,
       'claude',
@@ -13011,6 +13237,9 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
       unknown
     >;
     expect(failedData.error).toContain('produced no assistant output');
+    // The node's failure row carries only the FINAL attempt's spend; the run total
+    // accumulates every attempt — the empty-stream error is transient-retried (#2706),
+    // and this node spent its retry budget (max_attempts: 1 → two paid attempts).
     expect(failedData.cost_usd).toBe(0.02);
     expect(failedData.tokens).toEqual({
       input: 30,
@@ -13020,10 +13249,10 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
     });
     expect(runUsageWrites(store)).toEqual([
       {
-        total_cost_usd: 0.02,
-        total_tokens_in: 30,
-        total_tokens_out: 3,
-        total_cache_read_tokens: 20,
+        total_cost_usd: 0.04,
+        total_tokens_in: 60,
+        total_tokens_out: 6,
+        total_cache_read_tokens: 40,
         total_cache_write_tokens: 0,
       },
     ]);
@@ -16370,6 +16599,7 @@ describe('executeDagWorkflow -- run usage survives every disposition', () => {
             kind: 'agent',
             source: { kind: 'inline', prompt: 'Fail here.' },
             depends_on: ['spend'],
+            retry: { max_attempts: 1, delay_ms: 1 },
           },
         ],
       },
@@ -19990,7 +20220,14 @@ describe('executeDagWorkflow -- completion telemetry', () => {
 
     await runDag({
       name: 'dag-empty',
-      nodes: [{ id: 'only', kind: 'agent', source: { kind: 'inline', prompt: 'Do thing.' } }],
+      nodes: [
+        {
+          id: 'only',
+          kind: 'agent',
+          source: { kind: 'inline', prompt: 'Do thing.' },
+          retry: { max_attempts: 1, delay_ms: 1 },
+        },
+      ],
     });
 
     expect(mockCaptureWorkflowCompleted).toHaveBeenCalledTimes(1);
@@ -19999,9 +20236,10 @@ describe('executeDagWorkflow -- completion telemetry', () => {
         outcome: 'failed',
         workflowSource: 'bundled',
         exitReason: 'no_nodes_completed',
-        // Failure taxonomy: "produced no assistant output" matches no fatal/
-        // transient pattern → unknown; the failing node is a prompt node.
-        errorClass: 'unknown',
+        // Failure taxonomy: "produced no assistant output" is transient-classified
+        // (#2706), so after exhausting the node's explicit retry budget it reports
+        // transient, not unknown. The failing node is a prompt node.
+        errorClass: 'transient',
         failedNodeType: 'prompt',
       })
     );
@@ -20030,6 +20268,7 @@ describe('executeDagWorkflow -- completion telemetry', () => {
           kind: 'agent',
           source: { kind: 'inline', prompt: 'Second.' },
           depends_on: ['node1'],
+          retry: { max_attempts: 1, delay_ms: 1 },
         },
       ],
     });
@@ -20040,7 +20279,7 @@ describe('executeDagWorkflow -- completion telemetry', () => {
         outcome: 'failed',
         workflowSource: 'bundled',
         exitReason: 'node_error',
-        errorClass: 'unknown',
+        errorClass: 'transient',
         failedNodeType: 'prompt',
       })
     );
