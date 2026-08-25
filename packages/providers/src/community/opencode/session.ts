@@ -1,6 +1,7 @@
 import { createLogger } from '@archon/paths';
 
 import type { MessageChunk, SendQueryOptions } from '../../types';
+import { ProviderAttemptStopUnconfirmedError } from '../../shared/provider-attempt';
 
 import {
   adaptNamedAgentForOpencode,
@@ -131,7 +132,7 @@ export async function* streamOpencodeSession(
   let latestAssistantInfo: Record<string, unknown> | undefined;
   let lastAssistantMessageId: string | undefined;
   let aborted = requestOptions?.abortSignal?.aborted === true;
-  let resultYielded = false;
+  let terminalObserved = false;
   let abortPromise: Promise<unknown> | undefined;
 
   const abortSession = (): Promise<unknown> => {
@@ -143,6 +144,17 @@ export async function* streamOpencodeSession(
       getLog().debug({ err: error, sessionId }, 'opencode.session_abort_failed');
     });
     return abortPromise;
+  };
+
+  const confirmSessionStopped = async (): Promise<void> => {
+    try {
+      await abortSession();
+    } catch (error) {
+      throw new ProviderAttemptStopUnconfirmedError(
+        `OpenCode session shutdown could not be confirmed (session: ${sessionId}, cwd: ${cwd})`,
+        { cause: error }
+      );
+    }
   };
 
   const abortHandler = (): void => {
@@ -251,6 +263,7 @@ export async function* streamOpencodeSession(
         const rawError = isRecord(properties.error) ? properties.error : properties;
         const err = new Error(errorMessage(rawError));
         err.cause = rawError;
+        terminalObserved = true;
         throw err;
       }
 
@@ -264,6 +277,7 @@ export async function* streamOpencodeSession(
           lastAssistantMessageId
         );
         const tokens = normalizeTokens(latestAssistantInfo);
+        terminalObserved = true;
 
         yield {
           type: 'result',
@@ -281,12 +295,11 @@ export async function* streamOpencodeSession(
             ? { resolvedModel: { id: latestAssistantInfo.modelID } }
             : {}),
         };
-        resultYielded = true;
         return;
       }
     }
 
-    if (!resultYielded && !aborted) {
+    if (!terminalObserved && !aborted) {
       await abortSession();
       throw new Error(
         `OpenCode event stream ended before session became idle (session: ${sessionId}, cwd: ${cwd})`
@@ -303,7 +316,7 @@ export async function* streamOpencodeSession(
   } finally {
     requestOptions?.abortSignal?.removeEventListener('abort', abortHandler);
     streamController.abort();
-    if (abortPromise) await abortPromise;
+    if (!terminalObserved) await confirmSessionStopped();
   }
 }
 

@@ -76,10 +76,17 @@ function StatusBadge({ status }: { status: string }): React.ReactElement {
 
 export function foldPersistedDagNodes(events: WorkflowEventResponse[]): DagNodeState[] {
   const nodeMap = new Map<string, DagNodeState>();
-  for (const event of events.filter(
-    candidate =>
-      candidate.event_type.startsWith('node_') || candidate.event_type.startsWith('provider_slot_')
-  )) {
+  const statusByEvent: Partial<Record<string, WorkflowStepStatus>> = {
+    node_started: 'running',
+    node_completed: 'completed',
+    node_failed: 'failed',
+    node_skipped: 'skipped',
+    provider_slot_queued: 'queued',
+    provider_slot_acquired: 'running',
+  };
+  for (const event of events) {
+    const status = statusByEvent[event.event_type];
+    if (!status) continue;
     const isProviderSlotEvent = event.event_type.startsWith('provider_slot_');
     const nodeId =
       event.step_name ??
@@ -87,18 +94,6 @@ export function foldPersistedDagNodes(events: WorkflowEventResponse[]): DagNodeS
       (event.data.nodeId as string) ??
       '';
     if (!nodeId) continue;
-    const status =
-      event.event_type === 'node_started'
-        ? 'running'
-        : event.event_type === 'provider_slot_queued'
-          ? 'queued'
-          : event.event_type === 'provider_slot_acquired'
-            ? 'running'
-            : event.event_type === 'node_completed'
-              ? 'completed'
-              : event.event_type === 'node_failed'
-                ? 'failed'
-                : 'skipped';
     const existing = nodeMap.get(nodeId);
     // Queue state replaces node_started; acquisition returns it to running.
     // Terminal states still replace either active state in event order.
@@ -108,7 +103,7 @@ export function foldPersistedDagNodes(events: WorkflowEventResponse[]): DagNodeS
         name:
           (isProviderSlotEvent ? (event.data.node_name as string | undefined) : undefined) ??
           nodeId,
-        status: status as WorkflowStepStatus,
+        status,
         duration: event.data.duration_ms as number | undefined,
         error: event.data.error as string | undefined,
         reason: event.data.reason as 'when_condition' | 'trigger_rule' | undefined,
@@ -161,6 +156,41 @@ export function foldPersistedDagNodes(events: WorkflowEventResponse[]): DagNodeS
   }
 
   return Array.from(nodeMap.values());
+}
+
+export function findCurrentlyExecuting(
+  events: WorkflowEventResponse[],
+  workflowStatus: string | undefined
+): { nodeName: string; startedAt: number } | null {
+  if (workflowStatus !== 'running') return null;
+  const active = new Map<string, { nodeName: string; startedAt: number }>();
+
+  for (const event of events) {
+    const isProviderSlotEvent = event.event_type.startsWith('provider_slot_');
+    const nodeId =
+      event.step_name ??
+      (isProviderSlotEvent ? (event.data.node_id as string | undefined) : undefined) ??
+      '';
+    if (!nodeId) continue;
+
+    if (event.event_type === 'node_started' || event.event_type === 'provider_slot_acquired') {
+      active.set(nodeId, {
+        nodeName:
+          (isProviderSlotEvent ? (event.data.node_name as string | undefined) : undefined) ??
+          nodeId,
+        startedAt: new Date(ensureUtc(event.created_at)).getTime(),
+      });
+    } else if (
+      event.event_type === 'provider_slot_queued' ||
+      event.event_type === 'node_completed' ||
+      event.event_type === 'node_failed' ||
+      event.event_type === 'node_skipped'
+    ) {
+      active.delete(nodeId);
+    }
+  }
+
+  return active.values().next().value ?? null;
 }
 
 export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.ReactElement {
@@ -406,41 +436,7 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
 
   // Derive the currently executing node/step from events data
   const currentlyExecuting = useMemo((): { nodeName: string; startedAt: number } | null => {
-    if (!queryData?.events || workflow?.status !== 'running') return null;
-    const events = queryData.events;
-
-    // Find nodes that started but haven't completed/failed/skipped
-    const startedNodes = new Set<string>();
-    const completedNodes = new Set<string>();
-
-    for (const e of events) {
-      const nodeId = e.step_name ?? '';
-      if (e.event_type === 'node_started') startedNodes.add(nodeId);
-      if (
-        e.event_type === 'node_completed' ||
-        e.event_type === 'node_failed' ||
-        e.event_type === 'node_skipped'
-      ) {
-        completedNodes.add(nodeId);
-      }
-    }
-
-    // Find the first started-but-not-completed node
-    for (const nodeId of startedNodes) {
-      if (!completedNodes.has(nodeId)) {
-        const startEvent = events.find(
-          e => e.event_type === 'node_started' && e.step_name === nodeId
-        );
-        if (startEvent) {
-          return {
-            nodeName: nodeId,
-            startedAt: new Date(ensureUtc(startEvent.created_at)).getTime(),
-          };
-        }
-      }
-    }
-
-    return null;
+    return findCurrentlyExecuting(queryData?.events ?? [], workflow?.status);
   }, [queryData?.events, workflow?.status]);
 
   // Compute formatted log lines for the selected DAG node from DB events.

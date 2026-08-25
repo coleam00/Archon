@@ -131,4 +131,47 @@ describe('installPiAdmission', () => {
     }
     expect(releases).toBe(1);
   });
+
+  test('forwards lease ownership loss to the active Pi model stream', async () => {
+    const leaseController = new AbortController();
+    let upstreamSignal: AbortSignal | undefined;
+    const streamSimple = mock<ModelRuntime['streamSimple']>((_model, _context, options) => {
+      upstreamSignal = options?.signal;
+      const stream = createAssistantMessageEventStream();
+      upstreamSignal?.addEventListener(
+        'abort',
+        () => stream.push({ type: 'done', reason: 'stop', message: message() }),
+        { once: true }
+      );
+      return stream;
+    });
+    const runtime: Pick<ModelRuntime, 'streamSimple'> = { streamSimple };
+    let released = false;
+    installPiAdmission(
+      runtime,
+      {
+        acquire: async () => ({
+          signal: leaseController.signal,
+          release: async () => {
+            released = true;
+          },
+        }),
+      },
+      lazyStream
+    );
+
+    const consumption = (async (): Promise<void> => {
+      for await (const _event of runtime.streamSimple(model, { messages: [] })) {
+        // Consume until the lease-loss signal ends the fake upstream stream.
+      }
+    })();
+    while (!upstreamSignal) await Bun.sleep(1);
+    const leaseLost = new Error('lease ownership lost');
+    leaseController.abort(leaseLost);
+
+    await consumption;
+    expect(upstreamSignal.aborted).toBe(true);
+    expect(upstreamSignal.reason).toBe(leaseLost);
+    expect(released).toBe(true);
+  });
 });

@@ -318,6 +318,11 @@ export async function loadGlobalConfig(forceReload = false): Promise<GlobalConfi
   try {
     const content = await readConfigFile(configPath);
     const parsed = parseYaml(content);
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      throw new Error(
+        `Invalid global config in '${configPath}': top-level document must be a mapping`
+      );
+    }
     validateWorkflowContinuationConfig(parsed, configPath);
     cachedGlobalConfigError = null;
     cachedGlobalConfig = parsed as GlobalConfig;

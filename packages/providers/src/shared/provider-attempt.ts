@@ -1,5 +1,13 @@
 import type { MessageChunk, SendQueryOptions } from '../types';
 
+/** The provider could not prove the remote attempt stopped, so capacity must expire naturally. */
+export class ProviderAttemptStopUnconfirmedError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'ProviderAttemptStopUnconfirmedError';
+  }
+}
+
 function throwIfAborted(signal: AbortSignal): void {
   if (!signal.aborted) return;
   if (signal.reason instanceof Error) throw signal.reason;
@@ -23,10 +31,14 @@ export async function* withProviderAttempt(
   const signal = options.abortSignal
     ? AbortSignal.any([options.abortSignal, lease.signal])
     : lease.signal;
+  let upstreamStopped = true;
   try {
     throwIfAborted(signal);
     yield* run(signal);
+  } catch (error) {
+    if (error instanceof ProviderAttemptStopUnconfirmedError) upstreamStopped = false;
+    throw error;
   } finally {
-    await lease.release();
+    await lease.release({ upstreamStopped });
   }
 }

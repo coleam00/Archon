@@ -2269,6 +2269,49 @@ describe('CodexProvider', () => {
         ]);
       });
 
+      test('forwards lease ownership loss to the active Codex turn', async () => {
+        const leaseController = new AbortController();
+        let turnSignal: AbortSignal | undefined;
+        let released = false;
+        mockRunStreamed.mockImplementation((_prompt, options) => {
+          if (!options?.signal) throw new Error('missing Codex turn signal');
+          turnSignal = options.signal;
+          return Promise.resolve({
+            events: (async function* () {
+              await new Promise<void>(resolve => {
+                if (turnSignal?.aborted) resolve();
+                else turnSignal?.addEventListener('abort', () => resolve(), { once: true });
+              });
+              throw turnSignal?.reason;
+            })(),
+          });
+        });
+
+        const consumption = (async (): Promise<void> => {
+          for await (const _chunk of client.sendQuery('test', '/workspace', undefined, {
+            providerAttemptGate: {
+              acquire: async () => ({
+                signal: leaseController.signal,
+                release: async () => {
+                  released = true;
+                },
+              }),
+            },
+          })) {
+            // Consume until ownership loss stops the Codex turn.
+          }
+        })();
+
+        while (!turnSignal) await Bun.sleep(1);
+        const leaseLost = new Error('lease ownership lost');
+        leaseController.abort(leaseLost);
+
+        await expect(consumption).rejects.toThrow('lease ownership lost');
+        expect(turnSignal.aborted).toBe(true);
+        expect(turnSignal.reason).toBe(leaseLost);
+        expect(released).toBe(true);
+      });
+
       test('classifies auth errors as fatal (no retry)', async () => {
         mockRunStreamed.mockRejectedValue(new Error('unauthorized'));
 

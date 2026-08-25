@@ -164,6 +164,34 @@ describe('createProviderQueryRunner', () => {
     expect(order).toEqual(['acquire', 'start', 'release']);
   });
 
+  test('carries terminal workflow ownership through admission without starting the provider', async () => {
+    let started = false;
+    let observedShouldContinue = false;
+    const runner = createProviderQueryRunner({
+      acquire: async (_provider, _limit, options) => {
+        observedShouldContinue = (await options?.shouldContinue?.()) === false;
+        throw new Error('terminal owner');
+      },
+      loadLimits: async () => ({ pi: 1 }),
+    });
+
+    await expect(
+      consume(
+        runner({
+          client: provider(async function* () {
+            started = true;
+            yield { type: 'assistant', content: 'should not start' };
+          }),
+          prompt: 'hello',
+          cwd: '/tmp',
+          context: { shouldContinue: async () => false },
+        })
+      )
+    ).rejects.toThrow('terminal owner');
+    expect(observedShouldContinue).toBe(true);
+    expect(started).toBe(false);
+  });
+
   test('keeps a multi-attempt query queued until its last waiter acquires', async () => {
     let acquireCalls = 0;
     let releaseBoth!: () => void;

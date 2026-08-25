@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { MessageChunk, SendQueryOptions } from '../types';
-import { withProviderAttempt } from './provider-attempt';
+import { ProviderAttemptStopUnconfirmedError, withProviderAttempt } from './provider-attempt';
 
 async function consume(generator: AsyncGenerator<MessageChunk>): Promise<MessageChunk[]> {
   const chunks: MessageChunk[] = [];
@@ -117,5 +117,29 @@ describe('withProviderAttempt', () => {
     await expect(result).rejects.toThrow('cancelled while claiming');
     expect(started).toBe(false);
     expect(released).toBe(true);
+  });
+
+  test('preserves capacity until expiry when upstream shutdown cannot be confirmed', async () => {
+    let releaseOptions: { upstreamStopped?: boolean } | undefined;
+    const result = consume(
+      withProviderAttempt(
+        {
+          providerAttemptGate: {
+            acquire: async () => ({
+              signal: new AbortController().signal,
+              release: async options => {
+                releaseOptions = options;
+              },
+            }),
+          },
+        },
+        async function* () {
+          throw new ProviderAttemptStopUnconfirmedError('remote attempt may still be active');
+        }
+      )
+    );
+
+    await expect(result).rejects.toThrow('remote attempt may still be active');
+    expect(releaseOptions).toEqual({ upstreamStopped: false });
   });
 });

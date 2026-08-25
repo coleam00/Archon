@@ -22,7 +22,10 @@ import {
 } from './runtime';
 import { resolveSessionId, streamOpencodeSession } from './session';
 import { withResumedOutcome, resumedOutcome } from '../../shared/resumed';
-import { withProviderAttempt } from '../../shared/provider-attempt';
+import {
+  ProviderAttemptStopUnconfirmedError,
+  withProviderAttempt,
+} from '../../shared/provider-attempt';
 
 export { parseModelRef } from './config';
 export { resetEmbeddedRuntime } from './runtime';
@@ -182,6 +185,7 @@ export class OpencodeProvider implements IAgentProvider {
         });
         return;
       } catch (error) {
+        if (error instanceof ProviderAttemptStopUnconfirmedError) throw error;
         const errorClass = classifyOpencodeError(
           error,
           attemptSignal?.aborted === true || requestOptions?.abortSignal?.aborted === true

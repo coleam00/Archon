@@ -48,8 +48,11 @@ export function registerProvider(entry: ProviderRegistration): void {
   if (registry.has(entry.id)) {
     throw new Error(`Provider '${entry.id}' is already registered`);
   }
-  if (entry.id.length > 64) {
-    throw new Error(`Provider ID '${entry.id}' exceeds the 64-character database limit`);
+  if (entry.id.length > 20) {
+    throw new Error(`Provider ID '${entry.id}' exceeds the 20-character database limit`);
+  }
+  if (entry.id in Object.prototype) {
+    throw new Error(`Provider ID '${entry.id}' conflicts with JavaScript object properties`);
   }
   assertValidCapabilities(entry);
   registry.set(entry.id, entry);

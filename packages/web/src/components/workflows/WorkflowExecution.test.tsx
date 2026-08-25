@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { WorkflowEventResponse } from '@/lib/api';
-import { foldPersistedDagNodes } from './WorkflowExecution';
+import { findCurrentlyExecuting, foldPersistedDagNodes } from './WorkflowExecution';
 
 function event(
   eventType: string,
@@ -48,5 +48,28 @@ describe('foldPersistedDagNodes', () => {
     expect(nodes).toEqual([
       expect.objectContaining({ nodeId: 'review', name: 'Review changes', status: 'queued' }),
     ]);
+  });
+
+  test('ignores audit-only node events instead of turning them into skipped transitions', () => {
+    const nodes = foldPersistedDagNodes([
+      event('node_always_run_reset', 'review'),
+      event('node_started', 'review'),
+    ]);
+
+    expect(nodes).toEqual([expect.objectContaining({ nodeId: 'review', status: 'running' })]);
+  });
+});
+
+describe('findCurrentlyExecuting', () => {
+  test('removes queued calls and restores them only when provider capacity is acquired', () => {
+    const started = event('node_started', 'review');
+    const queued = event('provider_slot_queued', 'review', { node_name: 'Review changes' });
+    const acquired = event('provider_slot_acquired', 'review', { node_name: 'Review changes' });
+
+    expect(findCurrentlyExecuting([started, queued], 'running')).toBeNull();
+    expect(findCurrentlyExecuting([started, queued, acquired], 'running')).toEqual({
+      nodeName: 'Review changes',
+      startedAt: new Date(acquired.created_at).getTime(),
+    });
   });
 });

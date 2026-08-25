@@ -1207,6 +1207,81 @@ describe('OpencodeProvider', () => {
     expect(released).toBe(true);
   });
 
+  test('confirms session shutdown before releasing capacity when a consumer stops early', async () => {
+    const events = createPushStream();
+    let confirmAbort!: () => void;
+    const abortConfirmed = new Promise<void>(resolve => {
+      confirmAbort = resolve;
+    });
+    const runtime = makeRuntime({
+      subscribe: mock(async () => ({ stream: events.stream })),
+      sessionAbort: mock(() => abortConfirmed),
+    });
+    runtimeQueue.push(runtime);
+    let released = false;
+
+    const generator = new OpencodeProvider().sendQuery('hi', '/tmp', undefined, {
+      assistantConfig: TEST_MODEL,
+      providerAttemptGate: {
+        acquire: async () => ({
+          signal: new AbortController().signal,
+          release: async () => {
+            released = true;
+          },
+        }),
+      },
+    });
+    const firstChunk = generator.next();
+    events.push({
+      type: 'message.part.updated',
+      properties: {
+        part: { type: 'text', sessionID: 'session-1', text: 'partial' },
+      },
+    });
+    expect(await firstChunk).toEqual({
+      value: { type: 'assistant', content: 'partial' },
+      done: false,
+    });
+
+    const stopped = generator.return(undefined);
+    while (runtime.client.session.abort.mock.calls.length === 0) await Bun.sleep(1);
+    expect(released).toBe(false);
+
+    confirmAbort();
+    await stopped;
+    expect(released).toBe(true);
+  });
+
+  test('preserves capacity until expiry when OpenCode shutdown cannot be confirmed', async () => {
+    const runtime = makeRuntime({
+      subscribe: mock(async () => ({ stream: createEventStream([]) })),
+      sessionAbort: mock(async () => {
+        throw new Error('abort transport failed');
+      }),
+    });
+    runtimeQueue.push(runtime);
+    let releaseOptions: { upstreamStopped?: boolean } | undefined;
+
+    const { chunks, error } = await consume(
+      new OpencodeProvider().sendQuery('hi', '/tmp', undefined, {
+        assistantConfig: TEST_MODEL,
+        providerAttemptGate: {
+          acquire: async () => ({
+            signal: new AbortController().signal,
+            release: async options => {
+              releaseOptions = options;
+            },
+          }),
+        },
+      })
+    );
+
+    expect(chunks).toEqual([]);
+    expect(error?.message).toContain('shutdown could not be confirmed');
+    expect(releaseOptions).toEqual({ upstreamStopped: false });
+    expect(mockCreateOpencode).toHaveBeenCalledTimes(1);
+  });
+
   test('cancellation during multi-agent session creation aborts every created session', async () => {
     const cwd = await createTempProjectDir();
     let releaseSecondCreate!: () => void;

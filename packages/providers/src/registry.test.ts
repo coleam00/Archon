@@ -210,9 +210,15 @@ describe('registry', () => {
     });
 
     test('rejects provider IDs that cannot fit the shared database schema', () => {
-      const id = 'p'.repeat(65);
+      const id = 'p'.repeat(21);
       expect(() => registerProvider(makeMockRegistration(id))).toThrow(
-        'exceeds the 64-character database limit'
+        'exceeds the 20-character database limit'
+      );
+    });
+
+    test('rejects provider IDs that collide with provider-keyed object maps', () => {
+      expect(() => registerProvider(makeMockRegistration('__proto__'))).toThrow(
+        'conflicts with JavaScript object properties'
       );
     });
   });

@@ -1293,6 +1293,46 @@ describe('ClaudeProvider', () => {
       ]);
     }, 5_000);
 
+    test('forwards lease ownership loss to the active Claude SDK query', async () => {
+      const leaseController = new AbortController();
+      let sdkSignal: AbortSignal | undefined;
+      let released = false;
+      mockQuery.mockImplementation(async function* (request) {
+        const abortController = request.options?.abortController;
+        if (!abortController) throw new Error('missing Claude abort controller');
+        sdkSignal = abortController.signal;
+        await new Promise<void>(resolve => {
+          if (sdkSignal?.aborted) resolve();
+          else sdkSignal?.addEventListener('abort', () => resolve(), { once: true });
+        });
+        throw sdkSignal?.reason;
+      });
+
+      const consumption = (async (): Promise<void> => {
+        for await (const _chunk of client.sendQuery('test', '/workspace', undefined, {
+          providerAttemptGate: {
+            acquire: async () => ({
+              signal: leaseController.signal,
+              release: async () => {
+                released = true;
+              },
+            }),
+          },
+        })) {
+          // Consume until ownership loss stops the SDK query.
+        }
+      })();
+
+      while (!sdkSignal) await Bun.sleep(1);
+      const leaseLost = new Error('lease ownership lost');
+      leaseController.abort(leaseLost);
+
+      await expect(consumption).rejects.toThrow('Query aborted');
+      expect(sdkSignal.aborted).toBe(true);
+      expect(sdkSignal.reason).toBe(leaseLost);
+      expect(released).toBe(true);
+    });
+
     test('classifies auth errors as fatal (no retry)', async () => {
       const error = new Error('unauthorized');
       mockQuery.mockImplementation(async function* () {

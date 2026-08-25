@@ -73,6 +73,20 @@ describe('ProviderConcurrencyGate', () => {
     await second.release();
   });
 
+  test('preserves an owned row until expiry when upstream shutdown is unconfirmed', async () => {
+    const [db] = sharedDatabase();
+    const lease = await gate(db).acquire('opencode', 1);
+
+    await lease.release({ upstreamStopped: false });
+
+    const rows = await db.query(
+      `SELECT slot_index FROM remote_agent_provider_slots
+       WHERE provider_id = $1 AND slot_index = $2`,
+      ['opencode', lease.slot]
+    );
+    expect(rows.rowCount).toBe(1);
+  });
+
   test('coordinates a cap across independent processes sharing SQLite', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'archon-provider-concurrency-process-'));
     tempDirs.push(dir);

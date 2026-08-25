@@ -42,7 +42,7 @@ export interface ProviderConcurrencyLease {
   readonly slot: number;
   /** Aborts when Archon can no longer prove ownership of the slot. */
   readonly signal: AbortSignal;
-  release(): Promise<void>;
+  release(options?: { upstreamStopped?: boolean }): Promise<void>;
 }
 
 interface GateTiming {
@@ -181,11 +181,18 @@ class DatabaseProviderLease implements ProviderConcurrencyLease {
     return result.rowCount === 1 ? queryStartedAt + this.timing.leaseMs : null;
   }
 
-  async release(): Promise<void> {
+  async release(options?: { upstreamStopped?: boolean }): Promise<void> {
     if (this.released) return;
     this.released = true;
     if (this.heartbeatTimer) clearTimeout(this.heartbeatTimer);
     if (this.expiryGuardTimer) clearTimeout(this.expiryGuardTimer);
+    if (options?.upstreamStopped === false) {
+      getLog().warn(
+        { provider: this.provider, slot: this.slot },
+        'provider_concurrency.release_deferred_until_expiry'
+      );
+      return;
+    }
     try {
       await this.db.query(
         `DELETE FROM remote_agent_provider_slots

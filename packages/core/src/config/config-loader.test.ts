@@ -361,6 +361,18 @@ concurrency:
       );
     });
 
+    test('rejects an unregistered provider cap even when its value is valid', async () => {
+      mockFsReadFile.mockResolvedValue(`
+concurrency:
+  providers:
+    missing-provider: 2
+`);
+
+      await expect(loadProviderConcurrencyLimits()).rejects.toThrow(
+        'concurrency.providers.missing-provider is not a registered provider'
+      );
+    });
+
     test('rejects wrong-shaped provider concurrency policy instead of running uncapped', async () => {
       mockFsReadFile.mockResolvedValue('concurrency: 5\n');
       await expect(loadProviderConcurrencyLimits()).rejects.toThrow(
@@ -378,6 +390,16 @@ concurrency:
         mockFsReadFile.mockResolvedValue(`concurrency:\n  providers: ${providers}\n`);
         await expect(loadProviderConcurrencyLimits()).rejects.toThrow(
           'concurrency.providers must be a mapping'
+        );
+      }
+    });
+
+    test('rejects non-mapping global documents instead of running providers uncapped', async () => {
+      for (const document of ['[]', 'garbage']) {
+        clearConfigCache();
+        mockFsReadFile.mockResolvedValue(`${document}\n`);
+        await expect(loadProviderConcurrencyLimits()).rejects.toThrow(
+          'Cannot load provider concurrency policy from the global config'
         );
       }
     });
