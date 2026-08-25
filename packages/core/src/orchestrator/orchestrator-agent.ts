@@ -6,6 +6,7 @@
  * - Can answer directly or invoke workflows
  * - Does NOT require a project to be selected before starting a conversation
  */
+import { randomUUID } from 'node:crypto';
 import { existsSync, realpathSync } from 'fs';
 import { createLogger, captureChatTurn } from '@archon/paths';
 import type {
@@ -74,6 +75,7 @@ import { listDecryptedUserProviderCredentials } from '../db/user-provider-key-st
 import { getUserAiPrefs, type UserAiPrefs } from '../db/user-ai-prefs-store';
 import { createWorkflowDeps } from '../workflows/store-adapter';
 import { createChildWorktreeResolver } from '../workflows/child-isolation-resolver';
+import { resolveWorkflowAdoption, WorkflowAdoptionError } from '../operations/workflow-adoption';
 import { loadConfig, loadRepoConfig } from '../config/config-loader';
 import type { MergedConfig } from '../config/config-types';
 import { generateAndSetTitle } from '../services/title-generator';
@@ -663,6 +665,9 @@ interface WorkflowDispatchOptions {
   inputs?: Readonly<Record<string, string>>;
   /** Sparse tier/@alias rebindings supplied by this run invocation (#2481). */
   modelOverrides?: RunModelOverrides;
+  /** Between-run continuation (#2747): adopt/supersede target, if declared. */
+  adoptRunId?: string;
+  supersedesRunId?: string;
 }
 
 const FAILED_RUN_PROMPT_PREVIEW_MAX = 160;
@@ -762,6 +767,37 @@ async function dispatchOrchestratorWorkflowOwned(
   // executeWorkflow dispatch below (repo config worktree.baseBranch still wins).
   const codebaseBaseBranch = codebase.default_branch?.trim() || undefined;
 
+  // Between-run continuation (#2747): adoption is validated by the ONE resolver,
+  // whatever surface declared it — CLI, API, or chat. A non-terminal target, a
+  // cross-codebase id, or a missing estate refuses here, before any worktree is
+  // cut; the resolved lane then drives where the run actually executes.
+  const adoptionLane = options?.adoptRunId
+    ? (
+        await resolveWorkflowAdoption({
+          adoptedRunId: options.adoptRunId,
+          codebaseId: codebase.id,
+          codebasePath: codebase.default_cwd,
+          codebaseKind: codebase.kind,
+        })
+      ).lane
+    : undefined;
+
+  // A lane other than in-place inherits a worktree or branch estate; a workflow
+  // that opted out of worktrees runs in the parent checkout and has nothing to
+  // inherit, so honoring the adoption would mean silently dropping the lane.
+  if (
+    options?.adoptRunId !== undefined &&
+    adoptionLane !== undefined &&
+    adoptionLane.kind !== 'in-place' &&
+    workflow.worktree?.enabled === false
+  ) {
+    throw new WorkflowAdoptionError(
+      `Cannot adopt run '${options.adoptRunId}': workflow '${workflow.name}' disables ` +
+        'worktrees, so there is no worktree or branch estate to inherit. ' +
+        'Drop the adoption or run a worktree-isolated workflow.'
+    );
+  }
+
   // Per-child isolation resolver (#2121 slice 2, PR-A): a `workflow:` node with
   // `isolation: 'worktree'` gets its own worktree per child. Built for git-repo
   // codebases only — a folder project can't make worktrees, so the engine fails
@@ -823,6 +859,18 @@ async function dispatchOrchestratorWorkflowOwned(
     Boolean(resumableRun?.working_path) &&
     (resumableRun?.status === 'paused' || resumableRun?.id === options?.resumeRunId);
 
+  // Adoption and continuation are mutually exclusive: both decide where the run
+  // executes and which estate it inherits, and every continuation path below forwards
+  // only the resume context — an adopted id would be validated above and then silently
+  // dropped. Refuse the combination up front, mirroring the CLI's adopt/resume guard.
+  if (options?.adoptRunId !== undefined && willContinueExistingRun && resumableRun) {
+    throw new WorkflowAdoptionError(
+      `Cannot adopt run '${options.adoptRunId}': this conversation already continues ` +
+        `run '${resumableRun.id}' (${resumableRun.status}). Resume or abandon that run ` +
+        'first, or declare the adoption from a conversation with no open run.'
+    );
+  }
+
   // ── Executable source ───────────────────────────────────────────────────────
   //
   // AFTER resume detection, on purpose. A continuation must execute the source its run
@@ -870,67 +918,85 @@ async function dispatchOrchestratorWorkflowOwned(
     }
   }
 
-  if (!willContinueExistingRun) {
-    freshCaptured = await captureFreshSource(owner, runCwd, workflow, conversationId, platform);
+  // A reuse-worktree lane inherits the adopted run's worktree; its `.archon` belongs to
+  // whatever branch that worktree carries, so the frozen source must come from THERE —
+  // capturing from the parent checkout would mix vintages exactly as #2660 describes.
+  // A fresh-from-branch lane has the same constraint, but its worktree only exists after
+  // isolation resolution below — so its capture is deferred until `cwd` is known.
+  const captureCwd = adoptionLane?.kind === 'reuse-worktree' ? adoptionLane.workingPath : runCwd;
+  if (!willContinueExistingRun && adoptionLane?.kind !== 'fresh-from-branch') {
+    freshCaptured = await captureFreshSource(owner, captureCwd, workflow, conversationId, platform);
     if (!freshCaptured) return; // capture failed, message already sent
     workflow = freshCaptured.workflow;
   }
 
-  // Signature gate (#2470, #2554): resolve this invocation's declared inputs from the
-  // values its channel supplied — the run route's `inputs` map today; chat platforms
-  // supply nothing and so still refuse a required-input workflow here, before any
-  // worktree/clone/AI cost. The workflow still lists/loads normally either way.
   let resolvedInputs: Record<string, string> | undefined;
   // A contract violation held back because a resume may make it moot. Only the one
   // branch below that falls through to a FRESH run row (hydration found nothing worth
   // resuming) still needs it; every other continuation path never reads inputs from
   // this invocation at all.
   let deferredInputError: Error | undefined;
-  try {
-    resolvedInputs = resolveTopLevelInputs(workflow, options?.inputs);
-  } catch (err) {
-    // Both are user-facing contract violations: a missing required input, and — now
-    // that a caller can supply values — a key the workflow does not declare.
-    if (err instanceof WorkflowMissingInputsError || err instanceof WorkflowInputContractError) {
-      getLog().info(
-        {
-          workflowName: workflow.name,
-          // Names only, never values — a supplied value is user content (logging rules).
-          missing: err instanceof WorkflowMissingInputsError ? err.missing : undefined,
-          suppliedKeys: options?.inputs ? Object.keys(options.inputs) : [],
-          deferred: willContinueExistingRun,
-        },
-        'workflow.required_inputs_unsatisfiable'
-      );
-      if (!willContinueExistingRun) {
-        await platform.sendMessage(conversationId, err.message);
-        return;
-      }
-      deferredInputError = err;
-    } else {
-      throw err;
-    }
-  }
 
-  // Capability gate: hard-fail before any worktree/clone/AI cost if the
-  // workflow declares `requires: [github]` and the originating user hasn't
-  // connected. No-op when per-user GitHub is disabled (solo PAT installs).
-  if (isPerUserGitHubEnabled() && workflow.requires?.length) {
-    const githubConnected = userId ? Boolean(await getDecryptedAccessToken(userId)) : false;
+  // Input signature gate (#2470, #2554) plus capability gate, judged against ONE
+  // workflow definition. A fresh-from-branch adoption swaps the definition for the
+  // branch's vintage only after isolation resolves its worktree, so these gates must
+  // run AFTER that swap there — otherwise required inputs or `requires:` declared on
+  // the branch would bypass them entirely.
+  const runSignatureGates = async (definition: WorkflowDefinition): Promise<boolean> => {
+    // Resolve this invocation's declared inputs from the values its channel supplied —
+    // the run route's `inputs` map today; chat platforms supply nothing and so still
+    // refuse a required-input workflow here. The workflow still lists/loads normally.
     try {
-      assertWorkflowRequirementsMet(workflow, { githubConnected });
+      resolvedInputs = resolveTopLevelInputs(definition, options?.inputs);
     } catch (err) {
-      if (err instanceof WorkflowRequirementError) {
+      // Both are user-facing contract violations: a missing required input, and — now
+      // that a caller can supply values — a key the workflow does not declare.
+      if (err instanceof WorkflowMissingInputsError || err instanceof WorkflowInputContractError) {
         getLog().info(
-          { workflowName: workflow.name, conversationId, userId, requirement: err.requirement },
-          'workflow.requirement_unmet'
+          {
+            workflowName: definition.name,
+            // Names only, never values — a supplied value is user content (logging rules).
+            missing: err instanceof WorkflowMissingInputsError ? err.missing : undefined,
+            suppliedKeys: options?.inputs ? Object.keys(options.inputs) : [],
+            deferred: willContinueExistingRun,
+          },
+          'workflow.required_inputs_unsatisfiable'
         );
-        await platform.sendMessage(conversationId, err.message);
-        return;
+        if (!willContinueExistingRun) {
+          await platform.sendMessage(conversationId, err.message);
+          return false;
+        }
+        deferredInputError = err;
+      } else {
+        throw err;
       }
-      throw err;
     }
-  }
+
+    // Capability gate: hard-fail before any worktree/clone/AI cost if the
+    // workflow declares `requires: [github]` and the originating user hasn't
+    // connected. No-op when per-user GitHub is disabled (solo PAT installs).
+    if (isPerUserGitHubEnabled() && definition.requires?.length) {
+      const githubConnected = userId ? Boolean(await getDecryptedAccessToken(userId)) : false;
+      try {
+        assertWorkflowRequirementsMet(definition, { githubConnected });
+      } catch (err) {
+        if (err instanceof WorkflowRequirementError) {
+          getLog().info(
+            { workflowName: definition.name, conversationId, userId, requirement: err.requirement },
+            'workflow.requirement_unmet'
+          );
+          await platform.sendMessage(conversationId, err.message);
+          return false;
+        }
+        throw err;
+      }
+    }
+    return true;
+  };
+
+  const gatesWaitForBranchVintage =
+    adoptionLane?.kind === 'fresh-from-branch' && !willContinueExistingRun;
+  if (!gatesWaitForBranchVintage && !(await runSignatureGates(workflow))) return;
 
   // Keys the engine dropped from this workflow's YAML (#2213). Every chat and
   // console run funnels through here, so this is the one place that covers all
@@ -963,7 +1029,24 @@ async function dispatchOrchestratorWorkflowOwned(
   // declarative equivalent of CLI `--no-worktree` for workflows that should always
   // run live (e.g. read-only triage, docs generation on the main checkout).
   let cwd: string;
-  if (workflow.worktree?.enabled === false) {
+  if (adoptionLane?.kind === 'reuse-worktree') {
+    // Adoption lane: the adopted run's worktree survives — run in it dirty-as-is
+    // instead of cutting a fresh one (same shape as the background dispatch in
+    // orchestrator.ts). Linking the env keeps isolation hygiene pointed at this
+    // checkout.
+    cwd = adoptionLane.workingPath;
+    await db
+      .updateConversation(conversation.id, {
+        cwd,
+        ...(adoptionLane.envId ? { isolation_env_id: adoptionLane.envId } : {}),
+      })
+      .catch((e: unknown) => {
+        getLog().warn(
+          { err: toError(e), conversationId },
+          'orchestrator.worker_cwd_persist_failed'
+        );
+      });
+  } else if (workflow.worktree?.enabled === false) {
     getLog().info(
       { workflowName: workflow.name, conversationId, codebaseId: codebase.id },
       'workflow.worktree_disabled_by_policy'
@@ -972,11 +1055,28 @@ async function dispatchOrchestratorWorkflowOwned(
   } else {
     try {
       const result = await validateAndResolveIsolation(
-        { ...conversation, codebase_id: codebase.id },
+        // A fresh-from-branch adoption must not adopt the conversation's existing env:
+        // the resolver short-circuits on `existingEnvId` before hints are read (R7), so a
+        // stale worktree from an earlier run in this conversation would win over the
+        // adopted branch. Null it out — same shape the `stale_cleaned` retry sees.
+        {
+          ...conversation,
+          codebase_id: codebase.id,
+          ...(adoptionLane?.kind === 'fresh-from-branch' ? { isolation_env_id: null } : {}),
+        },
         codebase,
         platform,
         conversationId,
-        isolationHints,
+        adoptionLane?.kind === 'fresh-from-branch'
+          ? {
+              ...isolationHints,
+              // Unique per dispatch: a shared id would key the reuse lookup to an
+              // earlier adoption's worktree and drop `fromBranch` on later ones.
+              workflowId: randomUUID(),
+              workflowType: 'task',
+              fromBranch: toBranchName(adoptionLane.branch),
+            }
+          : isolationHints,
         false,
         userId
       );
@@ -996,6 +1096,18 @@ async function dispatchOrchestratorWorkflowOwned(
       }
       throw error;
     }
+  }
+
+  // Deferred capture for the fresh-from-branch lane: the resolver cut a worktree from
+  // the adopted branch, so its `.archon` is the branch's vintage — freeze it instead of
+  // the parent checkout's, for the same reason the reuse-worktree lane captures above.
+  if (adoptionLane?.kind === 'fresh-from-branch' && !willContinueExistingRun) {
+    freshCaptured = await captureFreshSource(owner, cwd, workflow, conversationId, platform);
+    if (!freshCaptured) return; // capture failed, message already sent
+    workflow = freshCaptured.workflow;
+    // The executed graph just changed vintages; judge the invocation against the
+    // branch's definition, not the parent checkout's it was provisionally read from.
+    if (!(await runSignatureGates(workflow))) return;
   }
 
   // Dispatch workflow.
@@ -1223,6 +1335,9 @@ async function dispatchOrchestratorWorkflowOwned(
           parseWarnings: options?.parseWarnings,
           inputs: resolvedInputs,
           modelOverrides: options?.modelOverrides,
+          adoptRunId: options?.adoptRunId,
+          supersedesRunId: options?.supersedesRunId,
+          adoptionLane,
         },
         workflow
       );
@@ -1274,6 +1389,14 @@ async function dispatchOrchestratorWorkflowOwned(
         resolveChildIsolation,
         capturedSourceOwner: owner,
         inputs: resolvedInputs,
+        ...(options?.adoptRunId
+          ? { adoptedFromRunId: options.adoptRunId, continuationMode: 'adopt' as const }
+          : options?.supersedesRunId
+            ? {
+                adoptedFromRunId: options.supersedesRunId,
+                continuationMode: 'supersede' as const,
+              }
+            : {}),
         ...(options?.modelOverrides
           ? {
               modelOverrideLayer: { kind: 'raw' as const, overrides: options.modelOverrides },
@@ -1862,6 +1985,9 @@ export async function handleMessage(
               // command text — the run route is the only caller that sets them.
               inputs: context?.workflowInputs,
               modelOverrides: context?.workflowModelOverrides,
+              // Between-run continuation (#2747), same channel.
+              adoptRunId: context?.workflowAdoptRunId,
+              supersedesRunId: context?.workflowSupersedesRunId,
             }
           );
         }

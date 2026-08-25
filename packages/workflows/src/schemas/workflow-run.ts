@@ -236,6 +236,16 @@ export const workflowRunSchema = z.object({
    */
   parent_run_id: z.string().nullable(),
   /**
+   * Between-run continuation (#2747). The terminal run whose estate (branch/
+   * worktree + artifacts-by-reference via `$ADOPTED_RUN_DIR`) this run
+   * explicitly adopted. Written once at run creation, never on resume (the
+   * `output_root` write-once precedent). Reverse lookup (`adopted_by`) reads
+   * the same column — the chain walks in both directions with no second
+   * column. Also carries supersession (`--supersedes`), which records
+   * provenance WITHOUT lane inheritance; the mode lives in run metadata.
+   */
+  adopted_from_run_id: z.string().nullable(),
+  /**
    * Durable pointer to this run's storage tree (#2200) — the resolved
    * `~/.archon/workspaces/<project>/` root its artifacts, logs, and state live
    * under. Written ONCE at run start and never rewritten (a resume must not
@@ -349,6 +359,27 @@ export function readSubrunMetadata(metadata: Record<string, unknown> | undefined
 export const RUN_METADATA_KEYS = {
   identityUnresolved: 'identity_unresolved',
 } as const;
+
+/**
+ * Between-run continuation (#2747). Written once at run creation alongside
+ * `adopted_from_run_id`: `{mode: 'adopt'}` when this run took over a terminal
+ * run's estate, `{mode: 'supersede'}` when a fresh-lane rerun replaces its open
+ * item (NO lane inheritance). Lives in metadata, not a column — nothing queries
+ * it except display.
+ */
+export const CONTINUATION_METADATA_KEY = 'continuation';
+
+export type ContinuationMode = 'adopt' | 'supersede';
+
+/** Typed view of the continuation stamp; undefined when the run adopted nothing. */
+export function readContinuationMode(
+  metadata: Record<string, unknown> | undefined
+): ContinuationMode | undefined {
+  const raw = metadata?.[CONTINUATION_METADATA_KEY];
+  if (typeof raw !== 'object' || raw === null) return undefined;
+  const mode = (raw as { mode?: unknown }).mode;
+  return mode === 'adopt' || mode === 'supersede' ? mode : undefined;
+}
 
 /** Typed view of the run-lifecycle keys on a run's metadata; undefined when unset. */
 export function readIdentityUnresolved(

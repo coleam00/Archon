@@ -69,6 +69,9 @@ export const WORKFLOW_EVENT_TYPES = [
   // handler records a failure in metadata and nowhere else), NOT a general
   // "a resume happened" marker: its absence never means the run wasn't resumed.
   'workflow_resumed',
+  // Between-run continuation (#2747) — written on the ADOPTING run's log when it
+  // starts with `--adopt`/`--supersedes`, so the chain renders from events alone.
+  'workflow.run_adopted',
   'node_started',
   'node_completed',
   'node_failed',
@@ -190,6 +193,12 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
      * links back to the spawning parent run; omitted for top-level runs.
      */
     parent_run_id?: string;
+    /**
+     * Between-run continuation (#2747). Set when this run adopts a terminal
+     * run's estate (or supersedes it); written once at creation, never on
+     * resume. Omitted for ordinary fresh runs.
+     */
+    adopted_from_run_id?: string;
   }): Promise<WorkflowRun>;
   getWorkflowRun(id: string): Promise<WorkflowRun | null>;
   /**

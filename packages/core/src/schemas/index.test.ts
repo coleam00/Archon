@@ -33,6 +33,7 @@ const validDashboardWorkflowRun = {
   user_id: null,
   parent_run_id: null,
   output_root: null,
+  adopted_from_run_id: null,
   // dashboard extensions
   codebase_name: 'my-repo',
   platform_type: 'web',

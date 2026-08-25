@@ -96,7 +96,9 @@ export {
   LOOP_NODE_AI_FIELDS,
   LOOP_GROUP_NODE_AI_FIELDS,
   INCLUDE_NODE_IGNORED_FIELDS,
+  WAIT_NODE_IGNORED_FIELDS,
   WORKFLOW_NODE_IGNORED_FIELDS,
+  GATE_AND_HALT_IGNORED_FIELDS,
   KNOWN_DAG_NODE_KEYS,
   KNOWN_NODE_NESTED_KEYS,
   approvalConfigSchema,
@@ -190,6 +192,8 @@ export {
   workflowSourceMetadataSchema,
   readWorkflowSourceMetadata,
   readWorkflowSourceState,
+  CONTINUATION_METADATA_KEY,
+  readContinuationMode,
 } from './workflow-run';
 export type {
   WorkflowRunStatus,
@@ -206,6 +210,7 @@ export type {
   LoopGateRunMetadata,
   WorkflowSourceMetadata,
   WorkflowSourceState,
+  ContinuationMode,
 } from './workflow-run';
 
 // Per-node persisted provider sessions

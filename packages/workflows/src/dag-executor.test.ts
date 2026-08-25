@@ -149,6 +149,7 @@ function mockWorkflowRun(id = 'mock-run-id'): WorkflowRun {
     user_id: null,
     parent_run_id: null,
     output_root: null,
+    adopted_from_run_id: null,
   };
 }
 
@@ -409,6 +410,7 @@ function makeWorkflowRun(id = 'dag-test-run-id', overrides?: Partial<WorkflowRun
     user_id: null,
     parent_run_id: null,
     output_root: null,
+    adopted_from_run_id: null,
     ...overrides,
   };
 }
@@ -27283,6 +27285,178 @@ describe('executeDagWorkflow -- gate pause vs external transition (#1123)', () =
     expect(store.completeWorkflowRun).not.toHaveBeenCalled();
   });
 
+  describe('workflow: declared output_format vs the child terminal output (#2774)', () => {
+    const setupCompletedChild = (
+      metadata: Record<string, unknown>
+    ): ReturnType<typeof createMockStore> => {
+      const store = createMockStore();
+      store.findChildRuns = mock(() =>
+        Promise.resolve([
+          makeWorkflowRun('child-run-2774', {
+            workflow_name: 'child-wf',
+            status: 'completed',
+            metadata: { parent_node_id: 'sub', ...metadata },
+          }),
+        ])
+      );
+      return store;
+    };
+
+    const runSubNode = async (
+      store: ReturnType<typeof createMockStore>,
+      outputFormat?: Record<string, unknown>
+    ) => {
+      const mockDeps = createMockDeps(store);
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun();
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-subrun-contract',
+        testDir,
+        {
+          name: 'subrun-contract',
+          nodes: [
+            {
+              id: 'sub',
+              kind: 'workflow',
+              workflow: 'child-wf',
+              ...(outputFormat !== undefined ? { output_format: outputFormat } : {}),
+            } as unknown as DagNode,
+          ],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'state'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        async () => {
+          throw new Error('runChildWorkflow should not be called — a completed child exists');
+        }
+      );
+      return platform;
+    };
+
+    const eventTypes = (store: ReturnType<typeof createMockStore>): string[] =>
+      (store.createWorkflowEvent as Mock<IWorkflowStore['createWorkflowEvent']>).mock.calls.map(
+        (c: unknown[]) => (c[0] as { event_type: string }).event_type
+      );
+
+    beforeEach(async () => {
+      testDir = join(
+        tmpdir(),
+        `dag-subrun-contract-${Date.now()}-${Math.random().toString(36).slice(2)}`
+      );
+      await mkdir(join(testDir, '.archon', 'commands'), { recursive: true });
+    });
+
+    afterEach(async () => {
+      try {
+        await rm(testDir, { recursive: true, force: true });
+      } catch {
+        // ignore cleanup errors
+      }
+    });
+
+    it('fails the node when structuredOutput violates the declared schema', async () => {
+      const store = setupCompletedChild({
+        summary_value: { verdict: 42 },
+      });
+
+      await runSubNode(store, {
+        type: 'object',
+        properties: { verdict: { type: 'string' } },
+        required: ['verdict'],
+      });
+
+      expect(eventTypes(store)).toContain('node_failed');
+      expect(eventTypes(store)).not.toContain('node_completed');
+      expect(store.failWorkflowRun).toHaveBeenCalled();
+      const failed = (
+        store.createWorkflowEvent as Mock<IWorkflowStore['createWorkflowEvent']>
+      ).mock.calls
+        .map((c: unknown[]) => c[0] as { event_type: string; data: { error: string } })
+        .filter(c => c.event_type === 'node_failed');
+      expect(failed.length).toBeGreaterThan(0);
+      for (const call of failed) {
+        expect(call.data.error).toContain("Node 'sub'");
+        expect(call.data.error).toContain("sub-run 'child-wf'");
+        expect(call.data.error).toContain('/verdict');
+        expect(call.data.error).toContain('must be string');
+        expect(call.data.error).toContain('Received: object');
+      }
+    });
+
+    it('completes when text-only output parses to a valid object', async () => {
+      const store = setupCompletedChild({
+        summary: JSON.stringify({ verdict: 'SHIP' }),
+      });
+
+      await runSubNode(store, {
+        type: 'object',
+        properties: { verdict: { type: 'string' } },
+        required: ['verdict'],
+      });
+
+      expect(eventTypes(store)).toContain('node_completed');
+      expect(eventTypes(store)).not.toContain('node_failed');
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    });
+
+    it('fails when text-only output is not JSON against an object-typed schema', async () => {
+      const store = setupCompletedChild({ summary: 'plain prose summary' });
+
+      await runSubNode(store, {
+        type: 'object',
+        properties: { verdict: { type: 'string' } },
+      });
+
+      expect(eventTypes(store)).toContain('node_failed');
+      const failed = (
+        store.createWorkflowEvent as Mock<IWorkflowStore['createWorkflowEvent']>
+      ).mock.calls
+        .map((c: unknown[]) => c[0] as { event_type: string; data: { error: string } })
+        .filter(c => c.event_type === 'node_failed');
+      expect(failed.some(c => c.data.error.includes('Received: string'))).toBe(true);
+    });
+
+    it('leaves nodes without output_format untouched', async () => {
+      const store = setupCompletedChild({ summary: 'plain prose summary' });
+
+      await runSubNode(store);
+
+      expect(eventTypes(store)).toContain('node_completed');
+      expect(eventTypes(store)).not.toContain('node_failed');
+    });
+
+    it('warns instead of failing on an uncompilable schema', async () => {
+      const store = setupCompletedChild({ summary_value: { verdict: 'SHIP' } });
+
+      const platform = await runSubNode(store, {
+        type: 'object',
+        properties: { verdict: { $ref: '#/definitions/missing' } },
+      });
+
+      expect(eventTypes(store)).toContain('node_completed');
+      expect(eventTypes(store)).not.toContain('node_failed');
+      const sent = platform.sendMessage.mock.calls.map(([, message]) => message);
+      expect(sent.some(m => m.includes('could not be compiled'))).toBe(true);
+    });
+  });
+
   it('gate pause failure with the run still running stays a genuine node failure', async () => {
     const store = createMockStore();
     // Pause fails but the run is still 'running' (default mock) — a real store
@@ -30191,5 +30365,179 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
     expect(
       (store.completeWorkflowRun as Mock<IWorkflowStore['completeWorkflowRun']>).mock.calls.length
     ).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// mutates_checkout: false — per-node tree-integrity assertion (#2771)
+// ---------------------------------------------------------------------------
+
+describe('executeDagWorkflow -- node-level mutates_checkout: false (#2771)', () => {
+  let testDir: string;
+
+  const initRepo = (dir: string): void => {
+    const { execSync } = require('node:child_process') as typeof import('node:child_process');
+    execSync('git init -q && git config user.email t@t && git config user.name t', { cwd: dir });
+    execSync('git add -A && git commit -qm init --allow-empty', { cwd: dir });
+  };
+
+  const runBashNode = async (
+    script: string,
+    declareReadOnly: boolean
+  ): Promise<ReturnType<typeof createMockDeps>> => {
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('mc-run-id', {
+      workflow_name: 'mc-test',
+      conversation_id: 'conv-mc',
+      user_message: 'mc test',
+    });
+    const bashNode: ExecNode = {
+      id: 'guarded',
+      kind: 'exec',
+      runtime: 'sh',
+      script,
+      ...(declareReadOnly ? { mutates_checkout: false as const } : {}),
+    };
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-mc',
+      testDir,
+      { name: 'mc-test', nodes: [bashNode] },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+    return mockDeps;
+  };
+
+  const nodeFailedError = (
+    deps: ReturnType<typeof createMockDeps>,
+    nodeId: string
+  ): string | undefined => {
+    const calls = (deps.store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls as Array<
+      [{ event_type: string; step_name?: string; data?: { error?: string } }]
+    >;
+    const failed = calls.find(([e]) => e.event_type === 'node_failed' && e.step_name === nodeId);
+    return failed?.[0].data?.error;
+  };
+
+  beforeEach(async () => {
+    testDir = join(tmpdir(), `dag-mc-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    await mkdir(testDir, { recursive: true });
+
+    mockSendQueryDag.mockClear();
+    mockGetAgentProviderDag.mockClear();
+
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'assistant', content: 'DAG AI response' };
+      yield { type: 'result', sessionId: 'dag-session-id' };
+    });
+
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+  });
+
+  afterEach(async () => {
+    try {
+      await rm(testDir, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup errors
+    }
+  });
+
+  it('a clean read-only node succeeds', async () => {
+    initRepo(testDir);
+    const deps = await runBashNode('echo untouched', true);
+    expect(nodeFailedError(deps, 'guarded')).toBeUndefined();
+  });
+
+  it('a read-only node that writes to the tree fails naming the node and path', async () => {
+    initRepo(testDir);
+    const deps = await runBashNode('touch stray.txt', true);
+    const error = nodeFailedError(deps, 'guarded');
+    expect(error).toBeDefined();
+    expect(error).toContain('guarded');
+    expect(error).toContain('mutates_checkout: false');
+    expect(error).toContain('stray.txt');
+    console.log('EVENTS', JSON.stringify((deps.store.createWorkflowEvent as any).mock.calls));
+  });
+
+  it('an undeclared mutating node is not checked', async () => {
+    initRepo(testDir);
+    const deps = await runBashNode('touch stray.txt', false);
+    expect(nodeFailedError(deps, 'guarded')).toBeUndefined();
+  });
+
+  it('writes under the engine-owned artifacts dir do not trip the assertion', async () => {
+    initRepo(testDir);
+    // executeBashNode injects ARTIFACTS_DIR into the script's environment.
+    const deps = await runBashNode(
+      'mkdir -p "$ARTIFACTS_DIR" && echo x > "$ARTIFACTS_DIR/out.txt"',
+      true
+    );
+    expect(nodeFailedError(deps, 'guarded')).toBeUndefined();
+  });
+
+  it('outside a git repo the check fails open and the node succeeds', async () => {
+    const deps = await runBashNode('touch stray.txt', true);
+    expect(nodeFailedError(deps, 'guarded')).toBeUndefined();
+  });
+
+  it('a mutating sibling in the same layer is not attributed to a guarded node', async () => {
+    initRepo(testDir);
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('mc-run-id', {
+      workflow_name: 'mc-test',
+      conversation_id: 'conv-mc',
+      user_message: 'mc test',
+    });
+    const nodes: ExecNode[] = [
+      {
+        id: 'guarded',
+        kind: 'exec',
+        runtime: 'sh',
+        script: 'echo read-only',
+        mutates_checkout: false as const,
+      },
+      { id: 'mutator', kind: 'exec', runtime: 'sh', script: 'touch sibling.txt' },
+    ];
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-mc',
+      testDir,
+      { name: 'mc-test', nodes },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+    expect(nodeFailedError(mockDeps, 'guarded')).toBeUndefined();
+  });
+
+  it('non-ASCII paths under excluded dirs do not trip the assertion', async () => {
+    initRepo(testDir);
+    const deps = await runBashNode(
+      'mkdir -p "$ARTIFACTS_DIR/日本語" && echo x > "$ARTIFACTS_DIR/日本語/out.txt"',
+      true
+    );
+    expect(nodeFailedError(deps, 'guarded')).toBeUndefined();
   });
 });

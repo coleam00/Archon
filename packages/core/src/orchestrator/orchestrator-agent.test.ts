@@ -167,6 +167,30 @@ const mockHydrateResumableRun = mock(
       priorCompletedNodes: new Map([['n1', 'v1']]),
     }) as unknown
 );
+const mockPrepareWorkflowSource = mock(() =>
+  Promise.resolve({
+    runId: 'prepared-run-id',
+    captureRoot: '/capture',
+    origin: '/origin',
+    manifest: {
+      version: 1,
+      engine_version: 'test',
+      origin: '/origin',
+      captured_at: '2026-08-21T00:00:00.000Z',
+      digest: 'test-digest',
+      file_count: 0,
+      byte_count: 0,
+      scopes: [],
+    },
+    roots: {
+      project: '/capture/project',
+      globalWorkflows: '/capture/global/workflows',
+      globalCommands: '/capture/global/commands',
+      globalScripts: '/capture/global/scripts',
+      bundledWorkflows: '/capture/bundled',
+    },
+  })
+);
 /** Ownership calls the dispatch path makes on its capture, in order. */
 const capturedSourceOwnerCalls: string[] = [];
 
@@ -176,30 +200,7 @@ mock.module('@archon/workflows/executor', () => ({
   // Source capture runs before dispatch and does real filesystem work; stub it so these
   // tests stay about routing. `mock.module` MERGES, so an export omitted here keeps its
   // REAL implementation — which is exactly how a stub silently starts doing disk I/O.
-  prepareWorkflowSource: mock(() =>
-    Promise.resolve({
-      runId: 'prepared-run-id',
-      captureRoot: '/capture',
-      origin: '/origin',
-      manifest: {
-        version: 1,
-        engine_version: 'test',
-        origin: '/origin',
-        captured_at: '2026-08-21T00:00:00.000Z',
-        digest: 'test-digest',
-        file_count: 0,
-        byte_count: 0,
-        scopes: [],
-      },
-      roots: {
-        project: '/capture/project',
-        globalWorkflows: '/capture/global/workflows',
-        globalCommands: '/capture/global/commands',
-        globalScripts: '/capture/global/scripts',
-        bundledWorkflows: '/capture/bundled',
-      },
-    })
-  ),
+  prepareWorkflowSource: mockPrepareWorkflowSource,
   recordSelectedWorkflow: mock(() => Promise.resolve()),
   disposeWorkflowSource: mock(() => Promise.resolve()),
   resolveContinuationWorkflow: mock(() => Promise.resolve(undefined)),
@@ -297,9 +298,25 @@ mock.module('../services/title-generator', () => ({
 }));
 
 const mockDispatchBackgroundWorkflow = mock(() => Promise.resolve());
+const mockValidateAndResolveIsolation = mock(() =>
+  Promise.resolve({ cwd: '/test/cwd', status: 'new' })
+);
 mock.module('./orchestrator', () => ({
-  validateAndResolveIsolation: mock(() => Promise.resolve({ cwd: '/test/cwd' })),
+  validateAndResolveIsolation: mockValidateAndResolveIsolation,
   dispatchBackgroundWorkflow: mockDispatchBackgroundWorkflow,
+}));
+
+const mockResolveWorkflowAdoption = mock(() =>
+  Promise.resolve({ adoptedRun: {}, lane: undefined })
+);
+mock.module('../operations/workflow-adoption', () => ({
+  resolveWorkflowAdoption: mockResolveWorkflowAdoption,
+  WorkflowAdoptionError: class WorkflowAdoptionError extends Error {
+    constructor(message: string) {
+      super(message);
+      this.name = 'WorkflowAdoptionError';
+    }
+  },
 }));
 
 mock.module('./prompt-builder', () => ({
@@ -1878,8 +1895,8 @@ describe('provider cwd resolution', () => {
 // ─── Workflow dispatch routing — interactive flag ─────────────────────────────
 
 describe('workflow dispatch routing — interactive flag', () => {
-  function makeDispatchConversation() {
-    return makeConversation({ codebase_id: 'codebase-1' });
+  function makeDispatchConversation(overrides: Partial<Conversation> = {}) {
+    return makeConversation({ codebase_id: 'codebase-1', ...overrides });
   }
 
   function makeDispatchCodebase(overrides: { default_branch?: string | null } = {}) {
@@ -1962,6 +1979,9 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockGetOrCreateConversation.mockImplementation(() => Promise.resolve(null));
     mockGetCodebase.mockReset();
     mockGetCodebase.mockImplementation(() => Promise.resolve(null));
+    mockValidateAndResolveIsolation.mockClear();
+    mockResolveWorkflowAdoption.mockClear();
+    mockUpdateConversation.mockClear();
   });
 
   test('calls executeWorkflow (not dispatchBackground) for interactive workflow on web', async () => {
@@ -1987,6 +2007,284 @@ describe('workflow dispatch routing — interactive flag', () => {
     expect(opts.parentConversationId).toBe('conv-1-db');
     // The codebase's stored default branch rides along as the $BASE_BRANCH fallback.
     expect(opts.baseBranch).toBe('develop');
+  });
+
+  // Adoption lane on the FOREGROUND dispatch (#2747 review): the background path
+  // inherits the adopted estate; the interactive/chat path must honor it too.
+  test('adopt with reuse-worktree lane runs the foreground dispatch in the adopted worktree', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve(makeWorkflowResult(true, { args: 'test message' }))
+    );
+    mockResolveWorkflowAdoption.mockImplementationOnce(() =>
+      Promise.resolve({
+        adoptedRun: {},
+        lane: { kind: 'reuse-worktree', workingPath: '/wt/adopted', envId: 'env-1' },
+      })
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+      workflowAdoptRunId: 'prior-run',
+    });
+
+    expect(mockExecuteWorkflow).toHaveBeenCalled();
+    expect(mockValidateAndResolveIsolation).not.toHaveBeenCalled();
+    const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
+    expect(callArgs[3]).toBe('/wt/adopted');
+    const opts = callArgs[callArgs.length - 1] as {
+      adoptedFromRunId?: string;
+      continuationMode?: string;
+    };
+    expect(opts.adoptedFromRunId).toBe('prior-run');
+    expect(opts.continuationMode).toBe('adopt');
+    expect(mockUpdateConversation).toHaveBeenCalledWith('conv-1-db', {
+      cwd: '/wt/adopted',
+      isolation_env_id: 'env-1',
+    });
+  });
+
+  test('adopt with fresh-from-branch lane cuts the foreground worktree from the adopted branch', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve(makeWorkflowResult(true, { args: 'test message' }))
+    );
+    mockResolveWorkflowAdoption.mockImplementationOnce(() =>
+      Promise.resolve({
+        adoptedRun: {},
+        lane: { kind: 'fresh-from-branch', branch: 'feature/adopted' },
+      })
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+      workflowAdoptRunId: 'prior-run',
+    });
+
+    expect(mockValidateAndResolveIsolation).toHaveBeenCalled();
+    const isoArgs = mockValidateAndResolveIsolation.mock.calls[0] as unknown[];
+    const hints = isoArgs[4] as { workflowType?: string; fromBranch?: string };
+    expect(hints.workflowType).toBe('task');
+    expect(hints.fromBranch).toBe('feature/adopted');
+    const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
+    const opts = callArgs[callArgs.length - 1] as { adoptedFromRunId?: string };
+    expect(opts.adoptedFromRunId).toBe('prior-run');
+  });
+
+  // R7: the resolver short-circuits on `existingEnvId` before hints are read, so a
+  // fresh-from-branch adoption must neutralize the conversation's stale env and key
+  // its reuse lookup with a unique per-dispatch workflow id.
+  test('adopt fresh-from-branch ignores a stale isolation env and keys a unique worktree', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeDispatchConversation({ isolation_env_id: 'env-stale' }))
+    );
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve(makeWorkflowResult(true, { args: 'test message' }))
+    );
+    mockResolveWorkflowAdoption.mockImplementationOnce(() =>
+      Promise.resolve({
+        adoptedRun: {},
+        lane: { kind: 'fresh-from-branch', branch: 'feature/adopted' },
+      })
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+      workflowAdoptRunId: 'prior-run',
+    });
+
+    expect(mockValidateAndResolveIsolation).toHaveBeenCalled();
+    const isoArgs = mockValidateAndResolveIsolation.mock.calls[0] as unknown[];
+    const convArg = isoArgs[0] as { isolation_env_id?: string | null };
+    expect(convArg.isolation_env_id).toBeNull();
+    const hints = isoArgs[4] as { workflowId?: string; fromBranch?: string };
+    expect(hints.fromBranch).toBe('feature/adopted');
+    expect(typeof hints.workflowId).toBe('string');
+    expect(hints.workflowId!.length).toBeGreaterThan(0);
+  });
+
+  // R8: a reuse-worktree adoption executes inside the inherited worktree, so the
+  // frozen source must come from there — not from the parent checkout.
+  test('adopt with reuse-worktree captures workflow source from the inherited worktree', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve(makeWorkflowResult(true, { args: 'test message' }))
+    );
+    mockResolveWorkflowAdoption.mockImplementationOnce(() =>
+      Promise.resolve({
+        adoptedRun: {},
+        lane: { kind: 'reuse-worktree', workingPath: '/wt/adopted', envId: 'env-1' },
+      })
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+      workflowAdoptRunId: 'prior-run',
+    });
+
+    expect(mockPrepareWorkflowSource).toHaveBeenCalled();
+    const lastCaptureCall = mockPrepareWorkflowSource.mock.calls.at(-1) as unknown[];
+    const captureArg = lastCaptureCall[1] as {
+      sourceRoot?: string;
+    };
+    expect(captureArg.sourceRoot).toBe('/wt/adopted');
+  });
+
+  // R10: a fresh-from-branch adoption runs in a worktree cut from the adopted branch,
+  // so its frozen source must come from that worktree — not from the parent checkout.
+  test('adopt with fresh-from-branch captures workflow source from the created worktree', async () => {
+    mockValidateAndResolveIsolation.mockImplementationOnce(() =>
+      Promise.resolve({ cwd: '/wt/from-branch', status: 'new' })
+    );
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve(makeWorkflowResult(true, { args: 'test message' }))
+    );
+    mockResolveWorkflowAdoption.mockImplementationOnce(() =>
+      Promise.resolve({
+        adoptedRun: {},
+        lane: { kind: 'fresh-from-branch', branch: 'feature/adopted' },
+      })
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+      workflowAdoptRunId: 'prior-run',
+    });
+
+    expect(mockPrepareWorkflowSource).toHaveBeenCalled();
+    const lastCaptureCall = mockPrepareWorkflowSource.mock.calls.at(-1) as unknown[];
+    const captureArg = lastCaptureCall[1] as {
+      sourceRoot?: string;
+    };
+    expect(captureArg.sourceRoot).toBe('/wt/from-branch');
+  });
+
+  // F1: the deferred capture swaps the executed graph for the branch's vintage, so the
+  // invocation gates must be judged against THAT definition — a required input declared
+  // only on the branch must refuse the run instead of slipping through on the parent's
+  // vintage.
+  test('adopt with fresh-from-branch enforces an input declared only on the branch', async () => {
+    mockPrepareWorkflowSource.mockImplementationOnce(() =>
+      Promise.resolve({
+        runId: 'prepared-run-id',
+        captureRoot: '/capture-branch',
+        origin: '/wt/from-branch',
+        manifest: {
+          version: 1,
+          engine_version: 'test',
+          origin: '/wt/from-branch',
+          captured_at: '2026-08-21T00:00:00.000Z',
+          digest: 'branch-digest',
+          file_count: 1,
+          byte_count: 1,
+          scopes: ['project'],
+        },
+        roots: {
+          project: '/capture-branch/project',
+          globalWorkflows: '/capture-branch/global/workflows',
+          globalCommands: '/capture-branch/global/commands',
+          globalScripts: '/capture-branch/global/scripts',
+          bundledWorkflows: '/capture-branch/bundled',
+        },
+      })
+    );
+    // Discovery off the branch capture resolves a definition that requires an input
+    // the caller did not supply — a contract the parent checkout's YAML never had.
+    mockDiscoverWorkflowsWithConfig.mockImplementationOnce(() =>
+      Promise.resolve({
+        workflows: [
+          {
+            workflow: makeTestWorkflow({
+              name: 'test-workflow',
+              inputs: { diff: { required: true } },
+            }),
+          },
+        ],
+        errors: [],
+      })
+    );
+    mockValidateAndResolveIsolation.mockImplementationOnce(() =>
+      Promise.resolve({ cwd: '/wt/from-branch', status: 'new' })
+    );
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve(makeWorkflowResult(true, { args: 'test message' }))
+    );
+    mockResolveWorkflowAdoption.mockImplementationOnce(() =>
+      Promise.resolve({
+        adoptedRun: {},
+        lane: { kind: 'fresh-from-branch', branch: 'feature/adopted' },
+      })
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+      workflowAdoptRunId: 'prior-run',
+    });
+
+    expect(platform.sendMessage).toHaveBeenCalledWith('conv-1', expect.stringContaining('diff'));
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+  });
+
+  test('adopt is refused when the conversation already continues a resumable run', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve(makeWorkflowResult(true, { args: 'test message' }))
+    );
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve(makeResumableRun({ status: 'paused' }))
+    );
+    mockResolveWorkflowAdoption.mockImplementationOnce(() =>
+      Promise.resolve({
+        adoptedRun: {},
+        lane: { kind: 'reuse-worktree', workingPath: '/wt/adopted' },
+      })
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+      workflowAdoptRunId: 'prior-run',
+    });
+
+    // handleMessage funnels dispatch refusals into its user-facing error notice.
+    expect(platform.sendMessage).toHaveBeenCalledWith(
+      'conv-1',
+      expect.stringContaining('already continues run')
+    );
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+  });
+
+  test('adopt is refused when the workflow opts out of worktrees', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    const noWorktreeResult = makeWorkflowResult(true, { args: 'test message' });
+    noWorktreeResult.workflow.definition.worktree = { enabled: false };
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(noWorktreeResult));
+    mockResolveWorkflowAdoption.mockImplementationOnce(() =>
+      Promise.resolve({
+        adoptedRun: {},
+        lane: { kind: 'reuse-worktree', workingPath: '/wt/adopted' },
+      })
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+      workflowAdoptRunId: 'prior-run',
+    });
+
+    expect(platform.sendMessage).toHaveBeenCalledWith(
+      'conv-1',
+      expect.stringContaining('disables worktrees')
+    );
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
 
   test('failed_resume_user_prompted: failed runs are not auto-resumed', async () => {

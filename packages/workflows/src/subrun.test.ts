@@ -148,6 +148,7 @@ class InMemoryStore implements IWorkflowStore {
       user_id: data.user_id ?? null,
       parent_run_id: data.parent_run_id ?? null,
       output_root: null,
+      adopted_from_run_id: null,
     };
     this.runs.set(id, row);
     return Promise.resolve(this.clone(row));
@@ -2001,6 +2002,198 @@ nodes:
       'did:alpha',
       'did:beta',
       'did:gamma',
+    ]);
+  });
+
+  it('fails the fan-out node when a child output violates the node output_format (#2774)', async () => {
+    await writeWorkflow(
+      'fan-child-json',
+      `
+name: fan-child-json
+description: emits a structured-looking terminal value
+mutates_checkout: false
+nodes:
+  - id: emit
+    bash: |
+      printf '%s' '{"verdict":42}'
+`
+    );
+    await writeWorkflow(
+      'fan-parent-schema',
+      `
+name: fan-parent-schema
+description: fan-out with a declared output_format the children violate
+nodes:
+  - id: plan
+    bash: |
+      printf '%s' '["a","b"]'
+  - id: work
+    workflow: fan-child-json
+    depends_on: [plan]
+    mutates_checkout: false
+    output_format:
+      type: object
+      properties:
+        verdict: { type: string }
+      required: [verdict]
+    fan_out:
+      items: "$plan.output"
+      join: all_success
+`
+    );
+
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      await discover('fan-parent-schema'),
+      'goal',
+      'conv-db',
+      { resolveChildIsolation: makeFanResolver(cwd).resolver }
+    );
+
+    expect(result.success).toBe(false);
+    const failed = store.events.find(e => e.event_type === 'node_failed' && e.step_name === 'work');
+    expect(failed).toBeDefined();
+    const error = String(failed?.data?.error);
+    expect(error).toContain("Node 'work'");
+    expect(error).toContain('fan-out child');
+    expect(error).toContain('/verdict');
+    expect(error).toContain('must be string');
+    // No node_completed row may exist — resume must re-run into the same failure.
+    expect(
+      store.events.find(e => e.event_type === 'node_completed' && e.step_name === 'work')
+    ).toBeUndefined();
+    const parent = [...store.runs.values()].find(r => r.workflow_name === 'fan-parent-schema');
+    expect(parent?.status).toBe('failed');
+  });
+
+  it('completes the fan-out when every child matches the declared output_format (#2774)', async () => {
+    await writeWorkflow(
+      'fan-child-ok',
+      `
+name: fan-child-ok
+description: emits a schema-conformant terminal value
+mutates_checkout: false
+nodes:
+  - id: emit
+    bash: |
+      printf '%s' '{"verdict":"ship"}'
+`
+    );
+    await writeWorkflow(
+      'fan-parent-ok',
+      `
+name: fan-parent-ok
+description: fan-out whose children satisfy the declared output_format
+nodes:
+  - id: plan
+    bash: |
+      printf '%s' '["a","b"]'
+  - id: work
+    workflow: fan-child-ok
+    depends_on: [plan]
+    mutates_checkout: false
+    output_format:
+      type: object
+      properties:
+        verdict: { type: string }
+      required: [verdict]
+    fan_out:
+      items: "$plan.output"
+      join: all_success
+`
+    );
+
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      await discover('fan-parent-ok'),
+      'goal',
+      'conv-db',
+      { resolveChildIsolation: makeFanResolver(cwd).resolver }
+    );
+
+    expect(result.success).toBe(true);
+    const completed = store.events.find(
+      e => e.event_type === 'node_completed' && e.step_name === 'work'
+    );
+    expect(completed).toBeDefined();
+    // Text-only bash children land PARSED in the aggregate (no typed summary_value):
+    // the join persists exactly the value the output_format gate validated, so
+    // downstream typed access ($work.output[i].verdict) sees what was certified.
+    expect(JSON.parse(String(completed?.data?.node_output))).toEqual([
+      { verdict: 'ship' },
+      { verdict: 'ship' },
+    ]);
+    expect(
+      store.events.find(e => e.event_type === 'node_failed' && e.step_name === 'work')
+    ).toBeUndefined();
+  });
+
+  it('persists the certified logical value on the 1:1 path when the child had no typed summary (#2774)', async () => {
+    await writeWorkflow(
+      'array-child',
+      `
+name: array-child
+description: terminal node emits a bare JSON array as text
+nodes:
+  - id: emit
+    bash: |
+      printf '%s' '[{"verdict":"ship"},{"verdict":"hold"}]'
+`
+    );
+    await writeWorkflow(
+      'array-parent',
+      `
+name: array-parent
+description: declares an array output_format over a text-only child
+nodes:
+  - id: sub
+    workflow: array-child
+    mutates_checkout: false
+    output_format:
+      type: array
+      items:
+        type: object
+        properties:
+          verdict: { type: string }
+        required: [verdict]
+`
+    );
+
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      await discover('array-parent'),
+      'goal',
+      'conv-db'
+    );
+
+    expect(result.success).toBe(true);
+    const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'array-parent');
+    const subCompleted = store.events.find(
+      e =>
+        e.workflow_run_id === parentRun?.id &&
+        e.event_type === 'node_completed' &&
+        e.step_name === 'sub'
+    );
+    // The gate certified the PARSED array, so that — not the raw text — is what a
+    // cold resume rehydrates and downstream `$sub.output[0].verdict` reads.
+    expect(subCompleted?.data?.structured_output).toEqual([
+      { verdict: 'ship' },
+      { verdict: 'hold' },
     ]);
   });
 

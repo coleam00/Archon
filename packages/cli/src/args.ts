@@ -16,6 +16,10 @@ export const cliArgOptions: CliArgOptions = {
   folder: { type: 'boolean' },
   container: { type: 'boolean' },
   resume: { type: 'boolean' },
+  // Between-run continuation (#2747). Run-id only — no name-based newest-wins.
+  adopt: { type: 'string' },
+  supersedes: { type: 'string' },
+  open: { type: 'boolean' },
   spawn: { type: 'boolean' },
   quiet: { type: 'boolean', short: 'q' },
   verbose: { type: 'boolean', short: 'v' },

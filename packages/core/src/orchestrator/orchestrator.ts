@@ -38,6 +38,7 @@ import {
   isWebAdapter,
 } from '../types';
 import type { IsolationHints, IsolationEnvironmentRow } from '@archon/isolation';
+import type { AdoptionLane } from '../operations/workflow-adoption';
 import {
   IsolationBlockedError,
   IsolationResolver,
@@ -64,7 +65,10 @@ import {
   assertComposedGateDriveable,
   assertInteractiveClassNotBackgrounded,
 } from '@archon/workflows/utils/workflow-requirements';
-import { SUBRUN_METADATA_KEYS } from '@archon/workflows/schemas/workflow-run';
+import {
+  SUBRUN_METADATA_KEYS,
+  CONTINUATION_METADATA_KEY,
+} from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowDefinition, WorkflowSource } from '@archon/workflows/schemas/workflow';
 import type { DagNode } from '@archon/workflows/schemas/dag-node';
 import type { RunModelOverrides } from '@archon/workflows/model-validation';
@@ -318,6 +322,15 @@ export interface WorkflowRoutingContext {
   readonly inputs?: Readonly<Record<string, string>>;
   /** Sparse tier/@alias rebindings supplied by this invocation (#2481). */
   readonly modelOverrides?: RunModelOverrides;
+  /** Between-run continuation (#2747): adopt/supersede target, if declared. */
+  readonly adoptRunId?: string;
+  readonly supersedesRunId?: string;
+  /**
+   * Adoption lane resolved by `resolveWorkflowAdoption` upstream — the adopting
+   * run executes in the adopted run's worktree (reuse) or in one cut from its
+   * branch (fresh-from-branch) instead of a fresh worktree from base.
+   */
+  readonly adoptionLane?: AdoptionLane;
 }
 
 /**
@@ -408,13 +421,52 @@ async function dispatchBackgroundWorkflowOwned(
         'workflow.worktree_disabled_by_policy'
       );
       workerCwd = ctx.cwd;
+    } else if (ctx.adoptionLane?.kind === 'reuse-worktree') {
+      // Adoption lane 2: the adopted run's worktree survives — inherit it dirty-as-is
+      // instead of cutting a fresh one from base. Linking the env keeps standard
+      // isolation hygiene (list/cleanup/complete) pointed at this checkout.
+      workerCwd = ctx.adoptionLane.workingPath;
+      await db
+        .updateConversation(workerConv.id, {
+          cwd: workerCwd,
+          ...(ctx.adoptionLane.envId ? { isolation_env_id: ctx.adoptionLane.envId } : {}),
+        })
+        .catch((e: unknown) => {
+          getLog().warn(
+            { err: toError(e), workerPlatformId },
+            'orchestrator.worker_cwd_persist_failed'
+          );
+        });
+      await ctx.platform
+        .sendMessage(
+          ctx.conversationId,
+          `Adopting prior run — reusing its worktree at ${workerCwd} (dirty state inherited as-is).`,
+          { category: 'workflow_dispatch_status', segment: 'new' }
+        )
+        .catch(e => {
+          getLog().warn(
+            { err: toError(e), conversationId: ctx.conversationId },
+            'workflow_adoption_notice_failed'
+          );
+        });
     } else {
+      // A fresh-from-branch adoption lane cuts the new worktree FROM the adopted
+      // run's branch rather than base; 'task' is the workflow type whose creation
+      // path consumes `fromBranch` (same shape the CLI's adopt lane produces).
+      const hints: IsolationHints =
+        ctx.adoptionLane?.kind === 'fresh-from-branch'
+          ? {
+              workflowType: 'task',
+              workflowId: workerPlatformId,
+              fromBranch: toBranchName(ctx.adoptionLane.branch),
+            }
+          : { workflowType: 'thread', workflowId: workerPlatformId };
       const result = await validateAndResolveIsolation(
         workerConv,
         codebase,
         ctx.platform,
         workerPlatformId,
-        { workflowType: 'thread', workflowId: workerPlatformId },
+        hints,
         false,
         ctx.userId
       );
@@ -534,9 +586,20 @@ async function dispatchBackgroundWorkflowOwned(
         ...(ctx.inputs && Object.keys(ctx.inputs).length > 0
           ? { [SUBRUN_METADATA_KEYS.inputs]: { ...ctx.inputs } }
           : {}),
+        // Between-run continuation (#2747) — write-once with the column below.
+        ...(ctx.adoptRunId || ctx.supersedesRunId
+          ? {
+              [CONTINUATION_METADATA_KEY]: {
+                mode: ctx.adoptRunId ? 'adopt' : 'supersede',
+              },
+            }
+          : {}),
       },
       parent_conversation_id: ctx.conversationDbId,
       user_id: ctx.userId,
+      ...(ctx.adoptRunId || ctx.supersedesRunId
+        ? { adopted_from_run_id: ctx.adoptRunId ?? ctx.supersedesRunId }
+        : {}),
     });
   } catch (error) {
     const err = error as Error;
@@ -581,6 +644,14 @@ async function dispatchBackgroundWorkflowOwned(
             // the executor creates the row itself); otherwise the row above already
             // carries them.
             inputs: ctx.inputs,
+            ...(ctx.adoptRunId
+              ? { adoptedFromRunId: ctx.adoptRunId, continuationMode: 'adopt' as const }
+              : ctx.supersedesRunId
+                ? {
+                    adoptedFromRunId: ctx.supersedesRunId,
+                    continuationMode: 'supersede' as const,
+                  }
+                : {}),
             ...(ctx.modelOverrides
               ? { modelOverrideLayer: { kind: 'raw' as const, overrides: ctx.modelOverrides } }
               : {}),

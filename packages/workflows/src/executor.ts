@@ -35,6 +35,7 @@ import {
   readSubrunMetadata,
   RUN_METADATA_KEYS,
   readIdentityUnresolved,
+  CONTINUATION_METADATA_KEY,
   WORKFLOW_SOURCE_METADATA_KEY,
   readWorkflowSourceState,
 } from './schemas';
@@ -82,6 +83,7 @@ import {
   classifyError,
   toTelemetryErrorClass,
   safeSendMessage,
+  runWithAdoptedRunDir,
   type SendMessageContext,
 } from './executor-shared';
 import { resolveGithubTokenOverrides } from './utils/github-token-policy';
@@ -658,6 +660,17 @@ export type ExecuteWorkflowOptions = ResumePayload & {
    * Ignored on a resume: the row already carries the inputs validated at creation.
    */
   inputs?: Readonly<Record<string, string>>;
+  /**
+   * Between-run continuation (#2747): the terminal run whose estate this run
+   * adopted (`--adopt`) or superseded (`--supersedes`). Written once onto the
+   * fresh run row's `adopted_from_run_id` — never on resume — and announced on
+   * THIS run's event log as `workflow.run_adopted` so the chain renders without
+   * joining on the column. The lane itself is resolved by the caller before
+   * dispatch; the executor only records provenance.
+   */
+  adoptedFromRunId?: string;
+  /** How `adoptedFromRunId` continues: estate adoption or fresh-lane supersession. */
+  continuationMode?: 'adopt' | 'supersede';
   /** One model-binding phase: raw at invocation boundaries, resolved for child runs. */
   modelOverrideLayer?:
     | { kind: 'raw'; overrides: RunModelOverrides }
@@ -1719,6 +1732,8 @@ export async function executeWorkflow(
     inputs: suppliedInputs,
     modelOverrideLayer,
     preparedSource,
+    adoptedFromRunId,
+    continuationMode = 'adopt',
   } = opts;
 
   const executionUserId = preCreatedRun ? (preCreatedRun.user_id ?? undefined) : userId;
@@ -2060,10 +2075,14 @@ export async function executeWorkflow(
           ...(suppliedInputs && Object.keys(suppliedInputs).length > 0
             ? { [SUBRUN_METADATA_KEYS.inputs]: { ...suppliedInputs } }
             : {}),
+          // Between-run continuation (#2747): the mode stamp rides the same
+          // creation write as `adopted_from_run_id` so both are write-once.
+          ...(adoptedFromRunId ? { [CONTINUATION_METADATA_KEY]: { mode: continuationMode } } : {}),
           [RUN_MODEL_BINDINGS_METADATA_KEY]: modelBindingsMetadata,
         },
         parent_conversation_id: parentConversationId,
         user_id: userId,
+        ...(adoptedFromRunId ? { adopted_from_run_id: adoptedFromRunId } : {}),
       });
     } catch (error) {
       const err = error as Error;
@@ -2390,6 +2409,45 @@ export async function executeWorkflow(
     };
   }
   getLog().debug({ artifactsDir, logDir, stateDir, outputRoot }, 'workflow_paths_resolved');
+
+  // Between-run continuation (#2747): resolve $ADOPTED_RUN_DIR through the
+  // adopted run's persisted `output_root` (rename-safe per #2200) and announce
+  // the adoption on THIS run's own event log so the chain renders without a
+  // column join. Read-only by contract — this run writes to its own artifacts;
+  // stores are never merged, so evidence stays attributable per run.
+  // Resolution also runs on resume: a resumed run carries no caller-supplied id,
+  // but its row still records the adoption, and every remaining node may reference
+  // $ADOPTED_RUN_DIR. Only the announcement event stays creation-only — it was
+  // written once when the adoption was made.
+  const effectiveAdoptedFromRunId = adoptedFromRunId ?? workflowRun.adopted_from_run_id;
+  let adoptedRunDir: string | undefined;
+  if (effectiveAdoptedFromRunId) {
+    const adopted = await deps.store.getWorkflowRun(effectiveAdoptedFromRunId);
+    if (!adopted?.output_root) {
+      throw new Error(
+        `Cannot adopt run '${effectiveAdoptedFromRunId}': it has no persisted output root, so its ` +
+          'artifact directory cannot be addressed.'
+      );
+    }
+    adoptedRunDir = archonPaths.getRunArtifactsDirForRoot(
+      adopted.output_root,
+      effectiveAdoptedFromRunId
+    );
+    if (!isContinuation) {
+      try {
+        await deps.store.createWorkflowEvent({
+          workflow_run_id: workflowRun.id,
+          event_type: 'workflow.run_adopted',
+          data: { adopted_from_run_id: effectiveAdoptedFromRunId },
+        });
+      } catch (err) {
+        getLog().warn(
+          { err: err as Error, workflowRunId: workflowRun.id, adoptedFromRunId },
+          'workflow.run_adopted_event_persist_failed'
+        );
+      }
+    }
+  }
 
   // ── Executable source ──────────────────────────────────────────────────────
   //
@@ -2833,43 +2891,53 @@ export async function executeWorkflow(
 
     // Execute the DAG workflow. Already-expanded (see `telemetryNodes` above) — the
     // executor's own `DagNode[]` parameter type is correctly narrow; this boundary
-    // cast reflects that invariant, not a new one.
-    const dagSummary = await executeDagWorkflow(
-      deps,
-      platform,
-      conversationId,
-      cwd,
-      { ...workflow, nodes: telemetryNodes },
-      runForDag,
-      resolvedProvider,
-      resolvedModel,
-      artifactsDir,
-      stateDir,
-      logDir,
-      baseBranch,
-      docsDir,
-      config,
-      configuredCommandFolder,
-      issueContext,
-      dagPriorCompletedNodes,
-      source,
-      aiProfile,
-      workflowPreset,
-      scopeArtifactsDir,
-      execContext,
-      containerCtx,
-      // Sub-run closure (#2121 Phase 2): captures executeWorkflow (this module — no
-      // import cycle) so a `workflow:` node can spawn a governed child run in-process.
-      // Also captures the per-child isolation resolver (slice 2, PR-A) so an
-      // `isolation: 'worktree'` child gets its own worktree cwd.
-      (childArgs: RunChildWorkflowArgs): Promise<ChildWorkflowOutcome> =>
-        runChildWorkflow(deps, platform, childArgs, resolvedModelOverrides, resolveChildIsolation),
-      dagPriorUsage,
-      priorNodeSessions,
-      // Container runs resolve from the capture like every other run: it is bind-mounted
-      // read-only at the SAME absolute path inside the container, so one source-roots
-      // value means the same thing on both sides of the boundary.
-      workflowSourceRoots
+    // cast reflects that invariant, not a new one. The adopted-dir scope (#2747)
+    // encloses only the DAG: a child sub-run spawned from a node re-enters
+    // `executeWorkflow` and scopes its own (absent) adoption.
+    const dagSummary = await runWithAdoptedRunDir(adoptedRunDir, () =>
+      executeDagWorkflow(
+        deps,
+        platform,
+        conversationId,
+        cwd,
+        { ...workflow, nodes: telemetryNodes },
+        runForDag,
+        resolvedProvider,
+        resolvedModel,
+        artifactsDir,
+        stateDir,
+        logDir,
+        baseBranch,
+        docsDir,
+        config,
+        configuredCommandFolder,
+        issueContext,
+        dagPriorCompletedNodes,
+        source,
+        aiProfile,
+        workflowPreset,
+        scopeArtifactsDir,
+        execContext,
+        containerCtx,
+        // Sub-run closure (#2121 Phase 2): captures executeWorkflow (this module — no
+        // import cycle) so a `workflow:` node can spawn a governed child run in-process.
+        // Also captures the per-child isolation resolver (slice 2, PR-A) so an
+        // `isolation: 'worktree'` child gets its own worktree cwd.
+        (childArgs: RunChildWorkflowArgs): Promise<ChildWorkflowOutcome> =>
+          runChildWorkflow(
+            deps,
+            platform,
+            childArgs,
+            resolvedModelOverrides,
+            resolveChildIsolation
+          ),
+        dagPriorUsage,
+        priorNodeSessions,
+        // Container runs resolve from the capture like every other run: it is bind-mounted
+        // read-only at the SAME absolute path inside the container, so one source-roots
+        // value means the same thing on both sides of the boundary.
+        workflowSourceRoots
+      )
     );
 
     // executeDagWorkflow throws on fatal errors; check DB status for result

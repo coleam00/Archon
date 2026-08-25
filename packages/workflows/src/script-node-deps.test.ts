@@ -72,6 +72,7 @@ function createMockStore(): IWorkflowStore {
         user_id: null,
         parent_run_id: null,
         output_root: null,
+        adopted_from_run_id: null,
       })
     ),
     getWorkflowRun: mock(() => Promise.resolve(null)),
@@ -98,6 +99,7 @@ function createMockStore(): IWorkflowStore {
         user_id: null,
         parent_run_id: null,
         output_root: null,
+        adopted_from_run_id: null,
       })
     ),
     updateWorkflowRun: mock(() => Promise.resolve()),
@@ -202,6 +204,7 @@ function makeWorkflowRun(id: string): WorkflowRun {
     user_id: null,
     parent_run_id: null,
     output_root: null,
+    adopted_from_run_id: null,
   };
 }
 

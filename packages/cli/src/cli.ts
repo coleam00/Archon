@@ -215,6 +215,8 @@ Options:
   --input <name>=<value>     Supply a declared workflow input; repeat per input (mutually exclusive with --resume)
   --model <name>=<spec>      Rebind small/medium/large or @alias for one run; repeat per binding
   --resume                   Resume the most recent failed or paused run of the workflow (mutually exclusive with --branch)
+  --adopt <run-id>           Start a new run adopting a terminal run's worktree/branch + artifacts ($ADOPTED_RUN_DIR)
+  --supersedes <run-id>      Record this fresh run as replacing the prior run's open item (no lane inheritance)
   --dry-run                  Simulate workflow DAG control flow without creating a run or contacting a provider
   --stubs <path>             YAML node-output map for --dry-run
   --stubs-init <path>        Write a complete dry-run stub scaffold and exit
@@ -229,6 +231,7 @@ Options:
   --detach                   Run 'workflow run'/'approve'/'reject'/'respond'/'resume' in a detached background child (returns immediately)
   --all                      For 'workflow runs': list across all projects (ignore cwd scope)
   --status <status>          For 'workflow runs': filter to one status (running, completed, failed, ...)
+  --open                     For 'workflow runs': the open-work inbox — failed runs nothing has adopted or superseded
   --limit <n>                For 'workflow runs': max rows (default 20)
   --workflow <name>          Workflow to run for 'continue' (default: archon-assist)
   --no-context               Skip context injection for 'continue'
@@ -689,6 +692,8 @@ async function main(): Promise<number> {
               branchName,
               fromBranch,
               baseBranch,
+              adoptRunId: values.adopt as string | undefined,
+              supersedesRunId: values.supersedes as string | undefined,
               // `--workflow-source` selects WHERE the workflow is read from; `--cwd`
               // continues to select what it acts on. Reusing `discoveryCwd` keeps one
               // internal concept: the directory discovery searches, which the run then
@@ -772,6 +777,7 @@ async function main(): Promise<number> {
               all: values.all as boolean | undefined,
               status: values.status as string | undefined,
               limit,
+              open: values.open as boolean | undefined,
             });
             break;
           }
