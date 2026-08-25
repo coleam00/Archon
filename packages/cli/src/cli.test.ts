@@ -818,6 +818,29 @@ describe('pre-dispatch gates --json error envelope', () => {
     expect(() => JSON.parse(result.stdout)).not.toThrow();
     expect(JSON.parse(result.stdout)).toMatchObject({ ok: false });
   });
+
+  it('emits { ok: false } on stdout when workflow get is missing its run-id', () => {
+    const result = spawnSync(process.execPath, [CLI_ENTRY, 'workflow', 'get', '--json'], {
+      encoding: 'utf8',
+      env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' },
+    });
+
+    expect(result.status).toBe(1);
+    expect(() => JSON.parse(result.stdout)).not.toThrow();
+    expect(JSON.parse(result.stdout)).toMatchObject({ ok: false });
+  });
+
+  it('emits { ok: false } on stdout when setup --scope project runs outside a git repo', () => {
+    const result = spawnSync(
+      process.execPath,
+      [CLI_ENTRY, 'setup', '--scope', 'project', '--json', '--cwd', tmpdir()],
+      { encoding: 'utf8', env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' } }
+    );
+
+    expect(result.status).toBe(1);
+    expect(() => JSON.parse(result.stdout)).not.toThrow();
+    expect(JSON.parse(result.stdout)).toMatchObject({ ok: false });
+  });
 });
 
 describe('workflow test --json error envelope', () => {
