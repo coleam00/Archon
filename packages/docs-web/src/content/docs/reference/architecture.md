@@ -434,14 +434,21 @@ export function registerBuiltinProviders(): void {
       factory: () => new YourAssistantProvider(),
       capabilities: YOUR_ASSISTANT_CAPABILITIES,
       builtIn: true,
+      parseRunConfig: parseYourAssistantRunConfig,
+      credentials: {
+        kind: 'static',
+        specs: [{ vendor: 'your-vendor', displayName: 'Your Vendor', kinds: ['api_key'] }],
+      },
     },
     // ...existing entries
   ];
   for (const entry of builtins) {
-    if (!registry.has(entry.id)) registry.set(entry.id, entry);
+    if (!isRegisteredProvider(entry.id)) registerProvider(entry);
   }
 }
 ```
+
+Import the canonical registry helpers and your provider's strict run-config parser. `registerProvider()` is the validation boundary; do not write to the backing map directly.
 
 Community providers use `registerCommunityProviders()` (same file). See the [community provider guide](../contributing/adding-a-community-provider/) for that path.
 

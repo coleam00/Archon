@@ -29,8 +29,8 @@ describe('withProviderAttempt', () => {
           order.push('acquire');
           return {
             signal: new AbortController().signal,
-            release: async () => {
-              order.push('release');
+            release: async ({ upstreamStopped }) => {
+              order.push(`release:${String(upstreamStopped)}`);
             },
           };
         },
@@ -45,7 +45,31 @@ describe('withProviderAttempt', () => {
         })
       )
     ).rejects.toThrow('attempt failed');
-    expect(order).toEqual(['acquire', 'start', 'release']);
+    expect(order).toEqual(['acquire', 'start', 'release:true']);
+  });
+
+  test('releases confirmed capacity after a successful upstream attempt', async () => {
+    let releaseOptions: { upstreamStopped: boolean } | undefined;
+    const chunks = await consume(
+      withProviderAttempt(
+        {
+          providerAttemptGate: {
+            acquire: async () => ({
+              signal: new AbortController().signal,
+              release: async options => {
+                releaseOptions = options;
+              },
+            }),
+          },
+        },
+        async function* () {
+          yield { type: 'assistant', content: 'ok' };
+        }
+      )
+    );
+
+    expect(chunks).toEqual([{ type: 'assistant', content: 'ok' }]);
+    expect(releaseOptions).toEqual({ upstreamStopped: true });
   });
 
   test('forwards lease ownership loss to the active attempt', async () => {

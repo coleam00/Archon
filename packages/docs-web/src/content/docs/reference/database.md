@@ -71,7 +71,7 @@ psql $DATABASE_URL -c "\dt"
 
 ## Schema Overview
 
-The database has 21 tables, all prefixed with `remote_agent_`:
+The shared application schema has 17 tables, all prefixed with `remote_agent_`. PostgreSQL has 21 tables because it also stores the four Better Auth tables listed below; SQLite authentication does not use those four tables.
 
 1. **`remote_agent_codebases`** - Repository metadata
    - Commands stored as JSONB: `{command_name: {path, description}}`

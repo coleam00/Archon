@@ -450,20 +450,17 @@ export async function* bridgeSession(
     }
     // If the consumer closed the generator early (return() / break), abort
     // confirms that the remote call stopped before releasing capacity.
-    if (!sendSettled) {
-      try {
-        await requestAbort();
-      } catch (err) {
-        log.debug({ err, sessionId: session.sessionId }, 'copilot.abort_cleanup_failed');
-      }
-    }
     try {
-      await session.disconnect();
-    } catch (err) {
-      log.debug({ err, sessionId: session.sessionId }, 'copilot.disconnect_failed');
+      if (!sendSettled || abortPromise) await requestAbort();
+    } finally {
+      try {
+        await session.disconnect();
+      } catch (err) {
+        log.debug({ err, sessionId: session.sessionId }, 'copilot.disconnect_failed');
+      }
+      // The rejection path is handled above. Do not wait on an unsettled SDK
+      // promise after confirmed abort; some runtimes do not resolve it promptly.
+      if (sendSettled) await sendPromise;
     }
-    // The rejection path is handled above. Do not wait on an unsettled SDK
-    // promise after confirmed abort; some runtimes do not resolve it promptly.
-    if (sendSettled) await sendPromise;
   }
 }

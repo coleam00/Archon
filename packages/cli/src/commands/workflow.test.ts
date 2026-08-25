@@ -8290,6 +8290,36 @@ describe('workflowRunCommand — progress rendering', () => {
     expect(stderrSpy).toHaveBeenCalledWith('[classify] Started\n');
   });
 
+  it('should write live provider queue and acquisition progress to stderr', async () => {
+    setupWorkflowMocks();
+
+    const { executeWorkflow } = require('@archon/workflows/executor');
+    (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(async () => {
+      capturedSubscribeHandler?.({
+        type: 'provider_slot_queued',
+        runId: 'run-1',
+        nodeId: 'implement',
+        provider: 'pi',
+        limit: 2,
+      });
+      capturedSubscribeHandler?.({
+        type: 'provider_slot_acquired',
+        runId: 'run-1',
+        nodeId: 'implement',
+        provider: 'pi',
+        limit: 2,
+        slot: 1,
+        waitMs: 1_500,
+      });
+      return { success: true, workflowRunId: 'run-1' };
+    });
+
+    await workflowRunCommand('/test/path', 'plan', 'hello', {});
+
+    expect(stderrSpy).toHaveBeenCalledWith('[implement] Queued for pi capacity (limit 2)\n');
+    expect(stderrSpy).toHaveBeenCalledWith('[implement] pi capacity acquired after 1.5s\n');
+  });
+
   it('should write node_started with provider/model/tier suffix for tier-resolved nodes', async () => {
     setupWorkflowMocks();
 

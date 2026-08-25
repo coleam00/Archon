@@ -133,6 +133,7 @@ JavaScript object-property names such as `constructor` or `__proto__`.
 // registration.ts
 import { isRegisteredProvider, registerProvider } from '../../registry';
 import { YOUR_CAPABILITIES } from './capabilities';
+import { parseYourRunConfig } from './config';
 import { YourProvider } from './provider';
 
 export function registerYourProvider(): void {
@@ -143,9 +144,16 @@ export function registerYourProvider(): void {
     factory: () => new YourProvider(),
     capabilities: YOUR_CAPABILITIES,
     builtIn: false, // ← important: community providers are NOT built-in
+    parseRunConfig: parseYourRunConfig,
+    credentials: {
+      kind: 'static',
+      specs: [{ vendor: 'your-vendor', displayName: 'Your Vendor', kinds: ['api_key'] }],
+    },
   });
 }
 ```
+
+The strict parser validates provider defaults selected for one workflow run. Declare the credential vendors and kinds the provider actually consumes; use `credentials: { kind: 'none' }` only when it needs no credential.
 
 Then add one line to the aggregator at `packages/providers/src/registry.ts`:
 

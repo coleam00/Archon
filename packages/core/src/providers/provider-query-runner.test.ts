@@ -192,6 +192,61 @@ describe('createProviderQueryRunner', () => {
     expect(started).toBe(false);
   });
 
+  test('composes request and local-attempt cancellation while acquiring capacity', async () => {
+    const exerciseCancellation = async (source: 'request' | 'attempt'): Promise<void> => {
+      const requestController = new AbortController();
+      const attemptController = new AbortController();
+      let markSignalReady!: () => void;
+      const signalReady = new Promise<void>(resolve => {
+        markSignalReady = resolve;
+      });
+      const reason = new Error(`${source} cancelled`);
+      const runner = createProviderQueryRunner({
+        acquire: async (_provider, _limit, options) => {
+          const signal = options?.signal;
+          if (!signal) throw new Error('missing composed admission signal');
+          markSignalReady();
+          await new Promise<void>((_resolve, reject) => {
+            if (signal.aborted) {
+              reject(signal.reason);
+              return;
+            }
+            signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+          });
+          throw new Error('unreachable');
+        },
+        loadLimits: async () => ({ pi: 1 }),
+      });
+      const locallyCancellableProvider: IAgentProvider = {
+        supportsProviderAttemptGate: true,
+        getType: () => 'pi',
+        getCapabilities: () => capabilities,
+        sendQuery: async function* (_prompt, _cwd, _resume, options) {
+          const attemptGate = options?.providerAttemptGate;
+          if (!attemptGate) throw new Error('missing attempt gate');
+          await attemptGate.acquire(attemptController.signal);
+          yield { type: 'assistant', content: 'should not start' };
+        },
+      };
+      const result = consume(
+        runner({
+          client: locallyCancellableProvider,
+          prompt: 'hello',
+          cwd: '/tmp',
+          options: { abortSignal: requestController.signal },
+        })
+      );
+      void result.catch(() => undefined);
+
+      await signalReady;
+      (source === 'request' ? requestController : attemptController).abort(reason);
+      await expect(result).rejects.toThrow(reason.message);
+    };
+
+    await exerciseCancellation('request');
+    await exerciseCancellation('attempt');
+  });
+
   test('keeps a multi-attempt query queued until its last waiter acquires', async () => {
     let acquireCalls = 0;
     let releaseBoth!: () => void;

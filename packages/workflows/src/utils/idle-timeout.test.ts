@@ -228,4 +228,39 @@ describe('withIdleTimeout', () => {
 
     expect(result).toEqual(['admitted']);
   });
+
+  test('a stale external activity timestamp only extends the pending call once', async () => {
+    async function* hangs(): AsyncGenerator<string> {
+      await new Promise<void>(() => {});
+    }
+
+    let externalActivityAt: number | undefined;
+    const pulse = setTimeout(() => {
+      externalActivityAt = Date.now();
+    }, 5);
+    const onTimeout = mock(() => {});
+
+    try {
+      const outcome = await Promise.race([
+        (async (): Promise<'timed-out'> => {
+          for await (const _value of withIdleTimeout(
+            hangs(),
+            20,
+            onTimeout,
+            undefined,
+            () => externalActivityAt
+          )) {
+            // The source never yields.
+          }
+          return 'timed-out';
+        })(),
+        Bun.sleep(150).then(() => 'hung' as const),
+      ]);
+
+      expect(outcome).toBe('timed-out');
+      expect(onTimeout).toHaveBeenCalledTimes(1);
+    } finally {
+      clearTimeout(pulse);
+    }
+  });
 });

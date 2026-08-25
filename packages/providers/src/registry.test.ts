@@ -314,6 +314,14 @@ describe('registry', () => {
       expect(isRegisteredProvider('copilot')).toBe(true);
     });
 
+    test('all bundled providers support install-wide attempt admission', () => {
+      registerCommunityProviders();
+
+      for (const id of ['claude', 'codex', 'opencode', 'pi', 'copilot']) {
+        expect(getAgentProvider(id).supportsProviderAttemptGate).toBe(true);
+      }
+    });
+
     test('is idempotent', () => {
       registerCommunityProviders();
       expect(() => registerCommunityProviders()).not.toThrow();

@@ -607,6 +607,62 @@ describe('OpencodeProvider', () => {
     expect(releases).toEqual([{ upstreamStopped: true }, { upstreamStopped: true }]);
   });
 
+  test('does not complete when a pending multi-agent prompt rejects after an idle event', async () => {
+    const cwd = await createTempProjectDir();
+    const sessionIds = ['scout-session', 'reviewer-session'];
+    const events = createPushStream();
+    let rejectReviewer!: (error: Error) => void;
+    const reviewerPrompt = new Promise<void>((_resolve, reject) => {
+      rejectReviewer = reject;
+    });
+    const sessionAbort = mock(
+      async (_request: { path: { id: string }; query: { directory: string } }) => undefined
+    );
+    const runtime = makeRuntime({
+      sessionCreate: mock(async () => ({ data: { id: sessionIds.shift() } })),
+      promptAsync: mock(async request =>
+        request.path.id === 'reviewer-session' ? reviewerPrompt : undefined
+      ),
+      sessionAbort,
+      subscribe: mock(async () => ({ stream: events.stream })),
+    });
+    runtimeQueue.push(runtime);
+
+    const consumption = consume(
+      new OpencodeProvider().sendQuery('hi', cwd, undefined, {
+        assistantConfig: TEST_MODEL,
+        nodeConfig: {
+          nodeId: 'research',
+          agents: {
+            scout: { description: 'Scout', prompt: 'Explore' },
+            reviewer: { description: 'Reviewer', prompt: 'Review' },
+          },
+        },
+        providerAttemptGate: {
+          acquire: async () => ({
+            signal: new AbortController().signal,
+            release: async () => undefined,
+          }),
+        },
+      })
+    );
+
+    while (runtime.client.session.promptAsync.mock.calls.length < 2) await Bun.sleep(1);
+    events.push({ type: 'session.idle', properties: { sessionID: 'scout-session' } });
+    events.push({ type: 'session.idle', properties: { sessionID: 'reviewer-session' } });
+    rejectReviewer(new Error('prompt rejected'));
+
+    const { chunks, error } = await consumption;
+    expect(error?.message).toContain('prompt rejected');
+    expect(
+      chunks.some(
+        chunk =>
+          typeof chunk === 'object' && chunk !== null && 'type' in chunk && chunk.type === 'result'
+      )
+    ).toBe(false);
+    expect(sessionAbort).toHaveBeenCalled();
+  });
+
   test('does not accept a multi-agent error until its pending prompt is stopped', async () => {
     const cwd = await createTempProjectDir();
     const sessionIds = ['scout-session', 'reviewer-session'];

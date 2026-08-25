@@ -292,6 +292,77 @@ describe('CopilotProvider.sendQuery', () => {
     expect(releases).toEqual([{ upstreamStopped: false }]);
   });
 
+  test('preserves the lease when early consumer return cannot confirm shutdown', async () => {
+    const session = makeFakeSession('sess-unconfirmed-early-return');
+    session.abortError = new Error('abort transport failed');
+    nextCreateSessionResult = session;
+    const releases: { upstreamStopped: boolean }[] = [];
+
+    const p = new CopilotProvider();
+    const gen = p.sendQuery('hello', '/work/dir', undefined, {
+      model: 'gpt-5',
+      providerAttemptGate: {
+        acquire: async () => ({
+          signal: new AbortController().signal,
+          release: async options => {
+            releases.push(options);
+          },
+        }),
+      },
+    });
+
+    const first = gen.next();
+    while (session.prompt === undefined) await Bun.sleep(1);
+    session.fire(evt('assistant.message_delta', { messageId: 'm', deltaContent: 'partial' }));
+    await first;
+
+    await expect(gen.return(undefined)).rejects.toThrow(
+      'Copilot session shutdown could not be confirmed'
+    );
+    expect(session.aborted).toBe(true);
+    expect(releases).toEqual([{ upstreamStopped: false }]);
+  });
+
+  test('preserves the lease when send settles before an in-flight abort fails', async () => {
+    const session = makeFakeSession('sess-unconfirmed-after-send');
+    nextCreateSessionResult = session;
+    const leaseController = new AbortController();
+    const releases: { upstreamStopped: boolean }[] = [];
+    let rejectAbort: ((error: Error) => void) | undefined;
+    const abortCompletion = new Promise<void>((_resolve, reject) => {
+      rejectAbort = reject;
+    });
+    (session as unknown as { abort: () => Promise<void> }).abort = async () => {
+      session.aborted = true;
+      return abortCompletion;
+    };
+
+    const p = new CopilotProvider();
+    const completion = collect(
+      p.sendQuery('hello', '/work/dir', undefined, {
+        model: 'gpt-5',
+        providerAttemptGate: {
+          acquire: async () => ({
+            signal: leaseController.signal,
+            release: async options => {
+              releases.push(options);
+            },
+          }),
+        },
+      })
+    );
+
+    while (session.prompt === undefined) await Bun.sleep(1);
+    leaseController.abort(new Error('lease lost'));
+    session.rejectSend(new Error('SDK wait stopped'));
+    await Bun.sleep(1);
+    expect(releases).toEqual([]);
+
+    rejectAbort?.(new Error('abort transport failed'));
+    await expect(completion).rejects.toThrow('Copilot session shutdown could not be confirmed');
+    expect(releases).toEqual([{ upstreamStopped: false }]);
+  });
+
   test('reasoningEffort from nodeConfig.effort passes through', async () => {
     const session = makeFakeSession();
     nextCreateSessionResult = session;

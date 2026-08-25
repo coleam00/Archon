@@ -19,12 +19,14 @@ interface ProviderModel {
   modelID: string;
 }
 
-type BufferedTerminal = { type: 'idle' } | { type: 'error'; error: Error };
-
 type AgentRunLifecycle =
   | { phase: 'not_started'; terminal: 'active' | 'aborted' }
-  | { phase: 'pending'; settled: Promise<void>; bufferedTerminal?: BufferedTerminal }
-  | { phase: 'settled'; terminal: 'active' | 'idle' | 'error' | 'aborted' };
+  | { phase: 'pending'; settled: Promise<void> }
+  | {
+      phase: 'settled';
+      prompt: 'accepted' | 'rejected';
+      terminal: 'active' | 'idle' | 'error' | 'aborted';
+    };
 
 interface AgentRunState {
   agent: NamedAgentConfig;
@@ -155,7 +157,9 @@ export async function* streamMultiAgentOpencodeSession(
     state.lifecycle.phase !== 'pending' && state.lifecycle.terminal !== 'active';
 
   const isDone = (state: AgentRunState): boolean =>
-    state.lifecycle.phase === 'settled' && state.lifecycle.terminal === 'idle';
+    state.lifecycle.phase === 'settled' &&
+    state.lifecycle.prompt === 'accepted' &&
+    state.lifecycle.terminal === 'idle';
 
   const markTerminal = (
     state: AgentRunState,
@@ -166,7 +170,7 @@ export async function* streamMultiAgentOpencodeSession(
         `OpenCode session '${state.sessionId}' reached terminal state before prompt settled`
       );
     }
-    state.lifecycle = { phase: 'settled', terminal };
+    state.lifecycle = { ...state.lifecycle, terminal };
   };
 
   const releaseStateLease = async (state: AgentRunState): Promise<void> => {
@@ -222,14 +226,10 @@ export async function* streamMultiAgentOpencodeSession(
     return Promise.all(aborts).then(() => undefined);
   };
 
-  const confirmBufferedTerminal = async (
-    state: AgentRunState,
-    terminal: BufferedTerminal
-  ): Promise<boolean> => {
+  const confirmPendingStop = async (state: AgentRunState): Promise<boolean> => {
     const lifecycle = state.lifecycle;
     if (lifecycle.phase !== 'pending') return false;
 
-    lifecycle.bufferedTerminal ??= terminal;
     await lifecycle.settled;
     // The terminal event may describe the session before promptAsync accepted
     // this submission. A fresh post-submission abort is the only proof that the
@@ -315,8 +315,11 @@ export async function* streamMultiAgentOpencodeSession(
         );
         try {
           await promptSession(client, cwd, state.sessionId, promptBody);
+          state.lifecycle = { phase: 'settled', prompt: 'accepted', terminal: 'active' };
+        } catch (error) {
+          state.lifecycle = { phase: 'settled', prompt: 'rejected', terminal: 'active' };
+          throw error;
         } finally {
-          state.lifecycle = { phase: 'settled', terminal: 'active' };
           settlePrompt();
         }
         lifecycleController.signal.throwIfAborted();
@@ -451,7 +454,7 @@ export async function* streamMultiAgentOpencodeSession(
         const err = new Error(`[${state.agent.key}] ${errorMessage(rawError)}`);
         err.cause = rawError;
         lifecycleController.abort(err);
-        const wasPending = await confirmBufferedTerminal(state, { type: 'error', error: err });
+        const wasPending = await confirmPendingStop(state);
         if (!wasPending || isStopConfirmed(state)) markTerminal(state, 'error');
         await releaseStateLease(state);
         await abortAll();
@@ -464,7 +467,7 @@ export async function* streamMultiAgentOpencodeSession(
         const state = sessionId ? sessionToAgent.get(sessionId) : undefined;
         if (!state) continue;
         if (state.lifecycle.phase === 'not_started') continue;
-        const wasPending = await confirmBufferedTerminal(state, { type: 'idle' });
+        const wasPending = await confirmPendingStop(state);
         if (wasPending && !isStopConfirmed(state)) {
           throw new ProviderAttemptStopUnconfirmedError(
             `OpenCode session shutdown could not be confirmed (session: ${state.sessionId}, cwd: ${state.cwd})`
