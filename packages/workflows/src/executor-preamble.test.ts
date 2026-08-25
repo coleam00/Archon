@@ -104,6 +104,7 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     findResumableRun: mock(async () => null),
     getDagResumeSnapshot: mock(async () => ({
       completedNodeOutputs: new Map<string, { output: string }>(),
+      terminalNodeIds: new Set<string>(),
       tokens: { input: 0, output: 0 },
       costUsd: 0,
       workUnits: 0,

@@ -53,7 +53,10 @@ const mockCreateRequiredWorkflowEvent = mock(() => Promise.resolve());
 const mockGetDagResumeSnapshot = mock(() =>
   Promise.resolve({
     completedNodeOutputs: new Map<string, string>(),
+    terminalNodeIds: new Set<string>(),
     tokens: { input: 0, output: 0 },
+    costUsd: 0,
+    workUnits: 0,
   })
 );
 mock.module('../db/workflow-events', () => ({
@@ -218,7 +221,10 @@ describe('createWorkflowStore', () => {
   test('delegates getDagResumeSnapshot to DB', async () => {
     const expected = {
       completedNodeOutputs: new Map([['step1', 'output text']]),
+      terminalNodeIds: new Set(['step1']),
       tokens: { input: 40, output: 4 },
+      costUsd: 0,
+      workUnits: 0,
     };
     mockGetDagResumeSnapshot.mockResolvedValueOnce(expected);
     const store = createWorkflowStore();

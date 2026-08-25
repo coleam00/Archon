@@ -53,7 +53,11 @@ import {
   type WorkflowSourceConfig,
   type WorkflowSourceRoots,
 } from './workflow-source';
-import { executeDagWorkflow, childOutcomeFromRun } from './dag-executor';
+import {
+  executeDagWorkflow,
+  childOutcomeFromRun,
+  WorkflowUsagePersistenceError,
+} from './dag-executor';
 import type { RunChildWorkflowArgs, ChildWorkflowOutcome, PriorRunUsage } from './dag-executor';
 import type { PersistedNodeOutput, WorkflowResumeCursor } from './store';
 import { canonicalValueText, type JsonValue } from './output-ref';
@@ -1022,6 +1026,52 @@ export interface ResumableRunInspection {
   priorUsage: PriorRunUsage;
 }
 
+function readPersistedRunUsage(run: WorkflowRun): { costUsd?: number; tokens?: TokenUsage } {
+  const metadata = run.metadata ?? {};
+  const cost = metadata.total_cost_usd;
+  const input = metadata.total_tokens_in;
+  const output = metadata.total_tokens_out;
+  const cacheRead = metadata.total_cache_read_tokens;
+  const cacheWrite = metadata.total_cache_write_tokens;
+  const isNonNegativeFinite = (value: unknown): value is number =>
+    typeof value === 'number' && Number.isFinite(value) && value >= 0;
+  return {
+    ...(isNonNegativeFinite(cost) ? { costUsd: cost } : {}),
+    ...(isNonNegativeFinite(input) && isNonNegativeFinite(output)
+      ? {
+          tokens: {
+            input,
+            output,
+            ...(isNonNegativeFinite(cacheRead) ? { cacheRead } : {}),
+            ...(isNonNegativeFinite(cacheWrite) ? { cacheWrite } : {}),
+            ...(metadata.total_cache_partial === true ? { cachePartial: true as const } : {}),
+          },
+        }
+      : {}),
+  };
+}
+
+function maxPersistedTokenUsage(
+  eventTokens: TokenUsage | undefined,
+  rowTokens: TokenUsage | undefined
+): TokenUsage | undefined {
+  if (eventTokens === undefined) return rowTokens;
+  if (rowTokens === undefined) return eventTokens;
+  return {
+    input: Math.max(eventTokens.input, rowTokens.input),
+    output: Math.max(eventTokens.output, rowTokens.output),
+    ...(eventTokens.cacheRead !== undefined || rowTokens.cacheRead !== undefined
+      ? { cacheRead: Math.max(eventTokens.cacheRead ?? 0, rowTokens.cacheRead ?? 0) }
+      : {}),
+    ...(eventTokens.cacheWrite !== undefined || rowTokens.cacheWrite !== undefined
+      ? { cacheWrite: Math.max(eventTokens.cacheWrite ?? 0, rowTokens.cacheWrite ?? 0) }
+      : {}),
+    ...(eventTokens.cachePartial === true || rowTokens.cachePartial === true
+      ? { cachePartial: true as const }
+      : {}),
+  };
+}
+
 /** Read whether a candidate has state worth resuming without claiming or mutating it. */
 export async function inspectResumableRun(
   deps: WorkflowDeps,
@@ -1046,24 +1096,28 @@ export async function inspectResumableRun(
     );
     return null;
   }
+  const rowUsage = readPersistedRunUsage(candidate);
+  const eventAndCursorCost =
+    snapshot.costUsd +
+    (approvalContext?.type === 'interactive_loop' &&
+    !priorCompletedNodes.has(approvalContext.nodeId) &&
+    typeof approvalContext.signaledCostUsd === 'number' &&
+    Number.isFinite(approvalContext.signaledCostUsd) &&
+    approvalContext.signaledCostUsd >= 0
+      ? approvalContext.signaledCostUsd
+      : 0);
+  const persistedTokens = maxPersistedTokenUsage(snapshot.tokens, rowUsage.tokens);
   return {
     priorCompletedNodes,
     priorUsage: {
-      ...(snapshot.tokens !== undefined ? { tokens: snapshot.tokens } : {}),
+      ...(persistedTokens !== undefined ? { tokens: persistedTokens } : {}),
       // A paused single-node loop has no terminal node row yet. Its approval cursor is
       // therefore the only durable record of spend from the iterations before the gate.
       // Once the loop has a terminal row, that row already carries the cumulative cost
       // and adding the cursor again would double count it on a later downstream resume.
-      costUsd:
-        snapshot.costUsd +
-        (approvalContext?.type === 'interactive_loop' &&
-        !priorCompletedNodes.has(approvalContext.nodeId) &&
-        typeof approvalContext.signaledCostUsd === 'number' &&
-        Number.isFinite(approvalContext.signaledCostUsd) &&
-        approvalContext.signaledCostUsd >= 0
-          ? approvalContext.signaledCostUsd
-          : 0),
+      costUsd: Math.max(eventAndCursorCost, rowUsage.costUsd ?? 0),
       workUnits: snapshot.workUnits,
+      terminalNodeIds: snapshot.terminalNodeIds,
     },
   };
 }
@@ -1440,6 +1494,7 @@ async function runChildWorkflow(
             ...(snapshot.tokens !== undefined ? { tokens: snapshot.tokens } : {}),
             costUsd: snapshot.costUsd,
             workUnits: snapshot.workUnits,
+            terminalNodeIds: snapshot.terminalNodeIds,
           },
           codebaseId,
           resolveChildIsolation,
@@ -1572,6 +1627,14 @@ async function runChildWorkflow(
       return failAfterExecution('Child run row disappeared after execution.', childRunId);
     }
     const outcome = childOutcomeFromRun(finalChild);
+    if (!childExecutionResult.success && childExecutionResult.usagePersisted === false) {
+      return {
+        ...outcome,
+        costUsd: undefined,
+        tokens: undefined,
+        costEnforceable: false,
+      };
+    }
     if (
       requireReportedCost &&
       !childExecutionResult.success &&
@@ -3204,6 +3267,7 @@ export async function executeWorkflow(
   } catch (error) {
     // Top-level error handler: ensure workflow is marked as failed
     const err = error as Error;
+    const usagePersistenceFailed = err instanceof WorkflowUsagePersistenceError;
     getLog().error(
       { err, workflowName: workflow.name, workflowId: workflowRun.id },
       'workflow_execution_unhandled_error'
@@ -3217,6 +3281,22 @@ export async function executeWorkflow(
         { err: dbError as Error, workflowId: workflowRun.id, originalError: err.message },
         'db_record_failure_failed'
       );
+    }
+
+    if (usagePersistenceFailed) {
+      // Preserve the fail-closed fact independently of the cumulative usage write that
+      // just failed. A cold resume reads this marker before dispatch, while an in-process
+      // parent also receives usagePersisted:false below.
+      await deps.store
+        .updateWorkflowRun(workflowRun.id, {
+          metadata: { cost_reporting_unavailable: true },
+        })
+        .catch((markerError: Error) => {
+          getLog().error(
+            { err: markerError, workflowId: workflowRun.id },
+            'workflow.usage_persistence_marker_failed'
+          );
+        });
     }
 
     // Log to file (separate from database - non-blocking)
@@ -3278,7 +3358,12 @@ export async function executeWorkflow(
     }
     // Return failure result instead of re-throwing
     return workflowWorkStarted
-      ? { success: false, workflowRunId: workflowRun.id, error: err.message }
+      ? {
+          success: false,
+          workflowRunId: workflowRun.id,
+          error: err.message,
+          ...(usagePersistenceFailed ? { usagePersisted: false as const } : {}),
+        }
       : failBeforeWorkflowWork(err.message, workflowRun.id);
   } finally {
     // Release the keep-awake request FIRST — before the backstop DB calls that

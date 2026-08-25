@@ -155,8 +155,9 @@ export const workflowBudgetPolicySchema = z
     max_spend_usd: z.number().positive().optional(),
     /**
      * Run-wide ceiling on deterministic work units. One required
-     * `work_unit_charged` row records each node attempt or governed child spawn,
-     * so retries count and the ceiling is reconstructible across cold resume.
+     * `work_unit_charged` row records each node attempt or governed child spawn.
+     * Plain-loop provider iterations, retries, and structured-output reasks each count,
+     * so dynamic work is bounded and the ceiling is reconstructible across cold resume.
      */
     max_work_units: z.number().int().positive().optional(),
   })
@@ -396,6 +397,8 @@ export type WorkflowExecutionResult =
       error: string;
       /** Explicit proof that the DAG admission boundary was never crossed. */
       workStarted?: false;
+      /** The run's cumulative usage could not be durably published for a governed caller. */
+      usagePersisted?: false;
     }
   | { success: true; paused: true; workflowRunId: string };
 

@@ -780,6 +780,18 @@ export interface PriorRunUsage {
   costUsd: number;
   /** Started node attempts from prior passes (#1961) — seeds the work-unit budget ledger. */
   workUnits: number;
+  /** Nodes whose prior terminal rows already contributed usage to this cumulative total. */
+  terminalNodeIds?: ReadonlySet<string>;
+}
+
+/** A governed run could not durably publish the cumulative usage its caller must trust. */
+export class WorkflowUsagePersistenceError extends Error {
+  constructor(cause: unknown) {
+    super(
+      `Failed to persist exact workflow usage: ${cause instanceof Error ? cause.message : String(cause)}`
+    );
+    this.name = 'WorkflowUsagePersistenceError';
+  }
 }
 
 /**
@@ -5964,7 +5976,7 @@ async function executeLoopNode(
   checkpointSession?: SessionCheckpoint,
   /** Roots a `loop.command` file resolves under; always supplied from RunLayersContext. */
   workflowSourceRoots?: WorkflowSourceRoots,
-  /** Invoked once per execution before the node_started write (#1961 work-unit accounting). */
+  /** Invoked before every provider attempt, including transient retries and reasks. */
   chargeWorkUnit?: () => Promise<void>,
   budget?: WorkflowBudgetPolicy,
   budgetLedger?: RunBudgetLedger,
@@ -6003,7 +6015,6 @@ async function executeLoopNode(
       ? undefined
       : cumulativeCostUsd - (priorUsageRestored ? (persistedLoopCostUsd ?? 0) : 0);
 
-  await chargeWorkUnit?.();
   // Emit node_started up-front so every terminal outcome of this loop node is
   // paired with a corresponding _started event — same pattern the bash and
   // script node executors follow. The pairing contract: every `return` of a
@@ -6512,6 +6523,10 @@ async function executeLoopNode(
             abortSignal: iterationAbortController.signal,
           };
 
+          // A plain loop can make unbounded provider calls inside one DAG-node
+          // dispatch. Each real provider attempt is therefore its own deterministic
+          // work unit, including transient retries and structured-output reasks.
+          await chargeWorkUnit?.();
           // Reask attempts start a FRESH session (mirrors runStreamPass in
           // executeNodeInternal) so an invalid turn is not carried forward as context.
           const generator = aiClient.sendQuery(
@@ -8335,6 +8350,12 @@ async function executeWorkflowNode(
     }
   };
 
+  const withoutCurrentPassUsage = (outcome: ChildWorkflowOutcome): ChildWorkflowOutcome => ({
+    ...outcome,
+    costUsd: 0,
+    tokens: undefined,
+  });
+
   // Re-entry: find THIS node's child (a parent may run several workflow: nodes, so
   // filter by parent_node_id). At most one child per node in slice 1; if somehow
   // several, the most recent wins.
@@ -8391,8 +8412,22 @@ async function executeWorkflowNode(
       return await pauseParentOnChild(existing.id);
     }
     // completed / cancelled — thread the outcome through the same state table a
-    // freshly-run child uses (interpret handles both).
-    return await interpret(childOutcomeFromRun(existing));
+    // freshly-run child uses. A prior terminal parent row already contributed this
+    // child's lifetime usage to the restored total; reinspection performs no child
+    // work and therefore contributes zero in the current pass. A parent that first
+    // paused on the child has no prior terminal row and must account the full child
+    // total when the child later settles.
+    const cumulativeOutcome = childOutcomeFromRun(existing);
+    if (ctx.priorUsageRestored && ctx.priorTerminalNodeIds === undefined) {
+      return failResult(
+        `Cannot resume workflow node '${node.id}': prior terminal-node accounting is unavailable.`
+      );
+    }
+    return await interpret(
+      ctx.priorTerminalNodeIds?.has(ctx.stepNamePrefix + node.id)
+        ? withoutCurrentPassUsage(cumulativeOutcome)
+        : cumulativeOutcome
+    );
   } catch (err) {
     if (err instanceof BudgetAdmissionError) {
       return refuseNodeForBudget(ctx, node, err.exhaustion, 'work_unit_reservation');
@@ -9627,6 +9662,8 @@ interface RunLayersContext {
   priorCompletedNodes?: Map<string, PersistedNodeOutput>;
   /** Whether the run-level usage accumulators already include hydrated prior usage. */
   priorUsageRestored: boolean;
+  /** Prior terminal rows that already contributed usage to the hydrated run total. */
+  priorTerminalNodeIds?: ReadonlySet<string>;
   /**
    * Private provider session handles produced by completed top-level nodes. Undefined
    * inside loop_group bodies because repeated local IDs have no addressable lineage
@@ -12113,6 +12150,7 @@ export async function executeDagWorkflow(
     afterLayer: persistAuthoredOutcome,
     priorCompletedNodes,
     priorUsageRestored: priorUsage !== undefined,
+    priorTerminalNodeIds: priorUsage?.terminalNodeIds,
     nodeSessionHandles,
     namedResumeSourceIds,
     lastSequentialSession: undefined,
@@ -12146,9 +12184,10 @@ export async function executeDagWorkflow(
    * and so still lands on a row another process has already flipped to `cancelled`.
    * Same ordering as the evidence gate: metadata first, terminal status after.
    *
-   * Ordinary usage is best-effort — a bookkeeping write must not fail an otherwise-fine
-   * run — but the marker that says a numeric total is incomplete is required accounting
-   * state. Losing that marker would make a partial total look exact after resume.
+   * Ordinary usage is best-effort. A spend-governed run is different: its cumulative
+   * row is the durable fallback when a best-effort terminal event is lost, and a parent
+   * reads that row as the child's exact roll-up. Both exact totals and the marker that
+   * says a numeric total is incomplete are therefore required accounting state.
    */
   const persistRunUsage = async (): Promise<void> => {
     const usage = {
@@ -12178,19 +12217,27 @@ export async function executeDagWorkflow(
         : {}),
     };
     if (Object.keys(usage).length === 0) return;
-    const persist = deps.store.updateWorkflowRun(workflowRun.id, { metadata: usage });
-    if (runCtx.budgetLedger?.spendEnforceable === false) {
-      // The marker distinguishes an exact total from a known partial total. Treat it as
-      // required accounting state; swallowing this write would let a resumed parent mint
-      // fresh work from an amount we already know is incomplete.
-      await persist;
-    } else {
-      await persist.catch((dbErr: Error) => {
+    if (runCtx.requireReportedCost || runCtx.budgetLedger?.spendEnforceable === false) {
+      // A governed caller must never infer freshness from a stale numeric row. Surface a
+      // typed accounting failure so a parent can mark the child outcome unenforceable.
+      try {
+        await deps.store.updateWorkflowRun(workflowRun.id, { metadata: usage });
+      } catch (dbErr) {
         getLog().error(
-          { err: dbErr, workflowRunId: workflowRun.id },
+          { err: dbErr as Error, workflowRunId: workflowRun.id },
           'dag.run_usage_persist_failed'
         );
-      });
+        throw new WorkflowUsagePersistenceError(dbErr);
+      }
+    } else {
+      await deps.store
+        .updateWorkflowRun(workflowRun.id, { metadata: usage })
+        .catch((dbErr: Error) => {
+          getLog().error(
+            { err: dbErr, workflowRunId: workflowRun.id },
+            'dag.run_usage_persist_failed'
+          );
+        });
     }
   };
 
@@ -12265,9 +12312,10 @@ export async function executeDagWorkflow(
   } catch (error) {
     // runLayers guards almost everything, but a FATAL platform error can escape its
     // allSettled rejection branch. Persist both durable facts before rethrowing that
-    // exact value (including an exotic `throw undefined`). Usage is best-effort. An
-    // outcome write failure is secondary here: record it, but never let it mask the
-    // execution error already in flight.
+    // exact value (including an exotic `throw undefined`). Governed usage persistence
+    // may replace the execution error with a typed accounting failure because the caller
+    // must fail closed rather than trust a stale total. An outcome write failure remains
+    // secondary: record it, but never let it mask the execution error already in flight.
     await persistRunUsage();
     try {
       await persistAuthoredOutcome();

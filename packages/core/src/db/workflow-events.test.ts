@@ -242,6 +242,7 @@ describe('workflow-events', () => {
           ['node-b', { output: 'output B' }],
         ])
       );
+      expect(result.terminalNodeIds).toEqual(new Set(['node-a', 'node-b']));
       expect(result.tokens).toEqual({
         input: 100,
         output: 10,
@@ -284,6 +285,7 @@ describe('workflow-events', () => {
 
       expect(result.workUnits).toBe(2);
       expect(result.costUsd).toBeCloseTo(0.01);
+      expect(result.terminalNodeIds).toEqual(new Set(['node-a']));
     });
 
     test('does not let a negative persisted provider cost reduce resumed spend (#1961)', async () => {

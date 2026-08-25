@@ -121,6 +121,7 @@ mock.module('@archon/git', () => ({
 // --- Mock dag-executor ---
 type ExecuteDagWorkflow = typeof import('./dag-executor').executeDagWorkflow;
 const mockExecuteDagWorkflow = mock<ExecuteDagWorkflow>(async () => undefined);
+class MockWorkflowUsagePersistenceError extends Error {}
 mock.module('./dag-executor', () => ({
   executeDagWorkflow: mockExecuteDagWorkflow,
   // Passthrough for the sub-run outcome mapper (#2121) — executor.ts imports it;
@@ -130,6 +131,7 @@ mock.module('./dag-executor', () => ({
     childRunId: run.id,
     status: run.status,
   })),
+  WorkflowUsagePersistenceError: MockWorkflowUsagePersistenceError,
 }));
 
 // --- Mock logger functions ---
@@ -191,6 +193,7 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     findResumableRun: mock(async () => null),
     getDagResumeSnapshot: mock(async () => ({
       completedNodeOutputs: new Map(),
+      terminalNodeIds: new Set<string>(),
       tokens: { input: 0, output: 0 },
       costUsd: 0,
       workUnits: 0,
@@ -2112,6 +2115,7 @@ describe('executeWorkflow', () => {
       const store = makeStore({
         getDagResumeSnapshot: mock(async () => ({
           completedNodeOutputs,
+          terminalNodeIds: new Set(completedNodeOutputs.keys()),
           tokens,
           costUsd,
           workUnits: 0,
@@ -2149,7 +2153,12 @@ describe('executeWorkflow', () => {
       expect(dagCall?.[16]).toBe(completedNodeOutputs);
       // Both usage axes travel as one `priorUsage` bundle (#2469) — cost is restored
       // across resume exactly like tokens, so a resumed run's total never regresses.
-      expect(dagCall?.[24]).toEqual({ tokens, costUsd, workUnits: 0 });
+      expect(dagCall?.[24]).toEqual({
+        tokens,
+        costUsd,
+        workUnits: 0,
+        terminalNodeIds: new Set(['node-a']),
+      });
       expect(dagCall?.[25]).toEqual(hydrated.priorNodeSessions);
       expect(store.createWorkflowRun).not.toHaveBeenCalled();
     });
@@ -3292,6 +3301,7 @@ describe('hydrateResumableRun', () => {
     const store = makeStore({
       getDagResumeSnapshot: mock(async () => ({
         completedNodeOutputs: priorNodes,
+        terminalNodeIds: new Set(priorNodes.keys()),
         tokens: { input: 4, output: 1 },
         costUsd: 0.1,
         workUnits: 2,
@@ -3302,10 +3312,47 @@ describe('hydrateResumableRun', () => {
 
     expect(result).toEqual({
       priorCompletedNodes: priorNodes,
-      priorUsage: { tokens: { input: 4, output: 1 }, costUsd: 0.1, workUnits: 2 },
+      priorUsage: {
+        tokens: { input: 4, output: 1 },
+        costUsd: 0.1,
+        workUnits: 2,
+        terminalNodeIds: new Set(['n1']),
+      },
     });
     expect(store.resumeWorkflowRun).not.toHaveBeenCalled();
     expect(store.listWorkflowRunNodeSessions).not.toHaveBeenCalled();
+  });
+
+  it('uses the cumulative run row when a best-effort terminal usage event is missing', async () => {
+    const candidate = makeRun({
+      id: 'row-usage-fallback',
+      status: 'failed',
+      metadata: {
+        total_cost_usd: 0.5,
+        total_tokens_in: 20,
+        total_tokens_out: 8,
+        total_cache_read_tokens: 6,
+      },
+    });
+    const priorNodes = new Map([['n1', { output: 'out1' }]]);
+    const store = makeStore({
+      getDagResumeSnapshot: mock(async () => ({
+        completedNodeOutputs: priorNodes,
+        terminalNodeIds: new Set(['n1']),
+        tokens: { input: 10, output: 4, cacheRead: 3 },
+        costUsd: 0.25,
+        workUnits: 1,
+      })),
+    });
+
+    const result = await inspectResumableRun(makeDeps(store), candidate);
+
+    expect(result?.priorUsage).toEqual({
+      tokens: { input: 20, output: 8, cacheRead: 6 },
+      costUsd: 0.5,
+      workUnits: 1,
+      terminalNodeIds: new Set(['n1']),
+    });
   });
 
   it('returns hydrated run + prior outputs for a candidate with completed nodes', async () => {
@@ -3315,6 +3362,7 @@ describe('hydrateResumableRun', () => {
     const store = makeStore({
       getDagResumeSnapshot: mock(async () => ({
         completedNodeOutputs: priorNodes,
+        terminalNodeIds: new Set(priorNodes.keys()),
         tokens: { input: 40, output: 4 },
         costUsd: 0.75,
         workUnits: 0,
@@ -3348,6 +3396,7 @@ describe('hydrateResumableRun', () => {
       tokens: { input: 40, output: 4 },
       costUsd: 0.75,
       workUnits: 0,
+      terminalNodeIds: new Set(['n1']),
     });
     expect(result?.priorNodeSessions.map(row => row.node_id)).toEqual(['n1']);
     expect(store.listWorkflowRunNodeSessions).toHaveBeenCalledWith('prior-failed');
@@ -3359,6 +3408,7 @@ describe('hydrateResumableRun', () => {
     const store = makeStore({
       getDagResumeSnapshot: mock(async () => ({
         completedNodeOutputs: new Map(),
+        terminalNodeIds: new Set<string>(),
         tokens: { input: 0, output: 0 },
         costUsd: 0,
         workUnits: 0,
@@ -3389,6 +3439,7 @@ describe('hydrateResumableRun', () => {
     const store = makeStore({
       getDagResumeSnapshot: mock(async () => ({
         completedNodeOutputs: new Map(),
+        terminalNodeIds: new Set<string>(),
         tokens: { input: 0, output: 0 },
         costUsd: 0,
         workUnits: 0,
@@ -3419,6 +3470,7 @@ describe('hydrateResumableRun', () => {
     const store = makeStore({
       getDagResumeSnapshot: mock(async () => ({
         completedNodeOutputs: new Map([['loop-1', { output: 'done' }]]),
+        terminalNodeIds: new Set(['loop-1']),
         tokens: { input: 4, output: 1 },
         costUsd: 2,
         workUnits: 1,
@@ -3465,6 +3517,7 @@ describe('hydrateResumableRun', () => {
     const store = makeStore({
       getDagResumeSnapshot: mock(async () => ({
         completedNodeOutputs: new Map(),
+        terminalNodeIds: new Set<string>(),
         tokens: { input: 0, output: 0 },
         costUsd: 0,
         workUnits: 0,
@@ -3504,6 +3557,7 @@ describe('hydrateResumableRun', () => {
     const store = makeStore({
       getDagResumeSnapshot: mock(async () => ({
         completedNodeOutputs: new Map(),
+        terminalNodeIds: new Set<string>(),
         tokens: { input: 0, output: 0 },
         costUsd: 0,
         workUnits: 0,
@@ -3537,6 +3591,7 @@ describe('hydrateResumableRun', () => {
     const store = makeStore({
       getDagResumeSnapshot: mock(async () => ({
         completedNodeOutputs: new Map(),
+        terminalNodeIds: new Set<string>(),
         tokens: { input: 0, output: 0 },
         costUsd: 0,
         workUnits: 0,
@@ -3562,6 +3617,7 @@ describe('hydrateResumableRun', () => {
     const store = makeStore({
       getDagResumeSnapshot: mock(async () => ({
         completedNodeOutputs: priorNodes,
+        terminalNodeIds: new Set(priorNodes.keys()),
         tokens: { input: 0, output: 0 },
         costUsd: 0,
         workUnits: 0,
@@ -3590,6 +3646,7 @@ describe('hydrateResumableRun', () => {
     const store = makeStore({
       getDagResumeSnapshot: mock(async () => ({
         completedNodeOutputs: new Map([['n1', { output: 'v1' }]]),
+        terminalNodeIds: new Set(['n1']),
         tokens: { input: 0, output: 0 },
         costUsd: 0,
         workUnits: 0,

@@ -33,6 +33,8 @@ export interface PersistedNodeOutput {
 
 export interface DagResumeSnapshot {
   completedNodeOutputs: Map<string, PersistedNodeOutput>;
+  /** Nodes with a persisted completed/failed terminal row in any prior execution pass. */
+  terminalNodeIds: ReadonlySet<string>;
   tokens?: TokenUsage;
   /** Cumulative USD cost persisted by completed and failed node attempts across prior passes. */
   costUsd: number;

@@ -347,9 +347,8 @@ not report a finite cost, the run fails with `budget_enforcement_failed`; unknow
 treated as zero while claiming the ceiling is enforced.
 
 `max_work_units` is provider-independent. One unit is charged for each node attempt (including
-retries and each `loop_group` body-node attempt) and each governed child spawn or re-drive. A
-plain `loop:` is one node attempt even when it makes several internal provider calls; use
-`max_spend_usd` to govern those calls by recorded cost.
+retries and each `loop_group` body-node attempt), each plain-loop provider call (including
+transient retries and structured-output reasks), and each governed child spawn or re-drive.
 
 Both limits survive cold resume through the workflow event log. Exhaustion emits
 `budget_exhausted` and fails explicitly; Archon never silently truncates a fan-out or skips the

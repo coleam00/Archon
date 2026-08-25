@@ -267,6 +267,7 @@ export async function listWorkflowEventsSince(
  */
 export async function getDagResumeSnapshot(workflowRunId: string): Promise<{
   completedNodeOutputs: Map<string, { output: string; structuredOutput?: unknown }>;
+  terminalNodeIds: ReadonlySet<string>;
   tokens?: TokenUsage;
   costUsd: number;
   /**
@@ -291,6 +292,7 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<{
     [workflowRunId]
   );
   const completedNodeOutputs = new Map<string, { output: string; structuredOutput?: unknown }>();
+  const terminalNodeIds = new Set<string>();
   // Collected and merged once at the end rather than folded pairwise: a pairwise fold
   // cannot tell "one of five contributions reported" from "one of two" (#2662).
   const usages: TokenUsage[] = [];
@@ -312,6 +314,9 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<{
       // Required persisted trace of either a node attempt or child spawn decision.
       workUnits++;
       continue;
+    }
+    if (row.event_type === 'node_completed' || row.event_type === 'node_failed') {
+      terminalNodeIds.add(row.step_name);
     }
     if (row.event_type === 'node_failed') {
       // A later failure for this step supersedes any earlier node_completed /
@@ -441,5 +446,11 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<{
       }
     }
   }
-  return { completedNodeOutputs, tokens: mergeTokenUsage(usages), costUsd, workUnits };
+  return {
+    completedNodeOutputs,
+    terminalNodeIds,
+    tokens: mergeTokenUsage(usages),
+    costUsd,
+    workUnits,
+  };
 }

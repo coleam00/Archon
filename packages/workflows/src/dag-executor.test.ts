@@ -194,6 +194,7 @@ function createMockStore(): MockWorkflowStore {
     getDagResumeSnapshot: mock<IWorkflowStore['getDagResumeSnapshot']>(async _workflowRunId =>
       Promise.resolve({
         completedNodeOutputs: new Map<string, { output: string }>(),
+        terminalNodeIds: new Set<string>(),
         tokens: { input: 0, output: 0 },
         costUsd: 0,
         workUnits: 0,
@@ -7952,6 +7953,114 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         )
       ).toBe(true);
       expect(runUsageWrites(mockDeps.store).at(-1)?.total_cost_usd).toBe(6);
+    });
+
+    it('charges max_work_units for every plain-loop provider iteration (#1961)', async () => {
+      let calls = 0;
+      mockSendQueryDag.mockImplementation(async function* () {
+        calls++;
+        yield { type: 'assistant', content: 'not complete' };
+        // Deliberately omit cost: the work ceiling is provider-independent.
+        yield { type: 'result', sessionId: `loop-work-${String(calls)}` };
+      });
+      const store = createMockStore();
+
+      await executeDagWorkflow(
+        createMockDeps(store),
+        createMockPlatform(),
+        'conv-loop-work-budget',
+        testDir,
+        {
+          name: 'loop-work-budget',
+          budget: { max_work_units: 2 },
+          nodes: [
+            {
+              id: 'iterate',
+              kind: 'loop',
+              loop: {
+                prompt: 'keep working',
+                until: 'COMPLETE',
+                max_iterations: 100,
+                fresh_context: false,
+              },
+            },
+          ],
+        },
+        makeWorkflowRun('loop-work-budget-run'),
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'state'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      expect(calls).toBe(2);
+      expect(
+        store.createWorkflowEvent.mock.calls.filter(
+          ([event]) => event.event_type === 'work_unit_charged'
+        )
+      ).toHaveLength(2);
+      expect(
+        store.createWorkflowEvent.mock.calls.some(
+          ([event]) => event.event_type === 'budget_exhausted' && event.step_name === 'iterate'
+        )
+      ).toBe(true);
+    });
+
+    it('charges max_work_units for a plain-loop structured-output reask (#1961)', async () => {
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield { type: 'result', sessionId: 'invalid', structuredOutput: { note: 'missing done' } };
+      });
+      const store = createMockStore();
+
+      await executeDagWorkflow(
+        createMockDeps(store),
+        createMockPlatform(),
+        'conv-loop-reask-work-budget',
+        testDir,
+        {
+          name: 'loop-reask-work-budget',
+          budget: { max_work_units: 1 },
+          nodes: [
+            {
+              id: 'iterate',
+              provider: 'pi',
+              output_format: untilFieldSchema,
+              kind: 'loop',
+              loop: {
+                prompt: 'keep working',
+                until_field: 'done',
+                max_iterations: 3,
+                fresh_context: false,
+              },
+            },
+          ],
+        },
+        makeWorkflowRun('loop-reask-work-budget-run'),
+        'pi',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'state'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        { ...minimalConfig, assistant: 'pi' }
+      );
+
+      expect(mockSendQueryDag.mock.calls.length).toBe(1);
+      expect(
+        store.createWorkflowEvent.mock.calls.filter(
+          ([event]) => event.event_type === 'work_unit_charged'
+        )
+      ).toHaveLength(1);
+      expect(
+        store.createWorkflowEvent.mock.calls.some(
+          ([event]) => event.event_type === 'budget_exhausted' && event.data?.phase === 'loop_reask'
+        )
+      ).toBe(true);
     });
 
     it('emits a loop tool_completed duration at tool_result, excluding later assistant time', async () => {

@@ -309,6 +309,7 @@ class InMemoryStore implements IWorkflowStore {
 
   getDagResumeSnapshot: IWorkflowStore['getDagResumeSnapshot'] = workflowRunId => {
     const completedNodeOutputs = new Map<string, { output: string; structuredOutput?: unknown }>();
+    const terminalNodeIds = new Set<string>();
     const tokens = { input: 0, output: 0 };
     let costUsd = 0;
     let workUnits = 0;
@@ -324,6 +325,9 @@ class InMemoryStore implements IWorkflowStore {
           e.event_type === 'node_skipped_prior_success') &&
         typeof e.step_name === 'string'
       ) {
+        if (e.event_type === 'node_completed' || e.event_type === 'node_failed') {
+          terminalNodeIds.add(e.step_name);
+        }
         if (e.event_type === 'node_failed') {
           completedNodeOutputs.delete(e.step_name);
         } else {
@@ -363,7 +367,7 @@ class InMemoryStore implements IWorkflowStore {
         }
       }
     }
-    return Promise.resolve({ completedNodeOutputs, tokens, costUsd, workUnits });
+    return Promise.resolve({ completedNodeOutputs, terminalNodeIds, tokens, costUsd, workUnits });
   };
 
   getCodebase = (): Promise<null> => Promise.resolve(null);
@@ -2334,6 +2338,102 @@ nodes:
     expect(parent?.status).toBe('failed');
   });
 
+  it('does not replay 1:1 child usage when parent output validation fails again on resume (#1961)', async () => {
+    await writeWorkflow(
+      'paid-schema-child',
+      `
+name: paid-schema-child
+description: paid child whose text violates the parent schema
+nodes:
+  - id: emit
+    prompt: return plain text
+`
+    );
+    await writeWorkflow(
+      'paid-schema-parent',
+      `
+name: paid-schema-parent
+description: rechecks one settled child without charging it twice
+budget: { max_spend_usd: 5 }
+nodes:
+  - id: prepare
+    bash: echo ready
+  - id: sub
+    workflow: paid-schema-child
+    depends_on: [prepare]
+    output_format:
+      type: object
+      properties:
+        verdict: { type: string }
+      required: [verdict]
+`
+    );
+
+    const store = new InMemoryStore();
+    let providerCalls = 0;
+    const provider = {
+      ...makeProvider(),
+      sendQuery: mock(function* () {
+        providerCalls++;
+        yield { type: 'assistant', content: 'ai-output' };
+        yield {
+          type: 'result',
+          sessionId: 'paid-schema-child',
+          cost: 0.01,
+          tokens: { input: 7, output: 3, cacheRead: 5, cacheWrite: 0 },
+        };
+      }),
+    };
+    const deps: WorkflowDeps = {
+      ...makeDeps(store),
+      getAgentProvider: mock(() => provider) as unknown as WorkflowDeps['getAgentProvider'],
+    };
+    const parentDefinition = await discover('paid-schema-parent');
+
+    const first = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parentDefinition,
+      'goal',
+      'conv-db'
+    );
+    expect(first.success).toBe(false);
+    const parent = [...store.runs.values()].find(run => run.workflow_name === 'paid-schema-parent');
+    expect(parent?.metadata.total_cost_usd).toBeCloseTo(0.01, 5);
+
+    const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(parent!.id))!);
+    expect(hydrated).not.toBeNull();
+    const second = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parentDefinition,
+      'goal',
+      'conv-db',
+      { ...hydrated! }
+    );
+
+    expect(second.success).toBe(false);
+    expect(providerCalls).toBe(1);
+    const resumedParent = await store.getWorkflowRun(parent!.id);
+    expect(resumedParent?.metadata.total_cost_usd).toBeCloseTo(0.01, 5);
+    expect(resumedParent?.metadata.total_tokens_in).toBe(7);
+    expect(resumedParent?.metadata.total_tokens_out).toBe(3);
+    const subFailures = store.events.filter(
+      event =>
+        event.workflow_run_id === parent?.id &&
+        event.step_name === 'sub' &&
+        event.event_type === 'node_failed'
+    );
+    expect(subFailures).toHaveLength(2);
+    expect(subFailures[0]?.data?.cost_usd).toBeCloseTo(0.01, 5);
+    expect(subFailures[1]?.data?.cost_usd).toBe(0);
+    expect(subFailures[1]?.data?.tokens).toBeUndefined();
+  });
+
   it('completes the fan-out when every child matches the declared output_format (#2774)', async () => {
     await writeWorkflow(
       'fan-child-ok',
@@ -3034,6 +3134,123 @@ nodes:
       store.events.some(
         event =>
           event.workflow_run_id === parent?.id && event.event_type === 'budget_enforcement_failed'
+      )
+    ).toBe(true);
+  });
+
+  it('fails closed when a resumed child cannot persist its new cumulative usage (#1961)', async () => {
+    await writeWorkflow(
+      'resumed-paid-child-usage-write-fails',
+      `
+name: resumed-paid-child-usage-write-fails
+description: incurs paid work on every failed attempt
+nodes:
+  - id: paid
+    prompt: return plain text
+    output_format:
+      type: object
+      properties:
+        verdict: { type: string }
+      required: [verdict]
+`
+    );
+    await writeWorkflow(
+      'resumed-paid-parent-usage-write-fails',
+      `
+name: resumed-paid-parent-usage-write-fails
+description: must reject a stale cumulative child total
+budget: { max_spend_usd: 5 }
+nodes:
+  - id: prepare
+    bash: echo ready
+  - id: sub
+    workflow: resumed-paid-child-usage-write-fails
+    depends_on: [prepare]
+`
+    );
+
+    const store = new InMemoryStore();
+    let childUsageWrites = 0;
+    const updateWorkflowRun = store.updateWorkflowRun;
+    store.updateWorkflowRun = (id, updates) => {
+      const run = store.runs.get(id);
+      if (
+        run?.workflow_name === 'resumed-paid-child-usage-write-fails' &&
+        typeof updates.metadata?.total_cost_usd === 'number'
+      ) {
+        childUsageWrites++;
+        if (childUsageWrites === 2) {
+          return Promise.reject(new Error('second child usage write unavailable'));
+        }
+      }
+      return updateWorkflowRun(id, updates);
+    };
+    let providerCalls = 0;
+    const provider = {
+      ...makeProvider(),
+      sendQuery: mock(function* () {
+        providerCalls++;
+        yield { type: 'assistant', content: 'still plain text' };
+        yield {
+          type: 'result',
+          sessionId: `resumed-paid-${String(providerCalls)}`,
+          cost: 0.01,
+          tokens: { input: 7, output: 3, cacheRead: 5, cacheWrite: 0 },
+        };
+      }),
+    };
+    const deps: WorkflowDeps = {
+      ...makeDeps(store),
+      getAgentProvider: mock(() => provider) as unknown as WorkflowDeps['getAgentProvider'],
+    };
+    const parentDefinition = await discover('resumed-paid-parent-usage-write-fails');
+
+    const first = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parentDefinition,
+      'goal',
+      'conv-db'
+    );
+    expect(first.success).toBe(false);
+    const parent = [...store.runs.values()].find(
+      run => run.workflow_name === 'resumed-paid-parent-usage-write-fails'
+    );
+    const child = [...store.runs.values()].find(
+      run => run.workflow_name === 'resumed-paid-child-usage-write-fails'
+    );
+    expect(child?.metadata.total_cost_usd).toBeCloseTo(0.01, 5);
+
+    const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(parent!.id))!);
+    expect(hydrated).not.toBeNull();
+    const second = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parentDefinition,
+      'goal',
+      'conv-db',
+      { ...hydrated! }
+    );
+
+    expect(second.success).toBe(false);
+    expect(providerCalls).toBe(2);
+    expect(childUsageWrites).toBe(2);
+    const resumedChild = await store.getWorkflowRun(child!.id);
+    expect(resumedChild?.metadata.total_cost_usd).toBeCloseTo(0.01, 5);
+    expect(resumedChild?.metadata.cost_reporting_unavailable).toBe(true);
+    expect((await store.getWorkflowRun(parent!.id))?.metadata.cost_reporting_unavailable).toBe(
+      true
+    );
+    expect(
+      store.events.some(
+        event =>
+          event.workflow_run_id === parent?.id &&
+          event.step_name === 'sub' &&
+          event.event_type === 'budget_enforcement_failed'
       )
     ).toBe(true);
   });
