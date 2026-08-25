@@ -68,7 +68,7 @@ import { formatDuration, parseDbTimestamp } from './utils/duration';
 import { keepAwake } from './utils/keep-awake';
 import { getWorkflowEventEmitter } from './event-emitter';
 import { isRegisteredProvider, getRegisteredProviders } from '@archon/providers';
-import type { ExecutionContext } from '@archon/providers/types';
+import type { ExecutionContext, TokenUsage } from '@archon/providers/types';
 import type { ContainerRunContext } from './container-context';
 export type { ContainerRunContext, ContainerWriteBackBackend } from './container-context';
 // Re-exported so callers driving the capture-first sequence need only this module.
@@ -1154,6 +1154,31 @@ async function gatherDescendantRunIds(deps: WorkflowDeps, rootId: string): Promi
   return out;
 }
 
+/** Convert a child run's cumulative token totals into this re-drive's contribution. */
+function subtractPriorTokenUsage(
+  cumulative: TokenUsage | undefined,
+  prior: TokenUsage | undefined
+): TokenUsage | undefined {
+  if (cumulative === undefined || prior === undefined) return cumulative;
+  const cacheRead =
+    cumulative.cacheRead === undefined
+      ? undefined
+      : Math.max(0, cumulative.cacheRead - (prior.cacheRead ?? 0));
+  const cacheWrite =
+    cumulative.cacheWrite === undefined
+      ? undefined
+      : Math.max(0, cumulative.cacheWrite - (prior.cacheWrite ?? 0));
+  return {
+    input: Math.max(0, cumulative.input - prior.input),
+    output: Math.max(0, cumulative.output - prior.output),
+    ...(cacheRead !== undefined ? { cacheRead } : {}),
+    ...(cacheWrite !== undefined ? { cacheWrite } : {}),
+    ...(cumulative.cachePartial === true || prior.cachePartial === true
+      ? { cachePartial: true as const }
+      : {}),
+  };
+}
+
 /**
  * Start (or resume a failed) child workflow run in-process for a `workflow:` node
  * (#2121 Phase 2). Reuses the FULL executeWorkflow lifecycle for the child —
@@ -1382,7 +1407,8 @@ async function runChildWorkflow(
   let childOpts: ExecuteWorkflowOptions;
   let childRunId: string;
   let priorChildCostUsd = 0;
-  let priorChildWorkUnits = 0;
+  let priorChildTokens =
+    resumeFailedChild === undefined ? undefined : childOutcomeFromRun(resumeFailedChild).tokens;
   // Thread the resolver into every child so a NESTED grandchild `workflow:` node can
   // also request its own worktree (nesting is first-class up to the depth cap) — the
   // recursive executeWorkflow otherwise has no resolver and would fail-fast. (The
@@ -1400,7 +1426,7 @@ async function runChildWorkflow(
         };
         childRunId = hydrated.preCreatedRun.id;
         priorChildCostUsd = hydrated.priorUsage.costUsd;
-        priorChildWorkUnits = hydrated.priorUsage.workUnits;
+        priorChildTokens ??= hydrated.priorUsage.tokens;
       } else {
         // Failed child with no completed nodes — flip it back to running and re-run
         // from the top (nothing to skip). Its failed attempts still consumed budget,
@@ -1421,7 +1447,7 @@ async function runChildWorkflow(
         };
         childRunId = preCreatedRun.id;
         priorChildCostUsd = snapshot.costUsd;
-        priorChildWorkUnits = snapshot.workUnits;
+        priorChildTokens ??= snapshot.tokens;
       }
     } else {
       const childRun = await deps.store.createWorkflowRun({
@@ -1546,16 +1572,13 @@ async function runChildWorkflow(
       return failAfterExecution('Child run row disappeared after execution.', childRunId);
     }
     const outcome = childOutcomeFromRun(finalChild);
-    if (requireReportedCost && !childExecutionResult.success && outcome.costUsd === undefined) {
-      // A normal failure return before DAG admission (source/config/path/credential
-      // setup) has no result cost, just like an unreported paid provider result. The
-      // required work-unit ledger is the durable boundary between those states: if
-      // this pass admitted no new unit, its spend is provably zero. Previous child
-      // attempts remain in the cumulative snapshot and are excluded by comparison.
-      const snapshot = await deps.store.getDagResumeSnapshot(childRunId);
-      if (snapshot.workUnits === priorChildWorkUnits) {
-        return { ...outcome, costUsd: 0 };
-      }
+    if (
+      requireReportedCost &&
+      !childExecutionResult.success &&
+      childExecutionResult.workStarted === false &&
+      outcome.costUsd === undefined
+    ) {
+      return { ...outcome, costUsd: 0 };
     }
     if (!resumeFailedChild || outcome.costUsd === undefined) return outcome;
     return {
@@ -1564,6 +1587,7 @@ async function runChildWorkflow(
       // contains the child's earlier contribution, so this execution pass carries only
       // the newly consumed delta into the next parent event and live admission check.
       costUsd: Math.max(0, outcome.costUsd - priorChildCostUsd),
+      tokens: subtractPriorTokenUsage(outcome.tokens, priorChildTokens),
     };
   } catch (err) {
     // A read-back/interpretation failure crosses the execution boundary: paid work may
@@ -1780,6 +1804,16 @@ async function maybeResumeParentRun(
   }
 }
 
+/** A failed result that proves no DAG node was admitted in this execution pass. */
+function failBeforeWorkflowWork(error: string, workflowRunId?: string): WorkflowExecutionResult {
+  return {
+    success: false,
+    error,
+    workStarted: false,
+    ...(workflowRunId !== undefined ? { workflowRunId } : {}),
+  };
+}
+
 /**
  * Execute a complete DAG-based workflow.
  *
@@ -1924,7 +1958,7 @@ export async function executeWorkflow(
       );
     });
     await safeSendMessage(platform, conversationId, `⚠️ ${msg}`);
-    return { success: false, workflowRunId: preCreatedRun.id, error: msg };
+    return failBeforeWorkflowWork(msg, preCreatedRun.id);
   }
 
   let runConfigMetadata: WorkflowRunConfigMetadata | undefined;
@@ -2271,7 +2305,7 @@ export async function executeWorkflow(
         conversationId,
         '❌ **Workflow failed**: Unable to start workflow (database error). Please try again later.'
       );
-      return { success: false, error: 'Database error creating workflow run' };
+      return failBeforeWorkflowWork('Database error creating workflow run');
     }
   }
 
@@ -2302,11 +2336,10 @@ export async function executeWorkflow(
         conversationId,
         '❌ **Workflow failed**: Unable to record the run invocation settings. Please try again later.'
       );
-      return {
-        success: false,
-        workflowRunId: preCreatedRun.id,
-        error: 'Database error recording workflow invocation settings',
-      };
+      return failBeforeWorkflowWork(
+        'Database error recording workflow invocation settings',
+        preCreatedRun.id
+      );
     }
     workflowRun = {
       ...preCreatedRun,
@@ -2419,10 +2452,10 @@ export async function executeWorkflow(
           `❌ **This worktree is in use** by \`${activeWorkflow.workflow_name}\` ` +
             `(${stateLine}).\n${actionLines}`
         );
-        return {
-          success: false,
-          error: `Workflow already active on this path (${activeWorkflow.status}): ${activeWorkflow.workflow_name}`,
-        };
+        return failBeforeWorkflowWork(
+          `Workflow already active on this path (${activeWorkflow.status}): ${activeWorkflow.workflow_name}`,
+          workflowRun.id
+        );
       }
     } catch (error) {
       const err = error as Error;
@@ -2449,7 +2482,7 @@ export async function executeWorkflow(
         conversationId,
         '❌ **Workflow blocked**: Unable to verify if another workflow is running (database error). Please try again in a moment.'
       );
-      return { success: false, error: 'Database error checking for active workflow' };
+      return failBeforeWorkflowWork('Database error checking for active workflow', workflowRun.id);
     }
   }
 
@@ -2582,11 +2615,10 @@ export async function executeWorkflow(
       conversationId,
       `❌ **Workflow failed**: Could not create artifacts directory \`${artifactsDir}\`: ${err.message}`
     );
-    return {
-      success: false,
-      workflowRunId: workflowRun.id,
-      error: `Artifacts directory creation failed: ${err.message}`,
-    };
+    return failBeforeWorkflowWork(
+      `Artifacts directory creation failed: ${err.message}`,
+      workflowRun.id
+    );
   }
   getLog().debug({ artifactsDir, logDir, stateDir, outputRoot }, 'workflow_paths_resolved');
 
@@ -2659,7 +2691,7 @@ export async function executeWorkflow(
       );
     });
     await sendCriticalMessage(platform, conversationId, `❌ **Workflow failed**: ${message}`);
-    return { success: false, workflowRunId: workflowRun.id, error: message };
+    return failBeforeWorkflowWork(message, workflowRun.id);
   };
 
   if (recordedSourceState.kind === 'unreadable') {
@@ -2810,7 +2842,7 @@ export async function executeWorkflow(
       conversationId,
       'Workflow blocked: Unable to safely prepare provider credentials. Please retry.'
     );
-    return { success: false, workflowRunId: workflowRun.id, error: message };
+    return failBeforeWorkflowWork(message, workflowRun.id);
   }
 
   const { env: userProviderEnv, protectedValues } = await resolveUserProviderEnvForWorkflow(
@@ -2842,6 +2874,7 @@ export async function executeWorkflow(
   // best-effort semantics). Placed HERE, not at function top, so the
   // early-return validation paths above never leak an unpaired acquire; the
   // matching release is the first statement of this try's finally.
+  let workflowWorkStarted = false;
   keepAwake.acquire();
   try {
     getLog().info(
@@ -2967,7 +3000,7 @@ export async function executeWorkflow(
           conversationId,
           'Workflow blocked: Unable to update status. Please try again.'
         );
-        return { success: false, error: 'Database error setting workflow to running' };
+        return failBeforeWorkflowWork('Database error setting workflow to running', workflowRun.id);
       }
     }
 
@@ -3074,6 +3107,7 @@ export async function executeWorkflow(
     // cast reflects that invariant, not a new one. The adopted-dir scope (#2747)
     // encloses only the DAG: a child sub-run spawned from a node re-enters
     // `executeWorkflow` and scopes its own (absent) adoption.
+    workflowWorkStarted = true;
     const dagSummary = await runWithAdoptedRunDir(adoptedRunDir, () =>
       executeDagWorkflow(
         deps,
@@ -3243,7 +3277,9 @@ export async function executeWorkflow(
       );
     }
     // Return failure result instead of re-throwing
-    return { success: false, workflowRunId: workflowRun.id, error: err.message };
+    return workflowWorkStarted
+      ? { success: false, workflowRunId: workflowRun.id, error: err.message }
+      : failBeforeWorkflowWork(err.message, workflowRun.id);
   } finally {
     // Release the keep-awake request FIRST — before the backstop DB calls that
     // may throw — so it always pairs with the acquire above this try, on every

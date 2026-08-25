@@ -390,7 +390,13 @@ export type LoadCommandResult =
  */
 export type WorkflowExecutionResult =
   | { success: true; workflowRunId: string; summary?: string }
-  | { success: false; workflowRunId?: string; error: string }
+  | {
+      success: false;
+      workflowRunId?: string;
+      error: string;
+      /** Explicit proof that the DAG admission boundary was never crossed. */
+      workStarted?: false;
+    }
   | { success: true; paused: true; workflowRunId: string };
 
 // ---------------------------------------------------------------------------

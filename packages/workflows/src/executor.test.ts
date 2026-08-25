@@ -999,6 +999,7 @@ describe('executeWorkflow', () => {
         success: false,
         workflowRunId: 'pending-run',
         error: 'Database error recording workflow invocation settings',
+        workStarted: false,
       });
       expect(failRun).toHaveBeenCalledWith(
         'pending-run',

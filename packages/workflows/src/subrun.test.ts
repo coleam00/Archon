@@ -319,22 +319,28 @@ class InMemoryStore implements IWorkflowStore {
       }
       if (
         e.workflow_run_id === workflowRunId &&
-        (e.event_type === 'node_completed' || e.event_type === 'node_skipped_prior_success') &&
+        (e.event_type === 'node_completed' ||
+          e.event_type === 'node_failed' ||
+          e.event_type === 'node_skipped_prior_success') &&
         typeof e.step_name === 'string'
       ) {
-        // Mirrors the real store (#2637): the logical value rides beside the text.
-        completedNodeOutputs.set(e.step_name, {
-          output: String(e.data?.node_output ?? ''),
-          ...(e.data?.structured_output !== undefined
-            ? { structuredOutput: e.data.structured_output }
-            : {}),
-        });
+        if (e.event_type === 'node_failed') {
+          completedNodeOutputs.delete(e.step_name);
+        } else {
+          // Mirrors the real store (#2637): the logical value rides beside the text.
+          completedNodeOutputs.set(e.step_name, {
+            output: String(e.data?.node_output ?? ''),
+            ...(e.data?.structured_output !== undefined
+              ? { structuredOutput: e.data.structured_output }
+              : {}),
+          });
+        }
         // Mirrors the real store: a derived row (loop_group roll-up) restates usage
         // other rows already carry, so it contributes output but never usage (#2469).
         if (e.data?.aggregate === true) continue;
         const eventTokens = e.data?.tokens;
         if (
-          e.event_type === 'node_completed' &&
+          e.event_type !== 'node_skipped_prior_success' &&
           typeof eventTokens === 'object' &&
           eventTokens !== null &&
           'input' in eventTokens &&
@@ -349,7 +355,7 @@ class InMemoryStore implements IWorkflowStore {
         }
         const eventCost = e.data?.cost_usd;
         if (
-          e.event_type === 'node_completed' &&
+          e.event_type !== 'node_skipped_prior_success' &&
           typeof eventCost === 'number' &&
           Number.isFinite(eventCost)
         ) {
@@ -1228,10 +1234,16 @@ nodes:
       .at(-1);
     expect(String(subCompleted?.data?.node_output)).toContain('recovered');
     expect(subCompleted?.data?.cost_usd).toBe(0);
-    expect((await store.getWorkflowRun(parentRun!.id))?.metadata.total_cost_usd).toBeCloseTo(
-      0.01,
-      5
-    );
+    expect(subCompleted?.data?.tokens).toEqual({
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+    });
+    const resumedParent = await store.getWorkflowRun(parentRun!.id);
+    expect(resumedParent?.metadata.total_cost_usd).toBeCloseTo(0.01, 5);
+    expect(resumedParent?.metadata.total_tokens_in).toBe(7);
+    expect(resumedParent?.metadata.total_tokens_out).toBe(3);
 
     // Separately: a child cancelled out-of-band fails the node on re-entry.
     await writeWorkflow(
@@ -2960,6 +2972,72 @@ nodes:
     ).toBe(false);
   });
 
+  it('does not classify paid child work as zero when its usage row write fails (#1961)', async () => {
+    await writeWorkflow(
+      'paid-child-usage-write-fails',
+      `
+name: paid-child-usage-write-fails
+description: spends through a provider, then fails deterministically
+nodes:
+  - id: paid
+    prompt: do paid work
+  - id: fail
+    depends_on: [paid]
+    bash: exit 1
+`
+    );
+    await writeWorkflow(
+      'paid-parent-usage-write-fails',
+      `
+name: paid-parent-usage-write-fails
+description: must fail closed when child usage persistence is lost
+budget: { max_spend_usd: 5 }
+nodes:
+  - id: sub
+    workflow: paid-child-usage-write-fails
+`
+    );
+
+    const store = new InMemoryStore();
+    const updateWorkflowRun = store.updateWorkflowRun;
+    store.updateWorkflowRun = (id, updates) => {
+      const run = store.runs.get(id);
+      if (
+        run?.workflow_name === 'paid-child-usage-write-fails' &&
+        typeof updates.metadata?.total_cost_usd === 'number'
+      ) {
+        return Promise.reject(new Error('child usage write unavailable'));
+      }
+      return updateWorkflowRun(id, updates);
+    };
+
+    const result = await executeWorkflow(
+      makeDeps(store),
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      await discover('paid-parent-usage-write-fails'),
+      'goal',
+      'conv-db'
+    );
+
+    expect(result.success).toBe(false);
+    const child = [...store.runs.values()].find(
+      run => run.workflow_name === 'paid-child-usage-write-fails'
+    );
+    expect(child?.metadata.total_cost_usd).toBeUndefined();
+    const parent = [...store.runs.values()].find(
+      run => run.workflow_name === 'paid-parent-usage-write-fails'
+    );
+    expect(parent?.metadata.cost_reporting_unavailable).toBe(true);
+    expect(
+      store.events.some(
+        event =>
+          event.workflow_run_id === parent?.id && event.event_type === 'budget_enforcement_failed'
+      )
+    ).toBe(true);
+  });
+
   it('records an explicit zero for a deterministic child under a parent spend ceiling (#1961)', async () => {
     await writeWorkflow(
       'deterministic-budget-child',
@@ -3739,11 +3817,14 @@ nodes:
     expect(byIndex1.get(1)?.status).toBe('failed');
     expect(byIndex1.get(2)?.status).toBe('completed');
     expect(parentRun?.metadata.total_cost_usd).toBeCloseTo(0.03, 5);
+    expect(parentRun?.metadata.total_tokens_in).toBe(21);
+    expect(parentRun?.metadata.total_tokens_out).toBe(9);
     const completedAtBefore = byIndex1.get(0)!.completed_at;
 
     // Resume the PARENT: only the failed index-1 child is re-driven (marker now present →
     // recovered); the two COMPLETED siblings are threaded from their rows, not re-executed.
     const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(parentRun!.id))!);
+    expect(hydrated?.priorUsage.tokens).toMatchObject({ input: 21, output: 9 });
     const resumeOpts = hydrated ?? {
       preCreatedRun: await store.resumeWorkflowRun(parentRun!.id),
     };
@@ -3760,10 +3841,10 @@ nodes:
 
     expect(r2.success).toBe(true);
     expect((await store.getWorkflowRun(parentRun!.id))?.status).toBe('completed');
-    expect((await store.getWorkflowRun(parentRun!.id))?.metadata.total_cost_usd).toBeCloseTo(
-      0.03,
-      5
-    );
+    const resumedParent = await store.getWorkflowRun(parentRun!.id);
+    expect(resumedParent?.metadata.total_cost_usd).toBeCloseTo(0.03, 5);
+    expect(resumedParent?.metadata.total_tokens_in).toBe(21);
+    expect(resumedParent?.metadata.total_tokens_out).toBe(9);
     // Exactly 3 child rows — one per index; the failed one was re-driven in its own row.
     expect(
       [...store.runs.values()].filter(r => r.workflow_name === 'fan-child-flaky')
