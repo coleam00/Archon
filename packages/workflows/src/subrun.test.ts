@@ -952,6 +952,128 @@ nodes:
     expect((await store.getWorkflowRun(child!.id))?.metadata.cost_reporting_unavailable).toBe(true);
   });
 
+  it('accounts pre-pause child usage when the child later fails and is re-driven (#1961)', async () => {
+    await writeWorkflow(
+      'child-paid-around-gate',
+      `
+name: child-paid-around-gate
+description: paid work before and after an approval gate
+interactive: true
+nodes:
+  - id: before
+    prompt: work before the gate
+  - id: gate
+    approval:
+      message: continue
+    depends_on: [before]
+  - id: after
+    prompt: work after the gate
+    depends_on: [gate]
+    output_format:
+      type: object
+      properties:
+        verdict: { type: string }
+      required: [verdict]
+`
+    );
+    await writeWorkflow(
+      'parent-paid-around-gate',
+      `
+name: parent-paid-around-gate
+description: owns every child pass after pausing on it
+interactive: true
+budget: { max_spend_usd: 5 }
+nodes:
+  - id: sub
+    workflow: child-paid-around-gate
+    isolation: inherit
+`
+    );
+
+    let providerCalls = 0;
+    const usages = [
+      { cost: 0.01, tokens: { input: 7, output: 3, cacheRead: 5, cacheWrite: 1 } },
+      { cost: 0.02, tokens: { input: 11, output: 5, cacheRead: 4, cacheWrite: 1 } },
+      { cost: 0.03, tokens: { input: 13, output: 6, cacheRead: 5, cacheWrite: 2 } },
+    ] as const;
+    const store = new InMemoryStore();
+    const deps: WorkflowDeps = {
+      ...makeDeps(store),
+      getAgentProvider: mock(() => ({
+        ...makeProvider(),
+        sendQuery: mock(function* () {
+          const call = providerCalls++;
+          yield {
+            type: 'assistant',
+            content: call === 1 ? 'not structured' : 'ready',
+          };
+          yield {
+            type: 'result',
+            sessionId: `paid-gate-${String(call)}`,
+            ...usages[call]!,
+            ...(call === 2 ? { structuredOutput: { verdict: 'ship' } } : {}),
+          };
+        }),
+      })) as unknown as WorkflowDeps['getAgentProvider'],
+    };
+
+    const parentDefinition = await discover('parent-paid-around-gate');
+    const first = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parentDefinition,
+      'goal',
+      'conv-db'
+    );
+    expect(first.success && 'paused' in first && first.paused).toBe(true);
+    const parent = [...store.runs.values()].find(
+      run => run.workflow_name === 'parent-paid-around-gate'
+    );
+    const child = [...store.runs.values()].find(
+      run => run.workflow_name === 'child-paid-around-gate'
+    );
+    expect(parent?.metadata.total_cost_usd).toBe(0);
+
+    store.approveGate(child!.id);
+    const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(child!.id))!);
+    expect(hydrated).not.toBeNull();
+    const childResult = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      await discover('child-paid-around-gate'),
+      child!.user_message,
+      'conv-db',
+      { ...hydrated! }
+    );
+
+    expect(childResult.success).toBe(false);
+    expect(providerCalls).toBe(3);
+    const finalParent = await store.getWorkflowRun(parent!.id);
+    expect(finalParent?.status).toBe('completed');
+    expect(finalParent?.metadata.total_cost_usd).toBeCloseTo(0.06, 5);
+    expect(finalParent?.metadata.total_tokens_in).toBe(31);
+    expect(finalParent?.metadata.total_tokens_out).toBe(14);
+    expect(finalParent?.metadata.total_cache_read_tokens).toBe(14);
+    expect(finalParent?.metadata.total_cache_write_tokens).toBe(4);
+    const subCompleted = store.events.find(
+      event =>
+        event.workflow_run_id === parent!.id &&
+        event.step_name === 'sub' &&
+        event.event_type === 'node_completed'
+    );
+    expect(subCompleted?.data?.cost_usd).toBeCloseTo(0.06, 5);
+    expect(subCompleted?.data?.tokens).toEqual({
+      input: 31,
+      output: 14,
+      cacheRead: 14,
+      cacheWrite: 4,
+    });
+  });
+
   it('a throw during the parent auto-resume pass lands the parent in failed, never wedged at running', async () => {
     await writeWorkflow(
       'child-gated',

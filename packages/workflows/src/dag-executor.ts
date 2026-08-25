@@ -92,6 +92,7 @@ import {
   isBindingDirective,
   SUBRUN_METADATA_KEYS,
   RUN_METADATA_KEYS,
+  readUsageTerminalNodeIds,
   WAIT_NODE_OUTPUT_FORMAT,
   waitUntilTimestampSchema,
   waitCondition,
@@ -764,6 +765,31 @@ function sumTokenUsage(
   // The merge rule itself lives with TokenUsage so every aggregation site shares one
   // owner; this function keeps the validation and warn events, which differ per caller.
   return mergeTokenUsage(valid);
+}
+
+/** Return the current-pass portion of a cumulative token total. */
+export function subtractPriorTokenUsage(
+  cumulative: TokenUsage | undefined,
+  prior: TokenUsage | undefined
+): TokenUsage | undefined {
+  if (cumulative === undefined || prior === undefined) return cumulative;
+  const cacheRead =
+    cumulative.cacheRead === undefined
+      ? undefined
+      : Math.max(0, cumulative.cacheRead - (prior.cacheRead ?? 0));
+  const cacheWrite =
+    cumulative.cacheWrite === undefined
+      ? undefined
+      : Math.max(0, cumulative.cacheWrite - (prior.cacheWrite ?? 0));
+  return {
+    input: Math.max(0, cumulative.input - prior.input),
+    output: Math.max(0, cumulative.output - prior.output),
+    ...(cacheRead !== undefined ? { cacheRead } : {}),
+    ...(cacheWrite !== undefined ? { cacheWrite } : {}),
+    ...(cumulative.cachePartial === true || prior.cachePartial === true
+      ? { cachePartial: true as const }
+      : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -4561,7 +4587,7 @@ function buildHonestGateMessage(
  * non-finite value must be dropped rather than persisted onward as a number a
  * consumer would believe.
  */
-function readSignaledTokens(
+export function readSignaledTokens(
   raw: unknown,
   context: { workflowRunId: string; nodeId: string }
 ): TokenUsage | undefined {
@@ -6018,30 +6044,8 @@ async function executeLoopNode(
       : cumulativeCostUsd - (priorUsageRestored ? (persistedLoopCostUsd ?? 0) : 0);
   const currentPassLoopTokens = (
     cumulativeTokens: TokenUsage | undefined
-  ): TokenUsage | undefined => {
-    if (cumulativeTokens === undefined || !priorUsageRestored) return cumulativeTokens;
-    return {
-      input: Math.max(0, cumulativeTokens.input - (persistedLoopTokens?.input ?? 0)),
-      output: Math.max(0, cumulativeTokens.output - (persistedLoopTokens?.output ?? 0)),
-      ...(cumulativeTokens.cacheRead !== undefined
-        ? {
-            cacheRead: Math.max(
-              0,
-              cumulativeTokens.cacheRead - (persistedLoopTokens?.cacheRead ?? 0)
-            ),
-          }
-        : {}),
-      ...(cumulativeTokens.cacheWrite !== undefined
-        ? {
-            cacheWrite: Math.max(
-              0,
-              cumulativeTokens.cacheWrite - (persistedLoopTokens?.cacheWrite ?? 0)
-            ),
-          }
-        : {}),
-      ...(cumulativeTokens.cachePartial === true ? { cachePartial: true as const } : {}),
-    };
-  };
+  ): TokenUsage | undefined =>
+    subtractPriorTokenUsage(cumulativeTokens, priorUsageRestored ? persistedLoopTokens : undefined);
 
   // Emit node_started up-front so every terminal outcome of this loop node is
   // paired with a corresponding _started event — same pattern the bash and
@@ -8390,6 +8394,26 @@ async function executeWorkflowNode(
     tokens: undefined,
   });
 
+  const withPriorLifetimeUsage = (
+    outcome: ChildWorkflowOutcome,
+    prior: ChildWorkflowOutcome
+  ): ChildWorkflowOutcome => {
+    const costUsd =
+      outcome.costUsd !== undefined || prior.costUsd !== undefined
+        ? (outcome.costUsd ?? 0) + (prior.costUsd ?? 0)
+        : undefined;
+    const tokens = sumTokenUsage(
+      [prior.tokens, outcome.tokens].filter((usage): usage is TokenUsage => usage !== undefined),
+      { nodeId: node.id }
+    );
+    return {
+      ...outcome,
+      ...(costUsd !== undefined ? { costUsd } : {}),
+      ...(tokens !== undefined ? { tokens } : {}),
+      ...(prior.costEnforceable === false ? { costEnforceable: false as const } : {}),
+    };
+  };
+
   // Re-entry: find THIS node's child (a parent may run several workflow: nodes, so
   // filter by parent_node_id). At most one child per node in slice 1; if somehow
   // several, the most recent wins.
@@ -8430,10 +8454,24 @@ async function executeWorkflowNode(
       return await interpret(await ctx.runChildWorkflow(childArgs));
     }
     if (existing.status === 'failed') {
+      if (ctx.priorUsageRestored && ctx.priorTerminalNodeIds === undefined) {
+        return failResult(
+          `Cannot resume workflow node '${node.id}': prior terminal-node accounting is unavailable.`
+        );
+      }
+      const priorTerminalNodeIds = ctx.priorUsageRestored
+        ? ctx.priorTerminalNodeIds
+        : readUsageTerminalNodeIds(ctx.workflowRun.metadata);
+      const parentOwnsPriorUsage = priorTerminalNodeIds?.has(ctx.stepNamePrefix + node.id);
+      const priorOutcome = childOutcomeFromRun(existing);
       // Resume-through-parent recovery (D5/#1764): re-drive the failed child once.
       await chargeBudgetWorkUnit(ctx, node.id, 'spawn_decision');
+      const redriveOutcome = await ctx.runChildWorkflow({
+        ...childArgs,
+        resumeFailedChild: existing,
+      });
       return await interpret(
-        await ctx.runChildWorkflow({ ...childArgs, resumeFailedChild: existing })
+        parentOwnsPriorUsage ? redriveOutcome : withPriorLifetimeUsage(redriveOutcome, priorOutcome)
       );
     }
     if (

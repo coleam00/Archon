@@ -58,6 +58,8 @@ import {
 import {
   executeDagWorkflow,
   childOutcomeFromRun,
+  readSignaledTokens,
+  subtractPriorTokenUsage,
   WorkflowUsagePersistenceError,
 } from './dag-executor';
 import type { RunChildWorkflowArgs, ChildWorkflowOutcome, PriorRunUsage } from './dag-executor';
@@ -74,7 +76,7 @@ import { formatDuration, parseDbTimestamp } from './utils/duration';
 import { keepAwake } from './utils/keep-awake';
 import { getWorkflowEventEmitter } from './event-emitter';
 import { isRegisteredProvider, getRegisteredProviders } from '@archon/providers';
-import type { ExecutionContext, TokenUsage } from '@archon/providers/types';
+import { mergeTokenUsage, type ExecutionContext, type TokenUsage } from '@archon/providers/types';
 import type { ContainerRunContext } from './container-context';
 export type { ContainerRunContext, ContainerWriteBackBackend } from './container-context';
 // Re-exported so callers driving the capture-first sequence need only this module.
@@ -1111,10 +1113,21 @@ function mergePersistedPriorUsage(
     approvalContext.signaledCostUsd >= 0
       ? approvalContext.signaledCostUsd
       : 0);
-  const persistedTokens = maxPersistedTokenUsage(snapshot.tokens, rowUsage.tokens);
+  const cursorTokens =
+    approvalContext?.type === 'interactive_loop' &&
+    !snapshot.completedNodeOutputs.has(approvalContext.nodeId)
+      ? readSignaledTokens(approvalContext.signaledTokens, {
+          workflowRunId: run.id,
+          nodeId: approvalContext.nodeId,
+        })
+      : undefined;
+  const eventAndCursorTokens = mergeTokenUsage(
+    [snapshot.tokens, cursorTokens].filter((usage): usage is TokenUsage => usage !== undefined)
+  );
+  const persistedTokens = maxPersistedTokenUsage(eventAndCursorTokens, rowUsage.tokens);
   const rowFallbackUsed =
     (rowUsage.costUsd ?? 0) > eventAndCursorCost ||
-    tokenUsageExceeds(rowUsage.tokens, snapshot.tokens);
+    tokenUsageExceeds(rowUsage.tokens, eventAndCursorTokens);
   return {
     ...(persistedTokens !== undefined ? { tokens: persistedTokens } : {}),
     costUsd: Math.max(eventAndCursorCost, rowUsage.costUsd ?? 0),
@@ -1237,31 +1250,6 @@ async function gatherDescendantRunIds(deps: WorkflowDeps, rootId: string): Promi
     }
   }
   return out;
-}
-
-/** Convert a child run's cumulative token totals into this re-drive's contribution. */
-function subtractPriorTokenUsage(
-  cumulative: TokenUsage | undefined,
-  prior: TokenUsage | undefined
-): TokenUsage | undefined {
-  if (cumulative === undefined || prior === undefined) return cumulative;
-  const cacheRead =
-    cumulative.cacheRead === undefined
-      ? undefined
-      : Math.max(0, cumulative.cacheRead - (prior.cacheRead ?? 0));
-  const cacheWrite =
-    cumulative.cacheWrite === undefined
-      ? undefined
-      : Math.max(0, cumulative.cacheWrite - (prior.cacheWrite ?? 0));
-  return {
-    input: Math.max(0, cumulative.input - prior.input),
-    output: Math.max(0, cumulative.output - prior.output),
-    ...(cacheRead !== undefined ? { cacheRead } : {}),
-    ...(cacheWrite !== undefined ? { cacheWrite } : {}),
-    ...(cumulative.cachePartial === true || prior.cachePartial === true
-      ? { cachePartial: true as const }
-      : {}),
-  };
 }
 
 /**

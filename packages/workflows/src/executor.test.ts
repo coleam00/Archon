@@ -3434,7 +3434,7 @@ describe('hydrateResumableRun', () => {
       getDagResumeSnapshot: mock(async () => ({
         completedNodeOutputs: new Map(),
         terminalNodeIds: new Set<string>(),
-        tokens: { input: 0, output: 0 },
+        tokens: undefined,
         costUsd: 0,
         workUnits: 0,
       })),
@@ -3457,6 +3457,7 @@ describe('hydrateResumableRun', () => {
           message: 'Iterate?',
           iteration: 2,
           signaledCostUsd: 1.25,
+          signaledTokens: { input: 40, output: 4, cacheRead: 20, cacheWrite: 0 },
         },
       },
     });
@@ -3465,7 +3466,7 @@ describe('hydrateResumableRun', () => {
       getDagResumeSnapshot: mock(async () => ({
         completedNodeOutputs: new Map(),
         terminalNodeIds: new Set<string>(),
-        tokens: { input: 0, output: 0 },
+        tokens: undefined,
         costUsd: 0,
         workUnits: 0,
       })),
@@ -3476,7 +3477,49 @@ describe('hydrateResumableRun', () => {
     expect(result).not.toBeNull();
     expect(result?.priorCompletedNodes.size).toBe(0);
     expect(result?.priorUsage.costUsd).toBe(1.25);
+    expect(result?.priorUsage.tokens).toEqual({
+      input: 40,
+      output: 4,
+      cacheRead: 20,
+      cacheWrite: 0,
+    });
     expect(store.resumeWorkflowRun).toHaveBeenCalledWith('paused-loop');
+  });
+
+  it('adds an interactive-loop cursor to terminal usage from other nodes', async () => {
+    const candidate = makeRun({
+      id: 'paused-loop-after-prepare',
+      status: 'paused',
+      metadata: {
+        approval: {
+          type: 'interactive_loop',
+          nodeId: 'loop-1',
+          message: 'Iterate?',
+          iteration: 2,
+          signaledCostUsd: 1.25,
+          signaledTokens: { input: 40, output: 4, cacheRead: 20, cacheWrite: 0 },
+        },
+      },
+    });
+    const store = makeStore({
+      getDagResumeSnapshot: mock(async () => ({
+        completedNodeOutputs: new Map([['prepare', { output: 'ready' }]]),
+        terminalNodeIds: new Set(['prepare']),
+        tokens: { input: 10, output: 1, cacheRead: 5, cacheWrite: 0 },
+        costUsd: 0.5,
+        workUnits: 1,
+      })),
+      resumeWorkflowRun: mock(async () => makeRun({ id: candidate.id, status: 'running' })),
+    });
+
+    const result = await hydrateResumableRun(makeDeps(store), candidate);
+
+    expect(result?.priorUsage).toEqual({
+      tokens: { input: 50, output: 5, cacheRead: 25, cacheWrite: 0 },
+      costUsd: 1.75,
+      workUnits: 1,
+      terminalNodeIds: new Set(['prepare']),
+    });
   });
 
   it('does not add a stale loop cursor after that loop has a terminal usage row', async () => {
@@ -3489,6 +3532,7 @@ describe('hydrateResumableRun', () => {
           nodeId: 'loop-1',
           message: 'Iterate?',
           signaledCostUsd: 1.25,
+          signaledTokens: { input: 40, output: 4 },
         },
       },
     });
@@ -3506,6 +3550,7 @@ describe('hydrateResumableRun', () => {
     const result = await hydrateResumableRun(makeDeps(store), candidate);
 
     expect(result?.priorUsage.costUsd).toBe(2);
+    expect(result?.priorUsage.tokens).toEqual({ input: 4, output: 1 });
   });
 
   it.each([
