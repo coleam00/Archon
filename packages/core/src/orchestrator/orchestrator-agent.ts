@@ -2690,7 +2690,6 @@ async function handleStreamMode(
   let lastResult: { cost?: number; tokens?: TokenUsage; stopReason?: string } | undefined;
 
   for await (const msg of runProviderQuery({
-    provider,
     client: aiClient,
     prompt: fullPrompt,
     cwd,
@@ -2926,7 +2925,6 @@ async function handleBatchMode(
   let lastResult: { cost?: number; tokens?: TokenUsage; stopReason?: string } | undefined;
 
   for await (const msg of runProviderQuery({
-    provider,
     client: aiClient,
     prompt: fullPrompt,
     cwd,

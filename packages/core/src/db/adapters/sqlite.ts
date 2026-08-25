@@ -759,8 +759,6 @@ export class SqliteAdapter implements IDatabase {
         slot_index INTEGER NOT NULL CHECK (slot_index >= 0),
         lease_id TEXT NOT NULL,
         lease_expires_at TEXT NOT NULL,
-        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (provider_id, slot_index)
       );
 

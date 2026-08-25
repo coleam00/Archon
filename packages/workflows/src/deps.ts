@@ -139,7 +139,6 @@ export interface ProviderQueryContext {
 }
 
 export interface ProviderQueryRequest {
-  provider: string;
   client: IAgentProvider;
   prompt: string;
   cwd: string;

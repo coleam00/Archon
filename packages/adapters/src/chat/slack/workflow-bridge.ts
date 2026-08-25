@@ -151,11 +151,11 @@ export class SlackWorkflowBridge {
           this.scheduleStatusUpdate(event.runId);
           break;
         case 'provider_slot_queued':
-          this.upsertNode(event.runId, event.nodeId, event.nodeId, 'queued');
+          this.upsertNode(event.runId, event.nodeId, event.nodeName, 'queued');
           this.scheduleStatusUpdate(event.runId);
           break;
         case 'provider_slot_acquired':
-          this.upsertNode(event.runId, event.nodeId, event.nodeId, 'running');
+          this.upsertNode(event.runId, event.nodeId, event.nodeName, 'running');
           this.scheduleStatusUpdate(event.runId);
           break;
         case 'approval_pending':

@@ -213,6 +213,35 @@ describe('createWorkflowStore', () => {
     ).resolves.toBeUndefined();
   });
 
+  test('serializes fire-and-forget event writes within one workflow run', async () => {
+    let releaseFirst: (() => void) | undefined;
+    const firstBlocked = new Promise<void>(resolve => {
+      releaseFirst = resolve;
+    });
+    const committed: string[] = [];
+    mockCreateWorkflowEvent.mockImplementation(async data => {
+      committed.push(data.event_type);
+      if (data.event_type === 'provider_slot_queued') await firstBlocked;
+    });
+    const store = createWorkflowStore();
+
+    const queued = store.createWorkflowEvent({
+      workflow_run_id: 'run-order',
+      event_type: 'provider_slot_queued',
+    });
+    const acquired = store.createWorkflowEvent({
+      workflow_run_id: 'run-order',
+      event_type: 'provider_slot_acquired',
+    });
+    await Bun.sleep(0);
+    expect(committed).toEqual(['provider_slot_queued']);
+
+    releaseFirst?.();
+    await Promise.all([queued, acquired]);
+    expect(committed).toEqual(['provider_slot_queued', 'provider_slot_acquired']);
+    mockCreateWorkflowEvent.mockImplementation(() => Promise.resolve());
+  });
+
   test('delegates getDagResumeSnapshot to DB', async () => {
     const expected = {
       completedNodeOutputs: new Map([['step1', 'output text']]),

@@ -25,6 +25,13 @@ export interface IAgentProvider {
 
 The provider yields a stream of `MessageChunk` variants (see `packages/providers/src/types.ts`). Archon normalizes every backend to this shape so platform adapters, the DAG executor, and the orchestrator don't need to know whether they're talking to Claude, Codex, Pi, or your provider.
 
+`IAgentProvider` is sufficient when the provider is uncapped. To support an
+install-wide `concurrency.providers.<id>` limit, implement
+`AdmissionCapableAgentProvider` as well. Its `sendQueryWithAdmission` method
+receives a required `providerAttemptGate`; acquire immediately before each
+actual upstream attempt and release before retry backoff. Archon fails closed
+when a cap is configured for a provider that does not implement this contract.
+
 ## Directory layout
 
 A community provider lives entirely under `packages/providers/src/community/<your-provider-id>/`. The Pi provider uses this layout:

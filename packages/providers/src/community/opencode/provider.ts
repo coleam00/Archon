@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { createLogger } from '@archon/paths';
 
 import type {
-  IAgentProvider,
+  AdmissionCapableAgentProvider,
   MessageChunk,
   ProviderCapabilities,
   SendQueryOptions,
@@ -41,7 +41,18 @@ function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-export class OpencodeProvider implements IAgentProvider {
+export class OpencodeProvider implements AdmissionCapableAgentProvider {
+  async *sendQueryWithAdmission(
+    prompt: string,
+    cwd: string,
+    resumeSessionId: string | undefined,
+    options: SendQueryOptions & {
+      providerAttemptGate: NonNullable<SendQueryOptions['providerAttemptGate']>;
+    }
+  ): AsyncGenerator<MessageChunk> {
+    yield* this.sendQuery(prompt, cwd, resumeSessionId, options);
+  }
+
   private readonly retryBaseDelayMs: number;
 
   constructor(options?: { retryBaseDelayMs?: number }) {
@@ -141,20 +152,18 @@ export class OpencodeProvider implements IAgentProvider {
           // sessions internally and cannot resume a single prior session. If a
           // resume was requested, report it as cold (false) so the executor
           // surfaces the lost continuity instead of silently starting fresh.
-          yield* withProviderAttempt(requestOptions, signal => {
-            attemptSignal = signal;
-            return withResumedOutcome(
-              streamMultiAgentOpencodeSession(
-                runtime.client,
-                sessionCwd,
-                nodeId,
-                prompt,
-                parsedModel,
-                { ...requestOptions, abortSignal: signal }
-              ),
-              resumedOutcome(resumeSessionId, false)
-            );
-          });
+          attemptSignal = requestOptions?.abortSignal;
+          yield* withResumedOutcome(
+            streamMultiAgentOpencodeSession(
+              runtime.client,
+              sessionCwd,
+              nodeId,
+              prompt,
+              parsedModel,
+              requestOptions
+            ),
+            resumedOutcome(resumeSessionId, false)
+          );
           return;
         }
 

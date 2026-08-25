@@ -79,6 +79,7 @@ describe('mapWorkflowEvent — provider capacity', () => {
       type: 'provider_slot_queued',
       runId: 'run-1',
       nodeId: 'implement',
+      nodeName: 'Implementation',
       provider: 'pi',
       limit: 2,
     };
@@ -86,6 +87,7 @@ describe('mapWorkflowEvent — provider capacity', () => {
       type: 'provider_slot_acquired',
       runId: 'run-1',
       nodeId: 'implement',
+      nodeName: 'Implementation',
       provider: 'pi',
       limit: 2,
       slot: 1,
@@ -95,11 +97,13 @@ describe('mapWorkflowEvent — provider capacity', () => {
     expect(JSON.parse(mapWorkflowEvent(queued) ?? '{}')).toMatchObject({
       type: 'dag_node',
       nodeId: 'implement',
+      name: 'Implementation',
       status: 'queued',
     });
     expect(JSON.parse(mapWorkflowEvent(acquired) ?? '{}')).toMatchObject({
       type: 'dag_node',
       nodeId: 'implement',
+      name: 'Implementation',
       status: 'running',
     });
   });

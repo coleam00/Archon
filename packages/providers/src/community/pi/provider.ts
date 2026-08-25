@@ -6,12 +6,14 @@ import { createLogger } from '@archon/paths';
 // Type-only import — erased by TS, so it does NOT trigger Pi's config.js
 // package.json read at module load (see the header note below). Used only to
 // annotate the per-call ResourceLoader local.
-import type { DefaultResourceLoader } from '@earendil-works/pi-coding-agent';
+import type { DefaultResourceLoader, ModelRuntime } from '@earendil-works/pi-coding-agent';
+import type { AssistantMessageEvent } from '@earendil-works/pi-ai';
 
 import type {
-  IAgentProvider,
+  AdmissionCapableAgentProvider,
   MessageChunk,
   ProviderCapabilities,
+  ProviderAttemptGate,
   SendQueryOptions,
   SystemPromptInput,
 } from '../../types';
@@ -21,7 +23,36 @@ import { parsePiConfig, resolvePiExtensionSettings } from './config';
 import { parsePiModelRef } from './model-ref';
 import { buildCustomProviderModelsPath } from './request-auth';
 import { withResumedOutcome, resumedOutcome } from '../../shared/resumed';
-import { withProviderAttempt } from '../../shared/provider-attempt';
+
+export function installPiAdmission(
+  runtime: Pick<ModelRuntime, 'streamSimple'>,
+  gate: ProviderAttemptGate,
+  lazyStream: typeof import('@earendil-works/pi-ai').lazyStream
+): void {
+  const streamSimple = runtime.streamSimple.bind(runtime);
+  runtime.streamSimple = (model, context, options): ReturnType<ModelRuntime['streamSimple']> =>
+    lazyStream(model, async (): Promise<AsyncIterable<AssistantMessageEvent>> => {
+      const lease = await gate.acquire(options?.signal);
+      const signal = options?.signal
+        ? AbortSignal.any([options.signal, lease.signal])
+        : lease.signal;
+      return (async function* (): AsyncGenerator<AssistantMessageEvent> {
+        try {
+          signal.throwIfAborted();
+          yield* streamSimple(model, context, {
+            ...options,
+            signal,
+            // Keep the user's high-level Pi session retry unchanged, but
+            // disable the nested transport retry whose backoff would otherwise
+            // sleep inside this lease.
+            maxRetries: 0,
+          });
+        } finally {
+          await lease.release();
+        }
+      })();
+    });
+}
 
 // IMPORTANT: Do NOT add static `import { ... } from '@earendil-works/*'` here,
 // and do NOT statically import sibling modules that themselves import runtime
@@ -248,7 +279,18 @@ Guidelines:
  * coding-agent harness. Each `sendQuery()` call creates a fresh session
  * (no reuse) so concurrent calls don't collide.
  */
-export class PiProvider implements IAgentProvider {
+export class PiProvider implements AdmissionCapableAgentProvider {
+  async *sendQueryWithAdmission(
+    prompt: string,
+    cwd: string,
+    resumeSessionId: string | undefined,
+    options: SendQueryOptions & {
+      providerAttemptGate: NonNullable<SendQueryOptions['providerAttemptGate']>;
+    }
+  ): AsyncGenerator<MessageChunk> {
+    yield* this.sendQuery(prompt, cwd, resumeSessionId, options);
+  }
+
   async *sendQuery(
     prompt: string,
     cwd: string,
@@ -278,6 +320,7 @@ export class PiProvider implements IAgentProvider {
     // destructured PascalCase bindings trip eslint's naming-convention rule.
     const [
       piCodingAgent,
+      piAi,
       { bridgeSession },
       { resolvePiSkills, resolvePiThinkingLevel, resolvePiTools, buildDefaultPiTools },
       { createNoopResourceLoader, getOrCreateReloadedExtensionLoader },
@@ -286,6 +329,7 @@ export class PiProvider implements IAgentProvider {
       { buildPiNativeToolDefinitions },
     ] = await Promise.all([
       import('@earendil-works/pi-coding-agent'),
+      import('@earendil-works/pi-ai'),
       import('./event-bridge'),
       import('./options-translator'),
       import('./resource-loader'),
@@ -387,6 +431,10 @@ export class PiProvider implements IAgentProvider {
         authPath: archonAuthPath,
         ...(customProviderModelsPath ? { modelsPath: customProviderModelsPath } : {}),
       });
+      const attemptGate = requestOptions?.providerAttemptGate;
+      if (attemptGate) {
+        installPiAdmission(modelRuntime, attemptGate, piAi.lazyStream);
+      }
       modelRegistry = new piCodingAgent.ModelRegistry(modelRuntime);
     } catch (err) {
       const e = err as Error;
@@ -866,11 +914,15 @@ export class PiProvider implements IAgentProvider {
     //    is on, it also binds/unbinds the UI stub's emitter so extension
     //    notifications land on the same queue as Pi events.
     try {
-      yield* withProviderAttempt(requestOptions, signal =>
-        withResumedOutcome(
-          bridgeSession(session, effectivePrompt, signal, outputFormat?.schema, uiBridge),
-          resumedOutcome(resumeSessionId, !resumeFailed)
-        )
+      yield* withResumedOutcome(
+        bridgeSession(
+          session,
+          effectivePrompt,
+          requestOptions?.abortSignal,
+          outputFormat?.schema,
+          uiBridge
+        ),
+        resumedOutcome(resumeSessionId, !resumeFailed)
       );
       getLog().info({ piProvider: parsed.provider }, 'pi.prompt_completed');
     } catch (err) {

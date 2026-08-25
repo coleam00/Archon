@@ -4294,11 +4294,18 @@ describe('executeDagWorkflow -- tool_called event persistence', () => {
     const mockDeps = createMockDeps(mockStore);
     const platform = createMockPlatform();
     const workflowRun = makeWorkflowRun();
+    const liveEvents: WorkflowEmitterEvent[] = [];
+    const unsubscribe = getWorkflowEventEmitter().subscribe(event => {
+      if (event.runId === workflowRun.id && event.type.startsWith('provider_slot_')) {
+        liveEvents.push(event);
+      }
+    });
     mockDeps.runProviderQuery = request =>
       (async function* () {
-        await request.context?.onQueued?.({ provider: request.provider, limit: 2 });
+        const provider = request.client.getType();
+        await request.context?.onQueued?.({ provider, limit: 2 });
         await request.context?.onAcquired?.({
-          provider: request.provider,
+          provider,
           limit: 2,
           slot: 1,
           waitMs: 40,
@@ -4311,22 +4318,29 @@ describe('executeDagWorkflow -- tool_called event persistence', () => {
         );
       })();
 
-    await executeDagWorkflow(
-      mockDeps,
-      platform,
-      'conv-dag',
-      testDir,
-      { name: 'capacity-events', nodes: [node('my-cmd')] },
-      workflowRun,
-      'claude',
-      undefined,
-      join(testDir, 'artifacts'),
-      join(testDir, 'state'),
-      join(testDir, 'logs'),
-      'main',
-      'docs/',
-      minimalConfig
-    );
+    try {
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-dag',
+        testDir,
+        {
+          name: 'capacity-events',
+          nodes: [node('node-id', undefined, { source: { kind: 'command', name: 'my-cmd' } })],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'state'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+    } finally {
+      unsubscribe();
+    }
 
     const persisted = (mockStore.createWorkflowEvent as ReturnType<typeof mock>).mock.calls
       .map(
@@ -4343,15 +4357,27 @@ describe('executeDagWorkflow -- tool_called event persistence', () => {
       {
         workflow_run_id: workflowRun.id,
         event_type: 'provider_slot_queued',
-        step_name: 'my-cmd',
+        step_name: 'node-id',
         data: { provider: 'claude', limit: 2, query_attempt: 0 },
       },
       {
         workflow_run_id: workflowRun.id,
         event_type: 'provider_slot_acquired',
-        step_name: 'my-cmd',
+        step_name: 'node-id',
         data: { provider: 'claude', limit: 2, slot: 1, wait_ms: 40, query_attempt: 0 },
       },
+    ]);
+    expect(liveEvents).toEqual([
+      expect.objectContaining({
+        type: 'provider_slot_queued',
+        nodeId: 'node-id',
+        nodeName: 'my-cmd',
+      }),
+      expect.objectContaining({
+        type: 'provider_slot_acquired',
+        nodeId: 'node-id',
+        nodeName: 'my-cmd',
+      }),
     ]);
   });
 

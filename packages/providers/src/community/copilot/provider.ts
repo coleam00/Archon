@@ -24,7 +24,7 @@ import type {
 } from '@github/copilot-sdk';
 
 import type {
-  IAgentProvider,
+  AdmissionCapableAgentProvider,
   MessageChunk,
   ProviderCapabilities,
   SendQueryOptions,
@@ -434,7 +434,18 @@ function buildFriendlyCopilotError(error: unknown, lastSessionError?: string): E
  * caller. Each `sendQuery()` constructs a fresh `CopilotClient` so
  * per-request env vars are honored.
  */
-export class CopilotProvider implements IAgentProvider {
+export class CopilotProvider implements AdmissionCapableAgentProvider {
+  async *sendQueryWithAdmission(
+    prompt: string,
+    cwd: string,
+    resumeSessionId: string | undefined,
+    options: SendQueryOptions & {
+      providerAttemptGate: NonNullable<SendQueryOptions['providerAttemptGate']>;
+    }
+  ): AsyncGenerator<MessageChunk> {
+    yield* this.sendQuery(prompt, cwd, resumeSessionId, options);
+  }
+
   getType(): string {
     return 'copilot';
   }

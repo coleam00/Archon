@@ -86,4 +86,36 @@ describe('withProviderAttempt', () => {
     await expect(result).rejects.toThrow('lease lost');
     expect(released).toBe(true);
   });
+
+  test('does not start upstream work when cancellation wins during acquisition', async () => {
+    const controller = new AbortController();
+    let started = false;
+    let released = false;
+    const result = consume(
+      withProviderAttempt(
+        {
+          abortSignal: controller.signal,
+          providerAttemptGate: {
+            acquire: async () => {
+              controller.abort(new Error('cancelled while claiming'));
+              return {
+                signal: new AbortController().signal,
+                release: async () => {
+                  released = true;
+                },
+              };
+            },
+          },
+        },
+        async function* () {
+          started = true;
+          yield { type: 'assistant', content: 'should not start' };
+        }
+      )
+    );
+
+    await expect(result).rejects.toThrow('cancelled while claiming');
+    expect(started).toBe(false);
+    expect(released).toBe(true);
+  });
 });

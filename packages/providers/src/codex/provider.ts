@@ -11,7 +11,7 @@ import {
   type ThreadStartedEvent,
 } from '@openai/codex-sdk';
 import type {
-  IAgentProvider,
+  AdmissionCapableAgentProvider,
   SendQueryOptions,
   NodeConfig,
   MessageChunk,
@@ -880,7 +880,18 @@ function classifyAndEnrichCodexError(
  * - streamCodexEvents: raw SDK event normalization into MessageChunks
  * - classifyAndEnrichCodexError: error classification for retry decisions
  */
-export class CodexProvider implements IAgentProvider {
+export class CodexProvider implements AdmissionCapableAgentProvider {
+  async *sendQueryWithAdmission(
+    prompt: string,
+    cwd: string,
+    resumeSessionId: string | undefined,
+    options: SendQueryOptions & {
+      providerAttemptGate: NonNullable<SendQueryOptions['providerAttemptGate']>;
+    }
+  ): AsyncGenerator<MessageChunk> {
+    yield* this.sendQuery(prompt, cwd, resumeSessionId, options);
+  }
+
   private readonly retryBaseDelayMs: number;
 
   constructor(options?: { retryBaseDelayMs?: number }) {

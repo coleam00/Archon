@@ -880,13 +880,14 @@ describe('orchestrator-agent handleMessage', () => {
         sendQuery: mock(async function* () {
           yield { type: 'result', sessionId: 'codex-session' };
         }),
+        getType: mock(() => 'codex'),
       };
       mockGetAgentProvider.mockReturnValueOnce(codexClient);
 
       await handleMessage(platform, 'chat-456', 'hello');
 
       // Should pass codex assistantConfig, not claude's
-      const callArgs = codexClient.sendQuery.mock.calls[0];
+      const callArgs = codexClient.sendQuery.mock.calls.at(-1);
       const requestOptions = callArgs?.[3] as Record<string, unknown> | undefined;
       expect(requestOptions).toBeDefined();
       expect(requestOptions).not.toHaveProperty('settingSources');

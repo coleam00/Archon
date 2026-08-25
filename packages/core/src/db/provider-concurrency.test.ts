@@ -161,6 +161,53 @@ describe('ProviderConcurrencyGate', () => {
     await first.release();
   });
 
+  test('releases a successful claim when cancellation wins during the claim query', async () => {
+    const [db] = sharedDatabase();
+    const controller = new AbortController();
+    const cancellingDb: IDatabase = {
+      dialect: db.dialect,
+      sql: db.sql,
+      query: async <T>(sql: string, params?: unknown[]) => {
+        const result = await db.query<T>(sql, params);
+        if (sql.includes('INSERT INTO remote_agent_provider_slots')) controller.abort();
+        return result;
+      },
+      withTransaction: callback => db.withTransaction(callback),
+      close: () => db.close(),
+    };
+
+    const cancellingGate = new ProviderConcurrencyGate(cancellingDb, {
+      leaseMs: 10_000,
+      heartbeatMs: 2_000,
+      pollMs: 1,
+    });
+    await expect(
+      cancellingGate.acquire('pi', 1, { signal: controller.signal })
+    ).rejects.toMatchObject({ name: 'AbortError' });
+    const rows = await db.query(
+      `SELECT lease_id FROM remote_agent_provider_slots WHERE provider_id = $1`,
+      ['pi']
+    );
+    expect(rows.rowCount).toBe(0);
+  });
+
+  test('releases a successful claim when its workflow becomes terminal during the query', async () => {
+    const [db] = sharedDatabase();
+    let checks = 0;
+    await expect(
+      gate(db).acquire('pi', 1, {
+        shouldContinue: async () => ++checks === 1,
+      })
+    ).rejects.toMatchObject({ name: 'AbortError' });
+
+    expect(checks).toBe(2);
+    const rows = await db.query(
+      `SELECT lease_id FROM remote_agent_provider_slots WHERE provider_id = $1`,
+      ['pi']
+    );
+    expect(rows.rowCount).toBe(0);
+  });
+
   test('reclaims an expired slot and stale release cannot remove its successor', async () => {
     const [firstDb, secondDb] = sharedDatabase();
     await firstDb.query(

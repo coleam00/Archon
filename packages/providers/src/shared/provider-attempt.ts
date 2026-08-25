@@ -1,31 +1,11 @@
 import type { MessageChunk, SendQueryOptions } from '../types';
 
-function combineAbortSignals(signals: readonly (AbortSignal | undefined)[]): {
-  signal: AbortSignal;
-  cleanup: () => void;
-} {
-  const controller = new AbortController();
-  const listeners = new Map<AbortSignal, () => void>();
-  for (const signal of signals) {
-    if (!signal) continue;
-    const abort = (): void => {
-      controller.abort(signal.reason);
-    };
-    if (signal.aborted) {
-      abort();
-      break;
-    }
-    signal.addEventListener('abort', abort, { once: true });
-    listeners.set(signal, abort);
-  }
-  return {
-    signal: controller.signal,
-    cleanup: (): void => {
-      for (const [signal, listener] of listeners) {
-        signal.removeEventListener('abort', listener);
-      }
-    },
-  };
+function throwIfAborted(signal: AbortSignal): void {
+  if (!signal.aborted) return;
+  if (signal.reason instanceof Error) throw signal.reason;
+  const error = new Error('Provider attempt aborted before upstream work started');
+  error.name = 'AbortError';
+  throw error;
 }
 
 /** Run exactly one upstream provider attempt under the optional core admission gate. */
@@ -40,11 +20,13 @@ export async function* withProviderAttempt(
   }
 
   const lease = await gate.acquire();
-  const combined = combineAbortSignals([options.abortSignal, lease.signal]);
+  const signal = options.abortSignal
+    ? AbortSignal.any([options.abortSignal, lease.signal])
+    : lease.signal;
   try {
-    yield* run(combined.signal);
+    throwIfAborted(signal);
+    yield* run(signal);
   } finally {
-    combined.cleanup();
     await lease.release();
   }
 }

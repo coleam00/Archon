@@ -1,7 +1,7 @@
 import { createLogger } from '@archon/paths';
 
 import { mergeTokenUsage } from '../../types';
-import type { MessageChunk, SendQueryOptions, TokenUsage } from '../../types';
+import type { MessageChunk, ProviderAttemptLease, SendQueryOptions, TokenUsage } from '../../types';
 import { getOrderedAgents, type NamedAgentConfig } from './agent-config';
 import { errorMessage } from './errors';
 import type { OpencodeClientLike } from './runtime';
@@ -25,6 +25,8 @@ interface AgentRunState {
   chunks: MessageChunk[];
   latestAssistantInfo?: Record<string, unknown>;
   lastAssistantMessageId?: string;
+  lease?: ProviderAttemptLease;
+  leaseAbortHandler?: () => void;
   done: boolean;
 }
 
@@ -131,8 +133,21 @@ export async function* streamMultiAgentOpencodeSession(
   const events = await client.event.subscribe({ query: { directory: cwd } });
   getLog().info({ nodeId }, 'opencode.multi_agent_events_subscribed');
   const streamController = new AbortController();
+  const admissionController = new AbortController();
   const sessionToAgent = new Map<string, AgentRunState>();
   let aborted = requestOptions?.abortSignal?.aborted === true;
+  let promptError: Error | undefined;
+
+  const releaseStateLease = async (state: AgentRunState): Promise<void> => {
+    if (!state.lease) return;
+    if (state.leaseAbortHandler) {
+      state.lease.signal.removeEventListener('abort', state.leaseAbortHandler);
+    }
+    const lease = state.lease;
+    state.lease = undefined;
+    state.leaseAbortHandler = undefined;
+    await lease.release();
+  };
 
   const abortAll = async (): Promise<void> => {
     await Promise.all(
@@ -151,11 +166,16 @@ export async function* streamMultiAgentOpencodeSession(
 
   const abortHandler = (): void => {
     aborted = true;
+    admissionController.abort(requestOptions?.abortSignal?.reason);
     void abortAll();
     streamController.abort();
   };
 
-  requestOptions?.abortSignal?.addEventListener('abort', abortHandler, { once: true });
+  if (requestOptions?.abortSignal?.aborted) {
+    abortHandler();
+  } else {
+    requestOptions?.abortSignal?.addEventListener('abort', abortHandler, { once: true });
+  }
 
   try {
     // Phase 1: Create all child sessions in the shared sessionCwd so a single
@@ -177,10 +197,38 @@ export async function* streamMultiAgentOpencodeSession(
       })
     );
 
-    // Phase 2: Fire all prompts in parallel
+    // Phase 2: Fire prompts in parallel. Under an install-wide cap, each
+    // child owns its own slot from prompt submission until that exact session
+    // becomes idle. Acquiring all slots before listening would deadlock when
+    // the cap is lower than the fan-out width, so admission and event demux run
+    // concurrently.
     getLog().info({ nodeId, sessionCount: states.length }, 'opencode.multi_agent_prompting');
-    await Promise.all(
-      states.map(async state => {
+    const promptTasks = states.map(async state => {
+      try {
+        const lease = requestOptions?.providerAttemptGate
+          ? await requestOptions.providerAttemptGate.acquire(admissionController.signal)
+          : undefined;
+        if (lease) {
+          state.lease = lease;
+          const onLeaseLost = (): void => {
+            promptError =
+              lease.signal.reason instanceof Error
+                ? lease.signal.reason
+                : new Error(`OpenCode capacity lease lost for agent '${state.agent.key}'`);
+            admissionController.abort(promptError);
+            void abortAll();
+            streamController.abort();
+          };
+          state.leaseAbortHandler = onLeaseLost;
+          if (lease.signal.aborted) {
+            onLeaseLost();
+            throw (
+              promptError ??
+              new Error(`OpenCode capacity lease lost for agent '${state.agent.key}'`)
+            );
+          }
+          lease.signal.addEventListener('abort', onLeaseLost, { once: true });
+        }
         const agentRequestOptions = withAgentNodeConfig(requestOptions, state.agent);
         const promptBody = createSessionPromptBody(prompt, model, agentRequestOptions, state.agent);
         getLog().info(
@@ -192,9 +240,23 @@ export async function* streamMultiAgentOpencodeSession(
           { agent: state.agent.key, sessionId: state.sessionId },
           'opencode.multi_agent_prompt_sent'
         );
-      })
-    );
-    getLog().info({ nodeId }, 'opencode.multi_agent_all_prompts_sent');
+      } catch (error) {
+        promptError = error instanceof Error ? error : new Error(String(error));
+        admissionController.abort(promptError);
+        void abortAll();
+        streamController.abort();
+        throw promptError;
+      }
+    });
+    // Without a gate every prompt is admitted immediately, so retain the old
+    // guarantee that all submissions complete before consuming scripted/live
+    // events. Gated fan-out must consume events concurrently to release slots.
+    if (!requestOptions?.providerAttemptGate) {
+      await Promise.all(promptTasks);
+      getLog().info({ nodeId }, 'opencode.multi_agent_all_prompts_sent');
+    } else {
+      for (const task of promptTasks) void task.catch(() => undefined);
+    }
 
     const seenToolCalls = new Set<string>();
     const completedToolCalls = new Set<string>();
@@ -301,6 +363,7 @@ export async function* streamMultiAgentOpencodeSession(
           typeof properties.sessionID === 'string' ? properties.sessionID : undefined;
         const state = sessionId ? sessionToAgent.get(sessionId) : undefined;
         if (!state) continue;
+        await releaseStateLease(state);
         await abortAll();
         const rawError = isRecord(properties.error) ? properties.error : properties;
         const err = new Error(`[${state.agent.key}] ${errorMessage(rawError)}`);
@@ -313,6 +376,7 @@ export async function* streamMultiAgentOpencodeSession(
           typeof properties.sessionID === 'string' ? properties.sessionID : undefined;
         const state = sessionId ? sessionToAgent.get(sessionId) : undefined;
         if (!state) continue;
+        await releaseStateLease(state);
         state.done = true;
         getLog().info(
           {
@@ -391,6 +455,7 @@ export async function* streamMultiAgentOpencodeSession(
     }
 
     getLog().info({ nodeId, aborted, eventCount }, 'opencode.multi_agent_loop_exited');
+    if (promptError) throw promptError;
     if (aborted) {
       const abortReason = requestOptions?.abortSignal?.reason;
       throw new Error(
@@ -401,6 +466,8 @@ export async function* streamMultiAgentOpencodeSession(
     throw new Error('OpenCode multi-agent stream ended before all agents completed');
   } finally {
     requestOptions?.abortSignal?.removeEventListener('abort', abortHandler);
+    admissionController.abort();
     streamController.abort();
+    await Promise.all(Array.from(sessionToAgent.values(), state => releaseStateLease(state)));
   }
 }

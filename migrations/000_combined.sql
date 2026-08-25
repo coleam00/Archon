@@ -229,8 +229,6 @@ CREATE TABLE IF NOT EXISTS remote_agent_provider_slots (
   slot_index INTEGER NOT NULL CHECK (slot_index >= 0),
   lease_id UUID NOT NULL,
   lease_expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
-  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
   PRIMARY KEY (provider_id, slot_index)
 );
 

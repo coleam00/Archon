@@ -60,6 +60,35 @@ function collectOAuthCredentialValues(
 }
 
 export function createWorkflowStore(): IWorkflowStore {
+  // Preserve invocation order for one run even when callers intentionally do
+  // not await observability writes. In particular, provider admission emits
+  // queued/acquired from synchronous callbacks while node completion is
+  // persisted elsewhere; independent promises could otherwise commit those
+  // causal transitions out of order.
+  const eventWriteTails = new Map<string, Promise<void>>();
+  const createWorkflowEvent: IWorkflowStore['createWorkflowEvent'] = data => {
+    const previous = eventWriteTails.get(data.workflow_run_id) ?? Promise.resolve();
+    const current = previous.then(async (): Promise<void> => {
+      try {
+        await workflowEventDb.createWorkflowEvent(data);
+      } catch (err) {
+        // Belt-and-suspenders: workflowEventDb.createWorkflowEvent already catches internally,
+        // but this wrapper guarantees the IWorkflowStore non-throwing contract at the boundary.
+        getLog().error(
+          { err: err as Error, eventType: data.event_type, runId: data.workflow_run_id },
+          'workflow_event_create_unexpected_throw'
+        );
+      }
+    });
+    eventWriteTails.set(data.workflow_run_id, current);
+    void current.finally(() => {
+      if (eventWriteTails.get(data.workflow_run_id) === current) {
+        eventWriteTails.delete(data.workflow_run_id);
+      }
+    });
+    return current;
+  };
+
   return {
     createWorkflowRun: workflowDb.createWorkflowRun,
     getWorkflowRun: workflowDb.getWorkflowRun,
@@ -86,18 +115,7 @@ export function createWorkflowStore(): IWorkflowStore {
     claimWriteback: workflowDb.claimWriteback,
     releaseWritebackClaim: workflowDb.releaseWritebackClaim,
     cancelWorkflowRun: workflowDb.cancelWorkflowRun,
-    createWorkflowEvent: async (data): Promise<void> => {
-      try {
-        await workflowEventDb.createWorkflowEvent(data);
-      } catch (err) {
-        // Belt-and-suspenders: workflowEventDb.createWorkflowEvent already catches internally,
-        // but this wrapper guarantees the IWorkflowStore non-throwing contract at the boundary.
-        getLog().error(
-          { err: err as Error, eventType: data.event_type, runId: data.workflow_run_id },
-          'workflow_event_create_unexpected_throw'
-        );
-      }
-    },
+    createWorkflowEvent,
     getDagResumeSnapshot: workflowEventDb.getDagResumeSnapshot,
     getCodebase: codebaseDb.getCodebase,
     getCodebaseEnvVars: envVarDb.getCodebaseEnvVars,

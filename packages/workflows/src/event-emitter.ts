@@ -121,6 +121,7 @@ interface ProviderSlotQueuedEvent {
   type: 'provider_slot_queued';
   runId: string;
   nodeId: string;
+  nodeName: string;
   provider: string;
   limit: number;
 }
@@ -129,6 +130,7 @@ interface ProviderSlotAcquiredEvent {
   type: 'provider_slot_acquired';
   runId: string;
   nodeId: string;
+  nodeName: string;
   provider: string;
   limit: number;
   slot: number;

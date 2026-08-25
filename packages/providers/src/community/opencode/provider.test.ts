@@ -64,6 +64,32 @@ function createPendingStream(): AsyncIterable<OpencodeEvent> {
   };
 }
 
+function createPushStream(): {
+  stream: AsyncIterable<OpencodeEvent>;
+  push: (event: OpencodeEvent) => void;
+} {
+  const buffered: OpencodeEvent[] = [];
+  const waiters: ((result: IteratorResult<OpencodeEvent>) => void)[] = [];
+  return {
+    stream: {
+      [Symbol.asyncIterator]() {
+        return {
+          next: async (): Promise<IteratorResult<OpencodeEvent>> => {
+            const event = buffered.shift();
+            if (event) return { value: event, done: false };
+            return new Promise(resolve => waiters.push(resolve));
+          },
+        };
+      },
+    },
+    push: event => {
+      const waiter = waiters.shift();
+      if (waiter) waiter({ value: event, done: false });
+      else buffered.push(event);
+    },
+  };
+}
+
 function makeRuntime(overrides?: {
   sessionCreate?: ReturnType<typeof mock>;
   sessionGet?: ReturnType<typeof mock>;
@@ -454,6 +480,71 @@ describe('OpencodeProvider', () => {
         }),
       ])
     );
+  });
+
+  test('multi-agent fan-out holds one capacity lease per active child session', async () => {
+    const cwd = await createTempProjectDir();
+    const sessionIds = ['scout-session', 'reviewer-session'];
+    const events = createPushStream();
+    const runtime = makeRuntime({
+      sessionCreate: mock(async () => ({ data: { id: sessionIds.shift() } })),
+      promptAsync: mock(async request => {
+        events.push({
+          type: 'session.idle',
+          properties: { sessionID: request.path.id },
+        });
+      }),
+      subscribe: mock(async () => ({ stream: events.stream })),
+    });
+    runtimeQueue.push(runtime);
+
+    let active = 0;
+    let maxActive = 0;
+    let releases = 0;
+    const waiters: (() => void)[] = [];
+    const gate = {
+      acquire: async (): Promise<{
+        signal: AbortSignal;
+        release: () => Promise<void>;
+      }> => {
+        if (active >= 1) {
+          await new Promise<void>(resolve => waiters.push(resolve));
+        }
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        let released = false;
+        return {
+          signal: new AbortController().signal,
+          release: async (): Promise<void> => {
+            if (released) return;
+            released = true;
+            releases += 1;
+            active -= 1;
+            waiters.shift()?.();
+          },
+        };
+      },
+    };
+
+    const { error } = await consume(
+      new OpencodeProvider().sendQueryWithAdmission('hi', cwd, undefined, {
+        assistantConfig: TEST_MODEL,
+        nodeConfig: {
+          nodeId: 'research',
+          agents: {
+            scout: { description: 'Scout', prompt: 'Explore' },
+            reviewer: { description: 'Reviewer', prompt: 'Review' },
+          },
+        },
+        providerAttemptGate: gate,
+      })
+    );
+
+    expect(error).toBeUndefined();
+    expect(runtime.client.session.promptAsync).toHaveBeenCalledTimes(2);
+    expect(maxActive).toBe(1);
+    expect(active).toBe(0);
+    expect(releases).toBe(2);
   });
 
   test('terminal result chunk includes sessionId and normalized tokens', async () => {

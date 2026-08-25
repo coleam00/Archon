@@ -398,6 +398,32 @@ describe('mapPiEvent', () => {
     expect(chunks[0].type).toBe('result');
   });
 
+  test('agent_end before an automatic retry does not emit a terminal result', () => {
+    const usage = {
+      input: 5,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 5,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    };
+    expect(
+      mapPiEvent({
+        type: 'agent_end',
+        willRetry: true,
+        messages: [
+          {
+            role: 'assistant',
+            usage,
+            stopReason: 'error',
+            errorMessage: 'rate limit',
+            content: [],
+          } as never,
+        ],
+      })
+    ).toEqual([]);
+  });
+
   test('skipped event types yield no chunks', () => {
     expect(mapPiEvent({ type: 'agent_start' })).toEqual([]);
     expect(mapPiEvent({ type: 'turn_start' })).toEqual([]);

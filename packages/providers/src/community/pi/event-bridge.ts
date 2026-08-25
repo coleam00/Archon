@@ -258,7 +258,7 @@ export function mapPiEvent(event: AgentSessionEvent): MessageChunk[] {
       return chunks;
     }
     case 'agent_end':
-      return [buildResultChunk(event.messages)];
+      return event.willRetry ? [] : [buildResultChunk(event.messages)];
     case 'auto_retry_start':
       return [
         {

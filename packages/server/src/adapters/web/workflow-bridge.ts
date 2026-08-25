@@ -99,7 +99,7 @@ export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
         nodeId: event.nodeId,
         name:
           event.type === 'provider_slot_queued' || event.type === 'provider_slot_acquired'
-            ? event.nodeId
+            ? event.nodeName
             : event.nodeName,
         status:
           event.type === 'provider_slot_queued'

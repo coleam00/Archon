@@ -68,7 +68,6 @@ export async function generateAndSetTitle(
     };
 
     for await (const chunk of runProviderQuery({
-      provider: assistantType,
       client,
       prompt: titlePrompt,
       cwd,

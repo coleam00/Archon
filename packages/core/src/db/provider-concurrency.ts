@@ -170,10 +170,9 @@ class DatabaseProviderLease implements ProviderConcurrencyLease {
       this.db.dialect === 'postgres'
         ? "NOW() + ($4 * INTERVAL '1 millisecond')"
         : "strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+' || ($4 / 1000.0) || ' seconds')";
-    const now = this.db.dialect === 'postgres' ? 'NOW()' : 'CURRENT_TIMESTAMP';
     const result = await this.db.query(
       `UPDATE remote_agent_provider_slots
-       SET lease_expires_at = ${expiry}, updated_at = ${now}
+       SET lease_expires_at = ${expiry}
        WHERE provider_id = $1 AND slot_index = $2 AND lease_id = $3`,
       [this.provider, this.slot, this.leaseId, this.timing.leaseMs]
     );
@@ -257,6 +256,17 @@ export class ProviderConcurrencyGate {
             this.timing,
             claimedUntil
           );
+          try {
+            throwIfAborted(options.signal);
+            if (options.shouldContinue && !(await options.shouldContinue())) {
+              throw abortError(
+                `Provider concurrency wait stopped for terminal owner '${provider}'`
+              );
+            }
+          } catch (error) {
+            await lease.release();
+            throw error;
+          }
           if (queued) {
             notify(
               () => options.observer?.onAcquired?.({ provider, limit, slot, waitMs }),
@@ -291,19 +301,17 @@ export class ProviderConcurrencyGate {
       this.db.dialect === 'postgres'
         ? "NOW() + ($4 * INTERVAL '1 millisecond')"
         : "strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+' || ($4 / 1000.0) || ' seconds')";
-    const now = this.db.dialect === 'postgres' ? 'NOW()' : 'CURRENT_TIMESTAMP';
     const expired =
       this.db.dialect === 'postgres'
         ? 'remote_agent_provider_slots.lease_expires_at <= NOW()'
         : "julianday(remote_agent_provider_slots.lease_expires_at) <= julianday('now')";
     const result = await this.db.query<{ slot_index: number }>(
       `INSERT INTO remote_agent_provider_slots
-         (provider_id, slot_index, lease_id, lease_expires_at, created_at, updated_at)
-       VALUES ($1, $2, $3, ${expiry}, ${now}, ${now})
+         (provider_id, slot_index, lease_id, lease_expires_at)
+       VALUES ($1, $2, $3, ${expiry})
        ON CONFLICT (provider_id, slot_index) DO UPDATE SET
          lease_id = EXCLUDED.lease_id,
-         lease_expires_at = EXCLUDED.lease_expires_at,
-         updated_at = ${now}
+         lease_expires_at = EXCLUDED.lease_expires_at
        WHERE ${expired}
        RETURNING slot_index`,
       [provider, slot, leaseId, this.timing.leaseMs]

@@ -327,6 +327,11 @@ export interface IAgentProvider {
 }
 ```
 
+Providers that participate in install-wide concurrency limits also implement
+`AdmissionCapableAgentProvider`. Its admitted send method receives a required
+attempt gate, preventing a configured cap from being silently ignored by an
+adapter that does not know where its actual upstream attempts begin and end.
+
 ### MessageChunk Types
 
 `MessageChunk` is a discriminated union. Only the fields for each variant are present:

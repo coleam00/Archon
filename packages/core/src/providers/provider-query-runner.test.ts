@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'bun:test';
-import type { IAgentProvider, MessageChunk, ProviderCapabilities } from '@archon/providers/types';
+import type {
+  AdmissionCapableAgentProvider,
+  IAgentProvider,
+  MessageChunk,
+  ProviderCapabilities,
+} from '@archon/providers/types';
 import type { ProviderConcurrencyLease } from '../db/provider-concurrency';
 import { createProviderQueryRunner } from './provider-query-runner';
 
@@ -21,7 +26,7 @@ const capabilities: ProviderCapabilities = {
   containerExec: false,
 };
 
-function provider(stream: IAgentProvider['sendQuery']): IAgentProvider {
+function provider(stream: IAgentProvider['sendQuery']): AdmissionCapableAgentProvider {
   return {
     sendQuery: async function* (prompt, cwd, resumeSessionId, options) {
       const gate = options?.providerAttemptGate;
@@ -39,6 +44,9 @@ function provider(stream: IAgentProvider['sendQuery']): IAgentProvider {
       } finally {
         await lease.release();
       }
+    },
+    sendQueryWithAdmission: async function* (prompt, cwd, resumeSessionId, options) {
+      yield* this.sendQuery(prompt, cwd, resumeSessionId, options);
     },
     getType: () => 'pi',
     getCapabilities: () => capabilities,
@@ -63,7 +71,6 @@ describe('createProviderQueryRunner', () => {
     });
     const chunks = await consume(
       runner({
-        provider: 'pi',
         client: provider(async function* () {
           yield { type: 'assistant', content: 'ok' };
         }),
@@ -74,6 +81,35 @@ describe('createProviderQueryRunner', () => {
 
     expect(chunks).toEqual([{ type: 'assistant', content: 'ok' }]);
     expect(acquireCalls).toBe(0);
+  });
+
+  test('configured caps fail closed for providers without the admission contract', async () => {
+    let started = false;
+    const uncappedOnlyProvider: IAgentProvider = {
+      sendQuery: async function* () {
+        started = true;
+        yield { type: 'assistant', content: 'should not start' };
+      },
+      getType: () => 'community',
+      getCapabilities: () => capabilities,
+    };
+    const runner = createProviderQueryRunner({
+      acquire: async () => {
+        throw new Error('should not acquire');
+      },
+      loadLimits: async () => ({ community: 1 }),
+    });
+
+    await expect(
+      consume(
+        runner({
+          client: uncappedOnlyProvider,
+          prompt: 'hello',
+          cwd: '/tmp',
+        })
+      )
+    ).rejects.toThrow("Provider 'community' does not support install-wide concurrency admission");
+    expect(started).toBe(false);
   });
 
   test('acquires before starting and releases after completion', async () => {
@@ -96,7 +132,6 @@ describe('createProviderQueryRunner', () => {
 
     await consume(
       runner({
-        provider: 'pi',
         client: provider(async function* () {
           order.push('start');
           yield { type: 'assistant', content: 'ok' };
@@ -126,7 +161,6 @@ describe('createProviderQueryRunner', () => {
     await expect(
       consume(
         runner({
-          provider: 'pi',
           client: provider(async function* () {
             throw new Error('provider failed');
           }),
@@ -152,7 +186,6 @@ describe('createProviderQueryRunner', () => {
       loadLimits: async () => ({ pi: 1 }),
     });
     const generator = runner({
-      provider: 'pi',
       client: provider(async function* () {
         yield { type: 'assistant', content: 'first' };
         yield { type: 'assistant', content: 'second' };
@@ -183,7 +216,6 @@ describe('createProviderQueryRunner', () => {
     });
     const result = consume(
       runner({
-        provider: 'pi',
         client: provider(async function* (_prompt, _cwd, _resumeSessionId, options) {
           started = true;
           await new Promise<void>(resolve => {
@@ -220,11 +252,11 @@ describe('createProviderQueryRunner', () => {
       },
       loadLimits: async () => ({ pi: 1 }),
     });
-    const retryingProvider: IAgentProvider = {
+    const retryingProvider: AdmissionCapableAgentProvider = {
       ...provider(async function* () {
         yield { type: 'assistant', content: 'unused' };
       }),
-      sendQuery: async function* (prompt, cwd, resumeSessionId, options) {
+      sendQueryWithAdmission: async function* (prompt, cwd, resumeSessionId, options) {
         for (attempt = 1; attempt <= 2; attempt += 1) {
           const lease = await options?.providerAttemptGate?.acquire();
           if (!lease) throw new Error('missing attempt gate');
@@ -245,7 +277,6 @@ describe('createProviderQueryRunner', () => {
 
     await consume(
       runner({
-        provider: 'pi',
         client: retryingProvider,
         prompt: 'hello',
         cwd: '/tmp',

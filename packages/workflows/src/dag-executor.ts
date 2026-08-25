@@ -958,7 +958,7 @@ export function shouldContinueStreamingForStatus(status: WorkflowRunStatus | nul
 function createProviderQueryContext(
   deps: WorkflowDeps,
   workflowRunId: string,
-  stepName: string,
+  identity: { stepName: string; nodeId: string; nodeName: string },
   data: Record<string, unknown>,
   onWaiting?: () => void
 ): ProviderQueryContext {
@@ -967,7 +967,12 @@ function createProviderQueryContext(
   ): void => {
     void deps.store.createWorkflowEvent(event).catch((error: unknown) => {
       getLog().warn(
-        { err: error as Error, workflowRunId, stepName, eventType: event.event_type },
+        {
+          err: error as Error,
+          workflowRunId,
+          stepName: identity.stepName,
+          eventType: event.event_type,
+        },
         'provider_concurrency.event_persist_failed'
       );
     });
@@ -977,14 +982,15 @@ function createProviderQueryContext(
       getWorkflowEventEmitter().emit({
         type: 'provider_slot_queued',
         runId: workflowRunId,
-        nodeId: stepName,
+        nodeId: identity.nodeId,
+        nodeName: identity.nodeName,
         provider,
         limit,
       });
       persistEvent({
         workflow_run_id: workflowRunId,
         event_type: 'provider_slot_queued',
-        step_name: stepName,
+        step_name: identity.stepName,
         data: { provider, limit, ...data },
       });
     },
@@ -992,7 +998,8 @@ function createProviderQueryContext(
       getWorkflowEventEmitter().emit({
         type: 'provider_slot_acquired',
         runId: workflowRunId,
-        nodeId: stepName,
+        nodeId: identity.nodeId,
+        nodeName: identity.nodeName,
         provider,
         limit,
         slot,
@@ -1001,7 +1008,7 @@ function createProviderQueryContext(
       persistEvent({
         workflow_run_id: workflowRunId,
         event_type: 'provider_slot_acquired',
-        step_name: stepName,
+        step_name: identity.stepName,
         data: { provider, limit, slot, wait_ms: waitMs, ...data },
       });
     },
@@ -1012,7 +1019,7 @@ function createProviderQueryContext(
         return shouldContinueStreamingForStatus(status);
       } catch (error) {
         getLog().warn(
-          { err: error as Error, workflowRunId, stepName },
+          { err: error as Error, workflowRunId, stepName: identity.stepName },
           'provider_concurrency.status_check_failed'
         );
         return true;
@@ -2416,7 +2423,6 @@ async function executeNodeInternal(
     let providerWaitActivityAt: number | undefined;
     for await (const msg of withIdleTimeout(
       deps.runProviderQuery({
-        provider,
         client: aiClient,
         prompt: attemptPrompt,
         cwd,
@@ -2425,7 +2431,7 @@ async function executeNodeInternal(
         context: createProviderQueryContext(
           deps,
           workflowRun.id,
-          stepName,
+          { stepName, nodeId: node.id, nodeName: commandName ?? node.id },
           {
             query_attempt: queryAttempt,
             ...iterationData,
@@ -6335,7 +6341,6 @@ async function executeLoopNode(
           // Reask attempts start a FRESH session (mirrors runStreamPass in
           // executeNodeInternal) so an invalid turn is not carried forward as context.
           const generator = deps.runProviderQuery({
-            provider: workflowProvider,
             client: aiClient,
             prompt: finalPrompt,
             cwd,
@@ -6344,7 +6349,7 @@ async function executeLoopNode(
             context: createProviderQueryContext(
               deps,
               workflowRun.id,
-              stepName,
+              { stepName, nodeId: node.id, nodeName: node.id },
               {
                 iteration: i,
                 retry_attempt: iterRetry,
