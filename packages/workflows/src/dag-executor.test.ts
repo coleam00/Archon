@@ -11500,18 +11500,7 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         join(testDir, 'logs'),
         'main',
         'docs/',
-        minimalConfig,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        { costUsd: 0.02, workUnits: 1 }
+        minimalConfig
       );
 
       // Feedback ⇒ a fresh iteration ran with $LOOP_USER_INPUT substituted.

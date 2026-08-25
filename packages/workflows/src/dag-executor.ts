@@ -5212,6 +5212,7 @@ async function executeLoopGroupNode(
       layers: iterBodyLayers,
       nodeOutputs: scopedNodeOutputs,
       priorCompletedNodes: undefined, // body re-runs in full each iteration (v1)
+      priorUsageRestored: false,
       // Thread the loop-level session cursor: fresh_context (or the loop's true first
       // iteration) starts fresh; otherwise carry the prior iteration's last sequential
       // session forward so a body AI node resumes the prior iteration's conversation.
@@ -5967,7 +5968,8 @@ async function executeLoopNode(
   chargeWorkUnit?: () => Promise<void>,
   budget?: WorkflowBudgetPolicy,
   budgetLedger?: RunBudgetLedger,
-  requireReportedCost = false
+  requireReportedCost = false,
+  priorUsageRestored = false
 ): Promise<NodeExecutionResult> {
   const loop = node.loop;
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -5997,7 +5999,9 @@ async function executeLoopNode(
   // events remain cumulative for future cold resumes, while the value returned to
   // runLayers carries only spend incurred by this execution pass.
   const currentPassLoopCostUsd = (cumulativeCostUsd: number | undefined): number | undefined =>
-    cumulativeCostUsd === undefined ? undefined : cumulativeCostUsd - (persistedLoopCostUsd ?? 0);
+    cumulativeCostUsd === undefined
+      ? undefined
+      : cumulativeCostUsd - (priorUsageRestored ? (persistedLoopCostUsd ?? 0) : 0);
 
   await chargeWorkUnit?.();
   // Emit node_started up-front so every terminal outcome of this loop node is
@@ -9621,6 +9625,8 @@ interface RunLayersContext {
   afterLayer?: () => Promise<void>;
   /** Resume cache: node ids that completed in a prior run (top-level only; undefined for body). */
   priorCompletedNodes?: Map<string, PersistedNodeOutput>;
+  /** Whether the run-level usage accumulators already include hydrated prior usage. */
+  priorUsageRestored: boolean;
   /**
    * Private provider session handles produced by completed top-level nodes. Undefined
    * inside loop_group bodies because repeated local IDs have no addressable lineage
@@ -10523,7 +10529,8 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                   chargeWorkUnit,
                   ctx.budget,
                   ctx.budgetLedger,
-                  ctx.requireReportedCost
+                  ctx.requireReportedCost,
+                  ctx.priorUsageRestored
                 );
                 // Loop nodes run every iteration on the same resolved provider, so the
                 // result session (if any) is attributable to loopProvider — tag it so a
@@ -12105,6 +12112,7 @@ export async function executeDagWorkflow(
     nodeOutputs,
     afterLayer: persistAuthoredOutcome,
     priorCompletedNodes,
+    priorUsageRestored: priorUsage !== undefined,
     nodeSessionHandles,
     namedResumeSourceIds,
     lastSequentialSession: undefined,
