@@ -2450,6 +2450,58 @@ nodes:
     expect((after?.metadata as Record<string, unknown>).cancelled_reason).toBe('fan_out_orphan');
   });
 
+  it('an unpersistable work-unit charge fails the fan-out node under join all_done too (#1961 R5)', async () => {
+    // `all_done` collapses failed child outcomes into markers, so a charge whose audit row
+    // cannot be written must refuse the spawn BEFORE the join (like a budget refusal) —
+    // otherwise a DB blip silently drops items while the node reports success.
+    await writeWorkflow('fan-child', fanChildEcho);
+    await writeWorkflow(
+      'fan-charge-fail',
+      `
+name: fan-charge-fail
+description: a dropped work_unit_charged row must fail the node explicitly
+budget: { max_work_units: 10 }
+nodes:
+  - id: plan
+    bash: |
+      printf '%s' '["alpha","beta"]'
+  - id: work
+    workflow: fan-child
+    depends_on: [plan]
+    isolation: inherit
+    fan_out:
+      items: "$plan.output"
+      max_parallel: 1
+`
+    );
+
+    const store = new InMemoryStore();
+    const realCreateEvent = store.createWorkflowEvent.bind(store);
+    store.createWorkflowEvent = (async (event: Parameters<typeof store.createWorkflowEvent>[0]) => {
+      if (event.event_type === 'work_unit_charged') throw new Error('db blip');
+      return realCreateEvent(event);
+    }) as typeof store.createWorkflowEvent;
+    const deps = makeDeps(store);
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      await discover('fan-charge-fail'),
+      'goal',
+      'conv-db',
+      { resolveChildIsolation: makeFanResolver(cwd).resolver }
+    );
+
+    expect(result.success).toBe(false);
+    const nodeFailed = store.events.find(
+      e => e.event_type === 'node_failed' && e.step_name === 'work'
+    );
+    expect(String(nodeFailed?.data?.error)).toContain('work-unit charge could not be persisted');
+    // No child was started behind the refused charge.
+    expect([...store.runs.values()].filter(r => r.workflow_name === 'fan-child')).toHaveLength(0);
+  });
+
   it('a resume with ONE instance left is not blocked by the shared-checkout preflight', async () => {
     // The preflight counts the indices this attempt will actually DRIVE, not items.length.
     // Counting items.length instead would block every resume of a wide shared-checkout

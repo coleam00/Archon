@@ -831,11 +831,17 @@ function describeBudgetExhaustion(e: BudgetExhaustion): string {
  * from the event log on cold resume (`getDagResumeSnapshot` counts these rows back).
  * The persist is awaited — a fire-and-forget write would let a transient DB failure
  * drop the row while the live ledger still counts the unit, silently loosening the
- * `max_work_units` ceiling on the next cold resume. A failed persist therefore THROWS,
- * failing the spawn explicitly rather than continuing with diverged accounting.
+ * `max_work_units` ceiling on the next cold resume. The increment happens synchronously
+ * with the caller's exhaustion check — concurrent fan-out workers share the gate read and
+ * an awaited gap between them would let several siblings reserve the same unit. A failed
+ * persist rolls the reservation back and THROWS, failing the spawn explicitly rather than
+ * continuing with diverged accounting.
  */
 async function chargeBudgetWorkUnit(ctx: RunLayersContext, nodeId: string): Promise<void> {
   if (ctx.budgetLedger === undefined) return;
+  // Reserve before awaiting anything so the check-then-reserve pair is atomic against the
+  // other workers inside mapWithLimit; rolled back if the persist fails below.
+  ctx.budgetLedger.workUnits++;
   try {
     await ctx.deps.store.createWorkflowEvent({
       workflow_run_id: ctx.workflowRun.id,
@@ -844,15 +850,13 @@ async function chargeBudgetWorkUnit(ctx: RunLayersContext, nodeId: string): Prom
       data: { kind: 'spawn_decision' },
     });
   } catch (err) {
+    ctx.budgetLedger.workUnits--;
     getLog().error(
       { err, workflowRunId: ctx.workflowRun.id, eventType: 'work_unit_charged' },
       'workflow.event_persist_failed'
     );
     throw err;
   }
-  // Charged only after the audit row is durably written, so the ledger can never
-  // run ahead of what a cold resume reconstructs.
-  ctx.budgetLedger.workUnits++;
 }
 
 /** Terminal (or paused) outcome of a child sub-run, as consumed by a `workflow:` node. */
@@ -8725,6 +8729,10 @@ async function executeFanOutWorkflowNode(
   //    a run-tree budget ceiling is #1961.
   // Indices refused for budget (#1961) — see the spawn gate inside the callback.
   const budgetRefusals: BudgetExhaustion[] = [];
+  // Children whose work-unit charge could not be persisted — a distinct refusal cause from
+  // gate exhaustion, but it must fail the node explicitly under every join mode too.
+  let chargeFailures = 0;
+  let chargeFailureError: string | undefined;
   const settled = await mapWithLimit(
     items,
     fanOut.max_parallel,
@@ -8750,8 +8758,22 @@ async function executeFanOutWorkflowNode(
           error: `child ${String(i)} not spawned: run budget exhausted — ${describeBudgetExhaustion(spawnExhaustion)}`,
         };
       }
-      // One parent work unit per spawned/re-driven child (#1961).
-      await chargeBudgetWorkUnit(ctx, node.id);
+      // One parent work unit per spawned/re-driven child (#1961). If the charge cannot be
+      // persisted, refuse this spawn like a gate refusal so the explicit pre-join failure
+      // fires under every join mode (`all_done` must not mask it either).
+      try {
+        await chargeBudgetWorkUnit(ctx, node.id);
+      } catch (err) {
+        chargeFailures++;
+        chargeFailureError ??= (err as Error).message;
+        return {
+          childRunId: '',
+          status: 'failed',
+          error:
+            `child ${String(i)} not spawned: work-unit charge could not be persisted — ` +
+            (err as Error).message,
+        };
+      }
       const input = itemToInput(item);
       // Per-child $INPUTS (#2470): the static `with:` map plus the per-item `fan_out.as`
       // channel (the item value under `$INPUTS.<as>`). `as` is load-time guaranteed not to
@@ -8831,17 +8853,30 @@ async function executeFanOutWorkflowNode(
   // Explicit budget refusal (#1961): children the gate would not spawn fail the node
   // here, naming how many ran vs were planned — never a silent truncation of the item
   // list. Checked before the join modes so `all_done` cannot mask the refusals either.
-  if (budgetRefusals.length > 0) {
-    const first = budgetRefusals[0];
-    const spawned = items.length - budgetRefusals.length;
+  // Unpersistable work-unit charges refuse their spawns too — same explicit failure, so a
+  // persist blip cannot silently drop items under `all_done` either.
+  const refusedCount = budgetRefusals.length + chargeFailures;
+  if (refusedCount > 0) {
+    const spawned = items.length - refusedCount;
     const msg =
-      `fan_out node '${node.id}': run budget exhausted after ${String(spawned)} of ` +
-      `${String(items.length)} planned children — ${describeBudgetExhaustion(first)} ` +
-      (budgetRefusals.length > 1
-        ? `${String(budgetRefusals.length - 1)} further child spawn${budgetRefusals.length > 2 ? 's were' : ' was'} also refused.`
-        : 'One child was refused.');
+      `fan_out node '${node.id}': ${String(spawned)} of ${String(items.length)} planned children spawned, ` +
+      (budgetRefusals.length > 0
+        ? `${String(budgetRefusals.length)} refused by the run budget — ${describeBudgetExhaustion(budgetRefusals[0])}`
+        : '') +
+      (chargeFailures > 0
+        ? (budgetRefusals.length > 0 ? '; ' : '') +
+          `${String(chargeFailures)} spawn${chargeFailures > 1 ? 's' : ''} refused because the ` +
+          `work-unit charge could not be persisted (${chargeFailureError ?? 'unknown error'})`
+        : '') +
+      '.';
     getLog().warn(
-      { parentRunId: parentRun.id, nodeId: node.id, ...first, refusals: budgetRefusals.length },
+      {
+        parentRunId: parentRun.id,
+        nodeId: node.id,
+        ...(budgetRefusals[0] ?? {}),
+        refusals: budgetRefusals.length,
+        chargeFailures,
+      },
       'workflow.fan_out_budget_exhausted'
     );
     deps.store
@@ -8851,7 +8886,8 @@ async function executeFanOutWorkflowNode(
         step_name: ctx.stepNamePrefix + node.id,
         data: {
           phase: 'fan_out_spawn',
-          ...first,
+          ...(budgetRefusals[0] ?? { budget: 'max_work_units', limit: null, current: null }),
+          charge_failures: chargeFailures,
           planned_children: items.length,
           spawned_children: spawned,
         },
