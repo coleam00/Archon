@@ -195,6 +195,7 @@ function createMockStore(): MockWorkflowStore {
         completedNodeOutputs: new Map<string, { output: string }>(),
         tokens: { input: 0, output: 0 },
         costUsd: 0,
+        workUnits: 0,
       })
     ),
     getCodebase: mock<IWorkflowStore['getCodebase']>(async _id => null),
@@ -2397,6 +2398,123 @@ describe('executeDagWorkflow -- bash nodes', () => {
     // The prompt should contain the substituted bash output
     const prompt = mockSendQueryDag.mock.calls[0][0] as string;
     expect(prompt).toContain('42 files');
+  });
+
+  it('work-unit ceiling refuses the second node and fails the run explicitly (#1961)', async () => {
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('budget-work-units-run', {
+      workflow_name: 'budget-test',
+      conversation_id: 'conv-budget',
+      user_message: 'budget test message',
+    });
+
+    const nodes: DagNode[] = [
+      { id: 'first', kind: 'exec', runtime: 'sh', script: 'echo one' },
+      { id: 'second', kind: 'exec', runtime: 'sh', script: 'echo two', depends_on: ['first'] },
+    ];
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-budget',
+      testDir,
+      {
+        name: 'budget-work-units',
+        nodes,
+        budget: { max_work_units: 1 },
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    // Exactly ONE node attempt was allowed — the second dispatch is refused.
+    const startedEvents = mockDeps.store.createWorkflowEvent.mock.calls.filter(
+      call => (call[0] as { event_type: string }).event_type === 'node_started'
+    );
+    expect(startedEvents.length).toBe(1);
+
+    // The refusal is explicit and structured: a persisted budget_exhausted event
+    // naming the tripped axis, limit, and observed value.
+    const exhaustionEvents = mockDeps.store.createWorkflowEvent.mock.calls.filter(
+      call => (call[0] as { event_type: string }).event_type === 'budget_exhausted'
+    );
+    expect(exhaustionEvents.length).toBeGreaterThan(0);
+    const exhaustionData = (exhaustionEvents[0][0] as { data: Record<string, unknown> }).data;
+    expect(exhaustionData).toMatchObject({ budget: 'max_work_units', limit: 1, current: 1 });
+
+    // The run FAILS — it does not complete with silent truncation.
+    expect(mockDeps.store.failWorkflowRun).toHaveBeenCalled();
+    const failMsg = mockDeps.store.failWorkflowRun.mock.calls[0][1] as string;
+    expect(failMsg).toContain('max_work_units');
+    expect(platform.sendMessage.mock.calls.some(call => String(call[1]).includes('budget'))).toBe(
+      true
+    );
+  });
+
+  it('a resumed run whose spend already exceeds the ceiling refuses before any node (#1961)', async () => {
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('budget-resume-run', {
+      workflow_name: 'budget-resume-test',
+      conversation_id: 'conv-budget-resume',
+      user_message: 'budget resume test message',
+    });
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-budget-resume',
+      testDir,
+      {
+        name: 'budget-resume',
+        nodes: [{ id: 'only', kind: 'exec', runtime: 'sh', script: 'echo hi' }],
+        budget: { max_spend_usd: 5 },
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      // Positional optionals before priorUsage (configuredCommandFolder … runChildWorkflow).
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      // priorUsage: reconstructed on cold resume — already over the ceiling.
+      { costUsd: 7.5, workUnits: 2 }
+    );
+
+    // No node ever starts.
+    const startedEvents = mockDeps.store.createWorkflowEvent.mock.calls.filter(
+      call => (call[0] as { event_type: string }).event_type === 'node_started'
+    );
+    expect(startedEvents.length).toBe(0);
+
+    const exhaustionEvents = mockDeps.store.createWorkflowEvent.mock.calls.filter(
+      call => (call[0] as { event_type: string }).event_type === 'budget_exhausted'
+    );
+    expect(exhaustionEvents.length).toBe(1);
+    const exhaustionData = (exhaustionEvents[0][0] as { data: Record<string, unknown> }).data;
+    expect(exhaustionData).toMatchObject({ budget: 'max_spend_usd', limit: 5, current: 7.5 });
+    expect(mockDeps.store.failWorkflowRun).toHaveBeenCalled();
   });
 
   it('non-zero exit code results in failed state', async () => {
@@ -5608,7 +5726,7 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         }
     );
     const priorCompletedNodes = new Map<string, PersistedNodeOutput>();
-    const priorUsage = { tokens: { input: 0, output: 0 }, costUsd: 0 };
+    const priorUsage = { tokens: { input: 0, output: 0 }, costUsd: 0, workUnits: 0 };
     for (const event of firstExecutionEvents) {
       if (event.event_type !== 'node_completed' || !event.step_name) continue;
       if (typeof event.data?.node_output === 'string') {
@@ -5632,7 +5750,11 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
     expect(priorCompletedNodes).toEqual(new Map([['step1', { output: 'first execution output' }]]));
     // Both axes are reconstructable from the event log — this mirrors what
     // getDagResumeSnapshot does, and cost is now among them (#2469).
-    expect(priorUsage).toEqual({ tokens: { input: 40, output: 4 }, costUsd: 0.02 });
+    expect(priorUsage).toEqual({
+      tokens: { input: 40, output: 4 },
+      costUsd: 0.02,
+      workUnits: expect.any(Number),
+    });
 
     mockSendQueryDag.mockImplementation(async function* () {
       yield { type: 'assistant', content: 'resumed execution output' };

@@ -351,7 +351,7 @@ class InMemoryStore implements IWorkflowStore {
         }
       }
     }
-    return Promise.resolve({ completedNodeOutputs, tokens, costUsd });
+    return Promise.resolve({ completedNodeOutputs, tokens, costUsd, workUnits: 0 });
   };
 
   getCodebase = (): Promise<null> => Promise.resolve(null);

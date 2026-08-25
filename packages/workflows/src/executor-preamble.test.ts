@@ -106,6 +106,7 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
       completedNodeOutputs: new Map<string, { output: string }>(),
       tokens: { input: 0, output: 0 },
       costUsd: 0,
+      workUnits: 0,
     })),
     resumeWorkflowRun: mock(async () => makeRun()),
     getCodebase: mock(async () => null),

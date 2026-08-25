@@ -120,6 +120,7 @@ function createMockStore(): IWorkflowStore {
         completedNodeOutputs: new Map<string, { output: string }>(),
         tokens: { input: 0, output: 0 },
         costUsd: 0,
+        workUnits: 0,
       })
     ),
     getCodebase: mock(() => Promise.resolve(null)),

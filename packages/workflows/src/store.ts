@@ -36,6 +36,8 @@ export interface DagResumeSnapshot {
   tokens?: TokenUsage;
   /** Cumulative USD cost persisted by completed and failed node attempts across prior passes. */
   costUsd: number;
+  /** Started node attempts (`node_started` rows) — the work-unit total for budget enforcement (#1961). */
+  workUnits: number;
 }
 
 /** Durable wait outcome committed atomically with consumption of its active cursor. */
@@ -128,6 +130,10 @@ export const WORKFLOW_EVENT_TYPES = [
   // `$ARTIFACTS_DIR/evidence.json` was absent at completion time — the run was
   // refused terminal `completed` and marked failed. Data carries the expected path.
   'evidence_validation_failed',
+  // Run-wide budget exhaustion (#1961): a ceiling (budget.max_spend_usd /
+  // budget.max_work_units) was met and new work was refused. Data carries the
+  // tripped axis, the limit, the observed value, and the phase that refused.
+  'budget_exhausted',
   // #2213 — keys the engine dropped from this run's workflow YAML. Written by the
   // executor at run start for EVERY run that has them, whatever surface started
   // it, so the record does not depend on a chat/console notification being

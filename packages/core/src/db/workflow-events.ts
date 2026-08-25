@@ -260,14 +260,20 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<{
   completedNodeOutputs: Map<string, { output: string; structuredOutput?: unknown }>;
   tokens?: TokenUsage;
   costUsd: number;
+  /**
+   * Count of started node attempts (`node_started` rows) — the deterministic work-unit
+   * total the run-wide budget ceiling (#1961) is checked against on resume. Every attempt
+   * writes exactly one row, so this is reconstructible from the audit log by construction.
+   */
+  workUnits: number;
 }> {
   const result = await pool.query<{
     step_name: string | null;
-    event_type: 'node_completed' | 'node_failed' | 'node_skipped_prior_success';
+    event_type: 'node_completed' | 'node_failed' | 'node_skipped_prior_success' | 'node_started';
     data: string | Record<string, unknown>;
   }>(
     `SELECT step_name, event_type, data FROM remote_agent_workflow_events
-     WHERE workflow_run_id = $1 AND event_type IN ('node_completed', 'node_failed', 'node_skipped_prior_success')
+     WHERE workflow_run_id = $1 AND event_type IN ('node_completed', 'node_failed', 'node_skipped_prior_success', 'node_started')
      ORDER BY created_at ASC, COALESCE(event_order, 0) ASC, id ASC`,
     [workflowRunId]
   );
@@ -276,6 +282,7 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<{
   // cannot tell "one of five contributions reported" from "one of two" (#2662).
   const usages: TokenUsage[] = [];
   let costUsd = 0;
+  let workUnits = 0;
   for (const row of result.rows) {
     if (!row.step_name) continue;
     let data: Record<string, unknown>;
@@ -286,6 +293,11 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<{
         { err: parseErr as Error, runId: workflowRunId, stepName: row.step_name },
         'db.workflow_dag_node_output_parse_failed'
       );
+      continue;
+    }
+    if (row.event_type === 'node_started') {
+      // Counted for the run-wide work-unit budget (#1961); carries no output or usage.
+      workUnits++;
       continue;
     }
     if (row.event_type === 'node_failed') {
@@ -416,5 +428,5 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<{
       }
     }
   }
-  return { completedNodeOutputs, tokens: mergeTokenUsage(usages), costUsd };
+  return { completedNodeOutputs, tokens: mergeTokenUsage(usages), costUsd, workUnits };
 }

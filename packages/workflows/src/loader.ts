@@ -49,6 +49,7 @@ import {
   webSearchModeSchema,
   workflowRequirementSchema,
   workflowEvidencePolicySchema,
+  workflowBudgetPolicySchema,
   workflowInputSpecSchema,
   KNOWN_WORKFLOW_KEYS,
   KNOWN_WORKFLOW_NESTED_KEYS,
@@ -57,6 +58,7 @@ import {
 import type {
   WorkflowRequirement,
   WorkflowEvidencePolicy,
+  WorkflowBudgetPolicy,
   WorkflowInputSpec,
 } from './schemas/workflow';
 import { INPUT_NAME_PATTERN, inputEnvKey } from './schemas/dag-node';
@@ -1694,6 +1696,27 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
       evidencePolicy = parsedEvidence.data;
     }
 
+    // Parse run-wide budget ceilings (#1961). Same hard-reject posture as
+    // evidence_policy: silently dropping a declared ceiling would let a run spend
+    // without the governance its author asked for — not fail-safe.
+    let budgetPolicy: WorkflowBudgetPolicy | undefined;
+    if (raw.budget !== undefined) {
+      const parsedBudget = workflowBudgetPolicySchema.safeParse(raw.budget);
+      if (!parsedBudget.success) {
+        return {
+          workflow: null,
+          error: {
+            filename,
+            error:
+              'Invalid budget: expected { max_spend_usd?: number > 0, max_work_units?: positive integer }. ' +
+              'Both fields are optional, but each must be valid when present.',
+            errorType: 'validation_error',
+          },
+        };
+      }
+      budgetPolicy = parsedBudget.data;
+    }
+
     // Parse mutates_checkout — boolean, omitted means true (run the path-lock guard).
     // Same parse/warn pattern as `interactive` (invalid non-boolean values are dropped).
     // When false, the executor skips the path-lock guard and allows concurrent runs on the same checkout.
@@ -2014,6 +2037,7 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
       ...(worktreePolicy ? { worktree: worktreePolicy } : {}),
       ...(containerPolicy ? { container: containerPolicy } : {}),
       ...(evidencePolicy !== undefined ? { evidence_policy: evidencePolicy } : {}),
+      ...(budgetPolicy !== undefined ? { budget: budgetPolicy } : {}),
       ...(tags !== undefined ? { tags } : {}),
       ...(requires !== undefined ? { requires } : {}),
       ...(inputs !== undefined ? { inputs } : {}),

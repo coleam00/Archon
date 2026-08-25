@@ -129,6 +129,40 @@ export const workflowEvidencePolicySchema = z.object({
 export type WorkflowEvidencePolicy = z.infer<typeof workflowEvidencePolicySchema>;
 
 // ---------------------------------------------------------------------------
+// Workflow-level run budget (#1961)
+// ---------------------------------------------------------------------------
+
+/**
+ * Run-wide consumption ceilings (#1961), independent of `max_parallel` (which
+ * bounds burn RATE, not total). Both fields are optional and independent;
+ * whichever ceiling is hit first fails the run explicitly — never silently
+ * truncates remaining work. Enforcement is pre-dispatch: nodes already running
+ * when a ceiling is crossed are allowed to finish, so overshoot is bounded by
+ * one in-flight layer.
+ *
+ * Child sub-runs (`workflow:`/`fan_out:`) do NOT inherit their parent's budget;
+ * each run enforces its own declared block. The parent's ceilings still bound
+ * the aggregate because a settled child's spend rolls up into the parent node's
+ * cost, and every child spawn charges the parent one work unit.
+ */
+export const workflowBudgetPolicySchema = z.object({
+  /**
+   * Run-wide ceiling on summed recorded provider cost (USD), including rolled-up
+   * child cost. Providers that report no usage contribute nothing (absence is
+   * not zero) — pair with `max_work_units` when providers may omit cost.
+   */
+  max_spend_usd: z.number().positive().optional(),
+  /**
+   * Run-wide ceiling on deterministic work units. One unit = one started node
+   * attempt (one `node_started` audit row), so retries count, and the count is
+   * reconstructible from the event log across cold resume.
+   */
+  max_work_units: z.number().int().positive().optional(),
+});
+
+export type WorkflowBudgetPolicy = z.infer<typeof workflowBudgetPolicySchema>;
+
+// ---------------------------------------------------------------------------
 // Workflow signature — declared inputs (#2470, Signature Phase 2)
 // ---------------------------------------------------------------------------
 
@@ -193,6 +227,8 @@ export const workflowBaseSchema = z.object({
   worktree: workflowWorktreePolicySchema.optional(),
   container: workflowContainerPolicySchema.optional(),
   evidence_policy: workflowEvidencePolicySchema.optional(),
+  /** Run-wide work/spend ceilings (#1961). Omitted = ungoverned (today's behavior). */
+  budget: workflowBudgetPolicySchema.optional(),
   /**
    * When `false`, the engine skips the path-exclusive lock for this workflow,
    * allowing N concurrent runs on the same live checkout. The author asserts
@@ -313,6 +349,7 @@ export const KNOWN_WORKFLOW_NESTED_KEYS: ReadonlyMap<string, NestedKeySpec> = ne
     'evidence_policy',
     { kind: 'object', keys: new Set(Object.keys(workflowEvidencePolicySchema.shape)) },
   ],
+  ['budget', { kind: 'object', keys: new Set(Object.keys(workflowBudgetPolicySchema.shape)) }],
   // First `record` entry in this map: `inputs` is a record of input-name → spec,
   // so unknown keys under an individual spec (e.g. `inputs.diff.typo`) warn.
   // `returns` and `outcome_field` are plain strings and need no nested registration.

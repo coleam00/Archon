@@ -191,6 +191,7 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
       completedNodeOutputs: new Map(),
       tokens: { input: 0, output: 0 },
       costUsd: 0,
+      workUnits: 0,
     })),
     resumeWorkflowRun: mock(async () => makeRun()),
     getCodebase: mock(async () => null),
@@ -380,7 +381,7 @@ describe('executeWorkflow', () => {
         {
           preCreatedRun,
           priorCompletedNodes: new Map([['node1', { output: 'out' }]]),
-          priorUsage: { tokens: { input: 40, output: 4 }, costUsd: 0.5 },
+          priorUsage: { tokens: { input: 40, output: 4 }, costUsd: 0.5, workUnits: 0 },
           execContext: { kind: 'container', containerId: 'cid' },
           container: { envId: 'env-x', writeBack: 'approve', backend },
         }
@@ -390,6 +391,7 @@ describe('executeWorkflow', () => {
       expect(mockExecuteDagWorkflow.mock.calls[0]?.[24]).toEqual({
         tokens: { input: 40, output: 4 },
         costUsd: 0.5,
+        workUnits: 0,
       });
       expect(result.success).toBe(true);
     });
@@ -1720,7 +1722,12 @@ describe('executeWorkflow', () => {
       const tokens = { input: 40, output: 4 };
       const costUsd = 0.25;
       const store = makeStore({
-        getDagResumeSnapshot: mock(async () => ({ completedNodeOutputs, tokens, costUsd })),
+        getDagResumeSnapshot: mock(async () => ({
+          completedNodeOutputs,
+          tokens,
+          costUsd,
+          workUnits: 0,
+        })),
         listWorkflowRunNodeSessions: mock(async () => [
           {
             workflow_run_id: 'failed-run',
@@ -1754,7 +1761,7 @@ describe('executeWorkflow', () => {
       expect(dagCall?.[16]).toBe(completedNodeOutputs);
       // Both usage axes travel as one `priorUsage` bundle (#2469) — cost is restored
       // across resume exactly like tokens, so a resumed run's total never regresses.
-      expect(dagCall?.[24]).toEqual({ tokens, costUsd });
+      expect(dagCall?.[24]).toEqual({ tokens, costUsd, workUnits: 0 });
       expect(dagCall?.[25]).toEqual(hydrated.priorNodeSessions);
       expect(store.createWorkflowRun).not.toHaveBeenCalled();
     });
@@ -2900,6 +2907,7 @@ describe('hydrateResumableRun', () => {
         completedNodeOutputs: priorNodes,
         tokens: { input: 40, output: 4 },
         costUsd: 0.75,
+        workUnits: 0,
       })),
       listWorkflowRunNodeSessions: mock(async () => [
         {
@@ -2926,7 +2934,11 @@ describe('hydrateResumableRun', () => {
     expect(result).not.toBeNull();
     expect(result?.preCreatedRun).toBe(resumed);
     expect(result?.priorCompletedNodes).toBe(priorNodes);
-    expect(result?.priorUsage).toEqual({ tokens: { input: 40, output: 4 }, costUsd: 0.75 });
+    expect(result?.priorUsage).toEqual({
+      tokens: { input: 40, output: 4 },
+      costUsd: 0.75,
+      workUnits: 0,
+    });
     expect(result?.priorNodeSessions.map(row => row.node_id)).toEqual(['n1']);
     expect(store.listWorkflowRunNodeSessions).toHaveBeenCalledWith('prior-failed');
     expect(store.resumeWorkflowRun).toHaveBeenCalledWith('prior-failed');
@@ -2939,6 +2951,7 @@ describe('hydrateResumableRun', () => {
         completedNodeOutputs: new Map(),
         tokens: { input: 0, output: 0 },
         costUsd: 0,
+        workUnits: 0,
       })),
     });
     const deps = makeDeps(store);
@@ -2962,6 +2975,7 @@ describe('hydrateResumableRun', () => {
         completedNodeOutputs: new Map(),
         tokens: { input: 0, output: 0 },
         costUsd: 0,
+        workUnits: 0,
       })),
       resumeWorkflowRun: mock(async () => resumed),
     });
@@ -3008,6 +3022,7 @@ describe('hydrateResumableRun', () => {
         completedNodeOutputs: new Map(),
         tokens: { input: 0, output: 0 },
         costUsd: 0,
+        workUnits: 0,
       })),
       resumeWorkflowRun: mock(async () => resumed),
     });
@@ -3046,6 +3061,7 @@ describe('hydrateResumableRun', () => {
         completedNodeOutputs: new Map(),
         tokens: { input: 0, output: 0 },
         costUsd: 0,
+        workUnits: 0,
       })),
       resumeWorkflowRun: mock(async () => resumed),
     });
@@ -3078,6 +3094,7 @@ describe('hydrateResumableRun', () => {
         completedNodeOutputs: new Map(),
         tokens: { input: 0, output: 0 },
         costUsd: 0,
+        workUnits: 0,
       })),
     });
     const deps = makeDeps(store);
@@ -3102,6 +3119,7 @@ describe('hydrateResumableRun', () => {
         completedNodeOutputs: priorNodes,
         tokens: { input: 0, output: 0 },
         costUsd: 0,
+        workUnits: 0,
       })),
       resumeWorkflowRun: mock(async () => resumed),
     });
@@ -3129,6 +3147,7 @@ describe('hydrateResumableRun', () => {
         completedNodeOutputs: new Map([['n1', { output: 'v1' }]]),
         tokens: { input: 0, output: 0 },
         costUsd: 0,
+        workUnits: 0,
       })),
       resumeWorkflowRun: mock(async () => {
         throw new Error('DB write failed');

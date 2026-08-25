@@ -6717,6 +6717,51 @@ nodes:
       expect(pw[0]).toContain("unknown key 'loop_group.max_attempts'");
     });
 
+    it('should parse budget ceilings (#1961)', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      const yaml = `name: capped\ndescription: budgeted\nbudget:\n  max_spend_usd: 5\n  max_work_units: 20\nnodes:\n  - id: n\n    prompt: p\n`;
+      await writeFile(join(workflowDir, 'capped.yaml'), yaml);
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(0);
+      expect(result.workflows[0].workflow.budget).toEqual({
+        max_spend_usd: 5,
+        max_work_units: 20,
+      });
+    });
+
+    it('should parse budget ceilings (#1961)', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      const yaml = `name: capped\ndescription: budgeted\nbudget:\n  max_spend_usd: 5\n  max_work_units: 20\nnodes:\n  - id: n\n    prompt: p\n`;
+      await writeFile(join(workflowDir, 'capped.yaml'), yaml);
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(0);
+      expect(result.workflows[0].workflow.budget).toEqual({
+        max_spend_usd: 5,
+        max_work_units: 20,
+      });
+    });
+
+    it('should REJECT an invalid budget block instead of silently ungoverning the run', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      const yaml = `name: capped2\ndescription: bad spend\nbudget:\n  max_spend_usd: -1\n  max_work_units: 3\nnodes:\n  - id: n\n    prompt: p\n`;
+      await writeFile(join(workflowDir, 'capped2.yaml'), yaml);
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0].error).toContain('Invalid budget');
+    });
+
+    it('should omit the budget block when not present (ungoverned run)', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      const yaml = `name: free\ndescription: no budget\nnodes:\n  - id: n\n    prompt: p\n`;
+      await writeFile(join(workflowDir, 'free.yaml'), yaml);
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.workflows[0].workflow.budget).toBeUndefined();
+    });
+
     it('should warn on an unknown key inside a workflow-level worktree block', async () => {
       const pw = await warningsFor([
         'name: test',
@@ -6731,6 +6776,23 @@ nodes:
       expect(pw.length).toBe(1);
       expect(pw[0]).toContain("Workflow 'test'");
       expect(pw[0]).toContain("unknown key 'worktree.base_branch'");
+    });
+
+    it('should warn on an unknown key inside a workflow-level budget block (#1961)', async () => {
+      const pw = await warningsFor([
+        'name: test',
+        'description: test',
+        'budget:',
+        '  max_spend_usd: 5',
+        '  max_work_units: 10',
+        '  max_dollars: 5', // real field is max_spend_usd
+        'nodes:',
+        '  - id: n',
+        '    prompt: p',
+      ]);
+      expect(pw.length).toBe(1);
+      expect(pw[0]).toContain("Workflow 'test'");
+      expect(pw[0]).toContain("unknown key 'budget.max_dollars'");
     });
 
     it('should not warn on valid nested keys, including a clean loop_group body', async () => {
@@ -7763,6 +7825,10 @@ describe('workflow-level field parity (#2457)', () => {
     evidence_policy: {
       yaml: 'evidence_policy:\n  required: true',
       present: w => w.evidence_policy?.required === true,
+    },
+    budget: {
+      yaml: 'budget:\n  max_spend_usd: 5\n  max_work_units: 20',
+      present: w => w.budget?.max_spend_usd === 5 && w.budget?.max_work_units === 20,
     },
     mutates_checkout: {
       yaml: 'mutates_checkout: false',

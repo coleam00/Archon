@@ -238,6 +238,39 @@ describe('workflow-events', () => {
       ]);
     });
 
+    test('counts every node_started row as one work unit (#1961)', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          {
+            step_name: 'node-a',
+            event_type: 'node_started',
+            data: { provider: 'claude' },
+          },
+          {
+            step_name: 'node-a',
+            event_type: 'node_completed',
+            data: { node_output: 'output A', tokens: { input: 40, output: 4 } },
+          },
+          // A retry writes a second node_started for the same step — both count.
+          {
+            step_name: 'node-a',
+            event_type: 'node_started',
+            data: { provider: 'claude' },
+          },
+          {
+            step_name: 'node-a',
+            event_type: 'node_failed',
+            data: { error: 'boom', cost_usd: 0.01 },
+          },
+        ])
+      );
+
+      const result = await getDagResumeSnapshot('run-123');
+
+      expect(result.workUnits).toBe(2);
+      expect(result.costUsd).toBeCloseTo(0.01);
+    });
+
     test('carries structured_output back out; rows without it stay text-only (#2637)', async () => {
       mockQuery.mockResolvedValueOnce(
         createQueryResult([
