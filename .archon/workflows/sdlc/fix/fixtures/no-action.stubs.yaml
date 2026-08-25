@@ -1,0 +1,9 @@
+# Sparse guard fixture: run with --default-stubs --exec-code. Triage is explicit,
+# every delivery node stays skipped, and the real outcome node returns the reason.
+triage__triage:
+  route: no_action
+  summary: "stub: the requested outcome is already present on the current branch"
+triage__assert-intact: '{"intact":"true"}'
+fixture:
+  expect: completed
+exec-code: true

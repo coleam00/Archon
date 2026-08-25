@@ -1,0 +1,319 @@
+name: archon-deliver
+description: |
+  The delivery tail, end to end and autonomous: implement the work, gate on
+  green, open a draft PR, review it, correct and close the findings, validate,
+  wait for checks to clear, then flip the PR ready for review. No in-run
+  approval gate — the human gate is PR review and merge on GitHub, outside
+  the run.
+
+  Use when: decided work should become a reviewed, ready-to-merge PR —
+  "deliver this plan", "take this to a PR", "build and ship this".
+  NOT for: deciding what to build, or merging (always human).
+
+# Review establishes the first verdict. When blockers remain, a bounded static
+# body repeats fix → light review, so every correction is independently checked
+# and a clean review stops immediately. Exhausting the bound fails truthfully
+# with the PR still draft and the canonical report carrying the open findings.
+
+requires: [github]
+
+inputs:
+  work:
+    default: ""
+    description: >-
+      What to deliver — a plan path, findings, or a description. Empty means
+      the run's trigger message is the work.
+  prior_report:
+    default: ""
+    description: >-
+      Cross-run review continuity: the previous delivery run's review report
+      path. Round 1 then verifies prior findings (rejections included) instead
+      of relitigating them from scratch. Empty on a first delivery.
+  # Review lens controls, three-state: 'auto' (default) lets the post-PR
+  # classifier decide from the actual diff; 'true'/'false' force the lens on or
+  # off and beat the classifier. Code, seams, and simplify always run and have
+  # no control.
+  tests:
+    default: "auto"
+    description: Test-coverage lens — auto, true, or false.
+  errors:
+    default: "auto"
+    description: Silent-failure lens — auto, true, or false.
+  comments:
+    default: "auto"
+    description: Comment-accuracy lens — auto, true, or false.
+  types:
+    default: "auto"
+    description: Type-design lens — auto, true, or false.
+  docs:
+    default: "auto"
+    description: Docs-impact lens — auto, true, or false.
+
+returns: pr
+
+nodes:
+  - id: impl
+    include: archon-implement
+    with:
+      work: "$INPUTS.work"
+
+  # R3's gate: run success never certifies green — this does, deterministically,
+  # before anything public happens. Strict field access: a missing field fails
+  # the node rather than passing the gate.
+  - id: gate-green
+    bash: |
+      if [ "$impl.output.green" = "true" ]; then
+        echo '{"gate":"green"}'
+      else
+        echo "implement finished but not green — its summary says why. Refusing to open a PR on red work." >&2
+        exit 1
+      fi
+    depends_on: [impl]
+
+  - id: pr
+    include: archon-pr
+    with:
+      draft: "true"
+    depends_on: [gate-green]
+
+  # Initial review: full on a first delivery, light continuation when
+  # the caller passes the previous run's report (adjudications carry across
+  # runs instead of being relitigated).
+  # Review scope is decided from the actual PR, not declared blind at launch:
+  # the diff is information that does not exist until the PR does. classify
+  # judges which optional lenses this diff warrants; resolve-scope then merges
+  # the operator's declared forces over that judgment deterministically, and
+  # its structured output is what every lens gate reads — round 1 decides once,
+  # and the correction rechecks reuse the same resolved scope so review
+  # coverage never drifts mid-loop.
+  - id: classify
+    command: classify-review-scope
+    depends_on: [pr]
+    mutates_checkout: false
+    output_type: review-scope
+    output_format:
+      type: object
+      properties:
+        tests: { type: boolean }
+        errors: { type: boolean }
+        comments: { type: boolean }
+        types: { type: boolean }
+        docs: { type: boolean }
+        reasons:
+          type: object
+          properties:
+            tests: { type: string }
+            errors: { type: string }
+            comments: { type: string }
+            types: { type: string }
+            docs: { type: string }
+          required: [tests, errors, comments, types, docs]
+      required: [tests, errors, comments, types, docs, reasons]
+
+  # Deterministic merge at the boundary: a declared 'true'/'false' beats the
+  # classifier; 'auto' adopts its judgment. Output values are the strings the
+  # lens gates compare against.
+  - id: resolve-scope
+    bash: |
+      resolve() {
+        forced="$1"; judged="$2"
+        case "$forced" in
+          true|false) printf '%s' "$forced" ;;
+          *) printf '%s' "$judged" ;;
+        esac
+      }
+      printf '{"tests":"%s","errors":"%s","comments":"%s","types":"%s","docs":"%s"}\n' \
+        "$(resolve "$INPUTS_TESTS" "$INPUTS_C_TESTS")" \
+        "$(resolve "$INPUTS_ERRORS" "$INPUTS_C_ERRORS")" \
+        "$(resolve "$INPUTS_COMMENTS" "$INPUTS_C_COMMENTS")" \
+        "$(resolve "$INPUTS_TYPES" "$INPUTS_C_TYPES")" \
+        "$(resolve "$INPUTS_DOCS" "$INPUTS_C_DOCS")"
+    with:
+      c_tests: "$classify.output.tests"
+      c_errors: "$classify.output.errors"
+      c_comments: "$classify.output.comments"
+      c_types: "$classify.output.types"
+      c_docs: "$classify.output.docs"
+    depends_on: [classify]
+
+  - id: review
+    include: archon-review
+    with:
+      scope: ""
+      prior_report: "$INPUTS.prior_report"
+      tests: "$resolve-scope.output.tests"
+      errors: "$resolve-scope.output.errors"
+      comments: "$resolve-scope.output.comments"
+      types: "$resolve-scope.output.types"
+      docs: "$resolve-scope.output.docs"
+    depends_on: [resolve-scope]
+
+  # A ready initial review skips this block. Otherwise each iteration corrects
+  # the current canonical findings, proves the correction is green, then runs a
+  # fresh light review over the delta — never an unreviewed final fix. The bound
+  # is a runaway backstop, not a pacing device: until_bash ends the loop the
+  # moment a recheck certifies ready, so a healthy fix-class run still exits in
+  # one or two rounds. Five rounds is calibrated to the feature-class evidence
+  # (2026-08-25: every executor-heavy delivery needed 4-6 rounds and every
+  # non-starved resume converged; 3 cut two converging runs short). A per-lane
+  # bound would need runtime-parameterized composition, which the language
+  # deliberately does not have — the flat bound buys the same outcome free.
+  - id: corrections
+    depends_on: [review]
+    when: "$review.output.ready == 'false'"
+    loop_group:
+      until_bash: test "$recheck.output.ready" = "true"
+      max_iterations: 5
+      fresh_context: true
+      nodes:
+        - id: fix
+          include: archon-implement
+          with:
+            work: >-
+              Fix every open Critical and Important finding recorded in
+              $ARTIFACTS_DIR/review/report.md. When the correction is green,
+              push its commits to the existing PR branch (git push). Do not
+              change the PR's draft state or edit the canonical review comment;
+              the following review owns that public verdict.
+
+        - id: gate-correction-green
+          bash: |
+            if [ "$fix.output.green" = "true" ]; then
+              echo '{"gate":"green"}'
+            else
+              echo "correction finished but is not green — refusing to spend a review on red work." >&2
+              exit 1
+            fi
+          depends_on: [fix]
+
+        - id: recheck
+          include: archon-review
+          with:
+            scope: ""
+            prior_report: "$ARTIFACTS_DIR/review/report.md"
+            # Round-1's resolved scope, read across the body boundary: rechecks
+            # keep the same lens coverage the initial review had.
+            tests: "$resolve-scope.output.tests"
+            errors: "$resolve-scope.output.errors"
+            comments: "$resolve-scope.output.comments"
+            types: "$resolve-scope.output.types"
+            docs: "$resolve-scope.output.docs"
+          depends_on: [gate-correction-green]
+
+  # all_done joins the mutually exclusive paths as bound values (#2637): the
+  # initial review's verdict directly, and the correction loop's output with an
+  # if_skipped default. A completed loop implies readiness — until_bash on the
+  # recheck verdict is its only success exit — while a failed loop (bound
+  # exhausted) or a failed review surfaces as a binding-resolution failure on
+  # this node, so lifecycle success alone never certifies readiness. The
+  # failed-producer -> failed-binding rule is engine-enforced (#2696/#2710);
+  # if_skipped covers only skipped/pending producers, never failed ones.
+  - id: gate-ready
+    script: gate-ready
+    runtime: uv
+    depends_on: [review, corrections]
+    trigger_rule: all_done
+    with:
+      review_ready: { from: "$review.output.ready", if_skipped: false }
+      corrections: { from: "$corrections.output", if_skipped: null }
+
+  # Correction rounds change the diff after `pr` wrote the description, so
+  # concrete claims in the body can be falsified by the very fixes the review
+  # demanded. One resync, once readiness is certified — never per iteration
+  # (that would be repeated public writes describing diffs the next iteration
+  # falsifies). Skipped when the initial review was already ready: the diff
+  # never changed after the body was written.
+  - id: sync-pr-body
+    command: sync-pr-body
+    model: medium
+    depends_on: [gate-ready]
+    when: "$review.output.ready == 'false'"
+
+  # Final local gate, ALWAYS run: the project's own checks via the validate
+  # package. Uniform on every path — and when CI is maintainer-gated (fork
+  # PRs), this is the only validation before the flip.
+  - id: validate
+    include: archon-validate
+    depends_on: [gate-ready]
+
+  - id: gate-validated
+    bash: |
+      if [ "$validate.output.green" = "true" ]; then
+        echo '{"validated":"true"}'
+      else
+        echo "local validation failed after review — see the validation report in the run artifacts." >&2
+        exit 1
+      fi
+    depends_on: [validate]
+
+  # CI wait, durably. The probe classifies check state once; a pending state
+  # routes into the engine's `wait:` node (#2744), which suspends the run and
+  # releases the worker slot — the server's continuation scan resumes it when
+  # the clock fires, surviving restarts. This replaced a 60-minute in-process
+  # polling script the moment the engine could hold the time itself. Red fails
+  # the body (and so the group) immediately; a concluded probe skips the pause
+  # and `until_bash` ends the loop with zero wasted wait. 13 iterations bound
+  # the watch at ~60 minutes of CI time, the same ceiling the poller had —
+  # exhausting it fails the run rather than flipping a PR whose CI never ended.
+  - id: await-checks
+    loop_group:
+      max_iterations: 13
+      # Completion computed EXTERNALLY (gh state), never from body-node output
+      # substitution: the resumed-wait completion recheck does not evaluate
+      # until_bash against the iteration's outputs (#2794 — seen flipping a PR
+      # with CI still running). Red counts as done here; the next iteration's
+      # probe is what turns red into a loud body failure, and flip-ready's
+      # preflight refuses any non-green state that slips through regardless.
+      until_bash: '! gh pr checks --json bucket --jq ".[].bucket" 2>/dev/null | grep -q "^pending$"'
+      nodes:
+        - id: ci-probe
+          script: check-ci
+          runtime: uv
+          # The probe's only in-process wait is the single 60 s registration
+          # grace; headroom over the 120 s script default keeps that honest.
+          timeout: 180000
+        - id: ci-pause
+          wait:
+            duration_ms: 300000
+          when: $ci-probe.output.state == 'pending'
+          depends_on: [ci-probe]
+    depends_on: [gate-validated]
+
+  - id: flip-ready
+    bash: |
+      # --repo pins to the origin remote (#2226): gh's default resolution in a
+      # fork clone targets the upstream parent instead. With --repo, gh disables
+      # branch inference and REQUIRES an explicit selector — omitting it is a
+      # usage error, seen red on run 925f6c43's resume.
+      ORIGIN_REPO=$(git remote get-url origin | sed -E 's#^.*[:/]([^/]+/[^/]+)$#\1#; s#\.git$##')
+      BRANCH=$(git branch --show-current)
+      if [ -z "$BRANCH" ]; then
+        echo "flip-ready: detached HEAD — cannot resolve the PR branch." >&2
+        exit 1
+      fi
+      # Public-surface preflight (#2794): the flip is the one irreversible
+      # step, so it re-verifies CI itself instead of trusting the loop above —
+      # any pending or non-green check refuses the flip loudly. An empty result
+      # (no CI configured, or gated checks that never started) proceeds,
+      # matching the probe's permission-agnostic skip.
+      NOT_GREEN=$(gh pr checks "$BRANCH" --repo "$ORIGIN_REPO" --json name,bucket --jq '.[] | select(.bucket != "pass" and .bucket != "skipping") | "\(.name) (\(.bucket))"' 2>/dev/null)
+      if [ -n "$NOT_GREEN" ]; then
+        echo "flip-ready: refusing to flip with non-green checks:" >&2
+        echo "$NOT_GREEN" >&2
+        exit 1
+      fi
+      gh pr ready "$BRANCH" --repo "$ORIGIN_REPO"
+      draft=$(gh pr view "$BRANCH" --repo "$ORIGIN_REPO" --json isDraft --jq .isDraft)
+      if [ "$draft" = "false" ]; then
+        gh pr view "$BRANCH" --repo "$ORIGIN_REPO" --json url --jq .url
+      else
+        echo "flip-ready: PR still reports draft after the ready flip" >&2
+        exit 1
+      fi
+    # Waits on sync-pr-body explicitly: on a repo with no CI, await-checks
+    # returns immediately and the flip could otherwise beat the resync. The
+    # trigger rule lets a SKIPPED resync (initial review was ready) pass while
+    # a FAILED resync still blocks the flip — a public surface we could not
+    # correct is a reason not to go ready.
+    depends_on: [await-checks, sync-pr-body]
+    trigger_rule: none_failed_min_one_success

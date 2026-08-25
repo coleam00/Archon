@@ -1,0 +1,59 @@
+name: archon-investigate
+description: |
+  Establish the proven causal chain for a bug, unexplained behavior, or open
+  question — to the root cause whose fix prevents the symptom, never the first
+  plausible explanation — and write an evidence-backed report a fixer or
+  planner can act on without repeating the work. Advisory: it reads,
+  reproduces, and reports — the repository is left exactly as it was found.
+
+  Use when: the cause is not yet known — "investigate this issue", "why does
+  this fail", "root-cause this before we fix it".
+  NOT for: deciding how to build the fix (plan), or building it (implement).
+
+model: medium
+
+inputs:
+  target:
+    default: ""
+    description: >-
+      What to investigate — an issue reference, a symptom, a failing command, or
+      a question. When empty, the run's trigger message is the target.
+
+# rooted:false is a valid completion (see the investigate node): the run succeeds
+# with an authored outcome of false — lifecycle status and work outcome are separate facts.
+returns: investigate
+outcome_field: rooted
+
+nodes:
+
+  # Inconclusive is a valid outcome, not a failure: rooted:false with the gaps
+  # named honestly beats a confident guess. Consumers gate on
+  # $investigate.output.rooted before building on the chain.
+  - id: investigate
+    command: investigate
+    # Advisory: the engine fails this node with the touched paths named if it
+    # modifies the working tree (#2771); replaced the record-state snapshot.
+    mutates_checkout: false
+    output_type: investigation-report
+    output_format:
+      type: object
+      properties:
+        rooted:
+          type: boolean
+        summary:
+          type: string
+      required: [rooted, summary]
+
+  # Deterministic on both promises: a pleasant summary is not a report, and an
+  # advisory run must not mutate the checkout (advisory agents resetting user
+  # work is a lived failure mode, not a hypothetical).
+  - id: assert-intact
+    bash: |
+      # Tree-intactness is engine-enforced via mutates_checkout: false above;
+      # what remains is the evidence contract.
+      if [ ! -s "$ARTIFACTS_DIR/investigation.md" ]; then
+        echo "assert-intact: the run completed but wrote no investigation.md — a summary is not a report." >&2
+        exit 1
+      fi
+      echo '{"intact":"true"}'
+    depends_on: [investigate]

@@ -1,0 +1,7 @@
+# Dry-run fixture: current evidence says the target is implementation-ready.
+triage:
+  route: deliver
+  summary: "stub: current code confirms the work order; no material decision remains"
+assert-intact: '{"intact":"true"}'
+fixture:
+  expect: completed

@@ -1,0 +1,126 @@
+name: archon-fix
+description: |
+  Ground an issue or request against the current repository before spending on
+  it, then take the least speculative path: investigate an unknown cause, plan
+  an undecided shape, deliver an implementation-ready work order, or stop when
+  no work remains. Actionable paths converge on the reviewed delivery tail.
+  One governed run, one artifact store, no inherited issue assumptions.
+
+  Use when: a GitHub issue or request should be taken from current-truth check
+  through to a reviewed PR — "fix this issue", "implement issue #123", "take
+  this work item to a PR".
+  NOT for: bypassing triage with already-prepared work (deliver directly),
+  reviewing an existing PR, or merging.
+
+requires: [github]
+
+inputs:
+  target:
+    default: ""
+    description: >-
+      What to take through the pipeline — an issue, document, plan, report, or
+      free-form request. When empty, the run's trigger message is the target.
+  tests:
+    default: "auto"
+    description: Test-coverage lens — auto (post-PR classifier decides), true, or false.
+  errors:
+    default: "auto"
+    description: Silent-failure lens — auto, true, or false.
+  comments:
+    default: "auto"
+    description: Comment-accuracy lens — auto, true, or false.
+  types:
+    default: "auto"
+    description: Type-design lens — auto, true, or false.
+  docs:
+    default: "auto"
+    description: Docs-impact lens — auto, true, or false.
+
+returns: outcome
+
+nodes:
+  # The source is history, not a work order. Triage checks it against current
+  # code and direction before deciding which kind of reasoning is still owed.
+  - id: triage
+    include: archon-triage
+    with:
+      target: "$INPUTS.target"
+
+  - id: inv
+    include: archon-investigate
+    with:
+      target: >-
+        Investigate the unresolved causal question recorded in
+        $ARTIFACTS_DIR/triage.md. Read that assessment first; its confirmed facts
+        are context, while its unknowns are the investigation target. Original
+        work item: $INPUTS.target
+    depends_on: [triage]
+    when: "$triage.output.route == 'investigate'"
+
+  # These three route markers form one join into delivery. Expected negative
+  # judgments skip their marker; contract failures inside the advisory package
+  # still fail normally. That keeps "not ready to build" distinct from "the
+  # workflow failed to execute" without weakening the spend boundary.
+  - id: gate-direct
+    bash: echo '{"gate":"direct"}'
+    depends_on: [triage]
+    when: "$triage.output.route == 'deliver'"
+
+  - id: gate-rooted
+    bash: echo '{"gate":"rooted"}'
+    depends_on: [inv]
+    when: "$inv.output.rooted == 'true'"
+
+  - id: planned
+    include: archon-plan
+    with:
+      work: >-
+        Plan the current work item from $ARTIFACTS_DIR/triage.md. Read that
+        assessment first, preserve its verified outcome and constraints, and
+        decide the implementation questions it identified. Original work item:
+        $INPUTS.target
+    depends_on: [triage]
+    when: "$triage.output.route == 'plan'"
+
+  - id: gate-planned
+    bash: echo '{"gate":"planned"}'
+    depends_on: [planned]
+    when: "$planned.output.ready == 'true'"
+
+  - id: deliver
+    include: archon-deliver
+    with:
+      tests: "$INPUTS.tests"
+      errors: "$INPUTS.errors"
+      comments: "$INPUTS.comments"
+      types: "$INPUTS.types"
+      docs: "$INPUTS.docs"
+      work: >-
+        Deliver the work prepared by this run. Read $ARTIFACTS_DIR/triage.md
+        first. When present, plan.md or investigation.md is the detailed work
+        order and must be read in full; triage.md records which path produced it
+        and which source assumptions were corrected. On the direct route,
+        triage.md itself is the verified work order. Original work item:
+        $INPUTS.target
+    depends_on: [gate-direct, gate-rooted, gate-planned]
+    trigger_rule: none_failed_min_one_success
+
+  # One return for every legitimate terminal result. Negative advisory verdicts
+  # complete with the report that explains them; delivery is still accepted
+  # only when the deliver branch actually ran (bound with if_skipped, #2637)
+  # and GitHub confirms the PR state — see scripts/outcome.py.
+  - id: outcome
+    script: outcome
+    runtime: uv
+    depends_on: [triage, inv, planned, gate-direct, gate-rooted, gate-planned, deliver]
+    trigger_rule: none_failed_min_one_success
+    with:
+      route: "$triage.output.route"
+      summary: "$triage.output.summary"
+      delivered: { from: "$deliver.output", if_skipped: null }
+      # A passed spend gate with no delivered output means delivery STARTED and
+      # died mid-flight — a different fact from an advisory stop, and the report
+      # must not claim the advisory refused (seen wrong on run a1da7249, #2402).
+      gate_passed_direct: { from: "$gate-direct.output", if_skipped: null }
+      gate_passed_rooted: { from: "$gate-rooted.output", if_skipped: null }
+      gate_passed_planned: { from: "$gate-planned.output", if_skipped: null }
