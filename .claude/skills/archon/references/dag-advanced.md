@@ -315,11 +315,11 @@ For deterministic bash/script failures (a script that exits 1 reproducibly), ret
 
 | Category | Examples | Retried? |
 |----------|----------|----------|
-| **FATAL** | `unauthorized`, `forbidden`, `permission denied`, `invalid token`, `authentication failed`, `auth error`, `401`, `403`, `session limit`, `usage limit reached`, `credit exhaustion`, `credit balance` | Never |
+| **FATAL** | `unauthorized`, `forbidden`, `permission denied`, `invalid token`, `authentication failed`, `401`, `403`, `session limit`, `usage limit reached`, `credit exhaustion`, `credit balance` | Never |
 | **TRANSIENT** | `timeout`, `etimedout`, `rate limit`, `too many requests`, `429`, `502`, `503`, `529`, `overloaded`, `at capacity`, `stream closed without yielding content`, `econnrefused`, `econnreset`, `network error`, `socket hang up`, `exited with code`, `claude code crash` | By default (rate-limit matches get the ~45s±50% backoff and widened budget above) |
 | **UNKNOWN** | Everything else | Only with `on_error: all` |
 
-FATAL patterns take priority over TRANSIENT patterns in the same error message.
+FATAL patterns take priority over TRANSIENT patterns in the same error message. `auth error` alone is fatal, but yields to any concrete transient pattern in the same message.
 
 ### Two-Layer Retry Stack
 
