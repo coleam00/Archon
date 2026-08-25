@@ -829,25 +829,30 @@ function describeBudgetExhaustion(e: BudgetExhaustion): string {
  * Charge one work unit to the run's shared ledger when one exists (#1961), and
  * persist a matching `work_unit_charged` audit row so the charge is reconstructible
  * from the event log on cold resume (`getDagResumeSnapshot` counts these rows back).
- * Without the persisted trace, a spawn decision charged live only would vanish across
- * pause/resume and silently loosen the `max_work_units` ceiling each cycle.
+ * The persist is awaited — a fire-and-forget write would let a transient DB failure
+ * drop the row while the live ledger still counts the unit, silently loosening the
+ * `max_work_units` ceiling on the next cold resume. A failed persist therefore THROWS,
+ * failing the spawn explicitly rather than continuing with diverged accounting.
  */
-function chargeBudgetWorkUnit(ctx: RunLayersContext, nodeId: string): void {
+async function chargeBudgetWorkUnit(ctx: RunLayersContext, nodeId: string): Promise<void> {
   if (ctx.budgetLedger === undefined) return;
-  ctx.budgetLedger.workUnits++;
-  ctx.deps.store
-    .createWorkflowEvent({
+  try {
+    await ctx.deps.store.createWorkflowEvent({
       workflow_run_id: ctx.workflowRun.id,
       event_type: 'work_unit_charged',
       step_name: ctx.stepNamePrefix + nodeId,
       data: { kind: 'spawn_decision' },
-    })
-    .catch((err: Error) => {
-      getLog().error(
-        { err, workflowRunId: ctx.workflowRun.id, eventType: 'work_unit_charged' },
-        'workflow.event_persist_failed'
-      );
     });
+  } catch (err) {
+    getLog().error(
+      { err, workflowRunId: ctx.workflowRun.id, eventType: 'work_unit_charged' },
+      'workflow.event_persist_failed'
+    );
+    throw err;
+  }
+  // Charged only after the audit row is durably written, so the ledger can never
+  // run ahead of what a cold resume reconstructs.
+  ctx.budgetLedger.workUnits++;
 }
 
 /** Terminal (or paused) outcome of a child sub-run, as consumed by a `workflow:` node. */
@@ -8029,12 +8034,12 @@ async function executeWorkflowNode(
     if (existing === undefined) {
       // One work unit per spawn decision (#1961): the child's own attempts are its
       // own run's ledger; the parent charges the decision to start it.
-      chargeBudgetWorkUnit(ctx, node.id);
+      await chargeBudgetWorkUnit(ctx, node.id);
       return await interpret(await ctx.runChildWorkflow(childArgs));
     }
     if (existing.status === 'failed') {
       // Resume-through-parent recovery (D5/#1764): re-drive the failed child once.
-      chargeBudgetWorkUnit(ctx, node.id);
+      await chargeBudgetWorkUnit(ctx, node.id);
       return await interpret(
         await ctx.runChildWorkflow({ ...childArgs, resumeFailedChild: existing })
       );
@@ -8746,7 +8751,7 @@ async function executeFanOutWorkflowNode(
         };
       }
       // One parent work unit per spawned/re-driven child (#1961).
-      chargeBudgetWorkUnit(ctx, node.id);
+      await chargeBudgetWorkUnit(ctx, node.id);
       const input = itemToInput(item);
       // Per-child $INPUTS (#2470): the static `with:` map plus the per-item `fan_out.as`
       // channel (the item value under `$INPUTS.<as>`). `as` is load-time guaranteed not to

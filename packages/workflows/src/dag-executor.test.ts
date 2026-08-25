@@ -2520,6 +2520,70 @@ describe('executeDagWorkflow -- bash nodes', () => {
     });
   });
 
+  it('a failed work_unit_charged persist fails the run instead of silently loosening the ceiling (#1961 R3)', async () => {
+    // The audit row is what a cold resume reconstructs the ceiling from, so a dropped
+    // row must not pass unnoticed: the persist failure propagates and the run fails
+    // explicitly rather than continuing with live/persisted accounting diverged.
+    const store = createMockStore();
+    store.findChildRuns = mock(() => Promise.resolve([]));
+    const original = store.createWorkflowEvent;
+    store.createWorkflowEvent = mock((event: Parameters<typeof store.createWorkflowEvent>[0]) =>
+      event.event_type === 'work_unit_charged'
+        ? Promise.reject(new Error('db blip'))
+        : original(event)
+    );
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('spawn-charge-fail-run', {
+      workflow_name: 'spawn-charge-fail-test',
+      conversation_id: 'conv-spawn-charge-fail',
+      user_message: 'spawn charge fail test message',
+    });
+
+    let spawnAttempts = 0;
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-spawn-charge-fail',
+      testDir,
+      {
+        name: 'spawn-charge-fail',
+        nodes: [{ id: 'sub', kind: 'workflow', workflow: 'child-wf' } as DagNode],
+        budget: { max_work_units: 5 },
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      async () => {
+        spawnAttempts++;
+        return {
+          childRunId: 'child-run-id',
+          status: 'completed' as const,
+          output: 'child done',
+        };
+      }
+    );
+
+    // The child was never started — the un-persistable charge refused the spawn.
+    expect(spawnAttempts).toBe(0);
+    expect(mockDeps.store.failWorkflowRun).toHaveBeenCalled();
+  });
+
   it('a resumed run whose spend already exceeds the ceiling refuses before any node (#1961)', async () => {
     const mockDeps = createMockDeps();
     const platform = createMockPlatform();
