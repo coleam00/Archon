@@ -13,20 +13,34 @@ afterEach(() => {
 
 describe('confirmProviderAttemptStopped', () => {
   test('accepts confirmed shutdown', async () => {
-    await expect(confirmProviderAttemptStopped(Promise.resolve(), 'stop failed')).resolves.toBe(
+    await expect(confirmProviderAttemptStopped(async () => undefined, 'stop failed')).resolves.toBe(
       undefined
     );
   });
 
   test('wraps rejected shutdown as unconfirmed', async () => {
     await expect(
-      confirmProviderAttemptStopped(Promise.reject(new Error('transport failed')), 'stop failed')
+      confirmProviderAttemptStopped(
+        async () => Promise.reject(new Error('transport failed')),
+        'stop failed'
+      )
+    ).rejects.toMatchObject({ name: 'ProviderAttemptStopUnconfirmedError' });
+  });
+
+  test('wraps a synchronous shutdown throw as unconfirmed', async () => {
+    await expect(
+      confirmProviderAttemptStopped(() => {
+        throw new Error('sync transport failure');
+      }, 'stop failed')
     ).rejects.toMatchObject({ name: 'ProviderAttemptStopUnconfirmedError' });
   });
 
   test('bounds a shutdown promise that never settles', async () => {
     jest.useFakeTimers();
-    const confirmation = confirmProviderAttemptStopped(new Promise(() => undefined), 'stop failed');
+    const confirmation = confirmProviderAttemptStopped(
+      () => new Promise(() => undefined),
+      'stop failed'
+    );
 
     jest.advanceTimersByTime(PROVIDER_STOP_CONFIRMATION_TIMEOUT_MS);
 

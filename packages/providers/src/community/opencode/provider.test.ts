@@ -64,6 +64,24 @@ function createPendingStream(): AsyncIterable<OpencodeEvent> {
   };
 }
 
+function createPendingStreamWithHungReturn(): {
+  stream: AsyncIterable<OpencodeEvent>;
+  returnCall: ReturnType<typeof mock>;
+} {
+  const returnCall = mock(() => new Promise<IteratorResult<OpencodeEvent>>(() => undefined));
+  return {
+    stream: {
+      [Symbol.asyncIterator]() {
+        return {
+          next: () => new Promise<IteratorResult<OpencodeEvent>>(() => undefined),
+          return: returnCall,
+        };
+      },
+    },
+    returnCall,
+  };
+}
+
 function createPushStream(): {
   stream: AsyncIterable<OpencodeEvent>;
   push: (event: OpencodeEvent) => void;
@@ -106,7 +124,7 @@ function makeRuntime(overrides?: {
     overrides?.sessionGet ?? mock(async () => ({ data: { id: 'resumed-session' } }));
   const promptAsync = overrides?.promptAsync ?? mock(async () => undefined);
   const sessionMessage = overrides?.sessionMessage ?? mock(async () => ({ data: { info: {} } }));
-  const sessionAbort = overrides?.sessionAbort ?? mock(async () => undefined);
+  const sessionAbort = overrides?.sessionAbort ?? mock(async () => ({ data: true }));
   const subscribe =
     overrides?.subscribe ??
     mock(async () => ({
@@ -558,7 +576,7 @@ describe('OpencodeProvider', () => {
       settlePrompts = resolve;
     });
     const sessionAbort = mock(
-      async (_request: { path: { id: string }; query: { directory: string } }) => undefined
+      async (_request: { path: { id: string }; query: { directory: string } }) => ({ data: true })
     );
     const runtime = makeRuntime({
       sessionCreate: mock(async () => ({ data: { id: sessionIds.shift() } })),
@@ -618,7 +636,7 @@ describe('OpencodeProvider', () => {
       rejectReviewer = reject;
     });
     const sessionAbort = mock(
-      async (_request: { path: { id: string }; query: { directory: string } }) => undefined
+      async (_request: { path: { id: string }; query: { directory: string } }) => ({ data: true })
     );
     const runtime = makeRuntime({
       sessionCreate: mock(async () => ({ data: { id: sessionIds.shift() } })),
@@ -674,7 +692,7 @@ describe('OpencodeProvider', () => {
       settlePrompts = resolve;
     });
     const sessionAbort = mock(
-      async (_request: { path: { id: string }; query: { directory: string } }) => undefined
+      async (_request: { path: { id: string }; query: { directory: string } }) => ({ data: true })
     );
     const runtime = makeRuntime({
       sessionCreate: mock(async () => ({ data: { id: sessionIds.shift() } })),
@@ -731,7 +749,7 @@ describe('OpencodeProvider', () => {
     const leaseControllers = [new AbortController(), new AbortController()];
     let promptCalls = 0;
     const sessionAbort = mock(
-      async (_request: { path: { id: string }; query: { directory: string } }) => undefined
+      async (_request: { path: { id: string }; query: { directory: string } }) => ({ data: true })
     );
     const runtime = makeRuntime({
       sessionCreate: mock(async () => ({ data: { id: sessionIds.shift() } })),
@@ -780,7 +798,7 @@ describe('OpencodeProvider', () => {
     expect(releases).toBe(2);
   });
 
-  test('re-aborts multi-agent sessions after pending prompt submissions settle', async () => {
+  test('expires leases and re-aborts multi-agent sessions after pending prompts settle', async () => {
     const cwd = await createTempProjectDir();
     const sessionIds = ['scout-session', 'reviewer-session'];
     const events = createPushStream();
@@ -790,7 +808,7 @@ describe('OpencodeProvider', () => {
       settlePrompts = resolve;
     });
     const sessionAbort = mock(
-      async (_request: { path: { id: string }; query: { directory: string } }) => undefined
+      async (_request: { path: { id: string }; query: { directory: string } }) => ({ data: true })
     );
     const runtime = makeRuntime({
       sessionCreate: mock(async () => ({ data: { id: sessionIds.shift() } })),
@@ -833,17 +851,18 @@ describe('OpencodeProvider', () => {
     while (sessionAbort.mock.calls.length < 2) await Bun.sleep(1);
     await Promise.resolve();
     expect(sessionAbort).toHaveBeenCalledTimes(2);
-    expect(releases).toEqual([]);
+    expect(releases).toEqual([{ upstreamStopped: false }, { upstreamStopped: false }]);
 
     settlePrompts();
     const { error } = await consumption;
+    while (sessionAbort.mock.calls.length < 4) await Bun.sleep(1);
 
     expect(error?.message).toContain('lease ownership lost');
     expect(sessionAbort).toHaveBeenCalledTimes(4);
     const abortedSessionIds = sessionAbort.mock.calls.map(call => call[0].path.id);
     expect(abortedSessionIds.filter(id => id === 'scout-session')).toHaveLength(2);
     expect(abortedSessionIds.filter(id => id === 'reviewer-session')).toHaveLength(2);
-    expect(releases).toEqual([{ upstreamStopped: true }, { upstreamStopped: true }]);
+    expect(releases).toEqual([{ upstreamStopped: false }, { upstreamStopped: false }]);
   });
 
   test('expires multi-agent leases when prompt submissions never settle after cancellation', async () => {
@@ -857,7 +876,7 @@ describe('OpencodeProvider', () => {
         if (runtime.client.session.promptAsync.mock.calls.length === 2) promptStarted.resolve();
         return neverSettles;
       }),
-      sessionAbort: mock(async () => undefined),
+      sessionAbort: mock(async () => ({ data: true })),
       subscribe: mock(async () => ({ stream: createPendingStream() })),
     });
     runtimeQueue.push(runtime);
@@ -906,7 +925,7 @@ describe('OpencodeProvider', () => {
     const runtime = makeRuntime({
       sessionCreate: mock(async () => ({ data: { id: sessionIds.shift() } })),
       promptAsync: mock(async () => undefined),
-      sessionAbort: mock(() => new Promise<void>(() => undefined)),
+      sessionAbort: mock(() => new Promise<{ data: boolean }>(() => undefined)),
       subscribe: mock(async () => ({ stream: createPendingStream() })),
     });
     runtimeQueue.push(runtime);
@@ -951,6 +970,48 @@ describe('OpencodeProvider', () => {
     expect(releases).toEqual([{ upstreamStopped: false }, { upstreamStopped: false }]);
   });
 
+  test('expires multi-agent leases when OpenCode returns abort errors', async () => {
+    const cwd = await createTempProjectDir();
+    const sessionIds = ['scout-session', 'reviewer-session'];
+    const runtime = makeRuntime({
+      sessionCreate: mock(async () => ({ data: { id: sessionIds.shift() } })),
+      promptAsync: mock(async () => undefined),
+      sessionAbort: mock(async () => ({ error: { message: 'abort rejected' } })),
+      subscribe: mock(async () => ({ stream: createPendingStream() })),
+    });
+    runtimeQueue.push(runtime);
+    const abortController = new AbortController();
+    const releases: { upstreamStopped: boolean }[] = [];
+    const consumption = consume(
+      new OpencodeProvider().sendQuery('hi', cwd, undefined, {
+        assistantConfig: TEST_MODEL,
+        abortSignal: abortController.signal,
+        nodeConfig: {
+          nodeId: 'research',
+          agents: {
+            scout: { description: 'Scout', prompt: 'Explore' },
+            reviewer: { description: 'Reviewer', prompt: 'Review' },
+          },
+        },
+        providerAttemptGate: {
+          acquire: async () => ({
+            signal: new AbortController().signal,
+            release: async options => {
+              releases.push(options);
+            },
+          }),
+        },
+      })
+    );
+
+    while (runtime.client.session.promptAsync.mock.calls.length < 2) await Bun.sleep(1);
+    abortController.abort();
+    const { error } = await consumption;
+
+    expect(error?.name).toBe('ProviderAttemptStopUnconfirmedError');
+    expect(releases).toEqual([{ upstreamStopped: false }, { upstreamStopped: false }]);
+  });
+
   test('preserves each unconfirmed multi-agent lease without replacing the causal error', async () => {
     const cwd = await createTempProjectDir();
     const sessionIds = ['scout-session', 'reviewer-session'];
@@ -965,6 +1026,7 @@ describe('OpencodeProvider', () => {
       }),
       sessionAbort: mock(async request => {
         if (request.path.id === 'scout-session') throw new Error('abort transport failed');
+        return { data: true };
       }),
       subscribe: mock(async () => ({ stream: events.stream })),
     });
@@ -1027,6 +1089,7 @@ describe('OpencodeProvider', () => {
       }),
       sessionAbort: mock(async request => {
         if (request.path.id === 'reviewer-session') throw new Error('abort transport failed');
+        return { data: true };
       }),
       subscribe: mock(async () => ({ stream: events.stream })),
     });
@@ -1584,6 +1647,7 @@ describe('OpencodeProvider', () => {
     expect(runtime.client.session.abort).toHaveBeenCalledWith({
       path: { id: 'session-1' },
       query: { directory: '/tmp' },
+      throwOnError: true,
     });
   });
 
@@ -1629,10 +1693,89 @@ describe('OpencodeProvider', () => {
     expect(releases).toEqual([{ upstreamStopped: true }]);
   });
 
+  test('releases confirmed capacity when cancellation interrupts a hung event subscription', async () => {
+    const subscribeStarted = Promise.withResolvers<void>();
+    const leaseController = new AbortController();
+    const releases: { upstreamStopped: boolean }[] = [];
+    const runtime = makeRuntime({
+      subscribe: mock(async () => {
+        subscribeStarted.resolve();
+        return new Promise<{ stream: AsyncIterable<OpencodeEvent> }>(() => undefined);
+      }),
+    });
+    runtimeQueue.push(runtime);
+
+    const consumption = consume(
+      new OpencodeProvider().sendQuery('hi', '/tmp', undefined, {
+        assistantConfig: TEST_MODEL,
+        providerAttemptGate: {
+          acquire: async () => ({
+            signal: leaseController.signal,
+            release: async options => {
+              releases.push(options);
+            },
+          }),
+        },
+      })
+    );
+
+    await subscribeStarted.promise;
+    leaseController.abort(new Error('lease ownership lost'));
+    const result = await Promise.race([
+      consumption,
+      Bun.sleep(100).then(() => 'timed-out' as const),
+    ]);
+
+    expect(result).not.toBe('timed-out');
+    if (result === 'timed-out') return;
+    expect(result.error?.message).toBe('OpenCode query aborted');
+    expect(runtime.client.session.promptAsync).not.toHaveBeenCalled();
+    expect(runtime.client.session.abort).toHaveBeenCalledTimes(1);
+    expect(releases).toEqual([{ upstreamStopped: true }]);
+  });
+
+  test('does not await a hung event iterator cleanup after confirmed cancellation', async () => {
+    const events = createPendingStreamWithHungReturn();
+    const abortController = new AbortController();
+    const releases: { upstreamStopped: boolean }[] = [];
+    const runtime = makeRuntime({
+      subscribe: mock(async () => ({ stream: events.stream })),
+    });
+    runtimeQueue.push(runtime);
+
+    const consumption = consume(
+      new OpencodeProvider().sendQuery('hi', '/tmp', undefined, {
+        assistantConfig: TEST_MODEL,
+        abortSignal: abortController.signal,
+        providerAttemptGate: {
+          acquire: async () => ({
+            signal: new AbortController().signal,
+            release: async options => {
+              releases.push(options);
+            },
+          }),
+        },
+      })
+    );
+
+    while (runtime.client.session.promptAsync.mock.calls.length === 0) await Bun.sleep(1);
+    abortController.abort();
+    const result = await Promise.race([
+      consumption,
+      Bun.sleep(100).then(() => 'timed-out' as const),
+    ]);
+
+    expect(result).not.toBe('timed-out');
+    if (result === 'timed-out') return;
+    expect(result.error?.message).toBe('OpenCode query aborted');
+    expect(events.returnCall).toHaveBeenCalled();
+    expect(releases).toEqual([{ upstreamStopped: true }]);
+  });
+
   test('keeps the provider lease until OpenCode confirms cancellation', async () => {
     let confirmAbort!: () => void;
-    const abortConfirmed = new Promise<void>(resolve => {
-      confirmAbort = resolve;
+    const abortConfirmed = new Promise<{ data: boolean }>(resolve => {
+      confirmAbort = (): void => resolve({ data: true });
     });
     const runtime = makeRuntime({
       subscribe: mock(async () => ({ stream: createPendingStream() })),
@@ -1671,7 +1814,7 @@ describe('OpencodeProvider', () => {
   test('expires a single-agent lease when session abort never settles', async () => {
     const runtime = makeRuntime({
       subscribe: mock(async () => ({ stream: createPendingStream() })),
-      sessionAbort: mock(() => new Promise<void>(() => undefined)),
+      sessionAbort: mock(() => new Promise<{ data: boolean }>(() => undefined)),
     });
     runtimeQueue.push(runtime);
     const abortController = new AbortController();
@@ -1709,12 +1852,43 @@ describe('OpencodeProvider', () => {
     expect(releases).toEqual([{ upstreamStopped: false }]);
   });
 
+  test('expires a single-agent lease when OpenCode rejects the abort response', async () => {
+    const runtime = makeRuntime({
+      subscribe: mock(async () => ({ stream: createPendingStream() })),
+      sessionAbort: mock(async () => ({ data: false })),
+    });
+    runtimeQueue.push(runtime);
+    const abortController = new AbortController();
+    const releases: { upstreamStopped: boolean }[] = [];
+    const consumption = consume(
+      new OpencodeProvider().sendQuery('hi', '/tmp', undefined, {
+        assistantConfig: TEST_MODEL,
+        abortSignal: abortController.signal,
+        providerAttemptGate: {
+          acquire: async () => ({
+            signal: new AbortController().signal,
+            release: async options => {
+              releases.push(options);
+            },
+          }),
+        },
+      })
+    );
+
+    while (runtime.client.session.promptAsync.mock.calls.length === 0) await Bun.sleep(1);
+    abortController.abort();
+    const { error } = await consumption;
+
+    expect(error?.name).toBe('ProviderAttemptStopUnconfirmedError');
+    expect(releases).toEqual([{ upstreamStopped: false }]);
+  });
+
   test('expires the lease before re-aborting an in-flight prompt that later settles', async () => {
     let settlePrompt!: () => void;
     const promptSettled = new Promise<void>(resolve => {
       settlePrompt = resolve;
     });
-    const sessionAbort = mock(async () => undefined);
+    const sessionAbort = mock(async () => ({ data: true }));
     const runtime = makeRuntime({
       promptAsync: mock(async () => promptSettled),
       subscribe: mock(async () => ({ stream: createPendingStream() })),
@@ -1754,7 +1928,7 @@ describe('OpencodeProvider', () => {
 
   test('re-aborts an in-flight prompt after its late rejection', async () => {
     const promptDeferred = Promise.withResolvers<void>();
-    const sessionAbort = mock(async () => undefined);
+    const sessionAbort = mock(async () => ({ data: true }));
     const runtime = makeRuntime({
       promptAsync: mock(async () => promptDeferred.promise),
       subscribe: mock(async () => ({ stream: createPendingStream() })),
@@ -1801,7 +1975,7 @@ describe('OpencodeProvider', () => {
         return new Promise<void>(() => undefined);
       }),
       subscribe: mock(async () => ({ stream: createPendingStream() })),
-      sessionAbort: mock(async () => undefined),
+      sessionAbort: mock(async () => ({ data: true })),
     });
     runtimeQueue.push(runtime);
     const abortController = new AbortController();
@@ -1838,8 +2012,8 @@ describe('OpencodeProvider', () => {
 
   test('aborts an unconfirmed single-agent stream before releasing provider capacity', async () => {
     let confirmAbort!: () => void;
-    const abortConfirmed = new Promise<void>(resolve => {
-      confirmAbort = resolve;
+    const abortConfirmed = new Promise<{ data: boolean }>(resolve => {
+      confirmAbort = (): void => resolve({ data: true });
     });
     const runtime = makeRuntime({
       subscribe: mock(async () => ({ stream: createEventStream([]) })),
@@ -1875,8 +2049,8 @@ describe('OpencodeProvider', () => {
   test('confirms session shutdown before releasing capacity when a consumer stops early', async () => {
     const events = createPushStream();
     let confirmAbort!: () => void;
-    const abortConfirmed = new Promise<void>(resolve => {
-      confirmAbort = resolve;
+    const abortConfirmed = new Promise<{ data: boolean }>(resolve => {
+      confirmAbort = (): void => resolve({ data: true });
     });
     const runtime = makeRuntime({
       subscribe: mock(async () => ({ stream: events.stream })),

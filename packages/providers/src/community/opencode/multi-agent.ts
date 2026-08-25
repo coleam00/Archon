@@ -3,6 +3,7 @@ import { createLogger } from '@archon/paths';
 import {
   confirmProviderAttemptStopped,
   ProviderAttemptStopUnconfirmedError,
+  waitForPromiseOrAbort,
 } from '../../shared/provider-attempt';
 import { mergeTokenUsage } from '../../types';
 import type { MessageChunk, ProviderAttemptLease, SendQueryOptions, TokenUsage } from '../../types';
@@ -10,11 +11,11 @@ import { getOrderedAgents, type NamedAgentConfig } from './agent-config';
 import { errorMessage } from './errors';
 import type { OpencodeClientLike } from './runtime';
 import {
+  abortOpencodeSession,
   abortableStream,
   createSessionPromptBody,
   promptSession,
   resolveSessionId,
-  waitForPromiseOrAbort,
 } from './session';
 import { normalizeTokens } from './tokens';
 
@@ -146,7 +147,10 @@ export async function* streamMultiAgentOpencodeSession(
 
   getLog().info({ nodeId, agentCount: agents.length, cwd }, 'opencode.multi_agent_starting');
 
-  const events = await client.event.subscribe({ query: { directory: cwd } });
+  const events = await waitForPromiseOrAbort(
+    client.event.subscribe({ query: { directory: cwd } }),
+    requestOptions?.abortSignal
+  );
   getLog().info({ nodeId }, 'opencode.multi_agent_events_subscribed');
   const lifecycleController = new AbortController();
   const sessionToAgent = new Map<string, AgentRunState>();
@@ -195,10 +199,7 @@ export async function* streamMultiAgentOpencodeSession(
     if (!abort) {
       const abortPhase = promptPhase;
       abort = confirmProviderAttemptStopped(
-        client.session.abort({
-          path: { id: state.sessionId },
-          query: { directory: state.cwd },
-        }),
+        () => abortOpencodeSession(client, state.cwd, state.sessionId),
         `OpenCode session shutdown could not be confirmed (session: ${state.sessionId}, cwd: ${state.cwd})`
       ).then(
         () => {
@@ -586,7 +587,6 @@ export async function* streamMultiAgentOpencodeSession(
     requestOptions?.abortSignal?.removeEventListener('abort', abortHandler);
     lifecycleController.abort();
     if (!completed) {
-      await abortAll();
       // Pending prompt tasks retain their rejection handlers and issue a fresh
       // abort if their submissions ever settle. Do not await an SDK request that
       // may never settle: release its lease as unconfirmed so expiry can recover it.

@@ -51,7 +51,7 @@ export interface OpencodeClientLike {
     create(options?: Record<string, unknown>): Promise<{ data?: { id?: string } }>;
     get(options: Record<string, unknown>): Promise<{ data?: { id?: string } }>;
     promptAsync(options: Record<string, unknown>): Promise<unknown>;
-    abort(options: Record<string, unknown>): Promise<unknown>;
+    abort(options: Record<string, unknown>): Promise<{ data?: boolean; error?: unknown }>;
     message(
       options: Record<string, unknown>
     ): Promise<{ data?: { info?: Record<string, unknown> } }>;

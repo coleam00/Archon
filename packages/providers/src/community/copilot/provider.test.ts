@@ -251,6 +251,15 @@ describe('CopilotProvider.sendQuery', () => {
     });
 
     const firstNext = gen.next();
+    const completion = (async (): Promise<Error | undefined> => {
+      try {
+        await firstNext;
+        await collect(gen);
+        return undefined;
+      } catch (error) {
+        return error as Error;
+      }
+    })();
     await Bun.sleep(5);
     expect(session.prompt).toBeUndefined();
 
@@ -260,12 +269,7 @@ describe('CopilotProvider.sendQuery', () => {
 
     leaseController.abort(new Error('lease lost'));
     while (!session.aborted) await Bun.sleep(1);
-    await expect(
-      (async (): Promise<void> => {
-        await firstNext;
-        await collect(gen);
-      })()
-    ).rejects.toThrow('lease lost');
+    expect((await completion)?.message).toContain('lease lost');
 
     expect(session.aborted).toBe(true);
     expect(releases).toEqual([{ upstreamStopped: true }]);

@@ -177,8 +177,64 @@ describe('installPiAdmission', () => {
     expect(events).toHaveLength(1);
     expect(events[0]?.type).toBe('error');
     if (events[0]?.type === 'error') {
-      expect(events[0].error.errorMessage).toBe('lease ownership lost');
+      expect(events[0].error.errorMessage).toBe(
+        'Pi provider attempt shutdown could not be confirmed'
+      );
     }
-    expect(releases).toEqual([{ upstreamStopped: true }]);
+    expect(releases).toEqual([{ upstreamStopped: false }]);
+  });
+
+  test('expires the lease when cancellation cannot stop a stalled Pi stream', async () => {
+    const leaseController = new AbortController();
+    const nextStarted = Promise.withResolvers<void>();
+    const returnCall = mock(
+      () => new Promise<IteratorResult<AssistantMessageEvent>>(() => undefined)
+    );
+    const streamSimple = mock<ModelRuntime['streamSimple']>(
+      () =>
+        ({
+          [Symbol.asyncIterator]() {
+            return {
+              next: () => {
+                nextStarted.resolve();
+                return new Promise<IteratorResult<AssistantMessageEvent>>(() => undefined);
+              },
+              return: returnCall,
+            };
+          },
+        }) as unknown as ReturnType<ModelRuntime['streamSimple']>
+    );
+    const runtime: Pick<ModelRuntime, 'streamSimple'> = { streamSimple };
+    const releases: { upstreamStopped: boolean }[] = [];
+    installPiAdmission(
+      runtime,
+      {
+        acquire: async () => ({
+          signal: leaseController.signal,
+          release: async options => {
+            releases.push(options);
+          },
+        }),
+      },
+      lazyStream
+    );
+
+    const events: AssistantMessageEvent[] = [];
+    const consumption = (async (): Promise<void> => {
+      for await (const event of runtime.streamSimple(model, { messages: [] })) {
+        events.push(event);
+      }
+    })();
+    await nextStarted.promise;
+    leaseController.abort(new Error('lease ownership lost'));
+    const result = await Promise.race([
+      consumption.then(() => 'completed' as const),
+      Bun.sleep(100).then(() => 'timed-out' as const),
+    ]);
+
+    expect(result).toBe('completed');
+    expect(returnCall).toHaveBeenCalledTimes(1);
+    expect(releases).toEqual([{ upstreamStopped: false }]);
+    expect(events.at(-1)?.type).toBe('error');
   });
 });

@@ -3,6 +3,7 @@ import type { AgentSession, AgentSessionEvent } from '@earendil-works/pi-coding-
 import type { AssistantMessage, Usage } from '@earendil-works/pi-ai';
 
 import type { MessageChunk, TokenUsage } from '../../types';
+import { confirmProviderAttemptStopped } from '../../shared/provider-attempt';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -383,7 +384,10 @@ export async function* bridgeSession(
   });
 
   const onAbort = (): void => {
-    void session.abort().catch((err: unknown) => {
+    void confirmProviderAttemptStopped(
+      () => session.abort(),
+      'Pi session shutdown could not be confirmed'
+    ).catch((err: unknown) => {
       // Abort is best-effort — failures are recoverable via the dispose()
       // call in the `finally` below. But log at debug so a regression in
       // Pi's abort path doesn't silently disappear.

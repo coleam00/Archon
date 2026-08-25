@@ -23,6 +23,11 @@ import { parsePiConfig, resolvePiExtensionSettings } from './config';
 import { parsePiModelRef } from './model-ref';
 import { buildCustomProviderModelsPath } from './request-auth';
 import { withResumedOutcome, resumedOutcome } from '../../shared/resumed';
+import {
+  confirmProviderAttemptStopped,
+  ProviderAttemptStopUnconfirmedError,
+  waitForPromiseOrAbort,
+} from '../../shared/provider-attempt';
 
 export function installPiAdmission(
   runtime: Pick<ModelRuntime, 'streamSimple'>,
@@ -37,6 +42,9 @@ export function installPiAdmission(
         ? AbortSignal.any([options.signal, lease.signal])
         : lease.signal;
       return (async function* (): AsyncGenerator<AssistantMessageEvent> {
+        let upstreamStopped = true;
+        let iterator: AsyncIterator<AssistantMessageEvent> | undefined;
+        let completed = false;
         try {
           signal.throwIfAborted();
           const stream = streamSimple(model, context, {
@@ -47,16 +55,48 @@ export function installPiAdmission(
             // sleep inside this lease.
             maxRetries: 0,
           });
-          for await (const event of stream) {
+          iterator = stream[Symbol.asyncIterator]();
+          while (true) {
+            const result = await waitForPromiseOrAbort(iterator.next(), signal);
+            if (result.done) {
+              completed = true;
+              break;
+            }
             // Pi may translate an aborted transport into a normal terminal
             // event. Check before forwarding every event, especially `done`,
             // so ownership loss cannot become a successful model attempt.
             signal.throwIfAborted();
-            yield event;
+            yield result.value;
           }
           signal.throwIfAborted();
+        } catch (error) {
+          if (signal.aborted) {
+            if (completed) throw error;
+            upstreamStopped = false;
+            try {
+              void iterator?.return?.().catch(() => undefined);
+            } catch {
+              // The lease expiry is the recovery boundary when Pi cannot stop.
+            }
+            throw new ProviderAttemptStopUnconfirmedError(
+              'Pi provider attempt shutdown could not be confirmed',
+              { cause: error }
+            );
+          }
+          throw error;
         } finally {
-          await lease.release({ upstreamStopped: true });
+          if (iterator && !completed && !signal.aborted) {
+            const activeIterator = iterator;
+            try {
+              await confirmProviderAttemptStopped(async () => {
+                if (!activeIterator.return) throw new Error('Pi model stream cannot be closed');
+                await activeIterator.return();
+              }, 'Pi provider attempt shutdown could not be confirmed');
+            } catch {
+              upstreamStopped = false;
+            }
+          }
+          await lease.release({ upstreamStopped });
         }
       })();
     });

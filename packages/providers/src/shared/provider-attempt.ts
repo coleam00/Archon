@@ -12,7 +12,7 @@ export const PROVIDER_STOP_CONFIRMATION_TIMEOUT_MS = 5_000;
 
 /** Bound provider shutdown so an unresponsive SDK cannot renew capacity forever. */
 export async function confirmProviderAttemptStopped(
-  stop: Promise<unknown>,
+  stop: () => Promise<void>,
   message: string
 ): Promise<void> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -28,14 +28,47 @@ export async function confirmProviderAttemptStopped(
 
   try {
     await Promise.race([
-      stop.catch(error => {
-        if (error instanceof ProviderAttemptStopUnconfirmedError) throw error;
-        throw new ProviderAttemptStopUnconfirmedError(message, { cause: error });
-      }),
+      Promise.resolve()
+        .then(stop)
+        .catch(error => {
+          if (error instanceof ProviderAttemptStopUnconfirmedError) throw error;
+          throw new ProviderAttemptStopUnconfirmedError(message, { cause: error });
+        }),
       timedOut,
     ]);
   } finally {
     if (timeout) clearTimeout(timeout);
+  }
+}
+
+export async function waitForPromiseOrAbort<T>(
+  promise: Promise<T>,
+  signal: AbortSignal | undefined
+): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) {
+    void promise.catch(() => undefined);
+    signal.throwIfAborted();
+  }
+
+  let onAbort: (() => void) | undefined;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    onAbort = (): void => {
+      if (signal.reason instanceof Error) {
+        reject(signal.reason);
+        return;
+      }
+      const error = new Error('Provider operation aborted');
+      error.name = 'AbortError';
+      reject(error);
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+
+  try {
+    return await Promise.race([promise, aborted]);
+  } finally {
+    if (onAbort) signal.removeEventListener('abort', onAbort);
   }
 }
 

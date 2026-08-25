@@ -289,7 +289,7 @@ export async function* bridgeSession(
 
   const requestAbort = (): Promise<void> => {
     abortPromise ??= confirmProviderAttemptStopped(
-      session.abort(),
+      () => session.abort(),
       'Copilot session shutdown could not be confirmed'
     );
     return abortPromise;
@@ -304,13 +304,15 @@ export async function* bridgeSession(
     });
     try {
       const outcome = await Promise.race([
-        session.disconnect().then(
-          () => 'disconnected' as const,
-          err => {
-            log.debug({ err, sessionId: session.sessionId }, 'copilot.disconnect_failed');
-            return 'failed' as const;
-          }
-        ),
+        Promise.resolve()
+          .then(() => session.disconnect())
+          .then(
+            () => 'disconnected' as const,
+            err => {
+              log.debug({ err, sessionId: session.sessionId }, 'copilot.disconnect_failed');
+              return 'failed' as const;
+            }
+          ),
         timedOut,
       ]);
       if (outcome === 'timeout') {

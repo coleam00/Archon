@@ -4,6 +4,7 @@ import type { MessageChunk, SendQueryOptions } from '../../types';
 import {
   confirmProviderAttemptStopped,
   ProviderAttemptStopUnconfirmedError,
+  waitForPromiseOrAbort,
 } from '../../shared/provider-attempt';
 
 import {
@@ -96,34 +97,18 @@ export async function promptSession(
   });
 }
 
-export async function waitForPromiseOrAbort<T>(
-  promise: Promise<T>,
-  signal: AbortSignal | undefined
-): Promise<T> {
-  if (!signal) return promise;
-  if (signal.aborted) {
-    void promise.catch(() => undefined);
-    signal.throwIfAborted();
-  }
-
-  let onAbort: (() => void) | undefined;
-  const aborted = new Promise<never>((_resolve, reject) => {
-    onAbort = (): void => {
-      if (signal.reason instanceof Error) {
-        reject(signal.reason);
-        return;
-      }
-      const error = new Error('OpenCode operation aborted');
-      error.name = 'AbortError';
-      reject(error);
-    };
-    signal.addEventListener('abort', onAbort, { once: true });
+export async function abortOpencodeSession(
+  client: OpencodeClientLike,
+  cwd: string,
+  sessionId: string
+): Promise<void> {
+  const response = await client.session.abort({
+    path: { id: sessionId },
+    query: { directory: cwd },
+    throwOnError: true,
   });
-
-  try {
-    return await Promise.race([promise, aborted]);
-  } finally {
-    if (onAbort) signal.removeEventListener('abort', onAbort);
+  if (response.error !== undefined || response.data !== true) {
+    throw new Error(`OpenCode rejected session abort (session: ${sessionId}, cwd: ${cwd})`);
   }
 }
 
@@ -159,7 +144,6 @@ export async function* streamOpencodeSession(
   model: { providerID: string; modelID: string },
   requestOptions: SendQueryOptions | undefined
 ): AsyncGenerator<MessageChunk> {
-  const events = await client.event.subscribe({ query: { directory: cwd } });
   const streamController = new AbortController();
   const seenToolCalls = new Set<string>();
   const completedToolCalls = new Set<string>();
@@ -169,17 +153,14 @@ export async function* streamOpencodeSession(
   let terminalObserved = false;
   let promptSettled = false;
   let promptPendingAfterAbort = false;
-  let preSubmissionAbortPromise: Promise<unknown> | undefined;
-  let postSubmissionAbortPromise: Promise<unknown> | undefined;
+  let preSubmissionAbortPromise: Promise<void> | undefined;
+  let postSubmissionAbortPromise: Promise<void> | undefined;
 
-  const abortSession = (): Promise<unknown> => {
+  const abortSession = (): Promise<void> => {
     const existingAbort = promptSettled ? postSubmissionAbortPromise : preSubmissionAbortPromise;
     if (existingAbort) return existingAbort;
 
-    const abortPromise = client.session.abort({
-      path: { id: sessionId },
-      query: { directory: cwd },
-    });
+    const abortPromise = abortOpencodeSession(client, cwd, sessionId);
     if (promptSettled) postSubmissionAbortPromise = abortPromise;
     else preSubmissionAbortPromise = abortPromise;
     void abortPromise.catch((error): void => {
@@ -190,7 +171,7 @@ export async function* streamOpencodeSession(
 
   const confirmSessionStopped = async (): Promise<void> => {
     await confirmProviderAttemptStopped(
-      abortSession(),
+      abortSession,
       `OpenCode session shutdown could not be confirmed (session: ${sessionId}, cwd: ${cwd})`
     );
   };
@@ -206,6 +187,10 @@ export async function* streamOpencodeSession(
   });
 
   try {
+    const events = await waitForPromiseOrAbort(
+      client.event.subscribe({ query: { directory: cwd } }),
+      requestOptions?.abortSignal
+    );
     requestOptions?.abortSignal?.throwIfAborted();
     const promptBody = createSessionPromptBody(prompt, model, requestOptions);
     const promptPromise = promptSession(client, cwd, sessionId, promptBody).finally((): void => {
@@ -385,10 +370,17 @@ export async function* abortableStream(
   signal: AbortSignal
 ): AsyncGenerator<unknown, void, unknown> {
   const iterator = stream[Symbol.asyncIterator]();
+  const closeIterator = (): void => {
+    try {
+      void iterator.return?.().catch(() => undefined);
+    } catch {
+      // The provider session abort is the authoritative shutdown boundary.
+    }
+  };
 
   while (true) {
     if (signal.aborted) {
-      await iterator.return?.().catch(() => undefined);
+      closeIterator();
       return;
     }
 
@@ -408,7 +400,7 @@ export async function* abortableStream(
     ]);
 
     if (result.done) {
-      await iterator.return?.().catch(() => undefined);
+      closeIterator();
       return;
     }
     yield result.value;
