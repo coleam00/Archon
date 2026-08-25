@@ -61,6 +61,9 @@ export function installPiAdmission(
               upstreamStopped = true;
               break;
             }
+            if (result.value.type === 'done' || result.value.type === 'error') {
+              upstreamStopped = true;
+            }
             // Pi may translate an aborted transport into a normal terminal
             // event. Check before forwarding every event, especially `done`,
             // so ownership loss cannot become a successful model attempt.
@@ -76,9 +79,10 @@ export function installPiAdmission(
                 if (!activeIterator.return) throw new Error('Pi model stream cannot be closed');
                 await activeIterator.return();
               }, 'Pi provider attempt shutdown could not be confirmed');
-              upstreamStopped = true;
             } catch {
-              upstreamStopped = false;
+              // Closing Pi's consumer iterator cannot prove that its
+              // independently-fed event stream stopped. Lease expiry remains
+              // the safe recovery boundary without a producer terminal event.
             }
           }
           await lease.release({ upstreamStopped });

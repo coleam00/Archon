@@ -1438,6 +1438,51 @@ describe('OpencodeProvider', () => {
     expect(mockLogger.warn).toHaveBeenCalledTimes(1);
   });
 
+  test('does not complete after losing provider ownership during structured-output lookup', async () => {
+    const lookupStarted = Promise.withResolvers<void>();
+    const leaseController = new AbortController();
+    const runtime = makeRuntime({
+      sessionMessage: mock(async () => {
+        lookupStarted.resolve();
+        return new Promise<{ data?: { info?: Record<string, unknown> } }>(() => undefined);
+      }),
+    });
+    runtimeQueue.push(runtime);
+    scriptedEvents = [
+      {
+        type: 'message.updated',
+        properties: {
+          info: { id: 'message-1', role: 'assistant', sessionID: 'session-1' },
+        },
+      },
+      { type: 'session.idle', properties: { sessionID: 'session-1' } },
+    ];
+    const releases: { upstreamStopped: boolean }[] = [];
+    const consumption = consume(
+      new OpencodeProvider().sendQuery('hi', '/tmp', undefined, {
+        assistantConfig: TEST_MODEL,
+        outputFormat: { type: 'json_schema', schema: { type: 'object' } },
+        providerAttemptGate: {
+          acquire: async () => ({
+            signal: leaseController.signal,
+            release: async options => {
+              releases.push(options);
+            },
+          }),
+        },
+      })
+    );
+
+    await lookupStarted.promise;
+    leaseController.abort(new Error('lease ownership lost'));
+    const { chunks, error } = await consumption;
+
+    expect(error?.message).toContain('OpenCode query aborted');
+    expect(chunks).not.toContainEqual(expect.objectContaining({ type: 'result' }));
+    expect(runtime.client.session.abort).toHaveBeenCalledTimes(1);
+    expect(releases).toEqual([{ upstreamStopped: true }]);
+  });
+
   test('fails immediately when OpenCode resolves a rejected single-agent prompt', async () => {
     const runtime = makeRuntime({
       promptAsync: mock(async () => ({ error: { message: 'bad request' } })),

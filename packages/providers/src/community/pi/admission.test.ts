@@ -184,7 +184,47 @@ describe('installPiAdmission', () => {
     if (events[0]?.type === 'error') {
       expect(events[0].error.errorMessage).toBe('lease ownership lost');
     }
-    expect(releases).toEqual([{ upstreamStopped: true }]);
+    expect(releases).toEqual([{ upstreamStopped: false }]);
+  });
+
+  test('does not treat consumer iterator closure as proof that Pi stopped', async () => {
+    const leaseController = new AbortController();
+    const streamSimple = mock<ModelRuntime['streamSimple']>(() => {
+      const stream = createAssistantMessageEventStream();
+      stream.push({ type: 'start', partial: message() });
+      return stream;
+    });
+    const runtime: Pick<ModelRuntime, 'streamSimple'> = { streamSimple };
+    const releases: { upstreamStopped: boolean }[] = [];
+    installPiAdmission(
+      runtime,
+      {
+        acquire: async () => ({
+          signal: leaseController.signal,
+          release: async options => {
+            releases.push(options);
+          },
+        }),
+      },
+      lazyStream
+    );
+
+    const iterator = runtime.streamSimple(model, { messages: [] })[Symbol.asyncIterator]();
+    expect((await iterator.next()).value?.type).toBe('start');
+    jest.useFakeTimers();
+    leaseController.abort(new Error('lease ownership lost'));
+    const completion = (async (): Promise<void> => {
+      while (!(await iterator.next()).done) {
+        // Drain the error event that closes the public lazy stream.
+      }
+    })();
+    for (let attempt = 0; attempt < 20 && releases.length === 0; attempt++) {
+      await Promise.resolve();
+    }
+    jest.advanceTimersByTime(PROVIDER_STOP_CONFIRMATION_TIMEOUT_MS);
+    await completion;
+
+    expect(releases).toEqual([{ upstreamStopped: false }]);
   });
 
   test('releases an unused lease when ownership is already lost before stream creation', async () => {
