@@ -30365,3 +30365,177 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
     ).toBe(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// mutates_checkout: false — per-node tree-integrity assertion (#2771)
+// ---------------------------------------------------------------------------
+
+describe('executeDagWorkflow -- node-level mutates_checkout: false (#2771)', () => {
+  let testDir: string;
+
+  const initRepo = (dir: string): void => {
+    const { execSync } = require('node:child_process') as typeof import('node:child_process');
+    execSync('git init -q && git config user.email t@t && git config user.name t', { cwd: dir });
+    execSync('git add -A && git commit -qm init --allow-empty', { cwd: dir });
+  };
+
+  const runBashNode = async (
+    script: string,
+    declareReadOnly: boolean
+  ): Promise<ReturnType<typeof createMockDeps>> => {
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('mc-run-id', {
+      workflow_name: 'mc-test',
+      conversation_id: 'conv-mc',
+      user_message: 'mc test',
+    });
+    const bashNode: ExecNode = {
+      id: 'guarded',
+      kind: 'exec',
+      runtime: 'sh',
+      script,
+      ...(declareReadOnly ? { mutates_checkout: false as const } : {}),
+    };
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-mc',
+      testDir,
+      { name: 'mc-test', nodes: [bashNode] },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+    return mockDeps;
+  };
+
+  const nodeFailedError = (
+    deps: ReturnType<typeof createMockDeps>,
+    nodeId: string
+  ): string | undefined => {
+    const calls = (deps.store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls as Array<
+      [{ event_type: string; step_name?: string; data?: { error?: string } }]
+    >;
+    const failed = calls.find(([e]) => e.event_type === 'node_failed' && e.step_name === nodeId);
+    return failed?.[0].data?.error;
+  };
+
+  beforeEach(async () => {
+    testDir = join(tmpdir(), `dag-mc-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    await mkdir(testDir, { recursive: true });
+
+    mockSendQueryDag.mockClear();
+    mockGetAgentProviderDag.mockClear();
+
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'assistant', content: 'DAG AI response' };
+      yield { type: 'result', sessionId: 'dag-session-id' };
+    });
+
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+  });
+
+  afterEach(async () => {
+    try {
+      await rm(testDir, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup errors
+    }
+  });
+
+  it('a clean read-only node succeeds', async () => {
+    initRepo(testDir);
+    const deps = await runBashNode('echo untouched', true);
+    expect(nodeFailedError(deps, 'guarded')).toBeUndefined();
+  });
+
+  it('a read-only node that writes to the tree fails naming the node and path', async () => {
+    initRepo(testDir);
+    const deps = await runBashNode('touch stray.txt', true);
+    const error = nodeFailedError(deps, 'guarded');
+    expect(error).toBeDefined();
+    expect(error).toContain('guarded');
+    expect(error).toContain('mutates_checkout: false');
+    expect(error).toContain('stray.txt');
+    console.log('EVENTS', JSON.stringify((deps.store.createWorkflowEvent as any).mock.calls));
+  });
+
+  it('an undeclared mutating node is not checked', async () => {
+    initRepo(testDir);
+    const deps = await runBashNode('touch stray.txt', false);
+    expect(nodeFailedError(deps, 'guarded')).toBeUndefined();
+  });
+
+  it('writes under the engine-owned artifacts dir do not trip the assertion', async () => {
+    initRepo(testDir);
+    // executeBashNode injects ARTIFACTS_DIR into the script's environment.
+    const deps = await runBashNode(
+      'mkdir -p "$ARTIFACTS_DIR" && echo x > "$ARTIFACTS_DIR/out.txt"',
+      true
+    );
+    expect(nodeFailedError(deps, 'guarded')).toBeUndefined();
+  });
+
+  it('outside a git repo the check fails open and the node succeeds', async () => {
+    const deps = await runBashNode('touch stray.txt', true);
+    expect(nodeFailedError(deps, 'guarded')).toBeUndefined();
+  });
+
+  it('a mutating sibling in the same layer is not attributed to a guarded node', async () => {
+    initRepo(testDir);
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('mc-run-id', {
+      workflow_name: 'mc-test',
+      conversation_id: 'conv-mc',
+      user_message: 'mc test',
+    });
+    const nodes: ExecNode[] = [
+      {
+        id: 'guarded',
+        kind: 'exec',
+        runtime: 'sh',
+        script: 'echo read-only',
+        mutates_checkout: false as const,
+      },
+      { id: 'mutator', kind: 'exec', runtime: 'sh', script: 'touch sibling.txt' },
+    ];
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-mc',
+      testDir,
+      { name: 'mc-test', nodes },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+    expect(nodeFailedError(mockDeps, 'guarded')).toBeUndefined();
+  });
+
+  it('non-ASCII paths under excluded dirs do not trip the assertion', async () => {
+    initRepo(testDir);
+    const deps = await runBashNode(
+      'mkdir -p "$ARTIFACTS_DIR/日本語" && echo x > "$ARTIFACTS_DIR/日本語/out.txt"',
+      true
+    );
+    expect(nodeFailedError(deps, 'guarded')).toBeUndefined();
+  });
+});

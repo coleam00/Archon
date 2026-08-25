@@ -557,6 +557,95 @@ describe('Workflow Loader', () => {
       expect(result.workflows[0].workflow.mutates_checkout).toBeUndefined();
     });
 
+    // Node-level declaration (#2771): the engine-enforced tree-integrity assertion.
+    it('should parse node-level mutates_checkout onto exec and agent nodes', () => {
+      const { workflow } = parseWorkflowYaml(`name: test-workflow
+description: node-level declarations
+nodes:
+  - id: guarded-bash
+    bash: echo hi
+    mutates_checkout: false
+  - id: guarded-agent
+    prompt: p
+    mutates_checkout: false
+  - id: plain
+    bash: echo hi
+`);
+      const byId = Object.fromEntries(workflow.nodes.map(n => [n.id, n]));
+      const guardedBash = byId['guarded-bash'];
+      expect(
+        guardedBash && 'mutates_checkout' in guardedBash && guardedBash.mutates_checkout === false
+      ).toBe(true);
+      const guardedAgent = byId['guarded-agent'];
+      expect(
+        guardedAgent &&
+          'mutates_checkout' in guardedAgent &&
+          guardedAgent.mutates_checkout === false
+      ).toBe(true);
+      const plain = byId['plain'];
+      expect(plain && !('mutates_checkout' in plain)).toBe(true);
+    });
+
+    it('should reject a non-boolean node-level mutates_checkout', () => {
+      const result = parseWorkflow(
+        `name: test-workflow
+description: bad type
+nodes:
+  - id: n
+    bash: echo hi
+    mutates_checkout: "no"
+`,
+        'bad.yaml'
+      );
+      expect(result.error).not.toBeNull();
+    });
+
+    it('should still hard-reject mutates_checkout on an include node', () => {
+      const result = parseWorkflow(
+        `name: test-workflow
+description: include rejection
+nodes:
+  - id: blk
+    include: other
+    mutates_checkout: false
+`,
+        'include-mc.yaml'
+      );
+      expect(result.error).not.toBeNull();
+    });
+
+    it('should warn that mutates_checkout is inert on loop/gate/cancel/loop_group nodes', () => {
+      mockLogger.warn.mockClear();
+      for (const [nodeYaml, kind] of [
+        ['    loop:\n      until: done\n      max_iterations: 1\n      prompt: p', 'loop'],
+        ['    approval:\n      message: m', 'approval'],
+        ['    cancel: stop', 'cancel'],
+        [
+          '    loop_group:\n      nodes:\n        - id: b\n          bash: echo hi\n      until: done\n      max_iterations: 1',
+          'loop_group',
+        ],
+      ] as const) {
+        const result = parseWorkflow(
+          `name: mc-inert-${kind}
+description: d
+nodes:
+  - id: n
+${nodeYaml}
+    mutates_checkout: false
+`,
+          `${kind}-mc.yaml`
+        );
+        expect(result.error).toBeNull();
+        expect(
+          mockLogger.warn.mock.calls.some(
+            call =>
+              call[1] === `${kind}_node_ai_fields_ignored` &&
+              JSON.stringify(call[0]).includes('mutates_checkout')
+          )
+        ).toBe(true);
+      }
+    });
+
     it('should parse valid DAG workflow YAML', () => {
       const { workflow } = parseWorkflowYaml(`name: test-workflow
 description: A test workflow
