@@ -4,8 +4,9 @@
  * Stores step transitions, parallel agent status, artifacts, and errors.
  * Verbose assistant/tool content stays in JSONL logs only.
  *
- * All write operations use fire-and-forget pattern (catch + log, never throw)
- * because workflow execution must not fail due to event logging.
+ * Observability writes use a fire-and-forget pattern because workflow execution
+ * must not fail due to event logging. Required accounting writes reject so their
+ * callers can refuse work that was not durably admitted.
  * Read operations also throw on error — callers own the degradation policy.
  */
 import { pool, getDialect, getDatabaseType } from './connection';

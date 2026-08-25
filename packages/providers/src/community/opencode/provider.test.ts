@@ -442,6 +442,7 @@ describe('OpencodeProvider', () => {
       expect.arrayContaining([
         expect.objectContaining({
           type: 'result',
+          cost: 0.5,
           tokens: {
             input: 36,
             output: 10,
@@ -451,6 +452,84 @@ describe('OpencodeProvider', () => {
             total: 46,
             cost: 0.5,
           },
+        }),
+      ])
+    );
+  });
+
+  test('multi-agent result omits cost when any sub-agent does not report it', async () => {
+    const cwd = await createTempProjectDir();
+    const sessionIds = ['scout-session', 'reviewer-session'];
+    const runtime = makeRuntime({
+      sessionCreate: mock(async () => ({ data: { id: sessionIds.shift() } })),
+    });
+    runtimeQueue.push(runtime);
+    scriptedEvents = [
+      {
+        type: 'message.updated',
+        properties: {
+          info: {
+            id: 'message-scout',
+            role: 'assistant',
+            sessionID: 'scout-session',
+            providerID: 'anthropic',
+            modelID: 'claude-sonnet',
+            cost: 0.25,
+            finish: 'stop',
+            tokens: { input: 11, output: 7 },
+          },
+        },
+      },
+      {
+        type: 'message.updated',
+        properties: {
+          info: {
+            id: 'message-reviewer',
+            role: 'assistant',
+            sessionID: 'reviewer-session',
+            providerID: 'anthropic',
+            modelID: 'claude-sonnet',
+            finish: 'stop',
+            tokens: { input: 20, output: 3 },
+          },
+        },
+      },
+      { type: 'session.idle', properties: { sessionID: 'scout-session' } },
+      { type: 'session.idle', properties: { sessionID: 'reviewer-session' } },
+    ];
+
+    const { chunks, error } = await consume(
+      new OpencodeProvider().sendQuery('hi', cwd, undefined, {
+        assistantConfig: TEST_MODEL,
+        nodeConfig: {
+          nodeId: 'research',
+          agents: {
+            scout: { description: 'Scout', prompt: 'Explore' },
+            reviewer: { description: 'Reviewer', prompt: 'Review' },
+          },
+        },
+      })
+    );
+
+    expect(error).toBeUndefined();
+    expect(chunks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'result',
+          tokens: expect.objectContaining({ input: 31, output: 10 }),
+        }),
+      ])
+    );
+    expect(chunks).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'result', cost: expect.any(Number) }),
+      ])
+    );
+    expect(chunks).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'result',
+          tokens: expect.objectContaining({ cost: expect.any(Number) }),
         }),
       ])
     );

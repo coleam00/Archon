@@ -341,15 +341,24 @@ export async function* streamMultiAgentOpencodeSession(
 
           // Aggregate tokens across sub-agents. The cache axes follow the shared floor
           // rule (#2662): one sub-agent without cache telemetry narrows the total and
-          // flags it, instead of erasing cache the others did report. `total` and `cost`
-          // keep OpenCode's own composition, including its `input + output` fallback.
+          // flags it, instead of erasing cache the others did report. `total` keeps
+          // OpenCode's own composition, including its `input + output` fallback. Cost is
+          // emitted only when every sub-agent reported a finite non-negative value.
           const perAgentUsage = states
             .map(candidate => normalizeTokens(candidate.latestAssistantInfo))
             .filter((usage): usage is TokenUsage => usage !== undefined);
           const mergedUsage = mergeTokenUsage(perAgentUsage);
+          const cost =
+            perAgentUsage.length === states.length &&
+            perAgentUsage.every(
+              usage =>
+                typeof usage.cost === 'number' && Number.isFinite(usage.cost) && usage.cost >= 0
+            )
+              ? perAgentUsage.reduce((sum, usage) => sum + (usage.cost ?? 0), 0)
+              : undefined;
           const tokens: TokenUsage | undefined =
-            // A lone sub-agent passes through verbatim, as before — synthesizing `total`
-            // and `cost` for it would change what a single-agent turn reports.
+            // A lone reported usage keeps its token shape. Cost is normalized below so
+            // a silent sibling cannot make a partial amount look like the aggregate.
             perAgentUsage.length === 1
               ? { ...perAgentUsage[0] }
               : mergedUsage && {
@@ -358,8 +367,12 @@ export async function* streamMultiAgentOpencodeSession(
                     (sum, usage) => sum + (usage.total ?? usage.input + usage.output),
                     0
                   ),
-                  cost: perAgentUsage.reduce((sum, usage) => sum + (usage.cost ?? 0), 0),
+                  ...(cost !== undefined ? { cost } : {}),
                 };
+          if (tokens !== undefined) {
+            if (cost === undefined) delete tokens.cost;
+            else tokens.cost = cost;
+          }
 
           // Fetch structured outputs from all agents
           const structuredOutputs = await Promise.all(
@@ -382,6 +395,7 @@ export async function* streamMultiAgentOpencodeSession(
           yield {
             type: 'result',
             ...(tokens ? { tokens } : {}),
+            ...(cost !== undefined ? { cost } : {}),
             ...(structuredOutputs ? { structuredOutput: structuredOutputs } : {}),
           };
           getLog().info({ nodeId }, 'opencode.multi_agent_completed');

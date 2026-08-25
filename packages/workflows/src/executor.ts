@@ -1043,7 +1043,33 @@ interface PersistedRunUsage {
 
 // Ownership watermarks are capabilities, not caller-authored data: only this module's
 // persisted event/row reconciliation can prove which node and child usage the run owns.
-const hydratedPriorUsage = new WeakSet<PriorRunUsage>();
+interface HydratedPriorUsageProof {
+  runId: string;
+  usage: PriorRunUsage;
+}
+
+const hydratedPriorUsage = new WeakMap<PriorRunUsage, HydratedPriorUsageProof>();
+
+function clonePriorRunUsage(usage: PriorRunUsage): PriorRunUsage {
+  const total = workflowRunUsageLeafSchema.parse({
+    costUsd: usage.costUsd,
+    ...(usage.tokens !== undefined ? { tokens: usage.tokens } : {}),
+  });
+  const terminalUsageByNode =
+    usage.terminalUsageByNode === undefined
+      ? undefined
+      : new Map(
+          [...usage.terminalUsageByNode].map(([nodeId, nodeUsage]) => [
+            nodeId,
+            workflowRunUsageSchema.parse(nodeUsage),
+          ])
+        );
+  return {
+    ...total,
+    workUnits: usage.workUnits,
+    ...(terminalUsageByNode !== undefined ? { terminalUsageByNode } : {}),
+  };
+}
 
 function readPersistedRunUsage(run: WorkflowRun): PersistedRunUsage {
   const metadata = run.metadata ?? {};
@@ -1237,7 +1263,10 @@ function mergePersistedPriorUsage(
     workUnits: snapshot.workUnits,
     ...(terminalUsageByNode !== undefined ? { terminalUsageByNode } : {}),
   };
-  hydratedPriorUsage.add(priorUsage);
+  hydratedPriorUsage.set(priorUsage, {
+    runId: run.id,
+    usage: clonePriorRunUsage(priorUsage),
+  });
   return priorUsage;
 }
 
@@ -2078,14 +2107,27 @@ export async function executeWorkflow(
       `Cannot resume workflow run '${preCreatedRun.id}' without its persisted prior usage.`
     );
   }
+  const requiresPersistedUsage =
+    isContinuation && (workflow.budget !== undefined || requireReportedCost);
+  const hydratedUsageProof =
+    priorUsage === undefined ? undefined : hydratedPriorUsage.get(priorUsage);
+  const hasMatchingUsageProof =
+    hydratedUsageProof !== undefined && hydratedUsageProof.runId === preCreatedRun?.id;
+  const admittedPriorUsage = hasMatchingUsageProof ? hydratedUsageProof.usage : priorUsage;
   if (
     priorUsage !== undefined &&
-    (!isValidPriorRunUsage(priorUsage) ||
-      (priorUsage.terminalUsageByNode !== undefined && !hydratedPriorUsage.has(priorUsage)))
+    (!isValidPriorRunUsage(admittedPriorUsage ?? priorUsage) ||
+      ((requiresPersistedUsage || priorUsage.terminalUsageByNode !== undefined) &&
+        !hasMatchingUsageProof))
   ) {
     throw new Error(
       `Cannot resume workflow run '${preCreatedRun?.id ?? 'unknown'}' with invalid persisted prior usage.`
     );
+  }
+  if (priorUsage !== undefined && hasMatchingUsageProof) {
+    // Consume the proof atomically at admission. A retry must re-read durable usage so
+    // concurrent or later work cannot reuse a stale ledger snapshot.
+    hydratedPriorUsage.delete(priorUsage);
   }
   if (isContinuation && modelOverrides !== undefined) {
     throw new Error('Cannot supply model overrides when resuming an existing workflow run.');
@@ -2429,7 +2471,7 @@ export async function executeWorkflow(
   // preCreatedRun (from hydrateResumableRun) + priorCompletedNodes via opts.
   // When both are absent the executor creates a fresh row below.
   const dagPriorCompletedNodes = priorCompletedNodes;
-  const dagPriorUsage = priorUsage;
+  const dagPriorUsage = admittedPriorUsage;
   let workflowRun: WorkflowRun | undefined = preCreatedRun;
 
   if (preCreatedRun && priorCompletedNodes !== undefined) {

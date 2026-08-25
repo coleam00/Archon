@@ -383,6 +383,69 @@ describe('executeWorkflow', () => {
     expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
   });
 
+  it('rejects caller-authored totals for a governed continuation (#1961)', async () => {
+    const store = makeStore();
+    const resumed = makeRun({ id: 'forged-total-resume', status: 'running' });
+
+    await expect(
+      executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv-1',
+        '/tmp/ops',
+        { ...makeWorkflow(), budget: { max_work_units: 2 } },
+        'msg',
+        'db-conv-1',
+        {
+          preCreatedRun: resumed,
+          priorCompletedNodes: new Map(),
+          priorUsage: { costUsd: 0, workUnits: 0 },
+        }
+      )
+    ).rejects.toThrow(
+      "Cannot resume workflow run 'forged-total-resume' with invalid persisted prior usage"
+    );
+
+    expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('binds hydrated prior usage to the run it was read from (#1961)', async () => {
+    const source = makeRun({ id: 'usage-source-run', status: 'running' });
+    const target = makeRun({ id: 'usage-target-run', status: 'running' });
+    const completed = new Map([['node1', { output: 'done' }]]);
+    const store = makeStore({
+      getDagResumeSnapshot: mock(async () => ({
+        completedNodeOutputs: completed,
+        terminalNodeIds: new Set(['node1']),
+        costUsd: 1,
+        workUnits: 1,
+      })),
+    });
+    const inspection = await inspectResumableRun(makeDeps(store), source);
+    expect(inspection).not.toBeNull();
+
+    await expect(
+      executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv-1',
+        '/tmp/ops',
+        { ...makeWorkflow(), budget: { max_work_units: 2 } },
+        'msg',
+        'db-conv-1',
+        {
+          preCreatedRun: target,
+          priorCompletedNodes: inspection!.priorCompletedNodes,
+          priorUsage: inspection!.priorUsage,
+        }
+      )
+    ).rejects.toThrow(
+      "Cannot resume workflow run 'usage-target-run' with invalid persisted prior usage"
+    );
+
+    expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+  });
+
   it('rejects a continuation whose node watermark exceeds the restored total (#1961)', async () => {
     const store = makeStore();
     const resumed = makeRun({ id: 'oversized-watermark-resume', status: 'running' });
@@ -2277,6 +2340,7 @@ describe('executeWorkflow', () => {
       const completedNodeOutputs = new Map([['node-a', { output: 'first output' }]]);
       const tokens = { input: 40, output: 4 };
       const costUsd = 0.25;
+      const workflow = { ...makeWorkflow(), budget: { max_spend_usd: 5 } };
       const store = makeStore({
         getDagResumeSnapshot: mock(async () => ({
           completedNodeOutputs,
@@ -2302,13 +2366,18 @@ describe('executeWorkflow', () => {
       const hydrated = await hydrateResumableRun(deps, candidate);
       expect(hydrated).not.toBeNull();
       if (!hydrated) throw new Error('Expected resumable workflow to hydrate');
+      // The caller-visible payload is not the accounting authority. A mutation between
+      // hydration and dispatch cannot lower the usage restored into the DAG.
+      hydrated.priorUsage.costUsd = 0;
+      hydrated.priorUsage.workUnits = 99;
+      if (hydrated.priorUsage.tokens !== undefined) hydrated.priorUsage.tokens.input = 0;
 
       await executeWorkflow(
         deps,
         makePlatform(),
         'conv-1',
         '/tmp',
-        makeWorkflow(),
+        workflow,
         'test message',
         'db-conv-1',
         hydrated
@@ -2325,6 +2394,22 @@ describe('executeWorkflow', () => {
       });
       expect(dagCall?.[25]).toEqual(hydrated.priorNodeSessions);
       expect(store.createWorkflowRun).not.toHaveBeenCalled();
+
+      await expect(
+        executeWorkflow(
+          deps,
+          makePlatform(),
+          'conv-1',
+          '/tmp',
+          workflow,
+          'test message',
+          'db-conv-1',
+          hydrated
+        )
+      ).rejects.toThrow(
+        "Cannot resume workflow run 'failed-run' with invalid persisted prior usage"
+      );
+      expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(1);
     });
   });
 

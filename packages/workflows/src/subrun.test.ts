@@ -1747,8 +1747,11 @@ nodes:
 name: independent-budget-child
 description: fails after a paid classification attempt
 nodes:
+  - id: prepare
+    bash: echo ready
   - id: classify
     prompt: classify
+    depends_on: [prepare]
     output_format:
       type: object
       properties:
@@ -1813,16 +1816,7 @@ nodes:
     )!;
 
     const childHydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(child.id))!);
-    const childSnapshot = await store.getDagResumeSnapshot(child.id);
-    const childResume = childHydrated ?? {
-      preCreatedRun: await store.resumeWorkflowRun(child.id),
-      priorCompletedNodes: childSnapshot.completedNodeOutputs,
-      priorUsage: {
-        costUsd: childSnapshot.costUsd,
-        tokens: childSnapshot.tokens,
-        workUnits: childSnapshot.workUnits,
-      },
-    };
+    expect(childHydrated).not.toBeNull();
     expect(
       (
         await executeWorkflow(
@@ -1833,7 +1827,7 @@ nodes:
           childDefinition,
           child.user_message,
           'conv-db',
-          childResume
+          childHydrated!
         )
       ).success
     ).toBe(false);
