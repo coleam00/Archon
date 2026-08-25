@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from 'bun:test';
+import { afterEach, describe, expect, jest, mock, test } from 'bun:test';
 import {
   createAssistantMessageEventStream,
   lazyStream,
@@ -10,6 +10,7 @@ import {
   type SimpleStreamOptions,
 } from '@earendil-works/pi-ai';
 import type { ModelRuntime } from '@earendil-works/pi-coding-agent';
+import { PROVIDER_STOP_CONFIRMATION_TIMEOUT_MS } from '../../shared/provider-attempt';
 import { installPiAdmission } from './provider';
 
 const model: Model<Api> = {
@@ -46,6 +47,10 @@ function message(stopReason: AssistantMessage['stopReason'] = 'stop'): Assistant
 }
 
 describe('installPiAdmission', () => {
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
   test('leases each model stream separately and disables nested transport retries', async () => {
     const lifecycle: string[] = [];
     const seenOptions: (SimpleStreamOptions | undefined)[] = [];
@@ -177,11 +182,40 @@ describe('installPiAdmission', () => {
     expect(events).toHaveLength(1);
     expect(events[0]?.type).toBe('error');
     if (events[0]?.type === 'error') {
-      expect(events[0].error.errorMessage).toBe(
-        'Pi provider attempt shutdown could not be confirmed'
-      );
+      expect(events[0].error.errorMessage).toBe('lease ownership lost');
     }
-    expect(releases).toEqual([{ upstreamStopped: false }]);
+    expect(releases).toEqual([{ upstreamStopped: true }]);
+  });
+
+  test('releases an unused lease when ownership is already lost before stream creation', async () => {
+    const leaseController = new AbortController();
+    leaseController.abort(new Error('lease ownership lost'));
+    const streamSimple = mock<ModelRuntime['streamSimple']>(() =>
+      createAssistantMessageEventStream()
+    );
+    const runtime: Pick<ModelRuntime, 'streamSimple'> = { streamSimple };
+    const releases: { upstreamStopped: boolean }[] = [];
+    installPiAdmission(
+      runtime,
+      {
+        acquire: async () => ({
+          signal: leaseController.signal,
+          release: async options => {
+            releases.push(options);
+          },
+        }),
+      },
+      lazyStream
+    );
+
+    const events: AssistantMessageEvent[] = [];
+    for await (const event of runtime.streamSimple(model, { messages: [] })) {
+      events.push(event);
+    }
+
+    expect(streamSimple).not.toHaveBeenCalled();
+    expect(releases).toEqual([{ upstreamStopped: true }]);
+    expect(events.at(-1)?.type).toBe('error');
   });
 
   test('expires the lease when cancellation cannot stop a stalled Pi stream', async () => {
@@ -226,13 +260,14 @@ describe('installPiAdmission', () => {
       }
     })();
     await nextStarted.promise;
+    jest.useFakeTimers();
     leaseController.abort(new Error('lease ownership lost'));
-    const result = await Promise.race([
-      consumption.then(() => 'completed' as const),
-      Bun.sleep(100).then(() => 'timed-out' as const),
-    ]);
+    for (let attempt = 0; attempt < 20 && returnCall.mock.calls.length === 0; attempt++) {
+      await Promise.resolve();
+    }
+    jest.advanceTimersByTime(PROVIDER_STOP_CONFIRMATION_TIMEOUT_MS);
+    await consumption;
 
-    expect(result).toBe('completed');
     expect(returnCall).toHaveBeenCalledTimes(1);
     expect(releases).toEqual([{ upstreamStopped: false }]);
     expect(events.at(-1)?.type).toBe('error');

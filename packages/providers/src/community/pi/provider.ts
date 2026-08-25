@@ -25,7 +25,6 @@ import { buildCustomProviderModelsPath } from './request-auth';
 import { withResumedOutcome, resumedOutcome } from '../../shared/resumed';
 import {
   confirmProviderAttemptStopped,
-  ProviderAttemptStopUnconfirmedError,
   waitForPromiseOrAbort,
 } from '../../shared/provider-attempt';
 
@@ -44,7 +43,6 @@ export function installPiAdmission(
       return (async function* (): AsyncGenerator<AssistantMessageEvent> {
         let upstreamStopped = true;
         let iterator: AsyncIterator<AssistantMessageEvent> | undefined;
-        let completed = false;
         try {
           signal.throwIfAborted();
           const stream = streamSimple(model, context, {
@@ -56,10 +54,11 @@ export function installPiAdmission(
             maxRetries: 0,
           });
           iterator = stream[Symbol.asyncIterator]();
+          upstreamStopped = false;
           while (true) {
             const result = await waitForPromiseOrAbort(iterator.next(), signal);
             if (result.done) {
-              completed = true;
+              upstreamStopped = true;
               break;
             }
             // Pi may translate an aborted transport into a normal terminal
@@ -69,29 +68,15 @@ export function installPiAdmission(
             yield result.value;
           }
           signal.throwIfAborted();
-        } catch (error) {
-          if (signal.aborted) {
-            if (completed) throw error;
-            upstreamStopped = false;
-            try {
-              void iterator?.return?.().catch(() => undefined);
-            } catch {
-              // The lease expiry is the recovery boundary when Pi cannot stop.
-            }
-            throw new ProviderAttemptStopUnconfirmedError(
-              'Pi provider attempt shutdown could not be confirmed',
-              { cause: error }
-            );
-          }
-          throw error;
         } finally {
-          if (iterator && !completed && !signal.aborted) {
+          if (iterator && !upstreamStopped) {
             const activeIterator = iterator;
             try {
               await confirmProviderAttemptStopped(async () => {
                 if (!activeIterator.return) throw new Error('Pi model stream cannot be closed');
                 await activeIterator.return();
               }, 'Pi provider attempt shutdown could not be confirmed');
+              upstreamStopped = true;
             } catch {
               upstreamStopped = false;
             }

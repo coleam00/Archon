@@ -50,7 +50,7 @@ export interface OpencodeClientLike {
   session: {
     create(options?: Record<string, unknown>): Promise<{ data?: { id?: string } }>;
     get(options: Record<string, unknown>): Promise<{ data?: { id?: string } }>;
-    promptAsync(options: Record<string, unknown>): Promise<unknown>;
+    promptAsync(options: Record<string, unknown>): Promise<{ error?: unknown } | undefined>;
     abort(options: Record<string, unknown>): Promise<{ data?: boolean; error?: unknown }>;
     message(
       options: Record<string, unknown>

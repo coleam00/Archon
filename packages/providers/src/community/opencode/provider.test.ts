@@ -1338,6 +1338,7 @@ describe('OpencodeProvider', () => {
           schema: { type: 'object', properties: { answer: { type: 'string' } } },
         },
       },
+      throwOnError: true,
     });
     expect(chunks).toEqual([
       {
@@ -1390,6 +1391,115 @@ describe('OpencodeProvider', () => {
       },
     ]);
     expect(mockLogger.warn).toHaveBeenCalledTimes(1);
+  });
+
+  test('bounds a hung structured-output lookup after OpenCode becomes idle', async () => {
+    const lookupStarted = Promise.withResolvers<void>();
+    const runtime = makeRuntime({
+      sessionMessage: mock(async () => {
+        lookupStarted.resolve();
+        return new Promise<{ data?: { info?: Record<string, unknown> } }>(() => undefined);
+      }),
+    });
+    runtimeQueue.push(runtime);
+    scriptedEvents = [
+      {
+        type: 'message.updated',
+        properties: {
+          info: { id: 'message-1', role: 'assistant', sessionID: 'session-1' },
+        },
+      },
+      { type: 'session.idle', properties: { sessionID: 'session-1' } },
+    ];
+    const releases: { upstreamStopped: boolean }[] = [];
+    jest.useFakeTimers();
+    const consumption = consume(
+      new OpencodeProvider().sendQuery('hi', '/tmp', undefined, {
+        assistantConfig: TEST_MODEL,
+        outputFormat: { type: 'json_schema', schema: { type: 'object' } },
+        providerAttemptGate: {
+          acquire: async () => ({
+            signal: new AbortController().signal,
+            release: async options => {
+              releases.push(options);
+            },
+          }),
+        },
+      })
+    );
+
+    await lookupStarted.promise;
+    jest.advanceTimersByTime(5_000);
+    const { chunks, error } = await consumption;
+
+    expect(error).toBeUndefined();
+    expect(chunks).toEqual([{ type: 'result', sessionId: 'session-1' }]);
+    expect(releases).toEqual([{ upstreamStopped: true }]);
+    expect(mockLogger.warn).toHaveBeenCalledTimes(1);
+  });
+
+  test('fails immediately when OpenCode resolves a rejected single-agent prompt', async () => {
+    const runtime = makeRuntime({
+      promptAsync: mock(async () => ({ error: { message: 'bad request' } })),
+      subscribe: mock(async () => ({ stream: createPendingStream() })),
+    });
+    runtimeQueue.push(runtime);
+
+    const result = await Promise.race([
+      consume(
+        new OpencodeProvider().sendQuery('hi', '/tmp', undefined, {
+          assistantConfig: TEST_MODEL,
+        })
+      ),
+      Bun.sleep(100).then(() => 'timed-out' as const),
+    ]);
+
+    expect(result).not.toBe('timed-out');
+    if (result === 'timed-out') return;
+    expect(result.error?.message).toContain('OpenCode rejected prompt submission');
+    expect(runtime.client.session.promptAsync).toHaveBeenCalledWith(
+      expect.objectContaining({ throwOnError: true })
+    );
+  });
+
+  test('fails immediately when OpenCode resolves rejected multi-agent prompts', async () => {
+    const cwd = await createTempProjectDir();
+    const sessionIds = ['scout-session', 'reviewer-session'];
+    const runtime = makeRuntime({
+      sessionCreate: mock(async () => ({ data: { id: sessionIds.shift() } })),
+      promptAsync: mock(async () => ({ error: { message: 'bad request' } })),
+      subscribe: mock(async () => ({ stream: createPendingStream() })),
+    });
+    runtimeQueue.push(runtime);
+
+    const result = await Promise.race([
+      consume(
+        new OpencodeProvider().sendQuery('hi', cwd, undefined, {
+          assistantConfig: TEST_MODEL,
+          nodeConfig: {
+            nodeId: 'research',
+            agents: {
+              scout: { description: 'Scout', prompt: 'Explore' },
+              reviewer: { description: 'Reviewer', prompt: 'Review' },
+            },
+          },
+        })
+      ),
+      Bun.sleep(100).then(() => 'timed-out' as const),
+    ]);
+
+    expect(result).not.toBe('timed-out');
+    if (result === 'timed-out') return;
+    expect(result.error?.message).toContain('OpenCode rejected prompt submission');
+    expect(
+      result.chunks.some(
+        chunk =>
+          typeof chunk === 'object' && chunk !== null && 'type' in chunk && chunk.type === 'result'
+      )
+    ).toBe(false);
+    for (const call of runtime.client.session.promptAsync.mock.calls) {
+      expect(call[0]).toEqual(expect.objectContaining({ throwOnError: true }));
+    }
   });
 
   test('rate limit errors are classified as retryable and retried', async () => {
@@ -1845,6 +1955,42 @@ describe('OpencodeProvider', () => {
       await Promise.resolve();
     }
     for (let attempt = 0; attempt < 10; attempt++) await Promise.resolve();
+    jest.advanceTimersByTime(PROVIDER_STOP_CONFIRMATION_TIMEOUT_MS);
+    const { error } = await consumption;
+
+    expect(error?.name).toBe('ProviderAttemptStopUnconfirmedError');
+    expect(releases).toEqual([{ upstreamStopped: false }]);
+  });
+
+  test('expires the lease when a premature event stream cannot confirm shutdown', async () => {
+    const runtime = makeRuntime({
+      subscribe: mock(async () => ({ stream: createEventStream([]) })),
+      sessionAbort: mock(() => new Promise<{ data: boolean }>(() => undefined)),
+    });
+    runtimeQueue.push(runtime);
+    const releases: { upstreamStopped: boolean }[] = [];
+    jest.useFakeTimers();
+    const consumption = consume(
+      new OpencodeProvider().sendQuery('hi', '/tmp', undefined, {
+        assistantConfig: TEST_MODEL,
+        providerAttemptGate: {
+          acquire: async () => ({
+            signal: new AbortController().signal,
+            release: async options => {
+              releases.push(options);
+            },
+          }),
+        },
+      })
+    );
+
+    for (
+      let attempt = 0;
+      attempt < 20 && runtime.client.session.abort.mock.calls.length === 0;
+      attempt++
+    ) {
+      await Promise.resolve();
+    }
     jest.advanceTimersByTime(PROVIDER_STOP_CONFIRMATION_TIMEOUT_MS);
     const { error } = await consumption;
 
@@ -2319,6 +2465,7 @@ describe('OpencodeProvider', () => {
     expect(runtime.client.session.promptAsync).toHaveBeenCalledWith({
       path: { id: 'session-1' },
       query: { directory: cwd },
+      throwOnError: true,
       body: expect.objectContaining({
         agent: 'archon-my-agent',
       }),
@@ -2545,6 +2692,7 @@ describe('OpencodeProvider', () => {
     expect(runtime.client.session.promptAsync).toHaveBeenCalledWith({
       path: { id: 'session-1' },
       query: { directory: cwd },
+      throwOnError: true,
       body: expect.objectContaining({
         model: { providerID: 'anthropic', modelID: 'claude-3-5-sonnet' },
         agent: 'archon-special-agent',
@@ -2586,6 +2734,7 @@ describe('OpencodeProvider', () => {
     expect(runtime.client.session.promptAsync).toHaveBeenCalledWith({
       path: { id: 'session-1' },
       query: { directory: cwd },
+      throwOnError: true,
       body: expect.objectContaining({
         tools: {
           read: true,
@@ -2766,6 +2915,7 @@ describe('OpencodeProvider', () => {
     expect(runtime.client.session.promptAsync).toHaveBeenCalledWith({
       path: { id: 'session-1' },
       query: { directory: cwd },
+      throwOnError: true,
       body: expect.objectContaining({
         parts: [{ type: 'text', text: 'node prompt that should be used' }],
         agent: 'archon-test-agent',
@@ -2791,6 +2941,7 @@ describe('OpencodeProvider', () => {
     expect(runtime.client.session.promptAsync).toHaveBeenCalledWith({
       path: { id: 'session-1' },
       query: { directory: cwd },
+      throwOnError: true,
       body: expect.objectContaining({
         parts: [{ type: 'text', text: 'node prompt should be used' }],
       }),
@@ -2824,6 +2975,7 @@ describe('OpencodeProvider', () => {
     expect(runtime.client.session.promptAsync).toHaveBeenCalledWith({
       path: { id: 'session-1' },
       query: { directory: cwd },
+      throwOnError: true,
       body: expect.objectContaining({
         parts: [{ type: 'text', text: 'fallback node prompt' }],
         agent: 'archon-empty-agent',

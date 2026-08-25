@@ -798,6 +798,8 @@ concurrency:
 
 Calls beyond a cap queue until a lease is available. A workflow node is shown as queued while it has waiting attempts and no admitted attempt; a queued sibling does not replace the running state of another active attempt from the same node. Retry backoff, durable waits, and quota continuations do not hold a slot; each later attempt or continuation acquires again. This is separate from workflow budgets, which bound total consumption rather than simultaneous demand.
 
+Provider-slot queueing is a live, abortable runtime wait, not a durable `wait:` or paused state. The owning process must remain running. Cancellation removes the waiter, and a later continuation acquires a fresh slot.
+
 Provider caps are install policy. A repository or run profile cannot override them for one project. The former global `assistants.pi.maxConcurrent` key is accepted temporarily as a warned fallback when `concurrency.providers.pi` is absent; move it to the global shape above. Repository-level Pi values no longer change concurrency.
 
 ---

@@ -32,7 +32,9 @@ interface FakeSession {
   aborted: boolean;
   disconnected: boolean;
   abortError?: Error;
+  abortSyncError?: Error;
   abortPromise?: Promise<void>;
+  disconnectSyncError?: Error;
   disconnectPromise?: Promise<void>;
   listener: ((event: SessionEvent) => void) | undefined;
   fire: (event: SessionEvent) => void;
@@ -81,14 +83,16 @@ function makeFakeSession(sessionId = 'sess-1'): FakeSession {
     fake.sendTimeout = timeout;
     return sendPromise;
   };
-  session.disconnect = async (): Promise<void> => {
+  session.disconnect = (): Promise<void> => {
     fake.disconnected = true;
-    if (fake.disconnectPromise) await fake.disconnectPromise;
+    if (fake.disconnectSyncError) throw fake.disconnectSyncError;
+    return fake.disconnectPromise ?? Promise.resolve();
   };
-  session.abort = async (): Promise<void> => {
+  session.abort = (): Promise<void> => {
     fake.aborted = true;
-    if (fake.abortError) throw fake.abortError;
-    if (fake.abortPromise) await fake.abortPromise;
+    if (fake.abortSyncError) throw fake.abortSyncError;
+    if (fake.abortError) return Promise.reject(fake.abortError);
+    return fake.abortPromise ?? Promise.resolve();
   };
   return session as unknown as FakeSession;
 }
@@ -305,6 +309,33 @@ describe('CopilotProvider.sendQuery', () => {
     expect(releases).toEqual([{ upstreamStopped: false }]);
   });
 
+  test('preserves the lease when Copilot abort throws synchronously', async () => {
+    const session = makeFakeSession('sess-sync-abort');
+    session.abortSyncError = new Error('synchronous abort failure');
+    nextCreateSessionResult = session;
+    const leaseController = new AbortController();
+    const releases: { upstreamStopped: boolean }[] = [];
+    const completion = collect(
+      new CopilotProvider().sendQuery('hello', '/work/dir', undefined, {
+        model: 'gpt-5',
+        providerAttemptGate: {
+          acquire: async () => ({
+            signal: leaseController.signal,
+            release: async options => {
+              releases.push(options);
+            },
+          }),
+        },
+      })
+    );
+
+    while (session.prompt === undefined) await Bun.sleep(1);
+    leaseController.abort(new Error('lease lost'));
+
+    await expect(completion).rejects.toThrow('Copilot session shutdown could not be confirmed');
+    expect(releases).toEqual([{ upstreamStopped: false }]);
+  });
+
   test('expires the lease when Copilot abort never settles', async () => {
     const session = makeFakeSession('sess-hung-abort');
     session.abortPromise = new Promise<void>(() => undefined);
@@ -361,6 +392,33 @@ describe('CopilotProvider.sendQuery', () => {
     jest.advanceTimersByTime(PROVIDER_STOP_CONFIRMATION_TIMEOUT_MS);
     await completion;
 
+    expect(releases).toEqual([{ upstreamStopped: true }]);
+  });
+
+  test('keeps a completed result when Copilot disconnect throws synchronously', async () => {
+    const session = makeFakeSession('sess-sync-disconnect');
+    session.disconnectSyncError = new Error('synchronous disconnect failure');
+    nextCreateSessionResult = session;
+    const releases: { upstreamStopped: boolean }[] = [];
+    const completion = collect(
+      new CopilotProvider().sendQuery('hello', '/work/dir', undefined, {
+        model: 'gpt-5',
+        providerAttemptGate: {
+          acquire: async () => ({
+            signal: new AbortController().signal,
+            release: async options => {
+              releases.push(options);
+            },
+          }),
+        },
+      })
+    );
+
+    while (session.prompt === undefined) await Bun.sleep(1);
+    session.resolveSend(undefined);
+    const chunks = await completion;
+
+    expect(chunks.some(chunk => chunk.type === 'result')).toBe(true);
     expect(releases).toEqual([{ upstreamStopped: true }]);
   });
 

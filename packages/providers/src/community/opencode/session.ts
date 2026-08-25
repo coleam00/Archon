@@ -90,11 +90,15 @@ export async function promptSession(
   sessionId: string,
   promptBody: Record<string, unknown>
 ): Promise<void> {
-  await client.session.promptAsync({
+  const response = await client.session.promptAsync({
     path: { id: sessionId },
     query: { directory: cwd },
     body: promptBody,
+    throwOnError: true,
   });
+  if (response?.error !== undefined) {
+    throw new Error(`OpenCode rejected prompt submission (session: ${sessionId}, cwd: ${cwd})`);
+  }
 }
 
 export async function abortOpencodeSession(
@@ -116,20 +120,29 @@ async function readStructuredOutput(
   client: OpencodeClientLike,
   cwd: string,
   sessionId: string,
-  messageId: string | undefined
+  messageId: string | undefined,
+  requestSignal: AbortSignal | undefined
 ): Promise<unknown> {
   if (!messageId) return undefined;
 
   try {
-    const response = await client.session.message({
-      path: { id: sessionId, messageID: messageId },
-      query: { directory: cwd },
-    });
+    const timeoutSignal = AbortSignal.timeout(5_000);
+    const lookupSignal = requestSignal
+      ? AbortSignal.any([requestSignal, timeoutSignal])
+      : timeoutSignal;
+    const response = await waitForPromiseOrAbort(
+      client.session.message({
+        path: { id: sessionId, messageID: messageId },
+        query: { directory: cwd },
+      }),
+      lookupSignal
+    );
     const info = response.data?.info;
     if (isRecord(info) && 'structured_output' in info) {
       return info.structured_output;
     }
   } catch (error) {
+    if (requestSignal?.aborted) requestSignal.throwIfAborted();
     getLog().warn({ err: error, sessionId, messageId }, 'opencode.structured_output_lookup_failed');
   }
 
@@ -319,7 +332,8 @@ export async function* streamOpencodeSession(
           client,
           cwd,
           sessionId,
-          lastAssistantMessageId
+          lastAssistantMessageId,
+          requestOptions?.abortSignal
         );
         const tokens = normalizeTokens(latestAssistantInfo);
         terminalObserved = true;
@@ -345,7 +359,6 @@ export async function* streamOpencodeSession(
     }
 
     if (!terminalObserved && !aborted) {
-      await abortSession();
       throw new Error(
         `OpenCode event stream ended before session became idle (session: ${sessionId}, cwd: ${cwd})`
       );
