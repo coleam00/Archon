@@ -9,7 +9,7 @@ description: |
 model: medium
 
 inputs:
-  work_order:
+  order:
     required: true
     description: Complete self-contained brief from the batch's work-orders node.
   test_repetitions:

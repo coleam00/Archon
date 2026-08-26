@@ -13,7 +13,7 @@ with what is missing rather than guessing.
 Work order:
 
 ```
-$INPUTS.work_order
+$INPUTS.order
 ```
 
 ## Do

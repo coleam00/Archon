@@ -4,7 +4,7 @@
 fixture:
   expect: completed
   inputs:
-    work_order: |
+    order: |
       scripts/example.test.ts spawns one subprocess per case; total runtime exceeds
       the 5000ms bound on windows runners. Recompose to share one prepared fixture
       and run in-process. Forbidden: timeout raises, retries, skips.

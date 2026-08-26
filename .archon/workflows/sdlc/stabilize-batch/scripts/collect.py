@@ -49,7 +49,7 @@ def main() -> int:
     shipped = []
     for i, r in enumerate(results, start=1):
         if r.get("archon_failed"):
-            reason = str(r.get("error", "child failed"))[:80].replace("|", "\\|")
+            reason = " ".join(str(r.get("error", "child failed")).split())[:200].replace("|", "\\|")
             lines.append(f"| {i} | {reason} | — | — | — | FAILED |")
             continue
         pr_url = r.get("pr_url", "—")
