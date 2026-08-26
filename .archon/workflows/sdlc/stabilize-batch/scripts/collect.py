@@ -17,6 +17,28 @@ import os
 import sys
 
 
+def parse_entries(raw: str) -> list:
+    """Normalize fan-out join output into result dicts.
+
+    Entries may be dicts or raw JSON text; a single text blob may hold several
+    back-to-back JSON objects."""
+    data = json.loads(raw)
+    if not isinstance(data, list):
+        data = [data]
+    dec = json.JSONDecoder()
+    out = []
+    for entry in data:
+        if isinstance(entry, dict):
+            out.append(entry)
+            continue
+        s = str(entry).strip()
+        while s:
+            obj, idx = dec.raw_decode(s)
+            out.append(obj)
+            s = s[idx:].lstrip()
+    return out
+
+
 def main() -> int:
     raw = os.environ.get("INPUTS_FIX_EACH", "")
     if not raw.strip() or raw.strip() == "[]":
@@ -26,13 +48,7 @@ def main() -> int:
         no_dispatch = True
     else:
         no_dispatch = False
-        try:
-            results = json.loads(raw)
-            if isinstance(results, dict):
-                results = [results]
-        except json.JSONDecodeError:
-            results = [{"archon_failed": True,
-                        "error": f"unparseable child output: {raw[:500]}"}]
+        results = parse_entries(raw)
 
     artifacts = os.environ["ARTIFACTS_DIR"]
     report_path = os.path.join(artifacts, "batch-report.md")
