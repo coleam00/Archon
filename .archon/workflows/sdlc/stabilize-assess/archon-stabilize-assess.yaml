@@ -18,6 +18,8 @@ inputs:
 
 returns: assess
 
+mutates_checkout: false
+
 nodes:
   - id: assess
     command: assess-target
