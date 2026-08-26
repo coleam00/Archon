@@ -51,7 +51,7 @@ def main() -> int:
         ]
     )
     if code != 0:
-        print(f"gh pr create failed: {out}")
+        print(f"gh pr create failed: {out}", file=sys.stderr)
         return 1
     pr_url = out.splitlines()[-1].strip()
 

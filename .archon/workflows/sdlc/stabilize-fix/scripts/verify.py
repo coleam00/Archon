@@ -34,15 +34,15 @@ def main() -> int:
     for i in range(1, repetitions + 1):
         code, tail = run(test_cmd)
         if code != 0:
-            print(f"targeted test failed on repetition {i}/{repetitions}: {test_cmd}")
-            print(tail)
+            print(f"targeted test failed on repetition {i}/{repetitions}: {test_cmd}", file=sys.stderr)
+            print(tail, file=sys.stderr)
             return 1
         print(f"targeted test green {i}/{repetitions}")
 
     code, tail = run(validate_cmd)
     if code != 0:
-        print(f"project checks failed: {validate_cmd}")
-        print(tail)
+        print(f"project checks failed: {validate_cmd}", file=sys.stderr)
+        print(tail, file=sys.stderr)
         return 1
     print("project checks green")
 
