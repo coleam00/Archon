@@ -28,8 +28,9 @@ def parse_entries(raw: str) -> list:
 
     # Fast path: the whole thing parses (array or single object).
     try:
-        data, rest = dec.raw_decode(s)
+        data, consumed = dec.raw_decode(s)
         entries = data if isinstance(data, list) else [data]
+        rest = s[consumed:].strip()
     except json.JSONDecodeError:
         entries = [s]
         rest = ""
