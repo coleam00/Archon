@@ -1,0 +1,130 @@
+name: archon-stabilize-batch
+description: |
+  Hunt down a whole CLASS of flaky/failing tests and fix every instance in one
+  run. Point it at a smell ("5000ms timeouts failing in windows CI"), a GitHub
+  issue, or prior evidence — sniff grounds against CI state and sweeps the
+  codebase for every instance plus near-misses, splits them into self-contained
+  work orders, fixes each in parallel (own worktree, own branch), verifies with
+  repeated targeted-test runs, and returns one PR per instance plus a batch
+  report. The right fix is never "make CI pass": delete useless tests, make
+  weak tests actually test the behavior, fix real product bugs, split for
+  composability.
+
+  Use when: the same flake family keeps biting CI and you want all instances
+  gone, not just the loudest one.
+
+model: medium
+
+inputs:
+  smell:
+    default: ""
+    description: >-
+      The issue class or evidence to hunt — e.g. "tests timing out at Bun's
+      5000ms default in windows CI". Empty means the run's trigger message.
+  max_parallel:
+    default: "3"
+    description: Concurrent children (provider rate windows are the real bound).
+  test_repetitions:
+    default: "5"
+    description: Consecutive greens required of the targeted test before shipping.
+
+returns: collect
+
+nodes:
+  # Advisory sweep: grounds against CI state where reachable, then hunts the
+  # codebase for every instance of the smell class plus near-misses. Never
+  # modifies anything (mutates_checkout: false).
+  - id: sniff
+    command: sniff
+    mutates_checkout: false
+    output_format:
+      type: object
+      properties:
+        grounded:
+          type: string
+          description: What CI/evidence was actually consulted, one line.
+        findings:
+          type: array
+          items:
+            type: object
+            properties:
+              title:
+                type: string
+              file:
+                type: string
+              test_id:
+                type: string
+                description: Test/case selector to re-run this test alone.
+              why_suspect:
+                type: string
+              evidence:
+                type: string
+              confidence:
+                type: string
+                enum: [confirmed, suspected]
+            required: [title, file, test_id, why_suspect, confidence]
+      required: [grounded, findings]
+
+  # Split findings into self-contained work orders. Each order carries its own
+  # evidence, paths, and the fix-quality bar verbatim — children share nothing.
+  - id: work-orders
+    command: work-orders
+    depends_on: [sniff]
+    with:
+      findings: "$sniff.output.findings"
+      grounded: "$sniff.output.grounded"
+    mutates_checkout: false
+    output_format:
+      type: object
+      properties:
+        orders:
+          type: array
+          items:
+            type: object
+            properties:
+              title:
+                type: string
+              branch:
+                type: string
+                description: Branch slug, e.g. fix/flaky-migrate-state-dir-timeout
+              kind:
+                type: string
+                enum:
+                  - delete-useless-test
+                  - make-test-meaningful
+                  - fix-product-bug
+                  - split-or-recompose-test
+              work_order:
+                type: string
+                description: >
+                  Complete brief: file paths, test id, evidence, root-cause
+                  hypothesis, chosen fix kind AND WHY, the forbidden shortcuts
+                  (no timeout raises, no retries, no skips, no tolerance
+                  widening), and how to verify. A competent engineer with no
+                  other context acts on exactly this text.
+            required: [title, branch, kind, work_order]
+      required: [orders]
+
+  # One child per order, in parallel, each in its own worktree. Children push
+  # branches and open PRs; they never touch this checkout's state.
+  - id: fix-each
+    workflow: archon-stabilize-fix
+    depends_on: [work-orders]
+    with:
+      test_repetitions: "$INPUTS.test_repetitions"
+    fan_out:
+      items: "$work-orders.output.orders"
+      as: order
+      max_parallel: 3
+      join: all_done
+    isolation: worktree
+
+  # One canonical batch surface: which order became which PR, what CI said.
+  - id: collect
+    script: collect
+    runtime: uv
+    depends_on: [fix-each]
+    # The collector runs regardless of child outcomes — reporting three failed
+    # children IS its job. It exits 1 itself only when every child failed.
+    trigger_rule: all_done
+    mutates_checkout: false

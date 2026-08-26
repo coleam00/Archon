@@ -1,0 +1,19 @@
+# Fixture: child wiring — order in, verified ship out. All nodes stubbed;
+# exec-code paths (verify/ship scripts against a real remote) are exercised by
+# the live batch dogfood, not here.
+fixture:
+  expect: completed
+  inputs:
+    work_order: |
+      scripts/example.test.ts spawns one subprocess per case; total runtime exceeds
+      the 5000ms bound on windows runners. Recompose to share one prepared fixture
+      and run in-process. Forbidden: timeout raises, retries, skips.
+    test_repetitions: "5"
+exec-code: false
+fix:
+  branch: fix/flaky-example-timeout
+  summary: "shared fixture; script invoked in-process"
+  validate_cmd: "bun run typecheck"
+  test_cmd: "bun test scripts/example.test.ts"
+verify: '{"verified": true, "repetitions": 5}'
+ship: '{"branch": "fix/flaky-example-timeout", "pr_url": "https://example.com/pr/1", "ci_verdict": "green"}'

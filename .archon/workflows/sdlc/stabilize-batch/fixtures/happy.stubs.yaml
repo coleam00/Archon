@@ -1,0 +1,32 @@
+# Fixture (acceptance test for #2818 — red until dry-run simulates workflow: nodes):
+# happy path — one confirmed finding becomes one shipped order.
+sniff:
+  grounded: "gh run list: 3 windows failures in the last day, all at 5000ms"
+  findings:
+    - title: "migrate-state-dir subdirectory invocation exceeds Bun's 5000ms bound"
+      file: "scripts/migrate-state-dir.test.ts"
+      test_id: "bun test scripts/migrate-state-dir.test.ts"
+      why_suspect: "spawns a subprocess per case; spawn cost on windows runners sits at the bound"
+      evidence: "CI run 32843285990 job windows: timed out after 5000ms"
+      confidence: confirmed
+work-orders:
+  orders:
+    - title: "migrate-state-dir subdirectory invocation exceeds Bun's 5000ms bound"
+      branch: fix/flaky-migrate-state-dir-timeout
+      kind: split-or-recompose-test
+      work_order: |
+        scripts/migrate-state-dir.test.ts spawns the migration script as a
+        subprocess per case (~120ms spawn cost on windows runners); several cases
+        in sequence push total runtime past bun's 5000ms default timeout under
+        load. Recompose: share one prepared project fixture across cases and run
+        the script in-process where it exports an entrypoint. Forbidden: no
+        timeout raises, retries, sleeps, skips, platform guards, or assertion
+        weakening. Verify with `bun test scripts/migrate-state-dir.test.ts` x5
+        green, then the project's own checks once.
+fix-each:
+  branch: fix/flaky-migrate-state-dir-timeout
+  pr_url: "https://github.com/coleam00/Archon/pull/9999"
+  ci_verdict: green
+fixture:
+  expect: completed
+exec-code: false
