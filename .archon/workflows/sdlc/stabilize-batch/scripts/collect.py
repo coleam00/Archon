@@ -20,22 +20,37 @@ import sys
 def parse_entries(raw: str) -> list:
     """Normalize fan-out join output into result dicts.
 
-    Entries may be dicts or raw JSON text; a single text blob may hold several
-    back-to-back JSON objects."""
-    data = json.loads(raw)
-    if not isinstance(data, list):
-        data = [data]
+    The join may deliver: a JSON array of dicts, a JSON array of raw-JSON-text
+    entries, a single dict, or back-to-back JSON objects as one text blob."""
     dec = json.JSONDecoder()
     out = []
-    for entry in data:
+    s = raw.strip()
+
+    # Fast path: the whole thing parses (array or single object).
+    try:
+        data, rest = dec.raw_decode(s)
+        entries = data if isinstance(data, list) else [data]
+    except json.JSONDecodeError:
+        entries = [s]
+        rest = ""
+
+    for entry in entries:
         if isinstance(entry, dict):
             out.append(entry)
             continue
-        s = str(entry).strip()
-        while s:
-            obj, idx = dec.raw_decode(s)
+        # Raw JSON text entry — parse it; may itself hold several objects.
+        entry_s = str(entry).strip()
+        while entry_s:
+            obj, idx = dec.raw_decode(entry_s)
             out.append(obj)
-            s = s[idx:].lstrip()
+            entry_s = entry_s[idx:].lstrip()
+
+    # Anything left over after fast-path parse = trailing concatenated objects.
+    while rest.strip():
+        obj, idx = dec.raw_decode(rest.strip())
+        out.append(obj)
+        rest = rest.strip()[idx:].lstrip()
+
     return out
 
 
