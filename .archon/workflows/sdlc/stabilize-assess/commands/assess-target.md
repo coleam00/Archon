@@ -25,10 +25,11 @@ Original smell (framing only): $INPUTS.smell
 
 2. **Prove the causal chain.** Walk from code structure to observed failure
    with no gaps: what exactly happens, in which order, that produces the
-   failure under which conditions? Numbers beat adjectives — count subprocess
-   spawns, measure a run, cite the timing bound. If your chain contains
-   "might", "could", or "probably" for any load-bearing link, either close it
-   with an observation or reject the candidate.
+   failure under which conditions? Numbers beat adjectives — measure whatever
+   the mechanism claims (counts, durations, state transitions, input sizes)
+   rather than asserting it. If your chain contains "might", "could", or
+   "probably" for any load-bearing link, either close it with an observation
+   or reject the candidate.
 
 3. **Classify the fix kind honestly:**
    - `delete-useless-test` — verifies nothing real; removing loses nothing.

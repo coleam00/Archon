@@ -26,11 +26,11 @@ $ARGUMENTS
    note what you saw in `grounded` — one line. Unreachable: say so, move on.
    Do not sink time here; grounding is context, not your deliverable.
 
-2. **Translate the smell into greppable signals** before searching. For "tests
-   timing out at Bun's 5000ms default in windows CI": tests spawning subprocesses
-   per case or in loops; process-tree/child-process helpers; repeated CLI or
-   `bun test` invocations inside tests; timing-sensitive assertions; anything
-   whose runtime is dominated by process creation on slow runners.
+2. **Translate the smell into concrete, mechanically checkable signals** before
+   searching. A smell like "tests flake under load" becomes: which operations
+   are wall-clock bound? Which tests share mutable state or external resources?
+   What does this repo's own test runner log when it struggles? Derive signals
+   FROM the description and THIS codebase — never assume a pattern family.
 
 3. **Sweep every test file** against those signals. Grep wide, skim hits,
    include adjacent tests in the same files — families cluster. Err toward
@@ -38,8 +38,8 @@ $ARGUMENTS
    a missed instance costs a future CI break.
 
 4. **One paragraph of why per candidate.** Name file, a runnable `test_id`
-   (selector that runs exactly that test), and the structural signal you saw
-   ("spawns subprocess per case via execFileSync; 14 cases"). CI evidence goes
+   (selector that runs exactly that test), and the structural signal you saw —
+   what the code does, concretely, that matches the signal. CI evidence goes
    in `evidence` when you have it; otherwise say what pattern class this is.
 
 ## Output contract

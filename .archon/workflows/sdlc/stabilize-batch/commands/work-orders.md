@@ -24,11 +24,11 @@ $INPUTS.assessments
    rejection reasons are final and are NOT your concern to relitigate or record.
 
 2. **Dedupe by mechanism, not by file.** Two findings sharing one root cause
-   (same missing helper, same spawn pattern in one helper function) are ONE
-   order covering both files — parallel children cannot coordinate edits, and
-   two orders editing the same helper would collide. Different tests failing
-   from genuinely independent causes stay separate orders even if they look
-   similar.
+   — any shared fixture, helper, or dependency both tests sit on — are ONE
+   order covering all affected files: parallel children cannot coordinate
+   edits, and two orders touching the same underlying cause would collide.
+   Different tests failing from genuinely independent causes stay separate
+   orders even if they look similar.
 
 3. **Write each order as a complete brief** a competent engineer with no other
    context acts on:
