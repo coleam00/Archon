@@ -27,7 +27,7 @@ def run(cmd: list[str], timeout: int | None = None) -> tuple[int, str]:
 
 
 def main() -> int:
-    fix = json.loads(os.environ["FIX_OUTPUT"])
+    fix = json.loads(os.environ["INPUTS_FIX"])
     order = os.environ.get("INPUTS_WORK_ORDER", "")
     base = os.environ.get("BASE_BRANCH", "")
     branch = fix["branch"].strip()

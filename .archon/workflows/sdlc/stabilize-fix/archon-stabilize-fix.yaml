@@ -45,9 +45,13 @@ nodes:
     script: verify
     runtime: uv
     depends_on: [fix]
+    with:
+      fix: "$fix.output"
 
   # Ship: open the PR against the base branch, watch its CI to a verdict.
   - id: ship
     script: ship
     runtime: uv
     depends_on: [verify]
+    with:
+      fix: "$fix.output"

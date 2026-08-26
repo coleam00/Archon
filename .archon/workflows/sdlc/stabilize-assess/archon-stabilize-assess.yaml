@@ -1,0 +1,53 @@
+name: archon-stabilize-assess
+description: |
+  Deep assessment of ONE candidate flaky-test target. Child of
+  archon-stabilize-batch: receives a single sniffed candidate, reads the test
+  and its subject closely, confirms or rejects the mechanism, classifies the
+  right fix kind, and returns a verdict with evidence. Confirms what the cheap
+  sweep only suspected.
+
+model: medium
+
+inputs:
+  target:
+    required: true
+    description: One candidate finding from the sniff node (title/file/test_id/why_suspect/evidence).
+  smell:
+    default: ""
+    description: The original smell description, for framing only.
+
+returns: assess
+
+nodes:
+  - id: assess
+    command: assess-target
+    mutates_checkout: false
+    output_format:
+      type: object
+      properties:
+        confirmed:
+          type: boolean
+          description: True only if the mechanism is proven against the code.
+        title:
+          type: string
+        file:
+          type: string
+        test_id:
+          type: string
+          description: Selector that runs exactly this test.
+        kind:
+          type: string
+          enum:
+            - delete-useless-test
+            - make-test-meaningful
+            - fix-product-bug
+            - split-or-recompose-test
+        mechanism:
+          type: string
+          description: The proven causal chain from code structure to observed failure.
+        evidence:
+          type: string
+        rejection_reason:
+          type: string
+          description: Required when confirmed is false — why this candidate is not real.
+      required: [confirmed, title, file, test_id]

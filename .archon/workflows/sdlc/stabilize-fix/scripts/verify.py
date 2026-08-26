@@ -25,7 +25,7 @@ def run(cmd: str) -> tuple[int, str]:
 
 
 def main() -> int:
-    fix = json.loads(os.environ["FIX_OUTPUT"])
+    fix = json.loads(os.environ["INPUTS_FIX"])
     repetitions = int(os.environ.get("INPUTS_TEST_REPETITIONS", "5"))
 
     test_cmd = fix["test_cmd"].strip()

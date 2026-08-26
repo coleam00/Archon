@@ -17,7 +17,7 @@ import sys
 
 
 def main() -> int:
-    raw = os.environ.get("FIX_EACH_OUTPUT", "[]")
+    raw = os.environ.get("INPUTS_FIX_EACH", "[]")
     try:
         results = json.loads(raw)
         if isinstance(results, dict):

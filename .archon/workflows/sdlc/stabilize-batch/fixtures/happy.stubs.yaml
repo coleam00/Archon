@@ -1,5 +1,5 @@
-# Fixture (acceptance test for #2818 — red until dry-run simulates workflow: nodes):
-# happy path — one confirmed finding becomes one shipped order.
+# Fixture (acceptance test for #2818 — red until dry-run simulates workflow:
+# nodes): one confirmed finding flows find → assess → order → fixed PR.
 sniff:
   grounded: "gh run list: 3 windows failures in the last day, all at 5000ms"
   findings:
@@ -8,7 +8,14 @@ sniff:
       test_id: "bun test scripts/migrate-state-dir.test.ts"
       why_suspect: "spawns a subprocess per case; spawn cost on windows runners sits at the bound"
       evidence: "CI run 32843285990 job windows: timed out after 5000ms"
-      confidence: confirmed
+assess-each:
+  - confirmed: true
+    title: "migrate-state-dir subdirectory invocation exceeds Bun's 5000ms bound"
+    file: "scripts/migrate-state-dir.test.ts"
+    test_id: "bun test scripts/migrate-state-dir.test.ts"
+    kind: split-or-recompose-test
+    mechanism: "~14 subprocess spawns per invocation; windows spawn cost pushes total past the 5000ms default timeout under runner load"
+    evidence: "CI run 32843285990 job windows: timed out after 5000ms"
 work-orders:
   orders:
     - title: "migrate-state-dir subdirectory invocation exceeds Bun's 5000ms bound"

@@ -1,8 +1,10 @@
-# Fixture (acceptance test for #2818 — red until dry-run simulates workflow: nodes):
-# sniff finds nothing — the run completes honestly with zero orders.
+# Fixture (acceptance test for #2818 — red until dry-run simulates workflow:
+# nodes): sweep finds nothing; assessors reject nothing; zero orders; honest
+# empty batch completes.
 sniff:
   grounded: "no reachable CI evidence; sweep of test files found no matching pattern"
   findings: []
+assess-each: []
 work-orders:
   orders: []
 fixture:
