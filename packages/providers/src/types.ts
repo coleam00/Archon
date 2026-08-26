@@ -535,7 +535,11 @@ export interface AgentRequestOptions {
 export interface NativeTool {
   name: string;
   description: string;
-  inputSchema: Record<string, unknown>;
+  inputSchema: {
+    type: 'object';
+    properties: Record<string, unknown>;
+    [key: string]: unknown;
+  };
   handler: (input: Record<string, unknown>) => Promise<string>;
 }
 

@@ -127,9 +127,6 @@ export class OpencodeProvider implements IAgentProvider {
       ) {
         throw new Error('OpenCode V2 does not yet support workflow tool restrictions');
       }
-      if (requestOptions?.nativeTools?.length) {
-        throw new Error('OpenCode V2 native tools require the follow-up bridge');
-      }
     }
 
     const sessionCwd =
@@ -148,7 +145,10 @@ export class OpencodeProvider implements IAgentProvider {
 
       try {
         if (this.useV2) {
-          const runtime = await acquireV2Runtime(requestOptions?.abortSignal);
+          const runtime = await acquireV2Runtime(
+            requestOptions?.abortSignal,
+            requestOptions?.nativeTools
+          );
           try {
             const { sessionId, resumed } = await resolveSessionIdV2(
               runtime.client,
@@ -263,9 +263,10 @@ export class OpencodeProvider implements IAgentProvider {
         );
         const enrichedError = enrichOpencodeError(error, errorClass);
         const shouldRetry =
-          errorClass === 'rate_limit' ||
-          errorClass === 'crash' ||
-          (errorClass === 'agent_not_found' && hasAgentConfig && !recoveredAgentNotFound);
+          !requestOptions?.nativeTools?.length &&
+          (errorClass === 'rate_limit' ||
+            errorClass === 'crash' ||
+            (errorClass === 'agent_not_found' && hasAgentConfig && !recoveredAgentNotFound));
 
         getLog().error(
           {

@@ -6,12 +6,13 @@ function spec(inputSchema: Record<string, unknown>): NativeTool {
   return {
     name: 'manage_run',
     description: 'test tool',
-    inputSchema,
+    // Deliberately bypass the stronger contract to verify runtime rejection.
+    inputSchema: inputSchema as NativeTool['inputSchema'],
     handler: () => Promise.resolve('ok'),
   };
 }
 
-const VALID_SCHEMA: Record<string, unknown> = {
+const VALID_SCHEMA: NativeTool['inputSchema'] = {
   type: 'object',
   properties: {
     action: { type: 'string', enum: ['list', 'get'], description: 'the action' },

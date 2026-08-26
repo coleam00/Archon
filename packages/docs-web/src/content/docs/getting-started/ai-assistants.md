@@ -336,7 +336,7 @@ The table below describes the default V1 runtime.
 
 Unsupported YAML fields trigger a visible warning from the dag-executor when the workflow runs, so you always know what was ignored.
 
-V2 currently supports single-session creation, same-project resume, exact-turn streaming, tool events, cancellation, terminal results, and additive usage accounting. It rejects inline agents, multi-agent fan-out, skills, request-scoped environment variables, system prompt overrides, tool restrictions, native tools, and structured output before starting the sidecar. These capabilities will be added only through focused follow-up integrations.
+V2 currently supports single-session creation, same-project resume, exact-turn streaming, native tools, cancellation, terminal results, and additive usage accounting. Native tools cross a request-scoped, bearer-authenticated loopback bridge and disable whole-query retries because handlers can produce side effects. V2 rejects inline agents, multi-agent fan-out, skills, request-scoped environment variables, system prompt overrides, tool restrictions, and structured output before starting the sidecar.
 
 ### Usage in workflows
 

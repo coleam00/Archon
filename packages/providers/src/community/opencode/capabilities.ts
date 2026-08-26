@@ -49,6 +49,7 @@ export function getOpencodeCapabilities(useV2: boolean): ProviderCapabilities {
         toolRestrictions: false,
         structuredOutput: false,
         envInjection: false,
+        nativeTools: true,
       }
     : OPENCODE_CAPABILITIES;
 }

@@ -393,6 +393,7 @@ describe('registry', () => {
         expect(registered.toolRestrictions).toBe(false);
         expect(registered.structuredOutput).toBe(false);
         expect(registered.envInjection).toBe(false);
+        expect(registered.nativeTools).toBe(true);
 
         delete process.env.OPENCODE_V2;
         expect(getAgentProvider('opencode').getCapabilities()).toEqual(registered);

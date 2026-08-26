@@ -1,5 +1,7 @@
 import { afterAll, expect, mock, spyOn, test } from 'bun:test';
 
+import { dirname, join } from 'node:path';
+
 const endpoint = { url: 'http://127.0.0.1:4096' };
 const healthGet = mock(async (): Promise<{ healthy: boolean }> => ({ healthy: true }));
 const client = { health: { get: healthGet } };
@@ -7,7 +9,11 @@ const make = mock(() => client);
 
 mock.module('@opencode-ai/client', () => ({ OpenCode: { make } }));
 
-const binary = process.platform === 'win32' ? 'C:\\opencode2.exe' : '/usr/bin/opencode2';
+const binary = join(
+  dirname(Bun.resolveSync('@opencode-ai/cli/package.json', import.meta.dir)),
+  'bin',
+  'opencode2.exe'
+);
 const whichSpy = spyOn(Bun, 'which').mockReturnValue(binary);
 let serviceExited = Promise.withResolvers<number>();
 const serviceKill = mock((): void => serviceExited.resolve(0));

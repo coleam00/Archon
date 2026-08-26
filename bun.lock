@@ -154,6 +154,7 @@
         "zod": "^4.0.0",
       },
       "devDependencies": {
+        "@opencode-ai/cli": "0.0.0-beta-17963",
         "pino": "^9",
       },
       "peerDependencies": {
@@ -250,6 +251,9 @@
       },
     },
   },
+  "trustedDependencies": [
+    "@opencode-ai/cli",
+  ],
   "overrides": {
     "@hono/node-server": "^1.19.15",
     "axios": "^1.15.2",
@@ -807,6 +811,32 @@
     "@openai/codex-win32-arm64": ["@openai/codex@0.150.1-win32-arm64", "", { "os": "win32", "cpu": "arm64" }, "sha512-8I7N3ppKS1ql9GUr2RHS5Gw+KkRCKfIMIDDK/brxq6HizLgHoDK4CIR0OTvEgdX3Yh/2reBbxr9P4L1e+61e+Q=="],
 
     "@openai/codex-win32-x64": ["@openai/codex@0.150.1-win32-x64", "", { "os": "win32", "cpu": "x64" }, "sha512-1P1tscFnw4A4ip/WN1R5WYPdfuAlxLctPpcE1QAPQnOtbkJR5NX8da4kNTQmiDN/Flx3TLJPDTRHP9Jn435eJg=="],
+
+    "@opencode-ai/cli": ["@opencode-ai/cli@0.0.0-beta-17963", "", { "optionalDependencies": { "@opencode-ai/cli-darwin-arm64": "0.0.0-beta-17963", "@opencode-ai/cli-darwin-x64": "0.0.0-beta-17963", "@opencode-ai/cli-darwin-x64-baseline": "0.0.0-beta-17963", "@opencode-ai/cli-linux-arm64": "0.0.0-beta-17963", "@opencode-ai/cli-linux-arm64-musl": "0.0.0-beta-17963", "@opencode-ai/cli-linux-x64": "0.0.0-beta-17963", "@opencode-ai/cli-linux-x64-baseline": "0.0.0-beta-17963", "@opencode-ai/cli-linux-x64-baseline-musl": "0.0.0-beta-17963", "@opencode-ai/cli-linux-x64-musl": "0.0.0-beta-17963", "@opencode-ai/cli-windows-arm64": "0.0.0-beta-17963", "@opencode-ai/cli-windows-x64": "0.0.0-beta-17963", "@opencode-ai/cli-windows-x64-baseline": "0.0.0-beta-17963" }, "os": [ "linux", "win32", "darwin", ], "cpu": [ "x64", "arm64", ], "bin": { "opencode2": "bin/opencode2.exe" } }, "sha512-cOGHC28YCW/4nfO6Fy4kVCD5HHUrjgkTPqf3NaZ1cBRGhSe4rQysa+ojZploQOiekyyi3lcN1Kw7O6q4rzPMWg=="],
+
+    "@opencode-ai/cli-darwin-arm64": ["@opencode-ai/cli-darwin-arm64@0.0.0-beta-17963", "", { "os": "darwin", "cpu": "arm64" }, "sha512-x9E0ik26iYfis6ZjDTh9dUeugGvuAueYPEeE5B6u+KCw0njoGmptlxJO92of09grVZokg5ojFx58KvZLhcrOXA=="],
+
+    "@opencode-ai/cli-darwin-x64": ["@opencode-ai/cli-darwin-x64@0.0.0-beta-17963", "", { "os": "darwin", "cpu": "x64" }, "sha512-IE4ffm5vsEEDiYoellEzMublXJdYGd1bmg6vZiX8SCl1TtKVvqJsDc3uKaVxXRso6INyd8LRzeRMO/Je9LUcvQ=="],
+
+    "@opencode-ai/cli-darwin-x64-baseline": ["@opencode-ai/cli-darwin-x64-baseline@0.0.0-beta-17963", "", { "os": "darwin", "cpu": "x64" }, "sha512-m0vQ5DbCo/66PtX3F4enUM3wPDqSYfp9osN4GO8ZVgeHZm+UUwgxYlBO9IDPXFSw6NJe2O5ng+M3yRYhyahObA=="],
+
+    "@opencode-ai/cli-linux-arm64": ["@opencode-ai/cli-linux-arm64@0.0.0-beta-17963", "", { "os": "linux", "cpu": "arm64" }, "sha512-3cnYeFZk9N3YikKp9zQF2oeYJ2SIyhwNB0UNQ5GY27JAB5ToS+TXmxRQg7E3P9VvuF3bsNV/r3F7cjoApAPihQ=="],
+
+    "@opencode-ai/cli-linux-arm64-musl": ["@opencode-ai/cli-linux-arm64-musl@0.0.0-beta-17963", "", { "os": "linux", "cpu": "arm64" }, "sha512-OBYPAOaB5cx8h0jIyPOdDgq4LYPtAFHsmrjlMPxEimZSGgn8NRFiGlxN8Jizk5XUJcRCjeB9tH8azeXDOKSBHQ=="],
+
+    "@opencode-ai/cli-linux-x64": ["@opencode-ai/cli-linux-x64@0.0.0-beta-17963", "", { "os": "linux", "cpu": "x64" }, "sha512-GK25+LmmnoQNsf6OXZzx13fZPkm66/XrOUsEYZL2S9PoeQgrIPyxopGd5aGzA3ErBxRZ4tGB9c5uvDzhu8GW4Q=="],
+
+    "@opencode-ai/cli-linux-x64-baseline": ["@opencode-ai/cli-linux-x64-baseline@0.0.0-beta-17963", "", { "os": "linux", "cpu": "x64" }, "sha512-7cqBL7uggNSqXvQHOa0pHOnzr81HOZYLd4T8ym1FIRgu8TAUT8ZWCW/7Jr8JHG8/nuR95KvT9/ptZIn5QcCiTw=="],
+
+    "@opencode-ai/cli-linux-x64-baseline-musl": ["@opencode-ai/cli-linux-x64-baseline-musl@0.0.0-beta-17963", "", { "os": "linux", "cpu": "x64" }, "sha512-MEePx2IATZk2NFyZ8cNVhXrxeTcPE9atkbW+lHFTVIO+34LrBEjs3h2fxCTX8+NWgCa2XLHbJcBBKePtUxdBhQ=="],
+
+    "@opencode-ai/cli-linux-x64-musl": ["@opencode-ai/cli-linux-x64-musl@0.0.0-beta-17963", "", { "os": "linux", "cpu": "x64" }, "sha512-psLsZCVRxD2HuqwtjCoYsRT2CqYJGWP0je43s4sUOb9OlsZQTcTSxrG1qOWICHGz1dPO1TAdb09+QEj7GkXFVA=="],
+
+    "@opencode-ai/cli-windows-arm64": ["@opencode-ai/cli-windows-arm64@0.0.0-beta-17963", "", { "os": "win32", "cpu": "arm64" }, "sha512-rRAsTSR0tTLcCnQfr4pkI4GO19NQHcN+tmEthjb5Sy8+x0ApqY+5qOK7FjN7bkr4nBUZkvO/KLq4S4+50aFnxw=="],
+
+    "@opencode-ai/cli-windows-x64": ["@opencode-ai/cli-windows-x64@0.0.0-beta-17963", "", { "os": "win32", "cpu": "x64" }, "sha512-y6WtVxcILaqiSOyBgBDOMfPcnGB2WDXmmyDkqwWx9xFhvPkpwfP2PkM/OIDAax0wD4L9DPjB6d5bufRswfZ9aQ=="],
+
+    "@opencode-ai/cli-windows-x64-baseline": ["@opencode-ai/cli-windows-x64-baseline@0.0.0-beta-17963", "", { "os": "win32", "cpu": "x64" }, "sha512-A1av5XDFE/2dTrnoVRTegMFhGmseNjyWEWXqTt4ujAkrvpuwoOkLzhlkwdgkghNT7hpLx4do0K1IU5oPOryrDw=="],
 
     "@opencode-ai/client": ["@opencode-ai/client@0.0.0-beta-17963", "", { "dependencies": { "@opencode-ai/protocol": "0.0.0-beta-17963", "@opencode-ai/schema": "0.0.0-beta-17963" }, "peerDependencies": { "effect": "4.0.0-rc.110", "solid-js": ">=1.9.0" }, "optionalPeers": ["effect", "solid-js"] }, "sha512-Rq+XXxmIOZ5LbiUj89byxN2FWxmmoZqq1BHGdS6734QN2/K1GD/mcWTfIKJlMToEZ03EGCvxJKjvGrixYCEFUA=="],
 

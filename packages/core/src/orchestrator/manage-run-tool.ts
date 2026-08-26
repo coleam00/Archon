@@ -75,7 +75,7 @@ const ACTIONS = [
 ] as const;
 type Action = (typeof ACTIONS)[number];
 
-const INPUT_SCHEMA: Record<string, unknown> = {
+const INPUT_SCHEMA: NativeTool['inputSchema'] = {
   type: 'object',
   properties: {
     action: {

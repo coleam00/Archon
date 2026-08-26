@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { OpenCodeClient, OpenCodeEvent } from '@opencode-ai/client';
 
 import { createMockLogger } from '../../test/mocks/logger';
-import type { SendQueryOptions } from '../../types';
+import type { NativeTool, SendQueryOptions } from '../../types';
 
 const mockLogger = createMockLogger();
 mock.module('@archon/paths', () => ({ createLogger: mock(() => mockLogger) }));
@@ -15,13 +15,17 @@ interface MockV2Runtime {
 
 const v2Runtimes: MockV2Runtime[] = [];
 const v2Errors: unknown[] = [];
-const acquireV2Runtime = mock(async (): Promise<MockV2Runtime> => {
+async function nextV2Runtime(
+  _signal?: AbortSignal,
+  _nativeTools?: readonly NativeTool[]
+): Promise<MockV2Runtime> {
   const error = v2Errors.shift();
   if (error) throw error;
   const runtime = v2Runtimes.shift();
   if (!runtime) throw new Error('Missing mocked V2 runtime');
   return runtime;
-});
+}
+const acquireV2Runtime = mock(nextV2Runtime);
 const acquireEmbeddedRuntime = mock(async (): Promise<never> => {
   throw new Error('V1 runtime must not be acquired');
 });
@@ -112,7 +116,8 @@ const TEST_OPTIONS: SendQueryOptions = {
 beforeEach(() => {
   v2Runtimes.length = 0;
   v2Errors.length = 0;
-  acquireV2Runtime.mockClear();
+  acquireV2Runtime.mockReset();
+  acquireV2Runtime.mockImplementation(nextV2Runtime);
   acquireEmbeddedRuntime.mockClear();
   mockLogger.info.mockClear();
   mockLogger.error.mockClear();
@@ -227,5 +232,55 @@ describe('OpencodeProvider V2 boundary', () => {
     expect(acquireEmbeddedRuntime).not.toHaveBeenCalled();
     expect(first.release).toHaveBeenCalledTimes(1);
     expect(second.release).toHaveBeenCalledTimes(1);
+  });
+
+  test('does not retry after a native tool can produce side effects', async () => {
+    const sessionId = 'ses_native_tool_failure';
+    const runtime = makeRuntime(sessionId, [
+      { id: 'connected', type: 'server.connected', data: {} },
+      durableEvent(sessionId, 'session.inbox.delivered', {
+        sessionID: sessionId,
+        inboxID: `inbox_${sessionId}`,
+      }),
+      durableEvent(sessionId, 'session.execution.failed', {
+        sessionID: sessionId,
+        error: { type: 'provider', message: 'rate limit exceeded', status: 429 },
+      }),
+    ]);
+    v2Runtimes.push(runtime);
+    const handler = mock(async () => 'started');
+    acquireV2Runtime.mockImplementationOnce(async (signal, nativeTools) => {
+      await nativeTools?.[0]?.handler({ action: 'start' });
+      return nextV2Runtime(signal, nativeTools);
+    });
+
+    const result = await consume(
+      new OpencodeProvider({ useV2: true, retryBaseDelayMs: 1 }).sendQuery(
+        'start workflow',
+        '/workspace',
+        undefined,
+        {
+          ...TEST_OPTIONS,
+          nativeTools: [
+            {
+              name: 'manage_run',
+              description: 'Manage workflow runs',
+              inputSchema: {
+                type: 'object',
+                properties: { action: { type: 'string' } },
+                required: ['action'],
+              },
+              handler,
+            },
+          ],
+        }
+      )
+    );
+
+    expect(result.error?.message).toContain('rate_limit');
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(acquireV2Runtime).toHaveBeenCalledTimes(1);
+    expect(runtime.release).toHaveBeenCalledTimes(1);
+    expect(mockLogger.info).not.toHaveBeenCalledWith(expect.anything(), 'opencode.query_retrying');
   });
 });

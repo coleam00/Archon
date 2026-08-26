@@ -5,6 +5,10 @@ import { dirname, join } from 'node:path';
 import { OpenCode, type OpenCodeClient } from '@opencode-ai/client';
 import type { Endpoint } from '@opencode-ai/client/service';
 
+import type { NativeTool } from '../../types';
+
+import { startNativeToolsV2Bridge } from './native-tools-v2';
+
 export const OPENCODE_V2_VERSION = '0.0.0-beta-17963';
 
 export interface V2Runtime {
@@ -14,6 +18,14 @@ export interface V2Runtime {
 }
 
 async function resolveOpencodeV2Binary(): Promise<string> {
+  try {
+    const packageJson = Bun.resolveSync('@opencode-ai/cli/package.json', import.meta.dir);
+    const packagedBinary = join(dirname(packageJson), 'bin', 'opencode2.exe');
+    if ((await stat(packagedBinary)).isFile()) return packagedBinary;
+  } catch {
+    // Compiled installs use an operator-installed CLI from PATH.
+  }
+
   const shim = Bun.which('opencode2');
   if (!shim) {
     throw new Error(
@@ -105,8 +117,53 @@ async function waitForHealth(client: OpenCodeClient, signal: AbortSignal): Promi
   throw signal.reason ?? new Error('OpenCode V2 runtime startup stopped');
 }
 
+async function waitForPlugin(
+  client: OpenCodeClient,
+  pluginId: string,
+  signal: AbortSignal
+): Promise<void> {
+  while (!signal.aborted) {
+    const plugins = await client.plugin.list(undefined, { signal });
+    const plugin = plugins.data.find(candidate => candidate.id === pluginId);
+    if (plugin?.status === 'active') return;
+    if (plugin?.status === 'failed') {
+      throw new Error(`OpenCode V2 failed to load the Archon native-tools plugin: ${plugin.error}`);
+    }
+    await Bun.sleep(50);
+  }
+  throw signal.reason ?? new Error('OpenCode V2 native-tools plugin startup stopped');
+}
+
+function mergeConfigContent(existing: string | undefined, pluginContent: string): string {
+  const base: unknown = existing ? JSON.parse(existing) : {};
+  const plugin: unknown = JSON.parse(pluginContent);
+  if (
+    typeof base !== 'object' ||
+    base === null ||
+    Array.isArray(base) ||
+    typeof plugin !== 'object' ||
+    plugin === null ||
+    Array.isArray(plugin)
+  ) {
+    throw new Error('OPENCODE_CONFIG_CONTENT must contain a JSON object');
+  }
+  const baseRecord = base as Record<string, unknown>;
+  const pluginRecord = plugin as Record<string, unknown>;
+  const existingPlugins = baseRecord.plugin ?? [];
+  if (!Array.isArray(existingPlugins) || !Array.isArray(pluginRecord.plugin)) {
+    throw new Error('OpenCode plugin config must be an array');
+  }
+  return JSON.stringify({
+    ...baseRecord,
+    plugin: [...existingPlugins, ...pluginRecord.plugin],
+  });
+}
+
 /** Start an Archon-owned V2 sidecar and stop exactly that process on release. */
-export async function acquireV2Runtime(signal?: AbortSignal): Promise<V2Runtime> {
+export async function acquireV2Runtime(
+  signal?: AbortSignal,
+  nativeTools: readonly NativeTool[] = []
+): Promise<V2Runtime> {
   if (signal?.aborted) throw abortError();
 
   const binary = await resolveOpencodeV2Binary();
@@ -114,6 +171,12 @@ export async function acquireV2Runtime(signal?: AbortSignal): Promise<V2Runtime>
   if (signal?.aborted) throw abortError();
 
   const password = randomBytes(32).toString('base64url');
+  const nativeToolsBridge =
+    nativeTools.length > 0 ? await startNativeToolsV2Bridge(nativeTools) : undefined;
+  if (signal?.aborted) {
+    await nativeToolsBridge?.close();
+    throw abortError();
+  }
   const startupController = new AbortController();
   const abortHandler = (): void => {
     startupController.abort(abortError());
@@ -121,22 +184,39 @@ export async function acquireV2Runtime(signal?: AbortSignal): Promise<V2Runtime>
   signal?.addEventListener('abort', abortHandler, { once: true });
   if (signal?.aborted) {
     signal.removeEventListener('abort', abortHandler);
+    await nativeToolsBridge?.close();
     throw abortError();
   }
   const timeout = setTimeout(() => {
     startupController.abort(new Error('OpenCode V2 runtime startup timed out'));
   }, 10_000);
-  const child = Bun.spawn([binary, 'serve', '--stdio', '--hostname', '127.0.0.1', '--port', '0'], {
-    stdin: 'pipe',
-    stdout: 'pipe',
-    stderr: 'pipe',
-    signal: startupController.signal,
-    env: {
-      ...process.env,
-      OPENCODE_SERVER_USERNAME: 'opencode',
-      OPENCODE_SERVER_PASSWORD: password,
-    },
-  });
+  let child: Bun.Subprocess<'pipe', 'pipe', 'pipe'>;
+  try {
+    child = Bun.spawn([binary, 'serve', '--stdio', '--hostname', '127.0.0.1', '--port', '0'], {
+      stdin: 'pipe',
+      stdout: 'pipe',
+      stderr: 'pipe',
+      signal: startupController.signal,
+      env: {
+        ...process.env,
+        OPENCODE_SERVER_USERNAME: 'opencode',
+        OPENCODE_SERVER_PASSWORD: password,
+        ...(nativeToolsBridge
+          ? {
+              OPENCODE_CONFIG_CONTENT: mergeConfigContent(
+                process.env.OPENCODE_CONFIG_CONTENT,
+                nativeToolsBridge.configContent
+              ),
+            }
+          : {}),
+      },
+    });
+  } catch (error) {
+    clearTimeout(timeout);
+    signal?.removeEventListener('abort', abortHandler);
+    await nativeToolsBridge?.close();
+    throw error;
+  }
   const stderr = new Response(child.stderr).text().catch(() => '');
 
   let endpoint: Endpoint;
@@ -154,11 +234,15 @@ export async function acquireV2Runtime(signal?: AbortSignal): Promise<V2Runtime>
       },
     });
     await waitForHealth(client, startupController.signal);
+    if (nativeToolsBridge) {
+      await waitForPlugin(client, nativeToolsBridge.pluginId, startupController.signal);
+    }
   } catch (error) {
     child.stdin.end();
     child.kill();
     await child.exited.catch(() => undefined);
     const detail = (await stderr).trim();
+    await nativeToolsBridge?.close();
     if (signal?.aborted) throw abortError();
     throw new Error(`OpenCode V2 runtime failed to start${detail ? `: ${detail}` : ''}`, {
       cause: error,
@@ -177,7 +261,11 @@ export async function acquireV2Runtime(signal?: AbortSignal): Promise<V2Runtime>
       released = true;
       child.stdin.end();
       child.kill();
-      await child.exited;
+      try {
+        await child.exited;
+      } finally {
+        await nativeToolsBridge?.close();
+      }
     },
   };
 }
