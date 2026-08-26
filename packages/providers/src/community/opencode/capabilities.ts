@@ -40,3 +40,15 @@ export const OPENCODE_CAPABILITIES: ProviderCapabilities = {
   nativeTools: false,
   containerExec: false, // no in-container spawn path yet (fail-fast source of truth)
 };
+
+export function getOpencodeCapabilities(useV2: boolean): ProviderCapabilities {
+  return useV2
+    ? {
+        ...OPENCODE_CAPABILITIES,
+        agents: false,
+        toolRestrictions: false,
+        structuredOutput: false,
+        envInjection: false,
+      }
+    : OPENCODE_CAPABILITIES;
+}

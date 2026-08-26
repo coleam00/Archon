@@ -255,8 +255,14 @@ function buildMarkdown(providers: ProviderInfo[], caveats: ResolvedCaveat[]): st
 }
 
 async function main(): Promise<void> {
-  registerBuiltinProviders();
-  registerCommunityProviders();
+  const opencodeV2 = process.env.OPENCODE_V2;
+  delete process.env.OPENCODE_V2;
+  try {
+    registerBuiltinProviders();
+    registerCommunityProviders();
+  } finally {
+    if (opencodeV2 !== undefined) process.env.OPENCODE_V2 = opencodeV2;
+  }
   const providers = getProviderInfoList();
   if (providers.length === 0) {
     throw new Error('No providers registered — registry bootstrap failed.');

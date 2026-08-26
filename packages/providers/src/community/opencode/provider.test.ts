@@ -1559,6 +1559,7 @@ describe('classifyOpencodeError (#2715)', () => {
 
     for (const [statusCode, expectedClass] of cases) {
       expect(classifyOpencodeError({ statusCode }, false)).toBe(expectedClass);
+      expect(classifyOpencodeError({ status: statusCode }, false)).toBe(expectedClass);
 
       const sdkError = {
         name: 'APIError',
@@ -1569,6 +1570,10 @@ describe('classifyOpencodeError (#2715)', () => {
       const wrappedError = new Error('request failed');
       wrappedError.cause = sdkError;
       expect(classifyOpencodeError(wrappedError, false)).toBe(expectedClass);
+
+      const wrappedV2Error = new Error('request failed');
+      wrappedV2Error.cause = { type: 'provider', message: 'request failed', status: statusCode };
+      expect(classifyOpencodeError(wrappedV2Error, false)).toBe(expectedClass);
     }
   });
 

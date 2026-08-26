@@ -7,10 +7,11 @@ import type {
   MessageChunk,
   ProviderCapabilities,
   SendQueryOptions,
+  TokenUsage,
 } from '../../types';
 
 import { getOrderedAgents } from './agent-config';
-import { OPENCODE_CAPABILITIES } from './capabilities';
+import { getOpencodeCapabilities } from './capabilities';
 import { parseModelRef, parseOpencodeConfig } from './config';
 import { classifyOpencodeError, enrichOpencodeError } from './errors';
 import { materializeAgents } from './agent-fs';
@@ -20,7 +21,14 @@ import {
   disposeInstanceForDirectory,
   releaseEmbeddedRuntime,
 } from './runtime';
+import { acquireV2Runtime } from './runtime-v2';
 import { resolveSessionId, streamOpencodeSession } from './session';
+import {
+  OpencodeV2RetryableError,
+  resolveSessionIdV2,
+  streamOpencodeSessionV2,
+  summarizeOpencodeV2Usage,
+} from './session-v2';
 import { withResumedOutcome, resumedOutcome } from '../../shared/resumed';
 
 export { parseModelRef } from './config';
@@ -40,11 +48,23 @@ function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+function includePriorV2Usage(chunk: MessageChunk, priorUsage: readonly TokenUsage[]): MessageChunk {
+  if (chunk.type !== 'result' || priorUsage.length === 0) return chunk;
+  const tokens = summarizeOpencodeV2Usage([...priorUsage, ...(chunk.tokens ? [chunk.tokens] : [])]);
+  return {
+    ...chunk,
+    ...(tokens ? { tokens } : {}),
+    ...(tokens?.cost !== undefined ? { cost: tokens.cost } : {}),
+  };
+}
+
 export class OpencodeProvider implements IAgentProvider {
   private readonly retryBaseDelayMs: number;
+  private readonly useV2: boolean;
 
-  constructor(options?: { retryBaseDelayMs?: number }) {
+  constructor(options?: { retryBaseDelayMs?: number; useV2?: boolean }) {
     this.retryBaseDelayMs = options?.retryBaseDelayMs ?? RETRY_BASE_DELAY_MS;
+    this.useV2 = options?.useV2 === true;
   }
 
   async *sendQuery(
@@ -85,6 +105,33 @@ export class OpencodeProvider implements IAgentProvider {
       );
     }
 
+    if (this.useV2) {
+      if (hasAgentConfig) {
+        throw new Error('OpenCode V2 does not yet support workflow agent definitions');
+      }
+      if (requestOptions?.outputFormat) {
+        throw new Error('OpenCode V2 does not yet support output_format');
+      }
+      if (requestOptions?.systemPrompt ?? requestOptions?.nodeConfig?.systemPrompt) {
+        throw new Error('OpenCode V2 does not yet support system prompt overrides');
+      }
+      if (requestOptions?.env && Object.keys(requestOptions.env).length > 0) {
+        throw new Error('OpenCode V2 does not yet support per-request environment variables');
+      }
+      if (requestOptions?.nodeConfig?.skills?.length) {
+        throw new Error('OpenCode V2 does not yet support workflow skills');
+      }
+      if (
+        requestOptions?.nodeConfig?.allowed_tools?.length ||
+        requestOptions?.nodeConfig?.denied_tools?.length
+      ) {
+        throw new Error('OpenCode V2 does not yet support workflow tool restrictions');
+      }
+      if (requestOptions?.nativeTools?.length) {
+        throw new Error('OpenCode V2 native tools require the follow-up bridge');
+      }
+    }
+
     const sessionCwd =
       hasAgentConfig && nodeId && !usingExternalBaseUrl
         ? join(cwd, '.archon-opencode', nodeId)
@@ -92,92 +139,124 @@ export class OpencodeProvider implements IAgentProvider {
 
     let lastError: Error | undefined;
     let recoveredAgentNotFound = false;
+    const priorV2Usage: TokenUsage[] = [];
 
     for (let attempt = 0; attempt < MAX_RETRIES; attempt += 1) {
       if (requestOptions?.abortSignal?.aborted) {
         throw new Error('OpenCode query aborted');
       }
 
-      const runtime = await (async (): Promise<{
-        client: import('./runtime').OpencodeClientLike;
-        release: () => void;
-      }> => {
-        const embedded = await acquireEmbeddedRuntime(requestOptions?.abortSignal);
-        return {
-          client: embedded.client,
-          release: (): void => {
-            releaseEmbeddedRuntime(embedded);
-          },
-        };
-      })();
-
       try {
-        // When agents are defined, use a per-node session directory so each node
-        // gets its own OpenCode InstanceState — preventing stale agent cache from
-        // previous nodes in the same workflow run.
-        // For multi-agent, materialize each agent in its own subdirectory.
-        if (hasAgentConfig) {
-          if (isMultiAgent) {
-            // Materialize all agents in the shared sessionCwd so the single
-            // event subscription catches events from every child session.
-            await materializeAgents(sessionCwd, nodeAgents ?? {});
-            await disposeInstanceForDirectory(runtime.client, sessionCwd);
-          } else if (nodeAgents) {
-            await materializeAgents(sessionCwd, nodeAgents);
-            await disposeInstanceForDirectory(runtime.client, sessionCwd);
+        if (this.useV2) {
+          const runtime = await acquireV2Runtime(requestOptions?.abortSignal);
+          try {
+            const { sessionId, resumed } = await resolveSessionIdV2(
+              runtime.client,
+              cwd,
+              resumeSessionId,
+              requestOptions?.abortSignal
+            );
+            if (resumeSessionId && !resumed) {
+              yield {
+                type: 'system',
+                content: '⚠️ Could not resume OpenCode V2 session. Starting fresh conversation.',
+              };
+            }
+            const stream = withResumedOutcome(
+              streamOpencodeSessionV2(
+                runtime.client,
+                cwd,
+                sessionId,
+                prompt,
+                parsedModel,
+                requestOptions
+              ),
+              resumedOutcome(resumeSessionId, resumed)
+            );
+            for await (const chunk of stream) {
+              yield includePriorV2Usage(chunk, priorV2Usage);
+            }
+            return;
+          } finally {
+            await runtime.release();
           }
         }
 
-        if (isMultiAgent) {
-          if (!nodeId) {
-            throw new Error(
-              'OpenCode multi-agent execution requires a nodeId in nodeConfig. ' +
-                'Ensure the workflow node sets nodeConfig.nodeId.'
-            );
+        const runtime = await acquireEmbeddedRuntime(requestOptions?.abortSignal);
+        try {
+          // V1 path (legacy)
+          // When agents are defined, use a per-node session directory so each node
+          // gets its own OpenCode InstanceState — preventing stale agent cache from
+          // previous nodes in the same workflow run.
+          // For multi-agent, materialize each agent in its own subdirectory.
+          if (hasAgentConfig) {
+            if (isMultiAgent) {
+              // Materialize all agents in the shared sessionCwd so the single
+              // event subscription catches events from every child session.
+              await materializeAgents(sessionCwd, nodeAgents ?? {});
+              await disposeInstanceForDirectory(runtime.client, sessionCwd);
+            } else if (nodeAgents) {
+              await materializeAgents(sessionCwd, nodeAgents);
+              await disposeInstanceForDirectory(runtime.client, sessionCwd);
+            }
           }
-          // Multi-agent always starts fresh — it resolves its own per-node
-          // sessions internally and cannot resume a single prior session. If a
-          // resume was requested, report it as cold (false) so the executor
-          // surfaces the lost continuity instead of silently starting fresh.
+
+          if (isMultiAgent) {
+            if (!nodeId) {
+              throw new Error(
+                'OpenCode multi-agent execution requires a nodeId in nodeConfig. ' +
+                  'Ensure the workflow node sets nodeConfig.nodeId.'
+              );
+            }
+            // Multi-agent always starts fresh — it resolves its own per-node
+            // sessions internally and cannot resume a single prior session. If a
+            // resume was requested, report it as cold (false) so the executor
+            // surfaces the lost continuity instead of silently starting fresh.
+            yield* withResumedOutcome(
+              streamMultiAgentOpencodeSession(
+                runtime.client,
+                sessionCwd,
+                nodeId,
+                prompt,
+                parsedModel,
+                requestOptions
+              ),
+              resumedOutcome(resumeSessionId, false)
+            );
+            return;
+          }
+
+          const { sessionId, resumed } = await resolveSessionId(
+            runtime.client,
+            sessionCwd,
+            resumeSessionId
+          );
+          if (resumeSessionId && !resumed) {
+            yield {
+              type: 'system',
+              content: '⚠️ Could not resume OpenCode session. Starting fresh conversation.',
+            };
+          }
+
           yield* withResumedOutcome(
-            streamMultiAgentOpencodeSession(
+            streamOpencodeSession(
               runtime.client,
               sessionCwd,
-              nodeId,
+              sessionId,
               prompt,
               parsedModel,
               requestOptions
             ),
-            resumedOutcome(resumeSessionId, false)
+            resumedOutcome(resumeSessionId, resumed)
           );
           return;
+        } finally {
+          releaseEmbeddedRuntime(runtime);
         }
-
-        const { sessionId, resumed } = await resolveSessionId(
-          runtime.client,
-          sessionCwd,
-          resumeSessionId
-        );
-        if (resumeSessionId && !resumed) {
-          yield {
-            type: 'system',
-            content: '⚠️ Could not resume OpenCode session. Starting fresh conversation.',
-          };
-        }
-
-        yield* withResumedOutcome(
-          streamOpencodeSession(
-            runtime.client,
-            sessionCwd,
-            sessionId,
-            prompt,
-            parsedModel,
-            requestOptions
-          ),
-          resumedOutcome(resumeSessionId, resumed)
-        );
-        return;
       } catch (error) {
+        if (error instanceof OpencodeV2RetryableError && error.usage) {
+          priorV2Usage.push(error.usage);
+        }
         const errorClass = classifyOpencodeError(
           error,
           requestOptions?.abortSignal?.aborted === true
@@ -214,8 +293,6 @@ export class OpencodeProvider implements IAgentProvider {
           enrichedError.cause = lastError;
         }
         lastError = enrichedError;
-      } finally {
-        runtime.release();
       }
     }
 
@@ -227,6 +304,6 @@ export class OpencodeProvider implements IAgentProvider {
   }
 
   getCapabilities(): ProviderCapabilities {
-    return OPENCODE_CAPABILITIES;
+    return getOpencodeCapabilities(this.useV2);
   }
 }

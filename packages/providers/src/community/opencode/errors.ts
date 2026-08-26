@@ -41,9 +41,11 @@ function classifyStructuredError(error: unknown): RetryableErrorClass | undefine
     const statusCode =
       typeof candidate.statusCode === 'number'
         ? candidate.statusCode
-        : typeof data?.statusCode === 'number'
-          ? data.statusCode
-          : undefined;
+        : typeof candidate.status === 'number'
+          ? candidate.status
+          : typeof data?.statusCode === 'number'
+            ? data.statusCode
+            : undefined;
     if (statusCode === 401 || statusCode === 403) return 'auth';
     if (statusCode === 429) return 'rate_limit';
   }

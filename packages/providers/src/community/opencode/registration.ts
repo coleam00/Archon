@@ -1,6 +1,6 @@
 import { isRegisteredProvider, registerProvider } from '../../registry';
 
-import { OPENCODE_CAPABILITIES } from './capabilities';
+import { getOpencodeCapabilities } from './capabilities';
 import { parseOpencodeRunConfig } from './config';
 import { OpencodeProvider } from './provider';
 
@@ -11,11 +11,12 @@ import { OpencodeProvider } from './provider';
  */
 export function registerOpencodeProvider(): void {
   if (isRegisteredProvider('opencode')) return;
+  const useV2 = process.env.OPENCODE_V2 === '1';
   registerProvider({
     id: 'opencode',
     displayName: 'OpenCode (community)',
-    factory: () => new OpencodeProvider(),
-    capabilities: OPENCODE_CAPABILITIES,
+    factory: (): OpencodeProvider => new OpencodeProvider({ useV2 }),
+    capabilities: getOpencodeCapabilities(useV2),
     builtIn: false,
     parseRunConfig: parseOpencodeRunConfig,
     // OpenCode's backend universe is the models.dev catalog, resolved at

@@ -354,6 +354,7 @@ describe('registry', () => {
       expect(reg.id).toBe('opencode');
       expect(reg.displayName).toBe('OpenCode (community)');
       expect(reg.builtIn).toBe(false);
+      expect(reg.parseRunConfig).toBeDefined();
     });
 
     test('is idempotent', () => {
@@ -379,6 +380,26 @@ describe('registry', () => {
       expect(caps.costControl).toBe(false);
       expect(caps.fallbackModel).toBe(false);
       expect(caps.sandbox).toBe(false);
+    });
+
+    test('snapshots conservative V2 capabilities for registration and factory', () => {
+      const previous = process.env.OPENCODE_V2;
+      process.env.OPENCODE_V2 = '1';
+      try {
+        registerOpencodeProvider();
+        const registered = getProviderCapabilities('opencode');
+        expect(registered.sessionResume).toBe(true);
+        expect(registered.agents).toBe(false);
+        expect(registered.toolRestrictions).toBe(false);
+        expect(registered.structuredOutput).toBe(false);
+        expect(registered.envInjection).toBe(false);
+
+        delete process.env.OPENCODE_V2;
+        expect(getAgentProvider('opencode').getCapabilities()).toEqual(registered);
+      } finally {
+        if (previous === undefined) delete process.env.OPENCODE_V2;
+        else process.env.OPENCODE_V2 = previous;
+      }
     });
 
     test('appears in getProviderInfoList with builtIn: false', () => {

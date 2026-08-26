@@ -19,10 +19,12 @@ When a workflow node sets `output_format`, the guarantee level depends on the pr
 
 | Provider | Tier | How it works | On a validation miss |
 |----------|------|--------------|----------------------|
-| Claude, Codex, OpenCode | **enforced** | The SDK/backend grammar-constrains decoding (`output_config.format` / `outputSchema` / `format:{json_schema}`). | The node **fails** — a refusal or `max_tokens` truncation can still bypass grammar enforcement, so the parsed output is validated post-parse for these too. No reask (a failure here is a genuine edge). |
+| Claude, Codex, OpenCode V1 | **enforced** | The SDK/backend grammar-constrains decoding (`output_config.format` / `outputSchema` / `format:{json_schema}`). | The node **fails** — a refusal or `max_tokens` truncation can still bypass grammar enforcement, so the parsed output is validated post-parse for these too. No reask (a failure here is a genuine edge). |
 | Pi, Copilot | **best-effort** | The schema is appended to the prompt; JSON is extracted from the response and structurally repaired (trailing commas, single quotes, truncated tails). | The executor re-asks (prompt + the schema errors) up to **3×**; if still invalid, the node **fails loudly**. |
 
 In all cases the parsed output is **validated against your `output_format` schema** before downstream nodes see it, and a node that declares `output_format` but produces no schema-valid output **fails** rather than silently degrading. See [Authoring Workflows → `output_format`](/guides/authoring-workflows/#output_format-for-structured-json) for field-access (`$node.output.field`) semantics.
+
+OpenCode V2 currently rejects `output_format`; its initial compatibility path is intentionally limited to the session lifecycle and event stream.
 
 ## Claude Code
 
@@ -260,15 +262,24 @@ See [Per-Node Skills](/guides/skills/#codex-compatibility) for behavior details 
 
 ## OpenCode (Community Provider)
 
-**SDK-backed community provider.** Archon's OpenCode adapter uses `@opencode-ai/sdk`, which provides a multi-provider AI coding agent with support for Anthropic, OpenAI, Google, and more through a unified interface.
+**SDK-backed community provider.** OpenCode provides a multi-provider AI coding agent with support for Anthropic, OpenAI, Google, and more through a unified interface. Archon uses `@opencode-ai/sdk` by default and offers an explicit V2 compatibility mode.
 
 OpenCode is registered as `builtIn: false` — like Pi, it is a bundled community provider rather than a core built-in.
 
-Archon always runs OpenCode as a **managed embedded runtime** — it spawns and owns the OpenCode server process, generates a random server password per session, and tears it down when the workflow completes. Connecting to an external OpenCode server (`baseUrl`) is not supported.
+Archon always runs OpenCode as a **managed runtime**. It spawns and owns the server process, generates random credentials, and tears down the exact process when the workflow completes. Connecting to an external OpenCode server (`baseUrl`) is not supported.
 
 ### Install
 
 OpenCode is included as a dependency of `@archon/providers` — `bun install` pulls in the SDK automatically. It's available immediately.
+
+To opt into the pinned V2 client and protocol, install the matching CLI and set `OPENCODE_V2=1`:
+
+```bash
+bun add --global @opencode-ai/cli@0.0.0-beta-17963
+OPENCODE_V2=1 archon workflow run my-workflow
+```
+
+V2 starts a private authenticated loopback sidecar for each attempt. The opt-in fails closed: startup or protocol failures are reported and never fall back to V1.
 
 ### Authenticate
 
@@ -278,7 +289,7 @@ OpenCode handles authentication internally — Archon does not pass API keys thr
 2. **Config file** — Store credentials in `~/.config/opencode/opencode.json` with `{env:VAR}` or `{file:PATH}` substitution
 3. **Auth file** — Credentials are persisted in `~/.local/share/opencode/auth.json` after connecting
 
-OpenCode delegates to the underlying LLM provider (Anthropic, OpenAI, Google, etc.) based on your model selection. Request-scoped env vars from Archon workflows are still merged into the OpenCode environment.
+OpenCode delegates to the underlying LLM provider (Anthropic, OpenAI, Google, etc.) based on your model selection. In the default V1 mode, request-scoped env vars from Archon workflows are merged into the OpenCode environment.
 
 ### Configuration Options
 
@@ -304,6 +315,8 @@ assistants:
 
 ### Supported Archon Features
 
+The table below describes the default V1 runtime.
+
 | Feature | Support | Notes |
 |---|---|---|
 | Session resume | ✅ | Single-agent runs return `sessionId`; multi-agent runs do not |
@@ -322,6 +335,8 @@ assistants:
 | Cost limits (`maxBudgetUsd`) | ❌ | Cost tracked in result chunks, but no runtime budget enforcement |
 
 Unsupported YAML fields trigger a visible warning from the dag-executor when the workflow runs, so you always know what was ignored.
+
+V2 currently supports single-session creation, same-project resume, exact-turn streaming, tool events, cancellation, terminal results, and additive usage accounting. It rejects inline agents, multi-agent fan-out, skills, request-scoped environment variables, system prompt overrides, tool restrictions, native tools, and structured output before starting the sidecar. These capabilities will be added only through focused follow-up integrations.
 
 ### Usage in workflows
 
