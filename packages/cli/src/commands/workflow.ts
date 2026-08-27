@@ -53,6 +53,7 @@ import {
   type DetachedInstallContext,
 } from '@archon/paths';
 import { isAbsolute, join, resolve } from 'node:path';
+import { rejectConfigOnContinuation } from '../dispatch-guards';
 import { applyWorkflowRunConfigLayer } from '@archon/workflows/run-config';
 import { mkdirSync, openSync, closeSync, readFileSync, rmSync, writeSync } from 'node:fs';
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -1178,11 +1179,12 @@ async function runWorkflowWithOwnedSource(
       ? options.configPath
       : join(cwd, options.configPath)
     : undefined;
-  if (isContinuation && (resolvedRunConfigPath || options.detachedRunConfig)) {
-    throw new Error(
-      '--resume and --config are mutually exclusive. A resumed run keeps its original run config.'
-    );
-  }
+  const configHandoffGuard = rejectConfigOnContinuation(
+    isContinuation,
+    resolvedRunConfigPath,
+    options.detachedRunConfig
+  );
+  if (configHandoffGuard !== undefined) throw new Error(configHandoffGuard);
   const runConfig =
     options.detachedRunConfig ??
     (resolvedRunConfigPath ? await loadWorkflowRunConfigFile(resolvedRunConfigPath) : undefined);

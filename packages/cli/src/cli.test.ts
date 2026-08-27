@@ -9,7 +9,7 @@ import { Database } from 'bun:sqlite';
 import { parseArgs } from 'util';
 import { cliArgOptions } from './args';
 import * as git from '@archon/git';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
@@ -203,24 +203,69 @@ describe('workflow run config argument', () => {
     if (savedArchonHome === undefined) delete process.env.ARCHON_HOME;
     else process.env.ARCHON_HOME = savedArchonHome;
 
+    // Replay the detached dispatch boot in a minimal probe child instead of
+    // spawning the full CLI: the probe imports strip-cwd-env-boot, replays the
+    // capture -> load -> restore sequence from cli.ts, consumes the sealed
+    // handoff through the real @archon/core decrypt path, and runs the
+    // extracted pre-dispatch guard. Every asserted contract executes the same
+    // product code, but no ~35-module interpreter boot is charged to the
+    // default test timeout that Windows CI crossed (#2859).
+    const stripBootUrl = pathToFileURL(
+      join(repoRoot, 'packages', 'paths', 'src', 'strip-cwd-env-boot.ts')
+    ).href;
+    const pathsUrl = pathToFileURL(join(repoRoot, 'packages', 'paths', 'src', 'index.ts')).href;
+    const coreConfigUrl = pathToFileURL(
+      join(repoRoot, 'packages', 'core', 'src', 'config', 'run-config.ts')
+    ).href;
+    const guardsUrl = pathToFileURL(join(import.meta.dir, 'dispatch-guards.ts')).href;
+    const probe = join(repo, 'probe.ts');
+    writeFileSync(
+      probe,
+      `import '${stripBootUrl}';
+import {
+  captureDetachedInstallContext,
+  getArchonHome,
+  loadArchonEnv,
+  restoreDetachedInstallContext,
+} from '${pathsUrl}';
+import { unsealWorkflowRunConfig } from '${coreConfigUrl}';
+import { rejectConfigOnContinuation } from '${guardsUrl}';
+
+// Replay the detached dispatch boot from cli.ts: capture the inherited install
+// context before target env loads, then restore it so the hostile repo .env
+// cannot replace install-deriving inputs. The sealed handoff payload is then
+// consumed through the same decrypt-and-guard path the real dispatch runs.
+const hasDetachedRunConfigHandoff = process.argv
+  .slice(2)
+  .includes('--internal-detached-run-config');
+const inherited = hasDetachedRunConfigHandoff
+  ? captureDetachedInstallContext()
+  : undefined;
+loadArchonEnv(process.cwd());
+if (inherited) restoreDetachedInstallContext(inherited);
+
+const payload = process.argv[process.argv.indexOf('--internal-detached-run-config') + 1];
+const metadata = JSON.parse(payload);
+const detachedRunConfig = { layer: unsealWorkflowRunConfig(metadata), source: metadata.source };
+process.stdout.write(JSON.stringify({ home: getArchonHome(), layer: detachedRunConfig.layer }));
+const guard = rejectConfigOnContinuation(true, undefined, detachedRunConfig);
+if (guard !== undefined) {
+  console.error(guard);
+  process.exitCode = 1;
+}
+`
+    );
+
     try {
       const result = spawnSync(
         process.execPath,
-        [
-          CLI_ENTRY,
-          'workflow',
-          'run',
-          'x',
-          '--dry-run',
-          '--resume',
-          '--internal-detached-run-config',
-          payload,
-        ],
+        [probe, '--internal-detached-run-config', payload],
         {
           cwd: repo,
           encoding: 'utf8',
           env: {
             ...process.env,
+            ARCHON_TELEMETRY_DISABLED: '1',
             ARCHON_HOME: archonHome,
             TOKEN_ENCRYPTION_KEY: '',
             ARCHON_DOCKER: '',
@@ -232,6 +277,12 @@ describe('workflow run config argument', () => {
       expect(result.status).toBe(1);
       expect(result.stderr).not.toContain('could not be decrypted');
       expect(result.stderr).toContain('--resume and --config are mutually exclusive');
+      // Classification and decrypt survival: the restored install context wins
+      // over the repo .env, so the payload unseals against the install key.
+      expect(JSON.parse(result.stdout)).toEqual({
+        home: archonHome,
+        layer: { docsPath: 'accepted' },
+      });
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }
@@ -928,27 +979,87 @@ describe('CLI git repo check', () => {
   });
 });
 
-// All --json error-envelope tests share one contract: exit 1 and a parseable
-// `{ ok: false }` payload on stdout via the shared writeJsonLine catch path.
-// One helper owns the spawn env and envelope access so every case pays setup
-// once instead of repeating it; each test still drives its own invocation so
-// the subprocess stdout/exit-code contract stays covered.
-function spawnJsonError(argv: string[], extraEnv: Record<string, string> = {}) {
-  const result = spawnSync(process.execPath, [CLI_ENTRY, ...argv], {
-    encoding: 'utf8',
+// All --json error-envelope tests share one contract: a real CLI subprocess
+// exits 1 and writes a parseable `{ ok: false }` payload on stdout via the
+// shared writeJsonLine catch path. Each case pays a full interpreter boot, and
+// that uncontrolled startup must not sit inside any single test or hook clock:
+// spawned serially per test it re-charged Bun's default 5000ms per-test
+// boundary on loaded CI runners (#2859), and fanned out under one awaited
+// beforeAll it made all 11 children compete for a single shared hook deadline
+// (#2860). So every capture starts here at module scope, concurrently and
+// un-awaited, while the rest of this file runs; each named test then awaits
+// only its own child, and no clock ever carries a serialized startup.
+type EnvelopeCapture = Promise<{
+  status: number | null;
+  envelope: () => unknown;
+}>;
+
+function spawnJsonError(argv: string[], extraEnv: Record<string, string> = {}): EnvelopeCapture {
+  const child = spawn(process.execPath, [CLI_ENTRY, ...argv], {
+    stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1', ...extraEnv },
   });
-  return { status: result.status, envelope: () => JSON.parse(result.stdout ?? '') };
+  return new Promise((resolveCapture, rejectCapture) => {
+    let stdout = '';
+    child.stdout?.on('data', chunk => {
+      stdout += chunk;
+    });
+    child.on('error', rejectCapture);
+    child.on('close', code => {
+      resolveCapture({ status: code, envelope: () => JSON.parse(stdout) });
+    });
+  });
 }
 
+const envelopeCaptures = {
+  searchCommandThrow: spawnJsonError(['workflow', 'search', 'anything', '--json'], {
+    ARCHON_MARKETPLACE_URL: 'http://127.0.0.1:9/nope',
+  }),
+  mainCatchCommandThrow: spawnJsonError([
+    'workflow',
+    'run',
+    'definitely-not-a-workflow',
+    '--json',
+    '--cwd',
+    repoRoot,
+  ]),
+  cwdDoesNotExist: spawnJsonError([
+    'workflow',
+    'run',
+    'anything',
+    '--json',
+    '--cwd',
+    '/does/not/exist',
+  ]),
+  outsideGitRepo: spawnJsonError(['workflow', 'list', '--json', '--cwd', tmpdir()]),
+  unknownCommand: spawnJsonError(['boguscmd', '--json']),
+  unknownFlag: spawnJsonError(['workflow', 'list', '--json', '--bogus-flag']),
+  chatWithNoMessage: spawnJsonError(['chat', '--json']),
+  invalidSetupScope: spawnJsonError(['setup', '--scope', 'bogus', '--json']),
+  getMissingRunId: spawnJsonError(['workflow', 'get', '--json']),
+  setupProjectOutsideRepo: spawnJsonError([
+    'setup',
+    '--scope',
+    'project',
+    '--json',
+    '--cwd',
+    tmpdir(),
+  ]),
+  workflowTestThrow: spawnJsonError([
+    'workflow',
+    'test',
+    '--json',
+    '--cwd',
+    join(tmpdir(), 'archon-missing-cwd'),
+  ]),
+};
+
 describe('workflow search --json error envelope', () => {
-  it('emits { ok: false } on stdout when the command throws under --json', () => {
+  it('emits { ok: false } on stdout when the command throws under --json', async () => {
     // An unreachable marketplace URL makes fetchMarketplace throw inside the
     // `workflow search` handler — the only deterministic error path. The
     // envelope, not the message, is the contract.
-    const { status, envelope } = spawnJsonError(['workflow', 'search', 'anything', '--json'], {
-      ARCHON_MARKETPLACE_URL: 'http://127.0.0.1:9/nope',
-    });
+    const { status, envelope } = await envelopeCaptures.searchCommandThrow;
 
     expect(status).toBe(1);
     expect(envelope).not.toThrow();
@@ -957,18 +1068,11 @@ describe('workflow search --json error envelope', () => {
 });
 
 describe('main catch --json error envelope', () => {
-  it('emits { ok: false } on stdout when an unhandled command error reaches the top-level catch', () => {
+  it('emits { ok: false } on stdout when an unhandled command error reaches the top-level catch', async () => {
     // An unknown workflow name makes workflowRunCommand throw with no local
     // handling, so the error escapes to main()'s outer catch — the last route
     // that could still leak bare stderr text under --json.
-    const { status, envelope } = spawnJsonError([
-      'workflow',
-      'run',
-      'definitely-not-a-workflow',
-      '--json',
-      '--cwd',
-      repoRoot,
-    ]);
+    const { status, envelope } = await envelopeCaptures.mainCatchCommandThrow;
 
     expect(status).toBe(1);
     expect(envelope).not.toThrow();
@@ -977,78 +1081,64 @@ describe('main catch --json error envelope', () => {
 });
 
 describe('pre-dispatch gates --json error envelope', () => {
-  it('emits { ok: false } on stdout when --cwd does not exist', () => {
-    const { status, envelope } = spawnJsonError([
-      'workflow',
-      'run',
-      'anything',
-      '--json',
-      '--cwd',
-      '/does/not/exist',
-    ]);
+  it('emits { ok: false } on stdout when --cwd does not exist', async () => {
+    const { status, envelope } = await envelopeCaptures.cwdDoesNotExist;
 
     expect(status).toBe(1);
     expect(envelope).not.toThrow();
     expect(envelope()).toMatchObject({ ok: false });
   });
 
-  it('emits { ok: false } on stdout when outside a git repository', () => {
-    const { status, envelope } = spawnJsonError(['workflow', 'list', '--json', '--cwd', tmpdir()]);
+  it('emits { ok: false } on stdout when outside a git repository', async () => {
+    const { status, envelope } = await envelopeCaptures.outsideGitRepo;
 
     expect(status).toBe(1);
     expect(envelope).not.toThrow();
     expect(envelope()).toMatchObject({ ok: false });
   });
 
-  it('emits { ok: false } on stdout for an unknown command instead of usage text', () => {
-    const { status, envelope } = spawnJsonError(['boguscmd', '--json']);
+  it('emits { ok: false } on stdout for an unknown command instead of usage text', async () => {
+    const { status, envelope } = await envelopeCaptures.unknownCommand;
 
     expect(status).toBe(1);
     expect(envelope).not.toThrow();
     expect(envelope()).toMatchObject({ ok: false });
   });
 
-  it('emits { ok: false } on stdout when arg parsing rejects an unknown flag', () => {
-    const { status, envelope } = spawnJsonError(['workflow', 'list', '--json', '--bogus-flag']);
+  it('emits { ok: false } on stdout when arg parsing rejects an unknown flag', async () => {
+    const { status, envelope } = await envelopeCaptures.unknownFlag;
 
     expect(status).toBe(1);
     expect(envelope).not.toThrow();
     expect(envelope()).toMatchObject({ ok: false });
   });
 
-  it('emits { ok: false } on stdout when chat is invoked with no message', () => {
-    const { status, envelope } = spawnJsonError(['chat', '--json']);
+  it('emits { ok: false } on stdout when chat is invoked with no message', async () => {
+    const { status, envelope } = await envelopeCaptures.chatWithNoMessage;
 
     expect(status).toBe(1);
     expect(envelope).not.toThrow();
     expect(envelope()).toMatchObject({ ok: false });
   });
 
-  it('emits { ok: false } on stdout for an invalid setup --scope', () => {
-    const { status, envelope } = spawnJsonError(['setup', '--scope', 'bogus', '--json']);
+  it('emits { ok: false } on stdout for an invalid setup --scope', async () => {
+    const { status, envelope } = await envelopeCaptures.invalidSetupScope;
 
     expect(status).toBe(1);
     expect(envelope).not.toThrow();
     expect(envelope()).toMatchObject({ ok: false });
   });
 
-  it('emits { ok: false } on stdout when workflow get is missing its run-id', () => {
-    const { status, envelope } = spawnJsonError(['workflow', 'get', '--json']);
+  it('emits { ok: false } on stdout when workflow get is missing its run-id', async () => {
+    const { status, envelope } = await envelopeCaptures.getMissingRunId;
 
     expect(status).toBe(1);
     expect(envelope).not.toThrow();
     expect(envelope()).toMatchObject({ ok: false });
   });
 
-  it('emits { ok: false } on stdout when setup --scope project runs outside a git repo', () => {
-    const { status, envelope } = spawnJsonError([
-      'setup',
-      '--scope',
-      'project',
-      '--json',
-      '--cwd',
-      tmpdir(),
-    ]);
+  it('emits { ok: false } on stdout when setup --scope project runs outside a git repo', async () => {
+    const { status, envelope } = await envelopeCaptures.setupProjectOutsideRepo;
 
     expect(status).toBe(1);
     expect(envelope).not.toThrow();
@@ -1057,17 +1147,11 @@ describe('pre-dispatch gates --json error envelope', () => {
 });
 
 describe('workflow test --json error envelope', () => {
-  it('emits { ok: false } on stdout when the command throws under --json', () => {
+  it('emits { ok: false } on stdout when the command throws under --json', async () => {
     // A --cwd that does not exist makes findRepoRoot throw inside the
     // `workflow test` handler — the only reachable error path without a full
     // fixture project. The envelope, not the message, is the contract.
-    const { status, envelope } = spawnJsonError([
-      'workflow',
-      'test',
-      '--json',
-      '--cwd',
-      join(tmpdir(), 'archon-missing-cwd'),
-    ]);
+    const { status, envelope } = await envelopeCaptures.workflowTestThrow;
 
     expect(status).toBe(1);
     expect(envelope).not.toThrow();

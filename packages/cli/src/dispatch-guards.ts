@@ -62,3 +62,24 @@ export function rejectConfigOnContinue(
   }
   return undefined;
 }
+
+/**
+ * Rejects any run config layer on a continuation run — whether it arrives as a
+ * --config path or as a detached parent's sealed handoff payload: a resumed run
+ * keeps the run config it started with. Deeper defense than
+ * rejectConfigOnContinue: it also covers the detached handoff payload and
+ * continuations that arrive through other subcommands.
+ */
+export function rejectConfigOnContinuation(
+  isContinuation: boolean,
+  resolvedRunConfigPath: string | undefined,
+  detachedRunConfig: unknown
+): string | undefined {
+  if (isContinuation && (resolvedRunConfigPath !== undefined || detachedRunConfig !== undefined)) {
+    return (
+      '--resume and --config are mutually exclusive. ' +
+      'A resumed run keeps its original run config.'
+    );
+  }
+  return undefined;
+}
