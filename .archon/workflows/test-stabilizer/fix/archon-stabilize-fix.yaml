@@ -1,0 +1,115 @@
+name: archon-stabilize-fix
+description: |
+  Implement one concern from a test-failure class. The implementer receives the
+  original structured diagnoses unchanged, validates once locally, and a fresh
+  test-focused reviewer checks the final diff against every diagnosed mechanism.
+  Review findings feed a bounded correction loop. Only an independently approved
+  and locally green concern opens a PR and waits for CI.
+
+model: medium
+
+inputs:
+  order:
+    required: true
+    description: Concern ownership and the diagnosis IDs assigned to this child.
+  diagnoses:
+    required: true
+    description: Complete raw assessor outputs from the parent run.
+  smell:
+    default: ""
+    description: Original failure class.
+
+returns: ship
+
+nodes:
+  - id: converge
+    loop_group:
+      max_iterations: 3
+      fresh_context: true
+      until_bash: test $verdict.output.done = "true"
+      nodes:
+        - id: implement
+          command: implement-concern
+          with:
+            order: "$INPUTS.order"
+            diagnoses: "$INPUTS.diagnoses"
+            smell: "$INPUTS.smell"
+          output_format:
+            type: object
+            properties:
+              branch:
+                type: string
+              summary:
+                type: string
+              validate_cmd:
+                type: string
+              test_cmd:
+                type: string
+              addressed_diagnosis_ids:
+                type: array
+                items:
+                  type: string
+            required:
+              - branch
+              - summary
+              - validate_cmd
+              - test_cmd
+              - addressed_diagnosis_ids
+
+        - id: verify
+          script: verify
+          runtime: uv
+          depends_on: [implement]
+          with:
+            implement: "$implement.output"
+
+        - id: review
+          command: review-test-fix
+          depends_on: [implement, verify]
+          context: fresh
+          mutates_checkout: false
+          with:
+            order: "$INPUTS.order"
+            diagnoses: "$INPUTS.diagnoses"
+            implement: "$implement.output"
+            verification: "$verify.output"
+          output_format:
+            type: object
+            properties:
+              approved:
+                type: boolean
+              summary:
+                type: string
+              findings:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    diagnosis_id:
+                      type: string
+                    evidence:
+                      type: string
+                    required_change:
+                      type: string
+                  required: [diagnosis_id, evidence, required_change]
+            required: [approved, summary, findings]
+
+        - id: verdict
+          script: verdict
+          runtime: uv
+          depends_on: [implement, verify, review]
+          with:
+            order: "$INPUTS.order"
+            implement: "$implement.output"
+            verification: "$verify.output"
+            review: "$review.output"
+
+  - id: ship
+    script: ship
+    runtime: uv
+    timeout: 2760000
+    depends_on: [converge]
+    with:
+      fix: "$converge.output"
+      order: "$INPUTS.order"
+

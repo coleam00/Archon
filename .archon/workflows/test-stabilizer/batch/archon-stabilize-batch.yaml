@@ -1,0 +1,141 @@
+name: archon-stabilize-batch
+description: |
+  Hunt down a whole CLASS of flaky or unsound tests. A wide sweep finds
+  candidates, independent assessors prove or reject each diagnosis, a planner
+  groups confirmed diagnoses by concern and edit ownership, and isolated child
+  workflows implement each concern. Every child receives the raw structured
+  diagnoses, validates once locally, passes an independent test-focused review,
+  opens one PR, and waits for that PR's CI.
+
+  Use when: the same failure mechanism keeps biting CI and every occurrence
+  should be removed, not just the first test that happened to fail.
+
+model: medium
+
+inputs:
+  smell:
+    default: ""
+    description: >-
+      The failure class or evidence to hunt. Empty means the run's trigger
+      message.
+
+returns: collect
+
+nodes:
+  - id: sniff
+    command: sniff
+    mutates_checkout: false
+    output_format:
+      type: object
+      properties:
+        grounded:
+          type: string
+        findings:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+                description: Stable kebab-case identifier for this candidate.
+              title:
+                type: string
+              file:
+                type: string
+              test_id:
+                type: string
+              why_suspect:
+                type: string
+              evidence:
+                type: string
+            required: [id, title, file, test_id, why_suspect, evidence]
+      required: [grounded, findings]
+
+  - id: assess-each
+    workflow: archon-stabilize-assess
+    depends_on: [sniff]
+    with:
+      smell: "$INPUTS.smell"
+    fan_out:
+      items: "$sniff.output.findings"
+      as: target
+      max_parallel: 3
+      join: all_done
+
+  # This node chooses execution ownership only. It references diagnosis IDs;
+  # the raw assessor outputs flow separately and unchanged into every child.
+  - id: work-orders
+    command: work-orders
+    depends_on: [assess-each]
+    with:
+      assessments: "$assess-each.output"
+      grounded: "$sniff.output.grounded"
+    mutates_checkout: false
+    output_format:
+      type: object
+      properties:
+        orders:
+          type: array
+          items:
+            type: object
+            properties:
+              concern_id:
+                type: string
+              title:
+                type: string
+              branch:
+                type: string
+              kind:
+                type: string
+                enum:
+                  - delete-useless-test
+                  - make-test-meaningful
+                  - fix-product-bug
+                  - split-or-recompose-test
+              diagnosis_ids:
+                type: array
+                items:
+                  type: string
+              owned_paths:
+                type: array
+                items:
+                  type: string
+              shared_primitives:
+                type: array
+                items:
+                  type: string
+              why_grouped:
+                type: string
+            required:
+              - concern_id
+              - title
+              - branch
+              - kind
+              - diagnosis_ids
+              - owned_paths
+              - shared_primitives
+              - why_grouped
+      required: [orders]
+
+  - id: fix-each
+    workflow: archon-stabilize-fix
+    depends_on: [work-orders]
+    with:
+      diagnoses: "$assess-each.output"
+      smell: "$INPUTS.smell"
+    fan_out:
+      items: "$work-orders.output.orders"
+      as: order
+      max_parallel: 3
+      join: all_done
+    isolation: worktree
+
+  - id: collect
+    script: collect
+    runtime: uv
+    depends_on: [fix-each]
+    with:
+      fix-each: "$fix-each.output"
+    trigger_rule: all_done
+    mutates_checkout: false
+

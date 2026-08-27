@@ -1,0 +1,20 @@
+name: archon-stabilize
+description: |
+  Compatibility entry point for test stabilization. It delegates the supplied
+  target or CI evidence to the standalone archon-stabilize-batch workflow, which
+  discovers the complete class and delivers concern-scoped fixes. This workflow
+  has no dependency on the SDLC workflow pack.
+
+inputs:
+  target:
+    default: ""
+    description: Test, CI evidence, or failure class to stabilize.
+
+returns: stabilize
+
+nodes:
+  - id: stabilize
+    workflow: archon-stabilize-batch
+    with:
+      smell: "$INPUTS.target"
+
