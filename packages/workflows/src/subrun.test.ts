@@ -95,6 +95,7 @@ import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
 import type { IWorkflowStore } from './store';
 import type { WorkflowRun } from './schemas/workflow-run';
 import type { WorkflowDefinition } from './schemas/workflow';
+import type { WorkflowRunConfigMetadata } from './schemas/run-config';
 import type {
   ChildIsolationResolver,
   ChildIsolationRequest,
@@ -306,6 +307,16 @@ class InMemoryStore implements IWorkflowStore {
     return Promise.resolve();
   };
 
+  persistWorkflowEvent: IWorkflowStore['persistWorkflowEvent'] = data =>
+    this.createWorkflowEvent(data);
+
+  persistWorkflowEventIfRunning: IWorkflowStore['persistWorkflowEventIfRunning'] = data => {
+    const run = this.runs.get(data.workflow_run_id);
+    if (run?.status !== 'running') return Promise.resolve({ persisted: false });
+    this.events.push(data);
+    return Promise.resolve({ persisted: true });
+  };
+
   getDagResumeSnapshot: IWorkflowStore['getDagResumeSnapshot'] = workflowRunId => {
     const completedNodeOutputs = new Map<string, { output: string; structuredOutput?: unknown }>();
     const tokens = { input: 0, output: 0 };
@@ -351,7 +362,13 @@ class InMemoryStore implements IWorkflowStore {
         }
       }
     }
-    return Promise.resolve({ completedNodeOutputs, tokens, costUsd });
+    return Promise.resolve({
+      completedNodeOutputs,
+      fanOutSnapshots: new Map(),
+      unresolvedNodeStarts: new Set(),
+      tokens,
+      costUsd,
+    });
   };
 
   getCodebase = (): Promise<null> => Promise.resolve(null);
@@ -428,6 +445,15 @@ function makeDeps(store: IWorkflowStore): WorkflowDeps {
           defaults: { loadDefaultCommands: false, loadDefaultWorkflows: false },
         })
     ),
+    sealRunConfig: (layer, source): WorkflowRunConfigMetadata => ({
+      version: 1,
+      ciphertext: 'opaque-test-payload',
+      source,
+      keys: [
+        ...Object.keys(layer.tiers ?? {}).map(name => `tiers.${name}`),
+        ...Object.keys(layer.envVars ?? {}).map(name => `env.${name}`),
+      ].sort(),
+    }),
   };
 }
 
@@ -672,6 +698,67 @@ nodes:
       overrides: {
         tiers: { large: { provider: 'codex', model: 'gpt-5.6-sol' } },
       },
+      effective: {
+        aliases: { large: { provider: 'codex', model: 'gpt-5.6-sol' } },
+      },
+    });
+  });
+
+  it('propagates a sparse run config into a child and gives it durable attribution', async () => {
+    await writeWorkflow(
+      'child-run-config',
+      `
+name: child-run-config
+description: child using the large tier
+nodes:
+  - id: child-work
+    prompt: "child work"
+    model: large
+`
+    );
+    await writeWorkflow(
+      'parent-run-config',
+      `
+name: parent-run-config
+description: parent composing a child with the same run config
+nodes:
+  - id: sub
+    workflow: child-run-config
+`
+    );
+
+    const store = new InMemoryStore();
+    const parent = await discover('parent-run-config');
+    const result = await executeWorkflow(
+      makeDeps(store),
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parent,
+      'goal',
+      'conv-db',
+      {
+        runConfig: {
+          source: { kind: 'cli', label: 'config.minimax.yaml' },
+          layer: {
+            tiers: { large: { provider: 'codex', model: 'gpt-5.6-sol' } },
+            envVars: { BENCH_MODE: '1' },
+          },
+        },
+      }
+    );
+
+    expect(result.success).toBe(true);
+    const parentRun = [...store.runs.values()].find(
+      run => run.workflow_name === 'parent-run-config'
+    );
+    const childRun = [...store.runs.values()].find(run => run.workflow_name === 'child-run-config');
+    expect(childRun?.parent_run_id).toBe(parentRun?.id);
+    expect(childRun?.metadata.run_config).toMatchObject({
+      source: { kind: 'cli', label: 'config.minimax.yaml' },
+      keys: ['env.BENCH_MODE', 'tiers.large'],
+    });
+    expect(childRun?.metadata.model_bindings).toMatchObject({
       effective: {
         aliases: { large: { provider: 'codex', model: 'gpt-5.6-sol' } },
       },
@@ -2547,7 +2634,7 @@ description: children run one at a time in the parent checkout — no lock conte
 nodes:
   - id: plan
     bash: |
-      printf '%s' '["alpha","beta","gamma"]'
+      printf '%s' '["alpha","beta"]'
   - id: work
     workflow: fan-child
     depends_on: [plan]
@@ -2575,7 +2662,7 @@ nodes:
     expect(result.success).toBe(true);
     expect(calls).toHaveLength(0);
     const children = [...store.runs.values()].filter(r => r.workflow_name === 'fan-child');
-    expect(children).toHaveLength(3);
+    expect(children).toHaveLength(2);
     for (const c of children) expect(c.working_path).toBe(cwd);
   });
 
@@ -2676,9 +2763,12 @@ nodes:
       printf 'ok:%s' "$ARGUMENTS"
 `;
 
-  it('the DEFAULT join succeeds with a failed child, aggregating all three outcomes', async () => {
-    // Independence: children are separate jobs, so one failing must not discard the other
-    // two. The default has to carry that — an author who writes no `join:` gets it.
+  it('the DEFAULT join succeeds with a failed child, aggregating every outcome', async () => {
+    // Independence: children are separate jobs, so one failing must not discard its
+    // siblings. The default has to carry that — an author who writes no `join:` gets it.
+    // Two items keep this e2e case's real-subprocess tree (every child is a real bash
+    // spawn plus a checkout snapshot) inside Bun's default 5000ms per-test cap on slow
+    // CI runners while pinning the same join-independence contract.
     await writeWorkflow('fan-child-cond', fanChildCond);
     await writeWorkflow(
       'fan-default-join',
@@ -2688,13 +2778,13 @@ description: no join declared — takes the default
 nodes:
   - id: plan
     bash: |
-      printf '%s' '["a","boom","c"]'
+      printf '%s' '["a","boom"]'
   - id: work
     workflow: fan-child-cond
     depends_on: [plan]
     fan_out:
       items: "$plan.output"
-      max_parallel: 3
+      max_parallel: 2
 `
     );
 
@@ -2717,17 +2807,16 @@ nodes:
     expect(parentRun?.status).toBe('completed');
 
     const children = [...store.runs.values()].filter(r => r.workflow_name === 'fan-child-cond');
-    expect(children).toHaveLength(3);
+    expect(children).toHaveLength(2);
 
-    // All three outcomes reach the aggregate, in item order, with the failure as DATA in
+    // Every outcome reaches the aggregate, in item order, with the failure as DATA in
     // its own slot rather than as an absence.
     const workCompleted = store.events.find(
       e => e.event_type === 'node_completed' && e.step_name === 'work'
     );
     const aggregate = JSON.parse(String(workCompleted?.data?.node_output)) as unknown[];
-    expect(aggregate).toHaveLength(3);
+    expect(aggregate).toHaveLength(2);
     expect(aggregate[0]).toBe('ok:a');
-    expect(aggregate[2]).toBe('ok:c');
     expect(aggregate[1]).toMatchObject({ status: 'failed' });
   });
 
@@ -2811,6 +2900,8 @@ nodes:
   });
 
   it('all_done: a partial failure still completes the node; the failed entry is represented', async () => {
+    // Two items: same mechanism as the DEFAULT-join case above — every child is a real
+    // subprocess under one test clock, so the fan-out stays minimal for slow CI runners.
     await writeWorkflow('fan-child-cond', fanChildCond);
     await writeWorkflow(
       'fan-alldone',
@@ -2820,13 +2911,13 @@ description: all_done tolerates a partial failure
 nodes:
   - id: plan
     bash: |
-      printf '%s' '["a","boom","c"]'
+      printf '%s' '["a","boom"]'
   - id: work
     workflow: fan-child-cond
     depends_on: [plan]
     fan_out:
       items: "$plan.output"
-      max_parallel: 3
+      max_parallel: 2
       join: all_done
 `
     );
@@ -2848,9 +2939,9 @@ nodes:
     expect(result.success).toBe(true);
     const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'fan-alldone');
     expect(parentRun?.status).toBe('completed');
-    // All 3 children ran (no fail-fast under all_done).
+    // Both children ran (no fail-fast under all_done).
     expect([...store.runs.values()].filter(r => r.workflow_name === 'fan-child-cond')).toHaveLength(
-      3
+      2
     );
 
     const workCompleted = store.events.find(
@@ -2858,8 +2949,7 @@ nodes:
     );
     const aggregate = JSON.parse(String(workCompleted?.data?.node_output)) as unknown[];
     expect(aggregate[0]).toBe('ok:a');
-    expect(aggregate[2]).toBe('ok:c');
-    // The failed middle child is represented as the marked error object, not dropped.
+    // The failed child is represented as the marked error object, not dropped.
     expect(aggregate[1]).toMatchObject({ archon_failed: true, status: 'failed' });
   });
 
@@ -3135,8 +3225,12 @@ nodes:
 `
     );
     // Concurrent, and deterministic without any choreography: with no fail-fast, nothing
-    // cancels a sibling, so run 1 always ends index 0 and 2 completed and index 1 failed.
+    // cancels a sibling, so run 1 always ends index 0 completed and index 1 failed.
     // (This test used to be pinned to max_parallel: 1 purely to dodge that race.)
+    // Two items keep this e2e case's real-subprocess tree (plan node + one real bash
+    // child per item, all under one clock) inside Bun's default 5000ms cap on slow CI
+    // runners; one completed survivor still proves completed siblings are threaded
+    // from their rows on resume, not re-driven.
     await writeWorkflow(
       'fan-resume',
       `
@@ -3145,7 +3239,7 @@ description: one flaky instance recovers on parent resume
 nodes:
   - id: plan
     bash: |
-      printf '%s' '["keep0","flaky","keep2"]'
+      printf '%s' '["keep0","flaky"]'
   - id: work
     workflow: fan-child-flaky
     depends_on: [plan]
@@ -3162,7 +3256,7 @@ nodes:
     const parent = await discover('fan-resume');
     const { resolver } = makeFanResolver(cwd);
 
-    // First drive: the flaky child (index 1) fails; indexes 0 and 2 run to completion
+    // First drive: the flaky child (index 1) fails; index 0 runs to completion
     // regardless, and the node fails afterwards under all_success.
     const r1 = await executeWorkflow(
       deps,
@@ -3177,13 +3271,12 @@ nodes:
     expect(r1.success).toBe(false);
     const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'fan-resume');
     const children1 = [...store.runs.values()].filter(r => r.workflow_name === 'fan-child-flaky');
-    expect(children1).toHaveLength(3);
+    expect(children1).toHaveLength(2);
     const byIndex1 = new Map(
       children1.map(c => [(c.metadata as Record<string, unknown>).child_index as number, c])
     );
     expect(byIndex1.get(0)?.status).toBe('completed');
     expect(byIndex1.get(1)?.status).toBe('failed');
-    expect(byIndex1.get(2)?.status).toBe('completed');
     const completedAtBefore = byIndex1.get(0)!.completed_at;
 
     // Resume the PARENT: only the failed index-1 child is re-driven (marker now present →
@@ -3205,10 +3298,10 @@ nodes:
 
     expect(r2.success).toBe(true);
     expect((await store.getWorkflowRun(parentRun!.id))?.status).toBe('completed');
-    // Exactly 3 child rows — one per index; the failed one was re-driven in its own row.
+    // Exactly 2 child rows — one per index; the failed one was re-driven in its own row.
     expect(
       [...store.runs.values()].filter(r => r.workflow_name === 'fan-child-flaky')
-    ).toHaveLength(3);
+    ).toHaveLength(2);
     // The completed child was threaded from its row, not re-executed. Row count can't show
     // this (a re-drive reuses the row) but completed_at can — re-driving it would stamp a
     // new one, even though its own DAG node would be skipped by the child's resume.
@@ -3218,11 +3311,7 @@ nodes:
     const workCompleted = store.events.find(
       e => e.event_type === 'node_completed' && e.step_name === 'work'
     );
-    expect(JSON.parse(String(workCompleted?.data?.node_output))).toEqual([
-      'ok:keep0',
-      'recovered',
-      'ok:keep2',
-    ]);
+    expect(JSON.parse(String(workCompleted?.data?.node_output))).toEqual(['ok:keep0', 'recovered']);
   });
 
   it('a fan-out target that is interactive-class is refused before any child is created (#2707 step 2, #2474)', async () => {

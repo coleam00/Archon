@@ -8,10 +8,13 @@ import { promisify } from 'node:util';
 
 export const DETACHED_RUN_OWNER_ENV = 'ARCHON_DETACHED_RUN_OWNER';
 
+/** Idle-lease lifetime for control sockets; owners release a retained lease after this. */
+export const DETACHED_RUN_IPC_TIMEOUT_MS = 2_000;
+
 const STOP_REQUEST = 'stop\n';
 const TERMINATE_REQUEST = 'terminate\n';
 const TERMINATE_READY = 'ready\n';
-const IPC_TIMEOUT_MS = 2_000;
+const IPC_TIMEOUT_MS = DETACHED_RUN_IPC_TIMEOUT_MS;
 const TERMINATION_GRACE_MS = 5_000;
 const TERMINATION_CONFIRM_MS = 1_000;
 const TERMINATION_LEASE_MS = TERMINATION_GRACE_MS + TERMINATION_CONFIRM_MS + IPC_TIMEOUT_MS;

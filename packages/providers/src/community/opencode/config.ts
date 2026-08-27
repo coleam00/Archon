@@ -1,4 +1,10 @@
 import type { OpencodeProviderDefaults } from '../../types';
+import { InvalidProviderRunConfigError } from '../../errors';
+import {
+  assertKnownRunConfigKeys,
+  invalidRunConfigValue,
+  normalizeRunConfigString,
+} from '../../shared/run-config';
 
 export type { OpencodeProviderDefaults };
 
@@ -36,4 +42,28 @@ export function parseOpencodeConfig(raw: Record<string, unknown>): OpencodeProvi
   }
 
   return result;
+}
+
+/** Strict counterpart used only for an explicitly selected per-run layer. */
+export function parseOpencodeRunConfig(raw: Record<string, unknown>): OpencodeProviderDefaults {
+  assertKnownRunConfigKeys(raw, ['model', 'baseUrl', 'agent']);
+  let model = normalizeRunConfigString(raw.model, 'model');
+  if (model !== undefined) {
+    const parsed = parseModelRef(model);
+    if (parsed === null) {
+      invalidRunConfigValue('model', "'<provider>/<model>'");
+    }
+    model = `${parsed.providerID}/${parsed.modelID}`;
+  }
+  for (const key of ['baseUrl', 'agent'] as const) {
+    if (Object.hasOwn(raw, key)) {
+      throw new InvalidProviderRunConfigError(
+        key,
+        key === 'baseUrl'
+          ? 'external OpenCode runtimes are not supported'
+          : 'default OpenCode agents are not consumed by workflow runs'
+      );
+    }
+  }
+  return model === undefined ? {} : { model };
 }

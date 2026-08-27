@@ -16,6 +16,49 @@ afterEach(async () => {
 });
 
 describe('discoverWorkflows — nested included command compilation', () => {
+  test('pre-resolves command files for a compose-only target', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'archon-workflow-discovery-'));
+    tempDirectories.push(cwd);
+    const workflowDir = join(cwd, '.archon', 'workflows');
+    const commandDir = join(cwd, '.archon', 'commands');
+    await Promise.all([
+      mkdir(workflowDir, { recursive: true }),
+      mkdir(commandDir, { recursive: true }),
+    ]);
+    await writeFile(
+      join(workflowDir, 'block.yaml'),
+      JSON.stringify({
+        name: 'command-block',
+        description: 'Used only by runtime-width composition',
+        inputs: { item: { required: true } },
+        returns: 'review',
+        nodes: [{ id: 'review', command: 'review-item' }],
+      })
+    );
+    await writeFile(
+      join(workflowDir, 'parent.yaml'),
+      JSON.stringify({
+        name: 'parent',
+        description: 'Fans out a command-backed block',
+        nodes: [
+          { id: 'items', bash: 'echo ["a"]' },
+          {
+            id: 'reviews',
+            include: 'command-block',
+            depends_on: ['items'],
+            fan_out: { items: '$items.output', as: 'item', max_parallel: 1 },
+          },
+        ],
+      })
+    );
+    await writeFile(join(commandDir, 'review-item.md'), 'Review $INPUTS.item.');
+
+    const result = await discoverWorkflows(cwd, { loadDefaults: false });
+
+    expect(result.errors.filter(error => error.filename === 'parent.yaml')).toHaveLength(0);
+    expect(result.workflows.map(item => item.workflow.name)).toContain('parent');
+  });
+
   test('pre-resolves a command block included below nested loop_group bodies', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'archon-workflow-discovery-'));
     tempDirectories.push(cwd);

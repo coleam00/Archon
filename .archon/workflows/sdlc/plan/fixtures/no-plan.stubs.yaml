@@ -1,0 +1,11 @@
+# Dry-run fixture: the guard seen RED (run with --exec-code). plan is stubbed
+# as a pleasant verdict but writes no plan.md; assert-intact executes for
+# real, so it must fail the run: a summary without a plan fails rather than
+# reporting success.
+plan:
+  ready: true
+  summary: "stub: claims a complete plan but produced no artifact"
+fixture:
+  expect: failed
+  fail-node: assert-intact
+exec-code: true

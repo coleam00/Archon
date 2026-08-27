@@ -2302,7 +2302,7 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
     }
     s.stop('Archon skill installed');
     skillInstalledBase = skillTargetRaw;
-    skillInstalledPath = join(skillTargetRaw, '.claude', 'skills', 'archon');
+    skillInstalledPath = join(skillTargetRaw, '.claude', 'skills', 'archon-cli');
 
     const bootstrapResult = bootstrapProjectConfig(skillTargetRaw);
     if (bootstrapResult.state === 'created') {
@@ -2389,7 +2389,7 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
   }
 
   if (skillInstalledPath && skillInstalledBase) {
-    const codexInstalledPath = join(skillInstalledBase, '.agents', 'skills', 'archon');
+    const codexInstalledPath = join(skillInstalledBase, '.agents', 'skills', 'archon-cli');
     summaryLines.push('');
     summaryLines.push('Archon skill installed:');
     summaryLines.push(`  ${skillInstalledPath}  (Claude Code)`);

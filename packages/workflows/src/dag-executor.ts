@@ -7,10 +7,10 @@
  */
 import { existsSync, mkdirSync, writeFileSync } from 'fs';
 import { readFile } from 'fs/promises';
-import { isAbsolute, join as joinPath, resolve as resolvePath, sep } from 'path';
+import { basename, isAbsolute, join as joinPath, resolve as resolvePath, sep } from 'path';
 import { execFileAsync, resolveBashPath } from '@archon/git';
 import { discoverScriptsForCwd } from './script-discovery';
-import { discoverWorkflowsWithConfig } from './workflow-discovery';
+import { discoverWorkflowsWithConfig, resolveWorkflowCommandContents } from './workflow-discovery';
 import {
   liveSourceRoots,
   resolveChildDiscoveryRoot,
@@ -51,6 +51,7 @@ import type {
   LoopNode,
   LoopGroupNode,
   WorkflowNode,
+  ComposeFanOutNode,
   FanOutConfig,
   NodeOutput,
   TriggerRule,
@@ -94,7 +95,7 @@ import {
   waitCondition,
 } from './schemas';
 import type { BindingDirective } from './schemas';
-import type { PersistedNodeOutput } from './store';
+import type { DagResumeSnapshot, PersistedNodeOutput } from './store';
 import { formatToolCall } from './utils/tool-formatter';
 import { createLogger, captureWorkflowCompleted } from '@archon/paths';
 import type { WorkflowErrorClass, WorkflowNodeType } from '@archon/paths';
@@ -120,6 +121,7 @@ import {
   readComposedMeta,
   type LoopWithCompiledCommand,
   type NodeWithComposedMeta,
+  type IncludeCommandContent,
 } from './compiled-command';
 import { assistantModelDefaults, resolveNodeModel } from './node-model-resolution';
 import {
@@ -135,6 +137,8 @@ import {
 } from './logger';
 import { withIdleTimeout, STEP_IDLE_TIMEOUT_MS } from './utils/idle-timeout';
 import { mapWithLimit } from './utils/map-with-limit';
+import { collectComposedSuspensionPaths, instantiateResolvedInclude } from './include-expander';
+import { buildInstanceSnapshots, composeFanOutScopeSegment } from './fan-out-identity';
 import {
   classifyError,
   getRetryDelayMs,
@@ -186,6 +190,8 @@ function dagNodeTelemetryType(node: DagNode): WorkflowNodeType {
       return 'cancel';
     case 'workflow':
       return 'workflow';
+    case 'compose_fan_out':
+      return 'compose_fan_out';
     default: {
       const exhaustive: never = node;
       return exhaustive;
@@ -1361,6 +1367,21 @@ function shellQuoteOrFile(
   return shellQuote(value);
 }
 
+interface RequiredOutputRefContext {
+  consumerId: string;
+  field: 'loop.until_bash' | 'loop_group.until_bash';
+}
+
+function requiredOutputRefError(
+  context: RequiredOutputRefContext,
+  ref: string,
+  detail: string
+): Error {
+  return new Error(
+    `Node '${context.consumerId}' field '${context.field}' cannot resolve '${ref}': ${detail}`
+  );
+}
+
 /**
  * Substitute $node_id.output and $node_id.output.field references in a prompt.
  * Called AFTER the standard substituteWorkflowVariables pass.
@@ -1375,12 +1396,16 @@ function shellQuoteOrFile(
  * @param escapedForBash - When true, wraps substituted values in single quotes so
  *   they are safe to embed in bash scripts passed to `bash -c`. Set true only for
  *   bash node script substitution; AI/command prompt substitution should use false.
+ * @param requiredContext - Makes unavailable whole-output refs fail with the owning
+ *   decision surface named. Used by `until_bash`; other callers keep the legacy empty
+ *   fallback. Field refs remain strict in either mode.
  */
 export function substituteNodeOutputRefs(
   prompt: string,
   nodeOutputs: Map<string, NodeOutput>,
   escapedForBash = false,
-  artifactsDir?: string
+  artifactsDir?: string,
+  requiredContext?: RequiredOutputRefContext
 ): string {
   return prompt.replace(
     /\$([a-zA-Z_][a-zA-Z0-9_-]*)\.output(?:\.([a-zA-Z_][a-zA-Z0-9_]*))?/g,
@@ -1392,20 +1417,50 @@ export function substituteNodeOutputRefs(
         // output is unavailable on this execution path) fails the consuming node loudly,
         // matching the strict
         // no-silent-drop posture for known-producer field access below. The whole-text
-        // `$id.output` form stays lenient ('') as a long-documented surface (changing
-        // it is a bigger compatibility break).
+        // `$id.output` form stays lenient ('') by default as a long-documented surface.
+        // `until_bash` opts into requiredContext because empty text would become an
+        // input to a completion decision rather than merely missing display text.
         if (field) {
-          throw new OutputRefError(
+          const error = new OutputRefError(
             nodeId,
             field,
             'unknown-node',
             similarNodeIds(nodeId, nodeOutputs.keys())
+          );
+          throw requiredContext
+            ? requiredOutputRefError(requiredContext, match, error.message)
+            : error;
+        }
+        if (requiredContext) {
+          const candidates = similarNodeIds(nodeId, nodeOutputs.keys());
+          const hint =
+            candidates.length > 0
+              ? ` Did you mean: ${candidates.map(candidate => `'${candidate}'`).join(', ')}?`
+              : '';
+          throw requiredOutputRefError(
+            requiredContext,
+            match,
+            `node '${nodeId}' has not produced output at this point.${hint} Fix the id, or ensure '${nodeId}' runs before this check.`
           );
         }
         getLog().warn({ nodeId, match }, 'dag_node_output_ref_unknown_node');
         return escapedForBash ? "''" : '';
       }
       if (!field) {
+        if (requiredContext && (nodeOutput.state === 'skipped' || nodeOutput.state === 'pending')) {
+          throw requiredOutputRefError(
+            requiredContext,
+            match,
+            `node '${nodeId}' did not run (skipped or pending), so it has no output to read. Fix the dependency or guard the consuming loop.`
+          );
+        }
+        if (requiredContext && nodeOutput.state === 'failed') {
+          throw requiredOutputRefError(
+            requiredContext,
+            match,
+            `node '${nodeId}' failed (${nodeOutput.error}), so its output cannot be trusted. Fix the failure or guard the consuming loop.`
+          );
+        }
         // A failed producer's stale output is never spliced into a consumer's own
         // prompt/bash/command body (#2713) — matches resolveBindingDirective's #2710
         // guard for the same class of bug (a loop_group's failure paths leave real,
@@ -1431,7 +1486,15 @@ export function substituteNodeOutputRefs(
       // key). The throw propagates to the dag-executor's per-node catch → the
       // consuming node fails visibly instead of receiving a poisoned ''. The only
       // value that resolves to empty is an author-declared-optional field.
-      const resolution = resolveNodeOutputField(nodeOutput, nodeId, field);
+      let resolution: ReturnType<typeof resolveNodeOutputField>;
+      try {
+        resolution = resolveNodeOutputField(nodeOutput, nodeId, field);
+      } catch (error) {
+        if (requiredContext && error instanceof OutputRefError) {
+          throw requiredOutputRefError(requiredContext, match, error.message);
+        }
+        throw error;
+      }
       if (resolution.kind === 'empty') return escapedForBash ? "''" : '';
       const value = resolution.value;
       // numbers and booleans are shell-safe without quoting: JSON disallows
@@ -4478,6 +4541,8 @@ async function executeLoopGroupNode(
   /** Ordered enclosing loop_group frames. Required so nested artifact identity cannot
    *  silently fall back to only the immediate group. */
   enclosingLoopGroupPath: NodeArtifactLoopFrame[],
+  /** Inherited only from a composed instance that already owns its durable start. */
+  claimedWorkPausePolicy: ClaimedWorkPausePolicy | undefined,
   issueContext?: string,
   stepNamePrefix = '',
   execContext: ExecutionContext = { kind: 'host' },
@@ -4692,7 +4757,8 @@ async function executeLoopGroupNode(
           resumedBashPrompt,
           resumedScope,
           true, // escapedForBash
-          artifactsDir
+          artifactsDir,
+          { consumerId: node.id, field: 'loop_group.until_bash' }
         );
         const resumedBashPath = resolveBashPath();
         try {
@@ -4936,6 +5002,7 @@ async function executeLoopGroupNode(
       layers: iterBodyLayers,
       nodeOutputs: scopedNodeOutputs,
       priorCompletedNodes: undefined, // body re-runs in full each iteration (v1)
+      claimedWorkPausePolicy,
       // Thread the loop-level session cursor: fresh_context (or the loop's true first
       // iteration) starts fresh; otherwise carry the prior iteration's last sequential
       // session forward so a body AI node resumes the prior iteration's conversation.
@@ -5162,7 +5229,8 @@ async function executeLoopGroupNode(
           bashPrompt,
           scopedNodeOutputs,
           true, // escapedForBash
-          artifactsDir
+          artifactsDir,
+          { consumerId: node.id, field: 'loop_group.until_bash' }
         );
         await runSubprocess(execContext, groupBashPath, ['-c', substitutedBash], {
           cwd,
@@ -6860,7 +6928,8 @@ async function executeLoopNode(
           bashPrompt,
           nodeOutputs,
           true, // escapedForBash
-          artifactsDir
+          artifactsDir,
+          { consumerId: node.id, field: 'loop.until_bash' }
         );
         await runSubprocess(execContext, loopBashPath, ['-c', substitutedBash], {
           cwd,
@@ -7636,6 +7705,7 @@ async function executeWorkflowNode(
 ): Promise<NodeExecutionResult> {
   const { deps, platform, conversationId, cwd, workflowRun: parentRun } = ctx;
   const msgContext = { workflowId: parentRun.id, nodeName: node.id };
+  const executionNodeId = ctx.stepNamePrefix + node.id;
 
   // Build the failed result AND persist a node_failed event with the reason. Unlike
   // command/prompt/bash/script nodes (which write their own node_failed inside their
@@ -7652,7 +7722,7 @@ async function executeWorkflowNode(
       .createWorkflowEvent({
         workflow_run_id: parentRun.id,
         event_type: 'node_failed',
-        step_name: ctx.stepNamePrefix + node.id,
+        step_name: executionNodeId,
         data: {
           error,
           type: 'workflow',
@@ -7669,7 +7739,7 @@ async function executeWorkflowNode(
     getWorkflowEventEmitter().emit({
       type: 'node_failed',
       runId: parentRun.id,
-      nodeId: node.id,
+      nodeId: executionNodeId,
       nodeName: node.id,
       error,
     });
@@ -7839,7 +7909,7 @@ async function executeWorkflowNode(
       .createWorkflowEvent({
         workflow_run_id: parentRun.id,
         event_type: 'node_completed',
-        step_name: ctx.stepNamePrefix + node.id,
+        step_name: executionNodeId,
         data: {
           node_output: output,
           type: 'workflow',
@@ -7873,7 +7943,7 @@ async function executeWorkflowNode(
     getWorkflowEventEmitter().emit({
       type: 'node_completed',
       runId: parentRun.id,
-      nodeId: node.id,
+      nodeId: executionNodeId,
       nodeName: node.id,
       // The wrapper node has no meaningful duration of its own — the child run's
       // own events carry real timing. Emitted as 0 to satisfy NodeCompletedEvent.
@@ -7919,7 +7989,7 @@ async function executeWorkflowNode(
       `Approve it by run id: \`/workflow approve ${childRunId}\``;
     const paused = await pauseGateRespectingExternalTransition(deps, parentRun.id, {
       message,
-      nodeId: node.id,
+      nodeId: executionNodeId,
       type: 'child_workflow',
       childRunId,
     });
@@ -7971,7 +8041,7 @@ async function executeWorkflowNode(
     const children = (await deps.store.findChildRuns(parentRun.id)).filter(
       c =>
         readSubrunMetadata(c.metadata as Record<string, unknown> | undefined).parentNodeId ===
-        node.id
+        executionNodeId
     );
     existing = children.length > 0 ? children[children.length - 1] : undefined;
   } catch (err) {
@@ -7982,7 +8052,7 @@ async function executeWorkflowNode(
 
   const childArgs = {
     parentRun,
-    nodeId: node.id,
+    nodeId: executionNodeId,
     childWorkflowName: node.workflow,
     input,
     cwd,
@@ -8166,25 +8236,39 @@ async function resolveFanOutChildDefinition(
   deps: WorkflowDeps,
   cwd: string,
   targetName: string,
-  /** Parent run's AUTHORING directory; a fan-out target is a sibling workflow, so it
-   *  lives beside the parent there rather than in the target workspace. */
-  childSourceRoot?: string
-): Promise<{ definition: WorkflowDefinition } | { unresolved: string }> {
+  /** Frozen source roots owned by composed execution, or a live child authoring root. */
+  source?: WorkflowSourceRoots | string
+): Promise<
+  | {
+      definition: WorkflowDefinition;
+      definitions: WorkflowDefinition[];
+      commandContents: ReadonlyMap<string, IncludeCommandContent>;
+    }
+  | { unresolved: string }
+> {
   try {
-    const { workflows } = await discoverWorkflowsWithConfig(
+    const sourceRoots =
+      typeof source === 'string' ? liveSourceRoots(source) : (source ?? liveSourceRoots(cwd));
+    const { workflows, errors } = await discoverWorkflowsWithConfig(
       cwd,
       deps.loadConfig,
-      childSourceRoot === undefined ? undefined : liveSourceRoots(childSourceRoot)
+      sourceRoots
     );
-    const definition = resolveWorkflowName(
-      targetName,
-      workflows.map(w => w.workflow)
-    );
+    const definitions = workflows.map(w => w.workflow);
+    const definition = resolveWorkflowName(targetName, definitions);
     // resolveWorkflowName returns undefined for an unknown name and THROWS only on
     // ambiguity, so the undefined branch is ordinary rather than exceptional.
-    return definition
-      ? { definition }
-      : { unresolved: `no workflow named '${targetName}' was found` };
+    if (!definition) {
+      const relevantError = errors.find(error => {
+        const filename = basename(error.filename).replace(/\.ya?ml$/i, '');
+        return filename === targetName || error.error.includes(`'${targetName}'`);
+      });
+      return {
+        unresolved: relevantError?.error ?? `no workflow named '${targetName}' was found`,
+      };
+    }
+    const commandContents = await resolveWorkflowCommandContents(sourceRoots, definitions);
+    return { definition, definitions, commandContents };
   } catch (err) {
     return { unresolved: (err as Error).message };
   }
@@ -8200,7 +8284,14 @@ async function resolveFanOutChildDefinition(
  * contributes what it burned. That matters most here — `all_done` is the default join,
  * which makes a partly-failed fan-out the ordinary case rather than the exceptional one.
  */
-function sumFanOutCost(outcomes: readonly ChildWorkflowOutcome[]): number | undefined {
+function sumFanOutCost(
+  outcomes: readonly {
+    costUsd?: number;
+    tokens?: TokenUsage;
+    childRunId?: string;
+    status: string;
+  }[]
+): number | undefined {
   let sum = 0;
   let any = false;
   for (const o of outcomes) {
@@ -8216,7 +8307,9 @@ function sumFanOutCost(outcomes: readonly ChildWorkflowOutcome[]): number | unde
  * Σ of defined child token usage; undefined when no child reported tokens. Like
  * {@link sumFanOutCost}, this covers every child regardless of outcome.
  */
-function sumFanOutTokens(outcomes: readonly ChildWorkflowOutcome[]): TokenUsage | undefined {
+function sumFanOutTokens(
+  outcomes: readonly { tokens?: TokenUsage; status: string }[]
+): TokenUsage | undefined {
   return sumTokenUsage(
     outcomes.flatMap(outcome => (outcome.tokens !== undefined ? [outcome.tokens] : [])),
     { scope: 'fan_out' }
@@ -8465,7 +8558,7 @@ async function executeFanOutWorkflowNode(
     const children = (await deps.store.findChildRuns(parentRun.id)).filter(
       c =>
         readSubrunMetadata(c.metadata as Record<string, unknown> | undefined).parentNodeId ===
-        node.id
+        stepName
     );
     for (const child of children) {
       const meta = readSubrunMetadata(child.metadata as Record<string, unknown> | undefined);
@@ -8726,7 +8819,7 @@ async function executeFanOutWorkflowNode(
       // child's outcome alone. The join reads them all once every one has settled.
       const outcome = await runChild({
         parentRun,
-        nodeId: node.id,
+        nodeId: stepName,
         childWorkflowName: node.workflow,
         input,
         cwd,
@@ -8925,6 +9018,670 @@ async function executeFanOutWorkflowNode(
 }
 
 /**
+ * Instantiate ONE composed fan-out item through the same narrow primitive used by a
+ * static include. The target closure was already resolved and validated at load time;
+ * only input materialization and instance namespacing vary per item.
+ */
+function expandComposeInstance(
+  node: ComposeFanOutNode,
+  identity: string,
+  inputs: Record<string, JsonValue>,
+  definition: WorkflowDefinition,
+  commandContents: ReadonlyMap<string, IncludeCommandContent>
+): { nodes: DagNode[]; primarySink: string } | { error: string } {
+  const directiveId = `${node.id}__${identity}`;
+  const directive: IncludeDirective = {
+    id: directiveId,
+    kind: 'include',
+    include: node.include,
+    ...(Object.keys(inputs).length > 0 ? { with: inputs } : {}),
+  };
+  const expanded = instantiateResolvedInclude(directive, definition, commandContents);
+  const primarySink = expanded.primarySink;
+  if (primarySink === '') {
+    return { error: `composed block '${definition.name}' has no sink node` };
+  }
+  return { nodes: expanded.namespaced, primarySink };
+}
+
+/** One settled composed fan-out instance, reduced into the aggregate (#2512). */
+interface ComposeInstanceOutcome {
+  status: 'completed' | 'failed' | 'cancelled' | 'ambiguous';
+  output: string;
+  structuredOutput?: unknown;
+  error?: string;
+  costUsd?: number;
+  tokens?: TokenUsage;
+}
+
+/**
+ * Execute a composed fan-out (`include:` + `fan_out:`) node (#2512): resolve the item
+ * list at run time, then execute the statically named composed body ONCE PER ITEM inside
+ * THIS run — one workflow_runs row, events under the parent's run id under instance-
+ * qualified step names, bounded by `max_parallel`, aggregated in input order. No child
+ * run rows are created; cancellation propagates through the parent's own lifecycle.
+ *
+ * Resume keys on CONTENT-hash identity (`fan-out-identity.ts`) from the first durable
+ * ordered snapshot. Completed instance outcomes and completed inner nodes are threaded;
+ * a started instance with no terminal row is ambiguous and never replayed automatically.
+ */
+async function executeComposeFanOutNode(
+  node: ComposeFanOutNode,
+  ctx: RunLayersContext,
+  fanOut: ComposeFanOutNode['fan_out']
+): Promise<NodeExecutionResult> {
+  const { deps, platform, conversationId, cwd, workflowRun: parentRun } = ctx;
+  const msgContext = { workflowId: parentRun.id, nodeName: node.id };
+  const stepName = ctx.stepNamePrefix + node.id;
+
+  const failResult = (
+    error: string,
+    costUsd?: number,
+    tokens?: TokenUsage
+  ): NodeExecutionResult => {
+    deps.store
+      .createWorkflowEvent({
+        workflow_run_id: parentRun.id,
+        event_type: 'node_failed',
+        step_name: stepName,
+        data: {
+          error,
+          type: 'compose_fan_out',
+          aggregate: true,
+          ...(costUsd !== undefined ? { cost_usd: costUsd } : {}),
+          ...(tokens !== undefined ? { tokens } : {}),
+        },
+      })
+      .catch((err: Error) => {
+        getLog().error(
+          { err, workflowRunId: parentRun.id, eventType: 'node_failed' },
+          'workflow.event_persist_failed'
+        );
+      });
+    getWorkflowEventEmitter().emit({
+      type: 'node_failed',
+      runId: parentRun.id,
+      nodeId: node.id,
+      nodeName: node.id,
+      error,
+    });
+    return {
+      state: 'failed',
+      output: '',
+      error,
+      ...(costUsd !== undefined ? { costUsd } : {}),
+      ...(tokens !== undefined ? { tokens } : {}),
+    };
+  };
+
+  // Written ONLY when the join is satisfied, mirroring executeFanOutWorkflowNode — so
+  // cold resume skips a finished fan-out but re-runs an unfinished one.
+  const writeCompleted = (
+    output: string,
+    costUsd?: number,
+    tokens?: TokenUsage,
+    structured?: unknown
+  ): void => {
+    deps.store
+      .createWorkflowEvent({
+        workflow_run_id: parentRun.id,
+        event_type: 'node_completed',
+        step_name: stepName,
+        data: {
+          node_output: output,
+          type: 'compose_fan_out',
+          fan_out: true,
+          aggregate: true,
+          ...(structured !== undefined ? { structured_output: structured } : {}),
+          ...(costUsd !== undefined ? { cost_usd: costUsd } : {}),
+          ...(tokens !== undefined ? { tokens } : {}),
+        },
+      })
+      .catch((err: Error) => {
+        getLog().error(
+          { err, workflowRunId: parentRun.id, eventType: 'node_completed' },
+          'workflow.event_persist_failed'
+        );
+      });
+    getWorkflowEventEmitter().emit({
+      type: 'node_completed',
+      runId: parentRun.id,
+      nodeId: node.id,
+      nodeName: node.id,
+      duration: 0,
+      ...(costUsd !== undefined ? { costUsd } : {}),
+    });
+  };
+
+  const notify = async (text: string): Promise<void> => {
+    await safeSendMessage(platform, conversationId, text, msgContext);
+  };
+
+  // Load the durable plan before touching the live item producer. Once a plan exists,
+  // it owns the instance set; current output is only a best-effort drift diagnostic.
+  const fanOutScopeName =
+    ctx.stepNamePrefix + composeFanOutScopeSegment(node.id, ctx.loopGroupPath);
+  let resumeSnapshot: DagResumeSnapshot;
+  try {
+    resumeSnapshot = await deps.store.getDagResumeSnapshot(parentRun.id);
+  } catch (err) {
+    const msg =
+      `composed fan-out node '${node.id}' could not load durable resume state: ` +
+      (err as Error).message;
+    getLog().error(
+      { err: err as Error, parentRunId: parentRun.id, nodeId: node.id },
+      'workflow.compose_fan_out_resume_snapshot_failed'
+    );
+    await notify(`❌ **Composed fan-out blocked** (node \`${node.id}\`): ${msg}`);
+    return failResult(msg);
+  }
+  const priorOutputs = resumeSnapshot.completedNodeOutputs;
+  const persistedSnapshots = resumeSnapshot.fanOutSnapshots.get(fanOutScopeName);
+
+  const resolveCurrentItems = (): { items: JsonValue[] } | { error: string } => {
+    try {
+      const { prompt: itemsVarsResolved } = substituteWorkflowVariables(
+        fanOut.items,
+        parentRun.id,
+        parentRun.user_message ?? '',
+        ctx.artifactsDir,
+        ctx.baseBranch,
+        ctx.docsDir,
+        ctx.issueContext
+      );
+      const itemsResolved = substituteNodeOutputRefs(itemsVarsResolved, ctx.nodeOutputs);
+      const parsed: unknown = JSON.parse(itemsResolved);
+      if (!Array.isArray(parsed)) {
+        return {
+          error:
+            `fan_out.items on '${node.id}' resolved to ${typeof parsed}, not a JSON array. ` +
+            `'${fanOut.items}' must reference a node output that produces a JSON array.`,
+        };
+      }
+      return { items: parsed };
+    } catch (err) {
+      return {
+        error: `fan_out.items on '${node.id}' could not be resolved to a JSON array: ${(err as Error).message}`,
+      };
+    }
+  };
+
+  const currentItems = resolveCurrentItems();
+  if ('error' in currentItems && persistedSnapshots === undefined) {
+    await notify(`❌ **Composed fan-out failed** (node \`${node.id}\`): ${currentItems.error}`);
+    return failResult(currentItems.error);
+  }
+  if ('error' in currentItems) {
+    getLog().warn(
+      { parentRunId: parentRun.id, nodeId: node.id, error: currentItems.error },
+      'workflow.compose_fan_out_item_drift_unreadable'
+    );
+  }
+
+  // Preflight BEFORE any instance spend: the target must still resolve (it may have been
+  // renamed or deleted since load), and its complete closure must remain suspension-free.
+  const resolved = await resolveFanOutChildDefinition(
+    deps,
+    cwd,
+    node.include,
+    ctx.workflowSourceRoots
+  );
+  if ('unresolved' in resolved) {
+    const msg =
+      `composed fan-out node '${node.id}': cannot resolve the composed block '${node.include}' — ` +
+      `${resolved.unresolved}. Fix the include target name.`;
+    await notify(`❌ **Composed fan-out blocked** (node \`${node.id}\`): ${msg}`);
+    return failResult(msg);
+  }
+  const bodySuspensions = collectComposedSuspensionPaths(resolved.definition, resolved.definitions);
+  if (bodySuspensions.length > 0) {
+    const names = bodySuspensions.map(entry => `'${entry.id}' (${entry.reason})`).join(', ');
+    const msg =
+      `composed fan-out node '${node.id}': the composed block '${node.include}' contains ` +
+      `suspension-capable path${bodySuspensions.length === 1 ? '' : 's'} ${names}. An in-parent ` +
+      'fan-out has no per-instance pause cursor, so it cannot safely resume a partly completed ' +
+      "body. Remove the suspension path, or invoke the block once through 'include:' or 'workflow:'.";
+    getLog().warn(
+      { parentRunId: parentRun.id, nodeId: node.id, include: node.include },
+      'workflow.compose_fan_out_suspension_rejected'
+    );
+    await notify(`❌ **Composed fan-out blocked** (node \`${node.id}\`): ${msg}`);
+    return failResult(msg);
+  }
+
+  let computedSnapshots: ReturnType<typeof buildInstanceSnapshots>;
+  if (persistedSnapshots === undefined) {
+    // Freeze every resolved binding together with the item before any instance starts.
+    // A resumed run must never combine completed work from the old bindings with a
+    // retried instance resolved from changed upstream output.
+    let staticInputs: Record<string, JsonValue> = {};
+    const parentInputs = resolveRunInputs(parentRun);
+    try {
+      if (node.with !== undefined) {
+        const resolutionCtx: ShellInputContext = {
+          workflowRun: parentRun,
+          artifactsDir: ctx.artifactsDir,
+          stateDir: ctx.stateDir,
+          baseBranch: ctx.baseBranch,
+          docsDir: ctx.docsDir,
+          issueContext: ctx.issueContext,
+          nodeOutputs: ctx.nodeOutputs,
+        };
+        staticInputs = Object.fromEntries(
+          Object.entries(node.with).map(([name, rawValue]) => [
+            name,
+            resolveWorkflowValue(rawValue, resolutionCtx, parentInputs, false),
+          ])
+        );
+      }
+    } catch (err) {
+      const msg = `fan_out 'with:' on '${node.id}' could not be resolved: ${(err as Error).message}`;
+      await notify(`❌ **Composed fan-out failed** (node \`${node.id}\`): ${msg}`);
+      return failResult(msg);
+    }
+    if ('error' in currentItems) {
+      throw new Error('unreachable: fresh composed fan-out has no resolved item list');
+    }
+    computedSnapshots = buildInstanceSnapshots(currentItems.items, staticInputs, fanOut.as);
+  } else {
+    // Only compare item identity for drift diagnostics. The persisted input map is the
+    // authority on resume, so current `with:` references are intentionally not resolved.
+    computedSnapshots =
+      'items' in currentItems
+        ? buildInstanceSnapshots(currentItems.items, {}, fanOut.as)
+        : [...persistedSnapshots];
+  }
+  const snapshots = persistedSnapshots ?? computedSnapshots;
+
+  // Concurrent instances share the parent checkout. Use the authoritative persisted
+  // width on resume so a changed producer cannot bypass the original safety preflight.
+  const plannedConcurrency = Math.min(fanOut.max_parallel, snapshots.length);
+  if (plannedConcurrency > 1 && resolved.definition.mutates_checkout !== false) {
+    const msg =
+      `composed fan-out node '${node.id}': up to ${String(plannedConcurrency)} instances of ` +
+      `'${node.include}' would run at once in this run's checkout, and that block does not ` +
+      'declare `mutates_checkout: false`. Concurrent runs on one checkout take a ' +
+      'path-exclusive lock, so all but the first would cancel themselves — and a ' +
+      'lock-cancelled instance is not recoverable by resume (#2180). Choose one: add ' +
+      `\`mutates_checkout: false\` to '${node.include}' if it only reads the repo; or set ` +
+      `\`fan_out.max_parallel: 1\` on '${node.id}' to run the instances one at a time.`;
+    getLog().warn(
+      { parentRunId: parentRun.id, nodeId: node.id, include: node.include, plannedConcurrency },
+      'workflow.compose_fan_out_shared_checkout_collision'
+    );
+    await notify(`❌ **Composed fan-out blocked** (node \`${node.id}\`): ${msg}`);
+    return failResult(msg);
+  }
+
+  if (persistedSnapshots === undefined) {
+    try {
+      await deps.store.persistWorkflowEvent({
+        workflow_run_id: parentRun.id,
+        event_type: 'fan_out_instances',
+        step_name: fanOutScopeName,
+        data: { instances: computedSnapshots },
+      });
+    } catch (err) {
+      const msg =
+        `composed fan-out node '${node.id}' could not persist its item snapshot before ` +
+        `execution: ${(err as Error).message}`;
+      await notify(`❌ **Composed fan-out blocked** (node \`${node.id}\`): ${msg}`);
+      return failResult(msg);
+    }
+  } else if (
+    persistedSnapshots.length !== computedSnapshots.length ||
+    persistedSnapshots.some((snapshot, index) => {
+      const current = computedSnapshots[index];
+      return (
+        snapshot.identity !== current?.identity ||
+        JSON.stringify(snapshot.item) !== JSON.stringify(current?.item)
+      );
+    })
+  ) {
+    getLog().warn(
+      { parentRunId: parentRun.id, nodeId: node.id },
+      'workflow.compose_fan_out_using_persisted_instances'
+    );
+  }
+
+  if (snapshots.length === 0) {
+    getLog().info({ parentRunId: parentRun.id, nodeId: node.id }, 'workflow.compose_fan_out_empty');
+    writeCompleted('[]', undefined, undefined, []);
+    return { state: 'completed', output: '[]', structuredOutput: [] };
+  }
+
+  const ambiguousIdentity = snapshots.find(snapshot =>
+    resumeSnapshot.unresolvedNodeStarts.has(`${fanOutScopeName}__${snapshot.identity}`)
+  );
+  if (ambiguousIdentity !== undefined) {
+    const msg =
+      `composed fan-out node '${node.id}' has instance '${ambiguousIdentity.identity}' with ` +
+      'a durable start but no terminal event. It may still be running or may have completed ' +
+      'before its result was stored. Archon will not replay it automatically; inspect the ' +
+      'run and deliberately abandon it or start a new run.';
+    await notify(`❌ **Composed fan-out blocked** (node \`${node.id}\`): ${msg}`);
+    return failResult(msg);
+  }
+
+  // Execute incomplete identities through a bounded sliding window. Each instance runs
+  // the composed body via runLayers in its own context: fresh output map, events under
+  // the parent run id with engine-owned, instance-qualified step names. The authored
+  // node ids remain ordinary DAG ids inside that isolated execution context.
+  const settled = await mapWithLimit(
+    snapshots,
+    fanOut.max_parallel,
+    async (snapshot): Promise<ComposeInstanceOutcome> => {
+      let expanded: { nodes: DagNode[]; primarySink: string } | { error: string };
+      try {
+        expanded = expandComposeInstance(
+          node,
+          snapshot.identity,
+          snapshot.inputs,
+          resolved.definition,
+          resolved.commandContents
+        );
+      } catch (err) {
+        expanded = { error: (err as Error).message };
+      }
+      if ('error' in expanded) {
+        return {
+          status: 'failed',
+          output: '',
+          error: `instance ${snapshot.identity} failed to compose: ${expanded.error}`,
+        };
+      }
+      const instanceScopeName = `${fanOutScopeName}__${snapshot.identity}`;
+      const instanceStepNamePrefix = `${instanceScopeName}__`;
+      const prior = priorOutputs.get(instanceScopeName);
+      if (prior !== undefined) {
+        return {
+          status: 'completed',
+          output: prior.output,
+          ...(prior.structuredOutput !== undefined
+            ? { structuredOutput: prior.structuredOutput }
+            : {}),
+        };
+      }
+      const instancePriorNodes = new Map<string, PersistedNodeOutput>();
+      const instanceNodeOutputs = new Map<string, NodeOutput>();
+      for (const innerNode of expanded.nodes) {
+        const persisted = priorOutputs.get(instanceStepNamePrefix + innerNode.id);
+        if (persisted === undefined) continue;
+        instancePriorNodes.set(innerNode.id, persisted);
+        instanceNodeOutputs.set(innerNode.id, {
+          state: 'completed',
+          output: persisted.output,
+          ...(persisted.structuredOutput !== undefined
+            ? { structuredOutput: persisted.structuredOutput }
+            : {}),
+        });
+      }
+      try {
+        const claim = await deps.store.persistWorkflowEventIfRunning(
+          {
+            workflow_run_id: parentRun.id,
+            event_type: 'node_started',
+            step_name: instanceScopeName,
+            data: {
+              type: 'compose_fan_out_instance',
+              identity: snapshot.identity,
+              ordinal: snapshot.ordinal,
+            },
+          },
+          {
+            allowPaused: ctx.claimedWorkPausePolicy === 'finish_through_parent_pause',
+          }
+        );
+        if (!claim.persisted) {
+          return {
+            status: 'cancelled',
+            output: '',
+            error: 'parent run is no longer running; instance was not started',
+          };
+        }
+      } catch (err) {
+        return {
+          status: 'failed',
+          output: '',
+          error: `instance ${snapshot.identity} could not persist its start: ${(err as Error).message}`,
+        };
+      }
+      const instanceCtx: RunLayersContext = {
+        deps: ctx.deps,
+        platform: ctx.platform,
+        conversationId: ctx.conversationId,
+        cwd: ctx.cwd,
+        workflowSourceRoots: ctx.workflowSourceRoots,
+        runChildWorkflow: ctx.runChildWorkflow,
+        execContext: ctx.execContext,
+        workflowRun: parentRun,
+        workflowName: ctx.workflowName,
+        config: ctx.config,
+        workflowProvider: ctx.workflowProvider,
+        workflowModel: ctx.workflowModel,
+        workflowLevelOptions: ctx.workflowLevelOptions,
+        aiProfile: ctx.aiProfile,
+        workflowPreset: ctx.workflowPreset,
+        artifactsDir: ctx.artifactsDir,
+        stateDir: ctx.stateDir,
+        logDir: ctx.logDir,
+        baseBranch: ctx.baseBranch,
+        docsDir: ctx.docsDir,
+        configuredCommandFolder: ctx.configuredCommandFolder,
+        issueContext: ctx.issueContext,
+        persistScopeKey: ctx.persistScopeKey,
+        workflowPersistSessions: ctx.workflowPersistSessions,
+        scopeArtifactsDir: undefined,
+        layers: buildTopologicalLayers(expanded.nodes),
+        nodeOutputs: instanceNodeOutputs,
+        priorCompletedNodes: instancePriorNodes,
+        claimedWorkPausePolicy: 'finish_through_parent_pause',
+        lastSequentialSession: undefined,
+        warnedProviderConflicts: ctx.warnedProviderConflicts,
+        totalCostUsd: 0,
+        totalTokens: undefined,
+        totalLoopIterations: 0,
+        stepNamePrefix: instanceStepNamePrefix,
+        loopGroupPath: ctx.loopGroupPath,
+      };
+      try {
+        await runLayers(instanceCtx);
+      } catch (err) {
+        const error = (err as Error).message;
+        const outcome: ComposeInstanceOutcome = {
+          status: 'failed',
+          output: '',
+          error,
+          ...(instanceCtx.totalCostUsd > 0 ? { costUsd: instanceCtx.totalCostUsd } : {}),
+          ...(instanceCtx.totalTokens !== undefined ? { tokens: instanceCtx.totalTokens } : {}),
+        };
+        try {
+          await deps.store.persistWorkflowEvent({
+            workflow_run_id: parentRun.id,
+            event_type: 'node_failed',
+            step_name: instanceScopeName,
+            data: {
+              type: 'compose_fan_out_instance',
+              aggregate: true,
+              error,
+              ...(outcome.costUsd !== undefined ? { cost_usd: outcome.costUsd } : {}),
+              ...(outcome.tokens !== undefined ? { tokens: outcome.tokens } : {}),
+            },
+          });
+        } catch (persistErr) {
+          return {
+            ...outcome,
+            status: 'ambiguous',
+            error: `instance ${snapshot.identity} failed and its terminal state could not be stored: ${(persistErr as Error).message}`,
+          };
+        }
+        return outcome;
+      }
+      const failed = [...instanceCtx.nodeOutputs.values()].filter(o => o.state === 'failed');
+      if (failed.length > 0) {
+        const outcome: ComposeInstanceOutcome = {
+          status: 'failed',
+          output: '',
+          error: failed[0].error ?? 'composed instance node failed',
+          ...(instanceCtx.totalCostUsd > 0 ? { costUsd: instanceCtx.totalCostUsd } : {}),
+          ...(instanceCtx.totalTokens !== undefined ? { tokens: instanceCtx.totalTokens } : {}),
+        };
+        try {
+          await deps.store.persistWorkflowEvent({
+            workflow_run_id: parentRun.id,
+            event_type: 'node_failed',
+            step_name: instanceScopeName,
+            data: {
+              type: 'compose_fan_out_instance',
+              aggregate: true,
+              error: outcome.error,
+              ...(outcome.costUsd !== undefined ? { cost_usd: outcome.costUsd } : {}),
+              ...(outcome.tokens !== undefined ? { tokens: outcome.tokens } : {}),
+            },
+          });
+        } catch (err) {
+          return {
+            ...outcome,
+            status: 'ambiguous',
+            error: `instance ${snapshot.identity} failed and its terminal state could not be stored: ${(err as Error).message}`,
+          };
+        }
+        return outcome;
+      }
+      // Cancellation or another terminal status can stop runLayers early. A claimed
+      // deterministic instance finishes through a sibling's pause and reaches its sink.
+      // Surface any remaining incompleteness rather than treating absent output as success.
+      const terminal = instanceCtx.nodeOutputs.get(expanded.primarySink);
+      if (terminal?.state !== 'completed') {
+        return {
+          status: 'ambiguous',
+          output: '',
+          error:
+            `composed instance ${snapshot.identity} stopped without a terminal state; ` +
+            'automatic replay is unsafe',
+        };
+      }
+      const outcome: ComposeInstanceOutcome = {
+        status: 'completed',
+        output: terminal.output,
+        ...(terminal.structuredOutput !== undefined
+          ? { structuredOutput: terminal.structuredOutput }
+          : {}),
+        ...(instanceCtx.totalCostUsd > 0 ? { costUsd: instanceCtx.totalCostUsd } : {}),
+        ...(instanceCtx.totalTokens !== undefined ? { tokens: instanceCtx.totalTokens } : {}),
+      };
+      try {
+        await deps.store.persistWorkflowEvent({
+          workflow_run_id: parentRun.id,
+          event_type: 'node_completed',
+          step_name: instanceScopeName,
+          data: {
+            type: 'compose_fan_out_instance',
+            aggregate: true,
+            node_output: outcome.output,
+            ...(outcome.structuredOutput !== undefined
+              ? { structured_output: outcome.structuredOutput }
+              : {}),
+            ...(outcome.costUsd !== undefined ? { cost_usd: outcome.costUsd } : {}),
+            ...(outcome.tokens !== undefined ? { tokens: outcome.tokens } : {}),
+          },
+        });
+      } catch (err) {
+        return {
+          ...outcome,
+          status: 'ambiguous',
+          error: `instance ${snapshot.identity} completed but its result could not be stored: ${(err as Error).message}`,
+        };
+      }
+      return outcome;
+    }
+  );
+
+  const outcomes: ComposeInstanceOutcome[] = settled.map((r, i) =>
+    r.status === 'fulfilled'
+      ? r.value
+      : {
+          status: 'failed',
+          output: '',
+          error: `composed instance ${snapshots[i].identity} threw: ${String(r.reason)}`,
+        }
+  );
+
+  const totalCostUsd = sumFanOutCost(outcomes);
+  const totalTokens = sumFanOutTokens(outcomes);
+
+  // If the run stopped underneath us (external pause/cancel mid-flight), do NOT write a
+  // terminal aggregate — leave the node unwritten so resume re-drives the incomplete
+  // instances. Mirrors the between-layer early-return posture of runLayers itself.
+  let runStatus: WorkflowRunStatus | null;
+  try {
+    runStatus = await deps.store.getWorkflowRunStatus(parentRun.id);
+  } catch (err) {
+    const msg = `could not verify parent status after composed fan-out: ${(err as Error).message}`;
+    return failResult(msg, totalCostUsd, totalTokens);
+  }
+  const claimedWorkMayFinishPaused =
+    runStatus === 'paused' && ctx.claimedWorkPausePolicy === 'finish_through_parent_pause';
+  if (runStatus !== 'running' && !claimedWorkMayFinishPaused) {
+    getLog().info(
+      { parentRunId: parentRun.id, nodeId: node.id, runStatus },
+      'workflow.compose_fan_out_interrupted'
+    );
+    return {
+      state: ctx.claimedWorkPausePolicy === 'finish_through_parent_pause' ? 'pending' : 'completed',
+      output: '',
+      ...(totalCostUsd !== undefined ? { costUsd: totalCostUsd } : {}),
+      ...(totalTokens !== undefined ? { tokens: totalTokens } : {}),
+    };
+  }
+
+  const ambiguous = outcomes.find(outcome => outcome.status === 'ambiguous');
+  if (ambiguous !== undefined) {
+    const msg = ambiguous.error ?? 'a composed instance has ambiguous non-terminal work';
+    await notify(`❌ **Composed fan-out blocked** (node \`${node.id}\`): ${msg}`);
+    return failResult(msg, totalCostUsd, totalTokens);
+  }
+
+  if (fanOut.join === 'all_success') {
+    const firstBad = outcomes.findIndex(o => o.status !== 'completed');
+    if (firstBad !== -1) {
+      const bad = outcomes[firstBad];
+      const ref = `instance ${snapshots[firstBad].identity}`;
+      await notify(
+        `❌ **Composed fan-out failed** (node \`${node.id}\`): ${ref} ${bad.status}` +
+          (bad.error ? ` — ${bad.error}` : '')
+      );
+      return failResult(
+        `composed fan_out node '${node.id}' (join: all_success): ${ref} ${bad.status}` +
+          (bad.error ? `: ${bad.error}` : ''),
+        totalCostUsd,
+        totalTokens
+      );
+    }
+  }
+
+  // all_done represents a failure as a marker object; all_success reaching here is all-completed.
+  const elements = outcomes.map(o =>
+    o.status === 'completed'
+      ? ((o.structuredOutput !== undefined ? o.structuredOutput : o.output) as JsonValue)
+      : {
+          archon_failed: true,
+          error: o.error ?? `instance ${o.status}`,
+          status: o.status === 'cancelled' ? 'cancelled' : 'failed',
+        }
+  );
+  const aggregate = JSON.stringify(elements);
+  writeCompleted(aggregate, totalCostUsd, totalTokens, elements);
+  return {
+    state: 'completed',
+    output: aggregate,
+    structuredOutput: elements,
+    ...(totalCostUsd !== undefined ? { costUsd: totalCostUsd } : {}),
+    ...(totalTokens !== undefined ? { tokens: totalTokens } : {}),
+  };
+}
+
+/**
  * True when a node participates in cross-run session persistence: a command/prompt
  * node (see {@link isPersistableNode}) that hasn't opted out via `context: 'fresh'`,
  * with `persist_session: true` set directly or inherited from the workflow-level
@@ -8986,6 +9743,8 @@ async function buildColdResumeRecoveryPointer(
  * executeLoopNode / executeApprovalNode. Body lifecycle rows additionally carry `iteration`
  * in `data`. The in-process emitter payloads stay raw (unprefixed) — see #2090.
  */
+type ClaimedWorkPausePolicy = 'finish_through_parent_pause';
+
 interface RunLayersContext {
   // --- run-level invariants (shared by top-level DAG and loop_group body) ---
   deps: WorkflowDeps;
@@ -9061,6 +9820,14 @@ interface RunLayersContext {
    * the first point it exists; loop_group bodies have no run-level hook.
    */
   afterLayer?: () => Promise<void>;
+  /**
+   * Finish an already-claimed deterministic subgraph when a sibling pauses the parent.
+   * Composed fan-out bodies set this after their durable start claim: load-time
+   * validation proves they cannot create the pause themselves, and finishing the outer
+   * node's claimed work avoids leaving an unresolved durable start. Cancellation and
+   * deletion still stop between layers, and unclaimed instances still cannot start.
+   */
+  claimedWorkPausePolicy?: ClaimedWorkPausePolicy;
   /** Resume cache: node ids that completed in a prior run (top-level only; undefined for body). */
   priorCompletedNodes?: Map<string, PersistedNodeOutput>;
   /**
@@ -9300,9 +10067,10 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
             // cannot slip through by matching a prior-completed entry, a false `when:`, or a
             // failing trigger rule. If one gets here, discovery was bypassed; fail loud rather
             // than silently accepting an invalid runtime DAG.
-            if (isIncludeDirective(node)) {
+            if (isIncludeDirective(node as DagNode | IncludeDirective)) {
+              const includeNode = node as unknown as IncludeDirective;
               throw new Error(
-                `Internal error: include node '${node.id}' reached the executor unexpanded. ` +
+                `Internal error: include node '${includeNode.id}' reached the executor unexpanded. ` +
                   'Include nodes must be resolved by expandWorkflowIncludes() during discovery.'
               );
             }
@@ -9851,6 +10619,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                   config,
                   ctx.warnedProviderConflicts,
                   ctx.loopGroupPath,
+                  ctx.claimedWorkPausePolicy,
                   issueContext,
                   stepNamePrefix,
                   execContext,
@@ -9951,6 +10720,14 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                 // node_completed is written inline by executeWorkflowNode itself (see
                 // asCompleted — only on true completion, never on the paused branch).
                 const output = await executeWorkflowNode(node, ctx);
+                return { nodeId: node.id, output };
+              }
+
+              case 'compose_fan_out': {
+                // Composed fan-out dispatch (#2512): per-item in-parent expansion. Like
+                // the sub-run wrapper it makes no provider call of its own and writes its
+                // own lifecycle events.
+                const output = await executeComposeFanOutNode(node, ctx, node.fan_out);
                 return { nodeId: node.id, output };
               }
 
@@ -10449,6 +11226,16 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
       const dagStatus = await deps.store.getWorkflowRunStatus(workflowRun.id);
       if (dagStatus === null || dagStatus !== 'running') {
         const effectiveStatus = dagStatus ?? 'deleted';
+        if (
+          effectiveStatus === 'paused' &&
+          ctx.claimedWorkPausePolicy === 'finish_through_parent_pause'
+        ) {
+          getLog().debug(
+            { workflowRunId: workflowRun.id, layerIdx, totalLayers: layers.length },
+            'dag.claimed_work_continues_through_parent_pause'
+          );
+          continue;
+        }
         getLog().info(
           {
             workflowRunId: workflowRun.id,

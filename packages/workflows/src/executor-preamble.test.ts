@@ -101,9 +101,13 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     getWorkflowRun: mock(async () => ({ ...makeRun(), status: 'completed' as const })),
     getWorkflowRunStatus: mock(async () => 'completed' as const),
     createWorkflowEvent: mock(async () => {}),
+    persistWorkflowEvent: mock(async () => {}),
+    persistWorkflowEventIfRunning: mock(async () => ({ persisted: true })),
     findResumableRun: mock(async () => null),
     getDagResumeSnapshot: mock(async () => ({
       completedNodeOutputs: new Map<string, { output: string }>(),
+      fanOutSnapshots: new Map(),
+      unresolvedNodeStarts: new Set<string>(),
       tokens: { input: 0, output: 0 },
       costUsd: 0,
     })),

@@ -77,12 +77,18 @@ export async function continueCommand(
   }
   console.log('');
 
-  // 6. Delegate to workflowRunCommand (fresh run, no resume)
+  // 6. A prior run makes this an explicit adoption: the central resolver owns
+  // terminality, project identity, path locking, provenance, and artifacts.
+  // A branch with no prior run still runs at the exact path resolved above.
   try {
-    await workflowRunCommand(env.working_path, workflowName, enrichedMessage, {
-      noWorktree: true,
-      codebaseId: env.codebase_id,
-    });
+    await workflowRunCommand(
+      env.working_path,
+      workflowName,
+      enrichedMessage,
+      priorRun
+        ? { adoptRunId: priorRun.id, codebaseId: env.codebase_id }
+        : { noWorktree: true, codebaseId: env.codebase_id }
+    );
   } catch (error) {
     const err = error as Error;
     getLog().error({ err, branch, workflowName }, 'cli.continue_run_failed');

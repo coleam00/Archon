@@ -162,6 +162,7 @@ registerCommunityProviders();
 import {
   executeWorkflow,
   hydrateResumableRun,
+  inspectResumableRun,
   resolveProjectPaths,
   resolveScopeArtifactsDir,
 } from './executor';
@@ -170,6 +171,7 @@ import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
 import type { IWorkflowStore } from './store';
 import type { WorkflowDefinition, WorkflowRun, WorkflowRunNodeSession } from './schemas';
 import { RUN_METADATA_KEYS, workflowDefinitionSchema } from './schemas';
+import type { WorkflowRunConfigMetadata } from './schemas/run-config';
 import { substituteWorkflowVariables } from './executor-shared';
 
 // --- Helpers ---
@@ -186,9 +188,13 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     getWorkflowRun: mock(async () => ({ ...makeRun(), status: 'completed' as const })),
     getWorkflowRunStatus: mock(async () => 'completed' as const),
     createWorkflowEvent: mock(async () => {}),
+    persistWorkflowEvent: mock(async () => {}),
+    persistWorkflowEventIfRunning: mock(async () => ({ persisted: true })),
     findResumableRun: mock(async () => null),
     getDagResumeSnapshot: mock(async () => ({
       completedNodeOutputs: new Map(),
+      fanOutSnapshots: new Map(),
+      unresolvedNodeStarts: new Set<string>(),
       tokens: { input: 0, output: 0 },
       costUsd: 0,
     })),
@@ -920,11 +926,11 @@ describe('executeWorkflow', () => {
       expect(result).toEqual({
         success: false,
         workflowRunId: 'pending-run',
-        error: 'Database error recording workflow model bindings',
+        error: 'Database error recording workflow invocation settings',
       });
       expect(failRun).toHaveBeenCalledWith(
         'pending-run',
-        'Database error recording workflow model bindings'
+        'Database error recording workflow invocation settings'
       );
       expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
     });
@@ -984,7 +990,8 @@ describe('executeWorkflow', () => {
       ).rejects.toThrow(/Cannot supply model overrides when resuming/);
     });
 
-    it('resumes a persisted no-op effort accepted by the provider', async () => {
+    it('terminalizes a resumed run before dispatch when persisted effort is ineffective', async () => {
+      const failRun = mock<IWorkflowStore['failWorkflowRun']>(async () => {});
       const preCreatedRun = makeRun({
         id: 'resume-opencode-effort-run',
         status: 'running',
@@ -1015,19 +1022,24 @@ describe('executeWorkflow', () => {
         },
       });
 
-      await executeWorkflow(
-        makeDeps(makeStore()),
-        makePlatform(),
-        'conv-1',
-        '/tmp',
-        makeWorkflow({ model: 'large' }),
-        'msg',
-        'db-conv-1',
-        { preCreatedRun, priorCompletedNodes: new Map() }
-      );
+      await expect(
+        executeWorkflow(
+          makeDeps(makeStore({ failWorkflowRun: failRun })),
+          makePlatform(),
+          'conv-1',
+          '/tmp',
+          makeWorkflow({ model: 'large' }),
+          'msg',
+          'db-conv-1',
+          { preCreatedRun, priorCompletedNodes: new Map() }
+        )
+      ).rejects.toThrow(/cannot apply effort to provider 'opencode'/);
 
-      expect(mockExecuteDagWorkflow.mock.calls[0]?.[6]).toBe('opencode');
-      expect(mockExecuteDagWorkflow.mock.calls[0]?.[7]).toBe('anthropic/claude-sonnet-4-6');
+      expect(failRun).toHaveBeenCalledWith(
+        'resume-opencode-effort-run',
+        expect.stringContaining("cannot apply effort to provider 'opencode'")
+      );
+      expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
     });
 
     it('terminalizes a resumed run with an invalid persisted alias key', async () => {
@@ -1064,6 +1076,87 @@ describe('executeWorkflow', () => {
       expect(failRun).toHaveBeenCalledWith(
         'resume-invalid-alias-run',
         expect.stringContaining('invalid model_bindings aliases')
+      );
+      expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+    });
+
+    it('terminalizes a resumed run before dispatch when a persisted provider is unavailable', async () => {
+      const failRun = mock<IWorkflowStore['failWorkflowRun']>(async () => {});
+      const preCreatedRun = makeRun({
+        id: 'resume-removed-provider-run',
+        status: 'running',
+        metadata: {
+          model_bindings: {
+            overrides: {
+              tiers: { large: { provider: 'removed-provider', model: 'legacy-model' } },
+            },
+            effective: {
+              defaultProvider: 'claude',
+              aliases: {
+                large: { provider: 'removed-provider', model: 'legacy-model' },
+              },
+            },
+          },
+        },
+      });
+
+      await expect(
+        executeWorkflow(
+          makeDeps(makeStore({ failWorkflowRun: failRun })),
+          makePlatform(),
+          'conv-1',
+          '/tmp',
+          makeWorkflow({ model: 'large' }),
+          'msg',
+          'db-conv-1',
+          { preCreatedRun, priorCompletedNodes: new Map() }
+        )
+      ).rejects.toThrow(/unknown provider 'removed-provider'/);
+
+      expect(failRun).toHaveBeenCalledWith(
+        'resume-removed-provider-run',
+        expect.stringContaining("unknown provider 'removed-provider'")
+      );
+      expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+    });
+
+    it('terminalizes a resumed run before dispatch when persisted thinking is ineffective', async () => {
+      const failRun = mock<IWorkflowStore['failWorkflowRun']>(async () => {});
+      const preset = {
+        provider: 'copilot',
+        model: 'gpt-5.6',
+        thinking: { type: 'enabled' as const, budgetTokens: 1_000 },
+      };
+      const preCreatedRun = makeRun({
+        id: 'resume-ignored-thinking-run',
+        status: 'running',
+        metadata: {
+          model_bindings: {
+            overrides: { tiers: { large: preset } },
+            effective: {
+              defaultProvider: 'claude',
+              aliases: { large: preset },
+            },
+          },
+        },
+      });
+
+      await expect(
+        executeWorkflow(
+          makeDeps(makeStore({ failWorkflowRun: failRun })),
+          makePlatform(),
+          'conv-1',
+          '/tmp',
+          makeWorkflow({ model: 'large' }),
+          'msg',
+          'db-conv-1',
+          { preCreatedRun, priorCompletedNodes: new Map() }
+        )
+      ).rejects.toThrow(/cannot apply Claude-shaped thinking options/);
+
+      expect(failRun).toHaveBeenCalledWith(
+        'resume-ignored-thinking-run',
+        expect.stringContaining('cannot apply Claude-shaped thinking options')
       );
       expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
     });
@@ -1155,6 +1248,220 @@ describe('executeWorkflow', () => {
     });
   });
 
+  describe('run-scoped config layer (#2482)', () => {
+    const sealedMetadata: WorkflowRunConfigMetadata = {
+      version: 1,
+      ciphertext: 'opaque-ciphertext',
+      source: { kind: 'cli', label: 'config.minimax.yaml' },
+      keys: ['assistant', 'env.SHARED', 'tiers.large'],
+    };
+
+    it('layers file content above DB/user config and explicit model mappings above the file', async () => {
+      const createRun = mock<IWorkflowStore['createWorkflowRun']>(async data =>
+        makeRun({ metadata: data.metadata })
+      );
+      const store = makeStore({
+        createWorkflowRun: createRun,
+        getCodebaseEnvVars: mock(async () => ({ SHARED: 'db', DB_ONLY: 'kept' })),
+      });
+      const sealRunConfig = mock(() => sealedMetadata);
+      const deps: WorkflowDeps = {
+        ...makeDeps(store),
+        sealRunConfig,
+        loadConfig: mock(async () => ({
+          assistant: 'claude',
+          assistants: { claude: {}, codex: {} },
+          tiers: { large: { provider: 'claude', model: 'opus' } },
+          envVars: { SHARED: 'repo', REPO_ONLY: 'kept' },
+          commands: {},
+        })),
+        getUserAiPrefs: mock(async () => ({
+          defaultProvider: 'codex',
+          tiers: { large: { provider: 'codex', model: 'gpt-5.5' } },
+        })),
+        isPerUserProviderKeysEnabled: () => true,
+        getUserProviderEnv: mock(async () => ({
+          env: { PROTECTED_TOKEN: 'credential-wins' },
+          files: [],
+          protectedValues: ['credential-wins'],
+        })),
+      };
+
+      await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow({ model: 'large' }),
+        'msg',
+        'db-conv-1',
+        {
+          codebaseId: 'codebase-1',
+          runConfig: {
+            source: sealedMetadata.source,
+            layer: {
+              assistant: 'pi',
+              tiers: { large: { provider: 'pi', model: 'minimax/MiniMax-M3' } },
+              envVars: { SHARED: 'run', PROTECTED_TOKEN: 'must-not-win' },
+            },
+          },
+          modelOverrideLayer: {
+            kind: 'raw',
+            overrides: { tiers: { large: 'openai/gpt-5.6' } },
+          },
+          userId: 'user-1',
+        }
+      );
+
+      expect(sealRunConfig).toHaveBeenCalledTimes(1);
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[6]).toBe('pi');
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[7]).toBe('openai/gpt-5.6');
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[13]).toMatchObject({
+        assistant: 'pi',
+        envVars: {
+          REPO_ONLY: 'kept',
+          DB_ONLY: 'kept',
+          SHARED: 'run',
+          PROTECTED_TOKEN: 'credential-wins',
+        },
+        protectedEnvKeys: ['PROTECTED_TOKEN'],
+      });
+      expect(createRun.mock.calls[0]?.[0].metadata).toMatchObject({
+        run_config: sealedMetadata,
+        model_bindings: {
+          effective: {
+            defaultProvider: 'pi',
+            aliases: { large: { provider: 'pi', model: 'openai/gpt-5.6' } },
+          },
+        },
+      });
+    });
+
+    it('restores the sealed layer on cold resume without caller input', async () => {
+      const layer = {
+        docsPath: 'handbook',
+        envVars: { RUN_ONLY: 'restored' },
+      };
+      const unsealRunConfig = mock(() => layer);
+      const preCreatedRun = makeRun({
+        id: 'resume-config-run',
+        status: 'running',
+        metadata: { run_config: sealedMetadata },
+      });
+
+      await executeWorkflow(
+        { ...makeDeps(makeStore()), unsealRunConfig },
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'msg',
+        'db-conv-1',
+        { preCreatedRun, priorCompletedNodes: new Map() }
+      );
+
+      expect(unsealRunConfig).toHaveBeenCalledWith(sealedMetadata);
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[12]).toBe('handbook');
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[13]).toMatchObject({
+        envVars: { RUN_ONLY: 'restored' },
+      });
+    });
+
+    it('terminalizes a pre-created run when persisted config cannot be restored', async () => {
+      const failRun = mock<IWorkflowStore['failWorkflowRun']>(async () => {});
+      const preCreatedRun = makeRun({
+        id: 'broken-config-run',
+        status: 'running',
+        metadata: { run_config: sealedMetadata },
+      });
+
+      await expect(
+        executeWorkflow(
+          {
+            ...makeDeps(makeStore({ failWorkflowRun: failRun })),
+            unsealRunConfig: () => {
+              throw new Error('Workflow run config could not be decrypted.');
+            },
+          },
+          makePlatform(),
+          'conv-1',
+          '/tmp',
+          makeWorkflow(),
+          'msg',
+          'db-conv-1',
+          { preCreatedRun, priorCompletedNodes: new Map() }
+        )
+      ).rejects.toThrow('could not be decrypted');
+      expect(failRun).toHaveBeenCalledWith(
+        'broken-config-run',
+        'Workflow run config could not be decrypted.'
+      );
+      expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+    });
+
+    it('keeps concurrent run layers isolated and leaves no residue', async () => {
+      const workflow = makeWorkflow({ model: 'large', mutates_checkout: false });
+      const input = (id: string, provider: 'pi' | 'codex', model: string, marker: string) =>
+        executeWorkflow(
+          {
+            ...makeDeps(makeStore({ createWorkflowRun: mock(async () => makeRun({ id })) })),
+            sealRunConfig: () => sealedMetadata,
+          },
+          makePlatform(),
+          `conv-${id}`,
+          '/tmp',
+          workflow,
+          id,
+          `db-${id}`,
+          {
+            runConfig: {
+              source: sealedMetadata.source,
+              layer: {
+                tiers: { large: { provider, model } },
+                envVars: { RUN_MARKER: marker },
+              },
+            },
+          }
+        );
+
+      await Promise.all([
+        input('config-a', 'pi', 'openai/gpt-5.6', 'a'),
+        input('config-b', 'codex', 'gpt-5.6-sol', 'b'),
+      ]);
+
+      const concurrent = mockExecuteDagWorkflow.mock.calls.slice(0, 2).map(call => ({
+        provider: call[6],
+        model: call[7],
+        marker: (call[13] as WorkflowConfig | undefined)?.envVars?.RUN_MARKER,
+      }));
+      expect(concurrent).toContainEqual({
+        provider: 'pi',
+        model: 'openai/gpt-5.6',
+        marker: 'a',
+      });
+      expect(concurrent).toContainEqual({
+        provider: 'codex',
+        model: 'gpt-5.6-sol',
+        marker: 'b',
+      });
+
+      await executeWorkflow(
+        makeDeps(
+          makeStore({ createWorkflowRun: mock(async () => makeRun({ id: 'config-clean' })) })
+        ),
+        makePlatform(),
+        'conv-clean',
+        '/tmp',
+        workflow,
+        'clean',
+        'db-clean'
+      );
+      const cleanConfig = mockExecuteDagWorkflow.mock.calls[2]?.[13] as WorkflowConfig | undefined;
+      expect(cleanConfig?.envVars?.RUN_MARKER).toBeUndefined();
+      expect(mockExecuteDagWorkflow.mock.calls[2]?.[6]).toBe('claude');
+    });
+  });
+
   // -------------------------------------------------------------------------
   // Durable workflow_started configuration snapshot
   // -------------------------------------------------------------------------
@@ -1186,6 +1493,12 @@ describe('executeWorkflow', () => {
           })
         ),
         getUserAiPrefs: mock(async () => ({ defaultProvider: 'codex' })),
+        sealRunConfig: mock(() => ({
+          version: 1 as const,
+          ciphertext: 'opaque',
+          source: { kind: 'http' as const, label: 'inline' },
+          keys: ['assistant'],
+        })),
       } as WorkflowDeps;
       const platform = {
         sendMessage: mock(async () => {}),
@@ -1205,6 +1518,10 @@ describe('executeWorkflow', () => {
           baseBranch: 'caller-base',
           baseOverride: 'override-base',
           isolationContext: { branchName: 'feature/snapshot' },
+          runConfig: {
+            source: { kind: 'http', label: 'inline' },
+            layer: { assistant: 'pi' },
+          },
         }
       );
 
@@ -1213,7 +1530,7 @@ describe('executeWorkflow', () => {
         .find(event => event.event_type === 'workflow_started');
       expect(startedEvent?.data).toEqual({
         workflowName: 'test-workflow',
-        defaultAssistant: 'codex',
+        defaultAssistant: 'pi',
         provider: 'codex',
         model: 'gpt-5.5',
         isolationMode: 'worktree',
@@ -1720,7 +2037,13 @@ describe('executeWorkflow', () => {
       const tokens = { input: 40, output: 4 };
       const costUsd = 0.25;
       const store = makeStore({
-        getDagResumeSnapshot: mock(async () => ({ completedNodeOutputs, tokens, costUsd })),
+        getDagResumeSnapshot: mock(async () => ({
+          completedNodeOutputs,
+          fanOutSnapshots: new Map(),
+          unresolvedNodeStarts: new Set<string>(),
+          tokens,
+          costUsd,
+        })),
         listWorkflowRunNodeSessions: mock(async () => [
           {
             workflow_run_id: 'failed-run',
@@ -2891,6 +3214,29 @@ describe('telemetry wiring', () => {
 // ───────────────────────────────────────────────────────────────────────────
 
 describe('hydrateResumableRun', () => {
+  it('inspects resumable state without claiming the run', async () => {
+    const candidate = makeRun({ id: 'read-only-prior', status: 'paused' });
+    const priorNodes = new Map([['n1', { output: 'out1' }]]);
+    const store = makeStore({
+      getDagResumeSnapshot: mock(async () => ({
+        completedNodeOutputs: priorNodes,
+        fanOutSnapshots: new Map(),
+        unresolvedNodeStarts: new Set<string>(),
+        tokens: { input: 4, output: 1 },
+        costUsd: 0.1,
+      })),
+    });
+
+    const result = await inspectResumableRun(makeDeps(store), candidate);
+
+    expect(result).toEqual({
+      priorCompletedNodes: priorNodes,
+      priorUsage: { tokens: { input: 4, output: 1 }, costUsd: 0.1 },
+    });
+    expect(store.resumeWorkflowRun).not.toHaveBeenCalled();
+    expect(store.listWorkflowRunNodeSessions).not.toHaveBeenCalled();
+  });
+
   it('returns hydrated run + prior outputs for a candidate with completed nodes', async () => {
     const candidate = makeRun({ id: 'prior-failed', status: 'failed' });
     const resumed = makeRun({ id: 'prior-failed', status: 'running' });
@@ -2898,6 +3244,8 @@ describe('hydrateResumableRun', () => {
     const store = makeStore({
       getDagResumeSnapshot: mock(async () => ({
         completedNodeOutputs: priorNodes,
+        fanOutSnapshots: new Map(),
+        unresolvedNodeStarts: new Set<string>(),
         tokens: { input: 40, output: 4 },
         costUsd: 0.75,
       })),
@@ -2937,6 +3285,8 @@ describe('hydrateResumableRun', () => {
     const store = makeStore({
       getDagResumeSnapshot: mock(async () => ({
         completedNodeOutputs: new Map(),
+        fanOutSnapshots: new Map(),
+        unresolvedNodeStarts: new Set<string>(),
         tokens: { input: 0, output: 0 },
         costUsd: 0,
       })),
@@ -2946,6 +3296,39 @@ describe('hydrateResumableRun', () => {
     expect(result).toBeNull();
     // Must not transition the run — there is nothing to resume.
     expect(store.resumeWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('hydrates fan-out-only recovery state before any inner node completed', async () => {
+    const fanOutSnapshots = new Map([
+      [
+        'fan',
+        [
+          {
+            ordinal: 0,
+            identity: 'instance-a',
+            item: 'a',
+            inputs: { item: 'a' },
+          },
+        ],
+      ],
+    ]);
+    const candidate = makeRun({ id: 'fan-out-only', status: 'failed' });
+    const resumed = makeRun({ id: 'fan-out-only', status: 'running' });
+    const store = makeStore({
+      getDagResumeSnapshot: mock(async () => ({
+        completedNodeOutputs: new Map(),
+        fanOutSnapshots,
+        unresolvedNodeStarts: new Set(['fan__instance-a']),
+        tokens: { input: 0, output: 0 },
+        costUsd: 0,
+      })),
+      resumeWorkflowRun: mock(async () => resumed),
+    });
+
+    const result = await hydrateResumableRun(makeDeps(store), candidate);
+
+    expect(result).not.toBeNull();
+    expect(store.resumeWorkflowRun).toHaveBeenCalledWith('fan-out-only');
   });
 
   it('returns hydrated run when interactive-loop state is present even with zero completed nodes', async () => {
@@ -2960,6 +3343,8 @@ describe('hydrateResumableRun', () => {
     const store = makeStore({
       getDagResumeSnapshot: mock(async () => ({
         completedNodeOutputs: new Map(),
+        fanOutSnapshots: new Map(),
+        unresolvedNodeStarts: new Set<string>(),
         tokens: { input: 0, output: 0 },
         costUsd: 0,
       })),
@@ -3006,6 +3391,8 @@ describe('hydrateResumableRun', () => {
     const store = makeStore({
       getDagResumeSnapshot: mock(async () => ({
         completedNodeOutputs: new Map(),
+        fanOutSnapshots: new Map(),
+        unresolvedNodeStarts: new Set<string>(),
         tokens: { input: 0, output: 0 },
         costUsd: 0,
       })),
@@ -3044,6 +3431,8 @@ describe('hydrateResumableRun', () => {
     const store = makeStore({
       getDagResumeSnapshot: mock(async () => ({
         completedNodeOutputs: new Map(),
+        fanOutSnapshots: new Map(),
+        unresolvedNodeStarts: new Set<string>(),
         tokens: { input: 0, output: 0 },
         costUsd: 0,
       })),
@@ -3076,6 +3465,8 @@ describe('hydrateResumableRun', () => {
     const store = makeStore({
       getDagResumeSnapshot: mock(async () => ({
         completedNodeOutputs: new Map(),
+        fanOutSnapshots: new Map(),
+        unresolvedNodeStarts: new Set<string>(),
         tokens: { input: 0, output: 0 },
         costUsd: 0,
       })),
@@ -3100,6 +3491,8 @@ describe('hydrateResumableRun', () => {
     const store = makeStore({
       getDagResumeSnapshot: mock(async () => ({
         completedNodeOutputs: priorNodes,
+        fanOutSnapshots: new Map(),
+        unresolvedNodeStarts: new Set<string>(),
         tokens: { input: 0, output: 0 },
         costUsd: 0,
       })),
@@ -3127,6 +3520,8 @@ describe('hydrateResumableRun', () => {
     const store = makeStore({
       getDagResumeSnapshot: mock(async () => ({
         completedNodeOutputs: new Map([['n1', { output: 'v1' }]]),
+        fanOutSnapshots: new Map(),
+        unresolvedNodeStarts: new Set<string>(),
         tokens: { input: 0, output: 0 },
         costUsd: 0,
       })),

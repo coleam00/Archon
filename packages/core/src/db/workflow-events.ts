@@ -4,8 +4,8 @@
  * Stores step transitions, parallel agent status, artifacts, and errors.
  * Verbose assistant/tool content stays in JSONL logs only.
  *
- * All write operations use fire-and-forget pattern (catch + log, never throw)
- * because workflow execution must not fail due to event logging.
+ * Ordinary observability writes are fire-and-forget. Correctness-critical lifecycle
+ * writes use `persistWorkflowEvent` and propagate storage failure to their owner.
  * Read operations also throw on error — callers own the degradation policy.
  */
 import { pool, getDialect, getDatabaseType } from './connection';
@@ -14,6 +14,7 @@ import type { WorkflowEventRow } from '../schemas/workflow-event';
 import { createLogger } from '@archon/paths';
 import { mergeTokenUsage, type TokenUsage } from '@archon/providers/types';
 import { readFile } from 'node:fs/promises';
+import type { FanOutInstanceSnapshot } from '@archon/workflows/fan-out-identity';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -115,6 +116,43 @@ export async function createWorkflowEvent(data: WorkflowEventInput): Promise<voi
     );
     // Fire-and-forget: never throw
   }
+}
+
+/** Persist a correctness-critical event and propagate storage errors to the caller. */
+export async function persistWorkflowEvent(data: WorkflowEventInput): Promise<void> {
+  await insertWorkflowEvent((sql, params) => pool.query(sql, params), data);
+}
+
+/**
+ * Persist a correctness-critical start while the owning run is running, or while it is
+ * paused when the caller already owns deterministic work that must finish through that
+ * pause. This is one conditional INSERT rather than a SELECT followed by an INSERT: on
+ * SQLite, a plain cancellation query can otherwise join the claim's open transaction
+ * between those two statements. PostgreSQL additionally locks the selected run row, so
+ * its concurrent cancellation UPDATE observes the same claim order.
+ */
+export async function persistWorkflowEventIfRunning(
+  data: WorkflowEventInput,
+  options?: { allowPaused?: boolean }
+): Promise<{ persisted: boolean }> {
+  const lockClause = getDatabaseType() === 'postgresql' ? ' FOR UPDATE' : '';
+  const statusPredicate =
+    options?.allowPaused === true ? "status IN ('running', 'paused')" : "status = 'running'";
+  const result = await pool.query(
+    `INSERT INTO remote_agent_workflow_events (id, workflow_run_id, event_type, step_index, step_name, data)
+     SELECT $1, $2, $3, $4, $5, $6
+     FROM remote_agent_workflow_runs
+     WHERE id = $2 AND ${statusPredicate}${lockClause}`,
+    [
+      getDialect().generateUuid(),
+      data.workflow_run_id,
+      data.event_type,
+      data.step_index ?? null,
+      data.step_name ?? null,
+      JSON.stringify(data.data ?? {}),
+    ]
+  );
+  return { persisted: result.rowCount > 0 };
 }
 
 /**
@@ -256,28 +294,103 @@ export async function listWorkflowEventsSince(
  * double-count its cost. Bounded and self-clearing: only cost is affected (the roll-up
  * never carried `tokens`), and only until those runs reach a terminal state.
  */
+function isFanOutItem(value: unknown): value is FanOutInstanceSnapshot['item'] {
+  if (
+    value === null ||
+    typeof value === 'string' ||
+    typeof value === 'boolean' ||
+    (typeof value === 'number' && Number.isFinite(value))
+  ) {
+    return true;
+  }
+  if (Array.isArray(value)) return value.every(isFanOutItem);
+  if (typeof value !== 'object') return false;
+  return Object.values(value).every(isFanOutItem);
+}
+
+function isFanOutInputs(value: unknown): value is Record<string, FanOutInstanceSnapshot['item']> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.values(value).every(isFanOutItem)
+  );
+}
+
+function parseFanOutSnapshots(value: unknown): FanOutInstanceSnapshot[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const identities = new Set<string>();
+  const snapshots: FanOutInstanceSnapshot[] = [];
+  for (const [index, entry] of value.entries()) {
+    if (
+      typeof entry !== 'object' ||
+      entry === null ||
+      !('ordinal' in entry) ||
+      !('identity' in entry) ||
+      !('item' in entry) ||
+      !('inputs' in entry) ||
+      entry.ordinal !== index ||
+      typeof entry.identity !== 'string' ||
+      entry.identity.length === 0 ||
+      identities.has(entry.identity) ||
+      !isFanOutItem(entry.item) ||
+      !isFanOutInputs(entry.inputs)
+    ) {
+      return undefined;
+    }
+    identities.add(entry.identity);
+    snapshots.push({
+      ordinal: index,
+      identity: entry.identity,
+      item: entry.item,
+      inputs: entry.inputs,
+    });
+  }
+  return snapshots;
+}
+
 export async function getDagResumeSnapshot(workflowRunId: string): Promise<{
   completedNodeOutputs: Map<string, { output: string; structuredOutput?: unknown }>;
+  fanOutSnapshots: Map<string, readonly FanOutInstanceSnapshot[]>;
+  unresolvedNodeStarts: Set<string>;
   tokens?: TokenUsage;
   costUsd: number;
 }> {
   const result = await pool.query<{
     step_name: string | null;
-    event_type: 'node_completed' | 'node_failed' | 'node_skipped_prior_success';
+    event_type:
+      | 'node_started'
+      | 'node_completed'
+      | 'node_failed'
+      | 'node_skipped'
+      | 'node_skipped_prior_success'
+      | 'fan_out_instances';
     data: string | Record<string, unknown>;
   }>(
     `SELECT step_name, event_type, data FROM remote_agent_workflow_events
-     WHERE workflow_run_id = $1 AND event_type IN ('node_completed', 'node_failed', 'node_skipped_prior_success')
+     WHERE workflow_run_id = $1 AND event_type IN ('node_started', 'node_completed', 'node_failed', 'node_skipped', 'node_skipped_prior_success', 'fan_out_instances')
      ORDER BY created_at ASC, COALESCE(event_order, 0) ASC, id ASC`,
     [workflowRunId]
   );
   const completedNodeOutputs = new Map<string, { output: string; structuredOutput?: unknown }>();
+  const fanOutSnapshots = new Map<string, readonly FanOutInstanceSnapshot[]>();
+  const unresolvedNodeStarts = new Set<string>();
   // Collected and merged once at the end rather than folded pairwise: a pairwise fold
   // cannot tell "one of five contributions reported" from "one of two" (#2662).
-  const usages: TokenUsage[] = [];
-  let costUsd = 0;
+  const usageContributions: { stepName: string; tokens?: TokenUsage; costUsd?: number }[] = [];
+  const authoritativeInstanceScopes = new Set<string>();
   for (const row of result.rows) {
     if (!row.step_name) continue;
+    if (row.event_type === 'node_started') {
+      unresolvedNodeStarts.add(row.step_name);
+    } else if (
+      row.event_type === 'node_completed' ||
+      row.event_type === 'node_failed' ||
+      row.event_type === 'node_skipped' ||
+      row.event_type === 'node_skipped_prior_success'
+    ) {
+      unresolvedNodeStarts.delete(row.step_name);
+    }
     let data: Record<string, unknown>;
     try {
       data = typeof row.data === 'string' ? JSON.parse(row.data) : row.data;
@@ -288,6 +401,14 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<{
       );
       continue;
     }
+    if (row.event_type === 'fan_out_instances') {
+      if (!fanOutSnapshots.has(row.step_name)) {
+        const snapshots = parseFanOutSnapshots(data.instances);
+        if (snapshots !== undefined) fanOutSnapshots.set(row.step_name, snapshots);
+      }
+      continue;
+    }
+    if (row.event_type === 'node_started' || row.event_type === 'node_skipped') continue;
     if (row.event_type === 'node_failed') {
       // A later failure for this step supersedes any earlier node_completed /
       // node_skipped_prior_success entry (#2705 R2) — otherwise a node the engine's own
@@ -356,8 +477,17 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<{
           : {}),
       });
     }
-    // A derived row restates usage that other rows in this same log already carry.
-    if (data.aggregate === true) continue;
+    // Composed-instance terminals are the durable accounting source for their whole
+    // scope. Their inner rows are observability writes and may be missing after a crash.
+    const isAuthoritativeInstanceUsage =
+      data.type === 'compose_fan_out_instance' &&
+      (row.event_type === 'node_completed' || row.event_type === 'node_failed');
+    if (isAuthoritativeInstanceUsage) authoritativeInstanceScopes.add(row.step_name);
+    // Other aggregate rows merely restate usage already carried by their leaves.
+    if (data.aggregate === true && !isAuthoritativeInstanceUsage) continue;
+    const contribution: { stepName: string; tokens?: TokenUsage; costUsd?: number } = {
+      stepName: row.step_name,
+    };
     if (row.event_type !== 'node_skipped_prior_success' && data.tokens !== undefined) {
       const eventTokens = data.tokens;
       if (
@@ -393,7 +523,7 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<{
         if (optionalTokens.cachePartial === true) {
           normalized.cachePartial = true;
         }
-        usages.push(normalized);
+        contribution.tokens = normalized;
       } else {
         getLog().warn(
           { runId: workflowRunId, stepName: row.step_name, tokens: eventTokens },
@@ -407,7 +537,7 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<{
       // silently poison the total (NaN > 0 is false, which would drop the run's
       // cost from the persisted metadata with no trace).
       if (typeof eventCost === 'number' && Number.isFinite(eventCost)) {
-        costUsd += eventCost;
+        contribution.costUsd = eventCost;
       } else {
         getLog().warn(
           { runId: workflowRunId, stepName: row.step_name, costUsd: eventCost },
@@ -415,6 +545,24 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<{
         );
       }
     }
+    if (contribution.tokens !== undefined || contribution.costUsd !== undefined) {
+      usageContributions.push(contribution);
+    }
   }
-  return { completedNodeOutputs, tokens: mergeTokenUsage(usages), costUsd };
+  const authoritativeInstancePrefixes = [...authoritativeInstanceScopes].map(scope => `${scope}__`);
+  const countedUsage = usageContributions.filter(
+    contribution =>
+      !authoritativeInstancePrefixes.some(prefix => contribution.stepName.startsWith(prefix))
+  );
+  return {
+    completedNodeOutputs,
+    fanOutSnapshots,
+    unresolvedNodeStarts,
+    tokens: mergeTokenUsage(
+      countedUsage.flatMap(contribution =>
+        contribution.tokens === undefined ? [] : [contribution.tokens]
+      )
+    ),
+    costUsd: countedUsage.reduce((total, contribution) => total + (contribution.costUsd ?? 0), 0),
+  };
 }

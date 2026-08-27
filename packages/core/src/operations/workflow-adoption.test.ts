@@ -7,6 +7,7 @@
  * is what is under test.
  */
 import { describe, expect, test } from 'bun:test';
+import type { IsolationEnvironmentRow } from '@archon/isolation';
 import { resolveWorkflowAdoption, WorkflowAdoptionError } from './workflow-adoption';
 
 function runRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -61,15 +62,16 @@ function makeDeps(
   overrides: {
     run?: Record<string, unknown> | null;
     activeHolder?: Record<string, unknown> | null;
-    environments?: Record<string, unknown>[];
+    environment?: Record<string, unknown> | null;
   } = {}
 ) {
   return {
     existsSync: (p: string) => p === '/ws/repo/.worktrees/run-1',
     branchExists: async (_repo: string, branch: string) => branch === 'alive-branch',
+    currentBranch: async (): Promise<string | null> => 'impl-branch',
     getRun: async () => ('run' in overrides ? overrides.run : null),
     getActiveRunByPath: async () => overrides.activeHolder ?? null,
-    listEnvironments: async () => overrides.environments ?? [],
+    findEnvironmentByPath: async () => overrides.environment ?? null,
   };
 }
 
@@ -103,6 +105,24 @@ describe('resolveWorkflowAdoption', () => {
     ).rejects.toThrow(/different project/);
   });
 
+  test('refuses adoption when either codebase identity is missing', async () => {
+    await expect(
+      resolveWorkflowAdoption({
+        ...baseArgs,
+        adoptedRunId: 'run-1',
+        codebaseId: null,
+        deps: makeDeps({ run: runRow() }),
+      })
+    ).rejects.toThrow(/different project/);
+    await expect(
+      resolveWorkflowAdoption({
+        ...baseArgs,
+        adoptedRunId: 'run-1',
+        deps: makeDeps({ run: runRow({ codebase_id: null }) }),
+      })
+    ).rejects.toThrow(/different project/);
+  });
+
   test('refuses container-backed runs in v1', async () => {
     await expect(
       resolveWorkflowAdoption({
@@ -119,7 +139,7 @@ describe('resolveWorkflowAdoption', () => {
       await resolveWorkflowAdoption({
         ...baseArgs,
         adoptedRunId: 'run-1',
-        deps: makeDeps({ run: runRow(), environments: [envRow()] }),
+        deps: makeDeps({ run: runRow(), environment: envRow() }),
       })
     ).lane;
     expect(lane).toEqual({
@@ -129,13 +149,59 @@ describe('resolveWorkflowAdoption', () => {
     });
   });
 
+  test('refuses a surviving worktree that moved off its recorded branch', async () => {
+    const inspectedPaths: string[] = [];
+    await expect(
+      resolveWorkflowAdoption({
+        ...baseArgs,
+        adoptedRunId: 'run-1',
+        deps: {
+          ...makeDeps({ run: runRow(), environment: envRow() }),
+          currentBranch: async (path): Promise<string | null> => {
+            inspectedPaths.push(path);
+            return path === '/ws/repo/.worktrees/run-1' ? 'other-branch' : 'impl-branch';
+          },
+        },
+      })
+    ).rejects.toThrow(/recorded on branch 'impl-branch' but is now on 'other-branch'/);
+    expect(inspectedPaths).toEqual(['/ws/repo/.worktrees/run-1']);
+  });
+
+  test('refuses a surviving worktree at detached HEAD', async () => {
+    await expect(
+      resolveWorkflowAdoption({
+        ...baseArgs,
+        adoptedRunId: 'run-1',
+        deps: {
+          ...makeDeps({ run: runRow(), environment: envRow() }),
+          currentBranch: async (): Promise<string | null> => null,
+        },
+      })
+    ).rejects.toThrow(/detached HEAD/);
+  });
+
+  test('preserves an unexpected branch-inspection failure', async () => {
+    await expect(
+      resolveWorkflowAdoption({
+        ...baseArgs,
+        adoptedRunId: 'run-1',
+        deps: {
+          ...makeDeps({ run: runRow(), environment: envRow() }),
+          currentBranch: async (): Promise<string | null> => {
+            throw new Error('git probe timed out');
+          },
+        },
+      })
+    ).rejects.toThrow(/git probe timed out/);
+  });
+
   test('refuses reuse when another LIVE run holds the same path', async () => {
     const err = await resolveWorkflowAdoption({
       ...baseArgs,
       adoptedRunId: 'run-1',
       deps: makeDeps({
         run: runRow(),
-        environments: [envRow()],
+        environment: envRow(),
         activeHolder: runRow({ id: 'other-run', status: 'running' }),
       }),
     }).catch((e: unknown) => e);
@@ -143,7 +209,7 @@ describe('resolveWorkflowAdoption', () => {
     expect((err as Error).message).toMatch(/held by live run 'other-run'/);
   });
 
-  test('cuts a fresh worktree from the adopted branch when the worktree is gone', async () => {
+  test('checks out the adopted branch when the worktree is gone', async () => {
     // Worktree deleted: env row destroyed AND nothing on disk. The branch survives.
     const lane = (
       await resolveWorkflowAdoption({
@@ -151,18 +217,61 @@ describe('resolveWorkflowAdoption', () => {
         adoptedRunId: 'run-1',
         deps: makeDeps({
           run: runRow({ working_path: '/ws/repo/.worktrees/vanished' }),
-          environments: [
-            envRow({
-              id: 'env-gone',
-              working_path: '/ws/repo/.worktrees/vanished',
-              branch_name: 'alive-branch',
-              status: 'destroyed',
-            }),
-          ],
+          environment: envRow({
+            id: 'env-gone',
+            working_path: '/ws/repo/.worktrees/vanished',
+            branch_name: 'alive-branch',
+            status: 'destroyed',
+          }),
         }),
       })
     ).lane;
-    expect(lane).toEqual({ kind: 'fresh-from-branch', branch: 'alive-branch' });
+    expect(lane).toEqual({
+      kind: 'checkout-branch',
+      taskBranch: { kind: 'existing', branch: 'alive-branch' },
+    });
+  });
+
+  test("bounds estate history by the adopted run's start time", async () => {
+    const startedAt = new Date('2026-08-25T09:00:00.000Z');
+    const completedAt = new Date('2026-08-25T12:00:00.000Z');
+    const lookupCalls: Array<{ codebaseId: string; workingPath: string; cutoff: Date }> = [];
+    const lane = (
+      await resolveWorkflowAdoption({
+        ...baseArgs,
+        adoptedRunId: 'run-1',
+        deps: {
+          ...makeDeps({
+            run: runRow({
+              working_path: '/ws/repo/.worktrees/vanished',
+              started_at: startedAt,
+              completed_at: completedAt,
+            }),
+          }),
+          findEnvironmentByPath: async (codebaseId, workingPath, cutoff) => {
+            lookupCalls.push({ codebaseId, workingPath, cutoff });
+            return envRow({
+              working_path: workingPath,
+              branch_name:
+                cutoff.getTime() === startedAt.getTime() ? 'alive-branch' : 'later-branch',
+              status: 'destroyed',
+            }) as IsolationEnvironmentRow;
+          },
+        },
+      })
+    ).lane;
+
+    expect(lookupCalls).toEqual([
+      {
+        codebaseId: 'cb-1',
+        workingPath: '/ws/repo/.worktrees/vanished',
+        cutoff: startedAt,
+      },
+    ]);
+    expect(lane).toEqual({
+      kind: 'checkout-branch',
+      taskBranch: { kind: 'existing', branch: 'alive-branch' },
+    });
   });
 
   test('refuses when neither worktree nor branch survives', async () => {
@@ -171,14 +280,12 @@ describe('resolveWorkflowAdoption', () => {
       adoptedRunId: 'run-1',
       deps: makeDeps({
         run: runRow({ working_path: '/ws/repo/.worktrees/vanished' }),
-        environments: [
-          envRow({
-            id: 'env-gone',
-            working_path: '/ws/repo/.worktrees/vanished',
-            branch_name: 'deleted-branch',
-            status: 'destroyed',
-          }),
-        ],
+        environment: envRow({
+          id: 'env-gone',
+          working_path: '/ws/repo/.worktrees/vanished',
+          branch_name: 'deleted-branch',
+          status: 'destroyed',
+        }),
       }),
     }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(WorkflowAdoptionError);

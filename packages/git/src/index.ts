@@ -36,6 +36,8 @@ export {
   getDefaultBranch,
   getUniqueCommitCount,
   getCurrentBranch,
+  getCurrentBranchStrict,
+  localBranchExists,
   countCommitsAhead,
   checkout,
   hasUncommittedChanges,

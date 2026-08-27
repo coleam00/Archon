@@ -1,5 +1,10 @@
 import type { CopilotProviderDefaults } from '../../types';
-import { clampEffort } from '../../shared/effort';
+import { clampEffort, isEffortRung } from '../../shared/effort';
+import {
+  assertKnownRunConfigKeys,
+  invalidRunConfigValue,
+  normalizeRunConfigString,
+} from '../../shared/run-config';
 
 export type { CopilotProviderDefaults };
 
@@ -72,4 +77,42 @@ export function parseCopilotConfig(raw: Record<string, unknown>): CopilotProvide
   }
 
   return config;
+}
+
+/** Strict counterpart used only for an explicitly selected per-run layer. */
+export function parseCopilotRunConfig(raw: Record<string, unknown>): CopilotProviderDefaults {
+  assertKnownRunConfigKeys(raw, [
+    'model',
+    'modelReasoningEffort',
+    'copilotCliPath',
+    'configDir',
+    'enableConfigDiscovery',
+    'useLoggedInUser',
+    'logLevel',
+  ]);
+  const model = normalizeRunConfigString(raw.model, 'model');
+  const copilotCliPath = normalizeRunConfigString(raw.copilotCliPath, 'copilotCliPath');
+  const configDir = normalizeRunConfigString(raw.configDir, 'configDir');
+  if (raw.modelReasoningEffort !== undefined && !isEffortRung(raw.modelReasoningEffort)) {
+    invalidRunConfigValue('modelReasoningEffort', 'a valid Archon effort level');
+  }
+  for (const key of ['enableConfigDiscovery', 'useLoggedInUser'] as const) {
+    if (raw[key] !== undefined && typeof raw[key] !== 'boolean') {
+      invalidRunConfigValue(key, 'a boolean');
+    }
+  }
+  if (
+    raw.logLevel !== undefined &&
+    (typeof raw.logLevel !== 'string' ||
+      !['none', 'error', 'warning', 'info', 'debug', 'all'].includes(raw.logLevel))
+  ) {
+    invalidRunConfigValue('logLevel', 'none, error, warning, info, debug, or all');
+  }
+  const parsed = parseCopilotConfig(raw);
+  return {
+    ...parsed,
+    ...(model === undefined ? {} : { model }),
+    ...(copilotCliPath === undefined ? {} : { copilotCliPath }),
+    ...(configDir === undefined ? {} : { configDir }),
+  };
 }

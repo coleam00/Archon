@@ -22,6 +22,10 @@
  */
 import { config } from 'dotenv';
 import { resolve } from 'path';
+import {
+  captureDetachedInstallContext,
+  restoreDetachedInstallContext,
+} from './detached-install-context';
 
 /** The four filenames Bun auto-loads from CWD (in loading order). */
 const BUN_AUTO_LOADED_ENV_FILES = ['.env', '.env.local', '.env.development', '.env.production'];
@@ -39,6 +43,13 @@ const CLAUDE_CODE_AUTH_VARS = new Set([
  * Safe to call even when no CWD .env files exist.
  */
 export function stripCwdEnv(cwd: string = process.cwd()): void {
+  const preserveDetachedInstallContext = process.argv
+    .slice(2)
+    .includes('--internal-detached-run-config');
+  const inheritedInstallContext = preserveDetachedInstallContext
+    ? captureDetachedInstallContext()
+    : undefined;
+
   // --- Pass 1: CWD .env files ---
   const cwdKeys = new Set<string>();
   const strippedFiles: string[] = [];
@@ -71,6 +82,13 @@ export function stripCwdEnv(cwd: string = process.cwd()): void {
 
   for (const key of cwdKeys) {
     Reflect.deleteProperty(process.env, key);
+  }
+
+  // A detached parent already sealed the run config with this install context.
+  // Bun's target-repo .env stripping must not delete it before CLI boot can
+  // protect it from the later Archon-owned env layers too.
+  if (inheritedInstallContext) {
+    restoreDetachedInstallContext(inheritedInstallContext);
   }
 
   // Tell the operator what we just did — otherwise the delete loop is silent

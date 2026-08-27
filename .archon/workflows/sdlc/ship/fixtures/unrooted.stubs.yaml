@@ -1,0 +1,14 @@
+# Dry-run fixture: an honest inconclusive investigation is a valid terminal
+# result (run with --default-stubs --exec-code). gate-rooted and the complete
+# delivery tail stay skipped, while the real outcome node points to the report.
+triage__triage:
+  route: investigate
+  summary: "stub: reported failure still needs a proven cause"
+triage__assert-intact: '{"intact":"true"}'
+inv__investigate:
+  rooted: false
+  summary: "stub: two hypotheses survive — not proven"
+inv__assert-intact: '{"intact":"true"}'
+fixture:
+  expect: completed
+exec-code: true

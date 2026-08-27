@@ -10,6 +10,7 @@ name: Docs Build
 # reason to pay it on the ~95% of PRs that never touch packages/docs-web.
 
 on:
+  workflow_dispatch:
   pull_request:
     paths:
       - 'packages/docs-web/**'

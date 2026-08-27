@@ -14,7 +14,11 @@
  * per call.
  */
 
-import { getProviderCapabilities, isRegisteredProvider } from '@archon/providers';
+import {
+  getProviderCapabilities,
+  isRegisteredProvider,
+  parseProviderRunModel,
+} from '@archon/providers';
 import { parsePiModelRef } from '@archon/providers/community/pi';
 import tierDefaults from './defaults/tier-defaults.json';
 import { EFFORT_LEVELS } from './schemas/dag-node';
@@ -104,6 +108,113 @@ function assertValidEntry(name: string, entry: RawAliasEntry): void {
 function assertValidPersistedPreset(name: string, entry: ModelAliasPreset): void {
   if (entry.effort !== undefined && !isEffortValidForProvider(entry.provider, entry.effort)) {
     throw new Error(`Model binding '${name}' has an invalid effort.`);
+  }
+}
+
+export type RunModelPresetValidationIssue =
+  | { kind: 'unknown-provider'; provider: string; field: 'provider' }
+  | { kind: 'invalid-model'; provider: string; model: string; reason: string; field: 'model' }
+  | { kind: 'unsupported-effort'; provider: string; effort: string; field: 'effort' }
+  | {
+      kind: 'invalid-effort';
+      provider: string;
+      effort: string;
+      valid: readonly string[];
+      field: 'effort';
+    }
+  | { kind: 'unsupported-thinking'; provider: string; field: 'thinking' };
+
+function runModelPresetValidationMessage(issue: RunModelPresetValidationIssue): string {
+  switch (issue.kind) {
+    case 'unknown-provider':
+      return `resolved to unknown provider '${issue.provider}'`;
+    case 'invalid-model':
+      return `has invalid ${issue.provider} model '${issue.model}': ${issue.reason}`;
+    case 'unsupported-effort':
+      return `cannot apply effort to provider '${issue.provider}'`;
+    case 'invalid-effort':
+      return (
+        `has invalid ${issue.provider} effort '${issue.effort}'. ` +
+        `Valid: ${issue.valid.join(', ')}`
+      );
+    case 'unsupported-thinking':
+      return `cannot apply Claude-shaped thinking options to provider '${issue.provider}'`;
+  }
+}
+
+/** A strict execution-input preset failed a provider-owned semantic invariant. */
+export class RunModelPresetValidationError extends Error {
+  constructor(readonly issue: RunModelPresetValidationIssue) {
+    super(runModelPresetValidationMessage(issue));
+    this.name = 'RunModelPresetValidationError';
+  }
+}
+
+/**
+ * Validate and canonicalize a model preset that will directly affect one run.
+ * Ordinary layered config remains tolerant; every strict execution-input path
+ * (fresh config, explicit overrides, and persisted overrides) shares this gate.
+ */
+export function normalizeStrictRunModelPreset(preset: ModelAliasPreset): ModelAliasPreset {
+  if (!isRegisteredProvider(preset.provider)) {
+    throw new RunModelPresetValidationError({
+      kind: 'unknown-provider',
+      provider: preset.provider,
+      field: 'provider',
+    });
+  }
+
+  let model: string;
+  try {
+    model = parseProviderRunModel(preset.provider, preset.model);
+  } catch (error) {
+    throw new RunModelPresetValidationError({
+      kind: 'invalid-model',
+      provider: preset.provider,
+      model: preset.model,
+      reason: error instanceof Error ? error.message : String(error),
+      field: 'model',
+    });
+  }
+
+  if (preset.effort !== undefined) {
+    const valid = validEffortsForProvider(preset.provider);
+    if (valid === null) {
+      throw new RunModelPresetValidationError({
+        kind: 'unsupported-effort',
+        provider: preset.provider,
+        effort: preset.effort,
+        field: 'effort',
+      });
+    }
+    if (!valid.includes(preset.effort)) {
+      throw new RunModelPresetValidationError({
+        kind: 'invalid-effort',
+        provider: preset.provider,
+        effort: preset.effort,
+        valid,
+        field: 'effort',
+      });
+    }
+  }
+
+  if (preset.thinking !== undefined && preset.provider !== 'claude') {
+    throw new RunModelPresetValidationError({
+      kind: 'unsupported-thinking',
+      provider: preset.provider,
+      field: 'thinking',
+    });
+  }
+
+  return model === preset.model ? preset : { ...preset, model };
+}
+
+function normalizePersistedOverridePreset(name: string, entry: ModelAliasPreset): ModelAliasPreset {
+  try {
+    return normalizeStrictRunModelPreset(entry);
+  } catch (error) {
+    if (!(error instanceof RunModelPresetValidationError)) throw error;
+    throw new Error(`Model binding '${name}' ${error.message}.`);
   }
 }
 
@@ -208,6 +319,15 @@ function presetForOverrideTarget(profile: ResolvedAiProfile, name: string): Mode
   return preset;
 }
 
+function normalizeRunOverridePreset(targetName: string, preset: RawAliasEntry): RawAliasEntry {
+  try {
+    return normalizeStrictRunModelPreset(preset);
+  } catch (error) {
+    if (!(error instanceof RunModelPresetValidationError)) throw error;
+    throw new Error(`Model override '${targetName}' ${error.message}.`);
+  }
+}
+
 function resolveRunOverrideSpec(
   profile: ResolvedAiProfile,
   targetName: string,
@@ -221,13 +341,13 @@ function resolveRunOverrideSpec(
     if (isLiteralSpec(resolved)) {
       throw new Error(`Model override '${targetName}' could not resolve '${spec}'.`);
     }
-    return { ...resolved };
+    return normalizeRunOverridePreset(targetName, { ...resolved });
   }
 
   const slash = spec.indexOf('/');
   if (slash === -1) {
     const target = presetForOverrideTarget(profile, targetName);
-    return { provider: target.provider, model: spec };
+    return normalizeRunOverridePreset(targetName, { provider: target.provider, model: spec });
   }
 
   const prefix = spec.slice(0, slash);
@@ -236,12 +356,7 @@ function resolveRunOverrideSpec(
     if (remainder.length === 0) {
       throw new Error(`Model override '${targetName}' has an empty model id.`);
     }
-    if (prefix === 'pi' && !parsePiModelRef(remainder)) {
-      throw new Error(
-        `Model override '${targetName}' has invalid Pi model '${remainder}'. Expected <vendor>/<model>.`
-      );
-    }
-    return { provider: prefix, model: remainder };
+    return normalizeRunOverridePreset(targetName, { provider: prefix, model: remainder });
   }
 
   if (!parsePiModelRef(spec)) {
@@ -249,7 +364,7 @@ function resolveRunOverrideSpec(
       `Model override '${targetName}' has invalid model '${spec}'. Expected <agent>/<model> or <vendor>/<model>.`
     );
   }
-  return { provider: 'pi', model: spec };
+  return normalizeRunOverridePreset(targetName, { provider: 'pi', model: spec });
 }
 
 /**
@@ -277,6 +392,21 @@ export function resolveRunModelOverrides(
   return {
     ...(Object.keys(tiers).length > 0 ? { tiers } : {}),
     ...(Object.keys(aliases).length > 0 ? { aliases } : {}),
+  };
+}
+
+/** Apply already validated sparse run bindings without rebuilding lower config layers. */
+export function applyResolvedRunModelOverrides(
+  profile: ResolvedAiProfile,
+  overrides: ResolvedRunModelOverrides
+): ResolvedAiProfile {
+  return {
+    defaultProvider: profile.defaultProvider,
+    aliases: {
+      ...profile.aliases,
+      ...overrides.tiers,
+      ...overrides.aliases,
+    },
   };
 }
 
@@ -376,17 +506,29 @@ export function readRunModelBindingsMetadata(
     throw new Error('Workflow run has invalid model_bindings metadata.');
   }
 
-  for (const layer of [
-    parsed.data.overrides.tiers,
-    parsed.data.overrides.aliases,
-    parsed.data.effective.aliases,
-  ]) {
-    for (const [name, preset] of Object.entries(layer ?? {})) {
-      assertValidPersistedPreset(name, preset);
-    }
+  const tiers = Object.fromEntries(
+    Object.entries(parsed.data.overrides.tiers ?? {}).map(([name, preset]) => [
+      name,
+      normalizePersistedOverridePreset(name, preset),
+    ])
+  );
+  const aliases = Object.fromEntries(
+    Object.entries(parsed.data.overrides.aliases ?? {}).map(([name, preset]) => [
+      name,
+      normalizePersistedOverridePreset(name, preset),
+    ])
+  );
+  for (const [name, preset] of Object.entries(parsed.data.effective.aliases)) {
+    assertValidPersistedPreset(name, preset);
   }
 
-  return parsed.data;
+  return {
+    ...parsed.data,
+    overrides: {
+      ...(parsed.data.overrides.tiers === undefined ? {} : { tiers }),
+      ...(parsed.data.overrides.aliases === undefined ? {} : { aliases }),
+    },
+  };
 }
 
 /**

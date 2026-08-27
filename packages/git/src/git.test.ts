@@ -1693,6 +1693,73 @@ branch refs/heads/feature/auth
     });
   });
 
+  describe('ownership-critical branch probes', () => {
+    let execSpy: Mock<typeof git.execFileAsync>;
+
+    beforeEach(() => {
+      execSpy = spyOn(git, 'execFileAsync');
+    });
+
+    afterEach(() => {
+      execSpy.mockRestore();
+    });
+
+    test('getCurrentBranchStrict returns a named branch', async () => {
+      execSpy.mockResolvedValue({ stdout: 'feature/live-pr\n', stderr: '' });
+
+      await expect(git.getCurrentBranchStrict('/workspace/repo' as git.RepoPath)).resolves.toBe(
+        branch('feature/live-pr')
+      );
+      expect(execSpy).toHaveBeenCalledWith(
+        'git',
+        ['-C', '/workspace/repo', 'symbolic-ref', '--quiet', '--short', 'HEAD'],
+        { timeout: 10000 }
+      );
+    });
+
+    test('getCurrentBranchStrict returns null only for detached HEAD', async () => {
+      execSpy.mockRejectedValue(Object.assign(new Error('not a symbolic ref'), { code: 1 }));
+
+      await expect(
+        git.getCurrentBranchStrict('/workspace/repo' as git.RepoPath)
+      ).resolves.toBeNull();
+    });
+
+    test('getCurrentBranchStrict preserves infrastructure failures', async () => {
+      execSpy.mockRejectedValue(
+        Object.assign(new Error('operation timed out'), { code: 'ETIMEDOUT' })
+      );
+
+      let error: Error | undefined;
+      try {
+        await git.getCurrentBranchStrict('/workspace/repo' as git.RepoPath);
+      } catch (caught) {
+        error = caught as Error;
+      }
+      expect(error?.message).toMatch(/operation timed out/);
+      expect((error?.cause as NodeJS.ErrnoException).code).toBe('ETIMEDOUT');
+    });
+
+    test('localBranchExists distinguishes a missing ref from an unreadable repository', async () => {
+      execSpy.mockRejectedValueOnce(Object.assign(new Error('missing ref'), { code: 1 }));
+      await expect(
+        git.localBranchExists('/workspace/repo' as git.RepoPath, branch('feature/missing'))
+      ).resolves.toBe(false);
+
+      execSpy.mockRejectedValueOnce(
+        Object.assign(new Error('permission denied'), { code: 'EACCES' })
+      );
+      let error: Error | undefined;
+      try {
+        await git.localBranchExists('/workspace/repo' as git.RepoPath, branch('feature/live'));
+      } catch (caught) {
+        error = caught as Error;
+      }
+      expect(error?.message).toMatch(/permission denied/);
+      expect((error?.cause as NodeJS.ErrnoException).code).toBe('EACCES');
+    });
+  });
+
   describe('countCommitsAhead', () => {
     let execSpy: Mock<typeof git.execFileAsync>;
 

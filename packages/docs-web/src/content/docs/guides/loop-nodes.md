@@ -340,7 +340,7 @@ which is the existing way to express the same thing.
 # loop_group equivalent — no new field needed
 loop_group:
   max_iterations: 10
-  until_bash: '[ "$decide.output.done" = "true" ]'
+  until_bash: '[ $decide.output.done = "true" ]'
   nodes:
     - id: decide
       output_format:
@@ -666,7 +666,7 @@ runtime-resolved graph:
 ```yaml
 - id: converge
   loop_group:
-    until_bash: test "$review.output.ready" = true
+    until_bash: test $review.output.ready = "true"
     max_iterations: 5
     nodes:
       - id: review

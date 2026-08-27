@@ -28,12 +28,18 @@ const db = new SqliteAdapter(':memory:');
 
 mock.module('./connection', () => ({
   pool: db,
+  getDatabase: () => db,
   getDialect: () => sqliteDialect,
   getDatabaseType: () => 'sqlite',
 }));
 
-const { listWorkflowEventsSince, createWorkflowEvent, listWorkflowEvents } =
-  await import('./workflow-events');
+const {
+  listWorkflowEventsSince,
+  createWorkflowEvent,
+  listWorkflowEvents,
+  persistWorkflowEventIfRunning,
+} = await import('./workflow-events');
+const { cancelWorkflowRun } = await import('./workflows');
 
 // workflow_events.workflow_run_id has an enforced FK (PRAGMA foreign_keys = ON) — seed parents.
 await db.query(
@@ -51,6 +57,67 @@ await db.query(
 const minuteAgo = (): Date => new Date(Date.now() - 60_000);
 
 describe('listWorkflowEventsSince — real SQLite (catches the C1 datetime mismatch)', () => {
+  test('cancellation cannot interleave between an instance claim check and its insert', async () => {
+    await db.query(
+      `INSERT INTO remote_agent_workflow_runs
+         (id, workflow_name, conversation_id, user_message, status, started_at)
+       VALUES ('run-claim-race', 'wf', 'conv-1', 'msg', 'running', datetime('now'))`,
+      []
+    );
+
+    const originalQuery = db.query.bind(db);
+    let releaseClaim!: () => void;
+    const claimReleased = new Promise<void>(resolve => {
+      releaseClaim = resolve;
+    });
+    let claimReached!: () => void;
+    const claimReady = new Promise<void>(resolve => {
+      claimReached = resolve;
+    });
+    let intercepted = false;
+
+    db.query = async <T>(sql: string, params?: unknown[]) => {
+      const oldTwoStatementRead =
+        sql.includes('SELECT status FROM remote_agent_workflow_runs') &&
+        params?.[0] === 'run-claim-race';
+      const atomicConditionalInsert =
+        sql.includes('INSERT INTO remote_agent_workflow_events') &&
+        params?.[1] === 'run-claim-race';
+
+      if (!intercepted && oldTwoStatementRead) {
+        intercepted = true;
+        const result = await originalQuery<T>(sql, params);
+        claimReached();
+        await claimReleased;
+        return result;
+      }
+      if (!intercepted && atomicConditionalInsert) {
+        intercepted = true;
+        claimReached();
+        await claimReleased;
+      }
+      return originalQuery<T>(sql, params);
+    };
+
+    try {
+      const claim = persistWorkflowEventIfRunning({
+        workflow_run_id: 'run-claim-race',
+        event_type: 'node_started',
+        step_name: 'fan-instance',
+      });
+      await claimReady;
+      await expect(cancelWorkflowRun('run-claim-race')).resolves.toEqual({ cancelled: true });
+      releaseClaim();
+      await expect(claim).resolves.toEqual({ persisted: false });
+
+      const events = await listWorkflowEvents('run-claim-race');
+      expect(events).toHaveLength(0);
+    } finally {
+      db.query = originalQuery;
+      releaseClaim();
+    }
+  });
+
   test('preserves insertion chronology for lifecycle events sharing a timestamp', async () => {
     await createWorkflowEvent({
       workflow_run_id: 'run-1',

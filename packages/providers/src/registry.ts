@@ -15,12 +15,14 @@ import type {
 } from './types';
 import { ClaudeProvider } from './claude/provider';
 import { CodexProvider } from './codex/provider';
+import { parseClaudeRunConfig } from './claude/config';
+import { parseCodexRunConfig } from './codex/config';
 import { CLAUDE_CAPABILITIES } from './claude/capabilities';
 import { CODEX_CAPABILITIES } from './codex/capabilities';
 import { registerCopilotProvider } from './community/copilot/registration';
 import { registerOpencodeProvider } from './community/opencode/registration';
 import { registerPiProvider } from './community/pi/registration';
-import { UnknownProviderError } from './errors';
+import { InvalidProviderRunConfigError, UnknownProviderError } from './errors';
 import { createLogger } from '@archon/paths';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -84,6 +86,15 @@ export function getProviderCapabilities(id: string): ProviderCapabilities {
   return getRegistration(id).capabilities;
 }
 
+/** Validate and normalize a run-owned model through the provider's strict parser. */
+export function parseProviderRunModel(id: string, model: string): string {
+  const parsed = getRegistration(id).parseRunConfig({ model });
+  if (typeof parsed.model !== 'string' || parsed.model.trim().length === 0) {
+    throw new InvalidProviderRunConfigError('model', 'provider did not accept the model');
+  }
+  return parsed.model;
+}
+
 /**
  * Get all registered providers.
  */
@@ -122,6 +133,7 @@ export function registerBuiltinProviders(): void {
       factory: () => new ClaudeProvider(),
       capabilities: CLAUDE_CAPABILITIES,
       builtIn: true,
+      parseRunConfig: parseClaudeRunConfig,
       credentials: {
         kind: 'static',
         specs: [
@@ -139,6 +151,7 @@ export function registerBuiltinProviders(): void {
       factory: () => new CodexProvider(),
       capabilities: CODEX_CAPABILITIES,
       builtIn: true,
+      parseRunConfig: parseCodexRunConfig,
       credentials: {
         kind: 'static',
         specs: [

@@ -380,6 +380,60 @@ export async function getCurrentBranch(
 }
 
 /**
+ * Read the checked-out branch for an ownership decision.
+ *
+ * Unlike `getCurrentBranch`, this returns `null` only for Git's explicit
+ * detached-HEAD result. Infrastructure and repository errors remain errors so
+ * callers never mistake an unreadable checkout for a different branch.
+ */
+export async function getCurrentBranchStrict(
+  workingPath: RepoPath | WorktreePath
+): Promise<BranchName | null> {
+  try {
+    const { stdout } = await execFileAsync(
+      'git',
+      ['-C', workingPath, 'symbolic-ref', '--quiet', '--short', 'HEAD'],
+      { timeout: 10000 }
+    );
+    const branch = stdout.trim();
+    if (!branch) {
+      throw new Error(`Git returned no branch for checkout ${workingPath}`);
+    }
+    return toBranchName(branch);
+  } catch (error) {
+    const err = error as Error & { code?: number | string };
+    if (err.code === 1 || err.code === '1') return null;
+    throw new Error(`Failed to inspect the current branch at ${workingPath}: ${err.message}`, {
+      cause: error,
+    });
+  }
+}
+
+/** Verify an exact local branch ref without treating Git failures as absence. */
+export async function localBranchExists(
+  repoPath: RepoPath,
+  branchName: BranchName
+): Promise<boolean> {
+  try {
+    await execFileAsync(
+      'git',
+      ['-C', repoPath, 'show-ref', '--verify', '--quiet', `refs/heads/${branchName}`],
+      { timeout: 10000 }
+    );
+    return true;
+  } catch (error) {
+    const err = error as Error & { code?: number | string };
+    if (err.code === 1 || err.code === '1') return false;
+    throw new Error(
+      `Failed to verify local branch '${branchName}' at ${repoPath}: ${err.message}`,
+      {
+        cause: error,
+      }
+    );
+  }
+}
+
+/**
  * Count how many local commits on the current branch are ahead of `origin/<branch>`.
  *
  * Returns 0 if origin/<branch> doesn't exist, on detached HEAD, or any error.

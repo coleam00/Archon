@@ -344,7 +344,7 @@ describe('IsolationResolver', () => {
     }
   });
 
-  test('passes fromBranch hint when creating task isolation', async () => {
+  test('passes new-branch selection when creating task isolation', async () => {
     let capturedRequest: unknown;
     const resolver = createResolver({
       provider: {
@@ -370,7 +370,10 @@ describe('IsolationResolver', () => {
       hints: {
         workflowType: 'task',
         workflowId: 'test-adapters',
-        fromBranch: git.toBranchName('feature/extract-adapters'),
+        taskBranch: {
+          kind: 'new',
+          fromBranch: git.toBranchName('feature/extract-adapters'),
+        },
       },
       platformType: 'web',
     });
@@ -379,7 +382,53 @@ describe('IsolationResolver', () => {
       expect.objectContaining({
         workflowType: 'task',
         identifier: 'test-adapters',
-        fromBranch: git.toBranchName('feature/extract-adapters'),
+        taskBranch: {
+          kind: 'new',
+          fromBranch: git.toBranchName('feature/extract-adapters'),
+        },
+      })
+    );
+  });
+
+  test('passes exact existing-branch selection when adopting a task estate', async () => {
+    let capturedRequest: unknown;
+    const resolver = createResolver({
+      provider: {
+        ...makeMockProvider(),
+        create: async request => {
+          capturedRequest = request;
+          return {
+            id: '/worktrees/existing',
+            provider: 'worktree',
+            workingPath: '/worktrees/existing',
+            branchName: git.toBranchName('feature/live-pr'),
+            status: 'active',
+            createdAt: new Date(),
+            metadata: { adopted: true },
+          };
+        },
+      },
+    });
+
+    await resolver.resolve({
+      existingEnvId: null,
+      codebase: defaultCodebase,
+      hints: {
+        workflowType: 'task',
+        workflowId: 'adopt-run-1',
+        taskBranch: {
+          kind: 'existing',
+          branch: git.toBranchName('feature/live-pr'),
+        },
+      },
+      platformType: 'web',
+    });
+
+    expect(capturedRequest).toEqual(
+      expect.objectContaining({
+        workflowType: 'task',
+        identifier: 'adopt-run-1',
+        taskBranch: { kind: 'existing', branch: 'feature/live-pr' },
       })
     );
   });

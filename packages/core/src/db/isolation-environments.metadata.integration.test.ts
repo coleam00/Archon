@@ -38,7 +38,7 @@ mock.module('./connection', () => ({
   getDatabaseType: () => 'sqlite',
 }));
 
-const { create, getById, listByCodebase, updateMetadata } =
+const { create, getById, listByCodebase, updateMetadata, findLatestByCodebaseAndWorkingPath } =
   await import('./isolation-environments');
 
 // isolation_environments.codebase_id is NOT NULL with an enforced FK — seed a parent.
@@ -130,5 +130,32 @@ describe('isolation-environments metadata — real SQLite round trip', () => {
       containerName: 'archon-merge',
       volume: 'archon-merge-upper',
     });
+  });
+
+  test('historical lookup selects the newest estate at or before the run cutoff', async () => {
+    const rows = [
+      ['history-old', 'wf-history-old', 'old-branch', '2026-08-25 08:00:00'],
+      ['history-intended', 'wf-history-intended', 'intended-branch', '2026-08-25 09:00:00'],
+      ['history-later', 'wf-history-later', 'later-branch', '2026-08-25 11:00:00'],
+    ] as const;
+    for (const [id, workflowId, branch, createdAt] of rows) {
+      await db.query(
+        `INSERT INTO remote_agent_isolation_environments
+           (id, codebase_id, workflow_type, workflow_id, provider, working_path,
+            branch_name, status, created_at, metadata)
+         VALUES ($1, 'cb-1', 'task', $2, 'worktree', '/tmp/shared-estate',
+                 $3, 'destroyed', $4, '{}')`,
+        [id, workflowId, branch, createdAt]
+      );
+    }
+
+    const selected = await findLatestByCodebaseAndWorkingPath(
+      'cb-1',
+      '/tmp/shared-estate',
+      new Date('2026-08-25T10:00:00.000Z')
+    );
+
+    expect(selected?.id).toBe('history-intended');
+    expect(selected?.branch_name).toBe('intended-branch');
   });
 });

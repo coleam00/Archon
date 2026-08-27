@@ -41,6 +41,7 @@ import {
   isExecNode,
   isHaltNode,
   isAgentNode,
+  isComposeFanOutNode,
   isLoopGroupNode,
   isLoopNode,
   isWaitNode,
@@ -211,6 +212,7 @@ function collectsStub(node: DagNode): boolean {
     isWaitNode(node) ||
     isHaltNode(node) ||
     isWorkflowNode(node) ||
+    isComposeFanOutNode(node) ||
     isLoopGroupNode(node)
   );
 }
@@ -288,6 +290,7 @@ const dryRunNodeTypeSchema = z.enum([
   'cancel',
   'include',
   'workflow',
+  'compose_fan_out',
 ]);
 
 /**
@@ -410,6 +413,7 @@ function nodeType(node: DagNode): z.infer<typeof dryRunNodeTypeSchema> {
   if (isWaitNode(node)) return 'wait';
   if (isHaltNode(node)) return 'cancel';
   if (isWorkflowNode(node)) return 'workflow';
+  if (isComposeFanOutNode(node)) return 'compose_fan_out';
   return 'prompt';
 }
 
@@ -992,7 +996,7 @@ async function simulateNode(
       ctx.halted = 'cancelled';
       return;
     }
-    if (isWorkflowNode(node)) {
+    if (isWorkflowNode(node) || isComposeFanOutNode(node)) {
       recordFailed(
         node,
         outputs,

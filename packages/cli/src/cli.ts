@@ -14,7 +14,20 @@ import '@archon/paths/strip-cwd-env-boot';
 // <cwd>/.archon/.env (repo scope, wins over user). Both with override: true.
 // See packages/paths/src/env-loader.ts and the three-path model (#1302 / #1303).
 import { loadArchonEnv } from '@archon/paths/env-loader';
+import { captureDetachedInstallContext, restoreDetachedInstallContext } from '@archon/paths';
+const hasDetachedRunConfigHandoff = process.argv
+  .slice(2)
+  .includes('--internal-detached-run-config');
+const inheritedInstallContext = hasDetachedRunConfigHandoff
+  ? captureDetachedInstallContext()
+  : undefined;
 loadArchonEnv(process.cwd());
+// The detached parent sealed this payload with its effective install key. Repo
+// env still loads normally, but it cannot replace any input that derives the
+// install home before the child consumes the accepted snapshot.
+if (inheritedInstallContext) {
+  restoreDetachedInstallContext(inheritedInstallContext);
+}
 
 // Install the pipe-safe `console.log` shim BEFORE any command module imports.
 // `console.log` reaches fd 1 via a non-blocking pipe (pino opens it that way at
@@ -30,6 +43,11 @@ loadArchonEnv(process.cwd());
 import { installPipeSafeConsole } from './utils/safe-console';
 import { withDrainedExit } from './utils/exit-with-drain';
 import { writeJsonLine } from './utils/stdout';
+import {
+  rejectConfigOnContinue,
+  rejectConfigOutsideRun,
+  rejectModelOnContinue,
+} from './dispatch-guards';
 installPipeSafeConsole();
 
 import { parseArgs } from 'util';
@@ -183,11 +201,11 @@ Commands:
   continue <branch> [msg]    Continue work on an existing worktree with prior context
   complete <branch> [...]    Complete branch lifecycle (remove worktree + branches)
   serve                      Start the web UI server (downloads web UI on first run)
-  skill install [path]       Install the bundled Archon skill into .claude/skills/archon
+  skill install [path]       Install archon-cli into .claude/skills and .agents/skills
   doctor [--full]            Verify your Archon setup (Claude/Codex binaries, gh auth, DB, adapters; --full also probes the OpenCode runtime SDK)
   auth github                Connect your GitHub identity via device flow (multi-user installs)
   ai key set <provider>      Connect an AI provider API key (multi-user installs; key read from prompt/stdin)
-  ai login <provider>        Connect a subscription (claude/copilot) via OAuth — codex is API-key only
+  ai login <provider>        Connect a Claude, ChatGPT/Codex, or Copilot subscription
   ai list                    List your connected AI provider keys
   ai logout <provider>       Disconnect an AI provider key
   ai tier set <t> <p> <m>    Set a model tier (small/medium/large) → provider/model [--effort <e>] [--scope user|install]
@@ -215,6 +233,7 @@ Options:
   --folder                   Register the current non-git directory as a folder project and run in place
   --input <name>=<value>     Supply a declared workflow input; repeat per input (mutually exclusive with --resume)
   --model <name>=<spec>      Rebind small/medium/large or @alias for one run; repeat per binding
+  --config <path>            Load a sparse YAML config layer for one fresh workflow run
   --resume                   Resume the most recent failed or paused run of the workflow (mutually exclusive with --branch)
   --adopt <run-id>           Start a new run adopting a terminal run's worktree/branch + artifacts ($ADOPTED_RUN_DIR)
   --supersedes <run-id>      Record this fresh run as replacing the prior run's open item (no lane inheritance)
@@ -426,6 +445,11 @@ async function main(): Promise<number> {
   const requiresGitRepo = !noGitCommands.includes(command ?? '');
 
   try {
+    const configOutsideRun = rejectConfigOutsideRun(command, subcommand, values.config);
+    if (configOutsideRun) {
+      console.error(configOutsideRun);
+      return 1;
+    }
     // Note: orphaned run cleanup moved to `workflow cleanup` command only.
     // Running it on every CLI startup killed parallel workflow runs (all
     // 'running' status rows were marked failed by each new process).
@@ -598,19 +622,10 @@ async function main(): Promise<number> {
         break;
       }
 
-      case 'workflow':
-        if (
-          values.model !== undefined &&
-          (subcommand === 'resume' ||
-            subcommand === 'approve' ||
-            subcommand === 'reject' ||
-            subcommand === 'respond')
-        ) {
-          return await fail(
-            jsonFlag,
-            'Error: --model cannot be used when continuing an existing workflow run. ' +
-              'The run keeps the model bindings it started with.'
-          );
+      case 'workflow': {
+        const modelOnContinue = rejectModelOnContinue(subcommand, values.model);
+        if (modelOnContinue) {
+          return await fail(jsonFlag, modelOnContinue);
         }
         switch (subcommand) {
           case 'list':
@@ -623,6 +638,11 @@ async function main(): Promise<number> {
               return await fail(jsonFlag, 'Usage: archon workflow run <name> [message]');
             }
             const userMessage = positionals.slice(3).join(' ') || '';
+            const configOnContinue = rejectConfigOnContinue(resumeFlag, values.config);
+            if (configOnContinue) {
+              console.error(configOnContinue);
+              return 1;
+            }
             if (branchName !== undefined && noWorktree) {
               return await fail(
                 jsonFlag,
@@ -722,6 +742,11 @@ async function main(): Promise<number> {
               // Raw `name=value` assignments; parsed at the invocation gate (#2554).
               inputs: values.input as string[] | undefined,
               modelAssignments: values.model as string[] | undefined,
+              configPath:
+                typeof values.config === 'string' ? resolve(cwd, values.config) : undefined,
+              detachedRunConfigPayload: values['internal-detached-run-config'] as
+                | string
+                | undefined,
             };
             await workflowRunCommand(effectiveCwd, workflowName, userMessage, options);
             break;
@@ -985,6 +1010,7 @@ async function main(): Promise<number> {
           }
         }
         break;
+      }
 
       case 'isolation':
         switch (subcommand) {

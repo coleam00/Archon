@@ -9,12 +9,14 @@ mock.module('./connection', () => ({
     query: mockQuery,
   },
   getDialect: () => mockPostgresDialect,
+  getDatabaseType: (): 'postgresql' => 'postgresql',
 }));
 
 import {
   getById,
   findActiveByWorkflow,
   listByCodebase,
+  findLatestByCodebaseAndWorkingPath,
   create,
   updateStatus,
   updateMetadata,
@@ -160,6 +162,39 @@ describe('isolation-environments', () => {
       const result = await listByCodebase('empty-codebase');
 
       expect(result).toEqual([]);
+    });
+  });
+
+  describe('findLatestByCodebaseAndWorkingPath', () => {
+    test('returns a destroyed row so adoption can recover its branch', async () => {
+      const destroyed = { ...sampleEnv, status: 'destroyed' as const };
+      mockQuery.mockResolvedValueOnce(createQueryResult([destroyed]));
+
+      const result = await findLatestByCodebaseAndWorkingPath(
+        'codebase-456',
+        '/workspace/worktrees/project/issue-42',
+        new Date('2026-08-20T10:00:00.000Z')
+      );
+
+      expect(result).toEqual(destroyed);
+      expect(mockQuery).toHaveBeenCalledWith(
+        expect.stringContaining('codebase_id = $1 AND working_path = $2'),
+        ['codebase-456', '/workspace/worktrees/project/issue-42', '2026-08-20T10:00:00.000Z']
+      );
+      expect((mockQuery.mock.calls[0]?.[0] as string).includes("status = 'active'")).toBe(false);
+      expect(mockQuery.mock.calls[0]?.[0]).toContain('created_at <= $3');
+    });
+
+    test('returns null when the path has no isolation history', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+
+      const result = await findLatestByCodebaseAndWorkingPath(
+        'codebase-456',
+        '/missing',
+        new Date('2026-08-20T10:00:00.000Z')
+      );
+
+      expect(result).toBeNull();
     });
   });
 

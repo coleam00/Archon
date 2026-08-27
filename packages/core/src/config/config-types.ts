@@ -13,7 +13,6 @@
 
 // Provider config defaults — canonical definitions live in @archon/providers/types.
 // Imported and re-exported here so existing consumers don't break.
-import { z } from '@hono/zod-openapi';
 import type {
   ClaudeProviderDefaults,
   CodexProviderDefaults,
@@ -22,7 +21,10 @@ import type {
   ProviderDefaultsMap,
 } from '@archon/providers/types';
 import type { RawAliasesConfig, RawTiersConfig } from '@archon/workflows/model-validation';
-import { MAX_DURABLE_WAIT_MS } from '@archon/workflows/schemas/dag-node';
+import {
+  workflowRunContinuationConfigSchema,
+  type WorkflowRunConfigLayer,
+} from '@archon/workflows/schemas/run-config';
 
 export type {
   ClaudeProviderDefaults,
@@ -185,13 +187,10 @@ export interface GlobalConfig {
   workflows?: WorkflowContinuationConfig;
 }
 
-export const workflowContinuationConfigSchema = z.object({
-  autoResumeOnQuotaReset: z.boolean().optional(),
-  quotaFallbackDelayMs: z.number().finite().positive().max(MAX_DURABLE_WAIT_MS).optional(),
-  quotaMaxAttempts: z.number().int().positive().optional(),
-  quotaDeadlineMs: z.number().finite().positive().max(MAX_DURABLE_WAIT_MS).optional(),
-});
-export type WorkflowContinuationConfig = z.infer<typeof workflowContinuationConfigSchema>;
+// Ordinary global/repo config remains forward-compatible: unlike the explicitly
+// selected run layer, it strips extension keys it does not understand yet.
+export const workflowContinuationConfigSchema = workflowRunContinuationConfigSchema.strip();
+export type WorkflowContinuationConfig = NonNullable<WorkflowRunConfigLayer['workflows']>;
 
 /**
  * Repository configuration (project-specific settings)

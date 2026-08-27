@@ -56,6 +56,14 @@ export {
 } from './archon-paths';
 export type { ProjectStorageKey, ProjectStoragePaths } from './archon-paths';
 
+// Detached workflow install identity
+export {
+  DETACHED_INSTALL_CONTEXT_KEYS,
+  captureDetachedInstallContext,
+  restoreDetachedInstallContext,
+} from './detached-install-context';
+export type { DetachedInstallContext, DetachedInstallContextKey } from './detached-install-context';
+
 // Env loader
 export { loadArchonEnv, isVerboseBoot } from './env-loader';
 

@@ -51,11 +51,11 @@ export function expandTilde(path: string): string {
 /**
  * Detect if running in Docker container
  */
-export function isDocker(): boolean {
+export function isDocker(env: NodeJS.ProcessEnv = process.env): boolean {
   return (
-    process.env.WORKSPACE_PATH === '/workspace' ||
-    (process.env.HOME === '/root' && Boolean(process.env.WORKSPACE_PATH)) ||
-    process.env.ARCHON_DOCKER === 'true'
+    env.WORKSPACE_PATH === '/workspace' ||
+    (env.HOME === '/root' && Boolean(env.WORKSPACE_PATH)) ||
+    env.ARCHON_DOCKER === 'true'
   );
 }
 
@@ -105,12 +105,12 @@ export function getWSLDistroName(): string | undefined {
  * - Docker: /.archon
  * - Local: ~/.archon (or ARCHON_HOME env var)
  */
-export function getArchonHome(): string {
-  if (isDocker()) {
+export function getArchonHome(env: NodeJS.ProcessEnv = process.env): string {
+  if (isDocker(env)) {
     return '/.archon';
   }
 
-  const envHome = process.env.ARCHON_HOME;
+  const envHome = env.ARCHON_HOME;
   if (envHome) {
     if (envHome === 'undefined') {
       throw new Error(

@@ -1,80 +1,33 @@
 /**
- * Bundled Archon skill files for binary distribution
+ * Bundled skill files for the `archon-cli` skill.
  *
- * These static imports are resolved at compile time and embedded into the binary.
- * When running as a standalone binary (without Bun), these provide the skill files
- * without needing filesystem access to the source repo.
- *
- * Import syntax uses `with { type: 'text' }` to import file contents as strings.
+ * Bun's `with { type: 'text' }` imports are hand-maintained (no glob imports at
+ * compile time) — every file of the skill must be listed here and in the export
+ * map below. `scripts/check-bundled-skill.ts` verifies this file covers every
+ * file on disk under .claude/skills/archon-cli/; run it after adding or removing
+ * any skill file.
  */
-
-// =============================================================================
-// Skill Files (23 total: 21 archon + 2 manage-run)
-// =============================================================================
-
-import skillMd from '../../../.claude/skills/archon/SKILL.md' with { type: 'text' };
-import commandTemplate from '../../../.claude/skills/archon/examples/command-template.md' with { type: 'text' };
-import dagWorkflow from '../../../.claude/skills/archon/examples/dag-workflow.yaml' with { type: 'text' };
-import cliGuide from '../../../.claude/skills/archon/guides/cli.md' with { type: 'text' };
-import configGuide from '../../../.claude/skills/archon/guides/config.md' with { type: 'text' };
-import discordGuide from '../../../.claude/skills/archon/guides/discord.md' with { type: 'text' };
-import githubGuide from '../../../.claude/skills/archon/guides/github.md' with { type: 'text' };
-import serverGuide from '../../../.claude/skills/archon/guides/server.md' with { type: 'text' };
-import setupGuide from '../../../.claude/skills/archon/guides/setup.md' with { type: 'text' };
-import slackGuide from '../../../.claude/skills/archon/guides/slack.md' with { type: 'text' };
-import telegramGuide from '../../../.claude/skills/archon/guides/telegram.md' with { type: 'text' };
-import authoringCommands from '../../../.claude/skills/archon/references/authoring-commands.md' with { type: 'text' };
-import cliCommands from '../../../.claude/skills/archon/references/cli-commands.md' with { type: 'text' };
-import dagAdvanced from '../../../.claude/skills/archon/references/dag-advanced.md' with { type: 'text' };
-import goodPractices from '../../../.claude/skills/archon/references/good-practices.md' with { type: 'text' };
-import interactiveWorkflows from '../../../.claude/skills/archon/references/interactive-workflows.md' with { type: 'text' };
-import parameterMatrix from '../../../.claude/skills/archon/references/parameter-matrix.md' with { type: 'text' };
-import repoInit from '../../../.claude/skills/archon/references/repo-init.md' with { type: 'text' };
-import troubleshooting from '../../../.claude/skills/archon/references/troubleshooting.md' with { type: 'text' };
-import variables from '../../../.claude/skills/archon/references/variables.md' with { type: 'text' };
-import workflowDag from '../../../.claude/skills/archon/references/workflow-dag.md' with { type: 'text' };
-
-// manage-run skill (focused run-management skill — separate install target)
-import manageRunSkillMd from '../../../.claude/skills/manage-run/SKILL.md' with { type: 'text' };
-import manageRunCommands from '../../../.claude/skills/manage-run/references/commands.md' with { type: 'text' };
-
-// =============================================================================
-// Export
-// =============================================================================
+import router from '../../../.claude/skills/archon-cli/SKILL.md' with { type: 'text' };
+import runningWorkflows from '../../../.claude/skills/archon-cli/running-workflows/running-workflows.md' with { type: 'text' };
+import manageRuns from '../../../.claude/skills/archon-cli/manage-run/manage-runs.md' with { type: 'text' };
+import troubleshooting from '../../../.claude/skills/archon-cli/manage-run/troubleshooting.md' with { type: 'text' };
+import setupAndConfig from '../../../.claude/skills/archon-cli/setup-and-config/setup-and-config.md' with { type: 'text' };
+import authoringWorkflows from '../../../.claude/skills/archon-cli/authoring-workflows/authoring-workflows.md' with { type: 'text' };
+import nodeReference from '../../../.claude/skills/archon-cli/authoring-workflows/node-reference.md' with { type: 'text' };
+import variables from '../../../.claude/skills/archon-cli/authoring-workflows/variables.md' with { type: 'text' };
+import promptingMistakes from '../../../.claude/skills/archon-cli/prompting-mistakes/prompting-mistakes.md' with { type: 'text' };
 
 /**
- * Bundled skill files - relative path within .claude/skills/archon/ -> content
+ * Bundled archon-cli skill files - path relative to .claude/skills/archon-cli/ -> content.
  */
 export const BUNDLED_SKILL_FILES: Record<string, string> = {
-  'SKILL.md': skillMd,
-  'examples/command-template.md': commandTemplate,
-  'examples/dag-workflow.yaml': dagWorkflow,
-  'guides/cli.md': cliGuide,
-  'guides/config.md': configGuide,
-  'guides/discord.md': discordGuide,
-  'guides/github.md': githubGuide,
-  'guides/server.md': serverGuide,
-  'guides/setup.md': setupGuide,
-  'guides/slack.md': slackGuide,
-  'guides/telegram.md': telegramGuide,
-  'references/authoring-commands.md': authoringCommands,
-  'references/cli-commands.md': cliCommands,
-  'references/dag-advanced.md': dagAdvanced,
-  'references/good-practices.md': goodPractices,
-  'references/interactive-workflows.md': interactiveWorkflows,
-  'references/parameter-matrix.md': parameterMatrix,
-  'references/repo-init.md': repoInit,
-  'references/troubleshooting.md': troubleshooting,
-  'references/variables.md': variables,
-  'references/workflow-dag.md': workflowDag,
-};
-
-/**
- * Bundled manage-run skill files - relative path within .claude/skills/manage-run/ -> content.
- * Installed into a separate `.claude/skills/manage-run/` directory (kept distinct from the
- * broad `archon` skill so the run-management agent's context stays tiny).
- */
-export const BUNDLED_MANAGE_RUN_SKILL_FILES: Record<string, string> = {
-  'SKILL.md': manageRunSkillMd,
-  'references/commands.md': manageRunCommands,
+  'SKILL.md': router,
+  'running-workflows/running-workflows.md': runningWorkflows,
+  'manage-run/manage-runs.md': manageRuns,
+  'manage-run/troubleshooting.md': troubleshooting,
+  'setup-and-config/setup-and-config.md': setupAndConfig,
+  'authoring-workflows/authoring-workflows.md': authoringWorkflows,
+  'authoring-workflows/node-reference.md': nodeReference,
+  'authoring-workflows/variables.md': variables,
+  'prompting-mistakes/prompting-mistakes.md': promptingMistakes,
 };

@@ -1104,6 +1104,28 @@ describe('dryRunWorkflow', () => {
     expect(childResult.trace[0]?.reason).toContain('does not execute reachable workflow nodes');
   });
 
+  test('fails loud on a reachable composed fan-out node instead of simulating it', async () => {
+    const workflow = makeTestWorkflow({
+      name: 'compose-fan',
+      nodes: [
+        {
+          id: 'fan',
+          kind: 'compose_fan_out',
+          include: 'some-block',
+          fan_out: { items: "['a']", as: 'item', max_parallel: 1 },
+        },
+      ],
+    });
+    const result = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd: process.cwd(),
+    });
+    expect(result.outcome).toBe('failed');
+    expect(result.trace[0]?.nodeType).toBe('compose_fan_out');
+    expect(result.trace[0]?.reason).toContain('does not execute reachable compose_fan_out nodes');
+  });
+
   test('formats a stable human trace', async () => {
     const workflow = makeTestWorkflow({ name: 'format', nodes: [{ id: 'node', prompt: 'hello' }] });
     const result = await dryRunWorkflow({

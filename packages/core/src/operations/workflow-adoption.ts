@@ -12,7 +12,8 @@
  * (`withCapturedSource`); these run-level names are deliberately distinct.
  */
 import { existsSync } from 'fs';
-import { execFileAsync } from '@archon/git';
+import { getCurrentBranchStrict, localBranchExists, toBranchName, toRepoPath } from '@archon/git';
+import type { TaskBranchSelection } from '@archon/isolation';
 import {
   TERMINAL_WORKFLOW_STATUSES,
   type ContinuationMode,
@@ -35,9 +36,15 @@ export class WorkflowAdoptionError extends Error {
  * reference with nothing to inherit. Container-backend runs are refused in v1 —
  * their write-back lifecycle is separate machinery.
  */
+export type ExistingTaskBranchSelection = Extract<TaskBranchSelection, { kind: 'existing' }>;
+
 export type AdoptionLane =
-  | { kind: 'reuse-worktree'; workingPath: string; envId?: string }
-  | { kind: 'fresh-from-branch'; branch: string }
+  | {
+      kind: 'reuse-worktree';
+      workingPath: string;
+      envId?: string;
+    }
+  | { kind: 'checkout-branch'; taskBranch: ExistingTaskBranchSelection }
   | { kind: 'in-place' };
 
 export interface ResolvedWorkflowAdoption {
@@ -54,9 +61,10 @@ export interface ResolveWorkflowAdoptionArgs {
   deps?: {
     existsSync?: (path: string) => boolean;
     branchExists?: (repoPath: string, branch: string) => Promise<boolean>;
+    currentBranch?: (workingPath: string) => Promise<string | null>;
     getRun?: typeof workflowDb.getWorkflowRun;
     getActiveRunByPath?: typeof workflowDb.getActiveWorkflowRunByPath;
-    listEnvironments?: typeof isolationDb.listByCodebase;
+    findEnvironmentByPath?: typeof isolationDb.findLatestByCodebaseAndWorkingPath;
   };
   /** Codebase of the NEW run; cross-workflow is fine, cross-codebase is not. */
   codebaseId: string | null | undefined;
@@ -68,14 +76,11 @@ export interface ResolveWorkflowAdoptionArgs {
 }
 
 async function defaultBranchExists(repoPath: string, branch: string): Promise<boolean> {
-  try {
-    await execFileAsync('git', ['-C', repoPath, 'rev-parse', '--verify', '--quiet', branch], {
-      timeout: 10_000,
-    });
-    return true;
-  } catch {
-    return false;
-  }
+  return localBranchExists(toRepoPath(repoPath), toBranchName(branch));
+}
+
+async function defaultCurrentBranch(workingPath: string): Promise<string | null> {
+  return getCurrentBranchStrict(toRepoPath(workingPath));
 }
 
 /**
@@ -86,7 +91,7 @@ async function defaultBranchExists(repoPath: string, branch: string): Promise<bo
  *  2. Its worktree still recorded AND on disk → reuse that path dirty-as-is,
  *     unless another LIVE run holds the same path (the terminal row no longer
  *     holds the lock; whoever does wins).
- *  3. Else its branch still exists → fresh worktree cut FROM that branch.
+ *  3. Else its branch still exists → check out that exact branch in a worktree.
  *  4. Else refuse, naming what is missing.
  */
 export async function resolveWorkflowAdoption(
@@ -94,9 +99,11 @@ export async function resolveWorkflowAdoption(
 ): Promise<ResolvedWorkflowAdoption> {
   const pathExists = args.deps?.existsSync ?? existsSync;
   const branchExists = args.deps?.branchExists ?? defaultBranchExists;
+  const currentBranch = args.deps?.currentBranch ?? defaultCurrentBranch;
   const getRun = args.deps?.getRun ?? workflowDb.getWorkflowRun;
   const getActiveRunByPath = args.deps?.getActiveRunByPath ?? workflowDb.getActiveWorkflowRunByPath;
-  const listEnvironments = args.deps?.listEnvironments ?? isolationDb.listByCodebase;
+  const findEnvironmentByPath =
+    args.deps?.findEnvironmentByPath ?? isolationDb.findLatestByCodebaseAndWorkingPath;
   const adoptedRun = await getRun(args.adoptedRunId);
   if (!adoptedRun) {
     throw new WorkflowAdoptionError(
@@ -109,12 +116,7 @@ export async function resolveWorkflowAdoption(
         "Respond to or resume it, or abandon it first — adoption never takes a live run's lane."
     );
   }
-  if (
-    args.codebaseId !== undefined &&
-    args.codebaseId !== null &&
-    adoptedRun.codebase_id !== null &&
-    adoptedRun.codebase_id !== args.codebaseId
-  ) {
+  if (!args.codebaseId || !adoptedRun.codebase_id || adoptedRun.codebase_id !== args.codebaseId) {
     throw new WorkflowAdoptionError(
       `Cannot adopt run '${adoptedRun.id}': it belongs to a different project. ` +
         'Adoption is validated by codebase identity, never by workflow name.'
@@ -136,17 +138,32 @@ export async function resolveWorkflowAdoption(
     );
   }
 
-  const envs = adoptedRun.working_path
-    ? (await listEnvironments(args.codebaseId ?? '')).filter(
-        e => e.working_path === adoptedRun.working_path
-      )
-    : [];
-  const activeEnv = envs.find(e => e.status === 'active');
+  const environment = adoptedRun.working_path
+    ? await findEnvironmentByPath(args.codebaseId, adoptedRun.working_path, adoptedRun.started_at)
+    : null;
 
   // Lane 2: the adopted run's worktree still exists — inherit it as-is, dirty
   // state and all. A live run holding the same path refuses: two writers on one
   // checkout is a collision, not continuation.
-  if (activeEnv && adoptedRun.working_path && pathExists(adoptedRun.working_path)) {
+  if (
+    environment?.status === 'active' &&
+    adoptedRun.working_path &&
+    pathExists(adoptedRun.working_path)
+  ) {
+    const historicalBranch = environment.branch_name;
+    if (!historicalBranch) {
+      throw new WorkflowAdoptionError(
+        `Cannot adopt run '${adoptedRun.id}': its surviving worktree has no recorded branch identity.`
+      );
+    }
+    const actualBranch = await currentBranch(adoptedRun.working_path);
+    if (actualBranch !== historicalBranch) {
+      throw new WorkflowAdoptionError(
+        `Cannot adopt run '${adoptedRun.id}': its worktree at '${adoptedRun.working_path}' ` +
+          `was recorded on branch '${historicalBranch}' but is now on ` +
+          `'${actualBranch ?? 'detached HEAD'}'. Restore the recorded branch or start a fresh run.`
+      );
+    }
     const liveHolder = await getActiveRunByPath(adoptedRun.working_path);
     if (liveHolder && liveHolder.id !== adoptedRun.id) {
       throw new WorkflowAdoptionError(
@@ -156,18 +173,27 @@ export async function resolveWorkflowAdoption(
     }
     return {
       adoptedRun,
-      lane: { kind: 'reuse-worktree', workingPath: adoptedRun.working_path, envId: activeEnv.id },
+      lane: {
+        kind: 'reuse-worktree',
+        workingPath: adoptedRun.working_path,
+        envId: environment.id,
+      },
     };
   }
 
   // Lane 3: worktree gone (or its record destroyed) but the branch survives —
-  // the common case. Cut the fresh worktree from the adopted branch instead of
-  // baseBranch.
-  const anyEnv = envs[0];
-  const branch = anyEnv?.branch_name;
+  // materialize the same branch again. The branch carries the PR and remains
+  // the one mutable estate every node in the adopting run observes.
+  const branch = environment?.branch_name;
   if (branch) {
     if (await branchExists(args.codebasePath, branch)) {
-      return { adoptedRun, lane: { kind: 'fresh-from-branch', branch } };
+      return {
+        adoptedRun,
+        lane: {
+          kind: 'checkout-branch',
+          taskBranch: { kind: 'existing', branch: toBranchName(branch) },
+        },
+      };
     }
     throw new WorkflowAdoptionError(
       `Cannot adopt run '${adoptedRun.id}': neither its worktree nor its branch '${branch}' ` +

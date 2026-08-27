@@ -500,7 +500,7 @@ export class IsolationResolver {
       isolationRequest = {
         ...baseRequest,
         workflowType: 'task' as const,
-        fromBranch: hints?.fromBranch,
+        taskBranch: hints?.taskBranch,
       };
     } else {
       isolationRequest = {

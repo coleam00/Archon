@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createConnection, createServer, type Server, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  DETACHED_RUN_IPC_TIMEOUT_MS,
   detachedRunControlPath,
   requestDetachedRunStop,
   startDetachedRunControlServer,
@@ -42,6 +43,19 @@ function waitForExit(
   });
 }
 
+// Explicit slack for the shutdown steps after the lease socket's idle timeout
+// fires (socket teardown, server close, endpoint unlink) on a loaded host.
+const LEASE_RELEASE_SLACK_MS = 1_000;
+
+function processExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function listen(server: Server, path: string): Promise<void> {
   await new Promise<void>((resolve: () => void, reject: (reason?: unknown) => void): void => {
     server.once('error', reject);
@@ -74,8 +88,9 @@ describe('detached run control integration', () => {
     cleanupPaths.push(fixtureDir);
     const readyPath = join(fixtureDir, 'ready');
     const leakPath = join(fixtureDir, 'leaked');
+    const goPath = join(fixtureDir, 'go');
     const fixturePath = join(import.meta.dir, 'fixtures', 'detached-run-owner.ts');
-    const owner = spawn(process.execPath, [fixturePath, runId, readyPath, leakPath], {
+    const owner = spawn(process.execPath, [fixturePath, runId, readyPath, leakPath, goPath], {
       detached: true,
       stdio: 'ignore',
     });
@@ -84,10 +99,22 @@ describe('detached run control integration', () => {
 
     try {
       await waitFor(() => existsSync(readyPath));
+      const pids = JSON.parse(readFileSync(readyPath, 'utf8')) as {
+        owner: number;
+        leakWriter: number;
+      };
+      // The descendant is live and armed before the stop: if the coming stop
+      // failed to take the process group, it would remain able to act on the
+      // go signal, so its death is a meaningful (not vacuous) transition.
+      expect(pids.leakWriter).toBeGreaterThan(0);
+      expect(processExists(pids.leakWriter)).toBe(true);
       const target = await requestDetachedRunStop(runId);
       await target.stop();
       await exited;
-      await new Promise<void>(resolve => setTimeout(resolve, 1_300));
+      // Event-driven proof instead of a fixed sleep: wait for the descendant's
+      // observable death. A dead process cannot act on any future signal.
+      await waitFor(() => !processExists(pids.leakWriter));
+      writeFileSync(goPath, 'go');
       expect(existsSync(leakPath)).toBe(false);
     } finally {
       if (owner.exitCode === null && owner.signalCode === null) {
@@ -110,8 +137,9 @@ describe('detached run control integration', () => {
     cleanupPaths.push(fixtureDir);
     const readyPath = join(fixtureDir, 'ready');
     const leakPath = join(fixtureDir, 'leaked');
+    const goPath = join(fixtureDir, 'go');
     const fixturePath = join(import.meta.dir, 'fixtures', 'detached-run-owner.ts');
-    const owner = spawn(process.execPath, [fixturePath, runId, readyPath, leakPath], {
+    const owner = spawn(process.execPath, [fixturePath, runId, readyPath, leakPath, goPath], {
       stdio: ['ignore', 'ignore', 'pipe'],
     });
     if (owner.pid === undefined) throw new Error('Failed to spawn foreground owner fixture');
@@ -134,12 +162,17 @@ describe('detached run control integration', () => {
       client.once('connect', resolve);
       client.once('error', reject);
     });
+    // The client never sends 'terminate', so the owner-side idle timeout is the
+    // only thing that releases close(). The timeout arms when the owner parses
+    // the stop frame (at or after leaseStartedAt) and never fires early, and
+    // close() must not hang materially past it plus explicit shutdown slack.
+    const leaseStartedAt = Date.now();
     client.write('stop\n');
     await waitFor(() => owner.isStopRequested());
-
-    const startedAt = Date.now();
     await owner.close();
-    expect(Date.now() - startedAt).toBeLessThan(3_000);
+    const elapsedMs = Date.now() - leaseStartedAt;
+    expect(elapsedMs).toBeGreaterThanOrEqual(DETACHED_RUN_IPC_TIMEOUT_MS);
+    expect(elapsedMs).toBeLessThan(DETACHED_RUN_IPC_TIMEOUT_MS + LEASE_RELEASE_SLACK_MS);
     client.destroy();
   });
 

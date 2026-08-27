@@ -48,6 +48,21 @@ export type {
   RunModelBindingsMetadata,
 } from './model-binding';
 
+// Sparse, durable configuration for one workflow invocation
+export {
+  workflowRunContinuationConfigSchema,
+  workflowRunConfigLayerSchema,
+  workflowRunConfigSourceSchema,
+  workflowRunConfigInputSchema,
+  workflowRunConfigMetadataSchema,
+} from './run-config';
+export type {
+  WorkflowRunConfigLayer,
+  WorkflowRunConfigSource,
+  WorkflowRunConfigInput,
+  WorkflowRunConfigMetadata,
+} from './run-config';
+
 // DAG node types
 export {
   triggerRuleSchema,
@@ -74,6 +89,8 @@ export {
   includeDirectiveSchema,
   workflowNodeSchema,
   fanOutConfigSchema,
+  composeFanOutConfigSchema,
+  composeFanOutNodeSchema,
   dagNodeSchema,
   INPUT_NAME_SOURCE,
   inputEnvKey,
@@ -87,6 +104,7 @@ export {
   isLoopNode,
   isLoopGroupNode,
   isWorkflowNode,
+  isComposeFanOutNode,
   isIncludeDirective,
   isPersistableNode,
   isNodeContextResume,
@@ -130,6 +148,7 @@ export type {
   WorkflowWaitResult,
   IncludeDirective,
   WorkflowNode,
+  ComposeFanOutNode,
   FanOutConfig,
   DagNode,
   EffortLevel,

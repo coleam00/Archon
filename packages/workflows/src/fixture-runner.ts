@@ -30,7 +30,7 @@ import {
 import type { WorkflowWithSource } from './schemas/workflow';
 import type { WorkflowConfig } from './deps';
 import type { ResolvedAiProfile } from './model-validation';
-import { liveSourceRoots } from './workflow-source';
+import { liveSourceRoots, type WorkflowSourceRoots } from './workflow-source';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -224,6 +224,8 @@ export interface FixtureReport {
 export interface RunFixturesOptions {
   workflows: readonly WorkflowWithSource[];
   cwd: string;
+  /** Source scopes corresponding to `workflows`; defaults to the live project, global, and bundled scopes. */
+  sourceRoots?: WorkflowSourceRoots;
   config?: WorkflowConfig;
   aiProfile?: ResolvedAiProfile;
   /** Restrict to one workflow name or pack prefix; unresolved values are an error. */
@@ -237,7 +239,7 @@ export interface RunFixturesOptions {
  * warning, not a failure — stubs for conditionally-skipped branches are legitimate.
  */
 export async function runFixtures(options: RunFixturesOptions): Promise<FixtureReport> {
-  const roots = liveSourceRoots(options.cwd);
+  const roots = options.sourceRoots ?? liveSourceRoots(options.cwd);
   // Same scope roots discovery reads, project root included as its `.archon/workflows` dir.
   const all = await discoverFixtures([
     ...(roots.project !== null ? [join(roots.project, '.archon', 'workflows')] : []),

@@ -1,0 +1,40 @@
+# Dry-run fixture: the initial review is ready, so the correction loop stays
+# skipped and gate-ready binds the review verdict directly (the corrections
+# binding takes its if_skipped default).
+impl__record-start: '{"start":"recorded"}'
+impl__implement:
+  done: true
+  green: true
+  summary: "stub: implemented and green"
+impl__assert-changed: "3 files changed"
+gate-green: '{"gate":"green"}'
+pr__pr: "https://github.com/example/repo/pull/2 (draft)"
+review__scope: "target recorded; head sha stubbed"
+review__code: "0 findings"
+review__seams: "0 findings"
+review__synthesize:
+  ready: true
+  findings_summary: "stub: clean on initial review"
+gate-ready: '{"ready":"true"}'
+validate__validate:
+  green: true
+  summary: "stub: full gate green"
+gate-validated: '{"validated":"true"}'
+ci-probe: '{"state":"concluded","detail":"no checks configured on this repository — nothing to await"}'
+flip-ready: "https://github.com/example/repo/pull/2"
+classify:
+  tests: false
+  errors: false
+  comments: false
+  types: false
+  docs: false
+  reasons:
+    tests: "stub: small fixture diff"
+    errors: "stub: no failure paths"
+    comments: "stub: no comment changes"
+    types: "stub: no contract changes"
+    docs: "stub: no doc-facing changes"
+resolve-scope: '{"tests":"false","errors":"false","comments":"false","types":"false","docs":"false"}'
+fixture:
+  expect: completed
+review__simplify: "0 findings (suggestions only)"

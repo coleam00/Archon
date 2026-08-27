@@ -175,7 +175,7 @@ export const loopNodeConfigSchema = loopControlSchema
      *
      * `loop:` only, and the asymmetry is principled rather than convenient. A
      * `loop_group:` body node can already declare `output_format` and be read by
-     * `until_bash: '[ "$decide.output.done" = "true" ]'` — node-output refs are
+     * `until_bash: '[ $decide.output.done = "true" ]'` — node-output refs are
      * substituted into `until_bash` against the current iteration's outputs, and
      * booleans render unquoted. The single-prompt `loop:` has no such handle: its
      * judgment lives in its own AI turn, which has no node id, and `until_bash` runs

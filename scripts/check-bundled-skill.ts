@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 /**
  * Verifies that packages/cli/src/bundled-skill.ts embeds every file of the
- * Archon-distributed skills (.claude/skills/archon/ and .claude/skills/manage-run/).
+ * Archon-distributed skill (.claude/skills/archon-cli/).
  * bundled-skill.ts is hand-maintained (Bun's `with { type: 'text' }` import
  * attributes, which the generator approach in scripts/generate-bundled-defaults.ts
  * cannot reproduce for the binary build). This script is the safety net.
@@ -25,7 +25,7 @@ import { join, relative, resolve } from 'path';
 const REPO_ROOT = resolve(import.meta.dir, '..');
 const SKILLS_DIR = join(REPO_ROOT, '.claude', 'skills');
 /** Skills bundled into the binary and installed by `archon skill install`. */
-const BUNDLED_SKILLS = ['archon', 'manage-run'];
+const BUNDLED_SKILLS = ['archon-cli'];
 const BUNDLED_SKILL_PATH = join(REPO_ROOT, 'packages', 'cli', 'src', 'bundled-skill.ts');
 
 const CHECK_ONLY = process.argv.includes('--check');

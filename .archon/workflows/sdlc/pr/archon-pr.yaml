@@ -1,0 +1,24 @@
+name: archon-pr
+description: |
+  Open a pull request for the committed work on the current branch — draft by
+  default when composed, template-aware, with the body built from the run's
+  artifacts. Verifies by reading the created PR back. Never sweeps unrelated
+  changes and never force-pushes.
+
+  Use when: committed work on a branch needs a PR — "open a PR", "create a
+  draft PR for this branch".
+  NOT for: implementing (implement), reviewing (review), or merging (always human).
+
+model: medium
+requires: [github]
+
+inputs:
+  draft:
+    default: "true"
+    description: '"true" opens the PR as a draft; anything else opens it ready for review.'
+
+returns: pr
+
+nodes:
+  - id: pr
+    command: pr

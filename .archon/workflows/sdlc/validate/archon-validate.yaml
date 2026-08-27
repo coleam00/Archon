@@ -1,0 +1,35 @@
+name: archon-validate
+description: |
+  Discover and run the project's own checks — types, lint, tests, build,
+  whatever the repository itself defines — and report a structured verdict.
+  Judges nothing and fixes nothing: it runs what the project declares and
+  tells the truth about the result.
+
+  Use when: the current state of the checkout needs a validation verdict —
+  "run the checks", "is this green", "validate this".
+  NOT for: fixing failures (implement) or reviewing code (review).
+
+model: medium
+
+inputs:
+  scope:
+    default: ""
+    description: >-
+      Optional narrowing — a package, directory, or named check to focus on.
+      Empty means the project's full applicable gate.
+
+returns: validate
+outcome_field: green
+
+nodes:
+  - id: validate
+    command: validate
+    output_type: validation
+    output_format:
+      type: object
+      properties:
+        green:
+          type: boolean
+        summary:
+          type: string
+      required: [green, summary]

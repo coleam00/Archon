@@ -24,6 +24,13 @@ describe('parsePiModelRef', () => {
     });
   });
 
+  test('trims and canonicalizes provider and model components', () => {
+    expect(parsePiModelRef(' openai / gpt-5 ')).toEqual({
+      provider: 'openai',
+      modelId: 'gpt-5',
+    });
+  });
+
   test('rejects empty provider', () => {
     expect(parsePiModelRef('/model')).toBeUndefined();
   });

@@ -72,6 +72,7 @@ import {
 import type { WorkflowDefinition, WorkflowSource } from '@archon/workflows/schemas/workflow';
 import type { DagNode } from '@archon/workflows/schemas/dag-node';
 import type { RunModelOverrides } from '@archon/workflows/model-validation';
+import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
 import { createWorkflowDeps } from '../workflows/store-adapter';
 import { createChildWorktreeResolver } from '../workflows/child-isolation-resolver';
 import {
@@ -322,13 +323,15 @@ export interface WorkflowRoutingContext {
   readonly inputs?: Readonly<Record<string, string>>;
   /** Sparse tier/@alias rebindings supplied by this invocation (#2481). */
   readonly modelOverrides?: RunModelOverrides;
+  /** Validated sparse config content supplied by this fresh invocation. */
+  readonly runConfig?: WorkflowRunConfigInput;
   /** Between-run continuation (#2747): adopt/supersede target, if declared. */
   readonly adoptRunId?: string;
   readonly supersedesRunId?: string;
   /**
    * Adoption lane resolved by `resolveWorkflowAdoption` upstream — the adopting
    * run executes in the adopted run's worktree (reuse) or in one cut from its
-   * branch (fresh-from-branch) instead of a fresh worktree from base.
+   * exact branch (checkout-branch) instead of a fresh worktree from base.
    */
   readonly adoptionLane?: AdoptionLane;
 }
@@ -450,15 +453,14 @@ async function dispatchBackgroundWorkflowOwned(
           );
         });
     } else {
-      // A fresh-from-branch adoption lane cuts the new worktree FROM the adopted
-      // run's branch rather than base; 'task' is the workflow type whose creation
-      // path consumes `fromBranch` (same shape the CLI's adopt lane produces).
+      // A checkout-branch adoption lane materializes the adopted run's exact
+      // branch; 'task' is the workflow type whose request carries that selection.
       const hints: IsolationHints =
-        ctx.adoptionLane?.kind === 'fresh-from-branch'
+        ctx.adoptionLane?.kind === 'checkout-branch'
           ? {
               workflowType: 'task',
               workflowId: workerPlatformId,
-              fromBranch: toBranchName(ctx.adoptionLane.branch),
+              taskBranch: ctx.adoptionLane.taskBranch,
             }
           : { workflowType: 'thread', workflowId: workerPlatformId };
       const result = await validateAndResolveIsolation(
@@ -524,13 +526,16 @@ async function dispatchBackgroundWorkflowOwned(
   // consistent set of bytes. This background path calls `executeWorkflow` directly, so
   // without its own capture it would be the one surface still reading live source.
   //
-  // `workerCwd` is frequently a worktree, whose `.archon` belongs to whatever branch it
-  // is on rather than to the author; the canonical repo is what gets captured.
-  const workflowSourceRoot = await resolveWorkflowSourceRoot(workerCwd);
+  // Ordinary worktrees inherit workflow definitions from the canonical checkout.
+  // Adoption is different: the selected branch is the declared estate, so its
+  // workflow source must stay anchored to that exact checkout.
+  const workflowSourceRoot = ctx.adoptionLane
+    ? workerCwd
+    : ((await resolveWorkflowSourceRoot(workerCwd)) ?? workerCwd);
   let preparedSource: PreparedWorkflowSource | undefined;
   try {
     preparedSource = await prepareWorkflowSource(workflowDeps, {
-      sourceRoot: workflowSourceRoot ?? workerCwd,
+      sourceRoot: workflowSourceRoot,
     });
     // From here the owner reclaims it unless a run adopts it, whichever way we leave.
     owner.hold(preparedSource);
@@ -655,6 +660,7 @@ async function dispatchBackgroundWorkflowOwned(
             ...(ctx.modelOverrides
               ? { modelOverrideLayer: { kind: 'raw' as const, overrides: ctx.modelOverrides } }
               : {}),
+            ...(ctx.runConfig ? { runConfig: ctx.runConfig } : {}),
           }
         );
         // Surface workflow output to parent conversation as a result card
@@ -700,6 +706,14 @@ async function dispatchBackgroundWorkflowOwned(
         }
       } catch (error) {
         const err = toError(error);
+        if (preCreatedRun) {
+          await workflowDeps.store.failWorkflowRun(preCreatedRun.id, err.message).catch(dbError => {
+            getLog().error(
+              { err: toError(dbError), workflowRunId: preCreatedRun.id },
+              'background_workflow_fail_db_record_failed'
+            );
+          });
+        }
         getLog().error(
           {
             err,

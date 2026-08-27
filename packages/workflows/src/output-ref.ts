@@ -42,8 +42,10 @@
  * handled by the callers, not `resolveNodeOutputField` — they own the outputs map.
  * A `.field` ref to such an id throws `OutputRefError('unknown-node')` there, so it
  * fails the consuming node loudly, consistent with the strict field posture above;
- * a whole-text `$typo.output` to an unresolved id stays lenient ('') as a
- * long-documented surface. See `similarNodeIds`.
+ * a whole-text `$typo.output` to an unresolved id stays lenient ('') on the
+ * long-documented prompt/script surfaces. `until_bash` opts into a required-output
+ * policy at its substitution call sites because an empty fallback would decide loop
+ * completion. See `similarNodeIds`.
  */
 import { z } from '@hono/zod-openapi';
 import type { NodeOutput } from './schemas';

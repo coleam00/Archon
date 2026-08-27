@@ -1,0 +1,14 @@
+# Sparse guard fixture: run with --default-stubs --exec-code. A plan that still
+# needs a human decision completes honestly, while the delivery tail is skipped
+# and the real outcome node points to plan.md.
+triage__triage:
+  route: plan
+  summary: "stub: material product shape remains undecided"
+triage__assert-intact: '{"intact":"true"}'
+planned__plan:
+  ready: false
+  summary: "stub: owner decision required before implementation"
+planned__assert-intact: '{"intact":"true"}'
+fixture:
+  expect: completed
+exec-code: true

@@ -1069,6 +1069,53 @@ describe('validateWorkflowResources — bash double-quote lint', () => {
     expect(warnings).toHaveLength(1);
     expect(warnings[0].message).toContain('double-quoting');
   });
+
+  test('warns on double-quoted output refs in top-level and nested loop_groups', async () => {
+    const workflow = makeWorkflow('test', [
+      {
+        id: 'outer',
+        kind: 'loop_group',
+        loop_group: {
+          until_bash: 'test "$inner.output.state" = done',
+          max_iterations: 2,
+          nodes: [
+            {
+              id: 'inner',
+              kind: 'loop_group',
+              loop_group: {
+                until_bash: 'test "$LOOP_PREV.probe.output.state" != "pending"',
+                max_iterations: 2,
+                nodes: [{ id: 'probe', kind: 'exec', runtime: 'sh', script: 'echo pending' }],
+              },
+            } as unknown as DagNode,
+          ],
+        },
+      } as unknown as DagNode,
+    ]);
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    const warnings = issues.filter(
+      i => i.level === 'warning' && i.field === 'loop_group.until_bash'
+    );
+    expect(warnings).toHaveLength(2);
+    expect(warnings.map(warning => warning.nodeId)).toEqual(['outer', 'inner']);
+    expect(warnings.every(warning => warning.message.includes('double-quoting'))).toBe(true);
+  });
+
+  test('does not warn on an unquoted output ref in loop_group until_bash', async () => {
+    const workflow = makeWorkflow('test', [
+      {
+        id: 'group',
+        kind: 'loop_group',
+        loop_group: {
+          until_bash: 'test $probe.output.state != "pending"',
+          max_iterations: 2,
+          nodes: [{ id: 'probe', kind: 'exec', runtime: 'sh', script: 'echo pending' }],
+        },
+      } as unknown as DagNode,
+    ]);
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    expect(issues.some(i => i.field === 'loop_group.until_bash')).toBe(false);
+  });
 });
 
 // =============================================================================

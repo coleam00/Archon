@@ -1,6 +1,7 @@
 name: Test Suite
 
 on:
+  workflow_dispatch:
   push:
     branches: [main, dev]
   pull_request:
@@ -51,6 +52,9 @@ jobs:
         run: bun run type-check
 
       - name: Lint
+        env:
+          # Type-aware ESLint crosses Node's default 4 GB heap on windows-latest.
+          NODE_OPTIONS: --max-old-space-size=8192
         run: bun run lint --max-warnings 0
 
       - name: Check formatting

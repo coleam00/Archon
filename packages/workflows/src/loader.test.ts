@@ -30,7 +30,7 @@ mock.module('@archon/paths', () => ({
 }));
 
 // Bootstrap provider registry (needed by isRegisteredProvider checks at load time)
-import { registerBuiltinProviders, clearRegistry } from '@archon/providers';
+import { registerBuiltinProviders, clearRegistry, type ProviderDefaults } from '@archon/providers';
 clearRegistry();
 registerBuiltinProviders();
 
@@ -42,6 +42,7 @@ import {
   isLoopNode,
   isAgentNode,
   isWorkflowNode,
+  isIncludeDirective,
 } from './schemas';
 import { parseWorkflow, resetClassPlacementWarningForTests, type ParseResult } from './loader';
 import { COMPILED_LOOP_COMMAND, type LoopWithCompiledCommand } from './compiled-command';
@@ -56,7 +57,7 @@ import { discoverScriptsForCwd } from './script-discovery';
 /** The inline prompt text of an agent node, or undefined for any other kind
  * (formerly the bare `'prompt' in node ? node.prompt : ...` idiom, #2486). */
 function inlinePrompt(node: DagNode | IncludeDirective | undefined): string | undefined {
-  return node && 'kind' in node && isAgentNode(node) && node.source.kind === 'inline'
+  return node && !isIncludeDirective(node) && isAgentNode(node) && node.source.kind === 'inline'
     ? node.source.prompt
     : undefined;
 }
@@ -66,7 +67,7 @@ function inlinePrompt(node: DagNode | IncludeDirective | undefined): string | un
 function nodeWith(
   node: DagNode | IncludeDirective | undefined
 ): Record<string, JsonValue | BindingDirective> | undefined {
-  if (!node || !('kind' in node)) return undefined;
+  if (!node || isIncludeDirective(node)) return undefined;
   if (isExecNode(node)) return node.with;
   if (isAgentNode(node) && node.source.kind === 'command') return node.source.with;
   if (isWorkflowNode(node)) return node.with;
@@ -2626,6 +2627,96 @@ ${suspensionNode}
       }
     });
 
+    it('rejects a suspension-capable path inside a composed fan-out block', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      await writeFile(
+        join(workflowDir, 'gated-block.yaml'),
+        `name: gated-block\ndescription: block\nnodes:\n  - id: approve\n    approval:\n      message: Approve?\n`
+      );
+      await writeFile(
+        join(workflowDir, 'cfo-concurrent-suspension.yaml'),
+        `
+name: cfo-concurrent-suspension
+description: A wait and a suspending composed block must not race for the run cursor
+nodes:
+  - id: items
+    bash: "echo []"
+  - id: wait-for-time
+    wait:
+      duration_ms: 60000
+  - id: fan-block
+    include: gated-block
+    depends_on: [items]
+    fan_out:
+      items: "$items.output"
+      as: item
+`
+      );
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      const err = result.errors.find(e => e.filename === 'cfo-concurrent-suspension.yaml');
+      expect(err).toBeDefined();
+      expect(err?.error).toContain('contains unsupported suspension-capable path');
+    });
+
+    it('rejects composed fan-out blocks that hide a wait', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      await writeFile(
+        join(workflowDir, 'waiting-block.yaml'),
+        `name: waiting-block\ndescription: block\nnodes:\n  - id: delay\n    wait:\n      duration_ms: 60000\n`
+      );
+      await writeFile(
+        join(workflowDir, 'cfo-pair-suspension.yaml'),
+        `
+name: cfo-pair-suspension
+description: Two unordered composed blocks hiding waits must not race for the run cursor
+nodes:
+  - id: items-a
+    bash: "echo []"
+  - id: items-b
+    bash: "echo []"
+  - id: fan-block-a
+    include: waiting-block
+    depends_on: [items-a]
+    fan_out:
+      items: "$items-a.output"
+      as: item
+  - id: fan-block-b
+    include: waiting-block
+    depends_on: [items-b]
+    fan_out:
+      items: "$items-b.output"
+      as: item
+`
+      );
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      const err = result.errors.find(e => e.filename === 'cfo-pair-suspension.yaml');
+      expect(err).toBeDefined();
+      expect(err?.error).toContain('contains unsupported suspension-capable path');
+    });
+
+    it('allows a deterministic composed fan-out beside an unrelated wait', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      await writeFile(
+        join(workflowDir, 'deterministic-block.yaml'),
+        `name: deterministic-block\ndescription: block\nmutates_checkout: false\ninputs:\n  item: { required: true }\nnodes:\n  - id: work\n    bash: "echo $INPUTS.item"\n`
+      );
+      await writeFile(
+        join(workflowDir, 'cfo-with-unrelated-wait.yaml'),
+        `name: cfo-with-unrelated-wait\ndescription: Deterministic fan-out does not own a pause cursor\nnodes:\n  - id: items\n    bash: 'echo ["a"]'\n  - id: wait-for-time\n    depends_on: [items]\n    wait:\n      duration_ms: 60000\n  - id: fan-block\n    include: deterministic-block\n    depends_on: [items]\n    fan_out:\n      items: "$items.output"\n      as: item\n`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(
+        result.errors.find(error => error.filename === 'cfo-with-unrelated-wait.yaml')
+      ).toBeUndefined();
+      expect(
+        result.workflows.some(workflow => workflow.workflow.name === 'cfo-with-unrelated-wait')
+      ).toBe(true);
+    });
+
     it('rejects waits nested below more than one loop_group boundary', () => {
       const result = parseWorkflow(
         `
@@ -5098,6 +5189,106 @@ nodes:
       expect(err?.error).toContain('depends_on');
     });
 
+    it('applies the same fan_out.items guards to a compose_fan_out node', async () => {
+      const result = await loadOne(
+        'cfo-dangling',
+        `
+name: cfo-dangling
+description: composed fan-out items reference a node that does not exist
+nodes:
+  - id: work
+    include: cfo-block
+    fan_out:
+      items: "$ghost.output"
+      as: item
+`
+      );
+      const err = result.errors.find(e => e.filename === 'cfo-dangling.yaml');
+      expect(err).toBeDefined();
+      expect(err?.error).toContain("references unknown node '$ghost.output'");
+    });
+
+    it('rejects compose_fan_out items referencing a non-dependency producer', async () => {
+      await mkdir(join(testDir, '.archon', 'workflows'), { recursive: true });
+      await writeFile(
+        join(testDir, '.archon', 'workflows', 'cfo-block.yaml'),
+        `name: cfo-block\ndescription: block\nnodes:\n  - id: run\n    prompt: "do the thing"\n`
+      );
+      const result = await loadOne(
+        'cfo-not-dep',
+        `
+name: cfo-not-dep
+description: composed block fanned out on a downstream producer (would race)
+nodes:
+  - id: list
+    bash: "echo []"
+  - id: work
+    include: cfo-block
+    fan_out:
+      items: "$list.output"
+      as: item
+`
+      );
+      const err = result.errors.find(e => e.filename === 'cfo-not-dep.yaml');
+      expect(err).toBeDefined();
+      expect(err?.error).toContain('not an upstream dependency');
+    });
+
+    it('catches a dangling $node.output ref in a compose_fan_out with value', async () => {
+      await mkdir(join(testDir, '.archon', 'workflows'), { recursive: true });
+      await writeFile(
+        join(testDir, '.archon', 'workflows', 'cfo-block.yaml'),
+        `name: cfo-block\ndescription: block\nnodes:\n  - id: run\n    prompt: "do the thing"\n`
+      );
+      const result = await loadOne(
+        'cfo-with-dangling',
+        `
+name: cfo-with-dangling
+description: with value references a node that does not exist
+nodes:
+  - id: work
+    include: cfo-block
+    with:
+      seed: "$ghost.output"
+    fan_out:
+      items: "[1, 2]"
+      as: item
+`
+      );
+      const err = result.errors.find(e => e.filename === 'cfo-with-dangling.yaml');
+      expect(err).toBeDefined();
+      expect(err?.error).toContain("references unknown node '$ghost.output'");
+    });
+
+    it('rejects compose_fan_out with binding to a non-upstream producer', async () => {
+      await mkdir(join(testDir, '.archon', 'workflows'), { recursive: true });
+      await writeFile(
+        join(testDir, '.archon', 'workflows', 'cfo-block.yaml'),
+        `name: cfo-block\ndescription: block\nnodes:\n  - id: run\n    prompt: "do the thing"\n`
+      );
+      const result = await loadOne(
+        'cfo-with-late',
+        `
+name: cfo-with-late
+description: with value reads a sibling that is not an upstream dependency
+nodes:
+  - id: seed
+    bash: "echo hi"
+  - id: work
+    include: cfo-block
+    with:
+      seed: "$seed.output"
+    fan_out:
+      items: "[1]"
+      as: item
+`
+      );
+      const err = result.errors.find(e => e.filename === 'cfo-with-late.yaml');
+      expect(err).toBeDefined();
+      expect(err?.error).toContain("binding 'with.seed'");
+      expect(err?.error).toContain('not an upstream dependency');
+    });
+
     it("rejects 'fan_out' on a non-workflow node", async () => {
       const result = await loadOne(
         'fan-wrong-node',
@@ -5461,6 +5652,24 @@ nodes:
       expect(result.workflows.some(w => w.workflow.name === 'mc-parent')).toBe(false);
     });
 
+    it("points misplaced composed fan-out 'mutates_checkout' to the included workflow", async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      await writeFile(
+        join(workflowDir, 'mc-fan-block.yaml'),
+        `name: mc-fan-block\ndescription: b\ninputs:\n  item: { required: true }\nnodes:\n  - id: work\n    bash: echo work\n`
+      );
+      await writeFile(
+        join(workflowDir, 'mc-fan-parent.yaml'),
+        `name: mc-fan-parent\ndescription: p\nnodes:\n  - id: items\n    bash: 'echo ["a"]'\n  - id: fan\n    include: mc-fan-block\n    depends_on: [items]\n    mutates_checkout: false\n    fan_out:\n      items: "$items.output"\n      as: item\n`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      const err = result.errors.find(e => e.filename === 'mc-fan-parent.yaml');
+      expect(err?.error).toContain('root of the included workflow');
+      expect(err?.error).toContain('fan_out.max_parallel: 1');
+    });
+
     it('warns only about the RUN-owned fields a composed workflow cannot carry', async () => {
       const workflowDir = join(testDir, '.archon', 'workflows');
       await mkdir(workflowDir, { recursive: true });
@@ -5602,6 +5811,28 @@ nodes:
       // run-level decision it is not.
       expect(payload.droppedFields).toContain('webSearchMode');
       expect(payload.webSearchModeNote).toContain('no per-node form');
+    });
+
+    it('consumes target mutates_checkout for composed fan-out instead of warning it was dropped', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      await writeFile(
+        join(workflowDir, 'read-only-block.yaml'),
+        `name: read-only-block\ndescription: Safe to run concurrently\nmutates_checkout: false\ninputs:\n  item: { required: true }\nnodes:\n  - id: work\n    bash: "echo $INPUTS.item"\n`
+      );
+      await writeFile(
+        join(workflowDir, 'fan-parent.yaml'),
+        `name: fan-parent\ndescription: Fans out the block\nnodes:\n  - id: list\n    bash: 'echo ["a"]'\n  - id: fan\n    include: read-only-block\n    depends_on: [list]\n    fan_out:\n      items: "$list.output"\n      as: item\n      max_parallel: 2\n`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors.filter(e => e.filename === 'fan-parent.yaml')).toHaveLength(0);
+      const call = (mockLogger.warn as Mock<(...args: unknown[]) => unknown>).mock.calls.find(
+        c =>
+          c[1] === 'include.workflow_level_fields_dropped' &&
+          (c[0] as { include?: string }).include === 'fan'
+      );
+      expect(call).toBeUndefined();
     });
 
     it('should compile a block command file and namespace a local sibling ref', async () => {
@@ -6318,6 +6549,7 @@ nodes:
         displayName: 'No Resume Skip Test',
         builtIn: false,
         credentials: { kind: 'static', specs: [] },
+        parseRunConfig: (raw: ProviderDefaults): ProviderDefaults => raw,
         capabilities: {
           sessionResume: false,
           mcp: false,
@@ -6387,6 +6619,7 @@ nodes:
         displayName: 'No Resume Test',
         builtIn: false,
         credentials: { kind: 'static', specs: [] },
+        parseRunConfig: (raw: ProviderDefaults): ProviderDefaults => raw,
         capabilities: {
           sessionResume: false,
           mcp: false,
@@ -6772,7 +7005,7 @@ nodes:
       expect(pw.some(w => w.includes('unknown key'))).toBe(false);
       expect(pw).toEqual([
         "Node 'refine': node-level loop 'interactive:' is deprecated. A future release re-expresses the interactive loop as a gate + loop_group composition (#2707 step 3). Continue using it for now.",
-        "Node 'refine': the prose 'loop_group.until' completion signal is deprecated. Declare 'loop_group.until_bash' instead — it can read a body node's structured output (e.g. 'test \"$body-node.output.field\" = true') (#2707 step 3). Continue using it for now.",
+        "Node 'refine': the prose 'loop_group.until' completion signal is deprecated. Declare 'loop_group.until_bash' instead — it can read a body node's structured output (e.g. 'test $body-node.output.field = \"true\"') (#2707 step 3). Continue using it for now.",
         "Node 'gate': 'approval.on_reject' is deprecated. Declare 'approval.decisions' and wire a rework node with \"when: \\\"$gate.output.decision == 'reject'\\\"\" instead (loop it with loop_group if it should iterate). This gate keeps running via the legacy mechanism until migrated.",
       ]);
     });
@@ -7657,6 +7890,33 @@ nodes:
 
     expect(workflow).toBeNull();
     expect(error?.error).toContain('fan-out workflow node');
+    expect(error?.error).toContain('collector node');
+  });
+
+  it('rejects a composed fan-out node because its runtime output is an aggregate array', () => {
+    const { workflow, error } = parseWorkflow(
+      `
+name: compose-fan-out-outcome
+description: invalid direct outcome over an in-parent instance aggregate
+returns: fan
+outcome_field: green
+nodes:
+  - id: fan
+    include: some-block
+    fan_out:
+      items: "['a']"
+      as: item
+    output_format:
+      type: object
+      properties:
+        green: { type: boolean }
+      required: [green]
+`,
+      'compose-fan-out-outcome.yaml'
+    );
+
+    expect(workflow).toBeNull();
+    expect(error?.error).toContain('composed fan-out node');
     expect(error?.error).toContain('collector node');
   });
 

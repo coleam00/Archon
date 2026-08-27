@@ -90,6 +90,7 @@ describe('WorktreeProvider', () => {
   let worktreeExistsSpy: Mock<typeof git.worktreeExists>;
   let listWorktreesSpy: Mock<typeof git.listWorktrees>;
   let findWorktreeByBranchSpy: Mock<typeof git.findWorktreeByBranch>;
+  let getCurrentBranchStrictSpy: Mock<typeof git.getCurrentBranchStrict>;
   let getCanonicalRepoPathSpy: Mock<typeof git.getCanonicalRepoPath>;
   let verifyWorktreeOwnershipSpy: Mock<typeof git.verifyWorktreeOwnership>;
 
@@ -103,6 +104,7 @@ describe('WorktreeProvider', () => {
     worktreeExistsSpy = spyOn(git, 'worktreeExists');
     listWorktreesSpy = spyOn(git, 'listWorktrees');
     findWorktreeByBranchSpy = spyOn(git, 'findWorktreeByBranch');
+    getCurrentBranchStrictSpy = spyOn(git, 'getCurrentBranchStrict');
     getCanonicalRepoPathSpy = spyOn(git, 'getCanonicalRepoPath');
     verifyWorktreeOwnershipSpy = spyOn(git, 'verifyWorktreeOwnership');
     getDefaultBranchSpy = spyOn(git, 'getDefaultBranch');
@@ -115,6 +117,7 @@ describe('WorktreeProvider', () => {
     worktreeExistsSpy.mockResolvedValue(false);
     listWorktreesSpy.mockResolvedValue([]);
     findWorktreeByBranchSpy.mockResolvedValue(null);
+    getCurrentBranchStrictSpy.mockResolvedValue(null);
     getCanonicalRepoPathSpy.mockImplementation(async path => git.toRepoPath(path));
     verifyWorktreeOwnershipSpy.mockResolvedValue(undefined);
     // Most paths exist by default (directoryExists checks for destroy etc.),
@@ -151,6 +154,7 @@ describe('WorktreeProvider', () => {
     worktreeExistsSpy.mockRestore();
     listWorktreesSpy.mockRestore();
     findWorktreeByBranchSpy.mockRestore();
+    getCurrentBranchStrictSpy.mockRestore();
     getCanonicalRepoPathSpy.mockRestore();
     verifyWorktreeOwnershipSpy.mockRestore();
     getDefaultBranchSpy.mockRestore();
@@ -322,7 +326,10 @@ describe('WorktreeProvider', () => {
         ...baseRequest,
         workflowType: 'task',
         identifier: 'test-adapters',
-        fromBranch: git.toBranchName('feature/extract-adapters'),
+        taskBranch: {
+          kind: 'new',
+          fromBranch: git.toBranchName('feature/extract-adapters'),
+        },
       };
 
       await provider.create(request);
@@ -344,6 +351,129 @@ describe('WorktreeProvider', () => {
       );
     });
 
+    test('checks out an exact existing task branch without creating or syncing a branch', async () => {
+      const request: IsolationRequest = {
+        ...baseRequest,
+        workflowType: 'task',
+        identifier: 'adopt-run-1',
+        taskBranch: {
+          kind: 'existing',
+          branch: git.toBranchName('feature/live-pr'),
+        },
+      };
+
+      const env = await provider.create(request);
+
+      expect(env.branchName).toBe(git.toBranchName('feature/live-pr'));
+      expect(env.metadata).toMatchObject({ adopted: true, adoptedFrom: 'branch' });
+      expect(syncWorkspaceSpy).not.toHaveBeenCalled();
+      expect(execSpy).toHaveBeenCalledWith(
+        'git',
+        ['-C', '/workspace/repo', 'worktree', 'add', expect.any(String), 'feature/live-pr'],
+        expect.any(Object)
+      );
+      const addCall = execSpy.mock.calls.find((call: unknown[]) => {
+        const args = call[1] as string[];
+        return args.includes('worktree') && args.includes('add');
+      });
+      expect((addCall?.[1] as string[]).includes('-b')).toBe(false);
+    });
+
+    test('cleans a partially registered exact-branch worktree when checkout fails', async () => {
+      const removeWorktreeSpy = spyOn(git, 'removeWorktree');
+      removeWorktreeSpy.mockResolvedValue(undefined);
+      const checkoutError = new Error('checkout interrupted');
+      execSpy.mockRejectedValueOnce(checkoutError);
+      worktreeExistsSpy
+        .mockResolvedValueOnce(false) // No existing checkout to adopt.
+        .mockResolvedValueOnce(true); // Git registered the attempted checkout before failing.
+      mockAccess.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+
+      const request: IsolationRequest = {
+        ...baseRequest,
+        workflowType: 'task',
+        identifier: 'adopt-run-1',
+        taskBranch: {
+          kind: 'existing',
+          branch: git.toBranchName('feature/live-pr'),
+        },
+      };
+      const expectedWorktreePath = provider.getWorktreePath(
+        request,
+        git.toBranchName('feature/live-pr')
+      );
+
+      await expect(provider.create(request)).rejects.toThrow(
+        "Failed to check out existing branch 'feature/live-pr': checkout interrupted"
+      );
+      expect(removeWorktreeSpy).toHaveBeenCalledWith('/workspace/repo', expectedWorktreePath);
+
+      removeWorktreeSpy.mockRestore();
+    });
+
+    test('reuses an exact task branch worktree discovered outside the expected path', async () => {
+      const request: IsolationRequest = {
+        ...baseRequest,
+        workflowType: 'task',
+        identifier: 'adopt-run-1',
+        taskBranch: {
+          kind: 'existing',
+          branch: git.toBranchName('feature/live-pr'),
+        },
+      };
+      worktreeExistsSpy.mockResolvedValueOnce(false);
+      listWorktreesSpy.mockResolvedValue([
+        {
+          path: git.toWorktreePath('/external/worktrees/feature-live-pr'),
+          branch: git.toBranchName('feature/live-pr'),
+        },
+      ]);
+
+      const env = await provider.create(request);
+
+      expect(verifyWorktreeOwnershipSpy).toHaveBeenCalledWith(
+        '/external/worktrees/feature-live-pr',
+        request.canonicalRepoPath
+      );
+      expect(env.workingPath).toBe('/external/worktrees/feature-live-pr');
+      expect(env.metadata).toMatchObject({ adopted: true, adoptedFrom: 'branch' });
+      expect(syncWorkspaceSpy).not.toHaveBeenCalled();
+    });
+
+    test('refuses an expected-path worktree on a different branch', async () => {
+      const request: IsolationRequest = {
+        ...baseRequest,
+        workflowType: 'task',
+        identifier: 'adopt-run-1',
+        taskBranch: {
+          kind: 'existing',
+          branch: git.toBranchName('feature/live-pr'),
+        },
+      };
+      worktreeExistsSpy.mockResolvedValueOnce(true);
+      getCurrentBranchStrictSpy.mockResolvedValueOnce(git.toBranchName('other/branch'));
+
+      await expect(provider.create(request)).rejects.toThrow(
+        "expected branch 'feature/live-pr', found 'other/branch'"
+      );
+    });
+
+    test('preserves an unexpected current-branch probe failure', async () => {
+      const request: IsolationRequest = {
+        ...baseRequest,
+        workflowType: 'task',
+        identifier: 'adopt-run-1',
+        taskBranch: {
+          kind: 'existing',
+          branch: git.toBranchName('feature/live-pr'),
+        },
+      };
+      worktreeExistsSpy.mockResolvedValueOnce(true);
+      getCurrentBranchStrictSpy.mockRejectedValueOnce(new Error('git probe timed out'));
+
+      await expect(provider.create(request)).rejects.toThrow(/git probe timed out/);
+    });
+
     test('throws when branch already exists and fromBranch is specified', async () => {
       const alreadyExistsError = new Error('fatal: branch already exists') as Error & {
         stderr: string;
@@ -358,7 +488,10 @@ describe('WorktreeProvider', () => {
         ...baseRequest,
         workflowType: 'task',
         identifier: 'test-adapters',
-        fromBranch: git.toBranchName('feature/extract-adapters'),
+        taskBranch: {
+          kind: 'new',
+          fromBranch: git.toBranchName('feature/extract-adapters'),
+        },
       };
 
       await expect(provider.create(request)).rejects.toThrow(
@@ -2537,7 +2670,7 @@ describe('WorktreeProvider', () => {
         ...baseRequest,
         workflowType: 'task',
         identifier: 'test-feature',
-        fromBranch: git.toBranchName('dev'),
+        taskBranch: { kind: 'new', fromBranch: git.toBranchName('dev') },
       };
 
       await provider.create(request);
@@ -2558,7 +2691,7 @@ describe('WorktreeProvider', () => {
         ...baseRequest,
         workflowType: 'task',
         identifier: 'test-feature',
-        fromBranch: git.toBranchName('dev'),
+        taskBranch: { kind: 'new', fromBranch: git.toBranchName('dev') },
       };
 
       await provider.create(request);
@@ -3242,7 +3375,7 @@ describe('WorktreeProvider', () => {
         ...baseRequest,
         workflowType: 'task',
         identifier: 'my-feature',
-        fromBranch: git.toBranchName('develop'),
+        taskBranch: { kind: 'new', fromBranch: git.toBranchName('develop') },
       };
 
       const customProvider = new WorktreeProvider(async () => ({

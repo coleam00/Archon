@@ -193,8 +193,7 @@ smaller box with a tastefully curated set of tools."
 
 | Skill | Install | What It Teaches |
 |-------|---------|----------------|
-| `archon` (bundled) | `archon skill install` | Archon workflows, commands, and project conventions |
-| `manage-run` (bundled) | `archon skill install` | Inspect and control workflow runs via the `archon` CLI (focused run-management skill) |
+| `archon-cli` (bundled) | `archon skill install` | Run, manage, configure, and author Archon workflows through the CLI |
 | `remotion-best-practices` | `npx skills add remotion-dev/skills` | Remotion animation patterns, API usage, gotchas (35 rules) |
 | `skill-creator` | `npx skills add anthropics/skills` | How to create new SKILL.md files |
 | Community skills | Browse [skills.sh](https://skills.sh) | Search 500K+ skills for any domain |

@@ -476,14 +476,14 @@ If you want Claude Code to be able to invoke Archon workflows on your behalf, in
 Archon skill into your project. The setup wizard handles this automatically — just run
 `archon setup` and accept the skill installation prompt.
 
-To install manually instead, run `archon skill install /path/to/your/repo` (which writes both the `archon` and `manage-run` skills), or copy them by hand:
+To install manually instead, run `archon skill install /path/to/your/repo`, or copy it by hand:
 
 ```bash
-cp -r Archon/.claude/skills/archon /path/to/your/repo/.claude/skills/
-cp -r Archon/.claude/skills/manage-run /path/to/your/repo/.claude/skills/
+mkdir -p /path/to/your/repo/.claude/skills
+cp -r Archon/.claude/skills/archon-cli /path/to/your/repo/.claude/skills/
 ```
 
-Then in Claude Code, say things like "use archon to fix issue #42" and it will invoke the appropriate workflow. The `manage-run` skill lets it inspect and control runs (`archon workflow runs`/`get`/`approve`...).
+Then in Claude Code, say things like "use archon to fix issue #42" and the `archon-cli` skill routes it: running workflows, managing runs, setup/config, or authoring new ones.
 
 ---
 

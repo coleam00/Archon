@@ -29,10 +29,16 @@ mock.module('./connection', () => ({
   },
   getDialect: () => mockPostgresDialect,
   getDatabaseType: () => 'postgresql',
+  getDatabase: () => ({
+    withTransaction: async <T>(fn: (query: typeof mockQuery) => Promise<T>): Promise<T> =>
+      fn(mockQuery),
+  }),
 }));
 
 import {
   createWorkflowEvent,
+  persistWorkflowEvent,
+  persistWorkflowEventIfRunning,
   listWorkflowEvents,
   listRecentEvents,
   getDagResumeSnapshot,
@@ -106,6 +112,69 @@ describe('workflow-events', () => {
         workflow_run_id: 'run-456',
         event_type: 'step_started',
       });
+    });
+  });
+
+  describe('persistWorkflowEventIfRunning', () => {
+    test('atomically inserts the start from a locked running row', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([{}]));
+
+      await expect(
+        persistWorkflowEventIfRunning({
+          workflow_run_id: 'run-456',
+          event_type: 'node_started',
+          step_name: 'fan-instance',
+        })
+      ).resolves.toEqual({ persisted: true });
+
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+      expect(mockQuery.mock.calls[0]?.[0]).toContain('INSERT INTO remote_agent_workflow_events');
+      expect(mockQuery.mock.calls[0]?.[0]).toContain("status = 'running' FOR UPDATE");
+    });
+
+    test('does not persist a start after cancellation won the conditional insert', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+
+      await expect(
+        persistWorkflowEventIfRunning({
+          workflow_run_id: 'run-456',
+          event_type: 'node_started',
+          step_name: 'fan-instance',
+        })
+      ).resolves.toEqual({ persisted: false });
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+    });
+
+    test('allows already-claimed deterministic work to extend through a pause', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([{}]));
+
+      await expect(
+        persistWorkflowEventIfRunning(
+          {
+            workflow_run_id: 'run-456',
+            event_type: 'node_started',
+            step_name: 'nested-fan-instance',
+          },
+          { allowPaused: true }
+        )
+      ).resolves.toEqual({ persisted: true });
+
+      expect(mockQuery.mock.calls[0]?.[0]).toContain("status IN ('running', 'paused') FOR UPDATE");
+    });
+  });
+
+  describe('persistWorkflowEvent', () => {
+    test('propagates a storage failure for correctness-critical events', async () => {
+      mockQuery.mockRejectedValueOnce(new Error('disk full'));
+
+      await expect(
+        persistWorkflowEvent({
+          workflow_run_id: 'run-456',
+          event_type: 'fan_out_instances',
+          step_name: 'fan',
+          data: { instances: [] },
+        })
+      ).rejects.toThrow('disk full');
     });
   });
 
@@ -799,6 +868,49 @@ describe('workflow-events', () => {
       expect(result.completedNodeOutputs.get('group.body')).toEqual({ output: 'iteration 1' });
     });
 
+    test('uses durable composed-instance summaries instead of their fallible inner rows', async () => {
+      const first = '__archon_fan_out__fan__root__item-a';
+      const second = '__archon_fan_out__fan__root__item-b';
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          {
+            step_name: `${first}__fan__item-a__work`,
+            event_type: 'node_completed',
+            data: { node_output: 'leaf', cost_usd: 0.01, tokens: { input: 10, output: 1 } },
+          },
+          {
+            step_name: first,
+            event_type: 'node_completed',
+            data: {
+              node_output: 'done-a',
+              type: 'compose_fan_out_instance',
+              aggregate: true,
+              cost_usd: 0.01,
+              tokens: { input: 10, output: 1 },
+            },
+          },
+          // The second instance proves the durable summary remains sufficient when its
+          // fire-and-forget leaf event never reached storage before the process died.
+          {
+            step_name: second,
+            event_type: 'node_completed',
+            data: {
+              node_output: 'done-b',
+              type: 'compose_fan_out_instance',
+              aggregate: true,
+              cost_usd: 0.02,
+              tokens: { input: 20, output: 2 },
+            },
+          },
+        ])
+      );
+
+      const result = await getDagResumeSnapshot('run-compose-accounting');
+
+      expect(result.costUsd).toBeCloseTo(0.03, 10);
+      expect(result.tokens).toEqual({ input: 30, output: 3 });
+    });
+
     describe('node_output_spill_path preference (#2726)', () => {
       let spillDir: string;
 
@@ -929,6 +1041,68 @@ describe('workflow-events', () => {
       expect(result.completedNodeOutputs.size).toBe(0);
       expect(result.tokens).toBeUndefined();
       expect(result.costUsd).toBe(0);
+      expect(result.fanOutSnapshots.size).toBe(0);
+      expect(result.unresolvedNodeStarts.size).toBe(0);
+    });
+
+    test('keeps the first valid fan-out instance snapshot authoritative', async () => {
+      const first = [
+        { ordinal: 0, identity: 'a-0', item: { id: 'a' }, inputs: { item: { id: 'a' } } },
+        { ordinal: 1, identity: 'b-0', item: { id: 'b' }, inputs: { item: { id: 'b' } } },
+      ];
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          { step_name: 'fan', event_type: 'fan_out_instances', data: { instances: first } },
+          {
+            step_name: 'fan',
+            event_type: 'fan_out_instances',
+            data: {
+              instances: [
+                {
+                  ordinal: 0,
+                  identity: 'changed-0',
+                  item: 'changed',
+                  inputs: { item: 'changed' },
+                },
+              ],
+            },
+          },
+        ])
+      );
+
+      const result = await getDagResumeSnapshot('run-fan');
+
+      expect(result.fanOutSnapshots.get('fan')).toEqual(first);
+    });
+
+    test('ignores a fan-out snapshot that does not carry its resolved input map', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          {
+            step_name: 'fan',
+            event_type: 'fan_out_instances',
+            data: { instances: [{ ordinal: 0, identity: 'incomplete', item: 'a' }] },
+          },
+        ])
+      );
+
+      const result = await getDagResumeSnapshot('run-incomplete-fan-plan');
+
+      expect(result.fanOutSnapshots.has('fan')).toBe(false);
+    });
+
+    test('tracks a durable start until the same step reaches a terminal event', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          { step_name: 'fan__a', event_type: 'node_started', data: {} },
+          { step_name: 'fan__b', event_type: 'node_started', data: {} },
+          { step_name: 'fan__b', event_type: 'node_completed', data: { node_output: 'done' } },
+        ])
+      );
+
+      const result = await getDagResumeSnapshot('run-starts');
+
+      expect(result.unresolvedNodeStarts).toEqual(new Set(['fan__a']));
     });
 
     test('throws on DB query error', async () => {

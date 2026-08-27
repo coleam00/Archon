@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { parseWorkflow } from './loader';
 import { expandWorkflowIncludes } from './include-expander';
 import type { WorkflowWithSource } from './schemas/workflow';
+import { liveSourceRoots, type WorkflowSourceRoots } from './workflow-source';
 
 /** Load the temp project's on-disk workflows so targets match discovery's output shape. */
 function workflowsOnDisk(cwd: string, names: string[], pack = 'pack'): WorkflowWithSource[] {
@@ -21,10 +22,32 @@ function workflowsOnDisk(cwd: string, names: string[], pack = 'pack'): WorkflowW
     };
   });
 }
-import { formatFixtureReport, parseFixtureFile, runFixtures } from './fixture-runner';
+import {
+  formatFixtureReport,
+  parseFixtureFile,
+  runFixtures as runFixturesFromSource,
+  type FixtureReport,
+  type RunFixturesOptions,
+} from './fixture-runner';
 
 function makeTempProject(): string {
   return mkdtempSync(join(tmpdir(), 'fixture-runner-'));
+}
+
+function isolatedSourceRoots(cwd: string): WorkflowSourceRoots {
+  const roots = liveSourceRoots(cwd);
+  return {
+    ...roots,
+    globalWorkflows: join(cwd, '.empty', 'global-workflows'),
+    bundledWorkflows: join(cwd, '.empty', 'bundled-workflows'),
+  };
+}
+
+async function runFixtures(options: RunFixturesOptions): Promise<FixtureReport> {
+  return runFixturesFromSource({
+    ...options,
+    sourceRoots: isolatedSourceRoots(options.cwd),
+  });
 }
 
 const cleanups: string[] = [];

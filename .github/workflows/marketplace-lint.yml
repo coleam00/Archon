@@ -1,6 +1,7 @@
 name: Marketplace Lint
 
 on:
+  workflow_dispatch:
   pull_request:
     paths:
       - 'packages/docs-web/src/data/marketplace.ts'

@@ -1,0 +1,8 @@
+# Dry-run fixture: the blocked path. ready:false is a VALID outcome — the run
+# must COMPLETE (consumers gate on the field), never fail on honesty.
+plan:
+  ready: false
+  summary: "stub: blocked on missing intent — the plan names the owner's open question"
+assert-intact: '{"intact":"true"}'
+fixture:
+  expect: completed

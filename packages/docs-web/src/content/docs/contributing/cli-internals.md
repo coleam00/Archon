@@ -378,7 +378,10 @@ When `--branch` is provided:
 1. **Lookup:** `isolationDb.findActiveByWorkflow(codebaseId, 'task', branchName)`
 2. **Health check:** `provider.healthCheck(path)` on existing
 3. **Reuse:** If found and healthy (warns if `--from` was specified but not applied)
-4. **Create:** If not found or unhealthy -- passes `fromBranch` to provider if specified via `--from`
+4. **Create:** If not found or unhealthy -- passes a `taskBranch: { kind: 'new', fromBranch }`
+   selection to the provider when `--from` is specified. Adoption instead passes
+   `taskBranch: { kind: 'existing', branch }`, which checks out that exact local branch
+   without creating a child branch or syncing it to a remote.
 
 Worktrees stored at: `~/.archon/workspaces/<owner>/<repo>/worktrees/<branch-slug>/`
 

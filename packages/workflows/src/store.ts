@@ -17,6 +17,7 @@ import type {
   WorkflowRunNodeSession,
 } from './schemas';
 import type { TokenUsage } from '@archon/providers/types';
+import type { FanOutInstanceSnapshot } from './fan-out-identity';
 
 export type { WorkflowNodeSession, WorkflowRunNodeSession } from './schemas';
 
@@ -33,6 +34,10 @@ export interface PersistedNodeOutput {
 
 export interface DagResumeSnapshot {
   completedNodeOutputs: Map<string, PersistedNodeOutput>;
+  /** First durable ordered snapshot for each instance-qualified composed fan-out scope. */
+  fanOutSnapshots: Map<string, readonly FanOutInstanceSnapshot[]>;
+  /** Node/instance starts with no later terminal event, in lifecycle order. */
+  unresolvedNodeStarts: Set<string>;
   tokens?: TokenUsage;
   /** Cumulative USD cost persisted by completed and failed node attempts across prior passes. */
   costUsd: number;
@@ -134,6 +139,9 @@ export const WORKFLOW_EVENT_TYPES = [
   // deliverable. `data.warnings` is the message list. Absence means the YAML was
   // clean OR the run predates this event type — never that delivery failed.
   'workflow_parse_warnings',
+  // #2512 — audit snapshot of a composed fan-out's ordered instance set (identity +
+  // item per ordinal), written before the first instance schedules.
+  'fan_out_instances',
 ] as const;
 
 export type WorkflowEventType = (typeof WORKFLOW_EVENT_TYPES)[number];
@@ -318,6 +326,34 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
     step_name?: string;
     data?: Record<string, unknown>;
   }): Promise<void>;
+
+  /**
+   * Persist a correctness-critical workflow event and propagate any storage failure.
+   * Use only when execution must not proceed without the row; ordinary observability
+   * belongs on `createWorkflowEvent`.
+   */
+  persistWorkflowEvent(data: {
+    workflow_run_id: string;
+    event_type: WorkflowEventType;
+    step_index?: number;
+    step_name?: string;
+    data?: Record<string, unknown>;
+  }): Promise<void>;
+
+  /**
+   * Atomically persist a correctness-critical event while the run is running. Claimed
+   * deterministic work may explicitly extend that claim through a parent pause.
+   */
+  persistWorkflowEventIfRunning(
+    data: {
+      workflow_run_id: string;
+      event_type: WorkflowEventType;
+      step_index?: number;
+      step_name?: string;
+      data?: Record<string, unknown>;
+    },
+    options?: { allowPaused?: boolean }
+  ): Promise<{ persisted: boolean }>;
 
   /**
    * Return completed node outputs and cumulative token usage from a prior DAG

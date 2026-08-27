@@ -19,11 +19,12 @@ export interface PiModelRef {
  * Returns undefined for malformed refs so callers can surface clear errors.
  */
 export function parsePiModelRef(raw: string): PiModelRef | undefined {
-  const idx = raw.indexOf('/');
-  if (idx <= 0 || idx === raw.length - 1) return undefined;
+  const value = raw.trim();
+  const idx = value.indexOf('/');
+  if (idx <= 0 || idx === value.length - 1) return undefined;
 
-  const provider = raw.slice(0, idx);
-  const modelId = raw.slice(idx + 1);
+  const provider = value.slice(0, idx).trim();
+  const modelId = value.slice(idx + 1).trim();
 
   if (!/^[a-z][a-z0-9-]*$/.test(provider)) return undefined;
   if (modelId.length === 0) return undefined;

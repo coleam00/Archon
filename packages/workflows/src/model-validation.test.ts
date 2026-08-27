@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers';
 
 import {
+  applyResolvedRunModelOverrides,
   buildAiProfile,
   createRunModelBindingsMetadata,
   parseRunModelAssignments,
@@ -361,8 +362,43 @@ describe('per-run model bindings', () => {
       resolveRunModelOverrides(base, { tiers: { large: 'pi/openrouter/qwen/qwen3' } }).tiers?.large
     ).toEqual({ provider: 'pi', model: 'openrouter/qwen/qwen3' });
     expect(() => resolveRunModelOverrides(base, { tiers: { large: 'pi/not-a-model' } })).toThrow(
-      /Expected <vendor>\/<model>/
+      /expected '<provider>\/<model>'/
     );
+  });
+
+  test('provider model parsers validate and canonicalize the final explicit override', () => {
+    const opencodeBase = buildAiProfile('opencode', {
+      globalTiers: {
+        large: { provider: 'opencode', model: 'openai/gpt-5' },
+      },
+    });
+
+    expect(() => resolveRunModelOverrides(opencodeBase, { tiers: { large: 'banana' } })).toThrow(
+      /invalid opencode model 'banana'/
+    );
+    expect(() =>
+      resolveRunModelOverrides(opencodeBase, { tiers: { large: 'opencode/banana' } })
+    ).toThrow(/invalid opencode model 'banana'/);
+    expect(
+      resolveRunModelOverrides(opencodeBase, {
+        tiers: { large: 'opencode/ openai / gpt-5.6 ' },
+      }).tiers?.large
+    ).toEqual({ provider: 'opencode', model: 'openai/gpt-5.6' });
+    expect(
+      resolveRunModelOverrides(base, {
+        tiers: { large: 'pi/ openai / gpt-5.6 ' },
+      }).tiers?.large
+    ).toEqual({ provider: 'pi', model: 'openai/gpt-5.6' });
+  });
+
+  test('applies resolved overrides as a sparse overlay', () => {
+    const overrides = resolveRunModelOverrides(base, { tiers: { large: 'openai/gpt-5.6' } });
+    const effective = applyResolvedRunModelOverrides(base, overrides);
+
+    expect(effective.defaultProvider).toBe(base.defaultProvider);
+    expect(effective.aliases.small).toEqual(base.aliases.small);
+    expect(effective.aliases['@planner']).toEqual(base.aliases['@planner']);
+    expect(effective.aliases.large).toEqual({ provider: 'pi', model: 'openai/gpt-5.6' });
   });
 
   test('unqualified literals inherit the target provider and preset refs copy options', () => {
@@ -373,6 +409,32 @@ describe('per-run model bindings', () => {
     expect(
       resolveRunModelOverrides(base, { aliases: { '@cheap': '@planner' } }).aliases?.['@cheap']
     ).toEqual({ provider: 'claude', model: 'opus', effort: 'high' });
+  });
+
+  test('copied lower aliases cannot carry unsupported run controls into the final binding', () => {
+    const unsupportedEffort = buildAiProfile('opencode', {
+      repoAliases: {
+        '@source': { provider: 'opencode', model: 'openai/gpt-5.6', effort: 'high' },
+        '@target': { provider: 'opencode', model: 'openai/gpt-5' },
+      },
+    });
+    expect(() =>
+      resolveRunModelOverrides(unsupportedEffort, { aliases: { '@target': '@source' } })
+    ).toThrow(/cannot apply effort/);
+
+    const unsupportedThinking = buildAiProfile('pi', {
+      repoAliases: {
+        '@source': {
+          provider: 'pi',
+          model: 'openai/gpt-5.6',
+          thinking: { type: 'enabled' },
+        },
+        '@target': { provider: 'pi', model: 'openai/gpt-5' },
+      },
+    });
+    expect(() =>
+      resolveRunModelOverrides(unsupportedThinking, { aliases: { '@target': '@source' } })
+    ).toThrow(/cannot apply Claude-shaped thinking/);
   });
 
   test('rejects unknown alias targets and references', () => {
@@ -465,6 +527,58 @@ describe('per-run model bindings', () => {
         },
       })
     ).toBeDefined();
+    expect(() =>
+      readRunModelBindingsMetadata({
+        model_bindings: {
+          ...value,
+          overrides: {
+            tiers: { large: { provider: 'removed-provider', model: 'legacy-model' } },
+          },
+        },
+      })
+    ).toThrow(/unknown provider 'removed-provider'/);
+    expect(
+      readRunModelBindingsMetadata({
+        model_bindings: {
+          ...value,
+          overrides: {
+            tiers: { large: { provider: 'pi', model: ' openai/ gpt-5 ' } },
+          },
+        },
+      })?.overrides.tiers?.large
+    ).toEqual({ provider: 'pi', model: 'openai/gpt-5' });
+    expect(() =>
+      readRunModelBindingsMetadata({
+        model_bindings: {
+          ...value,
+          overrides: {
+            tiers: {
+              large: {
+                provider: 'copilot',
+                model: 'gpt-5.6',
+                thinking: { type: 'enabled', budgetTokens: 1_000 },
+              },
+            },
+          },
+        },
+      })
+    ).toThrow(/cannot apply Claude-shaped thinking options/);
+    expect(() =>
+      readRunModelBindingsMetadata({
+        model_bindings: {
+          ...value,
+          overrides: {
+            tiers: {
+              large: {
+                provider: 'opencode',
+                model: 'anthropic/claude-sonnet-4-6',
+                effort: 'ultra',
+              },
+            },
+          },
+        },
+      })
+    ).toThrow(/cannot apply effort to provider 'opencode'/);
   });
 });
 

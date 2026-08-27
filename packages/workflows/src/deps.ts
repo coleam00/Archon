@@ -19,6 +19,11 @@ import type {
   ProviderCapabilities,
 } from '@archon/providers/types';
 import type { RawAliasesConfig, RawTiersConfig } from './model-validation';
+import type {
+  WorkflowRunConfigLayer,
+  WorkflowRunConfigMetadata,
+  WorkflowRunConfigSource,
+} from './schemas/run-config';
 
 export const CODEX_AUTH_JSON_RELATIVE_PATH = 'codex-home/auth.json';
 export const PI_AUTH_JSON_RELATIVE_PATH = 'pi-home/auth.json';
@@ -132,6 +137,13 @@ export interface WorkflowDeps {
   store: IWorkflowStore;
   getAgentProvider: AgentProviderFactory;
   loadConfig: (cwd: string) => Promise<WorkflowConfig>;
+  /** Seal a run-owned config layer before it is persisted in public run metadata. */
+  sealRunConfig?: (
+    layer: WorkflowRunConfigLayer,
+    source: WorkflowRunConfigSource
+  ) => WorkflowRunConfigMetadata;
+  /** Restore a previously sealed run-owned config layer during continuation. */
+  unsealRunConfig?: (metadata: WorkflowRunConfigMetadata) => WorkflowRunConfigLayer;
   /**
    * Optional: resolve a fresh GitHub bot token for the given (owner, repo).
    * Used to inject GH_TOKEN/GITHUB_TOKEN into bash/script subprocess env so

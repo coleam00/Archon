@@ -208,7 +208,7 @@ nodes:
 | `approval` | object | Pauses workflow for human review. See [Approval Nodes](/guides/approval-nodes/) |
 | `wait` | object | Durably pauses the run until a time or bounded external event. The server resumes due waits without keeping a worker or subprocess alive. See [Durable waits](#durable-waits) |
 | `cancel` | string | Terminates the workflow run with a reason string. Uses existing cancellation plumbing — in-flight parallel nodes are stopped |
-| `include` | string | Name of another workflow whose nodes are inlined into this DAG at load time as a namespaced sub-DAG. See [Composing Another Workflow](#composing-another-workflow-with-include) |
+| `include` | string | Name of another workflow whose nodes are inlined into this DAG at load time as a namespaced sub-DAG. Optional `with:` (named inputs → the block's `$INPUTS.<name>`) and, to fan the composed body out over a runtime list **inside this run**, `fan_out` — see [Composing Another Workflow](#composing-another-workflow-with-include) and [Fanning out a composed block](#fanning-out-a-composed-block-inside-the-run-include--fan_out) |
 | `workflow` | string | Name of another workflow to run as a governed **child sub-run** at execution time — its own run record, gates, artifacts, and cost. Optional `input` (untyped data string → child's `$ARGUMENTS`) **or** `with:` (named inputs → child's `$INPUTS.<name>`; mutually exclusive with `input`), `isolation` (`'inherit'` \| `'worktree'`), and `fan_out` (one child per item of a runtime list; optional `as:` names the per-item `$INPUTS` channel). See [Launching a Separate Governed Run](#launching-a-separate-governed-run-with-workflow) and [Workflow Signature](#workflow-signature-inputs-returns-and-inputs) |
 
 **Common fields** — apply to all node types:
@@ -1211,7 +1211,8 @@ and then removed from the definition, so nothing can fall back to an outer file'
 | `requires` | **Unions** into the composing workflow, so a missing capability refuses the run at invocation instead of failing mid-block. |
 | `inputs`, `returns` | **Consumed** by composition — `inputs:` validates the caller's `with:`, `returns:` selects `$includeId.output`. |
 | `outcome_field` | **Owned by the workflow being run.** An included workflow's declaration does not propagate to its composer. A top-level composer may declare its own field relative to its own `returns:`; an include alias is rebound before that contract is validated. |
-| `interactive`, `worktree`, `container`, `evidence_policy`, `mutates_checkout` | **Run-owned.** Whoever starts the run decides these; a composed file's values are dropped with a load-time warning. Declare them on the top-level workflow. |
+| `interactive`, `worktree`, `container`, `evidence_policy` | **Run-owned.** Whoever starts the run decides these; a composed file's values are dropped with a load-time warning. Declare them on the top-level workflow. |
+| `mutates_checkout` | **Run-owned for ordinary `include:` composition.** It is dropped with the same warning. The one exception is `include:` + `fan_out:`, where the engine consumes the target block's `mutates_checkout: false` declaration to allow concurrent instances in the shared checkout. |
 | `webSearchMode` | **Dropped, and this one is a real gap.** It is the only workflow-level field with no per-node counterpart, so there is nowhere for it to travel. Set it on the top-level workflow — where it then applies to every node in the run. |
 
 Two consequences worth knowing:
@@ -1595,10 +1596,12 @@ for `workflow:` when a human needs to approve, inspect or abandon one delegated 
 one workflow (`fan_out:`). That independence is the one thing a single flat DAG cannot
 express, which is why both keywords exist.
 
-Because a composed block has no run of its own, the launch-only options are load errors on
-an `include:` node rather than silent no-ops: `isolation:`, `fan_out:`, `input:`, and
+Because a composed block has no run of its own, most launch-only options are load errors on
+an `include:` node rather than silent no-ops: `isolation:`, `input:`, and
 `mutates_checkout:` each fail with a message naming the option and pointing here. A merely
-unread field (an AI option on an include node, say) still only warns.
+unread field (an AI option on an include node, say) still only warns. The one exception is
+`fan_out:`, which an `include:` node accepts as the composed fan-out described in
+[Fanning out a composed block](#fanning-out-a-composed-block-inside-the-run-include--fan_out).
 
 ```yaml
 nodes:
@@ -2118,6 +2121,85 @@ re-deriving it.
 - **Static target only.** `workflow:` takes a literal workflow name — no
   `workflow: $something`. Self-reference and ancestor cycles (`A` → `B` → `A`) are rejected
   at run time, and the sub-run tree is depth-capped.
+
+### Fanning out a composed block inside the run (`include:` + `fan_out:`)
+
+A `workflow:` node with `fan_out:` gives every item its own governed child run. When runtime
+cardinality does not justify separate run identity — N review comments on N files that all
+belong to *this* run's audit trail — put `fan_out:` on an **`include:`** node instead:
+the statically named block is expanded once per item *inside this run*.
+
+```yaml
+nodes:
+  - id: pick-files
+    bash: |
+      git diff --name-only origin/main \
+        | jq -R -s -c 'split("\n") | map(select(length > 0))'
+
+  # annotate-file is an ordinary composable block (a workflow file with its own
+  # inputs:/returns: signature). It runs N times HERE — one parent run row, no children.
+  - id: annotate-each
+    include: annotate-file
+    depends_on: [pick-files]
+    with:
+      style-guide: "${ARTIFACTS_DIR}/style.md"
+    fan_out:
+      items: "$pick-files.output"
+      as: file            # each instance reads $INPUTS.file
+      max_parallel: 3     # join defaults to all_done, like a workflow: fan-out
+
+  - id: collect
+    prompt: "Merge these per-file annotations:\n\n$annotate-each.output"
+    depends_on: [annotate-each]
+```
+
+What you get, compared with the `workflow:` fan-out above:
+
+- **One governance object.** No child `workflow_runs` rows, artifacts directories, cost
+  lines or gate sets per item. Every instance's events are written under the parent run id,
+  under engine-owned instance-qualified step names. Their exact storage form is not part of
+  the workflow authoring contract.
+- **The same package and signature semantics as a static `include:`.** Command/script bodies
+  resolve from the exact packaged source captured for the run, `returns:` selects the
+  aggregate value, and `$INPUTS` binding follows the block's declared `inputs:`. The item
+  binding named by `fan_out.as` is required; there is no implicit `$ARGUMENTS` fallback.
+- **Ordered aggregate.** `$<id>.output` is a JSON array of the instances' terminal outputs
+  **in item order**, not completion order; under `join: all_done` a failed instance
+  contributes the `{ archon_failed: true, error, status }` marker. An empty item list
+  completes immediately with `[]`. Under `join: all_success` any failed instance fails the
+  node.
+- **Content-addressed resume.** Each instance is keyed by a hash of its item value (plus an
+  ordinal for byte-identical duplicates). The first ordered snapshot is persisted before
+  anything schedules and remains authoritative: a resume ignores and logs a producer list
+  that is now shorter, longer, or reordered. Completed instances and their completed inner
+  nodes are threaded from persisted events instead of re-running or being billed twice. If
+  an instance has a durable start but no terminal event, Archon cannot prove whether its
+  side effects finished and blocks automatic replay for operator recovery.
+
+Two hard limits, both enforced at load time before any upstream node can spend:
+
+- **No suspension inside the complete block closure.** The parent has no durable per-item
+  pause cursor, so a block containing an `approval:` node, `wait:` node, interactive
+  `loop:`/`loop_group:`, or a nested workflow that can pause is rejected. Put the pause in
+  the parent around the node, use governed child runs, or invoke the block 1:1. Durable
+  interactive fan-out instances are a possible future extension tracked in
+  [#2810](https://github.com/coleam00/Archon/issues/2810), not a promise of the current shape.
+- **No `isolation:`** — a composed block runs inside this run and has no checkout of its own
+  to isolate. Instances share the parent's checkout, so as with a `workflow:` fan-out,
+  concurrent instances over a mutating body fail closed unless the block declares
+  `mutates_checkout: false`; `fan_out.max_parallel: 1` remains the serial escape.
+
+Cancellation stops the pool from claiming new items. An in-flight item may still reach its
+own terminal event; under `all_done`, a cancelled slot is represented by the same reserved
+`{ archon_failed: true, error, status: "cancelled" }` marker used by child-run fan-out.
+Instance and wrapper events are aggregate accounting rows, so their rolled-up usage is not
+counted again during resume. Engine-managed artifact names also carry the enclosing
+`loop_group` iteration path, preventing later iterations from overwriting earlier sidecars.
+
+Choose by where the audit boundary belongs: one run row per item → `workflow:` +
+`fan_out:`; everything attributable to this run → `include:` + `fan_out:`. Existing
+`workflow:` fan-outs keep their exact behavior either way — nothing is migrated or
+reinterpreted.
 
 ---
 

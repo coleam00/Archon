@@ -613,7 +613,8 @@ export type WorkflowNodeType =
   | 'approval'
   | 'wait'
   | 'workflow'
-  | 'cancel';
+  | 'cancel'
+  | 'compose_fan_out';
 
 /**
  * Terminal workflow-run event (`workflow_completed` / `workflow_failed`).

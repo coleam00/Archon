@@ -589,6 +589,10 @@ export interface IIsolationProvider {
 ### Request & Response Types
 
 ```typescript
+type TaskBranchSelection =
+  | { kind: 'new'; fromBranch?: BranchName }
+  | { kind: 'existing'; branch: BranchName };
+
 interface IsolationRequest {
   codebaseId: string;
   canonicalRepoPath: string; // Main repo path, never a worktree
@@ -597,6 +601,7 @@ interface IsolationRequest {
   prBranch?: string; // PR branch name (for adoption and same-repo PRs)
   prSha?: string; // For reproducible PR reviews
   isForkPR?: boolean; // True if PR is from a fork
+  taskBranch?: TaskBranchSelection; // Task ancestry or exact branch ownership
 }
 
 interface IsolatedEnvironment {
@@ -708,7 +713,7 @@ const env = await provider.create({
 The provider adopts existing worktrees before creating new ones:
 
 1. **Path match**: If worktree exists at expected path -> adopt
-2. **Branch match**: If PR's branch has existing worktree -> adopt (skill symbiosis)
+2. **Branch match**: If a same-repository PR branch or a task request with `taskBranch.kind: 'existing'` has an existing worktree -> adopt
 
 ```typescript
 // Inside create()

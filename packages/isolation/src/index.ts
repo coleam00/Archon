@@ -7,6 +7,7 @@ export type {
   PRIsolationRequest,
   ReviewIsolationRequest,
   ThreadIsolationRequest,
+  TaskBranchSelection,
   TaskIsolationRequest,
   IsolationRequest,
   AdoptedWorktreeMetadata,

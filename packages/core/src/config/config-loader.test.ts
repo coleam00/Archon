@@ -143,6 +143,20 @@ workflows:
       });
     });
 
+    test('keeps ordinary config forward-compatible with unknown workflow settings', async () => {
+      mockFsReadFile.mockResolvedValue(`
+defaultAssistant: codex
+workflows:
+  autoResumeOnQuotaReset: true
+  futurePolicy: enabled
+`);
+
+      const config = await loadGlobalConfig();
+
+      expect(config.defaultAssistant).toBe('codex');
+      expect(config.workflows).toEqual({ autoResumeOnQuotaReset: true });
+    });
+
     test('caches config on subsequent calls', async () => {
       mockFsReadFile.mockResolvedValue('defaultAssistant: claude');
 

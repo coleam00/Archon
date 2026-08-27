@@ -49,6 +49,8 @@ mock.module('../db/workflows', () => ({
 }));
 
 const mockCreateWorkflowEvent = mock(() => Promise.resolve());
+const mockPersistWorkflowEvent = mock(() => Promise.resolve());
+const mockPersistWorkflowEventIfRunning = mock(() => Promise.resolve({ persisted: true }));
 const mockGetDagResumeSnapshot = mock(() =>
   Promise.resolve({
     completedNodeOutputs: new Map<string, string>(),
@@ -57,6 +59,8 @@ const mockGetDagResumeSnapshot = mock(() =>
 );
 mock.module('../db/workflow-events', () => ({
   createWorkflowEvent: mockCreateWorkflowEvent,
+  persistWorkflowEvent: mockPersistWorkflowEvent,
+  persistWorkflowEventIfRunning: mockPersistWorkflowEventIfRunning,
   getDagResumeSnapshot: mockGetDagResumeSnapshot,
 }));
 
@@ -68,6 +72,15 @@ mock.module('../db/codebases', () => ({
 mock.module('@archon/providers', () => ({
   getAgentProvider: mock(() => ({})),
   getRegisteredProviders: mock(() => []),
+  getRegistration: mock(
+    (): { parseRunConfig: (raw: Record<string, unknown>) => Record<string, unknown> } => ({
+      parseRunConfig: (raw: Record<string, unknown>): Record<string, unknown> => raw,
+    })
+  ),
+  parseProviderRunModel: mock((_provider: string, model: string): string => model),
+  isRegisteredProvider: mock((): boolean => false),
+  InvalidProviderRunConfigError: class InvalidProviderRunConfigError extends Error {},
+  getProviderCapabilities: mock((): { effortControl: boolean } => ({ effortControl: false })),
   // Vendor → env-var map consumed by credentials/delivery (#1955). A realistic
   // subset of the generated map (incl. HF_TOKEN, the upstream var).
   PI_PROVIDER_ENV_VARS: {
@@ -161,6 +174,8 @@ describe('createWorkflowStore', () => {
       'releaseWritebackClaim',
       'cancelWorkflowRun',
       'createWorkflowEvent',
+      'persistWorkflowEvent',
+      'persistWorkflowEventIfRunning',
       'getDagResumeSnapshot',
       'getCodebase',
       'getCodebaseEnvVars',
@@ -214,6 +229,36 @@ describe('createWorkflowStore', () => {
     const result = await store.getDagResumeSnapshot('run-123');
     expect(result).toBe(expected);
     expect(mockGetDagResumeSnapshot).toHaveBeenCalledWith('run-123');
+  });
+
+  test('delegates durable workflow events to DB without swallowing failures', async () => {
+    const event = {
+      workflow_run_id: 'run-123',
+      event_type: 'fan_out_instances' as const,
+      step_name: 'fan',
+      data: { instances: [] },
+    };
+    const store = createWorkflowStore();
+    await store.persistWorkflowEvent(event);
+    expect(mockPersistWorkflowEvent).toHaveBeenCalledWith(event);
+
+    mockPersistWorkflowEvent.mockRejectedValueOnce(new Error('disk full'));
+    await expect(store.persistWorkflowEvent(event)).rejects.toThrow('disk full');
+  });
+
+  test('delegates conditional running-state event claims', async () => {
+    const event = {
+      workflow_run_id: 'run-123',
+      event_type: 'node_started' as const,
+      step_name: 'fan-instance',
+    };
+    mockPersistWorkflowEventIfRunning.mockResolvedValueOnce({ persisted: false });
+    const store = createWorkflowStore();
+
+    await expect(store.persistWorkflowEventIfRunning(event)).resolves.toEqual({
+      persisted: false,
+    });
+    expect(mockPersistWorkflowEventIfRunning).toHaveBeenCalledWith(event);
   });
 
   test('delegates cancelWorkflowRun to DB', async () => {

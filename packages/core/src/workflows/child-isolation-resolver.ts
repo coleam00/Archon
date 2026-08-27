@@ -105,7 +105,7 @@ export interface ChildWorktreeResolverConfig {
    *
    * This is the ONLY base input a child worktree gets. The per-dispatch `--base` /
    * `--from` overrides (#2203) are deliberately NOT threaded here: unlike the
-   * top-level CLI path, `resolve()` passes no `baseOverride`/`fromBranch` to the
+   * top-level CLI path, `resolve()` passes no `baseOverride`/task branch selection to the
    * provider, so a child is cut from `origin/<worktree.baseBranch ?? this ?? auto>`
    * of the canonical repo no matter what the parent run was dispatched with. Which
    * also means a child sees neither the parent's uncommitted work nor its commits —

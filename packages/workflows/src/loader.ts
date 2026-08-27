@@ -18,9 +18,11 @@ import {
   isHaltNode,
   isWorkflowNode,
   isIncludeDirective,
+  isComposeFanOutNode,
   isPersistableNode,
   isNodeContextResume,
 } from './schemas';
+import { COMPOSE_FAN_OUT_STEP_MARKER } from './fan-out-identity';
 import { createLogger } from '@archon/paths';
 import {
   isRegisteredProvider,
@@ -187,6 +189,9 @@ export function validateWorkflowOutcomeDeclaration(
   }
   if (isWorkflowNode(selectedNode) && selectedNode.fan_out !== undefined) {
     return `Workflow outcome_field: '${field}' cannot select fan-out workflow node '${workflow.returns}' because its runtime output is an aggregate array; select a collector node with a required boolean output instead`;
+  }
+  if (isComposeFanOutNode(selectedNode)) {
+    return `Workflow outcome_field: '${field}' cannot select composed fan-out node '${workflow.returns}' because its runtime output is an aggregate array; select a collector node with a required boolean output instead`;
   }
 
   const schema = selectedNode.output_format;
@@ -481,7 +486,7 @@ function collectGateAndLoopDeprecationWarnings(
     const message =
       `Node '${id}': the prose 'loop_group.until' completion signal is deprecated. ` +
       "Declare 'loop_group.until_bash' instead — it can read a body node's structured " +
-      'output (e.g. \'test "$body-node.output.field" = true\') (#2707 step 3). Continue ' +
+      'output (e.g. \'test $body-node.output.field = "true"\') (#2707 step 3). Continue ' +
       'using it for now.';
     warnings.push(message);
     getLog().warn({ id, warning: message }, 'node_loop_group_until_deprecated');
@@ -625,14 +630,22 @@ function parseDagNode(
 
   const node = result.data;
 
-  // `mutates_checkout:` on an include is the fourth launch-only option (#1764), and
-  // the only one the schema cannot see: it is workflow-level, so Zod strips it before
-  // superRefine runs. An author writes it on an `include:` believing the block declares
-  // its own concurrency safety; composition has one checkout and one run, so the
-  // declaration belongs to the composing workflow or to a genuinely separate sub-run.
+  // `mutates_checkout:` is workflow-level, so Zod strips a misplaced node-level value
+  // before superRefine runs. Ordinary includes inherit the parent declaration; composed
+  // fan-out instead consumes the included workflow's declaration for block-level
+  // parallelism, so its correction points to that target rather than the parent run.
   if (isIncludeDirective(node) && (raw as Record<string, unknown>).mutates_checkout !== undefined) {
     errors.push(
       `Node '${id}': 'mutates_checkout' is not supported on an include node: a composed block shares the run's single checkout, so concurrency safety is the composing workflow's to declare. Set it at workflow level, or use a 'workflow:' node when you want a separate governed run.`
+    );
+    return null;
+  }
+  if (
+    isComposeFanOutNode(node) &&
+    (raw as Record<string, unknown>).mutates_checkout !== undefined
+  ) {
+    errors.push(
+      `Node '${id}': 'mutates_checkout' is not supported on a composed fan-out node. Declare 'mutates_checkout: false' at the root of the included workflow when its whole block is safe to run concurrently, or set 'fan_out.max_parallel: 1'.`
     );
     return null;
   }
@@ -648,6 +661,7 @@ function parseDagNode(
   const hasWithSupport =
     isIncludeDirective(node) ||
     isWorkflowNode(node) ||
+    isComposeFanOutNode(node) ||
     (isExecNode(node) && node.runtime !== 'sh') ||
     (isAgentNode(node) && node.source.kind === 'command');
   if ((raw as Record<string, unknown>).with !== undefined && !hasWithSupport) {
@@ -660,6 +674,10 @@ function parseDagNode(
   // Warn about AI-specific fields on non-AI nodes (runtime behavior, not schema errors)
   let nonAiNode: { type: string; fields: readonly string[] } | undefined;
   if (isIncludeDirective(node)) {
+    nonAiNode = { type: 'include', fields: INCLUDE_NODE_IGNORED_FIELDS };
+  } else if (isComposeFanOutNode(node)) {
+    // Same execution-less posture as a static include: the composed body's own nodes
+    // carry their config, so AI-level fields declared here are ignored (#2512).
     nonAiNode = { type: 'include', fields: INCLUDE_NODE_IGNORED_FIELDS };
   } else if (isHaltNode(node)) {
     nonAiNode = { type: 'cancel', fields: GATE_AND_HALT_IGNORED_FIELDS };
@@ -771,6 +789,9 @@ export function validateDagStructure(
     // body node would silently shadow the outer node for $id.output refs.
     if (enclosingNodes?.has(node.id)) {
       return `Node id '${node.id}' shadows a node id in the enclosing DAG`;
+    }
+    if (node.id.includes(COMPOSE_FAN_OUT_STEP_MARKER)) {
+      return `Node id '${node.id}' contains reserved engine namespace '${COMPOSE_FAN_OUT_STEP_MARKER}'`;
     }
     nodesById.set(node.id, node);
   }
@@ -886,7 +907,8 @@ export function validateDagStructure(
   // runtime: when:, and the text surfaces that flow through substituteNodeOutputRefs
   // (prompt, systemPrompt, agents.*.prompt/description, bash, script,
   // approval.message/on_reject.prompt, wait.until/event, cancel, loop.prompt, loop.until_bash,
-  // loop_group.until_bash, workflow.input/with/fan_out.items). A dangling ref in any of
+  // loop_group.until_bash, workflow.input/with/fan_out.items,
+  // compose_fan_out.with/fan_out.items). A dangling ref in any of
   // them can bind the wrong flat-DAG output or fail at run time, so all must be validated
   // here.
   //
@@ -963,7 +985,9 @@ export function validateDagStructure(
         ? node.with
         : isAgentNode(node) && node.source.kind === 'command'
           ? node.source.with
-          : undefined;
+          : isComposeFanOutNode(node)
+            ? node.with
+            : undefined;
       if (nodeWith !== undefined) {
         for (const [name, value] of Object.entries(nodeWith)) {
           if (typeof value === 'string') {
@@ -976,6 +1000,12 @@ export function validateDagStructure(
       // workflow.input is a live ref surface (a data string), scanned verbatim like
       // bash/script — not prose, so no markdown stripping. workflow.fan_out.items (slice
       // 2, PR-C) is a live `$node.output` ref to a JSON array — scanned the same way.
+      // A `compose_fan_out` node's `with:` values resolve at run time exactly like a
+      // `workflow:` node's (via nodeWith above); its `fan_out.items` is the same live
+      // `$node.output` ref surface as a `workflow:` node's.
+      if (isComposeFanOutNode(node)) {
+        sources.push({ field: 'fan_out.items', text: node.fan_out.items });
+      }
       if (isWorkflowNode(node)) {
         if (node.input) sources.push({ field: 'input', text: node.input });
         if (node.fan_out) sources.push({ field: 'fan_out.items', text: node.fan_out.items });
@@ -1149,7 +1179,12 @@ export function validateDagStructure(
   // load time with an actionable message instead. A literal `items` with no `$…output`
   // ref is left to the runtime fail-closed check (it must still parse to an array).
   for (const node of nodes) {
-    if (isIncludeDirective(node) || !isWorkflowNode(node) || !node.fan_out) continue;
+    if (
+      isIncludeDirective(node) ||
+      !(isWorkflowNode(node) || isComposeFanOutNode(node)) ||
+      !node.fan_out
+    )
+      continue;
     const refMatch = new RegExp(OUTPUT_REF_SOURCE).exec(node.fan_out.items);
     const producerId = refMatch?.[1];
     if (producerId === undefined) continue; // no ref surface — runtime fail-closed owns it
@@ -1164,12 +1199,17 @@ export function validateDagStructure(
   // enforced — a loop_group body node may read the enclosing scope, whose outputs are
   // settled before the group starts (existing body-ref semantics).
   for (const node of nodes) {
+    // Same capture-before-narrowing as the scan above: the include guard below would
+    // otherwise filter a compose_fan_out node out of the binding check entirely.
+    const composeFanOut = isComposeFanOutNode(node) ? node : undefined;
     if (isIncludeDirective(node)) continue;
     const nodeWith = isExecNode(node)
       ? node.with
       : isAgentNode(node) && node.source.kind === 'command'
         ? node.source.with
-        : undefined;
+        : composeFanOut
+          ? composeFanOut.with
+          : undefined;
     if (nodeWith === undefined) continue;
     for (const [name, value] of Object.entries(nodeWith)) {
       const producerIds: string[] = [];

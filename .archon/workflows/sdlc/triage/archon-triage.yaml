@@ -1,0 +1,53 @@
+name: archon-triage
+description: |
+  Ground one work item against the current repository before deciding what kind
+  of work it needs. Reconciles tracker history, current code, moved branches,
+  stale assumptions, and explicit direction; then routes to investigate, plan,
+  deliver, or no action. Advisory: it leaves the checkout unchanged.
+
+  Use when: an issue, plan, report, or request may be stale or may prescribe an
+  unverified solution — "triage this issue", "what does this need next", "is
+  this ready to build".
+  NOT for: performing the investigation, writing the plan, or delivering work.
+
+model: medium
+
+inputs:
+  target:
+    default: ""
+    description: >-
+      What to triage — an issue, document, plan, report, or free-form request.
+      When empty, the run's trigger message is the target.
+
+returns: triage
+
+nodes:
+  - id: triage
+    command: triage
+    # Triage is advisory: the engine fails this node with the touched paths
+    # named if it modifies the working tree (#2771). Replaced the
+    # record-state/assert-intact snapshot pair the pack carried before the
+    # engine could enforce this itself.
+    mutates_checkout: false
+    output_type: work-triage
+    output_format:
+      type: object
+      properties:
+        route:
+          type: string
+          enum: [investigate, plan, deliver, no_action]
+        summary:
+          type: string
+      required: [route, summary]
+
+  - id: assert-intact
+    bash: |
+      # Tree-intactness is engine-enforced via mutates_checkout: false above;
+      # what remains here is the evidence contract: a route without a written
+      # triage.md is not a triage.
+      if [ ! -s "$ARTIFACTS_DIR/triage.md" ]; then
+        echo "assert-intact: the run completed but wrote no triage.md — a route without evidence is not a triage." >&2
+        exit 1
+      fi
+      echo '{"intact":"true"}'
+    depends_on: [triage]

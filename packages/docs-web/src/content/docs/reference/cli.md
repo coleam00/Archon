@@ -204,6 +204,15 @@ archon workflow run review-block --cwd /path/to/repo \
 # Rebind only the large tier for this run
 archon workflow run issue-to-pr --cwd /path/to/repo \
   --model large=openai/gpt-5.6 "fix #2481"
+
+# Load a saved sparse layer, then replace only its large tier for this run
+archon workflow run issue-to-pr --cwd /path/to/repo \
+  --config ./config.minimax.yaml \
+  --model large=openai/gpt-5.6 "fix #2482"
+
+# Continue the exact estate left by a terminal run
+archon workflow run archon-ship --cwd /path/to/repo \
+  --adopt 6d5066ca-47b4-4ee8-8d1d-2f3db8039190 "finish the delivery"
 ```
 
 Progress events (node start/complete/fail/skip, approval gates) are written to stderr during execution.
@@ -226,7 +235,10 @@ Note that a real `run` emits a JSON payload **only** under `--detach`. Without i
 | `--container` | Run a **folder project** inside an overlay-isolated Docker container instead of in place (writes land in an overlay, not the live root, until an approval-gated write-back). Folder-only; a repo project errors. Requires the runner image (`bun run build:runner-image`). Pauses `docker stop` the container; `--resume`/`approve`/`reject` rediscover and restart it. See the [Container isolation guide](/guides/container-isolation/) and [configuration](/reference/configuration/#container-isolation-folder-projects). |
 | `--input <name>=<value>` | Supply one value for the workflow's declared `inputs:`. **Repeat the flag per input.** Splits on the first `=`, so the value may itself contain `=`; `--input name=` supplies an empty string. Omitted inputs take their declared `default:`. A missing **required** input or an **undeclared** name is refused before any worktree, clone, or AI cost, through the same contract a composing `with:` map goes through. Works with `--dry-run` (inputs resolve exactly as in a real run). Rejected with `--resume` (a resume replays the inputs recorded on the run). See [Running a workflow that declares inputs](/guides/authoring-workflows/#running-a-workflow-that-declares-inputs). |
 | `--model <name>=<spec>` | Rebind one `small`, `medium`, `large`, or existing `@alias` for this run. **Repeat the flag per binding.** An Archon agent prefix selects that agent (`codex/gpt-5.6-sol`); another valid vendor/model ref selects Pi (`openai/gpt-5.6`); an unqualified model keeps the binding's current provider; a tier or alias RHS copies that preset. Unspecified names keep their user → repo → global → built-in values. Literal `model:` pins and nodes that never reference the rebound name do not change. Bare `--model <spec>` is invalid, there is no run-wide `--provider`, and the flag is rejected with `--resume`. Works with `--dry-run`. |
+| `--config <path>` | Load one sparse YAML config layer for this fresh run. Relative paths resolve from the directory named by `--cwd`, even when it is a repository subdirectory. Values in the file override persistent config and user AI preferences; explicit `--model` flags then replace only their named bindings. Works with `--dry-run` and `--detach`; the parent validates and seals the layer before handing it to a detached child, so later file edits cannot change that launch. Rejected with `--resume` because a continuation restores the sealed layer recorded when the run started. |
 | `--resume` | Resume from last failed run at the working path (skips completed nodes) |
+| `--adopt <run-id>` | Start a new run in a terminal run's exact worktree or branch, with `adopted_from_run_id` provenance and `$ADOPTED_RUN_DIR` access. Run-id selection is exact; adoption never infers a run from workflow name or prompt text. |
+| `--supersedes <run-id>` | Start in a fresh estate while recording that this run replaces a terminal prior run. Unlike `--adopt`, it inherits no checkout. |
 | `--quiet`, `-q` | Suppress all progress output to stderr |
 | `--verbose`, `-v` | Also show tool-level events (tool name and duration) |
 | `--detach` | Run in a detached background child and return immediately. The child does all the work; find it later with `workflow runs`/`workflow get`. Child stdout/stderr is captured to `~/.archon/logs/detached-run-<id>.log`. Combine with `--json` for a machine-readable ack. Also available on `approve`/`reject`/`resume` — see [Detached control verbs](#detached-control-verbs). |
@@ -236,6 +248,20 @@ Note that a real `run` emits a JSON payload **only** under `--detach`. Without i
 | `--default-stubs` | Fill reachable nodes omitted from `--stubs` with schema-valid placeholders. Explicit stubs still win; without this flag, missing reachable stubs remain an error. |
 | `--exec-code` | During `--dry-run`, execute trusted `bash:`/`script:` nodes locally instead of requiring stubs. Default is no code execution. |
 | `--pause-at-gates` | During `--dry-run`, stop at the first approval gate instead of auto-approving it. |
+
+#### Per-run config files
+
+A run config is an ordinary YAML file selected explicitly for one invocation. It is useful for reusable choices such as `config.minimax.yaml`, but it is not a registered profile and does not change `.archon/config.yaml`.
+
+```yaml
+# config.minimax.yaml
+tiers:
+  large: { provider: pi, model: minimax/MiniMax-M3 }
+env:
+  BENCH_MODE: "1"
+```
+
+The layer is sparse: omitted settings keep their normal lower-layer values. In `--config ./config.minimax.yaml --model large=openai/gpt-5.6`, only `large` is replaced by the flag; `small`, `medium`, aliases, and every other omitted setting still fall through. See [Run-scoped configuration](/reference/configuration/#run-scoped-configuration) for the supported keys and fail-fast exclusions.
 
 #### Running a workflow from another checkout
 
@@ -294,7 +320,7 @@ archon workflow run deliver --cwd /path/to/repo \
   --dry-run --stubs fixtures/deliver.yaml --default-stubs
 ```
 
-The scaffold is derived from the already-expanded workflow, so included top-level nodes use their flattened ids (for example, `review__classify`). Structured `output_format` values are emitted as YAML objects with native booleans, numbers, arrays, and nested required properties. Loop completion fields are generated as `true`. If Archon cannot prove that a generated value satisfies its JSON Schema, scaffold generation fails before creating the file.
+The scaffold is derived from the already-expanded workflow, so included top-level nodes use their flattened ids (for example, `review__classify`) — while `loop_group` BODY nodes keep their bare ids even inside an included block (the group node gets the `<includeId>__` prefix; its body does not). Prefer `--stubs-init` over hand-writing keys: the scaffold is the authoritative source for both spellings. Structured `output_format` values are emitted as YAML objects with native booleans, numbers, arrays, and nested required properties. Loop completion fields are generated as `true`. If Archon cannot prove that a generated value satisfies its JSON Schema, scaffold generation fails before creating the file.
 
 The stub file must contain one YAML mapping. Each value is either a string or an object. Object stubs are preserved as structured output, so downstream `$classify.output.severity` references behave like live structured producers. Strict coverage remains the default: a reachable AI, bash, or script node without a stub fails the simulation and appears in `missingStubs`. Add `--default-stubs` to fill only omitted reachable nodes with the same schema-aware placeholders used by scaffold generation; explicit values always take precedence. Supplied stubs for unknown or unreachable nodes appear in `unusedStubs`, while generated placeholders do not. Whole-output references retain their normal lenient behavior, while invalid strict `$node.output.field` references fail the consuming node exactly as they do in a real run. See [Node Output References](/reference/variables/#node-output-references).
 
@@ -375,6 +401,12 @@ no worktree was ever cut from.
 **When an existing worktree is adopted** -- `--branch` naming a healthy worktree,
 or `--resume` continuing a prior run -- the cut-from is already fixed, so `--base`
 changes only the PR target. Archon warns in both cases.
+
+#### Continuing an existing estate
+
+Use structured continuation whenever a workflow must work on an existing branch or pull request. If you have the prior run id, `--adopt <run-id>` is the authoritative form. Archon reuses the prior worktree as-is. If the prior worktree is gone, Archon reuses a same-repository checkout already holding that branch, or creates one on the exact local branch. It does not fetch, reset, or synchronize the branch; update it first if the remote advanced.
+
+Every node in the new run uses that selected checkout, including bash/script delivery assertions. A branch name written only in the message is model context; it does not move engine-owned nodes to another checkout.
 
 **Name Matching:**
 
@@ -684,6 +716,24 @@ Checks: file exists, non-empty, valid name.
 
 Exit code: 0 = all valid, 1 = errors found.
 
+### `continue <branch> [message]`
+
+Start a new workflow run on an exact active worktree, with recent Git, pull-request, and prior-run context added to the message.
+
+```bash
+archon continue feature/live-pr --workflow archon-ship "resolve the remaining review finding"
+archon continue feature/live-pr --no-context "run the final validation"
+```
+
+If the worktree has a prior run, `continue` adopts that exact run: the new row records `adopted_from_run_id`, `$ADOPTED_RUN_DIR` points at the prior artifacts, and the normal terminal-status, project-identity, and live-path-lock checks apply. A live prior run is not taken over; resume, respond to, or abandon it first.
+
+If the worktree has no prior run, Archon still runs at the exact branch path but has no run provenance to record. `continue` only resolves active worktrees; use `workflow run <name> --adopt <run-id>` when the worktree was removed.
+
+| Flag | Effect |
+|------|--------|
+| `--workflow <name>` | Workflow to run (default: `archon-assist`) |
+| `--no-context` | Do not add Git, pull-request, or prior-artifact context to the message |
+
 ### `complete <branch> [branch2 ...]`
 
 Remove a branch's worktree, local branch, and remote branch, and mark its isolation environment as destroyed.
@@ -729,7 +779,10 @@ The cached web UI is stored at `~/.archon/web-dist/<version>/`. Each version is 
 
 ### `skill install [path]`
 
-Install the bundled Archon skills into both `.claude/skills/` (Claude Code) and `.agents/skills/` (Codex) directories of a project. Always overwrites existing files to ensure the latest version shipped with the current Archon binary is installed.
+Install the bundled `archon-cli` skill into both `.claude/skills/archon-cli/`
+(Claude Code) and `.agents/skills/archon-cli/` (Codex). The command overwrites
+existing files so both destinations match the current Archon binary. It also
+removes the retired `archon` and `manage-run` skill directories.
 
 ```bash
 # Install into the current directory
@@ -739,7 +792,9 @@ archon skill install
 archon skill install /path/to/project
 ```
 
-Two skills are installed: **`archon`**, which teaches the assistant how to work with Archon workflows, commands, and project conventions; and **`manage-run`**, a focused skill for inspecting and controlling workflow runs via the `archon` CLI. Each skill is written to both `.claude/skills/<skill>/` (Claude Code) and `.agents/skills/<skill>/` (Codex's canonical project-level skill path). Both are also installed automatically during `archon setup`.
+The unified skill covers workflow execution, run management, setup, configuration,
+authoring, and prompt guidance. It is also installed automatically during
+`archon setup`.
 
 ### `version`
 

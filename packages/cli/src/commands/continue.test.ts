@@ -17,15 +17,40 @@ const mockGetCodebase = mock(
 );
 mock.module('@archon/core/db/codebases', () => ({ getCodebase: mockGetCodebase }));
 
+const mockWorkflowRunCommand = mock((): Promise<void> => Promise.resolve());
+mock.module('./workflow', (): { workflowRunCommand: typeof mockWorkflowRunCommand } => ({
+  workflowRunCommand: mockWorkflowRunCommand,
+}));
+
+const mockFindActiveByBranchName = mock(() => Promise.resolve(null));
+mock.module(
+  '@archon/core/db/isolation-environments',
+  (): { findActiveByBranchName: typeof mockFindActiveByBranchName } => ({
+    findActiveByBranchName: mockFindActiveByBranchName,
+  })
+);
+
+const mockFindLatestRunByWorkingPath = mock(() => Promise.resolve(null));
+mock.module(
+  '@archon/core/db/workflows',
+  (): { findLatestRunByWorkingPath: typeof mockFindLatestRunByWorkingPath } => ({
+    findLatestRunByWorkingPath: mockFindLatestRunByWorkingPath,
+  })
+);
+
 let archonHome: string;
 
 // The real @archon/paths is used deliberately — this test is about delegating
 // to it correctly, so a fake resolver would test nothing. ARCHON_HOME is
 // redirected at the env level instead.
-import { resolveArtifactsDir } from './continue';
+import { continueCommand, resolveArtifactsDir } from './continue';
 
 beforeEach(async () => {
   mockGetCodebase.mockReset();
+  mockWorkflowRunCommand.mockReset();
+  mockWorkflowRunCommand.mockResolvedValue(undefined);
+  mockFindActiveByBranchName.mockReset();
+  mockFindLatestRunByWorkingPath.mockReset();
   archonHome = await mkdtemp(join(tmpdir(), 'archon-continue-'));
   process.env.ARCHON_HOME = archonHome;
 });
@@ -159,5 +184,78 @@ describe('resolveArtifactsDir', () => {
     } finally {
       await rm(workingPath, { recursive: true, force: true });
     }
+  });
+});
+
+describe('continueCommand estate ownership', () => {
+  const environment = {
+    id: 'env-1',
+    codebase_id: 'cb-1',
+    workflow_type: 'task',
+    workflow_id: 'old-task',
+    provider: 'worktree',
+    working_path: '/worktrees/feature-live-pr',
+    branch_name: 'feature/live-pr',
+    status: 'active',
+    created_at: new Date(),
+    created_by_platform: 'cli',
+    created_by_user_id: null,
+    metadata: {},
+    codebase_default_cwd: '/repo',
+  } as const;
+
+  test('adopts the exact prior run instead of bypassing provenance', async () => {
+    const priorRun = {
+      id: 'run-old',
+      workflow_name: 'implement',
+      status: 'failed',
+    } as unknown as WorkflowRun;
+    mockFindActiveByBranchName.mockResolvedValueOnce(environment);
+    mockFindLatestRunByWorkingPath.mockResolvedValueOnce(priorRun);
+
+    await continueCommand('feature/live-pr', 'finish it', {
+      workflow: 'archon-fix',
+      noContext: true,
+    });
+
+    expect(mockWorkflowRunCommand).toHaveBeenCalledWith(
+      environment.working_path,
+      'archon-fix',
+      'finish it',
+      { adoptRunId: 'run-old', codebaseId: 'cb-1' }
+    );
+  });
+
+  test('uses the already resolved worktree directly when no prior run exists', async () => {
+    mockFindActiveByBranchName.mockResolvedValueOnce(environment);
+    mockFindLatestRunByWorkingPath.mockResolvedValueOnce(null);
+
+    await continueCommand('feature/live-pr', 'start here', {
+      workflow: 'archon-fix',
+      noContext: true,
+    });
+
+    expect(mockWorkflowRunCommand).toHaveBeenCalledWith(
+      environment.working_path,
+      'archon-fix',
+      'start here',
+      { noWorktree: true, codebaseId: 'cb-1' }
+    );
+  });
+
+  test('does not derive estate selection from the user message', async () => {
+    mockFindActiveByBranchName.mockResolvedValueOnce(environment);
+    mockFindLatestRunByWorkingPath.mockResolvedValueOnce(null);
+
+    await continueCommand('feature/live-pr', 'please work on branch other/branch', {
+      noContext: true,
+    });
+
+    expect(mockWorkflowRunCommand).toHaveBeenCalledWith(
+      environment.working_path,
+      'archon-assist',
+      'please work on branch other/branch',
+      { noWorktree: true, codebaseId: 'cb-1' }
+    );
   });
 });

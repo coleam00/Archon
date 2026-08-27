@@ -1,0 +1,12 @@
+# Dry-run fixture: the green path. Fully stubbed — proves the DAG wiring,
+# input binding, and until_field completion without executing anything.
+# Structured stubs are YAML mappings (they hydrate structuredOutput, which the
+# until_field check reads); plain-string stubs stay strings.
+record-start: '{"start":"recorded"}'
+implement:
+  done: true
+  green: true
+  summary: "stub: work complete, checks green"
+assert-changed: "1 file changed"
+fixture:
+  expect: completed

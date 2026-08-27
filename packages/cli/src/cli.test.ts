@@ -4,15 +4,22 @@
  * Note: These tests focus on argument parsing logic.
  * Full integration tests would require mocking the database and commands.
  */
-import { describe, it, expect } from 'bun:test';
+import { describe, it, expect, beforeAll } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { parseArgs } from 'util';
 import { cliArgOptions } from './args';
 import * as git from '@archon/git';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { join, relative } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { sealWorkflowRunConfig } from '@archon/core/config';
+import {
+  rejectConfigOnContinue,
+  rejectConfigOutsideRun,
+  rejectModelOnContinue,
+} from './dispatch-guards';
 
 const CLI_ENTRY = join(import.meta.dir, 'cli.ts');
 // The enclosing git worktree — a valid repo for the git gate, with a real
@@ -20,49 +27,63 @@ const CLI_ENTRY = join(import.meta.dir, 'cli.ts');
 const repoRoot = join(import.meta.dir, '..', '..', '..');
 
 describe('CLI help output', () => {
-  it('lists the workflow resume command', () => {
+  // The five tests assert disjoint fragments of one static usage string, so a
+  // single captured `--help` spawn replaces five identical interpreter
+  // startups; every assertion below is unchanged.
+  let help: { status: number | null; stdout: string };
+  beforeAll(() => {
     const result = spawnSync(process.execPath, [CLI_ENTRY, '--help'], {
       encoding: 'utf8',
+      env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' },
     });
+    help = { status: result.status, stdout: result.stdout ?? '' };
+  });
 
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain(
+  it('lists the workflow resume command', () => {
+    expect(help.status).toBe(0);
+    expect(help.stdout).toContain(
       'workflow resume <run-id>   Resume a failed or paused run from completed nodes'
     );
   });
 
   it('distinguishes active cancel from state-only abandon', () => {
-    const result = spawnSync(process.execPath, [CLI_ENTRY, '--help'], {
-      encoding: 'utf8',
-    });
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain(
+    expect(help.status).toBe(0);
+    expect(help.stdout).toContain(
       'workflow cancel <run-id>   Stop a running workflow started with --detach'
     );
-    expect(result.stdout).toContain(
+    expect(help.stdout).toContain(
       'workflow abandon <run-id>  Mark a run cancelled without stopping host work'
     );
   });
 
   it('documents workflow dry-run flags', () => {
-    const result = spawnSync(process.execPath, [CLI_ENTRY, '--help'], {
-      encoding: 'utf8',
-    });
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain('--dry-run');
-    expect(result.stdout).toContain('--stubs <path>');
-    expect(result.stdout).toContain('--stubs-init <path>');
-    expect(result.stdout).toContain('--default-stubs');
-    expect(result.stdout).toContain('--exec-code');
-    expect(result.stdout).toContain('--pause-at-gates');
+    expect(help.status).toBe(0);
+    expect(help.stdout).toContain('--dry-run');
+    expect(help.stdout).toContain('--stubs <path>');
+    expect(help.stdout).toContain('--stubs-init <path>');
+    expect(help.stdout).toContain('--default-stubs');
+    expect(help.stdout).toContain('--exec-code');
+    expect(help.stdout).toContain('--pause-at-gates');
   });
 
   it('documents sparse repeatable model bindings', () => {
-    const result = spawnSync(process.execPath, [CLI_ENTRY, '--help'], { encoding: 'utf8' });
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain('--model <name>=<spec>');
+    expect(help.status).toBe(0);
+    expect(help.stdout).toContain('--model <name>=<spec>');
+  });
+
+  it('documents the per-run config file', () => {
+    expect(help.status).toBe(0);
+    expect(help.stdout).toContain('--config <path>');
+  });
+
+  it('documents the unified skill destinations and subscription providers', () => {
+    expect(help.status).toBe(0);
+    expect(help.stdout).toContain(
+      'skill install [path]       Install archon-cli into .claude/skills and .agents/skills'
+    );
+    expect(help.stdout).toContain(
+      'ai login <provider>        Connect a Claude, ChatGPT/Codex, or Copilot subscription'
+    );
   });
 });
 
@@ -92,15 +113,214 @@ describe('workflow model arguments', () => {
     ['workflow', 'respond', 'run-1', 'approve'],
   ]) {
     it(`rejects --model on ${args[0]} ${args[1]}`, () => {
-      const result = spawnSync(process.execPath, [CLI_ENTRY, ...args, '--model', 'large=opus'], {
-        encoding: 'utf8',
-      });
+      // Pure pre-dispatch argv guard — no I/O, so asserted in-process instead
+      // of through a full interpreter startup. A defined message is what makes
+      // main() print to stderr and exit 1.
+      const message = rejectModelOnContinue(args[1], 'large=opus');
+      expect(message).toBeDefined();
+      expect(message).toContain('--model cannot be used when continuing an existing workflow run');
+      expect(message).toContain('keeps the model bindings it started with');
+    });
+  }
+});
 
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain(
-        '--model cannot be used when continuing an existing workflow run'
+describe('workflow run config argument', () => {
+  it('parses one local path', () => {
+    const parsed = parseArgs({
+      args: ['workflow', 'run', 'x', '--config', './config.minimax.yaml'],
+      options: cliArgOptions,
+      allowPositionals: true,
+      strict: true,
+    });
+    expect(parsed.values.config).toBe('./config.minimax.yaml');
+  });
+
+  it('rejects a new config on run --resume before reading it', () => {
+    // Pure pre-dispatch argv guard — no I/O, so asserted in-process.
+    const message = rejectConfigOnContinue(true, './does-not-exist.yaml');
+    expect(message).toBeDefined();
+    expect(message).toContain('--config cannot be used when continuing');
+  });
+
+  it('rejects --config outside workflow run before dispatch', () => {
+    // Pure pre-dispatch argv guard — no I/O, so asserted in-process.
+    const message = rejectConfigOutsideRun('chat', undefined, './does-not-exist.yaml');
+    expect(message).toBeDefined();
+    expect(message).toContain('--config can only be used with workflow run');
+  });
+
+  it('resolves a relative config path from the requested subdirectory cwd', () => {
+    const repo = mkdtempSync(join(tmpdir(), 'archon-cli-config-cwd-'));
+    const subdir = join(repo, 'bench');
+    mkdirSync(subdir, { recursive: true });
+    spawnSync('git', ['init'], { cwd: repo, encoding: 'utf8' });
+    writeFileSync(join(subdir, 'config.yaml'), 'paths: {}\n');
+
+    try {
+      const result = spawnSync(
+        process.execPath,
+        [CLI_ENTRY, 'workflow', 'run', 'x', '--cwd', subdir, '--config', './config.yaml'],
+        { encoding: 'utf8' }
       );
-      expect(result.stderr).toContain('keeps the model bindings it started with');
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("Run config key 'paths' cannot apply");
+      expect(result.stderr).not.toContain('Unable to read run config');
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a detached config handoff outside repo env overrides', () => {
+    const repo = mkdtempSync(join(tmpdir(), 'archon-cli-detached-config-'));
+    const archonHome = join(repo, 'archon-home');
+    mkdirSync(join(repo, '.archon'), { recursive: true });
+    spawnSync('git', ['init', '-q', '.'], { cwd: repo });
+    writeFileSync(
+      join(repo, '.env'),
+      `TOKEN_ENCRYPTION_KEY=${'33'.repeat(32)}\n` +
+        `ARCHON_HOME=${join(repo, 'wrong-home')}\n` +
+        'ARCHON_DOCKER=true\n' +
+        'WORKSPACE_PATH=/workspace\n' +
+        'HOME=/root\n'
+    );
+    writeFileSync(
+      join(repo, '.archon', '.env'),
+      `TOKEN_ENCRYPTION_KEY=${'22'.repeat(32)}\n` +
+        'ARCHON_DOCKER=true\n' +
+        'WORKSPACE_PATH=/workspace\n' +
+        'HOME=/root\n'
+    );
+
+    const savedKey = process.env.TOKEN_ENCRYPTION_KEY;
+    const savedArchonHome = process.env.ARCHON_HOME;
+    delete process.env.TOKEN_ENCRYPTION_KEY;
+    process.env.ARCHON_HOME = relative(process.cwd(), archonHome);
+    const payload = JSON.stringify(
+      sealWorkflowRunConfig({ docsPath: 'accepted' }, { kind: 'cli', label: 'config.minimax.yaml' })
+    );
+    if (savedKey === undefined) delete process.env.TOKEN_ENCRYPTION_KEY;
+    else process.env.TOKEN_ENCRYPTION_KEY = savedKey;
+    if (savedArchonHome === undefined) delete process.env.ARCHON_HOME;
+    else process.env.ARCHON_HOME = savedArchonHome;
+
+    try {
+      const result = spawnSync(
+        process.execPath,
+        [
+          CLI_ENTRY,
+          'workflow',
+          'run',
+          'x',
+          '--dry-run',
+          '--resume',
+          '--internal-detached-run-config',
+          payload,
+        ],
+        {
+          cwd: repo,
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            ARCHON_HOME: archonHome,
+            TOKEN_ENCRYPTION_KEY: '',
+            ARCHON_DOCKER: '',
+            WORKSPACE_PATH: '',
+            HOME: homedir(),
+          },
+        }
+      );
+      expect(result.status).toBe(1);
+      expect(result.stderr).not.toContain('could not be decrypted');
+      expect(result.stderr).toContain('--resume and --config are mutually exclusive');
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a detached Docker install classified through target env loading', () => {
+    const repo = mkdtempSync(join(tmpdir(), 'archon-cli-detached-docker-'));
+    mkdirSync(join(repo, '.archon'), { recursive: true });
+    writeFileSync(
+      join(repo, '.env'),
+      `TOKEN_ENCRYPTION_KEY=${'33'.repeat(32)}\n` +
+        `ARCHON_HOME=${join(repo, 'wrong-home')}\n` +
+        'ARCHON_DOCKER=false\n' +
+        'WORKSPACE_PATH=\n' +
+        `HOME=${repo}\n`
+    );
+    writeFileSync(
+      join(repo, '.archon', '.env'),
+      `TOKEN_ENCRYPTION_KEY=${'22'.repeat(32)}\n` +
+        `ARCHON_HOME=${join(repo, 'wrong-home')}\n` +
+        'ARCHON_DOCKER=false\n' +
+        'WORKSPACE_PATH=\n' +
+        `HOME=${repo}\n`
+    );
+
+    const stripBootUrl = pathToFileURL(
+      join(repoRoot, 'packages', 'paths', 'src', 'strip-cwd-env-boot.ts')
+    ).href;
+    const pathsUrl = pathToFileURL(join(repoRoot, 'packages', 'paths', 'src', 'index.ts')).href;
+    const probe = join(repo, 'probe.ts');
+    writeFileSync(
+      probe,
+      `import '${stripBootUrl}';\n` +
+        `import { captureDetachedInstallContext, getArchonHome, isDocker, loadArchonEnv, restoreDetachedInstallContext } from '${pathsUrl}';\n` +
+        'const inherited = captureDetachedInstallContext();\n' +
+        'loadArchonEnv(process.cwd());\n' +
+        'restoreDetachedInstallContext(inherited);\n' +
+        'process.stdout.write(JSON.stringify({ docker: isDocker(), home: getArchonHome(), context: inherited }));\n'
+    );
+
+    try {
+      const result = spawnSync(
+        process.execPath,
+        [probe, '--internal-detached-run-config', 'placeholder'],
+        {
+          cwd: repo,
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            TOKEN_ENCRYPTION_KEY: 'parent-key',
+            ARCHON_HOME: '/.archon',
+            ARCHON_DOCKER: 'true',
+            WORKSPACE_PATH: '/workspace',
+            HOME: '/root',
+          },
+        }
+      );
+      expect({ status: result.status, stderr: result.stderr }).toEqual({
+        status: 0,
+        stderr: expect.stringContaining('[archon] stripped 5 keys'),
+      });
+      expect(JSON.parse(result.stdout)).toEqual({
+        docker: true,
+        home: '/.archon',
+        context: {
+          TOKEN_ENCRYPTION_KEY: 'parent-key',
+          ARCHON_HOME: '/.archon',
+          ARCHON_DOCKER: 'true',
+          WORKSPACE_PATH: '/workspace',
+          HOME: '/root',
+        },
+      });
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  for (const args of [
+    ['workflow', 'resume', 'run-1'],
+    ['workflow', 'approve', 'run-1'],
+    ['workflow', 'reject', 'run-1'],
+    ['workflow', 'respond', 'run-1', 'approve'],
+  ]) {
+    it(`rejects --config on ${args[0]} ${args[1]}`, () => {
+      // Pure pre-dispatch argv guard — no I/O, so asserted in-process instead
+      // of through a full interpreter startup.
+      const message = rejectConfigOutsideRun(args[0], args[1], './config.minimax.yaml');
+      expect(message).toBeDefined();
+      expect(message).toContain('--config can only be used with workflow run');
     });
   }
 });
@@ -708,27 +928,31 @@ describe('CLI git repo check', () => {
   });
 });
 
+// All --json error-envelope tests share one contract: exit 1 and a parseable
+// `{ ok: false }` payload on stdout via the shared writeJsonLine catch path.
+// One helper owns the spawn env and envelope access so every case pays setup
+// once instead of repeating it; each test still drives its own invocation so
+// the subprocess stdout/exit-code contract stays covered.
+function spawnJsonError(argv: string[], extraEnv: Record<string, string> = {}) {
+  const result = spawnSync(process.execPath, [CLI_ENTRY, ...argv], {
+    encoding: 'utf8',
+    env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1', ...extraEnv },
+  });
+  return { status: result.status, envelope: () => JSON.parse(result.stdout ?? '') };
+}
+
 describe('workflow search --json error envelope', () => {
   it('emits { ok: false } on stdout when the command throws under --json', () => {
     // An unreachable marketplace URL makes fetchMarketplace throw inside the
     // `workflow search` handler — the only deterministic error path. The
     // envelope, not the message, is the contract.
-    const result = spawnSync(
-      process.execPath,
-      [CLI_ENTRY, 'workflow', 'search', 'anything', '--json'],
-      {
-        encoding: 'utf8',
-        env: {
-          ...process.env,
-          ARCHON_TELEMETRY_DISABLED: '1',
-          ARCHON_MARKETPLACE_URL: 'http://127.0.0.1:9/nope',
-        },
-      }
-    );
+    const { status, envelope } = spawnJsonError(['workflow', 'search', 'anything', '--json'], {
+      ARCHON_MARKETPLACE_URL: 'http://127.0.0.1:9/nope',
+    });
 
-    expect(result.status).toBe(1);
-    expect(() => JSON.parse(result.stdout)).not.toThrow();
-    expect(JSON.parse(result.stdout)).toMatchObject({ ok: false });
+    expect(status).toBe(1);
+    expect(envelope).not.toThrow();
+    expect(envelope()).toMatchObject({ ok: false });
   });
 });
 
@@ -737,109 +961,98 @@ describe('main catch --json error envelope', () => {
     // An unknown workflow name makes workflowRunCommand throw with no local
     // handling, so the error escapes to main()'s outer catch — the last route
     // that could still leak bare stderr text under --json.
-    const result = spawnSync(
-      process.execPath,
-      [CLI_ENTRY, 'workflow', 'run', 'definitely-not-a-workflow', '--json', '--cwd', repoRoot],
-      { encoding: 'utf8', env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' } }
-    );
+    const { status, envelope } = spawnJsonError([
+      'workflow',
+      'run',
+      'definitely-not-a-workflow',
+      '--json',
+      '--cwd',
+      repoRoot,
+    ]);
 
-    expect(result.status).toBe(1);
-    expect(() => JSON.parse(result.stdout)).not.toThrow();
-    expect(JSON.parse(result.stdout)).toMatchObject({ ok: false });
+    expect(status).toBe(1);
+    expect(envelope).not.toThrow();
+    expect(envelope()).toMatchObject({ ok: false });
   });
 });
 
 describe('pre-dispatch gates --json error envelope', () => {
   it('emits { ok: false } on stdout when --cwd does not exist', () => {
-    const result = spawnSync(
-      process.execPath,
-      [CLI_ENTRY, 'workflow', 'run', 'anything', '--json', '--cwd', '/does/not/exist'],
-      { encoding: 'utf8', env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' } }
-    );
+    const { status, envelope } = spawnJsonError([
+      'workflow',
+      'run',
+      'anything',
+      '--json',
+      '--cwd',
+      '/does/not/exist',
+    ]);
 
-    expect(result.status).toBe(1);
-    expect(() => JSON.parse(result.stdout)).not.toThrow();
-    expect(JSON.parse(result.stdout)).toMatchObject({ ok: false });
+    expect(status).toBe(1);
+    expect(envelope).not.toThrow();
+    expect(envelope()).toMatchObject({ ok: false });
   });
 
   it('emits { ok: false } on stdout when outside a git repository', () => {
-    const result = spawnSync(
-      process.execPath,
-      [CLI_ENTRY, 'workflow', 'list', '--json', '--cwd', tmpdir()],
-      { encoding: 'utf8', env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' } }
-    );
+    const { status, envelope } = spawnJsonError(['workflow', 'list', '--json', '--cwd', tmpdir()]);
 
-    expect(result.status).toBe(1);
-    expect(() => JSON.parse(result.stdout)).not.toThrow();
-    expect(JSON.parse(result.stdout)).toMatchObject({ ok: false });
+    expect(status).toBe(1);
+    expect(envelope).not.toThrow();
+    expect(envelope()).toMatchObject({ ok: false });
   });
 
   it('emits { ok: false } on stdout for an unknown command instead of usage text', () => {
-    const result = spawnSync(process.execPath, [CLI_ENTRY, 'boguscmd', '--json'], {
-      encoding: 'utf8',
-      env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' },
-    });
+    const { status, envelope } = spawnJsonError(['boguscmd', '--json']);
 
-    expect(result.status).toBe(1);
-    expect(() => JSON.parse(result.stdout)).not.toThrow();
-    expect(JSON.parse(result.stdout)).toMatchObject({ ok: false });
+    expect(status).toBe(1);
+    expect(envelope).not.toThrow();
+    expect(envelope()).toMatchObject({ ok: false });
   });
 
   it('emits { ok: false } on stdout when arg parsing rejects an unknown flag', () => {
-    const result = spawnSync(
-      process.execPath,
-      [CLI_ENTRY, 'workflow', 'list', '--json', '--bogus-flag'],
-      { encoding: 'utf8', env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' } }
-    );
+    const { status, envelope } = spawnJsonError(['workflow', 'list', '--json', '--bogus-flag']);
 
-    expect(result.status).toBe(1);
-    expect(() => JSON.parse(result.stdout)).not.toThrow();
-    expect(JSON.parse(result.stdout)).toMatchObject({ ok: false });
+    expect(status).toBe(1);
+    expect(envelope).not.toThrow();
+    expect(envelope()).toMatchObject({ ok: false });
   });
 
   it('emits { ok: false } on stdout when chat is invoked with no message', () => {
-    const result = spawnSync(process.execPath, [CLI_ENTRY, 'chat', '--json'], {
-      encoding: 'utf8',
-      env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' },
-    });
+    const { status, envelope } = spawnJsonError(['chat', '--json']);
 
-    expect(result.status).toBe(1);
-    expect(() => JSON.parse(result.stdout)).not.toThrow();
-    expect(JSON.parse(result.stdout)).toMatchObject({ ok: false });
+    expect(status).toBe(1);
+    expect(envelope).not.toThrow();
+    expect(envelope()).toMatchObject({ ok: false });
   });
 
   it('emits { ok: false } on stdout for an invalid setup --scope', () => {
-    const result = spawnSync(process.execPath, [CLI_ENTRY, 'setup', '--scope', 'bogus', '--json'], {
-      encoding: 'utf8',
-      env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' },
-    });
+    const { status, envelope } = spawnJsonError(['setup', '--scope', 'bogus', '--json']);
 
-    expect(result.status).toBe(1);
-    expect(() => JSON.parse(result.stdout)).not.toThrow();
-    expect(JSON.parse(result.stdout)).toMatchObject({ ok: false });
+    expect(status).toBe(1);
+    expect(envelope).not.toThrow();
+    expect(envelope()).toMatchObject({ ok: false });
   });
 
   it('emits { ok: false } on stdout when workflow get is missing its run-id', () => {
-    const result = spawnSync(process.execPath, [CLI_ENTRY, 'workflow', 'get', '--json'], {
-      encoding: 'utf8',
-      env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' },
-    });
+    const { status, envelope } = spawnJsonError(['workflow', 'get', '--json']);
 
-    expect(result.status).toBe(1);
-    expect(() => JSON.parse(result.stdout)).not.toThrow();
-    expect(JSON.parse(result.stdout)).toMatchObject({ ok: false });
+    expect(status).toBe(1);
+    expect(envelope).not.toThrow();
+    expect(envelope()).toMatchObject({ ok: false });
   });
 
   it('emits { ok: false } on stdout when setup --scope project runs outside a git repo', () => {
-    const result = spawnSync(
-      process.execPath,
-      [CLI_ENTRY, 'setup', '--scope', 'project', '--json', '--cwd', tmpdir()],
-      { encoding: 'utf8', env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' } }
-    );
+    const { status, envelope } = spawnJsonError([
+      'setup',
+      '--scope',
+      'project',
+      '--json',
+      '--cwd',
+      tmpdir(),
+    ]);
 
-    expect(result.status).toBe(1);
-    expect(() => JSON.parse(result.stdout)).not.toThrow();
-    expect(JSON.parse(result.stdout)).toMatchObject({ ok: false });
+    expect(status).toBe(1);
+    expect(envelope).not.toThrow();
+    expect(envelope()).toMatchObject({ ok: false });
   });
 });
 
@@ -848,14 +1061,16 @@ describe('workflow test --json error envelope', () => {
     // A --cwd that does not exist makes findRepoRoot throw inside the
     // `workflow test` handler — the only reachable error path without a full
     // fixture project. The envelope, not the message, is the contract.
-    const result = spawnSync(
-      process.execPath,
-      [CLI_ENTRY, 'workflow', 'test', '--json', '--cwd', join(tmpdir(), 'archon-missing-cwd')],
-      { encoding: 'utf8', env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' } }
-    );
+    const { status, envelope } = spawnJsonError([
+      'workflow',
+      'test',
+      '--json',
+      '--cwd',
+      join(tmpdir(), 'archon-missing-cwd'),
+    ]);
 
-    expect(result.status).toBe(1);
-    expect(() => JSON.parse(result.stdout)).not.toThrow();
-    expect(JSON.parse(result.stdout)).toMatchObject({ ok: false });
+    expect(status).toBe(1);
+    expect(envelope).not.toThrow();
+    expect(envelope()).toMatchObject({ ok: false });
   });
 });
