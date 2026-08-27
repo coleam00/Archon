@@ -47,6 +47,7 @@ import {
   rejectConfigOnContinue,
   rejectConfigOutsideRun,
   rejectModelOnContinue,
+  resolveRunConfigPath,
 } from './dispatch-guards';
 installPipeSafeConsole();
 
@@ -742,8 +743,7 @@ async function main(): Promise<number> {
               // Raw `name=value` assignments; parsed at the invocation gate (#2554).
               inputs: values.input as string[] | undefined,
               modelAssignments: values.model as string[] | undefined,
-              configPath:
-                typeof values.config === 'string' ? resolve(cwd, values.config) : undefined,
+              configPath: resolveRunConfigPath(cwd, values.config),
               detachedRunConfigPayload: values['internal-detached-run-config'] as
                 | string
                 | undefined,

@@ -2,6 +2,7 @@
  * Workflow command - list and run workflows
  */
 import { existsSync, readdirSync, type Dirent } from 'node:fs';
+import { rejectRunConfigOnResume } from '../dispatch-guards';
 import * as archonPaths from '@archon/paths';
 import {
   registerRepository,
@@ -1178,10 +1179,12 @@ async function runWorkflowWithOwnedSource(
       ? options.configPath
       : join(cwd, options.configPath)
     : undefined;
-  if (isContinuation && (resolvedRunConfigPath || options.detachedRunConfig)) {
-    throw new Error(
-      '--resume and --config are mutually exclusive. A resumed run keeps its original run config.'
-    );
+  const resumeConfigConflict = rejectRunConfigOnResume(
+    isContinuation,
+    resolvedRunConfigPath !== undefined || options.detachedRunConfig !== undefined
+  );
+  if (resumeConfigConflict) {
+    throw new Error(resumeConfigConflict);
   }
   const runConfig =
     options.detachedRunConfig ??

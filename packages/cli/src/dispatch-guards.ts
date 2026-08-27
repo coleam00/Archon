@@ -8,6 +8,7 @@
  * case. Each guard returns the error message to print before exiting 1, or
  * undefined when the invocation is allowed.
  */
+import { resolve } from 'node:path';
 
 /** Workflow subcommands that continue an existing run. */
 const CONTINUE_SUBCOMMANDS = ['resume', 'approve', 'reject', 'respond'] as const;
@@ -61,4 +62,29 @@ export function rejectConfigOnContinue(
     );
   }
   return undefined;
+}
+
+/**
+ * Resolves the effective run-config path from the parsed --config value
+ * against the effective cwd (which honors an explicit --cwd subdirectory).
+ * Path math only — never reads the filesystem.
+ */
+export function resolveRunConfigPath(cwd: string, config: unknown): string | undefined {
+  return typeof config === 'string' ? resolve(cwd, config) : undefined;
+}
+
+/**
+ * Rejects any run-config input (a fresh --config path or the detached handoff
+ * payload) on a continuation: the resumed run keeps its original run config.
+ * Called from the workflow run command AFTER the detached payload has been
+ * parsed, which is why --resume plus an internal detached handoff surfaces
+ * here rather than at the CLI-level rejectConfigOnContinue guard above.
+ */
+export function rejectRunConfigOnResume(
+  isContinuation: boolean,
+  hasRunConfigInput: boolean
+): string | undefined {
+  return isContinuation && hasRunConfigInput
+    ? '--resume and --config are mutually exclusive. A resumed run keeps its original run config.'
+    : undefined;
 }
