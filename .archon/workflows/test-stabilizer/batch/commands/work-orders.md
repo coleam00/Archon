@@ -31,9 +31,8 @@ Each order references the original `diagnosis_id` values. Those complete raw
 diagnoses are passed independently to the implementer; this node must not turn
 them into another prose work order.
 
-`owned_paths` is the complete intended edit boundary. `shared_primitives` names
-helpers, fixtures, or runtime seams that forced diagnoses into the same concern.
-`why_grouped` explains the ownership decision only.
+Do not copy `kind`, `owned_paths`, `shared_primitives`, or any other diagnosis
+field into an order. The deterministic boundary derives them from the selected
+assessor outputs. `why_grouped` explains the partition decision only.
 
 Return structured fields only. An empty confirmed set produces `orders: []`.
-

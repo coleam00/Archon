@@ -8,38 +8,10 @@ import json
 import os
 
 
-def parse_entries(raw: str) -> list:
-    decoder = json.JSONDecoder()
-    output = []
-    remaining = raw.strip()
-    try:
-        value, consumed = decoder.raw_decode(remaining)
-        entries = value if isinstance(value, list) else [value]
-        remaining = remaining[consumed:].strip()
-    except json.JSONDecodeError:
-        entries = [remaining]
-        remaining = ""
-
-    for entry in entries:
-        if isinstance(entry, dict):
-            output.append(entry)
-            continue
-        text = str(entry).strip()
-        while text:
-            value, consumed = decoder.raw_decode(text)
-            output.append(value)
-            text = text[consumed:].lstrip()
-
-    while remaining:
-        value, consumed = decoder.raw_decode(remaining)
-        output.append(value)
-        remaining = remaining[consumed:].lstrip()
-    return output
-
-
 def main() -> int:
-    raw = os.environ.get("INPUTS_FIX_EACH", "").strip()
-    results = [] if not raw or raw == "[]" else parse_entries(raw)
+    results = json.loads(os.environ["INPUTS_FIX_EACH"])
+    if not isinstance(results, list):
+        raise ValueError("fix-each output must be the engine-owned fan-out array")
     report_path = os.path.join(os.environ["ARTIFACTS_DIR"], "batch-report.md")
 
     lines = ["# Test stabilizer report", ""]
@@ -75,4 +47,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

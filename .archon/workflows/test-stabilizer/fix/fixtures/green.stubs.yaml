@@ -5,9 +5,7 @@ fixture:
   expect: completed
   inputs:
     order: >-
-      {"concern_id":"cli-json-envelope","title":"Keep CLI JSON output machine-readable","branch":"fix/cli-json-envelope","kind":"split-or-recompose-test","diagnosis_ids":["cli-json-envelope"],"owned_paths":["packages/cli/src/commands/workflow.test.ts"],"shared_primitives":["runCli"],"why_grouped":"One concern owns the CLI JSON envelope assertions."}
-    diagnoses: >-
-      [{"diagnosis_id":"cli-json-envelope","confirmed":true,"title":"CLI JSON output shares one expensive setup","file":"packages/cli/src/commands/workflow.test.ts","test_id":"workflow JSON envelope","kind":"split-or-recompose-test","mechanism":"Each case repeats the same subprocess setup.","invariant":"Every JSON command emits exactly one parseable envelope.","evidence":"The cases share the same setup and assertion boundary.","owned_paths":["packages/cli/src/commands/workflow.test.ts"],"shared_primitives":["runCli"],"forbidden_residuals":["timeout increase","retry","skipped assertion"],"verification":"Run the focused workflow command test once.","rejection_reason":""}]
+      {"concern_id":"cli-json-envelope","title":"Keep CLI JSON output machine-readable","branch":"fix/cli-json-envelope","kind":"split-or-recompose-test","diagnosis_ids":["cli-json-envelope"],"owned_paths":["packages/cli/src/commands/workflow.test.ts"],"shared_primitives":["runCli"],"why_grouped":"One concern owns the CLI JSON envelope assertions.","diagnoses":[{"diagnosis_id":"cli-json-envelope","confirmed":true,"title":"CLI JSON output shares one expensive setup","file":"packages/cli/src/commands/workflow.test.ts","test_id":"workflow JSON envelope","kind":"split-or-recompose-test","mechanism":"Each case repeats the same subprocess setup.","invariant":"Every JSON command emits exactly one parseable envelope.","evidence":"The cases share the same setup and assertion boundary.","owned_paths":["packages/cli/src/commands/workflow.test.ts"],"shared_primitives":["runCli"],"forbidden_residuals":["timeout increase","retry","skipped assertion"],"verification":"Run the focused workflow command test once."}]}
     smell: Repeated subprocess setup crosses the test deadline on Windows.
 exec-code: true
 implement:
@@ -28,7 +26,7 @@ verify:
     artifact: /tmp/stabilizer-project.log
 review:
   approved: true
-  summary: The concern is fixed without moving the deadline.
+  summary: The concern is fixed and its invariant remains live.
   findings: []
 ship:
   concern: Keep CLI JSON output machine-readable

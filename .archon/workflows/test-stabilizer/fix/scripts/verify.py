@@ -23,13 +23,37 @@ def run(cmd: str, artifact: str) -> dict:
 def main() -> int:
     implement = json.loads(os.environ["INPUTS_IMPLEMENT"])
     artifacts = os.environ["ARTIFACTS_DIR"]
-    targeted = run(
-        implement["test_cmd"].strip(), os.path.join(artifacts, "stabilizer-targeted.log")
-    )
+    test_cmd = implement["test_cmd"].strip()
+    validate_cmd = implement["validate_cmd"].strip()
+    if not test_cmd or not validate_cmd:
+        invalid = []
+        if not test_cmd:
+            invalid.append("test_cmd must be non-empty")
+        if not validate_cmd:
+            invalid.append("validate_cmd must be non-empty")
+        reason = "; ".join(invalid)
+        print(json.dumps({
+            "green": False,
+            "targeted": {
+                "command": test_cmd,
+                "passed": False,
+                "artifact": None,
+                "reason": reason,
+            },
+            "project": {
+                "command": validate_cmd,
+                "passed": False,
+                "artifact": None,
+                "reason": reason,
+            },
+        }))
+        return 0
+
+    targeted = run(test_cmd, os.path.join(artifacts, "stabilizer-targeted.log"))
     project = run(
-        implement["validate_cmd"].strip(), os.path.join(artifacts, "stabilizer-project.log")
+        validate_cmd, os.path.join(artifacts, "stabilizer-project.log")
     ) if targeted["passed"] else {
-        "command": implement["validate_cmd"].strip(),
+        "command": validate_cmd,
         "passed": False,
         "artifact": None,
         "reason": "not run because targeted validation failed",

@@ -22,59 +22,68 @@ nodes:
     mutates_checkout: false
     output_format:
       type: object
+      additionalProperties: false
       properties:
-        diagnosis_id:
-          type: string
-        confirmed:
-          type: boolean
-        title:
-          type: string
-        file:
-          type: string
-        test_id:
-          type: string
-        kind:
-          type: string
-          enum:
-            - delete-useless-test
-            - make-test-meaningful
-            - fix-product-bug
-            - split-or-recompose-test
-        mechanism:
-          type: string
-        invariant:
-          type: string
-        evidence:
-          type: string
-        owned_paths:
-          type: array
-          items:
-            type: string
-        shared_primitives:
-          type: array
-          items:
-            type: string
-        forbidden_residuals:
-          type: array
-          items:
-            type: string
-        verification:
-          type: string
-        rejection_reason:
-          type: string
-      required:
-        - diagnosis_id
-        - confirmed
-        - title
-        - file
-        - test_id
-        - kind
-        - mechanism
-        - invariant
-        - evidence
-        - owned_paths
-        - shared_primitives
-        - forbidden_residuals
-        - verification
-        - rejection_reason
-
+        assessment:
+          anyOf:
+            - type: object
+              additionalProperties: false
+              properties:
+                diagnosis_id: { type: string }
+                confirmed: { const: true }
+                title: { type: string }
+                file: { type: string }
+                test_id: { type: string }
+                kind:
+                  type: string
+                  enum:
+                    - delete-useless-test
+                    - make-test-meaningful
+                    - fix-product-bug
+                    - split-or-recompose-test
+                mechanism: { type: string }
+                invariant: { type: string }
+                evidence: { type: string }
+                owned_paths:
+                  type: array
+                  items: { type: string }
+                shared_primitives:
+                  type: array
+                  items: { type: string }
+                forbidden_residuals:
+                  type: array
+                  items: { type: string }
+                verification: { type: string }
+              required:
+                - diagnosis_id
+                - confirmed
+                - title
+                - file
+                - test_id
+                - kind
+                - mechanism
+                - invariant
+                - evidence
+                - owned_paths
+                - shared_primitives
+                - forbidden_residuals
+                - verification
+            - type: object
+              additionalProperties: false
+              properties:
+                diagnosis_id: { type: string }
+                confirmed: { const: false }
+                title: { type: string }
+                file: { type: string }
+                test_id: { type: string }
+                evidence: { type: string }
+                rejection_reason: { type: string, minLength: 1 }
+              required:
+                - diagnosis_id
+                - confirmed
+                - title
+                - file
+                - test_id
+                - evidence
+                - rejection_reason
+      required: [assessment]

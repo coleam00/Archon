@@ -17,7 +17,8 @@ def main() -> int:
     assigned = sorted(order["diagnosis_ids"])
     addressed = sorted(implement["addressed_diagnosis_ids"])
     coverage_ok = assigned == addressed
-    done = bool(verification.get("green")) and bool(review.get("approved")) and coverage_ok
+    review_clear = bool(review.get("approved")) and not review.get("findings")
+    done = bool(verification.get("green")) and review_clear and coverage_ok
 
     feedback = {
         "validation": verification,
@@ -42,4 +43,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

@@ -62,8 +62,8 @@ nodes:
       max_parallel: 3
       join: all_done
 
-  # This node chooses execution ownership only. It references diagnosis IDs;
-  # the raw assessor outputs flow separately and unchanged into every child.
+  # This node proposes only a partition of diagnosis IDs. The next script owns
+  # the deterministic resolution back to assessor-authored diagnoses.
   - id: work-orders
     command: work-orders
     depends_on: [assess-each]
@@ -85,22 +85,7 @@ nodes:
                 type: string
               branch:
                 type: string
-              kind:
-                type: string
-                enum:
-                  - delete-useless-test
-                  - make-test-meaningful
-                  - fix-product-bug
-                  - split-or-recompose-test
               diagnosis_ids:
-                type: array
-                items:
-                  type: string
-              owned_paths:
-                type: array
-                items:
-                  type: string
-              shared_primitives:
                 type: array
                 items:
                   type: string
@@ -110,21 +95,26 @@ nodes:
               - concern_id
               - title
               - branch
-              - kind
               - diagnosis_ids
-              - owned_paths
-              - shared_primitives
               - why_grouped
       required: [orders]
 
-  - id: fix-each
-    workflow: archon-stabilize-fix
+  - id: prepare-orders
+    script: prepare-orders
+    runtime: uv
     depends_on: [work-orders]
     with:
-      diagnoses: "$assess-each.output"
+      assessments: "$assess-each.output"
+      orders: "$work-orders.output"
+    mutates_checkout: false
+
+  - id: fix-each
+    workflow: archon-stabilize-fix
+    depends_on: [prepare-orders]
+    with:
       smell: "$INPUTS.smell"
     fan_out:
-      items: "$work-orders.output.orders"
+      items: "$prepare-orders.output.orders"
       as: order
       max_parallel: 3
       join: all_done
@@ -138,4 +128,3 @@ nodes:
       fix-each: "$fix-each.output"
     trigger_rule: all_done
     mutates_checkout: false
-

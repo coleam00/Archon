@@ -11,12 +11,6 @@ Concern ownership:
 $INPUTS.order
 ```
 
-Complete assessor outputs:
-
-```json
-$INPUTS.diagnoses
-```
-
 Original class: $INPUTS.smell
 
 Independent findings from the previous attempt, empty on the first iteration:
@@ -25,19 +19,15 @@ Independent findings from the previous attempt, empty on the first iteration:
 $LOOP_PREV.verdict.output.feedback
 ```
 
-Use only the diagnoses named by `order.diagnosis_ids`. Their mechanisms,
+Use the diagnoses embedded in `order.diagnoses`. Their mechanisms,
 invariants, evidence, forbidden residuals, and verification requirements are
 authoritative. Read the current source to confirm it still matches; do not
 re-investigate or replace the diagnoses with your own abbreviated theory. If
 the source decisively contradicts one, stop and report the contradiction.
 
 Implement the smallest coherent fix inside `order.owned_paths`. The diff must
-remove every assigned mechanism without recreating it in another shape. In
-particular, moving environment-dependent work into shared setup, concurrent
-setup, a hook, or another implicit deadline does not remove a timing class.
-
-Never raise timeouts, add retries or sleeps, widen tolerances, skip or
-platform-gate tests, or weaken assertions. Preserve every diagnosed invariant.
+remove every assigned mechanism without violating its `forbidden_residuals`.
+Preserve every diagnosed invariant.
 
 Identify the smallest targeted command and the project's broad validation
 command, but do not run either: the deterministic verification node owns their

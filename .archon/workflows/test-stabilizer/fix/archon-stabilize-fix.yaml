@@ -11,10 +11,7 @@ model: medium
 inputs:
   order:
     required: true
-    description: Concern ownership and the diagnosis IDs assigned to this child.
-  diagnoses:
-    required: true
-    description: Complete raw assessor outputs from the parent run.
+    description: Concern ownership plus the selected raw assessor diagnoses.
   smell:
     default: ""
     description: Original failure class.
@@ -32,7 +29,6 @@ nodes:
           command: implement-concern
           with:
             order: "$INPUTS.order"
-            diagnoses: "$INPUTS.diagnoses"
             smell: "$INPUTS.smell"
           output_format:
             type: object
@@ -59,6 +55,7 @@ nodes:
         - id: verify
           script: verify
           runtime: uv
+          timeout: 1800000
           depends_on: [implement]
           with:
             implement: "$implement.output"
@@ -70,7 +67,6 @@ nodes:
           mutates_checkout: false
           with:
             order: "$INPUTS.order"
-            diagnoses: "$INPUTS.diagnoses"
             implement: "$implement.output"
             verification: "$verify.output"
           output_format:
@@ -112,4 +108,3 @@ nodes:
     with:
       fix: "$converge.output"
       order: "$INPUTS.order"
-

@@ -4,6 +4,8 @@
 # ///
 """Open or reuse one concern PR and wait for its current head's CI."""
 
+from __future__ import annotations
+
 import json
 import os
 import subprocess
@@ -155,4 +157,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

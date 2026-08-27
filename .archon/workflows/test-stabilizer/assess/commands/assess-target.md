@@ -26,14 +26,15 @@ For a confirmed diagnosis, record:
   split-or-recompose-test.
 - `owned_paths`: every path the smallest responsible fix may need to edit.
 - `shared_primitives`: helpers or seams that create edit overlap with siblings.
-- `forbidden_residuals`: concrete shapes that would recreate this mechanism,
-  including moving the same uncontrolled work under another clock boundary.
+- `forbidden_residuals`: concrete shapes that would recreate this mechanism.
 - `verification`: one targeted command and the observation that proves the
   mechanism is gone while the invariant remains live.
 
-For a rejected diagnosis, keep the same structured shape, copy the candidate
-identity fields, use empty arrays or strings where no confirmed proof exists,
-and put the decisive fact in `rejection_reason`.
+For a rejected candidate, return the rejected `assessment` variant. Copy its
+identity and evidence, set `confirmed` to false, and put the decisive fact in
+`rejection_reason`. Do not invent a fix kind or any other diagnosis field.
+
+For a confirmed candidate, return the confirmed `assessment` variant with
+`confirmed` set to true and every diagnosis field above populated.
 
 Structured output only. Modify nothing.
-

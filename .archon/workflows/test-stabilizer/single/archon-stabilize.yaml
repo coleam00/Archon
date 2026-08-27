@@ -16,5 +16,6 @@ nodes:
   - id: stabilize
     workflow: archon-stabilize-batch
     with:
-      smell: "$INPUTS.target"
-
+      smell: |-
+        $INPUTS.target
+        $ARGUMENTS

@@ -13,12 +13,6 @@ Concern ownership:
 $INPUTS.order
 ```
 
-Authoritative assessor outputs:
-
-```json
-$INPUTS.diagnoses
-```
-
 Implementer report:
 
 ```json
@@ -38,13 +32,11 @@ Inspect the complete diff against `$BASE_BRANCH` and the relevant current code.
 Review only test correctness and class drift:
 
 1. Every diagnosis assigned by `order.diagnosis_ids` is addressed.
-2. The diagnosed mechanism is gone, not moved into a shared hook, concurrent
-   fan-out, helper, or another deadline.
+2. Each diagnosed mechanism is gone and none of its `forbidden_residuals`
+   remains.
 3. Every behavioral invariant remains meaningfully asserted.
-4. No timeout increase, retry, sleep, tolerance widening, skip, platform guard,
-   or assertion weakening was introduced.
-5. The targeted and broad commands are appropriate. A local validation result
+4. The targeted and broad commands are appropriate. A local validation result
    with `green: false` is authoritative and must be rejected.
 
-Approve only when all five hold. Findings must cite a diagnosis ID, concrete
+Approve only when all four hold. Findings must cite a diagnosis ID, concrete
 diff evidence, and the required correction. Structured output only.
