@@ -34,6 +34,12 @@ import { readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 const REPO_ROOT = join(import.meta.dir, '..');
+
+// join() emits backslashes on Windows; reported paths and the fixture assertion
+// below use one spelling so the test means the same thing on every platform (#2954).
+function relativePath(file: string): string {
+  return file.slice(REPO_ROOT.length + 1).replaceAll('\\', '/');
+}
 const WORKFLOWS_ROOT = join(REPO_ROOT, '.archon', 'workflows');
 
 interface Violation {
@@ -104,7 +110,7 @@ function findViolations(): Violation[] {
         if (outputFormat === undefined) continue;
         const nodeId = String((node as { id?: unknown }).id ?? '(unnamed)');
         for (const found of underRequiredNodes(outputFormat, 'output_format')) {
-          violations.push({ workflow: file.slice(REPO_ROOT.length + 1), nodeId, ...found });
+          violations.push({ workflow: relativePath(file), nodeId, ...found });
         }
       }
     }
@@ -136,9 +142,7 @@ describe('bundled output_format schemas satisfy OpenAI strict mode (#1843)', () 
       for (const top of doc.nodes ?? []) {
         for (const node of withBodyNodes(top)) {
           if ((node as { output_format?: unknown }).output_format !== undefined) {
-            seen.push(
-              `${file.slice(REPO_ROOT.length + 1)}:${String((node as { id?: unknown }).id)}`
-            );
+            seen.push(`${relativePath(file)}:${String((node as { id?: unknown }).id)}`);
           }
         }
       }
