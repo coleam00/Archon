@@ -140,4 +140,25 @@ describe('test-suite change decision', () => {
     );
     expect(changesJob).toContain('echo "run-tests=$run_tests" >> "$GITHUB_OUTPUT"');
   });
+
+  test('the workflow fixture gate feeds the required test-suite result', () => {
+    const workflow = readFileSync(
+      resolve(import.meta.dir, '../.github/workflows/test.yml'),
+      'utf8'
+    ).replaceAll('\r\n', '\n');
+    const workflowFixtures = workflow.slice(
+      workflow.indexOf('  workflow-fixtures:'),
+      workflow.indexOf('  test:')
+    );
+    const testSuite = workflow.slice(workflow.indexOf('  test-suite:'));
+
+    expect(workflowFixtures).toContain('needs: changes');
+    expect(workflowFixtures).toContain("if: needs.changes.outputs.run-tests == 'true'");
+    expect(workflowFixtures).toContain('runs-on: ubuntu-latest');
+    expect(workflowFixtures).toContain('run: bun install --frozen-lockfile');
+    expect(workflowFixtures).toContain('run: bun run cli workflow test --json');
+    expect(testSuite).toContain('workflow-fixtures');
+    expect(testSuite).toContain('WORKFLOW_FIXTURES: ${{ needs.workflow-fixtures.result }}');
+    expect(testSuite).toContain('"$WORKFLOW_FIXTURES"');
+  });
 });

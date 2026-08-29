@@ -93,11 +93,6 @@ jobs:
           fi
           echo "all_success correctly failed the node"
 
-      # Declared dry-run fixtures (#2772). Exits 0 with "no fixtures found" until a
-      # fixture-bearing workflow merges; fails once any declared fixture regresses.
-      - name: Dry-run fixture suite
-        run: bun run cli workflow test --json
-
   # ─── Tier 1b: Container isolation (Docker, no API keys needed) ──────────
   # Deterministic slice of the container-isolation e2e (folder project +
   # --container). Bash-node-only, so no AI credential is required. Gated on
