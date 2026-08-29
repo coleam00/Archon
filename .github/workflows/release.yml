@@ -277,7 +277,7 @@ jobs:
       - name: Generate checksums
         run: |
           cd dist
-          sha256sum archon-* archon-web.tar.gz > checksums.txt
+          sha256sum archon-* > checksums.txt
           cat checksums.txt
 
       - name: Get version
