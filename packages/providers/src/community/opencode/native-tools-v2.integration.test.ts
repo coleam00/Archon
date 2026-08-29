@@ -1,6 +1,7 @@
 import { expect, mock, test } from 'bun:test';
 
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { removeTempTree } from '@archon/paths/test-utils';
+import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -220,6 +221,6 @@ test('pinned V2 daemon invokes a native tool through the provider boundary', asy
     if (previousModelsFetch === undefined) delete process.env.OPENCODE_DISABLE_MODELS_FETCH;
     else process.env.OPENCODE_DISABLE_MODELS_FETCH = previousModelsFetch;
     modelServer.stop(true);
-    await rm(cwd, { recursive: true, force: true });
+    await removeTempTree(cwd);
   }
 }, 30_000);
