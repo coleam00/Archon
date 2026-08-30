@@ -789,7 +789,8 @@ export class WorktreeProvider implements IIsolationProvider {
       const baseBranch = await this.syncWorkspaceBeforeCreate(
         repoPath,
         preferredBaseBranch,
-        remote
+        remote,
+        request.authToken
       );
 
       if (isPRIsolationRequest(request)) {
@@ -928,7 +929,8 @@ export class WorktreeProvider implements IIsolationProvider {
   private async syncWorkspaceBeforeCreate(
     repoPath: RepoPath,
     configuredBaseBranch?: string,
-    remote = 'origin'
+    remote = 'origin',
+    authToken?: string
   ): Promise<string> {
     try {
       getLog().debug(
@@ -943,7 +945,7 @@ export class WorktreeProvider implements IIsolationProvider {
       const { branch } = await syncWorkspace(
         repoPath,
         configuredBaseBranch ? toBranchName(configuredBaseBranch) : undefined,
-        { mode: isManagedClone ? 'reset' : 'fast-forward', remote }
+        { mode: isManagedClone ? 'reset' : 'fast-forward', remote, authToken }
       );
       getLog().debug({ repoPath, branch, remote }, 'workspace_synced');
       return branch;

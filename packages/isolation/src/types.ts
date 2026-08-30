@@ -86,6 +86,14 @@ interface IsolationRequestBase {
    * ambient git identity (unchanged behavior).
    */
   gitIdentity?: { email: string; name?: string };
+
+  /** Archon user ID of the initiating user. Passed to syncWorkspaceBeforeCreate
+   * so thread worktree syncs can resolve user credentials. */
+  userId?: string;
+
+  /** Pre-resolved PAT — populated by orchestrator/server before building the request
+   * when running under per-user GitHub mode, so sync operations can authenticate. */
+  authToken?: string;
 }
 
 export interface IssueIsolationRequest extends IsolationRequestBase {
@@ -395,6 +403,8 @@ export interface ResolveRequest {
    * IsolationRequest passed to the provider. Absent → ambient git identity.
    */
   gitIdentity?: { email: string; name?: string };
+  /** Pre-resolved PAT when running under per-user GitHub mode, so initial sync can authenticate. */
+  authToken?: string;
 }
 
 export type ResolutionMethod =

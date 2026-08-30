@@ -96,6 +96,7 @@ import {
   type SendMessageContext,
 } from './executor-shared';
 import { resolveGithubTokenOverrides } from './utils/github-token-policy';
+import { deriveRunToken } from '@archon/core';
 import {
   buildAiProfile,
   applyResolvedRunModelOverrides,
@@ -2757,7 +2758,10 @@ export async function executeWorkflow(
     executionUserId,
     artifactsDir
   );
-  config.envVars = { ...config.envVars, ...userProviderEnv };
+  const runCredentialEnv: Record<string, string> = workflowRun
+    ? { ARCHON_RUN_ID: workflowRun.id, ARCHON_RUN_TOKEN: deriveRunToken(workflowRun.id) }
+    : {};
+  config.envVars = { ...config.envVars, ...userProviderEnv, ...runCredentialEnv };
   for (const key of Object.keys(userProviderEnv)) {
     protectedEnvKeys.add(key);
   }

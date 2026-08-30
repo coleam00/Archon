@@ -73,6 +73,7 @@ import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
 import { isPerUserGitHubEnabled } from '../github-auth/config';
 import { getDecryptedAccessToken } from '../db/user-github-token-store';
+import { deriveSessionToken } from '../utils/run-token';
 import { isPerUserProviderKeysEnabled } from '../credentials/config';
 import { deliverCredential } from '../credentials/delivery';
 import { listDecryptedUserProviderCredentials } from '../db/user-provider-key-store';
@@ -2459,7 +2460,22 @@ export async function handleMessage(
         ? await resolveUserProviderEnvForChat(executionUserId)
         : {};
     const protectedEnvKeys = Object.keys(userProviderEnv);
-    const effectiveEnv = { ...(config.envVars ?? {}), ...dbEnvVars, ...userProviderEnv };
+    // Session-scoped git credential env (issue #223): give the credential helper
+    // a session token so git operations in the orchestrator / direct-chat context
+    // authenticate as the session user via the /internal/git-credential endpoint.
+    const sessionCredentialEnv: Record<string, string> =
+      isPerUserGitHubEnabled() && executionUserId
+        ? {
+            ARCHON_SESSION_ID: conversation.id,
+            ARCHON_SESSION_TOKEN: deriveSessionToken(conversation.id),
+          }
+        : {};
+    const effectiveEnv = {
+      ...(config.envVars ?? {}),
+      ...dbEnvVars,
+      ...userProviderEnv,
+      ...sessionCredentialEnv,
+    };
 
     // Warn if provider doesn't support env injection but env vars are configured
     if (Object.keys(effectiveEnv).length > 0) {

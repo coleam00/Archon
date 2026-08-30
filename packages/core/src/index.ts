@@ -277,3 +277,14 @@ export { getPort } from './utils/port-allocation';
 
 // Worktree sync
 export { resolveWorkflowSourceRoot } from './utils/workflow-source-root';
+
+// HMAC run and session tokens for credential broker
+export {
+  deriveRunToken,
+  verifyRunToken,
+  deriveSessionToken,
+  verifySessionToken,
+  RUN_TOKEN_PREFIX,
+  SESSION_TOKEN_PREFIX,
+} from './utils/run-token';
+export { resolveActingUserId } from './utils/resolve-acting-user-id';

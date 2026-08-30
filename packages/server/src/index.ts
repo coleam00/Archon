@@ -111,6 +111,9 @@ import {
 import type { IPlatformAdapter } from '@archon/core';
 import type { IdentityPlatform } from '@archon/core';
 import * as userDb from '@archon/core/db/users';
+import { getWorkflowRun } from '@archon/core/db/workflows';
+import { verifyRunToken, verifySessionToken } from '@archon/core';
+import { getConversationById } from '@archon/core/db/conversations';
 import * as conversationDb from '@archon/core/db/conversations';
 import type { IWorkflowPlatform } from '@archon/workflows/deps';
 import {
@@ -754,6 +757,10 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     const gitCredentialRequestSchema = z.object({
       host: z.string().optional(),
       path: z.string().optional(),
+      runId: z.string().optional(),
+      runToken: z.string().optional(),
+      sessionId: z.string().optional(),
+      sessionToken: z.string().optional(),
     });
 
     app.post('/internal/git-credential', async c => {
@@ -767,12 +774,52 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         if (!parsed) {
           return c.json({ error: 'unparseable path' }, 400);
         }
-        const token = await github.getInstallationToken(parsed.owner, parsed.repo);
-        return c.json({ token });
+
+        const { runId, runToken, sessionId, sessionToken } = parseResult.data;
+
+        // Path 1: run-scoped credential (workflow context).
+        if (runId && runToken) {
+          if (!verifyRunToken(runId, runToken)) {
+            getLog().warn({ runId }, 'internal.git_credential_invalid_run_token');
+            return c.json({ error: 'invalid run credential' }, 403);
+          }
+          const run = await getWorkflowRun(runId);
+          if (!run || !['pending', 'running'].includes(run.status)) {
+            getLog().warn({ runId, status: run?.status }, 'internal.git_credential_run_not_active');
+            return c.json({ error: 'run not active' }, 403);
+          }
+          if (run.user_id) {
+            const runUserToken = await getDecryptedAccessToken(run.user_id);
+            if (runUserToken) {
+              return c.json({ token: runUserToken });
+            }
+          }
+        }
+
+        // Path 2: session-scoped credential (orchestrator / direct-chat context — issue #223).
+        if (sessionId && sessionToken) {
+          if (!verifySessionToken(sessionId, sessionToken)) {
+            getLog().warn({ sessionId }, 'internal.git_credential_invalid_session_token');
+            return c.json({ error: 'invalid session credential' }, 403);
+          }
+          const conversation = await getConversationById(sessionId);
+          if (conversation?.user_id) {
+            const sessionUserToken = await getDecryptedAccessToken(conversation.user_id);
+            if (sessionUserToken) {
+              return c.json({ token: sessionUserToken });
+            }
+          }
+        }
+
+        // App installation token fallback (when GitHub App provider is registered)
+        if (githubAppAuthProvider) {
+          const token = await githubAppAuthProvider.getInstallationToken(parsed.owner, parsed.repo);
+          return c.json({ token });
+        }
+
+        return c.json({ error: 'no valid credential presented' }, 403);
       } catch (err) {
-        // ERROR (not WARN): this is a live credential-vending failure. If we
-        // can't issue a token, every workflow `git push` and `gh` call against
-        // that repo will start failing — operators need this surfaced loudly.
+        // ERROR (not WARN): this is a live credential-vending failure.
         getLog().error({ err }, 'internal.git_credential_resolve_failed');
         return c.json({ error: 'resolution failed' }, 500);
       }

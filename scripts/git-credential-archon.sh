@@ -1,5 +1,5 @@
 #!/bin/sh
-# Git credential helper for the Archon GitHub App.
+# Git credential helper for Archon GitHub authentication.
 #
 # Called by git when authenticating against github.com on a worktree where
 # this helper is configured via `git config credential.helper`.
@@ -51,16 +51,34 @@ case "$path" in
     ;;
 esac
 
+run_id="${ARCHON_RUN_ID:-}"
+run_token="${ARCHON_RUN_TOKEN:-}"
+session_id="${ARCHON_SESSION_ID:-}"
+session_token="${ARCHON_SESSION_TOKEN:-}"
+
+# Require at least one valid Archon credential context. Exit 1 only when
+# neither run nor session credentials are present so git does not silently
+# fall through to a less-privileged helper.
+if { [ -z "$run_id" ] || [ -z "$run_token" ]; } && \
+   { [ -z "$session_id" ] || [ -z "$session_token" ]; }; then
+  exit 1
+fi
+
 port="${ARCHON_PORT:-3090}"
 url="http://127.0.0.1:$port/internal/git-credential"
 
-# Capture stderr separately so a curl failure (server unreachable, 5xx) can
-# be surfaced to the workflow without leaking through git's interactive
-# prompt path. --connect-timeout / --max-time keep git from blocking
-# indefinitely when Archon isn't listening on the expected port.
+# Run credentials take priority (workflow context); session credentials are the
+# fallback for orchestrator / direct-chat context (issue #223).
+if [ -n "$run_id" ] && [ -n "$run_token" ]; then
+  payload="{\"host\":\"$host\",\"path\":\"$path\",\"runId\":\"$run_id\",\"runToken\":\"$run_token\"}"
+else
+  payload="{\"host\":\"$host\",\"path\":\"$path\",\"sessionId\":\"$session_id\",\"sessionToken\":\"$session_token\"}"
+fi
+
 resp=$(curl -fsS --connect-timeout 2 --max-time 5 -X POST \
   -H 'Content-Type: application/json' \
-  -d "{\"host\":\"$host\",\"path\":\"$path\"}" "$url" 2>/tmp/git-credential-archon.curlerr)
+  -d "$payload" "$url" \
+  2>/tmp/git-credential-archon.curlerr)
 curl_status=$?
 if [ "$curl_status" -ne 0 ]; then
   printf 'git-credential-archon: curl to %s failed (exit %d): %s\n' \

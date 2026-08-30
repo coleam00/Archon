@@ -153,7 +153,7 @@ export async function getRemoteUrl(repoPath: RepoPath, remote = 'origin'): Promi
 export async function syncWorkspace(
   workspacePath: RepoPath,
   baseBranch?: BranchName,
-  options?: { mode?: WorkspaceSyncMode; remote?: string }
+  options?: { mode?: WorkspaceSyncMode; remote?: string; authToken?: string }
 ): Promise<WorkspaceSyncResult> {
   const mode = options?.mode ?? 'fast-forward';
   const remote = options?.remote ?? 'origin';
