@@ -107,6 +107,7 @@ mock.module('../db/conversations', () => ({
 }));
 
 const mockListCodebases = mock(() => Promise.resolve([] as unknown[]));
+const mockListCodebasesForUser = mock((_userId?: string) => Promise.resolve([] as unknown[]));
 const mockCreateCodebase = mock(() => Promise.resolve({ id: 'new-codebase-id' }));
 const mockUpdateCodebase = mock(() => Promise.resolve());
 class MockCodebaseNotFoundError extends Error {
@@ -115,9 +116,12 @@ class MockCodebaseNotFoundError extends Error {
     this.name = 'CodebaseNotFoundError';
   }
 }
+const mockGrantAccess = mock(() => Promise.resolve());
 mock.module('../db/codebases', () => ({
   getCodebase: mockGetCodebase,
   listCodebases: mockListCodebases,
+  listCodebasesForUser: mockListCodebasesForUser,
+  grantAccess: mockGrantAccess,
   createCodebase: mockCreateCodebase,
   updateCodebase: mockUpdateCodebase,
   CodebaseNotFoundError: MockCodebaseNotFoundError,
@@ -466,7 +470,10 @@ function makeCodebase(name: string, id = `id-${name}`): Codebase {
 // Deliberately no count here: any number rots on the next test added, and the
 // mechanism is the argument.
 beforeEach(() => {
+  delete process.env.ARCHON_WEB_AUTH_HEADER;
   mockExistsSync.mockImplementation(() => true);
+  mockListCodebases.mockImplementation(() => Promise.resolve([]));
+  mockListCodebasesForUser.mockImplementation(() => Promise.resolve([]));
 });
 
 // ─── parseOrchestratorCommands ────────────────────────────────────────────────
@@ -1545,11 +1552,12 @@ describe('provider cwd resolution', () => {
     const conversation = makeConversation({ codebase_id: 'codebase-1' });
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
-    mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
+    mockListCodebasesForUser.mockReturnValueOnce(Promise.resolve([codebase]));
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'hello');
+    await handleMessage(platform, 'conv-1', 'hello', { userId: 'user-123' });
 
+    expect(mockListCodebasesForUser).toHaveBeenCalledWith('user-123');
     expect(getSendQueryCwd()).toBe('/repos/test-repo');
     expect(mockEnsureArchonWorkspacesPath).not.toHaveBeenCalled();
   });
@@ -1562,11 +1570,12 @@ describe('provider cwd resolution', () => {
     });
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
-    mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
+    mockListCodebasesForUser.mockReturnValueOnce(Promise.resolve([codebase]));
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'hello');
+    await handleMessage(platform, 'conv-1', 'hello', { userId: 'user-123' });
 
+    expect(mockListCodebasesForUser).toHaveBeenCalledWith('user-123');
     expect(getSendQueryCwd()).toBe('/worktrees/feature-branch');
     expect(mockEnsureArchonWorkspacesPath).not.toHaveBeenCalled();
   });
@@ -3792,7 +3801,7 @@ describe('paused approval gate routing', () => {
 
     expect(mockGetPausedWorkflowRun).not.toHaveBeenCalled();
     expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
-    expect(mockHandleCommand).toHaveBeenCalledWith(conversation, '   /status');
+    expect(mockHandleCommand).toHaveBeenCalledWith(conversation, '   /status', undefined);
     expect(platform.sendMessage).toHaveBeenCalledWith('conv-1', 'status ok');
   });
 
@@ -3897,6 +3906,7 @@ describe('handleWorkflowRunCommand — E2 single codebase auto-select', () => {
     mockGetOrCreateConversation.mockReset();
     mockGetCodebase.mockReset();
     mockListCodebases.mockReset();
+    mockListCodebasesForUser.mockReset();
     mockParseCommand.mockReset();
     mockHandleCommand.mockReset();
     mockDiscoverWorkflowsWithConfig.mockReset();
@@ -3908,6 +3918,7 @@ describe('handleWorkflowRunCommand — E2 single codebase auto-select', () => {
     mockGetOrCreateConversation.mockImplementation(() => Promise.resolve(null));
     mockGetCodebase.mockImplementation(() => Promise.resolve(null));
     mockListCodebases.mockImplementation(() => Promise.resolve([]));
+    mockListCodebasesForUser.mockImplementation(() => Promise.resolve([]));
     mockDiscoverWorkflowsWithConfig.mockImplementation(() =>
       Promise.resolve({ workflows: [], errors: [] })
     );
@@ -3927,7 +3938,7 @@ describe('handleWorkflowRunCommand — E2 single codebase auto-select', () => {
       })
     );
     // Single codebase triggers auto-select
-    mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
+    mockListCodebasesForUser.mockReturnValueOnce(Promise.resolve([codebase]));
     // discoverWorkflowsWithConfig returns WorkflowWithSource[]
     mockDiscoverWorkflowsWithConfig.mockReturnValueOnce(
       Promise.resolve({
@@ -3940,9 +3951,12 @@ describe('handleWorkflowRunCommand — E2 single codebase auto-select', () => {
     );
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/workflow run assist test prompt');
+    await handleMessage(platform, 'conv-1', '/workflow run assist test prompt', {
+      userId: 'user-123',
+    });
 
     // Should auto-select the codebase and update conversation
+    expect(mockListCodebasesForUser).toHaveBeenCalledWith('user-123');
     expect(mockUpdateConversation).toHaveBeenCalledWith('conv-1-db', { codebase_id: codebase.id });
     expect(mockDispatchBackgroundWorkflow).toHaveBeenCalled();
   });
@@ -3967,7 +3981,7 @@ describe('handleWorkflowRunCommand — E2 single codebase auto-select', () => {
         },
       })
     );
-    mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
+    mockListCodebasesForUser.mockReturnValueOnce(Promise.resolve([codebase]));
     // This branch re-resolves against the project's own discovery and uses that
     // entry's warnings (see the shadowing test below), so they belong here too.
     mockDiscoverWorkflowsWithConfig.mockReturnValueOnce(
@@ -3982,8 +3996,11 @@ describe('handleWorkflowRunCommand — E2 single codebase auto-select', () => {
     );
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/workflow run assist test prompt');
+    await handleMessage(platform, 'conv-1', '/workflow run assist test prompt', {
+      userId: 'user-123',
+    });
 
+    expect(mockListCodebasesForUser).toHaveBeenCalledWith('user-123');
     expect(platform.sendMessage).toHaveBeenCalledWith(
       'conv-1',
       expect.stringContaining("unknown key 'interactive' will be ignored")
@@ -4012,7 +4029,7 @@ describe('handleWorkflowRunCommand — E2 single codebase auto-select', () => {
         },
       })
     );
-    mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
+    mockListCodebasesForUser.mockReturnValueOnce(Promise.resolve([codebase]));
     mockDiscoverWorkflowsWithConfig.mockReturnValueOnce(
       Promise.resolve({
         workflows: [
@@ -4025,8 +4042,11 @@ describe('handleWorkflowRunCommand — E2 single codebase auto-select', () => {
     );
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/workflow run assist test prompt');
+    await handleMessage(platform, 'conv-1', '/workflow run assist test prompt', {
+      userId: 'user-123',
+    });
 
+    expect(mockListCodebasesForUser).toHaveBeenCalledWith('user-123');
     expect(platform.sendMessage).toHaveBeenCalledWith('conv-1', expect.stringContaining('FRESH:'));
     expect(platform.sendMessage).not.toHaveBeenCalledWith(
       'conv-1',
@@ -4050,7 +4070,7 @@ describe('handleWorkflowRunCommand — E2 single codebase auto-select', () => {
         workflow: { definition: assistWorkflow, args: 'test prompt' },
       })
     );
-    mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
+    mockListCodebasesForUser.mockReturnValueOnce(Promise.resolve([codebase]));
     mockDiscoverWorkflowsWithConfig.mockReturnValueOnce(
       Promise.resolve({
         workflows: [
@@ -4074,8 +4094,11 @@ describe('handleWorkflowRunCommand — E2 single codebase auto-select', () => {
     );
 
     // Must not throw: an undeliverable warning cannot fail the run.
-    await handleMessage(platform, 'conv-1', '/workflow run assist test prompt');
+    await handleMessage(platform, 'conv-1', '/workflow run assist test prompt', {
+      userId: 'user-123',
+    });
 
+    expect(mockListCodebasesForUser).toHaveBeenCalledWith('user-123');
     // The run still started, and it carries the warnings — so the executor
     // records them as a `workflow_parse_warnings` event regardless of delivery.
     expect(mockDispatchBackgroundWorkflow).toHaveBeenCalled();
@@ -4097,7 +4120,7 @@ describe('handleWorkflowRunCommand — E2 single codebase auto-select', () => {
         workflow: { definition: assistWorkflow, args: 'test prompt' },
       })
     );
-    mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
+    mockListCodebasesForUser.mockReturnValueOnce(Promise.resolve([codebase]));
     mockDiscoverWorkflowsWithConfig.mockReturnValueOnce(
       Promise.resolve({
         workflows: [makeTestWorkflowWithSource({ name: 'assist' })],
@@ -4106,8 +4129,11 @@ describe('handleWorkflowRunCommand — E2 single codebase auto-select', () => {
     );
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/workflow run assist test prompt');
+    await handleMessage(platform, 'conv-1', '/workflow run assist test prompt', {
+      userId: 'user-123',
+    });
 
+    expect(mockListCodebasesForUser).toHaveBeenCalledWith('user-123');
     expect(platform.sendMessage).not.toHaveBeenCalledWith(
       'conv-1',
       expect.stringContaining('declares keys the engine ignores')
@@ -4233,7 +4259,7 @@ describe('handleWorkflowRunCommand — E2 single codebase auto-select', () => {
         workflow: { definition: upperWorkflow, args: 'test' },
       })
     );
-    mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
+    mockListCodebasesForUser.mockReturnValueOnce(Promise.resolve([codebase]));
     // Workflow name in discovery is lowercase 'assist', but request is 'Assist'
     mockDiscoverWorkflowsWithConfig.mockReturnValueOnce(
       Promise.resolve({
@@ -4243,8 +4269,9 @@ describe('handleWorkflowRunCommand — E2 single codebase auto-select', () => {
     );
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/workflow run Assist test');
+    await handleMessage(platform, 'conv-1', '/workflow run Assist test', { userId: 'user-123' });
 
+    expect(mockListCodebasesForUser).toHaveBeenCalledWith('user-123');
     expect(mockUpdateConversation).toHaveBeenCalledWith('conv-1-db', { codebase_id: codebase.id });
     expect(mockDispatchBackgroundWorkflow).toHaveBeenCalled();
   });
@@ -4261,7 +4288,7 @@ describe('handleWorkflowRunCommand — E2 single codebase auto-select', () => {
         workflow: { definition: makeTestWorkflow({ name: 'missing' }), args: 'test' },
       })
     );
-    mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
+    mockListCodebasesForUser.mockReturnValueOnce(Promise.resolve([codebase]));
     mockDiscoverWorkflowsWithConfig.mockReturnValueOnce(
       Promise.resolve({
         workflows: [makeTestWorkflowWithSource({ name: 'assist' })],
@@ -4270,8 +4297,9 @@ describe('handleWorkflowRunCommand — E2 single codebase auto-select', () => {
     );
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/workflow run missing test');
+    await handleMessage(platform, 'conv-1', '/workflow run missing test', { userId: 'user-123' });
 
+    expect(mockListCodebasesForUser).toHaveBeenCalledWith('user-123');
     expect(platform.sendMessage).toHaveBeenCalledWith(
       'conv-1',
       expect.stringContaining('not found')
@@ -4291,12 +4319,13 @@ describe('handleWorkflowRunCommand — E2 single codebase auto-select', () => {
         workflow: { definition: assistWorkflow, args: 'test' },
       })
     );
-    mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
+    mockListCodebasesForUser.mockReturnValueOnce(Promise.resolve([codebase]));
     mockDiscoverWorkflowsWithConfig.mockRejectedValueOnce(new Error('YAML parse error'));
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/workflow run assist test');
+    await handleMessage(platform, 'conv-1', '/workflow run assist test', { userId: 'user-123' });
 
+    expect(mockListCodebasesForUser).toHaveBeenCalledWith('user-123');
     expect(platform.sendMessage).toHaveBeenCalledWith(
       'conv-1',
       expect.stringContaining('Failed to load workflows')
@@ -4662,7 +4691,7 @@ describe('handleMessage — multi-chunk command accumulation (regression)', () =
   });
 
   test('stream mode — invoke-workflow split across 2 chunks', async () => {
-    mockListCodebases.mockReturnValueOnce(Promise.resolve([makeCodebase('my-project')]));
+    mockListCodebasesForUser.mockReturnValueOnce(Promise.resolve([makeCodebase('my-project')]));
     mockDiscoverWorkflowsWithConfig.mockReturnValueOnce(
       Promise.resolve({ workflows: [makeTestWorkflowWithSource({ name: 'assist' })], errors: [] })
     );
@@ -4674,14 +4703,15 @@ describe('handleMessage — multi-chunk command accumulation (regression)', () =
 
     const platform = makePlatform();
     (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('stream');
-    await handleMessage(platform, 'conv-1', 'run assist on my-project');
+    await handleMessage(platform, 'conv-1', 'run assist on my-project', { userId: 'user-123' });
 
+    expect(mockListCodebasesForUser).toHaveBeenCalledWith('user-123');
     expect(mockDispatchBackgroundWorkflow).toHaveBeenCalled();
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
 
   test('batch mode — invoke-workflow split across 2 chunks', async () => {
-    mockListCodebases.mockReturnValueOnce(Promise.resolve([makeCodebase('my-project')]));
+    mockListCodebasesForUser.mockReturnValueOnce(Promise.resolve([makeCodebase('my-project')]));
     mockDiscoverWorkflowsWithConfig.mockReturnValueOnce(
       Promise.resolve({ workflows: [makeTestWorkflowWithSource({ name: 'assist' })], errors: [] })
     );
@@ -4693,8 +4723,9 @@ describe('handleMessage — multi-chunk command accumulation (regression)', () =
 
     const platform = makePlatform();
     (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('batch');
-    await handleMessage(platform, 'conv-1', 'run assist on my-project');
+    await handleMessage(platform, 'conv-1', 'run assist on my-project', { userId: 'user-123' });
 
+    expect(mockListCodebasesForUser).toHaveBeenCalledWith('user-123');
     expect(mockDispatchBackgroundWorkflow).toHaveBeenCalled();
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
@@ -4704,7 +4735,7 @@ describe('handleMessage — multi-chunk command accumulation (regression)', () =
     // --project <token> arrives without a line terminator, because --prompt may follow
     // in the next chunk. Without this fix, commandFullyParsed fires early and the
     // --prompt chunk is never accumulated, causing synthesizedPrompt to be lost.
-    mockListCodebases.mockReturnValueOnce(Promise.resolve([makeCodebase('my-project')]));
+    mockListCodebasesForUser.mockReturnValueOnce(Promise.resolve([makeCodebase('my-project')]));
     mockDiscoverWorkflowsWithConfig.mockReturnValueOnce(
       Promise.resolve({ workflows: [makeTestWorkflowWithSource({ name: 'assist' })], errors: [] })
     );
@@ -4719,9 +4750,10 @@ describe('handleMessage — multi-chunk command accumulation (regression)', () =
 
     const platform = makePlatform();
     (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('stream');
-    await handleMessage(platform, 'conv-1', 'original user message');
+    await handleMessage(platform, 'conv-1', 'original user message', { userId: 'user-123' });
 
     // Workflow was dispatched with the synthesized prompt, not the original user message.
+    expect(mockListCodebasesForUser).toHaveBeenCalledWith('user-123');
     expect(mockDispatchBackgroundWorkflow).toHaveBeenCalledWith(
       expect.objectContaining({ originalMessage: 'synthesized task description' }),
       expect.anything()
@@ -4729,7 +4761,7 @@ describe('handleMessage — multi-chunk command accumulation (regression)', () =
   });
 
   test('batch mode — invoke-workflow with --prompt split into a later chunk', async () => {
-    mockListCodebases.mockReturnValueOnce(Promise.resolve([makeCodebase('my-project')]));
+    mockListCodebasesForUser.mockReturnValueOnce(Promise.resolve([makeCodebase('my-project')]));
     mockDiscoverWorkflowsWithConfig.mockReturnValueOnce(
       Promise.resolve({ workflows: [makeTestWorkflowWithSource({ name: 'assist' })], errors: [] })
     );
@@ -4744,8 +4776,9 @@ describe('handleMessage — multi-chunk command accumulation (regression)', () =
 
     const platform = makePlatform();
     (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('batch');
-    await handleMessage(platform, 'conv-1', 'original user message');
+    await handleMessage(platform, 'conv-1', 'original user message', { userId: 'user-123' });
 
+    expect(mockListCodebasesForUser).toHaveBeenCalledWith('user-123');
     expect(mockDispatchBackgroundWorkflow).toHaveBeenCalledWith(
       expect.objectContaining({ originalMessage: 'synthesized task description' }),
       expect.anything()
@@ -4986,6 +5019,7 @@ describe('handleMessage — /setproject dispatch', () => {
   beforeEach(() => {
     mockGetOrCreateConversation.mockReset();
     mockListCodebases.mockReset();
+    mockListCodebasesForUser.mockReset();
     mockUpdateConversation.mockReset();
     mockParseCommand.mockReset();
     mockGetActiveSession.mockReset();
@@ -4993,6 +5027,7 @@ describe('handleMessage — /setproject dispatch', () => {
 
     mockUpdateConversation.mockImplementation(() => Promise.resolve());
     mockListCodebases.mockImplementation(() => Promise.resolve([]));
+    mockListCodebasesForUser.mockImplementation(() => Promise.resolve([]));
     mockGetActiveSession.mockImplementation(() => Promise.resolve(null));
     mockDeactivateSession.mockImplementation(() => Promise.resolve());
     mockGetOrCreateConversation.mockImplementation(() =>
@@ -5013,12 +5048,13 @@ describe('handleMessage — /setproject dispatch', () => {
         })
       )
     );
-    mockListCodebases.mockImplementation(() => Promise.resolve([cb]));
+    mockListCodebasesForUser.mockImplementation(() => Promise.resolve([cb]));
     mockParseCommand.mockReturnValue({ command: 'setproject', args: ['my-app'] });
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/setproject my-app');
+    await handleMessage(platform, 'conv-1', '/setproject my-app', { userId: 'user-123' });
 
+    expect(mockListCodebasesForUser).toHaveBeenCalledWith('user-123');
     expect(mockUpdateConversation).toHaveBeenCalledWith('db-conv-1', {
       codebase_id: 'id-my-app',
       cwd: null,
@@ -5039,12 +5075,13 @@ describe('handleMessage — /setproject dispatch', () => {
         })
       )
     );
-    mockListCodebases.mockImplementation(() => Promise.resolve([cb]));
+    mockListCodebasesForUser.mockImplementation(() => Promise.resolve([cb]));
     mockParseCommand.mockReturnValue({ command: 'setproject', args: ['my-app'] });
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/setproject my-app');
+    await handleMessage(platform, 'conv-1', '/setproject my-app', { userId: 'user-123' });
 
+    expect(mockListCodebasesForUser).toHaveBeenCalledWith('user-123');
     expect(mockUpdateConversation).toHaveBeenCalledWith('db-conv-ci', {
       codebase_id: 'id-My-App',
       cwd: null,
@@ -5063,12 +5100,13 @@ describe('handleMessage — /setproject dispatch', () => {
         })
       )
     );
-    mockListCodebases.mockImplementation(() => Promise.resolve([cb]));
+    mockListCodebasesForUser.mockImplementation(() => Promise.resolve([cb]));
     mockParseCommand.mockReturnValue({ command: 'setproject', args: ['my-web'] });
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/setproject my-web');
+    await handleMessage(platform, 'conv-1', '/setproject my-web', { userId: 'user-123' });
 
+    expect(mockListCodebasesForUser).toHaveBeenCalledWith('user-123');
     expect(mockUpdateConversation).toHaveBeenCalledWith('db-conv-px', {
       codebase_id: 'id-my-website',
       cwd: null,
@@ -5087,12 +5125,13 @@ describe('handleMessage — /setproject dispatch', () => {
         })
       )
     );
-    mockListCodebases.mockImplementation(() => Promise.resolve([cb]));
+    mockListCodebasesForUser.mockImplementation(() => Promise.resolve([cb]));
     mockParseCommand.mockReturnValue({ command: 'setproject', args: ['my-api'] });
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/setproject my-api');
+    await handleMessage(platform, 'conv-1', '/setproject my-api', { userId: 'user-123' });
 
+    expect(mockListCodebasesForUser).toHaveBeenCalledWith('user-123');
     expect(mockUpdateConversation).toHaveBeenCalledWith('db-conv-ss', {
       codebase_id: 'id-archon-my-api',
       cwd: null,
@@ -5106,7 +5145,7 @@ describe('handleMessage — /setproject dispatch', () => {
     // must update by the DB id, otherwise the UPDATE matches 0 rows and throws
     // "Conversation not found: <platform-id>".
     const cb = makeCodebase('my-app');
-    mockListCodebases.mockImplementation(() => Promise.resolve([cb]));
+    mockListCodebasesForUser.mockImplementation(() => Promise.resolve([cb]));
     mockParseCommand.mockReturnValue({ command: 'setproject', args: ['my-app'] });
     mockGetOrCreateConversation.mockImplementation(() =>
       Promise.resolve(
@@ -5120,8 +5159,9 @@ describe('handleMessage — /setproject dispatch', () => {
     );
 
     const platform = makePlatform();
-    await handleMessage(platform, '40865006', '/setproject my-app');
+    await handleMessage(platform, '40865006', '/setproject my-app', { userId: 'user-123' });
 
+    expect(mockListCodebasesForUser).toHaveBeenCalledWith('user-123');
     expect(mockUpdateConversation).toHaveBeenCalledWith('db-hex-id', {
       codebase_id: 'id-my-app',
       cwd: null,
@@ -5136,21 +5176,22 @@ describe('handleMessage — /setproject dispatch', () => {
 
   test('deactivates active provider session when project changes', async () => {
     const cb = makeCodebase('my-app');
-    mockListCodebases.mockImplementation(() => Promise.resolve([cb]));
+    mockListCodebasesForUser.mockImplementation(() => Promise.resolve([cb]));
     mockParseCommand.mockReturnValue({ command: 'setproject', args: ['my-app'] });
     mockGetActiveSession.mockImplementation(() =>
       Promise.resolve({ id: 'session-123', conversation_id: 'conv-1', active: true })
     );
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/setproject my-app');
+    await handleMessage(platform, 'conv-1', '/setproject my-app', { userId: 'user-123' });
 
+    expect(mockListCodebasesForUser).toHaveBeenCalledWith('user-123');
     expect(mockDeactivateSession).toHaveBeenCalledWith('session-123', 'project-changed');
   });
 
   test('treats SessionNotFoundError during deactivation as benign (TOCTOU race)', async () => {
     const cb = makeCodebase('my-app');
-    mockListCodebases.mockImplementation(() => Promise.resolve([cb]));
+    mockListCodebasesForUser.mockImplementation(() => Promise.resolve([cb]));
     mockParseCommand.mockReturnValue({ command: 'setproject', args: ['my-app'] });
     mockGetActiveSession.mockImplementation(() =>
       Promise.resolve({ id: 'session-gone', conversation_id: 'conv-1', active: true })
@@ -5160,8 +5201,9 @@ describe('handleMessage — /setproject dispatch', () => {
     );
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/setproject my-app');
+    await handleMessage(platform, 'conv-1', '/setproject my-app', { userId: 'user-123' });
 
+    expect(mockListCodebasesForUser).toHaveBeenCalledWith('user-123');
     // The race is benign: the command still completes and reports success.
     const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls
       .map(c => String(c[1]))
@@ -5174,13 +5216,14 @@ describe('handleMessage — /setproject dispatch', () => {
     // db.updateConversation, so a failure here must leave the conversation
     // untouched (no rebound project with the old session still active).
     const cb = makeCodebase('my-app');
-    mockListCodebases.mockImplementation(() => Promise.resolve([cb]));
+    mockListCodebasesForUser.mockImplementation(() => Promise.resolve([cb]));
     mockParseCommand.mockReturnValue({ command: 'setproject', args: ['my-app'] });
     mockGetActiveSession.mockImplementation(() => Promise.reject(new Error('db hiccup')));
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/setproject my-app');
+    await handleMessage(platform, 'conv-1', '/setproject my-app', { userId: 'user-123' });
 
+    expect(mockListCodebasesForUser).toHaveBeenCalledWith('user-123');
     expect(mockUpdateConversation).not.toHaveBeenCalled();
     const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls
       .map(c => String(c[1]))
@@ -5190,7 +5233,7 @@ describe('handleMessage — /setproject dispatch', () => {
 
   test('rethrows non-SessionNotFoundError deactivation failures without rebinding', async () => {
     const cb = makeCodebase('my-app');
-    mockListCodebases.mockImplementation(() => Promise.resolve([cb]));
+    mockListCodebasesForUser.mockImplementation(() => Promise.resolve([cb]));
     mockParseCommand.mockReturnValue({ command: 'setproject', args: ['my-app'] });
     mockGetActiveSession.mockImplementation(() =>
       Promise.resolve({ id: 'session-123', conversation_id: 'conv-1', active: true })
@@ -5198,8 +5241,9 @@ describe('handleMessage — /setproject dispatch', () => {
     mockDeactivateSession.mockImplementation(() => Promise.reject(new Error('db exploded')));
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/setproject my-app');
+    await handleMessage(platform, 'conv-1', '/setproject my-app', { userId: 'user-123' });
 
+    expect(mockListCodebasesForUser).toHaveBeenCalledWith('user-123');
     // Deactivation runs before the rebind, so the conversation stays untouched.
     expect(mockUpdateConversation).not.toHaveBeenCalled();
     // The failure surfaces: no success message, but SOME error reply went out
@@ -5224,12 +5268,13 @@ describe('handleMessage — /setproject dispatch', () => {
         })
       )
     );
-    mockListCodebases.mockImplementation(() => Promise.resolve([cb]));
+    mockListCodebasesForUser.mockImplementation(() => Promise.resolve([cb]));
     mockParseCommand.mockReturnValue({ command: 'setproject', args: ['my-app'] });
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/setproject my-app');
+    await handleMessage(platform, 'conv-1', '/setproject my-app', { userId: 'user-123' });
 
+    expect(mockListCodebasesForUser).toHaveBeenCalledWith('user-123');
     const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls
       .map(c => String(c[1]))
       .join('\n');
@@ -5239,12 +5284,13 @@ describe('handleMessage — /setproject dispatch', () => {
 
   test('omits the worktree note when no isolation env was attached', async () => {
     const cb = makeCodebase('my-app');
-    mockListCodebases.mockImplementation(() => Promise.resolve([cb]));
+    mockListCodebasesForUser.mockImplementation(() => Promise.resolve([cb]));
     mockParseCommand.mockReturnValue({ command: 'setproject', args: ['my-app'] });
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/setproject my-app');
+    await handleMessage(platform, 'conv-1', '/setproject my-app', { userId: 'user-123' });
 
+    expect(mockListCodebasesForUser).toHaveBeenCalledWith('user-123');
     const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls
       .map(c => String(c[1]))
       .join('\n');
@@ -5253,14 +5299,17 @@ describe('handleMessage — /setproject dispatch', () => {
   });
 
   test('returns not-found message listing available projects', async () => {
-    mockListCodebases.mockImplementation(() =>
+    mockListCodebasesForUser.mockImplementation(() =>
       Promise.resolve([makeCodebase('project-a'), makeCodebase('project-b')])
     );
     mockParseCommand.mockReturnValue({ command: 'setproject', args: ['nonexistent'] });
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/setproject nonexistent');
+    await handleMessage(platform, 'conv-1', '/setproject nonexistent', {
+      userId: 'user-123',
+    });
 
+    expect(mockListCodebasesForUser).toHaveBeenCalledWith('user-123');
     expect(mockUpdateConversation).not.toHaveBeenCalled();
     const msg = (platform.sendMessage as ReturnType<typeof mock>).mock.calls[0]?.[1] as string;
     expect(msg).toContain('nonexistent');
@@ -5269,26 +5318,28 @@ describe('handleMessage — /setproject dispatch', () => {
   });
 
   test('returns not-found with /register-project hint when no codebases registered', async () => {
-    mockListCodebases.mockImplementation(() => Promise.resolve([]));
+    mockListCodebasesForUser.mockImplementation(() => Promise.resolve([]));
     mockParseCommand.mockReturnValue({ command: 'setproject', args: ['anything'] });
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/setproject anything');
+    await handleMessage(platform, 'conv-1', '/setproject anything', { userId: 'user-123' });
 
+    expect(mockListCodebasesForUser).toHaveBeenCalledWith('user-123');
     expect(mockUpdateConversation).not.toHaveBeenCalled();
     const msg = (platform.sendMessage as ReturnType<typeof mock>).mock.calls[0]?.[1] as string;
     expect(msg).toContain('/register-project');
   });
 
   test('returns ambiguity message on multiple prefix matches', async () => {
-    mockListCodebases.mockImplementation(() =>
+    mockListCodebasesForUser.mockImplementation(() =>
       Promise.resolve([makeCodebase('app-backend'), makeCodebase('app-frontend')])
     );
     mockParseCommand.mockReturnValue({ command: 'setproject', args: ['app'] });
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/setproject app');
+    await handleMessage(platform, 'conv-1', '/setproject app', { userId: 'user-123' });
 
+    expect(mockListCodebasesForUser).toHaveBeenCalledWith('user-123');
     expect(mockUpdateConversation).not.toHaveBeenCalled();
     const msg = (platform.sendMessage as ReturnType<typeof mock>).mock.calls[0]?.[1] as string;
     expect(msg).toContain('Ambiguous');
@@ -5300,7 +5351,7 @@ describe('handleMessage — /setproject dispatch', () => {
     mockParseCommand.mockReturnValue({ command: 'setproject', args: [] });
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/setproject');
+    await handleMessage(platform, 'conv-1', '/setproject', { userId: 'user-123' });
 
     expect(mockUpdateConversation).not.toHaveBeenCalled();
     expect(platform.sendMessage).toHaveBeenCalledWith('conv-1', expect.stringContaining('Usage'));
@@ -5313,11 +5364,13 @@ describe('handleMessage — /update-project dispatch', () => {
   beforeEach(() => {
     mockGetOrCreateConversation.mockReset();
     mockListCodebases.mockReset();
+    mockListCodebasesForUser.mockReset();
     mockUpdateCodebase.mockReset();
     mockParseCommand.mockReset();
 
     mockGetOrCreateConversation.mockImplementation(() => Promise.resolve(makeConversation()));
     mockListCodebases.mockImplementation(() => Promise.resolve([makeCodebase('my-app')]));
+    mockListCodebasesForUser.mockImplementation(() => Promise.resolve([makeCodebase('my-app')]));
     mockUpdateCodebase.mockImplementation(() => Promise.resolve());
     // '/' always exists — the handler's un-mocked existsSync check passes.
     mockParseCommand.mockReturnValue({ command: 'update-project', args: ['my-app', '/'] });
@@ -5325,8 +5378,9 @@ describe('handleMessage — /update-project dispatch', () => {
 
   test('reports success with old and new path', async () => {
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/update-project my-app /');
+    await handleMessage(platform, 'conv-1', '/update-project my-app /', { userId: 'user-123' });
 
+    expect(mockListCodebasesForUser).toHaveBeenCalledWith('user-123');
     expect(mockUpdateCodebase).toHaveBeenCalledWith('id-my-app', {
       default_cwd: await canonicalizeProjectPath('/'),
     });
@@ -5341,8 +5395,9 @@ describe('handleMessage — /update-project dispatch', () => {
     );
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/update-project my-app /');
+    await handleMessage(platform, 'conv-1', '/update-project my-app /', { userId: 'user-123' });
 
+    expect(mockListCodebasesForUser).toHaveBeenCalledWith('user-123');
     const msg = (platform.sendMessage as ReturnType<typeof mock>).mock.calls[0]?.[1] as string;
     expect(msg).toContain('removed');
     expect(msg).toContain('/register-project');
@@ -5353,8 +5408,9 @@ describe('handleMessage — /update-project dispatch', () => {
     mockUpdateCodebase.mockImplementation(() => Promise.reject(new Error('connection refused')));
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/update-project my-app /');
+    await handleMessage(platform, 'conv-1', '/update-project my-app /', { userId: 'user-123' });
 
+    expect(mockListCodebasesForUser).toHaveBeenCalledWith('user-123');
     const msg = (platform.sendMessage as ReturnType<typeof mock>).mock.calls[0]?.[1] as string;
     expect(msg).toContain('database error');
     expect(msg).toContain('try again');
@@ -5375,6 +5431,8 @@ describe('chat turn telemetry', () => {
     mockGetCodebase.mockImplementation(() => Promise.resolve(null));
     mockListCodebases.mockReset();
     mockListCodebases.mockImplementation(() => Promise.resolve([]));
+    mockListCodebasesForUser.mockReset();
+    mockListCodebasesForUser.mockImplementation(() => Promise.resolve([]));
     mockExecuteWorkflow.mockClear();
     mockDiscoverWorkflowsWithConfig.mockReset();
     mockDiscoverWorkflowsWithConfig.mockImplementation(() =>
@@ -5414,7 +5472,7 @@ describe('chat turn telemetry', () => {
     mockGetOrCreateConversation.mockReturnValueOnce(
       Promise.resolve(makeConversation({ codebase_id: null }))
     );
-    mockListCodebases.mockImplementation(() => Promise.resolve([codebase]));
+    mockListCodebasesForUser.mockImplementation(() => Promise.resolve([codebase]));
     mockDiscoverWorkflowsWithConfig.mockImplementation(() =>
       Promise.resolve({
         workflows: [{ workflow: makeTestWorkflow({ name: 'assist' }) }],
@@ -5427,8 +5485,9 @@ describe('chat turn telemetry', () => {
     });
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'run assist on my project');
+    await handleMessage(platform, 'conv-1', 'run assist on my project', { userId: 'user-123' });
 
+    expect(mockListCodebasesForUser).toHaveBeenCalledWith('user-123');
     // Positive control: the routing path actually ran — dispatch auto-attaches
     // the project to the conversation before isolation/execution.
     expect(mockUpdateConversation).toHaveBeenCalledWith('conv-1-db', {

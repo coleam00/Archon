@@ -1931,6 +1931,12 @@ function buildFullPrompt(
  * Single entry point for all platforms — routes slash commands deterministically,
  * and routes everything else through the AI orchestrator which knows all projects
  * and workflows upfront.
+ *
+ * @param platform - Platform adapter for interacting with the messaging environment
+ * @param conversationId - The platform's conversation identifier
+ * @param message - The raw incoming message text
+ * @param context - Optional execution context including userId, attached files, parent thread context, and isolation hints
+ * @returns Promise resolving when message processing and response delivery complete
  */
 export async function handleMessage(
   platform: IPlatformAdapter,
@@ -1994,21 +2000,21 @@ export async function handleMessage(
       if (deterministicCommands.includes(command)) {
         if (command === 'register-project') {
           getLog().debug({ command, conversationId }, 'deterministic_command');
-          const result = await handleRegisterProject(message, platform, conversationId);
+          const result = await handleRegisterProject(message, platform, conversationId, userId);
           await platform.sendMessage(conversationId, result);
           return;
         }
 
         if (command === 'update-project') {
           getLog().debug({ command, conversationId }, 'deterministic_command');
-          const result = await handleUpdateProject(message);
+          const result = await handleUpdateProject(message, userId);
           await platform.sendMessage(conversationId, result);
           return;
         }
 
         if (command === 'remove-project') {
           getLog().debug({ command, conversationId }, 'deterministic_command');
-          const result = await handleRemoveProject(message);
+          const result = await handleRemoveProject(message, userId);
           await platform.sendMessage(conversationId, result);
           return;
         }
@@ -2018,13 +2024,13 @@ export async function handleMessage(
           // Pass the full Conversation — handleSetProject updates by the DB
           // primary key (conversation.id, not the platform conversation id)
           // and needs the prior cwd/isolation state for the detach note.
-          const result = await handleSetProject(message, conversation);
+          const result = await handleSetProject(message, conversation, userId);
           await platform.sendMessage(conversationId, result);
           return;
         }
 
         getLog().debug({ command, conversationId }, 'deterministic_command');
-        const result = await commandHandler.handleCommand(conversation, message);
+        const result = await commandHandler.handleCommand(conversation, message, userId);
         await platform.sendMessage(conversationId, result.message);
 
         if (result.workflow) {
@@ -2117,7 +2123,14 @@ export async function handleMessage(
     // needed the hoist). Keep it here: moved back down, the guard would have to
     // refuse AFTER the user row is written, which is exactly the orphaned-row bug
     // this ordering exists to prevent.
-    const codebases = await codebaseDb.listCodebases();
+    if (!userId && process.env.ARCHON_WEB_AUTH_HEADER) {
+      warnAuthContextUnresolved('handleMessage', 'chat');
+    }
+    const codebases = userId
+      ? await codebaseDb.listCodebasesForUser(userId)
+      : process.env.ARCHON_WEB_AUTH_HEADER
+        ? []
+        : await codebaseDb.listCodebases();
 
     // A registered project's directory can vanish under a long-lived conversation —
     // the clone deleted, the folder moved, the volume holding it unmounted.
@@ -2207,6 +2220,7 @@ export async function handleMessage(
         });
     }
 
+    // 3. Load codebases, discover workflows, build prompt
     const {
       workflows: workflowsWithSource,
       errors: workflowErrors,
@@ -2886,7 +2900,8 @@ async function handleStreamMode(
       platform,
       conversationId,
       fullResponse,
-      commands.projectRegistration
+      commands.projectRegistration,
+      userId
     );
     return;
   }
@@ -3147,7 +3162,8 @@ async function handleBatchMode(
       platform,
       conversationId,
       finalMessage,
-      commands.projectRegistration
+      commands.projectRegistration,
+      userId
     );
     return;
   }
@@ -3289,7 +3305,8 @@ async function handleProjectRegistrationResult(
   platform: IPlatformAdapter,
   conversationId: string,
   fullResponse: string,
-  registration: ProjectRegistration
+  registration: ProjectRegistration,
+  userId?: string
 ): Promise<void> {
   const { projectName, projectPath } = registration;
 
@@ -3316,12 +3333,25 @@ async function handleProjectRegistrationResult(
   const regResult = await handleRegisterProject(
     `/register-project ${projectName} ${projectPath}`,
     platform,
-    conversationId
+    conversationId,
+    userId
   );
   await platform.sendMessage(conversationId, regResult);
 }
 
 // ─── Internal Helpers ───────────────────────────────────────────────────────
+
+/**
+ * Emit a warn log when the orchestrator lacks a resolved userId on a request
+ * path that should be user-scoped. Mirrors patch 003's api.auth_context_unresolved.
+ * Gated on ARCHON_WEB_AUTH_HEADER so solo installs (no web auth configured) stay
+ * silent; on auth-enabled installs this surfaces identity resolution bugs.
+ */
+function warnAuthContextUnresolved(handler: string, messageType: string): void {
+  if (process.env.ARCHON_WEB_AUTH_HEADER) {
+    getLog().warn({ handler, messageType }, 'orchestrator.auth_context_unresolved');
+  }
+}
 
 /**
  * Handle /register-project command.
@@ -3330,7 +3360,8 @@ async function handleProjectRegistrationResult(
 async function handleRegisterProject(
   message: string,
   _platform: IPlatformAdapter,
-  _conversationId: string
+  _conversationId: string,
+  userId?: string
 ): Promise<string> {
   const { args } = commandHandler.parseCommand(message);
   if (args.length < 2) {
@@ -3354,7 +3385,13 @@ async function handleRegisterProject(
   }
 
   // Check if codebase already exists with this name
-  const existing = await codebaseDb.listCodebases();
+  if (!userId && process.env.ARCHON_WEB_AUTH_HEADER) {
+    warnAuthContextUnresolved('handleRegisterProject', 'command');
+    return 'Authentication required: could not resolve user identity for project registration.';
+  }
+  const existing = userId
+    ? await codebaseDb.listCodebasesForUser(userId)
+    : await codebaseDb.listCodebases();
   const alreadyExists = existing.find(c => c.name.toLowerCase() === projectName.toLowerCase());
 
   if (alreadyExists) {
@@ -3396,13 +3433,28 @@ async function handleRegisterProject(
     { name: projectName, path: canonicalPath, id: codebase.id, kind },
     'project.register_completed'
   );
+
+  let accessNote = '';
+  if (userId) {
+    try {
+      await codebaseDb.grantAccess(userId, codebase.id);
+    } catch (grantErr) {
+      getLog().warn(
+        { err: grantErr as Error, userId, codebaseId: codebase.id },
+        'orchestrator.register_grant_failed'
+      );
+      accessNote =
+        '\n⚠️ Access grant failed — project registered but may not appear in your list. Contact an admin if it remains invisible.';
+    }
+  }
+
   let kindNote = kind === 'folder' ? '\nKind: folder project (no git — runs in place)' : '';
   if (repoDetectFailed) {
     kindNote +=
       '\n⚠️ Could not determine git status (git error) — registered as a folder project. ' +
       'If this should be a git repo, resolve the error and re-register.';
   }
-  return `Project "${projectName}" registered successfully!\nPath: ${canonicalPath}\nID: ${codebase.id}${kindNote}`;
+  return `Project "${projectName}" registered successfully!\nPath: ${canonicalPath}\nID: ${codebase.id}${kindNote}${accessNote}`;
 }
 
 async function detectCurrentGitBranch(projectPath: string): Promise<string | null> {
@@ -3423,7 +3475,7 @@ async function detectCurrentGitBranch(projectPath: string): Promise<string | nul
  * Handle /update-project command.
  * Updates the path for an existing registered project.
  */
-async function handleUpdateProject(message: string): Promise<string> {
+async function handleUpdateProject(message: string, userId?: string): Promise<string> {
   const { args } = commandHandler.parseCommand(message);
   if (args.length < 2) {
     return 'Usage: /update-project <name> <new-path>';
@@ -3444,7 +3496,14 @@ async function handleUpdateProject(message: string): Promise<string> {
   }
 
   // Find existing codebase by name
-  const existing = await codebaseDb.listCodebases();
+  if (!userId && process.env.ARCHON_WEB_AUTH_HEADER) {
+    warnAuthContextUnresolved('handleUpdateProject', 'command');
+  }
+  const existing = userId
+    ? await codebaseDb.listCodebasesForUser(userId)
+    : process.env.ARCHON_WEB_AUTH_HEADER
+      ? []
+      : await codebaseDb.listCodebases();
   const codebase = existing.find(c => c.name.toLowerCase() === projectName.toLowerCase());
 
   if (!codebase) {
@@ -3474,7 +3533,7 @@ async function handleUpdateProject(message: string): Promise<string> {
  * Handle /remove-project command.
  * Deletes a registered project from the database.
  */
-async function handleRemoveProject(message: string): Promise<string> {
+async function handleRemoveProject(message: string, userId?: string): Promise<string> {
   const { args } = commandHandler.parseCommand(message);
   if (args.length < 1) {
     return 'Usage: /remove-project <name>';
@@ -3483,7 +3542,14 @@ async function handleRemoveProject(message: string): Promise<string> {
   const projectName = args[0];
 
   // Find existing codebase by name
-  const existing = await codebaseDb.listCodebases();
+  if (!userId && process.env.ARCHON_WEB_AUTH_HEADER) {
+    warnAuthContextUnresolved('handleRemoveProject', 'command');
+  }
+  const existing = userId
+    ? await codebaseDb.listCodebasesForUser(userId)
+    : process.env.ARCHON_WEB_AUTH_HEADER
+      ? []
+      : await codebaseDb.listCodebases();
   const codebase = existing.find(c => c.name.toLowerCase() === projectName.toLowerCase());
 
   if (!codebase) {
@@ -3507,14 +3573,25 @@ async function handleRemoveProject(message: string): Promise<string> {
  * substring) via resolveCodebaseName. Updates by the DB primary key
  * (conversation.id), never the platform conversation id.
  */
-async function handleSetProject(message: string, conversation: Conversation): Promise<string> {
+async function handleSetProject(
+  message: string,
+  conversation: Conversation,
+  userId?: string
+): Promise<string> {
   const { args } = commandHandler.parseCommand(message);
   if (args.length < 1) {
     return 'Usage: /setproject <project-name>';
   }
 
   const projectName = args.join(' ');
-  const codebases = await codebaseDb.listCodebases();
+  if (!userId && process.env.ARCHON_WEB_AUTH_HEADER) {
+    warnAuthContextUnresolved('handleSetProject', 'command');
+  }
+  const codebases = userId
+    ? await codebaseDb.listCodebasesForUser(userId)
+    : process.env.ARCHON_WEB_AUTH_HEADER
+      ? []
+      : await codebaseDb.listCodebases();
 
   let codebase: Codebase | undefined;
   try {
@@ -3616,7 +3693,14 @@ async function handleWorkflowRunCommand(
   }
 
   // No project attached — apply E2 logic
-  const codebases = await codebaseDb.listCodebases();
+  if (!userId && process.env.ARCHON_WEB_AUTH_HEADER) {
+    warnAuthContextUnresolved('handleWorkflowRunCommand', 'command');
+  }
+  const codebases = userId
+    ? await codebaseDb.listCodebasesForUser(userId)
+    : process.env.ARCHON_WEB_AUTH_HEADER
+      ? []
+      : await codebaseDb.listCodebases();
 
   if (codebases.length === 0) {
     await platform.sendMessage(

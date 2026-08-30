@@ -4,7 +4,12 @@
  */
 import { writeFile, access } from 'fs/promises';
 import { join, relative } from 'path';
-import { type Conversation, type CommandResult, ConversationNotFoundError } from '../types';
+import {
+  type Conversation,
+  type CommandResult,
+  type Codebase,
+  ConversationNotFoundError,
+} from '../types';
 import * as db from '../db/conversations';
 import * as codebaseDb from '../db/codebases';
 import * as sessionDb from '../db/sessions';
@@ -1223,9 +1228,18 @@ async function handleWorkflowCommand(
   }
 }
 
+/**
+ * Handle a slash command issued in a conversation.
+ *
+ * @param conversation - The active Conversation object
+ * @param message - The raw slash command message text
+ * @param userId - Optional authenticated user ID for access scoping
+ * @returns Result object containing execution status, reply message, and optional workflow to run
+ */
 export async function handleCommand(
   conversation: Conversation,
-  message: string
+  message: string,
+  userId?: string
 ): Promise<CommandResult> {
   const { command, args } = parseCommand(message);
 
@@ -1276,7 +1290,14 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
       let msg = `## Orchestrator Status\n\n**Platform**: ${conversation.platform_type}\n**AI Assistant**: ${conversation.ai_assistant_type}`;
 
       // Show all registered projects
-      const allCodebases = await codebaseDb.listCodebases();
+      let allCodebases: readonly Codebase[];
+      if (userId) {
+        allCodebases = await codebaseDb.listCodebasesForUser(userId);
+      } else if (process.env.ARCHON_WEB_AUTH_HEADER) {
+        allCodebases = [];
+      } else {
+        allCodebases = await codebaseDb.listCodebases();
+      }
       if (allCodebases.length > 0) {
         msg += `\n\n## Registered Projects (${String(allCodebases.length)})\n`;
         for (const cb of allCodebases) {

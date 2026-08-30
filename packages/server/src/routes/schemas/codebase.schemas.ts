@@ -9,6 +9,7 @@ export const codebaseSchema = codebaseRowSchema
   .extend({
     created_at: z.string().datetime(),
     updated_at: z.string().datetime(),
+    accessGranted: z.boolean().optional(),
   })
   .openapi('Codebase');
 

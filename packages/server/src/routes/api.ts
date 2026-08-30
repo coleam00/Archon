@@ -20,6 +20,7 @@ import type {
   TiersPatch,
   UserRole,
   SchemaVersionInfo,
+  Codebase,
 } from '@archon/core';
 import {
   handleMessage,
@@ -1693,11 +1694,32 @@ export function registerApiRoutes(
   }
 
   /**
-   * Validate that a caller-supplied `cwd` is rooted at a registered codebase path.
-   * This prevents path traversal — callers cannot read/write outside known project roots.
+   * Helper to check if authentication is configured in the current environment
+   * (either Better Auth is enabled via DATABASE_URL + BETTER_AUTH_SECRET, or
+   * a trusted reverse-proxy auth header is configured).
+   *
+   * @returns true if web authentication is enabled or configured
    */
-  async function validateCwd(cwd: string): Promise<boolean> {
-    const codebases = await codebaseDb.listCodebases();
+  function isAuthConfigured(): boolean {
+    return isWebAuthEnabled() || Boolean(process.env.ARCHON_WEB_AUTH_HEADER);
+  }
+
+  /**
+   * Validate that a caller-supplied `cwd` is rooted at a registered codebase path.
+   * When `userId` is present, validates against codebases accessible to that user.
+   * When auth is configured but no userId is present, fails closed.
+   * This prevents path traversal — callers cannot read/write outside known project roots.
+   *
+   * @param cwd - The filesystem path to validate
+   * @param userId - Optional user ID to scope codebase access
+   * @returns True if path is within a valid codebase directory
+   */
+  async function validateCwd(cwd: string, userId?: string): Promise<boolean> {
+    const codebases = userId
+      ? await codebaseDb.listCodebasesForUser(userId)
+      : isAuthConfigured()
+        ? []
+        : await codebaseDb.listCodebases();
     const normalizedCwd = normalize(cwd);
     return codebases.some(cb => {
       const base = normalize(cb.default_cwd);
@@ -1715,6 +1737,7 @@ export function registerApiRoutes(
   // boundary so a reverse-proxy auth sidecar can retire. Public exceptions:
   //   - /api/auth/* — the login/status/device-flow surface (can't gate login)
   //   - /api/health* — the Docker/uptime healthcheck MUST stay reachable
+  //   - /api/openapi.json — OpenAPI spec for docs and type generation
   // /webhooks/* (HMAC-verified) and /internal/* (loopback-guarded) are outside
   // /api/* and untouched. No-op when web auth is disabled (solo/local unchanged).
   // `resolveAuthContext`/`apiError` are function declarations below → hoisted.
@@ -1725,7 +1748,7 @@ export function registerApiRoutes(
   // STRIPS it from inbound requests (or the app binds 127.0.0.1). If you retire
   // the proxy auth sidecar, the proxy MUST still strip that header — otherwise a
   // client can forge it and walk straight through this gate.
-  const PUBLIC_API_GATE_PREFIXES = ['/api/auth/', '/api/health'];
+  const PUBLIC_API_GATE_PREFIXES = ['/api/auth/', '/api/health', '/api/openapi.json'];
   app.use('/api/*', async (c, next) => {
     if (!isApiGateEnabled()) return next();
     const path = c.req.path;
@@ -1849,6 +1872,34 @@ export function registerApiRoutes(
       getLog().error({ err: err as Error, headerPresent: true }, 'web.user_resolve_failed');
       return { error: apiError(c, 503, 'Could not verify web identity — backend unavailable') };
     }
+  }
+
+  /**
+   * Look up a codebase by ID, enforcing user access when auth is configured.
+   *
+   * @param c - Hono request context
+   * @param codebaseId - Unique ID of the codebase
+   * @returns Object containing the resolved codebase, or an HTTP error response
+   */
+  async function resolveScopedCodebase(
+    c: Context,
+    codebaseId: string
+  ): Promise<{ codebase?: Codebase; error?: Response }> {
+    const auth = await resolveAuthContext(c);
+    if (!auth && isAuthConfigured()) {
+      getLog().warn({ route: c.req.path, codebaseId }, 'api.auth_context_unresolved');
+      return { error: apiError(c, 404, 'Codebase not found') };
+    }
+    const codebase = auth
+      ? await codebaseDb.getCodebaseForUser(codebaseId, auth.userId)
+      : isAuthConfigured()
+        ? null
+        : await codebaseDb.getCodebase(codebaseId);
+
+    if (!codebase) {
+      return { error: apiError(c, 404, 'Codebase not found') };
+    }
+    return { codebase };
   }
 
   // GET /api/auth/status - web auth availability + signup posture.
@@ -2688,18 +2739,14 @@ export function registerApiRoutes(
     try {
       const platformType = c.req.query('platform') ?? undefined;
       const codebaseId = c.req.query('codebaseId') ?? undefined;
-      // Non-enforcing "mine" filter: only narrows when an identity resolves.
-      // Default visibility stays open (everyone sees everyone's conversations).
-      const mine = c.req.query('mine') === 'true';
-      const userId = mine ? (await resolveAuthContext(c))?.userId : undefined;
-      if (mine && !userId && getAuth()) {
-        // Narrowing was requested but no identity resolved on an install with
-        // web auth configured — the list silently degrades to ALL conversations
-        // (documented non-enforcing posture). Without web auth (solo installs,
-        // where the console always sends mine=true) this is the normal path
-        // and stays silent.
-        getLog().warn({ route: 'GET /api/conversations' }, 'api.mine_filter_identity_unresolved');
+      const auth = await resolveAuthContext(c);
+      if (!auth) {
+        if (isAuthConfigured()) {
+          getLog().warn({ route: 'GET /api/conversations' }, 'api.auth_context_unresolved');
+          return c.json([]);
+        }
       }
+      const userId = auth?.userId;
       const conversations = await conversationDb.listConversations(
         50,
         platformType,
@@ -2718,7 +2765,12 @@ export function registerApiRoutes(
   registerOpenApiRoute(getConversationRoute, async c => {
     const platformId = c.req.param('id') ?? '';
     try {
-      const conv = await conversationDb.findConversationByPlatformId(platformId);
+      const auth = await resolveAuthContext(c);
+      if (!auth && isAuthConfigured()) {
+        getLog().warn({ route: 'GET /api/conversations/:id' }, 'api.auth_context_unresolved');
+        return apiError(c, 404, 'Conversation not found');
+      }
+      const conv = await conversationDb.findConversationByPlatformId(platformId, auth?.userId);
       if (!conv) {
         return apiError(c, 404, 'Conversation not found');
       }
@@ -2734,11 +2786,20 @@ export function registerApiRoutes(
   registerOpenApiRoute(createConversationRoute, async c => {
     try {
       const { codebaseId, message } = getValidatedBody(c, createConversationBodySchema);
-      const userId = await resolveWebUserId(c);
+      const auth = await resolveAuthContext(c);
+      if (!auth && isAuthConfigured()) {
+        getLog().warn({ route: 'POST /api/conversations' }, 'api.auth_context_unresolved');
+        return apiError(c, 401, 'Authentication required');
+      }
+      const userId = auth?.userId;
 
-      // Validate codebase exists if provided
+      // Validate codebase exists and is accessible if provided
       if (codebaseId) {
-        const codebase = await codebaseDb.getCodebase(codebaseId);
+        const codebase = userId
+          ? await codebaseDb.getCodebaseForUser(codebaseId, userId)
+          : isAuthConfigured()
+            ? null
+            : await codebaseDb.getCodebase(codebaseId);
         if (!codebase) {
           return apiError(c, 400, 'Codebase not found', `No codebase with id "${codebaseId}"`);
         }
@@ -2813,7 +2874,12 @@ export function registerApiRoutes(
     const platformId = c.req.param('id') ?? '';
     const { title } = getValidatedBody(c, updateConversationBodySchema);
     try {
-      const conv = await conversationDb.findConversationByPlatformId(platformId);
+      const auth = await resolveAuthContext(c);
+      if (!auth && isAuthConfigured()) {
+        getLog().warn({ route: 'PATCH /api/conversations/:id' }, 'api.auth_context_unresolved');
+        return apiError(c, 404, 'Conversation not found');
+      }
+      const conv = await conversationDb.findConversationByPlatformId(platformId, auth?.userId);
       if (!conv) {
         return apiError(c, 404, 'Conversation not found');
       }
@@ -2834,7 +2900,12 @@ export function registerApiRoutes(
   registerOpenApiRoute(deleteConversationRoute, async c => {
     const platformId = c.req.param('id') ?? '';
     try {
-      const conv = await conversationDb.findConversationByPlatformId(platformId);
+      const auth = await resolveAuthContext(c);
+      if (!auth && isAuthConfigured()) {
+        getLog().warn({ route: 'DELETE /api/conversations/:id' }, 'api.auth_context_unresolved');
+        return apiError(c, 404, 'Conversation not found');
+      }
+      const conv = await conversationDb.findConversationByPlatformId(platformId, auth?.userId);
       if (!conv) {
         return apiError(c, 404, 'Conversation not found');
       }
@@ -2854,7 +2925,18 @@ export function registerApiRoutes(
     const platformConversationId = c.req.param('id') ?? '';
     const limit = Math.min(Number(c.req.query('limit') ?? '200'), 500);
     try {
-      const conv = await conversationDb.findConversationByPlatformId(platformConversationId);
+      const auth = await resolveAuthContext(c);
+      if (!auth && isAuthConfigured()) {
+        getLog().warn(
+          { route: 'GET /api/conversations/:id/messages' },
+          'api.auth_context_unresolved'
+        );
+        return apiError(c, 404, 'Conversation not found');
+      }
+      const conv = await conversationDb.findConversationByPlatformId(
+        platformConversationId,
+        auth?.userId
+      );
       if (!conv) {
         return apiError(c, 404, 'Conversation not found');
       }
@@ -2870,7 +2952,15 @@ export function registerApiRoutes(
   // Manual body parsing: multipart uses parseBody(), JSON uses req.json().
   registerOpenApiRoute(sendMessageRoute, async c => {
     const conversationId = c.req.param('id') ?? '';
-    const userId = await resolveWebUserId(c);
+    const auth = await resolveAuthContext(c);
+    if (!auth && isAuthConfigured()) {
+      getLog().warn(
+        { route: 'POST /api/conversations/:id/message' },
+        'api.auth_context_unresolved'
+      );
+      return apiError(c, 404, 'Conversation not found');
+    }
+    const userId = auth?.userId;
 
     // Reject conversation IDs that could be used for path traversal when building
     // the upload directory. Web conversation IDs are alphanumeric with hyphens only.
@@ -2937,9 +3027,13 @@ export function registerApiRoutes(
     // Look up conversation for message persistence
     let conv: Awaited<ReturnType<typeof conversationDb.findConversationByPlatformId>> = null;
     try {
-      conv = await conversationDb.findConversationByPlatformId(conversationId);
+      conv = await conversationDb.findConversationByPlatformId(conversationId, userId);
     } catch (e: unknown) {
       getLog().error({ err: e, conversationId }, 'conversation_lookup_failed');
+    }
+
+    if (!conv && (userId || isAuthConfigured())) {
+      return apiError(c, 404, 'Conversation not found');
     }
 
     // Persist user message and pass DB ID to adapter for assistant message persistence
@@ -3070,7 +3164,15 @@ export function registerApiRoutes(
   // GET /api/codebases - List codebases
   registerOpenApiRoute(listCodebasesRoute, async c => {
     try {
-      const codebases = await codebaseDb.listCodebases();
+      const auth = await resolveAuthContext(c);
+      if (!auth && isAuthConfigured()) {
+        getLog().warn({ route: 'GET /api/codebases' }, 'api.auth_context_unresolved');
+      }
+      const codebases = auth
+        ? await codebaseDb.listCodebasesForUser(auth.userId)
+        : isAuthConfigured()
+          ? []
+          : await codebaseDb.listCodebases();
 
       // Deduplicate by repository_url (keep most recently updated)
       const normalizeUrl = (url: string): string => url.replace(/\.git$/, '');
@@ -3100,9 +3202,9 @@ export function registerApiRoutes(
   // GET /api/codebases/:id - Codebase detail
   registerOpenApiRoute(getCodebaseRoute, async c => {
     try {
-      const codebase = await codebaseDb.getCodebase(c.req.param('id') ?? '');
-      if (!codebase) {
-        return apiError(c, 404, 'Codebase not found');
+      const { codebase, error } = await resolveScopedCodebase(c, c.req.param('id') ?? '');
+      if (error || !codebase) {
+        return error ?? apiError(c, 404, 'Codebase not found');
       }
       return c.json(toApiCodebase(codebase));
     } catch (error) {
@@ -3116,6 +3218,7 @@ export function registerApiRoutes(
     const body = getValidatedBody(c, addCodebaseBodySchema);
 
     try {
+      const auth = await resolveAuthContext(c);
       // .refine() guarantees exactly one of url/path is present.
       // For a local path, detect git-ness: a non-git directory registers as a
       // folder project (kind: 'folder') instead of being rejected. Folder-ness
@@ -3123,7 +3226,9 @@ export function registerApiRoutes(
       // needs no new field.
       let result;
       if (body.url) {
-        result = await cloneRepository(body.url);
+        result = auth?.userId
+          ? await cloneRepository(body.url, auth.userId)
+          : await cloneRepository(body.url);
       } else {
         const localPath = body.path ?? '';
         // Detect git-ness. A resolvable repo root → register as a repo project;
@@ -3146,7 +3251,13 @@ export function registerApiRoutes(
             );
           }
         }
-        result = repoRoot ? await registerRepository(localPath) : await registerFolder(localPath);
+        result = repoRoot
+          ? auth?.userId
+            ? await registerRepository(localPath, auth.userId)
+            : await registerRepository(localPath)
+          : auth?.userId
+            ? await registerFolder(localPath, undefined, auth.userId)
+            : await registerFolder(localPath);
       }
 
       // Fetch the full codebase record for a consistent response
@@ -3155,7 +3266,23 @@ export function registerApiRoutes(
         return apiError(c, 500, 'Codebase created but not found');
       }
 
-      return c.json(toApiCodebase(codebase), result.alreadyExisted ? 200 : 201);
+      let accessGranted = !auth; // true when auth is not enforced
+      if (auth) {
+        try {
+          await codebaseDb.grantAccess(auth.userId, result.codebaseId);
+          accessGranted = true;
+        } catch (grantErr) {
+          getLog().warn(
+            { err: grantErr, userId: auth.userId, codebaseId: result.codebaseId },
+            'grant_access_after_register_failed'
+          );
+        }
+      }
+
+      return c.json(
+        { ...toApiCodebase(codebase), accessGranted },
+        result.alreadyExisted ? 200 : 201
+      );
     } catch (error) {
       getLog().error({ err: error }, 'add_codebase_failed');
       return apiError(
@@ -3170,9 +3297,9 @@ export function registerApiRoutes(
   registerOpenApiRoute(deleteCodebaseRoute, async c => {
     const id = c.req.param('id') ?? '';
     try {
-      const codebase = await codebaseDb.getCodebase(id);
-      if (!codebase) {
-        return apiError(c, 404, 'Codebase not found');
+      const { codebase, error } = await resolveScopedCodebase(c, id);
+      if (error || !codebase) {
+        return error ?? apiError(c, 404, 'Codebase not found');
       }
 
       // Clean up isolation environments (worktrees)
@@ -3220,8 +3347,8 @@ export function registerApiRoutes(
   registerOpenApiRoute(listEnvVarsRoute, async c => {
     const id = c.req.param('id') ?? '';
     try {
-      const codebase = await codebaseDb.getCodebase(id);
-      if (!codebase) return apiError(c, 404, 'Codebase not found');
+      const { codebase, error } = await resolveScopedCodebase(c, id);
+      if (error || !codebase) return error ?? apiError(c, 404, 'Codebase not found');
       const envVars = await envVarDb.getCodebaseEnvVars(id);
       return c.json({ keys: Object.keys(envVars) });
     } catch (error) {
@@ -3235,8 +3362,8 @@ export function registerApiRoutes(
     const id = c.req.param('id') ?? '';
     try {
       const body = getValidatedBody(c, setEnvVarBodySchema);
-      const codebase = await codebaseDb.getCodebase(id);
-      if (!codebase) return apiError(c, 404, 'Codebase not found');
+      const { codebase, error } = await resolveScopedCodebase(c, id);
+      if (error || !codebase) return error ?? apiError(c, 404, 'Codebase not found');
       await envVarDb.setCodebaseEnvVar(id, body.key, body.value);
       return c.json({ success: true });
     } catch (error) {
@@ -3250,8 +3377,8 @@ export function registerApiRoutes(
     const id = c.req.param('id') ?? '';
     const key = c.req.param('key') ?? '';
     try {
-      const codebase = await codebaseDb.getCodebase(id);
-      if (!codebase) return apiError(c, 404, 'Codebase not found');
+      const { codebase, error } = await resolveScopedCodebase(c, id);
+      if (error || !codebase) return error ?? apiError(c, 404, 'Codebase not found');
       await envVarDb.deleteCodebaseEnvVar(id, key);
       return c.json({ success: true });
     } catch (error) {
@@ -3293,15 +3420,22 @@ export function registerApiRoutes(
     try {
       const cwd = c.req.query('cwd');
       let workingDir: string | undefined = cwd;
+      const auth = await resolveAuthContext(c);
+      if (!auth && isAuthConfigured()) {
+        getLog().warn({ route: 'GET /api/workflows' }, 'api.auth_context_unresolved');
+      }
 
       // Validate caller-supplied cwd against registered codebase paths
       if (cwd) {
-        if (!(await validateCwd(cwd))) {
+        if (!(await validateCwd(cwd, auth?.userId))) {
           return apiError(c, 400, 'Invalid cwd: must match a registered codebase path');
         }
       } else {
-        // Fallback to first codebase's default_cwd
-        const codebases = await codebaseDb.listCodebases();
+        const codebases = auth
+          ? await codebaseDb.listCodebasesForUser(auth.userId)
+          : isAuthConfigured()
+            ? []
+            : await codebaseDb.listCodebases();
         if (codebases.length > 0) {
           workingDir = codebases[0].default_cwd;
         }
@@ -3370,7 +3504,12 @@ export function registerApiRoutes(
   // way a freeform chat message can.
   registerOpenApiRoute(runWorkflowRoute, async c => {
     const workflowName = c.req.param('name') ?? '';
-    const userId = await resolveWebUserId(c);
+    const auth = await resolveAuthContext(c);
+    if (!auth && isAuthConfigured()) {
+      getLog().warn({ route: 'POST /api/workflows/:name/runs' }, 'api.auth_context_unresolved');
+      return apiError(c, 404, 'Conversation not found');
+    }
+    const userId = auth?.userId;
     if (!isValidWorkflowName(workflowName)) {
       return apiError(c, 400, 'Invalid workflow name');
     }
@@ -3570,9 +3709,12 @@ export function registerApiRoutes(
       // ephemeral) goes into message metadata when present.
       let conv: Awaited<ReturnType<typeof conversationDb.findConversationByPlatformId>> = null;
       try {
-        conv = await conversationDb.findConversationByPlatformId(conversationId);
+        conv = await conversationDb.findConversationByPlatformId(conversationId, userId);
       } catch (e: unknown) {
         getLog().error({ err: e, conversationId }, 'conversation_lookup_failed');
+      }
+      if (!conv && (userId || isAuthConfigured())) {
+        return apiError(c, 404, 'Conversation not found');
       }
       if (conv) {
         try {
@@ -4189,10 +4331,14 @@ export function registerApiRoutes(
       const codebaseId = c.req.query('codebaseId') ?? undefined;
       const limitRaw = Number(c.req.query('limit'));
       const limit = Number.isNaN(limitRaw) ? 50 : Math.min(Math.max(1, limitRaw), 200);
-      // Non-enforcing "mine" filter: only narrows when an identity resolves.
-      // Default visibility stays open (everyone sees everyone's runs).
-      const mine = c.req.query('mine') === 'true';
-      const userId = mine ? (await resolveAuthContext(c))?.userId : undefined;
+      const auth = await resolveAuthContext(c);
+      if (!auth) {
+        if (isAuthConfigured()) {
+          getLog().warn({ route: 'GET /api/workflows/runs' }, 'api.auth_context_unresolved');
+          return c.json({ runs: [], total: 0 });
+        }
+      }
+      const userId = auth?.userId;
 
       // Open-work inbox (#2747): a status-derived query, not a stored flag —
       // terminal failed runs with no adopter/successor. Mutually exclusive with
@@ -4318,12 +4464,21 @@ export function registerApiRoutes(
     try {
       const cwd = c.req.query('cwd');
       let workingDir = cwd;
+      const auth = await resolveAuthContext(c);
+      if (!auth && isAuthConfigured()) {
+        getLog().warn({ route: 'GET /api/workflows/:id' }, 'api.auth_context_unresolved');
+      }
+
       if (cwd) {
-        if (!(await validateCwd(cwd))) {
+        if (!(await validateCwd(cwd, auth?.userId))) {
           return apiError(c, 400, 'Invalid cwd: must match a registered codebase path');
         }
       } else {
-        const codebases = await codebaseDb.listCodebases();
+        const codebases = auth
+          ? await codebaseDb.listCodebasesForUser(auth.userId)
+          : isAuthConfigured()
+            ? []
+            : await codebaseDb.listCodebases();
         if (codebases.length > 0) workingDir = codebases[0].default_cwd;
       }
 
@@ -4430,14 +4585,23 @@ export function registerApiRoutes(
 
     const cwd = c.req.query('cwd');
     let workingDir = cwd;
+    const auth = await resolveAuthContext(c);
+    if (!auth && isAuthConfigured()) {
+      getLog().warn({ route: 'PUT /api/workflows' }, 'api.auth_context_unresolved');
+    }
+
     if (targetSource === 'global') {
       workingDir = undefined;
     } else if (cwd) {
-      if (!(await validateCwd(cwd))) {
+      if (!(await validateCwd(cwd, auth?.userId))) {
         return apiError(c, 400, 'Invalid cwd: must match a registered codebase path');
       }
     } else {
-      const codebases = await codebaseDb.listCodebases();
+      const codebases = auth
+        ? await codebaseDb.listCodebasesForUser(auth.userId)
+        : isAuthConfigured()
+          ? []
+          : await codebaseDb.listCodebases();
       if (codebases.length > 0) workingDir = codebases[0].default_cwd;
     }
     if (!workingDir) {
@@ -4501,14 +4665,23 @@ export function registerApiRoutes(
 
     const cwd = c.req.query('cwd');
     let workingDir = cwd;
+    const auth = await resolveAuthContext(c);
+    if (!auth && isAuthConfigured()) {
+      getLog().warn({ route: 'DELETE /api/workflows' }, 'api.auth_context_unresolved');
+    }
+
     if (targetSource === 'global') {
       workingDir = undefined;
     } else if (cwd) {
-      if (!(await validateCwd(cwd))) {
+      if (!(await validateCwd(cwd, auth?.userId))) {
         return apiError(c, 400, 'Invalid cwd: must match a registered codebase path');
       }
     } else {
-      const codebases = await codebaseDb.listCodebases();
+      const codebases = auth
+        ? await codebaseDb.listCodebasesForUser(auth.userId)
+        : isAuthConfigured()
+          ? []
+          : await codebaseDb.listCodebases();
       if (codebases.length > 0) workingDir = codebases[0].default_cwd;
     }
     if (!workingDir) {
@@ -4569,12 +4742,21 @@ export function registerApiRoutes(
     try {
       const cwd = c.req.query('cwd');
       let workingDir = cwd;
+      const auth = await resolveAuthContext(c);
+      if (!auth && isAuthConfigured()) {
+        getLog().warn({ route: 'GET /api/commands' }, 'api.auth_context_unresolved');
+      }
+
       if (cwd) {
-        if (!(await validateCwd(cwd))) {
+        if (!(await validateCwd(cwd, auth?.userId))) {
           return apiError(c, 400, 'Invalid cwd: must match a registered codebase path');
         }
       } else {
-        const codebases = await codebaseDb.listCodebases();
+        const codebases = auth
+          ? await codebaseDb.listCodebasesForUser(auth.userId)
+          : isAuthConfigured()
+            ? []
+            : await codebaseDb.listCodebases();
         if (codebases.length > 0) workingDir = codebases[0].default_cwd;
       }
 
@@ -5011,9 +5193,9 @@ export function registerApiRoutes(
   registerOpenApiRoute(getCodebaseEnvironmentsRoute, async c => {
     try {
       const { id } = c.req.param();
-      const codebase = await codebaseDb.getCodebase(id);
-      if (!codebase) {
-        return apiError(c, 404, 'Codebase not found');
+      const { codebase, error } = await resolveScopedCodebase(c, id);
+      if (error || !codebase) {
+        return error ?? apiError(c, 404, 'Codebase not found');
       }
 
       const environments = await isolationEnvDb.listByCodebaseWithAge(id);

@@ -126,8 +126,10 @@ mock.module('@archon/core/db/conversations', () => ({
 
 mock.module('@archon/core/db/codebases', () => ({
   listCodebases: mockListCodebases,
+  listCodebasesForUser: mockListCodebases,
   getCodebase: mockGetCodebase,
   deleteCodebase: mockDeleteCodebase,
+  grantAccess: mock(async () => {}),
 }));
 
 mock.module('@archon/core/db/isolation-environments', () => ({

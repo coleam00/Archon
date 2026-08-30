@@ -3399,6 +3399,7 @@ export interface components {
       created_at: string;
       /** Format: date-time */
       updated_at: string;
+      accessGranted?: boolean;
     };
     AddCodebaseBody: {
       url?: string;

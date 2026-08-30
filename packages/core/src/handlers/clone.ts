@@ -157,7 +157,8 @@ async function detectCurrentGitBranch(targetPath: string): Promise<string | null
 async function registerRepoAtPath(
   targetPath: string,
   name: string,
-  repositoryUrl: string | null
+  repositoryUrl: string | null,
+  userId?: string
 ): Promise<RegisterResult> {
   const suggestedAssistant = await resolveDefaultAssistant(targetPath);
   const detectedBranch = await detectCurrentGitBranch(targetPath);
@@ -218,6 +219,10 @@ async function registerRepoAtPath(
       }
     }
 
+    if (userId) {
+      await codebaseDb.grantAccess(userId, existing.id);
+    }
+
     return {
       codebaseId: existing.id,
       name: existing.name,
@@ -237,6 +242,10 @@ async function registerRepoAtPath(
     default_branch: detectedBranch,
     ai_assistant_type: suggestedAssistant,
   });
+
+  if (userId) {
+    await codebaseDb.grantAccess(userId, codebase.id);
+  }
 
   // Auto-load commands if found
   let commandsLoaded = 0;
@@ -306,12 +315,16 @@ function normalizeRepoUrl(rawUrl: string): {
  * Clone a repository from a URL and register it in the database.
  * Local paths (starting with /, ~, or .) are delegated to registerRepository
  * to avoid wrong owner/repo naming. See #383 for broader rethink.
+ *
+ * @param repoUrl - The URL or local path of the repository to clone/register
+ * @param userId - Optional authenticated user ID to grant access
+ * @returns Result object with codebaseId, name, paths, and registration status
  */
-export async function cloneRepository(repoUrl: string): Promise<RegisterResult> {
+export async function cloneRepository(repoUrl: string, userId?: string): Promise<RegisterResult> {
   // Local paths should be registered (symlink), not cloned (copied)
   if (repoUrl.startsWith('/') || repoUrl.startsWith('~') || repoUrl.startsWith('.')) {
     const resolvedPath = repoUrl.startsWith('~') ? expandTilde(repoUrl) : resolve(repoUrl);
-    return registerRepository(resolvedPath);
+    return registerRepository(resolvedPath, userId);
   }
 
   const { workingUrl, ownerName, repoName, targetPath } = normalizeRepoUrl(repoUrl);
@@ -335,6 +348,9 @@ export async function cloneRepository(repoUrl: string): Promise<RegisterResult> 
       (await codebaseDb.findCodebaseByRepoUrl(urlWithGit));
 
     if (existingCodebase) {
+      if (userId) {
+        await codebaseDb.grantAccess(userId, existingCodebase.id);
+      }
       return {
         codebaseId: existingCodebase.id,
         name: existingCodebase.name,
@@ -397,15 +413,27 @@ export async function cloneRepository(repoUrl: string): Promise<RegisterResult> 
   await execFileAsync('git', ['config', '--global', '--add', 'safe.directory', targetPath]);
   getLog().debug({ path: targetPath }, 'safe_directory_added');
 
-  const result = await registerRepoAtPath(targetPath, `${ownerName}/${repoName}`, workingUrl);
+  const result = await registerRepoAtPath(
+    targetPath,
+    `${ownerName}/${repoName}`,
+    workingUrl,
+    userId
+  );
   getLog().info({ url: workingUrl, targetPath }, 'clone_completed');
   return result;
 }
 
 /**
  * Register an existing local repository in the database (no git clone).
+ *
+ * @param localPath - Local filesystem path to the git repository
+ * @param userId - Optional authenticated user ID to grant access
+ * @returns Result object with codebaseId, name, paths, and registration status
  */
-export async function registerRepository(localPath: string): Promise<RegisterResult> {
+export async function registerRepository(
+  localPath: string,
+  userId?: string
+): Promise<RegisterResult> {
   // Validate path exists and is a git repo
   try {
     await execFileAsync('git', ['-C', localPath, 'rev-parse', '--git-dir']);
@@ -417,6 +445,9 @@ export async function registerRepository(localPath: string): Promise<RegisterRes
   // conflating separate clones, remotes, names, or branches (#1192).
   const existing = await findCodebaseForCheckoutPath(localPath);
   if (existing) {
+    if (userId) {
+      await codebaseDb.grantAccess(userId, existing.id);
+    }
     return {
       codebaseId: existing.id,
       name: existing.name,
@@ -474,7 +505,7 @@ export async function registerRepository(localPath: string): Promise<RegisterRes
   );
 
   // default_cwd is the real local path (not the symlink)
-  return registerRepoAtPath(localPath, name, remoteUrl);
+  return registerRepoAtPath(localPath, name, remoteUrl, userId);
 }
 
 /**
@@ -502,19 +533,23 @@ function pathValidationError(path: string, error: Error): Error {
  * Unlike {@link registerRepository}, this performs NO git validation and creates
  * NO `source/` symlink: a folder project runs in place at its real path. Named
  * artifact/log storage lives under `~/.archon/workspaces/_folder/<slug>/`.
+ *
+ * @param localPath - Local filesystem path to the folder
+ * @param name - Optional custom name for the project
+ * @param userId - Optional authenticated user ID to grant access
+ * @returns Result object with codebaseId, name, paths, and registration status
  */
-export async function registerFolder(localPath: string, name?: string): Promise<RegisterResult> {
+export async function registerFolder(
+  localPath: string,
+  name?: string,
+  userId?: string
+): Promise<RegisterResult> {
   // `canonicalizeProjectPath` is the one canonicalizer for `default_cwd`; the CLI
   // gate, `archon doctor` and `/register-project` all resolve through it, so a
   // symlinked root (macOS `/tmp` → `/private/tmp`) or a Windows 8.3 short path
   // registers under exactly the string those lookups will ask for (#2927). Repo
   // projects are immune because git canonicalizes the repo root on both sides.
   const resolvedPath = await canonicalizeProjectPath(localPath);
-
-  // The stat below is the existence gate: canonicalization is fail-safe and
-  // returns the unresolved path, so a missing/unreadable path surfaces here with
-  // its real errno rather than being registered. It also rejects a symlink to a
-  // file, which realpath resolves happily (no git check on this path).
   let isDirectory = false;
   try {
     isDirectory = (await stat(resolvedPath)).isDirectory();
@@ -528,6 +563,9 @@ export async function registerFolder(localPath: string, name?: string): Promise<
   // Already registered by path — return the existing record unchanged.
   const existing = await codebaseDb.findCodebaseByDefaultCwd(resolvedPath);
   if (existing) {
+    if (userId) {
+      await codebaseDb.grantAccess(userId, existing.id);
+    }
     return {
       codebaseId: existing.id,
       name: existing.name,
@@ -553,6 +591,10 @@ export async function registerFolder(localPath: string, name?: string): Promise<
     ai_assistant_type: suggestedAssistant,
     kind: 'folder',
   });
+
+  if (userId) {
+    await codebaseDb.grantAccess(userId, codebase.id);
+  }
 
   getLog().info(
     {

@@ -159,7 +159,7 @@ function makeApp(): OpenAPIHono {
       await fn();
       return { status: 'started' };
     }),
-    getStats: mock(() => ({ active: 0, queued: 0 })),
+    getStats: mock(() => ({ active: 0, queued: 0, activeConversationIds: [] })),
   } as unknown as ConversationLockManager;
   registerApiRoutes(app, mockWebAdapter, mockLockManager);
   return app;
@@ -167,6 +167,8 @@ function makeApp(): OpenAPIHono {
 
 describe('GET /api/auth/status', () => {
   beforeEach(() => {
+    delete process.env.ARCHON_WEB_AUTH_HEADER;
+    delete process.env.DATABASE_URL;
     authEnabled = false;
     // `disabled` is the real default posture (no allowlist + no open-signup flag).
     signupMode = 'disabled';
@@ -273,6 +275,8 @@ describe('server-side /api/* gate', () => {
 
 describe('?mine filter — non-enforcing', () => {
   beforeEach(() => {
+    delete process.env.ARCHON_WEB_AUTH_HEADER;
+    delete process.env.DATABASE_URL;
     authEnabled = false;
     signupMode = 'open';
     authInstance = null;

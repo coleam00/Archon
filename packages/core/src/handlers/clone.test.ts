@@ -38,6 +38,7 @@ const mockFindCodebaseByDefaultCwd = mock(() => Promise.resolve(null));
 const mockListCodebases = mock(() => Promise.resolve([]));
 const mockFindCodebaseByName = mock(() => Promise.resolve(null));
 const mockUpdateCodebase = mock(() => Promise.resolve());
+const mockGrantAccess = mock(() => Promise.resolve());
 const mockCreateProjectSourceSymlink = mock((): Promise<void> => Promise.resolve());
 
 mock.module('../db/codebases', () => ({
@@ -49,6 +50,7 @@ mock.module('../db/codebases', () => ({
   listCodebases: mockListCodebases,
   findCodebaseByName: mockFindCodebaseByName,
   updateCodebase: mockUpdateCodebase,
+  grantAccess: mockGrantAccess,
 }));
 
 // ── @archon/paths mock ──────────────────────────────────────────────────────
@@ -158,6 +160,7 @@ function clearMocks(): void {
   mockFindCodebaseByDefaultCwd.mockReset();
   mockFindCodebaseByName.mockReset();
   mockUpdateCodebase.mockReset();
+  mockGrantAccess.mockReset();
   mockCreateProjectSourceSymlink.mockClear();
   mockFindMarkdownFilesRecursive.mockReset();
   mockLoadConfig.mockReset();
@@ -1575,9 +1578,19 @@ describe('RegisterResult shape', () => {
     spyFsAccess.mockResolvedValue(undefined); // .git exists
     mockFindCodebaseByRepoUrl.mockResolvedValueOnce(makeCodebase({ id: 'existing-999' }));
 
-    const result = await cloneRepository('https://github.com/owner/repo');
+    const result = await cloneRepository('https://github.com/owner/repo', 'user-123');
 
     expect(result.alreadyExisted).toBe(true);
     expect(result.commandCount).toBe(0);
+    expect(mockGrantAccess).toHaveBeenCalledWith('user-123', 'existing-999');
+  });
+
+  test('pre-existing folder result grants access to requesting user', async () => {
+    mockFindCodebaseByDefaultCwd.mockResolvedValueOnce(makeCodebase({ id: 'folder-888' }));
+
+    const result = await registerFolder('/home/test/my-folder', undefined, 'user-123');
+
+    expect(result.alreadyExisted).toBe(true);
+    expect(mockGrantAccess).toHaveBeenCalledWith('user-123', 'folder-888');
   });
 });

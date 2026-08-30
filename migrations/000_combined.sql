@@ -579,6 +579,13 @@ CREATE TABLE IF NOT EXISTS remote_agent_auth_verification (
   "updatedAt" timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS remote_agent_user_codebase_access (
+  user_id UUID NOT NULL REFERENCES remote_agent_users(id) ON DELETE CASCADE,
+  codebase_id UUID NOT NULL REFERENCES remote_agent_codebases(id) ON DELETE CASCADE,
+  granted_at TIMESTAMPTZ DEFAULT now() NOT NULL,
+  PRIMARY KEY (user_id, codebase_id)
+);
+
 -- ============================================================================
 -- Indexes and column comments
 -- ============================================================================
@@ -715,3 +722,7 @@ CREATE INDEX IF NOT EXISTS idx_workflow_node_sessions_workflow
 -- Messages
 CREATE INDEX IF NOT EXISTS idx_messages_conversation_id
   ON remote_agent_messages(conversation_id, created_at ASC);
+
+-- User codebase access
+CREATE INDEX IF NOT EXISTS idx_user_codebase_access_codebase
+  ON remote_agent_user_codebase_access(codebase_id);

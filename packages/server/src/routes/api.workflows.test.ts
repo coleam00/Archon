@@ -120,6 +120,7 @@ mock.module('@archon/core/db/messages', () => ({}));
 const mockListCodebases = mock(async () => [{ default_cwd: '/tmp/project' }]);
 mock.module('@archon/core/db/codebases', () => ({
   listCodebases: mockListCodebases,
+  listCodebasesForUser: mockListCodebases,
 }));
 
 import { registerApiRoutes } from './api';

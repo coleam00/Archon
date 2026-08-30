@@ -13,6 +13,13 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
+/**
+ * Create a new codebase record in the database.
+ *
+ * @param data - Codebase creation properties including name, repository URL, default cwd, branch, assistant type, and project kind.
+ * @returns The created Codebase record.
+ * @throws Error if the INSERT query fails to return a row.
+ */
 export async function createCodebase(data: {
   name: string;
   repository_url?: string;
@@ -43,6 +50,12 @@ export async function createCodebase(data: {
   return result.rows[0];
 }
 
+/**
+ * Retrieve a codebase by its unique identifier (unscoped).
+ *
+ * @param id - The unique ID of the codebase.
+ * @returns The matching Codebase or null if not found.
+ */
 export async function getCodebase(id: string): Promise<Codebase | null> {
   const result = await pool.query<Codebase>('SELECT * FROM remote_agent_codebases WHERE id = $1', [
     id,
@@ -50,6 +63,34 @@ export async function getCodebase(id: string): Promise<Codebase | null> {
   return result.rows[0] || null;
 }
 
+/**
+ * Retrieve a codebase by its unique identifier, scoped to an authenticated user's access grants.
+ *
+ * @param id - The unique ID of the codebase.
+ * @param userId - Optional user ID. When provided, ensures the user has access; when omitted, delegates to unscoped lookup.
+ * @returns The matching Codebase if accessible, or null if not found or unauthorized.
+ */
+export async function getCodebaseForUser(id: string, userId?: string): Promise<Codebase | null> {
+  if (!userId) {
+    return getCodebase(id);
+  }
+  const result = await pool.query<Codebase>(
+    `SELECT c.* FROM remote_agent_codebases c
+     JOIN remote_agent_user_codebase_access a ON a.codebase_id = c.id
+     WHERE a.user_id = $1 AND c.id = $2
+     LIMIT 1`,
+    [userId, id]
+  );
+  return result.rows[0] || null;
+}
+
+/**
+ * Update the custom workflow commands registered for a codebase.
+ *
+ * @param id - The unique ID of the codebase.
+ * @param commands - Map of command names to command specifications.
+ * @returns Promise resolving when update completes.
+ */
 export async function updateCodebaseCommands(
   id: string,
   commands: Record<string, { path: string; description: string }>
@@ -61,6 +102,13 @@ export async function updateCodebaseCommands(
   );
 }
 
+/**
+ * Retrieve custom workflow commands registered for a codebase.
+ *
+ * @param id - The unique ID of the codebase.
+ * @returns Map of command names to their specifications.
+ * @throws Error if stored commands JSON is corrupted.
+ */
 export async function getCodebaseCommands(
   id: string
 ): Promise<Record<string, { path: string; description: string }>> {
@@ -87,6 +135,14 @@ export async function getCodebaseCommands(
   return { ...parsed };
 }
 
+/**
+ * Register or update a single custom command for a codebase.
+ *
+ * @param id - The unique ID of the codebase.
+ * @param name - The command name/identifier.
+ * @param command - The command specification containing file path and description.
+ * @returns Promise resolving when the command is registered.
+ */
 export async function registerCommand(
   id: string,
   name: string,
@@ -97,6 +153,12 @@ export async function registerCommand(
   await updateCodebaseCommands(id, commands);
 }
 
+/**
+ * Find a codebase by its git repository URL (unscoped).
+ *
+ * @param repoUrl - The git repository URL to match.
+ * @returns The matching Codebase or null if not found.
+ */
 export async function findCodebaseByRepoUrl(repoUrl: string): Promise<Codebase | null> {
   const result = await pool.query<Codebase>(
     'SELECT * FROM remote_agent_codebases WHERE repository_url = $1',
@@ -105,10 +167,64 @@ export async function findCodebaseByRepoUrl(repoUrl: string): Promise<Codebase |
   return result.rows[0] || null;
 }
 
+/**
+ * Find a codebase by its repository URL, scoped to an authenticated user.
+ *
+ * @param url - The repository URL.
+ * @param userId - Optional user ID to constrain access.
+ * @returns The matching Codebase or null.
+ */
+export async function findCodebaseByRepoUrlForUser(
+  url: string,
+  userId?: string
+): Promise<Codebase | null> {
+  if (!userId) {
+    return findCodebaseByRepoUrl(url);
+  }
+  const result = await pool.query<Codebase>(
+    `SELECT c.* FROM remote_agent_codebases c
+     JOIN remote_agent_user_codebase_access a ON a.codebase_id = c.id
+     WHERE a.user_id = $1 AND c.repository_url = $2
+     ORDER BY c.created_at DESC LIMIT 1`,
+    [userId, url]
+  );
+  return result.rows[0] || null;
+}
+
+/**
+ * Find a codebase by its exact default working directory path (unscoped).
+ *
+ * @param defaultCwd - The exact directory path to look up.
+ * @returns The matching Codebase or null if not found.
+ */
 export async function findCodebaseByDefaultCwd(defaultCwd: string): Promise<Codebase | null> {
   const result = await pool.query<Codebase>(
     'SELECT * FROM remote_agent_codebases WHERE default_cwd = $1 ORDER BY created_at DESC LIMIT 1',
     [defaultCwd]
+  );
+  return result.rows[0] || null;
+}
+
+/**
+ * Find a codebase by its default working directory path, scoped to an authenticated user.
+ *
+ * @param cwd - The working directory path.
+ * @param userId - Optional user ID to constrain access.
+ * @returns The matching Codebase or null.
+ */
+export async function findCodebaseByDefaultCwdForUser(
+  cwd: string,
+  userId?: string
+): Promise<Codebase | null> {
+  if (!userId) {
+    return findCodebaseByDefaultCwd(cwd);
+  }
+  const result = await pool.query<Codebase>(
+    `SELECT c.* FROM remote_agent_codebases c
+     JOIN remote_agent_user_codebase_access a ON a.codebase_id = c.id
+     WHERE a.user_id = $1 AND c.default_cwd = $2
+     ORDER BY c.created_at DESC LIMIT 1`,
+    [userId, cwd]
   );
   return result.rows[0] || null;
 }
@@ -124,6 +240,9 @@ export async function findCodebaseByDefaultCwd(defaultCwd: string): Promise<Code
  * wildcards, and (2) a bare `%` suffix has no separator boundary, so a sibling
  * directory sharing a name prefix (`/x/platform` vs `/x/platform-staging`)
  * would match. Returns the most specific (longest `default_cwd`) match.
+ *
+ * @param cwdPath - The working directory path to resolve against codebase roots.
+ * @returns The most specific matching Codebase, or null if no codebase encompasses the path.
  */
 export async function findCodebaseByPathPrefix(cwdPath: string): Promise<Codebase | null> {
   const result = await pool.query<Codebase>('SELECT * FROM remote_agent_codebases');
@@ -138,10 +257,40 @@ export async function findCodebaseByPathPrefix(cwdPath: string): Promise<Codebas
   return best;
 }
 
+/**
+ * Find a codebase by its exact registered name (unscoped).
+ *
+ * @param name - The codebase project name.
+ * @returns The matching Codebase or null.
+ */
 export async function findCodebaseByName(name: string): Promise<Codebase | null> {
   const result = await pool.query<Codebase>(
     'SELECT * FROM remote_agent_codebases WHERE name = $1 ORDER BY created_at DESC LIMIT 1',
     [name]
+  );
+  return result.rows[0] || null;
+}
+
+/**
+ * Find a codebase by name, scoped to an authenticated user.
+ *
+ * @param name - The codebase project name.
+ * @param userId - Optional user ID to constrain access.
+ * @returns The matching Codebase or null.
+ */
+export async function findCodebaseByNameForUser(
+  name: string,
+  userId?: string
+): Promise<Codebase | null> {
+  if (!userId) {
+    return findCodebaseByName(name);
+  }
+  const result = await pool.query<Codebase>(
+    `SELECT c.* FROM remote_agent_codebases c
+     JOIN remote_agent_user_codebase_access a ON a.codebase_id = c.id
+     WHERE a.user_id = $1 AND c.name = $2
+     ORDER BY c.created_at DESC LIMIT 1`,
+    [userId, name]
   );
   return result.rows[0] || null;
 }
@@ -152,12 +301,23 @@ export async function findCodebaseByName(name: string): Promise<Codebase | null>
  * DB failures (connection refused, timeout, constraint violation).
  */
 export class CodebaseNotFoundError extends Error {
+  /**
+   * @param codebaseId - The ID of the codebase that was not found.
+   */
   constructor(public codebaseId: string) {
     super(`Codebase ${codebaseId} not found`);
     this.name = 'CodebaseNotFoundError';
   }
 }
 
+/**
+ * Update properties of an existing codebase record.
+ *
+ * @param id - The unique ID of the codebase to update.
+ * @param data - Partial codebase fields to update (default_cwd, repository_url, default_branch).
+ * @returns Promise resolving when update is complete.
+ * @throws CodebaseNotFoundError if the target codebase row does not exist.
+ */
 export async function updateCodebase(
   id: string,
   data: { default_cwd?: string; repository_url?: string | null; default_branch?: string | null }
@@ -196,6 +356,11 @@ export async function updateCodebase(
   }
 }
 
+/**
+ * List all registered codebases ordered by name (unscoped/global).
+ *
+ * @returns Readonly array of all codebases.
+ */
 export async function listCodebases(): Promise<readonly Codebase[]> {
   const result = await pool.query<Codebase>(
     'SELECT * FROM remote_agent_codebases ORDER BY name ASC'
@@ -203,6 +368,12 @@ export async function listCodebases(): Promise<readonly Codebase[]> {
   return result.rows;
 }
 
+/**
+ * Delete a codebase record and unlink associated sessions and conversations.
+ *
+ * @param id - The unique ID of the codebase to delete.
+ * @returns Promise resolving when deletion and cascades complete.
+ */
 export async function deleteCodebase(id: string): Promise<void> {
   getLog().debug({ codebaseId: id }, 'db.codebase_delete_cascade_started');
   // First, unlink any sessions referencing this codebase (FK has no cascade)
@@ -217,4 +388,38 @@ export async function deleteCodebase(id: string): Promise<void> {
   // Then delete the codebase
   await pool.query('DELETE FROM remote_agent_codebases WHERE id = $1', [id]);
   getLog().info({ codebaseId: id }, 'db.codebase_delete_completed');
+}
+
+/**
+ * List all codebases accessible to a specific user.
+ *
+ * @param userId - The user ID whose accessible codebases to retrieve.
+ * @returns Readonly array of codebases accessible to the specified user.
+ */
+export async function listCodebasesForUser(userId: string): Promise<readonly Codebase[]> {
+  const result = await pool.query<Codebase>(
+    `SELECT c.* FROM remote_agent_codebases c
+     JOIN remote_agent_user_codebase_access a ON a.codebase_id = c.id
+     WHERE a.user_id = $1
+     ORDER BY c.name ASC`,
+    [userId]
+  );
+  return result.rows;
+}
+
+/**
+ * Grant a user access to a specific codebase.
+ *
+ * @param userId - The user ID receiving access.
+ * @param codebaseId - The codebase ID to grant access to.
+ * @returns Promise resolving when access grant is recorded.
+ */
+export async function grantAccess(userId: string, codebaseId: string): Promise<void> {
+  await pool.query(
+    `INSERT INTO remote_agent_user_codebase_access (user_id, codebase_id)
+     VALUES ($1, $2)
+     ON CONFLICT (user_id, codebase_id) DO NOTHING`,
+    [userId, codebaseId]
+  );
+  getLog().info({ userId, codebaseId }, 'db.codebase_access_granted');
 }
