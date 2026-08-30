@@ -72,6 +72,41 @@ describe('credential-sanitizer', () => {
         'see https://gitlab.example.com/owner/repo and https://example.com/docs/a@b for details';
       expect(sanitizeCredentials(input)).toBe(input);
     });
+
+    it('should redact ghu_ OAuth user token by pattern', () => {
+      process.env.GH_TOKEN = '';
+      const token = 'ghu_' + 'A'.repeat(36);
+      const result = sanitizeCredentials(`clone failed with ${token}`);
+      expect(result).not.toContain(token);
+      expect(result).toContain('[REDACTED]');
+    });
+
+    it('should redact ghs_ GitHub App installation token by pattern', () => {
+      process.env.GH_TOKEN = '';
+      const token = 'ghs_' + 'B'.repeat(36);
+      const result = sanitizeCredentials(`error: ${token}`);
+      expect(result).not.toContain(token);
+    });
+
+    it('should redact ghp_ PAT by pattern', () => {
+      process.env.GH_TOKEN = '';
+      const token = 'ghp_' + 'C'.repeat(36);
+      const result = sanitizeCredentials(`Authorization: Bearer ${token}`);
+      expect(result).not.toContain(token);
+    });
+
+    it('should redact art_ internal token by pattern', () => {
+      const hexToken = 'art_' + 'a1b2'.repeat(16); // 64 hex chars
+      const result = sanitizeCredentials(`token=${hexToken}`);
+      expect(result).not.toContain(hexToken);
+    });
+
+    it('should redact Base64 Basic auth blob', () => {
+      const blob = Buffer.from('x-access-token:ghp_secret').toString('base64');
+      const result = sanitizeCredentials(`Authorization: Basic ${blob}`);
+      expect(result).toContain('Basic [REDACTED]');
+      expect(result).not.toContain(blob);
+    });
   });
 
   describe('sanitizeError', () => {

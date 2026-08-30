@@ -73,6 +73,13 @@ export async function installCredentialHelper(
       ['-C', worktreePath, 'config', 'credential.https://github.com.helper', helperPath],
       { timeout: 5000 }
     );
+    // Enable useHttpPath so git sends path=owner/repo to the credential helper.
+    // Without this, the helper receives an empty path and cannot resolve the token.
+    await execFileAsync(
+      'git',
+      ['-C', worktreePath, 'config', 'credential.https://github.com.useHttpPath', 'true'],
+      { timeout: 5000 }
+    );
     getLog().info({ worktreePath, helperPath }, 'github_auth.credential_helper_registered');
     return { kind: 'installed', helperPath };
   } catch (err) {

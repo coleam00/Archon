@@ -23,6 +23,7 @@ import {
 import { findMarkdownFilesRecursive } from '../utils/commands';
 import { createLogger } from '@archon/paths';
 import { resolveDefaultAssistant } from '../config/resolve-assistant';
+import { installCredentialHelper } from '../github-auth/credential-helper-install';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -307,7 +308,10 @@ function normalizeRepoUrl(rawUrl: string): {
  * Local paths (starting with /, ~, or .) are delegated to registerRepository
  * to avoid wrong owner/repo naming. See #383 for broader rethink.
  */
-export async function cloneRepository(repoUrl: string): Promise<RegisterResult> {
+export async function cloneRepository(
+  repoUrl: string,
+  authToken?: string
+): Promise<RegisterResult> {
   // Local paths should be registered (symlink), not cloned (copied)
   if (repoUrl.startsWith('/') || repoUrl.startsWith('~') || repoUrl.startsWith('.')) {
     const resolvedPath = repoUrl.startsWith('~') ? expandTilde(repoUrl) : resolve(repoUrl);
@@ -357,19 +361,40 @@ export async function cloneRepository(repoUrl: string): Promise<RegisterResult> 
 
   getLog().info({ url: workingUrl, targetPath }, 'clone_started');
 
-  // Build clone command with authentication using forge-specific tokens
-  let cloneUrl = workingUrl;
-  const { token: forgeToken, scheme: authScheme } = resolveForgeAuth(workingUrl);
+  // Build clone command with authentication — GitHub uses env-based credential
+  // helper to avoid leaking tokens into git logs and /proc/*/cmdline; other
+  // forges use http.extraHeader so they receive Bearer tokens over HTTPS.
+  const { token: envToken } = resolveForgeAuth(workingUrl);
+  const isGitHub = workingUrl.includes('github.com');
 
-  if (forgeToken) {
-    const parsed = safeParseUrl(workingUrl);
-    if (parsed) {
-      cloneUrl = `https://${authScheme}${forgeToken}@${parsed.hostname}${parsed.pathname}`;
-    } else if (!workingUrl.startsWith('http')) {
-      // Bare host/path form (e.g. github.com/owner/repo)
-      cloneUrl = `https://${authScheme}${forgeToken}@${workingUrl}`;
+  let cloneConfigArgs: string[] = [];
+  let cloneEnv: NodeJS.ProcessEnv | undefined;
+
+  if (isGitHub) {
+    // authToken (per-user PAT) wins over envToken (ambient GH_TOKEN).
+    const ghToken = authToken ?? envToken;
+    if (ghToken) {
+      cloneConfigArgs = [
+        '-c',
+        'credential.helper=',
+        '-c',
+        'credential.https://github.com.helper=' +
+          '!f() { test "$1" = get && printf "username=%s\\npassword=%s\\n" ' +
+          '"$ARCHON_GIT_USER" "$ARCHON_GIT_PASS"; }; f',
+        '-c',
+        'credential.https://github.com.useHttpPath=true',
+      ];
+      cloneEnv = {
+        ...process.env,
+        ARCHON_GIT_USER: 'x-access-token',
+        ARCHON_GIT_PASS: ghToken,
+      };
+      getLog().debug('clone_github_credential_helper');
     }
-    getLog().debug('clone_authenticated');
+  } else if (envToken) {
+    // Non-GitHub forges authenticate via Bearer header in git config args.
+    cloneConfigArgs = ['-c', `http.extraHeader=Authorization: Bearer ${envToken}`];
+    getLog().debug('clone_forge_bearer_auth');
   }
 
   // Remove the empty source/ directory before cloning (git clone requires non-existent target)
@@ -382,11 +407,17 @@ export async function cloneRepository(repoUrl: string): Promise<RegisterResult> 
     }
   }
 
+  const executionEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    ...(cloneEnv ?? {}),
+    GIT_TERMINAL_PROMPT: '0',
+  };
+
   try {
     // GIT_TERMINAL_PROMPT=0 turns any missing-creds scenario into an
     // immediate, readable error instead of a hung stdin credential prompt.
-    await execFileAsync('git', ['clone', cloneUrl, targetPath], {
-      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+    await execFileAsync('git', [...cloneConfigArgs, 'clone', workingUrl, targetPath], {
+      env: executionEnv,
     });
   } catch (error) {
     const safeErr = sanitizeError(error as Error);
@@ -396,6 +427,13 @@ export async function cloneRepository(repoUrl: string): Promise<RegisterResult> 
   // Add to git safe.directory
   await execFileAsync('git', ['config', '--global', '--add', 'safe.directory', targetPath]);
   getLog().debug({ path: targetPath }, 'safe_directory_added');
+
+  // Install credential helper for subsequent authenticated git operations.
+  // Non-fatal: syncWorkspace self-heal will retry on next conversation start.
+  const helperResult = await installCredentialHelper(targetPath);
+  if (helperResult.kind !== 'installed') {
+    getLog().warn({ targetPath, result: helperResult }, 'clone_credential_helper_not_installed');
+  }
 
   const result = await registerRepoAtPath(targetPath, `${ownerName}/${repoName}`, workingUrl);
   getLog().info({ url: workingUrl, targetPath }, 'clone_completed');

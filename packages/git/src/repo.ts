@@ -1,7 +1,8 @@
 import { existsSync } from 'fs';
 import { readdir } from 'fs/promises';
 import { join } from 'path';
-import { createLogger } from '@archon/paths';
+import { createLogger, getArchonHome } from '@archon/paths';
+import { resolve } from 'node:path';
 import { execFileAsync } from './exec';
 import { getDefaultBranch } from './branch';
 import type {
@@ -153,17 +154,44 @@ export async function getRemoteUrl(repoPath: RepoPath, remote = 'origin'): Promi
 export async function syncWorkspace(
   workspacePath: RepoPath,
   baseBranch?: BranchName,
-  options?: { mode?: WorkspaceSyncMode; remote?: string }
+  options?: { mode?: WorkspaceSyncMode; remote?: string; authToken?: string }
 ): Promise<WorkspaceSyncResult> {
   const mode = options?.mode ?? 'fast-forward';
   const remote = options?.remote ?? 'origin';
   const branchToSync = baseBranch ?? (await getDefaultBranch(workspacePath, remote));
 
+  // Self-heal auth before fetching
+  await healWorkspaceAuth(workspacePath);
+
+  // Build per-user credential injection when a pre-resolved PAT is provided.
+  const pat = options?.authToken;
+  let fetchConfigArgs: string[] = [];
+  let fetchEnv: NodeJS.ProcessEnv | undefined;
+  if (pat) {
+    fetchConfigArgs = [
+      '-c',
+      'credential.helper=',
+      '-c',
+      'credential.https://github.com.helper=!f() { test "$1" = get && printf "username=%s\\npassword=%s\\n" "$ARCHON_GIT_USER" "$ARCHON_GIT_PASS"; }; f',
+      '-c',
+      'credential.https://github.com.useHttpPath=true',
+    ];
+    fetchEnv = {
+      PATH: process.env.PATH,
+      HOME: process.env.HOME,
+      LANG: process.env.LANG,
+      ARCHON_GIT_USER: 'x-access-token',
+      ARCHON_GIT_PASS: pat,
+    };
+  }
+
   // Fetch from the remote to ensure <remote>/<branchToSync> is up-to-date
   try {
-    await execFileAsync('git', ['-C', workspacePath, 'fetch', remote, branchToSync], {
-      timeout: 60000,
-    });
+    await execFileAsync(
+      'git',
+      [...fetchConfigArgs, '-C', workspacePath, 'fetch', remote, branchToSync],
+      fetchEnv ? { env: fetchEnv, timeout: 60000 } : { timeout: 60000 }
+    );
   } catch (error) {
     const err = error as Error;
     const errorMessage = err.message.toLowerCase();
@@ -484,5 +512,54 @@ export async function addSafeDirectory(path: RepoPath): Promise<void> {
     const err = error as Error;
     getLog().error({ err, path }, 'add_safe_directory_failed');
     throw new Error(`Failed to add safe directory '${path}': ${err.message}`);
+  }
+}
+
+/**
+ * Idempotent auth self-heal for github.com workspaces.
+ *
+ * 1. Strip embedded credentials from remote.origin.url
+ * 2. Register the archon credential helper
+ * 3. Enable useHttpPath so git sends path= to the helper
+ *
+ * Non-fatal: if any step fails the fetch will still attempt (and likely fail
+ * with a clear auth error rather than silently using stale credentials).
+ */
+async function healWorkspaceAuth(workspacePath: RepoPath): Promise<void> {
+  try {
+    const { stdout: rawUrl } = await execFileAsync(
+      'git',
+      ['-C', workspacePath, 'remote', 'get-url', 'origin'],
+      { timeout: 5000 }
+    );
+    const currentUrl = rawUrl.trim();
+
+    // Only heal github.com remotes
+    if (!currentUrl.includes('github.com')) return;
+
+    // 1. Strip embedded credentials (e.g. https://ghu_XXXX@github.com/...)
+    const cleanUrl = currentUrl.replace(/^https:\/\/[^/@]+@github\.com/, 'https://github.com');
+    if (cleanUrl !== currentUrl) {
+      await execFileAsync('git', ['-C', workspacePath, 'remote', 'set-url', 'origin', cleanUrl], {
+        timeout: 5000,
+      });
+    }
+
+    // 2. Register the archon credential helper
+    const helperPath = resolve(getArchonHome(), 'bin', 'git-credential-archon');
+    await execFileAsync(
+      'git',
+      ['-C', workspacePath, 'config', 'credential.https://github.com.helper', helperPath],
+      { timeout: 5000 }
+    );
+
+    // 3. Enable useHttpPath so git sends path=owner/repo to the helper
+    await execFileAsync(
+      'git',
+      ['-C', workspacePath, 'config', 'credential.https://github.com.useHttpPath', 'true'],
+      { timeout: 5000 }
+    );
+  } catch (err) {
+    getLog().warn({ err: err as Error, workspacePath }, 'workspace.auth_heal_failed');
   }
 }

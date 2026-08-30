@@ -443,15 +443,21 @@ describe('cloneRepository', () => {
       delete process.env.GH_TOKEN;
     });
 
-    test('injects GH_TOKEN into HTTPS clone URL', async () => {
+    test('uses credential helper with GH_TOKEN for GitHub HTTPS clone', async () => {
       mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);
 
       await cloneRepository('https://github.com/owner/private-repo');
 
-      const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
-        args => args[0] === 'git' && args[1]?.[0] === 'clone'
+      const cloneCall = spyExecFileAsync.mock.calls.find(
+        ([cmd, args]) =>
+          cmd === 'git' && Array.isArray(args) && (args as string[]).includes('clone')
       );
-      expect(cloneCall?.[1]?.[1]).toContain('ghp_testtoken123@github.com');
+      const gitArgs = cloneCall?.[1] as string[] | undefined;
+      const cloneOpts = cloneCall?.[2] as { env?: Record<string, string> } | undefined;
+      // Token passed via env, not embedded in URL or argv
+      expect(gitArgs?.some((a: string) => a.includes('ARCHON_GIT_USER'))).toBe(true);
+      expect(cloneOpts?.env?.ARCHON_GIT_PASS).toBe('ghp_testtoken123');
+      expect(gitArgs?.some((a: string) => a.includes('ghp_testtoken123'))).toBe(false);
     });
 
     test('does NOT inject GH_TOKEN into non-github URLs when no forge token set', async () => {
@@ -465,21 +471,64 @@ describe('cloneRepository', () => {
 
       await cloneRepository('https://gitlab.com/owner/repo');
 
-      const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
-        args => args[0] === 'git' && args[1]?.[0] === 'clone'
+      const cloneCall = spyExecFileAsync.mock.calls.find(
+        ([cmd, args]) =>
+          cmd === 'git' && Array.isArray(args) && (args as string[]).includes('clone')
       );
-      expect(cloneCall?.[1]?.[1]).not.toContain('ghp_testtoken123');
+      const cloneOpts = cloneCall?.[2] as { env?: Record<string, string> } | undefined;
+      expect(cloneOpts?.env?.ARCHON_GIT_PASS).toBeUndefined();
     });
 
-    test('converts SSH to HTTPS and injects GH_TOKEN', async () => {
+    test('uses credential helper with GH_TOKEN after SSH-to-HTTPS conversion', async () => {
       mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);
 
       await cloneRepository('git@github.com:owner/repo.git');
 
-      const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
-        args => args[0] === 'git' && args[1]?.[0] === 'clone'
+      const cloneCall = spyExecFileAsync.mock.calls.find(
+        ([cmd, args]) =>
+          cmd === 'git' && Array.isArray(args) && (args as string[]).includes('clone')
       );
-      expect(cloneCall?.[1]?.[1]).toContain('ghp_testtoken123@github.com');
+      const cloneOpts = cloneCall?.[2] as { env?: Record<string, string> } | undefined;
+      expect(cloneOpts?.env?.ARCHON_GIT_PASS).toBe('ghp_testtoken123');
+    });
+  });
+
+  // ── authToken parameter ───────────────────────────────────────────────
+  describe('authToken parameter', () => {
+    test('uses authToken for GitHub when no GH_TOKEN env set', async () => {
+      delete process.env.GH_TOKEN;
+      mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);
+
+      await cloneRepository(
+        'https://github.com/owner/private-repo',
+        'ghu_per_user_token_00000000000000000000'
+      );
+
+      const cloneCall = spyExecFileAsync.mock.calls.find(
+        ([cmd, args]) =>
+          cmd === 'git' && Array.isArray(args) && (args as string[]).includes('clone')
+      );
+      const cloneOpts = cloneCall?.[2] as { env?: Record<string, string> } | undefined;
+      expect(cloneOpts?.env?.ARCHON_GIT_PASS).toBe('ghu_per_user_token_00000000000000000000');
+      expect(cloneOpts?.env?.ARCHON_GIT_USER).toBe('x-access-token');
+    });
+
+    test('authToken takes precedence over envToken (GH_TOKEN) for GitHub', async () => {
+      process.env.GH_TOKEN = 'ghp_env_token_123456789012345678901234';
+      mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);
+
+      await cloneRepository(
+        'https://github.com/owner/private-repo',
+        'ghu_user_token_12345678901234567890123'
+      );
+
+      const cloneCall = spyExecFileAsync.mock.calls.find(
+        ([cmd, args]) =>
+          cmd === 'git' && Array.isArray(args) && (args as string[]).includes('clone')
+      );
+      const cloneOpts = cloneCall?.[2] as { env?: Record<string, string> } | undefined;
+      expect(cloneOpts?.env?.ARCHON_GIT_PASS).toBe('ghu_user_token_12345678901234567890123');
+      delete process.env.GH_TOKEN;
     });
   });
 
@@ -490,7 +539,7 @@ describe('cloneRepository', () => {
       delete process.env.GITEA_TOKEN;
     });
 
-    test('injects GITLAB_TOKEN with oauth2: scheme for gitlab.com URLs', async () => {
+    test('injects GITLAB_TOKEN via Bearer header for gitlab.com URLs', async () => {
       process.env.GITLAB_TOKEN = 'glpat-testtoken456';
       delete process.env.GH_TOKEN;
       mockCreateCodebase.mockResolvedValueOnce(
@@ -502,14 +551,18 @@ describe('cloneRepository', () => {
 
       await cloneRepository('https://gitlab.com/owner/repo');
 
-      const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
-        args => args[0] === 'git' && args[1]?.[0] === 'clone'
+      const cloneCall = spyExecFileAsync.mock.calls.find(
+        ([cmd, args]) =>
+          cmd === 'git' && Array.isArray(args) && (args as string[]).includes('clone')
       );
-      expect(cloneCall?.[1]?.[1]).toBe('https://oauth2:glpat-testtoken456@gitlab.com/owner/repo');
+      const gitArgs = cloneCall?.[1] as string[] | undefined;
+      expect(
+        gitArgs?.some((a: string) => a.includes('Authorization: Bearer glpat-testtoken456'))
+      ).toBe(true);
       delete process.env.GITLAB_TOKEN;
     });
 
-    test('injects GITLAB_TOKEN for self-hosted GitLab URLs', async () => {
+    test('injects GITLAB_TOKEN via Bearer header for self-hosted GitLab URLs', async () => {
       process.env.GITLAB_TOKEN = 'glpat-selfhosted';
       delete process.env.GH_TOKEN;
       mockCreateCodebase.mockResolvedValueOnce(
@@ -521,16 +574,18 @@ describe('cloneRepository', () => {
 
       await cloneRepository('https://gitlab.mycompany.com/owner/repo');
 
-      const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
-        args => args[0] === 'git' && args[1]?.[0] === 'clone'
+      const cloneCall = spyExecFileAsync.mock.calls.find(
+        ([cmd, args]) =>
+          cmd === 'git' && Array.isArray(args) && (args as string[]).includes('clone')
       );
-      expect(cloneCall?.[1]?.[1]).toBe(
-        'https://oauth2:glpat-selfhosted@gitlab.mycompany.com/owner/repo'
-      );
+      const gitArgs = cloneCall?.[1] as string[] | undefined;
+      expect(
+        gitArgs?.some((a: string) => a.includes('Authorization: Bearer glpat-selfhosted'))
+      ).toBe(true);
       delete process.env.GITLAB_TOKEN;
     });
 
-    test('injects GITEA_TOKEN for Gitea URLs', async () => {
+    test('injects GITEA_TOKEN via Bearer header for Gitea URLs', async () => {
       process.env.GITEA_TOKEN = 'gitea-token-789';
       delete process.env.GH_TOKEN;
       mockCreateCodebase.mockResolvedValueOnce(
@@ -542,14 +597,18 @@ describe('cloneRepository', () => {
 
       await cloneRepository('https://gitea.myorg.com/owner/repo');
 
-      const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
-        args => args[0] === 'git' && args[1]?.[0] === 'clone'
+      const cloneCall = spyExecFileAsync.mock.calls.find(
+        ([cmd, args]) =>
+          cmd === 'git' && Array.isArray(args) && (args as string[]).includes('clone')
       );
-      expect(cloneCall?.[1]?.[1]).toBe('https://gitea-token-789@gitea.myorg.com/owner/repo');
+      const gitArgs = cloneCall?.[1] as string[] | undefined;
+      expect(
+        gitArgs?.some((a: string) => a.includes('Authorization: Bearer gitea-token-789'))
+      ).toBe(true);
       delete process.env.GITEA_TOKEN;
     });
 
-    test('injects GITEA_TOKEN for Forgejo URLs', async () => {
+    test('injects GITEA_TOKEN via Bearer header for Forgejo URLs', async () => {
       process.env.GITEA_TOKEN = 'forgejo-token';
       delete process.env.GH_TOKEN;
       mockCreateCodebase.mockResolvedValueOnce(
@@ -561,10 +620,14 @@ describe('cloneRepository', () => {
 
       await cloneRepository('https://forgejo.example.org/owner/repo');
 
-      const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
-        args => args[0] === 'git' && args[1]?.[0] === 'clone'
+      const cloneCall = spyExecFileAsync.mock.calls.find(
+        ([cmd, args]) =>
+          cmd === 'git' && Array.isArray(args) && (args as string[]).includes('clone')
       );
-      expect(cloneCall?.[1]?.[1]).toBe('https://forgejo-token@forgejo.example.org/owner/repo');
+      const gitArgs = cloneCall?.[1] as string[] | undefined;
+      expect(gitArgs?.some((a: string) => a.includes('Authorization: Bearer forgejo-token'))).toBe(
+        true
+      );
       delete process.env.GITEA_TOKEN;
     });
 
@@ -581,10 +644,14 @@ describe('cloneRepository', () => {
 
       await cloneRepository('https://bitbucket.org/owner/repo');
 
-      const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
-        args => args[0] === 'git' && args[1]?.[0] === 'clone'
+      const cloneCall = spyExecFileAsync.mock.calls.find(
+        ([cmd, args]) =>
+          cmd === 'git' && Array.isArray(args) && (args as string[]).includes('clone')
       );
-      expect(cloneCall?.[1]?.[1]).toBe('https://bitbucket.org/owner/repo');
+      const gitArgs = cloneCall?.[1] as string[] | undefined;
+      // No auth headers injected for unknown forges
+      expect(gitArgs?.some((a: string) => a.includes('Authorization'))).toBe(false);
+      expect(gitArgs?.some((a: string) => a.includes('ARCHON_GIT_USER'))).toBe(false);
     });
 
     test('does not leak token when forge name appears only in URL path', async () => {
@@ -599,10 +666,12 @@ describe('cloneRepository', () => {
 
       await cloneRepository('https://evil.example.com/gitlab/mirror');
 
-      const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
-        args => args[0] === 'git' && args[1]?.[0] === 'clone'
+      const cloneCall = spyExecFileAsync.mock.calls.find(
+        ([cmd, args]) =>
+          cmd === 'git' && Array.isArray(args) && (args as string[]).includes('clone')
       );
-      expect(cloneCall?.[1]?.[1]).not.toContain('glpat-shouldnotleak');
+      const gitArgs = cloneCall?.[1] as string[] | undefined;
+      expect(gitArgs?.some((a: string) => a.includes('glpat-shouldnotleak'))).toBe(false);
       delete process.env.GITLAB_TOKEN;
     });
   });
@@ -817,7 +886,7 @@ describe('cloneRepository', () => {
     test('wraps git clone failure with sanitized message', async () => {
       process.env.GH_TOKEN = 'super_secret_token';
       spyExecFileAsync.mockImplementation((cmd: string, args: string[]) => {
-        if (args[0] === 'clone') {
+        if (Array.isArray(args) && args.includes('clone')) {
           return Promise.reject(
             new Error(
               'fatal: repository https://super_secret_token@github.com/owner/repo not found'
