@@ -63,11 +63,7 @@ export { SessionNotFoundError } from './db/sessions';
 // =============================================================================
 
 // Store adapter (bridges core DB to @archon/workflows IWorkflowStore)
-export {
-  createWorkflowStore,
-  createWorkflowDeps,
-  registerGitHubAppAuthProvider,
-} from './workflows/store-adapter';
+export { createWorkflowStore, createWorkflowDeps } from './workflows/store-adapter';
 
 // Per-child isolation resolver factory (#2121 slice 2, PR-A)
 export { createChildWorktreeResolver } from './workflows/child-isolation-resolver';
@@ -176,17 +172,10 @@ export { sanitizeCredentials, sanitizeError } from './utils/credential-sanitizer
 // GitHub GraphQL
 export { getLinkedIssueNumbers } from './utils/github-graphql';
 
-// GitHub App auth
+// GitHub auth (OAuth App mode)
 export {
-  createGitHubAppAuthProvider,
-  loadAppPrivateKey,
   installCredentialHelper,
-  AppNotInstalledError,
-  AppPrivateKeyError,
-  type GitHubAppConfig,
-  type IGitHubAppAuthProvider,
-  type GitHubAuth,
-  // Per-user device flow (PR-C)
+  // Per-user device flow
   isPerUserGitHubEnabled,
   loadDeviceFlowConfig,
   assertEncryptionKeyAtBoot,

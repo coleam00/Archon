@@ -1,15 +1,16 @@
 /**
- * GitHub App device flow (user-to-server tokens), hand-rolled over `fetch`.
+ * OAuth App device flow (user tokens), hand-rolled over `fetch`.
  *
  * Design notes:
  *  - No `client_secret`: the device flow is a public-client flow, and refresh
  *    of device-flow-issued tokens also needs no secret.
- *  - No OAuth `scope`: GitHub Apps derive permissions from the App's
- *    fine-grained permission set, not OAuth scopes. `scope` is always "".
+ *  - Explicit OAuth `scope`: the OAuth App needs `repo,read:user,workflow`.
+ *    The `workflow` scope is critical — without it, pushes to
+ *    `.github/workflows/` fail silently.
  *  - Error responses arrive as HTTP 200 with an `{ error }` field — callers
  *    must inspect the body, not just the status code.
  *
- * Ref: https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-user-access-token-for-a-github-app#using-the-device-flow-to-generate-a-user-access-token
+ * Ref: https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps#device-flow
  */
 
 const DEVICE_CODE_URL = 'https://github.com/login/device/code';
@@ -82,10 +83,17 @@ async function postForm<T>(url: string, params: Record<string, string>): Promise
   return (await res.json()) as T;
 }
 
+/** Default OAuth scopes for the device flow. */
+const DEFAULT_OAUTH_SCOPES = 'repo,read:user,workflow';
+
 /** Step 1: request device + user codes. */
-export async function startDeviceFlow(clientId: string): Promise<DeviceCodeResponse> {
+export async function startDeviceFlow(
+  clientId: string,
+  scope: string = DEFAULT_OAUTH_SCOPES
+): Promise<DeviceCodeResponse> {
   const data = await postForm<DeviceCodeResponse & { error?: string }>(DEVICE_CODE_URL, {
     client_id: clientId,
+    scope,
   });
   if (data.error) throw new DeviceFlowError(data.error);
   return data;

@@ -548,7 +548,7 @@ export interface DeploymentShapeProperties {
   webAuthEnabled?: boolean;
   /** Per-user credentials mode (TOKEN_ENCRYPTION_KEY configured). */
   multiUser?: boolean;
-  githubAuthMode?: 'app' | 'pat' | 'none' | 'conflict';
+  githubAuthMode?: 'oauth' | 'none';
   adapterSlack?: boolean;
   adapterTelegram?: boolean;
   adapterDiscord?: boolean;

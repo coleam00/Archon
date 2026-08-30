@@ -176,7 +176,17 @@ function buildSubprocessEnv(): NodeJS.ProcessEnv {
     { authMode },
     authMode === 'global' ? 'using_global_auth' : 'using_explicit_tokens'
   );
-  return { ...process.env };
+  // Never hand agent subprocesses secrets that can decrypt the credential
+  // store or forge webhooks that trick the server into acting on the agent's
+  // behalf (issue #126). Agents authenticate via the injected GH_TOKEN and
+  // the per-worktree git credential helper. Kept inline (not imported from
+  // @archon/workflows) to avoid a providers→workflows dep.
+  const AGENT_ENV_DENYLIST = ['TOKEN_ENCRYPTION_KEY', 'DATABASE_URL', 'WEBHOOK_SECRET'];
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  for (const k of AGENT_ENV_DENYLIST) {
+    Reflect.deleteProperty(env, k);
+  }
+  return env;
 }
 
 /**

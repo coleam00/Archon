@@ -436,6 +436,29 @@ describe('POST /api/codebases', () => {
     expect(response.status).toBe(200);
   });
 
+  test('returns 403 when anonymous GitHub clone is attempted without user token or env token', async () => {
+    const savedGhToken = process.env.GH_TOKEN;
+    const savedGithubToken = process.env.GITHUB_TOKEN;
+    delete process.env.GH_TOKEN;
+    delete process.env.GITHUB_TOKEN;
+
+    try {
+      const app = makeApp();
+      const response = await app.request('/api/codebases', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: 'https://github.com/user/repo' }),
+      });
+      expect(response.status).toBe(403);
+      const body = (await response.json()) as { error: string };
+      expect(body.error).toContain('GitHub clone requires a connected GitHub account');
+      expect(mockCloneRepository).not.toHaveBeenCalled();
+    } finally {
+      if (savedGhToken !== undefined) process.env.GH_TOKEN = savedGhToken;
+      if (savedGithubToken !== undefined) process.env.GITHUB_TOKEN = savedGithubToken;
+    }
+  });
+
   test('registers codebase by local path and returns 201', async () => {
     mockRegisterRepository.mockImplementationOnce(async () => ({
       codebaseId: 'register-uuid-1',

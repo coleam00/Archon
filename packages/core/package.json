@@ -18,6 +18,7 @@
     "./handlers": "./src/handlers/command-handler.ts",
     "./config": "./src/config/index.ts",
     "./config/resolve-assistant": "./src/config/resolve-assistant.ts",
+    "./utils/run-token": "./src/utils/run-token.ts",
     "./utils/*": "./src/utils/*.ts",
     "./services/*": "./src/services/*.ts",
     "./state/*": "./src/state/*.ts",
@@ -36,7 +37,6 @@
     "@archon/providers": "workspace:*",
     "@archon/workflows": "workspace:*",
     "@hono/zod-openapi": "^1.4.0",
-    "@octokit/auth-app": "^8.0.0",
     "@octokit/rest": "^22.0.0",
     "pg": "^8.11.0",
     "zod": "^4.4.3"

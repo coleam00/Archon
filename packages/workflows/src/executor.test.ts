@@ -2538,7 +2538,6 @@ describe('executeWorkflow', () => {
       });
       const deps: WorkflowDeps = {
         ...makeDeps(store),
-        resolveBotGitHubToken: mock(async () => 'bot-token'),
         isPerUserGitHubEnabled: () => true,
         getUserGithubToken: mock(async () => 'user-token'),
         isPerUserProviderKeysEnabled: () => true,

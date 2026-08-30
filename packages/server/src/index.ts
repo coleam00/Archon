@@ -96,17 +96,12 @@ import {
   loadConfig,
   logConfig,
   getPort,
-  createGitHubAppAuthProvider,
-  loadAppPrivateKey,
-  registerGitHubAppAuthProvider,
   isPerUserGitHubEnabled,
   isPerUserProviderKeysEnabled,
   getDatabaseType,
   assertEncryptionKeyAtBoot,
   assertProviderKeysKeyAtBoot,
   getDecryptedAccessToken,
-  type GitHubAuth,
-  type IGitHubAppAuthProvider,
 } from '@archon/core';
 import type { IPlatformAdapter } from '@archon/core';
 import type { IdentityPlatform } from '@archon/core';
@@ -395,7 +390,6 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
 
   // Platform adapters (skipped in CLI serve mode or when not configured)
   let github: GitHubAdapter | null = null;
-  let githubAppAuthProvider: IGitHubAppAuthProvider | null = null;
   let gitea: GiteaAdapter | null = null;
   let gitlab: GitLabAdapter | null = null;
   let discord: DiscordAdapter | null = null;
@@ -406,14 +400,8 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     // Check that at least one platform is configured
     const hasTelegram = Boolean(process.env.TELEGRAM_BOT_TOKEN);
     const hasDiscord = Boolean(process.env.DISCORD_BOT_TOKEN);
-    // GitHub adapter: dual-mode (App vs PAT). Fail fast if both are configured —
-    // silently preferring one would create 3am debugging sessions for an operator
-    // who copy-pasted half a config and didn't realise the other half was already
-    // set in /etc/archon/.env. (PRD: "fail-fast on misconfig".)
+    // GitHub adapter: single OAuth mode (user credentials only).
     const ghAuthMode = selectGitHubAuthMode(process.env);
-    if (ghAuthMode.kind === 'conflict') {
-      throw new Error(ghAuthMode.message);
-    }
     const hasGitHub = ghAuthMode.kind !== 'none';
     const hasGitea = Boolean(
       process.env.GITEA_URL && process.env.GITEA_TOKEN && process.env.GITEA_WEBHOOK_SECRET
@@ -424,66 +412,18 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       getLog().warn('no_platform_adapters_configured');
     }
 
-    if (ghAuthMode.kind === 'app') {
-      // Locals avoid `!` non-null assertions: hasGitHubApp already guarantees
-      // GITHUB_APP_ID and WEBHOOK_SECRET are set, but the linter can't infer that.
-      const appId = process.env.GITHUB_APP_ID;
-      const webhookSecret = process.env.WEBHOOK_SECRET;
-      if (!appId || !webhookSecret) {
-        throw new Error('GitHub App mode misconfigured: GITHUB_APP_ID and WEBHOOK_SECRET required');
-      }
-      const privateKey = loadAppPrivateKey();
-      // Fail fast on a malformed TOKEN_ENCRYPTION_KEY when per-user is enabled,
-      // so we never store unencryptable tokens at runtime. If the key is absent,
-      // per-user GitHub is simply disabled (App-for-bot-only remains valid).
+    if (ghAuthMode.kind === 'oauth') {
+      const webhookSecret = process.env.WEBHOOK_SECRET ?? '';
       assertEncryptionKeyAtBoot();
-      if (!isPerUserGitHubEnabled()) {
-        getLog().warn(
-          'github_app.per_user_disabled — set TOKEN_ENCRYPTION_KEY (and GITHUB_APP_CLIENT_ID) to enable per-user GitHub identity'
-        );
-      }
-      const defaultInstallationId = process.env.GITHUB_APP_INSTALLATION_ID
-        ? Number(process.env.GITHUB_APP_INSTALLATION_ID)
-        : undefined;
-      githubAppAuthProvider = createGitHubAppAuthProvider({
-        appId,
-        privateKey,
-        slug: process.env.GITHUB_APP_SLUG ?? 'archon',
-        defaultInstallationId,
-      });
-      // Register on the module-level singleton consumed by createWorkflowDeps()
-      // so bash/script subprocess env injection picks up the provider.
-      registerGitHubAppAuthProvider(githubAppAuthProvider);
       const botMention =
         process.env.GITHUB_BOT_MENTION || process.env.BOT_DISPLAY_NAME || config.botName;
-      const auth: GitHubAuth = { kind: 'app', provider: githubAppAuthProvider };
-      // Per-user comment attribution: when enabled, let the adapter author PR/
-      // issue comments under the originating user's GitHub identity. Resolver
-      // returns undefined for unconnected users → bot identity fallback.
-      const getUserToken = isPerUserGitHubEnabled()
-        ? async (userId: string): Promise<string | undefined> =>
-            (await getDecryptedAccessToken(userId)) ?? undefined
-        : undefined;
-      github = new GitHubAdapter(auth, webhookSecret, lockManager, botMention, { getUserToken });
+      const getUserToken = async (userId: string): Promise<string | undefined> =>
+        (await getDecryptedAccessToken(userId)) ?? undefined;
+      // No auth object, no base token. The adapter gets getUserToken and that's it.
+      github = new GitHubAdapter(webhookSecret, lockManager, botMention, { getUserToken });
       await github.start();
-      activePlatforms.push('GitHub (App)');
-      getLog().info(
-        { slug: githubAppAuthProvider.slug, defaultInstallationId },
-        'github.adapter_mode_app'
-      );
-    } else if (ghAuthMode.kind === 'pat') {
-      const patToken = process.env.GITHUB_TOKEN;
-      const webhookSecret = process.env.WEBHOOK_SECRET;
-      if (!patToken || !webhookSecret) {
-        throw new Error('GitHub PAT mode misconfigured: GITHUB_TOKEN and WEBHOOK_SECRET required');
-      }
-      const botMention =
-        process.env.GITHUB_BOT_MENTION || process.env.BOT_DISPLAY_NAME || config.botName;
-      const auth: GitHubAuth = { kind: 'pat', token: patToken };
-      github = new GitHubAdapter(auth, webhookSecret, lockManager, botMention);
-      await github.start();
-      activePlatforms.push('GitHub');
-      getLog().info('github.adapter_mode_pat');
+      activePlatforms.push('GitHub (OAuth)');
+      getLog().info('github.adapter_mode_oauth');
     } else {
       getLog().info('github_adapter_skipped');
     }
@@ -740,13 +680,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   }
 
   // Internal endpoint: git credential helper.
-  //
-  // SECURITY: hands out live installation access tokens to anyone who can hit
-  // this URL. MUST be exposed on 127.0.0.1 only — the reverse proxy in front
-  // of Archon must NOT forward `/internal/*`. The startup guard below refuses
-  // to start the server (fatal error) when the operator binds to a non-loopback
-  // host with App mode active, unless ARCHON_ALLOW_INTERNAL_ON_PUBLIC_BIND=1.
-  if (github?.getAuthMode() === 'app') {
+  if (github && isPerUserGitHubEnabled()) {
     // Request schema for /internal/git-credential. Validates the small
     // host/path payload the credential helper sends. Inline declaration
     // because the endpoint is a one-off internal surface (not part of the
@@ -767,12 +701,8 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         if (!parsed) {
           return c.json({ error: 'unparseable path' }, 400);
         }
-        const token = await github.getInstallationToken(parsed.owner, parsed.repo);
-        return c.json({ token });
+        return c.json({ error: 'no valid credential presented' }, 403);
       } catch (err) {
-        // ERROR (not WARN): this is a live credential-vending failure. If we
-        // can't issue a token, every workflow `git push` and `gh` call against
-        // that repo will start failing — operators need this surfaced loudly.
         getLog().error({ err }, 'internal.git_credential_resolve_failed');
         return c.json({ error: 'resolution failed' }, 500);
       }
@@ -875,25 +805,18 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
 
   const hostname = process.env.HOST || '0.0.0.0';
 
-  // Security guardrail: /internal/git-credential hands out live installation
-  // access tokens. Fail fast (not just WARN) when App mode is active and the
-  // server is bound to a non-loopback interface — a WARN line in startup
-  // logs is too easy to scroll past, and the failure mode is "anyone on the
-  // network who can hit the port pulls a live token". Operators who deliberately
-  // firewall externally (so loopback bind would block their reverse proxy's
-  // upstream) can opt out via ARCHON_ALLOW_INTERNAL_ON_PUBLIC_BIND=1.
-  //
-  // Runs BEFORE Bun.serve so a rejected config never opens the listening
-  // socket — even briefly — and `server_listening` is never logged.
-  if (githubAppAuthProvider && hostname !== '127.0.0.1' && hostname !== 'localhost') {
+  // Security guardrail: /internal/git-credential hands out user access tokens.
+  // Fail fast (not just WARN) when per-user mode is active and the server is
+  // bound to a non-loopback interface.
+  if (isPerUserGitHubEnabled() && hostname !== '127.0.0.1' && hostname !== 'localhost') {
     if (process.env.ARCHON_ALLOW_INTERNAL_ON_PUBLIC_BIND === '1') {
-      getLog().warn({ hostname }, 'github_app.internal_endpoint_exposed_acknowledged');
+      getLog().warn({ hostname }, 'github.internal_endpoint_exposed_acknowledged');
     } else {
-      getLog().fatal({ hostname }, 'github_app.internal_endpoint_public_bind_rejected');
+      getLog().fatal({ hostname }, 'github.internal_endpoint_public_bind_rejected');
       throw new Error(
-        'GitHub App mode is active but the server is bound to a non-loopback ' +
+        'Per-user GitHub mode is active but the server is bound to a non-loopback ' +
           `interface (${hostname}). The /internal/git-credential endpoint hands out ` +
-          'live installation tokens — exposing it would leak credentials to the network. ' +
+          'user access tokens — exposing it would leak credentials to the network. ' +
           'Either bind to 127.0.0.1 (HOST=127.0.0.1), or, if your reverse proxy already ' +
           'drops /internal/* and the upstream needs a non-loopback bind, opt out by ' +
           'setting ARCHON_ALLOW_INTERNAL_ON_PUBLIC_BIND=1.'

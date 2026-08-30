@@ -12,7 +12,7 @@
  * CANONICAL Archon user stays `remote_agent_users`; a Better Auth session is
  * mapped to it elsewhere via `findOrCreateUserByPlatformIdentity('web', …)`.
  *
- * Module-singleton pattern mirrors `registeredGitHubAppAuthProvider`.
+ * Module-singleton pattern — one shared instance per process.
  */
 import { betterAuth } from 'better-auth';
 import type { User } from 'better-auth';

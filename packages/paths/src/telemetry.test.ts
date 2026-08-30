@@ -611,7 +611,7 @@ describe('new capture functions are fire-and-forget no-throw', () => {
         dbKind: 'postgresql',
         webAuthEnabled: true,
         multiUser: false,
-        githubAuthMode: 'app',
+        githubAuthMode: 'oauth',
         adapterSlack: true,
         adapterTelegram: false,
         adapterDiscord: false,
@@ -644,7 +644,7 @@ describe('new capture functions are fire-and-forget no-throw', () => {
         surface: 'server',
         dbKind: 'postgresql',
         webAuthEnabled: true,
-        githubAuthMode: 'app',
+        githubAuthMode: 'oauth',
         adapterSlack: true,
         // multiUser and the remaining adapter booleans intentionally omitted —
         // absent fields must be omitted from the wire, not sent as undefined.

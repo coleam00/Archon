@@ -152,15 +152,6 @@ export interface WorkflowDeps {
    *
    *  - App mode (server bootstrap registered a provider): returns a fresh
    *    installation access token, refreshed transparently from the cache.
-   *  - PAT mode / not configured: returns undefined. The subprocess inherits
-   *    whatever GITHUB_TOKEN already lives on `process.env` (the legacy
-   *    behaviour), so solo installs see zero functional change.
-   *
-   * Implementations must not throw — return undefined on any failure so the
-   * workflow execution falls back to env inheritance rather than aborting.
-   */
-  resolveBotGitHubToken?: (owner: string, repo: string) => Promise<string | undefined>;
-  /**
    * Optional: resolve the originating user's personal GitHub token (decrypted,
    * refreshed on read). Used by the per-user token policy to route a run's
    * `gh`/`git push` through the human who triggered it rather than the shared
@@ -170,7 +161,7 @@ export interface WorkflowDeps {
   getUserGithubToken?: (userId: string) => Promise<string | undefined>;
   /**
    * Optional: whether per-user GitHub attribution is active for this install
-   * (GitHub App configured + TOKEN_ENCRYPTION_KEY set). When false/absent, the
+   * (OAuth App configured + TOKEN_ENCRYPTION_KEY set). When false/absent, the
    * token policy is a no-op and subprocesses keep inheriting `process.env`.
    */
   isPerUserGitHubEnabled?: () => boolean;

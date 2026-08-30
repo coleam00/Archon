@@ -92,6 +92,7 @@ import {
   waitUntilTimestampSchema,
   waitCondition,
 } from './schemas';
+import { scrubAgentEnv } from './utils/github-token-policy';
 import type { BindingDirective } from './schemas';
 import { mapNodeTemplateSlots } from './template-walker';
 import { FAN_OUT_CANCEL_REASONS } from './store';
@@ -3563,7 +3564,9 @@ async function runSubprocess(
   }
 ): Promise<{ stdout: string; stderr: string }> {
   const subprocessEnv =
-    execContext.kind === 'container' ? options.env : { ...process.env, ...options.env };
+    execContext.kind === 'container'
+      ? options.env
+      : { ...scrubAgentEnv(process.env), ...options.env };
   // Both outcomes redact against the same values, so the credential set is resolved
   // once here rather than separately per path — a success path that redacted less than
   // the failure path would be the security hole, not a style difference.

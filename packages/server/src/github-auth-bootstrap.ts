@@ -1,46 +1,29 @@
 /**
  * Pure helpers consumed by the server bootstrap path for GitHub adapter
  * configuration. Extracted from index.ts so the security-critical decisions
- * (dual-mode env detection, /internal/git-credential path parsing) are
+ * (OAuth App env detection, /internal/git-credential path parsing) are
  * testable in isolation without spinning up the full Hono stack.
  */
 
 /**
  * Result of detecting which GitHub auth mode the operator configured.
  * Discriminated on `kind` so callers narrow exhaustively at compile time.
+ *
+ * `'oauth'` — plain OAuth App: GITHUB_CLIENT_ID + TOKEN_ENCRYPTION_KEY +
+ *             WEBHOOK_SECRET are set. Every GitHub operation requires a
+ *             per-user token from the vault; there is no bot/PAT fallback.
+ * `'none'`  — GitHub adapter not configured.
  */
-export type GitHubAuthModeDecision =
-  | { kind: 'app' }
-  | { kind: 'pat' }
-  | { kind: 'none' }
-  | { kind: 'conflict'; message: string };
+export type GitHubAuthModeDecision = { kind: 'oauth' } | { kind: 'none' };
 
 /**
- * Decide GitHub auth mode from env, refusing both modes set simultaneously.
- *
- * "Refuse" is intentional — silently preferring one over the other creates
- * 3am incidents for operators who copy-pasted half a config and didn't
- * realise the other half was already set in /etc/archon/.env.
+ * Decide GitHub auth mode from env. One mode: OAuth App (user credentials
+ * only). No PAT mode, no GitHub App mode. Every GitHub operation requires
+ * a per-user token from the vault.
  */
 export function selectGitHubAuthMode(env: NodeJS.ProcessEnv): GitHubAuthModeDecision {
-  const hasGitHubApp = Boolean(
-    env.GITHUB_APP_ID &&
-    (env.GITHUB_APP_PRIVATE_KEY || env.GITHUB_APP_PRIVATE_KEY_PATH) &&
-    env.WEBHOOK_SECRET
-  );
-  const hasGitHubPat = Boolean(env.GITHUB_TOKEN && env.WEBHOOK_SECRET);
-
-  if (hasGitHubApp && hasGitHubPat) {
-    return {
-      kind: 'conflict',
-      message:
-        'GitHub adapter misconfigured: both App mode (GITHUB_APP_ID) and PAT mode ' +
-        '(GITHUB_TOKEN) are configured. Pick one — unset GITHUB_TOKEN for App mode, ' +
-        'or unset GITHUB_APP_ID for PAT mode.',
-    };
-  }
-  if (hasGitHubApp) return { kind: 'app' };
-  if (hasGitHubPat) return { kind: 'pat' };
+  const hasOAuth = Boolean(env.GITHUB_CLIENT_ID && env.TOKEN_ENCRYPTION_KEY && env.WEBHOOK_SECRET);
+  if (hasOAuth) return { kind: 'oauth' };
   return { kind: 'none' };
 }
 

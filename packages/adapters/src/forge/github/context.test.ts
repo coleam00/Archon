@@ -102,10 +102,9 @@ mock.module('@archon/core/db/conversations', () => ({
   updateConversation: mockUpdateConversation,
 }));
 
-mock.module('@archon/core/db/codebases', () => ({
-  findCodebaseByRepoUrl: mockFindCodebaseByRepoUrl,
-  createCodebase: mockCreateCodebase,
-  updateCodebase: mock(async () => {}),
+const mockGetUserIdsByGithubNumericId = mock(async () => ['user-test-uuid']);
+mock.module('@archon/core/db/user-github-token-store', () => ({
+  getUserIdsByGithubNumericId: mockGetUserIdsByGithubNumericId,
 }));
 
 // handleWebhook step 5b resolves the commenting GitHub login to an Archon user.
@@ -173,6 +172,7 @@ function signPayload(payload: string): string {
   return 'sha256=' + createHmac('sha256', WEBHOOK_SECRET).update(payload).digest('hex');
 }
 
+let commentIdCounter = 1000;
 function createIssueCommentPayload(
   commentBody: string,
   options: {
@@ -180,6 +180,7 @@ function createIssueCommentPayload(
     issueTitle?: string;
     isPR?: boolean;
     commentAuthor?: string;
+    commentId?: number;
   } = {}
 ): string {
   const {
@@ -187,6 +188,7 @@ function createIssueCommentPayload(
     issueTitle = 'Test Issue Title',
     isPR = false,
     commentAuthor = 'user123',
+    commentId = ++commentIdCounter,
   } = options;
 
   const issue: Record<string, unknown> = {
@@ -208,8 +210,10 @@ function createIssueCommentPayload(
     action: 'created',
     issue,
     comment: {
+      id: commentId,
       body: commentBody,
-      user: { login: commentAuthor },
+      updated_at: new Date().toISOString(),
+      user: { id: 42, login: commentAuthor },
     },
     repository: {
       owner: { login: 'testuser' },
@@ -218,7 +222,7 @@ function createIssueCommentPayload(
       html_url: 'https://github.com/testuser/testrepo',
       default_branch: 'main',
     },
-    sender: { login: commentAuthor },
+    sender: { id: 42, login: commentAuthor },
   });
 }
 
@@ -226,24 +230,30 @@ function createIssueCommentPayload(
  * Create an adapter with mocked internals for testing handleWebhook.
  */
 function createTestAdapter(): GitHubAdapter {
-  const adapter = new GitHubAdapter({ kind: 'pat', token: 'fake-token' }, WEBHOOK_SECRET, {
-    acquireLock: mock(async (_id: string, handler: () => Promise<void>) => {
-      await handler();
-    }),
-    getStats: () => ({
-      active: 0,
-      queuedTotal: 0,
-      queuedByConversation: [],
-      maxConcurrent: 10,
-      activeConversationIds: [],
-    }),
-  } as unknown as InstanceType<typeof import('@archon/core').ConversationLockManager>);
+  const adapter = new GitHubAdapter(
+    WEBHOOK_SECRET,
+    {
+      acquireLock: mock(async (_id: string, handler: () => Promise<void>) => {
+        await handler();
+      }),
+      getStats: () => ({
+        active: 0,
+        queuedTotal: 0,
+        queuedByConversation: [],
+        maxConcurrent: 10,
+        activeConversationIds: [],
+      }),
+    } as unknown as InstanceType<typeof import('@archon/core').ConversationLockManager>,
+    'archon',
+    {
+      getUserToken: async () => 'fake-token',
+    }
+  );
 
   // @ts-expect-error - mock private method for testing
   adapter.verifySignature = mock(() => true);
 
-  // @ts-expect-error - mock private Octokit for API calls during webhook flow
-  adapter.octokit = {
+  const mockOctokit = {
     rest: {
       repos: {
         get: mock(() =>
@@ -274,6 +284,12 @@ function createTestAdapter(): GitHubAdapter {
       },
     },
   };
+
+  // @ts-expect-error - mock private Octokit cache
+  adapter.userOctokitCache.set('user-test-uuid', {
+    octokit: mockOctokit as unknown as InstanceType<typeof import('@octokit/rest').Octokit>,
+    expiresAt: Date.now() + 100000,
+  });
 
   // @ts-expect-error - mock private method to skip filesystem operations
   adapter.ensureRepoReady = mock(async () => {});

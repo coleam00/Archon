@@ -33,8 +33,8 @@ export async function authGithubCommand(): Promise<number> {
   if (!isPerUserGitHubEnabled()) {
     console.error(
       'Per-user GitHub auth is not enabled on this install.\n' +
-        'It requires the GitHub App (GITHUB_APP_ID + GITHUB_APP_CLIENT_ID) and TOKEN_ENCRYPTION_KEY.\n' +
-        'Solo installs using GITHUB_TOKEN do not need to connect.'
+        'It requires GITHUB_CLIENT_ID and TOKEN_ENCRYPTION_KEY.\n' +
+        'See README.md for OAuth App setup instructions.'
     );
     return 1;
   }

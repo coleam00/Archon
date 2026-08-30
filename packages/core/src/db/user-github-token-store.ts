@@ -92,6 +92,20 @@ export async function getUserGithubTokenRecord(userId: string): Promise<UserGith
   return { ...row, github_user_id: Number(row.github_user_id) };
 }
 
+/**
+ * Return Archon user IDs whose connected GitHub numeric ID matches.
+ * Returns at most 2 rows (LIMIT 2) — a second row means two Archon users
+ * share one GitHub account, which the caller must treat as ambiguous.
+ * Returns [] when no connected user owns this GitHub account.
+ */
+export async function getUserIdsByGithubNumericId(githubUserId: number): Promise<string[]> {
+  const result = await pool.query<{ user_id: string }>(
+    'SELECT user_id FROM remote_agent_user_github_tokens WHERE github_user_id = $1 LIMIT 2',
+    [githubUserId]
+  );
+  return result.rows.map(r => r.user_id);
+}
+
 export async function deleteUserGithubToken(userId: string): Promise<void> {
   await pool.query('DELETE FROM remote_agent_user_github_tokens WHERE user_id = $1', [userId]);
   getLog().info({ userId }, 'user_github_token.deleted');

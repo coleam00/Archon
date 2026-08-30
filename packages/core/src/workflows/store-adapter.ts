@@ -18,7 +18,6 @@ import * as envVarDb from '../db/env-vars';
 import { getAgentProvider } from '@archon/providers';
 import { loadConfig as loadMergedConfig } from '../config/config-loader';
 import { createLogger } from '@archon/paths';
-import type { IGitHubAppAuthProvider } from '../github-auth';
 import { isPerUserGitHubEnabled } from '../github-auth/config';
 import { getDecryptedAccessToken } from '../db/user-github-token-store';
 import { isPerUserProviderKeysEnabled } from '../credentials/config';
@@ -112,51 +111,16 @@ export function createWorkflowStore(): IWorkflowStore {
 }
 
 /**
- * Module-singleton registration for the GitHub App auth provider. Set by the
- * server bootstrap (`registerGitHubAppAuthProvider(provider)`) when App mode
- * is active; remains null in PAT mode and during CLI execution. The
- * workflow-deps factory reads this to decide whether to expose
- * `resolveBotGitHubToken` to the engine.
- *
- * Singleton because the provider is itself a process-singleton (one cache
- * shared by the GitHub adapter, the workflow executor, and the internal
- * credential-helper endpoint). Threading it through every createWorkflowDeps
- * caller would just smuggle a singleton through more arguments.
- */
-let registeredGitHubAppAuthProvider: IGitHubAppAuthProvider | null = null;
-
-export function registerGitHubAppAuthProvider(provider: IGitHubAppAuthProvider | null): void {
-  registeredGitHubAppAuthProvider = provider;
-}
-
-/**
  * Create the canonical WorkflowDeps for the workflow engine.
  * Single construction point — avoids duplicating the wiring across callers.
  */
 export function createWorkflowDeps(): WorkflowDeps {
-  const provider = registeredGitHubAppAuthProvider;
   return {
     store: createWorkflowStore(),
     getAgentProvider,
     loadConfig: loadMergedConfig,
     sealRunConfig: sealWorkflowRunConfig,
     unsealRunConfig: unsealWorkflowRunConfig,
-    // App mode: resolve fresh installation tokens for subprocess env. PAT mode:
-    // undefined → engine falls back to env inheritance, preserving legacy
-    // behaviour for solo installs.
-    resolveBotGitHubToken: provider
-      ? async (owner: string, repo: string): Promise<string | undefined> => {
-          try {
-            return await provider.getInstallationToken(owner, repo);
-          } catch (err) {
-            getLog().warn(
-              { err: err as Error, owner, repo },
-              'workflow_deps.bot_token_resolve_failed'
-            );
-            return undefined;
-          }
-        }
-      : undefined,
     // Per-user token policy (PR-C): when per-user mode is on, route a run's
     // gh/git through the originating user's personal token (decrypted, refreshed
     // on read), or scrub the org/bot token when they haven't connected.
